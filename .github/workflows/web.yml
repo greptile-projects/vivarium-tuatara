@@ -1,0 +1,24 @@
+name: web
+
+on:
+  pull_request:
+    paths:
+      - "apps/web/**"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/web.yml"
+
+concurrency:
+  group: web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bunx tsc --noEmit
+        working-directory: apps/web

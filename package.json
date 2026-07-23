@@ -1,0 +1,12 @@
+{
+  "name": "vivarium-a",
+  "version": "0.0.0",
+  "private": true,
+  "workspaces": ["apps/*"],
+  "scripts": {
+    "dev": "bun run --cwd apps/web dev",
+    "dev:api": "cd apps/api && go run .",
+    "build": "bun run --cwd apps/web build",
+    "lint": "bun run --cwd apps/web lint"
+  }
+}

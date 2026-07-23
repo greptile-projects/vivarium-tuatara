@@ -1,0 +1,26 @@
+name: api
+
+on:
+  pull_request:
+    paths:
+      - "apps/api/**"
+      - ".github/workflows/api.yml"
+
+concurrency:
+  group: api-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/api/go.mod
+          # flip to cache-dependency-path: apps/api/go.sum once there are deps
+          cache: false
+      - run: go vet ./...
+        working-directory: apps/api
+      - run: go build ./...
+        working-directory: apps/api

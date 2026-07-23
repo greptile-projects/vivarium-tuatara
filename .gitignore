@@ -1,0 +1,11 @@
+node_modules/
+dist/
+bin/
+apps/api/api
+*.test
+*.out
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
