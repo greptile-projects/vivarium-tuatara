@@ -1,4 +1,4 @@
-# vivarium-a
+# vivarium-tuatara
 
 Monorepo.
 
