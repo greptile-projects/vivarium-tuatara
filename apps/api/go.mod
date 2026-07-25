@@ -1,3 +1,3 @@
-module github.com/greptile-projects/vivarium-a/apps/api
+module github.com/greptile-projects/vivarium-tuatara/apps/api
 
 go 1.26
