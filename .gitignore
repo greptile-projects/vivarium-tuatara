@@ -9,3 +9,9 @@ apps/api/api
 .env.*
 !.env.example
 .DS_Store
+
+# Symlink to the harness's LADDER.md, created per-checkout by the harness
+# itself. Not work this repo produced, so it must not count as untracked work:
+# scripts/resume-clean.sh otherwise reports every clean checkout as an
+# interrupted run, and its `git clean -fd` deletes the link on every --apply.
+/LADDER.md
