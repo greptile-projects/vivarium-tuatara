@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http/httptest"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
@@ -79,6 +82,53 @@ func TestGitDiscoveryRejectsUnknownRepositoriesAndServices(t *testing.T) {
 		t.Fatalf("unsupported service status = %d", response.StatusCode)
 	}
 	response.Body.Close()
+}
+
+func TestUploadPackStopsWhenRequestIsCanceled(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("canceled")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	requestContext, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	reader := &blockingReader{context: requestContext, started: started}
+	request := httptest.NewRequest("POST", "/git/canceled.git/git-upload-pack", reader)
+	request = request.WithContext(requestContext)
+	response := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		runUploadPack(response, request, repo, false)
+		close(done)
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("git upload-pack did not begin reading the request")
+	}
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("git upload-pack did not stop after request cancellation")
+	}
+}
+
+type blockingReader struct {
+	context context.Context
+	started chan struct{}
+	once    sync.Once
+}
+
+func (reader *blockingReader) Read([]byte) (int, error) {
+	reader.once.Do(func() { close(reader.started) })
+	<-reader.context.Done()
+	return 0, reader.context.Err()
 }
 
 func lsRemote(t *testing.T, arguments ...string) string {

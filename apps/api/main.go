@@ -94,7 +94,7 @@ func runUploadPack(w http.ResponseWriter, r *http.Request, repo *storage.Reposit
 		args = append(args, "--advertise-refs")
 	}
 	args = append(args, repo.Path())
-	command := exec.Command("git", args...)
+	command := exec.CommandContext(r.Context(), "git", args...)
 	command.Stdout = w
 	command.Stderr = os.Stderr
 	if !advertise {
