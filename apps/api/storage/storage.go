@@ -224,8 +224,16 @@ func readConfigSection(file *os.File, wanted string) (map[string]string, error) 
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
 			continue
 		}
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			section = strings.ToLower(strings.TrimSpace(line[1 : len(line)-1]))
+		if strings.HasPrefix(line, "[") {
+			closingBracket := strings.IndexByte(line, ']')
+			if closingBracket < 0 {
+				return nil, errors.New("unterminated config section")
+			}
+			remainder := strings.TrimSpace(line[closingBracket+1:])
+			if remainder != "" && !strings.HasPrefix(remainder, "#") && !strings.HasPrefix(remainder, ";") {
+				return nil, errors.New("invalid text after config section")
+			}
+			section = strings.ToLower(strings.TrimSpace(line[1:closingBracket]))
 			continue
 		}
 		if section != wanted {

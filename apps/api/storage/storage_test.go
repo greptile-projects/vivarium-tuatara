@@ -106,6 +106,7 @@ func TestOpenParsesRepositoryFormat(t *testing.T) {
 	}{
 		{id: "quoted", replacement: `repositoryformatversion = "0"`, valid: true},
 		{id: "commented", replacement: "repositoryformatversion = 0 # version", valid: true},
+		{id: "section-comment", replacement: "repositoryformatversion = 0", valid: true},
 		{id: "unsupported", replacement: "repositoryformatversion = 999", valid: false},
 		{id: "missing", replacement: "", valid: false},
 	} {
@@ -119,6 +120,9 @@ func TestOpenParsesRepositoryFormat(t *testing.T) {
 			t.Fatal(err)
 		}
 		mutated := strings.Replace(string(config), "repositoryformatversion = 0", test.replacement, 1)
+		if test.id == "section-comment" {
+			mutated = strings.Replace(mutated, "[core]", "[core] # repository settings", 1)
+		}
 		if err := os.WriteFile(configPath, []byte(mutated), 0o644); err != nil {
 			t.Fatal(err)
 		}
