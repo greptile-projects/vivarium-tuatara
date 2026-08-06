@@ -106,3 +106,10 @@ The API opens repositories through the storage boundary before invoking Git,
 so remote IDs use the same validation and stable identity as application
 storage. Set `GIT_STORAGE_ROOT` to the store directory when starting the API;
 it defaults to `repositories` relative to the process working directory.
+
+Stock `git clone` uses the same endpoint without platform-specific tooling. A
+populated clone receives every object reachable from the advertised refs,
+retains annotated tags and merged ancestry, and checks out `main` with the
+stored file contents and executable modes. Cloning an empty repository creates
+a valid working copy whose local `HEAD` remains the unborn `main` branch, ready
+for its first commit.
