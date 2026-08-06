@@ -53,6 +53,7 @@ func (r *Repository) ReadTree(id ObjectID) ([]TreeEntry, error) {
 
 	var entries []TreeEntry
 	content := object.Content
+	var previous *TreeEntry
 	for len(content) > 0 {
 		space := bytes.IndexByte(content, ' ')
 		nul := bytes.IndexByte(content, 0)
@@ -67,6 +68,9 @@ func (r *Repository) ReadTree(id ObjectID) ([]TreeEntry, error) {
 		}
 		entryID := ObjectID(fmt.Sprintf("%x", content[nul+1:nul+21]))
 		entry := TreeEntry{Name: name, Mode: mode, ID: entryID, Type: kind}
+		if previous != nil && compareTreeEntries(*previous, entry) >= 0 {
+			return nil, graphError(id, errors.New("tree entries are duplicate or not canonically ordered"))
+		}
 		if mode != "160000" {
 			target, readErr := r.ReadObject(entryID)
 			if readErr != nil {
@@ -77,6 +81,7 @@ func (r *Repository) ReadTree(id ObjectID) ([]TreeEntry, error) {
 			}
 		}
 		entries = append(entries, entry)
+		previous = &entries[len(entries)-1]
 		content = content[nul+21:]
 	}
 	return entries, nil
@@ -86,34 +91,44 @@ func (r *Repository) ReadTree(id ObjectID) ([]TreeEntry, error) {
 // Directory entries are included before their descendants.
 func (r *Repository) WalkTree(id ObjectID) ([]TreePath, error) {
 	var result []TreePath
-	active := make(map[ObjectID]bool)
-	var walk func(ObjectID, string) error
-	walk = func(treeID ObjectID, prefix string) error {
-		if active[treeID] {
-			return graphError(treeID, errors.New("tree cycle"))
-		}
-		active[treeID] = true
-		defer delete(active, treeID)
-		entries, err := r.ReadTree(treeID)
-		if err != nil {
-			return err
-		}
-		for _, entry := range entries {
-			entryPath := entry.Name
-			if prefix != "" {
-				entryPath = path.Join(prefix, entry.Name)
-			}
-			result = append(result, TreePath{Path: entryPath, TreeEntry: entry})
-			if entry.Type == TreeObject {
-				if err := walk(entry.ID, entryPath); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
+	type frame struct {
+		id      ObjectID
+		prefix  string
+		entries []TreeEntry
+		next    int
 	}
-	if err := walk(id, ""); err != nil {
+	rootEntries, err := r.ReadTree(id)
+	if err != nil {
 		return nil, err
+	}
+	stack := []frame{{id: id, entries: rootEntries}}
+	active := map[ObjectID]bool{id: true}
+	for len(stack) > 0 {
+		current := &stack[len(stack)-1]
+		if current.next == len(current.entries) {
+			delete(active, current.id)
+			stack = stack[:len(stack)-1]
+			continue
+		}
+		entry := current.entries[current.next]
+		current.next++
+		entryPath := entry.Name
+		if current.prefix != "" {
+			entryPath = path.Join(current.prefix, entry.Name)
+		}
+		result = append(result, TreePath{Path: entryPath, TreeEntry: entry})
+		if entry.Type != TreeObject {
+			continue
+		}
+		if active[entry.ID] {
+			return nil, graphError(entry.ID, errors.New("tree cycle"))
+		}
+		entries, err := r.ReadTree(entry.ID)
+		if err != nil {
+			return nil, err
+		}
+		active[entry.ID] = true
+		stack = append(stack, frame{id: entry.ID, prefix: entryPath, entries: entries})
 	}
 	return result, nil
 }
@@ -147,12 +162,12 @@ func (r *Repository) ReadCommit(id ObjectID) (Commit, error) {
 		commit.Headers = append(commit.Headers, CommitHeader{Name: name, Value: value})
 		switch name {
 		case "tree":
-			if commit.Tree != "" || !validObjectID(ObjectID(value)) {
+			if len(commit.Headers) != 1 || !validObjectID(ObjectID(value)) {
 				return Commit{}, graphError(id, errors.New("invalid tree header"))
 			}
 			commit.Tree = ObjectID(value)
 		case "parent":
-			if !validObjectID(ObjectID(value)) {
+			if commit.Tree == "" || !validObjectID(ObjectID(value)) || len(commit.Headers) != len(commit.Parents)+2 {
 				return Commit{}, graphError(id, errors.New("invalid parent header"))
 			}
 			commit.Parents = append(commit.Parents, ObjectID(value))
@@ -172,28 +187,53 @@ func (r *Repository) ReadCommit(id ObjectID) (Commit, error) {
 func (r *Repository) ListCommitAncestry(start ObjectID) ([]Commit, error) {
 	var commits []Commit
 	seen := make(map[ObjectID]bool)
-	var visit func(ObjectID) error
-	visit = func(id ObjectID) error {
+	type pendingCommit struct {
+		id   ObjectID
+		from ObjectID
+	}
+	stack := []pendingCommit{{id: start}}
+	for len(stack) > 0 {
+		pending := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		id := pending.id
 		if seen[id] {
-			return nil
+			continue
 		}
 		commit, err := r.ReadCommit(id)
 		if err != nil {
-			return err
+			if pending.from != "" {
+				return nil, graphError(pending.from, fmt.Errorf("parent %s: %w", id, err))
+			}
+			return nil, err
 		}
 		seen[id] = true
 		commits = append(commits, commit)
-		for _, parent := range commit.Parents {
-			if err := visit(parent); err != nil {
-				return graphError(id, fmt.Errorf("parent %s: %w", parent, err))
-			}
+		for index := len(commit.Parents) - 1; index >= 0; index-- {
+			stack = append(stack, pendingCommit{id: commit.Parents[index], from: id})
 		}
-		return nil
-	}
-	if err := visit(start); err != nil {
-		return nil, err
 	}
 	return commits, nil
+}
+
+// compareTreeEntries implements Git's base_name_compare ordering: directory
+// names compare as though suffixed with '/', while all other names use NUL.
+func compareTreeEntries(left, right TreeEntry) int {
+	common := min(len(left.Name), len(right.Name))
+	if comparison := bytes.Compare([]byte(left.Name[:common]), []byte(right.Name[:common])); comparison != 0 {
+		return comparison
+	}
+	leftTerminator, rightTerminator := byte(0), byte(0)
+	if len(left.Name) > common {
+		leftTerminator = left.Name[common]
+	} else if left.Type == TreeObject {
+		leftTerminator = '/'
+	}
+	if len(right.Name) > common {
+		rightTerminator = right.Name[common]
+	} else if right.Type == TreeObject {
+		rightTerminator = '/'
+	}
+	return int(leftTerminator) - int(rightTerminator)
 }
 
 func treeEntryType(mode string) (ObjectType, bool) {

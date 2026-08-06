@@ -177,6 +177,55 @@ func TestGraphReadersRejectWrongTypesAndBrokenEdges(t *testing.T) {
 	}
 }
 
+func TestReadTreeRejectsDuplicateAndNoncanonicalEntries(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("tree-order")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobID := writeObject(t, repo, storage.BlobObject, []byte("content"))
+	entry := func(name string) []byte {
+		return append([]byte("100644 "+name+"\x00"), decodeObjectID(t, blobID)...)
+	}
+	for _, test := range []struct {
+		name    string
+		entries []string
+	}{
+		{name: "duplicate", entries: []string{"same", "same"}},
+		{name: "unsorted", entries: []string{"second", "first"}},
+	} {
+		var content []byte
+		for _, name := range test.entries {
+			content = append(content, entry(name)...)
+		}
+		id := writeObject(t, repo, storage.TreeObject, content)
+		if _, err := repo.ReadTree(id); !errors.Is(err, storage.ErrCorruptObject) {
+			t.Errorf("ReadTree(%s) error = %v", test.name, err)
+		}
+	}
+}
+
+func TestReadCommitRejectsLateParentHeader(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("late-parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	treeID := writeObject(t, repo, storage.TreeObject, nil)
+	parentID := writeObject(t, repo, storage.CommitObject, commitContent(treeID, nil, 1700000000, "parent"))
+	content := []byte(fmt.Sprintf("tree %s\nauthor Test Author <test@example.com> 1700000001 +0000\ncommitter Test Author <test@example.com> 1700000001 +0000\nparent %s\n\nlate parent\n", treeID, parentID))
+	commitID := writeObject(t, repo, storage.CommitObject, content)
+	if _, err := repo.ReadCommit(commitID); !errors.Is(err, storage.ErrCorruptObject) {
+		t.Fatalf("ReadCommit(late parent) error = %v", err)
+	}
+}
+
 func commitContent(tree storage.ObjectID, parents []storage.ObjectID, timestamp int64, message string) []byte {
 	var content strings.Builder
 	fmt.Fprintf(&content, "tree %s\n", tree)
