@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -133,6 +134,126 @@ func TestListObjectsRejectsCorruptDiscoverableObject(t *testing.T) {
 
 	if _, err := repo.ListObjects(); !errors.Is(err, storage.ErrCorruptObject) {
 		t.Fatalf("ListObjects corrupt object error = %v", err)
+	}
+}
+
+func TestReferenceLifecycleIsGitCompatible(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("references")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	head, err := repo.ReadReference("HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head != (storage.Reference{Name: "HEAD", Target: "refs/heads/main", Symbolic: true}) {
+		t.Fatalf("initial HEAD = %#v", head)
+	}
+	if got := gitOutput(t, repo.Path(), "symbolic-ref", "HEAD"); got != "refs/heads/main\n" {
+		t.Fatalf("git symbolic-ref HEAD = %q", got)
+	}
+
+	firstID := writeObject(t, repo, storage.BlobObject, []byte("first"))
+	main := storage.Reference{Name: "refs/heads/main", Target: string(firstID)}
+	if err := repo.CreateReference(main); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitOutput(t, repo.Path(), "rev-parse", "refs/heads/main"); got != string(firstID)+"\n" {
+		t.Fatalf("git main = %q", got)
+	}
+
+	secondID := writeObject(t, repo, storage.BlobObject, []byte("second"))
+	main.Target = string(secondID)
+	if err := repo.UpdateReference(main); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := repo.ReadReference(main.Name); err != nil || got != main {
+		t.Fatalf("updated main = %#v, %v", got, err)
+	}
+
+	if err := repo.CreateReference(storage.Reference{Name: "refs/tags/latest", Target: "refs/heads/main", Symbolic: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateReference(storage.Reference{Name: "HEAD", Target: "refs/heads/next", Symbolic: true}); err != nil {
+		t.Fatal(err)
+	}
+	references, err := repo.ListReferences()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []storage.Reference{
+		{Name: "HEAD", Target: "refs/heads/next", Symbolic: true},
+		main,
+		{Name: "refs/tags/latest", Target: "refs/heads/main", Symbolic: true},
+	}
+	if !slices.Equal(references, want) {
+		t.Fatalf("ListReferences = %#v, want %#v", references, want)
+	}
+	if got := gitOutput(t, repo.Path(), "symbolic-ref", "HEAD"); got != "refs/heads/next\n" {
+		t.Fatalf("updated git HEAD = %q", got)
+	}
+
+	if err := repo.DeleteReference("refs/tags/latest"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ReadReference("refs/tags/latest"); !errors.Is(err, storage.ErrReferenceNotFound) {
+		t.Fatalf("deleted reference error = %v", err)
+	}
+}
+
+func TestReferencesRejectInvalidOperationsAndCorruption(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("reference-validation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := writeObject(t, repo, storage.BlobObject, []byte("target"))
+
+	for _, name := range []string{"", "main", "refs/heads/../escape", "refs/heads/.hidden", "refs/heads/a.lock", "refs/heads/a b"} {
+		err := repo.CreateReference(storage.Reference{Name: name, Target: string(id)})
+		if !errors.Is(err, storage.ErrInvalidReference) {
+			t.Errorf("CreateReference(%q) error = %v", name, err)
+		}
+	}
+	missingID := strings.Repeat("0", 40)
+	if err := repo.CreateReference(storage.Reference{Name: "refs/heads/missing", Target: missingID}); !errors.Is(err, storage.ErrObjectNotFound) {
+		t.Fatalf("missing target error = %v", err)
+	}
+	if err := repo.CreateReference(storage.Reference{Name: "refs/heads/bad-symbolic", Target: "HEAD", Symbolic: true}); !errors.Is(err, storage.ErrInvalidReference) {
+		t.Fatalf("invalid symbolic target error = %v", err)
+	}
+
+	branch := storage.Reference{Name: "refs/heads/main", Target: string(id)}
+	if err := repo.CreateReference(branch); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateReference(branch); !errors.Is(err, storage.ErrReferenceExists) {
+		t.Fatalf("duplicate create error = %v", err)
+	}
+	if err := repo.UpdateReference(storage.Reference{Name: "refs/heads/absent", Target: string(id)}); !errors.Is(err, storage.ErrReferenceNotFound) {
+		t.Fatalf("missing update error = %v", err)
+	}
+	if err := repo.DeleteReference("refs/heads/absent"); !errors.Is(err, storage.ErrReferenceNotFound) {
+		t.Fatalf("missing delete error = %v", err)
+	}
+
+	badPath := filepath.Join(repo.Path(), "refs", "heads", "corrupt")
+	if err := os.WriteFile(badPath, []byte("not-an-object\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ReadReference("refs/heads/corrupt"); !errors.Is(err, storage.ErrCorruptReference) {
+		t.Fatalf("corrupt read error = %v", err)
+	}
+	if _, err := repo.ListReferences(); !errors.Is(err, storage.ErrCorruptReference) {
+		t.Fatalf("corrupt list error = %v", err)
 	}
 }
 

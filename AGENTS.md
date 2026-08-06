@@ -67,6 +67,10 @@ whenever dependencies change or the web job fails before it starts.
   and annotated tag objects addressed by lowercase SHA-1 object IDs.
   `Repository.ListObjects` discovers every loose object, verifies it through
   the same read boundary, and returns the complete objects ordered by ID.
+  Loose references are managed through `CreateReference`, `ReadReference`,
+  `UpdateReference`, `ListReferences`, and `DeleteReference`. Direct targets
+  must name an existing verified object; symbolic targets may be unborn so
+  `HEAD` can identify the default branch before its first commit.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

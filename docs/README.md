@@ -41,3 +41,14 @@ object-ID order. Enumeration fails on a corrupt object rather than silently
 hiding it. For repositories populated through this storage boundary, its
 result is the same complete object set reported by stock Git's
 `git cat-file --batch-all-objects`.
+
+Named repository state is managed through `Repository.CreateReference`,
+`ReadReference`, `UpdateReference`, `ListReferences`, and `DeleteReference`.
+The interface handles loose references under `refs/` plus `HEAD`, returns
+direct object IDs and symbolic targets without resolving away their identity,
+and lists them deterministically by name. Direct targets must identify an
+existing object verified through `ReadObject`; symbolic references may point
+to an unborn reference, which is how a new repository exposes `HEAD` as
+`refs/heads/main` before the first commit. Reference mutations use Git-style
+lock files, atomic rename, and directory syncing, and their files remain
+interoperable with stock `git rev-parse`, `git show-ref`, and `git symbolic-ref`.

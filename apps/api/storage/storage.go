@@ -40,6 +40,16 @@ var (
 	ErrObjectNotFound = errors.New("git object not found")
 	// ErrCorruptObject indicates that stored bytes do not match their object ID.
 	ErrCorruptObject = errors.New("corrupt git object")
+	// ErrInvalidReference indicates an invalid reference name or target.
+	ErrInvalidReference = errors.New("invalid git reference")
+	// ErrReferenceNotFound indicates that a named reference does not exist.
+	ErrReferenceNotFound = errors.New("git reference not found")
+	// ErrReferenceExists indicates that a reference cannot be created twice.
+	ErrReferenceExists = errors.New("git reference already exists")
+	// ErrReferenceLocked indicates that another reference mutation is in progress.
+	ErrReferenceLocked = errors.New("git reference is locked")
+	// ErrCorruptReference indicates malformed reference storage.
+	ErrCorruptReference = errors.New("corrupt git reference")
 
 	validID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
@@ -343,13 +353,12 @@ func syncDirectory(path string) error {
 
 // Inspect validates the bare repository and reports its lifecycle metadata.
 func (r *Repository) Inspect() (Info, error) {
-	head, err := os.ReadFile(filepath.Join(r.path, "HEAD"))
+	head, err := r.ReadReference("HEAD")
 	if err != nil {
 		return Info{}, invalidRepository("read HEAD", err)
 	}
-	const prefix = "ref: refs/heads/"
-	headValue := strings.TrimSpace(string(head))
-	if !strings.HasPrefix(headValue, prefix) || len(headValue) == len(prefix) {
+	const prefix = "refs/heads/"
+	if !head.Symbolic || !strings.HasPrefix(head.Target, prefix) || len(head.Target) == len(prefix) {
 		return Info{}, invalidRepository("HEAD is not a branch reference", nil)
 	}
 
@@ -385,7 +394,7 @@ func (r *Repository) Inspect() (Info, error) {
 	}
 	return Info{
 		ID:            r.id,
-		DefaultBranch: strings.TrimPrefix(headValue, prefix),
+		DefaultBranch: strings.TrimPrefix(head.Target, prefix),
 		Bare:          true,
 		Empty:         empty,
 	}, nil

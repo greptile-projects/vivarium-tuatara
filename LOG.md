@@ -14,3 +14,4 @@ Fetch the timestamp on Linux with: date -u '+%Y-%m-%dT%H:%M:%SZ'
 2026-08-06T19:06:43Z: Made idempotent object-write retries repeat both fanout and parent objects-directory syncs, so a retry after a post-publication durability failure cannot acknowledge a still-unsynced fanout entry.
 2026-08-06T19:17:13Z: Made repository creation sync the published bare repository directory and storage root after rename, preventing successful creation from acknowledging an unpersisted repository entry.
 2026-08-06T19:26:32Z: Added deterministic, integrity-checked loose-object enumeration through `Repository.ListObjects`; compatibility coverage proves its identity, type, size, and content set matches `git cat-file --batch-all-objects`.
+2026-08-06T19:46:57Z: Added atomic create/read/update/list/delete operations for durable loose Git references, including verified direct targets, unborn symbolic targets, default-branch `HEAD`, strict validation, and stock Git compatibility coverage.
