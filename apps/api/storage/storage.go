@@ -235,12 +235,56 @@ func readConfigSection(file *os.File, wanted string) (map[string]string, error) 
 		if !found {
 			continue
 		}
-		values[strings.ToLower(strings.TrimSpace(key))] = strings.TrimSpace(value)
+		value, err := parseConfigValue(value)
+		if err != nil {
+			return nil, err
+		}
+		values[strings.ToLower(strings.TrimSpace(key))] = value
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
 	return values, nil
+}
+
+func parseConfigValue(raw string) (string, error) {
+	var value strings.Builder
+	quoted := false
+	escaped := false
+	for _, character := range strings.TrimSpace(raw) {
+		if escaped {
+			switch character {
+			case 'n':
+				value.WriteByte('\n')
+			case 't':
+				value.WriteByte('\t')
+			case 'b':
+				value.WriteByte('\b')
+			case '\\', '"':
+				value.WriteRune(character)
+			default:
+				return "", fmt.Errorf("invalid config escape %q", character)
+			}
+			escaped = false
+			continue
+		}
+		if character == '\\' {
+			escaped = true
+			continue
+		}
+		if character == '"' {
+			quoted = !quoted
+			continue
+		}
+		if !quoted && (character == '#' || character == ';') {
+			break
+		}
+		value.WriteRune(character)
+	}
+	if quoted || escaped {
+		return "", errors.New("unterminated quoted config value")
+	}
+	return strings.TrimSpace(value.String()), nil
 }
 
 func invalidRepository(message string, err error) error {

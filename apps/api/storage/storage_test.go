@@ -93,7 +93,7 @@ func TestOpenDistinguishesMissingAndInvalidRepositories(t *testing.T) {
 	}
 }
 
-func TestOpenRejectsUnsupportedRepositoryFormat(t *testing.T) {
+func TestOpenParsesRepositoryFormat(t *testing.T) {
 	store, err := storage.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -102,9 +102,12 @@ func TestOpenRejectsUnsupportedRepositoryFormat(t *testing.T) {
 	for _, test := range []struct {
 		id          string
 		replacement string
+		valid       bool
 	}{
-		{id: "unsupported", replacement: "repositoryformatversion = 999"},
-		{id: "missing", replacement: ""},
+		{id: "quoted", replacement: `repositoryformatversion = "0"`, valid: true},
+		{id: "commented", replacement: "repositoryformatversion = 0 # version", valid: true},
+		{id: "unsupported", replacement: "repositoryformatversion = 999", valid: false},
+		{id: "missing", replacement: "", valid: false},
 	} {
 		repo, err := store.Create(test.id)
 		if err != nil {
@@ -120,8 +123,12 @@ func TestOpenRejectsUnsupportedRepositoryFormat(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if _, err := store.Open(test.id); !errors.Is(err, storage.ErrInvalidRepository) {
-			t.Errorf("Open(%q) error = %v", test.id, err)
+		_, err = store.Open(test.id)
+		if test.valid && err != nil {
+			t.Errorf("Open(%q) rejected valid Git config: %v", test.id, err)
+		}
+		if !test.valid && !errors.Is(err, storage.ErrInvalidRepository) {
+			t.Errorf("Open(%q) error = %v, want ErrInvalidRepository", test.id, err)
 		}
 	}
 }
