@@ -70,6 +70,72 @@ func TestWriteAndReadObjectsAreGitCompatible(t *testing.T) {
 	gitOutput(t, repo.Path(), "fsck", "--full")
 }
 
+func TestListObjectsMatchesGitBatchAllObjects(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("enumeration")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blob := []byte("discoverable content\n")
+	blobID := writeObject(t, repo, storage.BlobObject, blob)
+	tree := append([]byte("100644 file.txt\x00"), decodeObjectID(t, blobID)...)
+	treeID := writeObject(t, repo, storage.TreeObject, tree)
+	commit := []byte(fmt.Sprintf("tree %s\nauthor Test Author <test@example.com> 1700000000 +0000\ncommitter Test Author <test@example.com> 1700000000 +0000\n\nenumerate objects\n", treeID))
+	commitID := writeObject(t, repo, storage.CommitObject, commit)
+	tag := []byte(fmt.Sprintf("object %s\ntype commit\ntag discovered\ntagger Test Author <test@example.com> 1700000000 +0000\n\nvisible tag\n", commitID))
+	writeObject(t, repo, storage.TagObject, tag)
+
+	got, err := repo.ListObjects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitLines := strings.Split(strings.TrimSpace(gitOutput(t, repo.Path(), "cat-file",
+		"--batch-check=%(objectname) %(objecttype) %(objectsize)", "--batch-all-objects")), "\n")
+	if len(got) != len(gitLines) {
+		t.Fatalf("ListObjects returned %d objects, git returned %d: %q", len(got), len(gitLines), gitLines)
+	}
+	for index, object := range got {
+		wantLine := fmt.Sprintf("%s %s %d", object.ID, object.Type, object.Size)
+		if wantLine != gitLines[index] {
+			t.Errorf("object %d metadata = %q, git reports %q", index, wantLine, gitLines[index])
+		}
+		gitContent := gitOutputBytes(t, repo.Path(), "cat-file", string(object.Type), string(object.ID))
+		if !bytes.Equal(object.Content, gitContent) {
+			t.Errorf("object %s content differs from git cat-file", object.ID)
+		}
+		if object.Size != int64(len(object.Content)) {
+			t.Errorf("object %s size = %d, content length = %d", object.ID, object.Size, len(object.Content))
+		}
+	}
+}
+
+func TestListObjectsRejectsCorruptDiscoverableObject(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("corrupt-enumeration")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := writeObject(t, repo, storage.BlobObject, []byte("content"))
+	path := filepath.Join(repo.Path(), "objects", string(id)[:2], string(id)[2:])
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("not an object"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repo.ListObjects(); !errors.Is(err, storage.ErrCorruptObject) {
+		t.Fatalf("ListObjects corrupt object error = %v", err)
+	}
+}
+
 func TestObjectsRejectInvalidInputsAndCorruption(t *testing.T) {
 	store, err := storage.New(t.TempDir())
 	if err != nil {

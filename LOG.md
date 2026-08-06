@@ -13,3 +13,4 @@ Fetch the timestamp on Linux with: date -u '+%Y-%m-%dT%H:%M:%SZ'
 2026-08-06T18:51:26Z: Hardened object storage after review with file/directory durability syncs, a 100 MiB object bound and header-first decompression, and rejection of trailing loose-object bytes that stock Git considers corrupt.
 2026-08-06T19:06:43Z: Made idempotent object-write retries repeat both fanout and parent objects-directory syncs, so a retry after a post-publication durability failure cannot acknowledge a still-unsynced fanout entry.
 2026-08-06T19:17:13Z: Made repository creation sync the published bare repository directory and storage root after rename, preventing successful creation from acknowledging an unpersisted repository entry.
+2026-08-06T19:26:32Z: Added deterministic, integrity-checked loose-object enumeration through `Repository.ListObjects`; compatibility coverage proves its identity, type, size, and content set matches `git cat-file --batch-all-objects`.

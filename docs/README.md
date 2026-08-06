@@ -34,3 +34,10 @@ objects, invalid headers, size mismatches, and content that does not hash to
 the requested ID. Reads and writes are limited to 100 MiB per object so corrupt
 compressed input cannot cause unbounded allocation. These files are directly
 readable by stock `git cat-file`.
+
+`Repository.ListObjects` discovers every canonical loose-object path and
+returns the verified identity, type, size, and exact content of each object in
+object-ID order. Enumeration fails on a corrupt object rather than silently
+hiding it. For repositories populated through this storage boundary, its
+result is the same complete object set reported by stock Git's
+`git cat-file --batch-all-objects`.
