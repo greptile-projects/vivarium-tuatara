@@ -90,3 +90,19 @@ merged commit history; branch references; lightweight and annotated tags; and
 symbolic `HEAD`. After reopening and reading the repository through the same
 interface, stock `git fsck --full` verifies the complete reachable graph, and
 stock revision parsing verifies `HEAD` and both tag forms.
+
+## Git HTTP transport
+
+The API exposes a read-only smart HTTP remote at
+`/git/<storage-id>.git`. `GET .../info/refs?service=git-upload-pack` advertises
+the repository and `POST .../git-upload-pack` serves the protocol-v2 `ls-refs`
+exchange used by current Git clients. Both protocol v0 and v2 are passed to
+stock `git upload-pack`, preserving Git's capability, symbolic `HEAD`, peeled
+tag, and unborn-reference semantics. As a result, `git ls-remote` can discover
+empty and populated repositories; in particular, protocol v2 advertises an
+empty repository's unborn `HEAD` as `refs/heads/main`.
+
+The API opens repositories through the storage boundary before invoking Git,
+so remote IDs use the same validation and stable identity as application
+storage. Set `GIT_STORAGE_ROOT` to the store directory when starting the API;
+it defaults to `repositories` relative to the process working directory.
