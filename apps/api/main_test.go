@@ -137,6 +137,86 @@ func TestGitCloneEmptyAndPopulatedRepositories(t *testing.T) {
 	}
 }
 
+func TestGitFetchAndPullAdvancedPrimaryBranch(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("synchronized")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	initialContent, err := repo.WriteObject(storage.BlobObject, []byte("first\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialTree := writeTestTree(t, repo, testTreeEntry{mode: "100644", name: "status.txt", id: initialContent})
+	initial := writeTestCommit(t, repo, initialTree, nil, 1700000000, "initial")
+	if err := repo.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(initial)}); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(newHandler(store))
+	t.Cleanup(server.Close)
+	workingCopy := filepath.Join(t.TempDir(), "working-copy")
+	gitCommand(t, "", "clone", server.URL+"/git/"+repo.ID()+".git", workingCopy)
+
+	fetchedContent, err := repo.WriteObject(storage.BlobObject, []byte("second\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fetchedTree := writeTestTree(t, repo, testTreeEntry{mode: "100644", name: "status.txt", id: fetchedContent})
+	fetched := writeTestCommit(t, repo, fetchedTree, []storage.ObjectID{initial}, 1700000001, "second")
+	if err := repo.UpdateReference(storage.Reference{Name: "refs/heads/main", Target: string(fetched)}); err != nil {
+		t.Fatal(err)
+	}
+
+	packsBeforeFetch := packIndexes(t, workingCopy)
+	fetchTrace := gitCommandWithEnv(t, workingCopy, []string{"GIT_TRACE_PACKET=1"}, "-c", "fetch.unpackLimit=1", "fetch", "origin")
+	if !strings.Contains(fetchTrace, "have "+string(initial)) {
+		t.Fatalf("fetch negotiation did not report existing commit %s as a have:\n%s", initial, fetchTrace)
+	}
+	packsAfterFetch := packIndexes(t, workingCopy)
+	newPacks := difference(packsAfterFetch, packsBeforeFetch)
+	if len(newPacks) != 1 {
+		t.Fatalf("new fetch pack indexes = %v, want exactly one", newPacks)
+	}
+	gotTransferred := packedObjectIDs(t, workingCopy, newPacks[0])
+	wantTransferred := []string{string(fetchedContent), string(fetchedTree), string(fetched)}
+	sort.Strings(wantTransferred)
+	if strings.Join(gotTransferred, "\n") != strings.Join(wantTransferred, "\n") {
+		t.Fatalf("fetch transferred object IDs =\n%s\nwant only missing objects:\n%s", strings.Join(gotTransferred, "\n"), strings.Join(wantTransferred, "\n"))
+	}
+	if got := gitCommand(t, workingCopy, "rev-parse", "HEAD"); got != string(initial)+"\n" {
+		t.Fatalf("HEAD after fetch = %q, want unchanged %s", got, initial)
+	}
+	if got := gitCommand(t, workingCopy, "rev-parse", "refs/remotes/origin/main"); got != string(fetched)+"\n" {
+		t.Fatalf("origin/main after fetch = %q, want %s", got, fetched)
+	}
+	gitCommand(t, workingCopy, "cat-file", "-e", string(fetched)+"^{commit}")
+	assertFile(t, filepath.Join(workingCopy, "status.txt"), "first\n", false)
+
+	pulledContent, err := repo.WriteObject(storage.BlobObject, []byte("third\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pulledTree := writeTestTree(t, repo, testTreeEntry{mode: "100644", name: "status.txt", id: pulledContent})
+	pulled := writeTestCommit(t, repo, pulledTree, []storage.ObjectID{fetched}, 1700000002, "third")
+	if err := repo.UpdateReference(storage.Reference{Name: "refs/heads/main", Target: string(pulled)}); err != nil {
+		t.Fatal(err)
+	}
+
+	gitCommand(t, workingCopy, "pull", "--ff-only")
+	if got := gitCommand(t, workingCopy, "rev-parse", "HEAD"); got != string(pulled)+"\n" {
+		t.Fatalf("HEAD after pull = %q, want %s", got, pulled)
+	}
+	if got := gitCommand(t, workingCopy, "rev-list", "--first-parent", "HEAD"); got != fmt.Sprintf("%s\n%s\n%s\n", pulled, fetched, initial) {
+		t.Fatalf("history after pull = %q", got)
+	}
+	assertFile(t, filepath.Join(workingCopy, "status.txt"), "third\n", false)
+}
+
 func TestGitLsRemoteAdvertisesEmptyAndPopulatedRepositories(t *testing.T) {
 	store, err := storage.New(t.TempDir())
 	if err != nil {
@@ -339,6 +419,57 @@ func gitCommand(t *testing.T, directory string, arguments ...string) string {
 		t.Fatalf("git %s failed: %v\n%s", strings.Join(arguments, " "), err, output)
 	}
 	return string(output)
+}
+
+func gitCommandWithEnv(t *testing.T, directory string, environment []string, arguments ...string) string {
+	t.Helper()
+	command := exec.Command("git", arguments...)
+	command.Dir = directory
+	command.Env = append(os.Environ(), environment...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(arguments, " "), err, output)
+	}
+	return string(output)
+}
+
+func packIndexes(t *testing.T, workingCopy string) []string {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(workingCopy, ".git", "objects", "pack", "*.idx"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return matches
+}
+
+func difference(after, before []string) []string {
+	existing := make(map[string]struct{}, len(before))
+	for _, value := range before {
+		existing[value] = struct{}{}
+	}
+	var added []string
+	for _, value := range after {
+		if _, ok := existing[value]; !ok {
+			added = append(added, value)
+		}
+	}
+	return added
+}
+
+func packedObjectIDs(t *testing.T, workingCopy, indexPath string) []string {
+	t.Helper()
+	output := gitCommand(t, workingCopy, "verify-pack", "-v", indexPath)
+	var ids []string
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && len(fields[0]) == 40 {
+			if _, err := hex.DecodeString(fields[0]); err == nil {
+				ids = append(ids, fields[0])
+			}
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func assertFile(t *testing.T, path, wantContent string, wantExecutable bool) {
