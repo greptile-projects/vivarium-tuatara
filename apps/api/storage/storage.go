@@ -203,7 +203,6 @@ func (r *Repository) WriteObject(objectType ObjectType, content []byte) (ObjectI
 		return "", fmt.Errorf("close object: %w", err)
 	}
 
-	published := false
 	if err := os.Link(tempPath, path); err != nil {
 		if !errors.Is(err, os.ErrExist) {
 			return "", fmt.Errorf("publish object: %w", err)
@@ -213,20 +212,15 @@ func (r *Repository) WriteObject(objectType ObjectType, content []byte) (ObjectI
 		if _, readErr := r.ReadObject(id); readErr != nil {
 			return "", readErr
 		}
-	} else {
-		published = true
 	}
-	// Sync even on an idempotent retry: the existing link may be from a prior
-	// call whose directory sync failed after publication.
+	// Sync both levels even on an idempotent retry: the existing link may be
+	// from a prior call whose directory sync failed after publication.
 	if err := syncDirectory(filepath.Dir(path)); err != nil {
 		return "", fmt.Errorf("sync object directory: %w", err)
 	}
-	if published {
-		// A newly created fanout directory also needs its entry persisted in the
-		// repository's objects directory.
-		if err := syncDirectory(filepath.Dir(filepath.Dir(path))); err != nil {
-			return "", fmt.Errorf("sync objects directory: %w", err)
-		}
+	// The fanout directory's entry is persisted by its parent objects directory.
+	if err := syncDirectory(filepath.Dir(filepath.Dir(path))); err != nil {
+		return "", fmt.Errorf("sync objects directory: %w", err)
 	}
 	return id, nil
 }

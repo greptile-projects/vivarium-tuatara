@@ -11,3 +11,4 @@ Fetch the timestamp on Linux with: date -u '+%Y-%m-%dT%H:%M:%SZ'
 2026-08-06T18:26:56Z: Extended Git-config section parsing to accept valid trailing comments such as `[core] # repository settings`, with compatibility regression coverage.
 2026-08-06T18:38:28Z: Added atomic, integrity-checked loose-object writes and reads for blobs, trees, commits, and annotated tags; compatibility tests verify exact platform and `git cat-file` round trips plus `git fsck --full`.
 2026-08-06T18:51:26Z: Hardened object storage after review with file/directory durability syncs, a 100 MiB object bound and header-first decompression, and rejection of trailing loose-object bytes that stock Git considers corrupt.
+2026-08-06T19:06:43Z: Made idempotent object-write retries repeat both fanout and parent objects-directory syncs, so a retry after a post-publication durability failure cannot acknowledge a still-unsynced fanout entry.
