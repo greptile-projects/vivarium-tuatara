@@ -17,6 +17,16 @@ import (
 const (
 	uploadPackService  = "git-upload-pack"
 	receivePackService = "git-receive-pack"
+	primaryBranchHook  = `#!/bin/sh
+while read -r old new ref
+do
+	if test "$ref" != "refs/heads/main"
+	then
+		echo "only refs/heads/main may be updated" >&2
+		exit 1
+	fi
+done
+`
 )
 
 func main() {
@@ -109,6 +119,7 @@ func runUploadPack(w http.ResponseWriter, r *http.Request, repo *storage.Reposit
 func runGitService(w http.ResponseWriter, r *http.Request, repo *storage.Repository, service string, advertise bool) {
 	commandName := strings.TrimPrefix(service, "git-")
 	args := []string{commandName, "--stateless-rpc"}
+	var removeHooks func()
 	if service == receivePackService {
 		// This rung accepts creation and fast-forward progress only. Stock Git
 		// enforces these protections before committing the ref transaction.
@@ -118,6 +129,20 @@ func runGitService(w http.ResponseWriter, r *http.Request, repo *storage.Reposit
 			"-c", "receive.hideRefs=refs/",
 			"-c", "receive.hideRefs=!refs/heads/main",
 		}, args...)
+		if !advertise {
+			hooksPath, err := os.MkdirTemp("", "vivarium-receive-hooks-")
+			if err != nil {
+				log.Printf("prepare %s for repository %s: %v", service, repo.ID(), err)
+				return
+			}
+			removeHooks = func() { _ = os.RemoveAll(hooksPath) }
+			defer removeHooks()
+			if err := os.WriteFile(hooksPath+"/pre-receive", []byte(primaryBranchHook), 0o700); err != nil {
+				log.Printf("prepare %s for repository %s: %v", service, repo.ID(), err)
+				return
+			}
+			args = append([]string{"-c", "core.hooksPath=" + hooksPath}, args...)
+		}
 	}
 	if advertise {
 		args = append(args, "--advertise-refs")

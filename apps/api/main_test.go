@@ -272,6 +272,7 @@ func TestGitPushCreatesAndAdvancesPrimaryBranchWithoutLosingHistory(t *testing.T
 	gitCommand(t, workingCopy, "branch", "secondary", advanced)
 	gitCommand(t, workingCopy, "tag", "secondary-tag", advanced)
 	gitCommandFails(t, workingCopy, "push", "origin", "secondary")
+	gitCommandFails(t, workingCopy, "push", "origin", advanced+":refs/heads/main/feature")
 	gitCommandFails(t, workingCopy, "push", "origin", "secondary-tag")
 	wantRefs := advanced + "\tHEAD\n" + advanced + "\trefs/heads/main\n"
 	if got := lsRemote(t, server.URL+"/git/"+repo.ID()+".git"); got != wantRefs {
