@@ -3,6 +3,7 @@ package storage
 
 import (
 	"bufio"
+	"bytes"
 	"compress/zlib"
 	"crypto/sha1"
 	"encoding/hex"
@@ -320,7 +321,10 @@ func (r *Repository) ReadObject(id ObjectID) (Object, error) {
 		_ = decompressed.Close()
 		return Object{}, corruptObject(id, errors.New("invalid or oversized object header"))
 	}
-	header = header[:len(header)-1]
+	// ReadSlice aliases the reader's buffer, which may be reused while reading
+	// larger content. Preserve the header because it is needed for the final
+	// identity verification.
+	header = bytes.Clone(header[:len(header)-1])
 	objectTypeText, sizeText, found := strings.Cut(string(header), " ")
 	objectType := ObjectType(objectTypeText)
 	size, sizeErr := strconv.ParseInt(sizeText, 10, 64)

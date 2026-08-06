@@ -71,6 +71,180 @@ func TestWriteAndReadObjectsAreGitCompatible(t *testing.T) {
 	gitOutput(t, repo.Path(), "fsck", "--full")
 }
 
+func TestTreesAndCommitAncestryAreGitCompatible(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("history")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	readmeID := writeObject(t, repo, storage.BlobObject, []byte("# project\n"))
+	mainID := writeObject(t, repo, storage.BlobObject, []byte("package main\n"))
+	sourceTree := append([]byte("100644 main.go\x00"), decodeObjectID(t, mainID)...)
+	sourceTreeID := writeObject(t, repo, storage.TreeObject, sourceTree)
+	rootTree := append([]byte("100644 README.md\x00"), decodeObjectID(t, readmeID)...)
+	rootTree = append(rootTree, []byte("40000 src\x00")...)
+	rootTree = append(rootTree, decodeObjectID(t, sourceTreeID)...)
+	rootTreeID := writeObject(t, repo, storage.TreeObject, rootTree)
+
+	firstID := writeObject(t, repo, storage.CommitObject, commitContent(rootTreeID, nil, 1700000000, "initial snapshot"))
+	secondID := writeObject(t, repo, storage.CommitObject, commitContent(rootTreeID, []storage.ObjectID{firstID}, 1700000100, "add source"))
+	sideID := writeObject(t, repo, storage.CommitObject, commitContent(rootTreeID, []storage.ObjectID{firstID}, 1700000200, "side work"))
+	mergeID := writeObject(t, repo, storage.CommitObject, commitContent(rootTreeID, []storage.ObjectID{secondID, sideID}, 1700000300, "merge work"))
+	if err := repo.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(mergeID)}); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := repo.ReadTree(rootTreeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEntries := []storage.TreeEntry{
+		{Name: "README.md", Mode: "100644", ID: readmeID, Type: storage.BlobObject},
+		{Name: "src", Mode: "40000", ID: sourceTreeID, Type: storage.TreeObject},
+	}
+	if !slices.Equal(entries, wantEntries) {
+		t.Fatalf("ReadTree = %#v, want %#v", entries, wantEntries)
+	}
+	walked, err := repo.WalkTree(rootTreeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPaths := []string{"README.md", "src", "src/main.go"}
+	for index, want := range wantPaths {
+		if walked[index].Path != want {
+			t.Errorf("walked path %d = %q, want %q", index, walked[index].Path, want)
+		}
+	}
+	gitTree := gitOutput(t, repo.Path(), "ls-tree", "-r", "--name-only", string(rootTreeID))
+	if gitTree != "README.md\nsrc/main.go\n" {
+		t.Fatalf("git ls-tree = %q", gitTree)
+	}
+
+	merge, err := repo.ReadCommit(mergeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merge.Tree != rootTreeID || !slices.Equal(merge.Parents, []storage.ObjectID{secondID, sideID}) || string(merge.Message) != "merge work\n" {
+		t.Fatalf("ReadCommit = %#v", merge)
+	}
+	ancestry, err := repo.ListCommitAncestry(mergeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotIDs := make([]storage.ObjectID, len(ancestry))
+	for index, commit := range ancestry {
+		gotIDs[index] = commit.ID
+	}
+	wantIDs := []storage.ObjectID{mergeID, secondID, firstID, sideID}
+	if !slices.Equal(gotIDs, wantIDs) {
+		t.Fatalf("ListCommitAncestry IDs = %v, want %v", gotIDs, wantIDs)
+	}
+	if got := gitOutput(t, repo.Path(), "log", "--format=%H", "--all"); got != strings.Join([]string{string(mergeID), string(sideID), string(secondID), string(firstID)}, "\n")+"\n" {
+		t.Fatalf("git log = %q", got)
+	}
+	if got := gitOutput(t, repo.Path(), "cat-file", "-p", string(mergeID)); got != string(commitContent(rootTreeID, []storage.ObjectID{secondID, sideID}, 1700000300, "merge work")) {
+		t.Fatalf("git cat-file commit changed content: %q", got)
+	}
+}
+
+func TestGraphReadersRejectWrongTypesAndBrokenEdges(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("broken-graph")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobID := writeObject(t, repo, storage.BlobObject, []byte("blob"))
+	if _, err := repo.ReadTree(blobID); !errors.Is(err, storage.ErrCorruptObject) {
+		t.Fatalf("ReadTree(blob) error = %v", err)
+	}
+	badTree := append([]byte("40000 directory\x00"), decodeObjectID(t, blobID)...)
+	badTreeID := writeObject(t, repo, storage.TreeObject, badTree)
+	if _, err := repo.WalkTree(badTreeID); !errors.Is(err, storage.ErrCorruptObject) {
+		t.Fatalf("WalkTree(type mismatch) error = %v", err)
+	}
+	missingParent := storage.ObjectID(strings.Repeat("0", 40))
+	emptyTreeID := writeObject(t, repo, storage.TreeObject, nil)
+	commitID := writeObject(t, repo, storage.CommitObject, commitContent(emptyTreeID, []storage.ObjectID{missingParent}, 1700000000, "broken"))
+	if _, err := repo.ListCommitAncestry(commitID); !errors.Is(err, storage.ErrCorruptObject) {
+		t.Fatalf("ListCommitAncestry(missing parent) error = %v", err)
+	}
+}
+
+func TestReadTreeRejectsDuplicateAndNoncanonicalEntries(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("tree-order")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobID := writeObject(t, repo, storage.BlobObject, []byte("content"))
+	entry := func(name string) []byte {
+		return append([]byte("100644 "+name+"\x00"), decodeObjectID(t, blobID)...)
+	}
+	for _, test := range []struct {
+		name    string
+		entries []string
+	}{
+		{name: "duplicate", entries: []string{"same", "same"}},
+		{name: "unsorted", entries: []string{"second", "first"}},
+	} {
+		var content []byte
+		for _, name := range test.entries {
+			content = append(content, entry(name)...)
+		}
+		id := writeObject(t, repo, storage.TreeObject, content)
+		if _, err := repo.ReadTree(id); !errors.Is(err, storage.ErrCorruptObject) {
+			t.Errorf("ReadTree(%s) error = %v", test.name, err)
+		}
+	}
+	emptyTreeID := writeObject(t, repo, storage.TreeObject, nil)
+	mixedMode := entry("same")
+	mixedMode = append(mixedMode, []byte("40000 same\x00")...)
+	mixedMode = append(mixedMode, decodeObjectID(t, emptyTreeID)...)
+	mixedModeID := writeObject(t, repo, storage.TreeObject, mixedMode)
+	if _, err := repo.ReadTree(mixedModeID); !errors.Is(err, storage.ErrCorruptObject) {
+		t.Fatalf("ReadTree(mixed-mode duplicate) error = %v", err)
+	}
+}
+
+func TestReadCommitRejectsLateParentHeader(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("late-parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	treeID := writeObject(t, repo, storage.TreeObject, nil)
+	parentID := writeObject(t, repo, storage.CommitObject, commitContent(treeID, nil, 1700000000, "parent"))
+	content := []byte(fmt.Sprintf("tree %s\nauthor Test Author <test@example.com> 1700000001 +0000\ncommitter Test Author <test@example.com> 1700000001 +0000\nparent %s\n\nlate parent\n", treeID, parentID))
+	commitID := writeObject(t, repo, storage.CommitObject, content)
+	if _, err := repo.ReadCommit(commitID); !errors.Is(err, storage.ErrCorruptObject) {
+		t.Fatalf("ReadCommit(late parent) error = %v", err)
+	}
+}
+
+func commitContent(tree storage.ObjectID, parents []storage.ObjectID, timestamp int64, message string) []byte {
+	var content strings.Builder
+	fmt.Fprintf(&content, "tree %s\n", tree)
+	for _, parent := range parents {
+		fmt.Fprintf(&content, "parent %s\n", parent)
+	}
+	fmt.Fprintf(&content, "author Test Author <test@example.com> %d +0000\n", timestamp)
+	fmt.Fprintf(&content, "committer Test Author <test@example.com> %d +0000\n\n%s\n", timestamp, message)
+	return []byte(content.String())
+}
+
 func TestListObjectsMatchesGitBatchAllObjects(t *testing.T) {
 	store, err := storage.New(t.TempDir())
 	if err != nil {
