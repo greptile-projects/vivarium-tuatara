@@ -83,8 +83,10 @@ whenever dependencies change or the web job fails before it starts.
   Read-only smart HTTP remotes are exposed at `/git/<storage-id>.git`. Discovery
   and upload-pack RPCs delegate to the installed stock `git` binary, support
   protocol v0 and v2, and advertise unborn `HEAD` so empty repositories retain
-  their `main` default branch. `$GIT_STORAGE_ROOT` selects the repository root
-  used by the API process and defaults to `repositories`.
+  their `main` default branch. Stock Git clones reproduce all advertised,
+  reachable objects and check out populated repositories on `main`; empty
+  clones retain an unborn local `main`. `$GIT_STORAGE_ROOT` selects the
+  repository root used by the API process and defaults to `repositories`.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 
