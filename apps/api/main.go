@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
@@ -95,6 +96,13 @@ func runUploadPack(w http.ResponseWriter, r *http.Request, repo *storage.Reposit
 	}
 	args = append(args, repo.Path())
 	command := exec.CommandContext(r.Context(), "git", args...)
+	// upload-pack can spawn pack-objects. Give the invocation a dedicated
+	// process group and cancel the whole group so descendants cannot outlive an
+	// abandoned HTTP request.
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Cancel = func() error {
+		return syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+	}
 	command.Stdout = w
 	command.Stderr = os.Stderr
 	if !advertise {
