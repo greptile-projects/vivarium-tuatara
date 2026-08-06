@@ -3,7 +3,6 @@ package storage
 
 import (
 	"bufio"
-	"bytes"
 	"compress/zlib"
 	"crypto/sha1"
 	"encoding/hex"
@@ -18,6 +17,12 @@ import (
 )
 
 const defaultBranch = "main"
+
+// MaxObjectSize bounds both accepted writes and allocations while reading
+// untrusted loose objects. It matches the common 100 MiB hosting limit.
+const MaxObjectSize int64 = 100 << 20
+
+const maxObjectHeaderSize = 64
 
 var (
 	// ErrInvalidID indicates that an identifier cannot safely name a repository.
@@ -153,6 +158,9 @@ func (r *Repository) WriteObject(objectType ObjectType, content []byte) (ObjectI
 	if !validObjectType(objectType) {
 		return "", fmt.Errorf("type %q: %w", objectType, ErrInvalidObject)
 	}
+	if int64(len(content)) > MaxObjectSize {
+		return "", fmt.Errorf("object exceeds %d bytes: %w", MaxObjectSize, ErrInvalidObject)
+	}
 
 	header := []byte(fmt.Sprintf("%s %d\x00", objectType, len(content)))
 	hash := sha1.New()
@@ -179,15 +187,23 @@ func (r *Repository) WriteObject(objectType ObjectType, content []byte) (ObjectI
 	if closeErr := compressed.Close(); writeErr == nil {
 		writeErr = closeErr
 	}
-	if closeErr := temp.Close(); writeErr == nil {
-		writeErr = closeErr
-	}
 	if writeErr != nil {
+		_ = temp.Close()
 		return "", fmt.Errorf("write object: %w", writeErr)
 	}
 	if err := os.Chmod(tempPath, 0o444); err != nil {
+		_ = temp.Close()
 		return "", fmt.Errorf("set object permissions: %w", err)
 	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return "", fmt.Errorf("sync object: %w", err)
+	}
+	if err := temp.Close(); err != nil {
+		return "", fmt.Errorf("close object: %w", err)
+	}
+
+	published := false
 	if err := os.Link(tempPath, path); err != nil {
 		if !errors.Is(err, os.ErrExist) {
 			return "", fmt.Errorf("publish object: %w", err)
@@ -196,6 +212,20 @@ func (r *Repository) WriteObject(objectType ObjectType, content []byte) (ObjectI
 		// corrupted, so verify it before reporting a successful idempotent write.
 		if _, readErr := r.ReadObject(id); readErr != nil {
 			return "", readErr
+		}
+	} else {
+		published = true
+	}
+	// Sync even on an idempotent retry: the existing link may be from a prior
+	// call whose directory sync failed after publication.
+	if err := syncDirectory(filepath.Dir(path)); err != nil {
+		return "", fmt.Errorf("sync object directory: %w", err)
+	}
+	if published {
+		// A newly created fanout directory also needs its entry persisted in the
+		// repository's objects directory.
+		if err := syncDirectory(filepath.Dir(filepath.Dir(path))); err != nil {
+			return "", fmt.Errorf("sync objects directory: %w", err)
 		}
 	}
 	return id, nil
@@ -216,36 +246,59 @@ func (r *Repository) ReadObject(id ObjectID) (Object, error) {
 	}
 	defer file.Close()
 
-	decompressed, err := zlib.NewReader(file)
+	compressed := bufio.NewReader(file)
+	decompressed, err := zlib.NewReader(compressed)
 	if err != nil {
 		return Object{}, corruptObject(id, err)
 	}
-	raw, readErr := io.ReadAll(decompressed)
-	closeErr := decompressed.Close()
-	if readErr != nil {
-		return Object{}, corruptObject(id, readErr)
+	reader := bufio.NewReaderSize(decompressed, maxObjectHeaderSize)
+	header, headerErr := reader.ReadSlice(0)
+	if headerErr != nil {
+		_ = decompressed.Close()
+		return Object{}, corruptObject(id, errors.New("invalid or oversized object header"))
 	}
-	if closeErr != nil {
-		return Object{}, corruptObject(id, closeErr)
-	}
-
-	nul := bytes.IndexByte(raw, 0)
-	if nul < 0 {
-		return Object{}, corruptObject(id, errors.New("missing header terminator"))
-	}
-	objectTypeText, sizeText, found := strings.Cut(string(raw[:nul]), " ")
+	header = header[:len(header)-1]
+	objectTypeText, sizeText, found := strings.Cut(string(header), " ")
 	objectType := ObjectType(objectTypeText)
-	size, sizeErr := strconv.ParseUint(sizeText, 10, 64)
-	content := raw[nul+1:]
-	if !found || !validObjectType(objectType) || sizeErr != nil ||
-		sizeText != strconv.FormatUint(size, 10) || size != uint64(len(content)) {
+	size, sizeErr := strconv.ParseInt(sizeText, 10, 64)
+	if !found || !validObjectType(objectType) || sizeErr != nil || size < 0 ||
+		sizeText != strconv.FormatInt(size, 10) || size > MaxObjectSize {
+		_ = decompressed.Close()
 		return Object{}, corruptObject(id, errors.New("invalid object header"))
 	}
-	hash := sha1.Sum(raw)
-	if hex.EncodeToString(hash[:]) != string(id) {
+
+	content := make([]byte, int(size))
+	if _, err := io.ReadFull(reader, content); err != nil {
+		_ = decompressed.Close()
+		return Object{}, corruptObject(id, errors.New("object content shorter than declared size"))
+	}
+	if _, err := reader.ReadByte(); !errors.Is(err, io.EOF) {
+		_ = decompressed.Close()
+		return Object{}, corruptObject(id, errors.New("object content exceeds declared size"))
+	}
+	if err := decompressed.Close(); err != nil {
+		return Object{}, corruptObject(id, err)
+	}
+	if _, err := compressed.ReadByte(); !errors.Is(err, io.EOF) {
+		return Object{}, corruptObject(id, errors.New("garbage after compressed object"))
+	}
+	hash := sha1.New()
+	_, _ = hash.Write(header)
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write(content)
+	if hex.EncodeToString(hash.Sum(nil)) != string(id) {
 		return Object{}, corruptObject(id, errors.New("object ID mismatch"))
 	}
 	return Object{ID: id, Type: objectType, Size: int64(len(content)), Content: content}, nil
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }
 
 // Inspect validates the bare repository and reports its lifecycle metadata.

@@ -2,6 +2,7 @@ package storage_test
 
 import (
 	"bytes"
+	"compress/zlib"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -105,6 +106,76 @@ func TestObjectsRejectInvalidInputsAndCorruption(t *testing.T) {
 	}
 	if _, err := repo.WriteObject(storage.BlobObject, []byte("original")); !errors.Is(err, storage.ErrCorruptObject) {
 		t.Fatalf("write over corrupt object error = %v", err)
+	}
+}
+
+func TestReadObjectRejectsTrailingFileData(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("trailing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := writeObject(t, repo, storage.BlobObject, []byte("content"))
+	path := filepath.Join(repo.Path(), "objects", string(id)[:2], string(id)[2:])
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write([]byte{0}); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ReadObject(id); !errors.Is(err, storage.ErrCorruptObject) {
+		t.Fatalf("object with trailing file data error = %v", err)
+	}
+	if _, err := repo.WriteObject(storage.BlobObject, []byte("content")); !errors.Is(err, storage.ErrCorruptObject) {
+		t.Fatalf("duplicate write with trailing file data error = %v", err)
+	}
+}
+
+func TestReadObjectBoundsMalformedDecompression(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("bounded")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := storage.ObjectID("0000000000000000000000000000000000000000")
+	path := filepath.Join(repo.Path(), "objects", string(id)[:2], string(id)[2:])
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compressed := zlib.NewWriter(file)
+	if _, err := compressed.Write([]byte("blob 1\x00")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := compressed.Write(bytes.Repeat([]byte{'x'}, 8<<20)); err != nil {
+		t.Fatal(err)
+	}
+	if err := compressed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repo.ReadObject(id); !errors.Is(err, storage.ErrCorruptObject) {
+		t.Fatalf("oversized decompressed content error = %v", err)
 	}
 }
 

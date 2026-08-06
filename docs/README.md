@@ -31,4 +31,6 @@ the same object is idempotent and never replaces existing storage.
 `Repository.ReadObject` accepts a full lowercase object ID and returns its
 verified ID, type, size, and exact content. Reads reject malformed IDs, missing
 objects, invalid headers, size mismatches, and content that does not hash to
-the requested ID. These files are directly readable by stock `git cat-file`.
+the requested ID. Reads and writes are limited to 100 MiB per object so corrupt
+compressed input cannot cause unbounded allocation. These files are directly
+readable by stock `git cat-file`.
