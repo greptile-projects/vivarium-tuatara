@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
@@ -89,5 +90,38 @@ func TestOpenDistinguishesMissingAndInvalidRepositories(t *testing.T) {
 	}
 	if _, err := store.Open("broken"); !errors.Is(err, storage.ErrInvalidRepository) {
 		t.Fatalf("invalid Open error = %v", err)
+	}
+}
+
+func TestOpenRejectsUnsupportedRepositoryFormat(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		id          string
+		replacement string
+	}{
+		{id: "unsupported", replacement: "repositoryformatversion = 999"},
+		{id: "missing", replacement: ""},
+	} {
+		repo, err := store.Create(test.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		configPath := filepath.Join(repo.Path(), "config")
+		config, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mutated := strings.Replace(string(config), "repositoryformatversion = 0", test.replacement, 1)
+		if err := os.WriteFile(configPath, []byte(mutated), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := store.Open(test.id); !errors.Is(err, storage.ErrInvalidRepository) {
+			t.Errorf("Open(%q) error = %v", test.id, err)
+		}
 	}
 }

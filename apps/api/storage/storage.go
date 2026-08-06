@@ -2,6 +2,7 @@
 package storage
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"os"
@@ -125,13 +126,23 @@ func (r *Repository) Inspect() (Info, error) {
 		return Info{}, invalidRepository("HEAD is not a branch reference", nil)
 	}
 
-	config, err := os.ReadFile(filepath.Join(r.path, "config"))
+	config, err := os.Open(filepath.Join(r.path, "config"))
 	if err != nil {
 		return Info{}, invalidRepository("read config", err)
 	}
-	compactConfig := strings.ToLower(strings.Join(strings.Fields(string(config)), ""))
-	if !strings.Contains(compactConfig, "bare=true") {
+	defer config.Close()
+	core, err := readConfigSection(config, "core")
+	if err != nil {
+		return Info{}, invalidRepository("parse config", err)
+	}
+	if !strings.EqualFold(core["bare"], "true") {
 		return Info{}, invalidRepository("core.bare is not true", nil)
+	}
+	// Version 0 is the repository format this package creates and understands.
+	// Version 1 may introduce extensions whose compatibility must be evaluated
+	// individually, so accepting it without extension support would be unsafe.
+	if core["repositoryformatversion"] != "0" {
+		return Info{}, invalidRepository("unsupported core.repositoryformatversion", nil)
 	}
 
 	for _, directory := range []string{"objects", "refs"} {
@@ -202,6 +213,34 @@ func directoryEmpty(path string) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+func readConfigSection(file *os.File, wanted string) (map[string]string, error) {
+	values := make(map[string]string)
+	section := ""
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			section = strings.ToLower(strings.TrimSpace(line[1 : len(line)-1]))
+			continue
+		}
+		if section != wanted {
+			continue
+		}
+		key, value, found := strings.Cut(line, "=")
+		if !found {
+			continue
+		}
+		values[strings.ToLower(strings.TrimSpace(key))] = strings.TrimSpace(value)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return values, nil
 }
 
 func invalidRepository(message string, err error) error {
