@@ -122,7 +122,7 @@ func (r *Repository) ReadReference(name string) (Reference, error) {
 // ListReferences returns HEAD and every loose reference, ordered by name.
 func (r *Repository) ListReferences() ([]Reference, error) {
 	names := []string{"HEAD"}
-	root, err := os.Open(r.path)
+	root, err := r.openRepositoryDirectory()
 	if err != nil {
 		return nil, fmt.Errorf("open repository: %w", err)
 	}
@@ -209,7 +209,7 @@ func (r *Repository) openReferenceParent(name string, create bool) (*os.File, st
 		return nil, "", err
 	}
 	components := strings.Split(name, "/")
-	current, err := os.Open(r.path)
+	current, err := r.openRepositoryDirectory()
 	if err != nil {
 		return nil, "", fmt.Errorf("open repository: %w", err)
 	}
@@ -266,6 +266,31 @@ func openDirectoryAt(parent *os.File, name string) (*os.File, error) {
 		return nil, err
 	}
 	return os.NewFile(uintptr(fd), name), nil
+}
+
+func openRepositoryDirectory(path string) (*os.File, error) {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), path), nil
+}
+
+func (r *Repository) openRepositoryDirectory() (*os.File, error) {
+	root, err := openRepositoryDirectory(r.path)
+	if err != nil {
+		return nil, fmt.Errorf("open repository: %w: %v", ErrInvalidRepository, err)
+	}
+	var identity syscall.Stat_t
+	if err := syscall.Fstat(int(root.Fd()), &identity); err != nil {
+		_ = root.Close()
+		return nil, fmt.Errorf("inspect repository: %w", err)
+	}
+	if uint64(identity.Dev) != r.device || identity.Ino != r.inode {
+		_ = root.Close()
+		return nil, fmt.Errorf("repository root changed: %w", ErrInvalidRepository)
+	}
+	return root, nil
 }
 
 func openReferenceFile(parent *os.File, name string) (*os.File, error) {

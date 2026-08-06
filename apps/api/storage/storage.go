@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 const defaultBranch = "main"
@@ -121,8 +122,10 @@ type Store struct {
 
 // Repository identifies an opened bare Git repository.
 type Repository struct {
-	id   string
-	path string
+	id     string
+	path   string
+	device uint64
+	inode  uint64
 }
 
 // Info is a validated snapshot of repository metadata.
@@ -195,7 +198,17 @@ func (s *Store) Open(id string) (*Repository, error) {
 		return nil, fmt.Errorf("open repository: %w", err)
 	}
 
-	repo := &Repository{id: id, path: path}
+	root, err := openRepositoryDirectory(path)
+	if err != nil {
+		return nil, invalidRepository("open repository root", err)
+	}
+	var identity syscall.Stat_t
+	if err := syscall.Fstat(int(root.Fd()), &identity); err != nil {
+		_ = root.Close()
+		return nil, invalidRepository("inspect repository root", err)
+	}
+	_ = root.Close()
+	repo := &Repository{id: id, path: path, device: uint64(identity.Dev), inode: identity.Ino}
 	if _, err := repo.Inspect(); err != nil {
 		return nil, err
 	}

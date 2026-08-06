@@ -307,6 +307,42 @@ func TestReferencesRejectIntermediateSymlinks(t *testing.T) {
 	}
 }
 
+func TestReferencesRejectRepositoryRootReplacement(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("replaced-root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parked := repo.Path() + ".parked"
+	if err := os.Rename(repo.Path(), parked); err != nil {
+		t.Fatal(err)
+	}
+	external := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(external, "refs", "heads"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, repo.Path()); err != nil {
+		t.Fatal(err)
+	}
+
+	escaped := storage.Reference{Name: "refs/heads/escaped", Target: "refs/heads/main", Symbolic: true}
+	if err := repo.CreateReference(escaped); !errors.Is(err, storage.ErrInvalidRepository) {
+		t.Fatalf("CreateReference after root replacement error = %v", err)
+	}
+	if _, err := repo.ReadReference(escaped.Name); err == nil {
+		t.Fatal("ReadReference followed a replaced repository root")
+	}
+	if _, err := repo.ListReferences(); err == nil {
+		t.Fatal("ListReferences followed a replaced repository root")
+	}
+	if _, err := os.Stat(filepath.Join(external, "refs", "heads", "escaped")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("external reference was created: %v", err)
+	}
+}
+
 func TestObjectsRejectInvalidInputsAndCorruption(t *testing.T) {
 	store, err := storage.New(t.TempDir())
 	if err != nil {
