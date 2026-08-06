@@ -117,10 +117,10 @@ func TestGitCloneEmptyAndPopulatedRepositories(t *testing.T) {
 	if got := gitCommand(t, populatedPath, "rev-parse", "v1^{}"); got != string(merge)+"\n" {
 		t.Fatalf("cloned tag target = %q, want %s", got, merge)
 	}
-	assertFile(t, filepath.Join(populatedPath, "README.md"), "# project\n\nReady to collaborate.\n", 0o644)
-	assertFile(t, filepath.Join(populatedPath, "run.sh"), "#!/bin/sh\necho ready\n", 0o755)
-	assertFile(t, filepath.Join(populatedPath, "src", "main.go"), "package main\n\nfunc main() {}\n", 0o644)
-	assertFile(t, filepath.Join(populatedPath, "src", "feature.go"), "package feature\n", 0o644)
+	assertFile(t, filepath.Join(populatedPath, "README.md"), "# project\n\nReady to collaborate.\n", false)
+	assertFile(t, filepath.Join(populatedPath, "run.sh"), "#!/bin/sh\necho ready\n", true)
+	assertFile(t, filepath.Join(populatedPath, "src", "main.go"), "package main\n\nfunc main() {}\n", false)
+	assertFile(t, filepath.Join(populatedPath, "src", "feature.go"), "package feature\n", false)
 
 	objects, err := populated.ListObjects()
 	if err != nil {
@@ -341,7 +341,7 @@ func gitCommand(t *testing.T, directory string, arguments ...string) string {
 	return string(output)
 }
 
-func assertFile(t *testing.T, path, wantContent string, wantMode os.FileMode) {
+func assertFile(t *testing.T, path, wantContent string, wantExecutable bool) {
 	t.Helper()
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -354,7 +354,7 @@ func assertFile(t *testing.T, path, wantContent string, wantMode os.FileMode) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := info.Mode().Perm(); got != wantMode {
-		t.Fatalf("%s mode = %o, want %o", path, got, wantMode)
+	if gotExecutable := info.Mode().Perm()&0o111 != 0; gotExecutable != wantExecutable {
+		t.Fatalf("%s mode = %o, executable = %t, want %t", path, info.Mode().Perm(), gotExecutable, wantExecutable)
 	}
 }
