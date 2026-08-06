@@ -85,7 +85,9 @@ whenever dependencies change or the web job fails before it starts.
   protocol v0 and v2, and advertise unborn `HEAD` so empty repositories retain
   their `main` default branch. Stock Git clones reproduce all advertised,
   reachable objects and check out populated repositories on `main`; empty
-  clones retain an unborn local `main`. `$GIT_STORAGE_ROOT` selects the
+  clones retain an unborn local `main`. Existing clones can negotiate and
+  fetch later primary-branch objects, update `origin/main`, and fast-forward
+  their checkout with a stock `git pull`. `$GIT_STORAGE_ROOT` selects the
   repository root used by the API process and defaults to `repositories`.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.

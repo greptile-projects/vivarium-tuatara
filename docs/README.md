@@ -113,3 +113,10 @@ retains annotated tags and merged ancestry, and checks out `main` with the
 stored file contents and executable modes. Cloning an empty repository creates
 a valid working copy whose local `HEAD` remains the unborn `main` branch, ready
 for its first commit.
+
+Existing working copies remain synchronized through the same read-only smart
+HTTP endpoint. After the server publishes new objects and advances `main`, a
+stock `git fetch` negotiates from the commits already present locally, receives
+the missing history, and updates `origin/main` without moving the checked-out
+branch. A subsequent stock `git pull --ff-only` fetches later state and
+fast-forwards the local `main` branch and working tree without recloning.
