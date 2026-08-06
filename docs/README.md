@@ -93,7 +93,7 @@ stock revision parsing verifies `HEAD` and both tag forms.
 
 ## Git HTTP transport
 
-The API exposes a read-only smart HTTP remote at
+The API exposes a smart HTTP remote at
 `/git/<storage-id>.git`. `GET .../info/refs?service=git-upload-pack` advertises
 the repository and `POST .../git-upload-pack` serves the protocol-v2 `ls-refs`
 exchange used by current Git clients. Both protocol v0 and v2 are passed to
@@ -114,9 +114,15 @@ stored file contents and executable modes. Cloning an empty repository creates
 a valid working copy whose local `HEAD` remains the unborn `main` branch, ready
 for its first commit.
 
-Existing working copies remain synchronized through the same read-only smart
+Existing working copies remain synchronized through the same smart
 HTTP endpoint. After the server publishes new objects and advances `main`, a
 stock `git fetch` negotiates from the commits already present locally, receives
 the missing history, and updates `origin/main` without moving the checked-out
 branch. A subsequent stock `git pull --ff-only` fetches later state and
 fast-forwards the local `main` branch and working tree without recloning.
+
+Stock clients publish work through receive-pack discovery and
+`POST .../git-receive-pack`. They can create the unborn `main` branch and
+advance it with fast-forward commits. Non-fast-forward updates and branch
+deletion are denied, leaving the accepted tip in place and the repository
+valid after rejection.

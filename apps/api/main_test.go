@@ -217,6 +217,59 @@ func TestGitFetchAndPullAdvancedPrimaryBranch(t *testing.T) {
 	assertFile(t, filepath.Join(workingCopy, "status.txt"), "third\n", false)
 }
 
+func TestGitPushCreatesAndAdvancesPrimaryBranchWithoutLosingHistory(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("published")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(newHandler(store))
+	t.Cleanup(server.Close)
+
+	workingCopy := filepath.Join(t.TempDir(), "publisher")
+	gitCommand(t, "", "init", "--initial-branch=main", workingCopy)
+	gitCommand(t, workingCopy, "config", "user.name", "Publisher")
+	gitCommand(t, workingCopy, "config", "user.email", "publisher@example.com")
+	gitCommand(t, workingCopy, "remote", "add", "origin", server.URL+"/git/"+repo.ID()+".git")
+	if err := os.WriteFile(filepath.Join(workingCopy, "progress.txt"), []byte("first\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommand(t, workingCopy, "add", "progress.txt")
+	gitCommand(t, workingCopy, "commit", "-m", "initial progress")
+	initial := strings.TrimSpace(gitCommand(t, workingCopy, "rev-parse", "HEAD"))
+	gitCommand(t, workingCopy, "push", "-u", "origin", "main")
+	if got := gitCommand(t, repo.Path(), "rev-parse", "refs/heads/main"); got != initial+"\n" {
+		t.Fatalf("initial remote main = %q, want %s", got, initial)
+	}
+
+	if err := os.WriteFile(filepath.Join(workingCopy, "progress.txt"), []byte("second\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommand(t, workingCopy, "commit", "-am", "continue progress")
+	advanced := strings.TrimSpace(gitCommand(t, workingCopy, "rev-parse", "HEAD"))
+	gitCommand(t, workingCopy, "push", "origin", "main")
+	if got := gitCommand(t, repo.Path(), "rev-list", "--first-parent", "refs/heads/main"); got != advanced+"\n"+initial+"\n" {
+		t.Fatalf("advanced remote history = %q", got)
+	}
+
+	gitCommand(t, workingCopy, "reset", "--hard", initial)
+	if err := os.WriteFile(filepath.Join(workingCopy, "progress.txt"), []byte("replacement\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommand(t, workingCopy, "commit", "-am", "replace progress")
+	gitCommandFails(t, workingCopy, "push", "--force", "origin", "main")
+	if got := gitCommand(t, repo.Path(), "rev-parse", "refs/heads/main"); got != advanced+"\n" {
+		t.Fatalf("remote main after rejected rewrite = %q, want %s", got, advanced)
+	}
+	gitCommand(t, repo.Path(), "fsck", "--full")
+	if _, err := repo.ListObjects(); err != nil {
+		t.Fatalf("objects after rejected rewrite are inconsistent: %v", err)
+	}
+}
+
 func TestGitLsRemoteAdvertisesEmptyAndPopulatedRepositories(t *testing.T) {
 	store, err := storage.New(t.TempDir())
 	if err != nil {
@@ -282,8 +335,8 @@ func TestGitDiscoveryRejectsUnknownRepositoriesAndServices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StatusCode != 400 {
-		t.Fatalf("unsupported service status = %d", response.StatusCode)
+	if response.StatusCode != 404 {
+		t.Fatalf("missing receive-pack repository status = %d", response.StatusCode)
 	}
 	response.Body.Close()
 }
@@ -417,6 +470,17 @@ func gitCommand(t *testing.T, directory string, arguments ...string) string {
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %s failed: %v\n%s", strings.Join(arguments, " "), err, output)
+	}
+	return string(output)
+}
+
+func gitCommandFails(t *testing.T, directory string, arguments ...string) string {
+	t.Helper()
+	command := exec.Command("git", arguments...)
+	command.Dir = directory
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatalf("git %s unexpectedly succeeded:\n%s", strings.Join(arguments, " "), output)
 	}
 	return string(output)
 }
