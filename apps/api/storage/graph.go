@@ -68,7 +68,7 @@ func (r *Repository) ReadTree(id ObjectID) ([]TreeEntry, error) {
 		}
 		entryID := ObjectID(fmt.Sprintf("%x", content[nul+1:nul+21]))
 		entry := TreeEntry{Name: name, Mode: mode, ID: entryID, Type: kind}
-		if previous != nil && compareTreeEntries(*previous, entry) >= 0 {
+		if previous != nil && (previous.Name == entry.Name || compareTreeEntries(*previous, entry) >= 0) {
 			return nil, graphError(id, errors.New("tree entries are duplicate or not canonically ordered"))
 		}
 		if mode != "160000" {

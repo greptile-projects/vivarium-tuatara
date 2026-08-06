@@ -206,6 +206,14 @@ func TestReadTreeRejectsDuplicateAndNoncanonicalEntries(t *testing.T) {
 			t.Errorf("ReadTree(%s) error = %v", test.name, err)
 		}
 	}
+	emptyTreeID := writeObject(t, repo, storage.TreeObject, nil)
+	mixedMode := entry("same")
+	mixedMode = append(mixedMode, []byte("40000 same\x00")...)
+	mixedMode = append(mixedMode, decodeObjectID(t, emptyTreeID)...)
+	mixedModeID := writeObject(t, repo, storage.TreeObject, mixedMode)
+	if _, err := repo.ReadTree(mixedModeID); !errors.Is(err, storage.ErrCorruptObject) {
+		t.Fatalf("ReadTree(mixed-mode duplicate) error = %v", err)
+	}
 }
 
 func TestReadCommitRejectsLateParentHeader(t *testing.T) {
