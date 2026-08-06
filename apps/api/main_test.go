@@ -268,6 +268,15 @@ func TestGitPushCreatesAndAdvancesPrimaryBranchWithoutLosingHistory(t *testing.T
 	if _, err := repo.ListObjects(); err != nil {
 		t.Fatalf("objects after rejected rewrite are inconsistent: %v", err)
 	}
+
+	gitCommand(t, workingCopy, "branch", "secondary", advanced)
+	gitCommand(t, workingCopy, "tag", "secondary-tag", advanced)
+	gitCommandFails(t, workingCopy, "push", "origin", "secondary")
+	gitCommandFails(t, workingCopy, "push", "origin", "secondary-tag")
+	wantRefs := advanced + "\tHEAD\n" + advanced + "\trefs/heads/main\n"
+	if got := lsRemote(t, server.URL+"/git/"+repo.ID()+".git"); got != wantRefs {
+		t.Fatalf("remote refs after rejected secondary refs = %q", got)
+	}
 }
 
 func TestGitLsRemoteAdvertisesEmptyAndPopulatedRepositories(t *testing.T) {

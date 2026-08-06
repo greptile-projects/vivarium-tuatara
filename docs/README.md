@@ -124,5 +124,6 @@ fast-forwards the local `main` branch and working tree without recloning.
 Stock clients publish work through receive-pack discovery and
 `POST .../git-receive-pack`. They can create the unborn `main` branch and
 advance it with fast-forward commits. Non-fast-forward updates and branch
-deletion are denied, leaving the accepted tip in place and the repository
-valid after rejection.
+deletion are denied, as are pushes to secondary branches, tags, or any ref
+other than `refs/heads/main`. Rejection leaves the accepted tip in place and
+the repository valid.

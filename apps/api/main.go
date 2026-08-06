@@ -111,8 +111,13 @@ func runGitService(w http.ResponseWriter, r *http.Request, repo *storage.Reposit
 	args := []string{commandName, "--stateless-rpc"}
 	if service == receivePackService {
 		// This rung accepts creation and fast-forward progress only. Stock Git
-		// enforces both protections before committing the reference transaction.
-		args = append([]string{"-c", "receive.denyNonFastForwards=true", "-c", "receive.denyDeletes=true"}, args...)
+		// enforces these protections before committing the ref transaction.
+		args = append([]string{
+			"-c", "receive.denyNonFastForwards=true",
+			"-c", "receive.denyDeletes=true",
+			"-c", "receive.hideRefs=refs/",
+			"-c", "receive.hideRefs=!refs/heads/main",
+		}, args...)
 	}
 	if advertise {
 		args = append(args, "--advertise-refs")
