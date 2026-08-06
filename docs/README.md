@@ -22,3 +22,15 @@ absolute path exposed by `Repository.Path`.
 Repository IDs are single URL-safe components containing letters, numbers,
 dots, underscores, or hyphens. Ownership and user-facing names remain an
 application-layer concern; storage IDs only identify a repository boundary.
+
+Repository content is written through `Repository.WriteObject`, which accepts
+one of Git's blob, tree, commit, or tag types and canonical uncompressed
+content. It computes the SHA-1 object ID over Git's `<type> <size>\0` header and
+content, then atomically publishes the zlib-compressed loose object. Rewriting
+the same object is idempotent and never replaces existing storage.
+`Repository.ReadObject` accepts a full lowercase object ID and returns its
+verified ID, type, size, and exact content. Reads reject malformed IDs, missing
+objects, invalid headers, size mismatches, and content that does not hash to
+the requested ID. Reads and writes are limited to 100 MiB per object so corrupt
+compressed input cannot cause unbounded allocation. These files are directly
+readable by stock `git cat-file`.

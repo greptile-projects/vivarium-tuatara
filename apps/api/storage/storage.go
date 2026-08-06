@@ -3,15 +3,26 @@ package storage
 
 import (
 	"bufio"
+	"compress/zlib"
+	"crypto/sha1"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
 const defaultBranch = "main"
+
+// MaxObjectSize bounds both accepted writes and allocations while reading
+// untrusted loose objects. It matches the common 100 MiB hosting limit.
+const MaxObjectSize int64 = 100 << 20
+
+const maxObjectHeaderSize = 64
 
 var (
 	// ErrInvalidID indicates that an identifier cannot safely name a repository.
@@ -22,9 +33,36 @@ var (
 	ErrRepositoryNotFound = errors.New("repository not found")
 	// ErrInvalidRepository indicates that an ID exists but is not a repository.
 	ErrInvalidRepository = errors.New("invalid repository")
+	// ErrInvalidObject indicates an unsupported type or malformed object ID.
+	ErrInvalidObject = errors.New("invalid git object")
+	// ErrObjectNotFound indicates that a repository does not contain an object.
+	ErrObjectNotFound = errors.New("git object not found")
+	// ErrCorruptObject indicates that stored bytes do not match their object ID.
+	ErrCorruptObject = errors.New("corrupt git object")
 
 	validID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
+
+// ObjectType is one of the four object kinds stored by Git.
+type ObjectType string
+
+const (
+	BlobObject   ObjectType = "blob"
+	TreeObject   ObjectType = "tree"
+	CommitObject ObjectType = "commit"
+	TagObject    ObjectType = "tag"
+)
+
+// ObjectID is the lowercase hexadecimal SHA-1 identity of a Git object.
+type ObjectID string
+
+// Object is the canonical uncompressed representation returned by ReadObject.
+type Object struct {
+	ID      ObjectID
+	Type    ObjectType
+	Size    int64
+	Content []byte
+}
 
 // Store owns bare Git repositories below a filesystem directory.
 type Store struct {
@@ -84,6 +122,12 @@ func (s *Store) Create(id string) (*Repository, error) {
 		}
 		return nil, fmt.Errorf("publish repository: %w", err)
 	}
+	if err := syncDirectory(path); err != nil {
+		return nil, fmt.Errorf("sync repository: %w", err)
+	}
+	if err := syncDirectory(s.root); err != nil {
+		return nil, fmt.Errorf("sync storage root: %w", err)
+	}
 
 	return s.Open(id)
 }
@@ -113,6 +157,149 @@ func (r *Repository) ID() string { return r.id }
 
 // Path returns the absolute bare-repository path for Git storage operations.
 func (r *Repository) Path() string { return r.path }
+
+// WriteObject stores content in Git's loose-object format and returns its
+// content-derived identity. Publishing is atomic and never replaces an object.
+func (r *Repository) WriteObject(objectType ObjectType, content []byte) (ObjectID, error) {
+	if !validObjectType(objectType) {
+		return "", fmt.Errorf("type %q: %w", objectType, ErrInvalidObject)
+	}
+	if int64(len(content)) > MaxObjectSize {
+		return "", fmt.Errorf("object exceeds %d bytes: %w", MaxObjectSize, ErrInvalidObject)
+	}
+
+	header := []byte(fmt.Sprintf("%s %d\x00", objectType, len(content)))
+	hash := sha1.New()
+	_, _ = hash.Write(header)
+	_, _ = hash.Write(content)
+	id := ObjectID(hex.EncodeToString(hash.Sum(nil)))
+	path, _ := r.objectPath(id)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", fmt.Errorf("create object directory: %w", err)
+	}
+
+	temp, err := os.CreateTemp(filepath.Dir(path), ".writing-")
+	if err != nil {
+		return "", fmt.Errorf("create object staging file: %w", err)
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+
+	compressed := zlib.NewWriter(temp)
+	_, writeErr := compressed.Write(header)
+	if writeErr == nil {
+		_, writeErr = compressed.Write(content)
+	}
+	if closeErr := compressed.Close(); writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr != nil {
+		_ = temp.Close()
+		return "", fmt.Errorf("write object: %w", writeErr)
+	}
+	if err := os.Chmod(tempPath, 0o444); err != nil {
+		_ = temp.Close()
+		return "", fmt.Errorf("set object permissions: %w", err)
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return "", fmt.Errorf("sync object: %w", err)
+	}
+	if err := temp.Close(); err != nil {
+		return "", fmt.Errorf("close object: %w", err)
+	}
+
+	if err := os.Link(tempPath, path); err != nil {
+		if !errors.Is(err, os.ErrExist) {
+			return "", fmt.Errorf("publish object: %w", err)
+		}
+		// An existing path has the same name but may have been externally
+		// corrupted, so verify it before reporting a successful idempotent write.
+		if _, readErr := r.ReadObject(id); readErr != nil {
+			return "", readErr
+		}
+	}
+	// Sync both levels even on an idempotent retry: the existing link may be
+	// from a prior call whose directory sync failed after publication.
+	if err := syncDirectory(filepath.Dir(path)); err != nil {
+		return "", fmt.Errorf("sync object directory: %w", err)
+	}
+	// The fanout directory's entry is persisted by its parent objects directory.
+	if err := syncDirectory(filepath.Dir(filepath.Dir(path))); err != nil {
+		return "", fmt.Errorf("sync objects directory: %w", err)
+	}
+	return id, nil
+}
+
+// ReadObject retrieves and verifies an object without altering its contents.
+func (r *Repository) ReadObject(id ObjectID) (Object, error) {
+	path, err := r.objectPath(id)
+	if err != nil {
+		return Object{}, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return Object{}, fmt.Errorf("%s: %w", id, ErrObjectNotFound)
+		}
+		return Object{}, fmt.Errorf("open object: %w", err)
+	}
+	defer file.Close()
+
+	compressed := bufio.NewReader(file)
+	decompressed, err := zlib.NewReader(compressed)
+	if err != nil {
+		return Object{}, corruptObject(id, err)
+	}
+	reader := bufio.NewReaderSize(decompressed, maxObjectHeaderSize)
+	header, headerErr := reader.ReadSlice(0)
+	if headerErr != nil {
+		_ = decompressed.Close()
+		return Object{}, corruptObject(id, errors.New("invalid or oversized object header"))
+	}
+	header = header[:len(header)-1]
+	objectTypeText, sizeText, found := strings.Cut(string(header), " ")
+	objectType := ObjectType(objectTypeText)
+	size, sizeErr := strconv.ParseInt(sizeText, 10, 64)
+	if !found || !validObjectType(objectType) || sizeErr != nil || size < 0 ||
+		sizeText != strconv.FormatInt(size, 10) || size > MaxObjectSize {
+		_ = decompressed.Close()
+		return Object{}, corruptObject(id, errors.New("invalid object header"))
+	}
+
+	content := make([]byte, int(size))
+	if _, err := io.ReadFull(reader, content); err != nil {
+		_ = decompressed.Close()
+		return Object{}, corruptObject(id, errors.New("object content shorter than declared size"))
+	}
+	if _, err := reader.ReadByte(); !errors.Is(err, io.EOF) {
+		_ = decompressed.Close()
+		return Object{}, corruptObject(id, errors.New("object content exceeds declared size"))
+	}
+	if err := decompressed.Close(); err != nil {
+		return Object{}, corruptObject(id, err)
+	}
+	if _, err := compressed.ReadByte(); !errors.Is(err, io.EOF) {
+		return Object{}, corruptObject(id, errors.New("garbage after compressed object"))
+	}
+	hash := sha1.New()
+	_, _ = hash.Write(header)
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write(content)
+	if hex.EncodeToString(hash.Sum(nil)) != string(id) {
+		return Object{}, corruptObject(id, errors.New("object ID mismatch"))
+	}
+	return Object{ID: id, Type: objectType, Size: int64(len(content)), Content: content}, nil
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
+}
 
 // Inspect validates the bare repository and reports its lifecycle metadata.
 func (r *Repository) Inspect() (Info, error) {
@@ -169,6 +356,28 @@ func (s *Store) pathFor(id string) (string, error) {
 		return "", fmt.Errorf("%q: %w", id, ErrInvalidID)
 	}
 	return filepath.Join(s.root, id+".git"), nil
+}
+
+func (r *Repository) objectPath(id ObjectID) (string, error) {
+	value := string(id)
+	decoded, err := hex.DecodeString(value)
+	if err != nil || len(decoded) != sha1.Size || value != strings.ToLower(value) {
+		return "", fmt.Errorf("object ID %q: %w", id, ErrInvalidObject)
+	}
+	return filepath.Join(r.path, "objects", value[:2], value[2:]), nil
+}
+
+func validObjectType(objectType ObjectType) bool {
+	switch objectType {
+	case BlobObject, TreeObject, CommitObject, TagObject:
+		return true
+	default:
+		return false
+	}
+}
+
+func corruptObject(id ObjectID, err error) error {
+	return fmt.Errorf("%s: %w: %v", id, ErrCorruptObject, err)
 }
 
 func initializeBareRepository(path string) error {
