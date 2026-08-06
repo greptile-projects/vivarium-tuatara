@@ -257,6 +257,56 @@ func TestReferencesRejectInvalidOperationsAndCorruption(t *testing.T) {
 	}
 }
 
+func TestReferencesRejectIntermediateSymlinks(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("symlinked-references")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := writeObject(t, repo, storage.BlobObject, []byte("target"))
+	external := t.TempDir()
+	for _, name := range []string{"created", "updated", "deleted"} {
+		if err := os.WriteFile(filepath.Join(external, name), []byte("outside\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	heads := filepath.Join(repo.Path(), "refs", "heads")
+	if err := os.Remove(heads); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, heads); err != nil {
+		t.Fatal(err)
+	}
+
+	reference := func(name string) storage.Reference {
+		return storage.Reference{Name: "refs/heads/" + name, Target: string(id)}
+	}
+	if err := repo.CreateReference(reference("created")); err == nil {
+		t.Fatal("CreateReference followed an intermediate symlink")
+	}
+	if err := repo.UpdateReference(reference("updated")); err == nil {
+		t.Fatal("UpdateReference followed an intermediate symlink")
+	}
+	if err := repo.DeleteReference("refs/heads/deleted"); err == nil {
+		t.Fatal("DeleteReference followed an intermediate symlink")
+	}
+	if _, err := repo.ReadReference("refs/heads/updated"); err == nil {
+		t.Fatal("ReadReference followed an intermediate symlink")
+	}
+	if _, err := repo.ListReferences(); err == nil {
+		t.Fatal("ListReferences followed an intermediate symlink")
+	}
+	for _, name := range []string{"created", "updated", "deleted"} {
+		contents, err := os.ReadFile(filepath.Join(external, name))
+		if err != nil || string(contents) != "outside\n" {
+			t.Fatalf("external %s changed: %q, %v", name, contents, err)
+		}
+	}
+}
+
 func TestObjectsRejectInvalidInputsAndCorruption(t *testing.T) {
 	store, err := storage.New(t.TempDir())
 	if err != nil {
