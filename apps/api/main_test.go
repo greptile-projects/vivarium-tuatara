@@ -172,9 +172,21 @@ func TestGitFetchAndPullAdvancedPrimaryBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fetchTrace := gitCommandWithEnv(t, workingCopy, []string{"GIT_TRACE_PACKET=1"}, "fetch", "origin")
+	packsBeforeFetch := packIndexes(t, workingCopy)
+	fetchTrace := gitCommandWithEnv(t, workingCopy, []string{"GIT_TRACE_PACKET=1"}, "-c", "fetch.unpackLimit=1", "fetch", "origin")
 	if !strings.Contains(fetchTrace, "have "+string(initial)) {
 		t.Fatalf("fetch negotiation did not report existing commit %s as a have:\n%s", initial, fetchTrace)
+	}
+	packsAfterFetch := packIndexes(t, workingCopy)
+	newPacks := difference(packsAfterFetch, packsBeforeFetch)
+	if len(newPacks) != 1 {
+		t.Fatalf("new fetch pack indexes = %v, want exactly one", newPacks)
+	}
+	gotTransferred := packedObjectIDs(t, workingCopy, newPacks[0])
+	wantTransferred := []string{string(fetchedContent), string(fetchedTree), string(fetched)}
+	sort.Strings(wantTransferred)
+	if strings.Join(gotTransferred, "\n") != strings.Join(wantTransferred, "\n") {
+		t.Fatalf("fetch transferred object IDs =\n%s\nwant only missing objects:\n%s", strings.Join(gotTransferred, "\n"), strings.Join(wantTransferred, "\n"))
 	}
 	if got := gitCommand(t, workingCopy, "rev-parse", "HEAD"); got != string(initial)+"\n" {
 		t.Fatalf("HEAD after fetch = %q, want unchanged %s", got, initial)
@@ -419,6 +431,45 @@ func gitCommandWithEnv(t *testing.T, directory string, environment []string, arg
 		t.Fatalf("git %s failed: %v\n%s", strings.Join(arguments, " "), err, output)
 	}
 	return string(output)
+}
+
+func packIndexes(t *testing.T, workingCopy string) []string {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(workingCopy, ".git", "objects", "pack", "*.idx"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return matches
+}
+
+func difference(after, before []string) []string {
+	existing := make(map[string]struct{}, len(before))
+	for _, value := range before {
+		existing[value] = struct{}{}
+	}
+	var added []string
+	for _, value := range after {
+		if _, ok := existing[value]; !ok {
+			added = append(added, value)
+		}
+	}
+	return added
+}
+
+func packedObjectIDs(t *testing.T, workingCopy, indexPath string) []string {
+	t.Helper()
+	output := gitCommand(t, workingCopy, "verify-pack", "-v", indexPath)
+	var ids []string
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && len(fields[0]) == 40 {
+			if _, err := hex.DecodeString(fields[0]); err == nil {
+				ids = append(ids, fields[0])
+			}
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func assertFile(t *testing.T, path, wantContent string, wantExecutable bool) {
