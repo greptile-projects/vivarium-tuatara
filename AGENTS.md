@@ -59,7 +59,9 @@ whenever dependencies change or the web job fails before it starts.
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's
   `cache: false` line should flip to `cache-dependency-path: apps/api/go.sum`.
-  The port comes from `$PORT`, defaulting to `8080`.
+  The port comes from `$PORT`, defaulting to `8080`. Bare Git repository
+  lifecycle storage lives in `apps/api/storage`; callers create or reopen a
+  stable storage ID there before performing repository operations.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 
