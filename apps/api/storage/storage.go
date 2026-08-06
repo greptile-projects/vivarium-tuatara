@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -62,6 +63,45 @@ type Object struct {
 	Type    ObjectType
 	Size    int64
 	Content []byte
+}
+
+// ListObjects returns every loose object in the repository, ordered by object
+// ID. Each object is fully verified through the same boundary as ReadObject.
+func (r *Repository) ListObjects() ([]Object, error) {
+	objectsPath := filepath.Join(r.path, "objects")
+	fanouts, err := os.ReadDir(objectsPath)
+	if err != nil {
+		return nil, fmt.Errorf("list object directories: %w", err)
+	}
+
+	var ids []ObjectID
+	for _, fanout := range fanouts {
+		if !fanout.IsDir() || !isLowerHex(fanout.Name(), 2) {
+			continue
+		}
+		entries, err := os.ReadDir(filepath.Join(objectsPath, fanout.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("list object directory %s: %w", fanout.Name(), err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !isLowerHex(entry.Name(), 38) {
+				continue
+			}
+			ids = append(ids, ObjectID(fanout.Name()+entry.Name()))
+		}
+	}
+
+	// os.ReadDir sorts each directory independently, not the combined IDs.
+	slices.Sort(ids)
+	objects := make([]Object, 0, len(ids))
+	for _, id := range ids {
+		object, err := r.ReadObject(id)
+		if err != nil {
+			return nil, fmt.Errorf("enumerate object %s: %w", id, err)
+		}
+		objects = append(objects, object)
+	}
+	return objects, nil
 }
 
 // Store owns bare Git repositories below a filesystem directory.
@@ -374,6 +414,18 @@ func validObjectType(objectType ObjectType) bool {
 	default:
 		return false
 	}
+}
+
+func isLowerHex(value string, length int) bool {
+	if len(value) != length {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func corruptObject(id ObjectID, err error) error {
