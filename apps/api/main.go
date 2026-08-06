@@ -14,7 +14,20 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
-const uploadPackService = "git-upload-pack"
+const (
+	uploadPackService  = "git-upload-pack"
+	receivePackService = "git-receive-pack"
+	primaryBranchHook  = `#!/bin/sh
+while read -r old new ref
+do
+	if test "$ref" != "refs/heads/main"
+	then
+		echo "only refs/heads/main may be updated" >&2
+		exit 1
+	fi
+done
+`
+)
 
 func main() {
 	root := os.Getenv("GIT_STORAGE_ROOT")
@@ -44,7 +57,8 @@ func newHandler(store *storage.Store) http.Handler {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 	mux.HandleFunc("GET /git/{remote}/info/refs", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("service") != uploadPackService {
+		service := r.URL.Query().Get("service")
+		if service != uploadPackService && service != receivePackService {
 			http.Error(w, "unsupported Git service", http.StatusBadRequest)
 			return
 		}
@@ -52,12 +66,12 @@ func newHandler(store *storage.Store) http.Handler {
 		if !ok {
 			return
 		}
-		w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+		w.Header().Set("Content-Type", "application/x-"+service+"-advertisement")
 		setGitCacheHeaders(w)
-		if _, err := io.WriteString(w, pktLine("# service=git-upload-pack\n")+"0000"); err != nil {
+		if _, err := io.WriteString(w, pktLine("# service="+service+"\n")+"0000"); err != nil {
 			return
 		}
-		runUploadPack(w, r, repo, true)
+		runGitService(w, r, repo, service, true)
 	})
 	mux.HandleFunc("POST /git/{remote}/git-upload-pack", func(w http.ResponseWriter, r *http.Request) {
 		repo, ok := openRemoteRepository(w, store, r.PathValue("remote"))
@@ -66,7 +80,16 @@ func newHandler(store *storage.Store) http.Handler {
 		}
 		w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
 		setGitCacheHeaders(w)
-		runUploadPack(w, r, repo, false)
+		runGitService(w, r, repo, uploadPackService, false)
+	})
+	mux.HandleFunc("POST /git/{remote}/git-receive-pack", func(w http.ResponseWriter, r *http.Request) {
+		repo, ok := openRemoteRepository(w, store, r.PathValue("remote"))
+		if !ok {
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
+		setGitCacheHeaders(w)
+		runGitService(w, r, repo, receivePackService, false)
 	})
 	return mux
 }
@@ -90,13 +113,43 @@ func openRemoteRepository(w http.ResponseWriter, store *storage.Store, remote st
 }
 
 func runUploadPack(w http.ResponseWriter, r *http.Request, repo *storage.Repository, advertise bool) {
-	args := []string{"upload-pack", "--stateless-rpc"}
+	runGitService(w, r, repo, uploadPackService, advertise)
+}
+
+func runGitService(w http.ResponseWriter, r *http.Request, repo *storage.Repository, service string, advertise bool) {
+	commandName := strings.TrimPrefix(service, "git-")
+	args := []string{commandName, "--stateless-rpc"}
+	var removeHooks func()
+	if service == receivePackService {
+		// This rung accepts creation and fast-forward progress only. Stock Git
+		// enforces these protections before committing the ref transaction.
+		args = append([]string{
+			"-c", "receive.denyNonFastForwards=true",
+			"-c", "receive.denyDeletes=true",
+			"-c", "receive.hideRefs=refs/",
+			"-c", "receive.hideRefs=!refs/heads/main",
+		}, args...)
+		if !advertise {
+			hooksPath, err := os.MkdirTemp("", "vivarium-receive-hooks-")
+			if err != nil {
+				log.Printf("prepare %s for repository %s: %v", service, repo.ID(), err)
+				return
+			}
+			removeHooks = func() { _ = os.RemoveAll(hooksPath) }
+			defer removeHooks()
+			if err := os.WriteFile(hooksPath+"/pre-receive", []byte(primaryBranchHook), 0o700); err != nil {
+				log.Printf("prepare %s for repository %s: %v", service, repo.ID(), err)
+				return
+			}
+			args = append([]string{"-c", "core.hooksPath=" + hooksPath}, args...)
+		}
+	}
 	if advertise {
 		args = append(args, "--advertise-refs")
 	}
 	args = append(args, repo.Path())
 	command := exec.CommandContext(r.Context(), "git", args...)
-	// upload-pack can spawn pack-objects. Give the invocation a dedicated
+	// Git services can spawn pack processes. Give the invocation a dedicated
 	// process group and cancel the whole group so descendants cannot outlive an
 	// abandoned HTTP request.
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -112,7 +165,7 @@ func runUploadPack(w http.ResponseWriter, r *http.Request, repo *storage.Reposit
 		command.Env = append(os.Environ(), "GIT_PROTOCOL="+protocol)
 	}
 	if err := command.Run(); err != nil {
-		log.Printf("serve %s for repository %s: %v", uploadPackService, repo.ID(), err)
+		log.Printf("serve %s for repository %s: %v", service, repo.ID(), err)
 	}
 }
 
