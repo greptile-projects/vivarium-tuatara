@@ -3,11 +3,17 @@ package storage
 
 import (
 	"bufio"
+	"bytes"
+	"compress/zlib"
+	"crypto/sha1"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -22,9 +28,36 @@ var (
 	ErrRepositoryNotFound = errors.New("repository not found")
 	// ErrInvalidRepository indicates that an ID exists but is not a repository.
 	ErrInvalidRepository = errors.New("invalid repository")
+	// ErrInvalidObject indicates an unsupported type or malformed object ID.
+	ErrInvalidObject = errors.New("invalid git object")
+	// ErrObjectNotFound indicates that a repository does not contain an object.
+	ErrObjectNotFound = errors.New("git object not found")
+	// ErrCorruptObject indicates that stored bytes do not match their object ID.
+	ErrCorruptObject = errors.New("corrupt git object")
 
 	validID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
+
+// ObjectType is one of the four object kinds stored by Git.
+type ObjectType string
+
+const (
+	BlobObject   ObjectType = "blob"
+	TreeObject   ObjectType = "tree"
+	CommitObject ObjectType = "commit"
+	TagObject    ObjectType = "tag"
+)
+
+// ObjectID is the lowercase hexadecimal SHA-1 identity of a Git object.
+type ObjectID string
+
+// Object is the canonical uncompressed representation returned by ReadObject.
+type Object struct {
+	ID      ObjectID
+	Type    ObjectType
+	Size    int64
+	Content []byte
+}
 
 // Store owns bare Git repositories below a filesystem directory.
 type Store struct {
@@ -114,6 +147,107 @@ func (r *Repository) ID() string { return r.id }
 // Path returns the absolute bare-repository path for Git storage operations.
 func (r *Repository) Path() string { return r.path }
 
+// WriteObject stores content in Git's loose-object format and returns its
+// content-derived identity. Publishing is atomic and never replaces an object.
+func (r *Repository) WriteObject(objectType ObjectType, content []byte) (ObjectID, error) {
+	if !validObjectType(objectType) {
+		return "", fmt.Errorf("type %q: %w", objectType, ErrInvalidObject)
+	}
+
+	header := []byte(fmt.Sprintf("%s %d\x00", objectType, len(content)))
+	hash := sha1.New()
+	_, _ = hash.Write(header)
+	_, _ = hash.Write(content)
+	id := ObjectID(hex.EncodeToString(hash.Sum(nil)))
+	path, _ := r.objectPath(id)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", fmt.Errorf("create object directory: %w", err)
+	}
+
+	temp, err := os.CreateTemp(filepath.Dir(path), ".writing-")
+	if err != nil {
+		return "", fmt.Errorf("create object staging file: %w", err)
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+
+	compressed := zlib.NewWriter(temp)
+	_, writeErr := compressed.Write(header)
+	if writeErr == nil {
+		_, writeErr = compressed.Write(content)
+	}
+	if closeErr := compressed.Close(); writeErr == nil {
+		writeErr = closeErr
+	}
+	if closeErr := temp.Close(); writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr != nil {
+		return "", fmt.Errorf("write object: %w", writeErr)
+	}
+	if err := os.Chmod(tempPath, 0o444); err != nil {
+		return "", fmt.Errorf("set object permissions: %w", err)
+	}
+	if err := os.Link(tempPath, path); err != nil {
+		if !errors.Is(err, os.ErrExist) {
+			return "", fmt.Errorf("publish object: %w", err)
+		}
+		// An existing path has the same name but may have been externally
+		// corrupted, so verify it before reporting a successful idempotent write.
+		if _, readErr := r.ReadObject(id); readErr != nil {
+			return "", readErr
+		}
+	}
+	return id, nil
+}
+
+// ReadObject retrieves and verifies an object without altering its contents.
+func (r *Repository) ReadObject(id ObjectID) (Object, error) {
+	path, err := r.objectPath(id)
+	if err != nil {
+		return Object{}, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return Object{}, fmt.Errorf("%s: %w", id, ErrObjectNotFound)
+		}
+		return Object{}, fmt.Errorf("open object: %w", err)
+	}
+	defer file.Close()
+
+	decompressed, err := zlib.NewReader(file)
+	if err != nil {
+		return Object{}, corruptObject(id, err)
+	}
+	raw, readErr := io.ReadAll(decompressed)
+	closeErr := decompressed.Close()
+	if readErr != nil {
+		return Object{}, corruptObject(id, readErr)
+	}
+	if closeErr != nil {
+		return Object{}, corruptObject(id, closeErr)
+	}
+
+	nul := bytes.IndexByte(raw, 0)
+	if nul < 0 {
+		return Object{}, corruptObject(id, errors.New("missing header terminator"))
+	}
+	objectTypeText, sizeText, found := strings.Cut(string(raw[:nul]), " ")
+	objectType := ObjectType(objectTypeText)
+	size, sizeErr := strconv.ParseUint(sizeText, 10, 64)
+	content := raw[nul+1:]
+	if !found || !validObjectType(objectType) || sizeErr != nil ||
+		sizeText != strconv.FormatUint(size, 10) || size != uint64(len(content)) {
+		return Object{}, corruptObject(id, errors.New("invalid object header"))
+	}
+	hash := sha1.Sum(raw)
+	if hex.EncodeToString(hash[:]) != string(id) {
+		return Object{}, corruptObject(id, errors.New("object ID mismatch"))
+	}
+	return Object{ID: id, Type: objectType, Size: int64(len(content)), Content: content}, nil
+}
+
 // Inspect validates the bare repository and reports its lifecycle metadata.
 func (r *Repository) Inspect() (Info, error) {
 	head, err := os.ReadFile(filepath.Join(r.path, "HEAD"))
@@ -169,6 +303,28 @@ func (s *Store) pathFor(id string) (string, error) {
 		return "", fmt.Errorf("%q: %w", id, ErrInvalidID)
 	}
 	return filepath.Join(s.root, id+".git"), nil
+}
+
+func (r *Repository) objectPath(id ObjectID) (string, error) {
+	value := string(id)
+	decoded, err := hex.DecodeString(value)
+	if err != nil || len(decoded) != sha1.Size || value != strings.ToLower(value) {
+		return "", fmt.Errorf("object ID %q: %w", id, ErrInvalidObject)
+	}
+	return filepath.Join(r.path, "objects", value[:2], value[2:]), nil
+}
+
+func validObjectType(objectType ObjectType) bool {
+	switch objectType {
+	case BlobObject, TreeObject, CommitObject, TagObject:
+		return true
+	default:
+		return false
+	}
+}
+
+func corruptObject(id ObjectID, err error) error {
+	return fmt.Errorf("%s: %w: %v", id, ErrCorruptObject, err)
 }
 
 func initializeBareRepository(path string) error {
