@@ -121,11 +121,13 @@ func runGitService(w http.ResponseWriter, r *http.Request, repo *storage.Reposit
 	args := []string{commandName, "--stateless-rpc"}
 	var removeHooks func()
 	if service == receivePackService {
-		// This rung accepts creation and fast-forward progress only. Stock Git
-		// enforces these protections before committing the ref transaction.
+		// Receive-pack applies each requested ref update transactionally. The
+		// client distinguishes ordinary progress from explicit force updates,
+		// while the hook keeps the remote constrained to its primary branch.
 		args = append([]string{
-			"-c", "receive.denyNonFastForwards=true",
-			"-c", "receive.denyDeletes=true",
+			"-c", "receive.denyNonFastForwards=false",
+			"-c", "receive.denyDeletes=false",
+			"-c", "receive.denyDeleteCurrent=ignore",
 			"-c", "receive.hideRefs=refs/",
 			"-c", "receive.hideRefs=!refs/heads/main",
 		}, args...)

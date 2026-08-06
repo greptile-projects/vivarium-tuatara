@@ -89,9 +89,10 @@ whenever dependencies change or the web job fails before it starts.
   fetch later primary-branch objects, update `origin/main`, and fast-forward
   their checkout with a stock `git pull`. `$GIT_STORAGE_ROOT` selects the
   repository root used by the API process and defaults to `repositories`.
-  Smart HTTP receive-pack accepts initial and fast-forward `main` pushes only.
-  Other ref names, non-fast-forward updates, and deletions are denied; rejected
-  updates preserve the accepted reference and repository integrity.
+  Smart HTTP receive-pack accepts initial, fast-forward, explicitly forced,
+  and deletion pushes for `main`. Other ref names remain denied; ordinary
+  non-fast-forward pushes are rejected by stock clients unless force is
+  requested, and receive-pack applies accepted updates transactionally.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 
