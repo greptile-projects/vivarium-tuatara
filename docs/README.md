@@ -123,7 +123,10 @@ fast-forwards the local `main` branch and working tree without recloning.
 
 Stock clients publish work through receive-pack discovery and
 `POST .../git-receive-pack`. They can create the unborn `main` branch and
-advance it with fast-forward commits. Non-fast-forward updates and branch
-deletion are denied, as are pushes to secondary branches, tags, or any ref
-other than `refs/heads/main`. Rejection leaves the accepted tip in place and
-the repository valid.
+advance it with fast-forward commits. An explicitly forced push can replace
+its history, and an explicit deletion returns the repository to an unborn
+`main`; a later push can recreate it. Stock clients continue to protect
+ordinary non-fast-forward pushes unless force is requested. Pushes to
+secondary branches, tags, or any ref other than `refs/heads/main` are denied.
+Receive-pack validates the complete request before applying its ref
+transaction, so rejected requests do not partially change named state.

@@ -260,9 +260,9 @@ func TestGitPushCreatesAndAdvancesPrimaryBranchWithoutLosingHistory(t *testing.T
 		t.Fatal(err)
 	}
 	gitCommand(t, workingCopy, "commit", "-am", "replace progress")
-	gitCommandFails(t, workingCopy, "push", "--force", "origin", "main")
+	gitCommandFails(t, workingCopy, "push", "origin", "main")
 	if got := gitCommand(t, repo.Path(), "rev-parse", "refs/heads/main"); got != advanced+"\n" {
-		t.Fatalf("remote main after rejected rewrite = %q, want %s", got, advanced)
+		t.Fatalf("remote main after unforced rewrite = %q, want %s", got, advanced)
 	}
 	gitCommand(t, repo.Path(), "fsck", "--full")
 	if _, err := repo.ListObjects(); err != nil {
@@ -278,6 +278,84 @@ func TestGitPushCreatesAndAdvancesPrimaryBranchWithoutLosingHistory(t *testing.T
 	if got := lsRemote(t, server.URL+"/git/"+repo.ID()+".git"); got != wantRefs {
 		t.Fatalf("remote refs after rejected secondary refs = %q", got)
 	}
+}
+
+func TestGitForceUpdatesDeletesAndRecoversPrimaryBranch(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("destructive-lifecycle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(newHandler(store))
+	t.Cleanup(server.Close)
+	remoteURL := server.URL + "/git/" + repo.ID() + ".git"
+
+	publisher := filepath.Join(t.TempDir(), "publisher")
+	gitCommand(t, "", "init", "--initial-branch=main", publisher)
+	gitCommand(t, publisher, "config", "user.name", "Publisher")
+	gitCommand(t, publisher, "config", "user.email", "publisher@example.com")
+	gitCommand(t, publisher, "remote", "add", "origin", remoteURL)
+	if err := os.WriteFile(filepath.Join(publisher, "history.txt"), []byte("original\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommand(t, publisher, "add", "history.txt")
+	gitCommand(t, publisher, "commit", "-m", "original history")
+	original := strings.TrimSpace(gitCommand(t, publisher, "rev-parse", "HEAD"))
+	gitCommand(t, publisher, "push", "-u", "origin", "main")
+
+	observer := filepath.Join(t.TempDir(), "observer")
+	gitCommand(t, "", "clone", remoteURL, observer)
+	gitCommand(t, publisher, "checkout", "--orphan", "replacement")
+	gitCommand(t, publisher, "rm", "-rf", ".")
+	if err := os.WriteFile(filepath.Join(publisher, "history.txt"), []byte("replacement\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommand(t, publisher, "add", "history.txt")
+	gitCommand(t, publisher, "commit", "-m", "replacement history")
+	replacement := strings.TrimSpace(gitCommand(t, publisher, "rev-parse", "HEAD"))
+	gitCommand(t, publisher, "branch", "-M", "main")
+
+	gitCommand(t, publisher, "push", "--force", "origin", "main")
+	wantReplacementRefs := replacement + "\tHEAD\n" + replacement + "\trefs/heads/main\n"
+	if got := lsRemote(t, remoteURL); got != wantReplacementRefs {
+		t.Fatalf("remote refs after force update = %q, want %q", got, wantReplacementRefs)
+	}
+	replacementClone := filepath.Join(t.TempDir(), "replacement-clone")
+	gitCommand(t, "", "clone", remoteURL, replacementClone)
+	assertFile(t, filepath.Join(replacementClone, "history.txt"), "replacement\n", false)
+	gitCommand(t, observer, "fetch", "--prune", "origin")
+	if got := gitCommand(t, observer, "rev-parse", "refs/remotes/origin/main"); got != replacement+"\n" {
+		t.Fatalf("observer origin/main after force update = %q, want %s", got, replacement)
+	}
+	if got := gitCommand(t, observer, "rev-parse", "HEAD"); got != original+"\n" {
+		t.Fatalf("observer HEAD moved by fetch = %q, want %s", got, original)
+	}
+
+	gitCommand(t, publisher, "push", "origin", ":main")
+	if got := lsRemote(t, "--symref", remoteURL); got != "" {
+		t.Fatalf("remote refs after deletion = %q, want empty", got)
+	}
+	emptyClone := filepath.Join(t.TempDir(), "empty-clone")
+	gitCommand(t, "", "clone", remoteURL, emptyClone)
+	if got := gitCommand(t, emptyClone, "symbolic-ref", "HEAD"); got != "refs/heads/main\n" {
+		t.Fatalf("empty clone HEAD = %q, want refs/heads/main", got)
+	}
+	gitCommand(t, observer, "fetch", "--prune", "origin")
+	gitCommandFails(t, observer, "rev-parse", "--verify", "refs/remotes/origin/main")
+
+	gitCommand(t, publisher, "push", "origin", "main")
+	if got := lsRemote(t, remoteURL); got != wantReplacementRefs {
+		t.Fatalf("remote refs after recovery = %q, want %q", got, wantReplacementRefs)
+	}
+	gitCommand(t, emptyClone, "pull", "origin", "main")
+	if got := gitCommand(t, emptyClone, "rev-parse", "HEAD"); got != replacement+"\n" {
+		t.Fatalf("recovered clone HEAD = %q, want %s", got, replacement)
+	}
+	assertFile(t, filepath.Join(emptyClone, "history.txt"), "replacement\n", false)
+	gitCommand(t, repo.Path(), "fsck", "--full")
 }
 
 func TestGitLsRemoteAdvertisesEmptyAndPopulatedRepositories(t *testing.T) {
