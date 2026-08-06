@@ -92,7 +92,10 @@ whenever dependencies change or the web job fails before it starts.
   Smart HTTP receive-pack accepts initial, fast-forward, explicitly forced,
   and deletion pushes for `main`. Other ref names remain denied; ordinary
   non-fast-forward pushes are rejected by stock clients unless force is
-  requested, and receive-pack applies accepted updates transactionally.
+  requested, and receive-pack applies accepted updates transactionally. The
+  end-to-end stock-client compatibility suite covers the complete workflow in
+  sequence: initial push, clone, ordinary push and pull, forced replacement,
+  deletion, empty clone, recovery push, and recovery pull.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

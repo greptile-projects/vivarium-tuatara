@@ -280,7 +280,7 @@ func TestGitPushCreatesAndAdvancesPrimaryBranchWithoutLosingHistory(t *testing.T
 	}
 }
 
-func TestGitForceUpdatesDeletesAndRecoversPrimaryBranch(t *testing.T) {
+func TestGitStockClientSingleBranchWorkflow(t *testing.T) {
 	store, err := storage.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -308,6 +308,20 @@ func TestGitForceUpdatesDeletesAndRecoversPrimaryBranch(t *testing.T) {
 
 	observer := filepath.Join(t.TempDir(), "observer")
 	gitCommand(t, "", "clone", remoteURL, observer)
+	assertFile(t, filepath.Join(observer, "history.txt"), "original\n", false)
+
+	if err := os.WriteFile(filepath.Join(publisher, "history.txt"), []byte("advanced\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommand(t, publisher, "commit", "-am", "advance history")
+	advanced := strings.TrimSpace(gitCommand(t, publisher, "rev-parse", "HEAD"))
+	gitCommand(t, publisher, "push", "origin", "main")
+	gitCommand(t, observer, "pull", "--ff-only")
+	if got := gitCommand(t, observer, "rev-list", "--first-parent", "HEAD"); got != advanced+"\n"+original+"\n" {
+		t.Fatalf("observer history after ordinary push and pull = %q", got)
+	}
+	assertFile(t, filepath.Join(observer, "history.txt"), "advanced\n", false)
+
 	gitCommand(t, publisher, "checkout", "--orphan", "replacement")
 	gitCommand(t, publisher, "rm", "-rf", ".")
 	if err := os.WriteFile(filepath.Join(publisher, "history.txt"), []byte("replacement\n"), 0o644); err != nil {
@@ -330,8 +344,8 @@ func TestGitForceUpdatesDeletesAndRecoversPrimaryBranch(t *testing.T) {
 	if got := gitCommand(t, observer, "rev-parse", "refs/remotes/origin/main"); got != replacement+"\n" {
 		t.Fatalf("observer origin/main after force update = %q, want %s", got, replacement)
 	}
-	if got := gitCommand(t, observer, "rev-parse", "HEAD"); got != original+"\n" {
-		t.Fatalf("observer HEAD moved by fetch = %q, want %s", got, original)
+	if got := gitCommand(t, observer, "rev-parse", "HEAD"); got != advanced+"\n" {
+		t.Fatalf("observer HEAD moved by fetch = %q, want %s", got, advanced)
 	}
 
 	gitCommand(t, publisher, "push", "origin", ":main")
