@@ -122,6 +122,12 @@ func (s *Store) Create(id string) (*Repository, error) {
 		}
 		return nil, fmt.Errorf("publish repository: %w", err)
 	}
+	if err := syncDirectory(path); err != nil {
+		return nil, fmt.Errorf("sync repository: %w", err)
+	}
+	if err := syncDirectory(s.root); err != nil {
+		return nil, fmt.Errorf("sync storage root: %w", err)
+	}
 
 	return s.Open(id)
 }
