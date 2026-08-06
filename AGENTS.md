@@ -67,6 +67,11 @@ whenever dependencies change or the web job fails before it starts.
   and annotated tag objects addressed by lowercase SHA-1 object IDs.
   `Repository.ListObjects` discovers every loose object, verifies it through
   the same read boundary, and returns the complete objects ordered by ID.
+  `Repository.ReadTree` exposes direct snapshot entries and `WalkTree`
+  recursively returns repository paths. `Repository.ReadCommit` exposes a
+  commit's tree, ordered parents, headers, and message, while
+  `ListCommitAncestry` traverses the complete deduplicated parent graph in
+  depth-first parent order.
   Loose references are managed through `CreateReference`, `ReadReference`,
   `UpdateReference`, `ListReferences`, and `DeleteReference`. Direct targets
   must name an existing verified object; symbolic targets may be unborn so

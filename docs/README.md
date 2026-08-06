@@ -42,6 +42,19 @@ hiding it. For repositories populated through this storage boundary, its
 result is the same complete object set reported by stock Git's
 `git cat-file --batch-all-objects`.
 
+Snapshots and history are available without requiring callers to parse raw
+Git bytes. `Repository.ReadTree` returns the names, modes, object IDs, and
+types of a tree's direct entries, verifying each in-repository edge.
+`Repository.WalkTree` recursively returns those entries with repository-rooted
+paths in depth-first tree order. Gitlinks are identified as commits but are
+not required to exist locally, matching Git's submodule model.
+`Repository.ReadCommit` returns a commit's snapshot tree, ordered parent IDs,
+ordered headers, and exact message. `Repository.ListCommitAncestry` follows
+all parent edges depth-first, in header order, and emits shared merge ancestors
+only once. These graph readers reject missing, malformed, or type-mismatched
+edges, while the underlying canonical objects and references remain directly
+usable by `git ls-tree`, `git cat-file`, and `git log`.
+
 Named repository state is managed through `Repository.CreateReference`,
 `ReadReference`, `UpdateReference`, `ListReferences`, and `DeleteReference`.
 The interface handles loose references under `refs/` plus `HEAD`, returns
