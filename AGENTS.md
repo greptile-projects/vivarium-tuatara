@@ -76,6 +76,10 @@ whenever dependencies change or the web job fails before it starts.
   `UpdateReference`, `ListReferences`, and `DeleteReference`. Direct targets
   must name an existing verified object; symbolic targets may be unborn so
   `HEAD` can identify the default branch before its first commit.
+  `Repository.Path` is reserved as an interoperability handle for stock Git
+  processes; application storage writes should go through the package API.
+  The integrated compatibility test builds representative merged history and
+  lightweight/annotated tags through that API and requires `git fsck --full`.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

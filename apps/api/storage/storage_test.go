@@ -71,6 +71,85 @@ func TestWriteAndReadObjectsAreGitCompatible(t *testing.T) {
 	gitOutput(t, repo.Path(), "fsck", "--full")
 }
 
+func TestCompleteStorageInterfacePassesGitFSCK(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("complete")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	readmeID := writeObject(t, repo, storage.BlobObject, []byte("# complete repository\n"))
+	executableID := writeObject(t, repo, storage.BlobObject, []byte("#!/bin/sh\necho compatible\n"))
+	linkID := writeObject(t, repo, storage.BlobObject, []byte("README.md"))
+	sourceID := writeObject(t, repo, storage.BlobObject, []byte("package main\n"))
+	sourceTree := append([]byte("100644 main.go\x00"), decodeObjectID(t, sourceID)...)
+	sourceTreeID := writeObject(t, repo, storage.TreeObject, sourceTree)
+
+	rootTree := append([]byte("100644 README.md\x00"), decodeObjectID(t, readmeID)...)
+	rootTree = append(rootTree, []byte("100755 build.sh\x00")...)
+	rootTree = append(rootTree, decodeObjectID(t, executableID)...)
+	rootTree = append(rootTree, []byte("120000 docs\x00")...)
+	rootTree = append(rootTree, decodeObjectID(t, linkID)...)
+	rootTree = append(rootTree, []byte("40000 src\x00")...)
+	rootTree = append(rootTree, decodeObjectID(t, sourceTreeID)...)
+	rootTreeID := writeObject(t, repo, storage.TreeObject, rootTree)
+
+	initialID := writeObject(t, repo, storage.CommitObject, commitContent(rootTreeID, nil, 1700000000, "initial"))
+	mainID := writeObject(t, repo, storage.CommitObject, commitContent(rootTreeID, []storage.ObjectID{initialID}, 1700000100, "main work"))
+	featureID := writeObject(t, repo, storage.CommitObject, commitContent(rootTreeID, []storage.ObjectID{initialID}, 1700000200, "feature work"))
+	mergeID := writeObject(t, repo, storage.CommitObject, commitContent(rootTreeID, []storage.ObjectID{mainID, featureID}, 1700000300, "merge feature"))
+	tagContent := []byte(fmt.Sprintf("object %s\ntype commit\ntag v1.0.0\ntagger Test Author <test@example.com> 1700000400 +0000\n\nstorage foundation\n", mergeID))
+	tagID := writeObject(t, repo, storage.TagObject, tagContent)
+
+	for _, reference := range []storage.Reference{
+		{Name: "refs/heads/main", Target: string(mergeID)},
+		{Name: "refs/heads/feature", Target: string(featureID)},
+		{Name: "refs/tags/v0.1.0", Target: string(initialID)},
+		{Name: "refs/tags/v1.0.0", Target: string(tagID)},
+	} {
+		if err := repo.CreateReference(reference); err != nil {
+			t.Fatalf("CreateReference(%s): %v", reference.Name, err)
+		}
+	}
+
+	reopened, err := store.Open(repo.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects, err := reopened.ListObjects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(objects) != 11 {
+		t.Fatalf("ListObjects returned %d objects, want 11", len(objects))
+	}
+	references, err := reopened.ListReferences()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(references) != 5 {
+		t.Fatalf("ListReferences returned %d references, want 5", len(references))
+	}
+	ancestry, err := reopened.ListCommitAncestry(mergeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ancestry) != 4 {
+		t.Fatalf("ListCommitAncestry returned %d commits, want 4", len(ancestry))
+	}
+
+	command := exec.Command("git", "--git-dir="+reopened.Path(), "fsck", "--full")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git fsck --full rejected repository: %v\n%s", err, output)
+	}
+	if got := gitOutput(t, reopened.Path(), "rev-parse", "HEAD", "refs/tags/v0.1.0", "refs/tags/v1.0.0^{}"); got != strings.Join([]string{string(mergeID), string(initialID), string(mergeID)}, "\n")+"\n" {
+		t.Fatalf("git resolved stored references as %q", got)
+	}
+}
+
 func TestTreesAndCommitAncestryAreGitCompatible(t *testing.T) {
 	store, err := storage.New(t.TempDir())
 	if err != nil {

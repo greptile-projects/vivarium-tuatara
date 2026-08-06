@@ -65,3 +65,28 @@ to an unborn reference, which is how a new repository exposes `HEAD` as
 `refs/heads/main` before the first commit. Reference mutations use Git-style
 lock files, atomic rename, and directory syncing, and their files remain
 interoperable with stock `git rev-parse`, `git show-ref`, and `git symbolic-ref`.
+
+### Storage interface contract
+
+Later repository and remote features use this package rather than manipulating
+Git files themselves. The complete durable interface is:
+
+| Concern | Write operations | Read operations |
+| --- | --- | --- |
+| Repository lifecycle | `Store.Create` | `Store.Open`, `Repository.ID`, `Repository.Path`, `Repository.Inspect` |
+| Immutable objects | `Repository.WriteObject` | `Repository.ReadObject`, `Repository.ListObjects` |
+| Named state | `Repository.CreateReference`, `UpdateReference`, `DeleteReference` | `Repository.ReadReference`, `ListReferences` |
+| Snapshots and history | Objects are written with `WriteObject` | `Repository.ReadTree`, `WalkTree`, `ReadCommit`, `ListCommitAncestry` |
+
+`Repository.Path` is an interoperability handle for stock Git processes, not
+an alternate application write API. New durable operations belong on the
+storage interface so its atomicity, integrity checks, and error contract remain
+the single repository boundary. Objects must be published before direct
+references that make them reachable; symbolic references may be unborn.
+
+Compatibility tests construct a representative repository solely through this
+interface: regular, executable, symlink, and nested-tree blobs; branched and
+merged commit history; branch references; lightweight and annotated tags; and
+symbolic `HEAD`. After reopening and reading the repository through the same
+interface, stock `git fsck --full` verifies the complete reachable graph, and
+stock revision parsing verifies `HEAD` and both tag forms.
