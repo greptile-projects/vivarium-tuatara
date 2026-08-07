@@ -6,6 +6,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
 } from "react";
@@ -74,10 +75,17 @@ export function ProposalsWorkspace() {
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const loadGeneration = useRef(0);
 
   const load = useCallback(async () => {
     if (authLoading) return;
+    const generation = ++loadGeneration.current;
+    const active = () => loadGeneration.current === generation;
     if (!token) {
+      setRepositories([]);
+      setProposals([]);
+      setAuthors({});
+      setError("");
       setLoading(false);
       return;
     }
@@ -85,6 +93,7 @@ export function ProposalsWorkspace() {
     setError("");
     try {
       const repos = await allPages<Repository>("/repositories", "repositories", token);
+      if (!active()) return;
       setRepositories(repos);
       const groups = await Promise.all(
         repos.map(async (repository) =>
@@ -95,6 +104,7 @@ export function ProposalsWorkspace() {
           )).map((proposal) => ({ ...proposal, repository })),
         ),
       );
+      if (!active()) return;
       const found = groups.flat().sort((a, b) =>
         b.updated_at.localeCompare(a.updated_at),
       );
@@ -103,13 +113,15 @@ export function ProposalsWorkspace() {
       const people = await Promise.all(
         ids.map((id) => api<User>(`/users/${id}`, {}, token).catch(() => null)),
       );
+      if (!active()) return;
       setAuthors(
         Object.fromEntries(people.filter((person): person is User => Boolean(person)).map((person) => [person.id, person])),
       );
     } catch (reason) {
-      setError(message(reason, "Proposals could not be loaded."));
+      if (active())
+        setError(message(reason, "Proposals could not be loaded."));
     } finally {
-      setLoading(false);
+      if (active()) setLoading(false);
     }
   }, [authLoading, token]);
 
@@ -228,9 +240,12 @@ export function ProposalConversation({ repositoryID, proposalID }: { repositoryI
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const loadGeneration = useRef(0);
 
   const load = useCallback(async () => {
     if (authLoading) return;
+    const generation = ++loadGeneration.current;
+    const active = () => loadGeneration.current === generation;
     setLoading(true);
     setError("");
     try {
@@ -239,17 +254,24 @@ export function ProposalConversation({ repositoryID, proposalID }: { repositoryI
         api<Proposal>(`/repositories/${repositoryID}/proposals/${proposalID}`, {}, token),
         allPages<ProposalComment>(`/repositories/${repositoryID}/proposals/${proposalID}/comments`, "comments", token),
       ]);
+      if (!active()) return;
       setRepository(repo); setProposal(item); setComments(discussion);
       if (token) {
         const available = await allPages<Repository>("/repositories", "repositories", token);
+        if (!active()) return;
         setParticipant(available.some((candidate) => candidate.id === repositoryID));
+      } else {
+        setParticipant(false);
       }
       const ids = [...new Set([item.author_id, ...discussion.map((comment) => comment.author_id)])];
       const people = await Promise.all(ids.map((id) => api<User>(`/users/${id}`, {}, token).catch(() => null)));
+      if (!active()) return;
       setAuthors(Object.fromEntries(people.filter((person): person is User => Boolean(person)).map((person) => [person.id, person])));
     } catch (reason) {
-      setError(message(reason, "Proposal could not be loaded."));
-    } finally { setLoading(false); }
+      if (active()) setError(message(reason, "Proposal could not be loaded."));
+    } finally {
+      if (active()) setLoading(false);
+    }
   }, [authLoading, proposalID, repositoryID, token]);
 
   useEffect(() => { void Promise.resolve().then(load); }, [load]);
