@@ -174,21 +174,26 @@ cannot be confirmed, preserving attribution IDs without overstating storage.
 A repository opts into automatic pull-request verification by committing
 `.vivarium/checks.json` on the candidate branch. The file has `version: 1` and
 a non-empty `checks` array (at most 20). Each check defines a unique `name`, a
-shell `command`, and optional `working_directory`, `environment`, and
+preinstalled OCI `image`, a shell `command`, and optional `working_directory`, `environment`, and
 `timeout_seconds` (default 600, maximum 3600):
 
 ```json
-{"version":1,"checks":[{"name":"api","command":"go test ./...","working_directory":"apps/api","environment":{"GOFLAGS":"-mod=readonly"},"timeout_seconds":900}]}
+{"version":1,"checks":[{"name":"api","image":"vivarium/go:1.26","command":"go test ./...","working_directory":"apps/api","environment":{"GOFLAGS":"-mod=readonly"},"timeout_seconds":900}]}
 ```
 
 Opening a pull request or explicitly synchronizing it to a new source revision
 loads that file from the exact recorded source commit and creates one durable
 run per definition. Execution uses an exported copy of that commit in a new
-disposable directory, a minimal environment, and no Git repository or
-credential. `PATH`, `HOME`, and `GIT_*` cannot be overridden. Runs progress
+OCI container with no network, capabilities, host root, Git repository, or
+credential; its root is read-only and CPU, memory, process count, and lifetime
+are bounded. Images are never pulled by a check and must already exist on the
+runner. The complete container is forcibly removed on every terminal path.
+`PATH`, `HOME`, and `GIT_*` cannot be overridden. Runs progress
 through `queued`, `running`, and `succeeded` or `failed`; invalid configuration
 is retained as a failed configuration run. Repeating synchronization without a
-new commit does not duplicate automatic runs.
+new commit does not duplicate automatic runs. At API startup, durable `queued`
+and interrupted `running` records are relaunched from the same exact commit
+under a cross-process execution lock.
 
 `GET /repositories/{id}/pulls/{pull_id}/checks` returns creation-ordered
 `check_runs`. Each record contains its stable ID, repository and pull-request

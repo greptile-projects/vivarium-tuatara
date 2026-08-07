@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -23,6 +24,7 @@ const ConfigPath = ".vivarium/checks.json"
 
 type Definition struct {
 	Name             string            `json:"name"`
+	Image            string            `json:"image"`
 	Command          string            `json:"command"`
 	WorkingDirectory string            `json:"working_directory,omitempty"`
 	Environment      map[string]string `json:"environment,omitempty"`
@@ -81,6 +83,9 @@ func ParseConfig(data []byte) (Config, error) {
 		if strings.TrimSpace(x.Name) == "" || len(x.Name) > 100 || strings.TrimSpace(x.Command) == "" || len(x.Command) > 4000 || seen[x.Name] || x.TimeoutSeconds < 0 || x.TimeoutSeconds > 3600 {
 			return Config{}, errors.New("invalid check definition")
 		}
+		if !validImage(x.Image) {
+			return Config{}, errors.New("invalid check image")
+		}
 		if x.WorkingDirectory == "" {
 			x.WorkingDirectory = "."
 		}
@@ -100,6 +105,18 @@ func ParseConfig(data []byte) (Config, error) {
 		seen[x.Name] = true
 	}
 	return c, nil
+}
+
+func validImage(image string) bool {
+	if image == "" || len(image) > 200 || strings.ContainsAny(image, " \t\r\n@") {
+		return false
+	}
+	for _, r := range image {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("./:_-", r)) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) Create(repositoryID, pullRequestID, commitID string, definitions []Definition) ([]Run, error) {
@@ -179,6 +196,34 @@ func (s *Store) List(repositoryID, pullRequestID string) ([]Run, error) {
 	return runs, nil
 }
 
+// Nonterminal returns durable work that must be relaunched after interruption.
+func (s *Store) Nonterminal() ([]Run, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var runs []Run
+	err := filepath.WalkDir(s.root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			return nil
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var run Run
+		if json.Unmarshal(body, &run) != nil {
+			return errors.New("invalid check run record")
+		}
+		if run.State == "queued" || run.State == "running" {
+			runs = append(runs, run)
+		}
+		return nil
+	})
+	return runs, err
+}
+
 func (s *Store) Update(run Run) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -224,9 +269,19 @@ func (s *Store) write(dir string, run Run) error {
 	return closeErr
 }
 
-// Execute runs a queued check in a disposable exact-commit snapshot. The child
-// receives only a minimal environment and never a repository credential.
+// Execute runs a queued check in a disposable exact-commit snapshot inside a
+// capability-free, network-disabled container. Only preinstalled images run.
 func (s *Store) Execute(run Run, repositoryPath string) {
+	lockPath := filepath.Join(s.root, run.RepositoryID, run.PullRequestID, run.ID+".execution.lock")
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	now := s.now().Truncate(time.Microsecond)
 	run.State = "running"
 	run.StartedAt = &now
@@ -259,13 +314,22 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 			err = errors.New("working directory does not exist")
 		} else {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(run.Definition.TimeoutSeconds)*time.Second)
-			cmd := exec.CommandContext(ctx, "sh", "-c", run.Definition.Command)
-			cmd.Dir = dir
-			cmd.Env = []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=" + workspace, "CI=true", "VIVARIUM_COMMIT_SHA=" + run.CommitID}
+			containerName := "vivarium-check-" + run.ID
+			// A previous API process may have died while Docker kept the container.
+			// The execution lock makes removing that abandoned tree safe before
+			// relaunching this exact durable run.
+			_ = exec.Command("docker", "rm", "--force", containerName).Run()
+			args := []string{"run", "--name", containerName, "--pull=never", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=1g", "--cpus=2", "--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "--mount", "type=bind,src=" + workspace + ",dst=/workspace", "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m", "--workdir", "/workspace/" + run.Definition.WorkingDirectory, "--env", "HOME=/tmp", "--env", "CI=true", "--env", "VIVARIUM_COMMIT_SHA=" + run.CommitID}
 			for k, v := range run.Definition.Environment {
-				cmd.Env = append(cmd.Env, k+"="+v)
+				args = append(args, "--env", k+"="+v)
 			}
+			args = append(args, run.Definition.Image, "sh", "-c", run.Definition.Command)
+			cmd := exec.CommandContext(ctx, "docker", args...)
 			err = cmd.Run()
+			// CommandContext may terminate only the Docker client. Force-removing the
+			// named container synchronously kills and reaps every check descendant.
+			cleanup := exec.Command("docker", "rm", "--force", containerName)
+			_ = cleanup.Run()
 			cancel()
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				err = errors.New("check timed out")

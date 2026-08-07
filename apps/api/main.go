@@ -132,6 +132,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	resumeCheckRuns(store, checkRunStore)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -423,7 +424,7 @@ func startCheckRuns(gitStore *storage.Store, runStore *checkruns.Store, pull pul
 	config, err := checkruns.ParseConfig(data)
 	if err != nil {
 		log.Printf("invalid check configuration for %s: %v", pull.SourceCommitID, err)
-		runs, createErr := runStore.Create(pull.RepositoryID, pull.ID, pull.SourceCommitID, []checkruns.Definition{{Name: "configuration", Command: "invalid configuration", TimeoutSeconds: 1, WorkingDirectory: "."}})
+		runs, createErr := runStore.Create(pull.RepositoryID, pull.ID, pull.SourceCommitID, []checkruns.Definition{{Name: "configuration", Image: "invalid", Command: "invalid configuration", TimeoutSeconds: 1, WorkingDirectory: "."}})
 		if createErr == nil && len(runs) == 1 {
 			now := time.Now().UTC()
 			code := 1
@@ -442,6 +443,22 @@ func startCheckRuns(gitStore *storage.Store, runStore *checkruns.Store, pull pul
 		return
 	}
 	for _, run := range runs {
+		go runStore.Execute(run, repository.Path())
+	}
+}
+
+func resumeCheckRuns(gitStore *storage.Store, runStore *checkruns.Store) {
+	runs, err := runStore.Nonterminal()
+	if err != nil {
+		log.Printf("recover check runs: %v", err)
+		return
+	}
+	for _, run := range runs {
+		repository, openErr := gitStore.Open(run.RepositoryID)
+		if openErr != nil {
+			log.Printf("recover check repository: %v", openErr)
+			continue
+		}
 		go runStore.Execute(run, repository.Path())
 	}
 }

@@ -50,7 +50,7 @@ func TestContributorOpensPullRequestWithExactBranchState(t *testing.T) {
 	oldReadme, _ := gitRepository.WriteObject(storage.BlobObject, []byte("old\n"))
 	newReadme, _ := gitRepository.WriteObject(storage.BlobObject, []byte("new\n"))
 	added, _ := gitRepository.WriteObject(storage.BlobObject, []byte("added\n"))
-	checkConfig, _ := gitRepository.WriteObject(storage.BlobObject, []byte(`{"version":1,"checks":[{"name":"candidate snapshot","command":"test \"$(cat README.md)\" = new"}]}`))
+	checkConfig, _ := gitRepository.WriteObject(storage.BlobObject, []byte(`{"version":1,"checks":[{"name":"candidate snapshot","image":"alpine:3.22","command":"test \"$(cat README.md)\" = new"}]}`))
 	checkTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "checks.json", id: checkConfig})
 	baseTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "README.md", id: oldReadme})
 	headTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "40000", name: ".vivarium", id: checkTree}, testTreeEntry{mode: "100644", name: "README.md", id: newReadme}, testTreeEntry{mode: "100644", name: "feature.go", id: added})

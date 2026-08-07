@@ -212,8 +212,10 @@ the target snapshot remains fixed.
 Candidate revisions can carry their reproducible verification contract in
 `.vivarium/checks.json`. Opening a pull request or explicitly adopting a new
 source revision snapshots those commands into durable check runs for that exact
-commit. Each command executes from a disposable exported snapshot with a
-minimal environment and no repository credential. Lifecycle metadata lives
+commit. Each command executes in a bounded, network-disabled OCI container
+from a disposable exported snapshot, using a preinstalled image and no
+repository credential. Interrupted nonterminal work is relaunched on service
+startup. Lifecycle metadata lives
 beneath `CHECK_RUN_STORAGE_ROOT` (default `check-runs`) independently of Git
 and pull-request records.
 

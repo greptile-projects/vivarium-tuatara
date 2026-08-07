@@ -1,6 +1,7 @@
 package checkruns
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,14 +10,14 @@ import (
 )
 
 func TestParseConfigValidatesExecutionContext(t *testing.T) {
-	config, err := ParseConfig([]byte(`{"version":1,"checks":[{"name":"test","command":"test \"$MODE\" = ci","working_directory":"app","environment":{"MODE":"ci"},"timeout_seconds":30}]}`))
+	config, err := ParseConfig([]byte(`{"version":1,"checks":[{"name":"test","image":"alpine:3.22","command":"test \"$MODE\" = ci","working_directory":"app","environment":{"MODE":"ci"},"timeout_seconds":30}]}`))
 	if err != nil || len(config.Checks) != 1 || config.Checks[0].WorkingDirectory != "app" {
 		t.Fatalf("ParseConfig() = %#v, %v", config, err)
 	}
 	for _, body := range []string{
-		`{"version":2,"checks":[{"name":"test","command":"true"}]}`,
-		`{"version":1,"checks":[{"name":"test","command":"true","working_directory":"../secret"}]}`,
-		`{"version":1,"checks":[{"name":"test","command":"true"},{"name":"test","command":"false"}]}`,
+		`{"version":2,"checks":[{"name":"test","image":"alpine:3.22","command":"true"}]}`,
+		`{"version":1,"checks":[{"name":"test","image":"alpine:3.22","command":"true","working_directory":"../secret"}]}`,
+		`{"version":1,"checks":[{"name":"test","image":"alpine:3.22","command":"true"},{"name":"test","image":"alpine:3.22","command":"false"}]}`,
 	} {
 		if _, err := ParseConfig([]byte(body)); err == nil {
 			t.Fatalf("ParseConfig(%s) unexpectedly succeeded", body)
@@ -45,7 +46,12 @@ func TestExecuteUsesExactDisposableSnapshotAndPersistsLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	definitions := []Definition{{Name: "snapshot", Command: `test "$(cat value)" = candidate && test "$TOKEN" = bounded && test ! -d .git`, WorkingDirectory: "app", Environment: map[string]string{"TOKEN": "bounded"}, TimeoutSeconds: 10}}
+	hostSecret := filepath.Join(t.TempDir(), "host-secret")
+	if err := os.WriteFile(hostSecret, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	command := fmt.Sprintf(`test "$(cat value)" = candidate && test "$TOKEN" = bounded && test ! -d .git && test ! -e %q; sleep 30 &`, hostSecret)
+	definitions := []Definition{{Name: "snapshot", Image: "alpine:3.22", Command: command, WorkingDirectory: "app", Environment: map[string]string{"TOKEN": "bounded"}, TimeoutSeconds: 10}}
 	runs, err := store.Create("0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789", commit, definitions)
 	if err != nil {
 		t.Fatal(err)
@@ -60,6 +66,32 @@ func TestExecuteUsesExactDisposableSnapshotAndPersistsLifecycle(t *testing.T) {
 	}
 	if got[0].CompletedAt.Before(got[0].CreatedAt) || got[0].CompletedAt.After(time.Now().Add(time.Second)) {
 		t.Fatalf("invalid lifecycle times: %#v", got[0])
+	}
+	if output, err := exec.Command("docker", "ps", "--quiet", "--filter", "name=vivarium-check-"+got[0].ID).Output(); err != nil || len(output) != 0 {
+		t.Fatalf("check descendants retained: %q, %v", output, err)
+	}
+
+	// A process restart releases the execution lock; durable nonterminal work is
+	// discovered and can be safely relaunched to a terminal result.
+	abandoned := got[0]
+	abandoned.State = "running"
+	abandoned.CompletedAt = nil
+	abandoned.ExitCode = nil
+	if err := store.Update(abandoned); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(store.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := reopened.Nonterminal()
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("Nonterminal() = %#v, %v", pending, err)
+	}
+	reopened.Execute(pending[0], repository)
+	final, err := reopened.List(abandoned.RepositoryID, abandoned.PullRequestID)
+	if err != nil || len(final) != 1 || final[0].State != "succeeded" {
+		t.Fatalf("recovered runs = %#v, %v", final, err)
 	}
 }
 

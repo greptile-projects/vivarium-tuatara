@@ -230,8 +230,10 @@ whenever dependencies change or the web job fails before it starts.
   Candidate commits opt into automatic verification through versioned
   `.vivarium/checks.json` definitions. Pull creation and source synchronization
   create durable exact-commit runs beneath `$CHECK_RUN_STORAGE_ROOT` (default
-  `check-runs`); commands execute from disposable exported snapshots with a
-  minimal environment and no Git credential. The visibility-aware run
+  `check-runs`); commands execute in capability-free, network-disabled OCI
+  containers using preinstalled images, disposable exported snapshots, and no
+  Git credential. Startup relaunches durable nonterminal runs under a
+  cross-process execution lock. The visibility-aware run
   collection is `GET /repositories/{id}/pulls/{pull_id}/checks`.
   Immutable pull request comments are attributable by stable user ID,
   readable under repository visibility rules, and writable by current owners
