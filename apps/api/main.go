@@ -331,6 +331,10 @@ type pullRequestInput struct {
 	ProposalID   *string `json:"proposal_id"`
 }
 
+type reviewInput struct {
+	Decision *string `json:"decision"`
+}
+
 func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositories.Store, proposalStore *proposals.Store, store *pullrequests.Store, authStore *auth.Store) {
 	mux.HandleFunc("GET /repositories/{id}/pulls", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
@@ -450,6 +454,59 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 		}
 		w.Header().Set("Location", r.URL.Path+"/"+comment.ID)
 		writeJSON(w, 201, comment)
+	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/reviews", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		all, err := store.ListReviews(r.PathValue("id"), r.PathValue("pull_id"))
+		if writePullRequestError(w, err) {
+			return
+		}
+		page, next, ok := paginate(r, all, func(review pullrequests.Review) string { return review.ID })
+		if !ok {
+			writeAPIError(w, 400, "invalid_pagination", "limit or after is invalid")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"reviews": page, "next_cursor": next})
+	})
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/reviews", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:read")
+		if !ok {
+			return
+		}
+		var input reviewInput
+		if decodeJSON(r, &input) != nil || input.Decision == nil || (*input.Decision != pullrequests.Approved && *input.Decision != pullrequests.ChangesRequested) {
+			writeAPIError(w, 400, "invalid_review", "decision must be approved or changes_requested")
+			return
+		}
+		review, err := store.SetReview(r.PathValue("id"), r.PathValue("pull_id"), actor.UserID, *input.Decision)
+		location := r.URL.Path + "/" + review.ID
+		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
+			w.Header().Set("Location", location)
+			writeUncertainMutation(w, review)
+			return
+		}
+		if writePullRequestError(w, err) {
+			return
+		}
+		w.Header().Set("Location", location)
+		writeJSON(w, 200, review)
+	})
+	mux.HandleFunc("DELETE /repositories/{id}/pulls/{pull_id}/reviews/{review_id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:read")
+		if !ok {
+			return
+		}
+		review, err := store.WithdrawReview(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("review_id"), actor.UserID)
+		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
+			writeUncertainMutation(w, review)
+			return
+		}
+		if writePullRequestError(w, err) {
+			return
+		}
+		writeJSON(w, 200, review)
 	})
 }
 

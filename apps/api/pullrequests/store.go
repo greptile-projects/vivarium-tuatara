@@ -27,6 +27,12 @@ var (
 
 const Open = "open"
 
+const (
+	Approved         = "approved"
+	ChangesRequested = "changes_requested"
+	Withdrawn        = "withdrawn"
+)
+
 type PullRequest struct {
 	ID             string    `json:"id"`
 	RepositoryID   string    `json:"repository_id"`
@@ -73,8 +79,26 @@ type Comment struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
+// Review is one participant's current decision. ReviewedCommitID identifies
+// the live source-branch tip the participant evaluated; Stale is derived when
+// the record is read and is never trusted as durable state.
+type Review struct {
+	ID               string    `json:"id"`
+	PullRequestID    string    `json:"pull_request_id"`
+	ReviewerID       string    `json:"reviewer_id"`
+	Decision         string    `json:"decision"`
+	ReviewedCommitID string    `json:"reviewed_commit_id"`
+	Stale            bool      `json:"stale"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
 type commentRecord struct {
 	Comments []Comment `json:"comments"`
+}
+
+type reviewRecord struct {
+	Reviews []Review `json:"reviews"`
 }
 
 type Store struct {
@@ -386,8 +410,196 @@ func (s *Store) ListComments(repositoryID, pullRequestID string) ([]Comment, err
 	return append([]Comment(nil), record.Comments...), nil
 }
 
+// SetReview creates or replaces the actor's decision against the current
+// source branch tip. A reviewer has exactly one durable current review.
+func (s *Store) SetReview(repositoryID, pullRequestID, reviewerID, decision string) (Review, error) {
+	if !validID(reviewerID) || (decision != Approved && decision != ChangesRequested) {
+		return Review{}, ErrInvalid
+	}
+	p, err := s.Get(repositoryID, pullRequestID)
+	if err != nil {
+		return Review{}, err
+	}
+	repository, err := s.git.Open(repositoryID)
+	if err != nil {
+		return Review{}, err
+	}
+	commitID, err := branchCommit(repository, p.SourceBranch)
+	if err != nil {
+		return Review{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Review{}, err
+	}
+	defer unlock()
+	record, err := s.readReviews(repositoryID, pullRequestID)
+	if err != nil {
+		return Review{}, err
+	}
+	now := s.now().Truncate(time.Microsecond)
+	var review Review
+	for i := range record.Reviews {
+		if record.Reviews[i].ReviewerID == reviewerID {
+			review = record.Reviews[i]
+			review.Decision = decision
+			review.ReviewedCommitID = commitID
+			review.UpdatedAt = now
+			record.Reviews[i] = review
+			break
+		}
+	}
+	if review.ID == "" {
+		id, err := newID()
+		if err != nil {
+			return Review{}, err
+		}
+		review = Review{ID: id, PullRequestID: pullRequestID, ReviewerID: reviewerID, Decision: decision, ReviewedCommitID: commitID, CreatedAt: now, UpdatedAt: now}
+		record.Reviews = append(record.Reviews, review)
+	}
+	if committed, err := s.writeReviews(repositoryID, pullRequestID, record); err != nil {
+		if committed {
+			return review, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+		}
+		return Review{}, err
+	}
+	return review, nil
+}
+
+// WithdrawReview retains who evaluated which commit while making clear that
+// the participant no longer has an active approval or change request.
+func (s *Store) WithdrawReview(repositoryID, pullRequestID, reviewID, reviewerID string) (Review, error) {
+	if !validID(reviewID) || !validID(reviewerID) {
+		return Review{}, ErrNotFound
+	}
+	if _, err := s.Get(repositoryID, pullRequestID); err != nil {
+		return Review{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Review{}, err
+	}
+	defer unlock()
+	record, err := s.readReviews(repositoryID, pullRequestID)
+	if err != nil {
+		return Review{}, err
+	}
+	var review Review
+	for i := range record.Reviews {
+		if record.Reviews[i].ID == reviewID && record.Reviews[i].ReviewerID == reviewerID {
+			review = record.Reviews[i]
+			review.Decision = Withdrawn
+			review.UpdatedAt = s.now().Truncate(time.Microsecond)
+			record.Reviews[i] = review
+			break
+		}
+	}
+	if review.ID == "" {
+		return Review{}, ErrNotFound
+	}
+	if committed, err := s.writeReviews(repositoryID, pullRequestID, record); err != nil {
+		if committed {
+			return review, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+		}
+		return Review{}, err
+	}
+	return review, nil
+}
+
+func (s *Store) ListReviews(repositoryID, pullRequestID string) ([]Review, error) {
+	p, err := s.Get(repositoryID, pullRequestID)
+	if err != nil {
+		return nil, err
+	}
+	repository, err := s.git.Open(repositoryID)
+	if err != nil {
+		return nil, err
+	}
+	currentCommitID, err := branchCommit(repository, p.SourceBranch)
+	if err != nil {
+		return nil, err
+	}
+	record, err := s.readReviews(repositoryID, pullRequestID)
+	if err != nil {
+		return nil, err
+	}
+	result := append([]Review(nil), record.Reviews...)
+	for i := range result {
+		result[i].Stale = result[i].ReviewedCommitID != currentCommitID
+	}
+	return result, nil
+}
+
 func (s *Store) commentsPath(repositoryID, pullRequestID string) string {
 	return filepath.Join(s.repositoryPath(repositoryID), pullRequestID+".comments.json")
+}
+
+func (s *Store) reviewsPath(repositoryID, pullRequestID string) string {
+	return filepath.Join(s.repositoryPath(repositoryID), pullRequestID+".reviews.json")
+}
+
+func (s *Store) readReviews(repositoryID, pullRequestID string) (reviewRecord, error) {
+	data, err := os.ReadFile(s.reviewsPath(repositoryID, pullRequestID))
+	if errors.Is(err, os.ErrNotExist) {
+		return reviewRecord{Reviews: []Review{}}, nil
+	}
+	if err != nil {
+		return reviewRecord{}, err
+	}
+	var record reviewRecord
+	if json.Unmarshal(data, &record) != nil {
+		return reviewRecord{}, fmt.Errorf("corrupt pull request reviews %s", pullRequestID)
+	}
+	seenIDs, seenReviewers := map[string]bool{}, map[string]bool{}
+	for _, review := range record.Reviews {
+		validDecision := review.Decision == Approved || review.Decision == ChangesRequested || review.Decision == Withdrawn
+		if !validID(review.ID) || review.PullRequestID != pullRequestID || !validID(review.ReviewerID) || !validDecision || !validCommitID(review.ReviewedCommitID) || review.CreatedAt.IsZero() || review.UpdatedAt.IsZero() || review.UpdatedAt.Before(review.CreatedAt) || seenIDs[review.ID] || seenReviewers[review.ReviewerID] {
+			return reviewRecord{}, fmt.Errorf("corrupt pull request reviews %s", pullRequestID)
+		}
+		seenIDs[review.ID], seenReviewers[review.ReviewerID] = true, true
+	}
+	sort.Slice(record.Reviews, func(i, j int) bool {
+		if record.Reviews[i].CreatedAt.Equal(record.Reviews[j].CreatedAt) {
+			return record.Reviews[i].ID < record.Reviews[j].ID
+		}
+		return record.Reviews[i].CreatedAt.Before(record.Reviews[j].CreatedAt)
+	})
+	return record, nil
+}
+
+func (s *Store) writeReviews(repositoryID, pullRequestID string, record reviewRecord) (bool, error) {
+	data, err := json.Marshal(record)
+	if err != nil {
+		return false, err
+	}
+	directory := s.repositoryPath(repositoryID)
+	temp, err := os.CreateTemp(directory, ".writing-reviews-")
+	if err != nil {
+		return false, err
+	}
+	path := temp.Name()
+	defer os.Remove(path)
+	if err = temp.Chmod(0o600); err == nil {
+		_, err = temp.Write(append(data, '\n'))
+	}
+	if err == nil {
+		err = temp.Sync()
+	}
+	if closeErr := temp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return false, err
+	}
+	if err := os.Rename(path, s.reviewsPath(repositoryID, pullRequestID)); err != nil {
+		return false, err
+	}
+	return true, s.directorySync(directory)
 }
 
 func (s *Store) readComments(repositoryID, pullRequestID string) (commentRecord, error) {

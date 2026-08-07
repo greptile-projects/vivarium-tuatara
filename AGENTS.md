@@ -172,6 +172,11 @@ whenever dependencies change or the web job fails before it starts.
   branches. Immutable pull request comments are attributable by stable user ID,
   readable under repository visibility rules, and writable by current owners
   and contributors; comment publication uses the uncertain-durability contract.
+  Each owner or contributor can maintain one pull request review decision;
+  approvals and change requests snapshot the live source-branch commit,
+  replacements retain the review ID, withdrawals remain explicit, and reads
+  derive staleness against the current source tip. Review publication uses the
+  uncertain-durability contract.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

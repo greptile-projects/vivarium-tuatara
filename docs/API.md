@@ -160,3 +160,21 @@ shared cursor pagination contract. Each comment records its stable `id`,
 request visibility, while participation requires current repository access
 and `repositories:read`; making a repository public does not grant comment
 permission. Comment publication uses the shared uncertain-durability response.
+
+Current repository participants record an explicit review with `POST
+/repositories/{id}/pulls/{pull_id}/reviews` and a `decision` of `approved` or
+`changes_requested`. Each reviewer has one current review: posting again keeps
+its stable review ID while replacing the decision and the evaluated commit.
+The resource records stable `reviewer_id`, `reviewed_commit_id`, creation and
+update timestamps, and a derived `stale` flag. The evaluated commit is the
+source branch tip when the decision is submitted, not merely the pull
+request's opening snapshot. Consequently, `GET` on the same paginated
+collection reports an earlier review as stale after the source branch moves.
+
+`DELETE /repositories/{id}/pulls/{pull_id}/reviews/{review_id}` is available
+only to that review's author and replaces its decision with `withdrawn`. The
+review remains visible with its prior `reviewed_commit_id`, preserving who
+evaluated which version without treating the old decision as active. Owners
+and contributors may review with `repositories:read`; public readability does
+not grant review participation. Review mutations use the shared uncertain-
+durability response when publication is visible but its directory sync fails.

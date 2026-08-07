@@ -154,6 +154,11 @@ from the pull request's snapshotted commit IDs, so branch movement does not
 rewrite the artifact participants are discussing. Immutable pull request
 comments retain stable author IDs; owners and contributors may participate,
 while reads continue to follow repository visibility.
+Each owner or contributor also has one attributable current review decision.
+Approvals and change requests capture the live source-branch commit being
+evaluated, replacements preserve the review identity, and withdrawals remain
+visible without acting as a decision. Review reads derive whether that commit
+has become stale relative to the current source branch tip.
 
 ## Git repository storage
 

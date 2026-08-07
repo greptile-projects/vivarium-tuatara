@@ -135,11 +135,58 @@ func TestContributorOpensPullRequestWithExactBranchState(t *testing.T) {
 	}
 	authenticatedRequest(t, http.MethodPost, commentsURL, `{"body":"uninvited"}`, outsider.Credential.Token, http.StatusNotFound).Body.Close()
 
+	reviewsURL := server.URL + "/repositories/" + repository.ID + "/pulls/" + pullRequest.ID + "/reviews"
+	reviewResponse := authenticatedRequest(t, http.MethodPost, reviewsURL, `{"decision":"approved"}`, owner.Credential.Token, http.StatusOK)
+	var review pullrequests.Review
+	if err := json.NewDecoder(reviewResponse.Body).Decode(&review); err != nil {
+		t.Fatal(err)
+	}
+	reviewResponse.Body.Close()
+	if review.ReviewerID != owner.User.ID || review.Decision != pullrequests.Approved || review.ReviewedCommitID != string(advanced) || review.Stale {
+		t.Fatalf("review = %#v", review)
+	}
+	latest := writeTestCommit(t, gitRepository, headTree, []storage.ObjectID{advanced}, 1700000003, "review response")
+	if err := gitRepository.UpdateReference(storage.Reference{Name: "refs/heads/feature", Target: string(latest)}); err != nil {
+		t.Fatal(err)
+	}
+	listedResponse := authenticatedRequest(t, http.MethodGet, reviewsURL, "", contributor.Credential.Token, http.StatusOK)
+	var reviewSet struct {
+		Reviews []pullrequests.Review `json:"reviews"`
+	}
+	if err := json.NewDecoder(listedResponse.Body).Decode(&reviewSet); err != nil {
+		t.Fatal(err)
+	}
+	listedResponse.Body.Close()
+	if len(reviewSet.Reviews) != 1 || !reviewSet.Reviews[0].Stale || reviewSet.Reviews[0].ReviewedCommitID != string(advanced) {
+		t.Fatalf("stale reviews = %#v", reviewSet.Reviews)
+	}
+	replacementResponse := authenticatedRequest(t, http.MethodPost, reviewsURL, `{"decision":"changes_requested"}`, owner.Credential.Token, http.StatusOK)
+	var replacement pullrequests.Review
+	if err := json.NewDecoder(replacementResponse.Body).Decode(&replacement); err != nil {
+		t.Fatal(err)
+	}
+	replacementResponse.Body.Close()
+	if replacement.ID != review.ID || replacement.Decision != pullrequests.ChangesRequested || replacement.ReviewedCommitID != string(latest) {
+		t.Fatalf("replacement = %#v", replacement)
+	}
+	authenticatedRequest(t, http.MethodDelete, reviewsURL+"/"+review.ID, "", contributor.Credential.Token, http.StatusNotFound).Body.Close()
+	withdrawResponse := authenticatedRequest(t, http.MethodDelete, reviewsURL+"/"+review.ID, "", owner.Credential.Token, http.StatusOK)
+	var withdrawn pullrequests.Review
+	if err := json.NewDecoder(withdrawResponse.Body).Decode(&withdrawn); err != nil {
+		t.Fatal(err)
+	}
+	withdrawResponse.Body.Close()
+	if withdrawn.Decision != pullrequests.Withdrawn || withdrawn.ReviewedCommitID != string(latest) {
+		t.Fatalf("withdrawn review = %#v", withdrawn)
+	}
+	authenticatedRequest(t, http.MethodPost, reviewsURL, `{"decision":"maybe"}`, owner.Credential.Token, http.StatusBadRequest).Body.Close()
+	authenticatedRequest(t, http.MethodPost, reviewsURL, `{"decision":"approved"}`, outsider.Credential.Token, http.StatusNotFound).Body.Close()
+
 	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/pulls", "", contributor.Credential.Token, http.StatusOK).Body.Close()
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/pulls", body, outsider.Credential.Token, http.StatusNotFound).Body.Close()
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/pulls", `{"title":"Bad","body":"","source_branch":"missing","target_branch":"main"}`, contributor.Credential.Token, http.StatusBadRequest).Body.Close()
 
-	objectPath := filepath.Join(gitRepository.Path(), "objects", string(advanced)[:2], string(advanced)[2:])
+	objectPath := filepath.Join(gitRepository.Path(), "objects", string(latest)[:2], string(latest)[2:])
 	if err := os.Remove(objectPath); err != nil {
 		t.Fatal(err)
 	}
