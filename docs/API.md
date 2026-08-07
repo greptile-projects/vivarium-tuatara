@@ -180,3 +180,24 @@ evaluated which version without treating the old decision as active. Owners
 and contributors may review with `repositories:read`; public readability does
 not grant review participation. Review mutations use the shared uncertain-
 durability response when publication is visible but its directory sync fails.
+
+`GET /repositories/{id}/pulls/{pull_id}/merge-readiness` gives a current owner
+or contributor a read-only answer about what remains before merge. The report
+contains `mergeable`, caller-specific `can_merge`, one required current
+approval and the current approval count, live `source` and `target` branch
+state, `has_conflicts`, and an ordered `blockers` array whose entries have a
+stable `code` and explanatory `message`. Branch state includes the branch
+name, immutable pull-request `snapshot_commit_id`, nullable
+`current_commit_id`, and a state of `current`, `advanced`, `rewritten`, or
+`missing`.
+
+An open request is mergeable only while its source branch still identifies the
+snapshotted commit, its target exists, the source is not already reachable
+from the target, at least one non-stale approval exists, no non-stale review
+requests changes, and Git's three-way merge against the live target is
+conflict-free. A target advance is reported but is not itself a blocker.
+`can_merge` additionally requires that the inspecting participant is the
+repository owner; contributors can therefore see that a request is otherwise
+ready without being told they may update the maintained branch. Conflict
+detection redirects Git's calculated merge objects into temporary storage, so
+the endpoint never changes repository objects or references.

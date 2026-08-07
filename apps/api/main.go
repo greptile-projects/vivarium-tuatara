@@ -418,6 +418,17 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 		}
 		writeJSON(w, 200, map[string]any{"files": changes})
 	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/merge-readiness", func(w http.ResponseWriter, r *http.Request) {
+		_, owner, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:read")
+		if !ok {
+			return
+		}
+		report, err := store.Readiness(r.PathValue("id"), r.PathValue("pull_id"), owner)
+		if writePullRequestError(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, report)
+	})
 	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/comments", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
 			return
