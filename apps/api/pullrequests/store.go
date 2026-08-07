@@ -49,6 +49,7 @@ type Store struct {
 	mu            sync.Mutex
 	now           func() time.Time
 	directorySync func(string) error
+	rootSync      func(string) error
 }
 
 func New(root string, git *storage.Store) (*Store, error) {
@@ -62,7 +63,7 @@ func New(root string, git *storage.Store) (*Store, error) {
 	if err := os.MkdirAll(abs, 0o700); err != nil {
 		return nil, fmt.Errorf("create pull request store: %w", err)
 	}
-	return &Store{root: abs, git: git, now: func() time.Time { return time.Now().UTC() }, directorySync: syncDirectory}, nil
+	return &Store{root: abs, git: git, now: func() time.Time { return time.Now().UTC() }, directorySync: syncDirectory, rootSync: syncDirectory}, nil
 }
 
 func (s *Store) Create(repositoryID, authorID, title, body, sourceBranch, targetBranch string, proposalID *string) (PullRequest, error) {
@@ -105,6 +106,9 @@ func (s *Store) Create(repositoryID, authorID, title, body, sourceBranch, target
 		return PullRequest{}, err
 	}
 	defer unlock()
+	if err := s.ensureRepositoryDirectory(repositoryID); err != nil {
+		return PullRequest{}, err
+	}
 	if committed, err := s.write(p); err != nil {
 		if committed {
 			return p, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
@@ -133,7 +137,10 @@ func branchCommit(repository *storage.Repository, branch string) (string, error)
 }
 
 func (s *Store) Get(repositoryID, id string) (PullRequest, error) {
-	p, err := s.read(id)
+	if !validID(repositoryID) {
+		return PullRequest{}, ErrNotFound
+	}
+	p, err := s.read(repositoryID, id)
 	if err != nil {
 		return PullRequest{}, err
 	}
@@ -144,7 +151,13 @@ func (s *Store) Get(repositoryID, id string) (PullRequest, error) {
 }
 
 func (s *Store) List(repositoryID string) ([]PullRequest, error) {
-	entries, err := os.ReadDir(s.root)
+	if !validID(repositoryID) {
+		return nil, ErrNotFound
+	}
+	entries, err := os.ReadDir(s.repositoryPath(repositoryID))
+	if errors.Is(err, os.ErrNotExist) {
+		return []PullRequest{}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +167,7 @@ func (s *Store) List(repositoryID string) ([]PullRequest, error) {
 		if entry.IsDir() || !ok || !validID(id) {
 			continue
 		}
-		p, err := s.read(id)
+		p, err := s.read(repositoryID, id)
 		if err != nil {
 			return nil, err
 		}
@@ -193,13 +206,19 @@ func validID(id string) bool {
 	_, err := hex.DecodeString(id)
 	return err == nil
 }
-func (s *Store) path(id string) string { return filepath.Join(s.root, id+".json") }
+func (s *Store) repositoryPath(repositoryID string) string {
+	return filepath.Join(s.root, repositoryID)
+}
 
-func (s *Store) read(id string) (PullRequest, error) {
-	if !validID(id) {
+func (s *Store) path(repositoryID, id string) string {
+	return filepath.Join(s.repositoryPath(repositoryID), id+".json")
+}
+
+func (s *Store) read(repositoryID, id string) (PullRequest, error) {
+	if !validID(repositoryID) || !validID(id) {
 		return PullRequest{}, ErrNotFound
 	}
-	data, err := os.ReadFile(s.path(id))
+	data, err := os.ReadFile(s.path(repositoryID, id))
 	if errors.Is(err, os.ErrNotExist) {
 		return PullRequest{}, ErrNotFound
 	}
@@ -229,7 +248,8 @@ func (s *Store) write(p PullRequest) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	temp, err := os.CreateTemp(s.root, ".writing-")
+	repositoryPath := s.repositoryPath(p.RepositoryID)
+	temp, err := os.CreateTemp(repositoryPath, ".writing-")
 	if err != nil {
 		return false, err
 	}
@@ -247,10 +267,23 @@ func (s *Store) write(p PullRequest) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if err := os.Rename(path, s.path(p.ID)); err != nil {
+	if err := os.Rename(path, s.path(p.RepositoryID, p.ID)); err != nil {
 		return false, err
 	}
-	return true, s.directorySync(s.root)
+	return true, s.directorySync(repositoryPath)
+}
+
+func (s *Store) ensureRepositoryDirectory(repositoryID string) error {
+	path := s.repositoryPath(repositoryID)
+	if err := os.Mkdir(path, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("create pull request repository directory: %w", err)
+	}
+	// Sync the root even for an existing directory. A retry after an uncertain
+	// directory publication must not acknowledge writes beneath an unsynced entry.
+	if err := s.rootSync(s.root); err != nil {
+		return fmt.Errorf("sync pull request storage root: %w", err)
+	}
+	return nil
 }
 
 func syncDirectory(path string) error {

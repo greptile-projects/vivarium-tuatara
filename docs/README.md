@@ -147,7 +147,8 @@ target branch, optionally linking a repository proposal. The durable resource
 records its author, purpose, branch names, and both commit IDs at creation, so
 later branch movement cannot change which version was originally requested.
 Pull request metadata lives beneath `PULL_REQUEST_STORAGE_ROOT` (default
-`pull-requests`) and follows repository visibility and participant access.
+`pull-requests`), partitioned by repository ID to isolate collection reads,
+and follows repository visibility and participant access.
 
 ## Git repository storage
 

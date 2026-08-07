@@ -159,7 +159,8 @@ whenever dependencies change or the web job fails before it starts.
   returns the resource with `202` and `Vivarium-Durability: uncertain`; clients
   retain its stable ID and inspect later instead of issuing a duplicate retry.
   Durable pull requests beneath `$PULL_REQUEST_STORAGE_ROOT` (default
-  `pull-requests`) connect an existing source branch to a distinct target
+  `pull-requests`) are partitioned by repository ID so damaged metadata cannot
+  affect another repository's collection. They connect an existing source branch to a distinct target
   branch. Creation snapshots both verified commit IDs, attributes the request
   to its actor, records title/body purpose and optional same-repository
   proposal linkage, and starts it with `open` status. Owners and contributors

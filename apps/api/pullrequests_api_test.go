@@ -101,7 +101,7 @@ func TestContributorOpensPullRequestWithExactBranchState(t *testing.T) {
 	}
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/pulls", body, contributor.Credential.Token, http.StatusInternalServerError).Body.Close()
 	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/pulls/00000000000000000000000000000000", "", owner.Credential.Token, http.StatusNotFound).Body.Close()
-	if err := os.WriteFile(filepath.Join(pullRequestRoot, pullRequest.ID+".json"), []byte("not json\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(pullRequestRoot, repository.ID, pullRequest.ID+".json"), []byte("not json\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/pulls/"+pullRequest.ID, "", owner.Credential.Token, http.StatusInternalServerError).Body.Close()

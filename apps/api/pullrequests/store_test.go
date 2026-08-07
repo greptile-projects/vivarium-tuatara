@@ -47,7 +47,7 @@ func TestCreateSnapshotsBranchesAndListsByRepository(t *testing.T) {
 	if _, err := store.Get(repository.ID(), testID('9')); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing Get error = %v", err)
 	}
-	if err := os.WriteFile(store.path(pullRequest.ID), []byte("not json\n"), 0o600); err != nil {
+	if err := os.WriteFile(store.path(repository.ID(), pullRequest.ID), []byte("not json\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Get(repository.ID(), pullRequest.ID); err == nil || errors.Is(err, ErrNotFound) {
@@ -77,6 +77,42 @@ func TestCreateRejectsMissingAndNonCommitBranches(t *testing.T) {
 	_, err = store.Create(repository.ID(), testID('5'), "Change", "", "blob", "missing", nil)
 	if err == nil || errors.Is(err, ErrBranchNotFound) {
 		t.Fatalf("corrupt branch error = %v, want preserved storage failure", err)
+	}
+}
+
+func TestListIsolatesRepositoryRecordCorruption(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	first, _ := gitStore.Create(testID('8'))
+	second, _ := gitStore.Create(testID('9'))
+	for _, repository := range []*storage.Repository{first, second} {
+		tree, _ := repository.WriteObject(storage.TreeObject, nil)
+		base := writeCommit(t, repository, tree, "base")
+		head := writeCommit(t, repository, tree, "head")
+		if err := repository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)}); err != nil {
+			t.Fatal(err)
+		}
+		if err := repository.CreateReference(storage.Reference{Name: "refs/heads/topic", Target: string(head)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store, _ := New(t.TempDir(), gitStore)
+	firstPull, err := store.Create(first.ID(), testID('2'), "First", "", "topic", "main", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPull, err := store.Create(second.ID(), testID('2'), "Second", "", "topic", "main", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.path(first.ID(), firstPull.ID), []byte("not json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := store.List(second.ID())
+	if err != nil || len(listed) != 1 || listed[0].ID != secondPull.ID {
+		t.Fatalf("healthy repository List = %#v, %v", listed, err)
+	}
+	if _, err := store.List(first.ID()); err == nil {
+		t.Fatal("corrupt repository List succeeded")
 	}
 }
 

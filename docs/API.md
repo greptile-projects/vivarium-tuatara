@@ -134,5 +134,7 @@ visibility and collaborator access. Creation requires a current owner or
 contributor with `repositories:write`; public readability alone does not
 grant permission to open a pull request. Pull request metadata is stored as
 private atomic JSON beneath `PULL_REQUEST_STORAGE_ROOT`, defaulting to
-`pull-requests`. A create whose rename is visible but directory durability is
+`pull-requests`, partitioned by repository ID so one repository's damaged
+metadata cannot make another repository's collection unavailable. A create
+whose rename is visible but directory durability is
 uncertain returns the shared `202` response with its stable pull request ID.
