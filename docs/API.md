@@ -383,3 +383,22 @@ the bounded Git credential so later progress, control reads, fetches, and
 pushes fail authentication. Cancel retries tolerate an already-revoked
 credential. Intervention publication follows the shared uncertain-durability
 response contract.
+
+After committing and pushing new descendant history, the active run credential
+publishes its review handoff at `POST .../runs/{run_id}/completion`. The body
+contains a required `summary`, the exact live source-branch `commit_id`, zero
+or more `checks` (`name`, `status` of `passed`, `failed`, or `skipped`, and
+optional `details`), and `unresolved_concerns`. The server holds the branch's
+standard reference lock, verifies the commit is its current tip and descends
+from the run's pinned revision, and derives the exact intervening commit IDs
+and path-ordered changed files from Git rather than trusting agent claims.
+
+Successful publication records the structured `outcome` on the run, appends an
+attributed `run.completed` event, marks the run terminal, revokes its Git
+credential, and synchronizes the pull request to the same commit. Existing reviews consequently become stale
+and merge readiness evaluates the new revision through the ordinary pull
+request rules. The response contains the run, event, and updated pull request;
+the shared `202` contract applies if either durable publication is visible but
+not confirmed. A moved branch tip, unrelated history, paused/canceled run, or
+pull request advanced by another workflow is rejected without presenting the
+candidate as this run's completed work.

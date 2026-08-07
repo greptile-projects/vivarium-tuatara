@@ -21,6 +21,7 @@ var (
 	ErrInvalid             = errors.New("invalid change session")
 	ErrRunPaused           = errors.New("agent run is paused")
 	ErrRunCanceled         = errors.New("agent run is canceled")
+	ErrRunCompleted        = errors.New("agent run is completed")
 	ErrDurabilityUncertain = errors.New("change session is visible but durability is uncertain")
 )
 
@@ -28,6 +29,7 @@ const Open = "open"
 const Launched = "launched"
 const Paused = "paused"
 const Canceled = "canceled"
+const Completed = "completed"
 
 var interventionKinds = map[string]bool{
 	"run.guidance": true, "question.answered": true, "run.paused": true,
@@ -81,8 +83,33 @@ type Run struct {
 	CredentialExpiresAt time.Time  `json:"credential_expires_at"`
 	AccessRevokedAt     *time.Time `json:"access_revoked_at,omitempty"`
 	State               string     `json:"state"`
+	Outcome             *Outcome   `json:"outcome,omitempty"`
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
+}
+
+type Check struct {
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	Details string `json:"details,omitempty"`
+}
+
+type ChangedFile struct {
+	Path   string `json:"path"`
+	Status string `json:"status"`
+}
+
+// Outcome is the durable handoff from delegated execution to ordinary review.
+// Commit and file evidence is derived by the server; only narrative evidence
+// and check results come from the credential-bound agent.
+type Outcome struct {
+	Summary      string        `json:"summary"`
+	CommitID     string        `json:"commit_id"`
+	Commits      []string      `json:"commits"`
+	ChangedFiles []ChangedFile `json:"changed_files"`
+	Checks       []Check       `json:"checks"`
+	Concerns     []string      `json:"unresolved_concerns"`
+	CompletedAt  time.Time     `json:"completed_at"`
 }
 
 type record struct {
@@ -311,6 +338,9 @@ func (s *Store) AppendWorkEvent(repositoryID, pullRequestID, sessionID, runID, c
 	if run.State == Canceled {
 		return Event{}, ErrRunCanceled
 	}
+	if run.State == Completed {
+		return Event{}, ErrRunCompleted
+	}
 	if strings.TrimSpace(message) == "" || (kind == "tool.action" && tool == "") || (kind == "artifact.produced" && artifact == "") || (kind == "branch.updated" && (branch != run.WorkingBranch || commitID == "")) {
 		return Event{}, ErrInvalid
 	}
@@ -331,6 +361,86 @@ func (s *Store) AppendWorkEvent(repositoryID, pullRequestID, sessionID, runID, c
 		return Event{}, err
 	}
 	return event, nil
+}
+
+// CompleteRun atomically records a structured, attributed review handoff.
+func (s *Store) CompleteRun(repositoryID, pullRequestID, sessionID, runID, credentialID, summary, commitID string, commits []string, files []ChangedFile, checks []Check, concerns []string) (Run, Event, error) {
+	summary = strings.TrimSpace(summary)
+	if summary == "" || len([]rune(summary)) > 10000 || !validObjectID(commitID) || len(commits) == 0 || len(commits) > 200 || len(files) > 2000 || len(checks) > 100 || len(concerns) > 100 {
+		return Run{}, Event{}, ErrInvalid
+	}
+	for _, id := range commits {
+		if !validObjectID(id) {
+			return Run{}, Event{}, ErrInvalid
+		}
+	}
+	for i := range checks {
+		checks[i].Name, checks[i].Status, checks[i].Details = strings.TrimSpace(checks[i].Name), strings.TrimSpace(checks[i].Status), strings.TrimSpace(checks[i].Details)
+		if checks[i].Name == "" || len([]rune(checks[i].Name)) > 200 || (checks[i].Status != "passed" && checks[i].Status != "failed" && checks[i].Status != "skipped") || len([]rune(checks[i].Details)) > 2000 {
+			return Run{}, Event{}, ErrInvalid
+		}
+	}
+	for i := range concerns {
+		concerns[i] = strings.TrimSpace(concerns[i])
+		if concerns[i] == "" || len([]rune(concerns[i])) > 2000 {
+			return Run{}, Event{}, ErrInvalid
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Run{}, Event{}, err
+	}
+	defer unlock()
+	rec, err := s.read(repositoryID, pullRequestID, sessionID)
+	if err != nil {
+		return Run{}, Event{}, err
+	}
+	var run *Run
+	for i := range rec.Runs {
+		if rec.Runs[i].ID == runID {
+			run = &rec.Runs[i]
+			break
+		}
+	}
+	if run == nil || run.CredentialID != credentialID || run.AccessRevokedAt != nil {
+		return Run{}, Event{}, ErrNotFound
+	}
+	if run.State == Canceled {
+		return Run{}, Event{}, ErrRunCanceled
+	}
+	if run.State == Paused {
+		return Run{}, Event{}, ErrRunPaused
+	}
+	if run.State == Completed {
+		if run.Outcome != nil && run.Outcome.CommitID == commitID {
+			for _, event := range rec.Events {
+				if event.RunID == runID && event.Kind == "run.completed" {
+					return *run, event, nil
+				}
+			}
+		}
+		return Run{}, Event{}, ErrRunCompleted
+	}
+	eventID, err := newID()
+	if err != nil {
+		return Run{}, Event{}, err
+	}
+	now := s.now().Truncate(time.Microsecond)
+	run.State, run.UpdatedAt = Completed, now
+	run.Outcome = &Outcome{Summary: summary, CommitID: commitID, Commits: append([]string(nil), commits...), ChangedFiles: append([]ChangedFile(nil), files...), Checks: append([]Check(nil), checks...), Concerns: append([]string(nil), concerns...), CompletedAt: now}
+	event := Event{ID: eventID, SessionID: sessionID, Kind: "run.completed", ActorID: run.InitiatorID, InitiatorID: run.InitiatorID, AgentID: run.AgentID, RevisionID: run.SourceCommitID, State: Completed, RunID: run.ID, Message: summary, Branch: run.WorkingBranch, CommitID: commitID, CreatedAt: now}
+	rec.Events = append(rec.Events, event)
+	rec.Session.UpdatedAt = now
+	committed, err := s.write(filepath.Join(s.root, repositoryID, pullRequestID), rec)
+	if err != nil {
+		if committed {
+			return *run, event, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+		}
+		return Run{}, Event{}, err
+	}
+	return *run, event, nil
 }
 
 // GetRunControl exposes only the mandate state and collaborator interventions
@@ -390,6 +500,9 @@ func (s *Store) Intervene(repositoryID, pullRequestID, sessionID, runID, actorID
 			}
 		}
 		return Run{}, Event{}, ErrRunCanceled
+	}
+	if run.State == Completed {
+		return Run{}, Event{}, ErrRunCompleted
 	}
 	switch kind {
 	case "run.paused":
@@ -515,7 +628,20 @@ func (s *Store) read(repositoryID, pullRequestID, sessionID string) (record, err
 		if run.UpdatedAt.IsZero() {
 			run.UpdatedAt = run.CreatedAt
 		}
-		if !validID(run.ID) || run.SessionID != sessionID || !validID(run.InitiatorID) || !validID(run.AgentID) || !validObjectID(run.SourceCommitID) || run.SourceCommitID != rec.Session.SourceCommitID || run.Instructions == "" || run.WorkingBranch == "" || !validID(run.CredentialID) || (run.State != Launched && run.State != Paused && run.State != Canceled) || run.CredentialExpiresAt.IsZero() || runEvents[run.ID] != 1 {
+		completionEvents := 0
+		for _, event := range rec.Events {
+			if event.RunID == run.ID && event.Kind == "run.completed" {
+				completionEvents++
+			}
+		}
+		validOutcome := run.Outcome == nil
+		if run.Outcome != nil {
+			validOutcome = run.Outcome.Summary != "" && validObjectID(run.Outcome.CommitID) && len(run.Outcome.Commits) > 0 && !run.Outcome.CompletedAt.IsZero()
+			for _, commitID := range run.Outcome.Commits {
+				validOutcome = validOutcome && validObjectID(commitID)
+			}
+		}
+		if !validID(run.ID) || run.SessionID != sessionID || !validID(run.InitiatorID) || !validID(run.AgentID) || !validObjectID(run.SourceCommitID) || run.SourceCommitID != rec.Session.SourceCommitID || run.Instructions == "" || run.WorkingBranch == "" || !validID(run.CredentialID) || (run.State != Launched && run.State != Paused && run.State != Canceled && run.State != Completed) || run.CredentialExpiresAt.IsZero() || runEvents[run.ID] != 1 || !validOutcome || (run.State == Completed) != (run.Outcome != nil && completionEvents == 1) {
 			return record{}, errors.New("invalid durable agent run")
 		}
 	}

@@ -452,6 +452,89 @@ func (s *Store) Changes(repositoryID, id string) ([]FileChange, error) {
 	return result, nil
 }
 
+// CompareCommits returns the path-ordered file delta between two exact commit
+// snapshots. Change-session publication uses this to describe only the work
+// produced by a run, independently of the pull request's older target.
+func (s *Store) CompareCommits(repositoryID, oldCommitID, newCommitID string) ([]FileChange, error) {
+	repository, err := s.git.Open(repositoryID)
+	if err != nil {
+		return nil, err
+	}
+	oldCommit, err := repository.ReadCommit(storage.ObjectID(oldCommitID))
+	if err != nil {
+		return nil, err
+	}
+	newCommit, err := repository.ReadCommit(storage.ObjectID(newCommitID))
+	if err != nil {
+		return nil, err
+	}
+	return compareTrees(repository, oldCommit.Tree, newCommit.Tree)
+}
+
+func compareTrees(repository *storage.Repository, oldTree, newTree storage.ObjectID) ([]FileChange, error) {
+	oldPaths, err := repository.WalkTree(oldTree)
+	if err != nil {
+		return nil, err
+	}
+	newPaths, err := repository.WalkTree(newTree)
+	if err != nil {
+		return nil, err
+	}
+	return compareTreeEntries(oldPaths, newPaths), nil
+}
+
+func compareTreeEntries(oldPaths, newPaths []storage.TreePath) []FileChange {
+	oldFiles, newFiles := map[string]storage.TreeEntry{}, map[string]storage.TreeEntry{}
+	for _, entry := range oldPaths {
+		if entry.Type != storage.TreeObject {
+			oldFiles[entry.Path] = entry.TreeEntry
+		}
+	}
+	for _, entry := range newPaths {
+		if entry.Type != storage.TreeObject {
+			newFiles[entry.Path] = entry.TreeEntry
+		}
+	}
+	paths, seen := make([]string, 0, len(oldFiles)+len(newFiles)), map[string]bool{}
+	for path := range oldFiles {
+		paths = append(paths, path)
+		seen[path] = true
+	}
+	for path := range newFiles {
+		if !seen[path] {
+			paths = append(paths, path)
+		}
+	}
+	sort.Strings(paths)
+	result := []FileChange{}
+	for _, path := range paths {
+		oldEntry, oldOK := oldFiles[path]
+		newEntry, newOK := newFiles[path]
+		if oldOK && newOK && oldEntry.ID == newEntry.ID && oldEntry.Mode == newEntry.Mode {
+			continue
+		}
+		change := FileChange{Path: path}
+		if oldOK {
+			value, mode := string(oldEntry.ID), oldEntry.Mode
+			change.OldID, change.OldMode = &value, &mode
+		}
+		if newOK {
+			value, mode := string(newEntry.ID), newEntry.Mode
+			change.NewID, change.NewMode = &value, &mode
+		}
+		switch {
+		case !oldOK:
+			change.Status = "added"
+		case !newOK:
+			change.Status = "deleted"
+		default:
+			change.Status = "modified"
+		}
+		result = append(result, change)
+	}
+	return result
+}
+
 func (s *Store) AddComment(repositoryID, pullRequestID, authorID, body string) (Comment, error) {
 	if !validID(authorID) {
 		return Comment{}, ErrInvalid
