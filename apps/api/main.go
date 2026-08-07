@@ -275,15 +275,19 @@ func registerRepositoryRoutes(mux *http.ServeMux, store *repositories.Store, aut
 		if writeRepositoryError(w, err) {
 			return
 		}
+		if repository.Visibility == repositories.Public {
+			writeJSON(w, http.StatusOK, repository)
+			return
+		}
 		actor, authenticated, ok := authenticateOptionalRequest(w, r, authStore, "repositories:read", false)
 		if !ok {
 			return
 		}
-		if repository.Visibility != repositories.Public && !authenticated {
+		if !authenticated {
 			writeAuthenticationRequired(w, false)
 			return
 		}
-		if repository.Visibility != repositories.Public && actor.UserID != repository.OwnerID {
+		if actor.UserID != repository.OwnerID {
 			writeAPIError(w, http.StatusNotFound, "repository_not_found", "repository not found")
 			return
 		}
@@ -466,12 +470,12 @@ func authorizeGitRepository(w http.ResponseWriter, r *http.Request, authStore *a
 		}
 		return auth.Credential{}, false
 	}
+	if scope == "git:read" && repository.Visibility == repositories.Public {
+		return auth.Credential{}, true
+	}
 	actor, authenticated, valid := authenticateOptionalRequest(w, r, authStore, scope, true)
 	if !valid {
 		return auth.Credential{}, false
-	}
-	if scope == "git:read" && repository.Visibility == repositories.Public {
-		return actor, true
 	}
 	if !authenticated {
 		writeAuthenticationRequired(w, true)

@@ -132,8 +132,16 @@ func TestRepositoryAuthorizationIsConsistentAcrossAPIAndGit(t *testing.T) {
 	patched := authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+repository.ID, `{"visibility":"public"}`, owner.Credential.Token, http.StatusOK)
 	patched.Body.Close()
 	requestStatus(t, http.MethodGet, server.URL+"/repositories/"+repository.ID, "", http.StatusOK).Body.Close()
+	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID, "", "malformed-token", http.StatusOK).Body.Close()
 	if output, err := execGit(gitURL, "ls-remote").CombinedOutput(); err != nil {
 		t.Fatalf("anonymous public Git read: %v\n%s", err, output)
+	}
+	writeOnlyGit, _ := credentials.Issue(other.User.ID, auth.Git, "write only", []string{"git:write"}, time.Hour)
+	if output, err := execGit(gitWithToken(writeOnlyGit.Token), "ls-remote").CombinedOutput(); err != nil {
+		t.Fatalf("public Git read with under-scoped credential: %v\n%s", err, output)
+	}
+	if output, err := execGit(gitWithToken("malformed-token"), "ls-remote").CombinedOutput(); err != nil {
+		t.Fatalf("public Git read with malformed credential: %v\n%s", err, output)
 	}
 	assertGitDiscoveryStatus(t, gitURL+"/info/refs?service=git-receive-pack", "", http.StatusUnauthorized)
 	assertGitDiscoveryStatus(t, gitURL+"/info/refs?service=git-receive-pack", otherGit.Token, http.StatusNotFound)
