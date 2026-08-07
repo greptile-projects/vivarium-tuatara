@@ -390,6 +390,8 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 		created, err := store.Create(r.PathValue("id"), actor.UserID, *input.Title, *input.Body, *input.SourceBranch, *input.TargetBranch, input.ProposalID)
 		location := "/repositories/" + r.PathValue("id") + "/pulls/" + created.ID
 		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
+			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.created", ActorID: actor.UserID, RepositoryID: created.RepositoryID, ResourceType: "pull_request", ResourceID: created.ID, ResourceTitle: created.Title})
+			recordMentions(activityStore, repositoriesStore, userStore, actor.UserID, created.RepositoryID, "pull_request", created.ID, created.Title, created.Title+"\n"+created.Body)
 			w.Header().Set("Location", location)
 			writeUncertainMutation(w, created)
 			return
@@ -820,10 +822,6 @@ func registerActivityRoutes(mux *http.ServeMux, repositoryStore *repositories.St
 		}
 		visible := make([]activities.Event, 0, len(all))
 		for _, event := range all {
-			if event.TargetUserID != nil && *event.TargetUserID == actor.UserID {
-				visible = append(visible, event)
-				continue
-			}
 			repository, repoErr := repositoryStore.GetByID(event.RepositoryID)
 			if repoErr != nil {
 				continue

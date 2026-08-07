@@ -43,9 +43,8 @@ review decisions, withdrawal, and merge; `@handle` mentions in proposal and
 pull request text; and collaborator grant or revocation. Each event contains a
 stable `actor_id`, `repository_id`, `resource_type`, `resource_id`, optional
 `target_user_id`, timestamp, and snapshot labels for the repository and
-resource. Ordinary events require current repository access. Mention and
-access events remain visible to the targeted user so revocation does not erase
-the fact that their access changed.
+resource. Every event requires current repository access, including targeted
+mention and access events, so activity never reveals private resource metadata.
 
 Activity is append-only beneath `ACTIVITY_STORAGE_ROOT`, which defaults to
 `activity-records`. Repeating an idempotent collaborator grant or removal does not

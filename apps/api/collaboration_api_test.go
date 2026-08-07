@@ -32,6 +32,7 @@ func TestPublicInterfacesSupportProposalToMergeCollaboration(t *testing.T) {
 
 	maintainer := createTestAccount(t, server.URL, "journey-maintainer")
 	newcomer := createTestAccount(t, server.URL, "journey-newcomer")
+	outsider := createTestAccount(t, server.URL, "journey-outsider")
 	created := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"welcome"}`, maintainer.Credential.Token, http.StatusCreated)
 	var repository repositories.Repository
 	decodeResponse(t, created, &repository)
@@ -59,8 +60,16 @@ func TestPublicInterfacesSupportProposalToMergeCollaboration(t *testing.T) {
 	var proposal proposals.Proposal
 	decodeResponse(t, proposalResponse, &proposal)
 	proposalComments := server.URL + "/repositories/" + repository.ID + "/proposals/" + proposal.ID + "/comments"
-	authenticatedRequest(t, http.MethodPost, proposalComments, `{"body":"@journey-newcomer please include a friendly example."}`, maintainer.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPost, proposalComments, `{"body":"@journey-newcomer please include a friendly example. @journey-outsider may be interested."}`, maintainer.Credential.Token, http.StatusCreated).Body.Close()
 	authenticatedRequest(t, http.MethodPost, proposalComments, `{"body":"I will send that on a candidate branch."}`, newcomer.Credential.Token, http.StatusCreated).Body.Close()
+	outsiderActivity := authenticatedRequest(t, http.MethodGet, server.URL+"/activity?limit=100", "", outsider.Credential.Token, http.StatusOK)
+	var outsiderFeed struct {
+		Events []activities.Event `json:"events"`
+	}
+	decodeResponse(t, outsiderActivity, &outsiderFeed)
+	if len(outsiderFeed.Events) != 0 {
+		t.Fatalf("private mention leaked activity to non-participant: %#v", outsiderFeed.Events)
+	}
 
 	newcomerCopy := filepath.Join(t.TempDir(), "newcomer")
 	gitCommand(t, "", "clone", remoteWithToken(newcomerGit.Token), newcomerCopy)
@@ -142,12 +151,14 @@ func TestPublicInterfacesSupportProposalToMergeCollaboration(t *testing.T) {
 	wanted := map[string]bool{"access.granted": false, "proposal.created": false, "mention.created": false, "pull_request.created": false, "review.changes_requested": false, "review.approved": false, "pull_request.merged": false}
 	for _, event := range feed.Events {
 		if _, ok := wanted[event.Kind]; ok {
-			wanted[event.Kind] = true
+			if event.Kind != "mention.created" || (event.TargetUserID != nil && *event.TargetUserID == newcomer.User.ID) {
+				wanted[event.Kind] = true
+			}
 		}
 		if event.RepositoryID != repository.ID || event.RepositoryName != repository.Name || event.ActorID == "" || event.ResourceID == "" || event.ResourceTitle == "" {
 			t.Fatalf("incomplete activity event: %#v", event)
 		}
-		if event.Kind == "mention.created" && (event.TargetUserID == nil || *event.TargetUserID != newcomer.User.ID || event.ResourceID != proposal.ID) {
+		if event.Kind == "mention.created" && event.TargetUserID != nil && *event.TargetUserID == newcomer.User.ID && event.ResourceID != proposal.ID {
 			t.Fatalf("mention event = %#v", event)
 		}
 	}
@@ -160,8 +171,8 @@ func TestPublicInterfacesSupportProposalToMergeCollaboration(t *testing.T) {
 	revokedResponse := authenticatedRequest(t, http.MethodGet, server.URL+"/activity?limit=100", "", newcomer.Credential.Token, http.StatusOK)
 	feed.Events = nil
 	decodeResponse(t, revokedResponse, &feed)
-	if len(feed.Events) < 2 || feed.Events[0].Kind != "access.revoked" {
-		t.Fatalf("revoked collaborator activity = %#v", feed.Events)
+	if len(feed.Events) != 0 {
+		t.Fatalf("revoked collaborator retained private activity = %#v", feed.Events)
 	}
 }
 

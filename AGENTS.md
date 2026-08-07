@@ -86,8 +86,8 @@ whenever dependencies change or the web job fails before it starts.
   temporary API storage plus the system Chromium and stock Git clients.
   The authenticated `/activity` workspace shows newest-first attributable
   proposal, pull request, review, merge, mention, and access changes across
-  repositories the actor currently collaborates on; directly targeted access
-  and mention events remain visible to their affected user.
+  repositories the actor currently collaborates on; every event remains
+  subject to current repository authorization.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's
@@ -248,8 +248,7 @@ whenever dependencies change or the web job fails before it starts.
   beneath `$ACTIVITY_STORAGE_ROOT` (default `activity-records`). Events snapshot the
   repository name and affected resource title while retaining stable actor,
   target-user, repository, and resource IDs. `GET /activity` is authenticated,
-  cursor-paginated, and filters ordinary events by current repository access;
-  directly targeted mention and access events remain visible after revocation.
+  cursor-paginated, and filters every event by current repository access.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

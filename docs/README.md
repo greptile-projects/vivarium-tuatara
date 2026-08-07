@@ -212,7 +212,7 @@ the target snapshot remains fixed.
 The activity layer records meaningful collaboration changes as immutable,
 attributable events associated with their repository and proposal, pull
 request, or access resource. The authenticated web feed combines current
-repository activity with direct mention and access events, retaining stable
+repository activity including direct mention and access events, retaining stable
 identity and resource keys plus snapshot labels so collaborators can
 understand what changed while they were away. Records live beneath
 `ACTIVITY_STORAGE_ROOT` (default `activity-records`) independently of conversation
