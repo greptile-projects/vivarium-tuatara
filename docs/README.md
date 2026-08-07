@@ -408,6 +408,10 @@ reviews become stale and existing readiness rules govern the result. The
 session renders commit and file links plus the structured handoff beside its
 attributed `run.completed` timeline event; collaborators review the resulting
 revision through the same pull request surface used for human work.
+Receive-pack independently consults durable run state for bounded credentials,
+closing branch access even if credential revocation storage fails. The handoff
+is persisted before pull-request synchronization so invalid evidence cannot
+move review state and a failed synchronization remains safely retryable.
 
 ## Git HTTP transport
 

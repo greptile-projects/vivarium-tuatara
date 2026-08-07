@@ -293,6 +293,10 @@ whenever dependencies change or the web job fails before it starts.
   checks, and unresolved concerns, appends `run.completed`, and synchronizes
   the pull request to that revision while revoking further run access. Existing reviews then become stale and
   merge readiness applies without agent-specific exceptions.
+  Bounded receive-pack also checks durable run state, independently denying
+  terminal credentials if auth revocation fails. Completion persists before
+  pull synchronization so validation/storage failures cannot move the request;
+  a synchronization failure retains retryable durable completion intent.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

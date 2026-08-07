@@ -402,3 +402,10 @@ the shared `202` contract applies if either durable publication is visible but
 not confirmed. A moved branch tip, unrelated history, paused/canceled run, or
 pull request advanced by another workflow is rejected without presenting the
 candidate as this run's completed work.
+
+The durable terminal run state is also checked independently by receive-pack,
+so a completed run cannot push again even if credential revocation storage is
+temporarily unavailable. Completion is persisted before source synchronization:
+invalid evidence or a failed session write cannot advance the request, while a
+later synchronization failure leaves a durable handoff that the still-active
+credential can safely retry.

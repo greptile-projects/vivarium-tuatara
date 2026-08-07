@@ -555,6 +555,47 @@ func (s *Store) ListRuns(repositoryID, pullRequestID, sessionID string) ([]Run, 
 	return append([]Run{}, rec.Runs...), nil
 }
 
+// AllowsGitWrite is the fail-closed authorization boundary for a bounded run
+// credential. Durable run state remains authoritative even when credential
+// revocation storage is temporarily unavailable.
+func (s *Store) AllowsGitWrite(repositoryID, credentialID string) (bool, error) {
+	if !validID(repositoryID) || !validID(credentialID) {
+		return false, ErrNotFound
+	}
+	pulls, err := os.ReadDir(filepath.Join(s.root, repositoryID))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("list repository change sessions: %w", err)
+	}
+	for _, pull := range pulls {
+		if !pull.IsDir() || !validID(pull.Name()) {
+			continue
+		}
+		entries, readErr := os.ReadDir(filepath.Join(s.root, repositoryID, pull.Name()))
+		if readErr != nil {
+			return false, fmt.Errorf("list pull request change sessions: %w", readErr)
+		}
+		for _, entry := range entries {
+			id, ok := strings.CutSuffix(entry.Name(), ".json")
+			if entry.IsDir() || !ok || !validID(id) {
+				continue
+			}
+			rec, readErr := s.read(repositoryID, pull.Name(), id)
+			if readErr != nil {
+				return false, readErr
+			}
+			for _, run := range rec.Runs {
+				if run.CredentialID == credentialID {
+					return run.State == Launched && run.AccessRevokedAt == nil, nil
+				}
+			}
+		}
+	}
+	return false, nil
+}
+
 func (s *Store) RevokeRunAccess(repositoryID, pullRequestID, sessionID, runID string) (Run, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

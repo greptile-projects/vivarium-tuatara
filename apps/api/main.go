@@ -194,7 +194,12 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 			required = "git:write"
 		}
 		if authStore != nil {
-			if _, _, ok := authorizeGitRepository(w, r, authStore, repositoryCatalog, r.PathValue("remote"), required); !ok {
+			credential, _, ok := authorizeGitRepository(w, r, authStore, repositoryCatalog, r.PathValue("remote"), required)
+			if !ok {
+				return
+			}
+			if service == receivePackService && credential.GitWriteBranch != "" && !activeRunCredential(changeSessionStore, r.PathValue("remote"), credential.ID) {
+				writeAPIError(w, 401, "invalid_credential", "credential is not active")
 				return
 			}
 		}
@@ -233,6 +238,10 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 			}
 			contributor = !owner
 			onlyBranch = credential.GitWriteBranch
+			if onlyBranch != "" && !activeRunCredential(changeSessionStore, r.PathValue("remote"), credential.ID) {
+				writeAPIError(w, 401, "invalid_credential", "credential is not active")
+				return
+			}
 		}
 		repo, ok := openRemoteRepository(w, store, r.PathValue("remote"))
 		if !ok {
@@ -243,6 +252,18 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 		runGitService(w, r, repo, receivePackService, false, contributor, onlyBranch)
 	})
 	return mux
+}
+
+func activeRunCredential(store *changesessions.Store, remote, credentialID string) bool {
+	if store == nil {
+		return false
+	}
+	repositoryID, ok := strings.CutSuffix(remote, ".git")
+	if !ok {
+		return false
+	}
+	allowed, err := store.AllowsGitWrite(repositoryID, credentialID)
+	return err == nil && allowed
 }
 
 type userInput struct {
@@ -816,6 +837,7 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 		}
 		var completed changesessions.Run
 		var event changesessions.Event
+		synchronized := false
 		complete := func() error {
 			headHistory, historyErr := repository.ListCommitAncestry(storage.ObjectID(input.CommitID))
 			if historyErr != nil {
@@ -849,6 +871,11 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 			for i, change := range changes {
 				files[i] = changesessions.ChangedFile{Path: change.Path, Status: change.Status}
 			}
+			var completionErr error
+			completed, event, completionErr = store.CompleteRun(r.PathValue("id"), pull.ID, run.SessionID, run.ID, credential.ID, input.Summary, input.CommitID, commits, files, input.Checks, input.UnresolvedConcerns)
+			if completionErr != nil && !errors.Is(completionErr, changesessions.ErrDurabilityUncertain) {
+				return completionErr
+			}
 			updated, syncErr := pullRequestStore.SynchronizeSource(r.PathValue("id"), pull.ID)
 			if syncErr != nil && !errors.Is(syncErr, pullrequests.ErrDurabilityUncertain) {
 				return syncErr
@@ -856,15 +883,17 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 			if updated.SourceCommitID != input.CommitID {
 				return changesessions.ErrInvalid
 			}
-			var completionErr error
-			completed, event, completionErr = store.CompleteRun(r.PathValue("id"), pull.ID, run.SessionID, run.ID, credential.ID, input.Summary, input.CommitID, commits, files, input.Checks, input.UnresolvedConcerns)
-			if errors.Is(syncErr, pullrequests.ErrDurabilityUncertain) && completionErr == nil {
+			synchronized = true
+			if errors.Is(completionErr, changesessions.ErrDurabilityUncertain) {
+				return completionErr
+			}
+			if errors.Is(syncErr, pullrequests.ErrDurabilityUncertain) {
 				return pullrequests.ErrDurabilityUncertain
 			}
-			return completionErr
+			return nil
 		}
 		err = repository.WithReferenceTarget("refs/heads/"+run.WorkingBranch, input.CommitID, complete)
-		if completed.ID != "" {
+		if completed.ID != "" && synchronized {
 			if _, revokeErr := authStore.Revoke(run.InitiatorID, credential.ID); revokeErr != nil && !errors.Is(revokeErr, auth.ErrNotFound) {
 				writeAPIError(w, 500, "internal_error", "work was published but agent access revocation must be retried")
 				return

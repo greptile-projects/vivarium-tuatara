@@ -192,6 +192,17 @@ func TestCollaboratorOpensAndReconnectsToChangeSession(t *testing.T) {
 	gitCommand(t, workingCopy, "commit", "-m", "agent work")
 	gitCommand(t, workingCopy, "push", "origin", "HEAD:refs/heads/feature")
 	agentCommit := strings.TrimSpace(gitCommand(t, workingCopy, "rev-parse", "HEAD"))
+	invalidCompletion := authenticatedRequest(t, http.MethodPost, reconnectBase+"/runs/"+launched.Run.ID+"/completion", `{"summary":"Invalid evidence must not move review state.","commit_id":"`+agentCommit+`","checks":[{"name":"go test ./...","status":"unknown"}]}`, launched.Credential.Token, http.StatusBadRequest)
+	invalidCompletion.Body.Close()
+	unchangedResponse := authenticatedRequest(t, http.MethodGet, reconnectedServer.URL+"/repositories/"+repository.ID+"/pulls/"+pull.ID, "", contributor.Credential.Token, http.StatusOK)
+	var unchanged pullrequests.PullRequest
+	if err := json.NewDecoder(unchangedResponse.Body).Decode(&unchanged); err != nil {
+		t.Fatal(err)
+	}
+	unchangedResponse.Body.Close()
+	if unchanged.SourceCommitID != pull.SourceCommitID {
+		t.Fatalf("invalid completion synchronized pull request to %s", unchanged.SourceCommitID)
+	}
 	completionResponse := authenticatedRequest(t, http.MethodPost, reconnectBase+"/runs/"+launched.Run.ID+"/completion", `{"summary":"Added focused regression coverage and verified the collaboration path.","commit_id":"`+agentCommit+`","checks":[{"name":"go test ./...","status":"passed","details":"All API packages passed."}],"unresolved_concerns":[]}`, launched.Credential.Token, http.StatusCreated)
 	var completion struct {
 		Run         changesessions.Run       `json:"run"`

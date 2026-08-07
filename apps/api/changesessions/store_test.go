@@ -90,3 +90,36 @@ func TestIsolationAndValidation(t *testing.T) {
 		t.Fatalf("sessions = %+v, err = %v", sessions, err)
 	}
 }
+
+func TestCompletedRunCredentialIsDeniedByDurableState(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repositoryID := "11111111111111111111111111111111"
+	pullID := "22222222222222222222222222222222"
+	actorID := "33333333333333333333333333333333"
+	base := "4444444444444444444444444444444444444444"
+	head := "5555555555555555555555555555555555555555"
+	credentialID := "66666666666666666666666666666666"
+	session, err := store.Create(repositoryID, pullID, actorID, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.LaunchRun(repositoryID, pullID, session.ID, actorID, "Make the reviewable change.", base, []string{"README.md"}, "feature", credentialID, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed, err := store.AllowsGitWrite(repositoryID, credentialID)
+	if err != nil || !allowed {
+		t.Fatalf("active run allowed = %v, %v", allowed, err)
+	}
+	completed, _, err := store.CompleteRun(repositoryID, pullID, session.ID, run.ID, credentialID, "Published reviewable work.", head, []string{head}, nil, []Check{{Name: "go test ./...", Status: "passed"}}, nil)
+	if err != nil || completed.State != Completed {
+		t.Fatalf("completion = %+v, %v", completed, err)
+	}
+	allowed, err = store.AllowsGitWrite(repositoryID, credentialID)
+	if err != nil || allowed {
+		t.Fatalf("completed run allowed = %v, %v", allowed, err)
+	}
+}
