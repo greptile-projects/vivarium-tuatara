@@ -88,6 +88,7 @@ func TestPublicInterfacesSupportProposalToMergeCollaboration(t *testing.T) {
 	gitCommand(t, newcomerCopy, "commit", "-m", "Address review feedback")
 	gitCommand(t, newcomerCopy, "push", "origin", "greeting")
 	updatedTip := strings.TrimSpace(gitCommand(t, newcomerCopy, "rev-parse", "HEAD"))
+	authenticatedRequest(t, http.MethodPost, pullURL+"/reviews", `{"decision":"approved"}`, maintainer.Credential.Token, http.StatusConflict).Body.Close()
 	authenticatedRequest(t, http.MethodPost, pullURL+"/synchronize", "", maintainer.Credential.Token, http.StatusNotFound).Body.Close()
 	synchronized := authenticatedRequest(t, http.MethodPost, pullURL+"/synchronize", "", newcomer.Credential.Token, http.StatusOK)
 	var revised pullrequests.PullRequest

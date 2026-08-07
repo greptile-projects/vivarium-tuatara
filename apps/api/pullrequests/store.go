@@ -23,6 +23,7 @@ var (
 	ErrNotFound            = errors.New("pull request not found")
 	ErrInvalid             = errors.New("invalid pull request")
 	ErrBranchNotFound      = errors.New("pull request branch not found")
+	ErrSourceChanged       = errors.New("pull request source branch must be synchronized")
 	ErrDurabilityUncertain = errors.New("pull request is visible but durability is uncertain")
 	ErrNotReady            = errors.New("pull request is not ready to merge")
 )
@@ -499,21 +500,13 @@ func (s *Store) ListComments(repositoryID, pullRequestID string) ([]Comment, err
 	return append([]Comment(nil), record.Comments...), nil
 }
 
-// SetReview creates or replaces the actor's decision against the current
-// source branch tip. A reviewer has exactly one durable current review.
+// SetReview creates or replaces the actor's decision against the recorded
+// source revision. A reviewer has exactly one durable current review.
 func (s *Store) SetReview(repositoryID, pullRequestID, reviewerID, decision string) (Review, error) {
 	if !validID(reviewerID) || (decision != Approved && decision != ChangesRequested) {
 		return Review{}, ErrInvalid
 	}
-	p, err := s.Get(repositoryID, pullRequestID)
-	if err != nil {
-		return Review{}, err
-	}
 	repository, err := s.git.Open(repositoryID)
-	if err != nil {
-		return Review{}, err
-	}
-	commitID, err := branchCommit(repository, p.SourceBranch)
 	if err != nil {
 		return Review{}, err
 	}
@@ -525,6 +518,20 @@ func (s *Store) SetReview(repositoryID, pullRequestID, reviewerID, decision stri
 		return Review{}, err
 	}
 	defer unlock()
+	p, err := s.read(repositoryID, pullRequestID)
+	if err != nil {
+		return Review{}, err
+	}
+	if p.Status != Open {
+		return Review{}, ErrNotReady
+	}
+	commitID, err := branchCommit(repository, p.SourceBranch)
+	if err != nil {
+		return Review{}, err
+	}
+	if commitID != p.SourceCommitID {
+		return Review{}, ErrSourceChanged
+	}
 	record, err := s.readReviews(repositoryID, pullRequestID)
 	if err != nil {
 		return Review{}, err

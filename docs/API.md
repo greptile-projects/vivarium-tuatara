@@ -171,6 +171,10 @@ Current repository participants record an explicit review with `POST
 /repositories/{id}/pulls/{pull_id}/reviews` and a `decision` of `approved` or
 `changes_requested`. Each reviewer has one current review: posting again keeps
 its stable review ID while replacing the decision and the evaluated commit.
+The live source branch must match the pull request's recorded source revision;
+otherwise review submission returns `409 source_branch_changed` and the pull
+request author must synchronize the revision first. This prevents a decision
+on an unadopted branch tip from becoming valid through later synchronization.
 The resource records stable `reviewer_id`, `reviewed_commit_id`, creation and
 update timestamps, and a derived `stale` flag. The evaluated commit is the
 source branch tip when the decision is submitted, not merely the pull

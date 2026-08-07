@@ -590,6 +590,8 @@ func writePullRequestError(w http.ResponseWriter, err error) bool {
 		writeAPIError(w, 400, "invalid_pull_request", "pull request content or branches are invalid")
 	case errors.Is(err, pullrequests.ErrBranchNotFound):
 		writeAPIError(w, 400, "branch_not_found", "source or target branch does not identify a commit")
+	case errors.Is(err, pullrequests.ErrSourceChanged):
+		writeAPIError(w, http.StatusConflict, "source_branch_changed", "source branch must be synchronized before review")
 	case errors.Is(err, pullrequests.ErrNotReady):
 		writeAPIError(w, 409, "pull_request_not_ready", "pull request is not ready to merge")
 	default:
