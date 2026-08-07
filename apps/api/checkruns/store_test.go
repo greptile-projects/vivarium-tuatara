@@ -1,10 +1,12 @@
 package checkruns
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -22,6 +24,70 @@ func TestParseConfigValidatesExecutionContext(t *testing.T) {
 		if _, err := ParseConfig([]byte(body)); err == nil {
 			t.Fatalf("ParseConfig(%s) unexpectedly succeeded", body)
 		}
+	}
+}
+
+func TestEvidenceSequenceHandlesEscapedMaximumLogChunk(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.Create("0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789", strings.Repeat("a", 40), []Definition{{Name: "logs", Image: "alpine:3.22", Command: "true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.Repeat([]byte{0x00, 0xff}, 16*1024)
+	writer := &evidenceWriter{store: store, run: runs[0], attempt: 1, stream: "stdout"}
+	if written, err := writer.Write(body); err != nil || written != len(body) {
+		t.Fatalf("Write() = %d, %v", written, err)
+	}
+	if err := store.appendEvent(runs[0], Event{Attempt: 1, Kind: "status", Timestamp: time.Now().UTC(), State: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.Events(runs[0].RepositoryID, runs[0].PullRequestID, runs[0].ID, 0)
+	if err != nil || len(events) != 3 || events[2].Sequence != 3 || events[2].State != "succeeded" {
+		t.Fatalf("Events() = %#v, %v", events, err)
+	}
+}
+
+func TestRecoveryDoesNotPublishInterruptedFailureBeforeRunUpdate(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.Create("0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789", strings.Repeat("b", 40), []Definition{{Name: "recovery", Image: "alpine:3.22", Command: "true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := runs[0]
+	started := time.Now().UTC()
+	run.State, run.StartedAt, run.Attempts = "running", &started, []Attempt{{Number: 1, State: "running", StartedAt: started}}
+	if err := store.Update(run); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(store.root, run.RepositoryID, run.PullRequestID)
+	if err := os.WriteFile(filepath.Join(directory, run.ID+".execution.lock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(directory, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	store.Execute(run, t.TempDir())
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.Events(run.RepositoryID, run.PullRequestID, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Attempt == 1 && event.State == "failed" {
+			t.Fatalf("published failure before run update: %#v", events)
+		}
+	}
+	persisted, err := store.Get(run.RepositoryID, run.PullRequestID, run.ID)
+	if err != nil || persisted.Attempts[0].State != "running" {
+		t.Fatalf("run = %#v, %v", persisted, err)
 	}
 }
 

@@ -350,12 +350,24 @@ func (s *Store) appendEventLocked(run Run, event Event) error {
 		if _, err = file.Seek(0, io.SeekStart); err != nil {
 			return err
 		}
-		scanner := bufio.NewScanner(file)
-		for scanner.Scan() {
-			sequence++
-		}
-		if err = scanner.Err(); err != nil {
-			return err
+		reader := bufio.NewReader(file)
+		var completeBytes int64
+		for {
+			line, readErr := reader.ReadBytes('\n')
+			if readErr == nil {
+				sequence++
+				completeBytes += int64(len(line))
+				continue
+			}
+			if errors.Is(readErr, io.EOF) {
+				if len(line) > 0 {
+					if err = file.Truncate(completeBytes); err != nil {
+						return err
+					}
+				}
+				break
+			}
+			return readErr
 		}
 		if _, err = file.Seek(0, io.SeekEnd); err != nil {
 			return err
@@ -505,10 +517,12 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 		return
 	}
 	now := s.now().Truncate(time.Microsecond)
+	interruptedAttempt := 0
+	interruptedFailure := ""
 	if len(run.Attempts) > 0 && run.Attempts[len(run.Attempts)-1].State == "running" {
 		previous := &run.Attempts[len(run.Attempts)-1]
 		previous.State, previous.CompletedAt, previous.Failure = "failed", &now, "execution interrupted before reconnect"
-		_ = s.appendEvent(run, Event{Attempt: previous.Number, Kind: "status", Timestamp: now, State: "failed", Message: previous.Failure})
+		interruptedAttempt, interruptedFailure = previous.Number, previous.Failure
 	}
 	attemptNumber := len(run.Attempts) + 1
 	run.Attempts = append(run.Attempts, Attempt{Number: attemptNumber, State: "running", StartedAt: now})
@@ -516,6 +530,9 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 	run.StartedAt = &now
 	if s.Update(run) != nil {
 		return
+	}
+	if interruptedAttempt != 0 {
+		_ = s.appendEvent(run, Event{Attempt: interruptedAttempt, Kind: "status", Timestamp: now, State: "failed", Message: interruptedFailure})
 	}
 	_ = s.appendEvent(run, Event{Attempt: attemptNumber, Kind: "status", Timestamp: now, State: "running"})
 	workspace, err := os.MkdirTemp("", "vivarium-check-*")
