@@ -41,6 +41,24 @@ export type TreeEntry = {
   id: string;
   type: "blob" | "tree" | "commit";
 };
+export type Proposal = {
+  id: string;
+  repository_id: string;
+  author_id: string;
+  title: string;
+  body: string;
+  status: "open" | "closed";
+  created_at: string;
+  updated_at: string;
+  closed_at?: string;
+};
+export type ProposalComment = {
+  id: string;
+  proposal_id: string;
+  author_id: string;
+  body: string;
+  created_at: string;
+};
 
 export class APIError extends Error {
   constructor(

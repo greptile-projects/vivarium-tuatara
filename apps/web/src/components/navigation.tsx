@@ -7,7 +7,7 @@ import { Icons } from "./icons";
 const navigation = [
   { label: "Home", href: "/", icon: Icons.Home },
   { label: "Repositories", href: "/repositories", icon: Icons.Code },
-  { label: "Proposals", href: "/proposals", icon: Icons.Spark, count: "4" },
+  { label: "Proposals", href: "/proposals", icon: Icons.Spark },
   { label: "Pull requests", href: "/pulls", icon: Icons.GitPull, count: "2" },
   { label: "Activity", href: "/activity", icon: Icons.Activity },
 ];

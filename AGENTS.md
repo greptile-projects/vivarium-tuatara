@@ -67,7 +67,10 @@ whenever dependencies change or the web job fails before it starts.
   `$API_ORIGIN` (default `http://127.0.0.1:8080`). `AuthProvider` retains the API-issued bearer token
   in browser local storage, validates it through `GET /user` at startup, and
   is the shared identity boundary for interactive account and repository
-  workflows.
+  workflows. Proposal discovery at `/proposals` aggregates the authenticated
+  actor's repository catalog and provides repository, status, and text filters;
+  durable conversations use `/proposals/{repository-id}/{proposal-id}` for
+  attributable comments, author edits, and participant closure controls.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's
