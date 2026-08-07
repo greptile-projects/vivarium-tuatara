@@ -170,6 +170,8 @@ update timestamps, and a derived `stale` flag. The evaluated commit is the
 source branch tip when the decision is submitted, not merely the pull
 request's opening snapshot. Consequently, `GET` on the same paginated
 collection reports an earlier review as stale after the source branch moves.
+If the source branch is deleted or no longer identifies a commit, its durable
+reviews remain readable and are all reported stale.
 
 `DELETE /repositories/{id}/pulls/{pull_id}/reviews/{review_id}` is available
 only to that review's author and replaces its decision with `withdrawn`. The

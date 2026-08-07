@@ -202,6 +202,13 @@ func TestReviewsCaptureCurrentCommitBecomeStaleAndRemainAttributable(t *testing.
 	if err != nil || len(reviews) != 1 || reviews[0].Decision != Withdrawn || reviews[0].Stale {
 		t.Fatalf("withdrawn reviews = %#v, %v", reviews, err)
 	}
+	if err := repository.DeleteReference("refs/heads/topic"); err != nil {
+		t.Fatal(err)
+	}
+	reviews, err = store.ListReviews(repository.ID(), pullRequest.ID)
+	if err != nil || len(reviews) != 1 || !reviews[0].Stale || reviews[0].ReviewedCommitID != string(advanced) {
+		t.Fatalf("reviews after source deletion = %#v, %v", reviews, err)
+	}
 }
 
 func writeCommit(t *testing.T, repository *storage.Repository, tree storage.ObjectID, message string) storage.ObjectID {

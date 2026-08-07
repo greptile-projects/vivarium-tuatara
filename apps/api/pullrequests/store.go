@@ -516,21 +516,25 @@ func (s *Store) ListReviews(repositoryID, pullRequestID string) ([]Review, error
 	if err != nil {
 		return nil, err
 	}
+	record, err := s.readReviews(repositoryID, pullRequestID)
+	if err != nil {
+		return nil, err
+	}
 	repository, err := s.git.Open(repositoryID)
 	if err != nil {
 		return nil, err
 	}
 	currentCommitID, err := branchCommit(repository, p.SourceBranch)
-	if err != nil {
-		return nil, err
+	if errors.Is(err, ErrBranchNotFound) {
+		currentCommitID = ""
+		err = nil
 	}
-	record, err := s.readReviews(repositoryID, pullRequestID)
 	if err != nil {
 		return nil, err
 	}
 	result := append([]Review(nil), record.Reviews...)
 	for i := range result {
-		result[i].Stale = result[i].ReviewedCommitID != currentCommitID
+		result[i].Stale = currentCommitID == "" || result[i].ReviewedCommitID != currentCommitID
 	}
 	return result, nil
 }
