@@ -29,6 +29,8 @@ export type Credential = {
   expires_at: string;
   last_used_at?: string;
   revoked_at?: string;
+  repository_id?: string;
+  git_write_branch?: string;
   token?: string;
 };
 export type Branch = { name: string; commit_id: string };
@@ -143,9 +145,24 @@ export type ChangeSession = {
 export type ChangeSessionEvent = {
   id: string;
   session_id: string;
-  kind: "session.opened";
+  kind: "session.opened" | "run.launched";
   actor_id: string;
-  state: "open";
+  state: "open" | "launched";
+  run_id?: string;
+  created_at: string;
+};
+export type AgentRun = {
+  id: string;
+  session_id: string;
+  initiator_id: string;
+  instructions: string;
+  source_commit_id: string;
+  context_paths: string[];
+  working_branch: string;
+  credential_id: string;
+  credential_expires_at: string;
+  access_revoked_at?: string;
+  state: "launched";
   created_at: string;
 };
 export type ActivityEvent = {

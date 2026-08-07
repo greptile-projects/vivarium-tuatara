@@ -45,16 +45,18 @@ var maximumLifetime = map[Kind]time.Duration{
 }
 
 type Credential struct {
-	ID         string     `json:"id"`
-	UserID     string     `json:"user_id"`
-	Kind       Kind       `json:"kind"`
-	Name       string     `json:"name"`
-	Scopes     []string   `json:"scopes"`
-	CreatedAt  time.Time  `json:"created_at"`
-	ExpiresAt  time.Time  `json:"expires_at"`
-	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
-	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
-	Hash       string     `json:"-"`
+	ID             string     `json:"id"`
+	UserID         string     `json:"user_id"`
+	Kind           Kind       `json:"kind"`
+	Name           string     `json:"name"`
+	Scopes         []string   `json:"scopes"`
+	CreatedAt      time.Time  `json:"created_at"`
+	ExpiresAt      time.Time  `json:"expires_at"`
+	LastUsedAt     *time.Time `json:"last_used_at,omitempty"`
+	RevokedAt      *time.Time `json:"revoked_at,omitempty"`
+	RepositoryID   string     `json:"repository_id,omitempty"`
+	GitWriteBranch string     `json:"git_write_branch,omitempty"`
+	Hash           string     `json:"-"`
 }
 
 type IssuedCredential struct {
@@ -80,6 +82,13 @@ func New(root string) (*Store, error) {
 }
 
 func (s *Store) Issue(userID string, kind Kind, name string, scopes []string, lifetime time.Duration) (IssuedCredential, error) {
+	return s.IssueBound(userID, kind, name, scopes, lifetime, "", "")
+}
+
+// IssueBound creates a credential constrained to one repository and,
+// optionally, one writable Git branch. Empty bounds retain the ordinary
+// account credential behavior used by existing clients.
+func (s *Store) IssueBound(userID string, kind Kind, name string, scopes []string, lifetime time.Duration, repositoryID, gitWriteBranch string) (IssuedCredential, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !validID(userID) || allowedScopes[kind] == nil {
@@ -102,6 +111,9 @@ func (s *Store) Issue(userID string, kind Kind, name string, scopes []string, li
 	if len(scopes) == 0 {
 		return IssuedCredential{}, ErrInvalid
 	}
+	if (repositoryID != "" && !validID(repositoryID)) || (gitWriteBranch != "" && (kind != Git || repositoryID == "" || !validBoundBranch(gitWriteBranch))) {
+		return IssuedCredential{}, ErrInvalid
+	}
 	sort.Strings(scopes)
 	idBytes, secretBytes := make([]byte, 16), make([]byte, 32)
 	if _, err := rand.Read(idBytes); err != nil {
@@ -114,7 +126,7 @@ func (s *Store) Issue(userID string, kind Kind, name string, scopes []string, li
 	token := "vvr_" + id + "_" + hex.EncodeToString(secretBytes)
 	hash := sha256.Sum256([]byte(token))
 	now := s.now().Truncate(time.Microsecond)
-	credential := Credential{ID: id, UserID: userID, Kind: kind, Name: name, Scopes: append([]string(nil), scopes...), CreatedAt: now, ExpiresAt: now.Add(lifetime), Hash: hex.EncodeToString(hash[:])}
+	credential := Credential{ID: id, UserID: userID, Kind: kind, Name: name, Scopes: append([]string(nil), scopes...), CreatedAt: now, ExpiresAt: now.Add(lifetime), RepositoryID: repositoryID, GitWriteBranch: gitWriteBranch, Hash: hex.EncodeToString(hash[:])}
 	if err := s.write(credential); err != nil {
 		// Reconcile errors after rename so Issue never reports failure while
 		// leaving the exact usable credential durably visible.
@@ -124,6 +136,24 @@ func (s *Store) Issue(userID string, kind Kind, name string, scopes []string, li
 		return IssuedCredential{}, err
 	}
 	return IssuedCredential{Credential: credential, Token: token}, nil
+}
+
+func validBoundBranch(branch string) bool {
+	name, ok := strings.CutPrefix(branch, "refs/heads/")
+	if !ok || name == "" || len(name) > 200 || strings.Contains(name, "..") || strings.HasSuffix(name, ".lock") {
+		return false
+	}
+	for _, character := range name {
+		if !((character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || strings.ContainsRune("._/-", character)) {
+			return false
+		}
+	}
+	for _, part := range strings.Split(name, "/") {
+		if part == "" || strings.HasPrefix(part, ".") || strings.HasSuffix(part, ".") {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) Authenticate(token string, required string) (Credential, error) {
@@ -219,7 +249,7 @@ func hasScope(scopes []string, required string) bool {
 func sameCredential(left, right Credential) bool {
 	return left.ID == right.ID && left.UserID == right.UserID && left.Kind == right.Kind && left.Name == right.Name &&
 		left.CreatedAt.Equal(right.CreatedAt) && left.ExpiresAt.Equal(right.ExpiresAt) && left.Hash == right.Hash &&
-		slices.Equal(left.Scopes, right.Scopes) && left.LastUsedAt == nil && left.RevokedAt == nil
+		slices.Equal(left.Scopes, right.Scopes) && left.RepositoryID == right.RepositoryID && left.GitWriteBranch == right.GitWriteBranch && left.LastUsedAt == nil && left.RevokedAt == nil
 }
 func validID(id string) bool {
 	if len(id) != 32 || id != strings.ToLower(id) {

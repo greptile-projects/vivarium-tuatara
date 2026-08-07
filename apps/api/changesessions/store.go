@@ -22,6 +22,7 @@ var (
 )
 
 const Open = "open"
+const Launched = "launched"
 
 type Session struct {
 	ID             string    `json:"id"`
@@ -40,12 +41,29 @@ type Event struct {
 	Kind      string    `json:"kind"`
 	ActorID   string    `json:"actor_id"`
 	State     string    `json:"state"`
+	RunID     string    `json:"run_id,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+type Run struct {
+	ID                  string     `json:"id"`
+	SessionID           string     `json:"session_id"`
+	InitiatorID         string     `json:"initiator_id"`
+	Instructions        string     `json:"instructions"`
+	SourceCommitID      string     `json:"source_commit_id"`
+	ContextPaths        []string   `json:"context_paths"`
+	WorkingBranch       string     `json:"working_branch"`
+	CredentialID        string     `json:"credential_id"`
+	CredentialExpiresAt time.Time  `json:"credential_expires_at"`
+	AccessRevokedAt     *time.Time `json:"access_revoked_at,omitempty"`
+	State               string     `json:"state"`
+	CreatedAt           time.Time  `json:"created_at"`
 }
 
 type record struct {
 	Session Session `json:"session"`
 	Events  []Event `json:"events"`
+	Runs    []Run   `json:"runs,omitempty"`
 }
 
 type Store struct {
@@ -190,6 +208,95 @@ func (s *Store) ListEvents(repositoryID, pullRequestID, sessionID string) ([]Eve
 	return append([]Event(nil), rec.Events...), nil
 }
 
+func (s *Store) LaunchRun(repositoryID, pullRequestID, sessionID, initiatorID, instructions, sourceCommitID string, contextPaths []string, workingBranch, credentialID string, credentialExpiresAt time.Time) (Run, error) {
+	if !validID(initiatorID) || !validObjectID(sourceCommitID) || !validID(credentialID) || instructions == "" || workingBranch == "" || credentialExpiresAt.IsZero() {
+		return Run{}, ErrInvalid
+	}
+	runID, err := newID()
+	if err != nil {
+		return Run{}, err
+	}
+	eventID, err := newID()
+	if err != nil {
+		return Run{}, err
+	}
+	now := s.now().Truncate(time.Microsecond)
+	run := Run{ID: runID, SessionID: sessionID, InitiatorID: initiatorID, Instructions: instructions, SourceCommitID: sourceCommitID, ContextPaths: append([]string(nil), contextPaths...), WorkingBranch: workingBranch, CredentialID: credentialID, CredentialExpiresAt: credentialExpiresAt, State: Launched, CreatedAt: now}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Run{}, err
+	}
+	defer unlock()
+	rec, err := s.read(repositoryID, pullRequestID, sessionID)
+	if err != nil {
+		return Run{}, err
+	}
+	if rec.Session.SourceCommitID != sourceCommitID {
+		return Run{}, ErrInvalid
+	}
+	rec.Runs = append(rec.Runs, run)
+	rec.Events = append(rec.Events, Event{ID: eventID, SessionID: sessionID, Kind: "run.launched", ActorID: initiatorID, State: Launched, RunID: runID, CreatedAt: now})
+	rec.Session.UpdatedAt = now
+	committed, err := s.write(filepath.Join(s.root, repositoryID, pullRequestID), rec)
+	if err != nil {
+		if committed {
+			return run, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+		}
+		return Run{}, err
+	}
+	return run, nil
+}
+
+func (s *Store) ListRuns(repositoryID, pullRequestID, sessionID string) ([]Run, error) {
+	if _, err := s.Get(repositoryID, pullRequestID, sessionID); err != nil {
+		return nil, err
+	}
+	rec, err := s.read(repositoryID, pullRequestID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return append([]Run(nil), rec.Runs...), nil
+}
+
+func (s *Store) RevokeRunAccess(repositoryID, pullRequestID, sessionID, runID string) (Run, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Run{}, err
+	}
+	defer unlock()
+	rec, err := s.read(repositoryID, pullRequestID, sessionID)
+	if err != nil {
+		return Run{}, err
+	}
+	index := -1
+	for i := range rec.Runs {
+		if rec.Runs[i].ID == runID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return Run{}, ErrNotFound
+	}
+	if rec.Runs[index].AccessRevokedAt == nil {
+		now := s.now().Truncate(time.Microsecond)
+		rec.Runs[index].AccessRevokedAt = &now
+		rec.Session.UpdatedAt = now
+		if committed, err := s.write(filepath.Join(s.root, repositoryID, pullRequestID), rec); err != nil {
+			if committed {
+				return rec.Runs[index], fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+			}
+			return Run{}, err
+		}
+	}
+	return rec.Runs[index], nil
+}
+
 func (s *Store) read(repositoryID, pullRequestID, sessionID string) (record, error) {
 	if !validID(repositoryID) || !validID(pullRequestID) || !validID(sessionID) {
 		return record{}, ErrNotFound
@@ -206,8 +313,19 @@ func (s *Store) read(repositoryID, pullRequestID, sessionID string) (record, err
 		return record{}, errors.New("invalid durable change session record")
 	}
 	for _, event := range rec.Events {
-		if !validID(event.ID) || event.SessionID != sessionID || !validID(event.ActorID) || event.Kind == "" || event.State == "" {
+		if !validID(event.ID) || event.SessionID != sessionID || !validID(event.ActorID) || event.Kind == "" || event.State == "" || (event.Kind == "run.launched" && !validID(event.RunID)) {
 			return record{}, errors.New("invalid durable change session event")
+		}
+	}
+	runEvents := map[string]int{}
+	for _, event := range rec.Events {
+		if event.Kind == "run.launched" {
+			runEvents[event.RunID]++
+		}
+	}
+	for _, run := range rec.Runs {
+		if !validID(run.ID) || run.SessionID != sessionID || !validID(run.InitiatorID) || !validObjectID(run.SourceCommitID) || run.SourceCommitID != rec.Session.SourceCommitID || run.Instructions == "" || run.WorkingBranch == "" || !validID(run.CredentialID) || run.State != Launched || run.CredentialExpiresAt.IsZero() || runEvents[run.ID] != 1 {
+			return record{}, errors.New("invalid durable agent run")
 		}
 	}
 	return rec, nil

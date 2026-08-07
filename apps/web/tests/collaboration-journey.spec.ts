@@ -155,6 +155,15 @@ test("two users carry one attributed change from onboarding through merge", asyn
   await expect(maintainer.getByText("Change session opened")).toBeVisible();
   await maintainer.reload();
   await expect(maintainer.getByText(`@maintainer-${suffix}`, { exact: true })).toBeVisible();
+  await maintainer.getByLabel("Instructions").fill("Verify the greeting behavior and add focused coverage.");
+  await maintainer.getByLabel("Repository context").fill("greeting.txt");
+  await expect(maintainer.getByLabel("Working branch")).toHaveValue("greeting");
+  await maintainer.getByRole("button", { name: "Launch agent run" }).click();
+  await expect(maintainer.getByText("Run launched · copy its credential now")).toBeVisible();
+  await expect(maintainer.getByText("Agent run launched")).toBeVisible();
+  const runCard = maintainer.locator("section").filter({ hasText: "Verify the greeting behavior and add focused coverage." });
+  await runCard.getByRole("button", { name: "Revoke access" }).click();
+  await expect(maintainer.getByText("access revoked", { exact: true })).toBeVisible();
   await maintainer.getByRole("link", { name: "← Back to pull request" }).click();
   await maintainer.getByRole("button", { name: "Approve" }).click();
   await expect(maintainer.getByText(`@maintainer-${suffix}`, { exact: true }).first()).toBeVisible();

@@ -319,6 +319,32 @@ instead of an ordinary event page until persistence is confirmed.
 Session discovery and inspection require current owner or contributor access
 with `repositories:read`, including for public repositories. Durable records
 live beneath `CHANGE_SESSION_STORAGE_ROOT` (default `change-sessions`) and are
-partitioned by repository and pull request. Future run, guidance, intervention,
-and artifact events extend this public session and timeline boundary rather
-than exposing execution internals.
+partitioned by repository and pull request. Run, guidance, intervention, and
+artifact events extend this public session and timeline boundary rather than
+exposing execution internals.
+
+Confirmed sessions accept bounded delegation at `POST
+.../sessions/{session_id}/runs`. A current participant with
+`repositories:write` supplies `instructions`, the session's exact
+`source_commit_id`, one to fifty unique `context_paths` that exist in that
+revision, the explicit pull-request source `working_branch`, and an optional
+`expires_in` between five minutes and 24 hours (one hour by default). The pull
+request must remain open. Success returns an attributable durable `run` plus a
+Git `credential`; its opaque `token` is shown only in this response. The
+credential has only `git:read` and `git:write`, is bound to this repository,
+may update only that source branch, and expires at the recorded
+`credential_expires_at`. It cannot update another branch even when the
+initiator owns the repository.
+
+`GET .../sessions/{session_id}/runs` is participant-only and cursor-paginated.
+Run records retain the mandate, selected revision and paths, branch,
+initiator, credential ID and expiry, but never the token. Launch atomically
+adds an oldest-first `run.launched` session event. A launch whose session
+publication is visible but not confirmed uses the shared `202` durability
+contract and still returns its stable run and one-time credential; clients
+must inspect rather than duplicate the launch. Any current participant with
+`repositories:write` can revoke a run credential through `DELETE
+.../runs/{run_id}/credential`; the run then records `access_revoked_at` and
+the token fails on its next request. This boundary launches authorized work;
+worker progress and produced artifacts remain future timeline events rather
+than private fields in the run contract.
