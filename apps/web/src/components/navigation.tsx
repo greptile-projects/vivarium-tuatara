@@ -8,7 +8,8 @@ const navigation = [
   { label: "Home", href: "/", icon: Icons.Home },
   { label: "Repositories", href: "/repositories", icon: Icons.Code },
   { label: "Proposals", href: "/proposals", icon: Icons.Spark },
-  { label: "Pull requests", href: "/pulls", icon: Icons.GitPull, count: "2" },
+  { label: "Pull requests", href: "/pulls", icon: Icons.GitPull },
+  { label: "Inbox", href: "/inbox", icon: Icons.Bell },
   { label: "Activity", href: "/activity", icon: Icons.Activity },
 ];
 
@@ -17,7 +18,7 @@ export function Navigation() {
 
   return (
     <nav aria-label="Primary" className="space-y-1">
-      {navigation.map(({ label, href, icon: Icon, count }) => {
+      {navigation.map(({ label, href, icon: Icon }) => {
         const current = href === "/" ? pathname === href : pathname.startsWith(`${href}/`) || pathname === href;
 
         return (
@@ -29,7 +30,6 @@ export function Navigation() {
           >
             <Icon size={17} />
             <span className="flex-1">{label}</span>
-            {count && <span className="rounded-full bg-black/[.055] px-2 py-0.5 text-[11px] tabular-nums">{count}</span>}
           </Link>
         );
       })}

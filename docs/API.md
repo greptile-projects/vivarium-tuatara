@@ -50,6 +50,29 @@ Activity is append-only beneath `ACTIVITY_STORAGE_ROOT`, which defaults to
 `activity-records`. Repeating an idempotent collaborator grant or removal does not
 create another event because shared state did not change.
 
+## Inbox
+
+`GET /inbox` returns the authenticated actor's newest-first actionable items
+under `items`. Each item retains its underlying activity fields and adds a
+`category` of `review`, `response`, or `awareness` plus a concrete `action`
+label. The optional `category` query filters before the shared cursor
+pagination contract is applied.
+
+Inbox membership is recipient-specific and derived from current collaboration
+state. Repository owners receive open pull requests and synchronized revisions
+to review. Resource authors receive mentions, comments, and requested changes
+that call for a response, plus approvals, merges, and owner-driven proposal
+closures to acknowledge. Directly affected users receive access changes for
+awareness. An actor's own events are excluded, completed work stops presenting
+obsolete actions, and current repository authorization is checked on every
+read.
+
+`DELETE /inbox/{event_id}` clears one item for the authenticated actor and is
+idempotent for an already-cleared item while it remains otherwise actionable.
+Clearing persists per user beneath the activity storage root; it never removes
+the immutable activity event or changes the underlying proposal, pull request,
+review, or repository.
+
 ## Accounts
 
 `POST /users` creates an account from `handle` and `display_name` and returns

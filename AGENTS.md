@@ -88,6 +88,11 @@ whenever dependencies change or the web job fails before it starts.
   proposal, pull request, review, merge, mention, and access changes across
   repositories the actor currently collaborates on; every event remains
   subject to current repository authorization.
+  The authenticated `/inbox` workspace derives only recipient-specific work
+  from those immutable events, classifies it as review, response, or awareness,
+  links directly to the underlying collaboration, and persists per-user clears
+  without deleting activity. Inbox reads recheck current repository access and
+  resource state so revoked or completed work does not retain obsolete actions.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's

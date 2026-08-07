@@ -86,6 +86,14 @@ func TestPublicInterfacesSupportProposalToMergeCollaboration(t *testing.T) {
 	pullResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/pulls", `{"title":"Add a greeting","body":"Implements the agreed welcome.","source_branch":"greeting","target_branch":"main","proposal_id":"`+proposal.ID+`"}`, newcomer.Credential.Token, http.StatusCreated)
 	var pull pullrequests.PullRequest
 	decodeResponse(t, pullResponse, &pull)
+	reviewInboxResponse := authenticatedRequest(t, http.MethodGet, server.URL+"/inbox?category=review&limit=100", "", maintainer.Credential.Token, http.StatusOK)
+	var reviewInbox struct {
+		Items []inboxItem `json:"items"`
+	}
+	decodeResponse(t, reviewInboxResponse, &reviewInbox)
+	if len(reviewInbox.Items) != 1 || reviewInbox.Items[0].ResourceID != pull.ID || reviewInbox.Items[0].Action != "Review pull request" {
+		t.Fatalf("maintainer review inbox = %#v", reviewInbox.Items)
+	}
 	pullURL := server.URL + "/repositories/" + repository.ID + "/pulls/" + pull.ID
 	authenticatedRequest(t, http.MethodPost, pullURL+"/comments", `{"body":"Could this greet agents too?"}`, maintainer.Credential.Token, http.StatusCreated).Body.Close()
 	requested := authenticatedRequest(t, http.MethodPost, pullURL+"/reviews", `{"decision":"changes_requested"}`, maintainer.Credential.Token, http.StatusOK)
@@ -165,6 +173,31 @@ func TestPublicInterfacesSupportProposalToMergeCollaboration(t *testing.T) {
 	for kind, found := range wanted {
 		if !found {
 			t.Errorf("activity did not include %s: %#v", kind, feed.Events)
+		}
+	}
+	inboxResponse := authenticatedRequest(t, http.MethodGet, server.URL+"/inbox?limit=100", "", newcomer.Credential.Token, http.StatusOK)
+	var inbox struct {
+		Items []inboxItem `json:"items"`
+	}
+	decodeResponse(t, inboxResponse, &inbox)
+	categories := map[string]bool{"response": false, "awareness": false}
+	for _, item := range inbox.Items {
+		categories[item.Category] = true
+		if item.Action == "" || item.ActorID == newcomer.User.ID {
+			t.Fatalf("non-actionable inbox item: %#v", item)
+		}
+	}
+	if !categories["response"] || !categories["awareness"] {
+		t.Fatalf("inbox did not classify response and awareness work: %#v", inbox.Items)
+	}
+	clearedID := inbox.Items[0].ID
+	authenticatedRequest(t, http.MethodDelete, server.URL+"/inbox/"+clearedID, "", newcomer.Credential.Token, http.StatusNoContent).Body.Close()
+	inboxResponse = authenticatedRequest(t, http.MethodGet, server.URL+"/inbox?limit=100", "", newcomer.Credential.Token, http.StatusOK)
+	inbox.Items = nil
+	decodeResponse(t, inboxResponse, &inbox)
+	for _, item := range inbox.Items {
+		if item.ID == clearedID {
+			t.Fatalf("cleared item remained in inbox: %#v", item)
 		}
 	}
 	authenticatedRequest(t, http.MethodDelete, server.URL+"/repositories/"+repository.ID+"/collaborators/"+newcomer.User.ID, "", maintainer.Credential.Token, http.StatusNoContent).Body.Close()

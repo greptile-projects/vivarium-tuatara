@@ -111,6 +111,13 @@ test("two users carry one attributed change from onboarding through merge", asyn
   await newcomer.goto(`/proposals/${repositoryID}/${proposalID}`);
   await expect(newcomer.getByText("closed", { exact: true }).first()).toBeVisible();
 
+  await newcomer.goto("/inbox");
+  const mergeItem = newcomer.getByRole("article").filter({ hasText: "Review merge outcome" });
+  await expect(mergeItem).toBeVisible();
+  await expect(mergeItem.getByText("awareness", { exact: true })).toBeVisible();
+  await mergeItem.getByRole("button", { name: "Clear Add a greeting" }).click();
+  await expect(mergeItem).toBeHidden();
+
   await maintainerContext.close();
   await newcomerContext.close();
 });

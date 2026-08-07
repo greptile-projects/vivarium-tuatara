@@ -217,6 +217,11 @@ identity and resource keys plus snapshot labels so collaborators can
 understand what changed while they were away. Records live beneath
 `ACTIVITY_STORAGE_ROOT` (default `activity-records`) independently of conversation
 and Git storage.
+The authenticated inbox turns the subset with a recipient-specific next step
+into review, response, and awareness queues. Each item links to its underlying
+collaboration and can be cleared per user without deleting shared history;
+current authorization and resource state prevent inaccessible or obsolete work
+from remaining actionable.
 Pull request metadata lives beneath `PULL_REQUEST_STORAGE_ROOT` (default
 `pull-requests`), partitioned by repository ID to isolate collection reads,
 and follows repository visibility and participant access.
