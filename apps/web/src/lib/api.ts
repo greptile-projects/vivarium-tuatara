@@ -99,6 +99,32 @@ export type PullRequestComment = {
   body: string;
   created_at: string;
 };
+export type PullRequestReview = {
+  id: string;
+  pull_request_id: string;
+  reviewer_id: string;
+  decision: "approved" | "changes_requested" | "withdrawn";
+  reviewed_commit_id: string;
+  stale: boolean;
+  created_at: string;
+  updated_at: string;
+};
+export type PullRequestBranchState = {
+  branch: string;
+  snapshot_commit_id: string;
+  current_commit_id: string | null;
+  state: "current" | "advanced" | "rewritten" | "missing";
+};
+export type MergeReadiness = {
+  mergeable: boolean;
+  can_merge: boolean;
+  required_approvals: number;
+  approvals: number;
+  source: PullRequestBranchState;
+  target: PullRequestBranchState;
+  has_conflicts: boolean;
+  blockers: { code: string; message: string }[];
+};
 
 export class APIError extends Error {
   constructor(

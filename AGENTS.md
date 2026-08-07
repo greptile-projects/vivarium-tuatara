@@ -76,8 +76,9 @@ whenever dependencies change or the web job fails before it starts.
   against distinct targets with optional proposal context. Durable detail
   routes at `/pulls/{repository-id}/{pull-request-id}` expose the recorded
   branch snapshots, source-only commits, path-ordered file changes, linked
-  proposal, and attributable discussion; review and merge controls belong to
-  the subsequent maintainer workflow.
+  proposal, attributable discussion, current and stale review decisions,
+  source synchronization for authors, server-derived merge blockers, and
+  owner-only merge controls. Completed requests retain their merge attribution.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's

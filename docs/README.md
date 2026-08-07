@@ -220,6 +220,16 @@ revisions, source-only commits, path-ordered file changes, linked proposal
 context, and attributable discussion. Public repositories remain inspectable
 without an account, while commenting and creation require current repository
 participation.
+Those detail pages also complete the maintainer workflow without duplicating
+server policy in the browser. Participants can approve, request changes,
+replace, or withdraw their attributable decision; stale decisions remain
+visible beside the exact revision they evaluated. When the candidate branch
+moves, only the pull-request author is offered synchronization, with explicit
+notice that prior decisions stay stale. The merge panel renders the API's
+ordered readiness blockers, live branch states, approval count, conflict
+result, and caller-specific permission. Only an owner with `can_merge` can
+apply the change, after which the page shows the durable merge commit and
+maintainer attribution.
 Each owner or contributor also has one attributable current review decision.
 Approvals and change requests capture the live source-branch commit being
 evaluated, replacements preserve the review identity, and withdrawals remain
