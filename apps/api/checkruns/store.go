@@ -22,7 +22,10 @@ import (
 	"time"
 )
 
-var ErrNotFound = errors.New("check run not found")
+var (
+	ErrNotFound            = errors.New("check run not found")
+	ErrDurabilityUncertain = errors.New("check run durability uncertain")
+)
 
 const ConfigPath = ".vivarium/checks.json"
 
@@ -89,9 +92,10 @@ type Event struct {
 }
 
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root          string
+	mu            sync.Mutex
+	now           func() time.Time
+	syncDirectory func(*os.File) error
 }
 
 func New(root string) (*Store, error) {
@@ -105,7 +109,7 @@ func New(root string) (*Store, error) {
 	if err := os.MkdirAll(abs, 0o700); err != nil {
 		return nil, err
 	}
-	return &Store{root: abs, now: func() time.Time { return time.Now().UTC() }}, nil
+	return &Store{root: abs, now: func() time.Time { return time.Now().UTC() }, syncDirectory: func(directory *os.File) error { return directory.Sync() }}, nil
 }
 
 func ParseConfig(data []byte) (Config, error) {
@@ -202,7 +206,7 @@ func (s *Store) Create(repositoryID, pullRequestID, commitID string, definitions
 		return resumable, nil
 	}
 	for _, run := range runs {
-		if err := s.write(dir, run); err != nil {
+		if err := s.write(dir, run); err != nil && !errors.Is(err, ErrDurabilityUncertain) {
 			return nil, err
 		}
 		if err := s.appendEventLocked(run, Event{Kind: "status", Timestamp: now, State: "queued"}); err != nil {
@@ -429,7 +433,7 @@ func (s *Store) RecordFailure(run Run, failure string) error {
 	code := 1
 	run.State, run.StartedAt, run.CompletedAt, run.ExitCode, run.Failure = "failed", &now, &now, &code, failure
 	run.Attempts = append(run.Attempts, Attempt{Number: len(run.Attempts) + 1, State: "failed", StartedAt: now, CompletedAt: &now, ExitCode: &code, Failure: failure})
-	if err := s.Update(run); err != nil {
+	if err := s.Update(run); err != nil && !errors.Is(err, ErrDurabilityUncertain) {
 		return err
 	}
 	if err := s.appendEvent(run, Event{Attempt: len(run.Attempts), Kind: "status", Timestamp: now, State: "running"}); err != nil {
@@ -470,14 +474,17 @@ func (s *Store) write(dir string, run Run) error {
 	}
 	directory, err := os.Open(dir)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
 	}
-	err = directory.Sync()
+	err = s.syncDirectory(directory)
 	closeErr = directory.Close()
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
 	}
-	return closeErr
+	if closeErr != nil {
+		return fmt.Errorf("%w: %v", ErrDurabilityUncertain, closeErr)
+	}
+	return nil
 }
 
 // Execute runs a queued check in a disposable exact-commit snapshot inside a
@@ -528,7 +535,7 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 	run.Attempts = append(run.Attempts, Attempt{Number: attemptNumber, State: "running", StartedAt: now})
 	run.State = "running"
 	run.StartedAt = &now
-	if s.Update(run) != nil {
+	if updateErr := s.Update(run); updateErr != nil && !errors.Is(updateErr, ErrDurabilityUncertain) {
 		return
 	}
 	if interruptedAttempt != 0 {
@@ -785,7 +792,7 @@ func (s *Store) collectArtifacts(run *Run, attempt int, temporary string) error 
 			artifact.ContentType = "application/octet-stream"
 		}
 		run.Artifacts = append(run.Artifacts, artifact)
-		if err := s.Update(*run); err != nil {
+		if err := s.Update(*run); err != nil && !errors.Is(err, ErrDurabilityUncertain) {
 			return err
 		}
 		return s.appendEvent(*run, Event{Attempt: attempt, Kind: "artifact", Timestamp: artifact.CreatedAt, Artifact: &artifact})

@@ -2,6 +2,7 @@ package checkruns
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -87,6 +88,41 @@ func TestRecoveryDoesNotPublishInterruptedFailureBeforeRunUpdate(t *testing.T) {
 	}
 	persisted, err := store.Get(run.RepositoryID, run.PullRequestID, run.ID)
 	if err != nil || persisted.Attempts[0].State != "running" {
+		t.Fatalf("run = %#v, %v", persisted, err)
+	}
+}
+
+func TestRecoveryPublishesLifecycleAfterPostRenameDurabilityFailure(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.Create("0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789", strings.Repeat("c", 40), []Definition{{Name: "recovery", Image: "alpine:3.22", Command: "true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := runs[0]
+	started := time.Now().UTC()
+	run.State, run.StartedAt, run.Attempts = "running", &started, []Attempt{{Number: 1, State: "running", StartedAt: started}}
+	if err := store.Update(run); err != nil {
+		t.Fatal(err)
+	}
+	store.syncDirectory = func(*os.File) error { return errors.New("injected post-rename sync failure") }
+	store.Execute(run, t.TempDir())
+	events, err := store.Events(run.RepositoryID, run.PullRequestID, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var interrupted, replacement bool
+	for _, event := range events {
+		interrupted = interrupted || event.Attempt == 1 && event.Kind == "status" && event.State == "failed"
+		replacement = replacement || event.Attempt == 2 && event.Kind == "status" && event.State == "running"
+	}
+	if !interrupted || !replacement {
+		t.Fatalf("recovery events = %#v", events)
+	}
+	persisted, err := store.Get(run.RepositoryID, run.PullRequestID, run.ID)
+	if err != nil || len(persisted.Attempts) != 2 || persisted.Attempts[0].State != "failed" {
 		t.Fatalf("run = %#v, %v", persisted, err)
 	}
 }
