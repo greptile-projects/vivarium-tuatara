@@ -44,6 +44,15 @@ func TestCreateSnapshotsBranchesAndListsByRepository(t *testing.T) {
 	if err != nil || len(listed) != 1 || listed[0].ID != pullRequest.ID {
 		t.Fatalf("List = %#v, %v", listed, err)
 	}
+	if _, err := store.Get(repository.ID(), testID('9')); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing Get error = %v", err)
+	}
+	if err := os.WriteFile(store.path(pullRequest.ID), []byte("not json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Get(repository.ID(), pullRequest.ID); err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("corrupt Get error = %v, want preserved storage failure", err)
+	}
 }
 
 func TestCreateRejectsMissingAndNonCommitBranches(t *testing.T) {

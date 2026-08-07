@@ -134,7 +134,10 @@ func branchCommit(repository *storage.Repository, branch string) (string, error)
 
 func (s *Store) Get(repositoryID, id string) (PullRequest, error) {
 	p, err := s.read(id)
-	if err != nil || p.RepositoryID != repositoryID {
+	if err != nil {
+		return PullRequest{}, err
+	}
+	if p.RepositoryID != repositoryID {
 		return PullRequest{}, ErrNotFound
 	}
 	return p, nil
