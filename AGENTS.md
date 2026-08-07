@@ -158,6 +158,15 @@ whenever dependencies change or the web job fails before it starts.
   After a proposal mutation's atomic rename, a parent-directory sync failure
   returns the resource with `202` and `Vivarium-Durability: uncertain`; clients
   retain its stable ID and inspect later instead of issuing a duplicate retry.
+  Durable pull requests beneath `$PULL_REQUEST_STORAGE_ROOT` (default
+  `pull-requests`) are partitioned by repository ID so damaged metadata cannot
+  affect another repository's collection. They connect an existing source branch to a distinct target
+  branch. Creation snapshots both verified commit IDs, attributes the request
+  to its actor, records title/body purpose and optional same-repository
+  proposal linkage, and starts it with `open` status. Owners and contributors
+  can create them; reads inherit repository visibility and access. Pull request
+  collections use shared cursor pagination and creation uses the same uncertain-
+  durability response contract as proposals.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

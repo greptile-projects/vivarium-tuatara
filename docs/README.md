@@ -141,6 +141,15 @@ repository visibility and collaborator access. Records are stored atomically
 beneath `PROPOSAL_STORAGE_ROOT` (default `proposals`) independently of Git
 objects, so conversation remains available without a candidate branch.
 
+Pull requests connect that context to exact repository state. An owner or
+contributor opens one from an existing source branch against a different
+target branch, optionally linking a repository proposal. The durable resource
+records its author, purpose, branch names, and both commit IDs at creation, so
+later branch movement cannot change which version was originally requested.
+Pull request metadata lives beneath `PULL_REQUEST_STORAGE_ROOT` (default
+`pull-requests`), partitioned by repository ID to isolate collection reads,
+and follows repository visibility and participant access.
+
 ## Git repository storage
 
 The API's `storage` package is the boundary for durable Git repositories. A

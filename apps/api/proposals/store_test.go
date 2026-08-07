@@ -3,6 +3,7 @@ package proposals
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 )
@@ -66,6 +67,24 @@ func TestConcurrentCommentsAreNotLostAcrossStores(t *testing.T) {
 	comments, err := first.ListComments(repositoryID, proposal.ID)
 	if err != nil || len(comments) != 2 {
 		t.Fatalf("comments = %#v, %v", comments, err)
+	}
+}
+
+func TestGetPreservesCorruptRecordError(t *testing.T) {
+	root := t.TempDir()
+	store, _ := New(root)
+	proposal, err := store.Create(repositoryID, authorID, "An idea", "Context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, proposal.ID+".json"), []byte("not json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Get(repositoryID, proposal.ID); err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get error = %v, want preserved corruption error", err)
+	}
+	if _, err := store.Get(repositoryID, "22222222222222222222222222222222"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing Get error = %v", err)
 	}
 }
 

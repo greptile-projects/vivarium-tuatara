@@ -16,6 +16,7 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
@@ -95,6 +96,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	pullRequestRoot := os.Getenv("PULL_REQUEST_STORAGE_ROOT")
+	if pullRequestRoot == "" {
+		pullRequestRoot = "pull-requests"
+	}
+	pullRequestStore, err := pullrequests.New(pullRequestRoot, store)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -102,7 +111,7 @@ func main() {
 	}
 
 	log.Printf("listening on http://localhost:%s", port)
-	if err := http.ListenAndServe(":"+port, newPlatformHandler(store, userStore, authStore, repositoryStore, proposalStore)); err != nil {
+	if err := http.ListenAndServe(":"+port, newPlatformHandler(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore)); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -123,7 +132,7 @@ func newAuthenticatedAppHandler(store *storage.Store, userStore *users.Store, au
 	return newPlatformHandler(store, userStore, authStore, repositoryCatalog, nil)
 }
 
-func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore *auth.Store, repositoryCatalog *repositories.Store, proposalStore *proposals.Store) http.Handler {
+func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore *auth.Store, repositoryCatalog *repositories.Store, proposalStore *proposals.Store, pullRequestStores ...*pullrequests.Store) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -140,6 +149,9 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 	}
 	if authStore != nil && repositoryCatalog != nil && proposalStore != nil {
 		registerProposalRoutes(mux, repositoryCatalog, proposalStore, authStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && len(pullRequestStores) > 0 && pullRequestStores[0] != nil {
+		registerPullRequestRoutes(mux, repositoryCatalog, proposalStore, pullRequestStores[0], authStore)
 	}
 	mux.HandleFunc("GET /git/{remote}/info/refs", func(w http.ResponseWriter, r *http.Request) {
 		service := r.URL.Query().Get("service")
@@ -309,6 +321,97 @@ type proposalPatch struct {
 
 type commentInput struct {
 	Body *string `json:"body"`
+}
+
+type pullRequestInput struct {
+	Title        *string `json:"title"`
+	Body         *string `json:"body"`
+	SourceBranch *string `json:"source_branch"`
+	TargetBranch *string `json:"target_branch"`
+	ProposalID   *string `json:"proposal_id"`
+}
+
+func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositories.Store, proposalStore *proposals.Store, store *pullrequests.Store, authStore *auth.Store) {
+	mux.HandleFunc("GET /repositories/{id}/pulls", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		all, err := store.List(r.PathValue("id"))
+		if writePullRequestError(w, err) {
+			return
+		}
+		page, next, ok := paginate(r, all, func(p pullrequests.PullRequest) string { return p.ID })
+		if !ok {
+			writeAPIError(w, 400, "invalid_pagination", "limit or after is invalid")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"pull_requests": page, "next_cursor": next})
+	})
+	mux.HandleFunc("POST /repositories/{id}/pulls", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var input pullRequestInput
+		if decodeJSON(r, &input) != nil || input.Title == nil || input.Body == nil || input.SourceBranch == nil || input.TargetBranch == nil {
+			writeAPIError(w, 400, "invalid_pull_request", "title, body, source_branch, and target_branch are required")
+			return
+		}
+		if input.ProposalID != nil {
+			if proposalStore == nil {
+				writeAPIError(w, 400, "invalid_pull_request", "proposal_id is invalid")
+				return
+			}
+			if _, err := proposalStore.Get(r.PathValue("id"), *input.ProposalID); errors.Is(err, proposals.ErrNotFound) {
+				writeAPIError(w, 400, "invalid_pull_request", "proposal_id is invalid")
+				return
+			} else if err != nil {
+				log.Printf("proposal storage while creating pull request: %v", err)
+				writeAPIError(w, 500, "internal_error", "proposal storage unavailable")
+				return
+			}
+		}
+		created, err := store.Create(r.PathValue("id"), actor.UserID, *input.Title, *input.Body, *input.SourceBranch, *input.TargetBranch, input.ProposalID)
+		location := "/repositories/" + r.PathValue("id") + "/pulls/" + created.ID
+		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
+			w.Header().Set("Location", location)
+			writeUncertainMutation(w, created)
+			return
+		}
+		if writePullRequestError(w, err) {
+			return
+		}
+		w.Header().Set("Location", location)
+		writeJSON(w, 201, created)
+	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		pullRequest, err := store.Get(r.PathValue("id"), r.PathValue("pull_id"))
+		if writePullRequestError(w, err) {
+			return
+		}
+		writeJSON(w, 200, pullRequest)
+	})
+}
+
+func writePullRequestError(w http.ResponseWriter, err error) bool {
+	if err == nil {
+		return false
+	}
+	switch {
+	case errors.Is(err, pullrequests.ErrNotFound):
+		writeAPIError(w, 404, "pull_request_not_found", "pull request not found")
+	case errors.Is(err, pullrequests.ErrInvalid):
+		writeAPIError(w, 400, "invalid_pull_request", "pull request content or branches are invalid")
+	case errors.Is(err, pullrequests.ErrBranchNotFound):
+		writeAPIError(w, 400, "branch_not_found", "source or target branch does not identify a commit")
+	default:
+		log.Printf("pull request storage: %v", err)
+		writeAPIError(w, 500, "internal_error", "pull request storage unavailable")
+	}
+	return true
 }
 
 func registerProposalRoutes(mux *http.ServeMux, repositoriesStore *repositories.Store, store *proposals.Store, authStore *auth.Store) {

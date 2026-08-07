@@ -109,3 +109,32 @@ files beneath `PROPOSAL_STORAGE_ROOT`, which defaults to `proposals`.
 Proposal creates, edits, closes, and comments use the shared uncertain-
 durability response when their new state is visible but crash persistence
 cannot be confirmed, preserving attribution IDs without overstating storage.
+
+## Pull requests
+
+Repository participants open a pull request with `POST
+/repositories/{id}/pulls`. The request requires `title`, `body`,
+`source_branch`, and `target_branch`; `proposal_id` may link an existing
+proposal in the same repository. Branch names are repository-relative (for
+example, `feature`, not `refs/heads/feature`), must be different, and must both
+currently identify commit objects. A missing, unborn, or non-commit branch is
+rejected without creating a resource.
+
+The created resource records immutable `repository_id` and `author_id`, its
+purpose in `title` and `body`, the source and target branch names, and the exact
+branch tips as `source_commit_id` and `target_commit_id`. These commit IDs are
+snapshots of the requested repository state and do not silently change when a
+branch later advances. New pull requests have `status: "open"` and creation
+and update timestamps. The linked `proposal_id` is nullable.
+
+`GET /repositories/{id}/pulls` returns pull requests in the shared cursor-
+paginated collection shape under `pull_requests`; `GET
+/repositories/{id}/pulls/{pull_id}` inspects one. Reads inherit repository
+visibility and collaborator access. Creation requires a current owner or
+contributor with `repositories:write`; public readability alone does not
+grant permission to open a pull request. Pull request metadata is stored as
+private atomic JSON beneath `PULL_REQUEST_STORAGE_ROOT`, defaulting to
+`pull-requests`, partitioned by repository ID so one repository's damaged
+metadata cannot make another repository's collection unavailable. A create
+whose rename is visible but directory durability is
+uncertain returns the shared `202` response with its stable pull request ID.

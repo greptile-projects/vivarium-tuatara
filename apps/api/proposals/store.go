@@ -113,7 +113,10 @@ func (s *Store) Create(repositoryID, authorID, title, body string) (Proposal, er
 
 func (s *Store) Get(repositoryID, id string) (Proposal, error) {
 	r, err := s.read(id)
-	if err != nil || r.Proposal.RepositoryID != repositoryID {
+	if err != nil {
+		return Proposal{}, err
+	}
+	if r.Proposal.RepositoryID != repositoryID {
 		return Proposal{}, ErrNotFound
 	}
 	return r.Proposal, nil
