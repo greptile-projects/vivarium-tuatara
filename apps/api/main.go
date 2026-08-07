@@ -164,6 +164,7 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 	}
 	if authStore != nil && repositoryCatalog != nil && activityStore != nil {
 		registerActivityRoutes(mux, repositoryCatalog, activityStore, authStore)
+		registerInboxRoutes(mux, repositoryCatalog, proposalStore, pullRequestStore, activityStore, authStore)
 	}
 	mux.HandleFunc("GET /git/{remote}/info/refs", func(w http.ResponseWriter, r *http.Request) {
 		service := r.URL.Query().Get("service")
@@ -429,6 +430,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 		}
 		updated, err := store.SynchronizeSource(r.PathValue("id"), existing.ID)
 		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
+			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.synchronized", ActorID: actor.UserID, RepositoryID: updated.RepositoryID, ResourceType: "pull_request", ResourceID: updated.ID, ResourceTitle: updated.Title})
 			writeUncertainMutation(w, updated)
 			return
 		}
@@ -847,6 +849,177 @@ func registerActivityRoutes(mux *http.ServeMux, repositoryStore *repositories.St
 		}
 		writeJSON(w, 200, map[string]any{"events": page, "next_cursor": next})
 	})
+}
+
+type inboxItem struct {
+	activities.Event
+	Category string `json:"category"`
+	Action   string `json:"action"`
+}
+
+func registerInboxRoutes(mux *http.ServeMux, repositoryStore *repositories.Store, proposalStore *proposals.Store, pullRequestStore *pullrequests.Store, activityStore *activities.Store, authStore *auth.Store) {
+	mux.HandleFunc("GET /inbox", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, authStore, "repositories:read", false)
+		if !ok {
+			return
+		}
+		category := r.URL.Query().Get("category")
+		if category != "" && category != "review" && category != "response" && category != "awareness" {
+			writeAPIError(w, 400, "invalid_inbox_category", "category must be review, response, or awareness")
+			return
+		}
+		items, err := buildInbox(actor.UserID, repositoryStore, proposalStore, pullRequestStore, activityStore, false)
+		if err != nil {
+			log.Printf("inbox storage: %v", err)
+			writeAPIError(w, 500, "internal_error", "inbox unavailable")
+			return
+		}
+		if category != "" {
+			filtered := items[:0]
+			for _, item := range items {
+				if item.Category == category {
+					filtered = append(filtered, item)
+				}
+			}
+			items = filtered
+		}
+		page, next, valid := paginate(r, items, func(item inboxItem) string { return item.ID })
+		if !valid {
+			writeAPIError(w, 400, "invalid_pagination", "limit or after is invalid")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"items": page, "next_cursor": next})
+	})
+
+	mux.HandleFunc("DELETE /inbox/{event_id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, authStore, "repositories:read", false)
+		if !ok {
+			return
+		}
+		items, err := buildInbox(actor.UserID, repositoryStore, proposalStore, pullRequestStore, activityStore, true)
+		if err != nil {
+			log.Printf("inbox storage: %v", err)
+			writeAPIError(w, 500, "internal_error", "inbox unavailable")
+			return
+		}
+		found := false
+		for _, item := range items {
+			if item.ID == r.PathValue("event_id") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeAPIError(w, 404, "inbox_item_not_found", "inbox item not found")
+			return
+		}
+		if err := activityStore.Clear(actor.UserID, r.PathValue("event_id")); err != nil {
+			log.Printf("clear inbox item: %v", err)
+			writeAPIError(w, 500, "internal_error", "inbox item could not be cleared")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+func buildInbox(userID string, repositoryStore *repositories.Store, proposalStore *proposals.Store, pullRequestStore *pullrequests.Store, activityStore *activities.Store, includeCleared bool) ([]inboxItem, error) {
+	events, err := activityStore.List()
+	if err != nil {
+		return nil, err
+	}
+	cleared, err := activityStore.Cleared(userID)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]inboxItem, 0)
+	seenReviews := make(map[string]bool)
+	for _, event := range events {
+		repository, err := repositoryStore.GetByID(event.RepositoryID)
+		if err != nil {
+			continue
+		}
+		if repository.OwnerID != userID {
+			collaborator, err := repositoryStore.HasCollaborator(userID, event.RepositoryID)
+			if err != nil || !collaborator {
+				continue
+			}
+		}
+		category, action, err := classifyInboxEvent(userID, repository.OwnerID, event, proposalStore, pullRequestStore)
+		if err != nil {
+			return nil, err
+		}
+		if category == "review" {
+			key := event.RepositoryID + "/" + event.ResourceID
+			if seenReviews[key] {
+				continue
+			}
+			seenReviews[key] = true
+		}
+		// Deduplicate before applying clear state so clearing the newest review
+		// action cannot reveal an obsolete event for the same pull request.
+		if !includeCleared && cleared[event.ID] {
+			continue
+		}
+		if category != "" {
+			items = append(items, inboxItem{Event: event, Category: category, Action: action})
+		}
+	}
+	return items, nil
+}
+
+func classifyInboxEvent(userID, ownerID string, event activities.Event, proposalStore *proposals.Store, pullRequestStore *pullrequests.Store) (string, string, error) {
+	if event.ActorID == userID {
+		return "", "", nil
+	}
+	if event.Kind == "mention.created" && event.TargetUserID != nil && *event.TargetUserID == userID {
+		return "response", "Respond to mention", nil
+	}
+	if strings.HasPrefix(event.Kind, "access.") && event.TargetUserID != nil && *event.TargetUserID == userID {
+		return "awareness", "Review repository access", nil
+	}
+	if event.ResourceType == "pull_request" && pullRequestStore != nil {
+		pull, err := pullRequestStore.Get(event.RepositoryID, event.ResourceID)
+		if errors.Is(err, pullrequests.ErrNotFound) {
+			return "", "", nil
+		}
+		if err != nil {
+			return "", "", err
+		}
+		switch event.Kind {
+		case "pull_request.created", "pull_request.synchronized":
+			if ownerID == userID && pull.Status == pullrequests.Open {
+				return "review", "Review pull request", nil
+			}
+		case "pull_request.commented", "review.changes_requested":
+			if pull.AuthorID == userID && pull.Status == pullrequests.Open {
+				return "response", "Respond to feedback", nil
+			}
+		case "review.approved":
+			if pull.AuthorID == userID {
+				return "awareness", "Review approval", nil
+			}
+		case "pull_request.merged":
+			if pull.AuthorID == userID {
+				return "awareness", "Review merge outcome", nil
+			}
+		}
+	}
+	if event.ResourceType == "proposal" && proposalStore != nil {
+		proposal, err := proposalStore.Get(event.RepositoryID, event.ResourceID)
+		if errors.Is(err, proposals.ErrNotFound) {
+			return "", "", nil
+		}
+		if err != nil {
+			return "", "", err
+		}
+		if event.Kind == "proposal.commented" && proposal.AuthorID == userID && proposal.Status == proposals.Open {
+			return "response", "Respond to proposal feedback", nil
+		}
+		if event.Kind == "proposal.closed" && proposal.AuthorID == userID {
+			return "awareness", "Review proposal outcome", nil
+		}
+	}
+	return "", "", nil
 }
 
 func authorizeRepositoryRead(w http.ResponseWriter, r *http.Request, store *repositories.Store, authStore *auth.Store, id string) (auth.Credential, bool, bool) {

@@ -142,6 +142,10 @@ export type ActivityEvent = {
   target_user_id: string | null;
   created_at: string;
 };
+export type InboxItem = ActivityEvent & {
+  category: "review" | "response" | "awareness";
+  action: string;
+};
 
 export class APIError extends Error {
   constructor(

@@ -52,6 +52,73 @@ func New(root string) (*Store, error) {
 	return &Store{root: abs, now: func() time.Time { return time.Now().UTC() }}, nil
 }
 
+// Cleared returns the event IDs the user has removed from their inbox. Inbox
+// state is kept beside, but separate from, the immutable activity records.
+func (s *Store) Cleared(userID string) (map[string]bool, error) {
+	if !validID(userID) {
+		return nil, ErrInvalid
+	}
+	directory := filepath.Join(s.root, ".inbox", userID)
+	entries, err := os.ReadDir(directory)
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]bool{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		id, ok := strings.CutSuffix(entry.Name(), ".cleared")
+		if !entry.IsDir() && ok && validID(id) {
+			result[id] = true
+		}
+	}
+	return result, nil
+}
+
+// Clear durably marks one immutable activity event as handled for a user.
+func (s *Store) Clear(userID, eventID string) error {
+	if !validID(userID) || !validID(eventID) {
+		return ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lock, err := os.OpenFile(filepath.Join(s.root, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	parent := filepath.Join(s.root, ".inbox")
+	directory := filepath.Join(parent, userID)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return err
+	}
+	path := filepath.Join(directory, eventID+".cleared")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	if err = file.Sync(); err == nil {
+		err = file.Close()
+	} else {
+		_ = file.Close()
+	}
+	if err == nil {
+		err = syncDirectory(directory)
+	}
+	if err == nil {
+		err = syncDirectory(parent)
+	}
+	if err == nil {
+		err = syncDirectory(s.root)
+	}
+	return err
+}
+
 func (s *Store) Append(event Event) (Event, error) {
 	if !validID(event.ActorID) || !validID(event.RepositoryID) || event.Kind == "" || event.ResourceType == "" || event.ResourceID == "" || strings.TrimSpace(event.RepositoryName) == "" || strings.TrimSpace(event.ResourceTitle) == "" {
 		return Event{}, ErrInvalid
