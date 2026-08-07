@@ -51,6 +51,13 @@ func New(root string) (*Store, error) {
 }
 
 func (s *Store) Create(handle, displayName string) (User, error) {
+	return s.CreateWithBootstrap(handle, displayName, nil)
+}
+
+// CreateWithBootstrap publishes a new user only after bootstrap succeeds. The
+// root lock reserves the validated handle while bootstrap prepares external
+// access, so a bootstrap failure cannot leave a user or consume the handle.
+func (s *Store) CreateWithBootstrap(handle, displayName string, bootstrap func(User) error) (User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	unlock, err := s.lockRoot()
@@ -75,6 +82,11 @@ func (s *Store) Create(handle, displayName string) (User, error) {
 	}
 	now := s.now().Truncate(time.Microsecond)
 	user := User{ID: hex.EncodeToString(idBytes), Handle: handle, DisplayName: displayName, CreatedAt: now, UpdatedAt: now}
+	if bootstrap != nil {
+		if err := bootstrap(user); err != nil {
+			return User{}, err
+		}
+	}
 	if err := s.write(user); err != nil {
 		return User{}, err
 	}
@@ -88,36 +100,6 @@ func (s *Store) Get(id string) (User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.read(id)
-}
-
-// Delete removes an identity durably. It is used to roll back account
-// bootstrap when the initial credential cannot be issued; established account
-// deletion remains outside the public API until repository ownership exists.
-func (s *Store) Delete(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	unlock, err := s.lockRoot()
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	if !validID(id) {
-		return ErrNotFound
-	}
-	if err := os.Remove(filepath.Join(s.root, id+".json")); errors.Is(err, os.ErrNotExist) {
-		return ErrNotFound
-	} else if err != nil {
-		return fmt.Errorf("remove user record: %w", err)
-	}
-	dir, err := os.Open(s.root)
-	if err != nil {
-		return fmt.Errorf("open user storage: %w", err)
-	}
-	defer dir.Close()
-	if err := dir.Sync(); err != nil {
-		return fmt.Errorf("sync user storage: %w", err)
-	}
-	return nil
 }
 
 // Update replaces the editable profile fields while preserving stable identity.

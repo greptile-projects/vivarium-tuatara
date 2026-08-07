@@ -159,21 +159,21 @@ func registerUserRoutes(mux *http.ServeMux, store *users.Store, authStore *auth.
 			writeAPIError(w, http.StatusBadRequest, "invalid_request", "handle and display_name are required")
 			return
 		}
-		user, err := store.Create(*input.Handle, *input.DisplayName)
+		var issued auth.IssuedCredential
+		user, err := store.CreateWithBootstrap(*input.Handle, *input.DisplayName, func(user users.User) error {
+			if authStore == nil {
+				return nil
+			}
+			var issueErr error
+			issued, issueErr = authStore.Issue(user.ID, auth.Session, "web session", []string{"credentials:write", "profile:write"}, 24*time.Hour)
+			return issueErr
+		})
 		if writeUserError(w, err) {
 			return
 		}
 		w.Header().Set("Location", "/users/"+user.ID)
 		if authStore == nil {
 			writeJSON(w, http.StatusCreated, user)
-			return
-		}
-		issued, err := authStore.Issue(user.ID, auth.Session, "web session", []string{"credentials:write", "profile:write"}, 24*time.Hour)
-		if err != nil {
-			if rollbackErr := store.Delete(user.ID); rollbackErr != nil {
-				log.Printf("roll back user %s after credential bootstrap failure: %v", user.ID, rollbackErr)
-			}
-			writeAPIError(w, http.StatusInternalServerError, "internal_error", "credential storage unavailable")
 			return
 		}
 		setSessionCookie(w, issued.Token, issued.ExpiresAt)
