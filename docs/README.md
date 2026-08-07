@@ -14,6 +14,32 @@ The supported consumer contract, including authentication, stable error
 shapes, validation, and collection pagination, is documented in [API.md](API.md).
 Consumers should use that HTTP boundary rather than reading storage roots.
 
+## Web interface foundation
+
+The web application uses a persistent workbench shell so account, repository,
+proposal, pull-request, and review routes can grow inside one navigation and
+content model. `apps/web/src/components/app-shell.tsx` owns the responsive
+sidebar, mobile navigation, global search affordance, creation entry point,
+notifications, account access, skip link target, and centered page boundary.
+Route pages provide only their content beneath that shared shell.
+
+The visual language is defined by semantic CSS variables in `globals.css`: an
+off-white canvas, white raised surfaces, ink and muted copy, moss as the
+primary action color, status-specific soft colors, consistent borders,
+radii, shadows, keyboard focus rings, and reduced-motion behavior. Reusable
+buttons, badges, cards, and avatars live in `src/components/ui.tsx`; common
+stroke icons live in `src/components/icons.tsx`. Later workflows should extend
+those modules when a pattern is genuinely shared instead of styling a second
+version in a route.
+
+Interaction states are part of the component contract: controls have visible
+hover and keyboard focus treatment, buttons expose a disabled state, selected
+navigation uses `aria-current`, status is communicated with text rather than
+color alone, icon-only controls have accessible names, and the document offers
+a skip link and semantic landmarks. Pages should supply useful empty, loading,
+error, and permission-denied states using the same card, type, action, and
+status vocabulary as their populated views.
+
 ## User identity
 
 Human collaborators have durable platform identities backed by the API's
