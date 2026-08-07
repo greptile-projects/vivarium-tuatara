@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,6 +14,76 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
+
+func TestPublicApplicationContractSupportsAccountAndPagination(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	server := httptest.NewServer(newAuthenticatedAppHandler(gitStore, identities, credentials, catalog))
+	defer server.Close()
+
+	account := createTestAccount(t, server.URL, "contract-user")
+	current := authenticatedRequest(t, http.MethodGet, server.URL+"/user", "", account.Credential.Token, http.StatusOK)
+	var currentUser users.User
+	if err := json.NewDecoder(current.Body).Decode(&currentUser); err != nil {
+		t.Fatal(err)
+	}
+	current.Body.Close()
+	if currentUser.ID != account.User.ID {
+		t.Fatalf("current user = %#v", currentUser)
+	}
+
+	for _, name := range []string{"first", "second", "third"} {
+		authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"`+name+`"}`, account.Credential.Token, http.StatusCreated).Body.Close()
+	}
+	first := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories?limit=2", "", account.Credential.Token, http.StatusOK)
+	var firstPage struct {
+		Repositories []repositories.Repository `json:"repositories"`
+		NextCursor   *string                   `json:"next_cursor"`
+	}
+	if err := json.NewDecoder(first.Body).Decode(&firstPage); err != nil {
+		t.Fatal(err)
+	}
+	first.Body.Close()
+	if len(firstPage.Repositories) != 2 || firstPage.NextCursor == nil || *firstPage.NextCursor != firstPage.Repositories[1].ID {
+		t.Fatalf("first page = %#v", firstPage)
+	}
+	second := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories?limit=2&after="+*firstPage.NextCursor, "", account.Credential.Token, http.StatusOK)
+	var secondPage struct {
+		Repositories []repositories.Repository `json:"repositories"`
+		NextCursor   *string                   `json:"next_cursor"`
+	}
+	if err := json.NewDecoder(second.Body).Decode(&secondPage); err != nil {
+		t.Fatal(err)
+	}
+	second.Body.Close()
+	if len(secondPage.Repositories) != 1 || secondPage.NextCursor != nil || secondPage.Repositories[0].Name != "third" {
+		t.Fatalf("second page = %#v", secondPage)
+	}
+
+	invalid := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories?limit=0", "", account.Credential.Token, http.StatusBadRequest)
+	data, _ := io.ReadAll(invalid.Body)
+	invalid.Body.Close()
+	var failure struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(data, &failure) != nil || failure.Error.Code != "invalid_pagination" || failure.Error.Message == "" {
+		t.Fatalf("error response = %s", data)
+	}
+	for _, path := range []string{
+		"/repositories?limit=",
+		"/repositories?after=",
+		"/auth/credentials?limit=",
+		"/auth/credentials?after=",
+	} {
+		response := authenticatedRequest(t, http.MethodGet, server.URL+path, "", account.Credential.Token, http.StatusBadRequest)
+		response.Body.Close()
+	}
+}
 
 func TestOwnedRepositoryLifecycleProvidesUsableGitRemote(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
