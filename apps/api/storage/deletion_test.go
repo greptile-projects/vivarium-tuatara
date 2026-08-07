@@ -40,4 +40,7 @@ func TestDeleteRetryCleansStableTombstoneAfterCleanupFailure(t *testing.T) {
 	if _, err := store.Open("recoverable"); !errors.Is(err, ErrRepositoryNotFound) {
 		t.Fatalf("Open after retry: %v", err)
 	}
+	if err := store.Delete("recoverable"); err != nil {
+		t.Fatalf("completed deletion was not idempotent: %v", err)
+	}
 }

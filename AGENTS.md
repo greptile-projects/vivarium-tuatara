@@ -131,7 +131,8 @@ whenever dependencies change or the web job fails before it starts.
   intentionally still scope-only until repository access enforcement. Catalog
   reads reconcile metadata with Git storage: records whose Git ID has already
   been detached by deletion are not active, even if metadata cleanup must be
-  retried.
+  retried. A Git cleanup error preserves the ownership record so the owner can
+  retry deletion; metadata is removed only after Git cleanup succeeds.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

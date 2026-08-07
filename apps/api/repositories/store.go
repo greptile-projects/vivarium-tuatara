@@ -33,9 +33,15 @@ type Repository struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
+type gitStore interface {
+	Create(string) (*storage.Repository, error)
+	Open(string) (*storage.Repository, error)
+	Delete(string) error
+}
+
 type Store struct {
 	root   string
-	git    *storage.Store
+	git    gitStore
 	mu     sync.Mutex
 	now    func() time.Time
 	remove func(string) error
@@ -144,11 +150,10 @@ func (s *Store) Delete(ownerID, id string) error {
 		return ErrNotFound
 	}
 	if err := s.git.Delete(id); err != nil {
-		// Reconcile errors after the atomic detach so metadata cannot remain
-		// stranded for a remote that is already absent.
-		if _, openErr := s.git.Open(id); !errors.Is(openErr, storage.ErrRepositoryNotFound) {
-			return fmt.Errorf("delete Git repository: %w", err)
-		}
+		// Git storage retains a stable tombstone after post-detach cleanup
+		// failures. Preserve ownership metadata so an authenticated retry can
+		// invoke Delete again and finish that cleanup.
+		return fmt.Errorf("delete Git repository: %w", err)
 	}
 	if err := s.remove(s.path(id)); err != nil {
 		return fmt.Errorf("delete repository metadata: %w", err)

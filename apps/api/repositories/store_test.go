@@ -75,6 +75,61 @@ func TestDeleteMetadataFailureDoesNotExposeOrReserveMissingRemote(t *testing.T) 
 	}
 }
 
+type interruptedGitDelete struct {
+	git       *storage.Store
+	interrupt bool
+}
+
+func (s *interruptedGitDelete) Create(id string) (*storage.Repository, error) {
+	return s.git.Create(id)
+}
+
+func (s *interruptedGitDelete) Open(id string) (*storage.Repository, error) {
+	return s.git.Open(id)
+}
+
+func (s *interruptedGitDelete) Delete(id string) error {
+	if s.interrupt {
+		s.interrupt = false
+		if err := s.git.Delete(id); err != nil {
+			return err
+		}
+		return errors.New("injected post-detach cleanup failure")
+	}
+	// The storage-layer regression test proves retry cleanup of its retained
+	// stable tombstone. Delegation models that successful retry boundary.
+	return s.git.Delete(id)
+}
+
+func TestGitDeletionFailurePreservesCatalogMetadataForRetry(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	store, _ := New(t.TempDir(), gitStore)
+	created, err := store.Create(testOwnerID, "retry-git-cleanup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.git = &interruptedGitDelete{git: gitStore, interrupt: true}
+	if err := store.Delete(testOwnerID, created.ID); err == nil {
+		t.Fatal("Delete succeeded despite Git cleanup failure")
+	}
+	if _, err := store.read(created.ID); err != nil {
+		t.Fatalf("catalog metadata needed for retry was removed: %v", err)
+	}
+	listed, err := store.List(testOwnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 0 {
+		t.Fatalf("detached repository remained active: %#v", listed)
+	}
+	if err := store.Delete(testOwnerID, created.ID); err != nil {
+		t.Fatalf("authenticated cleanup retry: %v", err)
+	}
+	if _, err := store.read(created.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("catalog metadata remains after successful retry: %v", err)
+	}
+}
+
 func TestRepositoryNameClaimIsAtomicAcrossStores(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	root := t.TempDir()

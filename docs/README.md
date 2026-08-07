@@ -106,8 +106,10 @@ atomically detaches the Git storage ID before removing the ownership record,
 so a successfully removed API resource is no longer a usable remote. Active
 catalog reads also verify that Git backing still exists. If metadata cleanup
 fails after that atomic detach, list and inspection treat the repository as
-deleted, its name can be reused, and a later delete retry removes the retained
-record.
+deleted and its name can be reused, but the private ownership record remains
+as authorization for a later delete retry. Metadata is removed only after Git
+cleanup reports success; completed Git deletion is idempotent so a preceding
+metadata-removal failure can also be retried safely.
 
 Session credentials include `repositories:read` and `repositories:write`.
 Long-lived API credentials can be issued with either capability for narrower

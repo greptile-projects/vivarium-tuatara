@@ -229,9 +229,7 @@ func (s *Store) Delete(id string) error {
 		return err
 	}
 	tombstone := s.deletionPath(id)
-	pending := false
 	if _, err := os.Lstat(tombstone); err == nil {
-		pending = true
 		if err := s.removeAll(tombstone); err != nil {
 			return fmt.Errorf("resume repository deletion: %w", err)
 		}
@@ -242,7 +240,7 @@ func (s *Store) Delete(id string) error {
 		return fmt.Errorf("inspect pending repository deletion: %w", err)
 	}
 	if _, err := s.Open(id); err != nil {
-		if pending && errors.Is(err, ErrRepositoryNotFound) {
+		if errors.Is(err, ErrRepositoryNotFound) {
 			return nil
 		}
 		return err
