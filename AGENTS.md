@@ -281,6 +281,12 @@ whenever dependencies change or the web job fails before it starts.
   Branch-update publication holds the stock-Git-compatible per-reference lock
   across tip validation and durable event append, preventing a concurrent push
   from making an accepted timeline event stale.
+  Current participants control runs through durable guidance, question-answer,
+  pause, resume, and cancel interventions. Credential-bound agents read the
+  authoritative run state and ordered interventions from the control endpoint;
+  paused runs cannot append progress, and cancellation is terminal and revokes
+  their bounded Git credential. Every intervention shares the attributable
+  session timeline.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

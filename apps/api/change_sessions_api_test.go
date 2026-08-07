@@ -125,6 +125,30 @@ func TestCollaboratorOpensAndReconnectsToChangeSession(t *testing.T) {
 		t.Fatalf("run has no durable agent identity: %+v", launched.Run)
 	}
 	eventURL := reconnectBase + "/runs/" + launched.Run.ID + "/events"
+	interventionURL := reconnectBase + "/runs/" + launched.Run.ID + "/interventions"
+	authenticatedRequest(t, http.MethodPost, eventURL, `{"kind":"agent.question","state":"awaiting_input","message":"Should a paused publication return conflict?"}`, launched.Credential.Token, http.StatusCreated).Body.Close()
+	for _, intervention := range []string{
+		`{"kind":"run.guidance","message":"Focus on the API contract before browser polish."}`,
+		`{"kind":"run.paused","message":"Pause while I confirm the expected status code."}`,
+		`{"kind":"question.answered","message":"Use conflict for blocked progress publication."}`,
+	} {
+		response := authenticatedRequest(t, http.MethodPost, interventionURL, intervention, owner.Credential.Token, http.StatusCreated)
+		response.Body.Close()
+	}
+	authenticatedRequest(t, http.MethodPost, eventURL, `{"kind":"run.status","state":"working","message":"This must wait."}`, launched.Credential.Token, http.StatusConflict).Body.Close()
+	controlResponse := authenticatedRequest(t, http.MethodGet, reconnectBase+"/runs/"+launched.Run.ID+"/control", "", launched.Credential.Token, http.StatusOK)
+	var control struct {
+		Run           changesessions.Run     `json:"run"`
+		Interventions []changesessions.Event `json:"interventions"`
+	}
+	if err := json.NewDecoder(controlResponse.Body).Decode(&control); err != nil {
+		t.Fatal(err)
+	}
+	controlResponse.Body.Close()
+	if control.Run.State != changesessions.Paused || len(control.Interventions) != 3 || control.Interventions[0].Kind != "run.guidance" || control.Interventions[2].Kind != "question.answered" {
+		t.Fatalf("agent control = %+v", control)
+	}
+	authenticatedRequest(t, http.MethodPost, interventionURL, `{"kind":"run.resumed","message":"The contract is confirmed; continue."}`, contributor.Credential.Token, http.StatusCreated).Body.Close()
 	workEvents := []string{
 		`{"kind":"run.status","state":"working","message":"Inspecting the selected revision."}`,
 		`{"kind":"agent.message","state":"working","message":"The regression belongs beside the session API coverage."}`,
@@ -190,18 +214,20 @@ func TestCollaboratorOpensAndReconnectsToChangeSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	timeline.Body.Close()
-	if len(eventPage.Events) != 8 || eventPage.Events[1].Kind != "run.launched" || eventPage.Events[7].Kind != "run.failed" || eventPage.Events[1].RunID != launched.Run.ID || eventPage.Events[1].ActorID != contributor.User.ID {
+	if len(eventPage.Events) != 13 || eventPage.Events[1].Kind != "run.launched" || eventPage.Events[2].Kind != "agent.question" || eventPage.Events[12].Kind != "run.failed" || eventPage.Events[1].RunID != launched.Run.ID || eventPage.Events[3].ActorID != owner.User.ID {
 		t.Fatalf("events after launch = %+v", eventPage.Events)
 	}
 	authenticatedRequest(t, http.MethodPost, reconnectBase+"/runs", `{"instructions":"Use unknown context.","source_commit_id":"`+pull.SourceCommitID+`","context_paths":["missing.txt"],"working_branch":"agent/invalid"}`, contributor.Credential.Token, http.StatusBadRequest).Body.Close()
-	revokedResponse := authenticatedRequest(t, http.MethodDelete, reconnectBase+"/runs/"+launched.Run.ID+"/credential", "", owner.Credential.Token, http.StatusOK)
-	var revoked changesessions.Run
-	if err := json.NewDecoder(revokedResponse.Body).Decode(&revoked); err != nil {
+	canceledResponse := authenticatedRequest(t, http.MethodPost, interventionURL, `{"kind":"run.canceled","message":"The requested evidence is complete."}`, owner.Credential.Token, http.StatusCreated)
+	var canceled struct {
+		Run changesessions.Run `json:"run"`
+	}
+	if err := json.NewDecoder(canceledResponse.Body).Decode(&canceled); err != nil {
 		t.Fatal(err)
 	}
-	revokedResponse.Body.Close()
-	if revoked.AccessRevokedAt == nil {
-		t.Fatalf("revoked run = %+v", revoked)
+	canceledResponse.Body.Close()
+	if canceled.Run.AccessRevokedAt == nil || canceled.Run.State != changesessions.Canceled {
+		t.Fatalf("canceled run = %+v", canceled.Run)
 	}
 	if _, err := credentials.Authenticate(launched.Credential.Token, "git:read"); !errors.Is(err, auth.ErrNotFound) {
 		t.Fatalf("revoked credential error = %v", err)

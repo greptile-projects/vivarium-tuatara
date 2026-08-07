@@ -390,6 +390,13 @@ the agent can append status, messages, tool actions, artifacts, failures, and
 verified source-branch updates; the store stamps every event with the
 authorizing user, agent, run, and pinned revision. Collaborators see that
 ordered record refresh in the same session page without needing worker logs.
+The same workspace is also the run control plane. Agents can ask explicit
+questions, while current collaborators can append guidance or answers and
+strictly pause, resume, or cancel active work. Credential-bound workers poll a
+minimal authoritative control view; paused runs cannot publish progress, and
+canceling permanently closes the run and revokes its branch-bound credential.
+Every intervention retains its human actor, generated agent, run, and revision
+attribution in the common timeline.
 
 ## Git HTTP transport
 

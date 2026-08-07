@@ -19,15 +19,24 @@ import (
 var (
 	ErrNotFound            = errors.New("change session not found")
 	ErrInvalid             = errors.New("invalid change session")
+	ErrRunPaused           = errors.New("agent run is paused")
+	ErrRunCanceled         = errors.New("agent run is canceled")
 	ErrDurabilityUncertain = errors.New("change session is visible but durability is uncertain")
 )
 
 const Open = "open"
 const Launched = "launched"
+const Paused = "paused"
+const Canceled = "canceled"
+
+var interventionKinds = map[string]bool{
+	"run.guidance": true, "question.answered": true, "run.paused": true,
+	"run.resumed": true, "run.canceled": true,
+}
 
 var workEventKinds = map[string]bool{
 	"run.status": true, "agent.message": true, "tool.action": true,
-	"artifact.produced": true, "run.failed": true, "branch.updated": true,
+	"agent.question": true, "artifact.produced": true, "run.failed": true, "branch.updated": true,
 }
 
 type Session struct {
@@ -73,6 +82,7 @@ type Run struct {
 	AccessRevokedAt     *time.Time `json:"access_revoked_at,omitempty"`
 	State               string     `json:"state"`
 	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
 }
 
 type record struct {
@@ -240,7 +250,7 @@ func (s *Store) LaunchRun(repositoryID, pullRequestID, sessionID, initiatorID, i
 		return Run{}, err
 	}
 	now := s.now().Truncate(time.Microsecond)
-	run := Run{ID: runID, SessionID: sessionID, InitiatorID: initiatorID, AgentID: agentID, Instructions: instructions, SourceCommitID: sourceCommitID, ContextPaths: append([]string(nil), contextPaths...), WorkingBranch: workingBranch, CredentialID: credentialID, CredentialExpiresAt: credentialExpiresAt, State: Launched, CreatedAt: now}
+	run := Run{ID: runID, SessionID: sessionID, InitiatorID: initiatorID, AgentID: agentID, Instructions: instructions, SourceCommitID: sourceCommitID, ContextPaths: append([]string(nil), contextPaths...), WorkingBranch: workingBranch, CredentialID: credentialID, CredentialExpiresAt: credentialExpiresAt, State: Launched, CreatedAt: now, UpdatedAt: now}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -295,6 +305,12 @@ func (s *Store) AppendWorkEvent(repositoryID, pullRequestID, sessionID, runID, c
 	if run == nil || run.CredentialID != credentialID || run.AccessRevokedAt != nil {
 		return Event{}, ErrNotFound
 	}
+	if run.State == Paused {
+		return Event{}, ErrRunPaused
+	}
+	if run.State == Canceled {
+		return Event{}, ErrRunCanceled
+	}
 	if strings.TrimSpace(message) == "" || (kind == "tool.action" && tool == "") || (kind == "artifact.produced" && artifact == "") || (kind == "branch.updated" && (branch != run.WorkingBranch || commitID == "")) {
 		return Event{}, ErrInvalid
 	}
@@ -305,6 +321,7 @@ func (s *Store) AppendWorkEvent(repositoryID, pullRequestID, sessionID, runID, c
 	now := s.now().Truncate(time.Microsecond)
 	event := Event{ID: eventID, SessionID: sessionID, Kind: kind, ActorID: run.InitiatorID, InitiatorID: run.InitiatorID, AgentID: run.AgentID, RevisionID: run.SourceCommitID, State: state, RunID: run.ID, Message: message, Tool: tool, Artifact: artifact, Branch: branch, CommitID: commitID, CreatedAt: now}
 	rec.Events = append(rec.Events, event)
+	run.UpdatedAt = now
 	rec.Session.UpdatedAt = now
 	committed, err := s.write(filepath.Join(s.root, repositoryID, pullRequestID), rec)
 	if err != nil {
@@ -314,6 +331,97 @@ func (s *Store) AppendWorkEvent(repositoryID, pullRequestID, sessionID, runID, c
 		return Event{}, err
 	}
 	return event, nil
+}
+
+// GetRunControl exposes only the mandate state and collaborator interventions
+// needed by the credential-bound worker to respond to human control.
+func (s *Store) GetRunControl(repositoryID, pullRequestID, sessionID, runID, credentialID string) (Run, []Event, error) {
+	rec, err := s.read(repositoryID, pullRequestID, sessionID)
+	if err != nil {
+		return Run{}, nil, err
+	}
+	for _, run := range rec.Runs {
+		if run.ID != runID || run.CredentialID != credentialID {
+			continue
+		}
+		events := []Event{}
+		for _, event := range rec.Events {
+			if event.RunID == runID && interventionKinds[event.Kind] {
+				events = append(events, event)
+			}
+		}
+		return run, events, nil
+	}
+	return Run{}, nil, ErrNotFound
+}
+
+// Intervene atomically records collaborator guidance or a run state transition.
+func (s *Store) Intervene(repositoryID, pullRequestID, sessionID, runID, actorID, kind, message string) (Run, Event, error) {
+	if !validID(actorID) || !interventionKinds[kind] || len([]rune(message)) > 10000 || ((kind == "run.guidance" || kind == "question.answered") && strings.TrimSpace(message) == "") {
+		return Run{}, Event{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Run{}, Event{}, err
+	}
+	defer unlock()
+	rec, err := s.read(repositoryID, pullRequestID, sessionID)
+	if err != nil {
+		return Run{}, Event{}, err
+	}
+	var run *Run
+	for i := range rec.Runs {
+		if rec.Runs[i].ID == runID {
+			run = &rec.Runs[i]
+			break
+		}
+	}
+	if run == nil {
+		return Run{}, Event{}, ErrNotFound
+	}
+	if run.State == Canceled {
+		return Run{}, Event{}, ErrRunCanceled
+	}
+	switch kind {
+	case "run.paused":
+		if run.State != Launched {
+			return Run{}, Event{}, ErrInvalid
+		}
+		run.State = Paused
+	case "run.resumed":
+		if run.State != Paused {
+			return Run{}, Event{}, ErrInvalid
+		}
+		run.State = Launched
+	case "run.canceled":
+		run.State = Canceled
+	default:
+		if run.State != Launched && run.State != Paused {
+			return Run{}, Event{}, ErrInvalid
+		}
+	}
+	eventID, err := newID()
+	if err != nil {
+		return Run{}, Event{}, err
+	}
+	now := s.now().Truncate(time.Microsecond)
+	if kind == "run.canceled" && run.AccessRevokedAt == nil {
+		run.AccessRevokedAt = &now
+	}
+	run.UpdatedAt = now
+	event := Event{ID: eventID, SessionID: sessionID, Kind: kind, ActorID: actorID, InitiatorID: run.InitiatorID, AgentID: run.AgentID, RevisionID: run.SourceCommitID, State: run.State, RunID: run.ID, Message: strings.TrimSpace(message), CreatedAt: now}
+	rec.Events = append(rec.Events, event)
+	rec.Session.UpdatedAt = now
+	committed, err := s.write(filepath.Join(s.root, repositoryID, pullRequestID), rec)
+	if err != nil {
+		if committed {
+			return *run, event, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+		}
+		return Run{}, Event{}, err
+	}
+	return *run, event, nil
 }
 
 func (s *Store) ListRuns(repositoryID, pullRequestID, sessionID string) ([]Run, error) {
@@ -352,6 +460,7 @@ func (s *Store) RevokeRunAccess(repositoryID, pullRequestID, sessionID, runID st
 	if rec.Runs[index].AccessRevokedAt == nil {
 		now := s.now().Truncate(time.Microsecond)
 		rec.Runs[index].AccessRevokedAt = &now
+		rec.Runs[index].UpdatedAt = now
 		rec.Session.UpdatedAt = now
 		if committed, err := s.write(filepath.Join(s.root, repositoryID, pullRequestID), rec); err != nil {
 			if committed {
@@ -396,7 +505,10 @@ func (s *Store) read(repositoryID, pullRequestID, sessionID string) (record, err
 		if run.AgentID == "" && validID(run.CredentialID) {
 			run.AgentID = run.CredentialID
 		}
-		if !validID(run.ID) || run.SessionID != sessionID || !validID(run.InitiatorID) || !validID(run.AgentID) || !validObjectID(run.SourceCommitID) || run.SourceCommitID != rec.Session.SourceCommitID || run.Instructions == "" || run.WorkingBranch == "" || !validID(run.CredentialID) || run.State != Launched || run.CredentialExpiresAt.IsZero() || runEvents[run.ID] != 1 {
+		if run.UpdatedAt.IsZero() {
+			run.UpdatedAt = run.CreatedAt
+		}
+		if !validID(run.ID) || run.SessionID != sessionID || !validID(run.InitiatorID) || !validID(run.AgentID) || !validObjectID(run.SourceCommitID) || run.SourceCommitID != rec.Session.SourceCommitID || run.Instructions == "" || run.WorkingBranch == "" || !validID(run.CredentialID) || (run.State != Launched && run.State != Paused && run.State != Canceled) || run.CredentialExpiresAt.IsZero() || runEvents[run.ID] != 1 {
 			return record{}, errors.New("invalid durable agent run")
 		}
 	}

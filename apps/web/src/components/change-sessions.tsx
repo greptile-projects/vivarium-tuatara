@@ -31,10 +31,16 @@ const eventTitles: Record<ChangeSessionEvent["kind"], string> = {
   "run.launched": "Agent run launched",
   "run.status": "Agent status",
   "agent.message": "Agent message",
+  "agent.question": "Agent question",
   "tool.action": "Tool action",
   "artifact.produced": "Artifact produced",
   "run.failed": "Agent run failed",
   "branch.updated": "Branch updated",
+  "run.guidance": "Follow-up guidance",
+  "question.answered": "Question answered",
+  "run.paused": "Run paused",
+  "run.resumed": "Run resumed",
+  "run.canceled": "Run canceled",
 };
 
 async function sessions(path: string, token: string | null) {
@@ -126,6 +132,7 @@ export function ChangeSessionDetail({ repositoryID, pullRequestID, sessionID }: 
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [issued, setIssued] = useState<{ run: AgentRun; credential: Credential } | null>(null);
   const [launching, setLaunching] = useState(false);
+  const [controlling, setControlling] = useState<string | null>(null);
   const [pull, setPull] = useState<PullRequest | null>(null);
   const [repository, setRepository] = useState<Repository | null>(null);
   const [initiator, setInitiator] = useState<User | null>(null);
@@ -160,8 +167,9 @@ export function ChangeSessionDetail({ repositoryID, pullRequestID, sessionID }: 
   useEffect(() => {
     if (!token || durabilityUncertain || !session) return;
     const interval = window.setInterval(() => {
-      void timeline(`/repositories/${repositoryID}/pulls/${pullRequestID}/sessions/${sessionID}/events`, token)
-        .then(setEvents).catch(() => undefined);
+      const base = `/repositories/${repositoryID}/pulls/${pullRequestID}/sessions/${sessionID}`;
+      void Promise.all([timeline(`${base}/events`, token), runs(`${base}/runs`, token)])
+        .then(([nextEvents, nextRuns]) => { setEvents(nextEvents); setAgentRuns(nextRuns); }).catch(() => undefined);
     }, 5000);
     return () => window.clearInterval(interval);
   }, [durabilityUncertain, pullRequestID, repositoryID, session, sessionID, token]);
@@ -187,6 +195,23 @@ export function ChangeSessionDetail({ repositoryID, pullRequestID, sessionID }: 
     } catch (reason) { setError(message(reason, "Agent access could not be revoked.")); }
   }
 
+  async function intervene(run: AgentRun, kind: "run.guidance" | "question.answered" | "run.paused" | "run.resumed" | "run.canceled", interventionMessage: string) {
+    setControlling(run.id); setError("");
+    try {
+      const response = await apiResponse<{ run: AgentRun; event: ChangeSessionEvent }>(`/repositories/${repositoryID}/pulls/${pullRequestID}/sessions/${sessionID}/runs/${run.id}/interventions`, { method: "POST", body: JSON.stringify({ kind, message: interventionMessage }) }, token);
+      setAgentRuns((current) => current.map((item) => item.id === run.id ? response.data.run : item));
+      setEvents((current) => current.some((item) => item.id === response.data.event.id) ? current : [...current, response.data.event]);
+    } catch (reason) { setError(message(reason, "The intervention could not be published.")); }
+    finally { setControlling(null); }
+  }
+
+  async function guide(event: FormEvent<HTMLFormElement>, run: AgentRun) {
+    event.preventDefault();
+    const form = event.currentTarget; const data = new FormData(form);
+    await intervene(run, String(data.get("kind")) as "run.guidance" | "question.answered", String(data.get("message") || ""));
+    form.reset();
+  }
+
   if (authLoading || loading) return <Card className="p-8 text-sm text-[var(--muted)]">Reconnecting to the change session…</Card>;
   if (!user) return <Card className="p-8 text-center"><h1 className="text-2xl font-semibold">Reconnect to shared agent work</h1><p className="mt-2 text-sm text-[var(--muted)]">Sign in as a current repository collaborator to inspect this session.</p><Link href="/?access=signin" className="mt-5 inline-flex min-h-10 items-center rounded-lg bg-[var(--brand)] px-4 text-sm font-semibold text-white">Sign in</Link></Card>;
   if (error || !session || !pull || !repository) return <Card className="p-8"><h1 className="text-xl font-semibold">Session unavailable</h1><p role="alert" className="mt-2 text-sm text-[var(--danger)]">{error || "The session could not be found."}</p></Card>;
@@ -196,7 +221,7 @@ export function ChangeSessionDetail({ repositoryID, pullRequestID, sessionID }: 
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
       <main className="space-y-6"><section><div className="flex items-end justify-between gap-3"><div><h2 className="text-lg font-semibold">Session timeline</h2><p className="mt-1 text-xs text-[var(--muted)]">Live agent progress refreshes every five seconds.</p></div><Badge tone="info">{events.length} events</Badge></div>{durabilityUncertain ? <Card className="mt-3 p-6 text-sm text-[var(--muted)]">Timeline events are withheld until session durability is confirmed.</Card> : <Card className="mt-3 overflow-hidden"><ol className="divide-y divide-[var(--line)]">{events.map((event) => <li key={event.id} className="flex gap-4 p-5"><span aria-hidden="true" className={`mt-1.5 size-2 shrink-0 rounded-full ${event.kind === "run.failed" ? "bg-[var(--danger)]" : "bg-[var(--brand)]"}`}/><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="text-sm font-semibold">{eventTitles[event.kind]}</p>{event.state && <Badge tone={event.kind === "run.failed" ? "warning" : "neutral"}>{event.state}</Badge>}</div><p className="mt-1 whitespace-pre-wrap text-sm text-[var(--muted)]">{event.message || (event.kind === "run.launched" ? "A collaborator authorized bounded work." : `${event.actor_id === session.initiator_id && initiator ? `@${initiator.handle}` : "A collaborator"} created this workspace.`)}</p>{(event.tool || event.artifact || event.branch || event.commit_id) && <p className="mt-2 break-all font-mono text-xs text-[var(--muted)]">{[event.tool && `tool: ${event.tool}`, event.artifact && `artifact: ${event.artifact}`, event.branch && `branch: ${event.branch}`, event.commit_id && `commit: ${short(event.commit_id)}`].filter(Boolean).join(" · ")}</p>}{event.agent_id && <p className="mt-2 font-mono text-[10px] text-[var(--muted)]">Agent {short(event.agent_id)} · authorized by {short(event.initiator_id || event.actor_id)} · revision {short(event.revision_id || session.source_commit_id)}</p>}<time className="mt-2 block text-xs text-[var(--muted)]">{formatTime(event.created_at)}</time></div></li>)}</ol></Card>}</section>
       {!durabilityUncertain && pull.status === "open" && <Card className="p-5"><h2 className="font-semibold">Delegate bounded work</h2><p className="mt-1 text-sm leading-6 text-[var(--muted)]">Define the outcome, pin this review revision, name only the paths the agent should focus on, and grant one hour of Git access to the pull request branch.</p><form className="mt-5 space-y-4" onSubmit={launch}><label className="block text-sm font-semibold">Instructions<textarea name="instructions" required maxLength={10000} rows={5} placeholder="Describe the outcome and checks that should pass." className="mt-2 w-full rounded-lg border border-[var(--line-strong)] p-3 font-normal"/></label><label className="block text-sm font-semibold">Pull request revision<select name="source_commit_id" className="mt-2 min-h-11 w-full rounded-lg border border-[var(--line-strong)] bg-white px-3 font-mono text-xs font-normal"><option value={session.source_commit_id}>{session.source_commit_id} · current session revision</option></select></label><label className="block text-sm font-semibold">Repository context<textarea name="context_paths" required rows={3} placeholder={"README.md\nsrc/feature.ts"} className="mt-2 w-full rounded-lg border border-[var(--line-strong)] p-3 font-mono text-xs font-normal"/><span className="mt-1 block text-xs font-normal text-[var(--muted)]">One existing file or directory path per line, resolved at the selected revision.</span></label><label className="block text-sm font-semibold">Working branch<select name="working_branch" className="mt-2 min-h-11 w-full rounded-lg border border-[var(--line-strong)] bg-white px-3 font-mono text-xs font-normal"><option value={pull.source_branch}>refs/heads/{pull.source_branch} · pull request source</option></select></label><Button type="submit" disabled={launching}>{launching ? "Launching…" : "Launch agent run"}</Button></form>{issued?.credential.token && <div role="status" className="mt-5 rounded-lg border border-[var(--brand)] bg-[var(--brand-soft)] p-4"><p className="text-sm font-semibold">Run launched · copy its credential now</p><p className="mt-1 text-xs text-[var(--muted)]">This secret is shown once, expires in one hour, and can only access {repository.name} and push {issued.run.working_branch}.</p><code className="mt-3 block break-all rounded bg-white p-3 text-xs select-all">{issued.credential.token}</code></div>}</Card>}
-      {agentRuns.length > 0 && <section><h2 className="text-lg font-semibold">Agent runs</h2><div className="mt-3 space-y-3">{[...agentRuns].reverse().map((run) => <Card key={run.id} className="p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><Badge tone={run.access_revoked_at ? "neutral" : "success"}>{run.access_revoked_at ? "access revoked" : run.state}</Badge><code className="text-xs">{run.working_branch}</code></div><p className="mt-3 whitespace-pre-wrap text-sm leading-6">{run.instructions}</p><p className="mt-2 text-xs text-[var(--muted)]">Agent {short(run.agent_id)} · Authorized by {short(run.initiator_id)} · Revision {short(run.source_commit_id)} · Context: {run.context_paths.join(", ")} · Access expires {formatTime(run.credential_expires_at)}</p></div>{!run.access_revoked_at && <Button variant="quiet" onClick={() => void revoke(run)}>Revoke access</Button>}</div></Card>)}</div></section>}</main>
+      {agentRuns.length > 0 && <section><h2 className="text-lg font-semibold">Agent runs</h2><div className="mt-3 space-y-3">{[...agentRuns].reverse().map((run) => <Card key={run.id} className="p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><Badge tone={run.state === "canceled" || run.access_revoked_at ? "neutral" : run.state === "paused" ? "warning" : "success"}>{run.state === "canceled" ? "canceled" : run.access_revoked_at ? "access revoked" : run.state}</Badge><code className="text-xs">{run.working_branch}</code></div><p className="mt-3 whitespace-pre-wrap text-sm leading-6">{run.instructions}</p><p className="mt-2 text-xs text-[var(--muted)]">Agent {short(run.agent_id)} · Authorized by {short(run.initiator_id)} · Revision {short(run.source_commit_id)} · Context: {run.context_paths.join(", ")} · Access expires {formatTime(run.credential_expires_at)}</p></div>{!run.access_revoked_at && <Button variant="quiet" onClick={() => void revoke(run)}>Revoke access</Button>}</div>{run.state !== "canceled" && !run.access_revoked_at && <div className="mt-5 border-t border-[var(--line)] pt-5"><form className="space-y-3" onSubmit={(event) => void guide(event, run)}><div className="grid gap-3 sm:grid-cols-[11rem_1fr]"><select name="kind" aria-label="Guidance type" className="min-h-11 rounded-lg border border-[var(--line-strong)] bg-white px-3 text-sm"><option value="run.guidance">Follow-up guidance</option><option value="question.answered">Answer question</option></select><textarea name="message" aria-label="Guidance message" required maxLength={10000} rows={2} placeholder="Redirect the work or answer the agent clearly." className="rounded-lg border border-[var(--line-strong)] p-3 text-sm"/></div><Button type="submit" variant="secondary" disabled={controlling === run.id}>Send to agent</Button></form><div className="mt-4 flex flex-wrap gap-2">{run.state === "launched" ? <Button variant="quiet" disabled={controlling === run.id} onClick={() => void intervene(run, "run.paused", "Work paused by a collaborator.")}>Pause run</Button> : <Button variant="secondary" disabled={controlling === run.id} onClick={() => void intervene(run, "run.resumed", "Work resumed by a collaborator.")}>Resume run</Button>}<Button variant="quiet" disabled={controlling === run.id} onClick={() => void intervene(run, "run.canceled", "Run canceled by a collaborator.")}>Cancel run</Button></div></div>}</Card>)}</div></section>}</main>
       <aside><Card className="p-5"><h2 className="font-semibold">Session context</h2><dl className="mt-4 space-y-3 text-sm"><div><dt className="text-xs text-[var(--muted)]">Initiated by</dt><dd className="mt-1 font-semibold">{initiator ? `@${initiator.handle}` : short(session.initiator_id)}</dd></div><div><dt className="text-xs text-[var(--muted)]">Review revision</dt><dd className="mt-1"><code title={session.source_commit_id}>{short(session.source_commit_id)}</code></dd></div><div><dt className="text-xs text-[var(--muted)]">Created</dt><dd className="mt-1">{formatTime(session.created_at)}</dd></div></dl></Card></aside>
     </div>
   </div>;
