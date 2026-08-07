@@ -826,11 +826,38 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 			writeAPIError(w, 400, "invalid_agent_event", "agent event fields do not match the run mandate")
 			return
 		}
+		if errors.Is(err, changesessions.ErrRunPaused) {
+			writeAPIError(w, http.StatusConflict, "agent_run_paused", "agent run is paused; inspect control state before continuing")
+			return
+		}
+		if errors.Is(err, changesessions.ErrRunCanceled) {
+			writeAPIError(w, http.StatusConflict, "agent_run_canceled", "agent run is canceled")
+			return
+		}
 		if writeChangeSessionError(w, err) {
 			return
 		}
 		w.Header().Set("Location", strings.TrimSuffix(r.URL.Path, "/runs/"+r.PathValue("run_id")+"/events")+"/events#"+event.ID)
 		writeJSON(w, http.StatusCreated, event)
+	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/sessions/{session_id}/runs/{run_id}/control", func(w http.ResponseWriter, r *http.Request) {
+		credential, ok := authenticateRequest(w, r, authStore, "git:read", false)
+		if !ok {
+			return
+		}
+		if credential.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "agent_run_not_found", "agent run not found")
+			return
+		}
+		run, interventions, err := store.GetRunControl(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("session_id"), r.PathValue("run_id"), credential.ID)
+		if errors.Is(err, changesessions.ErrNotFound) {
+			writeAPIError(w, 404, "agent_run_not_found", "agent run not found")
+			return
+		}
+		if writeChangeSessionError(w, err) {
+			return
+		}
+		writeJSON(w, 200, map[string]any{"run": run, "interventions": interventions})
 	})
 	type runInput struct {
 		Instructions   string   `json:"instructions"`
@@ -937,6 +964,56 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 			return
 		}
 		writeJSON(w, 200, map[string]any{"runs": page, "next_cursor": next})
+	})
+	type interventionInput struct {
+		Kind    string `json:"kind"`
+		Message string `json:"message"`
+	}
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/sessions/{session_id}/runs/{run_id}/interventions", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if _, ok := loadPull(w, r); !ok {
+			return
+		}
+		var input interventionInput
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_run_intervention", "run intervention is invalid")
+			return
+		}
+		input.Kind = strings.TrimSpace(input.Kind)
+		input.Message = strings.TrimSpace(input.Message)
+		run, event, err := store.Intervene(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("session_id"), r.PathValue("run_id"), actor.UserID, input.Kind, input.Message)
+		response := map[string]any{"run": run, "event": event}
+		uncertain := errors.Is(err, changesessions.ErrDurabilityUncertain)
+		if errors.Is(err, changesessions.ErrNotFound) {
+			writeAPIError(w, 404, "agent_run_not_found", "agent run not found")
+			return
+		}
+		if errors.Is(err, changesessions.ErrRunCanceled) {
+			writeAPIError(w, 409, "agent_run_canceled", "agent run is already canceled")
+			return
+		}
+		if errors.Is(err, changesessions.ErrInvalid) {
+			writeAPIError(w, 409, "invalid_run_transition", "intervention is invalid for the current run state")
+			return
+		}
+		if !uncertain && writeChangeSessionError(w, err) {
+			return
+		}
+		if input.Kind == "run.canceled" {
+			if _, revokeErr := authStore.Revoke(run.InitiatorID, run.CredentialID); revokeErr != nil && !errors.Is(revokeErr, auth.ErrNotFound) {
+				writeAPIError(w, 500, "internal_error", "run is canceled but agent access revocation must be retried")
+				return
+			}
+		}
+		w.Header().Set("Location", strings.TrimSuffix(r.URL.Path, "/runs/"+r.PathValue("run_id")+"/interventions")+"/events#"+event.ID)
+		if uncertain {
+			writeUncertainMutation(w, response)
+			return
+		}
+		writeJSON(w, http.StatusCreated, response)
 	})
 	mux.HandleFunc("DELETE /repositories/{id}/pulls/{pull_id}/sessions/{session_id}/runs/{run_id}/credential", func(w http.ResponseWriter, r *http.Request) {
 		_, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")

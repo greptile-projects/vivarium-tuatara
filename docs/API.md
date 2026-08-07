@@ -362,3 +362,24 @@ participant-only timeline; its atomic publication uses the shared uncertain-
 durability response. This provides one ordered public record for status,
 messages, actions, outputs, failures, and published revisions without exposing
 worker logs or accepting caller-supplied attribution.
+
+An agent can also publish `agent.question` when it needs a decision. Current
+participants guide active work through `POST
+.../runs/{run_id}/interventions` with a `kind` of `run.guidance`,
+`question.answered`, `run.paused`, `run.resumed`, or `run.canceled` and a
+`message`. Guidance and answers require non-empty messages and are accepted
+while a run is active or paused. Pause and resume are strict transitions;
+invalid or repeated transitions return `409 invalid_run_transition`. Every
+accepted intervention atomically updates the run and appends an attributed
+event to the shared timeline.
+
+The run credential reads its authoritative control state at `GET
+.../runs/{run_id}/control`. The response contains the `run` and its ordered
+collaborator `interventions`, without exposing the participant-only session
+timeline. A paused run receives `409 agent_run_paused` if it attempts to
+publish more progress and must poll control state until resumed. Cancellation
+is terminal: it records `state: "canceled"`, appends `run.canceled`, and revokes
+the bounded Git credential so later progress, control reads, fetches, and
+pushes fail authentication. Cancel retries tolerate an already-revoked
+credential. Intervention publication follows the shared uncertain-durability
+response contract.

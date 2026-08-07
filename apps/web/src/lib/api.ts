@@ -145,9 +145,9 @@ export type ChangeSession = {
 export type ChangeSessionEvent = {
   id: string;
   session_id: string;
-  kind: "session.opened" | "run.launched" | "run.status" | "agent.message" | "tool.action" | "artifact.produced" | "run.failed" | "branch.updated";
+  kind: "session.opened" | "run.launched" | "run.status" | "agent.message" | "agent.question" | "tool.action" | "artifact.produced" | "run.failed" | "branch.updated" | "run.guidance" | "question.answered" | "run.paused" | "run.resumed" | "run.canceled";
   actor_id: string;
-  state: "open" | "launched";
+  state: string;
   run_id?: string;
   initiator_id?: string;
   agent_id?: string;
@@ -171,8 +171,9 @@ export type AgentRun = {
   credential_id: string;
   credential_expires_at: string;
   access_revoked_at?: string;
-  state: "launched";
+  state: "launched" | "paused" | "canceled";
   created_at: string;
+  updated_at: string;
 };
 export type ActivityEvent = {
   id: string;
