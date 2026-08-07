@@ -32,9 +32,48 @@ The API syncs both record contents and the containing directory before
 acknowledging a write, and reopening the same root restores the same identity.
 All mutations hold an advisory lock in that root, making handle claims and
 sparse profile merges atomic even when multiple API processes share storage.
-The identity endpoints do not yet authenticate callers: the following
-authentication milestone will establish credentials and bind profile updates
-to the authenticated actor.
+Account creation is the credential bootstrap: its response contains the new
+`user` and a short-lived `credential`, including an opaque secret shown only in
+that response. It also sets the secret as a `Secure`, `HttpOnly`, `SameSite=Lax`
+`vivarium_session` cookie for browser use. `GET /users/{id}` remains public so
+collaborators can resolve attribution, while `PATCH /users/{id}` requires that
+user's authenticated `profile:write` scope.
+
+## Authentication
+
+Credentials are typed capabilities with an owner, human-readable name, exact
+scopes, expiration, last-use timestamp, and optional revocation timestamp.
+Session credentials last at most 24 hours and carry `profile:write` plus
+`credentials:write`. An authenticated session can call
+`POST /auth/credentials` to create narrower API credentials (at most 90 days)
+or Git credentials (at most 30 days). API credentials may carry
+`profile:write`; Git credentials independently carry `git:read`, `git:write`,
+or both. `expires_in` is expressed in seconds. A creation response is the only
+place the opaque `token` is returned.
+
+`GET /auth/credentials` inspects all of the actor's credentials as safe
+metadata, including expired and revoked entries. `DELETE
+/auth/credentials/{id}` revokes any owned credential immediately and is
+idempotent for an already-revoked record. `DELETE /auth/session` revokes the
+calling session and clears its browser cookie. Credential administration
+requires `credentials:write`, which cannot be granted to long-lived API or Git
+tokens.
+
+API consumers send `Authorization: Bearer <token>`. Stock Git clients use the
+Git token as an HTTP Basic password (the username is ignored), so standard Git
+credential helpers can store it without custom tooling. Upload-pack discovery
+and RPC require `git:read`; receive-pack discovery and RPC require
+`git:write`. Authentication therefore does not itself decide repository
+ownership—the following access-control rung will bind authenticated actors to
+repository permissions—but all Git HTTP operations now require a suitably
+scoped actor credential.
+
+Credential records are private atomic JSON files beneath `AUTH_STORAGE_ROOT`,
+which defaults to `credentials`. Only SHA-256 token hashes are durable; raw
+secrets cannot be recovered from inspection or storage. Authentication and
+revocation updates share a root-wide advisory lock, preventing concurrent API
+processes from resurrecting a revoked credential. Expiration is enforced on
+every request.
 
 ## Git repository storage
 
@@ -119,7 +158,7 @@ stock revision parsing verifies `HEAD` and both tag forms.
 
 ## Git HTTP transport
 
-The API exposes a smart HTTP remote at
+The API exposes an authenticated smart HTTP remote at
 `/git/<storage-id>.git`. `GET .../info/refs?service=git-upload-pack` advertises
 the repository and `POST .../git-upload-pack` serves the protocol-v2 `ls-refs`
 exchange used by current Git clients. Both protocol v0 and v2 are passed to
