@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
@@ -25,7 +26,8 @@ func TestPublicInterfacesSupportProposalToMergeCollaboration(t *testing.T) {
 	catalog, _ := repositories.New(t.TempDir(), gitStore)
 	proposalStore, _ := proposals.New(t.TempDir())
 	pullStore, _ := pullrequests.New(t.TempDir(), gitStore)
-	server := httptest.NewServer(newPlatformHandler(gitStore, identities, credentials, catalog, proposalStore, pullStore))
+	activityStore, _ := activities.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandler(gitStore, identities, credentials, catalog, proposalStore, pullStore, activityStore))
 	defer server.Close()
 
 	maintainer := createTestAccount(t, server.URL, "journey-maintainer")
@@ -57,7 +59,7 @@ func TestPublicInterfacesSupportProposalToMergeCollaboration(t *testing.T) {
 	var proposal proposals.Proposal
 	decodeResponse(t, proposalResponse, &proposal)
 	proposalComments := server.URL + "/repositories/" + repository.ID + "/proposals/" + proposal.ID + "/comments"
-	authenticatedRequest(t, http.MethodPost, proposalComments, `{"body":"Please include a friendly example."}`, maintainer.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPost, proposalComments, `{"body":"@journey-newcomer please include a friendly example."}`, maintainer.Credential.Token, http.StatusCreated).Body.Close()
 	authenticatedRequest(t, http.MethodPost, proposalComments, `{"body":"I will send that on a candidate branch."}`, newcomer.Credential.Token, http.StatusCreated).Body.Close()
 
 	newcomerCopy := filepath.Join(t.TempDir(), "newcomer")
@@ -131,6 +133,35 @@ func TestPublicInterfacesSupportProposalToMergeCollaboration(t *testing.T) {
 	decodeResponse(t, proposalInspection, &closedProposal)
 	if closedProposal.Status != proposals.Closed {
 		t.Fatalf("linked proposal status = %q", closedProposal.Status)
+	}
+	activityResponse := authenticatedRequest(t, http.MethodGet, server.URL+"/activity?limit=100", "", newcomer.Credential.Token, http.StatusOK)
+	var feed struct {
+		Events []activities.Event `json:"events"`
+	}
+	decodeResponse(t, activityResponse, &feed)
+	wanted := map[string]bool{"access.granted": false, "proposal.created": false, "mention.created": false, "pull_request.created": false, "review.changes_requested": false, "review.approved": false, "pull_request.merged": false}
+	for _, event := range feed.Events {
+		if _, ok := wanted[event.Kind]; ok {
+			wanted[event.Kind] = true
+		}
+		if event.RepositoryID != repository.ID || event.RepositoryName != repository.Name || event.ActorID == "" || event.ResourceID == "" || event.ResourceTitle == "" {
+			t.Fatalf("incomplete activity event: %#v", event)
+		}
+		if event.Kind == "mention.created" && (event.TargetUserID == nil || *event.TargetUserID != newcomer.User.ID || event.ResourceID != proposal.ID) {
+			t.Fatalf("mention event = %#v", event)
+		}
+	}
+	for kind, found := range wanted {
+		if !found {
+			t.Errorf("activity did not include %s: %#v", kind, feed.Events)
+		}
+	}
+	authenticatedRequest(t, http.MethodDelete, server.URL+"/repositories/"+repository.ID+"/collaborators/"+newcomer.User.ID, "", maintainer.Credential.Token, http.StatusNoContent).Body.Close()
+	revokedResponse := authenticatedRequest(t, http.MethodGet, server.URL+"/activity?limit=100", "", newcomer.Credential.Token, http.StatusOK)
+	feed.Events = nil
+	decodeResponse(t, revokedResponse, &feed)
+	if len(feed.Events) < 2 || feed.Events[0].Kind != "access.revoked" {
+		t.Fatalf("revoked collaborator activity = %#v", feed.Events)
 	}
 }
 

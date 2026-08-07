@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
@@ -104,6 +105,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	activityRoot := os.Getenv("ACTIVITY_STORAGE_ROOT")
+	if activityRoot == "" {
+		activityRoot = "activity-records"
+	}
+	activityStore, err := activities.New(activityRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -111,7 +120,7 @@ func main() {
 	}
 
 	log.Printf("listening on http://localhost:%s", port)
-	if err := http.ListenAndServe(":"+port, newPlatformHandler(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore)); err != nil {
+	if err := http.ListenAndServe(":"+port, newPlatformHandler(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore)); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -129,10 +138,10 @@ func newAuthenticatedAppHandler(store *storage.Store, userStore *users.Store, au
 	if len(catalogs) > 0 {
 		repositoryCatalog = catalogs[0]
 	}
-	return newPlatformHandler(store, userStore, authStore, repositoryCatalog, nil)
+	return newPlatformHandler(store, userStore, authStore, repositoryCatalog, nil, nil, nil)
 }
 
-func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore *auth.Store, repositoryCatalog *repositories.Store, proposalStore *proposals.Store, pullRequestStores ...*pullrequests.Store) http.Handler {
+func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore *auth.Store, repositoryCatalog *repositories.Store, proposalStore *proposals.Store, pullRequestStore *pullrequests.Store, activityStore *activities.Store) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -145,13 +154,16 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 		registerAuthRoutes(mux, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil {
-		registerRepositoryRoutes(mux, store, repositoryCatalog, userStore, authStore)
+		registerRepositoryRoutes(mux, store, repositoryCatalog, userStore, authStore, activityStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && proposalStore != nil {
-		registerProposalRoutes(mux, repositoryCatalog, proposalStore, authStore)
+		registerProposalRoutes(mux, repositoryCatalog, proposalStore, authStore, activityStore, userStore)
 	}
-	if authStore != nil && repositoryCatalog != nil && len(pullRequestStores) > 0 && pullRequestStores[0] != nil {
-		registerPullRequestRoutes(mux, repositoryCatalog, proposalStore, pullRequestStores[0], authStore)
+	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil {
+		registerPullRequestRoutes(mux, repositoryCatalog, proposalStore, pullRequestStore, authStore, activityStore, userStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && activityStore != nil {
+		registerActivityRoutes(mux, repositoryCatalog, activityStore, authStore)
 	}
 	mux.HandleFunc("GET /git/{remote}/info/refs", func(w http.ResponseWriter, r *http.Request) {
 		service := r.URL.Query().Get("service")
@@ -335,7 +347,7 @@ type reviewInput struct {
 	Decision *string `json:"decision"`
 }
 
-func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositories.Store, proposalStore *proposals.Store, store *pullrequests.Store, authStore *auth.Store) {
+func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositories.Store, proposalStore *proposals.Store, store *pullrequests.Store, authStore *auth.Store, activityStore *activities.Store, userStore *users.Store) {
 	mux.HandleFunc("GET /repositories/{id}/pulls", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
 			return
@@ -385,6 +397,8 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 		if writePullRequestError(w, err) {
 			return
 		}
+		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.created", ActorID: actor.UserID, RepositoryID: created.RepositoryID, ResourceType: "pull_request", ResourceID: created.ID, ResourceTitle: created.Title})
+		recordMentions(activityStore, repositoriesStore, userStore, actor.UserID, created.RepositoryID, "pull_request", created.ID, created.Title, created.Title+"\n"+created.Body)
 		w.Header().Set("Location", location)
 		writeJSON(w, 201, created)
 	})
@@ -419,6 +433,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 		if writePullRequestError(w, err) {
 			return
 		}
+		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.synchronized", ActorID: actor.UserID, RepositoryID: updated.RepositoryID, ResourceType: "pull_request", ResourceID: updated.ID, ResourceTitle: updated.Title})
 		writeJSON(w, http.StatusOK, updated)
 	})
 	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/commits", func(w http.ResponseWriter, r *http.Request) {
@@ -471,9 +486,11 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 		}
 		if merged.ProposalID != nil && proposalStore != nil {
 			proposal, proposalErr := proposalStore.Get(r.PathValue("id"), *merged.ProposalID)
+			closedLinkedProposal := false
 			if proposalErr == nil && proposal.Status == proposals.Open {
 				closed := proposals.Closed
 				_, proposalErr = proposalStore.Update(r.PathValue("id"), proposal.ID, proposals.Patch{Status: &closed})
+				closedLinkedProposal = proposalErr == nil || errors.Is(proposalErr, proposals.ErrDurabilityUncertain)
 			}
 			if errors.Is(proposalErr, proposals.ErrDurabilityUncertain) {
 				writeUncertainMutation(w, merged)
@@ -484,7 +501,11 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 				writeAPIError(w, http.StatusInternalServerError, "internal_error", "linked proposal closure unavailable; retry merge")
 				return
 			}
+			if closedLinkedProposal {
+				recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "proposal.closed", ActorID: actor.UserID, RepositoryID: merged.RepositoryID, ResourceType: "proposal", ResourceID: proposal.ID, ResourceTitle: proposal.Title})
+			}
 		}
+		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.merged", ActorID: actor.UserID, RepositoryID: merged.RepositoryID, ResourceType: "pull_request", ResourceID: merged.ID, ResourceTitle: merged.Title})
 		writeJSON(w, http.StatusOK, merged)
 	})
 	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/comments", func(w http.ResponseWriter, r *http.Request) {
@@ -520,6 +541,10 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 		}
 		if writePullRequestError(w, err) {
 			return
+		}
+		if pull, pullErr := store.Get(r.PathValue("id"), r.PathValue("pull_id")); pullErr == nil {
+			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.commented", ActorID: actor.UserID, RepositoryID: pull.RepositoryID, ResourceType: "pull_request", ResourceID: pull.ID, ResourceTitle: pull.Title})
+			recordMentions(activityStore, repositoriesStore, userStore, actor.UserID, pull.RepositoryID, "pull_request", pull.ID, pull.Title, comment.Body)
 		}
 		w.Header().Set("Location", r.URL.Path+"/"+comment.ID)
 		writeJSON(w, 201, comment)
@@ -559,6 +584,9 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 		if writePullRequestError(w, err) {
 			return
 		}
+		if pull, pullErr := store.Get(r.PathValue("id"), r.PathValue("pull_id")); pullErr == nil {
+			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "review." + review.Decision, ActorID: actor.UserID, RepositoryID: pull.RepositoryID, ResourceType: "pull_request", ResourceID: pull.ID, ResourceTitle: pull.Title})
+		}
 		w.Header().Set("Location", location)
 		writeJSON(w, 200, review)
 	})
@@ -574,6 +602,9 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 		}
 		if writePullRequestError(w, err) {
 			return
+		}
+		if pull, pullErr := store.Get(r.PathValue("id"), r.PathValue("pull_id")); pullErr == nil {
+			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "review.withdrawn", ActorID: actor.UserID, RepositoryID: pull.RepositoryID, ResourceType: "pull_request", ResourceID: pull.ID, ResourceTitle: pull.Title})
 		}
 		writeJSON(w, 200, review)
 	})
@@ -601,7 +632,7 @@ func writePullRequestError(w http.ResponseWriter, err error) bool {
 	return true
 }
 
-func registerProposalRoutes(mux *http.ServeMux, repositoriesStore *repositories.Store, store *proposals.Store, authStore *auth.Store) {
+func registerProposalRoutes(mux *http.ServeMux, repositoriesStore *repositories.Store, store *proposals.Store, authStore *auth.Store, activityStore *activities.Store, userStore *users.Store) {
 	mux.HandleFunc("GET /repositories/{id}/proposals", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
 			return
@@ -637,6 +668,8 @@ func registerProposalRoutes(mux *http.ServeMux, repositoriesStore *repositories.
 		if writeProposalError(w, err) {
 			return
 		}
+		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "proposal.created", ActorID: actor.UserID, RepositoryID: proposal.RepositoryID, ResourceType: "proposal", ResourceID: proposal.ID, ResourceTitle: proposal.Title})
+		recordMentions(activityStore, repositoriesStore, userStore, actor.UserID, proposal.RepositoryID, "proposal", proposal.ID, proposal.Title, proposal.Title+"\n"+proposal.Body)
 		location := "/repositories/" + r.PathValue("id") + "/proposals/" + proposal.ID
 		w.Header().Set("Location", location)
 		writeJSON(w, 201, proposal)
@@ -677,6 +710,17 @@ func registerProposalRoutes(mux *http.ServeMux, repositoriesStore *repositories.
 		if writeProposalError(w, err) {
 			return
 		}
+		kind := "proposal.updated"
+		if updated.Status == proposals.Closed && existing.Status != proposals.Closed {
+			kind = "proposal.closed"
+		}
+		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: kind, ActorID: actor.UserID, RepositoryID: updated.RepositoryID, ResourceType: "proposal", ResourceID: updated.ID, ResourceTitle: updated.Title})
+		if input.Body != nil {
+			recordMentions(activityStore, repositoriesStore, userStore, actor.UserID, updated.RepositoryID, "proposal", updated.ID, updated.Title, *input.Body)
+		}
+		if input.Title != nil {
+			recordMentions(activityStore, repositoriesStore, userStore, actor.UserID, updated.RepositoryID, "proposal", updated.ID, updated.Title, *input.Title)
+		}
 		writeJSON(w, 200, updated)
 	})
 	mux.HandleFunc("GET /repositories/{id}/proposals/{proposal_id}/comments", func(w http.ResponseWriter, r *http.Request) {
@@ -713,6 +757,10 @@ func registerProposalRoutes(mux *http.ServeMux, repositoriesStore *repositories.
 		if writeProposalError(w, err) {
 			return
 		}
+		if proposal, proposalErr := store.Get(r.PathValue("id"), r.PathValue("proposal_id")); proposalErr == nil {
+			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "proposal.commented", ActorID: actor.UserID, RepositoryID: proposal.RepositoryID, ResourceType: "proposal", ResourceID: proposal.ID, ResourceTitle: proposal.Title})
+			recordMentions(activityStore, repositoriesStore, userStore, actor.UserID, proposal.RepositoryID, "proposal", proposal.ID, proposal.Title, comment.Body)
+		}
 		w.Header().Set("Location", r.URL.Path+"/"+comment.ID)
 		writeJSON(w, 201, comment)
 	})
@@ -721,6 +769,81 @@ func registerProposalRoutes(mux *http.ServeMux, repositoriesStore *repositories.
 func writeUncertainMutation(w http.ResponseWriter, resource any) {
 	w.Header().Set("Vivarium-Durability", "uncertain")
 	writeJSON(w, http.StatusAccepted, resource)
+}
+
+func recordActivity(activityStore *activities.Store, repositoriesStore *repositories.Store, event activities.Event) {
+	if activityStore == nil {
+		return
+	}
+	repository, err := repositoriesStore.GetByID(event.RepositoryID)
+	if err != nil {
+		log.Printf("resolve repository for activity: %v", err)
+		return
+	}
+	event.RepositoryName = repository.Name
+	if _, err := activityStore.Append(event); err != nil {
+		log.Printf("record activity: %v", err)
+	}
+}
+
+func recordMentions(activityStore *activities.Store, repositoriesStore *repositories.Store, userStore *users.Store, actorID, repositoryID, resourceType, resourceID, resourceTitle, body string) {
+	if activityStore == nil || userStore == nil {
+		return
+	}
+	seen := map[string]bool{}
+	for _, word := range strings.Fields(body) {
+		handle := strings.Trim(strings.TrimPrefix(word, "@"), ".,;:!?()[]{}<>\"'")
+		if !strings.HasPrefix(word, "@") || handle == "" {
+			continue
+		}
+		user, err := userStore.FindByHandle(handle)
+		if err != nil || user.ID == actorID || seen[user.ID] {
+			continue
+		}
+		seen[user.ID] = true
+		target := user.ID
+		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "mention.created", ActorID: actorID, RepositoryID: repositoryID, ResourceType: resourceType, ResourceID: resourceID, ResourceTitle: resourceTitle, TargetUserID: &target})
+	}
+}
+
+func registerActivityRoutes(mux *http.ServeMux, repositoryStore *repositories.Store, activityStore *activities.Store, authStore *auth.Store) {
+	mux.HandleFunc("GET /activity", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, authStore, "repositories:read", false)
+		if !ok {
+			return
+		}
+		all, err := activityStore.List()
+		if err != nil {
+			log.Printf("activity storage: %v", err)
+			writeAPIError(w, 500, "internal_error", "activity storage unavailable")
+			return
+		}
+		visible := make([]activities.Event, 0, len(all))
+		for _, event := range all {
+			if event.TargetUserID != nil && *event.TargetUserID == actor.UserID {
+				visible = append(visible, event)
+				continue
+			}
+			repository, repoErr := repositoryStore.GetByID(event.RepositoryID)
+			if repoErr != nil {
+				continue
+			}
+			if repository.OwnerID == actor.UserID {
+				visible = append(visible, event)
+				continue
+			}
+			collaborator, collaboratorErr := repositoryStore.HasCollaborator(actor.UserID, event.RepositoryID)
+			if collaboratorErr == nil && collaborator {
+				visible = append(visible, event)
+			}
+		}
+		page, next, valid := paginate(r, visible, func(event activities.Event) string { return event.ID })
+		if !valid {
+			writeAPIError(w, 400, "invalid_pagination", "limit or after is invalid")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"events": page, "next_cursor": next})
+	})
 }
 
 func authorizeRepositoryRead(w http.ResponseWriter, r *http.Request, store *repositories.Store, authStore *auth.Store, id string) (auth.Credential, bool, bool) {
@@ -788,7 +911,7 @@ func writeProposalError(w http.ResponseWriter, err error) bool {
 	return true
 }
 
-func registerRepositoryRoutes(mux *http.ServeMux, gitStore *storage.Store, store *repositories.Store, userStore *users.Store, authStore *auth.Store) {
+func registerRepositoryRoutes(mux *http.ServeMux, gitStore *storage.Store, store *repositories.Store, userStore *users.Store, authStore *auth.Store, activityStore *activities.Store) {
 	mux.HandleFunc("POST /repositories", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)
 		if !ok {
@@ -902,9 +1025,13 @@ func registerRepositoryRoutes(mux *http.ServeMux, gitStore *storage.Store, store
 			writeAPIError(w, http.StatusBadRequest, "invalid_collaborator", "user_id must identify an existing user")
 			return
 		}
+		alreadyCollaborator, _ := store.HasCollaborator(*input.UserID, r.PathValue("id"))
 		collaborator, err := store.AddCollaborator(actor.UserID, r.PathValue("id"), *input.UserID)
 		if writeRepositoryError(w, err) {
 			return
+		}
+		if !alreadyCollaborator {
+			recordActivity(activityStore, store, activities.Event{Kind: "access.granted", ActorID: actor.UserID, RepositoryID: r.PathValue("id"), ResourceType: "repository", ResourceID: r.PathValue("id"), ResourceTitle: "Contributor access", TargetUserID: input.UserID})
 		}
 		w.Header().Set("Location", "/repositories/"+r.PathValue("id")+"/collaborators/"+collaborator.UserID)
 		writeJSON(w, http.StatusCreated, collaborator)
@@ -914,8 +1041,13 @@ func registerRepositoryRoutes(mux *http.ServeMux, gitStore *storage.Store, store
 		if !ok {
 			return
 		}
+		wasCollaborator, _ := store.HasCollaborator(r.PathValue("user_id"), r.PathValue("id"))
 		if writeRepositoryError(w, store.RemoveCollaborator(actor.UserID, r.PathValue("id"), r.PathValue("user_id"))) {
 			return
+		}
+		target := r.PathValue("user_id")
+		if wasCollaborator {
+			recordActivity(activityStore, store, activities.Event{Kind: "access.revoked", ActorID: actor.UserID, RepositoryID: r.PathValue("id"), ResourceType: "repository", ResourceID: r.PathValue("id"), ResourceTitle: "Contributor access", TargetUserID: &target})
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})

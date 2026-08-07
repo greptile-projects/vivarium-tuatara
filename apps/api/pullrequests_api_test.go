@@ -26,7 +26,7 @@ func TestContributorOpensPullRequestWithExactBranchState(t *testing.T) {
 	proposalStore, _ := proposals.New(proposalRoot)
 	pullRequestRoot := t.TempDir()
 	pullRequestStore, _ := pullrequests.New(pullRequestRoot, gitStore)
-	server := httptest.NewServer(newPlatformHandler(gitStore, identities, credentials, catalog, proposalStore, pullRequestStore))
+	server := httptest.NewServer(newPlatformHandler(gitStore, identities, credentials, catalog, proposalStore, pullRequestStore, nil))
 	defer server.Close()
 
 	owner := createTestAccount(t, server.URL, "pull-owner")
@@ -214,7 +214,7 @@ func TestPullRequestMergeReadinessReportsRequirementsConflictsAndPermission(t *t
 	credentials, _ := auth.New(t.TempDir())
 	catalog, _ := repositories.New(t.TempDir(), gitStore)
 	pullRequestStore, _ := pullrequests.New(t.TempDir(), gitStore)
-	server := httptest.NewServer(newPlatformHandler(gitStore, identities, credentials, catalog, nil, pullRequestStore))
+	server := httptest.NewServer(newPlatformHandler(gitStore, identities, credentials, catalog, nil, pullRequestStore, nil))
 	defer server.Close()
 
 	owner := createTestAccount(t, server.URL, "ready-owner")
@@ -284,7 +284,7 @@ func TestOwnerMergesApprovedPullRequestAndClosesLinkedProposal(t *testing.T) {
 	catalog, _ := repositories.New(t.TempDir(), gitStore)
 	proposalStore, _ := proposals.New(t.TempDir())
 	pullStore, _ := pullrequests.New(t.TempDir(), gitStore)
-	server := httptest.NewServer(newPlatformHandler(gitStore, identities, credentials, catalog, proposalStore, pullStore))
+	server := httptest.NewServer(newPlatformHandler(gitStore, identities, credentials, catalog, proposalStore, pullStore, nil))
 	defer server.Close()
 	owner := createTestAccount(t, server.URL, "merge-owner")
 	contributor := createTestAccount(t, server.URL, "merge-contributor")
