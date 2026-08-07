@@ -96,6 +96,9 @@ flag for a file. Text previews are limited to 512 KiB. Every
 revision-bearing response includes the resolved commit ID so clients can keep
 branch-friendly navigation tied to exact repository state. `path` is relative
 to the commit root and omitted for its top-level tree.
+Commit cursor replay is capped at 200 inspected commits per request; cursors
+deeper than that bound are rejected as invalid pagination. Blob previews stream
+and verify the full loose object while retaining only the bounded preview.
 
 ## Proposals
 

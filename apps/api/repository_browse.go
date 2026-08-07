@@ -1,20 +1,21 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
-const maxBlobPreviewBytes = 512 << 10
+const (
+	maxBlobPreviewBytes = 512 << 10
+	maxCommitPageScan   = 200
+)
 
 type browseCommit struct {
 	ID         string     `json:"id"`
@@ -76,7 +77,7 @@ func registerRepositoryBrowseRoutes(mux *http.ServeMux, gitStore *storage.Store,
 			writeAPIError(w, http.StatusBadRequest, "invalid_pagination", "limit or after is invalid")
 			return
 		}
-		commits, nextID, found, err := repo.ListCommitAncestryPage(id, storage.ObjectID(after), limit)
+		commits, nextID, found, err := repo.ListCommitAncestryPage(id, storage.ObjectID(after), limit, maxCommitPageScan)
 		if err != nil {
 			writeBrowseError(w, err)
 			return
@@ -143,23 +144,14 @@ func registerRepositoryBrowseRoutes(mux *http.ServeMux, gitStore *storage.Store,
 			writeBrowseError(w, storage.ErrObjectNotFound)
 			return
 		}
-		object, err := repo.ReadObject(entry.ID)
+		object, truncated, binary, err := repo.ReadBlobPreview(entry.ID, maxBlobPreviewBytes)
 		if err != nil {
 			writeBrowseError(w, err)
 			return
 		}
-		binary := !utf8.Valid(object.Content) || bytes.IndexByte(object.Content, 0) >= 0
 		content := ""
-		truncated := false
 		if !binary {
 			preview := object.Content
-			if len(preview) > maxBlobPreviewBytes {
-				preview = preview[:maxBlobPreviewBytes]
-				for len(preview) > 0 && !utf8.Valid(preview) {
-					preview = preview[:len(preview)-1]
-				}
-				truncated = true
-			}
 			content = string(preview)
 		}
 		writeJSON(w, 200, map[string]any{"revision": id, "path": r.URL.Query().Get("path"), "size": object.Size, "is_binary": binary, "content": content, "truncated": truncated})

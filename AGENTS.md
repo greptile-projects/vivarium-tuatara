@@ -94,7 +94,9 @@ whenever dependencies change or the web job fails before it starts.
   `HEAD` can identify the default branch before its first commit.
   Reference reads and listings also merge stock Git `packed-refs`, with loose
   references taking precedence, so browser and interoperability reads survive
-  normal `git pack-refs` maintenance.
+  normal `git pack-refs` maintenance. Deletion rewrites a matching packed entry
+  under Git's standard lock before removing its loose override, preventing
+  packed fallback from resurrecting a deleted branch.
   `Repository.Path` is reserved as an interoperability handle for stock Git
   processes; application storage writes should go through the package API.
   The integrated compatibility test builds representative merged history and
@@ -145,6 +147,8 @@ whenever dependencies change or the web job fails before it starts.
   Read-only browser routes beneath `/repositories/{id}` expose branches,
   paginated revision ancestry, direct tree entries, and bounded text/binary
   blob inspection.
+  Commit pages inspect at most 200 ancestry nodes per request, and blob previews
+  verify content in a stream while retaining at most 512 KiB.
   They accept a branch or full commit ID through `ref`, return the resolved
   commit with content, and apply the same public/private collaborator policy
   as repository inspection.

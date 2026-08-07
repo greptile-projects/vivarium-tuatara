@@ -58,6 +58,9 @@ in the URL, while every content response exposes its resolved commit, keeping
 navigation explicit when a branch moves. Branch selection is resolved once per
 load and subsequent content links use that immutable commit; history is
 paginated and text previews are capped at 512 KiB.
+Superseded client loads cannot publish state after a newer URL selection.
+Preview verification streams oversized blobs without retaining their full
+contents, and later history cursors have a fixed per-request scan ceiling.
 
 ## User identity
 

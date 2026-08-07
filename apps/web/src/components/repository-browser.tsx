@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
   type Branch,
@@ -37,15 +37,19 @@ export function RepositoryBrowser({ id }: { id: string }) {
   const [blob, setBlob] = useState<BlobResult | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const loadGeneration = useRef(0);
 
   const load = useCallback(async () => {
     if (authLoading) return;
+    const generation = ++loadGeneration.current;
+    const active = () => loadGeneration.current === generation;
     setLoading(true);
     setError("");
     setTree(null);
     setBlob(null);
     try {
       const repo = await api<Repository>(`/repositories/${id}`, {}, token);
+      if (!active()) return;
       setRepository(repo);
       const revision = selectedRef || repo.default_branch;
       const branchData = await api<{ branches: Branch[] }>(
@@ -53,6 +57,7 @@ export function RepositoryBrowser({ id }: { id: string }) {
         {},
         token,
       );
+      if (!active()) return;
       setBranches(branchData.branches);
       if (branchData.branches.length === 0) {
         setCommits([]);
@@ -66,42 +71,42 @@ export function RepositoryBrowser({ id }: { id: string }) {
         {},
         token,
       );
+      if (!active()) return;
       setCommits(history.commits);
-      if (!currentPath)
-        setTree(
-          await api<TreeResult>(
-            `/repositories/${id}/tree?ref=${encodeURIComponent(pinnedRevision)}`,
+      if (!currentPath) {
+        const result = await api<TreeResult>(
+          `/repositories/${id}/tree?ref=${encodeURIComponent(pinnedRevision)}`,
+          {},
+          token,
+        );
+        if (active()) setTree(result);
+      } else {
+        try {
+          const result = await api<BlobResult>(
+            `/repositories/${id}/blob?ref=${encodeURIComponent(pinnedRevision)}&path=${encodeURIComponent(currentPath)}`,
             {},
             token,
-          ),
-        );
-      else {
-        try {
-          setBlob(
-            await api<BlobResult>(
-              `/repositories/${id}/blob?ref=${encodeURIComponent(pinnedRevision)}&path=${encodeURIComponent(currentPath)}`,
-              {},
-              token,
-            ),
           );
+          if (active()) setBlob(result);
         } catch {
-          setTree(
-            await api<TreeResult>(
-              `/repositories/${id}/tree?ref=${encodeURIComponent(pinnedRevision)}&path=${encodeURIComponent(currentPath)}`,
-              {},
-              token,
-            ),
+          if (!active()) return;
+          const result = await api<TreeResult>(
+            `/repositories/${id}/tree?ref=${encodeURIComponent(pinnedRevision)}&path=${encodeURIComponent(currentPath)}`,
+            {},
+            token,
           );
+          if (active()) setTree(result);
         }
       }
     } catch (reason) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "Repository could not be loaded.",
-      );
+      if (active())
+        setError(
+          reason instanceof Error
+            ? reason.message
+            : "Repository could not be loaded.",
+        );
     } finally {
-      setLoading(false);
+      if (active()) setLoading(false);
     }
   }, [authLoading, currentPath, id, selectedRef, token]);
   useEffect(() => {

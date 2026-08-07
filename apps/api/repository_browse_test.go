@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -45,6 +48,12 @@ func TestRepositoryBrowsingPreservesBranchAndCommitRevision(t *testing.T) {
 	}
 	if output, err := exec.Command("git", "--git-dir", repo.Path(), "pack-refs", "--all", "--prune").CombinedOutput(); err != nil {
 		t.Fatalf("pack refs: %v\n%s", err, output)
+	}
+	if err := os.MkdirAll(filepath.Join(repo.Path(), "refs", "heads"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo.Path(), "refs", "heads", "feature"), []byte(commit+"\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	for _, endpoint := range []string{
@@ -105,6 +114,21 @@ func TestRepositoryBrowsingPreservesBranchAndCommitRevision(t *testing.T) {
 	preview.Body.Close()
 	if len(previewBody.Content) != maxBlobPreviewBytes || previewBody.Size != maxBlobPreviewBytes+1024 || !previewBody.Truncated {
 		t.Fatalf("bounded preview = content %d, size %d, truncated %v", len(previewBody.Content), previewBody.Size, previewBody.Truncated)
+	}
+	if err := repo.DeleteReference("refs/heads/feature"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ReadReference("refs/heads/feature"); !errors.Is(err, storage.ErrReferenceNotFound) {
+		t.Fatalf("deleted packed and loose branch: %v", err)
+	}
+	references, err := repo.ListReferences()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reference := range references {
+		if reference.Name == "refs/heads/feature" {
+			t.Fatalf("deleted branch remained listed: %#v", reference)
+		}
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"unicode/utf8"
 )
 
 const defaultBranch = "main"
@@ -402,6 +403,112 @@ func (r *Repository) ReadObject(id ObjectID) (Object, error) {
 		return Object{}, corruptObject(id, errors.New("object ID mismatch"))
 	}
 	return Object{ID: id, Type: objectType, Size: int64(len(content)), Content: content}, nil
+}
+
+// ReadBlobPreview verifies an entire loose blob while retaining at most limit
+// bytes of content. It avoids allocating the full blob for browser previews.
+func (r *Repository) ReadBlobPreview(id ObjectID, limit int64) (Object, bool, bool, error) {
+	if limit < 0 {
+		return Object{}, false, false, fmt.Errorf("preview limit: %w", ErrInvalidObject)
+	}
+	path, err := r.objectPath(id)
+	if err != nil {
+		return Object{}, false, false, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return Object{}, false, false, fmt.Errorf("%s: %w", id, ErrObjectNotFound)
+		}
+		return Object{}, false, false, fmt.Errorf("open object: %w", err)
+	}
+	defer file.Close()
+	compressed := bufio.NewReader(file)
+	decompressed, err := zlib.NewReader(compressed)
+	if err != nil {
+		return Object{}, false, false, corruptObject(id, err)
+	}
+	reader := bufio.NewReaderSize(decompressed, maxObjectHeaderSize)
+	header, headerErr := reader.ReadSlice(0)
+	if headerErr != nil {
+		_ = decompressed.Close()
+		return Object{}, false, false, corruptObject(id, errors.New("invalid or oversized object header"))
+	}
+	header = bytes.Clone(header[:len(header)-1])
+	typeText, sizeText, found := strings.Cut(string(header), " ")
+	size, sizeErr := strconv.ParseInt(sizeText, 10, 64)
+	if !found || ObjectType(typeText) != BlobObject || sizeErr != nil || size < 0 || sizeText != strconv.FormatInt(size, 10) || size > MaxObjectSize {
+		_ = decompressed.Close()
+		return Object{}, false, false, corruptObject(id, errors.New("invalid blob header"))
+	}
+	hash := sha1.New()
+	_, _ = hash.Write(header)
+	_, _ = hash.Write([]byte{0})
+	sink := &blobPreviewSink{hash: hash, limit: limit}
+	if written, err := io.CopyN(sink, reader, size); err != nil || written != size {
+		_ = decompressed.Close()
+		return Object{}, false, false, corruptObject(id, errors.New("object content shorter than declared size"))
+	}
+	if _, err := reader.ReadByte(); !errors.Is(err, io.EOF) {
+		_ = decompressed.Close()
+		return Object{}, false, false, corruptObject(id, errors.New("object content exceeds declared size"))
+	}
+	if err := decompressed.Close(); err != nil {
+		return Object{}, false, false, corruptObject(id, err)
+	}
+	if _, err := compressed.ReadByte(); !errors.Is(err, io.EOF) {
+		return Object{}, false, false, corruptObject(id, errors.New("garbage after compressed object"))
+	}
+	if hex.EncodeToString(hash.Sum(nil)) != string(id) {
+		return Object{}, false, false, corruptObject(id, errors.New("object ID mismatch"))
+	}
+	if len(sink.carry) != 0 {
+		sink.binary = true
+	}
+	if !sink.binary {
+		for len(sink.prefix) > 0 && !utf8.Valid(sink.prefix) {
+			sink.prefix = sink.prefix[:len(sink.prefix)-1]
+		}
+	}
+	return Object{ID: id, Type: BlobObject, Size: size, Content: sink.prefix}, size > int64(len(sink.prefix)), sink.binary, nil
+}
+
+type blobPreviewSink struct {
+	hash   io.Writer
+	limit  int64
+	prefix []byte
+	carry  []byte
+	binary bool
+}
+
+func (w *blobPreviewSink) Write(content []byte) (int, error) {
+	if _, err := w.hash.Write(content); err != nil {
+		return 0, err
+	}
+	remaining := int(w.limit) - len(w.prefix)
+	if remaining > len(content) {
+		remaining = len(content)
+	}
+	if remaining > 0 {
+		w.prefix = append(w.prefix, content[:remaining]...)
+	}
+	if bytes.IndexByte(content, 0) >= 0 {
+		w.binary = true
+	}
+	data := append(w.carry, content...)
+	w.carry = w.carry[:0]
+	for len(data) > 0 {
+		if !utf8.FullRune(data) {
+			w.carry = append(w.carry, data...)
+			break
+		}
+		runeValue, size := utf8.DecodeRune(data)
+		if runeValue == utf8.RuneError && size == 1 {
+			w.binary = true
+		}
+		data = data[size:]
+	}
+	return len(content), nil
 }
 
 func syncDirectory(path string) error {
