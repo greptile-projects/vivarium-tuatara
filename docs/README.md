@@ -369,6 +369,15 @@ retains stable request, proposal, author, and merger identifiers. Linked open
 proposals close after the contribution lands, while proposal and pull-request
 discussion remains intact as collaboration history.
 
+Pull requests also anchor agent-native change sessions. A current collaborator
+can open a durable session on the request's exact recorded source revision,
+discover it again from the pull request, and inspect a shared, attributable
+timeline at a stable web route. The session and its initial event are published
+together beneath `CHANGE_SESSION_STORAGE_ROOT`; neither the API nor browser
+requires access to worker processes or execution logs. This public session
+boundary is where later delegation, progress, intervention, and published
+artifacts attach.
+
 ## Git HTTP transport
 
 The API exposes a visibility-aware smart HTTP remote at

@@ -130,6 +130,24 @@ export type MergeReadiness = {
   has_conflicts: boolean;
   blockers: { code: string; message: string }[];
 };
+export type ChangeSession = {
+  id: string;
+  repository_id: string;
+  pull_request_id: string;
+  initiator_id: string;
+  source_commit_id: string;
+  state: "open";
+  created_at: string;
+  updated_at: string;
+};
+export type ChangeSessionEvent = {
+  id: string;
+  session_id: string;
+  kind: "session.opened";
+  actor_id: string;
+  state: "open";
+  created_at: string;
+};
 export type ActivityEvent = {
   id: string;
   kind: "proposal.created" | "proposal.updated" | "proposal.closed" | "proposal.commented" | "pull_request.created" | "pull_request.synchronized" | "pull_request.commented" | "pull_request.merged" | "review.approved" | "review.changes_requested" | "review.withdrawn" | "mention.created" | "access.granted" | "access.revoked";

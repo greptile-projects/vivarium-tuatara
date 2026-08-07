@@ -24,6 +24,7 @@ import {
   type User,
 } from "@/lib/api";
 import { useAuth } from "./auth";
+import { ChangeSessionsCard } from "./change-sessions";
 import { Icons } from "./icons";
 import { Avatar, Badge, Button, Card } from "./ui";
 
@@ -1085,6 +1086,12 @@ export function PullRequestDetail({
           </section>
         </main>
         <aside className="space-y-4">
+          <ChangeSessionsCard
+            repositoryID={repositoryID}
+            pullRequestID={pullRequestID}
+            participant={participant}
+            open={pull.status === "open"}
+          />
           {pull.status === "merged" ? (
             <Card className="border-[var(--brand)] p-5">
               <Badge tone="success">Merged</Badge>

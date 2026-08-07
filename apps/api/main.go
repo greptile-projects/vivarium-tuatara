@@ -16,6 +16,7 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
@@ -113,6 +114,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	changeSessionRoot := os.Getenv("CHANGE_SESSION_STORAGE_ROOT")
+	if changeSessionRoot == "" {
+		changeSessionRoot = "change-sessions"
+	}
+	changeSessionStore, err := changesessions.New(changeSessionRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -120,7 +129,7 @@ func main() {
 	}
 
 	log.Printf("listening on http://localhost:%s", port)
-	if err := http.ListenAndServe(":"+port, newPlatformHandler(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore)); err != nil {
+	if err := http.ListenAndServe(":"+port, newPlatformHandler(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore)); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -141,7 +150,11 @@ func newAuthenticatedAppHandler(store *storage.Store, userStore *users.Store, au
 	return newPlatformHandler(store, userStore, authStore, repositoryCatalog, nil, nil, nil)
 }
 
-func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore *auth.Store, repositoryCatalog *repositories.Store, proposalStore *proposals.Store, pullRequestStore *pullrequests.Store, activityStore *activities.Store) http.Handler {
+func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore *auth.Store, repositoryCatalog *repositories.Store, proposalStore *proposals.Store, pullRequestStore *pullrequests.Store, activityStore *activities.Store, sessionStores ...*changesessions.Store) http.Handler {
+	var changeSessionStore *changesessions.Store
+	if len(sessionStores) > 0 {
+		changeSessionStore = sessionStores[0]
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -161,6 +174,9 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 	}
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil {
 		registerPullRequestRoutes(mux, repositoryCatalog, proposalStore, pullRequestStore, authStore, activityStore, userStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil && changeSessionStore != nil {
+		registerChangeSessionRoutes(mux, repositoryCatalog, pullRequestStore, changeSessionStore, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && activityStore != nil {
 		registerActivityRoutes(mux, repositoryCatalog, activityStore, authStore)
@@ -637,6 +653,107 @@ func writePullRequestError(w http.ResponseWriter, err error) bool {
 	default:
 		log.Printf("pull request storage: %v", err)
 		writeAPIError(w, 500, "internal_error", "pull request storage unavailable")
+	}
+	return true
+}
+
+func registerChangeSessionRoutes(mux *http.ServeMux, repositoriesStore *repositories.Store, pullRequestStore *pullrequests.Store, store *changesessions.Store, authStore *auth.Store) {
+	loadPull := func(w http.ResponseWriter, r *http.Request) (pullrequests.PullRequest, bool) {
+		pull, err := pullRequestStore.Get(r.PathValue("id"), r.PathValue("pull_id"))
+		if writePullRequestError(w, err) {
+			return pullrequests.PullRequest{}, false
+		}
+		return pull, true
+	}
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/sessions", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		pull, ok := loadPull(w, r)
+		if !ok {
+			return
+		}
+		if pull.Status != pullrequests.Open {
+			writeAPIError(w, http.StatusConflict, "pull_request_closed", "change sessions require an open pull request")
+			return
+		}
+		session, err := store.Create(pull.RepositoryID, pull.ID, actor.UserID, pull.SourceCommitID)
+		location := r.URL.Path + "/" + session.ID
+		if errors.Is(err, changesessions.ErrDurabilityUncertain) {
+			w.Header().Set("Location", location)
+			writeUncertainMutation(w, session)
+			return
+		}
+		if writeChangeSessionError(w, err) {
+			return
+		}
+		w.Header().Set("Location", location)
+		writeJSON(w, http.StatusCreated, session)
+	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/sessions", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:read"); !ok {
+			return
+		}
+		if _, ok := loadPull(w, r); !ok {
+			return
+		}
+		all, err := store.List(r.PathValue("id"), r.PathValue("pull_id"))
+		if writeChangeSessionError(w, err) {
+			return
+		}
+		page, next, valid := paginate(r, all, func(session changesessions.Session) string { return session.ID })
+		if !valid {
+			writeAPIError(w, 400, "invalid_pagination", "limit or after is invalid")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"sessions": page, "next_cursor": next})
+	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/sessions/{session_id}", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:read"); !ok {
+			return
+		}
+		if _, ok := loadPull(w, r); !ok {
+			return
+		}
+		session, err := store.Get(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("session_id"))
+		if writeChangeSessionError(w, err) {
+			return
+		}
+		writeJSON(w, 200, session)
+	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/sessions/{session_id}/events", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:read"); !ok {
+			return
+		}
+		if _, ok := loadPull(w, r); !ok {
+			return
+		}
+		all, err := store.ListEvents(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("session_id"))
+		if writeChangeSessionError(w, err) {
+			return
+		}
+		page, next, valid := paginate(r, all, func(event changesessions.Event) string { return event.ID })
+		if !valid {
+			writeAPIError(w, 400, "invalid_pagination", "limit or after is invalid")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"events": page, "next_cursor": next})
+	})
+}
+
+func writeChangeSessionError(w http.ResponseWriter, err error) bool {
+	if err == nil {
+		return false
+	}
+	switch {
+	case errors.Is(err, changesessions.ErrNotFound):
+		writeAPIError(w, 404, "change_session_not_found", "change session not found")
+	case errors.Is(err, changesessions.ErrInvalid):
+		writeAPIError(w, 400, "invalid_change_session", "change session context is invalid")
+	default:
+		log.Printf("change session storage: %v", err)
+		writeAPIError(w, 500, "internal_error", "change session storage unavailable")
 	}
 	return true
 }

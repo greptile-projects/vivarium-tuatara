@@ -99,6 +99,14 @@ test("two users carry one attributed change from onboarding through merge", asyn
   await expect(newcomer.getByText(`@newcomer-${suffix}`, { exact: true }).first()).toBeVisible();
 
   await maintainer.goto(newcomer.url());
+  await maintainer.getByRole("button", { name: "Start change session" }).click();
+  await maintainer.getByRole("link", { name: /Session [a-f0-9]{7}/ }).click();
+  await expect(maintainer).toHaveURL(new RegExp(`/pulls/${repositoryID}/[a-f0-9]{32}/sessions/[a-f0-9]{32}$`));
+  await expect(maintainer.getByRole("heading", { name: "Session timeline" })).toBeVisible();
+  await expect(maintainer.getByText("Change session opened")).toBeVisible();
+  await maintainer.reload();
+  await expect(maintainer.getByText(`@maintainer-${suffix}`, { exact: true })).toBeVisible();
+  await maintainer.getByRole("link", { name: "← Back to pull request" }).click();
   await maintainer.getByRole("button", { name: "Approve" }).click();
   await expect(maintainer.getByText(`@maintainer-${suffix}`, { exact: true }).first()).toBeVisible();
   await expect(maintainer.getByRole("button", { name: "Merge into main" })).toBeEnabled();

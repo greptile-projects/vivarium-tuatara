@@ -1,0 +1,85 @@
+package changesessions
+
+import (
+	"errors"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestCreateReopenAndListTimeline(t *testing.T) {
+	root := t.TempDir()
+	store, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Date(2026, 8, 7, 17, 0, 0, 123456789, time.UTC)
+	store.now = func() time.Time { return clock }
+	repositoryID := "11111111111111111111111111111111"
+	pullID := "22222222222222222222222222222222"
+	actorID := "33333333333333333333333333333333"
+	revision := "4444444444444444444444444444444444444444"
+
+	created, err := store.Create(repositoryID, pullID, actorID, revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.State != Open || created.SourceCommitID != revision || created.InitiatorID != actorID {
+		t.Fatalf("unexpected session: %+v", created)
+	}
+
+	reopened, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := reopened.Get(repositoryID, pullID, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != created {
+		t.Fatalf("reopened session mismatch: %+v != %+v", got, created)
+	}
+	sessions, err := reopened.List(repositoryID, pullID)
+	if err != nil || len(sessions) != 1 || sessions[0].ID != created.ID {
+		t.Fatalf("sessions = %+v, %v", sessions, err)
+	}
+	events, err := reopened.ListEvents(repositoryID, pullID, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Kind != "session.opened" || events[0].ActorID != actorID || events[0].State != Open {
+		t.Fatalf("events = %+v", events)
+	}
+}
+
+func TestCreateReportsVisibleRecordWhenDirectorySyncFails(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.directorySync = func(string) error { return errors.New("injected sync failure") }
+	session, err := store.Create("11111111111111111111111111111111", "22222222222222222222222222222222", "33333333333333333333333333333333", "4444444444444444444444444444444444444444")
+	if !errors.Is(err, ErrDurabilityUncertain) || session.ID == "" {
+		t.Fatalf("session = %+v, err = %v", session, err)
+	}
+	if _, statErr := filepath.Glob(filepath.Join(store.root, session.RepositoryID, session.PullRequestID, session.ID+".json")); statErr != nil {
+		t.Fatal(statErr)
+	}
+	if _, getErr := store.Get(session.RepositoryID, session.PullRequestID, session.ID); getErr != nil {
+		t.Fatal(getErr)
+	}
+}
+
+func TestIsolationAndValidation(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create("bad", "bad", "bad", "bad"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("err = %v", err)
+	}
+	sessions, err := store.List("11111111111111111111111111111111", "22222222222222222222222222222222")
+	if err != nil || len(sessions) != 0 {
+		t.Fatalf("sessions = %+v, err = %v", sessions, err)
+	}
+}
