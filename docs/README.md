@@ -75,10 +75,9 @@ API consumers send `Authorization: Bearer <token>`. Stock Git clients use the
 Git token as an HTTP Basic password (the username is ignored), so standard Git
 credential helpers can store it without custom tooling. Upload-pack discovery
 and RPC require `git:read`; receive-pack discovery and RPC require
-`git:write`. Authentication therefore does not itself decide repository
-ownership—the following access-control rung will bind authenticated actors to
-repository permissions—but all Git HTTP operations now require a suitably
-scoped actor credential.
+`git:write`. Public upload-pack requests may omit a credential; private
+upload-pack and all receive-pack requests additionally require that the
+credential actor own the repository.
 
 Credential records are private atomic JSON files beneath `AUTH_STORAGE_ROOT`,
 which defaults to `credentials`. Only SHA-256 token hashes are durable; raw
@@ -99,9 +98,13 @@ identity. Names are case-insensitively unique within one owner's repositories
 but may be reused by other owners.
 
 `GET /repositories` lists only the authenticated actor's repositories in
-creation order. Inspection and `DELETE /repositories/{id}` likewise resolve
-ownership from the credential rather than accepting an owner from the client;
-another actor receives the same not-found response as an unknown ID. Deletion
+creation order. Repositories are private by default, and their owner can use
+`PATCH /repositories/{id}` to change `visibility` between `private` and
+`public`. Public repositories can be inspected without authentication, while
+private inspection, visibility changes, and `DELETE /repositories/{id}`
+resolve ownership from the credential rather than accepting an owner from the
+client; another actor receives the same not-found response as an unknown ID.
+Deletion
 atomically detaches the Git storage ID before removing the ownership record,
 so a successfully removed API resource is no longer a usable remote. Active
 catalog reads also verify that Git backing still exists. If metadata cleanup
@@ -115,10 +118,10 @@ Session credentials include `repositories:read` and `repositories:write`.
 Long-lived API credentials can be issued with either capability for narrower
 automation. Catalog metadata is stored as private atomic JSON records beneath
 `REPOSITORY_STORAGE_ROOT`, defaulting to `repository-records`, while Git bytes
-remain beneath `GIT_STORAGE_ROOT`. Git credentials continue to authorize smart
-HTTP by `git:read` and `git:write` scope only; binding Git transport requests to
-repository ownership and later collaborator permissions belongs to the access
-control layer.
+remain beneath `GIT_STORAGE_ROOT`. Git credentials authorize smart HTTP with
+`git:read` and `git:write`, and transport applies the same visibility and owner
+policy as the repository API. Anonymous and authenticated actors may fetch a
+public repository; only its owner may fetch it privately or push to it.
 
 ## Git repository storage
 
@@ -207,7 +210,7 @@ stock revision parsing verifies `HEAD` and both tag forms.
 
 ## Git HTTP transport
 
-The API exposes an authenticated smart HTTP remote at
+The API exposes a visibility-aware smart HTTP remote at
 `/git/<storage-id>.git`. `GET .../info/refs?service=git-upload-pack` advertises
 the repository and `POST .../git-upload-pack` serves the protocol-v2 `ls-refs`
 exchange used by current Git clients. Both protocol v0 and v2 are passed to
