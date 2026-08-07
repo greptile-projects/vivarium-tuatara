@@ -252,6 +252,17 @@ func TestOwnerCanGrantAndRevokeContributorCandidateAccess(t *testing.T) {
 		t.Fatalf("collaborator = %#v", collaborator)
 	}
 	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID, "", contributor.Credential.Token, http.StatusOK).Body.Close()
+	discovery := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories", "", contributor.Credential.Token, http.StatusOK)
+	var discovered struct {
+		Repositories []repositories.Repository `json:"repositories"`
+	}
+	if err := json.NewDecoder(discovery.Body).Decode(&discovered); err != nil {
+		t.Fatal(err)
+	}
+	discovery.Body.Close()
+	if len(discovered.Repositories) != 1 || discovered.Repositories[0] != repository {
+		t.Fatalf("collaborator repository discovery = %#v", discovered.Repositories)
+	}
 	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+repository.ID, `{"visibility":"public"}`, contributor.Credential.Token, http.StatusNotFound).Body.Close()
 	authenticatedRequest(t, http.MethodDelete, server.URL+"/repositories/"+repository.ID, "", contributor.Credential.Token, http.StatusNotFound).Body.Close()
 

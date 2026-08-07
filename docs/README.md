@@ -40,6 +40,16 @@ a skip link and semantic landmarks. Pages should supply useful empty, loading,
 error, and permission-denied states using the same card, type, action, and
 status vocabulary as their populated views.
 
+Browser API calls use same-origin `/api/*` requests, which Next.js rewrites to
+`API_ORIGIN` (the local API on port 8080 by default). Account creation returns
+its one-time session token to the web client; the client retains that bearer
+token in browser local storage, validates it with `GET /user` at startup, and
+clears invalid or explicitly logged-out sessions. Returning users may present
+an existing session or API token. Onboarding continues into owned and
+collaborator repository creation and cursor-complete discovery, while settings
+expose profile editing, API and Git
+token issuance, one-time secret revelation, revocation, and session logout.
+
 ## User identity
 
 Human collaborators have durable platform identities backed by the API's
