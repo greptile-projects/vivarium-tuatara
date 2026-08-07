@@ -188,6 +188,13 @@ their proposal, and owners may close any repository proposal. Reads inherit
 repository visibility and collaborator access. Records are stored atomically
 beneath `PROPOSAL_STORAGE_ROOT` (default `proposals`) independently of Git
 objects, so conversation remains available without a candidate branch.
+The web proposal workspace aggregates proposals across every repository in the
+signed-in actor's catalog and filters them by text, repository, and lifecycle
+status, making existing context visible before new work is proposed. Proposal
+detail routes remain directly addressable and render public conversations
+without authentication when repository visibility permits, while creation,
+editing, commenting, and closure controls follow the API's participant and
+ownership rules.
 
 Pull requests connect that context to exact repository state. An owner or
 contributor opens one from an existing source branch against a different
