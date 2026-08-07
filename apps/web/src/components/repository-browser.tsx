@@ -2,17 +2,19 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   api,
   type Branch,
+  type Collaborator,
   type Commit,
   type Repository,
   type TreeEntry,
+  type User,
 } from "@/lib/api";
 import { useAuth } from "./auth";
 import { Icons } from "./icons";
-import { Badge, Card } from "./ui";
+import { Badge, Button, Card } from "./ui";
 
 type TreeResult = { revision: string; path: string; entries: TreeEntry[] };
 type BlobResult = {
@@ -25,7 +27,7 @@ type BlobResult = {
 };
 
 export function RepositoryBrowser({ id }: { id: string }) {
-  const { token, loading: authLoading } = useAuth();
+  const { token, user, loading: authLoading } = useAuth();
   const router = useRouter();
   const search = useSearchParams();
   const selectedRef = search.get("ref") ?? "";
@@ -248,6 +250,9 @@ export function RepositoryBrowser({ id }: { id: string }) {
           </Card>
         </section>
         <aside className="space-y-4">
+          {user?.id === repository.owner_id && token && (
+            <CollaboratorPanel repositoryID={id} token={token} />
+          )}
           <Card className="p-5">
             <h2 className="font-semibold">Current revision</h2>
             {head ? (
@@ -300,6 +305,46 @@ export function RepositoryBrowser({ id }: { id: string }) {
       </div>
     </div>
   );
+}
+
+function CollaboratorPanel({ repositoryID, token }: { repositoryID: string; token: string }) {
+  const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
+  const [users, setUsers] = useState<Record<string, User>>({});
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const result = await api<{ collaborators: Collaborator[] }>(`/repositories/${repositoryID}/collaborators`, {}, token);
+      setCollaborators(result.collaborators);
+      const resolved = await Promise.all(result.collaborators.map((item) => api<User>(`/users/${item.user_id}`)));
+      setUsers(Object.fromEntries(resolved.map((item) => [item.id, item])));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Collaborators could not be loaded.");
+    }
+  }, [repositoryID, token]);
+  useEffect(() => { void Promise.resolve().then(load); }, [load]);
+
+  async function add(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const userID = String(new FormData(form).get("user_id") ?? "").trim();
+    setPending(true); setError("");
+    try {
+      await api<Collaborator>(`/repositories/${repositoryID}/collaborators`, { method: "POST", body: JSON.stringify({ user_id: userID }) }, token);
+      form.reset(); await load();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Contributor could not be added."); }
+    finally { setPending(false); }
+  }
+
+  async function remove(userID: string) {
+    setPending(true); setError("");
+    try { await api<void>(`/repositories/${repositoryID}/collaborators/${userID}`, { method: "DELETE" }, token); await load(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Contributor could not be removed."); }
+    finally { setPending(false); }
+  }
+
+  return <Card className="p-5"><h2 className="font-semibold">Contributors</h2><p className="mt-1 text-xs leading-5 text-[var(--muted)]">Grant a user access to this repository using the collaboration ID from their settings.</p><form onSubmit={add} className="mt-4 flex gap-2"><label className="sr-only" htmlFor="collaborator-id">Collaboration ID</label><input id="collaborator-id" name="user_id" required pattern="[a-f0-9]{32}" placeholder="32-character ID" className="min-h-10 min-w-0 flex-1 rounded-lg border border-[var(--line-strong)] px-3 font-mono text-xs"/><Button type="submit" disabled={pending}>{pending ? "Adding…" : "Add"}</Button></form>{error && <p role="alert" className="mt-3 text-sm text-[var(--danger)]">{error}</p>}<div className="mt-4 divide-y divide-[var(--line)]">{collaborators.length === 0 ? <p className="py-2 text-sm text-[var(--muted)]">No contributors yet.</p> : collaborators.map((item) => <div key={item.user_id} className="flex items-center gap-2 py-3"><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{users[item.user_id] ? `@${users[item.user_id].handle}` : item.user_id}</p><p className="text-xs text-[var(--muted)]">Contributor</p></div><Button variant="quiet" disabled={pending} onClick={() => void remove(item.user_id)}>Remove</Button></div>)}</div></Card>;
 }
 
 function TreeList({

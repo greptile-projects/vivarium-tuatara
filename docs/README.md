@@ -50,6 +50,10 @@ an existing session or API token. Onboarding continues into owned and
 collaborator repository creation and cursor-complete discovery, while settings
 expose profile editing, API and Git
 token issuance, one-time secret revelation, revocation, and session logout.
+Settings also expose the account's immutable collaboration ID. A newcomer can
+share that ID with a repository owner, who can grant or revoke contributor
+access directly from the repository detail page; resolved handles make the
+durable access list attributable rather than presenting opaque IDs.
 Repository catalog entries link to `/repositories/[id]`, where public visitors
 and authorized collaborators can select branches, follow commit-pinned history,
 navigate snapshot directories, preview text files, identify binary files, and
@@ -238,6 +242,14 @@ has become stale relative to the current source branch tip; deleting the
 source branch leaves the durable reviews readable and marks them stale.
 Synchronizing a revised source does not make an earlier decision fresh, so the
 new revision must receive an explicit replacement approval before merge.
+
+The connected web workflow is protected by a Playwright regression in
+`apps/web/tests/collaboration-journey.spec.ts`. It starts isolated API and web
+servers, drives two independent browser contexts through onboarding, access,
+proposal, pull-request, review, and merge actions, and uses stock Git for both
+candidate publication and the maintainer's final pull. Run it with
+`bun run --cwd apps/web test:e2e`; it uses the installed Chromium by default or
+the executable selected with `CHROMIUM_PATH`.
 
 ## Git repository storage
 

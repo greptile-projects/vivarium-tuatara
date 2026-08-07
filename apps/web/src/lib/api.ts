@@ -14,6 +14,11 @@ export type Repository = {
   git_remote: string;
   created_at: string;
 };
+export type Collaborator = {
+  user_id: string;
+  role: "contributor";
+  created_at: string;
+};
 export type Credential = {
   id: string;
   user_id: string;

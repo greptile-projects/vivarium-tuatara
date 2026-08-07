@@ -27,6 +27,7 @@ bun dev           # web  → http://localhost:3000
 bun run dev:api   # api  → http://localhost:8080/health
 bun run build     # next build
 bun run lint      # eslint over apps/web
+bun run --cwd apps/web test:e2e # full two-user browser + stock Git journey
 ```
 
 There is no root typecheck script. Typecheck the frontend the way CI does:
@@ -79,6 +80,10 @@ whenever dependencies change or the web job fails before it starts.
   proposal, attributable discussion, current and stale review decisions,
   source synchronization for authors, server-derived merge blockers, and
   owner-only merge controls. Completed requests retain their merge attribution.
+  Owners manage contributors from repository detail pages using the stable
+  collaboration ID each user can copy from Settings. The Playwright journey in
+  `apps/web/tests` is the connected-product regression and uses isolated
+  temporary API storage plus the system Chromium and stock Git clients.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's
