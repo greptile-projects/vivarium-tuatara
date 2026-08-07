@@ -142,12 +142,87 @@ func TestCreateReturnsIdentityAfterUncertainDurability(t *testing.T) {
 	if listErr != nil || len(comments) != 1 || comments[0].ID != comment.ID {
 		t.Fatalf("ListComments = %#v, %v", comments, listErr)
 	}
+	review, reviewErr := store.SetReview(repository.ID(), pullRequest.ID, testID('7'), Approved)
+	if !errors.Is(reviewErr, ErrDurabilityUncertain) || review.ID == "" {
+		t.Fatalf("SetReview = %#v, %v", review, reviewErr)
+	}
+	reviews, listReviewsErr := store.ListReviews(repository.ID(), pullRequest.ID)
+	if listReviewsErr != nil || len(reviews) != 1 || reviews[0].ID != review.ID {
+		t.Fatalf("ListReviews = %#v, %v", reviews, listReviewsErr)
+	}
+	withdrawn, withdrawErr := store.WithdrawReview(repository.ID(), pullRequest.ID, review.ID, testID('7'))
+	if !errors.Is(withdrawErr, ErrDurabilityUncertain) || withdrawn.Decision != Withdrawn {
+		t.Fatalf("WithdrawReview = %#v, %v", withdrawn, withdrawErr)
+	}
+}
+
+func TestReviewsCaptureCurrentCommitBecomeStaleAndRemainAttributable(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	repository, _ := gitStore.Create(testID('a'))
+	tree, _ := repository.WriteObject(storage.TreeObject, nil)
+	base := writeCommit(t, repository, tree, "base")
+	head := writeCommitWithParents(t, repository, tree, []storage.ObjectID{base}, "head")
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)})
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/topic", Target: string(head)})
+	store, _ := New(t.TempDir(), gitStore)
+	now := time.Unix(1700000000, 0).UTC()
+	store.now = func() time.Time { return now }
+	pullRequest, err := store.Create(repository.ID(), testID('b'), "Change", "", "topic", "main", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	review, err := store.SetReview(repository.ID(), pullRequest.ID, testID('c'), Approved)
+	if err != nil || review.Decision != Approved || review.ReviewedCommitID != string(head) || review.Stale {
+		t.Fatalf("SetReview = %#v, %v", review, err)
+	}
+	advanced := writeCommitWithParents(t, repository, tree, []storage.ObjectID{head}, "advanced")
+	if err := repository.UpdateReference(storage.Reference{Name: "refs/heads/topic", Target: string(advanced)}); err != nil {
+		t.Fatal(err)
+	}
+	reviews, err := store.ListReviews(repository.ID(), pullRequest.ID)
+	if err != nil || len(reviews) != 1 || !reviews[0].Stale || reviews[0].ReviewedCommitID != string(head) {
+		t.Fatalf("stale reviews = %#v, %v", reviews, err)
+	}
+
+	now = now.Add(time.Minute)
+	replaced, err := store.SetReview(repository.ID(), pullRequest.ID, testID('c'), ChangesRequested)
+	if err != nil || replaced.ID != review.ID || replaced.Decision != ChangesRequested || replaced.ReviewedCommitID != string(advanced) || !replaced.CreatedAt.Equal(review.CreatedAt) || !replaced.UpdatedAt.After(review.UpdatedAt) {
+		t.Fatalf("replacement = %#v, %v", replaced, err)
+	}
+	now = now.Add(time.Minute)
+	withdrawn, err := store.WithdrawReview(repository.ID(), pullRequest.ID, review.ID, testID('c'))
+	if err != nil || withdrawn.Decision != Withdrawn || withdrawn.ReviewedCommitID != string(advanced) {
+		t.Fatalf("withdrawal = %#v, %v", withdrawn, err)
+	}
+	if _, err := store.WithdrawReview(repository.ID(), pullRequest.ID, review.ID, testID('d')); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("other reviewer withdrawal error = %v", err)
+	}
+	reviews, err = store.ListReviews(repository.ID(), pullRequest.ID)
+	if err != nil || len(reviews) != 1 || reviews[0].Decision != Withdrawn || reviews[0].Stale {
+		t.Fatalf("withdrawn reviews = %#v, %v", reviews, err)
+	}
+	if err := repository.DeleteReference("refs/heads/topic"); err != nil {
+		t.Fatal(err)
+	}
+	reviews, err = store.ListReviews(repository.ID(), pullRequest.ID)
+	if err != nil || len(reviews) != 1 || !reviews[0].Stale || reviews[0].ReviewedCommitID != string(advanced) {
+		t.Fatalf("reviews after source deletion = %#v, %v", reviews, err)
+	}
 }
 
 func writeCommit(t *testing.T, repository *storage.Repository, tree storage.ObjectID, message string) storage.ObjectID {
+	return writeCommitWithParents(t, repository, tree, nil, message)
+}
+
+func writeCommitWithParents(t *testing.T, repository *storage.Repository, tree storage.ObjectID, parents []storage.ObjectID, message string) storage.ObjectID {
 	t.Helper()
-	content := []byte(fmt.Sprintf("tree %s\nauthor Test <test@example.com> 1700000000 +0000\ncommitter Test <test@example.com> 1700000000 +0000\n\n%s\n", tree, message))
-	id, err := repository.WriteObject(storage.CommitObject, content)
+	content := fmt.Sprintf("tree %s\n", tree)
+	for _, parent := range parents {
+		content += fmt.Sprintf("parent %s\n", parent)
+	}
+	content += fmt.Sprintf("author Test <test@example.com> 1700000000 +0000\ncommitter Test <test@example.com> 1700000000 +0000\n\n%s\n", message)
+	id, err := repository.WriteObject(storage.CommitObject, []byte(content))
 	if err != nil {
 		t.Fatal(err)
 	}
