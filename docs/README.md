@@ -45,8 +45,9 @@ Browser API calls use same-origin `/api/*` requests, which Next.js rewrites to
 its one-time session token to the web client; the client retains that bearer
 token in browser local storage, validates it with `GET /user` at startup, and
 clears invalid or explicitly logged-out sessions. Returning users may present
-an existing session or API token. Onboarding continues into repository
-creation and discovery, while settings expose profile editing, API and Git
+an existing session or API token. Onboarding continues into owned and
+collaborator repository creation and cursor-complete discovery, while settings
+expose profile editing, API and Git
 token issuance, one-time secret revelation, revocation, and session logout.
 
 ## User identity

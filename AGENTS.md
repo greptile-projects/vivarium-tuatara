@@ -148,8 +148,9 @@ whenever dependencies change or the web job fails before it starts.
   default; public reads are anonymous, while private reads, pushes, and
   administration require matching API or Git scope plus repository access.
   Unauthenticated or ungranted non-owners receive not-found where repository
-  visibility must be hidden. Catalog
-  and credential collection routes use `limit`/`after` cursor pagination (30
+  visibility must be hidden. The repository catalog includes both owned
+  repositories and repositories available through current collaborator
+  grants. Catalog and credential collection routes use `limit`/`after` cursor pagination (30
   by default, at most 100) and return `next_cursor`. The supported JSON contract
   and stable error envelope are documented in `docs/API.md`. Repository reads
   reconcile metadata with Git storage: records whose Git ID has already

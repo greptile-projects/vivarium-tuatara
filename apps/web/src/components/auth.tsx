@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { createContext, useContext, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { api, type User } from "@/lib/api";
 import { Icons } from "./icons";
@@ -60,7 +61,9 @@ export function AccessGate({ children }: { children: ReactNode }) {
 
 export function WelcomeAccess() {
   const { setSession } = useAuth();
-  const [mode, setMode] = useState<"create" | "signin">("create");
+  const searchParams = useSearchParams();
+  const [selectedMode, setSelectedMode] = useState<"create" | "signin" | null>(null);
+  const mode = selectedMode ?? (searchParams.get("access") === "signin" ? "signin" : "create");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
 
@@ -82,7 +85,7 @@ export function WelcomeAccess() {
 
   return <div className="grid min-h-[calc(100vh-9rem)] items-center gap-10 lg:grid-cols-[1.05fr_.95fr]">
     <section><p className="font-mono text-xs font-semibold uppercase tracking-[.16em] text-[var(--brand)]">Build in good company</p><h1 className="mt-4 max-w-2xl text-4xl font-semibold tracking-[-.045em] sm:text-6xl">From first idea to shared code.</h1><p className="mt-5 max-w-xl text-lg leading-8 text-[var(--muted)]">Create your identity, open a repository, and invite collaboration into the work from the beginning.</p><div className="mt-8 grid max-w-xl gap-3 sm:grid-cols-3">{[["1", "Join"], ["2", "Create a space"], ["3", "Build together"]].map(([number, label]) => <div key={number} className="flex items-center gap-3 rounded-xl border border-[var(--line)] bg-white/70 p-3 text-sm font-semibold"><span className="grid size-7 place-items-center rounded-full bg-[var(--brand-soft)] font-mono text-xs text-[var(--brand)]">{number}</span>{label}</div>)}</div></section>
-    <Card className="p-6 sm:p-8"><div className="flex rounded-lg bg-[var(--canvas)] p-1" role="tablist" aria-label="Account access"><button type="button" role="tab" aria-selected={mode === "create"} onClick={() => { setMode("create"); setError(""); }} className={`flex-1 rounded-md px-3 py-2 text-sm font-semibold ${mode === "create" ? "bg-white shadow-sm" : "text-[var(--muted)]"}`}>Create account</button><button type="button" role="tab" aria-selected={mode === "signin"} onClick={() => { setMode("signin"); setError(""); }} className={`flex-1 rounded-md px-3 py-2 text-sm font-semibold ${mode === "signin" ? "bg-white shadow-sm" : "text-[var(--muted)]"}`}>Sign in</button></div>
+    <Card className="p-6 sm:p-8"><div className="flex rounded-lg bg-[var(--canvas)] p-1" role="tablist" aria-label="Account access"><button type="button" role="tab" aria-selected={mode === "create"} onClick={() => { setSelectedMode("create"); setError(""); }} className={`flex-1 rounded-md px-3 py-2 text-sm font-semibold ${mode === "create" ? "bg-white shadow-sm" : "text-[var(--muted)]"}`}>Create account</button><button type="button" role="tab" aria-selected={mode === "signin"} onClick={() => { setSelectedMode("signin"); setError(""); }} className={`flex-1 rounded-md px-3 py-2 text-sm font-semibold ${mode === "signin" ? "bg-white shadow-sm" : "text-[var(--muted)]"}`}>Sign in</button></div>
       <div className="mt-6"><h2 className="text-xl font-semibold">{mode === "create" ? "Make your place in Vivarium" : "Welcome back"}</h2><p className="mt-1 text-sm leading-6 text-[var(--muted)]">{mode === "create" ? "You’ll go straight to your first collaborative workspace." : "Use a session or API token issued to your account."}</p></div>
       <form onSubmit={submit} className="mt-6 space-y-4">{mode === "create" ? <><Field label="Display name" name="display_name" placeholder="Avery Morgan" autoComplete="name" /><Field label="Handle" name="handle" placeholder="avery" autoComplete="username" pattern="[A-Za-z0-9-]{1,39}" hint="Letters, numbers, and hyphens." /></> : <Field label="Access token" name="token" type="password" autoComplete="current-password" placeholder="Paste your token" hint="Tokens are stored only in this browser." />}{error && <p role="alert" className="rounded-lg bg-[var(--danger-soft)] p-3 text-sm text-[var(--danger)]">{error}</p>}<Button type="submit" disabled={pending} className="w-full">{pending ? "Connecting…" : mode === "create" ? "Create account and continue" : "Sign in"}<Icons.Arrow size={16}/></Button></form>
     </Card>

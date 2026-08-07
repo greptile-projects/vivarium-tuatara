@@ -84,6 +84,10 @@ func TestRepositoryCollaboratorsPersistAndRemainOwnerManaged(t *testing.T) {
 	if err != nil || accessErr != nil || grant.Role != Contributor || !hasAccess {
 		t.Fatalf("grant = %#v, %v", grant, err)
 	}
+	accessible, err := store.ListAccessible(testCollaboratorID)
+	if err != nil || len(accessible) != 1 || accessible[0].ID != created.ID {
+		t.Fatalf("collaborator accessible repositories = %#v, %v", accessible, err)
+	}
 
 	reopenedGit, _ := storage.New(gitRoot)
 	reopened, _ := New(metadataRoot, reopenedGit)
@@ -97,6 +101,10 @@ func TestRepositoryCollaboratorsPersistAndRemainOwnerManaged(t *testing.T) {
 	hasAccess, err = reopened.HasCollaborator(testCollaboratorID, created.ID)
 	if err != nil || hasAccess {
 		t.Fatal("removed collaborator retained access")
+	}
+	accessible, err = reopened.ListAccessible(testCollaboratorID)
+	if err != nil || len(accessible) != 0 {
+		t.Fatalf("repositories after collaborator removal = %#v, %v", accessible, err)
 	}
 }
 

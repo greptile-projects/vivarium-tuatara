@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -287,6 +288,28 @@ func (s *Store) List(ownerID string) ([]Repository, error) {
 	result := []Repository{}
 	for _, repository := range all {
 		if repository.OwnerID == ownerID {
+			result = append(result, repository)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].CreatedAt.Equal(result[j].CreatedAt) {
+			return result[i].ID < result[j].ID
+		}
+		return result[i].CreatedAt.Before(result[j].CreatedAt)
+	})
+	return result, nil
+}
+
+// ListAccessible returns repositories the user owns or currently contributes
+// to, ordered as one stable collection for cursor pagination.
+func (s *Store) ListAccessible(userID string) ([]Repository, error) {
+	all, err := s.loadActive()
+	if err != nil {
+		return nil, err
+	}
+	result := []Repository{}
+	for _, repository := range all {
+		if repository.OwnerID == userID || slices.Contains(collaboratorIDs(repository), userID) {
 			result = append(result, repository)
 		}
 	}

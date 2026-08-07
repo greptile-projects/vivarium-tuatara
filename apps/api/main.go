@@ -811,11 +811,11 @@ func registerRepositoryRoutes(mux *http.ServeMux, store *repositories.Store, use
 		if !ok {
 			return
 		}
-		owned, err := store.List(actor.UserID)
+		accessible, err := store.ListAccessible(actor.UserID)
 		if writeRepositoryError(w, err) {
 			return
 		}
-		page, next, ok := paginate(r, owned, func(repository repositories.Repository) string { return repository.ID })
+		page, next, ok := paginate(r, accessible, func(repository repositories.Repository) string { return repository.ID })
 		if !ok {
 			writeAPIError(w, http.StatusBadRequest, "invalid_pagination", "limit or after is invalid")
 			return

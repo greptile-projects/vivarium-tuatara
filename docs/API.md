@@ -59,7 +59,8 @@ the calling session. Credential administration requires the session-only
 ## Repositories
 
 `POST /repositories` accepts `name` and creates a private repository owned by
-the current account. `GET /repositories` paginates that account's repositories.
+the current account. `GET /repositories` paginates repositories that account
+owns or can access through a current collaborator grant.
 `GET /repositories/{id}` returns an owned private repository or any public
 repository. `PATCH /repositories/{id}` accepts `visibility` as `private` or
 `public`; `DELETE /repositories/{id}` removes the owned repository and its Git
