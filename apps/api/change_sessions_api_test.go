@@ -218,6 +218,17 @@ func TestCollaboratorOpensAndReconnectsToChangeSession(t *testing.T) {
 		t.Fatalf("events after launch = %+v", eventPage.Events)
 	}
 	authenticatedRequest(t, http.MethodPost, reconnectBase+"/runs", `{"instructions":"Use unknown context.","source_commit_id":"`+pull.SourceCommitID+`","context_paths":["missing.txt"],"working_branch":"agent/invalid"}`, contributor.Credential.Token, http.StatusBadRequest).Body.Close()
+	sessionDirectory := filepath.Join(sessionRoot, repository.ID, pull.ID)
+	if err := os.Chmod(sessionDirectory, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	authenticatedRequest(t, http.MethodPost, interventionURL, `{"kind":"run.canceled","message":"The requested evidence is complete."}`, owner.Credential.Token, http.StatusInternalServerError).Body.Close()
+	if _, err := credentials.Authenticate(launched.Credential.Token, "git:read"); err != nil {
+		t.Fatalf("credential revoked before cancellation persisted: %v", err)
+	}
+	if err := os.Chmod(sessionDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	canceledResponse := authenticatedRequest(t, http.MethodPost, interventionURL, `{"kind":"run.canceled","message":"The requested evidence is complete."}`, owner.Credential.Token, http.StatusCreated)
 	var canceled struct {
 		Run changesessions.Run `json:"run"`
@@ -232,5 +243,7 @@ func TestCollaboratorOpensAndReconnectsToChangeSession(t *testing.T) {
 	if _, err := credentials.Authenticate(launched.Credential.Token, "git:read"); !errors.Is(err, auth.ErrNotFound) {
 		t.Fatalf("revoked credential error = %v", err)
 	}
+	retryCanceled := authenticatedRequest(t, http.MethodPost, interventionURL, `{"kind":"run.canceled","message":"retry after response loss"}`, owner.Credential.Token, http.StatusCreated)
+	retryCanceled.Body.Close()
 	authenticatedRequest(t, http.MethodGet, reconnectBase, "", outsider.Credential.Token, http.StatusNotFound).Body.Close()
 }

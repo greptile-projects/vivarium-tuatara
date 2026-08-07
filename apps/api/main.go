@@ -984,33 +984,9 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 		}
 		input.Kind = strings.TrimSpace(input.Kind)
 		input.Message = strings.TrimSpace(input.Message)
-		if input.Kind == "run.canceled" {
-			runs, err := store.ListRuns(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("session_id"))
-			if writeChangeSessionError(w, err) {
-				return
-			}
-			var selected *changesessions.Run
-			for i := range runs {
-				if runs[i].ID == r.PathValue("run_id") {
-					selected = &runs[i]
-					break
-				}
-			}
-			if selected == nil {
-				writeAPIError(w, 404, "agent_run_not_found", "agent run not found")
-				return
-			}
-			if _, err := authStore.Revoke(selected.InitiatorID, selected.CredentialID); err != nil && !errors.Is(err, auth.ErrNotFound) {
-				writeAPIError(w, 500, "internal_error", "agent access could not be revoked")
-				return
-			}
-		}
 		run, event, err := store.Intervene(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("session_id"), r.PathValue("run_id"), actor.UserID, input.Kind, input.Message)
 		response := map[string]any{"run": run, "event": event}
-		if errors.Is(err, changesessions.ErrDurabilityUncertain) {
-			writeUncertainMutation(w, response)
-			return
-		}
+		uncertain := errors.Is(err, changesessions.ErrDurabilityUncertain)
 		if errors.Is(err, changesessions.ErrNotFound) {
 			writeAPIError(w, 404, "agent_run_not_found", "agent run not found")
 			return
@@ -1023,10 +999,20 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 			writeAPIError(w, 409, "invalid_run_transition", "intervention is invalid for the current run state")
 			return
 		}
-		if writeChangeSessionError(w, err) {
+		if !uncertain && writeChangeSessionError(w, err) {
 			return
 		}
+		if input.Kind == "run.canceled" {
+			if _, revokeErr := authStore.Revoke(run.InitiatorID, run.CredentialID); revokeErr != nil && !errors.Is(revokeErr, auth.ErrNotFound) {
+				writeAPIError(w, 500, "internal_error", "run is canceled but agent access revocation must be retried")
+				return
+			}
+		}
 		w.Header().Set("Location", strings.TrimSuffix(r.URL.Path, "/runs/"+r.PathValue("run_id")+"/interventions")+"/events#"+event.ID)
+		if uncertain {
+			writeUncertainMutation(w, response)
+			return
+		}
 		writeJSON(w, http.StatusCreated, response)
 	})
 	mux.HandleFunc("DELETE /repositories/{id}/pulls/{pull_id}/sessions/{session_id}/runs/{run_id}/credential", func(w http.ResponseWriter, r *http.Request) {

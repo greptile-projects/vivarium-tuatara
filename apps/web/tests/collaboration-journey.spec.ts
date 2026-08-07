@@ -162,9 +162,17 @@ test("two users carry one attributed change from onboarding through merge", asyn
   await expect(maintainer.getByText("Run launched · copy its credential now")).toBeVisible();
   await expect(maintainer.getByText("Agent run launched")).toBeVisible();
   const runCard = maintainer.locator("section").filter({ hasText: "Verify the greeting behavior and add focused coverage." });
+  const interventionPattern = /\/sessions\/[a-f0-9]{32}\/runs\/[a-f0-9]{32}\/interventions$/;
+  await maintainer.route(interventionPattern, async (route) => {
+    await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: { code: "temporarily_unavailable", message: "Intervention storage is temporarily unavailable." } }) });
+  }, { times: 1 });
   await runCard.getByLabel("Guidance message").fill("Keep the regression focused on the public behavior.");
   await runCard.getByRole("button", { name: "Send to agent" }).click();
-  await expect(maintainer.getByText("Follow-up guidance")).toBeVisible();
+  await expect(maintainer.getByText(/Your draft is still available to retry\./)).toBeVisible();
+  await expect(runCard.getByLabel("Guidance message")).toHaveValue("Keep the regression focused on the public behavior.");
+  await maintainer.unroute(interventionPattern);
+  await runCard.getByRole("button", { name: "Send to agent" }).click();
+  await expect(maintainer.locator("ol").getByText("Follow-up guidance", { exact: true })).toBeVisible();
   await runCard.getByRole("button", { name: "Pause run" }).click();
   await expect(runCard.getByText("paused", { exact: true })).toBeVisible();
   await expect(maintainer.getByText("Run paused")).toBeVisible();

@@ -382,6 +382,13 @@ func (s *Store) Intervene(repositoryID, pullRequestID, sessionID, runID, actorID
 		return Run{}, Event{}, ErrNotFound
 	}
 	if run.State == Canceled {
+		if kind == "run.canceled" {
+			for _, event := range rec.Events {
+				if event.RunID == run.ID && event.Kind == kind {
+					return *run, event, nil
+				}
+			}
+		}
 		return Run{}, Event{}, ErrRunCanceled
 	}
 	switch kind {
@@ -432,7 +439,7 @@ func (s *Store) ListRuns(repositoryID, pullRequestID, sessionID string) ([]Run, 
 	if err != nil {
 		return nil, err
 	}
-	return append([]Run(nil), rec.Runs...), nil
+	return append([]Run{}, rec.Runs...), nil
 }
 
 func (s *Store) RevokeRunAccess(repositoryID, pullRequestID, sessionID, runID string) (Run, error) {
