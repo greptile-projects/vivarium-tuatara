@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
 
 const (
@@ -38,6 +40,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	userRoot := os.Getenv("USER_STORAGE_ROOT")
+	if userRoot == "" {
+		userRoot = "users"
+	}
+	userStore, err := users.New(userRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -45,17 +55,24 @@ func main() {
 	}
 
 	log.Printf("listening on http://localhost:%s", port)
-	if err := http.ListenAndServe(":"+port, newHandler(store)); err != nil {
+	if err := http.ListenAndServe(":"+port, newAppHandler(store, userStore)); err != nil {
 		log.Fatal(err)
 	}
 }
 
 func newHandler(store *storage.Store) http.Handler {
+	return newAppHandler(store, nil)
+}
+
+func newAppHandler(store *storage.Store, userStore *users.Store) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
+	if userStore != nil {
+		registerUserRoutes(mux, userStore)
+	}
 	mux.HandleFunc("GET /git/{remote}/info/refs", func(w http.ResponseWriter, r *http.Request) {
 		service := r.URL.Query().Get("service")
 		if service != uploadPackService && service != receivePackService {
@@ -92,6 +109,89 @@ func newHandler(store *storage.Store) http.Handler {
 		runGitService(w, r, repo, receivePackService, false)
 	})
 	return mux
+}
+
+type userInput struct {
+	Handle      *string `json:"handle"`
+	DisplayName *string `json:"display_name"`
+}
+
+func registerUserRoutes(mux *http.ServeMux, store *users.Store) {
+	mux.HandleFunc("POST /users", func(w http.ResponseWriter, r *http.Request) {
+		var input userInput
+		if err := decodeJSON(r, &input); err != nil || input.Handle == nil || input.DisplayName == nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid_request", "handle and display_name are required")
+			return
+		}
+		user, err := store.Create(*input.Handle, *input.DisplayName)
+		if writeUserError(w, err) {
+			return
+		}
+		w.Header().Set("Location", "/users/"+user.ID)
+		writeJSON(w, http.StatusCreated, user)
+	})
+	mux.HandleFunc("GET /users/{id}", func(w http.ResponseWriter, r *http.Request) {
+		user, err := store.Get(r.PathValue("id"))
+		if writeUserError(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, user)
+	})
+	mux.HandleFunc("PATCH /users/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var input userInput
+		if err := decodeJSON(r, &input); err != nil || (input.Handle == nil && input.DisplayName == nil) {
+			writeAPIError(w, http.StatusBadRequest, "invalid_request", "at least one of handle or display_name is required")
+			return
+		}
+		user, err := store.Patch(r.PathValue("id"), users.ProfilePatch{
+			Handle: input.Handle, DisplayName: input.DisplayName,
+		})
+		if writeUserError(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, user)
+	})
+}
+
+func decodeJSON(r *http.Request, destination any) error {
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return errors.New("request body must contain one JSON value")
+	}
+	return nil
+}
+
+func writeUserError(w http.ResponseWriter, err error) bool {
+	if err == nil {
+		return false
+	}
+	switch {
+	case errors.Is(err, users.ErrNotFound):
+		writeAPIError(w, http.StatusNotFound, "user_not_found", "user not found")
+	case errors.Is(err, users.ErrHandleTaken):
+		writeAPIError(w, http.StatusConflict, "handle_taken", "handle is already in use")
+	case errors.Is(err, users.ErrInvalidProfile):
+		writeAPIError(w, http.StatusBadRequest, "invalid_profile", err.Error())
+	default:
+		log.Printf("user storage: %v", err)
+		writeAPIError(w, http.StatusInternalServerError, "internal_error", "user storage unavailable")
+	}
+	return true
+}
+
+func writeAPIError(w http.ResponseWriter, status int, code, message string) {
+	writeJSON(w, status, map[string]any{"error": map[string]string{"code": code, "message": message}})
+}
+
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
 }
 
 func openRemoteRepository(w http.ResponseWriter, store *storage.Store, remote string) (*storage.Repository, bool) {

@@ -10,6 +10,32 @@ written down here as they're decided, not before.
 - `apps/api` — Go HTTP API. Starts at `main.go`, where routes are registered on
   the mux. `bun run dev:api` from the repo root, serves on `:8080`.
 
+## User identity
+
+Human collaborators have durable platform identities backed by the API's
+`users` package. `POST /users` creates an account from a unique `handle` and a
+`display_name`; `GET /users/{id}` inspects it; and `PATCH /users/{id}` changes
+either profile field. Handles are normalized to lowercase and contain 1–39
+letters, numbers, or hyphens. Display names contain 1–100 characters on one
+line. Requests and responses use JSON, and create responses include a
+`Location` header for the new identity.
+
+Each account receives a random 128-bit lowercase hexadecimal ID. That ID and
+`created_at` never change, so future repositories, commits, reviews, and other
+meaningful actions can refer to the actor independently of profile changes.
+Handles are globally unique but editable; they are collaboration labels, not
+attribution keys. `updated_at` records the most recent profile write.
+
+Records are atomically published as private JSON files beneath
+`USER_STORAGE_ROOT`, which defaults to `users` relative to the API process.
+The API syncs both record contents and the containing directory before
+acknowledging a write, and reopening the same root restores the same identity.
+All mutations hold an advisory lock in that root, making handle claims and
+sparse profile merges atomic even when multiple API processes share storage.
+The identity endpoints do not yet authenticate callers: the following
+authentication milestone will establish credentials and bind profile updates
+to the authenticated actor.
+
 ## Git repository storage
 
 The API's `storage` package is the boundary for durable Git repositories. A
