@@ -134,7 +134,13 @@ func mkdirAndSyncParent(path, parent string) error {
 
 func (s *Store) Get(repositoryID, pullRequestID, sessionID string) (Session, error) {
 	rec, err := s.read(repositoryID, pullRequestID, sessionID)
-	return rec.Session, err
+	if err != nil {
+		return Session{}, err
+	}
+	if err := s.directorySync(filepath.Join(s.root, repositoryID, pullRequestID)); err != nil {
+		return rec.Session, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+	}
+	return rec.Session, nil
 }
 
 func (s *Store) List(repositoryID, pullRequestID string) ([]Session, error) {
@@ -148,6 +154,9 @@ func (s *Store) List(repositoryID, pullRequestID string) ([]Session, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("list change sessions: %w", err)
+	}
+	if err := s.directorySync(directory); err != nil {
+		return nil, fmt.Errorf("confirm change session directory: %w", err)
 	}
 	sessions := make([]Session, 0, len(entries))
 	for _, entry := range entries {

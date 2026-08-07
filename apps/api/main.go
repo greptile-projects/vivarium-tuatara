@@ -717,6 +717,10 @@ func registerChangeSessionRoutes(mux *http.ServeMux, repositoriesStore *reposito
 			return
 		}
 		session, err := store.Get(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("session_id"))
+		if errors.Is(err, changesessions.ErrDurabilityUncertain) {
+			writeUncertainMutation(w, session)
+			return
+		}
 		if writeChangeSessionError(w, err) {
 			return
 		}

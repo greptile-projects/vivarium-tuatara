@@ -65,8 +65,12 @@ func TestCreateReportsVisibleRecordWhenDirectorySyncFails(t *testing.T) {
 	if _, statErr := filepath.Glob(filepath.Join(store.root, session.RepositoryID, session.PullRequestID, session.ID+".json")); statErr != nil {
 		t.Fatal(statErr)
 	}
+	if _, getErr := store.Get(session.RepositoryID, session.PullRequestID, session.ID); !errors.Is(getErr, ErrDurabilityUncertain) {
+		t.Fatalf("inspection error = %v, want durability uncertainty", getErr)
+	}
+	store.directorySync = syncDirectory
 	if _, getErr := store.Get(session.RepositoryID, session.PullRequestID, session.ID); getErr != nil {
-		t.Fatal(getErr)
+		t.Fatalf("inspection did not reconcile durability: %v", getErr)
 	}
 }
 

@@ -106,6 +106,7 @@ export function ChangeSessionDetail({ repositoryID, pullRequestID, sessionID }: 
   const [initiator, setInitiator] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [durabilityUncertain, setDurabilityUncertain] = useState(false);
   const generation = useRef(0);
 
   const load = useCallback(async () => {
@@ -115,15 +116,17 @@ export function ChangeSessionDetail({ repositoryID, pullRequestID, sessionID }: 
     setLoading(true); setError("");
     const base = `/repositories/${repositoryID}/pulls/${pullRequestID}`;
     try {
-      const [repo, pullItem, sessionItem, eventPage] = await Promise.all([
+      const [repo, pullItem, sessionResponse] = await Promise.all([
         api<Repository>(`/repositories/${repositoryID}`, {}, token),
         api<PullRequest>(base, {}, token),
-        api<ChangeSession>(`${base}/sessions/${sessionID}`, {}, token),
-        timeline(`${base}/sessions/${sessionID}/events`, token),
+        apiResponse<ChangeSession>(`${base}/sessions/${sessionID}`, {}, token),
       ]);
+      const uncertain = sessionResponse.status === 202 || sessionResponse.headers.get("Vivarium-Durability") === "uncertain";
+      const sessionItem = sessionResponse.data;
+      const eventPage = uncertain ? [] : await timeline(`${base}/sessions/${sessionID}/events`, token);
       const person = await api<User>(`/users/${sessionItem.initiator_id}`, {}, token).catch(() => null);
       if (generation.current !== current) return;
-      setRepository(repo); setPull(pullItem); setSession(sessionItem); setEvents(eventPage); setInitiator(person);
+      setRepository(repo); setPull(pullItem); setSession(sessionItem); setEvents(eventPage); setInitiator(person); setDurabilityUncertain(uncertain);
     } catch (reason) { if (generation.current === current) setError(message(reason, "The change session could not be loaded.")); }
     finally { if (generation.current === current) setLoading(false); }
   }, [authLoading, pullRequestID, repositoryID, sessionID, token]);
@@ -133,9 +136,10 @@ export function ChangeSessionDetail({ repositoryID, pullRequestID, sessionID }: 
   if (!user) return <Card className="p-8 text-center"><h1 className="text-2xl font-semibold">Reconnect to shared agent work</h1><p className="mt-2 text-sm text-[var(--muted)]">Sign in as a current repository collaborator to inspect this session.</p><Link href="/?access=signin" className="mt-5 inline-flex min-h-10 items-center rounded-lg bg-[var(--brand)] px-4 text-sm font-semibold text-white">Sign in</Link></Card>;
   if (error || !session || !pull || !repository) return <Card className="p-8"><h1 className="text-xl font-semibold">Session unavailable</h1><p role="alert" className="mt-2 text-sm text-[var(--danger)]">{error || "The session could not be found."}</p></Card>;
   return <div className="space-y-7">
-    <header><Link href={`/pulls/${repositoryID}/${pullRequestID}`} className="text-sm font-semibold text-[var(--brand)]">← Back to pull request</Link><div className="mt-5 flex flex-wrap items-center gap-3"><Badge tone="success">{session.state}</Badge><span className="font-mono text-xs text-[var(--muted)]">Session {short(session.id)}</span></div><h1 className="mt-3 text-3xl font-semibold tracking-[-.035em]">Change session for {pull.title}</h1><p className="mt-2 text-sm leading-6 text-[var(--muted)]">A durable collaboration timeline in {repository.name}, anchored to revision <code>{short(session.source_commit_id)}</code>.</p></header>
+    <header><Link href={`/pulls/${repositoryID}/${pullRequestID}`} className="text-sm font-semibold text-[var(--brand)]">← Back to pull request</Link><div className="mt-5 flex flex-wrap items-center gap-3"><Badge tone={durabilityUncertain ? "warning" : "success"}>{durabilityUncertain ? "durability uncertain" : session.state}</Badge><span className="font-mono text-xs text-[var(--muted)]">Session {short(session.id)}</span></div><h1 className="mt-3 text-3xl font-semibold tracking-[-.035em]">Change session for {pull.title}</h1><p className="mt-2 text-sm leading-6 text-[var(--muted)]">{durabilityUncertain ? "A visible collaboration workspace whose crash-safe persistence is not yet confirmed" : "A durable collaboration timeline"} in {repository.name}, anchored to revision <code>{short(session.source_commit_id)}</code>.</p></header>
+    {durabilityUncertain && <Card className="border-[var(--warning)] bg-[var(--warning-soft)] p-5"><h2 className="font-semibold text-[var(--warning)]">Session durability remains uncertain</h2><p className="mt-2 text-sm leading-6 text-[var(--warning)]">The workspace is currently visible, but its storage directory could not be synchronized. Do not rely on its timeline until a later inspection confirms persistence.</p><Button className="mt-4" variant="secondary" onClick={() => void load()}>Retry durability check</Button></Card>}
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
-      <main><h2 className="text-lg font-semibold">Session timeline</h2><Card className="mt-3 overflow-hidden"><ol className="divide-y divide-[var(--line)]">{events.map((event) => <li key={event.id} className="flex gap-4 p-5"><span aria-hidden="true" className="mt-1.5 size-2 shrink-0 rounded-full bg-[var(--brand)]"/><div><p className="text-sm font-semibold">Change session opened</p><p className="mt-1 text-sm text-[var(--muted)]">{event.actor_id === session.initiator_id && initiator ? `@${initiator.handle}` : "A collaborator"} created this workspace in the {event.state} state.</p><time className="mt-2 block text-xs text-[var(--muted)]">{formatTime(event.created_at)}</time></div></li>)}</ol></Card></main>
+      <main><h2 className="text-lg font-semibold">Session timeline</h2>{durabilityUncertain ? <Card className="mt-3 p-6 text-sm text-[var(--muted)]">Timeline events are withheld until session durability is confirmed.</Card> : <Card className="mt-3 overflow-hidden"><ol className="divide-y divide-[var(--line)]">{events.map((event) => <li key={event.id} className="flex gap-4 p-5"><span aria-hidden="true" className="mt-1.5 size-2 shrink-0 rounded-full bg-[var(--brand)]"/><div><p className="text-sm font-semibold">Change session opened</p><p className="mt-1 text-sm text-[var(--muted)]">{event.actor_id === session.initiator_id && initiator ? `@${initiator.handle}` : "A collaborator"} created this workspace in the {event.state} state.</p><time className="mt-2 block text-xs text-[var(--muted)]">{formatTime(event.created_at)}</time></div></li>)}</ol></Card>}</main>
       <aside><Card className="p-5"><h2 className="font-semibold">Session context</h2><dl className="mt-4 space-y-3 text-sm"><div><dt className="text-xs text-[var(--muted)]">Initiated by</dt><dd className="mt-1 font-semibold">{initiator ? `@${initiator.handle}` : short(session.initiator_id)}</dd></div><div><dt className="text-xs text-[var(--muted)]">Review revision</dt><dd className="mt-1"><code title={session.source_commit_id}>{short(session.source_commit_id)}</code></dd></div><div><dt className="text-xs text-[var(--muted)]">Created</dt><dd className="mt-1">{formatTime(session.created_at)}</dd></div></dl></Card></aside>
     </div>
   </div>;

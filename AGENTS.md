@@ -260,7 +260,9 @@ whenever dependencies change or the web job fails before it starts.
   creation snapshots its recorded source revision and atomically publishes an
   attributable `session.opened` timeline event. Participant-only collection,
   detail, and event endpoints are the durable reconnection boundary for future
-  runs and must not expose worker internals.
+  runs and must not expose worker internals. Detail inspection retries a
+  failed creation-time directory sync: only a successful retry confirms
+  durability, while another failure repeats the stable `202` resource response.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

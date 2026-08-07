@@ -102,6 +102,7 @@ test("two users carry one attributed change from onboarding through merge", asyn
   await maintainer.goto(newcomer.url());
   const uncertainSessionID = "f".repeat(32);
   const sessionEndpoint = `**/api/repositories/${repositoryID}/pulls/${pullRequestID}/sessions`;
+  const uncertainDetailEndpoint = `${sessionEndpoint}/${uncertainSessionID}`;
   await maintainer.route(sessionEndpoint, async (route) => {
     if (route.request().method() !== "POST") return route.continue();
     await route.fulfill({
@@ -123,7 +124,30 @@ test("two users carry one attributed change from onboarding through merge", asyn
   await expect(maintainer.getByText("Session created with uncertain durability")).toBeVisible();
   await expect(maintainer.getByRole("link", { name: "Inspect session fffffff" })).toBeVisible();
   await expect(maintainer.getByRole("link", { name: "Session fffffff", exact: true })).toHaveCount(0);
+  await maintainer.route(uncertainDetailEndpoint, async (route) => {
+    await route.fulfill({
+      status: 202,
+      headers: { "Content-Type": "application/json", "Vivarium-Durability": "uncertain" },
+      body: JSON.stringify({
+        id: uncertainSessionID,
+        repository_id: repositoryID,
+        pull_request_id: pullRequestID,
+        initiator_id: collaborationID,
+        source_commit_id: "a".repeat(40),
+        state: "open",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }),
+    });
+  });
+  await maintainer.getByRole("link", { name: "Inspect session fffffff" }).click();
+  await expect(maintainer.getByRole("heading", { name: "Session durability remains uncertain" })).toBeVisible();
+  await expect(maintainer.getByText("Timeline events are withheld until session durability is confirmed.")).toBeVisible();
+  await maintainer.reload();
+  await expect(maintainer.getByRole("heading", { name: "Session durability remains uncertain" })).toBeVisible();
+  await maintainer.getByRole("link", { name: "← Back to pull request" }).click();
   await maintainer.unroute(sessionEndpoint);
+  await maintainer.unroute(uncertainDetailEndpoint);
   await maintainer.getByRole("button", { name: "Start change session" }).click();
   await maintainer.getByRole("link", { name: /Session [a-f0-9]{7}/ }).click();
   await expect(maintainer).toHaveURL(new RegExp(`/pulls/${repositoryID}/[a-f0-9]{32}/sessions/[a-f0-9]{32}$`));
