@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"strconv"
 	"strings"
 	"syscall"
@@ -176,7 +177,7 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 		registerPullRequestRoutes(mux, repositoryCatalog, proposalStore, pullRequestStore, authStore, activityStore, userStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil && changeSessionStore != nil {
-		registerChangeSessionRoutes(mux, repositoryCatalog, pullRequestStore, changeSessionStore, authStore)
+		registerChangeSessionRoutes(mux, store, repositoryCatalog, pullRequestStore, changeSessionStore, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && activityStore != nil {
 		registerActivityRoutes(mux, repositoryCatalog, activityStore, authStore)
@@ -206,7 +207,7 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 		if _, err := io.WriteString(w, pktLine("# service="+service+"\n")+"0000"); err != nil {
 			return
 		}
-		runGitService(w, r, repo, service, true, false)
+		runGitService(w, r, repo, service, true, false, "")
 	})
 	mux.HandleFunc("POST /git/{remote}/git-upload-pack", func(w http.ResponseWriter, r *http.Request) {
 		if authStore != nil {
@@ -220,16 +221,18 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 		}
 		w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
 		setGitCacheHeaders(w)
-		runGitService(w, r, repo, uploadPackService, false, false)
+		runGitService(w, r, repo, uploadPackService, false, false, "")
 	})
 	mux.HandleFunc("POST /git/{remote}/git-receive-pack", func(w http.ResponseWriter, r *http.Request) {
 		contributor := false
+		onlyBranch := ""
 		if authStore != nil {
-			_, owner, ok := authorizeGitRepository(w, r, authStore, repositoryCatalog, r.PathValue("remote"), "git:write")
+			credential, owner, ok := authorizeGitRepository(w, r, authStore, repositoryCatalog, r.PathValue("remote"), "git:write")
 			if !ok {
 				return
 			}
 			contributor = !owner
+			onlyBranch = credential.GitWriteBranch
 		}
 		repo, ok := openRemoteRepository(w, store, r.PathValue("remote"))
 		if !ok {
@@ -237,7 +240,7 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 		}
 		w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
 		setGitCacheHeaders(w)
-		runGitService(w, r, repo, receivePackService, false, contributor)
+		runGitService(w, r, repo, receivePackService, false, contributor, onlyBranch)
 	})
 	return mux
 }
@@ -657,7 +660,7 @@ func writePullRequestError(w http.ResponseWriter, err error) bool {
 	return true
 }
 
-func registerChangeSessionRoutes(mux *http.ServeMux, repositoriesStore *repositories.Store, pullRequestStore *pullrequests.Store, store *changesessions.Store, authStore *auth.Store) {
+func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoriesStore *repositories.Store, pullRequestStore *pullrequests.Store, store *changesessions.Store, authStore *auth.Store) {
 	loadPull := func(w http.ResponseWriter, r *http.Request) (pullrequests.PullRequest, bool) {
 		pull, err := pullRequestStore.Get(r.PathValue("id"), r.PathValue("pull_id"))
 		if writePullRequestError(w, err) {
@@ -752,6 +755,163 @@ func registerChangeSessionRoutes(mux *http.ServeMux, repositoriesStore *reposito
 		}
 		writeJSON(w, 200, map[string]any{"events": page, "next_cursor": next})
 	})
+	type runInput struct {
+		Instructions   string   `json:"instructions"`
+		SourceCommitID string   `json:"source_commit_id"`
+		ContextPaths   []string `json:"context_paths"`
+		WorkingBranch  string   `json:"working_branch"`
+		ExpiresIn      int64    `json:"expires_in"`
+	}
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/sessions/{session_id}/runs", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		pull, ok := loadPull(w, r)
+		if !ok {
+			return
+		}
+		if pull.Status != pullrequests.Open {
+			writeAPIError(w, 409, "pull_request_closed", "agent runs require an open pull request")
+			return
+		}
+		session, err := store.Get(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("session_id"))
+		if writeChangeSessionError(w, err) {
+			return
+		}
+		var input runInput
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_agent_run", "run mandate is invalid")
+			return
+		}
+		input.Instructions = strings.TrimSpace(input.Instructions)
+		input.WorkingBranch = strings.TrimSpace(input.WorkingBranch)
+		if input.ExpiresIn == 0 {
+			input.ExpiresIn = 3600
+		}
+		if input.SourceCommitID != session.SourceCommitID || len([]rune(input.Instructions)) == 0 || len([]rune(input.Instructions)) > 10000 || len(input.ContextPaths) == 0 || len(input.ContextPaths) > 50 || !validWorkingBranch(input.WorkingBranch) || input.WorkingBranch != pull.SourceBranch || input.ExpiresIn < 300 || input.ExpiresIn > 86400 {
+			writeAPIError(w, 400, "invalid_agent_run", "instructions, revision, context, branch, or lifetime is invalid")
+			return
+		}
+		repo, openErr := gitStore.Open(r.PathValue("id"))
+		if openErr != nil {
+			writeAPIError(w, 500, "internal_error", "repository storage unavailable")
+			return
+		}
+		commit, commitErr := repo.ReadCommit(storage.ObjectID(input.SourceCommitID))
+		if commitErr != nil {
+			writeAPIError(w, 500, "internal_error", "repository revision unavailable")
+			return
+		}
+		entries, walkErr := repo.WalkTree(commit.Tree)
+		if walkErr != nil {
+			writeAPIError(w, 500, "internal_error", "repository context unavailable")
+			return
+		}
+		available := map[string]bool{}
+		for _, entry := range entries {
+			available[entry.Path] = true
+		}
+		seen := map[string]bool{}
+		for i, selected := range input.ContextPaths {
+			clean := path.Clean(strings.TrimSpace(selected))
+			if clean == "." || clean != selected || strings.HasPrefix(clean, "../") || !available[clean] || seen[clean] {
+				writeAPIError(w, 400, "invalid_agent_run", "every context path must identify a unique path in the selected revision")
+				return
+			}
+			seen[clean] = true
+			input.ContextPaths[i] = clean
+		}
+		issued, issueErr := authStore.IssueBound(actor.UserID, auth.Git, "Agent run in session "+session.ID, []string{"git:read", "git:write"}, time.Duration(input.ExpiresIn)*time.Second, r.PathValue("id"), "refs/heads/"+input.WorkingBranch)
+		if issueErr != nil {
+			writeAPIError(w, 500, "internal_error", "agent access could not be issued")
+			return
+		}
+		run, launchErr := store.LaunchRun(r.PathValue("id"), r.PathValue("pull_id"), session.ID, actor.UserID, input.Instructions, input.SourceCommitID, input.ContextPaths, input.WorkingBranch, issued.ID, issued.ExpiresAt)
+		location := r.URL.Path + "/" + run.ID
+		response := map[string]any{"run": run, "credential": issued}
+		if errors.Is(launchErr, changesessions.ErrDurabilityUncertain) {
+			w.Header().Set("Location", location)
+			writeUncertainMutation(w, response)
+			return
+		}
+		if launchErr != nil {
+			_, _ = authStore.Revoke(actor.UserID, issued.ID)
+			writeChangeSessionError(w, launchErr)
+			return
+		}
+		w.Header().Set("Location", location)
+		writeJSON(w, http.StatusCreated, response)
+	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/sessions/{session_id}/runs", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:read"); !ok {
+			return
+		}
+		if _, ok := loadPull(w, r); !ok {
+			return
+		}
+		all, err := store.ListRuns(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("session_id"))
+		if writeChangeSessionError(w, err) {
+			return
+		}
+		page, next, valid := paginate(r, all, func(run changesessions.Run) string { return run.ID })
+		if !valid {
+			writeAPIError(w, 400, "invalid_pagination", "limit or after is invalid")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"runs": page, "next_cursor": next})
+	})
+	mux.HandleFunc("DELETE /repositories/{id}/pulls/{pull_id}/sessions/{session_id}/runs/{run_id}/credential", func(w http.ResponseWriter, r *http.Request) {
+		_, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		runs, err := store.ListRuns(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("session_id"))
+		if writeChangeSessionError(w, err) {
+			return
+		}
+		var selected *changesessions.Run
+		for i := range runs {
+			if runs[i].ID == r.PathValue("run_id") {
+				selected = &runs[i]
+				break
+			}
+		}
+		if selected == nil {
+			writeAPIError(w, 404, "agent_run_not_found", "agent run not found")
+			return
+		}
+		if _, err := authStore.Revoke(selected.InitiatorID, selected.CredentialID); err != nil && !errors.Is(err, auth.ErrNotFound) {
+			writeAPIError(w, 500, "internal_error", "agent access could not be revoked")
+			return
+		}
+		run, err := store.RevokeRunAccess(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("session_id"), selected.ID)
+		if errors.Is(err, changesessions.ErrDurabilityUncertain) {
+			writeUncertainMutation(w, run)
+			return
+		}
+		if writeChangeSessionError(w, err) {
+			return
+		}
+		writeJSON(w, 200, run)
+	})
+}
+
+func validWorkingBranch(branch string) bool {
+	if branch == "" || len(branch) > 200 || strings.HasPrefix(branch, ".") || strings.HasSuffix(branch, ".") || strings.HasSuffix(branch, ".lock") || strings.Contains(branch, "..") || strings.ContainsAny(branch, " ~^:?*[\\\x00\r\n") {
+		return false
+	}
+	for _, character := range branch {
+		if !((character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || strings.ContainsRune("._/-", character)) {
+			return false
+		}
+	}
+	for _, part := range strings.Split(branch, "/") {
+		if part == "" || strings.HasPrefix(part, ".") || strings.HasSuffix(part, ".") {
+			return false
+		}
+	}
+	return true
 }
 
 func writeChangeSessionError(w http.ResponseWriter, err error) bool {
@@ -1526,6 +1686,10 @@ func authorizeGitRepository(w http.ResponseWriter, r *http.Request, authStore *a
 		writeAuthenticationRequired(w, true)
 		return auth.Credential{}, false, false
 	}
+	if actor.RepositoryID != "" && actor.RepositoryID != id {
+		http.Error(w, "repository not found", http.StatusNotFound)
+		return auth.Credential{}, false, false
+	}
 	owner := actor.UserID == repository.OwnerID
 	collaborator, accessErr := catalog.HasCollaborator(actor.UserID, id)
 	if accessErr != nil {
@@ -1654,10 +1818,10 @@ func openRemoteRepository(w http.ResponseWriter, store *storage.Store, remote st
 }
 
 func runUploadPack(w http.ResponseWriter, r *http.Request, repo *storage.Repository, advertise bool) {
-	runGitService(w, r, repo, uploadPackService, advertise, false)
+	runGitService(w, r, repo, uploadPackService, advertise, false, "")
 }
 
-func runGitService(w http.ResponseWriter, r *http.Request, repo *storage.Repository, service string, advertise, contributor bool) {
+func runGitService(w http.ResponseWriter, r *http.Request, repo *storage.Repository, service string, advertise, contributor bool, onlyBranch string) {
 	commandName := strings.TrimPrefix(service, "git-")
 	args := []string{commandName, "--stateless-rpc"}
 	var removeHooks func()
@@ -1679,7 +1843,9 @@ func runGitService(w http.ResponseWriter, r *http.Request, repo *storage.Reposit
 			removeHooks = func() { _ = os.RemoveAll(hooksPath) }
 			defer removeHooks()
 			hook := branchNamespaceHook
-			if contributor {
+			if onlyBranch != "" {
+				hook = "#!/bin/sh\nwhile read -r old new ref\ndo\n  if [ \"$ref\" != \"" + onlyBranch + "\" ]; then\n    echo \"credential may only update " + onlyBranch + "\" >&2\n    exit 1\n  fi\ndone\n"
+			} else if contributor {
 				hook = contributorBranchHook
 			}
 			if err := os.WriteFile(hooksPath+"/pre-receive", []byte(hook), 0o700); err != nil {

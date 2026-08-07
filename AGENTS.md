@@ -265,6 +265,14 @@ whenever dependencies change or the web job fails before it starts.
   durability, while another failure repeats the stable `202` resource response.
   Event reads must pass through the same reconciliation before exposing a
   timeline, including for direct API consumers.
+  Confirmed sessions accept durable agent run mandates containing bounded
+  instructions, the exact session revision, existing repository context paths,
+  and the explicit pull-request source branch. Launch issues a one-time Git
+  credential with only read/write scopes, restricted to that repository and
+  branch and expiring within 24 hours; durable runs retain only its ID and
+  expiry. Launches append attributable `run.launched` events, collection reads
+  remain participant-only, and any current participant with repository write
+  access can revoke the credential while preserving the mandate.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

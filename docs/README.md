@@ -378,6 +378,16 @@ requires access to worker processes or execution logs. This public session
 boundary is where later delegation, progress, intervention, and published
 artifacts attach.
 
+Delegation attaches a durable run mandate to that boundary. The initiating
+collaborator writes the intended outcome, explicitly confirms the pinned pull
+request revision, selects existing repository paths as context, and names a
+working branch. Launch returns a one-time, expiring Git credential bound to
+that repository and branch; its durable run record retains only the credential
+identity and expiry. The session timeline attributes the launch, and any
+current participant can revoke access without deleting the mandate. This makes
+authorization and reconstruction public collaboration state while leaving
+worker execution and progress for later session events.
+
 ## Git HTTP transport
 
 The API exposes a visibility-aware smart HTTP remote at
