@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -91,6 +92,32 @@ type Review struct {
 	Stale            bool      `json:"stale"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+type BranchState struct {
+	Branch           string  `json:"branch"`
+	SnapshotCommitID string  `json:"snapshot_commit_id"`
+	CurrentCommitID  *string `json:"current_commit_id"`
+	State            string  `json:"state"`
+}
+
+type ReadinessBlocker struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// MergeReadiness is derived entirely from durable pull-request, review, and
+// Git state. It is never persisted and computing it does not modify the
+// repository.
+type MergeReadiness struct {
+	Mergeable         bool               `json:"mergeable"`
+	CanMerge          bool               `json:"can_merge"`
+	RequiredApprovals int                `json:"required_approvals"`
+	Approvals         int                `json:"approvals"`
+	Source            BranchState        `json:"source"`
+	Target            BranchState        `json:"target"`
+	HasConflicts      bool               `json:"has_conflicts"`
+	Blockers          []ReadinessBlocker `json:"blockers"`
 }
 
 type commentRecord struct {
@@ -537,6 +564,155 @@ func (s *Store) ListReviews(repositoryID, pullRequestID string) ([]Review, error
 		result[i].Stale = currentCommitID == "" || result[i].ReviewedCommitID != currentCommitID
 	}
 	return result, nil
+}
+
+// Readiness recomputes every repository-level merge condition against live
+// branch state. The caller supplies whether the inspecting actor has merge
+// authority so the report can distinguish mergeability from permission.
+func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool) (MergeReadiness, error) {
+	p, err := s.Get(repositoryID, pullRequestID)
+	if err != nil {
+		return MergeReadiness{}, err
+	}
+	repository, err := s.git.Open(repositoryID)
+	if err != nil {
+		return MergeReadiness{}, err
+	}
+	report := MergeReadiness{
+		RequiredApprovals: 1,
+		Source:            BranchState{Branch: p.SourceBranch, SnapshotCommitID: p.SourceCommitID},
+		Target:            BranchState{Branch: p.TargetBranch, SnapshotCommitID: p.TargetCommitID},
+		Blockers:          []ReadinessBlocker{},
+	}
+	addBlocker := func(code, message string) {
+		report.Blockers = append(report.Blockers, ReadinessBlocker{Code: code, Message: message})
+	}
+	if p.Status != Open {
+		addBlocker("pull_request_not_open", "pull request must be open")
+	}
+
+	sourceID, sourceState, err := liveBranchState(repository, p.SourceBranch, p.SourceCommitID)
+	if err != nil {
+		return MergeReadiness{}, err
+	}
+	report.Source.State, report.Source.CurrentCommitID = sourceState, sourceID
+	if sourceID == nil {
+		addBlocker("source_branch_missing", "source branch must identify a commit")
+	} else if *sourceID != p.SourceCommitID {
+		addBlocker("source_branch_changed", "source branch no longer matches the pull request snapshot")
+	}
+	targetID, targetState, err := liveBranchState(repository, p.TargetBranch, p.TargetCommitID)
+	if err != nil {
+		return MergeReadiness{}, err
+	}
+	report.Target.State, report.Target.CurrentCommitID = targetState, targetID
+	if targetID == nil {
+		addBlocker("target_branch_missing", "target branch must identify a commit")
+	}
+
+	reviews, err := s.ListReviews(repositoryID, pullRequestID)
+	if err != nil {
+		return MergeReadiness{}, err
+	}
+	changesRequested := false
+	for _, review := range reviews {
+		if review.Stale || review.Decision == Withdrawn {
+			continue
+		}
+		if review.Decision == Approved {
+			report.Approvals++
+		} else if review.Decision == ChangesRequested {
+			changesRequested = true
+		}
+	}
+	if report.Approvals < report.RequiredApprovals {
+		addBlocker("approval_required", "at least one current approval is required")
+	}
+	if changesRequested {
+		addBlocker("changes_requested", "a current review requests changes")
+	}
+
+	if sourceID != nil && targetID != nil && *sourceID == p.SourceCommitID {
+		merged, err := commitReachable(repository, *sourceID, *targetID)
+		if err != nil {
+			return MergeReadiness{}, err
+		}
+		if merged {
+			addBlocker("already_merged", "source commit is already reachable from the target branch")
+		} else {
+			report.HasConflicts, err = mergeConflicts(repository, *targetID, *sourceID)
+			if err != nil {
+				return MergeReadiness{}, err
+			}
+			if report.HasConflicts {
+				addBlocker("merge_conflict", "source and target branches have merge conflicts")
+			}
+		}
+	}
+	report.Mergeable = len(report.Blockers) == 0
+	report.CanMerge = report.Mergeable && actorCanMerge
+	return report, nil
+}
+
+func liveBranchState(repository *storage.Repository, branch, snapshot string) (*string, string, error) {
+	current, err := branchCommit(repository, branch)
+	if errors.Is(err, ErrBranchNotFound) {
+		return nil, "missing", nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	state := "current"
+	if current != snapshot {
+		advanced, err := commitReachable(repository, snapshot, current)
+		if err != nil {
+			return nil, "", err
+		}
+		if advanced {
+			state = "advanced"
+		} else {
+			state = "rewritten"
+		}
+	}
+	return &current, state, nil
+}
+
+func commitReachable(repository *storage.Repository, ancestor, descendant string) (bool, error) {
+	commits, err := repository.ListCommitAncestry(storage.ObjectID(descendant))
+	if err != nil {
+		return false, err
+	}
+	for _, commit := range commits {
+		if string(commit.ID) == ancestor {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// mergeConflicts asks stock Git to perform its merge calculation while
+// redirecting every object write into a disposable object directory. The bare
+// repository remains byte-for-byte read-only.
+func mergeConflicts(repository *storage.Repository, target, source string) (bool, error) {
+	temporary, err := os.MkdirTemp("", "vivarium-merge-readiness-")
+	if err != nil {
+		return false, err
+	}
+	defer os.RemoveAll(temporary)
+	objects := filepath.Join(temporary, "objects")
+	if err := os.Mkdir(objects, 0o700); err != nil {
+		return false, err
+	}
+	command := exec.Command("git", "-C", repository.Path(), "merge-tree", "--write-tree", target, source)
+	command.Env = append(os.Environ(), "GIT_OBJECT_DIRECTORY="+objects, "GIT_ALTERNATE_OBJECT_DIRECTORIES="+filepath.Join(repository.Path(), "objects"))
+	if output, err := command.CombinedOutput(); err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 1 {
+			return true, nil
+		}
+		return false, fmt.Errorf("calculate merge: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return false, nil
 }
 
 func (s *Store) commentsPath(repositoryID, pullRequestID string) string {

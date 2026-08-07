@@ -246,6 +246,13 @@ symbolic `HEAD`. After reopening and reading the repository through the same
 interface, stock `git fsck --full` verifies the complete reachable graph, and
 stock revision parsing verifies `HEAD` and both tag forms.
 
+Pull-request merge readiness is derived on demand rather than persisted. It
+combines immutable request snapshots with live branch tips, current reviews,
+ancestry, owner authority, and a stock-Git three-way conflict calculation.
+The conflict calculation uses the bare repository only as an object source and
+redirects generated merge objects to a disposable directory, preserving the
+storage package as the sole durable write boundary.
+
 ## Git HTTP transport
 
 The API exposes a visibility-aware smart HTTP remote at

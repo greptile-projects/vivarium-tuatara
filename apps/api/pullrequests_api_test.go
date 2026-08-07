@@ -201,3 +201,72 @@ func TestContributorOpensPullRequestWithExactBranchState(t *testing.T) {
 	}
 	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/pulls/"+pullRequest.ID, "", owner.Credential.Token, http.StatusInternalServerError).Body.Close()
 }
+
+func TestPullRequestMergeReadinessReportsRequirementsConflictsAndPermission(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	pullRequestStore, _ := pullrequests.New(t.TempDir(), gitStore)
+	server := httptest.NewServer(newPlatformHandler(gitStore, identities, credentials, catalog, nil, pullRequestStore))
+	defer server.Close()
+
+	owner := createTestAccount(t, server.URL, "ready-owner")
+	contributor := createTestAccount(t, server.URL, "ready-contributor")
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"readiness"}`, owner.Credential.Token, http.StatusCreated)
+	var repository repositories.Repository
+	json.NewDecoder(response.Body).Decode(&repository)
+	response.Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/collaborators", `{"user_id":"`+contributor.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+
+	gitRepository, _ := gitStore.Open(repository.ID)
+	baseBlob, _ := gitRepository.WriteObject(storage.BlobObject, []byte("base\n"))
+	sourceBlob, _ := gitRepository.WriteObject(storage.BlobObject, []byte("source\n"))
+	baseTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "file.txt", id: baseBlob})
+	sourceTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "file.txt", id: sourceBlob})
+	base := writeTestCommit(t, gitRepository, baseTree, nil, 1700000000, "base")
+	source := writeTestCommit(t, gitRepository, sourceTree, []storage.ObjectID{base}, 1700000001, "source")
+	gitRepository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)})
+	gitRepository.CreateReference(storage.Reference{Name: "refs/heads/feature", Target: string(source)})
+	objectsBeforeReadiness, _ := gitRepository.ListObjects()
+
+	created := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/pulls", `{"title":"Ready?","body":"Report every condition.","source_branch":"feature","target_branch":"main"}`, contributor.Credential.Token, http.StatusCreated)
+	var pullRequest pullrequests.PullRequest
+	json.NewDecoder(created.Body).Decode(&pullRequest)
+	created.Body.Close()
+	readinessURL := server.URL + "/repositories/" + repository.ID + "/pulls/" + pullRequest.ID + "/merge-readiness"
+
+	readReport := func(token string) pullrequests.MergeReadiness {
+		t.Helper()
+		response := authenticatedRequest(t, http.MethodGet, readinessURL, "", token, http.StatusOK)
+		var report pullrequests.MergeReadiness
+		if err := json.NewDecoder(response.Body).Decode(&report); err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		return report
+	}
+	report := readReport(contributor.Credential.Token)
+	if report.Mergeable || report.CanMerge || report.RequiredApprovals != 1 || report.Approvals != 0 || len(report.Blockers) != 1 || report.Blockers[0].Code != "approval_required" || report.Source.State != "current" || report.Target.State != "current" || report.HasConflicts {
+		t.Fatalf("initial readiness = %#v", report)
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/pulls/"+pullRequest.ID+"/reviews", `{"decision":"approved"}`, owner.Credential.Token, http.StatusOK).Body.Close()
+	contributorReport := readReport(contributor.Credential.Token)
+	ownerReport := readReport(owner.Credential.Token)
+	if !contributorReport.Mergeable || contributorReport.CanMerge || !ownerReport.Mergeable || !ownerReport.CanMerge || len(ownerReport.Blockers) != 0 {
+		t.Fatalf("approved readiness: contributor=%#v owner=%#v", contributorReport, ownerReport)
+	}
+
+	targetBlob, _ := gitRepository.WriteObject(storage.BlobObject, []byte("target\n"))
+	targetTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "file.txt", id: targetBlob})
+	target := writeTestCommit(t, gitRepository, targetTree, []storage.ObjectID{base}, 1700000002, "target")
+	gitRepository.UpdateReference(storage.Reference{Name: "refs/heads/main", Target: string(target)})
+	report = readReport(owner.Credential.Token)
+	if report.Mergeable || report.CanMerge || !report.HasConflicts || report.Target.State != "advanced" || len(report.Blockers) != 1 || report.Blockers[0].Code != "merge_conflict" {
+		t.Fatalf("conflicting readiness = %#v", report)
+	}
+	objectsAfterReadiness, _ := gitRepository.ListObjects()
+	if len(objectsAfterReadiness) != len(objectsBeforeReadiness)+3 { // target blob, tree, and commit only
+		t.Fatalf("readiness wrote repository objects: before=%d after=%d", len(objectsBeforeReadiness), len(objectsAfterReadiness))
+	}
+}
