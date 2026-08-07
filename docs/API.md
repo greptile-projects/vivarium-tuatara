@@ -138,3 +138,25 @@ private atomic JSON beneath `PULL_REQUEST_STORAGE_ROOT`, defaulting to
 metadata cannot make another repository's collection unavailable. A create
 whose rename is visible but directory durability is
 uncertain returns the shared `202` response with its stable pull request ID.
+
+`GET /repositories/{id}/pulls/{pull_id}/commits` returns `commits`, the commits
+reachable from the pull request's snapshotted source commit but not from its
+snapshotted target commit. Results follow depth-first parent order from the
+source tip and expose each commit's `id`, `tree_id`, ordered `parent_ids`, raw
+ordered Git `headers`, and exact `message`. The endpoint uses the immutable
+creation snapshots rather than current branch tips.
+
+`GET /repositories/{id}/pulls/{pull_id}/files` compares those same two commit
+trees and returns `files` in path order. Each entry has `path`, `status`
+(`added`, `modified`, or `deleted`), and nullable `old_id`, `new_id`,
+`old_mode`, and `new_mode`. Files, symbolic links, and gitlinks are reported;
+tree container entries are omitted. A mode-only change is `modified`.
+
+Owners and contributors append immutable pull request discussion with `POST
+/repositories/{id}/pulls/{pull_id}/comments` and a non-empty `body`. `GET` on
+the same collection returns attributable comments under `comments` with the
+shared cursor pagination contract. Each comment records its stable `id`,
+`pull_request_id`, `author_id`, body, and creation time. Reads inherit pull
+request visibility, while participation requires current repository access
+and `repositories:read`; making a repository public does not grant comment
+permission. Comment publication uses the shared uncertain-durability response.

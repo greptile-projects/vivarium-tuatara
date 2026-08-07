@@ -394,6 +394,63 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 		}
 		writeJSON(w, 200, pullRequest)
 	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/commits", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		commits, err := store.Commits(r.PathValue("id"), r.PathValue("pull_id"))
+		if writePullRequestError(w, err) {
+			return
+		}
+		writeJSON(w, 200, map[string]any{"commits": commits})
+	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/files", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		changes, err := store.Changes(r.PathValue("id"), r.PathValue("pull_id"))
+		if writePullRequestError(w, err) {
+			return
+		}
+		writeJSON(w, 200, map[string]any{"files": changes})
+	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/comments", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		all, err := store.ListComments(r.PathValue("id"), r.PathValue("pull_id"))
+		if writePullRequestError(w, err) {
+			return
+		}
+		page, next, ok := paginate(r, all, func(c pullrequests.Comment) string { return c.ID })
+		if !ok {
+			writeAPIError(w, 400, "invalid_pagination", "limit or after is invalid")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"comments": page, "next_cursor": next})
+	})
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/comments", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:read")
+		if !ok {
+			return
+		}
+		var input commentInput
+		if decodeJSON(r, &input) != nil || input.Body == nil {
+			writeAPIError(w, 400, "invalid_comment", "body is required")
+			return
+		}
+		comment, err := store.AddComment(r.PathValue("id"), r.PathValue("pull_id"), actor.UserID, *input.Body)
+		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
+			w.Header().Set("Location", r.URL.Path+"/"+comment.ID)
+			writeUncertainMutation(w, comment)
+			return
+		}
+		if writePullRequestError(w, err) {
+			return
+		}
+		w.Header().Set("Location", r.URL.Path+"/"+comment.ID)
+		writeJSON(w, 201, comment)
+	})
 }
 
 func writePullRequestError(w http.ResponseWriter, err error) bool {

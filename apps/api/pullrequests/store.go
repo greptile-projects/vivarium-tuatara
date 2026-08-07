@@ -43,6 +43,40 @@ type PullRequest struct {
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
+type Commit struct {
+	ID      string         `json:"id"`
+	TreeID  string         `json:"tree_id"`
+	Parents []string       `json:"parent_ids"`
+	Headers []CommitHeader `json:"headers"`
+	Message string         `json:"message"`
+}
+
+type CommitHeader struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type FileChange struct {
+	Path    string  `json:"path"`
+	Status  string  `json:"status"`
+	OldID   *string `json:"old_id"`
+	NewID   *string `json:"new_id"`
+	OldMode *string `json:"old_mode"`
+	NewMode *string `json:"new_mode"`
+}
+
+type Comment struct {
+	ID            string    `json:"id"`
+	PullRequestID string    `json:"pull_request_id"`
+	AuthorID      string    `json:"author_id"`
+	Body          string    `json:"body"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+type commentRecord struct {
+	Comments []Comment `json:"comments"`
+}
+
 type Store struct {
 	root          string
 	git           *storage.Store
@@ -182,6 +216,230 @@ func (s *Store) List(repositoryID string) ([]PullRequest, error) {
 		return result[i].CreatedAt.Before(result[j].CreatedAt)
 	})
 	return result, nil
+}
+
+// Commits returns the source commits that are not reachable from the target
+// snapshot, in depth-first parent order from the snapshotted source tip.
+func (s *Store) Commits(repositoryID, id string) ([]Commit, error) {
+	p, err := s.Get(repositoryID, id)
+	if err != nil {
+		return nil, err
+	}
+	repository, err := s.git.Open(repositoryID)
+	if err != nil {
+		return nil, err
+	}
+	target, err := repository.ListCommitAncestry(storage.ObjectID(p.TargetCommitID))
+	if err != nil {
+		return nil, err
+	}
+	excluded := make(map[storage.ObjectID]bool, len(target))
+	for _, commit := range target {
+		excluded[commit.ID] = true
+	}
+	source, err := repository.ListCommitAncestry(storage.ObjectID(p.SourceCommitID))
+	if err != nil {
+		return nil, err
+	}
+	result := []Commit{}
+	for _, commit := range source {
+		if excluded[commit.ID] {
+			continue
+		}
+		parents := make([]string, len(commit.Parents))
+		for i, parent := range commit.Parents {
+			parents[i] = string(parent)
+		}
+		headers := make([]CommitHeader, len(commit.Headers))
+		for i, header := range commit.Headers {
+			headers[i] = CommitHeader{Name: header.Name, Value: header.Value}
+		}
+		result = append(result, Commit{ID: string(commit.ID), TreeID: string(commit.Tree), Parents: parents, Headers: headers, Message: string(commit.Message)})
+	}
+	return result, nil
+}
+
+// Changes compares the complete target and source snapshots by path. Tree
+// container entries are omitted; files, symlinks, and gitlinks are included.
+func (s *Store) Changes(repositoryID, id string) ([]FileChange, error) {
+	p, err := s.Get(repositoryID, id)
+	if err != nil {
+		return nil, err
+	}
+	repository, err := s.git.Open(repositoryID)
+	if err != nil {
+		return nil, err
+	}
+	oldCommit, err := repository.ReadCommit(storage.ObjectID(p.TargetCommitID))
+	if err != nil {
+		return nil, err
+	}
+	newCommit, err := repository.ReadCommit(storage.ObjectID(p.SourceCommitID))
+	if err != nil {
+		return nil, err
+	}
+	oldPaths, err := repository.WalkTree(oldCommit.Tree)
+	if err != nil {
+		return nil, err
+	}
+	newPaths, err := repository.WalkTree(newCommit.Tree)
+	if err != nil {
+		return nil, err
+	}
+	oldFiles, newFiles := map[string]storage.TreeEntry{}, map[string]storage.TreeEntry{}
+	for _, entry := range oldPaths {
+		if entry.Type != storage.TreeObject {
+			oldFiles[entry.Path] = entry.TreeEntry
+		}
+	}
+	for _, entry := range newPaths {
+		if entry.Type != storage.TreeObject {
+			newFiles[entry.Path] = entry.TreeEntry
+		}
+	}
+	paths := make([]string, 0, len(oldFiles)+len(newFiles))
+	seen := map[string]bool{}
+	for path := range oldFiles {
+		paths = append(paths, path)
+		seen[path] = true
+	}
+	for path := range newFiles {
+		if !seen[path] {
+			paths = append(paths, path)
+		}
+	}
+	sort.Strings(paths)
+	result := []FileChange{}
+	for _, path := range paths {
+		oldEntry, oldOK := oldFiles[path]
+		newEntry, newOK := newFiles[path]
+		if oldOK && newOK && oldEntry.ID == newEntry.ID && oldEntry.Mode == newEntry.Mode {
+			continue
+		}
+		change := FileChange{Path: path}
+		if oldOK {
+			value, mode := string(oldEntry.ID), oldEntry.Mode
+			change.OldID, change.OldMode = &value, &mode
+		}
+		if newOK {
+			value, mode := string(newEntry.ID), newEntry.Mode
+			change.NewID, change.NewMode = &value, &mode
+		}
+		switch {
+		case !oldOK:
+			change.Status = "added"
+		case !newOK:
+			change.Status = "deleted"
+		default:
+			change.Status = "modified"
+		}
+		result = append(result, change)
+	}
+	return result, nil
+}
+
+func (s *Store) AddComment(repositoryID, pullRequestID, authorID, body string) (Comment, error) {
+	if !validID(authorID) {
+		return Comment{}, ErrInvalid
+	}
+	body = strings.TrimSpace(body)
+	if body == "" || len([]rune(body)) > 10000 {
+		return Comment{}, ErrInvalid
+	}
+	if _, err := s.Get(repositoryID, pullRequestID); err != nil {
+		return Comment{}, err
+	}
+	commentID, err := newID()
+	if err != nil {
+		return Comment{}, err
+	}
+	comment := Comment{ID: commentID, PullRequestID: pullRequestID, AuthorID: authorID, Body: body, CreatedAt: s.now().Truncate(time.Microsecond)}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Comment{}, err
+	}
+	defer unlock()
+	record, err := s.readComments(repositoryID, pullRequestID)
+	if err != nil {
+		return Comment{}, err
+	}
+	record.Comments = append(record.Comments, comment)
+	if committed, err := s.writeComments(repositoryID, pullRequestID, record); err != nil {
+		if committed {
+			return comment, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+		}
+		return Comment{}, err
+	}
+	return comment, nil
+}
+
+func (s *Store) ListComments(repositoryID, pullRequestID string) ([]Comment, error) {
+	if _, err := s.Get(repositoryID, pullRequestID); err != nil {
+		return nil, err
+	}
+	record, err := s.readComments(repositoryID, pullRequestID)
+	if err != nil {
+		return nil, err
+	}
+	return append([]Comment(nil), record.Comments...), nil
+}
+
+func (s *Store) commentsPath(repositoryID, pullRequestID string) string {
+	return filepath.Join(s.repositoryPath(repositoryID), pullRequestID+".comments.json")
+}
+
+func (s *Store) readComments(repositoryID, pullRequestID string) (commentRecord, error) {
+	data, err := os.ReadFile(s.commentsPath(repositoryID, pullRequestID))
+	if errors.Is(err, os.ErrNotExist) {
+		return commentRecord{Comments: []Comment{}}, nil
+	}
+	if err != nil {
+		return commentRecord{}, err
+	}
+	var record commentRecord
+	if json.Unmarshal(data, &record) != nil {
+		return commentRecord{}, fmt.Errorf("corrupt pull request comments %s", pullRequestID)
+	}
+	seen := map[string]bool{}
+	for _, comment := range record.Comments {
+		if !validID(comment.ID) || comment.PullRequestID != pullRequestID || !validID(comment.AuthorID) || strings.TrimSpace(comment.Body) == "" || len([]rune(comment.Body)) > 10000 || comment.CreatedAt.IsZero() || seen[comment.ID] {
+			return commentRecord{}, fmt.Errorf("corrupt pull request comments %s", pullRequestID)
+		}
+		seen[comment.ID] = true
+	}
+	return record, nil
+}
+
+func (s *Store) writeComments(repositoryID, pullRequestID string, record commentRecord) (bool, error) {
+	data, err := json.Marshal(record)
+	if err != nil {
+		return false, err
+	}
+	directory := s.repositoryPath(repositoryID)
+	temp, err := os.CreateTemp(directory, ".writing-comments-")
+	if err != nil {
+		return false, err
+	}
+	path := temp.Name()
+	defer os.Remove(path)
+	if err = temp.Chmod(0o600); err == nil {
+		_, err = temp.Write(append(data, '\n'))
+	}
+	if err == nil {
+		err = temp.Sync()
+	}
+	if closeErr := temp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return false, err
+	}
+	if err := os.Rename(path, s.commentsPath(repositoryID, pullRequestID)); err != nil {
+		return false, err
+	}
+	return true, s.directorySync(directory)
 }
 
 func validatePurpose(title, body string) (string, string, error) {
