@@ -2,6 +2,7 @@ package proposals
 
 import (
 	"errors"
+	"os"
 	"sync"
 	"testing"
 )
@@ -70,11 +71,22 @@ func TestConcurrentCommentsAreNotLostAcrossStores(t *testing.T) {
 
 func TestMutationsReconcilePostRenameDirectorySyncFailure(t *testing.T) {
 	store, _ := New(t.TempDir())
-	store.directorySync = func(string) error { return errors.New("injected directory sync failure") }
+	failReads := false
+	store.directorySync = func(string) error {
+		failReads = true
+		return errors.New("injected directory sync failure")
+	}
+	store.readFile = func(path string) ([]byte, error) {
+		if failReads {
+			return nil, errors.New("injected verification read failure")
+		}
+		return os.ReadFile(path)
+	}
 	proposal, err := store.Create(repositoryID, authorID, "Durable idea", "Context")
 	if err != nil {
 		t.Fatalf("committed create returned error: %v", err)
 	}
+	failReads = false
 	listed, err := store.List(repositoryID)
 	if err != nil || len(listed) != 1 || listed[0].ID != proposal.ID {
 		t.Fatalf("proposals after create = %#v, %v", listed, err)
@@ -83,6 +95,7 @@ func TestMutationsReconcilePostRenameDirectorySyncFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("committed comment returned error: %v", err)
 	}
+	failReads = false
 	comments, err := store.ListComments(repositoryID, proposal.ID)
 	if err != nil || len(comments) != 1 || comments[0].ID != comment.ID {
 		t.Fatalf("comments after append = %#v, %v", comments, err)

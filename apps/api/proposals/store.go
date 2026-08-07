@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -63,6 +62,7 @@ type Store struct {
 	mu            sync.Mutex
 	now           func() time.Time
 	directorySync func(string) error
+	readFile      func(string) ([]byte, error)
 }
 
 func New(root string) (*Store, error) {
@@ -76,7 +76,7 @@ func New(root string) (*Store, error) {
 	if err := os.MkdirAll(abs, 0o700); err != nil {
 		return nil, fmt.Errorf("create proposal store: %w", err)
 	}
-	return &Store{root: abs, now: func() time.Time { return time.Now().UTC() }, directorySync: syncDirectory}, nil
+	return &Store{root: abs, now: func() time.Time { return time.Now().UTC() }, directorySync: syncDirectory, readFile: os.ReadFile}, nil
 }
 
 func (s *Store) Create(repositoryID, authorID, title, body string) (Proposal, error) {
@@ -101,8 +101,8 @@ func (s *Store) Create(repositoryID, authorID, title, body string) (Proposal, er
 	}
 	defer unlock()
 	desired := record{Proposal: p}
-	if err := s.write(desired); err != nil {
-		if persisted, readErr := s.read(id); readErr == nil && reflect.DeepEqual(persisted, desired) {
+	if committed, err := s.write(desired); err != nil {
+		if committed {
 			return p, nil
 		}
 		return Proposal{}, err
@@ -185,8 +185,8 @@ func (s *Store) Update(repositoryID, id string, patch Patch) (Proposal, error) {
 	}
 	p.UpdatedAt = s.now().Truncate(time.Microsecond)
 	r.Proposal = p
-	if err := s.write(r); err != nil {
-		if persisted, readErr := s.read(id); readErr == nil && reflect.DeepEqual(persisted, r) {
+	if committed, err := s.write(r); err != nil {
+		if committed {
 			return p, nil
 		}
 		return Proposal{}, err
@@ -219,8 +219,8 @@ func (s *Store) AddComment(repositoryID, proposalID, authorID, body string) (Com
 	}
 	c := Comment{ID: id, ProposalID: proposalID, AuthorID: authorID, Body: body, CreatedAt: s.now().Truncate(time.Microsecond)}
 	r.Comments = append(r.Comments, c)
-	if err := s.write(r); err != nil {
-		if persisted, readErr := s.read(proposalID); readErr == nil && reflect.DeepEqual(persisted, r) {
+	if committed, err := s.write(r); err != nil {
+		if committed {
 			return c, nil
 		}
 		return Comment{}, err
@@ -263,7 +263,7 @@ func (s *Store) read(id string) (record, error) {
 	if !validID(id) {
 		return record{}, ErrNotFound
 	}
-	data, err := os.ReadFile(s.path(id))
+	data, err := s.readFile(s.path(id))
 	if errors.Is(err, os.ErrNotExist) {
 		return record{}, ErrNotFound
 	}
@@ -287,14 +287,18 @@ func (s *Store) read(id string) (record, error) {
 	return r, nil
 }
 
-func (s *Store) write(r record) error {
+// write reports whether the atomic rename made the requested state visible.
+// Once committed, callers must preserve the resource result even if syncing
+// the parent directory cannot confirm crash durability; reporting an ordinary
+// failure would discard generated IDs and make client retries duplicate work.
+func (s *Store) write(r record) (bool, error) {
 	data, err := json.Marshal(r)
 	if err != nil {
-		return err
+		return false, err
 	}
 	temp, err := os.CreateTemp(s.root, ".writing-")
 	if err != nil {
-		return err
+		return false, err
 	}
 	tempPath := temp.Name()
 	defer os.Remove(tempPath)
@@ -308,12 +312,12 @@ func (s *Store) write(r record) error {
 		err = closeErr
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := os.Rename(tempPath, s.path(r.Proposal.ID)); err != nil {
-		return err
+		return false, err
 	}
-	return s.directorySync(s.root)
+	return true, s.directorySync(s.root)
 }
 
 func syncDirectory(path string) error {
