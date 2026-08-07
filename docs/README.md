@@ -133,6 +133,14 @@ stock Git, while visibility, collaborator management, deletion, and
 default-branch writes remain owner-only. Removing the grant immediately
 removes that additional API and Git access.
 
+Repository proposals provide durable pre-code collaboration. Owners and
+contributors can create proposals and append immutable comments; proposal and
+comment authorship uses stable user IDs. Proposal authors may refine and close
+their proposal, and owners may close any repository proposal. Reads inherit
+repository visibility and collaborator access. Records are stored atomically
+beneath `PROPOSAL_STORAGE_ROOT` (default `proposals`) independently of Git
+objects, so conversation remains available without a candidate branch.
+
 ## Git repository storage
 
 The API's `storage` package is the boundary for durable Git repositories. A

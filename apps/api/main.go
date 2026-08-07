@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
@@ -86,6 +87,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	proposalRoot := os.Getenv("PROPOSAL_STORAGE_ROOT")
+	if proposalRoot == "" {
+		proposalRoot = "proposals"
+	}
+	proposalStore, err := proposals.New(proposalRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -93,7 +102,7 @@ func main() {
 	}
 
 	log.Printf("listening on http://localhost:%s", port)
-	if err := http.ListenAndServe(":"+port, newAuthenticatedAppHandler(store, userStore, authStore, repositoryStore)); err != nil {
+	if err := http.ListenAndServe(":"+port, newPlatformHandler(store, userStore, authStore, repositoryStore, proposalStore)); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -107,11 +116,15 @@ func newAppHandler(store *storage.Store, userStore *users.Store) http.Handler {
 }
 
 func newAuthenticatedAppHandler(store *storage.Store, userStore *users.Store, authStore *auth.Store, catalogs ...*repositories.Store) http.Handler {
-	mux := http.NewServeMux()
 	var repositoryCatalog *repositories.Store
 	if len(catalogs) > 0 {
 		repositoryCatalog = catalogs[0]
 	}
+	return newPlatformHandler(store, userStore, authStore, repositoryCatalog, nil)
+}
+
+func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore *auth.Store, repositoryCatalog *repositories.Store, proposalStore *proposals.Store) http.Handler {
+	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
@@ -124,6 +137,9 @@ func newAuthenticatedAppHandler(store *storage.Store, userStore *users.Store, au
 	}
 	if authStore != nil && repositoryCatalog != nil {
 		registerRepositoryRoutes(mux, repositoryCatalog, userStore, authStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && proposalStore != nil {
+		registerProposalRoutes(mux, repositoryCatalog, proposalStore, authStore)
 	}
 	mux.HandleFunc("GET /git/{remote}/info/refs", func(w http.ResponseWriter, r *http.Request) {
 		service := r.URL.Query().Get("service")
@@ -278,6 +294,188 @@ type repositoryPatch struct {
 
 type collaboratorInput struct {
 	UserID *string `json:"user_id"`
+}
+
+type proposalInput struct {
+	Title *string `json:"title"`
+	Body  *string `json:"body"`
+}
+
+type proposalPatch struct {
+	Title  *string `json:"title"`
+	Body   *string `json:"body"`
+	Status *string `json:"status"`
+}
+
+type commentInput struct {
+	Body *string `json:"body"`
+}
+
+func registerProposalRoutes(mux *http.ServeMux, repositoriesStore *repositories.Store, store *proposals.Store, authStore *auth.Store) {
+	mux.HandleFunc("GET /repositories/{id}/proposals", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		all, err := store.List(r.PathValue("id"))
+		if writeProposalError(w, err) {
+			return
+		}
+		page, next, ok := paginate(r, all, func(p proposals.Proposal) string { return p.ID })
+		if !ok {
+			writeAPIError(w, 400, "invalid_pagination", "limit or after is invalid")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"proposals": page, "next_cursor": next})
+	})
+	mux.HandleFunc("POST /repositories/{id}/proposals", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var input proposalInput
+		if decodeJSON(r, &input) != nil || input.Title == nil || input.Body == nil {
+			writeAPIError(w, 400, "invalid_proposal", "title and body are required")
+			return
+		}
+		proposal, err := store.Create(r.PathValue("id"), actor.UserID, *input.Title, *input.Body)
+		if writeProposalError(w, err) {
+			return
+		}
+		location := "/repositories/" + r.PathValue("id") + "/proposals/" + proposal.ID
+		w.Header().Set("Location", location)
+		writeJSON(w, 201, proposal)
+	})
+	mux.HandleFunc("GET /repositories/{id}/proposals/{proposal_id}", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		proposal, err := store.Get(r.PathValue("id"), r.PathValue("proposal_id"))
+		if writeProposalError(w, err) {
+			return
+		}
+		writeJSON(w, 200, proposal)
+	})
+	mux.HandleFunc("PATCH /repositories/{id}/proposals/{proposal_id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, owner, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		existing, err := store.Get(r.PathValue("id"), r.PathValue("proposal_id"))
+		if writeProposalError(w, err) {
+			return
+		}
+		var input proposalPatch
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_proposal", "proposal patch is invalid")
+			return
+		}
+		if existing.AuthorID != actor.UserID && (!owner || input.Title != nil || input.Body != nil || input.Status == nil) {
+			writeAPIError(w, 404, "proposal_not_found", "proposal not found")
+			return
+		}
+		updated, err := store.Update(r.PathValue("id"), existing.ID, proposals.Patch{Title: input.Title, Body: input.Body, Status: input.Status})
+		if writeProposalError(w, err) {
+			return
+		}
+		writeJSON(w, 200, updated)
+	})
+	mux.HandleFunc("GET /repositories/{id}/proposals/{proposal_id}/comments", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		all, err := store.ListComments(r.PathValue("id"), r.PathValue("proposal_id"))
+		if writeProposalError(w, err) {
+			return
+		}
+		page, next, ok := paginate(r, all, func(c proposals.Comment) string { return c.ID })
+		if !ok {
+			writeAPIError(w, 400, "invalid_pagination", "limit or after is invalid")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"comments": page, "next_cursor": next})
+	})
+	mux.HandleFunc("POST /repositories/{id}/proposals/{proposal_id}/comments", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:read")
+		if !ok {
+			return
+		}
+		var input commentInput
+		if decodeJSON(r, &input) != nil || input.Body == nil {
+			writeAPIError(w, 400, "invalid_comment", "body is required")
+			return
+		}
+		comment, err := store.AddComment(r.PathValue("id"), r.PathValue("proposal_id"), actor.UserID, *input.Body)
+		if writeProposalError(w, err) {
+			return
+		}
+		w.Header().Set("Location", r.URL.Path+"/"+comment.ID)
+		writeJSON(w, 201, comment)
+	})
+}
+
+func authorizeRepositoryRead(w http.ResponseWriter, r *http.Request, store *repositories.Store, authStore *auth.Store, id string) (auth.Credential, bool, bool) {
+	repository, err := store.GetByID(id)
+	if writeRepositoryError(w, err) {
+		return auth.Credential{}, false, false
+	}
+	if repository.Visibility == repositories.Public {
+		return auth.Credential{}, false, true
+	}
+	actor, authenticated, ok := authenticateOptionalRequest(w, r, authStore, "repositories:read", false)
+	if !ok {
+		return auth.Credential{}, false, false
+	}
+	if !authenticated {
+		writeAuthenticationRequired(w, false)
+		return auth.Credential{}, false, false
+	}
+	collaborator, err := store.HasCollaborator(actor.UserID, id)
+	if err != nil {
+		writeRepositoryError(w, err)
+		return auth.Credential{}, false, false
+	}
+	if actor.UserID != repository.OwnerID && !collaborator {
+		writeAPIError(w, 404, "repository_not_found", "repository not found")
+		return auth.Credential{}, false, false
+	}
+	return actor, true, true
+}
+
+func authorizeRepositoryParticipant(w http.ResponseWriter, r *http.Request, store *repositories.Store, authStore *auth.Store, id, scope string) (auth.Credential, bool, bool) {
+	actor, ok := authenticateRequest(w, r, authStore, scope, false)
+	if !ok {
+		return auth.Credential{}, false, false
+	}
+	repository, err := store.GetByID(id)
+	if writeRepositoryError(w, err) {
+		return auth.Credential{}, false, false
+	}
+	owner := actor.UserID == repository.OwnerID
+	collaborator, err := store.HasCollaborator(actor.UserID, id)
+	if err != nil {
+		writeRepositoryError(w, err)
+		return auth.Credential{}, false, false
+	}
+	if !owner && !collaborator {
+		writeAPIError(w, 404, "repository_not_found", "repository not found")
+		return auth.Credential{}, false, false
+	}
+	return actor, owner, true
+}
+
+func writeProposalError(w http.ResponseWriter, err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, proposals.ErrNotFound) {
+		writeAPIError(w, 404, "proposal_not_found", "proposal not found")
+	} else if errors.Is(err, proposals.ErrInvalid) {
+		writeAPIError(w, 400, "invalid_proposal", "proposal content or status is invalid")
+	} else {
+		log.Printf("proposal storage: %v", err)
+		writeAPIError(w, 500, "internal_error", "proposal storage unavailable")
+	}
+	return true
 }
 
 func registerRepositoryRoutes(mux *http.ServeMux, store *repositories.Store, userStore *users.Store, authStore *auth.Store) {

@@ -76,3 +76,29 @@ administrative power. Contributors can inspect and fetch a private repository
 and can create, update, force-update, or delete non-default branches through
 stock Git. They cannot update `main`, change visibility, manage access, or
 delete the repository. Revocation takes effect on the next API or Git request.
+
+## Proposals
+
+Repository participants use proposals to establish shared context before or
+alongside a code change. `POST /repositories/{id}/proposals` accepts `title`
+and `body`; the title is a single line of at most 200 characters and the body
+may contain at most 10,000 characters. The resulting resource has an opaque
+`id`, immutable `repository_id` and `author_id`, `status: "open"`, and durable
+creation and update timestamps. `GET /repositories/{id}/proposals` is
+paginated, and `GET /repositories/{id}/proposals/{proposal_id}` inspects one.
+
+The author can update `title` or `body` with `PATCH`; the repository owner can
+also close any proposal by sending `status: "closed"`, as can its author. A
+closed proposal records `closed_at` and cannot be reopened. Other contributors
+cannot rewrite another person's proposal. Owners and contributors can append
+feedback with `POST .../comments` using a non-empty `body`; `GET .../comments`
+returns the attributable conversation in creation order with pagination.
+Comments are immutable and contain stable `author_id` values, so later profile
+edits do not alter conversation history.
+
+Proposal reads follow repository visibility: public repository proposals and
+comments are anonymously readable, while private reads require the owner or a
+current contributor with `repositories:read`. Creation and updates require
+`repositories:write`; commenting requires `repositories:read`. Public access
+does not itself grant participation. Proposal records are private atomic JSON
+files beneath `PROPOSAL_STORAGE_ROOT`, which defaults to `proposals`.
