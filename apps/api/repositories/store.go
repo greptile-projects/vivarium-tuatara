@@ -34,10 +34,11 @@ type Repository struct {
 }
 
 type Store struct {
-	root string
-	git  *storage.Store
-	mu   sync.Mutex
-	now  func() time.Time
+	root   string
+	git    *storage.Store
+	mu     sync.Mutex
+	now    func() time.Time
+	remove func(string) error
 }
 
 func New(root string, git *storage.Store) (*Store, error) {
@@ -51,7 +52,7 @@ func New(root string, git *storage.Store) (*Store, error) {
 	if err := os.MkdirAll(abs, 0o700); err != nil {
 		return nil, fmt.Errorf("create repository catalog: %w", err)
 	}
-	return &Store{root: abs, git: git, now: func() time.Time { return time.Now().UTC() }}, nil
+	return &Store{root: abs, git: git, now: func() time.Time { return time.Now().UTC() }, remove: os.Remove}, nil
 }
 
 func (s *Store) Create(ownerID, name string) (Repository, error) {
@@ -66,7 +67,7 @@ func (s *Store) Create(ownerID, name string) (Repository, error) {
 		return Repository{}, err
 	}
 	defer unlock()
-	all, err := s.loadAll()
+	all, err := s.loadActive()
 	if err != nil {
 		return Repository{}, err
 	}
@@ -102,13 +103,16 @@ func (s *Store) Get(ownerID, id string) (Repository, error) {
 		return Repository{}, ErrNotFound
 	}
 	if _, err := s.git.Open(id); err != nil {
+		if errors.Is(err, storage.ErrRepositoryNotFound) {
+			return Repository{}, ErrNotFound
+		}
 		return Repository{}, fmt.Errorf("open Git repository: %w", err)
 	}
 	return repository, nil
 }
 
 func (s *Store) List(ownerID string) ([]Repository, error) {
-	all, err := s.loadAll()
+	all, err := s.loadActive()
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +150,7 @@ func (s *Store) Delete(ownerID, id string) error {
 			return fmt.Errorf("delete Git repository: %w", err)
 		}
 	}
-	if err := os.Remove(s.path(id)); err != nil {
+	if err := s.remove(s.path(id)); err != nil {
 		return fmt.Errorf("delete repository metadata: %w", err)
 	}
 	return syncDirectory(s.root)
@@ -198,6 +202,28 @@ func (s *Store) loadAll() ([]Repository, error) {
 		result = append(result, repository)
 	}
 	return result, nil
+}
+
+// loadActive reconciles the catalog with the Git lifecycle boundary. A Git
+// repository is atomically detached before its metadata is removed, so a
+// retained record after an interrupted cleanup represents a completed delete,
+// not an active remote. The record remains available to a later Delete retry.
+func (s *Store) loadActive() ([]Repository, error) {
+	all, err := s.loadAll()
+	if err != nil {
+		return nil, err
+	}
+	active := make([]Repository, 0, len(all))
+	for _, repository := range all {
+		if _, err := s.git.Open(repository.ID); err != nil {
+			if errors.Is(err, storage.ErrRepositoryNotFound) {
+				continue
+			}
+			return nil, fmt.Errorf("open Git repository %s: %w", repository.ID, err)
+		}
+		active = append(active, repository)
+	}
+	return active, nil
 }
 
 func (s *Store) write(repository Repository) error {

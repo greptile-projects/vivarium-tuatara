@@ -103,7 +103,11 @@ creation order. Inspection and `DELETE /repositories/{id}` likewise resolve
 ownership from the credential rather than accepting an owner from the client;
 another actor receives the same not-found response as an unknown ID. Deletion
 atomically detaches the Git storage ID before removing the ownership record,
-so a successfully removed API resource is no longer a usable remote.
+so a successfully removed API resource is no longer a usable remote. Active
+catalog reads also verify that Git backing still exists. If metadata cleanup
+fails after that atomic detach, list and inspection treat the repository as
+deleted, its name can be reused, and a later delete retry removes the retained
+record.
 
 Session credentials include `repositories:read` and `repositories:write`.
 Long-lived API credentials can be issued with either capability for narrower

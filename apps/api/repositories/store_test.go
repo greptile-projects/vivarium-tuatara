@@ -2,6 +2,8 @@ package repositories
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"sync"
 	"testing"
 
@@ -39,6 +41,37 @@ func TestRepositoryCatalogPersistsOwnershipAndGitIdentity(t *testing.T) {
 	}
 	if _, err := reopenedGit.Open(created.ID); !errors.Is(err, storage.ErrRepositoryNotFound) {
 		t.Fatalf("open Git after delete: %v", err)
+	}
+}
+
+func TestDeleteMetadataFailureDoesNotExposeOrReserveMissingRemote(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	store, _ := New(t.TempDir(), gitStore)
+	created, err := store.Create(testOwnerID, "recoverable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.remove = func(string) error { return fmt.Errorf("injected metadata removal failure") }
+	if err := store.Delete(testOwnerID, created.ID); err == nil {
+		t.Fatal("Delete succeeded despite metadata removal failure")
+	}
+	listed, err := store.List(testOwnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 0 {
+		t.Fatalf("List returned deleted repository: %#v", listed)
+	}
+	if _, err := store.Get(testOwnerID, created.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get after detached Git repository: %v", err)
+	}
+	if _, err := store.Create(testOwnerID, "recoverable"); err != nil {
+		t.Fatalf("stale metadata retained repository name: %v", err)
+	}
+
+	store.remove = os.Remove
+	if err := store.Delete(testOwnerID, created.ID); err != nil {
+		t.Fatalf("cleanup retry: %v", err)
 	}
 }
 

@@ -126,7 +126,10 @@ whenever dependencies change or the web job fails before it starts.
   and bare Git storage. `$REPOSITORY_STORAGE_ROOT` selects the private metadata
   root and defaults to `repository-records`. Session and API credentials use
   `repositories:read` and `repositories:write`; Git transport authorization is
-  intentionally still scope-only until repository access enforcement.
+  intentionally still scope-only until repository access enforcement. Catalog
+  reads reconcile metadata with Git storage: records whose Git ID has already
+  been detached by deletion are not active, even if metadata cleanup must be
+  retried.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 
