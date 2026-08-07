@@ -510,6 +510,41 @@ func TestReferencesRejectInvalidOperationsAndCorruption(t *testing.T) {
 	}
 }
 
+func TestWithReferenceTargetCoordinatesObservationWithStockGitWriter(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("locked-reference-observation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := writeObject(t, repo, storage.BlobObject, []byte("first"))
+	second := writeObject(t, repo, storage.BlobObject, []byte("second"))
+	name := "refs/tags/feature"
+	if err := repo.CreateReference(storage.Reference{Name: name, Target: string(first)}); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	err = repo.WithReferenceTarget(name, string(first), func() error {
+		called = true
+		if err := exec.Command("git", "-C", repo.Path(), "update-ref", name, string(second)).Run(); err == nil {
+			t.Fatal("stock Git advanced a reference while its observation lock was held")
+		}
+		current, err := repo.ReadReference(name)
+		if err != nil || current.Target != string(first) {
+			t.Fatalf("locked target = %+v, %v", current, err)
+		}
+		return nil
+	})
+	if err != nil || !called {
+		t.Fatalf("WithReferenceTarget called = %t, err = %v", called, err)
+	}
+	if output, err := exec.Command("git", "-C", repo.Path(), "update-ref", name, string(second)).CombinedOutput(); err != nil {
+		t.Fatalf("stock Git could not advance after observation: %v: %s", err, output)
+	}
+}
+
 func TestReferencesRejectIntermediateSymlinks(t *testing.T) {
 	store, err := storage.New(t.TempDir())
 	if err != nil {

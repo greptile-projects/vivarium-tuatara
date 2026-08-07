@@ -785,15 +785,12 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 		input.Artifact = strings.TrimSpace(input.Artifact)
 		input.Branch = strings.TrimSpace(input.Branch)
 		input.CommitID = strings.TrimSpace(input.CommitID)
+		var repository *storage.Repository
 		if input.Kind == "branch.updated" {
-			repository, openErr := gitStore.Open(r.PathValue("id"))
+			var openErr error
+			repository, openErr = gitStore.Open(r.PathValue("id"))
 			if openErr != nil {
 				writeAPIError(w, 500, "internal_error", "repository storage unavailable")
-				return
-			}
-			reference, refErr := repository.ReadReference("refs/heads/" + input.Branch)
-			if refErr != nil || reference.Symbolic || reference.Target != input.CommitID {
-				writeAPIError(w, 400, "invalid_agent_event", "branch update must match the published branch tip")
 				return
 			}
 			if _, commitErr := repository.ReadCommit(storage.ObjectID(input.CommitID)); commitErr != nil {
@@ -801,7 +798,22 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 				return
 			}
 		}
-		event, err := store.AppendWorkEvent(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("session_id"), r.PathValue("run_id"), credential.ID, input.Kind, input.State, input.Message, input.Tool, input.Artifact, input.Branch, input.CommitID)
+		var event changesessions.Event
+		appendEvent := func() error {
+			var appendErr error
+			event, appendErr = store.AppendWorkEvent(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("session_id"), r.PathValue("run_id"), credential.ID, input.Kind, input.State, input.Message, input.Tool, input.Artifact, input.Branch, input.CommitID)
+			return appendErr
+		}
+		var err error
+		if input.Kind == "branch.updated" {
+			err = repository.WithReferenceTarget("refs/heads/"+input.Branch, input.CommitID, appendEvent)
+			if errors.Is(err, storage.ErrReferenceExists) || errors.Is(err, storage.ErrReferenceNotFound) || errors.Is(err, storage.ErrReferenceLocked) {
+				writeAPIError(w, 400, "invalid_agent_event", "branch update must match the published branch tip")
+				return
+			}
+		} else {
+			err = appendEvent()
+		}
 		if errors.Is(err, changesessions.ErrDurabilityUncertain) {
 			writeUncertainMutation(w, event)
 			return

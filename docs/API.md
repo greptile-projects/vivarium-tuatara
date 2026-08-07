@@ -351,7 +351,10 @@ progress at `POST
 `agent.message`, `tool.action`, `artifact.produced`, `run.failed`, or
 `branch.updated`, plus a required human-readable `message` and `state`.
 Tool actions require `tool`, artifacts require `artifact`, and branch updates
-require the run's exact `branch` plus a full `commit_id`. Each append verifies
+require the run's exact `branch` plus a full `commit_id`. A branch update holds
+Git's standard per-reference lock while verifying that commit is the published
+tip and durably appending the event, so a concurrent push cannot make the
+observation stale. Each append verifies
 the credential belongs to that run and is still active, then durably snapshots
 the `run_id`, generated `agent_id`, initiating user, and session revision onto
 the event. The event is immediately available through the ordinary

@@ -278,6 +278,9 @@ whenever dependencies change or the web job fails before it starts.
   endpoint. The store derives immutable initiating-user, generated-agent, run,
   and exact session-revision attribution rather than trusting event bodies;
   collaborators read the same ordered durable events from the session timeline.
+  Branch-update publication holds the stock-Git-compatible per-reference lock
+  across tip validation and durable event append, preventing a concurrent push
+  from making an accepted timeline event stale.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 
