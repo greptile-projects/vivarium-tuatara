@@ -61,7 +61,18 @@ repository. `PATCH /repositories/{id}` accepts `visibility` as `private` or
 `public`; `DELETE /repositories/{id}` removes the owned repository and its Git
 remote.
 
+Owners manage limited access with `GET` and `POST
+/repositories/{id}/collaborators` and `DELETE
+/repositories/{id}/collaborators/{user_id}`. A grant request contains an
+existing `user_id`; collaborator resources contain that stable ID and
+`role: "contributor"`. Granting the same user and revoking an absent grant are
+idempotent. Only the owner may inspect or change grants.
+
 Repository responses include immutable `id` and `owner_id`, user-facing
 `name`, `visibility`, `default_branch`, `created_at`, and `git_remote`. Use the
-returned `git_remote` relative to the API origin. Private reads and all writes
-require the owner and matching repository or Git credential scope.
+returned `git_remote` relative to the API origin. Private reads and writes
+require matching repository or Git credential scopes. Owners retain every
+administrative power. Contributors can inspect and fetch a private repository
+and can create, update, force-update, or delete non-default branches through
+stock Git. They cannot update `main`, change visibility, manage access, or
+delete the repository. Revocation takes effect on the next API or Git request.

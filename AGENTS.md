@@ -132,9 +132,10 @@ whenever dependencies change or the web job fails before it starts.
   and bare Git storage. `$REPOSITORY_STORAGE_ROOT` selects the private metadata
   root and defaults to `repository-records`. Session and API credentials use
   `repositories:read` and `repositories:write`. Repositories are private by
-  default; public reads are anonymous, while private reads, every push, and
-  administration require the owner and matching API or Git scope.
-  Authenticated non-owners receive not-found across both interfaces. Catalog
+  default; public reads are anonymous, while private reads, pushes, and
+  administration require matching API or Git scope plus repository access.
+  Unauthenticated or ungranted non-owners receive not-found where repository
+  visibility must be hidden. Catalog
   and credential collection routes use `limit`/`after` cursor pagination (30
   by default, at most 100) and return `next_cursor`. The supported JSON contract
   and stable error envelope are documented in `docs/API.md`. Repository reads
@@ -142,6 +143,11 @@ whenever dependencies change or the web job fails before it starts.
   been detached by deletion are not active, even if metadata cleanup must be
   retried. A Git cleanup error preserves the ownership record so the owner can
   retry deletion; metadata is removed only after Git cleanup succeeds.
+  Owners manage durable `contributor` grants through
+  `/repositories/{id}/collaborators`. Contributors can inspect and fetch a
+  private repository and use Git receive-pack for branches other than `main`;
+  default-branch writes, visibility, access management, and deletion remain
+  owner-only. Revocation applies on the next request.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

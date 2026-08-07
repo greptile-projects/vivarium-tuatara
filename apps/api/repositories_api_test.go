@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -221,6 +223,74 @@ func TestRepositoryAuthorizationIsConsistentAcrossAPIAndGit(t *testing.T) {
 	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+repository.ID, `{"visibility":"private"}`, other.Credential.Token, http.StatusNotFound).Body.Close()
 	authenticatedRequest(t, http.MethodDelete, server.URL+"/repositories/"+repository.ID, "", other.Credential.Token, http.StatusNotFound).Body.Close()
 	requestStatus(t, http.MethodDelete, server.URL+"/repositories/"+repository.ID, "", http.StatusUnauthorized).Body.Close()
+}
+
+func TestOwnerCanGrantAndRevokeContributorCandidateAccess(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	server := httptest.NewServer(newAuthenticatedAppHandler(gitStore, identities, credentials, catalog))
+	defer server.Close()
+
+	owner := createTestAccount(t, server.URL, "grant-owner")
+	contributor := createTestAccount(t, server.URL, "grant-contributor")
+	createdResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"shared"}`, owner.Credential.Token, http.StatusCreated)
+	var repository repositories.Repository
+	if err := json.NewDecoder(createdResponse.Body).Decode(&repository); err != nil {
+		t.Fatal(err)
+	}
+	createdResponse.Body.Close()
+
+	grant := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/collaborators", `{"user_id":"`+contributor.User.ID+`"}`, owner.Credential.Token, http.StatusCreated)
+	var collaborator repositories.Collaborator
+	if err := json.NewDecoder(grant.Body).Decode(&collaborator); err != nil {
+		t.Fatal(err)
+	}
+	grant.Body.Close()
+	if collaborator.UserID != contributor.User.ID || collaborator.Role != repositories.Contributor {
+		t.Fatalf("collaborator = %#v", collaborator)
+	}
+	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID, "", contributor.Credential.Token, http.StatusOK).Body.Close()
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+repository.ID, `{"visibility":"public"}`, contributor.Credential.Token, http.StatusNotFound).Body.Close()
+	authenticatedRequest(t, http.MethodDelete, server.URL+"/repositories/"+repository.ID, "", contributor.Credential.Token, http.StatusNotFound).Body.Close()
+
+	ownerGit, _ := credentials.Issue(owner.User.ID, auth.Git, "owner", []string{"git:read", "git:write"}, time.Hour)
+	contributorGit, _ := credentials.Issue(contributor.User.ID, auth.Git, "contributor", []string{"git:read", "git:write"}, time.Hour)
+	remoteWith := func(token string) string {
+		parsed, _ := url.Parse(server.URL + repository.GitRemote)
+		parsed.User = url.UserPassword("git", token)
+		return parsed.String()
+	}
+	ownerCopy := filepath.Join(t.TempDir(), "owner")
+	gitCommand(t, "", "clone", remoteWith(ownerGit.Token), ownerCopy)
+	gitCommand(t, ownerCopy, "config", "user.name", "Owner")
+	gitCommand(t, ownerCopy, "config", "user.email", "owner@example.com")
+	if err := os.WriteFile(filepath.Join(ownerCopy, "README.md"), []byte("maintained\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommand(t, ownerCopy, "add", "README.md")
+	gitCommand(t, ownerCopy, "commit", "-m", "initial")
+	gitCommand(t, ownerCopy, "push", "origin", "main")
+
+	contributorCopy := filepath.Join(t.TempDir(), "contributor")
+	gitCommand(t, "", "clone", remoteWith(contributorGit.Token), contributorCopy)
+	gitCommand(t, contributorCopy, "config", "user.name", "Contributor")
+	gitCommand(t, contributorCopy, "config", "user.email", "contributor@example.com")
+	gitCommand(t, contributorCopy, "switch", "-c", "candidate/contributor")
+	if err := os.WriteFile(filepath.Join(contributorCopy, "candidate.txt"), []byte("proposal\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommand(t, contributorCopy, "add", "candidate.txt")
+	gitCommand(t, contributorCopy, "commit", "-m", "candidate work")
+	gitCommand(t, contributorCopy, "push", "origin", "candidate/contributor")
+	gitCommandFails(t, contributorCopy, "push", "origin", "HEAD:main")
+
+	authenticatedRequest(t, http.MethodDelete, server.URL+"/repositories/"+repository.ID+"/collaborators/"+contributor.User.ID, "", owner.Credential.Token, http.StatusNoContent).Body.Close()
+	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID, "", contributor.Credential.Token, http.StatusNotFound).Body.Close()
+	if output, err := execGit(remoteWith(contributorGit.Token), "ls-remote").CombinedOutput(); err == nil {
+		t.Fatalf("revoked contributor retained Git read: %s", output)
+	}
 }
 
 func assertGitDiscoveryStatus(t *testing.T, target, token string, want int) {

@@ -11,6 +11,7 @@ import (
 )
 
 const testOwnerID = "0123456789abcdef0123456789abcdef"
+const testCollaboratorID = "abcdefabcdefabcdefabcdefabcdefab"
 
 func TestRepositoryCatalogPersistsOwnershipAndGitIdentity(t *testing.T) {
 	gitRoot, metadataRoot := t.TempDir(), t.TempDir()
@@ -67,6 +68,69 @@ func TestRepositoryVisibilityDefaultsPrivateAndPersists(t *testing.T) {
 	got, err := reopened.GetByID(created.ID)
 	if err != nil || got.Visibility != Public {
 		t.Fatalf("reopened = %#v, %v", got, err)
+	}
+}
+
+func TestRepositoryCollaboratorsPersistAndRemainOwnerManaged(t *testing.T) {
+	gitRoot, metadataRoot := t.TempDir(), t.TempDir()
+	gitStore, _ := storage.New(gitRoot)
+	store, _ := New(metadataRoot, gitStore)
+	created, _ := store.Create(testOwnerID, "contributors")
+	if _, err := store.AddCollaborator(testCollaboratorID, created.ID, testOwnerID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("non-owner grant error = %v", err)
+	}
+	grant, err := store.AddCollaborator(testOwnerID, created.ID, testCollaboratorID)
+	hasAccess, accessErr := store.HasCollaborator(testCollaboratorID, created.ID)
+	if err != nil || accessErr != nil || grant.Role != Contributor || !hasAccess {
+		t.Fatalf("grant = %#v, %v", grant, err)
+	}
+
+	reopenedGit, _ := storage.New(gitRoot)
+	reopened, _ := New(metadataRoot, reopenedGit)
+	listed, err := reopened.ListCollaborators(testOwnerID, created.ID)
+	if err != nil || len(listed) != 1 || listed[0] != grant {
+		t.Fatalf("reopened collaborators = %#v, %v", listed, err)
+	}
+	if err := reopened.RemoveCollaborator(testOwnerID, created.ID, testCollaboratorID); err != nil {
+		t.Fatal(err)
+	}
+	hasAccess, err = reopened.HasCollaborator(testCollaboratorID, created.ID)
+	if err != nil || hasAccess {
+		t.Fatal("removed collaborator retained access")
+	}
+}
+
+func TestCollaboratorRemovalReconcilesPostRenameSyncFailure(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	store, _ := New(t.TempDir(), gitStore)
+	created, _ := store.Create(testOwnerID, "revoke-uncertain")
+	if _, err := store.AddCollaborator(testOwnerID, created.ID, testCollaboratorID); err != nil {
+		t.Fatal(err)
+	}
+	store.directorySync = func(string) error { return errors.New("injected directory sync failure") }
+	if err := store.RemoveCollaborator(testOwnerID, created.ID, testCollaboratorID); err != nil {
+		t.Fatalf("committed removal returned an error: %v", err)
+	}
+	hasAccess, err := store.HasCollaborator(testCollaboratorID, created.ID)
+	if err != nil || hasAccess {
+		t.Fatalf("access after committed removal = %v, %v", hasAccess, err)
+	}
+}
+
+func TestCollaboratorRemovalReportsPreRenameFailure(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	store, _ := New(t.TempDir(), gitStore)
+	created, _ := store.Create(testOwnerID, "revoke-failed")
+	if _, err := store.AddCollaborator(testOwnerID, created.ID, testCollaboratorID); err != nil {
+		t.Fatal(err)
+	}
+	store.rename = func(string, string) error { return errors.New("injected rename failure") }
+	if err := store.RemoveCollaborator(testOwnerID, created.ID, testCollaboratorID); err == nil {
+		t.Fatal("uncommitted removal returned success")
+	}
+	hasAccess, err := store.HasCollaborator(testCollaboratorID, created.ID)
+	if err != nil || !hasAccess {
+		t.Fatalf("access after failed removal = %v, %v", hasAccess, err)
 	}
 }
 

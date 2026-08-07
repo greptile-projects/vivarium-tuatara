@@ -126,7 +126,12 @@ automation. Catalog metadata is stored as private atomic JSON records beneath
 remain beneath `GIT_STORAGE_ROOT`. Git credentials authorize smart HTTP with
 `git:read` and `git:write`, and transport applies the same visibility and owner
 policy as the repository API. Anonymous and authenticated actors may fetch a
-public repository; only its owner may fetch it privately or push to it.
+public repository. Owners can grant an existing user the `contributor` role
+through the repository's collaborator collection. Contributors may inspect
+and fetch private repositories and publish non-`main` candidate branches with
+stock Git, while visibility, collaborator management, deletion, and
+default-branch writes remain owner-only. Removing the grant immediately
+removes that additional API and Git access.
 
 ## Git repository storage
 
