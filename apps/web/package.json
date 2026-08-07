@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:e2e": "playwright test"
+    "test:e2e": "if [ -z \"$CHROMIUM_PATH\" ] && ! command -v chromium >/dev/null; then playwright install chromium; fi; playwright test"
   },
   "dependencies": {
     "next": "16.2.10",

@@ -250,7 +250,10 @@ proposal, pull-request, review, and merge actions, and uses stock Git for both
 candidate publication and the maintainer's final pull. Run it with
 `bun run --cwd apps/web test:e2e`; it discovers Chromium from `PATH`, falls
 back to Playwright's managed browser, and honors an explicit `CHROMIUM_PATH`
-override.
+override. When neither an override nor system Chromium is available, the
+command provisions the version-pinned Playwright Chromium in its standard
+cache, making a clean checkout self-contained while keeping repeat runs
+incremental.
 
 ## Git repository storage
 
