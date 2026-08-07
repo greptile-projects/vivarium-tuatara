@@ -408,4 +408,7 @@ so a completed run cannot push again even if credential revocation storage is
 temporarily unavailable. Completion is persisted before source synchronization:
 invalid evidence or a failed session write cannot advance the request, while a
 later synchronization failure leaves a durable handoff that the still-active
-credential can safely retry.
+credential can safely retry. Synchronization eligibility, including absence of
+a server merge intent, is checked under the pull-request lock before the
+completion callback runs, so a semantically blocked request cannot terminalize
+its agent run without adopting the handoff.

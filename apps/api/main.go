@@ -872,11 +872,13 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 				files[i] = changesessions.ChangedFile{Path: change.Path, Status: change.Status}
 			}
 			var completionErr error
-			completed, event, completionErr = store.CompleteRun(r.PathValue("id"), pull.ID, run.SessionID, run.ID, credential.ID, input.Summary, input.CommitID, commits, files, input.Checks, input.UnresolvedConcerns)
-			if completionErr != nil && !errors.Is(completionErr, changesessions.ErrDurabilityUncertain) {
+			updated, syncErr := pullRequestStore.SynchronizeSourceAfter(r.PathValue("id"), pull.ID, func() error {
+				completed, event, completionErr = store.CompleteRun(r.PathValue("id"), pull.ID, run.SessionID, run.ID, credential.ID, input.Summary, input.CommitID, commits, files, input.Checks, input.UnresolvedConcerns)
+				if errors.Is(completionErr, changesessions.ErrDurabilityUncertain) {
+					return nil
+				}
 				return completionErr
-			}
-			updated, syncErr := pullRequestStore.SynchronizeSource(r.PathValue("id"), pull.ID)
+			})
 			if syncErr != nil && !errors.Is(syncErr, pullrequests.ErrDurabilityUncertain) {
 				return syncErr
 			}

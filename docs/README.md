@@ -411,7 +411,9 @@ revision through the same pull request surface used for human work.
 Receive-pack independently consults durable run state for bounded credentials,
 closing branch access even if credential revocation storage fails. The handoff
 is persisted before pull-request synchronization so invalid evidence cannot
-move review state and a failed synchronization remains safely retryable.
+move review state and a failed synchronization remains safely retryable. The
+pull-request lock checks open/merge-intent eligibility before terminalizing the
+run and excludes a concurrent merge from entering between those operations.
 
 ## Git HTTP transport
 

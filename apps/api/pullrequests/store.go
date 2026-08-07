@@ -259,6 +259,14 @@ func (s *Store) Get(repositoryID, id string) (PullRequest, error) {
 // reviewable revision of an open pull request. Existing reviews retain the
 // commit they evaluated and therefore become stale when the branch advanced.
 func (s *Store) SynchronizeSource(repositoryID, id string) (PullRequest, error) {
+	return s.SynchronizeSourceAfter(repositoryID, id, nil)
+}
+
+// SynchronizeSourceAfter checks synchronization eligibility and the live
+// source tip under the pull-request lock, then invokes before immediately
+// before publishing the new snapshot. Callers can durably prepare a related
+// mutation without terminalizing it when a merge intent already blocks sync.
+func (s *Store) SynchronizeSourceAfter(repositoryID, id string, before func() error) (PullRequest, error) {
 	if !validID(repositoryID) || !validID(id) {
 		return PullRequest{}, ErrNotFound
 	}
@@ -283,6 +291,11 @@ func (s *Store) SynchronizeSource(repositoryID, id string) (PullRequest, error) 
 	commitID, err := branchCommit(repository, p.SourceBranch)
 	if err != nil {
 		return PullRequest{}, err
+	}
+	if before != nil {
+		if err := before(); err != nil {
+			return PullRequest{}, err
+		}
 	}
 	if commitID == p.SourceCommitID {
 		return p, nil

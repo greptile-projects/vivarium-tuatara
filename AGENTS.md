@@ -297,6 +297,9 @@ whenever dependencies change or the web job fails before it starts.
   terminal credentials if auth revocation fails. Completion persists before
   pull synchronization so validation/storage failures cannot move the request;
   a synchronization failure retains retryable durable completion intent.
+  Pull synchronization checks open status and merge intent under its lock
+  before invoking completion, preventing blocked or concurrent merges from
+  terminalizing a run whose revision cannot enter review.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

@@ -182,6 +182,36 @@ func TestSynchronizeReturnsPersistedRevisionAfterUncertainDurability(t *testing.
 	}
 }
 
+func TestSynchronizeSourceAfterRejectsMergeIntentBeforeCallback(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	repository, _ := gitStore.Create(testID('6'))
+	tree, _ := repository.WriteObject(storage.TreeObject, nil)
+	base := writeCommit(t, repository, tree, "base")
+	head := writeCommitWithParents(t, repository, tree, []storage.ObjectID{base}, "head")
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)})
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/topic", Target: string(head)})
+	store, _ := New(t.TempDir(), gitStore)
+	pullRequest, err := store.Create(repository.ID(), testID('7'), "Change", "Purpose", "topic", "main", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revised := writeCommitWithParents(t, repository, tree, []storage.ObjectID{head}, "revised")
+	_ = repository.UpdateReference(storage.Reference{Name: "refs/heads/topic", Target: string(revised)})
+	pullRequest.mergeIntent = &mergeIntent{CommitID: string(head), MergerID: testID('8'), MergedAt: time.Now().UTC()}
+	if _, err := store.write(pullRequest); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	_, err = store.SynchronizeSourceAfter(repository.ID(), pullRequest.ID, func() error { called = true; return nil })
+	if !errors.Is(err, ErrNotReady) || called {
+		t.Fatalf("SynchronizeSourceAfter error = %v, callback called = %v", err, called)
+	}
+	persisted, err := store.Get(repository.ID(), pullRequest.ID)
+	if err != nil || persisted.SourceCommitID != string(head) {
+		t.Fatalf("persisted pull request = %+v, %v", persisted, err)
+	}
+}
+
 func TestReviewsCaptureCurrentCommitBecomeStaleAndRemainAttributable(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	repository, _ := gitStore.Create(testID('a'))
