@@ -21,16 +21,18 @@ import (
 )
 
 const (
-	uploadPackService  = "git-upload-pack"
-	receivePackService = "git-receive-pack"
-	primaryBranchHook  = `#!/bin/sh
+	uploadPackService   = "git-upload-pack"
+	receivePackService  = "git-receive-pack"
+	branchNamespaceHook = `#!/bin/sh
 while read -r old new ref
 do
-	if test "$ref" != "refs/heads/main"
-	then
-		echo "only refs/heads/main may be updated" >&2
-		exit 1
-	fi
+	case "$ref" in
+		refs/heads/*) ;;
+		*)
+			echo "only branches may be updated" >&2
+			exit 1
+			;;
+	esac
 done
 `
 )
@@ -626,13 +628,11 @@ func runGitService(w http.ResponseWriter, r *http.Request, repo *storage.Reposit
 	if service == receivePackService {
 		// Receive-pack applies each requested ref update transactionally. The
 		// client distinguishes ordinary progress from explicit force updates,
-		// while the hook keeps the remote constrained to its primary branch.
+		// while the hook keeps writes constrained to branch references.
 		args = append([]string{
 			"-c", "receive.denyNonFastForwards=false",
 			"-c", "receive.denyDeletes=false",
 			"-c", "receive.denyDeleteCurrent=ignore",
-			"-c", "receive.hideRefs=refs/",
-			"-c", "receive.hideRefs=!refs/heads/main",
 		}, args...)
 		if !advertise {
 			hooksPath, err := os.MkdirTemp("", "vivarium-receive-hooks-")
@@ -642,7 +642,7 @@ func runGitService(w http.ResponseWriter, r *http.Request, repo *storage.Reposit
 			}
 			removeHooks = func() { _ = os.RemoveAll(hooksPath) }
 			defer removeHooks()
-			if err := os.WriteFile(hooksPath+"/pre-receive", []byte(primaryBranchHook), 0o700); err != nil {
+			if err := os.WriteFile(hooksPath+"/pre-receive", []byte(branchNamespaceHook), 0o700); err != nil {
 				log.Printf("prepare %s for repository %s: %v", service, repo.ID(), err)
 				return
 			}
