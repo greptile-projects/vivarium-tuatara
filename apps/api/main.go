@@ -18,6 +18,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
@@ -123,6 +124,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	checkRunRoot := os.Getenv("CHECK_RUN_STORAGE_ROOT")
+	if checkRunRoot == "" {
+		checkRunRoot = "check-runs"
+	}
+	checkRunStore, err := checkruns.New(checkRunRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -130,7 +139,7 @@ func main() {
 	}
 
 	log.Printf("listening on http://localhost:%s", port)
-	if err := http.ListenAndServe(":"+port, newPlatformHandler(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore)); err != nil {
+	if err := http.ListenAndServe(":"+port, newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore)); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -156,6 +165,10 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 	if len(sessionStores) > 0 {
 		changeSessionStore = sessionStores[0]
 	}
+	return newPlatformHandlerWithChecks(store, userStore, authStore, repositoryCatalog, proposalStore, pullRequestStore, activityStore, changeSessionStore, nil)
+}
+
+func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, authStore *auth.Store, repositoryCatalog *repositories.Store, proposalStore *proposals.Store, pullRequestStore *pullrequests.Store, activityStore *activities.Store, changeSessionStore *changesessions.Store, checkRunStore *checkruns.Store) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -174,7 +187,7 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 		registerProposalRoutes(mux, repositoryCatalog, proposalStore, authStore, activityStore, userStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil {
-		registerPullRequestRoutes(mux, repositoryCatalog, proposalStore, pullRequestStore, authStore, activityStore, userStore)
+		registerPullRequestRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, authStore, activityStore, userStore, checkRunStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil && changeSessionStore != nil {
 		registerChangeSessionRoutes(mux, store, repositoryCatalog, pullRequestStore, changeSessionStore, authStore, activityStore)
@@ -388,7 +401,52 @@ type reviewInput struct {
 	Decision *string `json:"decision"`
 }
 
-func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositories.Store, proposalStore *proposals.Store, store *pullrequests.Store, authStore *auth.Store, activityStore *activities.Store, userStore *users.Store) {
+func startCheckRuns(gitStore *storage.Store, runStore *checkruns.Store, pull pullrequests.PullRequest) {
+	if gitStore == nil || runStore == nil {
+		return
+	}
+	repository, err := gitStore.Open(pull.RepositoryID)
+	if err != nil {
+		log.Printf("open repository for checks: %v", err)
+		return
+	}
+	command := exec.Command("git", "--git-dir="+repository.Path(), "show", pull.SourceCommitID+":"+checkruns.ConfigPath)
+	data, err := command.Output()
+	if err != nil {
+		// A repository opts in by versioning the configuration at the candidate commit.
+		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 128 {
+			return
+		}
+		log.Printf("read check configuration: %v", err)
+		return
+	}
+	config, err := checkruns.ParseConfig(data)
+	if err != nil {
+		log.Printf("invalid check configuration for %s: %v", pull.SourceCommitID, err)
+		runs, createErr := runStore.Create(pull.RepositoryID, pull.ID, pull.SourceCommitID, []checkruns.Definition{{Name: "configuration", Command: "invalid configuration", TimeoutSeconds: 1, WorkingDirectory: "."}})
+		if createErr == nil && len(runs) == 1 {
+			now := time.Now().UTC()
+			code := 1
+			runs[0].State = "failed"
+			runs[0].StartedAt = &now
+			runs[0].CompletedAt = &now
+			runs[0].ExitCode = &code
+			runs[0].Failure = err.Error()
+			_ = runStore.Update(runs[0])
+		}
+		return
+	}
+	runs, err := runStore.Create(pull.RepositoryID, pull.ID, pull.SourceCommitID, config.Checks)
+	if err != nil {
+		log.Printf("create check runs: %v", err)
+		return
+	}
+	for _, run := range runs {
+		go runStore.Execute(run, repository.Path())
+	}
+}
+
+func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoriesStore *repositories.Store, proposalStore *proposals.Store, store *pullrequests.Store, authStore *auth.Store, activityStore *activities.Store, userStore *users.Store, checkRunStore *checkruns.Store) {
 	mux.HandleFunc("GET /repositories/{id}/pulls", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
 			return
@@ -431,6 +489,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 		created, err := store.Create(r.PathValue("id"), actor.UserID, *input.Title, *input.Body, *input.SourceBranch, *input.TargetBranch, input.ProposalID)
 		location := "/repositories/" + r.PathValue("id") + "/pulls/" + created.ID
 		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
+			startCheckRuns(gitStore, checkRunStore, created)
 			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.created", ActorID: actor.UserID, RepositoryID: created.RepositoryID, ResourceType: "pull_request", ResourceID: created.ID, ResourceTitle: created.Title})
 			recordMentions(activityStore, repositoriesStore, userStore, actor.UserID, created.RepositoryID, "pull_request", created.ID, created.Title, created.Title+"\n"+created.Body)
 			w.Header().Set("Location", location)
@@ -440,6 +499,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 		if writePullRequestError(w, err) {
 			return
 		}
+		startCheckRuns(gitStore, checkRunStore, created)
 		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.created", ActorID: actor.UserID, RepositoryID: created.RepositoryID, ResourceType: "pull_request", ResourceID: created.ID, ResourceTitle: created.Title})
 		recordMentions(activityStore, repositoriesStore, userStore, actor.UserID, created.RepositoryID, "pull_request", created.ID, created.Title, created.Title+"\n"+created.Body)
 		w.Header().Set("Location", location)
@@ -470,6 +530,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 		}
 		updated, err := store.SynchronizeSource(r.PathValue("id"), existing.ID)
 		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
+			startCheckRuns(gitStore, checkRunStore, updated)
 			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.synchronized", ActorID: actor.UserID, RepositoryID: updated.RepositoryID, ResourceType: "pull_request", ResourceID: updated.ID, ResourceTitle: updated.Title})
 			writeUncertainMutation(w, updated)
 			return
@@ -477,8 +538,28 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 		if writePullRequestError(w, err) {
 			return
 		}
+		startCheckRuns(gitStore, checkRunStore, updated)
 		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.synchronized", ActorID: actor.UserID, RepositoryID: updated.RepositoryID, ResourceType: "pull_request", ResourceID: updated.ID, ResourceTitle: updated.Title})
 		writeJSON(w, http.StatusOK, updated)
+	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/checks", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		if checkRunStore == nil {
+			writeJSON(w, 200, map[string]any{"check_runs": []checkruns.Run{}})
+			return
+		}
+		if _, err := store.Get(r.PathValue("id"), r.PathValue("pull_id")); writePullRequestError(w, err) {
+			return
+		}
+		runs, err := checkRunStore.List(r.PathValue("id"), r.PathValue("pull_id"))
+		if err != nil {
+			log.Printf("check run storage: %v", err)
+			writeAPIError(w, 500, "internal_error", "check run storage unavailable")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"check_runs": runs})
 	})
 	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/commits", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {

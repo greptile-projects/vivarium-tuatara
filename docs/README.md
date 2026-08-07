@@ -209,6 +209,14 @@ to feedback with another source-branch push, the author explicitly
 synchronizes the request to adopt that tip as its next reviewable revision;
 the target snapshot remains fixed.
 
+Candidate revisions can carry their reproducible verification contract in
+`.vivarium/checks.json`. Opening a pull request or explicitly adopting a new
+source revision snapshots those commands into durable check runs for that exact
+commit. Each command executes from a disposable exported snapshot with a
+minimal environment and no repository credential. Lifecycle metadata lives
+beneath `CHECK_RUN_STORAGE_ROOT` (default `check-runs`) independently of Git
+and pull-request records.
+
 The activity layer records meaningful collaboration changes as immutable,
 attributable events associated with their repository and proposal, pull
 request, or access resource. The authenticated web feed combines current

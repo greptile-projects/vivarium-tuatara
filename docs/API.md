@@ -169,6 +169,34 @@ Proposal creates, edits, closes, and comments use the shared uncertain-
 durability response when their new state is visible but crash persistence
 cannot be confirmed, preserving attribution IDs without overstating storage.
 
+## Automated checks
+
+A repository opts into automatic pull-request verification by committing
+`.vivarium/checks.json` on the candidate branch. The file has `version: 1` and
+a non-empty `checks` array (at most 20). Each check defines a unique `name`, a
+shell `command`, and optional `working_directory`, `environment`, and
+`timeout_seconds` (default 600, maximum 3600):
+
+```json
+{"version":1,"checks":[{"name":"api","command":"go test ./...","working_directory":"apps/api","environment":{"GOFLAGS":"-mod=readonly"},"timeout_seconds":900}]}
+```
+
+Opening a pull request or explicitly synchronizing it to a new source revision
+loads that file from the exact recorded source commit and creates one durable
+run per definition. Execution uses an exported copy of that commit in a new
+disposable directory, a minimal environment, and no Git repository or
+credential. `PATH`, `HOME`, and `GIT_*` cannot be overridden. Runs progress
+through `queued`, `running`, and `succeeded` or `failed`; invalid configuration
+is retained as a failed configuration run. Repeating synchronization without a
+new commit does not duplicate automatic runs.
+
+`GET /repositories/{id}/pulls/{pull_id}/checks` returns creation-ordered
+`check_runs`. Each record contains its stable ID, repository and pull-request
+IDs, exact `commit_id`, snapshotted definition, lifecycle state, timestamps,
+and terminal exit/failure information. Reads use the pull request's visibility
+policy. Records live beneath `CHECK_RUN_STORAGE_ROOT`, defaulting to
+`check-runs`.
+
 ## Pull requests
 
 Repository participants open a pull request with `POST
