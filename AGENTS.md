@@ -93,12 +93,14 @@ whenever dependencies change or the web job fails before it starts.
   their checkout with a stock `git pull`. `$GIT_STORAGE_ROOT` selects the
   repository root used by the API process and defaults to `repositories`.
   Smart HTTP receive-pack accepts initial, fast-forward, explicitly forced,
-  and deletion pushes for `main`. Other ref names remain denied; ordinary
-  non-fast-forward pushes are rejected by stock clients unless force is
-  requested, and receive-pack applies accepted updates transactionally. The
-  end-to-end stock-client compatibility suite covers the complete workflow in
-  sequence: initial push, clone, ordinary push and pull, forced replacement,
-  deletion, empty clone, recovery push, and recovery pull.
+  and deletion pushes for every branch under `refs/heads/`; tags and other ref
+  namespaces remain denied. Ordinary non-fast-forward pushes are rejected by
+  stock clients unless force is requested, and receive-pack applies accepted
+  updates transactionally. Stock clients discover and fetch every branch, and
+  candidate-branch updates leave `main` unchanged. The end-to-end compatibility
+  suite also covers the primary-branch workflow in sequence: initial push,
+  clone, ordinary push and pull, forced replacement, deletion, empty clone,
+  recovery push, and recovery pull.
   Durable human identities live in `apps/api/users` as atomic JSON records.
   Opaque 128-bit lowercase IDs are permanent attribution keys; handles are
   globally unique and, along with display names, are editable profile data.

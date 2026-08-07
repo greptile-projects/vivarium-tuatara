@@ -249,12 +249,14 @@ advance it with fast-forward commits. An explicitly forced push can replace
 its history, and an explicit deletion returns the repository to an unborn
 `main`; a later push can recreate it. Stock clients continue to protect
 ordinary non-fast-forward pushes unless force is requested. Pushes to
-secondary branches, tags, or any ref other than `refs/heads/main` are denied.
-Receive-pack validates the complete request before applying its ref
-transaction, so rejected requests do not partially change named state.
+any named branch under `refs/heads/` are accepted with the same create, update,
+force, and delete semantics. All branches are advertised and fetchable, so a
+contributor can publish and revise a candidate branch without moving `main`.
+Tags and other non-branch ref namespaces remain denied. Receive-pack validates
+the complete request before applying its ref transaction, so rejected requests
+do not partially change named state.
 
-An end-to-end compatibility suite treats the HTTP endpoint as an opaque remote
-and drives the entire single-branch lifecycle with stock Git commands. It
-creates the initial branch, clones it, advances and pulls it, force-replaces
-history, deletes the branch, clones the resulting empty repository, then
-recreates and pulls the branch into that empty working copy.
+End-to-end compatibility suites treat the HTTP endpoint as an opaque remote and
+drive it with stock Git commands. They cover the entire primary-branch
+lifecycle as well as discovery, fetch, creation, advancement, and deletion of
+a candidate branch while verifying that the maintained branch remains fixed.

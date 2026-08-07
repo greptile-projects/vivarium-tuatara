@@ -271,12 +271,82 @@ func TestGitPushCreatesAndAdvancesPrimaryBranchWithoutLosingHistory(t *testing.T
 
 	gitCommand(t, workingCopy, "branch", "secondary", advanced)
 	gitCommand(t, workingCopy, "tag", "secondary-tag", advanced)
-	gitCommandFails(t, workingCopy, "push", "origin", "secondary")
-	gitCommandFails(t, workingCopy, "push", "origin", advanced+":refs/heads/main/feature")
+	gitCommand(t, workingCopy, "push", "origin", "secondary")
+	gitCommand(t, workingCopy, "push", "origin", advanced+":refs/heads/main/feature")
 	gitCommandFails(t, workingCopy, "push", "origin", "secondary-tag")
-	wantRefs := advanced + "\tHEAD\n" + advanced + "\trefs/heads/main\n"
+	wantRefs := advanced + "\tHEAD\n" + advanced + "\trefs/heads/main\n" + advanced + "\trefs/heads/main/feature\n" + advanced + "\trefs/heads/secondary\n"
 	if got := lsRemote(t, server.URL+"/git/"+repo.ID()+".git"); got != wantRefs {
-		t.Fatalf("remote refs after rejected secondary refs = %q", got)
+		t.Fatalf("remote refs after branch pushes = %q", got)
+	}
+}
+
+func TestGitStockClientCandidateBranchLifecycleLeavesPrimaryUnchanged(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("candidate-branches")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(newHandler(store))
+	t.Cleanup(server.Close)
+	remoteURL := server.URL + "/git/" + repo.ID() + ".git"
+
+	publisher := filepath.Join(t.TempDir(), "publisher")
+	gitCommand(t, "", "init", "--initial-branch=main", publisher)
+	gitCommand(t, publisher, "config", "user.name", "Contributor")
+	gitCommand(t, publisher, "config", "user.email", "contributor@example.com")
+	gitCommand(t, publisher, "remote", "add", "origin", remoteURL)
+	if err := os.WriteFile(filepath.Join(publisher, "maintained.txt"), []byte("stable\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommand(t, publisher, "add", "maintained.txt")
+	gitCommand(t, publisher, "commit", "-m", "maintained version")
+	mainCommit := strings.TrimSpace(gitCommand(t, publisher, "rev-parse", "HEAD"))
+	gitCommand(t, publisher, "push", "-u", "origin", "main")
+
+	gitCommand(t, publisher, "switch", "-c", "candidate/parser")
+	if err := os.WriteFile(filepath.Join(publisher, "candidate.txt"), []byte("first draft\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommand(t, publisher, "add", "candidate.txt")
+	gitCommand(t, publisher, "commit", "-m", "publish candidate")
+	firstCandidate := strings.TrimSpace(gitCommand(t, publisher, "rev-parse", "HEAD"))
+	gitCommand(t, publisher, "push", "-u", "origin", "candidate/parser")
+
+	wantRefs := mainCommit + "\tHEAD\n" + firstCandidate + "\trefs/heads/candidate/parser\n" + mainCommit + "\trefs/heads/main\n"
+	if got := lsRemote(t, remoteURL); got != wantRefs {
+		t.Fatalf("discovered refs = %q, want %q", got, wantRefs)
+	}
+
+	observer := filepath.Join(t.TempDir(), "observer")
+	gitCommand(t, "", "clone", remoteURL, observer)
+	gitCommand(t, observer, "fetch", "origin", "candidate/parser")
+	if got := gitCommand(t, observer, "rev-parse", "refs/remotes/origin/candidate/parser"); got != firstCandidate+"\n" {
+		t.Fatalf("fetched candidate = %q, want %s", got, firstCandidate)
+	}
+	if got := gitCommand(t, observer, "rev-parse", "main"); got != mainCommit+"\n" {
+		t.Fatalf("observer main after candidate fetch = %q, want %s", got, mainCommit)
+	}
+
+	if err := os.WriteFile(filepath.Join(publisher, "candidate.txt"), []byte("second draft\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommand(t, publisher, "commit", "-am", "revise candidate")
+	secondCandidate := strings.TrimSpace(gitCommand(t, publisher, "rev-parse", "HEAD"))
+	gitCommand(t, publisher, "push", "origin", "candidate/parser")
+	gitCommand(t, observer, "fetch", "origin")
+	if got := gitCommand(t, observer, "rev-parse", "refs/remotes/origin/candidate/parser"); got != secondCandidate+"\n" {
+		t.Fatalf("updated candidate = %q, want %s", got, secondCandidate)
+	}
+
+	gitCommand(t, publisher, "push", "origin", "--delete", "candidate/parser")
+	if got := lsRemote(t, remoteURL); got != mainCommit+"\tHEAD\n"+mainCommit+"\trefs/heads/main\n" {
+		t.Fatalf("refs after candidate deletion = %q", got)
+	}
+	if got := gitCommand(t, repo.Path(), "rev-parse", "refs/heads/main"); got != mainCommit+"\n" {
+		t.Fatalf("main after candidate lifecycle = %q, want %s", got, mainCommit)
 	}
 }
 
