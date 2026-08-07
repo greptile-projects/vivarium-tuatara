@@ -61,9 +61,22 @@ func TestExecuteUsesExactDisposableSnapshotAndPersistsLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].State != "succeeded" || got[0].StartedAt == nil || got[0].CompletedAt == nil {
+	if len(got) != 1 || got[0].State != "succeeded" || got[0].StartedAt == nil || got[0].CompletedAt == nil || len(got[0].Attempts) != 1 || len(got[0].Artifacts) != 1 {
 		t.Fatalf("run = %#v", got)
 	}
+	events, err := store.Events(got[0].RepositoryID, got[0].PullRequestID, got[0].ID, 0)
+	if err != nil || len(events) < 5 || events[0].State != "queued" || events[1].State != "running" || events[len(events)-1].State != "succeeded" {
+		t.Fatalf("events = %#v, %v", events, err)
+	}
+	remaining, err := store.Events(got[0].RepositoryID, got[0].PullRequestID, got[0].ID, events[len(events)-1].Sequence)
+	if err != nil || len(remaining) != 0 {
+		t.Fatalf("reconnected events = %#v, %v", remaining, err)
+	}
+	artifact, metadata, err := store.OpenArtifact(got[0].RepositoryID, got[0].PullRequestID, got[0].ID, got[0].Artifacts[0].ID)
+	if err != nil || metadata.Path != "result" {
+		t.Fatalf("artifact = %#v, %v", metadata, err)
+	}
+	artifact.Close()
 	if got[0].CompletedAt.Before(got[0].CreatedAt) || got[0].CompletedAt.After(time.Now().Add(time.Second)) {
 		t.Fatalf("invalid lifecycle times: %#v", got[0])
 	}
@@ -94,7 +107,7 @@ func TestExecuteUsesExactDisposableSnapshotAndPersistsLifecycle(t *testing.T) {
 	}
 	reopened.Execute(pending[0], repository)
 	final, err := reopened.List(abandoned.RepositoryID, abandoned.PullRequestID)
-	if err != nil || len(final) != 1 || final[0].State != "succeeded" {
+	if err != nil || len(final) != 1 || final[0].State != "succeeded" || len(final[0].Attempts) != 2 {
 		t.Fatalf("recovered runs = %#v, %v", final, err)
 	}
 	cleanupPending := final[0]

@@ -236,7 +236,13 @@ whenever dependencies change or the web job fails before it starts.
   writable tmpfs. Startup, a periodic scheduler, and later same-commit triggers
   retry execution or container cleanup under a cross-process execution lock;
   cleanup must be confirmed before a run becomes terminal. The visibility-aware run
-  collection is `GET /repositories/{id}/pulls/{pull_id}/checks`.
+  collection is `GET /repositories/{id}/pulls/{pull_id}/checks`. Stable run
+  detail retains numbered execution attempts; its sequence-ordered events API
+  exposes lifecycle, bounded stdout/stderr logs, command outcomes, and artifact
+  publication with `after` reconnection. Artifact bytes remain downloadable by
+  stable ID and carry path, size, SHA-256, media type, attempt, and timing
+  metadata. Recovery records an interrupted attempt before relaunching so a
+  later success never erases prior failure evidence.
   Immutable pull request comments are attributable by stable user ID,
   readable under repository visibility rules, and writable by current owners
   and contributors; comment publication uses the uncertain-durability contract.
