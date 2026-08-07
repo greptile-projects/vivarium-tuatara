@@ -149,6 +149,11 @@ later branch movement cannot change which version was originally requested.
 Pull request metadata lives beneath `PULL_REQUEST_STORAGE_ROOT` (default
 `pull-requests`), partitioned by repository ID to isolate collection reads,
 and follows repository visibility and participant access.
+The API derives the source-only commit set and recursive changed-file summary
+from the pull request's snapshotted commit IDs, so branch movement does not
+rewrite the artifact participants are discussing. Immutable pull request
+comments retain stable author IDs; owners and contributors may participate,
+while reads continue to follow repository visibility.
 
 ## Git repository storage
 

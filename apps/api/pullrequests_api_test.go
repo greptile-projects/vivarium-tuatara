@@ -43,9 +43,13 @@ func TestContributorOpensPullRequestWithExactBranchState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tree := writeTestTree(t, gitRepository)
-	base := writeTestCommit(t, gitRepository, tree, nil, 1700000000, "base")
-	head := writeTestCommit(t, gitRepository, tree, []storage.ObjectID{base}, 1700000001, "candidate")
+	oldReadme, _ := gitRepository.WriteObject(storage.BlobObject, []byte("old\n"))
+	newReadme, _ := gitRepository.WriteObject(storage.BlobObject, []byte("new\n"))
+	added, _ := gitRepository.WriteObject(storage.BlobObject, []byte("added\n"))
+	baseTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "README.md", id: oldReadme})
+	headTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "README.md", id: newReadme}, testTreeEntry{mode: "100644", name: "feature.go", id: added})
+	base := writeTestCommit(t, gitRepository, baseTree, nil, 1700000000, "base")
+	head := writeTestCommit(t, gitRepository, headTree, []storage.ObjectID{base}, 1700000001, "candidate")
 	if err := gitRepository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)}); err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +77,7 @@ func TestContributorOpensPullRequestWithExactBranchState(t *testing.T) {
 		t.Fatalf("Location = %q", got)
 	}
 
-	advanced := writeTestCommit(t, gitRepository, tree, []storage.ObjectID{head}, 1700000002, "more work")
+	advanced := writeTestCommit(t, gitRepository, headTree, []storage.ObjectID{head}, 1700000002, "more work")
 	if err := gitRepository.UpdateReference(storage.Reference{Name: "refs/heads/feature", Target: string(advanced)}); err != nil {
 		t.Fatal(err)
 	}
@@ -86,6 +90,50 @@ func TestContributorOpensPullRequestWithExactBranchState(t *testing.T) {
 	if persisted.SourceCommitID != string(head) {
 		t.Fatalf("source commit moved to %s, want creation state %s", persisted.SourceCommitID, head)
 	}
+	commitsResponse := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/pulls/"+pullRequest.ID+"/commits", "", owner.Credential.Token, http.StatusOK)
+	var commitSet struct {
+		Commits []pullrequests.Commit `json:"commits"`
+	}
+	if err := json.NewDecoder(commitsResponse.Body).Decode(&commitSet); err != nil {
+		t.Fatal(err)
+	}
+	commitsResponse.Body.Close()
+	if len(commitSet.Commits) != 1 || commitSet.Commits[0].ID != string(head) || commitSet.Commits[0].Message != "candidate\n" {
+		t.Fatalf("commits = %#v", commitSet.Commits)
+	}
+	filesResponse := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/pulls/"+pullRequest.ID+"/files", "", contributor.Credential.Token, http.StatusOK)
+	var fileSet struct {
+		Files []pullrequests.FileChange `json:"files"`
+	}
+	if err := json.NewDecoder(filesResponse.Body).Decode(&fileSet); err != nil {
+		t.Fatal(err)
+	}
+	filesResponse.Body.Close()
+	if len(fileSet.Files) != 2 || fileSet.Files[0].Path != "README.md" || fileSet.Files[0].Status != "modified" || fileSet.Files[1].Path != "feature.go" || fileSet.Files[1].Status != "added" {
+		t.Fatalf("files = %#v", fileSet.Files)
+	}
+	commentsURL := server.URL + "/repositories/" + repository.ID + "/pulls/" + pullRequest.ID + "/comments"
+	commentResponse := authenticatedRequest(t, http.MethodPost, commentsURL, `{"body":"Please cover the edge case."}`, owner.Credential.Token, http.StatusCreated)
+	var comment pullrequests.Comment
+	if err := json.NewDecoder(commentResponse.Body).Decode(&comment); err != nil {
+		t.Fatal(err)
+	}
+	commentResponse.Body.Close()
+	if comment.AuthorID != owner.User.ID || comment.PullRequestID != pullRequest.ID {
+		t.Fatalf("comment = %#v", comment)
+	}
+	conversationResponse := authenticatedRequest(t, http.MethodGet, commentsURL, "", contributor.Credential.Token, http.StatusOK)
+	var conversation struct {
+		Comments []pullrequests.Comment `json:"comments"`
+	}
+	if err := json.NewDecoder(conversationResponse.Body).Decode(&conversation); err != nil {
+		t.Fatal(err)
+	}
+	conversationResponse.Body.Close()
+	if len(conversation.Comments) != 1 || conversation.Comments[0].ID != comment.ID {
+		t.Fatalf("comments = %#v", conversation.Comments)
+	}
+	authenticatedRequest(t, http.MethodPost, commentsURL, `{"body":"uninvited"}`, outsider.Credential.Token, http.StatusNotFound).Body.Close()
 
 	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/pulls", "", contributor.Credential.Token, http.StatusOK).Body.Close()
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/pulls", body, outsider.Credential.Token, http.StatusNotFound).Body.Close()

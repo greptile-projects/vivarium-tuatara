@@ -134,6 +134,14 @@ func TestCreateReturnsIdentityAfterUncertainDurability(t *testing.T) {
 	if getErr != nil || persisted.ID != pullRequest.ID {
 		t.Fatalf("persisted = %#v, %v", persisted, getErr)
 	}
+	comment, commentErr := store.AddComment(repository.ID(), pullRequest.ID, testID('7'), "Review note")
+	if !errors.Is(commentErr, ErrDurabilityUncertain) || comment.ID == "" {
+		t.Fatalf("AddComment = %#v, %v", comment, commentErr)
+	}
+	comments, listErr := store.ListComments(repository.ID(), pullRequest.ID)
+	if listErr != nil || len(comments) != 1 || comments[0].ID != comment.ID {
+		t.Fatalf("ListComments = %#v, %v", comments, listErr)
+	}
 }
 
 func writeCommit(t *testing.T, repository *storage.Repository, tree storage.ObjectID, message string) storage.ObjectID {

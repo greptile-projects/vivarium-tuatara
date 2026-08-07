@@ -167,6 +167,11 @@ whenever dependencies change or the web job fails before it starts.
   can create them; reads inherit repository visibility and access. Pull request
   collections use shared cursor pagination and creation uses the same uncertain-
   durability response contract as proposals.
+  Pull request inspection derives source-only commits and path-ordered file
+  changes from the immutable source/target commit snapshots rather than live
+  branches. Immutable pull request comments are attributable by stable user ID,
+  readable under repository visibility rules, and writable by current owners
+  and contributors; comment publication uses the uncertain-durability contract.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 
