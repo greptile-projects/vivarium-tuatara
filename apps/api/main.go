@@ -145,7 +145,7 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 		registerAuthRoutes(mux, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil {
-		registerRepositoryRoutes(mux, repositoryCatalog, userStore, authStore)
+		registerRepositoryRoutes(mux, store, repositoryCatalog, userStore, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && proposalStore != nil {
 		registerProposalRoutes(mux, repositoryCatalog, proposalStore, authStore)
@@ -788,7 +788,7 @@ func writeProposalError(w http.ResponseWriter, err error) bool {
 	return true
 }
 
-func registerRepositoryRoutes(mux *http.ServeMux, store *repositories.Store, userStore *users.Store, authStore *auth.Store) {
+func registerRepositoryRoutes(mux *http.ServeMux, gitStore *storage.Store, store *repositories.Store, userStore *users.Store, authStore *auth.Store) {
 	mux.HandleFunc("POST /repositories", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)
 		if !ok {
@@ -850,6 +850,7 @@ func registerRepositoryRoutes(mux *http.ServeMux, store *repositories.Store, use
 		}
 		writeJSON(w, http.StatusOK, repository)
 	})
+	registerRepositoryBrowseRoutes(mux, gitStore, store, authStore)
 	mux.HandleFunc("PATCH /repositories/{id}", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)
 		if !ok {
@@ -1119,24 +1120,12 @@ func decodeJSON(r *http.Request, destination any) error {
 }
 
 func paginate[T any](r *http.Request, all []T, id func(T) string) ([]T, *string, bool) {
-	values := r.URL.Query()
-	limitValues, hasLimit := values["limit"]
-	afterValues, hasAfter := values["after"]
-	if len(limitValues) > 1 || len(afterValues) > 1 || (hasLimit && limitValues[0] == "") || (hasAfter && afterValues[0] == "") {
+	limit, after, ok := paginationParameters(r)
+	if !ok {
 		return nil, nil, false
 	}
-	limit := 30
-	if hasLimit {
-		raw := limitValues[0]
-		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed < 1 || parsed > 100 {
-			return nil, nil, false
-		}
-		limit = parsed
-	}
 	start := 0
-	if hasAfter {
-		after := afterValues[0]
+	if after != "" {
 		start = -1
 		for index, item := range all {
 			if id(item) == after {
@@ -1156,6 +1145,29 @@ func paginate[T any](r *http.Request, all []T, id func(T) string) ([]T, *string,
 		next = &cursor
 	}
 	return page, next, true
+}
+
+func paginationParameters(r *http.Request) (int, string, bool) {
+	values := r.URL.Query()
+	limitValues, hasLimit := values["limit"]
+	afterValues, hasAfter := values["after"]
+	if len(limitValues) > 1 || len(afterValues) > 1 || (hasLimit && limitValues[0] == "") || (hasAfter && afterValues[0] == "") {
+		return 0, "", false
+	}
+	limit := 30
+	if hasLimit {
+		raw := limitValues[0]
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			return 0, "", false
+		}
+		limit = parsed
+	}
+	after := ""
+	if hasAfter {
+		after = afterValues[0]
+	}
+	return limit, after, true
 }
 
 func writeUserError(w http.ResponseWriter, err error) bool {

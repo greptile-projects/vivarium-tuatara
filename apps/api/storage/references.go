@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -113,11 +114,12 @@ func (r *Repository) UpdateReferenceIfTarget(reference Reference, expected strin
 	return publishReference(lock, parent, base, contents)
 }
 
-// ReadReference reads and validates one loose reference.
+// ReadReference reads and validates one reference. Loose references take
+// precedence over packed references, matching stock Git.
 func (r *Repository) ReadReference(name string) (Reference, error) {
 	parent, base, err := r.openReferenceParent(name, false)
 	if errors.Is(err, syscall.ENOENT) {
-		return Reference{}, fmt.Errorf("reference %q: %w", name, ErrReferenceNotFound)
+		return r.readPackedReference(name)
 	}
 	if err != nil {
 		return Reference{}, err
@@ -125,7 +127,7 @@ func (r *Repository) ReadReference(name string) (Reference, error) {
 	defer parent.Close()
 	file, err := openReferenceFile(parent, base)
 	if errors.Is(err, syscall.ENOENT) {
-		return Reference{}, fmt.Errorf("reference %q: %w", name, ErrReferenceNotFound)
+		return r.readPackedReference(name)
 	}
 	if err != nil {
 		return Reference{}, corruptReference(name, err)
@@ -154,9 +156,12 @@ func (r *Repository) ReadReference(name string) (Reference, error) {
 	return Reference{Name: name, Target: target}, nil
 }
 
-// ListReferences returns HEAD and every loose reference, ordered by name.
+// ListReferences returns HEAD and every loose or packed reference, ordered by
+// name. A loose reference shadows a packed entry with the same name.
 func (r *Repository) ListReferences() ([]Reference, error) {
 	names := []string{"HEAD"}
+	seen := map[string]bool{"HEAD": true}
+	loose := map[string]bool{"HEAD": true}
 	root, err := r.openRepositoryDirectory()
 	if err != nil {
 		return nil, fmt.Errorf("open repository: %w", err)
@@ -171,9 +176,26 @@ func (r *Repository) ListReferences() ([]Reference, error) {
 		return nil, fmt.Errorf("list references: %w", err)
 	}
 	_ = refs.Close()
+	for _, name := range names {
+		seen[name] = true
+		loose[name] = true
+	}
+	packed, err := r.readPackedReferences()
+	if err != nil {
+		return nil, err
+	}
+	for name := range packed {
+		if !seen[name] {
+			names = append(names, name)
+		}
+	}
 	slices.Sort(names)
 	references := make([]Reference, 0, len(names))
 	for _, name := range names {
+		if !loose[name] {
+			references = append(references, packed[name])
+			continue
+		}
 		reference, err := r.ReadReference(name)
 		if err != nil {
 			return nil, fmt.Errorf("enumerate %s: %w", name, err)
@@ -181,6 +203,67 @@ func (r *Repository) ListReferences() ([]Reference, error) {
 		references = append(references, reference)
 	}
 	return references, nil
+}
+
+func (r *Repository) readPackedReference(name string) (Reference, error) {
+	if !validRefName(name) {
+		return Reference{}, fmt.Errorf("reference %q: %w", name, ErrReferenceNotFound)
+	}
+	packed, err := r.readPackedReferences()
+	if err != nil {
+		return Reference{}, err
+	}
+	reference, ok := packed[name]
+	if !ok {
+		return Reference{}, fmt.Errorf("reference %q: %w", name, ErrReferenceNotFound)
+	}
+	return reference, nil
+}
+
+func (r *Repository) readPackedReferences() (map[string]Reference, error) {
+	root, err := r.openRepositoryDirectory()
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	file, err := openReferenceFile(root, "packed-refs")
+	if errors.Is(err, syscall.ENOENT) {
+		return map[string]Reference{}, nil
+	}
+	if err != nil {
+		return nil, corruptReference("packed-refs", err)
+	}
+	defer file.Close()
+
+	result := make(map[string]Reference)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "^") {
+			if !validObjectID(ObjectID(strings.TrimPrefix(line, "^"))) {
+				return nil, corruptReference("packed-refs", errors.New("invalid peeled object ID"))
+			}
+			continue
+		}
+		target, name, found := strings.Cut(line, " ")
+		if !found || !validObjectID(ObjectID(target)) || !validRefName(name) {
+			return nil, corruptReference("packed-refs", errors.New("invalid packed reference"))
+		}
+		if _, exists := result[name]; exists {
+			return nil, corruptReference("packed-refs", errors.New("duplicate packed reference"))
+		}
+		if _, err := r.ReadObject(ObjectID(target)); err != nil {
+			return nil, corruptReference(name, err)
+		}
+		result[name] = Reference{Name: name, Target: target}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, corruptReference("packed-refs", err)
+	}
+	return result, nil
 }
 
 // DeleteReference atomically coordinates with writers and removes a reference.
@@ -202,10 +285,25 @@ func (r *Repository) DeleteReference(name string) error {
 		return fmt.Errorf("close reference lock: %w", err)
 	}
 	defer unlinkAt(parent, base+".lock")
-	if err := unlinkAt(parent, base); errors.Is(err, syscall.ENOENT) {
+	file, openErr := openReferenceFile(parent, base)
+	looseExists := openErr == nil
+	if file != nil {
+		_ = file.Close()
+	}
+	if openErr != nil && !errors.Is(openErr, syscall.ENOENT) {
+		return fmt.Errorf("inspect reference %q: %w", name, openErr)
+	}
+	packedRemoved, err := r.removePackedReference(name)
+	if err != nil {
+		return err
+	}
+	if !looseExists && !packedRemoved {
 		return fmt.Errorf("reference %q: %w", name, ErrReferenceNotFound)
-	} else if err != nil {
-		return fmt.Errorf("delete reference %q: %w", name, err)
+	}
+	if looseExists {
+		if err := unlinkAt(parent, base); err != nil {
+			return fmt.Errorf("delete reference %q: %w", name, err)
+		}
 	}
 	if err := unlinkAt(parent, base+".lock"); err != nil {
 		return fmt.Errorf("remove reference lock: %w", err)
@@ -214,6 +312,75 @@ func (r *Repository) DeleteReference(name string) error {
 		return fmt.Errorf("sync reference directory: %w", err)
 	}
 	return nil
+}
+
+// removePackedReference rewrites packed-refs under Git's standard lock. The
+// packed entry is removed before its loose override so an interrupted delete
+// can leave the branch present, but can never resurrect a deleted branch.
+func (r *Repository) removePackedReference(name string) (bool, error) {
+	root, err := r.openRepositoryDirectory()
+	if err != nil {
+		return false, err
+	}
+	defer root.Close()
+	lock, err := lockReference(root, "packed-refs")
+	if err != nil {
+		return false, err
+	}
+	defer unlinkAt(root, "packed-refs.lock")
+	file, err := openReferenceFile(root, "packed-refs")
+	if errors.Is(err, syscall.ENOENT) {
+		_ = lock.Close()
+		return false, nil
+	}
+	if err != nil {
+		_ = lock.Close()
+		return false, corruptReference("packed-refs", err)
+	}
+	defer file.Close()
+	removed, omitPeeled := false, false
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		omit := false
+		if strings.HasPrefix(line, "^") {
+			if !validObjectID(ObjectID(strings.TrimPrefix(line, "^"))) {
+				_ = lock.Close()
+				return false, corruptReference("packed-refs", errors.New("invalid peeled object ID"))
+			}
+			omit = omitPeeled
+		} else {
+			omitPeeled = false
+			if !strings.HasPrefix(line, "#") && line != "" {
+				target, refName, found := strings.Cut(line, " ")
+				if !found || !validObjectID(ObjectID(target)) || !validRefName(refName) {
+					_ = lock.Close()
+					return false, corruptReference("packed-refs", errors.New("invalid packed reference"))
+				}
+				if refName == name {
+					removed, omit, omitPeeled = true, true, true
+				}
+			}
+		}
+		if !omit {
+			if _, err := io.WriteString(lock, line+"\n"); err != nil {
+				_ = lock.Close()
+				return false, fmt.Errorf("rewrite packed references: %w", err)
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		_ = lock.Close()
+		return false, corruptReference("packed-refs", err)
+	}
+	if !removed {
+		_ = lock.Close()
+		return false, nil
+	}
+	if err := publishReference(lock, root, "packed-refs", nil); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (r *Repository) prepareReference(reference Reference) ([]byte, error) {

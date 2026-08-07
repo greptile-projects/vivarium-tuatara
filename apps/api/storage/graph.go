@@ -12,10 +12,10 @@ import (
 // verified against the referenced object (except for gitlinks, whose commit
 // may intentionally live in another repository).
 type TreeEntry struct {
-	Name string
-	Mode string
-	ID   ObjectID
-	Type ObjectType
+	Name string     `json:"name"`
+	Mode string     `json:"mode"`
+	ID   ObjectID   `json:"id"`
+	Type ObjectType `json:"type"`
 }
 
 // TreePath is an entry reached while recursively walking a tree.
@@ -213,6 +213,50 @@ func (r *Repository) ListCommitAncestry(start ObjectID) ([]Commit, error) {
 		}
 	}
 	return commits, nil
+}
+
+// ListCommitAncestryPage walks ancestry in the same deterministic order while
+// stopping after one bounded page. after is the last commit returned by the
+// preceding page. The boolean reports whether a non-empty cursor was found.
+func (r *Repository) ListCommitAncestryPage(start, after ObjectID, limit, scanLimit int) ([]Commit, *ObjectID, bool, error) {
+	var commits []Commit
+	seen := make(map[ObjectID]bool)
+	found := after == ""
+	visited := 0
+	type pendingCommit struct{ id, from ObjectID }
+	stack := []pendingCommit{{id: start}}
+	for len(stack) > 0 {
+		pending := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if seen[pending.id] {
+			continue
+		}
+		if visited == scanLimit {
+			return nil, nil, false, nil
+		}
+		visited++
+		commit, err := r.ReadCommit(pending.id)
+		if err != nil {
+			if pending.from != "" {
+				return nil, nil, found, graphError(pending.from, fmt.Errorf("parent %s: %w", pending.id, err))
+			}
+			return nil, nil, found, err
+		}
+		seen[pending.id] = true
+		if found {
+			commits = append(commits, commit)
+			if len(commits) > limit {
+				next := commits[limit-1].ID
+				return commits[:limit], &next, true, nil
+			}
+		} else if commit.ID == after {
+			found = true
+		}
+		for index := len(commit.Parents) - 1; index >= 0; index-- {
+			stack = append(stack, pendingCommit{id: commit.Parents[index], from: commit.ID})
+		}
+	}
+	return commits, nil, found, nil
 }
 
 // compareTreeEntries implements Git's base_name_compare ordering: directory
