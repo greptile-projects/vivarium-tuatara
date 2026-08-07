@@ -40,8 +40,9 @@ a skip link and semantic landmarks. Pages should supply useful empty, loading,
 error, and permission-denied states using the same card, type, action, and
 status vocabulary as their populated views.
 
-Browser API calls use same-origin `/api/*` requests, which Next.js rewrites to
-`API_ORIGIN` (the local API on port 8080 by default). Account creation returns
+Browser API calls use same-origin `/api/*` requests and clone URLs use
+same-origin `/git/*`; Next.js rewrites both to `API_ORIGIN` (the local API on
+port 8080 by default). Account creation returns
 its one-time session token to the web client; the client retains that bearer
 token in browser local storage, validates it with `GET /user` at startup, and
 clears invalid or explicitly logged-out sessions. Returning users may present
@@ -49,6 +50,12 @@ an existing session or API token. Onboarding continues into owned and
 collaborator repository creation and cursor-complete discovery, while settings
 expose profile editing, API and Git
 token issuance, one-time secret revelation, revocation, and session logout.
+Repository catalog entries link to `/repositories/[id]`, where public visitors
+and authorized collaborators can select branches, follow commit-pinned history,
+navigate snapshot directories, preview text files, identify binary files, and
+copy clone information. The selected `ref` and repository-relative `path` live
+in the URL, while every content response exposes its resolved commit, keeping
+navigation explicit when a branch moves.
 
 ## User identity
 

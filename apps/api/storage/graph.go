@@ -12,10 +12,10 @@ import (
 // verified against the referenced object (except for gitlinks, whose commit
 // may intentionally live in another repository).
 type TreeEntry struct {
-	Name string
-	Mode string
-	ID   ObjectID
-	Type ObjectType
+	Name string     `json:"name"`
+	Mode string     `json:"mode"`
+	ID   ObjectID   `json:"id"`
+	Type ObjectType `json:"type"`
 }
 
 // TreePath is an entry reached while recursively walking a tree.

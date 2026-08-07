@@ -145,7 +145,7 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 		registerAuthRoutes(mux, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil {
-		registerRepositoryRoutes(mux, repositoryCatalog, userStore, authStore)
+		registerRepositoryRoutes(mux, store, repositoryCatalog, userStore, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && proposalStore != nil {
 		registerProposalRoutes(mux, repositoryCatalog, proposalStore, authStore)
@@ -788,7 +788,7 @@ func writeProposalError(w http.ResponseWriter, err error) bool {
 	return true
 }
 
-func registerRepositoryRoutes(mux *http.ServeMux, store *repositories.Store, userStore *users.Store, authStore *auth.Store) {
+func registerRepositoryRoutes(mux *http.ServeMux, gitStore *storage.Store, store *repositories.Store, userStore *users.Store, authStore *auth.Store) {
 	mux.HandleFunc("POST /repositories", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)
 		if !ok {
@@ -850,6 +850,7 @@ func registerRepositoryRoutes(mux *http.ServeMux, store *repositories.Store, use
 		}
 		writeJSON(w, http.StatusOK, repository)
 	})
+	registerRepositoryBrowseRoutes(mux, gitStore, store, authStore)
 	mux.HandleFunc("PATCH /repositories/{id}", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)
 		if !ok {

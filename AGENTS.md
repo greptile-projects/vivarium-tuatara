@@ -63,8 +63,8 @@ whenever dependencies change or the web job fails before it starts.
   needs client state. Navigation uses `next/link`; every page renders its
   primary content inside the shell's `#main-content` landmark. Browser API
   calls use the typed helper in `src/lib/api.ts` and same-origin `/api/*`
-  requests, which Next rewrites to `$API_ORIGIN` (default
-  `http://127.0.0.1:8080`). `AuthProvider` retains the API-issued bearer token
+  requests; clone URLs use same-origin `/git/*`. Next rewrites both to
+  `$API_ORIGIN` (default `http://127.0.0.1:8080`). `AuthProvider` retains the API-issued bearer token
   in browser local storage, validates it through `GET /user` at startup, and
   is the shared identity boundary for interactive account and repository
   workflows.
@@ -139,6 +139,11 @@ whenever dependencies change or the web job fails before it starts.
   Repository lifecycle routes are `POST /repositories`, `GET /repositories`,
   `GET /repositories/{id}`, `PATCH /repositories/{id}`, and `DELETE
   /repositories/{id}`.
+  Read-only browser routes beneath `/repositories/{id}` expose branches,
+  revision ancestry, direct tree entries, and text/binary blob inspection.
+  They accept a branch or full commit ID through `ref`, return the resolved
+  commit with content, and apply the same public/private collaborator policy
+  as repository inspection.
   Repository records have an opaque stable ID, immutable owner, user-facing
   name, `main` default branch, and `/git/<id>.git` remote path. Names are unique
   per owner (case-insensitively), while IDs are shared by application records
