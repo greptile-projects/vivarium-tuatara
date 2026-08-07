@@ -8,7 +8,9 @@ export default defineConfig({
   use: {
     baseURL: "http://localhost:3000",
     headless: true,
-    launchOptions: { executablePath: process.env.CHROMIUM_PATH ?? "/usr/local/bin/chromium" },
+    launchOptions: process.env.CHROMIUM_PATH
+      ? { executablePath: process.env.CHROMIUM_PATH }
+      : undefined,
   },
   webServer: [
     {
