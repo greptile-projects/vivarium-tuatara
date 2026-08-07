@@ -1,22 +1,11 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { Icons } from "./icons";
+import { Navigation, SettingsLink } from "./navigation";
 import { Avatar, Button } from "./ui";
-
-const navigation = [
-  { label: "Home", icon: Icons.Home, current: true },
-  { label: "Repositories", icon: Icons.Code },
-  { label: "Proposals", icon: Icons.Spark, count: "4" },
-  { label: "Pull requests", icon: Icons.GitPull, count: "2" },
-  { label: "Activity", icon: Icons.Activity },
-];
 
 function Brand() {
   return <Link href="/" className="inline-flex items-center gap-2.5 rounded-md font-semibold tracking-[-0.02em]"><span className="grid size-8 place-items-center rounded-lg bg-[var(--brand)] text-sm font-bold text-white shadow-sm">V</span><span>vivarium</span></Link>;
-}
-
-function Navigation() {
-  return <nav aria-label="Primary" className="space-y-1">{navigation.map(({ label, icon: Icon, count, current }) => <Link key={label} href="/" aria-current={current ? "page" : undefined} className={`group flex min-h-10 items-center gap-3 rounded-lg px-3 text-sm font-medium transition ${current ? "bg-[var(--brand-soft)] text-[var(--brand-strong)]" : "text-[var(--muted)] hover:bg-black/[.035] hover:text-[var(--ink)]"}`}><Icon size={17}/><span className="flex-1">{label}</span>{count && <span className="rounded-full bg-black/[.055] px-2 py-0.5 text-[11px] tabular-nums">{count}</span>}</Link>)}</nav>;
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -25,7 +14,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="px-2"><Brand /></div>
       <div className="mt-8"><Navigation /></div>
       <div className="mt-auto rounded-xl border border-[var(--line)] bg-white p-3.5"><div className="flex items-center gap-2 text-xs font-semibold text-[var(--brand-strong)]"><Icons.Spark size={15}/> Built for shared work</div><p className="mt-2 text-xs leading-5 text-[var(--muted)]">Propose an idea, shape it together, then carry its context into code.</p></div>
-      <Link href="/" className="mt-3 flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-[var(--muted)] hover:bg-black/[.035] hover:text-[var(--ink)]"><Icons.Settings size={17}/>Settings</Link>
+      <SettingsLink />
     </aside>
     <div className="min-w-0 lg:col-start-2">
       <header className="sticky top-0 z-10 flex h-16 items-center gap-3 border-b border-[var(--line)] bg-[rgb(251_252_248_/_0.88)] px-4 backdrop-blur-xl sm:px-6 lg:px-8">

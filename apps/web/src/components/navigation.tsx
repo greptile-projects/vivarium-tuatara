@@ -1,0 +1,54 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { Icons } from "./icons";
+
+const navigation = [
+  { label: "Home", href: "/", icon: Icons.Home },
+  { label: "Repositories", href: "/repositories", icon: Icons.Code },
+  { label: "Proposals", href: "/proposals", icon: Icons.Spark, count: "4" },
+  { label: "Pull requests", href: "/pulls", icon: Icons.GitPull, count: "2" },
+  { label: "Activity", href: "/activity", icon: Icons.Activity },
+];
+
+export function Navigation() {
+  const pathname = usePathname();
+
+  return (
+    <nav aria-label="Primary" className="space-y-1">
+      {navigation.map(({ label, href, icon: Icon, count }) => {
+        const current = href === "/" ? pathname === href : pathname.startsWith(`${href}/`) || pathname === href;
+
+        return (
+          <Link
+            key={href}
+            href={href}
+            aria-current={current ? "page" : undefined}
+            className={`group flex min-h-10 items-center gap-3 rounded-lg px-3 text-sm font-medium transition ${current ? "bg-[var(--brand-soft)] text-[var(--brand-strong)]" : "text-[var(--muted)] hover:bg-black/[.035] hover:text-[var(--ink)]"}`}
+          >
+            <Icon size={17} />
+            <span className="flex-1">{label}</span>
+            {count && <span className="rounded-full bg-black/[.055] px-2 py-0.5 text-[11px] tabular-nums">{count}</span>}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
+export function SettingsLink() {
+  const pathname = usePathname();
+  const current = pathname === "/settings" || pathname.startsWith("/settings/");
+
+  return (
+    <Link
+      href="/settings"
+      aria-current={current ? "page" : undefined}
+      className={`mt-3 flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition ${current ? "bg-[var(--brand-soft)] font-medium text-[var(--brand-strong)]" : "text-[var(--muted)] hover:bg-black/[.035] hover:text-[var(--ink)]"}`}
+    >
+      <Icons.Settings size={17} />
+      Settings
+    </Link>
+  );
+}
