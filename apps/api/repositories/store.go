@@ -19,10 +19,11 @@ import (
 )
 
 var (
-	ErrNotFound    = errors.New("repository not found")
-	ErrNameTaken   = errors.New("repository name is already in use")
-	ErrInvalidName = errors.New("invalid repository name")
-	ErrVisibility  = errors.New("invalid repository visibility")
+	ErrNotFound            = errors.New("repository not found")
+	ErrNameTaken           = errors.New("repository name is already in use")
+	ErrInvalidName         = errors.New("invalid repository name")
+	ErrVisibility          = errors.New("invalid repository visibility")
+	ErrInvalidCollaborator = errors.New("invalid repository collaborator")
 )
 
 const (
@@ -31,14 +32,22 @@ const (
 )
 
 type Repository struct {
-	ID            string    `json:"id"`
-	OwnerID       string    `json:"owner_id"`
-	Name          string    `json:"name"`
-	Visibility    string    `json:"visibility"`
-	DefaultBranch string    `json:"default_branch"`
-	GitRemote     string    `json:"git_remote"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID              string    `json:"id"`
+	OwnerID         string    `json:"owner_id"`
+	Name            string    `json:"name"`
+	Visibility      string    `json:"visibility"`
+	DefaultBranch   string    `json:"default_branch"`
+	GitRemote       string    `json:"git_remote"`
+	CreatedAt       time.Time `json:"created_at"`
+	collaboratorIDs string
 }
+
+type Collaborator struct {
+	UserID string `json:"user_id"`
+	Role   string `json:"role"`
+}
+
+const Contributor = "contributor"
 
 type gitStore interface {
 	Create(string) (*storage.Repository, error)
@@ -160,6 +169,91 @@ func (s *Store) SetVisibility(ownerID, id, visibility string) (Repository, error
 	return repository, nil
 }
 
+func (s *Store) AddCollaborator(ownerID, id, userID string) (Collaborator, error) {
+	if !validID(userID) {
+		return Collaborator{}, ErrInvalidCollaborator
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return Collaborator{}, err
+	}
+	defer unlock()
+	repository, err := s.read(id)
+	if err != nil || repository.OwnerID != ownerID {
+		return Collaborator{}, ErrNotFound
+	}
+	if userID == ownerID {
+		return Collaborator{}, ErrInvalidCollaborator
+	}
+	ids := collaboratorIDs(repository)
+	for _, existing := range ids {
+		if existing == userID {
+			return Collaborator{UserID: userID, Role: Contributor}, nil
+		}
+	}
+	ids = append(ids, userID)
+	sort.Strings(ids)
+	repository.collaboratorIDs = strings.Join(ids, ",")
+	if err := s.write(repository); err != nil {
+		if persisted, readErr := s.read(id); readErr == nil && persisted == repository {
+			return Collaborator{UserID: userID, Role: Contributor}, nil
+		}
+		return Collaborator{}, err
+	}
+	return Collaborator{UserID: userID, Role: Contributor}, nil
+}
+
+func (s *Store) ListCollaborators(ownerID, id string) ([]Collaborator, error) {
+	repository, err := s.Get(ownerID, id)
+	if err != nil {
+		return nil, err
+	}
+	ids := collaboratorIDs(repository)
+	result := make([]Collaborator, len(ids))
+	for i, userID := range ids {
+		result[i] = Collaborator{UserID: userID, Role: Contributor}
+	}
+	return result, nil
+}
+
+func (s *Store) RemoveCollaborator(ownerID, id, userID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	repository, err := s.read(id)
+	if err != nil || repository.OwnerID != ownerID {
+		return ErrNotFound
+	}
+	ids := collaboratorIDs(repository)
+	for i, existing := range ids {
+		if existing == userID {
+			ids = append(ids[:i], ids[i+1:]...)
+			repository.collaboratorIDs = strings.Join(ids, ",")
+			return s.write(repository)
+		}
+	}
+	return nil
+}
+
+func (s *Store) HasCollaborator(userID, id string) (bool, error) {
+	repository, err := s.GetByID(id)
+	if err != nil {
+		return false, err
+	}
+	for _, collaboratorID := range collaboratorIDs(repository) {
+		if collaboratorID == userID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (s *Store) Get(ownerID, id string) (Repository, error) {
 	repository, err := s.read(id)
 	if err != nil || repository.OwnerID != ownerID {
@@ -240,8 +334,29 @@ func (s *Store) read(id string) (Repository, error) {
 		return Repository{}, err
 	}
 	var repository Repository
-	if json.Unmarshal(data, &repository) != nil || repository.ID != id || !validID(repository.OwnerID) || repository.GitRemote != "/git/"+id+".git" || repository.DefaultBranch != "main" {
+	var record struct {
+		ID              string    `json:"id"`
+		OwnerID         string    `json:"owner_id"`
+		Name            string    `json:"name"`
+		Visibility      string    `json:"visibility"`
+		DefaultBranch   string    `json:"default_branch"`
+		GitRemote       string    `json:"git_remote"`
+		CreatedAt       time.Time `json:"created_at"`
+		CollaboratorIDs []string  `json:"collaborator_ids,omitempty"`
+	}
+	if json.Unmarshal(data, &record) != nil {
 		return Repository{}, fmt.Errorf("corrupt repository metadata %s", id)
+	}
+	repository = Repository{ID: record.ID, OwnerID: record.OwnerID, Name: record.Name, Visibility: record.Visibility, DefaultBranch: record.DefaultBranch, GitRemote: record.GitRemote, CreatedAt: record.CreatedAt, collaboratorIDs: strings.Join(record.CollaboratorIDs, ",")}
+	if repository.ID != id || !validID(repository.OwnerID) || repository.GitRemote != "/git/"+id+".git" || repository.DefaultBranch != "main" {
+		return Repository{}, fmt.Errorf("corrupt repository metadata %s", id)
+	}
+	seen := map[string]bool{}
+	for _, collaboratorID := range collaboratorIDs(repository) {
+		if !validID(collaboratorID) || collaboratorID == repository.OwnerID || seen[collaboratorID] {
+			return Repository{}, fmt.Errorf("corrupt repository metadata %s", id)
+		}
+		seen[collaboratorID] = true
 	}
 	// Records created before visibility existed are private by default.
 	if repository.Visibility == "" {
@@ -296,7 +411,17 @@ func (s *Store) loadActive() ([]Repository, error) {
 }
 
 func (s *Store) write(repository Repository) error {
-	data, err := json.Marshal(repository)
+	record := struct {
+		ID              string    `json:"id"`
+		OwnerID         string    `json:"owner_id"`
+		Name            string    `json:"name"`
+		Visibility      string    `json:"visibility"`
+		DefaultBranch   string    `json:"default_branch"`
+		GitRemote       string    `json:"git_remote"`
+		CreatedAt       time.Time `json:"created_at"`
+		CollaboratorIDs []string  `json:"collaborator_ids,omitempty"`
+	}{repository.ID, repository.OwnerID, repository.Name, repository.Visibility, repository.DefaultBranch, repository.GitRemote, repository.CreatedAt, collaboratorIDs(repository)}
+	data, err := json.Marshal(record)
 	if err != nil {
 		return err
 	}
@@ -322,6 +447,13 @@ func (s *Store) write(repository Repository) error {
 		return err
 	}
 	return syncDirectory(s.root)
+}
+
+func collaboratorIDs(repository Repository) []string {
+	if repository.collaboratorIDs == "" {
+		return nil
+	}
+	return strings.Split(repository.collaboratorIDs, ",")
 }
 
 func (s *Store) lockRoot() (func(), error) {

@@ -35,6 +35,22 @@ do
 	esac
 done
 `
+	contributorBranchHook = `#!/bin/sh
+while read -r old new ref
+do
+	case "$ref" in
+		refs/heads/main)
+			echo "contributors may not update the default branch" >&2
+			exit 1
+			;;
+		refs/heads/*) ;;
+		*)
+			echo "only branches may be updated" >&2
+			exit 1
+			;;
+	esac
+done
+`
 )
 
 func main() {
@@ -107,7 +123,7 @@ func newAuthenticatedAppHandler(store *storage.Store, userStore *users.Store, au
 		registerAuthRoutes(mux, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil {
-		registerRepositoryRoutes(mux, repositoryCatalog, authStore)
+		registerRepositoryRoutes(mux, repositoryCatalog, userStore, authStore)
 	}
 	mux.HandleFunc("GET /git/{remote}/info/refs", func(w http.ResponseWriter, r *http.Request) {
 		service := r.URL.Query().Get("service")
@@ -120,7 +136,7 @@ func newAuthenticatedAppHandler(store *storage.Store, userStore *users.Store, au
 			required = "git:write"
 		}
 		if authStore != nil {
-			if _, ok := authorizeGitRepository(w, r, authStore, repositoryCatalog, r.PathValue("remote"), required); !ok {
+			if _, _, ok := authorizeGitRepository(w, r, authStore, repositoryCatalog, r.PathValue("remote"), required); !ok {
 				return
 			}
 		}
@@ -133,11 +149,11 @@ func newAuthenticatedAppHandler(store *storage.Store, userStore *users.Store, au
 		if _, err := io.WriteString(w, pktLine("# service="+service+"\n")+"0000"); err != nil {
 			return
 		}
-		runGitService(w, r, repo, service, true)
+		runGitService(w, r, repo, service, true, false)
 	})
 	mux.HandleFunc("POST /git/{remote}/git-upload-pack", func(w http.ResponseWriter, r *http.Request) {
 		if authStore != nil {
-			if _, ok := authorizeGitRepository(w, r, authStore, repositoryCatalog, r.PathValue("remote"), "git:read"); !ok {
+			if _, _, ok := authorizeGitRepository(w, r, authStore, repositoryCatalog, r.PathValue("remote"), "git:read"); !ok {
 				return
 			}
 		}
@@ -147,13 +163,16 @@ func newAuthenticatedAppHandler(store *storage.Store, userStore *users.Store, au
 		}
 		w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
 		setGitCacheHeaders(w)
-		runGitService(w, r, repo, uploadPackService, false)
+		runGitService(w, r, repo, uploadPackService, false, false)
 	})
 	mux.HandleFunc("POST /git/{remote}/git-receive-pack", func(w http.ResponseWriter, r *http.Request) {
+		contributor := false
 		if authStore != nil {
-			if _, ok := authorizeGitRepository(w, r, authStore, repositoryCatalog, r.PathValue("remote"), "git:write"); !ok {
+			_, owner, ok := authorizeGitRepository(w, r, authStore, repositoryCatalog, r.PathValue("remote"), "git:write")
+			if !ok {
 				return
 			}
+			contributor = !owner
 		}
 		repo, ok := openRemoteRepository(w, store, r.PathValue("remote"))
 		if !ok {
@@ -161,7 +180,7 @@ func newAuthenticatedAppHandler(store *storage.Store, userStore *users.Store, au
 		}
 		w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
 		setGitCacheHeaders(w)
-		runGitService(w, r, repo, receivePackService, false)
+		runGitService(w, r, repo, receivePackService, false, contributor)
 	})
 	return mux
 }
@@ -257,7 +276,11 @@ type repositoryPatch struct {
 	Visibility *string `json:"visibility"`
 }
 
-func registerRepositoryRoutes(mux *http.ServeMux, store *repositories.Store, authStore *auth.Store) {
+type collaboratorInput struct {
+	UserID *string `json:"user_id"`
+}
+
+func registerRepositoryRoutes(mux *http.ServeMux, store *repositories.Store, userStore *users.Store, authStore *auth.Store) {
 	mux.HandleFunc("POST /repositories", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)
 		if !ok {
@@ -308,7 +331,12 @@ func registerRepositoryRoutes(mux *http.ServeMux, store *repositories.Store, aut
 			writeAuthenticationRequired(w, false)
 			return
 		}
-		if actor.UserID != repository.OwnerID {
+		collaborator, accessErr := store.HasCollaborator(actor.UserID, repository.ID)
+		if accessErr != nil {
+			writeRepositoryError(w, accessErr)
+			return
+		}
+		if actor.UserID != repository.OwnerID && !collaborator {
 			writeAPIError(w, http.StatusNotFound, "repository_not_found", "repository not found")
 			return
 		}
@@ -340,6 +368,48 @@ func registerRepositoryRoutes(mux *http.ServeMux, store *repositories.Store, aut
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+	mux.HandleFunc("GET /repositories/{id}/collaborators", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)
+		if !ok {
+			return
+		}
+		collaborators, err := store.ListCollaborators(actor.UserID, r.PathValue("id"))
+		if writeRepositoryError(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"collaborators": collaborators})
+	})
+	mux.HandleFunc("POST /repositories/{id}/collaborators", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)
+		if !ok {
+			return
+		}
+		var input collaboratorInput
+		if decodeJSON(r, &input) != nil || input.UserID == nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid_collaborator", "user_id is required")
+			return
+		}
+		if _, err := userStore.Get(*input.UserID); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid_collaborator", "user_id must identify an existing user")
+			return
+		}
+		collaborator, err := store.AddCollaborator(actor.UserID, r.PathValue("id"), *input.UserID)
+		if writeRepositoryError(w, err) {
+			return
+		}
+		w.Header().Set("Location", "/repositories/"+r.PathValue("id")+"/collaborators/"+collaborator.UserID)
+		writeJSON(w, http.StatusCreated, collaborator)
+	})
+	mux.HandleFunc("DELETE /repositories/{id}/collaborators/{user_id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)
+		if !ok {
+			return
+		}
+		if writeRepositoryError(w, store.RemoveCollaborator(actor.UserID, r.PathValue("id"), r.PathValue("user_id"))) {
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 }
 
 func writeRepositoryError(w http.ResponseWriter, err error) bool {
@@ -353,6 +423,8 @@ func writeRepositoryError(w http.ResponseWriter, err error) bool {
 		writeAPIError(w, http.StatusConflict, "repository_name_taken", "repository name is already in use")
 	case errors.Is(err, repositories.ErrInvalidName):
 		writeAPIError(w, http.StatusBadRequest, "invalid_repository", "repository name is invalid")
+	case errors.Is(err, repositories.ErrInvalidCollaborator):
+		writeAPIError(w, http.StatusBadRequest, "invalid_collaborator", "repository collaborator is invalid")
 	default:
 		log.Printf("repository storage: %v", err)
 		writeAPIError(w, http.StatusInternalServerError, "internal_error", "repository storage unavailable")
@@ -476,16 +548,17 @@ func writeAuthenticationRequired(w http.ResponseWriter, git bool) {
 	writeAPIError(w, http.StatusUnauthorized, "unauthorized", "valid authentication is required")
 }
 
-func authorizeGitRepository(w http.ResponseWriter, r *http.Request, authStore *auth.Store, catalog *repositories.Store, remote, scope string) (auth.Credential, bool) {
+func authorizeGitRepository(w http.ResponseWriter, r *http.Request, authStore *auth.Store, catalog *repositories.Store, remote, scope string) (auth.Credential, bool, bool) {
 	// Handlers without an application catalog are retained for storage-level
 	// compatibility tests. Production always supplies the catalog.
 	if catalog == nil {
-		return authenticateRequest(w, r, authStore, scope, true)
+		actor, ok := authenticateRequest(w, r, authStore, scope, true)
+		return actor, true, ok
 	}
 	id, ok := strings.CutSuffix(remote, ".git")
 	if !ok || id == "" {
 		http.Error(w, "repository not found", http.StatusNotFound)
-		return auth.Credential{}, false
+		return auth.Credential{}, false, false
 	}
 	repository, err := catalog.GetByID(id)
 	if err != nil {
@@ -494,24 +567,30 @@ func authorizeGitRepository(w http.ResponseWriter, r *http.Request, authStore *a
 		} else {
 			http.Error(w, "repository unavailable", http.StatusInternalServerError)
 		}
-		return auth.Credential{}, false
+		return auth.Credential{}, false, false
 	}
 	if scope == "git:read" && repository.Visibility == repositories.Public {
-		return auth.Credential{}, true
+		return auth.Credential{}, false, true
 	}
 	actor, authenticated, valid := authenticateOptionalRequest(w, r, authStore, scope, true)
 	if !valid {
-		return auth.Credential{}, false
+		return auth.Credential{}, false, false
 	}
 	if !authenticated {
 		writeAuthenticationRequired(w, true)
-		return auth.Credential{}, false
+		return auth.Credential{}, false, false
 	}
-	if actor.UserID != repository.OwnerID {
+	owner := actor.UserID == repository.OwnerID
+	collaborator, accessErr := catalog.HasCollaborator(actor.UserID, id)
+	if accessErr != nil {
+		http.Error(w, "repository unavailable", http.StatusInternalServerError)
+		return auth.Credential{}, false, false
+	}
+	if !owner && !collaborator {
 		http.Error(w, "repository not found", http.StatusNotFound)
-		return auth.Credential{}, false
+		return auth.Credential{}, false, false
 	}
-	return actor, true
+	return actor, owner, true
 }
 
 func setSessionCookie(w http.ResponseWriter, token string, expires time.Time) {
@@ -618,10 +697,10 @@ func openRemoteRepository(w http.ResponseWriter, store *storage.Store, remote st
 }
 
 func runUploadPack(w http.ResponseWriter, r *http.Request, repo *storage.Repository, advertise bool) {
-	runGitService(w, r, repo, uploadPackService, advertise)
+	runGitService(w, r, repo, uploadPackService, advertise, false)
 }
 
-func runGitService(w http.ResponseWriter, r *http.Request, repo *storage.Repository, service string, advertise bool) {
+func runGitService(w http.ResponseWriter, r *http.Request, repo *storage.Repository, service string, advertise, contributor bool) {
 	commandName := strings.TrimPrefix(service, "git-")
 	args := []string{commandName, "--stateless-rpc"}
 	var removeHooks func()
@@ -642,7 +721,11 @@ func runGitService(w http.ResponseWriter, r *http.Request, repo *storage.Reposit
 			}
 			removeHooks = func() { _ = os.RemoveAll(hooksPath) }
 			defer removeHooks()
-			if err := os.WriteFile(hooksPath+"/pre-receive", []byte(branchNamespaceHook), 0o700); err != nil {
+			hook := branchNamespaceHook
+			if contributor {
+				hook = contributorBranchHook
+			}
+			if err := os.WriteFile(hooksPath+"/pre-receive", []byte(hook), 0o700); err != nil {
 				log.Printf("prepare %s for repository %s: %v", service, repo.ID(), err)
 				return
 			}
