@@ -201,10 +201,24 @@ seconds, and a later same-commit collaboration trigger also relaunches existing
 nonterminal work after a transient repository outage.
 
 `GET /repositories/{id}/pulls/{pull_id}/checks` returns creation-ordered
-`check_runs`. Each record contains its stable ID, repository and pull-request
-IDs, exact `commit_id`, snapshotted definition, lifecycle state, timestamps,
-and terminal exit/failure information. Reads use the pull request's visibility
-policy. Records live beneath `CHECK_RUN_STORAGE_ROOT`, defaulting to
+`check_runs`; `GET /repositories/{id}/pulls/{pull_id}/checks/{check_id}` reads
+one stable run. Each record contains its exact `commit_id`, snapshotted
+definition, current lifecycle state, timestamps, retained numbered `attempts`,
+and artifact metadata. Interrupted executions become failed attempts before a
+new recovery attempt starts, so later success does not erase earlier evidence.
+
+`GET /repositories/{id}/pulls/{pull_id}/checks/{check_id}/events` returns the
+immutable, sequence-ordered evidence stream: queued/running/terminal status,
+stdout and stderr log chunks, artifact publication, and the command outcome
+with exit code and failure reason. Pass `after=<sequence>` to reconnect and
+receive only newer events; `next_sequence` is the cursor for the next request.
+Each output stream retains up to 10 MiB per attempt and ends with an explicit
+truncation message when that bound is reached. Artifact metadata includes its
+original relative path, attempt, byte size, SHA-256 digest, media type, and
+publication time. Download bytes from `GET
+/repositories/{id}/pulls/{pull_id}/checks/{check_id}/artifacts/{artifact_id}`.
+All reads use the pull request's visibility policy. Records, evidence, and
+artifact bytes live beneath `CHECK_RUN_STORAGE_ROOT`, defaulting to
 `check-runs`.
 
 ## Pull requests

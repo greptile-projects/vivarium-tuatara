@@ -426,14 +426,7 @@ func startCheckRuns(gitStore *storage.Store, runStore *checkruns.Store, pull pul
 		log.Printf("invalid check configuration for %s: %v", pull.SourceCommitID, err)
 		runs, createErr := runStore.Create(pull.RepositoryID, pull.ID, pull.SourceCommitID, []checkruns.Definition{{Name: "configuration", Image: "invalid", Command: "invalid configuration", TimeoutSeconds: 1, WorkingDirectory: "."}})
 		if createErr == nil && len(runs) == 1 {
-			now := time.Now().UTC()
-			code := 1
-			runs[0].State = "failed"
-			runs[0].StartedAt = &now
-			runs[0].CompletedAt = &now
-			runs[0].ExitCode = &code
-			runs[0].Failure = err.Error()
-			_ = runStore.Update(runs[0])
+			_ = runStore.RecordFailure(runs[0], err.Error())
 		}
 		return
 	}
@@ -588,6 +581,83 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 			return
 		}
 		writeJSON(w, 200, map[string]any{"check_runs": runs})
+	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/checks/{check_id}", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		if _, err := store.Get(r.PathValue("id"), r.PathValue("pull_id")); writePullRequestError(w, err) {
+			return
+		}
+		run, err := checkRunStore.Get(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("check_id"))
+		if errors.Is(err, checkruns.ErrNotFound) {
+			writeAPIError(w, 404, "check_run_not_found", "check run not found")
+			return
+		}
+		if err != nil {
+			log.Printf("check run storage: %v", err)
+			writeAPIError(w, 500, "internal_error", "check run storage unavailable")
+			return
+		}
+		writeJSON(w, 200, run)
+	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/checks/{check_id}/events", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		if _, err := store.Get(r.PathValue("id"), r.PathValue("pull_id")); writePullRequestError(w, err) {
+			return
+		}
+		after := int64(0)
+		if value, present := r.URL.Query()["after"]; present {
+			if len(value) != 1 || value[0] == "" {
+				writeAPIError(w, 400, "invalid_cursor", "after is invalid")
+				return
+			}
+			parsed, err := strconv.ParseInt(value[0], 10, 64)
+			if err != nil || parsed < 0 {
+				writeAPIError(w, 400, "invalid_cursor", "after is invalid")
+				return
+			}
+			after = parsed
+		}
+		events, err := checkRunStore.Events(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("check_id"), after)
+		if errors.Is(err, checkruns.ErrNotFound) {
+			writeAPIError(w, 404, "check_run_not_found", "check run not found")
+			return
+		}
+		if err != nil {
+			log.Printf("check evidence storage: %v", err)
+			writeAPIError(w, 500, "internal_error", "check evidence unavailable")
+			return
+		}
+		next := after
+		if len(events) > 0 {
+			next = events[len(events)-1].Sequence
+		}
+		writeJSON(w, 200, map[string]any{"events": events, "next_sequence": next})
+	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/checks/{check_id}/artifacts/{artifact_id}", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		if _, err := store.Get(r.PathValue("id"), r.PathValue("pull_id")); writePullRequestError(w, err) {
+			return
+		}
+		file, artifact, err := checkRunStore.OpenArtifact(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("check_id"), r.PathValue("artifact_id"))
+		if errors.Is(err, checkruns.ErrNotFound) {
+			writeAPIError(w, 404, "check_artifact_not_found", "check artifact not found")
+			return
+		}
+		if err != nil {
+			log.Printf("check artifact storage: %v", err)
+			writeAPIError(w, 500, "internal_error", "check artifact unavailable")
+			return
+		}
+		defer file.Close()
+		w.Header().Set("Content-Type", artifact.ContentType)
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", path.Base(artifact.Path)))
+		http.ServeContent(w, r, path.Base(artifact.Path), artifact.CreatedAt, file)
 	})
 	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/commits", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {

@@ -215,10 +215,16 @@ source revision snapshots those commands into durable check runs for that exact
 commit. Each command executes in a bounded, network-disabled OCI container
 from a disposable exported snapshot, using a preinstalled image and no
 repository credential. The snapshot is read-only; only bounded temporary and
-output filesystems are writable. Interrupted execution and cleanup work is
-retried at startup, periodically, and on a later same-commit trigger. Lifecycle metadata lives
-beneath `CHECK_RUN_STORAGE_ROOT` (default `check-runs`) independently of Git
-and pull-request records.
+output filesystems are writable. Each execution publishes an immutable
+sequence of status changes, stdout/stderr chunks, command outcome, and artifact
+metadata while it runs; clients reconnect from the last sequence they
+observed. Numbered attempt history retains interrupted and failed executions
+against the exact commit, and artifact bytes remain downloadable by stable ID
+with size and SHA-256 evidence. Interrupted execution and cleanup work is
+retried at startup, periodically, and on a later same-commit trigger.
+Lifecycle metadata, event streams, and artifacts live beneath
+`CHECK_RUN_STORAGE_ROOT` (default `check-runs`) independently of Git and
+pull-request records.
 
 The activity layer records meaningful collaboration changes as immutable,
 attributable events associated with their repository and proposal, pull

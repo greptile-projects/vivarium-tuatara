@@ -2,12 +2,16 @@
 package checkruns
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"mime"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,7 +22,10 @@ import (
 	"time"
 )
 
-var ErrNotFound = errors.New("check run not found")
+var (
+	ErrNotFound            = errors.New("check run not found")
+	ErrDurabilityUncertain = errors.New("check run durability uncertain")
+)
 
 const ConfigPath = ".vivarium/checks.json"
 
@@ -49,12 +56,46 @@ type Run struct {
 	CreatedAt      time.Time  `json:"created_at"`
 	StartedAt      *time.Time `json:"started_at,omitempty"`
 	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	Attempts       []Attempt  `json:"attempts"`
+	Artifacts      []Artifact `json:"artifacts"`
+}
+
+type Attempt struct {
+	Number      int        `json:"number"`
+	State       string     `json:"state"`
+	StartedAt   time.Time  `json:"started_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	ExitCode    *int       `json:"exit_code,omitempty"`
+	Failure     string     `json:"failure,omitempty"`
+}
+
+type Artifact struct {
+	ID          string    `json:"id"`
+	Attempt     int       `json:"attempt"`
+	Path        string    `json:"path"`
+	Size        int64     `json:"size"`
+	SHA256      string    `json:"sha256"`
+	ContentType string    `json:"content_type"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type Event struct {
+	Sequence  int64     `json:"sequence"`
+	Attempt   int       `json:"attempt"`
+	Kind      string    `json:"kind"`
+	Timestamp time.Time `json:"timestamp"`
+	State     string    `json:"state,omitempty"`
+	Stream    string    `json:"stream,omitempty"`
+	Message   string    `json:"message,omitempty"`
+	ExitCode  *int      `json:"exit_code,omitempty"`
+	Artifact  *Artifact `json:"artifact,omitempty"`
 }
 
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root          string
+	mu            sync.Mutex
+	now           func() time.Time
+	syncDirectory func(*os.File) error
 }
 
 func New(root string) (*Store, error) {
@@ -68,7 +109,7 @@ func New(root string) (*Store, error) {
 	if err := os.MkdirAll(abs, 0o700); err != nil {
 		return nil, err
 	}
-	return &Store{root: abs, now: func() time.Time { return time.Now().UTC() }}, nil
+	return &Store{root: abs, now: func() time.Time { return time.Now().UTC() }, syncDirectory: func(directory *os.File) error { return directory.Sync() }}, nil
 }
 
 func ParseConfig(data []byte) (Config, error) {
@@ -128,7 +169,7 @@ func (s *Store) Create(repositoryID, pullRequestID, commitID string, definitions
 		if err != nil {
 			return nil, err
 		}
-		runs = append(runs, Run{ID: id, RepositoryID: repositoryID, PullRequestID: pullRequestID, CommitID: commitID, Definition: definition, State: "queued", CreatedAt: now})
+		runs = append(runs, Run{ID: id, RepositoryID: repositoryID, PullRequestID: pullRequestID, CommitID: commitID, Definition: definition, State: "queued", CreatedAt: now, Attempts: []Attempt{}, Artifacts: []Artifact{}})
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -165,7 +206,10 @@ func (s *Store) Create(repositoryID, pullRequestID, commitID string, definitions
 		return resumable, nil
 	}
 	for _, run := range runs {
-		if err := s.write(dir, run); err != nil {
+		if err := s.write(dir, run); err != nil && !errors.Is(err, ErrDurabilityUncertain) {
+			return nil, err
+		}
+		if err := s.appendEventLocked(run, Event{Kind: "status", Timestamp: now, State: "queued"}); err != nil {
 			return nil, err
 		}
 	}
@@ -194,6 +238,12 @@ func (s *Store) List(repositoryID, pullRequestID string) ([]Run, error) {
 		if json.Unmarshal(b, &r) != nil {
 			return nil, errors.New("invalid check run record")
 		}
+		if r.Attempts == nil {
+			r.Attempts = []Attempt{}
+		}
+		if r.Artifacts == nil {
+			r.Artifacts = []Artifact{}
+		}
 		runs = append(runs, r)
 	}
 	sort.Slice(runs, func(i, j int) bool {
@@ -203,6 +253,139 @@ func (s *Store) List(repositoryID, pullRequestID string) ([]Run, error) {
 		return runs[i].CreatedAt.Before(runs[j].CreatedAt)
 	})
 	return runs, nil
+}
+
+func (s *Store) Get(repositoryID, pullRequestID, runID string) (Run, error) {
+	if !validID(runID) {
+		return Run{}, ErrNotFound
+	}
+	body, err := os.ReadFile(filepath.Join(s.root, repositoryID, pullRequestID, runID+".json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return Run{}, ErrNotFound
+	}
+	if err != nil {
+		return Run{}, err
+	}
+	var run Run
+	if json.Unmarshal(body, &run) != nil || run.ID != runID || run.RepositoryID != repositoryID || run.PullRequestID != pullRequestID {
+		return Run{}, errors.New("invalid check run record")
+	}
+	if run.Attempts == nil {
+		run.Attempts = []Attempt{}
+	}
+	if run.Artifacts == nil {
+		run.Artifacts = []Artifact{}
+	}
+	return run, nil
+}
+
+// Events returns immutable execution evidence after the supplied sequence.
+func (s *Store) Events(repositoryID, pullRequestID, runID string, after int64) ([]Event, error) {
+	if _, err := s.Get(repositoryID, pullRequestID, runID); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	file, err := os.Open(filepath.Join(s.root, repositoryID, pullRequestID, runID+".events"))
+	if errors.Is(err, os.ErrNotExist) {
+		return []Event{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	body, err := io.ReadAll(file)
+	if err != nil {
+		return nil, err
+	}
+	events := []Event{}
+	lines := strings.Split(string(body), "\n")
+	for _, line := range lines[:len(lines)-1] {
+		var event Event
+		if json.Unmarshal([]byte(line), &event) != nil || event.Sequence < 1 {
+			return nil, errors.New("invalid check evidence")
+		}
+		if event.Sequence > after {
+			events = append(events, event)
+		}
+	}
+	return events, nil
+}
+
+func (s *Store) OpenArtifact(repositoryID, pullRequestID, runID, artifactID string) (*os.File, Artifact, error) {
+	if !validID(artifactID) {
+		return nil, Artifact{}, ErrNotFound
+	}
+	run, err := s.Get(repositoryID, pullRequestID, runID)
+	if err != nil {
+		return nil, Artifact{}, err
+	}
+	for _, artifact := range run.Artifacts {
+		if artifact.ID == artifactID {
+			file, err := os.Open(filepath.Join(s.root, repositoryID, pullRequestID, "artifacts", runID, artifactID))
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, Artifact{}, errors.New("check artifact missing")
+			}
+			return file, artifact, err
+		}
+	}
+	return nil, Artifact{}, ErrNotFound
+}
+
+func (s *Store) appendEvent(run Run, event Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.appendEventLocked(run, event)
+}
+
+func (s *Store) appendEventLocked(run Run, event Event) error {
+	path := filepath.Join(s.root, run.RepositoryID, run.PullRequestID, run.ID+".events")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	sequence := int64(1)
+	if info.Size() > 0 {
+		if _, err = file.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		reader := bufio.NewReader(file)
+		var completeBytes int64
+		for {
+			line, readErr := reader.ReadBytes('\n')
+			if readErr == nil {
+				sequence++
+				completeBytes += int64(len(line))
+				continue
+			}
+			if errors.Is(readErr, io.EOF) {
+				if len(line) > 0 {
+					if err = file.Truncate(completeBytes); err != nil {
+						return err
+					}
+				}
+				break
+			}
+			return readErr
+		}
+		if _, err = file.Seek(0, io.SeekEnd); err != nil {
+			return err
+		}
+	}
+	event.Sequence = sequence
+	body, err := json.Marshal(event)
+	if err == nil {
+		_, err = file.Write(append(body, '\n'))
+	}
+	if err == nil {
+		err = file.Sync()
+	}
+	return err
 }
 
 // Nonterminal returns durable work that must be relaunched after interruption.
@@ -243,6 +426,25 @@ func (s *Store) Update(run Run) error {
 	return s.write(filepath.Join(s.root, run.RepositoryID, run.PullRequestID), run)
 }
 
+// RecordFailure terminalizes work that cannot enter the executor, while
+// preserving the same attempt and ordered evidence contract as commands.
+func (s *Store) RecordFailure(run Run, failure string) error {
+	now := s.now().Truncate(time.Microsecond)
+	code := 1
+	run.State, run.StartedAt, run.CompletedAt, run.ExitCode, run.Failure = "failed", &now, &now, &code, failure
+	run.Attempts = append(run.Attempts, Attempt{Number: len(run.Attempts) + 1, State: "failed", StartedAt: now, CompletedAt: &now, ExitCode: &code, Failure: failure})
+	if err := s.Update(run); err != nil && !errors.Is(err, ErrDurabilityUncertain) {
+		return err
+	}
+	if err := s.appendEvent(run, Event{Attempt: len(run.Attempts), Kind: "status", Timestamp: now, State: "running"}); err != nil {
+		return err
+	}
+	if err := s.appendEvent(run, Event{Attempt: len(run.Attempts), Kind: "command", Timestamp: now, State: "failed", ExitCode: &code, Message: failure}); err != nil {
+		return err
+	}
+	return s.appendEvent(run, Event{Attempt: len(run.Attempts), Kind: "status", Timestamp: now, State: "failed", ExitCode: &code, Message: failure})
+}
+
 func (s *Store) write(dir string, run Run) error {
 	b, err := json.Marshal(run)
 	if err != nil {
@@ -272,14 +474,17 @@ func (s *Store) write(dir string, run Run) error {
 	}
 	directory, err := os.Open(dir)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
 	}
-	err = directory.Sync()
+	err = s.syncDirectory(directory)
 	closeErr = directory.Close()
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
 	}
-	return closeErr
+	if closeErr != nil {
+		return fmt.Errorf("%w: %v", ErrDurabilityUncertain, closeErr)
+	}
+	return nil
 }
 
 // Execute runs a queued check in a disposable exact-commit snapshot inside a
@@ -310,15 +515,35 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 		} else {
 			run.State = "failed"
 		}
-		_ = s.Update(run)
+		if len(run.Attempts) > 0 {
+			last := &run.Attempts[len(run.Attempts)-1]
+			last.State, last.CompletedAt, last.ExitCode, last.Failure = run.State, &now, run.ExitCode, run.Failure
+		}
+		if !s.updatePublished(run) {
+			return
+		}
+		_ = s.appendEvent(run, Event{Attempt: len(run.Attempts), Kind: "status", Timestamp: now, State: run.State, ExitCode: run.ExitCode, Message: run.Failure})
 		return
 	}
 	now := s.now().Truncate(time.Microsecond)
+	interruptedAttempt := 0
+	interruptedFailure := ""
+	if len(run.Attempts) > 0 && run.Attempts[len(run.Attempts)-1].State == "running" {
+		previous := &run.Attempts[len(run.Attempts)-1]
+		previous.State, previous.CompletedAt, previous.Failure = "failed", &now, "execution interrupted before reconnect"
+		interruptedAttempt, interruptedFailure = previous.Number, previous.Failure
+	}
+	attemptNumber := len(run.Attempts) + 1
+	run.Attempts = append(run.Attempts, Attempt{Number: attemptNumber, State: "running", StartedAt: now})
 	run.State = "running"
 	run.StartedAt = &now
-	if s.Update(run) != nil {
+	if updateErr := s.Update(run); updateErr != nil && !errors.Is(updateErr, ErrDurabilityUncertain) {
 		return
 	}
+	if interruptedAttempt != 0 {
+		_ = s.appendEvent(run, Event{Attempt: interruptedAttempt, Kind: "status", Timestamp: now, State: "failed", Message: interruptedFailure})
+	}
+	_ = s.appendEvent(run, Event{Attempt: attemptNumber, Kind: "status", Timestamp: now, State: "running"})
 	workspace, err := os.MkdirTemp("", "vivarium-check-*")
 	if err == nil {
 		defer os.RemoveAll(workspace)
@@ -344,24 +569,53 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 		if e != nil || !info.IsDir() {
 			err = errors.New("working directory does not exist")
 		} else {
+			outputDirectory, outputErr := os.MkdirTemp("", "vivarium-output-*")
+			if outputErr != nil {
+				err = outputErr
+			} else {
+				defer os.RemoveAll(outputDirectory)
+				outputErr = os.Chmod(outputDirectory, 0o777)
+			}
+			if outputErr != nil {
+				err = outputErr
+			}
+			if err != nil {
+				goto executionDone
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(run.Definition.TimeoutSeconds)*time.Second)
+			outputExceeded := make(chan struct{}, 1)
+			stopOutputWatch := make(chan struct{})
+			go watchOutputLimit(ctx, cancel, outputDirectory, outputExceeded, stopOutputWatch)
 			// A previous API process may have died while Docker kept the container.
 			// The execution lock makes removing that abandoned tree safe before
 			// relaunching this exact durable run.
 			_ = removeContainer(containerName)
-			args := []string{"run", "--name", containerName, "--pull=never", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=1g", "--cpus=2", "--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "--mount", "type=bind,src=" + workspace + ",dst=/workspace,readonly", "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m", "--tmpfs", "/output:rw,nosuid,nodev,size=256m", "--workdir", "/workspace/" + run.Definition.WorkingDirectory, "--env", "HOME=/tmp", "--env", "VIVARIUM_OUTPUT=/output", "--env", "CI=true", "--env", "VIVARIUM_COMMIT_SHA=" + run.CommitID}
+			args := []string{"run", "--name", containerName, "--pull=never", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=1g", "--cpus=2", "--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "--mount", "type=bind,src=" + workspace + ",dst=/workspace,readonly", "--mount", "type=bind,src=" + outputDirectory + ",dst=/output", "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777", "--workdir", "/workspace/" + run.Definition.WorkingDirectory, "--env", "HOME=/tmp", "--env", "VIVARIUM_OUTPUT=/output", "--env", "CI=true", "--env", "VIVARIUM_COMMIT_SHA=" + run.CommitID}
 			for k, v := range run.Definition.Environment {
 				args = append(args, "--env", k+"="+v)
 			}
 			args = append(args, run.Definition.Image, "sh", "-c", run.Definition.Command)
 			cmd := exec.CommandContext(ctx, "docker", args...)
+			cmd.Stdout = &evidenceWriter{store: s, run: run, attempt: attemptNumber, stream: "stdout"}
+			cmd.Stderr = &evidenceWriter{store: s, run: run, attempt: attemptNumber, stream: "stderr"}
 			err = cmd.Run()
+			close(stopOutputWatch)
+			artifactErr := s.collectArtifacts(&run, attemptNumber, outputDirectory)
+			if err == nil && artifactErr != nil {
+				err = artifactErr
+			}
 			// CommandContext may terminate only the Docker client. Force-removing the
 			// named container synchronously kills and reaps every check descendant.
 			cleanupErr := removeContainer(containerName)
 			cancel()
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				err = errors.New("check timed out")
+			} else {
+				select {
+				case <-outputExceeded:
+					err = errors.New("check output exceeded 256 MiB")
+				default:
+				}
 			}
 			if cleanupErr != nil {
 				run.State = "cleanup_pending"
@@ -373,7 +627,14 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 				if err != nil {
 					run.Failure = err.Error()
 				}
-				_ = s.Update(run)
+				last := &run.Attempts[len(run.Attempts)-1]
+				last.State, last.ExitCode, last.Failure = "cleanup_pending", run.ExitCode, run.Failure
+				if !s.updatePublished(run) {
+					return
+				}
+				evidenceTime := s.now().Truncate(time.Microsecond)
+				_ = s.appendEvent(run, Event{Attempt: attemptNumber, Kind: "command", Timestamp: evidenceTime, State: "cleanup_pending", ExitCode: run.ExitCode, Message: run.Failure})
+				_ = s.appendEvent(run, Event{Attempt: attemptNumber, Kind: "status", Timestamp: evidenceTime, State: "cleanup_pending", ExitCode: run.ExitCode, Message: run.Failure})
 				return
 			}
 			if ee := new(exec.ExitError); errors.As(err, &ee) {
@@ -381,6 +642,7 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 			}
 		}
 	}
+executionDone:
 	done := s.now().Truncate(time.Microsecond)
 	run.CompletedAt = &done
 	run.ExitCode = &exit
@@ -390,7 +652,167 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 	} else {
 		run.State = "succeeded"
 	}
-	_ = s.Update(run)
+	last := &run.Attempts[len(run.Attempts)-1]
+	last.State, last.CompletedAt, last.ExitCode, last.Failure = run.State, &done, run.ExitCode, run.Failure
+	s.publishTerminal(run, attemptNumber, done)
+}
+
+func (s *Store) updatePublished(run Run) bool {
+	err := s.Update(run)
+	return err == nil || errors.Is(err, ErrDurabilityUncertain)
+}
+
+func (s *Store) publishTerminal(run Run, attempt int, at time.Time) bool {
+	if !s.updatePublished(run) {
+		return false
+	}
+	_ = s.appendEvent(run, Event{Attempt: attempt, Kind: "command", Timestamp: at, State: run.State, ExitCode: run.ExitCode, Message: run.Failure})
+	_ = s.appendEvent(run, Event{Attempt: attempt, Kind: "status", Timestamp: at, State: run.State, ExitCode: run.ExitCode, Message: run.Failure})
+	return true
+}
+
+func watchOutputLimit(ctx context.Context, cancel context.CancelFunc, directory string, exceeded chan<- struct{}, stop <-chan struct{}) {
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			var size int64
+			_ = filepath.WalkDir(directory, func(path string, entry os.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if !entry.IsDir() {
+					if info, e := entry.Info(); e == nil {
+						size += info.Size()
+					}
+				}
+				if size > 256*1024*1024 {
+					return errors.New("limit")
+				}
+				return nil
+			})
+			if size > 256*1024*1024 {
+				select {
+				case exceeded <- struct{}{}:
+				default:
+				}
+				cancel()
+				return
+			}
+		case <-ctx.Done():
+			return
+		case <-stop:
+			return
+		}
+	}
+}
+
+type evidenceWriter struct {
+	store     *Store
+	run       Run
+	attempt   int
+	stream    string
+	written   int
+	truncated bool
+}
+
+func (w *evidenceWriter) Write(body []byte) (int, error) {
+	const limit = 10 * 1024 * 1024
+	original := len(body)
+	if w.written >= limit {
+		if !w.truncated {
+			w.truncated = true
+			if err := w.store.appendEvent(w.run, Event{Attempt: w.attempt, Kind: "log", Timestamp: w.store.now().Truncate(time.Microsecond), Stream: w.stream, Message: "\n[output truncated after 10 MiB]\n"}); err != nil {
+				return 0, err
+			}
+		}
+		return original, nil
+	}
+	if len(body) > limit-w.written {
+		body = body[:limit-w.written]
+	}
+	const chunk = 32 * 1024
+	for start := 0; start < len(body); start += chunk {
+		end := start + chunk
+		if end > len(body) {
+			end = len(body)
+		}
+		if err := w.store.appendEvent(w.run, Event{Attempt: w.attempt, Kind: "log", Timestamp: w.store.now().Truncate(time.Microsecond), Stream: w.stream, Message: string(body[start:end])}); err != nil {
+			return start, err
+		}
+	}
+	w.written += len(body)
+	return original, nil
+}
+
+func (s *Store) collectArtifacts(run *Run, attempt int, temporary string) error {
+	destination := filepath.Join(s.root, run.RepositoryID, run.PullRequestID, "artifacts", run.ID)
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		return err
+	}
+	var total int64
+	return filepath.WalkDir(temporary, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return errors.New("check artifact is not a regular file")
+		}
+		total += info.Size()
+		if total > 256*1024*1024 {
+			return errors.New("check output exceeded 256 MiB")
+		}
+		relative, err := filepath.Rel(temporary, path)
+		if err != nil {
+			return err
+		}
+		source, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer source.Close()
+		id, err := newID()
+		if err != nil {
+			return err
+		}
+		target, err := os.OpenFile(filepath.Join(destination, id), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		hash := sha256.New()
+		written, copyErr := io.Copy(io.MultiWriter(target, hash), io.LimitReader(source, 256*1024*1024+1))
+		syncErr := target.Sync()
+		closeErr := target.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if syncErr != nil {
+			return syncErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if written > 256*1024*1024 {
+			return errors.New("check artifact exceeds size limit")
+		}
+		artifact := Artifact{ID: id, Attempt: attempt, Path: filepath.ToSlash(relative), Size: written, SHA256: hex.EncodeToString(hash.Sum(nil)), ContentType: mime.TypeByExtension(filepath.Ext(relative)), CreatedAt: s.now().Truncate(time.Microsecond)}
+		if artifact.ContentType == "" {
+			artifact.ContentType = "application/octet-stream"
+		}
+		run.Artifacts = append(run.Artifacts, artifact)
+		if err := s.Update(*run); err != nil && !errors.Is(err, ErrDurabilityUncertain) {
+			return err
+		}
+		return s.appendEvent(*run, Event{Attempt: attempt, Kind: "artifact", Timestamp: artifact.CreatedAt, Artifact: &artifact})
+	})
 }
 
 func removeContainer(name string) error {
@@ -411,4 +833,12 @@ func newID() (string, error) {
 		return "", fmt.Errorf("generate id: %w", err)
 	}
 	return hex.EncodeToString(b), nil
+}
+
+func validID(value string) bool {
+	if len(value) != 32 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil && value == strings.ToLower(value)
 }

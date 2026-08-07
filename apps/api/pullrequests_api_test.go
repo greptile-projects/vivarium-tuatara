@@ -2,10 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -50,7 +52,7 @@ func TestContributorOpensPullRequestWithExactBranchState(t *testing.T) {
 	oldReadme, _ := gitRepository.WriteObject(storage.BlobObject, []byte("old\n"))
 	newReadme, _ := gitRepository.WriteObject(storage.BlobObject, []byte("new\n"))
 	added, _ := gitRepository.WriteObject(storage.BlobObject, []byte("added\n"))
-	checkConfig, _ := gitRepository.WriteObject(storage.BlobObject, []byte(`{"version":1,"checks":[{"name":"candidate snapshot","image":"alpine:3.22","command":"test \"$(cat README.md)\" = new"}]}`))
+	checkConfig, _ := gitRepository.WriteObject(storage.BlobObject, []byte(`{"version":1,"checks":[{"name":"candidate snapshot","image":"alpine:3.22","command":"echo inspecting candidate; test \"$(cat README.md)\" = new; printf evidence > \"$VIVARIUM_OUTPUT/report.txt\""}]}`))
 	checkTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "checks.json", id: checkConfig})
 	baseTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "README.md", id: oldReadme})
 	headTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "40000", name: ".vivarium", id: checkTree}, testTreeEntry{mode: "100644", name: "README.md", id: newReadme}, testTreeEntry{mode: "100644", name: "feature.go", id: added})
@@ -100,6 +102,41 @@ func TestContributorOpensPullRequestWithExactBranchState(t *testing.T) {
 	}
 	if len(checkSet.CheckRuns) != 1 || checkSet.CheckRuns[0].CommitID != string(head) || checkSet.CheckRuns[0].State != "succeeded" {
 		t.Fatalf("check runs = %#v", checkSet.CheckRuns)
+	}
+	run := checkSet.CheckRuns[0]
+	if len(run.Attempts) != 1 || run.Attempts[0].State != "succeeded" || len(run.Artifacts) != 1 || run.Artifacts[0].Path != "report.txt" {
+		t.Fatalf("check evidence summary = %#v", run)
+	}
+	detailResponse := authenticatedRequest(t, http.MethodGet, checksURL+"/"+run.ID, "", owner.Credential.Token, http.StatusOK)
+	detailResponse.Body.Close()
+	eventsResponse := authenticatedRequest(t, http.MethodGet, checksURL+"/"+run.ID+"/events?after=0", "", owner.Credential.Token, http.StatusOK)
+	var evidence struct {
+		Events []checkruns.Event `json:"events"`
+		Next   int64             `json:"next_sequence"`
+	}
+	if err := json.NewDecoder(eventsResponse.Body).Decode(&evidence); err != nil {
+		t.Fatal(err)
+	}
+	eventsResponse.Body.Close()
+	if len(evidence.Events) < 6 || evidence.Events[0].State != "queued" || evidence.Events[1].State != "running" || evidence.Events[len(evidence.Events)-1].State != "succeeded" || evidence.Next != evidence.Events[len(evidence.Events)-1].Sequence {
+		t.Fatalf("check events = %#v", evidence)
+	}
+	resumedResponse := authenticatedRequest(t, http.MethodGet, checksURL+"/"+run.ID+"/events?after="+strconv.FormatInt(evidence.Next, 10), "", owner.Credential.Token, http.StatusOK)
+	var resumed struct {
+		Events []checkruns.Event `json:"events"`
+	}
+	if err := json.NewDecoder(resumedResponse.Body).Decode(&resumed); err != nil {
+		t.Fatal(err)
+	}
+	resumedResponse.Body.Close()
+	if len(resumed.Events) != 0 {
+		t.Fatalf("resumed events = %#v", resumed.Events)
+	}
+	artifactResponse := authenticatedRequest(t, http.MethodGet, checksURL+"/"+run.ID+"/artifacts/"+run.Artifacts[0].ID, "", owner.Credential.Token, http.StatusOK)
+	artifactBody, _ := io.ReadAll(artifactResponse.Body)
+	artifactResponse.Body.Close()
+	if string(artifactBody) != "evidence" {
+		t.Fatalf("artifact = %q", artifactBody)
 	}
 
 	advanced := writeTestCommit(t, gitRepository, headTree, []storage.ObjectID{head}, 1700000002, "more work")
