@@ -103,8 +103,20 @@ whenever dependencies change or the web job fails before it starts.
   lifecycle. `$USER_STORAGE_ROOT` selects their directory and defaults to
   `users`. Mutations take a root-wide advisory lock, so handle uniqueness and
   sparse profile patches remain atomic across API processes sharing the root.
-  These routes are intentionally unauthenticated until the next authentication
-  rung provides actor credentials.
+  Account creation returns a short-lived session credential and sets the same
+  secret as an HttpOnly, Secure cookie. Profile mutations require that actor's
+  `profile:write` scope; identity inspection remains public. Durable credential
+  records live beneath `$AUTH_STORAGE_ROOT` (default `credentials`) and contain
+  only SHA-256 token hashes. Session credentials can create, list, and revoke
+  scoped API and Git credentials through `/auth/credentials`; stock Git sends
+  its opaque token as the HTTP Basic password. Git transport requires
+  `git:read` for upload-pack and `git:write` for receive-pack. Maximum lifetimes
+  are 24 hours for sessions, 90 days for API tokens, and 30 days for Git tokens.
+  Account bootstrap publishes its user record only after the initial session
+  is durable, so a credential failure never reserves the handle; logout only
+  reports success after revocation is durable.
+  Both stores reconcile exact records after uncertain post-rename failures,
+  and a definitively failed user publication revokes its prepared session.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

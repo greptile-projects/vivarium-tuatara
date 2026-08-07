@@ -35,9 +35,10 @@ type User struct {
 }
 
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root       string
+	mu         sync.Mutex
+	now        func() time.Time
+	afterWrite func() error
 }
 
 func New(root string) (*Store, error) {
@@ -51,6 +52,13 @@ func New(root string) (*Store, error) {
 }
 
 func (s *Store) Create(handle, displayName string) (User, error) {
+	return s.CreateWithBootstrap(handle, displayName, nil)
+}
+
+// CreateWithBootstrap publishes a new user only after bootstrap succeeds. The
+// root lock reserves the validated handle while bootstrap prepares external
+// access, so a bootstrap failure cannot leave a user or consume the handle.
+func (s *Store) CreateWithBootstrap(handle, displayName string, bootstrap func(User) error) (User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	unlock, err := s.lockRoot()
@@ -75,7 +83,19 @@ func (s *Store) Create(handle, displayName string) (User, error) {
 	}
 	now := s.now().Truncate(time.Microsecond)
 	user := User{ID: hex.EncodeToString(idBytes), Handle: handle, DisplayName: displayName, CreatedAt: now, UpdatedAt: now}
+	if bootstrap != nil {
+		if err := bootstrap(user); err != nil {
+			return User{}, err
+		}
+	}
 	if err := s.write(user); err != nil {
+		// A failure after rename leaves publication uncertain (for example, a
+		// directory sync error). Reconcile the exact visible record so callers
+		// can treat the operation as committed instead of returning a retry-
+		// blocking failure after successful publication.
+		if persisted, readErr := s.read(user.ID); readErr == nil && persisted == user {
+			return user, nil
+		}
 		return User{}, err
 	}
 	return user, nil
@@ -283,6 +303,11 @@ func (s *Store) write(user User) error {
 	}
 	if err := os.Rename(tempName, filepath.Join(s.root, user.ID+".json")); err != nil {
 		return fmt.Errorf("publish user record: %w", err)
+	}
+	if s.afterWrite != nil {
+		if err := s.afterWrite(); err != nil {
+			return err
+		}
 	}
 	dir, err := os.Open(s.root)
 	if err != nil {

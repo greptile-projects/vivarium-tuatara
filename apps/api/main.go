@@ -11,7 +11,9 @@ import (
 	"os/exec"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
@@ -48,6 +50,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	authRoot := os.Getenv("AUTH_STORAGE_ROOT")
+	if authRoot == "" {
+		authRoot = "credentials"
+	}
+	authStore, err := auth.New(authRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -55,7 +65,7 @@ func main() {
 	}
 
 	log.Printf("listening on http://localhost:%s", port)
-	if err := http.ListenAndServe(":"+port, newAppHandler(store, userStore)); err != nil {
+	if err := http.ListenAndServe(":"+port, newAuthenticatedAppHandler(store, userStore, authStore)); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -65,19 +75,35 @@ func newHandler(store *storage.Store) http.Handler {
 }
 
 func newAppHandler(store *storage.Store, userStore *users.Store) http.Handler {
+	return newAuthenticatedAppHandler(store, userStore, nil)
+}
+
+func newAuthenticatedAppHandler(store *storage.Store, userStore *users.Store, authStore *auth.Store) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 	if userStore != nil {
-		registerUserRoutes(mux, userStore)
+		registerUserRoutes(mux, userStore, authStore)
+	}
+	if authStore != nil {
+		registerAuthRoutes(mux, authStore)
 	}
 	mux.HandleFunc("GET /git/{remote}/info/refs", func(w http.ResponseWriter, r *http.Request) {
 		service := r.URL.Query().Get("service")
 		if service != uploadPackService && service != receivePackService {
 			http.Error(w, "unsupported Git service", http.StatusBadRequest)
 			return
+		}
+		required := "git:read"
+		if service == receivePackService {
+			required = "git:write"
+		}
+		if authStore != nil {
+			if _, ok := authenticateRequest(w, r, authStore, required, true); !ok {
+				return
+			}
 		}
 		repo, ok := openRemoteRepository(w, store, r.PathValue("remote"))
 		if !ok {
@@ -91,6 +117,11 @@ func newAppHandler(store *storage.Store, userStore *users.Store) http.Handler {
 		runGitService(w, r, repo, service, true)
 	})
 	mux.HandleFunc("POST /git/{remote}/git-upload-pack", func(w http.ResponseWriter, r *http.Request) {
+		if authStore != nil {
+			if _, ok := authenticateRequest(w, r, authStore, "git:read", true); !ok {
+				return
+			}
+		}
 		repo, ok := openRemoteRepository(w, store, r.PathValue("remote"))
 		if !ok {
 			return
@@ -100,6 +131,11 @@ func newAppHandler(store *storage.Store, userStore *users.Store) http.Handler {
 		runGitService(w, r, repo, uploadPackService, false)
 	})
 	mux.HandleFunc("POST /git/{remote}/git-receive-pack", func(w http.ResponseWriter, r *http.Request) {
+		if authStore != nil {
+			if _, ok := authenticateRequest(w, r, authStore, "git:write", true); !ok {
+				return
+			}
+		}
 		repo, ok := openRemoteRepository(w, store, r.PathValue("remote"))
 		if !ok {
 			return
@@ -116,19 +152,37 @@ type userInput struct {
 	DisplayName *string `json:"display_name"`
 }
 
-func registerUserRoutes(mux *http.ServeMux, store *users.Store) {
+func registerUserRoutes(mux *http.ServeMux, store *users.Store, authStore *auth.Store) {
 	mux.HandleFunc("POST /users", func(w http.ResponseWriter, r *http.Request) {
 		var input userInput
 		if err := decodeJSON(r, &input); err != nil || input.Handle == nil || input.DisplayName == nil {
 			writeAPIError(w, http.StatusBadRequest, "invalid_request", "handle and display_name are required")
 			return
 		}
-		user, err := store.Create(*input.Handle, *input.DisplayName)
+		var issued auth.IssuedCredential
+		user, err := store.CreateWithBootstrap(*input.Handle, *input.DisplayName, func(user users.User) error {
+			if authStore == nil {
+				return nil
+			}
+			var issueErr error
+			issued, issueErr = authStore.Issue(user.ID, auth.Session, "web session", []string{"credentials:write", "profile:write"}, 24*time.Hour)
+			return issueErr
+		})
+		if err != nil && issued.ID != "" {
+			if _, revokeErr := authStore.Revoke(issued.UserID, issued.ID); revokeErr != nil {
+				log.Printf("revoke credential %s after user bootstrap failure: %v", issued.ID, revokeErr)
+			}
+		}
 		if writeUserError(w, err) {
 			return
 		}
 		w.Header().Set("Location", "/users/"+user.ID)
-		writeJSON(w, http.StatusCreated, user)
+		if authStore == nil {
+			writeJSON(w, http.StatusCreated, user)
+			return
+		}
+		setSessionCookie(w, issued.Token, issued.ExpiresAt)
+		writeJSON(w, http.StatusCreated, map[string]any{"user": user, "credential": issued})
 	})
 	mux.HandleFunc("GET /users/{id}", func(w http.ResponseWriter, r *http.Request) {
 		user, err := store.Get(r.PathValue("id"))
@@ -138,6 +192,16 @@ func registerUserRoutes(mux *http.ServeMux, store *users.Store) {
 		writeJSON(w, http.StatusOK, user)
 	})
 	mux.HandleFunc("PATCH /users/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if authStore != nil {
+			credential, ok := authenticateRequest(w, r, authStore, "profile:write", false)
+			if !ok {
+				return
+			}
+			if credential.UserID != r.PathValue("id") {
+				writeAPIError(w, http.StatusForbidden, "forbidden", "credential belongs to another user")
+				return
+			}
+		}
 		var input userInput
 		if err := decodeJSON(r, &input); err != nil || (input.Handle == nil && input.DisplayName == nil) {
 			writeAPIError(w, http.StatusBadRequest, "invalid_request", "at least one of handle or display_name is required")
@@ -151,6 +215,102 @@ func registerUserRoutes(mux *http.ServeMux, store *users.Store) {
 		}
 		writeJSON(w, http.StatusOK, user)
 	})
+}
+
+type credentialInput struct {
+	Kind      auth.Kind `json:"kind"`
+	Name      string    `json:"name"`
+	Scopes    []string  `json:"scopes"`
+	ExpiresIn int64     `json:"expires_in"`
+}
+
+func registerAuthRoutes(mux *http.ServeMux, store *auth.Store) {
+	mux.HandleFunc("GET /auth/credentials", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, store, "credentials:write", false)
+		if !ok {
+			return
+		}
+		credentials, err := store.List(actor.UserID)
+		if err != nil {
+			writeAPIError(w, 500, "internal_error", "credential storage unavailable")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"credentials": credentials})
+	})
+	mux.HandleFunc("POST /auth/credentials", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, store, "credentials:write", false)
+		if !ok {
+			return
+		}
+		var input credentialInput
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_request", "invalid credential request")
+			return
+		}
+		if input.ExpiresIn <= 0 || input.ExpiresIn > int64((90*24*time.Hour)/time.Second) {
+			writeAPIError(w, 400, "invalid_credential", "kind, name, scopes, or lifetime is invalid")
+			return
+		}
+		issued, err := store.Issue(actor.UserID, input.Kind, input.Name, input.Scopes, time.Duration(input.ExpiresIn)*time.Second)
+		if err != nil {
+			writeAPIError(w, 400, "invalid_credential", "kind, name, scopes, or lifetime is invalid")
+			return
+		}
+		writeJSON(w, 201, issued)
+	})
+	mux.HandleFunc("DELETE /auth/credentials/{id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, store, "credentials:write", false)
+		if !ok {
+			return
+		}
+		if _, err := store.Revoke(actor.UserID, r.PathValue("id")); err != nil {
+			writeAPIError(w, 404, "credential_not_found", "credential not found")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("DELETE /auth/session", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, store, "credentials:write", false)
+		if !ok {
+			return
+		}
+		if _, err := store.Revoke(actor.UserID, actor.ID); err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "internal_error", "credential storage unavailable")
+			return
+		}
+		http.SetCookie(w, &http.Cookie{Name: "vivarium_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+func authenticateRequest(w http.ResponseWriter, r *http.Request, store *auth.Store, scope string, git bool) (auth.Credential, bool) {
+	token := ""
+	if header := r.Header.Get("Authorization"); strings.HasPrefix(header, "Bearer ") {
+		token = strings.TrimPrefix(header, "Bearer ")
+	} else if _, password, ok := r.BasicAuth(); ok {
+		token = password
+	} else if cookie, err := r.Cookie("vivarium_session"); err == nil {
+		token = cookie.Value
+	}
+	credential, err := store.Authenticate(token, scope)
+	if err != nil {
+		if !errors.Is(err, auth.ErrNotFound) {
+			writeAPIError(w, http.StatusInternalServerError, "internal_error", "credential storage unavailable")
+			return auth.Credential{}, false
+		}
+		if git {
+			w.Header().Set("WWW-Authenticate", `Basic realm="vivarium-git"`)
+		} else {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+		}
+		writeAPIError(w, http.StatusUnauthorized, "unauthorized", "valid authentication is required")
+		return auth.Credential{}, false
+	}
+	return credential, true
+}
+
+func setSessionCookie(w http.ResponseWriter, token string, expires time.Time) {
+	http.SetCookie(w, &http.Cookie{Name: "vivarium_session", Value: token, Path: "/", Expires: expires, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
 }
 
 func decodeJSON(r *http.Request, destination any) error {
