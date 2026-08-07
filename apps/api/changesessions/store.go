@@ -429,7 +429,7 @@ func (s *Store) CompleteRun(repositoryID, pullRequestID, sessionID, runID, crede
 	}
 	now := s.now().Truncate(time.Microsecond)
 	run.State, run.UpdatedAt = Completed, now
-	run.Outcome = &Outcome{Summary: summary, CommitID: commitID, Commits: append([]string(nil), commits...), ChangedFiles: append([]ChangedFile(nil), files...), Checks: append([]Check(nil), checks...), Concerns: append([]string(nil), concerns...), CompletedAt: now}
+	run.Outcome = &Outcome{Summary: summary, CommitID: commitID, Commits: append([]string{}, commits...), ChangedFiles: append([]ChangedFile{}, files...), Checks: append([]Check{}, checks...), Concerns: append([]string{}, concerns...), CompletedAt: now}
 	event := Event{ID: eventID, SessionID: sessionID, Kind: "run.completed", ActorID: run.InitiatorID, InitiatorID: run.InitiatorID, AgentID: run.AgentID, RevisionID: run.SourceCommitID, State: Completed, RunID: run.ID, Message: summary, Branch: run.WorkingBranch, CommitID: commitID, CreatedAt: now}
 	rec.Events = append(rec.Events, event)
 	rec.Session.UpdatedAt = now

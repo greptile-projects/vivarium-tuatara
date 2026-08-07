@@ -415,6 +415,15 @@ move review state and a failed synchronization remains safely retryable. The
 pull-request lock checks open/merge-intent eligibility before terminalizing the
 run and excludes a concurrent merge from entering between those operations.
 
+The connected browser regression proves this as one developer-agent loop rather
+than independent surfaces: a maintainer opens and reconnects to a session,
+delegates bounded work, redirects and pauses it, then an agent uses only its
+one-time credential to push a descendant and publish the handoff through the
+public API. Invalid completion evidence leaves review state unchanged; valid
+completion survives reload, stales the earlier approval, receives a fresh
+review, merges through the ordinary owner control, and arrives through a stock
+Git pull with the same attributed collaboration history.
+
 ## Git HTTP transport
 
 The API exposes a visibility-aware smart HTTP remote at
