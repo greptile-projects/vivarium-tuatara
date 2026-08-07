@@ -503,10 +503,11 @@ export function PullRequestDetail({
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const generation = useRef(0);
 
   const load = useCallback(async () => {
-    if (authLoading) return;
+    if (authLoading) return false;
     const current = ++generation.current;
     const active = () => generation.current === current;
     setLoading(true);
@@ -522,7 +523,7 @@ export function PullRequestDetail({
           allPages<PullRequestComment>(`${base}/comments`, "comments", token),
           allPages<PullRequestReview>(`${base}/reviews`, "reviews", token),
         ]);
-      if (!active()) return;
+      if (!active()) return false;
       setRepository(repo);
       setPull(item);
       setCommits(commitPage.commits);
@@ -541,7 +542,7 @@ export function PullRequestDetail({
           ? allPages<Repository>("/repositories", "repositories", token)
           : [],
       ]);
-      if (!active()) return;
+      if (!active()) return false;
       const canParticipate = available.some(
         (candidate) => candidate.id === repositoryID,
       );
@@ -551,7 +552,7 @@ export function PullRequestDetail({
         canParticipate && item.status === "open"
           ? await api<MergeReadiness>(`${base}/merge-readiness`, {}, token)
           : null;
-      if (!active()) return;
+      if (!active()) return false;
       setReadiness(report);
       const ids = [
         ...new Set([
@@ -564,17 +565,19 @@ export function PullRequestDetail({
       const people = await Promise.all(
         ids.map((id) => api<User>(`/users/${id}`, {}, token).catch(() => null)),
       );
-      if (active())
-        setAuthors(
-          Object.fromEntries(
-            people
-              .filter((person): person is User => Boolean(person))
-              .map((person) => [person.id, person]),
-          ),
-        );
+      if (!active()) return false;
+      setAuthors(
+        Object.fromEntries(
+          people
+            .filter((person): person is User => Boolean(person))
+            .map((person) => [person.id, person]),
+        ),
+      );
+      return true;
     } catch (reason) {
       if (active())
         setError(errorMessage(reason, "Pull request could not be loaded."));
+      return false;
     } finally {
       if (active()) setLoading(false);
     }
@@ -605,17 +608,31 @@ export function PullRequestDetail({
     }
   }
 
-  async function mutate(path: string, init: RequestInit, fallback: string) {
+  async function mutate(
+    path: string,
+    init: RequestInit,
+    failure: string,
+    success: string,
+  ) {
     setPending(true);
     setError("");
+    setNotice("");
     try {
       await api(path, init, token);
-      await load();
     } catch (reason) {
-      setError(errorMessage(reason, fallback));
-    } finally {
       setPending(false);
+      setError(errorMessage(reason, failure));
+      return;
     }
+    setNotice(success);
+    const refreshed = await load();
+    if (!refreshed) {
+      setError("");
+      setNotice(
+        `${success} The latest page state could not be loaded; reload before taking another action.`,
+      );
+    }
+    setPending(false);
   }
 
   const submitReview = (decision: "approved" | "changes_requested") =>
@@ -623,24 +640,28 @@ export function PullRequestDetail({
       `/repositories/${repositoryID}/pulls/${pullRequestID}/reviews`,
       { method: "POST", body: JSON.stringify({ decision }) },
       "Review decision could not be recorded.",
+      "Review decision recorded.",
     );
   const withdrawReview = (reviewID: string) =>
     mutate(
       `/repositories/${repositoryID}/pulls/${pullRequestID}/reviews/${reviewID}`,
       { method: "DELETE" },
       "Review decision could not be withdrawn.",
+      "Review decision withdrawn.",
     );
   const synchronize = () =>
     mutate(
       `/repositories/${repositoryID}/pulls/${pullRequestID}/synchronize`,
       { method: "POST" },
       "The latest candidate branch revision could not be adopted.",
+      "Latest candidate revision adopted.",
     );
   const merge = () =>
     mutate(
       `/repositories/${repositoryID}/pulls/${pullRequestID}/merge`,
       { method: "POST" },
       "The pull request could not be merged. Review the current blockers and try again.",
+      "Pull request merged.",
     );
 
   if (loading)
@@ -697,6 +718,14 @@ export function PullRequestDetail({
           <code>{pull.target_branch}</code>
         </p>
       </header>
+      {notice && (
+        <p
+          role="status"
+          className="rounded-lg bg-[var(--brand-soft)] p-3 text-sm text-[var(--brand-strong)]"
+        >
+          {notice}
+        </p>
+      )}
       {error && (
         <p
           role="alert"
