@@ -362,8 +362,12 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 				writeAPIError(w, 400, "invalid_pull_request", "proposal_id is invalid")
 				return
 			}
-			if _, err := proposalStore.Get(r.PathValue("id"), *input.ProposalID); err != nil {
+			if _, err := proposalStore.Get(r.PathValue("id"), *input.ProposalID); errors.Is(err, proposals.ErrNotFound) {
 				writeAPIError(w, 400, "invalid_pull_request", "proposal_id is invalid")
+				return
+			} else if err != nil {
+				log.Printf("proposal storage while creating pull request: %v", err)
+				writeAPIError(w, 500, "internal_error", "proposal storage unavailable")
 				return
 			}
 		}

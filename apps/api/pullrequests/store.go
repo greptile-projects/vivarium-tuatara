@@ -82,7 +82,7 @@ func (s *Store) Create(repositoryID, authorID, title, body, sourceBranch, target
 	}
 	repository, err := s.git.Open(repositoryID)
 	if err != nil {
-		return PullRequest{}, ErrBranchNotFound
+		return PullRequest{}, fmt.Errorf("open Git repository: %w", err)
 	}
 	sourceCommit, err := branchCommit(repository, sourceBranch)
 	if err != nil {
@@ -116,11 +116,17 @@ func (s *Store) Create(repositoryID, authorID, title, body, sourceBranch, target
 
 func branchCommit(repository *storage.Repository, branch string) (string, error) {
 	ref, err := repository.ReadReference("refs/heads/" + branch)
-	if err != nil || ref.Symbolic {
+	if errors.Is(err, storage.ErrReferenceNotFound) || ref.Symbolic {
 		return "", ErrBranchNotFound
 	}
+	if err != nil {
+		return "", fmt.Errorf("read branch %q: %w", branch, err)
+	}
 	object, err := repository.ReadObject(storage.ObjectID(ref.Target))
-	if err != nil || object.Type != storage.CommitObject {
+	if err != nil {
+		return "", fmt.Errorf("read branch %q target: %w", branch, err)
+	}
+	if object.Type != storage.CommitObject {
 		return "", ErrBranchNotFound
 	}
 	return ref.Target, nil

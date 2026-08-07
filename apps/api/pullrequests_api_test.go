@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -19,7 +21,8 @@ func TestContributorOpensPullRequestWithExactBranchState(t *testing.T) {
 	identities, _ := users.New(t.TempDir())
 	credentials, _ := auth.New(t.TempDir())
 	catalog, _ := repositories.New(t.TempDir(), gitStore)
-	proposalStore, _ := proposals.New(t.TempDir())
+	proposalRoot := t.TempDir()
+	proposalStore, _ := proposals.New(proposalRoot)
 	pullRequestStore, _ := pullrequests.New(t.TempDir(), gitStore)
 	server := httptest.NewServer(newPlatformHandler(gitStore, identities, credentials, catalog, proposalStore, pullRequestStore))
 	defer server.Close()
@@ -86,4 +89,14 @@ func TestContributorOpensPullRequestWithExactBranchState(t *testing.T) {
 	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/pulls", "", contributor.Credential.Token, http.StatusOK).Body.Close()
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/pulls", body, outsider.Credential.Token, http.StatusNotFound).Body.Close()
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/pulls", `{"title":"Bad","body":"","source_branch":"missing","target_branch":"main"}`, contributor.Credential.Token, http.StatusBadRequest).Body.Close()
+
+	objectPath := filepath.Join(gitRepository.Path(), "objects", string(advanced)[:2], string(advanced)[2:])
+	if err := os.Remove(objectPath); err != nil {
+		t.Fatal(err)
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/pulls", `{"title":"Unavailable branch","body":"","source_branch":"feature","target_branch":"main"}`, contributor.Credential.Token, http.StatusInternalServerError).Body.Close()
+	if err := os.WriteFile(filepath.Join(proposalRoot, proposal.ID+".json"), []byte("not json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/pulls", body, contributor.Credential.Token, http.StatusInternalServerError).Body.Close()
 }

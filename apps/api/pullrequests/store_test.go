@@ -3,6 +3,8 @@ package pullrequests
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -59,6 +61,13 @@ func TestCreateRejectsMissingAndNonCommitBranches(t *testing.T) {
 	_, err = store.Create(repository.ID(), testID('5'), "Change", "", "same", "same", nil)
 	if !errors.Is(err, ErrInvalid) {
 		t.Fatalf("same-branch error = %v", err)
+	}
+	if err := os.Remove(filepath.Join(repository.Path(), "objects", string(blob)[:2], string(blob)[2:])); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Create(repository.ID(), testID('5'), "Change", "", "blob", "missing", nil)
+	if err == nil || errors.Is(err, ErrBranchNotFound) {
+		t.Fatalf("corrupt branch error = %v, want preserved storage failure", err)
 	}
 }
 
