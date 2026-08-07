@@ -130,3 +130,9 @@ ordinary non-fast-forward pushes unless force is requested. Pushes to
 secondary branches, tags, or any ref other than `refs/heads/main` are denied.
 Receive-pack validates the complete request before applying its ref
 transaction, so rejected requests do not partially change named state.
+
+An end-to-end compatibility suite treats the HTTP endpoint as an opaque remote
+and drives the entire single-branch lifecycle with stock Git commands. It
+creates the initial branch, clones it, advances and pulls it, force-replaces
+history, deletes the branch, clones the resulting empty repository, then
+recreates and pulls the branch into that empty working copy.
