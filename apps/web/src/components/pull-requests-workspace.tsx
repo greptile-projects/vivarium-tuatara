@@ -504,6 +504,7 @@ export function PullRequestDetail({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [refreshRequired, setRefreshRequired] = useState(false);
   const generation = useRef(0);
 
   const load = useCallback(async () => {
@@ -573,6 +574,7 @@ export function PullRequestDetail({
             .map((person) => [person.id, person]),
         ),
       );
+      setRefreshRequired(false);
       return true;
     } catch (reason) {
       if (active())
@@ -628,6 +630,7 @@ export function PullRequestDetail({
     const refreshed = await load();
     if (!refreshed) {
       setError("");
+      setRefreshRequired(true);
       setNotice(
         `${success} The latest page state could not be loaded; reload before taking another action.`,
       );
@@ -821,12 +824,17 @@ export function PullRequestDetail({
                       name="body"
                       required
                       maxLength={10000}
-                      rows={5}
+                    rows={5}
+                    disabled={refreshRequired}
                       placeholder="Ask a question or leave focused feedback…"
                       className="mt-2 w-full rounded-lg border border-[var(--line-strong)] bg-white p-3 font-normal leading-6 outline-none focus:border-[var(--brand)]"
                     />
                   </label>
-                  <Button type="submit" disabled={pending} className="mt-3">
+                  <Button
+                    type="submit"
+                    disabled={pending || refreshRequired}
+                    className="mt-3"
+                  >
                     {pending ? "Publishing…" : "Comment"}
                   </Button>
                 </form>
@@ -919,7 +927,7 @@ export function PullRequestDetail({
                             pull.status === "open" && (
                               <Button
                                 variant="secondary"
-                                disabled={pending}
+                                disabled={pending || refreshRequired}
                                 onClick={() => void withdrawReview(review.id)}
                               >
                                 Withdraw
@@ -946,14 +954,22 @@ export function PullRequestDetail({
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2">
                   <Button
-                    disabled={pending || readiness?.source.state !== "current"}
+                    disabled={
+                      pending ||
+                      refreshRequired ||
+                      readiness?.source.state !== "current"
+                    }
                     onClick={() => void submitReview("approved")}
                   >
                 Approve
                   </Button>
                   <Button
                     variant="secondary"
-                    disabled={pending || readiness?.source.state !== "current"}
+                    disabled={
+                      pending ||
+                      refreshRequired ||
+                      readiness?.source.state !== "current"
+                    }
                     onClick={() => void submitReview("changes_requested")}
                   >
                     Request changes
@@ -1141,7 +1157,7 @@ export function PullRequestDetail({
                   <Button
                     className="mt-4 w-full"
                     variant="secondary"
-                    disabled={pending}
+                    disabled={pending || refreshRequired}
                     onClick={() => void synchronize()}
                   >
                     {pending ? "Updating…" : "Use latest source revision"}
@@ -1156,7 +1172,7 @@ export function PullRequestDetail({
                 {isOwner && (
                   <Button
                     className="mt-4 w-full"
-                    disabled={pending || !readiness.can_merge}
+                    disabled={pending || refreshRequired || !readiness.can_merge}
                     onClick={() => void merge()}
                   >
                     {pending ? "Merging…" : `Merge into ${pull.target_branch}`}
