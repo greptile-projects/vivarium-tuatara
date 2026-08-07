@@ -214,5 +214,7 @@ proposal is closed while its existing discussion remains readable. Target
 advancement uses compare-and-swap protection so a concurrent push is never
 overwritten. Merge retries are idempotent; if target publication became
 visible before pull-request metadata could be published, a retry recognizes
-the attributable merge commit even beneath later target history and repairs
-the durable request outcome.
+the exact commit recorded in a private, durable server merge intent—even
+beneath later target history—and repairs the durable request outcome. Git
+trailers remain collaboration context and are never trusted as authorization
+provenance.

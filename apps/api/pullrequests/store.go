@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -56,6 +55,18 @@ type PullRequest struct {
 	MergedAt       *time.Time `json:"merged_at"`
 	MergedBy       *string    `json:"merged_by"`
 	MergeCommitID  *string    `json:"merge_commit_id"`
+	mergeIntent    *mergeIntent
+}
+
+type mergeIntent struct {
+	CommitID string    `json:"commit_id"`
+	MergerID string    `json:"merger_id"`
+	MergedAt time.Time `json:"merged_at"`
+}
+
+type pullRequestRecord struct {
+	PullRequest
+	MergeIntent *mergeIntent `json:"merge_intent,omitempty"`
 }
 
 type Commit struct {
@@ -729,33 +740,42 @@ func (s *Store) Merge(repositoryID, pullRequestID, mergerID string) (PullRequest
 	if err != nil {
 		return PullRequest{}, err
 	}
+	p.mergeIntent = &mergeIntent{CommitID: string(commit), MergerID: mergerID, MergedAt: now}
+	intentUncertain := false
+	if committed, intentErr := s.write(p); intentErr != nil {
+		if !committed {
+			return PullRequest{}, intentErr
+		}
+		intentUncertain = true
+	}
 	if err := repository.UpdateReferenceIfTarget(storage.Reference{Name: "refs/heads/" + p.TargetBranch, Target: string(commit)}, *report.Target.CurrentCommitID); err != nil {
+		p.mergeIntent = nil
+		_, _ = s.write(p)
 		return PullRequest{}, ErrNotReady
 	}
 	mergedBy, commitID := mergerID, string(commit)
-	p.Status, p.UpdatedAt, p.MergedAt, p.MergedBy, p.MergeCommitID = Merged, now, &now, &mergedBy, &commitID
+	p.Status, p.UpdatedAt, p.MergedAt, p.MergedBy, p.MergeCommitID, p.mergeIntent = Merged, now, &now, &mergedBy, &commitID, nil
 	if committed, err := s.write(p); err != nil {
 		if committed {
 			return p, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
 		}
-		// Publication did not occur, so restore the expected target if no
-		// concurrent writer has moved it since our compare-and-swap.
-		if rollbackErr := repository.UpdateReferenceIfTarget(storage.Reference{Name: "refs/heads/" + p.TargetBranch, Target: *report.Target.CurrentCommitID}, string(commit)); rollbackErr != nil {
-			if reconciled, found, reconcileErr := s.reconcileMerged(repository, p); found && reconcileErr == nil {
-				return reconciled, nil
-			}
-			return PullRequest{}, fmt.Errorf("publish merge metadata: %v; restore target: %w", err, rollbackErr)
-		}
 		return PullRequest{}, err
+	}
+	if intentUncertain {
+		return p, ErrDurabilityUncertain
 	}
 	return p, nil
 }
 
 // reconcileMerged repairs metadata when the target publication succeeded but
 // a later metadata write and compensating reference update both failed. The
-// stable trailers and two-parent shape distinguish this operation even after
-// later target commits have descended from it.
+// private durable intent identifies the exact server-generated commit even
+// after later target commits have descended from it. Git metadata alone is
+// never authorization provenance because contributors can forge it.
 func (s *Store) reconcileMerged(repository *storage.Repository, p PullRequest) (PullRequest, bool, error) {
+	if p.mergeIntent == nil || !validCommitID(p.mergeIntent.CommitID) || !validID(p.mergeIntent.MergerID) || p.mergeIntent.MergedAt.IsZero() {
+		return PullRequest{}, false, nil
+	}
 	target, err := branchCommit(repository, p.TargetBranch)
 	if errors.Is(err, ErrBranchNotFound) {
 		return PullRequest{}, false, nil
@@ -768,35 +788,12 @@ func (s *Store) reconcileMerged(repository *storage.Repository, p PullRequest) (
 		return PullRequest{}, false, err
 	}
 	for _, commit := range ancestry {
-		if len(commit.Parents) != 2 || string(commit.Parents[1]) != p.SourceCommitID {
+		if string(commit.ID) != p.mergeIntent.CommitID {
 			continue
 		}
-		message := string(commit.Message)
-		if !hasTrailer(message, "Pull-Request", p.ID) || !hasTrailer(message, "Authored-by", p.AuthorID) {
-			continue
-		}
-		merger := trailerValue(message, "Merged-by")
-		if !validID(merger) || (p.ProposalID != nil && !hasTrailer(message, "Proposal", *p.ProposalID)) {
-			continue
-		}
-		var mergedAt time.Time
-		for _, header := range commit.Headers {
-			if header.Name != "committer" || !strings.Contains(header.Value, "<"+merger+"@users.vivarium>") {
-				continue
-			}
-			fields := strings.Fields(header.Value)
-			if len(fields) >= 2 {
-				seconds, parseErr := strconv.ParseInt(fields[len(fields)-2], 10, 64)
-				if parseErr == nil {
-					mergedAt = time.Unix(seconds, 0).UTC()
-				}
-			}
-		}
-		if mergedAt.IsZero() {
-			continue
-		}
+		merger, mergedAt := p.mergeIntent.MergerID, p.mergeIntent.MergedAt
 		commitID := string(commit.ID)
-		p.Status, p.UpdatedAt, p.MergedAt, p.MergedBy, p.MergeCommitID = Merged, mergedAt, &mergedAt, &merger, &commitID
+		p.Status, p.UpdatedAt, p.MergedAt, p.MergedBy, p.MergeCommitID, p.mergeIntent = Merged, mergedAt, &mergedAt, &merger, &commitID, nil
 		if committed, writeErr := s.write(p); writeErr != nil {
 			if committed {
 				return p, true, fmt.Errorf("%w: %v", ErrDurabilityUncertain, writeErr)
@@ -805,22 +802,13 @@ func (s *Store) reconcileMerged(repository *storage.Repository, p PullRequest) (
 		}
 		return p, true, nil
 	}
-	return PullRequest{}, false, nil
-}
-
-func trailerValue(message, name string) string {
-	prefix := name + ": "
-	value := ""
-	for _, line := range strings.Split(message, "\n") {
-		if strings.HasPrefix(line, prefix) {
-			value = strings.TrimPrefix(line, prefix)
-		}
+	// The intent never reached the target (for example, its CAS lost). Remove
+	// it before evaluating a fresh merge attempt.
+	p.mergeIntent = nil
+	if committed, writeErr := s.write(p); writeErr != nil && !committed {
+		return PullRequest{}, false, writeErr
 	}
-	return value
-}
-
-func hasTrailer(message, name, value string) bool {
-	return trailerValue(message, name) == value
+	return PullRequest{}, false, nil
 }
 
 func mergeTree(repository *storage.Repository, target, source string) (storage.ObjectID, error) {
@@ -1101,12 +1089,15 @@ func (s *Store) read(repositoryID, id string) (PullRequest, error) {
 	if err != nil {
 		return PullRequest{}, err
 	}
-	var p PullRequest
-	if json.Unmarshal(data, &p) != nil {
+	var record pullRequestRecord
+	if json.Unmarshal(data, &record) != nil {
 		return PullRequest{}, fmt.Errorf("corrupt pull request %s", id)
 	}
+	p := record.PullRequest
+	p.mergeIntent = record.MergeIntent
 	validOutcome := (p.Status == Open && p.MergedAt == nil && p.MergedBy == nil && p.MergeCommitID == nil) || (p.Status == Merged && p.MergedAt != nil && p.MergedBy != nil && validID(*p.MergedBy) && p.MergeCommitID != nil && validCommitID(*p.MergeCommitID))
-	if p.ID != id || !validID(p.RepositoryID) || !validID(p.AuthorID) || !validOutcome || !validCommitID(p.SourceCommitID) || !validCommitID(p.TargetCommitID) || p.SourceBranch == p.TargetBranch || p.SourceBranch == "" || p.TargetBranch == "" || strings.HasPrefix(p.SourceBranch, "refs/") || strings.HasPrefix(p.TargetBranch, "refs/") || p.CreatedAt.IsZero() || p.UpdatedAt.IsZero() || (p.ProposalID != nil && !validID(*p.ProposalID)) {
+	validIntent := p.mergeIntent == nil || (p.Status == Open && validCommitID(p.mergeIntent.CommitID) && validID(p.mergeIntent.MergerID) && !p.mergeIntent.MergedAt.IsZero())
+	if p.ID != id || !validID(p.RepositoryID) || !validID(p.AuthorID) || !validOutcome || !validIntent || !validCommitID(p.SourceCommitID) || !validCommitID(p.TargetCommitID) || p.SourceBranch == p.TargetBranch || p.SourceBranch == "" || p.TargetBranch == "" || strings.HasPrefix(p.SourceBranch, "refs/") || strings.HasPrefix(p.TargetBranch, "refs/") || p.CreatedAt.IsZero() || p.UpdatedAt.IsZero() || (p.ProposalID != nil && !validID(*p.ProposalID)) {
 		return PullRequest{}, fmt.Errorf("corrupt pull request %s", id)
 	}
 	if _, _, err := validatePurpose(p.Title, p.Body); err != nil {
@@ -1124,7 +1115,7 @@ func validCommitID(id string) bool {
 }
 
 func (s *Store) write(p PullRequest) (bool, error) {
-	data, err := json.Marshal(p)
+	data, err := json.Marshal(pullRequestRecord{PullRequest: p, MergeIntent: p.mergeIntent})
 	if err != nil {
 		return false, err
 	}

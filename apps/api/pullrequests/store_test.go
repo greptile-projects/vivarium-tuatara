@@ -230,6 +230,13 @@ func TestMergeReconcilesAttributedCommitAfterLaterTargetAdvance(t *testing.T) {
 	descendant := writeCommitWithParents(t, repository, tree, []storage.ObjectID{mergeCommit}, "later target work")
 	repository.UpdateReference(storage.Reference{Name: "refs/heads/main", Target: string(descendant)})
 
+	if _, err := store.Merge(repository.ID(), pull.ID, merger); !errors.Is(err, ErrNotReady) {
+		t.Fatalf("forged attributed commit was reconciled: %v", err)
+	}
+	pull.mergeIntent = &mergeIntent{CommitID: string(mergeCommit), MergerID: merger, MergedAt: time.Unix(1700000010, 0).UTC()}
+	if _, err := store.write(pull); err != nil {
+		t.Fatal(err)
+	}
 	reconciled, err := store.Merge(repository.ID(), pull.ID, merger)
 	if err != nil || reconciled.Status != Merged || reconciled.MergeCommitID == nil || *reconciled.MergeCommitID != string(mergeCommit) || reconciled.MergedBy == nil || *reconciled.MergedBy != merger || reconciled.MergedAt == nil || reconciled.MergedAt.Unix() != 1700000010 {
 		t.Fatalf("reconciled = %#v, %v", reconciled, err)
