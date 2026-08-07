@@ -233,6 +233,9 @@ Cancellation persists its intent before stopping the executor, so a forced
 container exit cannot win the terminal-state race. Control attribution is also
 stored in the run record and repaired into the event stream after a transient
 event-write failure; queued reruns remain schedulable while that repair waits.
+Projection repair is serialized across API processes, and cancellation intent
+is retained whenever terminal record durability is uncertain so recovery never
+relaunches canceled work from an older record image.
 
 ## Pull requests
 

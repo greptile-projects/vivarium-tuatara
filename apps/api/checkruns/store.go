@@ -299,6 +299,37 @@ func (s *Store) Events(repositoryID, pullRequestID, runID string, after int64) (
 	if err != nil {
 		return nil, err
 	}
+	lock, err := s.lockProjection(run)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close()
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	events, err := s.projectControlsLocked(run)
+	if err != nil {
+		return nil, err
+	}
+	filtered := events[:0]
+	for _, event := range events {
+		if event.Sequence > after {
+			filtered = append(filtered, event)
+		}
+	}
+	return filtered, nil
+}
+
+func (s *Store) projectControls(run Run) error {
+	lock, err := s.lockProjection(run)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	_, err = s.projectControlsLocked(run)
+	return err
+}
+
+func (s *Store) projectControlsLocked(run Run) ([]Event, error) {
 	events, err := s.readEvents(run)
 	if err != nil {
 		return nil, err
@@ -319,16 +350,20 @@ func (s *Store) Events(repositoryID, pullRequestID, runID string, after int64) (
 	if len(run.Controls) > 0 {
 		events, err = s.readEvents(run)
 	}
+	return events, err
+}
+
+func (s *Store) lockProjection(run Run) (*os.File, error) {
+	path := filepath.Join(s.root, run.RepositoryID, run.PullRequestID, run.ID+".events.projection.lock")
+	lock, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	filtered := events[:0]
-	for _, event := range events {
-		if event.Sequence > after {
-			filtered = append(filtered, event)
-		}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		lock.Close()
+		return nil, err
 	}
-	return filtered, nil
+	return lock, nil
 }
 
 func (s *Store) readEvents(run Run) ([]Event, error) {
@@ -573,7 +608,7 @@ func (s *Store) control(repositoryID, pullRequestID, runID, actorID, action stri
 	}
 	// The run record is the durable source of control attribution. Events()
 	// repairs this projection if either append is temporarily unavailable.
-	_ = s.appendEvent(run, Event{Attempt: control.Attempt, Kind: "control", Timestamp: now, State: run.State, Message: action, ActorID: actorID, ControlID: control.ID})
+	_ = s.projectControls(run)
 	if action == "rerun" {
 		_ = s.appendEvent(run, Event{Attempt: len(run.Attempts) + 1, Kind: "status", Timestamp: now, State: "queued", ActorID: actorID})
 	}
@@ -642,11 +677,17 @@ func (s *Store) finalizeCancellation(run Run, control Control) (Run, error) {
 	if !found {
 		run.Controls = append(run.Controls, control)
 	}
-	if err := s.Update(run); err != nil && !errors.Is(err, ErrDurabilityUncertain) {
-		return Run{}, err
+	updateErr := s.Update(run)
+	if updateErr != nil && !errors.Is(updateErr, ErrDurabilityUncertain) {
+		return Run{}, updateErr
 	}
-	_ = s.appendEvent(run, Event{Attempt: control.Attempt, Kind: "control", Timestamp: control.CreatedAt, State: "canceled", Message: "cancel", ActorID: control.ActorID, ControlID: control.ID})
-	_ = os.Remove(filepath.Join(s.root, run.RepositoryID, run.PullRequestID, run.ID+".cancel"))
+	_ = s.projectControls(run)
+	// The intent is the recovery authority until the terminal run rename is
+	// confirmed durable. Retaining it makes an older nonterminal JSON image
+	// recover as cancellation rather than executable work.
+	if updateErr == nil {
+		_ = os.Remove(filepath.Join(s.root, run.RepositoryID, run.PullRequestID, run.ID+".cancel"))
+	}
 	return run, nil
 }
 

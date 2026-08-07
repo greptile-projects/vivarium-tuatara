@@ -250,7 +250,9 @@ whenever dependencies change or the web job fails before it starts.
   actor IDs without replacing earlier evidence. Cancellation publishes a
   durable intent before interrupting the executor, and recovery honors that
   intent even if the command first reports failure. Run records are the source
-  of truth for control attribution; event reads repair a missing projection.
+  of truth for control attribution; event reads repair a missing projection
+  under a cross-process projection lock. Cancellation intent remains until
+  terminal-state directory durability is confirmed.
   Immutable pull request comments are attributable by stable user ID,
   readable under repository visibility rules, and writable by current owners
   and contributors; comment publication uses the uncertain-durability contract.

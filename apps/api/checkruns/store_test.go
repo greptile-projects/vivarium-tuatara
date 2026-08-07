@@ -180,6 +180,83 @@ func TestCancellationIntentWinsExecutorFailureRace(t *testing.T) {
 	}
 }
 
+func TestCancellationIntentSurvivesUncertainTerminalPublication(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.Create("0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789", strings.Repeat("1", 40), []Definition{{Name: "test", Image: "alpine:3.22", Command: "true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := runs[0]
+	control, err := newControl("cancel", "33333333333333333333333333333333", 0, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.writeCancelIntent(run, control); err != nil {
+		t.Fatal(err)
+	}
+	store.syncDirectory = func(*os.File) error { return errors.New("injected post-rename sync failure") }
+	if _, err := store.finalizeCancellation(run, control); err != nil {
+		t.Fatal(err)
+	}
+	intent := filepath.Join(store.root, run.RepositoryID, run.PullRequestID, run.ID+".cancel")
+	if _, err := os.Stat(intent); err != nil {
+		t.Fatalf("cancel intent was removed after uncertain publication: %v", err)
+	}
+	recoverable, err := store.Nonterminal()
+	if err != nil || len(recoverable) != 1 || recoverable[0].ID != run.ID {
+		t.Fatalf("Nonterminal() = %#v, %v", recoverable, err)
+	}
+}
+
+func TestConcurrentEventsRepairProjectsControlOnce(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.Create("0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789", strings.Repeat("2", 40), []Definition{{Name: "test", Image: "alpine:3.22", Command: "true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := runs[0]
+	control, err := newControl("rerun", "44444444444444444444444444444444", 1, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Controls = []Control{control}
+	if err := store.Update(run); err != nil {
+		t.Fatal(err)
+	}
+	evidence := filepath.Join(store.root, run.RepositoryID, run.PullRequestID, run.ID+".events")
+	if err := os.Remove(evidence); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	errs := make(chan error, 16)
+	for range 16 {
+		go func() {
+			<-start
+			events, eventErr := store.Events(run.RepositoryID, run.PullRequestID, run.ID, 0)
+			if eventErr == nil && len(events) != 1 {
+				eventErr = fmt.Errorf("events = %#v", events)
+			}
+			errs <- eventErr
+		}()
+	}
+	close(start)
+	for range 16 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, err := store.readEvents(run)
+	if err != nil || len(events) != 1 || events[0].ControlID != control.ID {
+		t.Fatalf("persisted events = %#v, %v", events, err)
+	}
+}
+
 func TestRecoveryDoesNotPublishInterruptedFailureBeforeRunUpdate(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {
