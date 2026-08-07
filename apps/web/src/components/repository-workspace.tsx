@@ -22,9 +22,9 @@ export function RepositoryWorkspace({ compact = false }: { compact?: boolean }) 
         const query = after ? `?limit=100&after=${encodeURIComponent(after)}` : "?limit=100";
         const result: { repositories: Repository[]; next_cursor: string | null } = await api(`/repositories${query}`, {}, token);
         found.push(...result.repositories);
+        setRepositories([...found]);
         after = result.next_cursor;
       } while (after);
-      setRepositories(found);
     }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Repositories could not be loaded."); }
     finally { setLoading(false); }
