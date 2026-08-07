@@ -100,6 +100,40 @@ func TestRepositoryCollaboratorsPersistAndRemainOwnerManaged(t *testing.T) {
 	}
 }
 
+func TestCollaboratorRemovalReconcilesPostRenameSyncFailure(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	store, _ := New(t.TempDir(), gitStore)
+	created, _ := store.Create(testOwnerID, "revoke-uncertain")
+	if _, err := store.AddCollaborator(testOwnerID, created.ID, testCollaboratorID); err != nil {
+		t.Fatal(err)
+	}
+	store.directorySync = func(string) error { return errors.New("injected directory sync failure") }
+	if err := store.RemoveCollaborator(testOwnerID, created.ID, testCollaboratorID); err != nil {
+		t.Fatalf("committed removal returned an error: %v", err)
+	}
+	hasAccess, err := store.HasCollaborator(testCollaboratorID, created.ID)
+	if err != nil || hasAccess {
+		t.Fatalf("access after committed removal = %v, %v", hasAccess, err)
+	}
+}
+
+func TestCollaboratorRemovalReportsPreRenameFailure(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	store, _ := New(t.TempDir(), gitStore)
+	created, _ := store.Create(testOwnerID, "revoke-failed")
+	if _, err := store.AddCollaborator(testOwnerID, created.ID, testCollaboratorID); err != nil {
+		t.Fatal(err)
+	}
+	store.rename = func(string, string) error { return errors.New("injected rename failure") }
+	if err := store.RemoveCollaborator(testOwnerID, created.ID, testCollaboratorID); err == nil {
+		t.Fatal("uncommitted removal returned success")
+	}
+	hasAccess, err := store.HasCollaborator(testCollaboratorID, created.ID)
+	if err != nil || !hasAccess {
+		t.Fatalf("access after failed removal = %v, %v", hasAccess, err)
+	}
+}
+
 func TestDeleteMetadataFailureDoesNotExposeOrReserveMissingRemote(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	store, _ := New(t.TempDir(), gitStore)

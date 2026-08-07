@@ -56,11 +56,13 @@ type gitStore interface {
 }
 
 type Store struct {
-	root   string
-	git    gitStore
-	mu     sync.Mutex
-	now    func() time.Time
-	remove func(string) error
+	root          string
+	git           gitStore
+	mu            sync.Mutex
+	now           func() time.Time
+	remove        func(string) error
+	rename        func(string, string) error
+	directorySync func(string) error
 }
 
 func New(root string, git *storage.Store) (*Store, error) {
@@ -74,7 +76,7 @@ func New(root string, git *storage.Store) (*Store, error) {
 	if err := os.MkdirAll(abs, 0o700); err != nil {
 		return nil, fmt.Errorf("create repository catalog: %w", err)
 	}
-	return &Store{root: abs, git: git, now: func() time.Time { return time.Now().UTC() }, remove: os.Remove}, nil
+	return &Store{root: abs, git: git, now: func() time.Time { return time.Now().UTC() }, remove: os.Remove, rename: os.Rename, directorySync: syncDirectory}, nil
 }
 
 func (s *Store) Create(ownerID, name string) (Repository, error) {
@@ -235,7 +237,16 @@ func (s *Store) RemoveCollaborator(ownerID, id, userID string) error {
 		if existing == userID {
 			ids = append(ids[:i], ids[i+1:]...)
 			repository.collaboratorIDs = strings.Join(ids, ",")
-			return s.write(repository)
+			if err := s.write(repository); err != nil {
+				// A directory-sync failure after rename leaves publication
+				// uncertain. Reconcile the exact requested state so DELETE does
+				// not report failure after access was visibly revoked.
+				if persisted, readErr := s.read(id); readErr == nil && persisted == repository {
+					return nil
+				}
+				return err
+			}
+			return nil
 		}
 	}
 	return nil
@@ -309,7 +320,7 @@ func (s *Store) Delete(ownerID, id string) error {
 	if err := s.remove(s.path(id)); err != nil {
 		return fmt.Errorf("delete repository metadata: %w", err)
 	}
-	return syncDirectory(s.root)
+	return s.directorySync(s.root)
 }
 
 func validateName(name string) (string, error) {
@@ -443,7 +454,7 @@ func (s *Store) write(repository Repository) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Rename(tempPath, s.path(repository.ID)); err != nil {
+	if err := s.rename(tempPath, s.path(repository.ID)); err != nil {
 		return err
 	}
 	return syncDirectory(s.root)
