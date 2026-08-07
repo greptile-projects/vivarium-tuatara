@@ -118,7 +118,8 @@ func (r *Repository) ListObjects() ([]Object, error) {
 
 // Store owns bare Git repositories below a filesystem directory.
 type Store struct {
-	root string
+	root      string
+	removeAll func(string) error
 }
 
 // Repository identifies an opened bare Git repository.
@@ -148,7 +149,7 @@ func New(root string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve storage root: %w", err)
 	}
-	return &Store{root: abs}, nil
+	return &Store{root: abs, removeAll: os.RemoveAll}, nil
 }
 
 // Create atomically initializes and opens an empty bare Git repository.
@@ -159,6 +160,11 @@ func (s *Store) Create(id string) (*Repository, error) {
 	}
 	if err := os.MkdirAll(s.root, 0o755); err != nil {
 		return nil, fmt.Errorf("create storage root: %w", err)
+	}
+	if _, err := os.Lstat(s.deletionPath(id)); err == nil {
+		return nil, fmt.Errorf("%s deletion is pending: %w", id, ErrRepositoryExists)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("inspect pending repository deletion: %w", err)
 	}
 
 	temp, err := os.MkdirTemp(s.root, ".creating-")
@@ -222,15 +228,24 @@ func (s *Store) Delete(id string) error {
 	if err != nil {
 		return err
 	}
+	tombstone := s.deletionPath(id)
+	pending := false
+	if _, err := os.Lstat(tombstone); err == nil {
+		pending = true
+		if err := s.removeAll(tombstone); err != nil {
+			return fmt.Errorf("resume repository deletion: %w", err)
+		}
+		if err := syncDirectory(s.root); err != nil {
+			return fmt.Errorf("sync resumed repository deletion: %w", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect pending repository deletion: %w", err)
+	}
 	if _, err := s.Open(id); err != nil {
+		if pending && errors.Is(err, ErrRepositoryNotFound) {
+			return nil
+		}
 		return err
-	}
-	tombstone, err := os.MkdirTemp(s.root, ".deleting-")
-	if err != nil {
-		return fmt.Errorf("stage repository deletion: %w", err)
-	}
-	if err := os.Remove(tombstone); err != nil {
-		return fmt.Errorf("prepare repository deletion: %w", err)
 	}
 	if err := os.Rename(path, tombstone); err != nil {
 		return fmt.Errorf("detach repository: %w", err)
@@ -238,10 +253,14 @@ func (s *Store) Delete(id string) error {
 	if err := syncDirectory(s.root); err != nil {
 		return fmt.Errorf("sync repository deletion: %w", err)
 	}
-	if err := os.RemoveAll(tombstone); err != nil {
+	if err := s.removeAll(tombstone); err != nil {
 		return fmt.Errorf("remove repository: %w", err)
 	}
 	return syncDirectory(s.root)
+}
+
+func (s *Store) deletionPath(id string) string {
+	return filepath.Join(s.root, ".deleting-"+id)
 }
 
 // ID returns the stable identifier assigned by the store.

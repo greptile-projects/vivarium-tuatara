@@ -63,6 +63,8 @@ whenever dependencies change or the web job fails before it starts.
   lifecycle storage lives in `apps/api/storage`; callers create or reopen a
   stable storage ID there before performing repository operations, and
   `Store.Delete` atomically detaches an ID when its repository is removed.
+  Deletion uses a stable `.deleting-<id>` tombstone; cleanup failures retain
+  that locator, block ID reuse, and are completed by retrying `Store.Delete`.
   `Repository.WriteObject` and `ReadObject` are the durable object boundary;
   they use canonical Git loose-object storage and support blob, tree, commit,
   and annotated tag objects addressed by lowercase SHA-1 object IDs.

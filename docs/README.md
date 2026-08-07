@@ -130,6 +130,10 @@ absolute path exposed by `Repository.Path`.
 Repository IDs are single URL-safe components containing letters, numbers,
 dots, underscores, or hyphens. Ownership and user-facing names remain an
 application-layer concern; storage IDs only identify a repository boundary.
+Deletion first renames `<id>.git` to the stable internal tombstone
+`.deleting-<id>`, making the remote immediately unavailable. The ID cannot be
+recreated while cleanup is pending, and retrying `Store.Delete` discovers and
+removes that tombstone before reporting completion.
 
 Repository content is written through `Repository.WriteObject`, which accepts
 one of Git's blob, tree, commit, or tag types and canonical uncompressed
