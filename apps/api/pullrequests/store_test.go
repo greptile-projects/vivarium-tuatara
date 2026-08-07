@@ -156,6 +156,32 @@ func TestCreateReturnsIdentityAfterUncertainDurability(t *testing.T) {
 	}
 }
 
+func TestSynchronizeReturnsPersistedRevisionAfterUncertainDurability(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	repository, _ := gitStore.Create(testID('6'))
+	tree, _ := repository.WriteObject(storage.TreeObject, nil)
+	base := writeCommit(t, repository, tree, "base")
+	head := writeCommitWithParents(t, repository, tree, []storage.ObjectID{base}, "head")
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)})
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/topic", Target: string(head)})
+	store, _ := New(t.TempDir(), gitStore)
+	pullRequest, err := store.Create(repository.ID(), testID('7'), "Change", "Purpose", "topic", "main", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revised := writeCommitWithParents(t, repository, tree, []storage.ObjectID{head}, "revised")
+	_ = repository.UpdateReference(storage.Reference{Name: "refs/heads/topic", Target: string(revised)})
+	store.directorySync = func(string) error { return errors.New("injected sync failure") }
+	synchronized, err := store.SynchronizeSource(repository.ID(), pullRequest.ID)
+	if !errors.Is(err, ErrDurabilityUncertain) || synchronized.SourceCommitID != string(revised) {
+		t.Fatalf("SynchronizeSource = %#v, %v", synchronized, err)
+	}
+	persisted, getErr := store.Get(repository.ID(), pullRequest.ID)
+	if getErr != nil || persisted.SourceCommitID != string(revised) {
+		t.Fatalf("persisted synchronization = %#v, %v", persisted, getErr)
+	}
+}
+
 func TestReviewsCaptureCurrentCommitBecomeStaleAndRemainAttributable(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	repository, _ := gitStore.Create(testID('a'))

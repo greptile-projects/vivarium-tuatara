@@ -430,6 +430,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 		}
 		updated, err := store.SynchronizeSource(r.PathValue("id"), existing.ID)
 		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
+			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.synchronized", ActorID: actor.UserID, RepositoryID: updated.RepositoryID, ResourceType: "pull_request", ResourceID: updated.ID, ResourceTitle: updated.Title})
 			writeUncertainMutation(w, updated)
 			return
 		}
