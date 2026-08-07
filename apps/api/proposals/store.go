@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -58,9 +59,10 @@ type record struct {
 }
 
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root          string
+	mu            sync.Mutex
+	now           func() time.Time
+	directorySync func(string) error
 }
 
 func New(root string) (*Store, error) {
@@ -74,7 +76,7 @@ func New(root string) (*Store, error) {
 	if err := os.MkdirAll(abs, 0o700); err != nil {
 		return nil, fmt.Errorf("create proposal store: %w", err)
 	}
-	return &Store{root: abs, now: func() time.Time { return time.Now().UTC() }}, nil
+	return &Store{root: abs, now: func() time.Time { return time.Now().UTC() }, directorySync: syncDirectory}, nil
 }
 
 func (s *Store) Create(repositoryID, authorID, title, body string) (Proposal, error) {
@@ -98,7 +100,11 @@ func (s *Store) Create(repositoryID, authorID, title, body string) (Proposal, er
 		return Proposal{}, err
 	}
 	defer unlock()
-	if err := s.write(record{Proposal: p}); err != nil {
+	desired := record{Proposal: p}
+	if err := s.write(desired); err != nil {
+		if persisted, readErr := s.read(id); readErr == nil && reflect.DeepEqual(persisted, desired) {
+			return p, nil
+		}
 		return Proposal{}, err
 	}
 	return p, nil
@@ -180,6 +186,9 @@ func (s *Store) Update(repositoryID, id string, patch Patch) (Proposal, error) {
 	p.UpdatedAt = s.now().Truncate(time.Microsecond)
 	r.Proposal = p
 	if err := s.write(r); err != nil {
+		if persisted, readErr := s.read(id); readErr == nil && reflect.DeepEqual(persisted, r) {
+			return p, nil
+		}
 		return Proposal{}, err
 	}
 	return p, nil
@@ -211,6 +220,9 @@ func (s *Store) AddComment(repositoryID, proposalID, authorID, body string) (Com
 	c := Comment{ID: id, ProposalID: proposalID, AuthorID: authorID, Body: body, CreatedAt: s.now().Truncate(time.Microsecond)}
 	r.Comments = append(r.Comments, c)
 	if err := s.write(r); err != nil {
+		if persisted, readErr := s.read(proposalID); readErr == nil && reflect.DeepEqual(persisted, r) {
+			return c, nil
+		}
 		return Comment{}, err
 	}
 	return c, nil
@@ -301,7 +313,11 @@ func (s *Store) write(r record) error {
 	if err := os.Rename(tempPath, s.path(r.Proposal.ID)); err != nil {
 		return err
 	}
-	d, err := os.Open(s.root)
+	return s.directorySync(s.root)
+}
+
+func syncDirectory(path string) error {
+	d, err := os.Open(path)
 	if err != nil {
 		return err
 	}

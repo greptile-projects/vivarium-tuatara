@@ -68,4 +68,29 @@ func TestConcurrentCommentsAreNotLostAcrossStores(t *testing.T) {
 	}
 }
 
+func TestMutationsReconcilePostRenameDirectorySyncFailure(t *testing.T) {
+	store, _ := New(t.TempDir())
+	store.directorySync = func(string) error { return errors.New("injected directory sync failure") }
+	proposal, err := store.Create(repositoryID, authorID, "Durable idea", "Context")
+	if err != nil {
+		t.Fatalf("committed create returned error: %v", err)
+	}
+	listed, err := store.List(repositoryID)
+	if err != nil || len(listed) != 1 || listed[0].ID != proposal.ID {
+		t.Fatalf("proposals after create = %#v, %v", listed, err)
+	}
+	comment, err := store.AddComment(repositoryID, proposal.ID, commenterID, "Feedback")
+	if err != nil {
+		t.Fatalf("committed comment returned error: %v", err)
+	}
+	comments, err := store.ListComments(repositoryID, proposal.ID)
+	if err != nil || len(comments) != 1 || comments[0].ID != comment.ID {
+		t.Fatalf("comments after append = %#v, %v", comments, err)
+	}
+	updated, err := store.Update(repositoryID, proposal.ID, Patch{Status: pointer(Closed)})
+	if err != nil || updated.Status != Closed {
+		t.Fatalf("committed update = %#v, %v", updated, err)
+	}
+}
+
 func pointer(value string) *string { return &value }
