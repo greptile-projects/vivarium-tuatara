@@ -168,8 +168,11 @@ whenever dependencies change or the web job fails before it starts.
   collections use shared cursor pagination and creation uses the same uncertain-
   durability response contract as proposals.
   Pull request inspection derives source-only commits and path-ordered file
-  changes from the immutable source/target commit snapshots rather than live
-  branches. Immutable pull request comments are attributable by stable user ID,
+  changes from the fixed target snapshot and explicitly recorded source
+  revision rather than silently following live branches. Authors adopt a
+  revised source-branch tip through the public synchronize endpoint; existing
+  reviews remain tied to their evaluated commit and require a fresh decision.
+  Immutable pull request comments are attributable by stable user ID,
   readable under repository visibility rules, and writable by current owners
   and contributors; comment publication uses the uncertain-durability contract.
   Each owner or contributor can maintain one pull request review decision;

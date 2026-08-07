@@ -254,6 +254,49 @@ func (s *Store) Get(repositoryID, id string) (PullRequest, error) {
 	return p, nil
 }
 
+// SynchronizeSource adopts the source branch's current commit as the next
+// reviewable revision of an open pull request. Existing reviews retain the
+// commit they evaluated and therefore become stale when the branch advanced.
+func (s *Store) SynchronizeSource(repositoryID, id string) (PullRequest, error) {
+	if !validID(repositoryID) || !validID(id) {
+		return PullRequest{}, ErrNotFound
+	}
+	repository, err := s.git.Open(repositoryID)
+	if err != nil {
+		return PullRequest{}, fmt.Errorf("open Git repository: %w", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return PullRequest{}, err
+	}
+	defer unlock()
+	p, err := s.read(repositoryID, id)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	if p.Status != Open || p.mergeIntent != nil {
+		return PullRequest{}, ErrNotReady
+	}
+	commitID, err := branchCommit(repository, p.SourceBranch)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	if commitID == p.SourceCommitID {
+		return p, nil
+	}
+	p.SourceCommitID = commitID
+	p.UpdatedAt = s.now().Truncate(time.Microsecond)
+	if committed, err := s.write(p); err != nil {
+		if committed {
+			return p, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+		}
+		return PullRequest{}, err
+	}
+	return p, nil
+}
+
 func (s *Store) List(repositoryID string) ([]PullRequest, error) {
 	if !validID(repositoryID) {
 		return nil, ErrNotFound

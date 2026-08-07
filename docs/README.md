@@ -145,21 +145,26 @@ Pull requests connect that context to exact repository state. An owner or
 contributor opens one from an existing source branch against a different
 target branch, optionally linking a repository proposal. The durable resource
 records its author, purpose, branch names, and both commit IDs at creation, so
-later branch movement cannot change which version was originally requested.
+later branch movement does not silently change the review. After responding
+to feedback with another source-branch push, the author explicitly
+synchronizes the request to adopt that tip as its next reviewable revision;
+the target snapshot remains fixed.
 Pull request metadata lives beneath `PULL_REQUEST_STORAGE_ROOT` (default
 `pull-requests`), partitioned by repository ID to isolate collection reads,
 and follows repository visibility and participant access.
 The API derives the source-only commit set and recursive changed-file summary
-from the pull request's snapshotted commit IDs, so branch movement does not
-rewrite the artifact participants are discussing. Immutable pull request
-comments retain stable author IDs; owners and contributors may participate,
-while reads continue to follow repository visibility.
+from the fixed target snapshot and explicitly synchronized source revision.
+Immutable pull request comments retain stable author IDs; owners and
+contributors may participate, while reads continue to follow repository
+visibility.
 Each owner or contributor also has one attributable current review decision.
 Approvals and change requests capture the live source-branch commit being
 evaluated, replacements preserve the review identity, and withdrawals remain
 visible without acting as a decision. Review reads derive whether that commit
 has become stale relative to the current source branch tip; deleting the
 source branch leaves the durable reviews readable and marks them stale.
+Synchronizing a revised source does not make an earlier decision fresh, so the
+new revision must receive an explicit replacement approval before merge.
 
 ## Git repository storage
 
