@@ -96,6 +96,13 @@ whenever dependencies change or the web job fails before it starts.
   end-to-end stock-client compatibility suite covers the complete workflow in
   sequence: initial push, clone, ordinary push and pull, forced replacement,
   deletion, empty clone, recovery push, and recovery pull.
+  Durable human identities live in `apps/api/users` as atomic JSON records.
+  Opaque 128-bit lowercase IDs are permanent attribution keys; handles are
+  globally unique and, along with display names, are editable profile data.
+  `POST /users`, `GET /users/{id}`, and `PATCH /users/{id}` expose the account
+  lifecycle. `$USER_STORAGE_ROOT` selects their directory and defaults to
+  `users`; these routes are intentionally unauthenticated until the next
+  authentication rung provides actor credentials.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 
