@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -24,6 +25,11 @@ var (
 const Open = "open"
 const Launched = "launched"
 
+var workEventKinds = map[string]bool{
+	"run.status": true, "agent.message": true, "tool.action": true,
+	"artifact.produced": true, "run.failed": true, "branch.updated": true,
+}
+
 type Session struct {
 	ID             string    `json:"id"`
 	RepositoryID   string    `json:"repository_id"`
@@ -36,19 +42,28 @@ type Session struct {
 }
 
 type Event struct {
-	ID        string    `json:"id"`
-	SessionID string    `json:"session_id"`
-	Kind      string    `json:"kind"`
-	ActorID   string    `json:"actor_id"`
-	State     string    `json:"state"`
-	RunID     string    `json:"run_id,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	ID          string    `json:"id"`
+	SessionID   string    `json:"session_id"`
+	Kind        string    `json:"kind"`
+	ActorID     string    `json:"actor_id"`
+	State       string    `json:"state"`
+	RunID       string    `json:"run_id,omitempty"`
+	InitiatorID string    `json:"initiator_id,omitempty"`
+	AgentID     string    `json:"agent_id,omitempty"`
+	RevisionID  string    `json:"revision_id,omitempty"`
+	Message     string    `json:"message,omitempty"`
+	Tool        string    `json:"tool,omitempty"`
+	Artifact    string    `json:"artifact,omitempty"`
+	Branch      string    `json:"branch,omitempty"`
+	CommitID    string    `json:"commit_id,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type Run struct {
 	ID                  string     `json:"id"`
 	SessionID           string     `json:"session_id"`
 	InitiatorID         string     `json:"initiator_id"`
+	AgentID             string     `json:"agent_id"`
 	Instructions        string     `json:"instructions"`
 	SourceCommitID      string     `json:"source_commit_id"`
 	ContextPaths        []string   `json:"context_paths"`
@@ -220,8 +235,12 @@ func (s *Store) LaunchRun(repositoryID, pullRequestID, sessionID, initiatorID, i
 	if err != nil {
 		return Run{}, err
 	}
+	agentID, err := newID()
+	if err != nil {
+		return Run{}, err
+	}
 	now := s.now().Truncate(time.Microsecond)
-	run := Run{ID: runID, SessionID: sessionID, InitiatorID: initiatorID, Instructions: instructions, SourceCommitID: sourceCommitID, ContextPaths: append([]string(nil), contextPaths...), WorkingBranch: workingBranch, CredentialID: credentialID, CredentialExpiresAt: credentialExpiresAt, State: Launched, CreatedAt: now}
+	run := Run{ID: runID, SessionID: sessionID, InitiatorID: initiatorID, AgentID: agentID, Instructions: instructions, SourceCommitID: sourceCommitID, ContextPaths: append([]string(nil), contextPaths...), WorkingBranch: workingBranch, CredentialID: credentialID, CredentialExpiresAt: credentialExpiresAt, State: Launched, CreatedAt: now}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -238,7 +257,7 @@ func (s *Store) LaunchRun(repositoryID, pullRequestID, sessionID, initiatorID, i
 		return Run{}, ErrInvalid
 	}
 	rec.Runs = append(rec.Runs, run)
-	rec.Events = append(rec.Events, Event{ID: eventID, SessionID: sessionID, Kind: "run.launched", ActorID: initiatorID, State: Launched, RunID: runID, CreatedAt: now})
+	rec.Events = append(rec.Events, Event{ID: eventID, SessionID: sessionID, Kind: "run.launched", ActorID: initiatorID, InitiatorID: initiatorID, AgentID: agentID, RevisionID: sourceCommitID, State: Launched, RunID: runID, CreatedAt: now})
 	rec.Session.UpdatedAt = now
 	committed, err := s.write(filepath.Join(s.root, repositoryID, pullRequestID), rec)
 	if err != nil {
@@ -248,6 +267,53 @@ func (s *Store) LaunchRun(repositoryID, pullRequestID, sessionID, initiatorID, i
 		return Run{}, err
 	}
 	return run, nil
+}
+
+// AppendWorkEvent publishes agent-reported progress through the durable session boundary.
+func (s *Store) AppendWorkEvent(repositoryID, pullRequestID, sessionID, runID, credentialID, kind, state, message, tool, artifact, branch, commitID string) (Event, error) {
+	if !workEventKinds[kind] || strings.TrimSpace(state) == "" || len(state) > 100 || len([]rune(message)) > 10000 || len(tool) > 200 || len(artifact) > 1000 || len(branch) > 200 || (commitID != "" && !validObjectID(commitID)) {
+		return Event{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Event{}, err
+	}
+	defer unlock()
+	rec, err := s.read(repositoryID, pullRequestID, sessionID)
+	if err != nil {
+		return Event{}, err
+	}
+	var run *Run
+	for i := range rec.Runs {
+		if rec.Runs[i].ID == runID {
+			run = &rec.Runs[i]
+			break
+		}
+	}
+	if run == nil || run.CredentialID != credentialID || run.AccessRevokedAt != nil {
+		return Event{}, ErrNotFound
+	}
+	if strings.TrimSpace(message) == "" || (kind == "tool.action" && tool == "") || (kind == "artifact.produced" && artifact == "") || (kind == "branch.updated" && (branch != run.WorkingBranch || commitID == "")) {
+		return Event{}, ErrInvalid
+	}
+	eventID, err := newID()
+	if err != nil {
+		return Event{}, err
+	}
+	now := s.now().Truncate(time.Microsecond)
+	event := Event{ID: eventID, SessionID: sessionID, Kind: kind, ActorID: run.InitiatorID, InitiatorID: run.InitiatorID, AgentID: run.AgentID, RevisionID: run.SourceCommitID, State: state, RunID: run.ID, Message: message, Tool: tool, Artifact: artifact, Branch: branch, CommitID: commitID, CreatedAt: now}
+	rec.Events = append(rec.Events, event)
+	rec.Session.UpdatedAt = now
+	committed, err := s.write(filepath.Join(s.root, repositoryID, pullRequestID), rec)
+	if err != nil {
+		if committed {
+			return event, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+		}
+		return Event{}, err
+	}
+	return event, nil
 }
 
 func (s *Store) ListRuns(repositoryID, pullRequestID, sessionID string) ([]Run, error) {
@@ -313,7 +379,7 @@ func (s *Store) read(repositoryID, pullRequestID, sessionID string) (record, err
 		return record{}, errors.New("invalid durable change session record")
 	}
 	for _, event := range rec.Events {
-		if !validID(event.ID) || event.SessionID != sessionID || !validID(event.ActorID) || event.Kind == "" || event.State == "" || (event.Kind == "run.launched" && !validID(event.RunID)) {
+		if !validID(event.ID) || event.SessionID != sessionID || !validID(event.ActorID) || event.Kind == "" || event.State == "" || (event.Kind == "run.launched" && !validID(event.RunID)) || (workEventKinds[event.Kind] && (!validID(event.RunID) || !validID(event.InitiatorID) || !validID(event.AgentID) || !validObjectID(event.RevisionID))) {
 			return record{}, errors.New("invalid durable change session event")
 		}
 	}
@@ -323,8 +389,14 @@ func (s *Store) read(repositoryID, pullRequestID, sessionID string) (record, err
 			runEvents[event.RunID]++
 		}
 	}
-	for _, run := range rec.Runs {
-		if !validID(run.ID) || run.SessionID != sessionID || !validID(run.InitiatorID) || !validObjectID(run.SourceCommitID) || run.SourceCommitID != rec.Session.SourceCommitID || run.Instructions == "" || run.WorkingBranch == "" || !validID(run.CredentialID) || run.State != Launched || run.CredentialExpiresAt.IsZero() || runEvents[run.ID] != 1 {
+	for i := range rec.Runs {
+		run := &rec.Runs[i]
+		// Runs created before agent identities were introduced use their unique
+		// credential identity as a stable compatibility identity.
+		if run.AgentID == "" && validID(run.CredentialID) {
+			run.AgentID = run.CredentialID
+		}
+		if !validID(run.ID) || run.SessionID != sessionID || !validID(run.InitiatorID) || !validID(run.AgentID) || !validObjectID(run.SourceCommitID) || run.SourceCommitID != rec.Session.SourceCommitID || run.Instructions == "" || run.WorkingBranch == "" || !validID(run.CredentialID) || run.State != Launched || run.CredentialExpiresAt.IsZero() || runEvents[run.ID] != 1 {
 			return record{}, errors.New("invalid durable agent run")
 		}
 	}

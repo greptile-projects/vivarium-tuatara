@@ -114,6 +114,38 @@ func (r *Repository) UpdateReferenceIfTarget(reference Reference, expected strin
 	return publishReference(lock, parent, base, contents)
 }
 
+// WithReferenceTarget holds Git's standard per-reference lock while confirming
+// a direct target and running fn. Stock Git and package reference writers must
+// acquire the same lock, so fn can durably record an observation that must
+// remain current through publication.
+func (r *Repository) WithReferenceTarget(name, expected string, fn func() error) error {
+	if !validObjectID(ObjectID(expected)) || fn == nil {
+		return fmt.Errorf("reference %q: %w", name, ErrInvalidReference)
+	}
+	parent, base, err := r.openReferenceParent(name, false)
+	if errors.Is(err, syscall.ENOENT) {
+		return fmt.Errorf("reference %q: %w", name, ErrReferenceNotFound)
+	}
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	lock, err := lockReference(parent, base)
+	if err != nil {
+		return err
+	}
+	defer unlinkAt(parent, base+".lock")
+	defer lock.Close()
+	reference, err := r.ReadReference(name)
+	if err != nil {
+		return err
+	}
+	if reference.Symbolic || reference.Target != expected {
+		return fmt.Errorf("reference %q changed: %w", name, ErrReferenceExists)
+	}
+	return fn()
+}
+
 // ReadReference reads and validates one reference. Loose references take
 // precedence over packed references, matching stock Git.
 func (r *Repository) ReadReference(name string) (Reference, error) {

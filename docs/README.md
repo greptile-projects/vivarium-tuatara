@@ -384,9 +384,12 @@ request revision, selects existing repository paths as context, and names a
 working branch. Launch returns a one-time, expiring Git credential bound to
 that repository and branch; its durable run record retains only the credential
 identity and expiry. The session timeline attributes the launch, and any
-current participant can revoke access without deleting the mandate. This makes
-authorization and reconstruction public collaboration state while leaving
-worker execution and progress for later session events.
+current participant can revoke access without deleting the mandate. Each run
+has a generated durable agent identity. While its credential remains active,
+the agent can append status, messages, tool actions, artifacts, failures, and
+verified source-branch updates; the store stamps every event with the
+authorizing user, agent, run, and pinned revision. Collaborators see that
+ordered record refresh in the same session page without needing worker logs.
 
 ## Git HTTP transport
 
