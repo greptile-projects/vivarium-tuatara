@@ -253,6 +253,14 @@ The conflict calculation uses the bare repository only as an object source and
 redirects generated merge objects to a disposable directory, preserving the
 storage package as the sole durable write boundary.
 
+An owner applies an accepted request through its merge endpoint. The operation
+rechecks readiness, materializes a two-parent merge commit through the storage
+boundary, and compare-and-swaps the live target reference. The durable pull
+request records the merge commit, maintainer, and time; its commit message
+retains stable request, proposal, author, and merger identifiers. Linked open
+proposals close after the contribution lands, while proposal and pull-request
+discussion remains intact as collaboration history.
+
 ## Git HTTP transport
 
 The API exposes a visibility-aware smart HTTP remote at

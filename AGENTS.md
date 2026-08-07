@@ -185,6 +185,12 @@ whenever dependencies change or the web job fails before it starts.
   `mergeable` from owner-only, caller-specific `can_merge`. Conflict
   calculation redirects generated Git objects to temporary storage and must
   not mutate repository objects or references.
+  Owners apply ready pull requests with `POST
+  /repositories/{id}/pulls/{pull_id}/merge`. Readiness is revalidated, the
+  target advances with compare-and-swap protection, and a two-parent commit
+  records stable pull-request, proposal, author, and merger attribution. The
+  request becomes `merged` with its commit, actor, and timestamp; a linked open
+  proposal closes without losing its discussion.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

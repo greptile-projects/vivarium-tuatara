@@ -429,6 +429,37 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 		}
 		writeJSON(w, http.StatusOK, report)
 	})
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/merge", func(w http.ResponseWriter, r *http.Request) {
+		actor, owner, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if !owner {
+			writeAPIError(w, http.StatusNotFound, "repository_not_found", "repository not found")
+			return
+		}
+		merged, err := store.Merge(r.PathValue("id"), r.PathValue("pull_id"), actor.UserID)
+		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
+			writeUncertainMutation(w, merged)
+			return
+		}
+		if writePullRequestError(w, err) {
+			return
+		}
+		if merged.ProposalID != nil && proposalStore != nil {
+			proposal, proposalErr := proposalStore.Get(r.PathValue("id"), *merged.ProposalID)
+			if proposalErr == nil && proposal.Status == proposals.Open {
+				closed := proposals.Closed
+				_, proposalErr = proposalStore.Update(r.PathValue("id"), proposal.ID, proposals.Patch{Status: &closed})
+			}
+			if proposalErr != nil && !errors.Is(proposalErr, proposals.ErrDurabilityUncertain) {
+				log.Printf("close linked proposal after merge: %v", proposalErr)
+				writeAPIError(w, http.StatusInternalServerError, "internal_error", "linked proposal closure unavailable; retry merge")
+				return
+			}
+		}
+		writeJSON(w, http.StatusOK, merged)
+	})
 	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/comments", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
 			return
@@ -532,6 +563,8 @@ func writePullRequestError(w http.ResponseWriter, err error) bool {
 		writeAPIError(w, 400, "invalid_pull_request", "pull request content or branches are invalid")
 	case errors.Is(err, pullrequests.ErrBranchNotFound):
 		writeAPIError(w, 400, "branch_not_found", "source or target branch does not identify a commit")
+	case errors.Is(err, pullrequests.ErrNotReady):
+		writeAPIError(w, 409, "pull_request_not_ready", "pull request is not ready to merge")
 	default:
 		log.Printf("pull request storage: %v", err)
 		writeAPIError(w, 500, "internal_error", "pull request storage unavailable")

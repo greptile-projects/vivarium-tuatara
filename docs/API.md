@@ -201,3 +201,15 @@ repository owner; contributors can therefore see that a request is otherwise
 ready without being told they may update the maintained branch. Conflict
 detection redirects Git's calculated merge objects into temporary storage, so
 the endpoint never changes repository objects or references.
+
+`POST /repositories/{id}/pulls/{pull_id}/merge` applies a ready request and is
+restricted to the repository owner with `repositories:write`. A request that
+is no longer ready returns `409 pull_request_not_ready`; merge revalidates live
+branches and reviews and advances the target only if its tip still matches the
+calculation. Success creates a two-parent merge commit, changes the request to
+`status: "merged"`, and adds `merged_at`, `merged_by`, and `merge_commit_id`.
+The commit retains the request title and body plus stable `Pull-Request`,
+optional `Proposal`, `Authored-by`, and `Merged-by` trailers. A linked open
+proposal is closed while its existing discussion remains readable. Target
+advancement uses compare-and-swap protection so a concurrent push is never
+overwritten.

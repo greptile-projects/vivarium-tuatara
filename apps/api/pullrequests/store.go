@@ -24,9 +24,13 @@ var (
 	ErrInvalid             = errors.New("invalid pull request")
 	ErrBranchNotFound      = errors.New("pull request branch not found")
 	ErrDurabilityUncertain = errors.New("pull request is visible but durability is uncertain")
+	ErrNotReady            = errors.New("pull request is not ready to merge")
 )
 
-const Open = "open"
+const (
+	Open   = "open"
+	Merged = "merged"
+)
 
 const (
 	Approved         = "approved"
@@ -35,19 +39,22 @@ const (
 )
 
 type PullRequest struct {
-	ID             string    `json:"id"`
-	RepositoryID   string    `json:"repository_id"`
-	AuthorID       string    `json:"author_id"`
-	Title          string    `json:"title"`
-	Body           string    `json:"body"`
-	SourceBranch   string    `json:"source_branch"`
-	TargetBranch   string    `json:"target_branch"`
-	SourceCommitID string    `json:"source_commit_id"`
-	TargetCommitID string    `json:"target_commit_id"`
-	ProposalID     *string   `json:"proposal_id"`
-	Status         string    `json:"status"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID             string     `json:"id"`
+	RepositoryID   string     `json:"repository_id"`
+	AuthorID       string     `json:"author_id"`
+	Title          string     `json:"title"`
+	Body           string     `json:"body"`
+	SourceBranch   string     `json:"source_branch"`
+	TargetBranch   string     `json:"target_branch"`
+	SourceCommitID string     `json:"source_commit_id"`
+	TargetCommitID string     `json:"target_commit_id"`
+	ProposalID     *string    `json:"proposal_id"`
+	Status         string     `json:"status"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	MergedAt       *time.Time `json:"merged_at"`
+	MergedBy       *string    `json:"merged_by"`
+	MergeCommitID  *string    `json:"merge_commit_id"`
 }
 
 type Commit struct {
@@ -662,6 +669,136 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 	return report, nil
 }
 
+// Merge revalidates readiness while holding the cross-process mutation lock,
+// writes an attributable two-parent commit, advances the target with compare-
+// and-swap semantics, and closes the pull request.
+func (s *Store) Merge(repositoryID, pullRequestID, mergerID string) (PullRequest, error) {
+	if !validID(mergerID) {
+		return PullRequest{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return PullRequest{}, err
+	}
+	defer unlock()
+
+	p, err := s.Get(repositoryID, pullRequestID)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	// A merge retry is idempotent. This also lets the application complete a
+	// linked-proposal close after an earlier cross-store failure.
+	if p.Status == Merged {
+		return p, nil
+	}
+	report, err := s.Readiness(repositoryID, pullRequestID, true)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	if !report.CanMerge || report.Source.CurrentCommitID == nil || report.Target.CurrentCommitID == nil {
+		return PullRequest{}, ErrNotReady
+	}
+	repository, err := s.git.Open(repositoryID)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	tree, err := mergeTree(repository, *report.Target.CurrentCommitID, *report.Source.CurrentCommitID)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	now := s.now().Truncate(time.Microsecond)
+	stamp := fmt.Sprintf("%d +0000", now.Unix())
+	message := p.Title + "\n"
+	if p.Body != "" {
+		message += "\n" + p.Body + "\n"
+	}
+	message += fmt.Sprintf("\nPull-Request: %s\nAuthored-by: %s\nMerged-by: %s\n", p.ID, p.AuthorID, mergerID)
+	if p.ProposalID != nil {
+		message += "Proposal: " + *p.ProposalID + "\n"
+	}
+	content := fmt.Sprintf("tree %s\nparent %s\nparent %s\nauthor Vivarium Author <%s@users.vivarium> %s\ncommitter Vivarium Maintainer <%s@users.vivarium> %s\n\n%s", tree, *report.Target.CurrentCommitID, *report.Source.CurrentCommitID, p.AuthorID, stamp, mergerID, stamp, message)
+	commit, err := repository.WriteObject(storage.CommitObject, []byte(content))
+	if err != nil {
+		return PullRequest{}, err
+	}
+	if err := repository.UpdateReferenceIfTarget(storage.Reference{Name: "refs/heads/" + p.TargetBranch, Target: string(commit)}, *report.Target.CurrentCommitID); err != nil {
+		return PullRequest{}, ErrNotReady
+	}
+	mergedBy, commitID := mergerID, string(commit)
+	p.Status, p.UpdatedAt, p.MergedAt, p.MergedBy, p.MergeCommitID = Merged, now, &now, &mergedBy, &commitID
+	if committed, err := s.write(p); err != nil {
+		if committed {
+			return p, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+		}
+		// Publication did not occur, so restore the expected target if no
+		// concurrent writer has moved it since our compare-and-swap.
+		if rollbackErr := repository.UpdateReferenceIfTarget(storage.Reference{Name: "refs/heads/" + p.TargetBranch, Target: *report.Target.CurrentCommitID}, string(commit)); rollbackErr != nil {
+			return PullRequest{}, fmt.Errorf("publish merge metadata: %v; restore target: %w", err, rollbackErr)
+		}
+		return PullRequest{}, err
+	}
+	return p, nil
+}
+
+func mergeTree(repository *storage.Repository, target, source string) (storage.ObjectID, error) {
+	temporary, err := os.MkdirTemp("", "vivarium-merge-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(temporary)
+	objects := filepath.Join(temporary, "objects")
+	if err := os.Mkdir(objects, 0o700); err != nil {
+		return "", err
+	}
+	env := append(os.Environ(), "GIT_OBJECT_DIRECTORY="+objects, "GIT_ALTERNATE_OBJECT_DIRECTORIES="+filepath.Join(repository.Path(), "objects"))
+	command := exec.Command("git", "-C", repository.Path(), "merge-tree", "--write-tree", target, source)
+	command.Env = env
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("calculate merge tree: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	id := storage.ObjectID(strings.TrimSpace(string(output)))
+	seen := map[storage.ObjectID]bool{}
+	var importTree func(storage.ObjectID) error
+	importTree = func(tree storage.ObjectID) error {
+		if seen[tree] {
+			return nil
+		}
+		seen[tree] = true
+		cat := exec.Command("git", "-C", repository.Path(), "cat-file", "tree", string(tree))
+		cat.Env = env
+		content, err := cat.Output()
+		if err != nil {
+			return err
+		}
+		written, err := repository.WriteObject(storage.TreeObject, content)
+		if err != nil || written != tree {
+			return fmt.Errorf("import merge tree %s: %v", tree, err)
+		}
+		list := exec.Command("git", "-C", repository.Path(), "ls-tree", "-z", string(tree))
+		list.Env = env
+		listed, err := list.Output()
+		if err != nil {
+			return err
+		}
+		for _, record := range strings.Split(string(listed), "\x00") {
+			fields := strings.Fields(record)
+			if len(fields) >= 3 && fields[1] == "tree" {
+				if err := importTree(storage.ObjectID(fields[2])); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := importTree(id); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
 func liveBranchState(repository *storage.Repository, branch, snapshot string) (*string, string, error) {
 	current, err := branchCommit(repository, branch)
 	if errors.Is(err, ErrBranchNotFound) {
@@ -884,7 +1021,11 @@ func (s *Store) read(repositoryID, id string) (PullRequest, error) {
 		return PullRequest{}, err
 	}
 	var p PullRequest
-	if json.Unmarshal(data, &p) != nil || p.ID != id || !validID(p.RepositoryID) || !validID(p.AuthorID) || p.Status != Open || !validCommitID(p.SourceCommitID) || !validCommitID(p.TargetCommitID) || p.SourceBranch == p.TargetBranch || p.SourceBranch == "" || p.TargetBranch == "" || strings.HasPrefix(p.SourceBranch, "refs/") || strings.HasPrefix(p.TargetBranch, "refs/") || p.CreatedAt.IsZero() || p.UpdatedAt.IsZero() || (p.ProposalID != nil && !validID(*p.ProposalID)) {
+	if json.Unmarshal(data, &p) != nil {
+		return PullRequest{}, fmt.Errorf("corrupt pull request %s", id)
+	}
+	validOutcome := (p.Status == Open && p.MergedAt == nil && p.MergedBy == nil && p.MergeCommitID == nil) || (p.Status == Merged && p.MergedAt != nil && p.MergedBy != nil && validID(*p.MergedBy) && p.MergeCommitID != nil && validCommitID(*p.MergeCommitID))
+	if p.ID != id || !validID(p.RepositoryID) || !validID(p.AuthorID) || !validOutcome || !validCommitID(p.SourceCommitID) || !validCommitID(p.TargetCommitID) || p.SourceBranch == p.TargetBranch || p.SourceBranch == "" || p.TargetBranch == "" || strings.HasPrefix(p.SourceBranch, "refs/") || strings.HasPrefix(p.TargetBranch, "refs/") || p.CreatedAt.IsZero() || p.UpdatedAt.IsZero() || (p.ProposalID != nil && !validID(*p.ProposalID)) {
 		return PullRequest{}, fmt.Errorf("corrupt pull request %s", id)
 	}
 	if _, _, err := validatePurpose(p.Title, p.Body); err != nil {
