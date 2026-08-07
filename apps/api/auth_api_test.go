@@ -67,6 +67,25 @@ func TestAuthenticatedCredentialLifecycle(t *testing.T) {
 	}
 }
 
+func TestAccountCreationRollsBackWhenCredentialBootstrapFails(t *testing.T) {
+	repositories, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	authRoot := t.TempDir()
+	credentials, _ := auth.New(authRoot)
+	if err := os.RemoveAll(authRoot); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(newAuthenticatedAppHandler(repositories, identities, credentials))
+	defer server.Close()
+
+	requestStatus(t, http.MethodPost, server.URL+"/users", `{"handle":"retryable","display_name":"Retryable"}`, http.StatusInternalServerError)
+	if err := os.Mkdir(authRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	response := requestStatus(t, http.MethodPost, server.URL+"/users", `{"handle":"retryable","display_name":"Retryable"}`, http.StatusCreated)
+	response.Body.Close()
+}
+
 func TestStockGitAuthenticatesWithScopedCredential(t *testing.T) {
 	repositories, _ := storage.New(t.TempDir())
 	repo, err := repositories.Create("private")

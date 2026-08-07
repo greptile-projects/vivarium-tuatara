@@ -90,6 +90,36 @@ func (s *Store) Get(id string) (User, error) {
 	return s.read(id)
 }
 
+// Delete removes an identity durably. It is used to roll back account
+// bootstrap when the initial credential cannot be issued; established account
+// deletion remains outside the public API until repository ownership exists.
+func (s *Store) Delete(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if !validID(id) {
+		return ErrNotFound
+	}
+	if err := os.Remove(filepath.Join(s.root, id+".json")); errors.Is(err, os.ErrNotExist) {
+		return ErrNotFound
+	} else if err != nil {
+		return fmt.Errorf("remove user record: %w", err)
+	}
+	dir, err := os.Open(s.root)
+	if err != nil {
+		return fmt.Errorf("open user storage: %w", err)
+	}
+	defer dir.Close()
+	if err := dir.Sync(); err != nil {
+		return fmt.Errorf("sync user storage: %w", err)
+	}
+	return nil
+}
+
 // Update replaces the editable profile fields while preserving stable identity.
 func (s *Store) Update(id, handle, displayName string) (User, error) {
 	s.mu.Lock()

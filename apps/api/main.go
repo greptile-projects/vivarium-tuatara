@@ -170,6 +170,9 @@ func registerUserRoutes(mux *http.ServeMux, store *users.Store, authStore *auth.
 		}
 		issued, err := authStore.Issue(user.ID, auth.Session, "web session", []string{"credentials:write", "profile:write"}, 24*time.Hour)
 		if err != nil {
+			if rollbackErr := store.Delete(user.ID); rollbackErr != nil {
+				log.Printf("roll back user %s after credential bootstrap failure: %v", user.ID, rollbackErr)
+			}
 			writeAPIError(w, http.StatusInternalServerError, "internal_error", "credential storage unavailable")
 			return
 		}
@@ -266,7 +269,10 @@ func registerAuthRoutes(mux *http.ServeMux, store *auth.Store) {
 		if !ok {
 			return
 		}
-		_, _ = store.Revoke(actor.UserID, actor.ID)
+		if _, err := store.Revoke(actor.UserID, actor.ID); err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "internal_error", "credential storage unavailable")
+			return
+		}
 		http.SetCookie(w, &http.Cookie{Name: "vivarium_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 		w.WriteHeader(http.StatusNoContent)
 	})

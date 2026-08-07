@@ -154,3 +154,28 @@ func TestHandlesAreUniqueAndProfilesAreValidated(t *testing.T) {
 		}
 	}
 }
+
+func TestDeleteDurablyReleasesHandle(t *testing.T) {
+	root := t.TempDir()
+	store, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := store.Create("retryable", "First Attempt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete(user.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Get(user.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get deleted user error = %v", err)
+	}
+	reopened, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.Create("retryable", "Second Attempt"); err != nil {
+		t.Fatalf("reuse deleted handle: %v", err)
+	}
+}

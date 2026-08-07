@@ -39,6 +39,11 @@ that response. It also sets the secret as a `Secure`, `HttpOnly`, `SameSite=Lax`
 collaborators can resolve attribution, while `PATCH /users/{id}` requires that
 user's authenticated `profile:write` scope.
 
+User creation and its initial session are one application-level bootstrap: if
+credential publication fails, the API durably removes the new identity before
+returning an error so the same handle can be retried. Likewise, logout returns
+success only after the session revocation has been durably published.
+
 ## Authentication
 
 Credentials are typed capabilities with an owner, human-readable name, exact

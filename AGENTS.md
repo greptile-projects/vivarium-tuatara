@@ -112,6 +112,9 @@ whenever dependencies change or the web job fails before it starts.
   its opaque token as the HTTP Basic password. Git transport requires
   `git:read` for upload-pack and `git:write` for receive-pack. Maximum lifetimes
   are 24 hours for sessions, 90 days for API tokens, and 30 days for Git tokens.
+  Account bootstrap rolls its new user record back durably if the initial
+  session cannot be persisted; logout only reports success after revocation is
+  durable.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 
