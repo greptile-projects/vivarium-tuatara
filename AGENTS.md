@@ -227,6 +227,16 @@ whenever dependencies change or the web job fails before it starts.
   revision rather than silently following live branches. Authors adopt a
   revised source-branch tip through the public synchronize endpoint; existing
   reviews remain tied to their evaluated commit and require a fresh decision.
+  Candidate commits opt into automatic verification through versioned
+  `.vivarium/checks.json` definitions. Pull creation and source synchronization
+  create durable exact-commit runs beneath `$CHECK_RUN_STORAGE_ROOT` (default
+  `check-runs`); commands execute in capability-free, network-disabled OCI
+  containers using preinstalled images, disposable exported snapshots, and no
+  Git credential. Snapshots are read-only; `$VIVARIUM_OUTPUT` is a bounded
+  writable tmpfs. Startup, a periodic scheduler, and later same-commit triggers
+  retry execution or container cleanup under a cross-process execution lock;
+  cleanup must be confirmed before a run becomes terminal. The visibility-aware run
+  collection is `GET /repositories/{id}/pulls/{pull_id}/checks`.
   Immutable pull request comments are attributable by stable user ID,
   readable under repository visibility rules, and writable by current owners
   and contributors; comment publication uses the uncertain-durability contract.

@@ -169,6 +169,44 @@ Proposal creates, edits, closes, and comments use the shared uncertain-
 durability response when their new state is visible but crash persistence
 cannot be confirmed, preserving attribution IDs without overstating storage.
 
+## Automated checks
+
+A repository opts into automatic pull-request verification by committing
+`.vivarium/checks.json` on the candidate branch. The file has `version: 1` and
+a non-empty `checks` array (at most 20). Each check defines a unique `name`, a
+preinstalled OCI `image`, a shell `command`, and optional `working_directory`, `environment`, and
+`timeout_seconds` (default 600, maximum 3600):
+
+```json
+{"version":1,"checks":[{"name":"api","image":"vivarium/go:1.26","command":"go test ./...","working_directory":"apps/api","environment":{"GOFLAGS":"-mod=readonly"},"timeout_seconds":900}]}
+```
+
+Opening a pull request or explicitly synchronizing it to a new source revision
+loads that file from the exact recorded source commit and creates one durable
+run per definition. Execution uses an exported copy of that commit in a new
+OCI container with no network, capabilities, host root, Git repository, or
+credential; its root and source snapshot are read-only and CPU, memory, process
+count, and lifetime are bounded. Commands may write at most 256 MiB to the
+size-limited directory named by `$VIVARIUM_OUTPUT`; `$HOME` is a separate 64
+MiB tmpfs. Images are never pulled by a check and must already exist on the
+runner. The complete container must be confirmed removed before a run becomes
+terminal; cleanup failures remain durably `cleanup_pending` for retry.
+`PATH`, `HOME`, and `GIT_*` cannot be overridden. Runs progress
+through `queued`, `running`, and `succeeded` or `failed`; invalid configuration
+is retained as a failed configuration run. Repeating synchronization without a
+new commit does not duplicate automatic runs. At API startup, durable `queued`
+and interrupted `running` or `cleanup_pending` records are retried from the same
+exact commit under a cross-process execution lock. Recovery repeats every 30
+seconds, and a later same-commit collaboration trigger also relaunches existing
+nonterminal work after a transient repository outage.
+
+`GET /repositories/{id}/pulls/{pull_id}/checks` returns creation-ordered
+`check_runs`. Each record contains its stable ID, repository and pull-request
+IDs, exact `commit_id`, snapshotted definition, lifecycle state, timestamps,
+and terminal exit/failure information. Reads use the pull request's visibility
+policy. Records live beneath `CHECK_RUN_STORAGE_ROOT`, defaulting to
+`check-runs`.
+
 ## Pull requests
 
 Repository participants open a pull request with `POST

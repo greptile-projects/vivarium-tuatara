@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
@@ -26,7 +28,8 @@ func TestContributorOpensPullRequestWithExactBranchState(t *testing.T) {
 	proposalStore, _ := proposals.New(proposalRoot)
 	pullRequestRoot := t.TempDir()
 	pullRequestStore, _ := pullrequests.New(pullRequestRoot, gitStore)
-	server := httptest.NewServer(newPlatformHandler(gitStore, identities, credentials, catalog, proposalStore, pullRequestStore, nil))
+	checkRunStore, _ := checkruns.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, proposalStore, pullRequestStore, nil, nil, checkRunStore))
 	defer server.Close()
 
 	owner := createTestAccount(t, server.URL, "pull-owner")
@@ -47,8 +50,10 @@ func TestContributorOpensPullRequestWithExactBranchState(t *testing.T) {
 	oldReadme, _ := gitRepository.WriteObject(storage.BlobObject, []byte("old\n"))
 	newReadme, _ := gitRepository.WriteObject(storage.BlobObject, []byte("new\n"))
 	added, _ := gitRepository.WriteObject(storage.BlobObject, []byte("added\n"))
+	checkConfig, _ := gitRepository.WriteObject(storage.BlobObject, []byte(`{"version":1,"checks":[{"name":"candidate snapshot","image":"alpine:3.22","command":"test \"$(cat README.md)\" = new"}]}`))
+	checkTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "checks.json", id: checkConfig})
 	baseTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "README.md", id: oldReadme})
-	headTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "README.md", id: newReadme}, testTreeEntry{mode: "100644", name: "feature.go", id: added})
+	headTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "40000", name: ".vivarium", id: checkTree}, testTreeEntry{mode: "100644", name: "README.md", id: newReadme}, testTreeEntry{mode: "100644", name: "feature.go", id: added})
 	base := writeTestCommit(t, gitRepository, baseTree, nil, 1700000000, "base")
 	head := writeTestCommit(t, gitRepository, headTree, []storage.ObjectID{base}, 1700000001, "candidate")
 	if err := gitRepository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)}); err != nil {
@@ -76,6 +81,25 @@ func TestContributorOpensPullRequestWithExactBranchState(t *testing.T) {
 	}
 	if got := created.Header.Get("Location"); got != "/repositories/"+repository.ID+"/pulls/"+pullRequest.ID {
 		t.Fatalf("Location = %q", got)
+	}
+	checksURL := server.URL + "/repositories/" + repository.ID + "/pulls/" + pullRequest.ID + "/checks"
+	var checkSet struct {
+		CheckRuns []checkruns.Run `json:"check_runs"`
+	}
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+		checksResponse := authenticatedRequest(t, http.MethodGet, checksURL, "", owner.Credential.Token, http.StatusOK)
+		checkSet.CheckRuns = nil
+		if err := json.NewDecoder(checksResponse.Body).Decode(&checkSet); err != nil {
+			t.Fatal(err)
+		}
+		checksResponse.Body.Close()
+		if len(checkSet.CheckRuns) == 1 && checkSet.CheckRuns[0].CompletedAt != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(checkSet.CheckRuns) != 1 || checkSet.CheckRuns[0].CommitID != string(head) || checkSet.CheckRuns[0].State != "succeeded" {
+		t.Fatalf("check runs = %#v", checkSet.CheckRuns)
 	}
 
 	advanced := writeTestCommit(t, gitRepository, headTree, []storage.ObjectID{head}, 1700000002, "more work")
@@ -110,7 +134,7 @@ func TestContributorOpensPullRequestWithExactBranchState(t *testing.T) {
 		t.Fatal(err)
 	}
 	filesResponse.Body.Close()
-	if len(fileSet.Files) != 2 || fileSet.Files[0].Path != "README.md" || fileSet.Files[0].Status != "modified" || fileSet.Files[1].Path != "feature.go" || fileSet.Files[1].Status != "added" {
+	if len(fileSet.Files) != 3 || fileSet.Files[0].Path != ".vivarium/checks.json" || fileSet.Files[1].Path != "README.md" || fileSet.Files[1].Status != "modified" || fileSet.Files[2].Path != "feature.go" || fileSet.Files[2].Status != "added" {
 		t.Fatalf("files = %#v", fileSet.Files)
 	}
 	commentsURL := server.URL + "/repositories/" + repository.ID + "/pulls/" + pullRequest.ID + "/comments"
