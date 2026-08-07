@@ -145,7 +145,7 @@ export type ChangeSession = {
 export type ChangeSessionEvent = {
   id: string;
   session_id: string;
-  kind: "session.opened" | "run.launched" | "run.status" | "agent.message" | "agent.question" | "tool.action" | "artifact.produced" | "run.failed" | "branch.updated" | "run.guidance" | "question.answered" | "run.paused" | "run.resumed" | "run.canceled";
+  kind: "session.opened" | "run.launched" | "run.status" | "agent.message" | "agent.question" | "tool.action" | "artifact.produced" | "run.failed" | "branch.updated" | "run.guidance" | "question.answered" | "run.paused" | "run.resumed" | "run.canceled" | "run.completed";
   actor_id: string;
   state: string;
   run_id?: string;
@@ -171,7 +171,16 @@ export type AgentRun = {
   credential_id: string;
   credential_expires_at: string;
   access_revoked_at?: string;
-  state: "launched" | "paused" | "canceled";
+  state: "launched" | "paused" | "canceled" | "completed";
+  outcome?: {
+    summary: string;
+    commit_id: string;
+    commits: string[];
+    changed_files: { path: string; status: "added" | "modified" | "deleted" }[];
+    checks: { name: string; status: "passed" | "failed" | "skipped"; details?: string }[];
+    unresolved_concerns: string[];
+    completed_at: string;
+  };
   created_at: string;
   updated_at: string;
 };

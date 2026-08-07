@@ -398,6 +398,23 @@ canceling permanently closes the run and revokes its branch-bound credential.
 Every intervention retains its human actor, generated agent, run, and revision
 attribution in the common timeline.
 
+Completed work crosses into the ordinary review flow through a credential-
+bound publication. After the agent commits and pushes its authorized branch,
+the API verifies the live tip under the Git reference lock, derives the exact
+descendant commits and changed paths from repository objects, and durably
+attaches the agent's summary, checks, and unresolved concerns to the run. The
+same operation revokes further agent branch access and advances the pull request's recorded source revision, so prior
+reviews become stale and existing readiness rules govern the result. The
+session renders commit and file links plus the structured handoff beside its
+attributed `run.completed` timeline event; collaborators review the resulting
+revision through the same pull request surface used for human work.
+Receive-pack independently consults durable run state for bounded credentials,
+closing branch access even if credential revocation storage fails. The handoff
+is persisted before pull-request synchronization so invalid evidence cannot
+move review state and a failed synchronization remains safely retryable. The
+pull-request lock checks open/merge-intent eligibility before terminalizing the
+run and excludes a concurrent merge from entering between those operations.
+
 ## Git HTTP transport
 
 The API exposes a visibility-aware smart HTTP remote at

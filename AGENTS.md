@@ -287,6 +287,19 @@ whenever dependencies change or the web job fails before it starts.
   paused runs cannot append progress, and cancellation is terminal and revokes
   their bounded Git credential. Every intervention shares the attributable
   session timeline.
+  Active agents complete work only after pushing new descendant commits to the
+  bounded source branch. Completion verifies the live tip under its reference
+  lock, derives exact commits and changed files, stores structured summary,
+  checks, and unresolved concerns, appends `run.completed`, and synchronizes
+  the pull request to that revision while revoking further run access. Existing reviews then become stale and
+  merge readiness applies without agent-specific exceptions.
+  Bounded receive-pack also checks durable run state, independently denying
+  terminal credentials if auth revocation fails. Completion persists before
+  pull synchronization so validation/storage failures cannot move the request;
+  a synchronization failure retains retryable durable completion intent.
+  Pull synchronization checks open status and merge intent under its lock
+  before invoking completion, preventing blocked or concurrent merges from
+  terminalizing a run whose revision cannot enter review.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

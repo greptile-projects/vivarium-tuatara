@@ -177,7 +177,7 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 		registerPullRequestRoutes(mux, repositoryCatalog, proposalStore, pullRequestStore, authStore, activityStore, userStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil && changeSessionStore != nil {
-		registerChangeSessionRoutes(mux, store, repositoryCatalog, pullRequestStore, changeSessionStore, authStore)
+		registerChangeSessionRoutes(mux, store, repositoryCatalog, pullRequestStore, changeSessionStore, authStore, activityStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && activityStore != nil {
 		registerActivityRoutes(mux, repositoryCatalog, activityStore, authStore)
@@ -194,7 +194,12 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 			required = "git:write"
 		}
 		if authStore != nil {
-			if _, _, ok := authorizeGitRepository(w, r, authStore, repositoryCatalog, r.PathValue("remote"), required); !ok {
+			credential, _, ok := authorizeGitRepository(w, r, authStore, repositoryCatalog, r.PathValue("remote"), required)
+			if !ok {
+				return
+			}
+			if service == receivePackService && credential.GitWriteBranch != "" && !activeRunCredential(changeSessionStore, r.PathValue("remote"), credential.ID) {
+				writeAPIError(w, 401, "invalid_credential", "credential is not active")
 				return
 			}
 		}
@@ -233,6 +238,10 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 			}
 			contributor = !owner
 			onlyBranch = credential.GitWriteBranch
+			if onlyBranch != "" && !activeRunCredential(changeSessionStore, r.PathValue("remote"), credential.ID) {
+				writeAPIError(w, 401, "invalid_credential", "credential is not active")
+				return
+			}
 		}
 		repo, ok := openRemoteRepository(w, store, r.PathValue("remote"))
 		if !ok {
@@ -243,6 +252,18 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 		runGitService(w, r, repo, receivePackService, false, contributor, onlyBranch)
 	})
 	return mux
+}
+
+func activeRunCredential(store *changesessions.Store, remote, credentialID string) bool {
+	if store == nil {
+		return false
+	}
+	repositoryID, ok := strings.CutSuffix(remote, ".git")
+	if !ok {
+		return false
+	}
+	allowed, err := store.AllowsGitWrite(repositoryID, credentialID)
+	return err == nil && allowed
 }
 
 type userInput struct {
@@ -660,7 +681,11 @@ func writePullRequestError(w http.ResponseWriter, err error) bool {
 	return true
 }
 
-func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoriesStore *repositories.Store, pullRequestStore *pullrequests.Store, store *changesessions.Store, authStore *auth.Store) {
+func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoriesStore *repositories.Store, pullRequestStore *pullrequests.Store, store *changesessions.Store, authStore *auth.Store, activityStores ...*activities.Store) {
+	var activityStore *activities.Store
+	if len(activityStores) > 0 {
+		activityStore = activityStores[0]
+	}
 	loadPull := func(w http.ResponseWriter, r *http.Request) (pullrequests.PullRequest, bool) {
 		pull, err := pullRequestStore.Get(r.PathValue("id"), r.PathValue("pull_id"))
 		if writePullRequestError(w, err) {
@@ -764,6 +789,158 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 		Branch   string `json:"branch"`
 		CommitID string `json:"commit_id"`
 	}
+	type completionInput struct {
+		Summary            string                 `json:"summary"`
+		CommitID           string                 `json:"commit_id"`
+		Checks             []changesessions.Check `json:"checks"`
+		UnresolvedConcerns []string               `json:"unresolved_concerns"`
+	}
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/sessions/{session_id}/runs/{run_id}/completion", func(w http.ResponseWriter, r *http.Request) {
+		credential, ok := authenticateRequest(w, r, authStore, "git:write", false)
+		if !ok {
+			return
+		}
+		if credential.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "agent_run_not_found", "agent run not found")
+			return
+		}
+		var input completionInput
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_run_completion", "run completion is invalid")
+			return
+		}
+		input.Summary, input.CommitID = strings.TrimSpace(input.Summary), strings.TrimSpace(input.CommitID)
+		run, _, err := store.GetRunControl(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("session_id"), r.PathValue("run_id"), credential.ID)
+		if errors.Is(err, changesessions.ErrNotFound) {
+			writeAPIError(w, 404, "agent_run_not_found", "agent run not found")
+			return
+		}
+		if writeChangeSessionError(w, err) {
+			return
+		}
+		pull, ok := loadPull(w, r)
+		if !ok {
+			return
+		}
+		if pull.Status != pullrequests.Open {
+			writeAPIError(w, 409, "pull_request_closed", "completed work requires an open pull request")
+			return
+		}
+		if pull.SourceBranch != run.WorkingBranch || (pull.SourceCommitID != run.SourceCommitID && pull.SourceCommitID != input.CommitID) {
+			writeAPIError(w, 409, "run_revision_conflict", "pull request has advanced beyond this run")
+			return
+		}
+		repository, openErr := gitStore.Open(r.PathValue("id"))
+		if openErr != nil {
+			writeAPIError(w, 500, "internal_error", "repository storage unavailable")
+			return
+		}
+		var completed changesessions.Run
+		var event changesessions.Event
+		synchronized := false
+		complete := func() error {
+			headHistory, historyErr := repository.ListCommitAncestry(storage.ObjectID(input.CommitID))
+			if historyErr != nil {
+				return changesessions.ErrInvalid
+			}
+			baseHistory, baseErr := repository.ListCommitAncestry(storage.ObjectID(run.SourceCommitID))
+			if baseErr != nil {
+				return baseErr
+			}
+			baseSet := map[storage.ObjectID]bool{}
+			for _, commit := range baseHistory {
+				baseSet[commit.ID] = true
+			}
+			containsBase, commits := false, []string{}
+			for _, commit := range headHistory {
+				if commit.ID == storage.ObjectID(run.SourceCommitID) {
+					containsBase = true
+				}
+				if !baseSet[commit.ID] {
+					commits = append(commits, string(commit.ID))
+				}
+			}
+			if !containsBase || len(commits) == 0 {
+				return changesessions.ErrInvalid
+			}
+			changes, changeErr := pullRequestStore.CompareCommits(r.PathValue("id"), run.SourceCommitID, input.CommitID)
+			if changeErr != nil {
+				return changeErr
+			}
+			files := make([]changesessions.ChangedFile, len(changes))
+			for i, change := range changes {
+				files[i] = changesessions.ChangedFile{Path: change.Path, Status: change.Status}
+			}
+			var completionErr error
+			updated, syncErr := pullRequestStore.SynchronizeSourceAfter(r.PathValue("id"), pull.ID, func() error {
+				completed, event, completionErr = store.CompleteRun(r.PathValue("id"), pull.ID, run.SessionID, run.ID, credential.ID, input.Summary, input.CommitID, commits, files, input.Checks, input.UnresolvedConcerns)
+				if errors.Is(completionErr, changesessions.ErrDurabilityUncertain) {
+					return nil
+				}
+				return completionErr
+			})
+			if syncErr != nil && !errors.Is(syncErr, pullrequests.ErrDurabilityUncertain) {
+				return syncErr
+			}
+			if updated.SourceCommitID != input.CommitID {
+				return changesessions.ErrInvalid
+			}
+			synchronized = true
+			if errors.Is(completionErr, changesessions.ErrDurabilityUncertain) {
+				return completionErr
+			}
+			if errors.Is(syncErr, pullrequests.ErrDurabilityUncertain) {
+				return pullrequests.ErrDurabilityUncertain
+			}
+			return nil
+		}
+		err = repository.WithReferenceTarget("refs/heads/"+run.WorkingBranch, input.CommitID, complete)
+		if completed.ID != "" && synchronized {
+			if _, revokeErr := authStore.Revoke(run.InitiatorID, credential.ID); revokeErr != nil && !errors.Is(revokeErr, auth.ErrNotFound) {
+				writeAPIError(w, 500, "internal_error", "work was published but agent access revocation must be retried")
+				return
+			}
+			if revoked, revokeErr := store.RevokeRunAccess(r.PathValue("id"), pull.ID, run.SessionID, run.ID); revokeErr == nil || errors.Is(revokeErr, changesessions.ErrDurabilityUncertain) {
+				completed = revoked
+			} else {
+				writeChangeSessionError(w, revokeErr)
+				return
+			}
+		}
+		response := map[string]any{"run": completed, "event": event, "pull_request": func() pullrequests.PullRequest {
+			updated, _ := pullRequestStore.Get(r.PathValue("id"), pull.ID)
+			return updated
+		}()}
+		if errors.Is(err, storage.ErrReferenceExists) || errors.Is(err, storage.ErrReferenceNotFound) || errors.Is(err, storage.ErrReferenceLocked) {
+			writeAPIError(w, 409, "branch_tip_changed", "completion must identify the published branch tip")
+			return
+		}
+		if errors.Is(err, changesessions.ErrRunPaused) {
+			writeAPIError(w, 409, "agent_run_paused", "resume the run before publishing completion")
+			return
+		}
+		if errors.Is(err, changesessions.ErrRunCanceled) || errors.Is(err, changesessions.ErrRunCompleted) {
+			writeAPIError(w, 409, "agent_run_terminal", "agent run is already terminal")
+			return
+		}
+		if errors.Is(err, changesessions.ErrInvalid) || errors.Is(err, storage.ErrInvalidReference) {
+			writeAPIError(w, 400, "invalid_run_completion", "completion must identify new descendant commits and valid review evidence")
+			return
+		}
+		if errors.Is(err, changesessions.ErrDurabilityUncertain) || errors.Is(err, pullrequests.ErrDurabilityUncertain) {
+			if completed.ID != "" {
+				recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.synchronized", ActorID: run.InitiatorID, RepositoryID: pull.RepositoryID, ResourceType: "pull_request", ResourceID: pull.ID, ResourceTitle: pull.Title})
+			}
+			writeUncertainMutation(w, response)
+			return
+		}
+		if writePullRequestError(w, err) || writeChangeSessionError(w, err) {
+			return
+		}
+		w.Header().Set("Location", strings.TrimSuffix(r.URL.Path, "/completion")+"#outcome")
+		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.synchronized", ActorID: run.InitiatorID, RepositoryID: pull.RepositoryID, ResourceType: "pull_request", ResourceID: pull.ID, ResourceTitle: pull.Title})
+		writeJSON(w, http.StatusCreated, response)
+	})
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/sessions/{session_id}/runs/{run_id}/events", func(w http.ResponseWriter, r *http.Request) {
 		credential, ok := authenticateRequest(w, r, authStore, "git:write", false)
 		if !ok {
@@ -832,6 +1009,10 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 		}
 		if errors.Is(err, changesessions.ErrRunCanceled) {
 			writeAPIError(w, http.StatusConflict, "agent_run_canceled", "agent run is canceled")
+			return
+		}
+		if errors.Is(err, changesessions.ErrRunCompleted) {
+			writeAPIError(w, 409, "agent_run_completed", "agent run is already completed")
 			return
 		}
 		if writeChangeSessionError(w, err) {

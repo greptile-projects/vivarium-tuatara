@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -179,12 +180,57 @@ func TestCollaboratorOpensAndReconnectsToChangeSession(t *testing.T) {
 	remote, _ := url.Parse(reconnectedServer.URL + repository.GitRemote)
 	remote.User = url.UserPassword("git", launched.Credential.Token)
 	workingCopy := t.TempDir()
+	authenticatedRequest(t, http.MethodPost, reconnectedServer.URL+"/repositories/"+repository.ID+"/pulls/"+pull.ID+"/reviews", `{"decision":"approved"}`, owner.Credential.Token, http.StatusOK).Body.Close()
 	gitCommand(t, "", "clone", remote.String(), workingCopy)
 	gitCommand(t, workingCopy, "config", "user.name", "Agent")
 	gitCommand(t, workingCopy, "config", "user.email", "agent@example.com")
 	gitCommand(t, workingCopy, "switch", "-c", "agent-test", "origin/feature")
-	gitCommand(t, workingCopy, "commit", "--allow-empty", "-m", "agent work")
+	if err := os.WriteFile(filepath.Join(workingCopy, "README.md"), []byte("agent context\nreviewable agent work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommand(t, workingCopy, "add", "README.md")
+	gitCommand(t, workingCopy, "commit", "-m", "agent work")
 	gitCommand(t, workingCopy, "push", "origin", "HEAD:refs/heads/feature")
+	agentCommit := strings.TrimSpace(gitCommand(t, workingCopy, "rev-parse", "HEAD"))
+	invalidCompletion := authenticatedRequest(t, http.MethodPost, reconnectBase+"/runs/"+launched.Run.ID+"/completion", `{"summary":"Invalid evidence must not move review state.","commit_id":"`+agentCommit+`","checks":[{"name":"go test ./...","status":"unknown"}]}`, launched.Credential.Token, http.StatusBadRequest)
+	invalidCompletion.Body.Close()
+	unchangedResponse := authenticatedRequest(t, http.MethodGet, reconnectedServer.URL+"/repositories/"+repository.ID+"/pulls/"+pull.ID, "", contributor.Credential.Token, http.StatusOK)
+	var unchanged pullrequests.PullRequest
+	if err := json.NewDecoder(unchangedResponse.Body).Decode(&unchanged); err != nil {
+		t.Fatal(err)
+	}
+	unchangedResponse.Body.Close()
+	if unchanged.SourceCommitID != pull.SourceCommitID {
+		t.Fatalf("invalid completion synchronized pull request to %s", unchanged.SourceCommitID)
+	}
+	completionResponse := authenticatedRequest(t, http.MethodPost, reconnectBase+"/runs/"+launched.Run.ID+"/completion", `{"summary":"Added focused regression coverage and verified the collaboration path.","commit_id":"`+agentCommit+`","checks":[{"name":"go test ./...","status":"passed","details":"All API packages passed."}],"unresolved_concerns":[]}`, launched.Credential.Token, http.StatusCreated)
+	var completion struct {
+		Run         changesessions.Run       `json:"run"`
+		Event       changesessions.Event     `json:"event"`
+		PullRequest pullrequests.PullRequest `json:"pull_request"`
+	}
+	if err := json.NewDecoder(completionResponse.Body).Decode(&completion); err != nil {
+		t.Fatal(err)
+	}
+	completionResponse.Body.Close()
+	if completion.Run.State != changesessions.Completed || completion.Run.Outcome == nil || completion.Run.Outcome.CommitID != agentCommit || len(completion.Run.Outcome.Commits) != 1 || len(completion.Run.Outcome.ChangedFiles) != 1 || completion.Run.Outcome.ChangedFiles[0].Path != "README.md" || completion.Event.Kind != "run.completed" || completion.PullRequest.SourceCommitID != agentCommit {
+		t.Fatalf("completion = %+v", completion)
+	}
+	reviewsResponse := authenticatedRequest(t, http.MethodGet, reconnectedServer.URL+"/repositories/"+repository.ID+"/pulls/"+pull.ID+"/reviews", "", contributor.Credential.Token, http.StatusOK)
+	var reviews struct {
+		Reviews []pullrequests.Review `json:"reviews"`
+	}
+	if err := json.NewDecoder(reviewsResponse.Body).Decode(&reviews); err != nil {
+		t.Fatal(err)
+	}
+	reviewsResponse.Body.Close()
+	if len(reviews.Reviews) != 1 || !reviews.Reviews[0].Stale {
+		t.Fatalf("reviews after agent publication = %+v", reviews.Reviews)
+	}
+	authenticatedRequest(t, http.MethodPost, eventURL, `{"kind":"run.status","state":"working","message":"Too late."}`, launched.Credential.Token, http.StatusUnauthorized).Body.Close()
+	if _, err := credentials.Authenticate(launched.Credential.Token, "git:write"); !errors.Is(err, auth.ErrNotFound) {
+		t.Fatalf("completed run credential error = %v", err)
+	}
 	gitCommandFails(t, workingCopy, "push", "origin", "HEAD:refs/heads/agent/other")
 	ordinary, err := credentials.Issue(contributor.User.ID, auth.Git, "ordinary collaborator", []string{"git:read", "git:write"}, time.Hour)
 	if err != nil {
@@ -214,22 +260,32 @@ func TestCollaboratorOpensAndReconnectsToChangeSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	timeline.Body.Close()
-	if len(eventPage.Events) != 13 || eventPage.Events[1].Kind != "run.launched" || eventPage.Events[2].Kind != "agent.question" || eventPage.Events[12].Kind != "run.failed" || eventPage.Events[1].RunID != launched.Run.ID || eventPage.Events[3].ActorID != owner.User.ID {
+	if len(eventPage.Events) != 14 || eventPage.Events[1].Kind != "run.launched" || eventPage.Events[2].Kind != "agent.question" || eventPage.Events[12].Kind != "run.failed" || eventPage.Events[13].Kind != "run.completed" || eventPage.Events[1].RunID != launched.Run.ID || eventPage.Events[3].ActorID != owner.User.ID {
 		t.Fatalf("events after launch = %+v", eventPage.Events)
 	}
 	authenticatedRequest(t, http.MethodPost, reconnectBase+"/runs", `{"instructions":"Use unknown context.","source_commit_id":"`+pull.SourceCommitID+`","context_paths":["missing.txt"],"working_branch":"agent/invalid"}`, contributor.Credential.Token, http.StatusBadRequest).Body.Close()
+	cancelRunResponse := authenticatedRequest(t, http.MethodPost, reconnectBase+"/runs", `{"instructions":"Inspect the published revision.","source_commit_id":"`+pull.SourceCommitID+`","context_paths":["README.md"],"working_branch":"feature","expires_in":3600}`, contributor.Credential.Token, http.StatusCreated)
+	var cancelRun struct {
+		Run        changesessions.Run    `json:"run"`
+		Credential auth.IssuedCredential `json:"credential"`
+	}
+	if err := json.NewDecoder(cancelRunResponse.Body).Decode(&cancelRun); err != nil {
+		t.Fatal(err)
+	}
+	cancelRunResponse.Body.Close()
+	cancelInterventionURL := reconnectBase + "/runs/" + cancelRun.Run.ID + "/interventions"
 	sessionDirectory := filepath.Join(sessionRoot, repository.ID, pull.ID)
 	if err := os.Chmod(sessionDirectory, 0o500); err != nil {
 		t.Fatal(err)
 	}
-	authenticatedRequest(t, http.MethodPost, interventionURL, `{"kind":"run.canceled","message":"The requested evidence is complete."}`, owner.Credential.Token, http.StatusInternalServerError).Body.Close()
-	if _, err := credentials.Authenticate(launched.Credential.Token, "git:read"); err != nil {
+	authenticatedRequest(t, http.MethodPost, cancelInterventionURL, `{"kind":"run.canceled","message":"The requested evidence is complete."}`, owner.Credential.Token, http.StatusInternalServerError).Body.Close()
+	if _, err := credentials.Authenticate(cancelRun.Credential.Token, "git:read"); err != nil {
 		t.Fatalf("credential revoked before cancellation persisted: %v", err)
 	}
 	if err := os.Chmod(sessionDirectory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	canceledResponse := authenticatedRequest(t, http.MethodPost, interventionURL, `{"kind":"run.canceled","message":"The requested evidence is complete."}`, owner.Credential.Token, http.StatusCreated)
+	canceledResponse := authenticatedRequest(t, http.MethodPost, cancelInterventionURL, `{"kind":"run.canceled","message":"The requested evidence is complete."}`, owner.Credential.Token, http.StatusCreated)
 	var canceled struct {
 		Run changesessions.Run `json:"run"`
 	}
@@ -240,10 +296,10 @@ func TestCollaboratorOpensAndReconnectsToChangeSession(t *testing.T) {
 	if canceled.Run.AccessRevokedAt == nil || canceled.Run.State != changesessions.Canceled {
 		t.Fatalf("canceled run = %+v", canceled.Run)
 	}
-	if _, err := credentials.Authenticate(launched.Credential.Token, "git:read"); !errors.Is(err, auth.ErrNotFound) {
+	if _, err := credentials.Authenticate(cancelRun.Credential.Token, "git:read"); !errors.Is(err, auth.ErrNotFound) {
 		t.Fatalf("revoked credential error = %v", err)
 	}
-	retryCanceled := authenticatedRequest(t, http.MethodPost, interventionURL, `{"kind":"run.canceled","message":"retry after response loss"}`, owner.Credential.Token, http.StatusCreated)
+	retryCanceled := authenticatedRequest(t, http.MethodPost, cancelInterventionURL, `{"kind":"run.canceled","message":"retry after response loss"}`, owner.Credential.Token, http.StatusCreated)
 	retryCanceled.Body.Close()
 	authenticatedRequest(t, http.MethodGet, reconnectBase, "", outsider.Credential.Token, http.StatusNotFound).Body.Close()
 }
