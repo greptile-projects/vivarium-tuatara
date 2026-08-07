@@ -180,6 +180,9 @@ func (s *Store) List(repositoryID, pullRequestID string) ([]Session, error) {
 }
 
 func (s *Store) ListEvents(repositoryID, pullRequestID, sessionID string) ([]Event, error) {
+	if _, err := s.Get(repositoryID, pullRequestID, sessionID); err != nil {
+		return nil, err
+	}
 	rec, err := s.read(repositoryID, pullRequestID, sessionID)
 	if err != nil {
 		return nil, err

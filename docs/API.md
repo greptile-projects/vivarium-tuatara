@@ -312,7 +312,9 @@ Inspecting a session retries synchronization of its containing directory. If
 that reconciliation succeeds, inspection returns `200` and confirms durable
 reconnection; if it still fails, inspection repeats the `202` uncertainty
 response with the stable session body so clients continue warning users and
-withhold reliance on its timeline.
+withhold reliance on its timeline. Direct event collection requests enforce
+the same reconciliation and return that stable uncertain session response
+instead of an ordinary event page until persistence is confirmed.
 
 Session discovery and inspection require current owner or contributor access
 with `repositories:read`, including for public repositories. Durable records
