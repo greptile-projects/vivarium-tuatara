@@ -59,6 +59,46 @@ export type ProposalComment = {
   body: string;
   created_at: string;
 };
+export type PullRequest = {
+  id: string;
+  repository_id: string;
+  author_id: string;
+  title: string;
+  body: string;
+  source_branch: string;
+  target_branch: string;
+  source_commit_id: string;
+  target_commit_id: string;
+  proposal_id: string | null;
+  status: "open" | "merged";
+  created_at: string;
+  updated_at: string;
+  merged_at?: string | null;
+  merged_by?: string | null;
+  merge_commit_id?: string | null;
+};
+export type PullRequestCommit = {
+  id: string;
+  tree_id: string;
+  parent_ids: string[];
+  headers: { name: string; value: string }[];
+  message: string;
+};
+export type FileChange = {
+  path: string;
+  status: "added" | "modified" | "deleted";
+  old_id: string | null;
+  new_id: string | null;
+  old_mode: string | null;
+  new_mode: string | null;
+};
+export type PullRequestComment = {
+  id: string;
+  pull_request_id: string;
+  author_id: string;
+  body: string;
+  created_at: string;
+};
 
 export class APIError extends Error {
   constructor(

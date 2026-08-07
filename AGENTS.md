@@ -71,6 +71,13 @@ whenever dependencies change or the web job fails before it starts.
   actor's repository catalog and provides repository, status, and text filters;
   durable conversations use `/proposals/{repository-id}/{proposal-id}` for
   attributable comments, author edits, and participant closure controls.
+  Pull request discovery at `/pulls` aggregates reviewable work across the
+  authenticated actor's repository catalog and opens candidate branches
+  against distinct targets with optional proposal context. Durable detail
+  routes at `/pulls/{repository-id}/{pull-request-id}` expose the recorded
+  branch snapshots, source-only commits, path-ordered file changes, linked
+  proposal, and attributable discussion; review and merge controls belong to
+  the subsequent maintainer workflow.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's

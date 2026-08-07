@@ -212,6 +212,14 @@ from the fixed target snapshot and explicitly synchronized source revision.
 Immutable pull request comments retain stable author IDs; owners and
 contributors may participate, while reads continue to follow repository
 visibility.
+The web pull request workspace aggregates candidate work across the signed-in
+actor's repository catalog and opens requests from existing branch pairs with
+optional proposal context. Its directly addressable detail pages use the
+visibility-aware read APIs to present purpose, immutable review and target
+revisions, source-only commits, path-ordered file changes, linked proposal
+context, and attributable discussion. Public repositories remain inspectable
+without an account, while commenting and creation require current repository
+participation.
 Each owner or contributor also has one attributable current review decision.
 Approvals and change requests capture the live source-branch commit being
 evaluated, replacements preserve the review identity, and withdrawals remain
