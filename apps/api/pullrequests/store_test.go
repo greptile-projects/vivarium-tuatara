@@ -211,6 +211,35 @@ func TestReviewsCaptureCurrentCommitBecomeStaleAndRemainAttributable(t *testing.
 	}
 }
 
+func TestMergeReconcilesAttributedCommitAfterLaterTargetAdvance(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	repository, _ := gitStore.Create(testID('e'))
+	tree, _ := repository.WriteObject(storage.TreeObject, nil)
+	base := writeCommit(t, repository, tree, "base")
+	source := writeCommitWithParents(t, repository, tree, []storage.ObjectID{base}, "source")
+	repository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)})
+	repository.CreateReference(storage.Reference{Name: "refs/heads/topic", Target: string(source)})
+	store, _ := New(t.TempDir(), gitStore)
+	pull, err := store.Create(repository.ID(), testID('a'), "Accepted change", "Shared reason", "topic", "main", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	merger := testID('b')
+	mergeContent := fmt.Sprintf("tree %s\nparent %s\nparent %s\nauthor Vivarium Author <%s@users.vivarium> 1700000000 +0000\ncommitter Vivarium Maintainer <%s@users.vivarium> 1700000010 +0000\n\nAccepted change\n\nShared reason\n\nPull-Request: %s\nAuthored-by: %s\nMerged-by: %s\n", tree, base, source, pull.AuthorID, merger, pull.ID, pull.AuthorID, merger)
+	mergeCommit, _ := repository.WriteObject(storage.CommitObject, []byte(mergeContent))
+	descendant := writeCommitWithParents(t, repository, tree, []storage.ObjectID{mergeCommit}, "later target work")
+	repository.UpdateReference(storage.Reference{Name: "refs/heads/main", Target: string(descendant)})
+
+	reconciled, err := store.Merge(repository.ID(), pull.ID, merger)
+	if err != nil || reconciled.Status != Merged || reconciled.MergeCommitID == nil || *reconciled.MergeCommitID != string(mergeCommit) || reconciled.MergedBy == nil || *reconciled.MergedBy != merger || reconciled.MergedAt == nil || reconciled.MergedAt.Unix() != 1700000010 {
+		t.Fatalf("reconciled = %#v, %v", reconciled, err)
+	}
+	main, _ := repository.ReadReference("refs/heads/main")
+	if main.Target != string(descendant) {
+		t.Fatalf("reconciliation moved target to %s", main.Target)
+	}
+}
+
 func writeCommit(t *testing.T, repository *storage.Repository, tree storage.ObjectID, message string) storage.ObjectID {
 	return writeCommitWithParents(t, repository, tree, nil, message)
 }

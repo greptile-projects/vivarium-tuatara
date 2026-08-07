@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -693,16 +694,21 @@ func (s *Store) Merge(repositoryID, pullRequestID, mergerID string) (PullRequest
 	if p.Status == Merged {
 		return p, nil
 	}
+	repository, err := s.git.Open(repositoryID)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	if reconciled, found, reconcileErr := s.reconcileMerged(repository, p); reconcileErr != nil {
+		return PullRequest{}, reconcileErr
+	} else if found {
+		return reconciled, nil
+	}
 	report, err := s.Readiness(repositoryID, pullRequestID, true)
 	if err != nil {
 		return PullRequest{}, err
 	}
 	if !report.CanMerge || report.Source.CurrentCommitID == nil || report.Target.CurrentCommitID == nil {
 		return PullRequest{}, ErrNotReady
-	}
-	repository, err := s.git.Open(repositoryID)
-	if err != nil {
-		return PullRequest{}, err
 	}
 	tree, err := mergeTree(repository, *report.Target.CurrentCommitID, *report.Source.CurrentCommitID)
 	if err != nil {
@@ -735,11 +741,86 @@ func (s *Store) Merge(repositoryID, pullRequestID, mergerID string) (PullRequest
 		// Publication did not occur, so restore the expected target if no
 		// concurrent writer has moved it since our compare-and-swap.
 		if rollbackErr := repository.UpdateReferenceIfTarget(storage.Reference{Name: "refs/heads/" + p.TargetBranch, Target: *report.Target.CurrentCommitID}, string(commit)); rollbackErr != nil {
+			if reconciled, found, reconcileErr := s.reconcileMerged(repository, p); found && reconcileErr == nil {
+				return reconciled, nil
+			}
 			return PullRequest{}, fmt.Errorf("publish merge metadata: %v; restore target: %w", err, rollbackErr)
 		}
 		return PullRequest{}, err
 	}
 	return p, nil
+}
+
+// reconcileMerged repairs metadata when the target publication succeeded but
+// a later metadata write and compensating reference update both failed. The
+// stable trailers and two-parent shape distinguish this operation even after
+// later target commits have descended from it.
+func (s *Store) reconcileMerged(repository *storage.Repository, p PullRequest) (PullRequest, bool, error) {
+	target, err := branchCommit(repository, p.TargetBranch)
+	if errors.Is(err, ErrBranchNotFound) {
+		return PullRequest{}, false, nil
+	}
+	if err != nil {
+		return PullRequest{}, false, err
+	}
+	ancestry, err := repository.ListCommitAncestry(storage.ObjectID(target))
+	if err != nil {
+		return PullRequest{}, false, err
+	}
+	for _, commit := range ancestry {
+		if len(commit.Parents) != 2 || string(commit.Parents[1]) != p.SourceCommitID {
+			continue
+		}
+		message := string(commit.Message)
+		if !hasTrailer(message, "Pull-Request", p.ID) || !hasTrailer(message, "Authored-by", p.AuthorID) {
+			continue
+		}
+		merger := trailerValue(message, "Merged-by")
+		if !validID(merger) || (p.ProposalID != nil && !hasTrailer(message, "Proposal", *p.ProposalID)) {
+			continue
+		}
+		var mergedAt time.Time
+		for _, header := range commit.Headers {
+			if header.Name != "committer" || !strings.Contains(header.Value, "<"+merger+"@users.vivarium>") {
+				continue
+			}
+			fields := strings.Fields(header.Value)
+			if len(fields) >= 2 {
+				seconds, parseErr := strconv.ParseInt(fields[len(fields)-2], 10, 64)
+				if parseErr == nil {
+					mergedAt = time.Unix(seconds, 0).UTC()
+				}
+			}
+		}
+		if mergedAt.IsZero() {
+			continue
+		}
+		commitID := string(commit.ID)
+		p.Status, p.UpdatedAt, p.MergedAt, p.MergedBy, p.MergeCommitID = Merged, mergedAt, &mergedAt, &merger, &commitID
+		if committed, writeErr := s.write(p); writeErr != nil {
+			if committed {
+				return p, true, fmt.Errorf("%w: %v", ErrDurabilityUncertain, writeErr)
+			}
+			return PullRequest{}, false, writeErr
+		}
+		return p, true, nil
+	}
+	return PullRequest{}, false, nil
+}
+
+func trailerValue(message, name string) string {
+	prefix := name + ": "
+	value := ""
+	for _, line := range strings.Split(message, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			value = strings.TrimPrefix(line, prefix)
+		}
+	}
+	return value
+}
+
+func hasTrailer(message, name, value string) bool {
+	return trailerValue(message, name) == value
 }
 
 func mergeTree(repository *storage.Repository, target, source string) (storage.ObjectID, error) {

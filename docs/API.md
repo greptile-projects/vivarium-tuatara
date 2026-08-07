@@ -212,4 +212,7 @@ The commit retains the request title and body plus stable `Pull-Request`,
 optional `Proposal`, `Authored-by`, and `Merged-by` trailers. A linked open
 proposal is closed while its existing discussion remains readable. Target
 advancement uses compare-and-swap protection so a concurrent push is never
-overwritten.
+overwritten. Merge retries are idempotent; if target publication became
+visible before pull-request metadata could be published, a retry recognizes
+the attributable merge commit even beneath later target history and repairs
+the durable request outcome.

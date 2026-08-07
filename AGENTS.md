@@ -190,7 +190,9 @@ whenever dependencies change or the web job fails before it starts.
   target advances with compare-and-swap protection, and a two-parent commit
   records stable pull-request, proposal, author, and merger attribution. The
   request becomes `merged` with its commit, actor, and timestamp; a linked open
-  proposal closes without losing its discussion.
+  proposal closes without losing its discussion. Retries reconcile an
+  attributed merge commit already present in later target ancestry, repairing
+  metadata after publication and rollback races.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

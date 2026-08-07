@@ -452,6 +452,10 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 				closed := proposals.Closed
 				_, proposalErr = proposalStore.Update(r.PathValue("id"), proposal.ID, proposals.Patch{Status: &closed})
 			}
+			if errors.Is(proposalErr, proposals.ErrDurabilityUncertain) {
+				writeUncertainMutation(w, merged)
+				return
+			}
 			if proposalErr != nil && !errors.Is(proposalErr, proposals.ErrDurabilityUncertain) {
 				log.Printf("close linked proposal after merge: %v", proposalErr)
 				writeAPIError(w, http.StatusInternalServerError, "internal_error", "linked proposal closure unavailable; retry merge")
