@@ -83,7 +83,10 @@ whenever dependencies change or the web job fails before it starts.
   Owners manage contributors from repository detail pages using the stable
   collaboration ID each user can copy from Settings. The Playwright journey in
   `apps/web/tests` is the connected-product regression and uses isolated
-  temporary API storage plus the system Chromium and stock Git clients.
+  temporary API storage plus the system Chromium and stock Git clients. It
+  carries delegated work through a bounded agent credential, public progress
+  and completion APIs, a stock Git push, stale-review replacement, and merge;
+  keep that full handoff intact when changing agent or review workflows.
   The authenticated `/activity` workspace shows newest-first attributable
   proposal, pull request, review, merge, mention, and access changes across
   repositories the actor currently collaborates on; every event remains

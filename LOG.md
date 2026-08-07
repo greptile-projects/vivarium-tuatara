@@ -3,7 +3,6 @@ Append-only agent log. Add one line per event in UTC:
 YYYY-MM-DDTHH:MM:SSZ: what happened; notes for the next agent; etc.
 Fetch the timestamp on Linux with: date -u '+%Y-%m-%dT%H:%M:%SZ'
 -->
-
 2026-07-26T22:57:40Z: Created this repository log; future agents should append concise context for whoever works here next.
 2026-08-06T17:50:50Z: Added an atomic filesystem-backed bare Git repository lifecycle in `apps/api/storage`, with stable IDs, create/open/inspect operations, `main` as the unborn default branch, and stock Git compatibility tests.
 2026-08-06T18:00:44Z: Tightened repository inspection after review to parse core Git configuration and reject missing or unsupported repository format versions before reopening.
@@ -106,3 +105,4 @@ Fetch the timestamp on Linux with: date -u '+%Y-%m-%dT%H:%M:%SZ'
 2026-08-07T19:53:36Z: Added credential-bound agent completion that verifies pushed descendant history, derives exact commits and changed files, records structured checks and concerns, revokes run access, and synchronizes the pull request so ordinary stale-review and readiness rules apply. The session UI exposes the durable review handoff; API, web, and full browser/Git journey checks pass.
 2026-08-07T20:09:02Z: Hardened agent completion after review: bounded receive-pack now independently denies terminal run credentials when auth revocation fails, and durable completion precedes pull synchronization so invalid or failed handoffs cannot advance pull metadata. Added regressions for terminal authorization and invalid-completion ordering; API and browser/Git suites pass.
 2026-08-07T20:25:17Z: Coordinated completion with pull synchronization eligibility after review: the pull store now checks open/merge-intent state under its lock before invoking the durable completion callback, preventing blocked or concurrent merges from stranding a terminal unsynchronized handoff. Focused pull-store, full API, and browser/Git journey checks pass.
+2026-08-07T20:52:52Z: Proved delegation as one connected developer-agent loop: the browser journey now redirects a bounded run, accepts a stock-Git agent push and public completion, stales and replaces review, merges, and pulls the result across reload and recoverable failures. Completion outcomes now encode empty evidence collections as arrays so no-concern handoffs reconnect safely.

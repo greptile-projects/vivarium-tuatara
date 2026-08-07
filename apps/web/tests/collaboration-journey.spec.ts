@@ -158,7 +158,11 @@ test("two users carry one attributed change from onboarding through merge", asyn
   await maintainer.getByLabel("Instructions").fill("Verify the greeting behavior and add focused coverage.");
   await maintainer.getByLabel("Repository context").fill("greeting.txt");
   await expect(maintainer.getByLabel("Working branch")).toHaveValue("greeting");
+  const launchResponse = maintainer.waitForResponse((response) =>
+    response.request().method() === "POST" && /\/sessions\/[a-f0-9]{32}\/runs$/.test(new URL(response.url()).pathname),
+  );
   await maintainer.getByRole("button", { name: "Launch agent run" }).click();
+  const launched: { run: { id: string }; credential: { token: string } } = await (await launchResponse).json();
   await expect(maintainer.getByText("Run launched · copy its credential now")).toBeVisible();
   await expect(maintainer.getByText("Agent run launched")).toBeVisible();
   const runCard = maintainer.locator("section").filter({ hasText: "Verify the greeting behavior and add focused coverage." });
@@ -179,18 +183,62 @@ test("two users carry one attributed change from onboarding through merge", asyn
   await runCard.getByRole("button", { name: "Resume run" }).click();
   await expect(runCard.getByText("launched", { exact: true })).toBeVisible();
   await expect(maintainer.getByText("Run resumed")).toBeVisible();
-  await runCard.getByRole("button", { name: "Revoke access" }).click();
-  await expect(maintainer.getByText("access revoked", { exact: true })).toBeVisible();
+
+  const sessionURL = maintainer.url();
   await maintainer.getByRole("link", { name: "← Back to pull request" }).click();
   await maintainer.getByRole("button", { name: "Approve" }).click();
   await expect(maintainer.getByText(`@maintainer-${suffix}`, { exact: true }).first()).toBeVisible();
+  await expect(maintainer.getByRole("button", { name: "Merge into main" })).toBeEnabled();
+
+  const agentCopy = await mkdtemp(join(tmpdir(), "vivarium-agent-"));
+  const agentRemote = `http://git:${launched.credential.token}@localhost:3000/git/${repositoryID}.git`;
+  await git(tmpdir(), "clone", agentRemote, agentCopy);
+  await git(agentCopy, "config", "user.name", "Vivarium Agent");
+  await git(agentCopy, "config", "user.email", "agent@users.vivarium");
+  await git(agentCopy, "switch", "-c", "agent-greeting", "origin/greeting");
+  await writeFile(join(agentCopy, "greeting.txt"), "hello developers and agents\nagent verified\n");
+  await git(agentCopy, "add", "greeting.txt");
+  await git(agentCopy, "commit", "-m", "Verify delegated greeting");
+  await git(agentCopy, "push", "origin", "HEAD:refs/heads/greeting");
+  const agentCommit = await git(agentCopy, "rev-parse", "HEAD");
+  const runBase = `/api/repositories/${repositoryID}/pulls/${pullRequestID}/sessions/${new URL(sessionURL).pathname.split("/").pop()}/runs/${launched.run.id}`;
+  const agentHeaders = { Authorization: `Bearer ${launched.credential.token}` };
+  const progress = await maintainer.request.post(`${runBase}/events`, {
+    headers: agentHeaders,
+    data: { kind: "branch.updated", state: "working", message: "Published the redirected greeting revision.", branch: "greeting", commit_id: agentCommit },
+  });
+  expect(progress.status()).toBe(201);
+  const invalidCompletion = await maintainer.request.post(`${runBase}/completion`, {
+    headers: agentHeaders,
+    data: { summary: "Invalid check evidence must not move review state.", commit_id: agentCommit, checks: [{ name: "greeting check", status: "unknown" }] },
+  });
+  expect(invalidCompletion.status()).toBe(400);
+  const completion = await maintainer.request.post(`${runBase}/completion`, {
+    headers: agentHeaders,
+    data: { summary: "Applied the maintainer's direction and verified the delegated greeting.", commit_id: agentCommit, checks: [{ name: "greeting check", status: "passed", details: "Expected content is present." }], unresolved_concerns: [] },
+  });
+  expect(completion.status()).toBe(201);
+
+  await maintainer.goto(sessionURL);
+  const handoff = maintainer.locator("#outcome");
+  await expect(handoff.getByRole("heading", { name: "Review handoff" })).toBeVisible();
+  await expect(handoff.getByText("Applied the maintainer's direction and verified the delegated greeting.")).toBeVisible();
+  await expect(handoff.getByText("greeting check", { exact: true })).toBeVisible();
+  await expect(handoff.getByRole("link", { name: "greeting.txt" })).toBeVisible();
+  await expect(maintainer.getByText("Work published for review")).toBeVisible();
+  await maintainer.reload();
+  await expect(maintainer.getByRole("heading", { name: "Review handoff" })).toBeVisible();
+  await maintainer.getByRole("link", { name: new RegExp(`Review revision ${agentCommit.slice(0, 7)}`) }).click();
+  await expect(maintainer.getByText("0 / 1 required approvals")).toBeVisible();
+  await expect(maintainer.getByRole("button", { name: "Merge into main" })).toBeDisabled();
+  await maintainer.getByRole("button", { name: "Approve" }).click();
   await expect(maintainer.getByRole("button", { name: "Merge into main" })).toBeEnabled();
   await maintainer.getByRole("button", { name: "Merge into main" }).click();
   await expect(maintainer.getByText("Merged", { exact: true })).toBeVisible();
   await expect(maintainer.getByText(`@maintainer-${suffix}`, { exact: true }).first()).toBeVisible();
 
   await git(maintainerCopy, "pull", "--ff-only");
-  expect(await readFile(join(maintainerCopy, "greeting.txt"), "utf8")).toBe("hello developers and agents\n");
+  expect(await readFile(join(maintainerCopy, "greeting.txt"), "utf8")).toBe("hello developers and agents\nagent verified\n");
   await newcomer.goto(`/proposals/${repositoryID}/${proposalID}`);
   await expect(newcomer.getByText("closed", { exact: true }).first()).toBeVisible();
 
