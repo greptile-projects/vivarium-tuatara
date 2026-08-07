@@ -543,10 +543,6 @@ func (s *Store) ListReviews(repositoryID, pullRequestID string) ([]Review, error
 	if err != nil {
 		return nil, err
 	}
-	record, err := s.readReviews(repositoryID, pullRequestID)
-	if err != nil {
-		return nil, err
-	}
 	repository, err := s.git.Open(repositoryID)
 	if err != nil {
 		return nil, err
@@ -556,6 +552,14 @@ func (s *Store) ListReviews(repositoryID, pullRequestID string) ([]Review, error
 		currentCommitID = ""
 		err = nil
 	}
+	if err != nil {
+		return nil, err
+	}
+	return s.reviewsAtCommit(repositoryID, pullRequestID, currentCommitID)
+}
+
+func (s *Store) reviewsAtCommit(repositoryID, pullRequestID, currentCommitID string) ([]Review, error) {
+	record, err := s.readReviews(repositoryID, pullRequestID)
 	if err != nil {
 		return nil, err
 	}
@@ -610,7 +614,11 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 		addBlocker("target_branch_missing", "target branch must identify a commit")
 	}
 
-	reviews, err := s.ListReviews(repositoryID, pullRequestID)
+	currentSourceID := ""
+	if sourceID != nil {
+		currentSourceID = *sourceID
+	}
+	reviews, err := s.reviewsAtCommit(repositoryID, pullRequestID, currentSourceID)
 	if err != nil {
 		return MergeReadiness{}, err
 	}
