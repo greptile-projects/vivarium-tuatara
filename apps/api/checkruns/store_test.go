@@ -127,6 +127,49 @@ func TestRecoveryPublishesLifecycleAfterPostRenameDurabilityFailure(t *testing.T
 	}
 }
 
+func TestTerminalEvidenceWaitsForDefinitiveRunPublication(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.Create("0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789", strings.Repeat("d", 40), []Definition{{Name: "terminal", Image: "alpine:3.22", Command: "false"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := runs[0]
+	started := time.Now().UTC()
+	run.State, run.StartedAt, run.Attempts = "running", &started, []Attempt{{Number: 1, State: "running", StartedAt: started}}
+	if err := store.Update(run); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(store.root, run.RepositoryID, run.PullRequestID)
+	if err := os.Chmod(directory, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	done, code := time.Now().UTC(), 1
+	run.State, run.CompletedAt, run.ExitCode, run.Failure = "failed", &done, &code, "exit status 1"
+	run.Attempts[0].State, run.Attempts[0].CompletedAt, run.Attempts[0].ExitCode, run.Attempts[0].Failure = "failed", &done, &code, run.Failure
+	if store.publishTerminal(run, 1, done) {
+		t.Fatal("terminal publication unexpectedly succeeded")
+	}
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := store.Get(run.RepositoryID, run.PullRequestID, run.ID)
+	if err != nil || persisted.State != "running" || persisted.Attempts[0].State != "running" {
+		t.Fatalf("run = %#v, %v", persisted, err)
+	}
+	events, err := store.Events(run.RepositoryID, run.PullRequestID, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Kind == "command" || event.State == "failed" {
+			t.Fatalf("terminal evidence preceded durable state: %#v", events)
+		}
+	}
+}
+
 func TestExecuteUsesExactDisposableSnapshotAndPersistsLifecycle(t *testing.T) {
 	repository := filepath.Join(t.TempDir(), "repository.git")
 	runGit(t, "init", "--bare", repository)

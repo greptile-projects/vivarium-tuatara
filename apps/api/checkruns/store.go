@@ -519,7 +519,9 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 			last := &run.Attempts[len(run.Attempts)-1]
 			last.State, last.CompletedAt, last.ExitCode, last.Failure = run.State, &now, run.ExitCode, run.Failure
 		}
-		_ = s.Update(run)
+		if !s.updatePublished(run) {
+			return
+		}
 		_ = s.appendEvent(run, Event{Attempt: len(run.Attempts), Kind: "status", Timestamp: now, State: run.State, ExitCode: run.ExitCode, Message: run.Failure})
 		return
 	}
@@ -627,7 +629,9 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 				}
 				last := &run.Attempts[len(run.Attempts)-1]
 				last.State, last.ExitCode, last.Failure = "cleanup_pending", run.ExitCode, run.Failure
-				_ = s.Update(run)
+				if !s.updatePublished(run) {
+					return
+				}
 				evidenceTime := s.now().Truncate(time.Microsecond)
 				_ = s.appendEvent(run, Event{Attempt: attemptNumber, Kind: "command", Timestamp: evidenceTime, State: "cleanup_pending", ExitCode: run.ExitCode, Message: run.Failure})
 				_ = s.appendEvent(run, Event{Attempt: attemptNumber, Kind: "status", Timestamp: evidenceTime, State: "cleanup_pending", ExitCode: run.ExitCode, Message: run.Failure})
@@ -650,9 +654,21 @@ executionDone:
 	}
 	last := &run.Attempts[len(run.Attempts)-1]
 	last.State, last.CompletedAt, last.ExitCode, last.Failure = run.State, &done, run.ExitCode, run.Failure
-	_ = s.Update(run)
-	_ = s.appendEvent(run, Event{Attempt: attemptNumber, Kind: "command", Timestamp: done, State: run.State, ExitCode: run.ExitCode, Message: run.Failure})
-	_ = s.appendEvent(run, Event{Attempt: attemptNumber, Kind: "status", Timestamp: done, State: run.State, ExitCode: run.ExitCode, Message: run.Failure})
+	s.publishTerminal(run, attemptNumber, done)
+}
+
+func (s *Store) updatePublished(run Run) bool {
+	err := s.Update(run)
+	return err == nil || errors.Is(err, ErrDurabilityUncertain)
+}
+
+func (s *Store) publishTerminal(run Run, attempt int, at time.Time) bool {
+	if !s.updatePublished(run) {
+		return false
+	}
+	_ = s.appendEvent(run, Event{Attempt: attempt, Kind: "command", Timestamp: at, State: run.State, ExitCode: run.ExitCode, Message: run.Failure})
+	_ = s.appendEvent(run, Event{Attempt: attempt, Kind: "status", Timestamp: at, State: run.State, ExitCode: run.ExitCode, Message: run.Failure})
+	return true
 }
 
 func watchOutputLimit(ctx context.Context, cancel context.CancelFunc, directory string, exceeded chan<- struct{}, stop <-chan struct{}) {
