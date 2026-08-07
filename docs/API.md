@@ -84,13 +84,15 @@ delete the repository. Revocation takes effect on the next API or Git request.
 
 Repository content reads use the same visibility and collaborator policy.
 `GET /repositories/{id}/branches` lists direct branch names and commit IDs.
-`GET /repositories/{id}/commits?ref=<revision>` returns the complete,
-deduplicated commit ancestry from a branch name or full lowercase commit ID;
+`GET /repositories/{id}/commits?ref=<revision>` returns the deduplicated commit
+ancestry from a branch name or full lowercase commit ID through the shared
+`limit`/`after` cursor contract;
 each commit includes its tree, ordered parents, message, author header, and
 parsed author time. `GET /repositories/{id}/tree?ref=<revision>&path=<path>`
 lists the direct entries of the root or a nested directory with name, object
 ID, type, and Git mode. `GET /repositories/{id}/blob` accepts the same query
-and returns a text preview, size, and binary indicator for a file. Every
+and returns a text preview, total size, binary indicator, and `truncated`
+flag for a file. Text previews are limited to 512 KiB. Every
 revision-bearing response includes the resolved commit ID so clients can keep
 branch-friendly navigation tied to exact repository state. `path` is relative
 to the commit root and omitted for its top-level tree.

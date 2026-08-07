@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"net/http"
 	"strconv"
@@ -12,6 +13,8 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
+
+const maxBlobPreviewBytes = 512 << 10
 
 type browseCommit struct {
 	ID         string     `json:"id"`
@@ -68,16 +71,30 @@ func registerRepositoryBrowseRoutes(mux *http.ServeMux, gitStore *storage.Store,
 			writeBrowseError(w, err)
 			return
 		}
-		commits, err := repo.ListCommitAncestry(id)
+		limit, after, ok := paginationParameters(r)
+		if !ok {
+			writeAPIError(w, http.StatusBadRequest, "invalid_pagination", "limit or after is invalid")
+			return
+		}
+		commits, nextID, found, err := repo.ListCommitAncestryPage(id, storage.ObjectID(after), limit)
 		if err != nil {
 			writeBrowseError(w, err)
+			return
+		}
+		if !found {
+			writeAPIError(w, http.StatusBadRequest, "invalid_pagination", "limit or after is invalid")
 			return
 		}
 		result := make([]browseCommit, 0, len(commits))
 		for _, commit := range commits {
 			result = append(result, presentCommit(commit))
 		}
-		writeJSON(w, 200, map[string]any{"revision": id, "commits": result})
+		var next *string
+		if nextID != nil {
+			value := string(*nextID)
+			next = &value
+		}
+		writeJSON(w, 200, map[string]any{"revision": id, "commits": result, "next_cursor": next})
 	})
 	mux.HandleFunc("GET /repositories/{id}/tree", func(w http.ResponseWriter, r *http.Request) {
 		repo, ok := authorize(w, r)
@@ -131,12 +148,21 @@ func registerRepositoryBrowseRoutes(mux *http.ServeMux, gitStore *storage.Store,
 			writeBrowseError(w, err)
 			return
 		}
-		binary := !utf8.Valid(object.Content) || strings.IndexByte(string(object.Content), 0) >= 0
+		binary := !utf8.Valid(object.Content) || bytes.IndexByte(object.Content, 0) >= 0
 		content := ""
+		truncated := false
 		if !binary {
-			content = string(object.Content)
+			preview := object.Content
+			if len(preview) > maxBlobPreviewBytes {
+				preview = preview[:maxBlobPreviewBytes]
+				for len(preview) > 0 && !utf8.Valid(preview) {
+					preview = preview[:len(preview)-1]
+				}
+				truncated = true
+			}
+			content = string(preview)
 		}
-		writeJSON(w, 200, map[string]any{"revision": id, "path": r.URL.Query().Get("path"), "size": object.Size, "is_binary": binary, "content": content})
+		writeJSON(w, 200, map[string]any{"revision": id, "path": r.URL.Query().Get("path"), "size": object.Size, "is_binary": binary, "content": content, "truncated": truncated})
 	})
 }
 

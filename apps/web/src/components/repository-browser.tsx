@@ -21,6 +21,7 @@ type BlobResult = {
   size: number;
   is_binary: boolean;
   content: string;
+  truncated: boolean;
 };
 
 export function RepositoryBrowser({ id }: { id: string }) {
@@ -57,8 +58,11 @@ export function RepositoryBrowser({ id }: { id: string }) {
         setCommits([]);
         return;
       }
+      const pinnedRevision =
+        branchData.branches.find((branch) => branch.name === revision)
+          ?.commit_id ?? revision;
       const history = await api<{ commits: Commit[] }>(
-        `/repositories/${id}/commits?ref=${encodeURIComponent(revision)}`,
+        `/repositories/${id}/commits?limit=20&ref=${encodeURIComponent(pinnedRevision)}`,
         {},
         token,
       );
@@ -66,7 +70,7 @@ export function RepositoryBrowser({ id }: { id: string }) {
       if (!currentPath)
         setTree(
           await api<TreeResult>(
-            `/repositories/${id}/tree?ref=${encodeURIComponent(revision)}`,
+            `/repositories/${id}/tree?ref=${encodeURIComponent(pinnedRevision)}`,
             {},
             token,
           ),
@@ -75,7 +79,7 @@ export function RepositoryBrowser({ id }: { id: string }) {
         try {
           setBlob(
             await api<BlobResult>(
-              `/repositories/${id}/blob?ref=${encodeURIComponent(revision)}&path=${encodeURIComponent(currentPath)}`,
+              `/repositories/${id}/blob?ref=${encodeURIComponent(pinnedRevision)}&path=${encodeURIComponent(currentPath)}`,
               {},
               token,
             ),
@@ -83,7 +87,7 @@ export function RepositoryBrowser({ id }: { id: string }) {
         } catch {
           setTree(
             await api<TreeResult>(
-              `/repositories/${id}/tree?ref=${encodeURIComponent(revision)}&path=${encodeURIComponent(currentPath)}`,
+              `/repositories/${id}/tree?ref=${encodeURIComponent(pinnedRevision)}&path=${encodeURIComponent(currentPath)}`,
               {},
               token,
             ),
@@ -128,6 +132,9 @@ export function RepositoryBrowser({ id }: { id: string }) {
 
   const revision = selectedRef || repository.default_branch;
   const resolved = tree?.revision ?? blob?.revision;
+  const immutableRevision = resolved ?? commits[0]?.id ?? revision;
+
+  const namedRevision = branches.some((branch) => branch.name === revision);
   const cloneURL =
     typeof window === "undefined"
       ? repository.git_remote
@@ -181,7 +188,7 @@ export function RepositoryBrowser({ id }: { id: string }) {
               }
               className="min-h-9 rounded-lg border border-[var(--line-strong)] bg-white px-3 font-mono text-sm font-semibold"
             >
-              {branches.length === 0 && <option>{revision}</option>}
+              {!namedRevision && <option>{revision}</option>}
               {branches.map((branch) => (
                 <option key={branch.name}>{branch.name}</option>
               ))}
@@ -195,7 +202,7 @@ export function RepositoryBrowser({ id }: { id: string }) {
           <Card className="overflow-hidden">
             <div className="flex flex-wrap items-center gap-1 border-b border-[var(--line)] bg-[var(--surface)] px-4 py-3 text-sm">
               <Link
-                href={href(id, revision, "")}
+                href={href(id, immutableRevision, "")}
                 className="font-semibold text-[var(--brand)]"
               >
                 {repository.name}
@@ -206,7 +213,7 @@ export function RepositoryBrowser({ id }: { id: string }) {
                   <span key={target} className="flex items-center gap-1">
                     <Icons.Chevron size={13} />
                     <Link
-                      href={href(id, revision, target)}
+                      href={href(id, immutableRevision, target)}
                       className="hover:underline"
                     >
                       {part}
@@ -218,7 +225,7 @@ export function RepositoryBrowser({ id }: { id: string }) {
             {tree ? (
               <TreeList
                 id={id}
-                revision={revision}
+                revision={immutableRevision}
                 path={currentPath}
                 entries={tree.entries}
               />
@@ -354,6 +361,7 @@ function BlobView({ blob }: { blob: BlobResult }) {
       <div className="border-b border-[var(--line)] px-4 py-2 text-xs text-[var(--muted)]">
         {blob.size.toLocaleString()} bytes ·{" "}
         <code>{blob.revision.slice(0, 7)}</code>
+        {blob.truncated && " · preview limited to 512 KiB"}
       </div>
       <pre className="max-h-[45rem] overflow-auto p-4 font-mono text-xs leading-6">
         <code>{blob.content}</code>

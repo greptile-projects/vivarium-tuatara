@@ -55,7 +55,9 @@ and authorized collaborators can select branches, follow commit-pinned history,
 navigate snapshot directories, preview text files, identify binary files, and
 copy clone information. The selected `ref` and repository-relative `path` live
 in the URL, while every content response exposes its resolved commit, keeping
-navigation explicit when a branch moves.
+navigation explicit when a branch moves. Branch selection is resolved once per
+load and subsequent content links use that immutable commit; history is
+paginated and text previews are capped at 512 KiB.
 
 ## User identity
 

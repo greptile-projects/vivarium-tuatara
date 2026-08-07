@@ -92,6 +92,9 @@ whenever dependencies change or the web job fails before it starts.
   `UpdateReference`, `ListReferences`, and `DeleteReference`. Direct targets
   must name an existing verified object; symbolic targets may be unborn so
   `HEAD` can identify the default branch before its first commit.
+  Reference reads and listings also merge stock Git `packed-refs`, with loose
+  references taking precedence, so browser and interoperability reads survive
+  normal `git pack-refs` maintenance.
   `Repository.Path` is reserved as an interoperability handle for stock Git
   processes; application storage writes should go through the package API.
   The integrated compatibility test builds representative merged history and
@@ -140,7 +143,8 @@ whenever dependencies change or the web job fails before it starts.
   `GET /repositories/{id}`, `PATCH /repositories/{id}`, and `DELETE
   /repositories/{id}`.
   Read-only browser routes beneath `/repositories/{id}` expose branches,
-  revision ancestry, direct tree entries, and text/binary blob inspection.
+  paginated revision ancestry, direct tree entries, and bounded text/binary
+  blob inspection.
   They accept a branch or full commit ID through `ref`, return the resolved
   commit with content, and apply the same public/private collaborator policy
   as repository inspection.

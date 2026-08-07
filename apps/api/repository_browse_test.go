@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -29,15 +31,20 @@ func TestRepositoryBrowsingPreservesBranchAndCommitRevision(t *testing.T) {
 	created.Body.Close()
 	repo, _ := gitStore.Open(repository.ID)
 	readme, _ := repo.WriteObject(storage.BlobObject, []byte("# project\n"))
+	large, _ := repo.WriteObject(storage.BlobObject, bytes.Repeat([]byte("a"), maxBlobPreviewBytes+1024))
 	source, _ := repo.WriteObject(storage.BlobObject, []byte("package main\n"))
 	srcTree := writeTestTree(t, repo, testTreeEntry{"100644", "main.go", source})
-	rootTree := writeTestTree(t, repo, testTreeEntry{"100644", "README.md", readme}, testTreeEntry{"40000", "src", srcTree})
-	commit := writeTestCommit(t, repo, rootTree, nil, 1700000000, "initial browser state")
+	rootTree := writeTestTree(t, repo, testTreeEntry{"100644", "README.md", readme}, testTreeEntry{"100644", "large.txt", large}, testTreeEntry{"40000", "src", srcTree})
+	base := writeTestCommit(t, repo, rootTree, nil, 1699999999, "base browser state")
+	commit := writeTestCommit(t, repo, rootTree, []storage.ObjectID{base}, 1700000000, "initial browser state")
 	if err := repo.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(commit)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.CreateReference(storage.Reference{Name: "refs/heads/feature", Target: string(commit)}); err != nil {
 		t.Fatal(err)
+	}
+	if output, err := exec.Command("git", "--git-dir", repo.Path(), "pack-refs", "--all", "--prune").CombinedOutput(); err != nil {
+		t.Fatalf("pack refs: %v\n%s", err, output)
 	}
 
 	for _, endpoint := range []string{
@@ -60,6 +67,45 @@ func TestRepositoryBrowsingPreservesBranchAndCommitRevision(t *testing.T) {
 
 	missing := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/tree?ref=missing", "", account.Credential.Token, http.StatusNotFound)
 	missing.Body.Close()
+
+	history := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/commits?ref=feature&limit=1", "", account.Credential.Token, http.StatusOK)
+	var historyBody struct {
+		Commits    []browseCommit `json:"commits"`
+		NextCursor *string        `json:"next_cursor"`
+	}
+	if err := json.NewDecoder(history.Body).Decode(&historyBody); err != nil {
+		t.Fatal(err)
+	}
+	history.Body.Close()
+	if len(historyBody.Commits) != 1 || historyBody.NextCursor == nil {
+		t.Fatalf("paginated history = %#v", historyBody)
+	}
+	nextHistory := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/commits?ref=feature&limit=1&after="+*historyBody.NextCursor, "", account.Credential.Token, http.StatusOK)
+	var nextHistoryBody struct {
+		Commits    []browseCommit `json:"commits"`
+		NextCursor *string        `json:"next_cursor"`
+	}
+	if err := json.NewDecoder(nextHistory.Body).Decode(&nextHistoryBody); err != nil {
+		t.Fatal(err)
+	}
+	nextHistory.Body.Close()
+	if len(nextHistoryBody.Commits) != 1 || nextHistoryBody.Commits[0].ID != string(base) || nextHistoryBody.NextCursor != nil {
+		t.Fatalf("second history page = %#v", nextHistoryBody)
+	}
+
+	preview := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/blob?ref=feature&path=large.txt", "", account.Credential.Token, http.StatusOK)
+	var previewBody struct {
+		Content   string `json:"content"`
+		Size      int64  `json:"size"`
+		Truncated bool   `json:"truncated"`
+	}
+	if err := json.NewDecoder(preview.Body).Decode(&previewBody); err != nil {
+		t.Fatal(err)
+	}
+	preview.Body.Close()
+	if len(previewBody.Content) != maxBlobPreviewBytes || previewBody.Size != maxBlobPreviewBytes+1024 || !previewBody.Truncated {
+		t.Fatalf("bounded preview = content %d, size %d, truncated %v", len(previewBody.Content), previewBody.Size, previewBody.Truncated)
+	}
 }
 
 func TestPublicRepositoryBrowsingIsAnonymousAndPrivateBrowsingIsHidden(t *testing.T) {
