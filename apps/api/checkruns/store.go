@@ -24,6 +24,7 @@ import (
 
 var (
 	ErrNotFound            = errors.New("check run not found")
+	ErrInvalidState        = errors.New("check run state does not allow this action")
 	ErrDurabilityUncertain = errors.New("check run durability uncertain")
 )
 
@@ -58,6 +59,7 @@ type Run struct {
 	CompletedAt    *time.Time `json:"completed_at,omitempty"`
 	Attempts       []Attempt  `json:"attempts"`
 	Artifacts      []Artifact `json:"artifacts"`
+	RequestedBy    string     `json:"requested_by,omitempty"`
 }
 
 type Attempt struct {
@@ -67,6 +69,7 @@ type Attempt struct {
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 	ExitCode    *int       `json:"exit_code,omitempty"`
 	Failure     string     `json:"failure,omitempty"`
+	ActorID     string     `json:"actor_id,omitempty"`
 }
 
 type Artifact struct {
@@ -89,6 +92,7 @@ type Event struct {
 	Message   string    `json:"message,omitempty"`
 	ExitCode  *int      `json:"exit_code,omitempty"`
 	Artifact  *Artifact `json:"artifact,omitempty"`
+	ActorID   string    `json:"actor_id,omitempty"`
 }
 
 type Store struct {
@@ -426,6 +430,77 @@ func (s *Store) Update(run Run) error {
 	return s.write(filepath.Join(s.root, run.RepositoryID, run.PullRequestID), run)
 }
 
+// Rerun queues another attempt on the same exact commit while retaining all
+// prior attempts, evidence, and artifacts.
+func (s *Store) Rerun(repositoryID, pullRequestID, runID, actorID string) (Run, error) {
+	return s.control(repositoryID, pullRequestID, runID, actorID, "rerun")
+}
+
+// Cancel stops a nonterminal run and records the collaborator who requested it.
+func (s *Store) Cancel(repositoryID, pullRequestID, runID, actorID string) (Run, error) {
+	run, err := s.Get(repositoryID, pullRequestID, runID)
+	if err != nil {
+		return Run{}, err
+	}
+	if !nonterminal(run.State) {
+		return Run{}, ErrInvalidState
+	}
+	// Force removal interrupts a live executor. The execution lock below waits
+	// for that executor to publish its command outcome before cancellation wins.
+	_ = removeContainer("vivarium-check-" + run.ID)
+	return s.control(repositoryID, pullRequestID, runID, actorID, "cancel")
+}
+
+func (s *Store) control(repositoryID, pullRequestID, runID, actorID, action string) (Run, error) {
+	lockPath := filepath.Join(s.root, repositoryID, pullRequestID, runID+".execution.lock")
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return Run{}, err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return Run{}, err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	run, err := s.Get(repositoryID, pullRequestID, runID)
+	if err != nil {
+		return Run{}, err
+	}
+	now := s.now().Truncate(time.Microsecond)
+	switch action {
+	case "rerun":
+		if nonterminal(run.State) {
+			return Run{}, ErrInvalidState
+		}
+		run.State, run.ExitCode, run.Failure, run.CleanupFailure = "queued", nil, "", ""
+		run.StartedAt, run.CompletedAt = nil, nil
+		run.RequestedBy = actorID
+	case "cancel":
+		if !nonterminal(run.State) {
+			return Run{}, ErrInvalidState
+		}
+		run.State, run.CompletedAt, run.Failure = "canceled", &now, "canceled by collaborator"
+		if len(run.Attempts) > 0 && run.Attempts[len(run.Attempts)-1].State == "running" {
+			last := &run.Attempts[len(run.Attempts)-1]
+			last.State, last.CompletedAt, last.Failure = "canceled", &now, run.Failure
+		}
+	default:
+		return Run{}, ErrInvalidState
+	}
+	if err := s.Update(run); err != nil && !errors.Is(err, ErrDurabilityUncertain) {
+		return Run{}, err
+	}
+	if err := s.appendEvent(run, Event{Attempt: len(run.Attempts), Kind: "control", Timestamp: now, State: run.State, Message: action, ActorID: actorID}); err != nil {
+		return Run{}, err
+	}
+	if action == "rerun" {
+		if err := s.appendEvent(run, Event{Attempt: len(run.Attempts) + 1, Kind: "status", Timestamp: now, State: "queued", ActorID: actorID}); err != nil {
+			return Run{}, err
+		}
+	}
+	return run, nil
+}
+
 // RecordFailure terminalizes work that cannot enter the executor, while
 // preserving the same attempt and ordered evidence contract as commands.
 func (s *Store) RecordFailure(run Run, failure string) error {
@@ -534,7 +609,8 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 		interruptedAttempt, interruptedFailure = previous.Number, previous.Failure
 	}
 	attemptNumber := len(run.Attempts) + 1
-	run.Attempts = append(run.Attempts, Attempt{Number: attemptNumber, State: "running", StartedAt: now})
+	run.Attempts = append(run.Attempts, Attempt{Number: attemptNumber, State: "running", StartedAt: now, ActorID: run.RequestedBy})
+	run.RequestedBy = ""
 	run.State = "running"
 	run.StartedAt = &now
 	if updateErr := s.Update(run); updateErr != nil && !errors.Is(updateErr, ErrDurabilityUncertain) {

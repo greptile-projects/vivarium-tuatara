@@ -601,6 +601,69 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		}
 		writeJSON(w, 200, run)
 	})
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/checks/{check_id}/rerun", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if _, err := store.Get(r.PathValue("id"), r.PathValue("pull_id")); writePullRequestError(w, err) {
+			return
+		}
+		existing, err := checkRunStore.Get(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("check_id"))
+		if errors.Is(err, checkruns.ErrNotFound) {
+			writeAPIError(w, 404, "check_run_not_found", "check run not found")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 500, "internal_error", "check run storage unavailable")
+			return
+		}
+		repository, err := gitStore.Open(existing.RepositoryID)
+		if err != nil {
+			writeAPIError(w, 500, "internal_error", "check repository unavailable")
+			return
+		}
+		run, err := checkRunStore.Rerun(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("check_id"), actor.UserID)
+		if errors.Is(err, checkruns.ErrNotFound) {
+			writeAPIError(w, 404, "check_run_not_found", "check run not found")
+			return
+		}
+		if errors.Is(err, checkruns.ErrInvalidState) {
+			writeAPIError(w, 409, "check_run_active", "an active check cannot be rerun")
+			return
+		}
+		if err != nil {
+			log.Printf("rerun check: %v", err)
+			writeAPIError(w, 500, "internal_error", "check could not be rerun")
+			return
+		}
+		go checkRunStore.Execute(run, repository.Path())
+		writeJSON(w, http.StatusAccepted, run)
+	})
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/checks/{check_id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if _, err := store.Get(r.PathValue("id"), r.PathValue("pull_id")); writePullRequestError(w, err) {
+			return
+		}
+		run, err := checkRunStore.Cancel(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("check_id"), actor.UserID)
+		if errors.Is(err, checkruns.ErrNotFound) {
+			writeAPIError(w, 404, "check_run_not_found", "check run not found")
+			return
+		}
+		if errors.Is(err, checkruns.ErrInvalidState) {
+			writeAPIError(w, 409, "check_run_finished", "a finished check cannot be canceled")
+			return
+		}
+		if err != nil {
+			log.Printf("cancel check: %v", err)
+			writeAPIError(w, 500, "internal_error", "check could not be canceled")
+			return
+		}
+		writeJSON(w, http.StatusOK, run)
+	})
 	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/checks/{check_id}/events", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
 			return

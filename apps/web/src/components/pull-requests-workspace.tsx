@@ -25,6 +25,7 @@ import {
 } from "@/lib/api";
 import { useAuth } from "./auth";
 import { ChangeSessionsCard } from "./change-sessions";
+import { PullRequestChecks } from "./pull-request-checks";
 import { Icons } from "./icons";
 import { Avatar, Badge, Button, Card } from "./ui";
 
@@ -762,6 +763,12 @@ export function PullRequestDetail({
           Commits {commits.length}
         </a>
         <a
+          href="#checks"
+          className="px-3 py-3 text-sm font-semibold text-[var(--muted)] hover:text-[var(--ink)]"
+        >
+          Checks
+        </a>
+        <a
           href="#files"
           className="px-3 py-3 text-sm font-semibold text-[var(--muted)] hover:text-[var(--ink)]"
         >
@@ -991,6 +998,11 @@ export function PullRequestDetail({
               </Card>
             )}
           </section>
+          <PullRequestChecks
+            repositoryID={repositoryID}
+            pullRequestID={pullRequestID}
+            participant={participant}
+          />
           <section id="commits" className="scroll-mt-24">
             <div className="mb-3 flex items-baseline justify-between">
               <h2 className="text-lg font-semibold">Commits</h2>

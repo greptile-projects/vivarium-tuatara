@@ -221,6 +221,15 @@ All reads use the pull request's visibility policy. Records, evidence, and
 artifact bytes live beneath `CHECK_RUN_STORAGE_ROOT`, defaulting to
 `check-runs`.
 
+Current owners and contributors with `repositories:write` can control a run
+without changing its snapshotted definition or commit. `POST
+/repositories/{id}/pulls/{pull_id}/checks/{check_id}/cancel` stops a
+nonterminal run; `POST
+/repositories/{id}/pulls/{pull_id}/checks/{check_id}/rerun` queues a finished
+run for another attempt. Reruns retain every earlier attempt, event, and
+artifact. Both actions append immutable `control` evidence with the actor's
+stable user ID, and a collaborator-requested attempt carries that attribution.
+
 ## Pull requests
 
 Repository participants open a pull request with `POST

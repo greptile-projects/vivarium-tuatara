@@ -51,6 +51,43 @@ func TestEvidenceSequenceHandlesEscapedMaximumLogChunk(t *testing.T) {
 	}
 }
 
+func TestCollaboratorControlsPreserveAttemptsAndAttribution(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.Create("0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789", strings.Repeat("d", 40), []Definition{{Name: "test", Image: "alpine:3.22", Command: "true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := runs[0]
+	now := time.Now().UTC()
+	run.State, run.CompletedAt = "succeeded", &now
+	run.Attempts = []Attempt{{Number: 1, State: "succeeded", StartedAt: now, CompletedAt: &now}}
+	if err := store.Update(run); err != nil {
+		t.Fatal(err)
+	}
+	actor := "11111111111111111111111111111111"
+	queued, err := store.Rerun(run.RepositoryID, run.PullRequestID, run.ID, actor)
+	if err != nil || queued.State != "queued" || queued.RequestedBy != actor || len(queued.Attempts) != 1 {
+		t.Fatalf("Rerun() = %#v, %v", queued, err)
+	}
+	canceled, err := store.Cancel(run.RepositoryID, run.PullRequestID, run.ID, actor)
+	if err != nil || canceled.State != "canceled" || len(canceled.Attempts) != 1 {
+		t.Fatalf("Cancel() = %#v, %v", canceled, err)
+	}
+	events, err := store.Events(run.RepositoryID, run.PullRequestID, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 4 || events[1].Kind != "control" || events[1].ActorID != actor || events[3].Message != "cancel" || events[3].ActorID != actor {
+		t.Fatalf("events = %#v", events)
+	}
+	if _, err := store.Rerun(run.RepositoryID, run.PullRequestID, run.ID, actor); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRecoveryDoesNotPublishInterruptedFailureBeforeRunUpdate(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {

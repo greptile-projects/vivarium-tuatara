@@ -222,6 +222,11 @@ observed. Numbered attempt history retains interrupted and failed executions
 against the exact commit, and artifact bytes remain downloadable by stable ID
 with size and SHA-256 evidence. Interrupted execution and cleanup work is
 retried at startup, periodically, and on a later same-commit trigger.
+The pull-request review surface follows live state, expands every historical
+attempt into its logs and artifacts, and lets current collaborators cancel or
+rerun verification. Those controls append stable actor attribution while
+preserving all earlier evidence, so investigation and intervention stay in the
+same conversation as the change.
 Lifecycle metadata, event streams, and artifacts live beneath
 `CHECK_RUN_STORAGE_ROOT` (default `check-runs`) independently of Git and
 pull-request records.

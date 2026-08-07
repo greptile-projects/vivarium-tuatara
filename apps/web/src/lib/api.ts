@@ -132,6 +132,47 @@ export type MergeReadiness = {
   has_conflicts: boolean;
   blockers: { code: string; message: string }[];
 };
+export type CheckAttempt = {
+  number: number;
+  state: string;
+  started_at: string;
+  completed_at?: string;
+  exit_code?: number;
+  failure?: string;
+  actor_id?: string;
+};
+export type CheckArtifact = {
+  id: string;
+  attempt: number;
+  path: string;
+  size: number;
+  sha256: string;
+  content_type: string;
+  created_at: string;
+};
+export type CheckRun = {
+  id: string;
+  repository_id: string;
+  pull_request_id: string;
+  commit_id: string;
+  definition: { name: string; image: string; command: string };
+  state: string;
+  failure?: string;
+  created_at: string;
+  attempts: CheckAttempt[];
+  artifacts: CheckArtifact[];
+};
+export type CheckEvent = {
+  sequence: number;
+  attempt: number;
+  kind: "status" | "command" | "log" | "artifact" | "control";
+  timestamp: string;
+  state?: string;
+  stream?: string;
+  message?: string;
+  actor_id?: string;
+  artifact?: CheckArtifact;
+};
 export type ChangeSession = {
   id: string;
   repository_id: string;
