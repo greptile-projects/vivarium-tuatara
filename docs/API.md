@@ -229,6 +229,10 @@ nonterminal run; `POST
 run for another attempt. Reruns retain every earlier attempt, event, and
 artifact. Both actions append immutable `control` evidence with the actor's
 stable user ID, and a collaborator-requested attempt carries that attribution.
+Cancellation persists its intent before stopping the executor, so a forced
+container exit cannot win the terminal-state race. Control attribution is also
+stored in the run record and repaired into the event stream after a transient
+event-write failure; queued reruns remain schedulable while that repair waits.
 
 ## Pull requests
 

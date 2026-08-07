@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
   type CheckEvent,
@@ -38,22 +38,30 @@ export function PullRequestChecks({
   const [expanded, setExpanded] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const generation = useRef(0);
   const base = `/repositories/${repositoryID}/pulls/${pullRequestID}/checks`;
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (requestGeneration = generation.current) => {
     try {
       const result = await api<{ check_runs: CheckRun[] }>(base, {}, token);
+      if (requestGeneration !== generation.current) return;
       setRuns(result.check_runs);
       setError("");
     } catch (reason) {
+      if (requestGeneration !== generation.current) return;
       setError(reason instanceof Error ? reason.message : "Checks could not be loaded.");
     }
   }, [base, token]);
 
   useEffect(() => {
-    void Promise.resolve().then(load);
-    const timer = window.setInterval(() => void load(), 3000);
-    return () => window.clearInterval(timer);
+    const current = ++generation.current;
+    const invalid = current + 1;
+    void Promise.resolve().then(() => load(current));
+    const timer = window.setInterval(() => void load(current), 3000);
+    return () => {
+      generation.current = invalid;
+      window.clearInterval(timer);
+    };
   }, [load]);
 
   useEffect(() => {

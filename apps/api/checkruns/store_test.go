@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -85,6 +86,97 @@ func TestCollaboratorControlsPreserveAttemptsAndAttribution(t *testing.T) {
 	}
 	if _, err := store.Rerun(run.RepositoryID, run.PullRequestID, run.ID, actor); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRerunSurvivesEvidenceAppendFailureAndRepairsAttribution(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.Create("0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789", strings.Repeat("e", 40), []Definition{{Name: "test", Image: "alpine:3.22", Command: "true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, now := runs[0], time.Now().UTC()
+	run.State, run.CompletedAt = "succeeded", &now
+	if err := store.Update(run); err != nil {
+		t.Fatal(err)
+	}
+	evidencePath := filepath.Join(store.root, run.RepositoryID, run.PullRequestID, run.ID+".events")
+	if err := os.Remove(evidencePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(evidencePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	actor := "11111111111111111111111111111111"
+	queued, err := store.Rerun(run.RepositoryID, run.PullRequestID, run.ID, actor)
+	if err != nil || queued.State != "queued" || len(queued.Controls) != 1 {
+		t.Fatalf("Rerun() = %#v, %v", queued, err)
+	}
+	if err := os.Remove(evidencePath); err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.Events(run.RepositoryID, run.PullRequestID, run.ID, 0)
+	if err != nil || len(events) != 1 || events[0].Kind != "control" || events[0].ActorID != actor {
+		t.Fatalf("Events() = %#v, %v", events, err)
+	}
+}
+
+func TestCancellationIntentWinsExecutorFailureRace(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.Create("0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789", strings.Repeat("f", 40), []Definition{{Name: "test", Image: "alpine:3.22", Command: "true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, now := runs[0], time.Now().UTC()
+	run.State, run.StartedAt, run.Attempts = "running", &now, []Attempt{{Number: 1, State: "running", StartedAt: now}}
+	if err := store.Update(run); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := os.OpenFile(filepath.Join(store.root, run.RepositoryID, run.PullRequestID, run.ID+".execution.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	actor := "22222222222222222222222222222222"
+	go func() {
+		_, cancelErr := store.Cancel(run.RepositoryID, run.PullRequestID, run.ID, actor)
+		result <- cancelErr
+	}()
+	intentPath := filepath.Join(store.root, run.RepositoryID, run.PullRequestID, run.ID+".cancel")
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, statErr := os.Stat(intentPath); statErr == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("cancel intent was not published")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	failed := run
+	failed.State, failed.CompletedAt, failed.Failure = "failed", &now, "exit status 137"
+	if err := store.Update(failed); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	lock.Close()
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := store.Get(run.RepositoryID, run.PullRequestID, run.ID)
+	if err != nil || persisted.State != "canceled" || len(persisted.Controls) != 1 || persisted.Controls[0].ActorID != actor {
+		t.Fatalf("run = %#v, %v", persisted, err)
 	}
 }
 
