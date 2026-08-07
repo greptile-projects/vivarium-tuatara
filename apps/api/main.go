@@ -398,6 +398,29 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 		}
 		writeJSON(w, 200, pullRequest)
 	})
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/synchronize", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		existing, err := store.Get(r.PathValue("id"), r.PathValue("pull_id"))
+		if writePullRequestError(w, err) {
+			return
+		}
+		if existing.AuthorID != actor.UserID {
+			writeAPIError(w, http.StatusNotFound, "pull_request_not_found", "pull request not found")
+			return
+		}
+		updated, err := store.SynchronizeSource(r.PathValue("id"), existing.ID)
+		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
+			writeUncertainMutation(w, updated)
+			return
+		}
+		if writePullRequestError(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, updated)
+	})
 	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/commits", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
 			return
@@ -567,6 +590,8 @@ func writePullRequestError(w http.ResponseWriter, err error) bool {
 		writeAPIError(w, 400, "invalid_pull_request", "pull request content or branches are invalid")
 	case errors.Is(err, pullrequests.ErrBranchNotFound):
 		writeAPIError(w, 400, "branch_not_found", "source or target branch does not identify a commit")
+	case errors.Is(err, pullrequests.ErrSourceChanged):
+		writeAPIError(w, http.StatusConflict, "source_branch_changed", "source branch must be synchronized before review")
 	case errors.Is(err, pullrequests.ErrNotReady):
 		writeAPIError(w, 409, "pull_request_not_ready", "pull request is not ready to merge")
 	default:

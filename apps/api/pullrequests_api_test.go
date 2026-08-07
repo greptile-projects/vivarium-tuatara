@@ -137,6 +137,9 @@ func TestContributorOpensPullRequestWithExactBranchState(t *testing.T) {
 	authenticatedRequest(t, http.MethodPost, commentsURL, `{"body":"uninvited"}`, outsider.Credential.Token, http.StatusNotFound).Body.Close()
 
 	reviewsURL := server.URL + "/repositories/" + repository.ID + "/pulls/" + pullRequest.ID + "/reviews"
+	authenticatedRequest(t, http.MethodPost, reviewsURL, `{"decision":"approved"}`, owner.Credential.Token, http.StatusConflict).Body.Close()
+	synchronizeURL := server.URL + "/repositories/" + repository.ID + "/pulls/" + pullRequest.ID + "/synchronize"
+	authenticatedRequest(t, http.MethodPost, synchronizeURL, "", contributor.Credential.Token, http.StatusOK).Body.Close()
 	reviewResponse := authenticatedRequest(t, http.MethodPost, reviewsURL, `{"decision":"approved"}`, owner.Credential.Token, http.StatusOK)
 	var review pullrequests.Review
 	if err := json.NewDecoder(reviewResponse.Body).Decode(&review); err != nil {
@@ -161,6 +164,8 @@ func TestContributorOpensPullRequestWithExactBranchState(t *testing.T) {
 	if len(reviewSet.Reviews) != 1 || !reviewSet.Reviews[0].Stale || reviewSet.Reviews[0].ReviewedCommitID != string(advanced) {
 		t.Fatalf("stale reviews = %#v", reviewSet.Reviews)
 	}
+	authenticatedRequest(t, http.MethodPost, reviewsURL, `{"decision":"changes_requested"}`, owner.Credential.Token, http.StatusConflict).Body.Close()
+	authenticatedRequest(t, http.MethodPost, synchronizeURL, "", contributor.Credential.Token, http.StatusOK).Body.Close()
 	replacementResponse := authenticatedRequest(t, http.MethodPost, reviewsURL, `{"decision":"changes_requested"}`, owner.Credential.Token, http.StatusOK)
 	var replacement pullrequests.Review
 	if err := json.NewDecoder(replacementResponse.Body).Decode(&replacement); err != nil {

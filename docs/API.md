@@ -122,10 +122,15 @@ rejected without creating a resource.
 
 The created resource records immutable `repository_id` and `author_id`, its
 purpose in `title` and `body`, the source and target branch names, and the exact
-branch tips as `source_commit_id` and `target_commit_id`. These commit IDs are
-snapshots of the requested repository state and do not silently change when a
-branch later advances. New pull requests have `status: "open"` and creation
-and update timestamps. The linked `proposal_id` is nullable.
+branch tips as `source_commit_id` and `target_commit_id`. These commit IDs do
+not silently change when a branch advances. The author can explicitly adopt
+the source branch's current commit as a new reviewable revision with `POST
+/repositories/{id}/pulls/{pull_id}/synchronize`; this updates
+`source_commit_id`, while the target snapshot remains fixed. Synchronization
+requires `repositories:write`, rejects a missing or non-commit source branch,
+and is unavailable after merge. A different participant receives not-found.
+New pull requests have `status: "open"` and creation and update timestamps.
+The linked `proposal_id` is nullable.
 
 `GET /repositories/{id}/pulls` returns pull requests in the shared cursor-
 paginated collection shape under `pull_requests`; `GET
@@ -140,11 +145,12 @@ whose rename is visible but directory durability is
 uncertain returns the shared `202` response with its stable pull request ID.
 
 `GET /repositories/{id}/pulls/{pull_id}/commits` returns `commits`, the commits
-reachable from the pull request's snapshotted source commit but not from its
-snapshotted target commit. Results follow depth-first parent order from the
+reachable from the pull request's recorded source revision but not from its
+fixed target snapshot. Results follow depth-first parent order from the
 source tip and expose each commit's `id`, `tree_id`, ordered `parent_ids`, raw
-ordered Git `headers`, and exact `message`. The endpoint uses the immutable
-creation snapshots rather than current branch tips.
+ordered Git `headers`, and exact `message`. The endpoint uses the fixed target
+snapshot and explicitly synchronized source revision rather than silently
+following current branch tips.
 
 `GET /repositories/{id}/pulls/{pull_id}/files` compares those same two commit
 trees and returns `files` in path order. Each entry has `path`, `status`
@@ -165,11 +171,17 @@ Current repository participants record an explicit review with `POST
 /repositories/{id}/pulls/{pull_id}/reviews` and a `decision` of `approved` or
 `changes_requested`. Each reviewer has one current review: posting again keeps
 its stable review ID while replacing the decision and the evaluated commit.
+The live source branch must match the pull request's recorded source revision;
+otherwise review submission returns `409 source_branch_changed` and the pull
+request author must synchronize the revision first. This prevents a decision
+on an unadopted branch tip from becoming valid through later synchronization.
 The resource records stable `reviewer_id`, `reviewed_commit_id`, creation and
 update timestamps, and a derived `stale` flag. The evaluated commit is the
 source branch tip when the decision is submitted, not merely the pull
-request's opening snapshot. Consequently, `GET` on the same paginated
+request's recorded revision. Consequently, `GET` on the same paginated
 collection reports an earlier review as stale after the source branch moves.
+Synchronizing that tip makes it the pull request's reviewable revision but
+does not revive the earlier decision; a reviewer must approve it explicitly.
 If the source branch is deleted or no longer identifies a commit, its durable
 reviews remain readable and are all reported stale.
 

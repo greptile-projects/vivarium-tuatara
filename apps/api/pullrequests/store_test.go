@@ -186,6 +186,17 @@ func TestReviewsCaptureCurrentCommitBecomeStaleAndRemainAttributable(t *testing.
 	}
 
 	now = now.Add(time.Minute)
+	if _, err := store.SetReview(repository.ID(), pullRequest.ID, testID('c'), ChangesRequested); !errors.Is(err, ErrSourceChanged) {
+		t.Fatalf("review of unadopted revision error = %v", err)
+	}
+	synchronized, err := store.SynchronizeSource(repository.ID(), pullRequest.ID)
+	if err != nil || synchronized.SourceCommitID != string(advanced) {
+		t.Fatalf("SynchronizeSource = %#v, %v", synchronized, err)
+	}
+	reviews, err = store.ListReviews(repository.ID(), pullRequest.ID)
+	if err != nil || len(reviews) != 1 || !reviews[0].Stale {
+		t.Fatalf("review became fresh through synchronization = %#v, %v", reviews, err)
+	}
 	replaced, err := store.SetReview(repository.ID(), pullRequest.ID, testID('c'), ChangesRequested)
 	if err != nil || replaced.ID != review.ID || replaced.Decision != ChangesRequested || replaced.ReviewedCommitID != string(advanced) || !replaced.CreatedAt.Equal(review.CreatedAt) || !replaced.UpdatedAt.After(review.UpdatedAt) {
 		t.Fatalf("replacement = %#v, %v", replaced, err)
