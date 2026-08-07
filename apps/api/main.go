@@ -480,6 +480,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 		}
 		merged, err := store.Merge(r.PathValue("id"), r.PathValue("pull_id"), actor.UserID)
 		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
+			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.merged", ActorID: actor.UserID, RepositoryID: merged.RepositoryID, ResourceType: "pull_request", ResourceID: merged.ID, ResourceTitle: merged.Title})
 			writeUncertainMutation(w, merged)
 			return
 		}
@@ -495,6 +496,10 @@ func registerPullRequestRoutes(mux *http.ServeMux, repositoriesStore *repositori
 				closedLinkedProposal = proposalErr == nil || errors.Is(proposalErr, proposals.ErrDurabilityUncertain)
 			}
 			if errors.Is(proposalErr, proposals.ErrDurabilityUncertain) {
+				if closedLinkedProposal {
+					recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "proposal.closed", ActorID: actor.UserID, RepositoryID: merged.RepositoryID, ResourceType: "proposal", ResourceID: proposal.ID, ResourceTitle: proposal.Title})
+				}
+				recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.merged", ActorID: actor.UserID, RepositoryID: merged.RepositoryID, ResourceType: "pull_request", ResourceID: merged.ID, ResourceTitle: merged.Title})
 				writeUncertainMutation(w, merged)
 				return
 			}
