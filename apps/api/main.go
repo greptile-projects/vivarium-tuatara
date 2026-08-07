@@ -755,6 +755,71 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 		}
 		writeJSON(w, 200, map[string]any{"events": page, "next_cursor": next})
 	})
+	type workEventInput struct {
+		Kind     string `json:"kind"`
+		State    string `json:"state"`
+		Message  string `json:"message"`
+		Tool     string `json:"tool"`
+		Artifact string `json:"artifact"`
+		Branch   string `json:"branch"`
+		CommitID string `json:"commit_id"`
+	}
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/sessions/{session_id}/runs/{run_id}/events", func(w http.ResponseWriter, r *http.Request) {
+		credential, ok := authenticateRequest(w, r, authStore, "git:write", false)
+		if !ok {
+			return
+		}
+		if credential.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "agent_run_not_found", "agent run not found")
+			return
+		}
+		var input workEventInput
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_agent_event", "agent event is invalid")
+			return
+		}
+		input.Kind = strings.TrimSpace(input.Kind)
+		input.State = strings.TrimSpace(input.State)
+		input.Message = strings.TrimSpace(input.Message)
+		input.Tool = strings.TrimSpace(input.Tool)
+		input.Artifact = strings.TrimSpace(input.Artifact)
+		input.Branch = strings.TrimSpace(input.Branch)
+		input.CommitID = strings.TrimSpace(input.CommitID)
+		if input.Kind == "branch.updated" {
+			repository, openErr := gitStore.Open(r.PathValue("id"))
+			if openErr != nil {
+				writeAPIError(w, 500, "internal_error", "repository storage unavailable")
+				return
+			}
+			reference, refErr := repository.ReadReference("refs/heads/" + input.Branch)
+			if refErr != nil || reference.Symbolic || reference.Target != input.CommitID {
+				writeAPIError(w, 400, "invalid_agent_event", "branch update must match the published branch tip")
+				return
+			}
+			if _, commitErr := repository.ReadCommit(storage.ObjectID(input.CommitID)); commitErr != nil {
+				writeAPIError(w, 400, "invalid_agent_event", "branch update must identify a commit")
+				return
+			}
+		}
+		event, err := store.AppendWorkEvent(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("session_id"), r.PathValue("run_id"), credential.ID, input.Kind, input.State, input.Message, input.Tool, input.Artifact, input.Branch, input.CommitID)
+		if errors.Is(err, changesessions.ErrDurabilityUncertain) {
+			writeUncertainMutation(w, event)
+			return
+		}
+		if errors.Is(err, changesessions.ErrNotFound) {
+			writeAPIError(w, 404, "agent_run_not_found", "agent run not found")
+			return
+		}
+		if errors.Is(err, changesessions.ErrInvalid) {
+			writeAPIError(w, 400, "invalid_agent_event", "agent event fields do not match the run mandate")
+			return
+		}
+		if writeChangeSessionError(w, err) {
+			return
+		}
+		w.Header().Set("Location", strings.TrimSuffix(r.URL.Path, "/runs/"+r.PathValue("run_id")+"/events")+"/events#"+event.ID)
+		writeJSON(w, http.StatusCreated, event)
+	})
 	type runInput struct {
 		Instructions   string   `json:"instructions"`
 		SourceCommitID string   `json:"source_commit_id"`

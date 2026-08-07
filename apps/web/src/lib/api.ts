@@ -145,16 +145,25 @@ export type ChangeSession = {
 export type ChangeSessionEvent = {
   id: string;
   session_id: string;
-  kind: "session.opened" | "run.launched";
+  kind: "session.opened" | "run.launched" | "run.status" | "agent.message" | "tool.action" | "artifact.produced" | "run.failed" | "branch.updated";
   actor_id: string;
   state: "open" | "launched";
   run_id?: string;
+  initiator_id?: string;
+  agent_id?: string;
+  revision_id?: string;
+  message?: string;
+  tool?: string;
+  artifact?: string;
+  branch?: string;
+  commit_id?: string;
   created_at: string;
 };
 export type AgentRun = {
   id: string;
   session_id: string;
   initiator_id: string;
+  agent_id: string;
   instructions: string;
   source_commit_id: string;
   context_paths: string[];

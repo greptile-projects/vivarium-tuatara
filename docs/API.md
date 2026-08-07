@@ -338,13 +338,24 @@ initiator owns the repository.
 
 `GET .../sessions/{session_id}/runs` is participant-only and cursor-paginated.
 Run records retain the mandate, selected revision and paths, branch,
-initiator, credential ID and expiry, but never the token. Launch atomically
+initiator, a stable generated `agent_id`, credential ID and expiry, but never the token. Launch atomically
 adds an oldest-first `run.launched` session event. A launch whose session
 publication is visible but not confirmed uses the shared `202` durability
 contract and still returns its stable run and one-time credential; clients
 must inspect rather than duplicate the launch. Any current participant with
 `repositories:write` can revoke a run credential through `DELETE
 .../runs/{run_id}/credential`; the run then records `access_revoked_at` and
-the token fails on its next request. This boundary launches authorized work;
-worker progress and produced artifacts remain future timeline events rather
-than private fields in the run contract.
+the token fails on its next request. The run credential publishes execution
+progress at `POST
+.../runs/{run_id}/events`. The body has a `kind` of `run.status`,
+`agent.message`, `tool.action`, `artifact.produced`, `run.failed`, or
+`branch.updated`, plus a required human-readable `message` and `state`.
+Tool actions require `tool`, artifacts require `artifact`, and branch updates
+require the run's exact `branch` plus a full `commit_id`. Each append verifies
+the credential belongs to that run and is still active, then durably snapshots
+the `run_id`, generated `agent_id`, initiating user, and session revision onto
+the event. The event is immediately available through the ordinary
+participant-only timeline; its atomic publication uses the shared uncertain-
+durability response. This provides one ordered public record for status,
+messages, actions, outputs, failures, and published revisions without exposing
+worker logs or accepting caller-supplied attribution.

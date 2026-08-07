@@ -121,6 +121,30 @@ func TestCollaboratorOpensAndReconnectsToChangeSession(t *testing.T) {
 	if _, err := credentials.Authenticate(launched.Credential.Token, "git:write"); err != nil {
 		t.Fatalf("agent credential: %v", err)
 	}
+	if launched.Run.AgentID == "" {
+		t.Fatalf("run has no durable agent identity: %+v", launched.Run)
+	}
+	eventURL := reconnectBase + "/runs/" + launched.Run.ID + "/events"
+	workEvents := []string{
+		`{"kind":"run.status","state":"working","message":"Inspecting the selected revision."}`,
+		`{"kind":"agent.message","state":"working","message":"The regression belongs beside the session API coverage."}`,
+		`{"kind":"tool.action","state":"working","message":"Ran the focused Go test.","tool":"go test"}`,
+		`{"kind":"artifact.produced","state":"working","message":"Produced a test report.","artifact":"artifacts/test-report.txt"}`,
+		`{"kind":"branch.updated","state":"working","message":"Published the candidate revision.","branch":"feature","commit_id":"` + pull.SourceCommitID + `"}`,
+		`{"kind":"run.failed","state":"failed","message":"A later check failed with a reproducible error."}`,
+	}
+	for _, body := range workEvents {
+		published := authenticatedRequest(t, http.MethodPost, eventURL, body, launched.Credential.Token, http.StatusCreated)
+		var event changesessions.Event
+		if err := json.NewDecoder(published.Body).Decode(&event); err != nil {
+			t.Fatal(err)
+		}
+		published.Body.Close()
+		if event.AgentID != launched.Run.AgentID || event.InitiatorID != contributor.User.ID || event.RevisionID != pull.SourceCommitID || event.RunID != launched.Run.ID {
+			t.Fatalf("work event attribution = %+v", event)
+		}
+	}
+	authenticatedRequest(t, http.MethodPost, eventURL, `{"kind":"branch.updated","state":"working","message":"Wrong branch.","branch":"main","commit_id":"`+pull.SourceCommitID+`"}`, launched.Credential.Token, http.StatusBadRequest).Body.Close()
 	otherResponse := authenticatedRequest(t, http.MethodPost, reconnectedServer.URL+"/repositories", `{"name":"unrelated-agent-work"}`, contributor.Credential.Token, http.StatusCreated)
 	var otherRepository repositories.Repository
 	if err := json.NewDecoder(otherResponse.Body).Decode(&otherRepository); err != nil {
@@ -166,7 +190,7 @@ func TestCollaboratorOpensAndReconnectsToChangeSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	timeline.Body.Close()
-	if len(eventPage.Events) != 2 || eventPage.Events[1].Kind != "run.launched" || eventPage.Events[1].RunID != launched.Run.ID || eventPage.Events[1].ActorID != contributor.User.ID {
+	if len(eventPage.Events) != 8 || eventPage.Events[1].Kind != "run.launched" || eventPage.Events[7].Kind != "run.failed" || eventPage.Events[1].RunID != launched.Run.ID || eventPage.Events[1].ActorID != contributor.User.ID {
 		t.Fatalf("events after launch = %+v", eventPage.Events)
 	}
 	authenticatedRequest(t, http.MethodPost, reconnectBase+"/runs", `{"instructions":"Use unknown context.","source_commit_id":"`+pull.SourceCommitID+`","context_paths":["missing.txt"],"working_branch":"agent/invalid"}`, contributor.Credential.Token, http.StatusBadRequest).Body.Close()
