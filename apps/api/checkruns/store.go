@@ -37,17 +37,18 @@ type Config struct {
 }
 
 type Run struct {
-	ID            string     `json:"id"`
-	RepositoryID  string     `json:"repository_id"`
-	PullRequestID string     `json:"pull_request_id"`
-	CommitID      string     `json:"commit_id"`
-	Definition    Definition `json:"definition"`
-	State         string     `json:"state"`
-	ExitCode      *int       `json:"exit_code,omitempty"`
-	Failure       string     `json:"failure,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	StartedAt     *time.Time `json:"started_at,omitempty"`
-	CompletedAt   *time.Time `json:"completed_at,omitempty"`
+	ID             string     `json:"id"`
+	RepositoryID   string     `json:"repository_id"`
+	PullRequestID  string     `json:"pull_request_id"`
+	CommitID       string     `json:"commit_id"`
+	Definition     Definition `json:"definition"`
+	State          string     `json:"state"`
+	ExitCode       *int       `json:"exit_code,omitempty"`
+	Failure        string     `json:"failure,omitempty"`
+	CleanupFailure string     `json:"cleanup_failure,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
 }
 
 type Store struct {
@@ -139,6 +140,8 @@ func (s *Store) Create(repositoryID, pullRequestID, commitID string, definitions
 	if err != nil {
 		return nil, err
 	}
+	var existingCommit bool
+	var resumable []Run
 	for _, entry := range entries {
 		if !strings.HasSuffix(entry.Name(), ".json") {
 			continue
@@ -152,8 +155,14 @@ func (s *Store) Create(repositoryID, pullRequestID, commitID string, definitions
 			return nil, errors.New("invalid check run record")
 		}
 		if existing.CommitID == commitID {
-			return []Run{}, nil
+			existingCommit = true
+			if nonterminal(existing.State) {
+				resumable = append(resumable, existing)
+			}
 		}
+	}
+	if existingCommit {
+		return resumable, nil
 	}
 	for _, run := range runs {
 		if err := s.write(dir, run); err != nil {
@@ -216,12 +225,16 @@ func (s *Store) Nonterminal() ([]Run, error) {
 		if json.Unmarshal(body, &run) != nil {
 			return errors.New("invalid check run record")
 		}
-		if run.State == "queued" || run.State == "running" {
+		if nonterminal(run.State) {
 			runs = append(runs, run)
 		}
 		return nil
 	})
 	return runs, err
+}
+
+func nonterminal(state string) bool {
+	return state == "queued" || state == "running" || state == "cleanup_pending"
 }
 
 func (s *Store) Update(run Run) error {
@@ -282,6 +295,24 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 		return
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	containerName := "vivarium-check-" + run.ID
+	if run.State == "cleanup_pending" {
+		if cleanupErr := removeContainer(containerName); cleanupErr != nil {
+			run.CleanupFailure = cleanupErr.Error()
+			_ = s.Update(run)
+			return
+		}
+		now := s.now().Truncate(time.Microsecond)
+		run.CompletedAt = &now
+		run.CleanupFailure = ""
+		if run.ExitCode != nil && *run.ExitCode == 0 && run.Failure == "" {
+			run.State = "succeeded"
+		} else {
+			run.State = "failed"
+		}
+		_ = s.Update(run)
+		return
+	}
 	now := s.now().Truncate(time.Microsecond)
 	run.State = "running"
 	run.StartedAt = &now
@@ -314,12 +345,11 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 			err = errors.New("working directory does not exist")
 		} else {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(run.Definition.TimeoutSeconds)*time.Second)
-			containerName := "vivarium-check-" + run.ID
 			// A previous API process may have died while Docker kept the container.
 			// The execution lock makes removing that abandoned tree safe before
 			// relaunching this exact durable run.
-			_ = exec.Command("docker", "rm", "--force", containerName).Run()
-			args := []string{"run", "--name", containerName, "--pull=never", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=1g", "--cpus=2", "--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "--mount", "type=bind,src=" + workspace + ",dst=/workspace", "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m", "--workdir", "/workspace/" + run.Definition.WorkingDirectory, "--env", "HOME=/tmp", "--env", "CI=true", "--env", "VIVARIUM_COMMIT_SHA=" + run.CommitID}
+			_ = removeContainer(containerName)
+			args := []string{"run", "--name", containerName, "--pull=never", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=1g", "--cpus=2", "--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "--mount", "type=bind,src=" + workspace + ",dst=/workspace,readonly", "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m", "--tmpfs", "/output:rw,nosuid,nodev,size=256m", "--workdir", "/workspace/" + run.Definition.WorkingDirectory, "--env", "HOME=/tmp", "--env", "VIVARIUM_OUTPUT=/output", "--env", "CI=true", "--env", "VIVARIUM_COMMIT_SHA=" + run.CommitID}
 			for k, v := range run.Definition.Environment {
 				args = append(args, "--env", k+"="+v)
 			}
@@ -328,11 +358,23 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 			err = cmd.Run()
 			// CommandContext may terminate only the Docker client. Force-removing the
 			// named container synchronously kills and reaps every check descendant.
-			cleanup := exec.Command("docker", "rm", "--force", containerName)
-			_ = cleanup.Run()
+			cleanupErr := removeContainer(containerName)
 			cancel()
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				err = errors.New("check timed out")
+			}
+			if cleanupErr != nil {
+				run.State = "cleanup_pending"
+				run.CleanupFailure = cleanupErr.Error()
+				if ee := new(exec.ExitError); errors.As(err, &ee) {
+					exit = ee.ExitCode()
+				}
+				run.ExitCode = &exit
+				if err != nil {
+					run.Failure = err.Error()
+				}
+				_ = s.Update(run)
+				return
 			}
 			if ee := new(exec.ExitError); errors.As(err, &ee) {
 				exit = ee.ExitCode()
@@ -349,6 +391,18 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 		run.State = "succeeded"
 	}
 	_ = s.Update(run)
+}
+
+func removeContainer(name string) error {
+	removeErr := exec.Command("docker", "rm", "--force", name).Run()
+	if removeErr == nil {
+		return nil
+	}
+	output, listErr := exec.Command("docker", "ps", "--all", "--quiet", "--filter", "name=^/"+name+"$").Output()
+	if listErr == nil && len(strings.TrimSpace(string(output))) == 0 {
+		return nil
+	}
+	return removeErr
 }
 
 func newID() (string, error) {

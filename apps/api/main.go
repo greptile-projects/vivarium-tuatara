@@ -132,7 +132,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	resumeCheckRuns(store, checkRunStore)
+	startCheckRunRecovery(store, checkRunStore)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -461,6 +461,17 @@ func resumeCheckRuns(gitStore *storage.Store, runStore *checkruns.Store) {
 		}
 		go runStore.Execute(run, repository.Path())
 	}
+}
+
+func startCheckRunRecovery(gitStore *storage.Store, runStore *checkruns.Store) {
+	resumeCheckRuns(gitStore, runStore)
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			resumeCheckRuns(gitStore, runStore)
+		}
+	}()
 }
 
 func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoriesStore *repositories.Store, proposalStore *proposals.Store, store *pullrequests.Store, authStore *auth.Store, activityStore *activities.Store, userStore *users.Store, checkRunStore *checkruns.Store) {

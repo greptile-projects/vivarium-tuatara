@@ -50,7 +50,7 @@ func TestExecuteUsesExactDisposableSnapshotAndPersistsLifecycle(t *testing.T) {
 	if err := os.WriteFile(hostSecret, []byte("secret"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	command := fmt.Sprintf(`test "$(cat value)" = candidate && test "$TOKEN" = bounded && test ! -d .git && test ! -e %q; sleep 30 &`, hostSecret)
+	command := fmt.Sprintf(`test "$(cat value)" = candidate && test "$TOKEN" = bounded && test ! -d .git && test ! -e %q && ! touch ./forbidden && touch "$VIVARIUM_OUTPUT/result"; sleep 30 &`, hostSecret)
 	definitions := []Definition{{Name: "snapshot", Image: "alpine:3.22", Command: command, WorkingDirectory: "app", Environment: map[string]string{"TOKEN": "bounded"}, TimeoutSeconds: 10}}
 	runs, err := store.Create("0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789", commit, definitions)
 	if err != nil {
@@ -80,6 +80,10 @@ func TestExecuteUsesExactDisposableSnapshotAndPersistsLifecycle(t *testing.T) {
 	if err := store.Update(abandoned); err != nil {
 		t.Fatal(err)
 	}
+	resumable, err := store.Create(abandoned.RepositoryID, abandoned.PullRequestID, abandoned.CommitID, definitions)
+	if err != nil || len(resumable) != 1 || resumable[0].ID != abandoned.ID {
+		t.Fatalf("deduplicated resumable runs = %#v, %v", resumable, err)
+	}
 	reopened, err := New(store.root)
 	if err != nil {
 		t.Fatal(err)
@@ -92,6 +96,62 @@ func TestExecuteUsesExactDisposableSnapshotAndPersistsLifecycle(t *testing.T) {
 	final, err := reopened.List(abandoned.RepositoryID, abandoned.PullRequestID)
 	if err != nil || len(final) != 1 || final[0].State != "succeeded" {
 		t.Fatalf("recovered runs = %#v, %v", final, err)
+	}
+	cleanupPending := final[0]
+	cleanupPending.State = "cleanup_pending"
+	cleanupPending.CompletedAt = nil
+	if err := reopened.Update(cleanupPending); err != nil {
+		t.Fatal(err)
+	}
+	reopened.Execute(cleanupPending, repository)
+	final, err = reopened.List(abandoned.RepositoryID, abandoned.PullRequestID)
+	if err != nil || final[0].State != "succeeded" || final[0].CompletedAt == nil {
+		t.Fatalf("cleanup recovery = %#v, %v", final, err)
+	}
+
+	// A failed forced removal must remain durable and nonterminal until a later
+	// cleanup confirms that the named container is absent.
+	fakeBin := t.TempDir()
+	fakeDocker := filepath.Join(fakeBin, "docker")
+	marker := filepath.Join(t.TempDir(), "container")
+	failingDocker := `#!/bin/sh
+case "$1" in
+run) touch "$FAKE_CONTAINER"; exit 0 ;;
+rm) exit 1 ;;
+ps) test -e "$FAKE_CONTAINER" && echo retained; exit 0 ;;
+esac
+`
+	if err := os.WriteFile(fakeDocker, []byte(failingDocker), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKE_CONTAINER", marker)
+	t.Setenv("PATH", fakeBin+":"+os.Getenv("PATH"))
+	retry := final[0]
+	retry.State = "queued"
+	retry.CompletedAt = nil
+	retry.ExitCode = nil
+	if err := reopened.Update(retry); err != nil {
+		t.Fatal(err)
+	}
+	reopened.Execute(retry, repository)
+	pendingCleanup, err := reopened.List(retry.RepositoryID, retry.PullRequestID)
+	if err != nil || pendingCleanup[0].State != "cleanup_pending" || pendingCleanup[0].CleanupFailure == "" {
+		t.Fatalf("failed cleanup = %#v, %v", pendingCleanup, err)
+	}
+	successfulDocker := `#!/bin/sh
+case "$1" in
+rm) rm -f "$FAKE_CONTAINER"; exit 0 ;;
+ps) exit 0 ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(fakeDocker, []byte(successfulDocker), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	reopened.Execute(pendingCleanup[0], repository)
+	cleaned, err := reopened.List(retry.RepositoryID, retry.PullRequestID)
+	if err != nil || cleaned[0].State != "succeeded" || cleaned[0].CleanupFailure != "" {
+		t.Fatalf("retried cleanup = %#v, %v", cleaned, err)
 	}
 }
 

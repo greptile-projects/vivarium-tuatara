@@ -214,8 +214,9 @@ Candidate revisions can carry their reproducible verification contract in
 source revision snapshots those commands into durable check runs for that exact
 commit. Each command executes in a bounded, network-disabled OCI container
 from a disposable exported snapshot, using a preinstalled image and no
-repository credential. Interrupted nonterminal work is relaunched on service
-startup. Lifecycle metadata lives
+repository credential. The snapshot is read-only; only bounded temporary and
+output filesystems are writable. Interrupted execution and cleanup work is
+retried at startup, periodically, and on a later same-commit trigger. Lifecycle metadata lives
 beneath `CHECK_RUN_STORAGE_ROOT` (default `check-runs`) independently of Git
 and pull-request records.
 
