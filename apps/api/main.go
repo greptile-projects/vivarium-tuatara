@@ -338,6 +338,12 @@ func registerProposalRoutes(mux *http.ServeMux, repositoriesStore *repositories.
 			return
 		}
 		proposal, err := store.Create(r.PathValue("id"), actor.UserID, *input.Title, *input.Body)
+		if errors.Is(err, proposals.ErrDurabilityUncertain) {
+			location := "/repositories/" + r.PathValue("id") + "/proposals/" + proposal.ID
+			w.Header().Set("Location", location)
+			writeUncertainMutation(w, proposal)
+			return
+		}
 		if writeProposalError(w, err) {
 			return
 		}
@@ -374,6 +380,10 @@ func registerProposalRoutes(mux *http.ServeMux, repositoriesStore *repositories.
 			return
 		}
 		updated, err := store.Update(r.PathValue("id"), existing.ID, proposals.Patch{Title: input.Title, Body: input.Body, Status: input.Status})
+		if errors.Is(err, proposals.ErrDurabilityUncertain) {
+			writeUncertainMutation(w, updated)
+			return
+		}
 		if writeProposalError(w, err) {
 			return
 		}
@@ -405,12 +415,22 @@ func registerProposalRoutes(mux *http.ServeMux, repositoriesStore *repositories.
 			return
 		}
 		comment, err := store.AddComment(r.PathValue("id"), r.PathValue("proposal_id"), actor.UserID, *input.Body)
+		if errors.Is(err, proposals.ErrDurabilityUncertain) {
+			w.Header().Set("Location", r.URL.Path+"/"+comment.ID)
+			writeUncertainMutation(w, comment)
+			return
+		}
 		if writeProposalError(w, err) {
 			return
 		}
 		w.Header().Set("Location", r.URL.Path+"/"+comment.ID)
 		writeJSON(w, 201, comment)
 	})
+}
+
+func writeUncertainMutation(w http.ResponseWriter, resource any) {
+	w.Header().Set("Vivarium-Durability", "uncertain")
+	writeJSON(w, http.StatusAccepted, resource)
 }
 
 func authorizeRepositoryRead(w http.ResponseWriter, r *http.Request, store *repositories.Store, authStore *auth.Store, id string) (auth.Credential, bool, bool) {

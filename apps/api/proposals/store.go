@@ -17,8 +17,9 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("proposal not found")
-	ErrInvalid  = errors.New("invalid proposal")
+	ErrNotFound            = errors.New("proposal not found")
+	ErrInvalid             = errors.New("invalid proposal")
+	ErrDurabilityUncertain = errors.New("proposal mutation is visible but durability is uncertain")
 )
 
 const (
@@ -103,7 +104,7 @@ func (s *Store) Create(repositoryID, authorID, title, body string) (Proposal, er
 	desired := record{Proposal: p}
 	if committed, err := s.write(desired); err != nil {
 		if committed {
-			return p, nil
+			return p, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
 		}
 		return Proposal{}, err
 	}
@@ -187,7 +188,7 @@ func (s *Store) Update(repositoryID, id string, patch Patch) (Proposal, error) {
 	r.Proposal = p
 	if committed, err := s.write(r); err != nil {
 		if committed {
-			return p, nil
+			return p, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
 		}
 		return Proposal{}, err
 	}
@@ -221,7 +222,7 @@ func (s *Store) AddComment(repositoryID, proposalID, authorID, body string) (Com
 	r.Comments = append(r.Comments, c)
 	if committed, err := s.write(r); err != nil {
 		if committed {
-			return c, nil
+			return c, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
 		}
 		return Comment{}, err
 	}

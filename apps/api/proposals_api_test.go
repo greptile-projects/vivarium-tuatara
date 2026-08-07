@@ -65,3 +65,16 @@ func TestProposalLifecycleDiscussionAndAuthorization(t *testing.T) {
 	requestStatus(t, http.MethodGet, base, "", http.StatusOK).Body.Close()
 	requestStatus(t, http.MethodGet, base+"/comments", "", http.StatusOK).Body.Close()
 }
+
+func TestUncertainProposalMutationPreservesResourceForClient(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	resource := proposals.Comment{ID: "0123456789abcdef0123456789abcdef"}
+	writeUncertainMutation(recorder, resource)
+	if recorder.Code != http.StatusAccepted || recorder.Header().Get("Vivarium-Durability") != "uncertain" {
+		t.Fatalf("response = %d, durability %q", recorder.Code, recorder.Header().Get("Vivarium-Durability"))
+	}
+	var got proposals.Comment
+	if err := json.NewDecoder(recorder.Body).Decode(&got); err != nil || got.ID != resource.ID {
+		t.Fatalf("resource = %#v, %v", got, err)
+	}
+}

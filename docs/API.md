@@ -9,6 +9,10 @@ by repository resources.
 
 - Requests and responses use JSON. Successful resource creation returns `201`
   and a `Location` header; deletion returns `204`.
+- A mutation whose atomic rename is visible but whose parent-directory sync
+  fails returns `202` with `Vivarium-Durability: uncertain` and the affected
+  resource (including its stable ID). Clients must retain that identity and
+  inspect it later rather than retrying the mutation as a new request.
 - Resource `id` fields are opaque, permanent identities. Display names,
   handles, repository names, and Git remote paths are not attribution keys.
 - API credentials use `Authorization: Bearer <token>`. The account bootstrap
@@ -102,3 +106,6 @@ current contributor with `repositories:read`. Creation and updates require
 `repositories:write`; commenting requires `repositories:read`. Public access
 does not itself grant participation. Proposal records are private atomic JSON
 files beneath `PROPOSAL_STORAGE_ROOT`, which defaults to `proposals`.
+Proposal creates, edits, closes, and comments use the shared uncertain-
+durability response when their new state is visible but crash persistence
+cannot be confirmed, preserving attribution IDs without overstating storage.

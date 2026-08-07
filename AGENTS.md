@@ -155,6 +155,9 @@ whenever dependencies change or the web job fails before it starts.
   inherit repository visibility and private collaborator access, while public
   readability does not grant participation. Proposal and comment collections
   use the shared cursor pagination contract.
+  After a proposal mutation's atomic rename, a parent-directory sync failure
+  returns the resource with `202` and `Vivarium-Durability: uncertain`; clients
+  retain its stable ID and inspect later instead of issuing a duplicate retry.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

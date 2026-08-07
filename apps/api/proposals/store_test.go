@@ -83,8 +83,8 @@ func TestMutationsReconcilePostRenameDirectorySyncFailure(t *testing.T) {
 		return os.ReadFile(path)
 	}
 	proposal, err := store.Create(repositoryID, authorID, "Durable idea", "Context")
-	if err != nil {
-		t.Fatalf("committed create returned error: %v", err)
+	if !errors.Is(err, ErrDurabilityUncertain) || proposal.ID == "" {
+		t.Fatalf("committed create result = %#v, %v", proposal, err)
 	}
 	failReads = false
 	listed, err := store.List(repositoryID)
@@ -92,8 +92,8 @@ func TestMutationsReconcilePostRenameDirectorySyncFailure(t *testing.T) {
 		t.Fatalf("proposals after create = %#v, %v", listed, err)
 	}
 	comment, err := store.AddComment(repositoryID, proposal.ID, commenterID, "Feedback")
-	if err != nil {
-		t.Fatalf("committed comment returned error: %v", err)
+	if !errors.Is(err, ErrDurabilityUncertain) || comment.ID == "" {
+		t.Fatalf("committed comment result = %#v, %v", comment, err)
 	}
 	failReads = false
 	comments, err := store.ListComments(repositoryID, proposal.ID)
@@ -101,7 +101,7 @@ func TestMutationsReconcilePostRenameDirectorySyncFailure(t *testing.T) {
 		t.Fatalf("comments after append = %#v, %v", comments, err)
 	}
 	updated, err := store.Update(repositoryID, proposal.ID, Patch{Status: pointer(Closed)})
-	if err != nil || updated.Status != Closed {
+	if !errors.Is(err, ErrDurabilityUncertain) || updated.Status != Closed {
 		t.Fatalf("committed update = %#v, %v", updated, err)
 	}
 }
