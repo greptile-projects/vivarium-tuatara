@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -169,6 +170,19 @@ type userInput struct {
 }
 
 func registerUserRoutes(mux *http.ServeMux, store *users.Store, authStore *auth.Store) {
+	if authStore != nil {
+		mux.HandleFunc("GET /user", func(w http.ResponseWriter, r *http.Request) {
+			actor, ok := authenticateRequest(w, r, authStore, "", false)
+			if !ok {
+				return
+			}
+			user, err := store.Get(actor.UserID)
+			if writeUserError(w, err) {
+				return
+			}
+			writeJSON(w, http.StatusOK, user)
+		})
+	}
 	mux.HandleFunc("POST /users", func(w http.ResponseWriter, r *http.Request) {
 		var input userInput
 		if err := decodeJSON(r, &input); err != nil || input.Handle == nil || input.DisplayName == nil {
@@ -268,7 +282,12 @@ func registerRepositoryRoutes(mux *http.ServeMux, store *repositories.Store, aut
 		if writeRepositoryError(w, err) {
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"repositories": owned})
+		page, next, ok := paginate(r, owned, func(repository repositories.Repository) string { return repository.ID })
+		if !ok {
+			writeAPIError(w, http.StatusBadRequest, "invalid_pagination", "limit or after is invalid")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"repositories": page, "next_cursor": next})
 	})
 	mux.HandleFunc("GET /repositories/{id}", func(w http.ResponseWriter, r *http.Request) {
 		repository, err := store.GetByID(r.PathValue("id"))
@@ -357,7 +376,12 @@ func registerAuthRoutes(mux *http.ServeMux, store *auth.Store) {
 			writeAPIError(w, 500, "internal_error", "credential storage unavailable")
 			return
 		}
-		writeJSON(w, 200, map[string]any{"credentials": credentials})
+		page, next, valid := paginate(r, credentials, func(credential auth.Credential) string { return credential.ID })
+		if !valid {
+			writeAPIError(w, http.StatusBadRequest, "invalid_pagination", "limit or after is invalid")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"credentials": page, "next_cursor": next})
 	})
 	mux.HandleFunc("POST /auth/credentials", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, store, "credentials:write", false)
@@ -503,6 +527,42 @@ func decodeJSON(r *http.Request, destination any) error {
 		return errors.New("request body must contain one JSON value")
 	}
 	return nil
+}
+
+func paginate[T any](r *http.Request, all []T, id func(T) string) ([]T, *string, bool) {
+	values := r.URL.Query()
+	if len(values["limit"]) > 1 || len(values["after"]) > 1 {
+		return nil, nil, false
+	}
+	limit := 30
+	if raw := values.Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			return nil, nil, false
+		}
+		limit = parsed
+	}
+	start := 0
+	if after := values.Get("after"); after != "" {
+		start = -1
+		for index, item := range all {
+			if id(item) == after {
+				start = index + 1
+				break
+			}
+		}
+		if start < 0 {
+			return nil, nil, false
+		}
+	}
+	end := min(start+limit, len(all))
+	page := all[start:end]
+	var next *string
+	if end < len(all) {
+		cursor := id(all[end-1])
+		next = &cursor
+	}
+	return page, next, true
 }
 
 func writeUserError(w http.ResponseWriter, err error) bool {

@@ -103,7 +103,8 @@ whenever dependencies change or the web job fails before it starts.
   Opaque 128-bit lowercase IDs are permanent attribution keys; handles are
   globally unique and, along with display names, are editable profile data.
   `POST /users`, `GET /users/{id}`, and `PATCH /users/{id}` expose the account
-  lifecycle. `$USER_STORAGE_ROOT` selects their directory and defaults to
+  lifecycle; authenticated consumers resolve their own identity with `GET
+  /user`. `$USER_STORAGE_ROOT` selects their directory and defaults to
   `users`. Mutations take a root-wide advisory lock, so handle uniqueness and
   sparse profile patches remain atomic across API processes sharing the root.
   Account creation returns a short-lived session credential and sets the same
@@ -132,7 +133,10 @@ whenever dependencies change or the web job fails before it starts.
   default; public reads are anonymous, while private reads, every push, and
   administration require the owner and matching API or Git scope.
   Authenticated non-owners receive not-found across both interfaces. Catalog
-  reads reconcile metadata with Git storage: records whose Git ID has already
+  and credential collection routes use `limit`/`after` cursor pagination (30
+  by default, at most 100) and return `next_cursor`. The supported JSON contract
+  and stable error envelope are documented in `docs/API.md`. Repository reads
+  reconcile metadata with Git storage: records whose Git ID has already
   been detached by deletion are not active, even if metadata cleanup must be
   retried. A Git cleanup error preserves the ownership record so the owner can
   retry deletion; metadata is removed only after Git cleanup succeeds.

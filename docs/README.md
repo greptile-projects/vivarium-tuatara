@@ -10,6 +10,10 @@ written down here as they're decided, not before.
 - `apps/api` — Go HTTP API. Starts at `main.go`, where routes are registered on
   the mux. `bun run dev:api` from the repo root, serves on `:8080`.
 
+The supported consumer contract, including authentication, stable error
+shapes, validation, and collection pagination, is documented in [API.md](API.md).
+Consumers should use that HTTP boundary rather than reading storage roots.
+
 ## User identity
 
 Human collaborators have durable platform identities backed by the API's
@@ -98,7 +102,8 @@ identity. Names are case-insensitively unique within one owner's repositories
 but may be reused by other owners.
 
 `GET /repositories` lists only the authenticated actor's repositories in
-creation order. Repositories are private by default, and their owner can use
+creation order using the shared cursor pagination contract. Repositories are
+private by default, and their owner can use
 `PATCH /repositories/{id}` to change `visibility` between `private` and
 `public`. Public repositories can be inspected without authentication, while
 private inspection, visibility changes, and `DELETE /repositories/{id}`

@@ -144,7 +144,7 @@ func (s *Store) Authenticate(token string, required string) (Credential, error) 
 	}
 	hash := sha256.Sum256([]byte(token))
 	storedHash, decodeErr := hex.DecodeString(credential.Hash)
-	if decodeErr != nil || subtle.ConstantTimeCompare(storedHash, hash[:]) != 1 || credential.RevokedAt != nil || !s.now().Before(credential.ExpiresAt) || !hasScope(credential.Scopes, required) {
+	if decodeErr != nil || subtle.ConstantTimeCompare(storedHash, hash[:]) != 1 || credential.RevokedAt != nil || !s.now().Before(credential.ExpiresAt) || (required != "" && !hasScope(credential.Scopes, required)) {
 		return Credential{}, ErrNotFound
 	}
 	now := s.now().Truncate(time.Microsecond)
@@ -176,7 +176,12 @@ func (s *Store) List(userID string) ([]Credential, error) {
 			result = append(result, credential)
 		}
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.Before(result[j].CreatedAt) })
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].CreatedAt.Equal(result[j].CreatedAt) {
+			return result[i].ID < result[j].ID
+		}
+		return result[i].CreatedAt.Before(result[j].CreatedAt)
+	})
 	return result, nil
 }
 
