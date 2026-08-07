@@ -175,11 +175,17 @@ export class APIError extends Error {
   }
 }
 
-export async function api<T>(
+export type APIResponse<T> = {
+  data: T;
+  status: number;
+  headers: Headers;
+};
+
+export async function apiResponse<T>(
   path: string,
   init: RequestInit = {},
   token?: string | null,
-): Promise<T> {
+): Promise<APIResponse<T>> {
   const headers = new Headers(init.headers);
   if (init.body) headers.set("Content-Type", "application/json");
   if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -198,6 +204,16 @@ export async function api<T>(
       body?.error?.code,
     );
   }
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
+  const data = response.status === 204
+    ? undefined as T
+    : await response.json() as T;
+  return { data, status: response.status, headers: response.headers };
+}
+
+export async function api<T>(
+  path: string,
+  init: RequestInit = {},
+  token?: string | null,
+): Promise<T> {
+  return (await apiResponse<T>(path, init, token)).data;
 }

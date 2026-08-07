@@ -96,9 +96,34 @@ test("two users carry one attributed change from onboarding through merge", asyn
   await newcomer.getByLabel("Purpose and feedback needed").fill("Implements the agreed welcome.");
   await newcomer.getByRole("button", { name: "Open pull request" }).click();
   await expect(newcomer).toHaveURL(new RegExp(`/pulls/${repositoryID}/[a-f0-9]{32}$`));
+  const pullRequestID = new URL(newcomer.url()).pathname.split("/").pop()!;
   await expect(newcomer.getByText(`@newcomer-${suffix}`, { exact: true }).first()).toBeVisible();
 
   await maintainer.goto(newcomer.url());
+  const uncertainSessionID = "f".repeat(32);
+  const sessionEndpoint = `**/api/repositories/${repositoryID}/pulls/${pullRequestID}/sessions`;
+  await maintainer.route(sessionEndpoint, async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    await route.fulfill({
+      status: 202,
+      headers: { "Content-Type": "application/json", "Vivarium-Durability": "uncertain" },
+      body: JSON.stringify({
+        id: uncertainSessionID,
+        repository_id: repositoryID,
+        pull_request_id: pullRequestID,
+        initiator_id: collaborationID,
+        source_commit_id: "a".repeat(40),
+        state: "open",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }),
+    });
+  });
+  await maintainer.getByRole("button", { name: "Start change session" }).click();
+  await expect(maintainer.getByText("Session created with uncertain durability")).toBeVisible();
+  await expect(maintainer.getByRole("link", { name: "Inspect session fffffff" })).toBeVisible();
+  await expect(maintainer.getByRole("link", { name: "Session fffffff", exact: true })).toHaveCount(0);
+  await maintainer.unroute(sessionEndpoint);
   await maintainer.getByRole("button", { name: "Start change session" }).click();
   await maintainer.getByRole("link", { name: /Session [a-f0-9]{7}/ }).click();
   await expect(maintainer).toHaveURL(new RegExp(`/pulls/${repositoryID}/[a-f0-9]{32}/sessions/[a-f0-9]{32}$`));

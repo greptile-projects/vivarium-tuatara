@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
+  apiResponse,
   type ChangeSession,
   type ChangeSessionEvent,
   type PullRequest,
@@ -59,6 +60,7 @@ export function ChangeSessionsCard({ repositoryID, pullRequestID, participant, o
   const [items, setItems] = useState<ChangeSession[]>([]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const [uncertain, setUncertain] = useState<ChangeSession | null>(null);
   const base = `/repositories/${repositoryID}/pulls/${pullRequestID}/sessions`;
 
   const load = useCallback(async () => {
@@ -69,10 +71,14 @@ export function ChangeSessionsCard({ repositoryID, pullRequestID, participant, o
   useEffect(() => { void Promise.resolve().then(load); }, [load]);
 
   async function create() {
-    setPending(true); setError("");
+    setPending(true); setError(""); setUncertain(null);
     try {
-      const created = await api<ChangeSession>(base, { method: "POST" }, token);
-      setItems((current) => [...current, created]);
+      const response = await apiResponse<ChangeSession>(base, { method: "POST" }, token);
+      if (response.status === 202 || response.headers.get("Vivarium-Durability") === "uncertain") {
+        setUncertain(response.data);
+      } else {
+        setItems((current) => [...current, response.data]);
+      }
     } catch (reason) { setError(message(reason, "The change session could not be started.")); }
     finally { setPending(false); }
   }
@@ -85,6 +91,7 @@ export function ChangeSessionsCard({ repositoryID, pullRequestID, participant, o
     </div>
     <p className="mt-2 text-sm leading-6 text-[var(--muted)]">Open a durable shared workspace on this review revision and return to its timeline anytime.</p>
     {error && <p role="alert" className="mt-3 text-sm text-[var(--danger)]">{error}</p>}
+    {uncertain && <div role="status" className="mt-3 rounded-lg bg-[var(--warning-soft)] p-3 text-sm leading-6 text-[var(--warning)]"><p className="font-semibold">Session created with uncertain durability</p><p>The workspace is visible, but crash-safe persistence was not confirmed. Keep its stable link and inspect it later instead of starting another session.</p><Link href={`/pulls/${repositoryID}/${pullRequestID}/sessions/${uncertain.id}`} className="mt-2 inline-block font-semibold underline">Inspect session {short(uncertain.id)}</Link></div>}
     {items.length > 0 && <ol className="mt-4 space-y-2">{[...items].reverse().map((session) => <li key={session.id}><Link href={`/pulls/${repositoryID}/${pullRequestID}/sessions/${session.id}`} className="flex items-center justify-between rounded-lg border border-[var(--line)] px-3 py-2 text-sm hover:border-[var(--line-strong)]"><span><span className="font-semibold">Session {short(session.id)}</span><span className="ml-2 text-xs text-[var(--muted)]">{formatTime(session.created_at)}</span></span><Badge tone="success">{session.state}</Badge></Link></li>)}</ol>}
     {open ? <Button className="mt-4 w-full" variant={items.length ? "secondary" : "primary"} disabled={pending} onClick={() => void create()}>{pending ? "Opening…" : "Start change session"}</Button> : <p className="mt-4 text-xs text-[var(--muted)]">Merged pull requests keep their existing sessions, but cannot start new work.</p>}
   </Card>;
