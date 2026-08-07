@@ -61,7 +61,8 @@ whenever dependencies change or the web job fails before it starts.
   `cache: false` line should flip to `cache-dependency-path: apps/api/go.sum`.
   The port comes from `$PORT`, defaulting to `8080`. Bare Git repository
   lifecycle storage lives in `apps/api/storage`; callers create or reopen a
-  stable storage ID there before performing repository operations.
+  stable storage ID there before performing repository operations, and
+  `Store.Delete` atomically detaches an ID when its repository is removed.
   `Repository.WriteObject` and `ReadObject` are the durable object boundary;
   they use canonical Git loose-object storage and support blob, tree, commit,
   and annotated tag objects addressed by lowercase SHA-1 object IDs.
@@ -117,6 +118,15 @@ whenever dependencies change or the web job fails before it starts.
   reports success after revocation is durable.
   Both stores reconcile exact records after uncertain post-rename failures,
   and a definitively failed user publication revokes its prepared session.
+  Authenticated repository lifecycle routes are `POST /repositories`, `GET
+  /repositories`, `GET /repositories/{id}`, and `DELETE /repositories/{id}`.
+  Repository records have an opaque stable ID, immutable owner, user-facing
+  name, `main` default branch, and `/git/<id>.git` remote path. Names are unique
+  per owner (case-insensitively), while IDs are shared by application records
+  and bare Git storage. `$REPOSITORY_STORAGE_ROOT` selects the private metadata
+  root and defaults to `repository-records`. Session and API credentials use
+  `repositories:read` and `repositories:write`; Git transport authorization is
+  intentionally still scope-only until repository access enforcement.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

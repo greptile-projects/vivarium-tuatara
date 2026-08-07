@@ -33,8 +33,8 @@ const (
 )
 
 var allowedScopes = map[Kind]map[string]bool{
-	Session: {"profile:write": true, "credentials:write": true},
-	API:     {"profile:write": true},
+	Session: {"profile:write": true, "credentials:write": true, "repositories:read": true, "repositories:write": true},
+	API:     {"profile:write": true, "repositories:read": true, "repositories:write": true},
 	Git:     {"git:read": true, "git:write": true},
 }
 

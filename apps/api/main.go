@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
@@ -58,6 +59,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	repositoryRoot := os.Getenv("REPOSITORY_STORAGE_ROOT")
+	if repositoryRoot == "" {
+		repositoryRoot = "repository-records"
+	}
+	repositoryStore, err := repositories.New(repositoryRoot, store)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -65,7 +74,7 @@ func main() {
 	}
 
 	log.Printf("listening on http://localhost:%s", port)
-	if err := http.ListenAndServe(":"+port, newAuthenticatedAppHandler(store, userStore, authStore)); err != nil {
+	if err := http.ListenAndServe(":"+port, newAuthenticatedAppHandler(store, userStore, authStore, repositoryStore)); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -78,7 +87,7 @@ func newAppHandler(store *storage.Store, userStore *users.Store) http.Handler {
 	return newAuthenticatedAppHandler(store, userStore, nil)
 }
 
-func newAuthenticatedAppHandler(store *storage.Store, userStore *users.Store, authStore *auth.Store) http.Handler {
+func newAuthenticatedAppHandler(store *storage.Store, userStore *users.Store, authStore *auth.Store, catalogs ...*repositories.Store) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -89,6 +98,9 @@ func newAuthenticatedAppHandler(store *storage.Store, userStore *users.Store, au
 	}
 	if authStore != nil {
 		registerAuthRoutes(mux, authStore)
+	}
+	if authStore != nil && len(catalogs) > 0 && catalogs[0] != nil {
+		registerRepositoryRoutes(mux, catalogs[0], authStore)
 	}
 	mux.HandleFunc("GET /git/{remote}/info/refs", func(w http.ResponseWriter, r *http.Request) {
 		service := r.URL.Query().Get("service")
@@ -165,7 +177,7 @@ func registerUserRoutes(mux *http.ServeMux, store *users.Store, authStore *auth.
 				return nil
 			}
 			var issueErr error
-			issued, issueErr = authStore.Issue(user.ID, auth.Session, "web session", []string{"credentials:write", "profile:write"}, 24*time.Hour)
+			issued, issueErr = authStore.Issue(user.ID, auth.Session, "web session", []string{"credentials:write", "profile:write", "repositories:read", "repositories:write"}, 24*time.Hour)
 			return issueErr
 		})
 		if err != nil && issued.ID != "" {
@@ -215,6 +227,80 @@ func registerUserRoutes(mux *http.ServeMux, store *users.Store, authStore *auth.
 		}
 		writeJSON(w, http.StatusOK, user)
 	})
+}
+
+type repositoryInput struct {
+	Name *string `json:"name"`
+}
+
+func registerRepositoryRoutes(mux *http.ServeMux, store *repositories.Store, authStore *auth.Store) {
+	mux.HandleFunc("POST /repositories", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)
+		if !ok {
+			return
+		}
+		var input repositoryInput
+		if decodeJSON(r, &input) != nil || input.Name == nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid_request", "name is required")
+			return
+		}
+		repository, err := store.Create(actor.UserID, *input.Name)
+		if writeRepositoryError(w, err) {
+			return
+		}
+		w.Header().Set("Location", "/repositories/"+repository.ID)
+		writeJSON(w, http.StatusCreated, repository)
+	})
+	mux.HandleFunc("GET /repositories", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, authStore, "repositories:read", false)
+		if !ok {
+			return
+		}
+		owned, err := store.List(actor.UserID)
+		if writeRepositoryError(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"repositories": owned})
+	})
+	mux.HandleFunc("GET /repositories/{id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, authStore, "repositories:read", false)
+		if !ok {
+			return
+		}
+		repository, err := store.Get(actor.UserID, r.PathValue("id"))
+		if writeRepositoryError(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, repository)
+	})
+	mux.HandleFunc("DELETE /repositories/{id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)
+		if !ok {
+			return
+		}
+		if writeRepositoryError(w, store.Delete(actor.UserID, r.PathValue("id"))) {
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+func writeRepositoryError(w http.ResponseWriter, err error) bool {
+	if err == nil {
+		return false
+	}
+	switch {
+	case errors.Is(err, repositories.ErrNotFound):
+		writeAPIError(w, http.StatusNotFound, "repository_not_found", "repository not found")
+	case errors.Is(err, repositories.ErrNameTaken):
+		writeAPIError(w, http.StatusConflict, "repository_name_taken", "repository name is already in use")
+	case errors.Is(err, repositories.ErrInvalidName):
+		writeAPIError(w, http.StatusBadRequest, "invalid_repository", "repository name is invalid")
+	default:
+		log.Printf("repository storage: %v", err)
+		writeAPIError(w, http.StatusInternalServerError, "internal_error", "repository storage unavailable")
+	}
+	return true
 }
 
 type credentialInput struct {

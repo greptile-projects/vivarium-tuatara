@@ -87,6 +87,33 @@ revocation updates share a root-wide advisory lock, preventing concurrent API
 processes from resurrecting a revoked credential. Expiration is enforced on
 every request.
 
+## Owned repositories
+
+Repository lifecycle is exposed through an authenticated application catalog.
+`POST /repositories` accepts a `name`, creates an empty bare repository, and
+returns its immutable owner and opaque repository ID together with
+`default_branch: "main"` and `git_remote: "/git/<id>.git"`. The same opaque ID
+is used by `GET /repositories/{id}`, durable Git storage, and the smart HTTP
+remote, so profile edits and future name changes cannot change repository
+identity. Names are case-insensitively unique within one owner's repositories
+but may be reused by other owners.
+
+`GET /repositories` lists only the authenticated actor's repositories in
+creation order. Inspection and `DELETE /repositories/{id}` likewise resolve
+ownership from the credential rather than accepting an owner from the client;
+another actor receives the same not-found response as an unknown ID. Deletion
+atomically detaches the Git storage ID before removing the ownership record,
+so a successfully removed API resource is no longer a usable remote.
+
+Session credentials include `repositories:read` and `repositories:write`.
+Long-lived API credentials can be issued with either capability for narrower
+automation. Catalog metadata is stored as private atomic JSON records beneath
+`REPOSITORY_STORAGE_ROOT`, defaulting to `repository-records`, while Git bytes
+remain beneath `GIT_STORAGE_ROOT`. Git credentials continue to authorize smart
+HTTP by `git:read` and `git:write` scope only; binding Git transport requests to
+repository ownership and later collaborator permissions belongs to the access
+control layer.
+
 ## Git repository storage
 
 The API's `storage` package is the boundary for durable Git repositories. A
@@ -150,7 +177,7 @@ Git files themselves. The complete durable interface is:
 
 | Concern | Write operations | Read operations |
 | --- | --- | --- |
-| Repository lifecycle | `Store.Create` | `Store.Open`, `Repository.ID`, `Repository.Path`, `Repository.Inspect` |
+| Repository lifecycle | `Store.Create`, `Store.Delete` | `Store.Open`, `Repository.ID`, `Repository.Path`, `Repository.Inspect` |
 | Immutable objects | `Repository.WriteObject` | `Repository.ReadObject`, `Repository.ListObjects` |
 | Named state | `Repository.CreateReference`, `UpdateReference`, `DeleteReference` | `Repository.ReadReference`, `ListReferences` |
 | Snapshots and history | Objects are written with `WriteObject` | `Repository.ReadTree`, `WalkTree`, `ReadCommit`, `ListCommitAncestry` |

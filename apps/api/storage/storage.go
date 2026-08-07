@@ -216,6 +216,34 @@ func (s *Store) Open(id string) (*Repository, error) {
 	return repo, nil
 }
 
+// Delete removes a repository by first atomically detaching its stable ID.
+func (s *Store) Delete(id string) error {
+	path, err := s.pathFor(id)
+	if err != nil {
+		return err
+	}
+	if _, err := s.Open(id); err != nil {
+		return err
+	}
+	tombstone, err := os.MkdirTemp(s.root, ".deleting-")
+	if err != nil {
+		return fmt.Errorf("stage repository deletion: %w", err)
+	}
+	if err := os.Remove(tombstone); err != nil {
+		return fmt.Errorf("prepare repository deletion: %w", err)
+	}
+	if err := os.Rename(path, tombstone); err != nil {
+		return fmt.Errorf("detach repository: %w", err)
+	}
+	if err := syncDirectory(s.root); err != nil {
+		return fmt.Errorf("sync repository deletion: %w", err)
+	}
+	if err := os.RemoveAll(tombstone); err != nil {
+		return fmt.Errorf("remove repository: %w", err)
+	}
+	return syncDirectory(s.root)
+}
+
 // ID returns the stable identifier assigned by the store.
 func (r *Repository) ID() string { return r.id }
 
