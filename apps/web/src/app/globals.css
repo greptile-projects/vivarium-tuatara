@@ -1,26 +1,84 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --canvas: #f4f5f1;
+  --surface: #fbfcf8;
+  --surface-raised: #ffffff;
+  --ink: #1d2420;
+  --muted: #667069;
+  --line: #dfe3dc;
+  --line-strong: #c9d0c8;
+  --brand: #235c43;
+  --brand-strong: #194832;
+  --brand-soft: #e3eee7;
+  --warning: #8a5a12;
+  --warning-soft: #fbefd8;
+  --danger: #a23a32;
+  --danger-soft: #fae8e5;
+  --info: #365b8c;
+  --info-soft: #e8eef8;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --shadow-card: 0 1px 2px rgb(20 28 23 / 0.04), 0 8px 24px rgb(20 28 23 / 0.035);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-background: var(--canvas);
+  --color-foreground: var(--ink);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--canvas);
+  scroll-behavior: smooth;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  margin: 0;
+  background:
+    radial-gradient(circle at 80% 0%, rgb(222 235 225 / 0.45), transparent 28rem),
+    var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button,
+a,
+summary,
+input,
+textarea,
+select {
+  -webkit-tap-highlight-color: transparent;
+}
+
+:focus-visible {
+  outline: 3px solid rgb(35 92 67 / 0.28);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: #c7dfce;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }

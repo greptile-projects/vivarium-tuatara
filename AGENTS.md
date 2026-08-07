@@ -52,9 +52,16 @@ whenever dependencies change or the web job fails before it starts.
 ## Conventions
 
 - **Frontend** — App Router, file-based routes under `apps/web/src/app`. Entry
-  point is `src/app/page.tsx`, shared shell is `layout.tsx`, global styles are
-  `globals.css`. Tailwind v4 is wired through PostCSS
-  (`postcss.config.mjs`); there is no `tailwind.config` file.
+  point is `src/app/page.tsx`; `layout.tsx` installs the persistent application
+  shell from `src/components/app-shell.tsx`. Reuse the accessible visual
+  primitives in `src/components/ui.tsx` and the stroke icon set in
+  `src/components/icons.tsx` rather than creating route-local variants.
+  Global design tokens, focus treatment, reduced-motion behavior, and base
+  styles live in `globals.css`. Tailwind v4 is wired through PostCSS
+  (`postcss.config.mjs`); there is no `tailwind.config` file. The shell and
+  presentational pages remain Server Components unless an interaction truly
+  needs client state. Navigation uses `next/link`; every page renders its
+  primary content inside the shell's `#main-content` landmark.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's
