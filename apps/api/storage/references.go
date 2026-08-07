@@ -78,6 +78,41 @@ func (r *Repository) UpdateReference(reference Reference) error {
 	return publishReference(lock, parent, base, contents)
 }
 
+// UpdateReferenceIfTarget atomically replaces a direct reference only when it
+// still has the expected target. It is the compare-and-swap boundary used by
+// application operations that must not overwrite a concurrent push.
+func (r *Repository) UpdateReferenceIfTarget(reference Reference, expected string) error {
+	contents, err := r.prepareReference(reference)
+	if err != nil {
+		return err
+	}
+	parent, base, err := r.openReferenceParent(reference.Name, false)
+	if errors.Is(err, syscall.ENOENT) {
+		return fmt.Errorf("reference %q: %w", reference.Name, ErrReferenceNotFound)
+	}
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	lock, err := lockReference(parent, base)
+	if err != nil {
+		return err
+	}
+	defer unlinkAt(parent, base+".lock")
+	file, err := openReferenceFile(parent, base)
+	if err != nil {
+		_ = lock.Close()
+		return fmt.Errorf("inspect reference %q: %w", reference.Name, err)
+	}
+	current, readErr := io.ReadAll(io.LimitReader(file, 1025))
+	_ = file.Close()
+	if readErr != nil || string(current) != expected+"\n" {
+		_ = lock.Close()
+		return fmt.Errorf("reference %q changed: %w", reference.Name, ErrReferenceExists)
+	}
+	return publishReference(lock, parent, base, contents)
+}
+
 // ReadReference reads and validates one loose reference.
 func (r *Repository) ReadReference(name string) (Reference, error) {
 	parent, base, err := r.openReferenceParent(name, false)

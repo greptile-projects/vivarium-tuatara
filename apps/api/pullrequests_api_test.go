@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -269,4 +270,62 @@ func TestPullRequestMergeReadinessReportsRequirementsConflictsAndPermission(t *t
 	if len(objectsAfterReadiness) != len(objectsBeforeReadiness)+3 { // target blob, tree, and commit only
 		t.Fatalf("readiness wrote repository objects: before=%d after=%d", len(objectsBeforeReadiness), len(objectsAfterReadiness))
 	}
+}
+
+func TestOwnerMergesApprovedPullRequestAndClosesLinkedProposal(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	proposalStore, _ := proposals.New(t.TempDir())
+	pullStore, _ := pullrequests.New(t.TempDir(), gitStore)
+	server := httptest.NewServer(newPlatformHandler(gitStore, identities, credentials, catalog, proposalStore, pullStore))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "merge-owner")
+	contributor := createTestAccount(t, server.URL, "merge-contributor")
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"mergeable"}`, owner.Credential.Token, http.StatusCreated)
+	var repository repositories.Repository
+	json.NewDecoder(response.Body).Decode(&repository)
+	response.Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/collaborators", `{"user_id":"`+contributor.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	gitRepository, _ := gitStore.Open(repository.ID)
+	baseTree := writeTestTree(t, gitRepository)
+	featureBlob, _ := gitRepository.WriteObject(storage.BlobObject, []byte("feature\n"))
+	featureTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "feature.txt", id: featureBlob})
+	base := writeTestCommit(t, gitRepository, baseTree, nil, 1700000000, "base")
+	feature := writeTestCommit(t, gitRepository, featureTree, []storage.ObjectID{base}, 1700000001, "feature")
+	gitRepository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)})
+	gitRepository.CreateReference(storage.Reference{Name: "refs/heads/feature", Target: string(feature)})
+	proposalResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/proposals", `{"title":"Ship feature","body":"Collaboratively agreed."}`, contributor.Credential.Token, http.StatusCreated)
+	var proposal proposals.Proposal
+	json.NewDecoder(proposalResponse.Body).Decode(&proposal)
+	proposalResponse.Body.Close()
+	pullResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/pulls", `{"title":"Ship feature","body":"Implements our discussion.","source_branch":"feature","target_branch":"main","proposal_id":"`+proposal.ID+`"}`, contributor.Credential.Token, http.StatusCreated)
+	var pull pullrequests.PullRequest
+	json.NewDecoder(pullResponse.Body).Decode(&pull)
+	pullResponse.Body.Close()
+	mergeURL := server.URL + "/repositories/" + repository.ID + "/pulls/" + pull.ID + "/merge"
+	authenticatedRequest(t, http.MethodPost, mergeURL, "", contributor.Credential.Token, http.StatusNotFound).Body.Close()
+	authenticatedRequest(t, http.MethodPost, mergeURL, "", owner.Credential.Token, http.StatusConflict).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/pulls/"+pull.ID+"/reviews", `{"decision":"approved"}`, owner.Credential.Token, http.StatusOK).Body.Close()
+	mergedResponse := authenticatedRequest(t, http.MethodPost, mergeURL, "", owner.Credential.Token, http.StatusOK)
+	var merged pullrequests.PullRequest
+	json.NewDecoder(mergedResponse.Body).Decode(&merged)
+	mergedResponse.Body.Close()
+	if merged.Status != pullrequests.Merged || merged.MergedBy == nil || *merged.MergedBy != owner.User.ID || merged.MergeCommitID == nil || merged.MergedAt == nil {
+		t.Fatalf("merged = %#v", merged)
+	}
+	main, _ := gitRepository.ReadReference("refs/heads/main")
+	if main.Target != *merged.MergeCommitID {
+		t.Fatalf("main = %s, merge = %s", main.Target, *merged.MergeCommitID)
+	}
+	commit, err := gitRepository.ReadCommit(storage.ObjectID(main.Target))
+	if err != nil || len(commit.Parents) != 2 || commit.Parents[0] != base || commit.Parents[1] != feature || !strings.Contains(string(commit.Message), "Pull-Request: "+pull.ID) || !strings.Contains(string(commit.Message), "Proposal: "+proposal.ID) || !strings.Contains(string(commit.Message), "Authored-by: "+contributor.User.ID) || !strings.Contains(string(commit.Message), "Merged-by: "+owner.User.ID) {
+		t.Fatalf("merge commit = %#v, %v", commit, err)
+	}
+	closed, _ := proposalStore.Get(repository.ID, proposal.ID)
+	if closed.Status != proposals.Closed {
+		t.Fatalf("proposal = %#v", closed)
+	}
+	authenticatedRequest(t, http.MethodPost, mergeURL, "", owner.Credential.Token, http.StatusOK).Body.Close()
 }
