@@ -289,3 +289,36 @@ the exact commit recorded in a private, durable server merge intent—even
 beneath later target history—and repairs the durable request outcome. Git
 trailers remain collaboration context and are never trusted as authorization
 provenance.
+
+## Change sessions
+
+Current repository participants can turn an open pull request into a durable
+agent collaboration workspace with `POST
+/repositories/{id}/pulls/{pull_id}/sessions`. Creation requires
+`repositories:write`, accepts no worker configuration, and snapshots the pull
+request's current `source_commit_id`. The returned session contains stable
+repository, pull request, initiator, and revision identities; `state: "open"`;
+and creation and update timestamps. Merged pull requests retain their existing
+sessions but reject new ones with `409 pull_request_closed`.
+
+`GET /repositories/{id}/pulls/{pull_id}/sessions` discovers every session on
+the request using shared cursor pagination. `GET .../sessions/{session_id}`
+reconnects to one, and `GET .../sessions/{session_id}/events` returns its
+oldest-first, cursor-paginated timeline. Creation atomically publishes the
+session with a `session.opened` event attributed to its initiating user, so an
+inspectable session never depends on process memory or private worker logs.
+Session creation follows the shared uncertain-durability response contract.
+Inspecting a session retries synchronization of its containing directory. If
+that reconciliation succeeds, inspection returns `200` and confirms durable
+reconnection; if it still fails, inspection repeats the `202` uncertainty
+response with the stable session body so clients continue warning users and
+withhold reliance on its timeline. Direct event collection requests enforce
+the same reconciliation and return that stable uncertain session response
+instead of an ordinary event page until persistence is confirmed.
+
+Session discovery and inspection require current owner or contributor access
+with `repositories:read`, including for public repositories. Durable records
+live beneath `CHANGE_SESSION_STORAGE_ROOT` (default `change-sessions`) and are
+partitioned by repository and pull request. Future run, guidance, intervention,
+and artifact events extend this public session and timeline boundary rather
+than exposing execution internals.

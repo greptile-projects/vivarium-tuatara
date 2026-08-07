@@ -130,6 +130,24 @@ export type MergeReadiness = {
   has_conflicts: boolean;
   blockers: { code: string; message: string }[];
 };
+export type ChangeSession = {
+  id: string;
+  repository_id: string;
+  pull_request_id: string;
+  initiator_id: string;
+  source_commit_id: string;
+  state: "open";
+  created_at: string;
+  updated_at: string;
+};
+export type ChangeSessionEvent = {
+  id: string;
+  session_id: string;
+  kind: "session.opened";
+  actor_id: string;
+  state: "open";
+  created_at: string;
+};
 export type ActivityEvent = {
   id: string;
   kind: "proposal.created" | "proposal.updated" | "proposal.closed" | "proposal.commented" | "pull_request.created" | "pull_request.synchronized" | "pull_request.commented" | "pull_request.merged" | "review.approved" | "review.changes_requested" | "review.withdrawn" | "mention.created" | "access.granted" | "access.revoked";
@@ -157,11 +175,17 @@ export class APIError extends Error {
   }
 }
 
-export async function api<T>(
+export type APIResponse<T> = {
+  data: T;
+  status: number;
+  headers: Headers;
+};
+
+export async function apiResponse<T>(
   path: string,
   init: RequestInit = {},
   token?: string | null,
-): Promise<T> {
+): Promise<APIResponse<T>> {
   const headers = new Headers(init.headers);
   if (init.body) headers.set("Content-Type", "application/json");
   if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -180,6 +204,16 @@ export async function api<T>(
       body?.error?.code,
     );
   }
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
+  const data = response.status === 204
+    ? undefined as T
+    : await response.json() as T;
+  return { data, status: response.status, headers: response.headers };
+}
+
+export async function api<T>(
+  path: string,
+  init: RequestInit = {},
+  token?: string | null,
+): Promise<T> {
+  return (await apiResponse<T>(path, init, token)).data;
 }

@@ -254,6 +254,17 @@ whenever dependencies change or the web job fails before it starts.
   repository name and affected resource title while retaining stable actor,
   target-user, repository, and resource IDs. `GET /activity` is authenticated,
   cursor-paginated, and filters every event by current repository access.
+  Agent-native change sessions live beneath `$CHANGE_SESSION_STORAGE_ROOT`
+  (default `change-sessions`), partitioned by repository and pull request.
+  Current owners and contributors can open one only on an open pull request;
+  creation snapshots its recorded source revision and atomically publishes an
+  attributable `session.opened` timeline event. Participant-only collection,
+  detail, and event endpoints are the durable reconnection boundary for future
+  runs and must not expose worker internals. Detail inspection retries a
+  failed creation-time directory sync: only a successful retry confirms
+  durability, while another failure repeats the stable `202` resource response.
+  Event reads must pass through the same reconciliation before exposing a
+  timeline, including for direct API consumers.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 
