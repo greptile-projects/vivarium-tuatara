@@ -148,6 +148,16 @@ whenever dependencies change or the web job fails before it starts.
   private repository and use Git receive-pack for branches other than `main`;
   default-branch writes, visibility, access management, and deletion remain
   owner-only. Revocation applies on the next request.
+  Durable repository proposals live beneath `$PROPOSAL_STORAGE_ROOT` (default
+  `proposals`). Owners and contributors can create and discuss proposals;
+  authors can edit and close their own proposals, and owners can close any.
+  Proposal and immutable comment records retain stable author user IDs. Reads
+  inherit repository visibility and private collaborator access, while public
+  readability does not grant participation. Proposal and comment collections
+  use the shared cursor pagination contract.
+  After a proposal mutation's atomic rename, a parent-directory sync failure
+  returns the resource with `202` and `Vivarium-Durability: uncertain`; clients
+  retain its stable ID and inspect later instead of issuing a duplicate retry.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 
