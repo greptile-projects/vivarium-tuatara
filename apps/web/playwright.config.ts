@@ -1,4 +1,16 @@
 import { defineConfig } from "@playwright/test";
+import { execFileSync } from "node:child_process";
+
+function systemChromium() {
+  if (process.env.CHROMIUM_PATH) return process.env.CHROMIUM_PATH;
+  try {
+    return execFileSync("which", ["chromium"], { encoding: "utf8" }).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+const chromiumPath = systemChromium();
 
 export default defineConfig({
   testDir: "./tests",
@@ -8,9 +20,7 @@ export default defineConfig({
   use: {
     baseURL: "http://localhost:3000",
     headless: true,
-    launchOptions: process.env.CHROMIUM_PATH
-      ? { executablePath: process.env.CHROMIUM_PATH }
-      : undefined,
+    launchOptions: chromiumPath ? { executablePath: chromiumPath } : undefined,
   },
   webServer: [
     {

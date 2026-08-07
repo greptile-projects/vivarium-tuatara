@@ -248,8 +248,9 @@ The connected web workflow is protected by a Playwright regression in
 servers, drives two independent browser contexts through onboarding, access,
 proposal, pull-request, review, and merge actions, and uses stock Git for both
 candidate publication and the maintainer's final pull. Run it with
-`bun run --cwd apps/web test:e2e`; it uses Playwright's managed Chromium by
-default or the executable selected explicitly with `CHROMIUM_PATH`.
+`bun run --cwd apps/web test:e2e`; it discovers Chromium from `PATH`, falls
+back to Playwright's managed browser, and honors an explicit `CHROMIUM_PATH`
+override.
 
 ## Git repository storage
 
