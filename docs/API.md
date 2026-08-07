@@ -34,6 +34,22 @@ last page. Pass a non-null `next_cursor` unchanged as the next request's
 `invalid_pagination`. Collection order is oldest creation first, with opaque ID
 as the deterministic tie-breaker.
 
+## Activity
+
+`GET /activity` returns a newest-first, cursor-paginated `events` collection
+for the authenticated actor. It records meaningful proposal creation, editing,
+closure, and discussion; pull request creation, synchronization, discussion,
+review decisions, withdrawal, and merge; `@handle` mentions in proposal and
+pull request text; and collaborator grant or revocation. Each event contains a
+stable `actor_id`, `repository_id`, `resource_type`, `resource_id`, optional
+`target_user_id`, timestamp, and snapshot labels for the repository and
+resource. Every event requires current repository access, including targeted
+mention and access events, so activity never reveals private resource metadata.
+
+Activity is append-only beneath `ACTIVITY_STORAGE_ROOT`, which defaults to
+`activity-records`. Repeating an idempotent collaborator grant or removal does not
+create another event because shared state did not change.
+
 ## Accounts
 
 `POST /users` creates an account from `handle` and `display_name` and returns

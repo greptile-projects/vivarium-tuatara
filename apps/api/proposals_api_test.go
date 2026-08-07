@@ -19,7 +19,7 @@ func TestProposalLifecycleDiscussionAndAuthorization(t *testing.T) {
 	credentials, _ := auth.New(t.TempDir())
 	catalog, _ := repositories.New(t.TempDir(), gitStore)
 	proposalStore, _ := proposals.New(t.TempDir())
-	server := httptest.NewServer(newPlatformHandler(gitStore, identities, credentials, catalog, proposalStore))
+	server := httptest.NewServer(newPlatformHandler(gitStore, identities, credentials, catalog, proposalStore, nil, nil))
 	defer server.Close()
 
 	owner := createTestAccount(t, server.URL, "proposal-owner")

@@ -110,6 +110,21 @@ func (s *Store) Get(id string) (User, error) {
 	return s.read(id)
 }
 
+// FindByHandle resolves current profile text to the stable identity used for
+// mention attribution. Handles are unique under the store's root lock.
+func (s *Store) FindByHandle(handle string) (User, error) {
+	all, err := s.loadAll()
+	if err != nil {
+		return User{}, err
+	}
+	for _, user := range all {
+		if strings.EqualFold(user.Handle, strings.TrimPrefix(handle, "@")) {
+			return user, nil
+		}
+	}
+	return User{}, ErrNotFound
+}
+
 // Update replaces the editable profile fields while preserving stable identity.
 func (s *Store) Update(id, handle, displayName string) (User, error) {
 	s.mu.Lock()

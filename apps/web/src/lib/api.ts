@@ -130,6 +130,18 @@ export type MergeReadiness = {
   has_conflicts: boolean;
   blockers: { code: string; message: string }[];
 };
+export type ActivityEvent = {
+  id: string;
+  kind: "proposal.created" | "proposal.updated" | "proposal.closed" | "proposal.commented" | "pull_request.created" | "pull_request.synchronized" | "pull_request.commented" | "pull_request.merged" | "review.approved" | "review.changes_requested" | "review.withdrawn" | "mention.created" | "access.granted" | "access.revoked";
+  actor_id: string;
+  repository_id: string;
+  repository_name: string;
+  resource_type: "proposal" | "pull_request" | "repository";
+  resource_id: string;
+  resource_title: string;
+  target_user_id: string | null;
+  created_at: string;
+};
 
 export class APIError extends Error {
   constructor(

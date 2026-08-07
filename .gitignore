@@ -2,6 +2,7 @@ node_modules/
 dist/
 bin/
 apps/api/api
+/apps/api/activity-records/
 *.test
 *.out
 *.log
