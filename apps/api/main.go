@@ -531,11 +531,14 @@ func decodeJSON(r *http.Request, destination any) error {
 
 func paginate[T any](r *http.Request, all []T, id func(T) string) ([]T, *string, bool) {
 	values := r.URL.Query()
-	if len(values["limit"]) > 1 || len(values["after"]) > 1 {
+	limitValues, hasLimit := values["limit"]
+	afterValues, hasAfter := values["after"]
+	if len(limitValues) > 1 || len(afterValues) > 1 || (hasLimit && limitValues[0] == "") || (hasAfter && afterValues[0] == "") {
 		return nil, nil, false
 	}
 	limit := 30
-	if raw := values.Get("limit"); raw != "" {
+	if hasLimit {
+		raw := limitValues[0]
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed < 1 || parsed > 100 {
 			return nil, nil, false
@@ -543,7 +546,8 @@ func paginate[T any](r *http.Request, all []T, id func(T) string) ([]T, *string,
 		limit = parsed
 	}
 	start := 0
-	if after := values.Get("after"); after != "" {
+	if hasAfter {
+		after := afterValues[0]
 		start = -1
 		for index, item := range all {
 			if id(item) == after {

@@ -74,6 +74,15 @@ func TestPublicApplicationContractSupportsAccountAndPagination(t *testing.T) {
 	if json.Unmarshal(data, &failure) != nil || failure.Error.Code != "invalid_pagination" || failure.Error.Message == "" {
 		t.Fatalf("error response = %s", data)
 	}
+	for _, path := range []string{
+		"/repositories?limit=",
+		"/repositories?after=",
+		"/auth/credentials?limit=",
+		"/auth/credentials?after=",
+	} {
+		response := authenticatedRequest(t, http.MethodGet, server.URL+path, "", account.Credential.Token, http.StatusBadRequest)
+		response.Body.Close()
+	}
 }
 
 func TestOwnedRepositoryLifecycleProvidesUsableGitRemote(t *testing.T) {
