@@ -89,6 +89,10 @@ func newAppHandler(store *storage.Store, userStore *users.Store) http.Handler {
 
 func newAuthenticatedAppHandler(store *storage.Store, userStore *users.Store, authStore *auth.Store, catalogs ...*repositories.Store) http.Handler {
 	mux := http.NewServeMux()
+	var repositoryCatalog *repositories.Store
+	if len(catalogs) > 0 {
+		repositoryCatalog = catalogs[0]
+	}
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
@@ -99,8 +103,8 @@ func newAuthenticatedAppHandler(store *storage.Store, userStore *users.Store, au
 	if authStore != nil {
 		registerAuthRoutes(mux, authStore)
 	}
-	if authStore != nil && len(catalogs) > 0 && catalogs[0] != nil {
-		registerRepositoryRoutes(mux, catalogs[0], authStore)
+	if authStore != nil && repositoryCatalog != nil {
+		registerRepositoryRoutes(mux, repositoryCatalog, authStore)
 	}
 	mux.HandleFunc("GET /git/{remote}/info/refs", func(w http.ResponseWriter, r *http.Request) {
 		service := r.URL.Query().Get("service")
@@ -113,7 +117,7 @@ func newAuthenticatedAppHandler(store *storage.Store, userStore *users.Store, au
 			required = "git:write"
 		}
 		if authStore != nil {
-			if _, ok := authenticateRequest(w, r, authStore, required, true); !ok {
+			if _, ok := authorizeGitRepository(w, r, authStore, repositoryCatalog, r.PathValue("remote"), required); !ok {
 				return
 			}
 		}
@@ -130,7 +134,7 @@ func newAuthenticatedAppHandler(store *storage.Store, userStore *users.Store, au
 	})
 	mux.HandleFunc("POST /git/{remote}/git-upload-pack", func(w http.ResponseWriter, r *http.Request) {
 		if authStore != nil {
-			if _, ok := authenticateRequest(w, r, authStore, "git:read", true); !ok {
+			if _, ok := authorizeGitRepository(w, r, authStore, repositoryCatalog, r.PathValue("remote"), "git:read"); !ok {
 				return
 			}
 		}
@@ -144,7 +148,7 @@ func newAuthenticatedAppHandler(store *storage.Store, userStore *users.Store, au
 	})
 	mux.HandleFunc("POST /git/{remote}/git-receive-pack", func(w http.ResponseWriter, r *http.Request) {
 		if authStore != nil {
-			if _, ok := authenticateRequest(w, r, authStore, "git:write", true); !ok {
+			if _, ok := authorizeGitRepository(w, r, authStore, repositoryCatalog, r.PathValue("remote"), "git:write"); !ok {
 				return
 			}
 		}
@@ -233,6 +237,10 @@ type repositoryInput struct {
 	Name *string `json:"name"`
 }
 
+type repositoryPatch struct {
+	Visibility *string `json:"visibility"`
+}
+
 func registerRepositoryRoutes(mux *http.ServeMux, store *repositories.Store, authStore *auth.Store) {
 	mux.HandleFunc("POST /repositories", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)
@@ -263,11 +271,39 @@ func registerRepositoryRoutes(mux *http.ServeMux, store *repositories.Store, aut
 		writeJSON(w, http.StatusOK, map[string]any{"repositories": owned})
 	})
 	mux.HandleFunc("GET /repositories/{id}", func(w http.ResponseWriter, r *http.Request) {
-		actor, ok := authenticateRequest(w, r, authStore, "repositories:read", false)
+		repository, err := store.GetByID(r.PathValue("id"))
+		if writeRepositoryError(w, err) {
+			return
+		}
+		if repository.Visibility == repositories.Public {
+			writeJSON(w, http.StatusOK, repository)
+			return
+		}
+		actor, authenticated, ok := authenticateOptionalRequest(w, r, authStore, "repositories:read", false)
 		if !ok {
 			return
 		}
-		repository, err := store.Get(actor.UserID, r.PathValue("id"))
+		if !authenticated {
+			writeAuthenticationRequired(w, false)
+			return
+		}
+		if actor.UserID != repository.OwnerID {
+			writeAPIError(w, http.StatusNotFound, "repository_not_found", "repository not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, repository)
+	})
+	mux.HandleFunc("PATCH /repositories/{id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)
+		if !ok {
+			return
+		}
+		var input repositoryPatch
+		if decodeJSON(r, &input) != nil || input.Visibility == nil || (*input.Visibility != repositories.Private && *input.Visibility != repositories.Public) {
+			writeAPIError(w, http.StatusBadRequest, "invalid_repository", "visibility must be private or public")
+			return
+		}
+		repository, err := store.SetVisibility(actor.UserID, r.PathValue("id"), *input.Visibility)
 		if writeRepositoryError(w, err) {
 			return
 		}
@@ -370,6 +406,18 @@ func registerAuthRoutes(mux *http.ServeMux, store *auth.Store) {
 }
 
 func authenticateRequest(w http.ResponseWriter, r *http.Request, store *auth.Store, scope string, git bool) (auth.Credential, bool) {
+	credential, authenticated, ok := authenticateOptionalRequest(w, r, store, scope, git)
+	if !ok {
+		return auth.Credential{}, false
+	}
+	if !authenticated {
+		writeAuthenticationRequired(w, git)
+		return auth.Credential{}, false
+	}
+	return credential, true
+}
+
+func authenticateOptionalRequest(w http.ResponseWriter, r *http.Request, store *auth.Store, scope string, git bool) (auth.Credential, bool, bool) {
 	token := ""
 	if header := r.Header.Get("Authorization"); strings.HasPrefix(header, "Bearer ") {
 		token = strings.TrimPrefix(header, "Bearer ")
@@ -378,21 +426,66 @@ func authenticateRequest(w http.ResponseWriter, r *http.Request, store *auth.Sto
 	} else if cookie, err := r.Cookie("vivarium_session"); err == nil {
 		token = cookie.Value
 	}
+	if token == "" {
+		return auth.Credential{}, false, true
+	}
 	credential, err := store.Authenticate(token, scope)
 	if err != nil {
 		if !errors.Is(err, auth.ErrNotFound) {
 			writeAPIError(w, http.StatusInternalServerError, "internal_error", "credential storage unavailable")
-			return auth.Credential{}, false
+			return auth.Credential{}, false, false
 		}
-		if git {
-			w.Header().Set("WWW-Authenticate", `Basic realm="vivarium-git"`)
-		} else {
-			w.Header().Set("WWW-Authenticate", "Bearer")
-		}
-		writeAPIError(w, http.StatusUnauthorized, "unauthorized", "valid authentication is required")
+		writeAuthenticationRequired(w, git)
+		return auth.Credential{}, false, false
+	}
+	return credential, true, true
+}
+
+func writeAuthenticationRequired(w http.ResponseWriter, git bool) {
+	if git {
+		w.Header().Set("WWW-Authenticate", `Basic realm="vivarium-git"`)
+	} else {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+	}
+	writeAPIError(w, http.StatusUnauthorized, "unauthorized", "valid authentication is required")
+}
+
+func authorizeGitRepository(w http.ResponseWriter, r *http.Request, authStore *auth.Store, catalog *repositories.Store, remote, scope string) (auth.Credential, bool) {
+	// Handlers without an application catalog are retained for storage-level
+	// compatibility tests. Production always supplies the catalog.
+	if catalog == nil {
+		return authenticateRequest(w, r, authStore, scope, true)
+	}
+	id, ok := strings.CutSuffix(remote, ".git")
+	if !ok || id == "" {
+		http.Error(w, "repository not found", http.StatusNotFound)
 		return auth.Credential{}, false
 	}
-	return credential, true
+	repository, err := catalog.GetByID(id)
+	if err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			http.Error(w, "repository not found", http.StatusNotFound)
+		} else {
+			http.Error(w, "repository unavailable", http.StatusInternalServerError)
+		}
+		return auth.Credential{}, false
+	}
+	if scope == "git:read" && repository.Visibility == repositories.Public {
+		return auth.Credential{}, true
+	}
+	actor, authenticated, valid := authenticateOptionalRequest(w, r, authStore, scope, true)
+	if !valid {
+		return auth.Credential{}, false
+	}
+	if !authenticated {
+		writeAuthenticationRequired(w, true)
+		return auth.Credential{}, false
+	}
+	if actor.UserID != repository.OwnerID {
+		http.Error(w, "repository not found", http.StatusNotFound)
+		return auth.Credential{}, false
+	}
+	return actor, true
 }
 
 func setSessionCookie(w http.ResponseWriter, token string, expires time.Time) {

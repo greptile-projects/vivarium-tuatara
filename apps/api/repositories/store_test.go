@@ -44,6 +44,32 @@ func TestRepositoryCatalogPersistsOwnershipAndGitIdentity(t *testing.T) {
 	}
 }
 
+func TestRepositoryVisibilityDefaultsPrivateAndPersists(t *testing.T) {
+	gitRoot, metadataRoot := t.TempDir(), t.TempDir()
+	gitStore, _ := storage.New(gitRoot)
+	store, _ := New(metadataRoot, gitStore)
+	created, err := store.Create(testOwnerID, "visibility")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Visibility != Private {
+		t.Fatalf("default visibility = %q", created.Visibility)
+	}
+	if _, err := store.SetVisibility("abcdefabcdefabcdefabcdefabcdefab", created.ID, Public); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("non-owner SetVisibility error = %v", err)
+	}
+	updated, err := store.SetVisibility(testOwnerID, created.ID, Public)
+	if err != nil || updated.Visibility != Public {
+		t.Fatalf("updated = %#v, %v", updated, err)
+	}
+	reopenedGit, _ := storage.New(gitRoot)
+	reopened, _ := New(metadataRoot, reopenedGit)
+	got, err := reopened.GetByID(created.ID)
+	if err != nil || got.Visibility != Public {
+		t.Fatalf("reopened = %#v, %v", got, err)
+	}
+}
+
 func TestDeleteMetadataFailureDoesNotExposeOrReserveMissingRemote(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	store, _ := New(t.TempDir(), gitStore)

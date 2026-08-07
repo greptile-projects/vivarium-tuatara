@@ -22,12 +22,19 @@ var (
 	ErrNotFound    = errors.New("repository not found")
 	ErrNameTaken   = errors.New("repository name is already in use")
 	ErrInvalidName = errors.New("invalid repository name")
+	ErrVisibility  = errors.New("invalid repository visibility")
+)
+
+const (
+	Private = "private"
+	Public  = "public"
 )
 
 type Repository struct {
 	ID            string    `json:"id"`
 	OwnerID       string    `json:"owner_id"`
 	Name          string    `json:"name"`
+	Visibility    string    `json:"visibility"`
 	DefaultBranch string    `json:"default_branch"`
 	GitRemote     string    `json:"git_remote"`
 	CreatedAt     time.Time `json:"created_at"`
@@ -90,13 +97,63 @@ func (s *Store) Create(ownerID, name string) (Repository, error) {
 	if _, err := s.git.Create(id); err != nil {
 		return Repository{}, fmt.Errorf("create Git repository: %w", err)
 	}
-	repository := Repository{ID: id, OwnerID: ownerID, Name: name, DefaultBranch: "main", GitRemote: "/git/" + id + ".git", CreatedAt: s.now().Truncate(time.Microsecond)}
+	repository := Repository{ID: id, OwnerID: ownerID, Name: name, Visibility: Private, DefaultBranch: "main", GitRemote: "/git/" + id + ".git", CreatedAt: s.now().Truncate(time.Microsecond)}
 	if err := s.write(repository); err != nil {
 		if persisted, readErr := s.read(id); readErr == nil && persisted == repository {
 			return repository, nil
 		}
 		if deleteErr := s.git.Delete(id); deleteErr != nil {
 			return Repository{}, fmt.Errorf("publish repository metadata: %v; rollback Git repository: %w", err, deleteErr)
+		}
+		return Repository{}, err
+	}
+	return repository, nil
+}
+
+// GetByID resolves an active repository without applying an actor policy. It
+// is intended for the shared HTTP authorization layer, not direct API use.
+func (s *Store) GetByID(id string) (Repository, error) {
+	repository, err := s.read(id)
+	if err != nil {
+		return Repository{}, ErrNotFound
+	}
+	if _, err := s.git.Open(id); err != nil {
+		if errors.Is(err, storage.ErrRepositoryNotFound) {
+			return Repository{}, ErrNotFound
+		}
+		return Repository{}, fmt.Errorf("open Git repository: %w", err)
+	}
+	return repository, nil
+}
+
+func (s *Store) SetVisibility(ownerID, id, visibility string) (Repository, error) {
+	if visibility != Private && visibility != Public {
+		return Repository{}, ErrVisibility
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return Repository{}, err
+	}
+	defer unlock()
+	repository, err := s.read(id)
+	if err != nil || repository.OwnerID != ownerID {
+		return Repository{}, ErrNotFound
+	}
+	if _, err := s.git.Open(id); err != nil {
+		if errors.Is(err, storage.ErrRepositoryNotFound) {
+			return Repository{}, ErrNotFound
+		}
+		return Repository{}, err
+	}
+	if repository.Visibility == visibility {
+		return repository, nil
+	}
+	repository.Visibility = visibility
+	if err := s.write(repository); err != nil {
+		if persisted, readErr := s.read(id); readErr == nil && persisted == repository {
+			return repository, nil
 		}
 		return Repository{}, err
 	}
@@ -184,6 +241,13 @@ func (s *Store) read(id string) (Repository, error) {
 	}
 	var repository Repository
 	if json.Unmarshal(data, &repository) != nil || repository.ID != id || !validID(repository.OwnerID) || repository.GitRemote != "/git/"+id+".git" || repository.DefaultBranch != "main" {
+		return Repository{}, fmt.Errorf("corrupt repository metadata %s", id)
+	}
+	// Records created before visibility existed are private by default.
+	if repository.Visibility == "" {
+		repository.Visibility = Private
+	}
+	if repository.Visibility != Private && repository.Visibility != Public {
 		return Repository{}, fmt.Errorf("corrupt repository metadata %s", id)
 	}
 	return repository, nil

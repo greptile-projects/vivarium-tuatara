@@ -120,15 +120,18 @@ whenever dependencies change or the web job fails before it starts.
   reports success after revocation is durable.
   Both stores reconcile exact records after uncertain post-rename failures,
   and a definitively failed user publication revokes its prepared session.
-  Authenticated repository lifecycle routes are `POST /repositories`, `GET
-  /repositories`, `GET /repositories/{id}`, and `DELETE /repositories/{id}`.
+  Repository lifecycle routes are `POST /repositories`, `GET /repositories`,
+  `GET /repositories/{id}`, `PATCH /repositories/{id}`, and `DELETE
+  /repositories/{id}`.
   Repository records have an opaque stable ID, immutable owner, user-facing
   name, `main` default branch, and `/git/<id>.git` remote path. Names are unique
   per owner (case-insensitively), while IDs are shared by application records
   and bare Git storage. `$REPOSITORY_STORAGE_ROOT` selects the private metadata
   root and defaults to `repository-records`. Session and API credentials use
-  `repositories:read` and `repositories:write`; Git transport authorization is
-  intentionally still scope-only until repository access enforcement. Catalog
+  `repositories:read` and `repositories:write`. Repositories are private by
+  default; public reads are anonymous, while private reads, every push, and
+  administration require the owner and matching API or Git scope.
+  Authenticated non-owners receive not-found across both interfaces. Catalog
   reads reconcile metadata with Git storage: records whose Git ID has already
   been detached by deletion are not active, even if metadata cleanup must be
   retried. A Git cleanup error preserves the ownership record so the owner can
