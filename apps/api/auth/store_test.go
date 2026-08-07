@@ -51,3 +51,19 @@ func TestCredentialKindLimitsScopesAndLifetime(t *testing.T) {
 		t.Fatalf("cross-kind scope error = %v", err)
 	}
 }
+
+func TestIssueReconcilesPostRenameFailure(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.afterWrite = func() error { return errors.New("injected post-rename failure") }
+	issued, err := store.Issue("0123456789abcdef0123456789abcdef", API, "committed", []string{"profile:write"}, time.Hour)
+	if err != nil {
+		t.Fatalf("Issue returned post-publication error: %v", err)
+	}
+	store.afterWrite = nil
+	if _, err := store.Authenticate(issued.Token, "profile:write"); err != nil {
+		t.Fatalf("authenticate reconciled credential: %v", err)
+	}
+}

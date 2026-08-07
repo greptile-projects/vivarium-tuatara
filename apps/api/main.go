@@ -168,6 +168,11 @@ func registerUserRoutes(mux *http.ServeMux, store *users.Store, authStore *auth.
 			issued, issueErr = authStore.Issue(user.ID, auth.Session, "web session", []string{"credentials:write", "profile:write"}, 24*time.Hour)
 			return issueErr
 		})
+		if err != nil && issued.ID != "" {
+			if _, revokeErr := authStore.Revoke(issued.UserID, issued.ID); revokeErr != nil {
+				log.Printf("revoke credential %s after user bootstrap failure: %v", issued.ID, revokeErr)
+			}
+		}
 		if writeUserError(w, err) {
 			return
 		}

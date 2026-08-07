@@ -172,3 +172,19 @@ func TestBootstrapFailureDoesNotPublishUserOrReserveHandle(t *testing.T) {
 		t.Fatalf("reuse bootstrap handle: %v", err)
 	}
 }
+
+func TestCreateReconcilesPostRenameFailure(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.afterWrite = func() error { return errors.New("injected post-rename failure") }
+	user, err := store.Create("committed", "Committed User")
+	if err != nil {
+		t.Fatalf("Create returned post-publication error: %v", err)
+	}
+	persisted, err := store.Get(user.ID)
+	if err != nil || persisted != user {
+		t.Fatalf("persisted = %#v, err = %v", persisted, err)
+	}
+}

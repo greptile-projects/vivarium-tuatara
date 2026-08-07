@@ -45,6 +45,11 @@ publishes the identity only after credential publication succeeds. A credential
 failure therefore leaves no user record or handle reservation, so registration
 can be retried even when cleanup storage is unavailable. Likewise, logout
 returns success only after the session revocation has been durably published.
+If either store reports an error after its atomic rename, bootstrap rereads the
+exact record and treats a matching publication as committed rather than
+returning a misleading retry-blocking failure. If session issuance succeeded
+but user publication definitively did not, the API revokes that session before
+returning the registration error.
 
 ## Authentication
 

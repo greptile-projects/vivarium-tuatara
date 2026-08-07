@@ -115,6 +115,8 @@ whenever dependencies change or the web job fails before it starts.
   Account bootstrap publishes its user record only after the initial session
   is durable, so a credential failure never reserves the handle; logout only
   reports success after revocation is durable.
+  Both stores reconcile exact records after uncertain post-rename failures,
+  and a definitively failed user publication revokes its prepared session.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

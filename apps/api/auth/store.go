@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -62,9 +63,10 @@ type IssuedCredential struct {
 }
 
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root       string
+	mu         sync.Mutex
+	now        func() time.Time
+	afterWrite func() error
 }
 
 func New(root string) (*Store, error) {
@@ -114,6 +116,11 @@ func (s *Store) Issue(userID string, kind Kind, name string, scopes []string, li
 	now := s.now().Truncate(time.Microsecond)
 	credential := Credential{ID: id, UserID: userID, Kind: kind, Name: name, Scopes: append([]string(nil), scopes...), CreatedAt: now, ExpiresAt: now.Add(lifetime), Hash: hex.EncodeToString(hash[:])}
 	if err := s.write(credential); err != nil {
+		// Reconcile errors after rename so Issue never reports failure while
+		// leaving the exact usable credential durably visible.
+		if persisted, readErr := s.read(id); readErr == nil && sameCredential(persisted, credential) {
+			return IssuedCredential{Credential: credential, Token: token}, nil
+		}
 		return IssuedCredential{}, err
 	}
 	return IssuedCredential{Credential: credential, Token: token}, nil
@@ -203,6 +210,12 @@ func hasScope(scopes []string, required string) bool {
 	}
 	return false
 }
+
+func sameCredential(left, right Credential) bool {
+	return left.ID == right.ID && left.UserID == right.UserID && left.Kind == right.Kind && left.Name == right.Name &&
+		left.CreatedAt.Equal(right.CreatedAt) && left.ExpiresAt.Equal(right.ExpiresAt) && left.Hash == right.Hash &&
+		slices.Equal(left.Scopes, right.Scopes) && left.LastUsedAt == nil && left.RevokedAt == nil
+}
 func validID(id string) bool {
 	if len(id) != 32 || id != strings.ToLower(id) {
 		return false
@@ -266,6 +279,11 @@ func (s *Store) write(credential Credential) error {
 	}
 	if err := os.Rename(name, filepath.Join(s.root, credential.ID+".json")); err != nil {
 		return err
+	}
+	if s.afterWrite != nil {
+		if err := s.afterWrite(); err != nil {
+			return err
+		}
 	}
 	dir, err := os.Open(s.root)
 	if err != nil {

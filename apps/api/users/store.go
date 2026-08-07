@@ -35,9 +35,10 @@ type User struct {
 }
 
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root       string
+	mu         sync.Mutex
+	now        func() time.Time
+	afterWrite func() error
 }
 
 func New(root string) (*Store, error) {
@@ -88,6 +89,13 @@ func (s *Store) CreateWithBootstrap(handle, displayName string, bootstrap func(U
 		}
 	}
 	if err := s.write(user); err != nil {
+		// A failure after rename leaves publication uncertain (for example, a
+		// directory sync error). Reconcile the exact visible record so callers
+		// can treat the operation as committed instead of returning a retry-
+		// blocking failure after successful publication.
+		if persisted, readErr := s.read(user.ID); readErr == nil && persisted == user {
+			return user, nil
+		}
 		return User{}, err
 	}
 	return user, nil
@@ -295,6 +303,11 @@ func (s *Store) write(user User) error {
 	}
 	if err := os.Rename(tempName, filepath.Join(s.root, user.ID+".json")); err != nil {
 		return fmt.Errorf("publish user record: %w", err)
+	}
+	if s.afterWrite != nil {
+		if err := s.afterWrite(); err != nil {
+			return err
+		}
 	}
 	dir, err := os.Open(s.root)
 	if err != nil {
