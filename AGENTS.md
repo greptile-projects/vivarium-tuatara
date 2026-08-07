@@ -61,7 +61,13 @@ whenever dependencies change or the web job fails before it starts.
   (`postcss.config.mjs`); there is no `tailwind.config` file. The shell and
   presentational pages remain Server Components unless an interaction truly
   needs client state. Navigation uses `next/link`; every page renders its
-  primary content inside the shell's `#main-content` landmark.
+  primary content inside the shell's `#main-content` landmark. Browser API
+  calls use the typed helper in `src/lib/api.ts` and same-origin `/api/*`
+  requests, which Next rewrites to `$API_ORIGIN` (default
+  `http://127.0.0.1:8080`). `AuthProvider` retains the API-issued bearer token
+  in browser local storage, validates it through `GET /user` at startup, and
+  is the shared identity boundary for interactive account and repository
+  workflows.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's
