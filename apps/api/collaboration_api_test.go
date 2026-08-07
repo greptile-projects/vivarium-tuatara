@@ -115,6 +115,19 @@ func TestPublicInterfacesSupportProposalToMergeCollaboration(t *testing.T) {
 	if revised.SourceCommitID != updatedTip || revised.SourceCommitID == pull.SourceCommitID {
 		t.Fatalf("synchronized pull request = %#v", revised)
 	}
+	reviewInboxResponse = authenticatedRequest(t, http.MethodGet, server.URL+"/inbox?category=review&limit=100", "", maintainer.Credential.Token, http.StatusOK)
+	reviewInbox.Items = nil
+	decodeResponse(t, reviewInboxResponse, &reviewInbox)
+	if len(reviewInbox.Items) != 1 || reviewInbox.Items[0].ResourceID != pull.ID || reviewInbox.Items[0].Kind != "pull_request.synchronized" {
+		t.Fatalf("synchronized review inbox = %#v", reviewInbox.Items)
+	}
+	authenticatedRequest(t, http.MethodDelete, server.URL+"/inbox/"+reviewInbox.Items[0].ID, "", maintainer.Credential.Token, http.StatusNoContent).Body.Close()
+	reviewInboxResponse = authenticatedRequest(t, http.MethodGet, server.URL+"/inbox?category=review&limit=100", "", maintainer.Credential.Token, http.StatusOK)
+	reviewInbox.Items = nil
+	decodeResponse(t, reviewInboxResponse, &reviewInbox)
+	if len(reviewInbox.Items) != 0 {
+		t.Fatalf("clearing current review revealed obsolete action: %#v", reviewInbox.Items)
+	}
 	reviewsResponse := authenticatedRequest(t, http.MethodGet, pullURL+"/reviews", "", newcomer.Credential.Token, http.StatusOK)
 	var reviews struct {
 		Reviews []pullrequests.Review `json:"reviews"`

@@ -931,10 +931,8 @@ func buildInbox(userID string, repositoryStore *repositories.Store, proposalStor
 		return nil, err
 	}
 	items := make([]inboxItem, 0)
+	seenReviews := make(map[string]bool)
 	for _, event := range events {
-		if !includeCleared && cleared[event.ID] {
-			continue
-		}
 		repository, err := repositoryStore.GetByID(event.RepositoryID)
 		if err != nil {
 			continue
@@ -948,6 +946,18 @@ func buildInbox(userID string, repositoryStore *repositories.Store, proposalStor
 		category, action, err := classifyInboxEvent(userID, repository.OwnerID, event, proposalStore, pullRequestStore)
 		if err != nil {
 			return nil, err
+		}
+		if category == "review" {
+			key := event.RepositoryID + "/" + event.ResourceID
+			if seenReviews[key] {
+				continue
+			}
+			seenReviews[key] = true
+		}
+		// Deduplicate before applying clear state so clearing the newest review
+		// action cannot reveal an obsolete event for the same pull request.
+		if !includeCleared && cleared[event.ID] {
+			continue
 		}
 		if category != "" {
 			items = append(items, inboxItem{Event: event, Category: category, Action: action})

@@ -59,11 +59,12 @@ label. The optional `category` query filters before the shared cursor
 pagination contract is applied.
 
 Inbox membership is recipient-specific and derived from current collaboration
-state. Repository owners receive open pull requests and synchronized revisions
-to review. Resource authors receive mentions, comments, and requested changes
+state. Repository owners receive one review item per open pull request; a
+synchronized revision replaces its older review action. Resource authors receive mentions, comments, and requested changes
 that call for a response, plus approvals, merges, and owner-driven proposal
-closures to acknowledge. Directly affected users receive access changes for
-awareness. An actor's own events are excluded, completed work stops presenting
+closures to acknowledge. Newly granted collaborators receive the access grant
+for awareness. Revocation does not bypass current private-repository authorization
+to retain inaccessible repository metadata. An actor's own events are excluded, completed work stops presenting
 obsolete actions, and current repository authorization is checked on every
 read.
 
