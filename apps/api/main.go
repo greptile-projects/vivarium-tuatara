@@ -225,15 +225,14 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 	})
 	mux.HandleFunc("POST /git/{remote}/git-receive-pack", func(w http.ResponseWriter, r *http.Request) {
 		contributor := false
+		onlyBranch := ""
 		if authStore != nil {
 			credential, owner, ok := authorizeGitRepository(w, r, authStore, repositoryCatalog, r.PathValue("remote"), "git:write")
 			if !ok {
 				return
 			}
 			contributor = !owner
-			if credential.GitWriteBranch != "" {
-				r.Header.Set("Vivarium-Git-Write-Branch", credential.GitWriteBranch)
-			}
+			onlyBranch = credential.GitWriteBranch
 		}
 		repo, ok := openRemoteRepository(w, store, r.PathValue("remote"))
 		if !ok {
@@ -241,7 +240,7 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 		}
 		w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
 		setGitCacheHeaders(w)
-		runGitService(w, r, repo, receivePackService, false, contributor, r.Header.Get("Vivarium-Git-Write-Branch"))
+		runGitService(w, r, repo, receivePackService, false, contributor, onlyBranch)
 	})
 	return mux
 }

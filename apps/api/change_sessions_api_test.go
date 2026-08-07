@@ -6,7 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
@@ -135,6 +138,18 @@ func TestCollaboratorOpensAndReconnectsToChangeSession(t *testing.T) {
 	gitCommand(t, workingCopy, "commit", "--allow-empty", "-m", "agent work")
 	gitCommand(t, workingCopy, "push", "origin", "HEAD:refs/heads/feature")
 	gitCommandFails(t, workingCopy, "push", "origin", "HEAD:refs/heads/agent/other")
+	ordinary, err := credentials.Issue(contributor.User.ID, auth.Git, "ordinary collaborator", []string{"git:read", "git:write"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordinaryRemote, _ := url.Parse(reconnectedServer.URL + repository.GitRemote)
+	ordinaryRemote.User = url.UserPassword("git", ordinary.Token)
+	marker := filepath.Join(t.TempDir(), "header-executed")
+	gitCommand(t, workingCopy, "commit", "--allow-empty", "-m", "ordinary work")
+	gitCommand(t, workingCopy, "-c", "http.extraHeader=Vivarium-Git-Write-Branch: $(touch "+marker+")", "push", ordinaryRemote.String(), "HEAD:refs/heads/feature")
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("client branch header executed: %v", err)
+	}
 	runsResponse := authenticatedRequest(t, http.MethodGet, reconnectBase+"/runs", "", owner.Credential.Token, http.StatusOK)
 	var runPage struct {
 		Runs []changesessions.Run `json:"runs"`
