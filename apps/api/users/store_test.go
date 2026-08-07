@@ -3,6 +3,7 @@ package users
 import (
 	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -42,6 +43,89 @@ func TestIdentityPersistsAndProfileChangesWithoutChangingID(t *testing.T) {
 	}
 	if _, err := reopened.Get(filepath.Base(root)); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("invalid ID error = %v", err)
+	}
+}
+
+func TestIndependentStoresCoordinateHandleClaims(t *testing.T) {
+	root := t.TempDir()
+	first, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	errorsSeen := make(chan error, 2)
+	var wait sync.WaitGroup
+	for index, store := range []*Store{first, second} {
+		wait.Add(1)
+		go func(index int, store *Store) {
+			defer wait.Done()
+			<-start
+			_, err := store.Create("shared-handle", []string{"First", "Second"}[index])
+			errorsSeen <- err
+		}(index, store)
+	}
+	close(start)
+	wait.Wait()
+	close(errorsSeen)
+	successes, collisions := 0, 0
+	for err := range errorsSeen {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrHandleTaken):
+			collisions++
+		default:
+			t.Fatalf("Create error = %v", err)
+		}
+	}
+	if successes != 1 || collisions != 1 {
+		t.Fatalf("successes = %d, collisions = %d", successes, collisions)
+	}
+	all, err := first.loadAll()
+	if err != nil || len(all) != 1 {
+		t.Fatalf("persisted users = %#v, err = %v", all, err)
+	}
+}
+
+func TestConcurrentSparsePatchesPreserveBothChanges(t *testing.T) {
+	root := t.TempDir()
+	first, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := first.Create("original", "Original Name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, displayName := "changed", "Changed Name"
+	start := make(chan struct{})
+	errorsSeen := make(chan error, 2)
+	go func() { <-start; _, err := first.Patch(user.ID, ProfilePatch{Handle: &handle}); errorsSeen <- err }()
+	go func() {
+		<-start
+		_, err := second.Patch(user.ID, ProfilePatch{DisplayName: &displayName})
+		errorsSeen <- err
+	}()
+	close(start)
+	for range 2 {
+		if err := <-errorsSeen; err != nil {
+			t.Fatal(err)
+		}
+	}
+	final, err := first.Get(user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Handle != handle || final.DisplayName != displayName {
+		t.Fatalf("final profile = %#v", final)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -52,7 +53,12 @@ func New(root string) (*Store, error) {
 func (s *Store) Create(handle, displayName string) (User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	handle, displayName, err := validateProfile(handle, displayName)
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return User{}, err
+	}
+	defer unlock()
+	handle, displayName, err = validateProfile(handle, displayName)
 	if err != nil {
 		return User{}, err
 	}
@@ -88,10 +94,15 @@ func (s *Store) Get(id string) (User, error) {
 func (s *Store) Update(id, handle, displayName string) (User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return User{}, err
+	}
+	defer unlock()
 	if !validID(id) {
 		return User{}, ErrNotFound
 	}
-	handle, displayName, err := validateProfile(handle, displayName)
+	handle, displayName, err = validateProfile(handle, displayName)
 	if err != nil {
 		return User{}, err
 	}
@@ -113,6 +124,70 @@ func (s *Store) Update(id, handle, displayName string) (User, error) {
 		return User{}, err
 	}
 	return user, nil
+}
+
+// ProfilePatch contains optional profile changes. Patch performs the sparse
+// read/merge/write as one storage-root transaction so concurrent edits cannot
+// restore fields from a stale snapshot.
+type ProfilePatch struct {
+	Handle      *string
+	DisplayName *string
+}
+
+func (s *Store) Patch(id string, patch ProfilePatch) (User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return User{}, err
+	}
+	defer unlock()
+	if !validID(id) {
+		return User{}, ErrNotFound
+	}
+	user, err := s.read(id)
+	if err != nil {
+		return User{}, err
+	}
+	if patch.Handle != nil {
+		user.Handle = *patch.Handle
+	}
+	if patch.DisplayName != nil {
+		user.DisplayName = *patch.DisplayName
+	}
+	user.Handle, user.DisplayName, err = validateProfile(user.Handle, user.DisplayName)
+	if err != nil {
+		return User{}, err
+	}
+	allUsers, err := s.loadAll()
+	if err != nil {
+		return User{}, err
+	}
+	if handleExists(allUsers, user.Handle, id) {
+		return User{}, ErrHandleTaken
+	}
+	user.UpdatedAt = s.now().Truncate(time.Microsecond)
+	if err := s.write(user); err != nil {
+		return User{}, err
+	}
+	return user, nil
+}
+
+// lockRoot coordinates mutations among all Store instances and API processes
+// that share a storage root. The lock file is durable metadata, not a user.
+func (s *Store) lockRoot() (func(), error) {
+	file, err := os.OpenFile(filepath.Join(s.root, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open user storage lock: %w", err)
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+		file.Close()
+		return nil, fmt.Errorf("lock user storage: %w", err)
+	}
+	return func() {
+		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		_ = file.Close()
+	}, nil
 }
 
 func validateProfile(handle, displayName string) (string, string, error) {

@@ -101,8 +101,10 @@ whenever dependencies change or the web job fails before it starts.
   globally unique and, along with display names, are editable profile data.
   `POST /users`, `GET /users/{id}`, and `PATCH /users/{id}` expose the account
   lifecycle. `$USER_STORAGE_ROOT` selects their directory and defaults to
-  `users`; these routes are intentionally unauthenticated until the next
-  authentication rung provides actor credentials.
+  `users`. Mutations take a root-wide advisory lock, so handle uniqueness and
+  sparse profile patches remain atomic across API processes sharing the root.
+  These routes are intentionally unauthenticated until the next authentication
+  rung provides actor credentials.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

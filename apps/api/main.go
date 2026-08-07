@@ -143,17 +143,9 @@ func registerUserRoutes(mux *http.ServeMux, store *users.Store) {
 			writeAPIError(w, http.StatusBadRequest, "invalid_request", "at least one of handle or display_name is required")
 			return
 		}
-		current, err := store.Get(r.PathValue("id"))
-		if writeUserError(w, err) {
-			return
-		}
-		if input.Handle != nil {
-			current.Handle = *input.Handle
-		}
-		if input.DisplayName != nil {
-			current.DisplayName = *input.DisplayName
-		}
-		user, err := store.Update(current.ID, current.Handle, current.DisplayName)
+		user, err := store.Patch(r.PathValue("id"), users.ProfilePatch{
+			Handle: input.Handle, DisplayName: input.DisplayName,
+		})
 		if writeUserError(w, err) {
 			return
 		}

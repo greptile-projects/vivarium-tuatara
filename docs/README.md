@@ -30,6 +30,8 @@ Records are atomically published as private JSON files beneath
 `USER_STORAGE_ROOT`, which defaults to `users` relative to the API process.
 The API syncs both record contents and the containing directory before
 acknowledging a write, and reopening the same root restores the same identity.
+All mutations hold an advisory lock in that root, making handle claims and
+sparse profile merges atomic even when multiple API processes share storage.
 The identity endpoints do not yet authenticate callers: the following
 authentication milestone will establish credentials and bind profile updates
 to the authenticated actor.
