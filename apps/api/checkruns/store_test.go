@@ -124,7 +124,7 @@ func TestRerunSurvivesEvidenceAppendFailureAndRepairsAttribution(t *testing.T) {
 	}
 }
 
-func TestCancellationIntentWinsExecutorFailureRace(t *testing.T) {
+func TestTerminalResultWinsCancellationWaitingForExecutionLock(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -162,21 +162,32 @@ func TestCancellationIntentWinsExecutorFailureRace(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	failed := run
-	failed.State, failed.CompletedAt, failed.Failure = "failed", &now, "exit status 137"
-	if err := store.Update(failed); err != nil {
+	succeeded := run
+	succeeded.State, succeeded.CompletedAt = "succeeded", &now
+	succeeded.Attempts[0].State, succeeded.Attempts[0].CompletedAt = "succeeded", &now
+	if err := store.Update(succeeded); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.appendEvent(succeeded, Event{Attempt: 1, Kind: "status", Timestamp: now, State: "succeeded"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
 		t.Fatal(err)
 	}
 	lock.Close()
-	if err := <-result; err != nil {
-		t.Fatal(err)
+	if err := <-result; !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("Cancel() error = %v", err)
 	}
 	persisted, err := store.Get(run.RepositoryID, run.PullRequestID, run.ID)
-	if err != nil || persisted.State != "canceled" || len(persisted.Controls) != 1 || persisted.Controls[0].ActorID != actor {
+	if err != nil || persisted.State != "succeeded" || persisted.Attempts[0].State != "succeeded" || len(persisted.Controls) != 0 {
 		t.Fatalf("run = %#v, %v", persisted, err)
+	}
+	events, err := store.Events(run.RepositoryID, run.PullRequestID, run.ID, 0)
+	if err != nil || events[len(events)-1].State != "succeeded" {
+		t.Fatalf("events = %#v, %v", events, err)
+	}
+	if _, err := os.Stat(intentPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("obsolete cancellation intent remains: %v", err)
 	}
 }
 

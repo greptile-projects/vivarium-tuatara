@@ -236,6 +236,9 @@ event-write failure; queued reruns remain schedulable while that repair waits.
 Projection repair is serialized across API processes, and cancellation intent
 is retained whenever terminal record durability is uncertain so recovery never
 relaunches canceled work from an older record image.
+If execution reaches a terminal result before cancellation obtains the
+execution lock, that durably reconfirmed result wins and the cancel endpoint
+returns a state conflict without appending cancellation evidence.
 
 ## Pull requests
 

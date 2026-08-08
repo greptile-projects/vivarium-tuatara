@@ -568,6 +568,18 @@ func (s *Store) Cancel(repositoryID, pullRequestID, runID, actorID string) (Run,
 	if current.State == "canceled" {
 		return current, nil
 	}
+	if !nonterminal(current.State) {
+		// The executor completed before cancellation obtained the lock. Its
+		// already-published terminal result wins; do not contradict its attempt
+		// and immutable status evidence with a later canceled top-level state.
+		// Rewrite it under this lock to confirm post-rename directory durability
+		// before discarding the recovery intent.
+		if err := s.Update(current); err != nil {
+			return Run{}, err
+		}
+		_ = os.Remove(filepath.Join(s.root, repositoryID, pullRequestID, runID+".cancel"))
+		return Run{}, ErrInvalidState
+	}
 	return s.finalizeCancellation(current, control)
 }
 
