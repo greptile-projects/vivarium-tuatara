@@ -28,6 +28,9 @@ type Environment struct {
 	RepositoryID      string            `json:"repository_id"`
 	Name              string            `json:"name"`
 	Position          int               `json:"position"`
+	Image             string            `json:"image"`
+	Command           string            `json:"command"`
+	TimeoutSeconds    int               `json:"timeout_seconds"`
 	Configuration     map[string]string `json:"configuration"`
 	CredentialNames   []string          `json:"credential_names"`
 	RequiredApprovals int               `json:"required_approvals"`
@@ -98,7 +101,7 @@ func New(root string) (*Store, error) {
 }
 
 func (s *Store) PutEnvironment(value Environment) (Environment, error) {
-	if !validID(value.RepositoryID) || !validID(value.UpdatedBy) || strings.TrimSpace(value.Name) == "" || len(value.Name) > 100 || value.Position < 1 || value.RequiredApprovals < 0 || value.RequiredApprovals > 20 || value.Concurrency < 1 || value.Concurrency > 20 || len(value.Configuration) > 50 || len(value.Credentials) > 50 {
+	if !validID(value.RepositoryID) || !validID(value.UpdatedBy) || strings.TrimSpace(value.Name) == "" || len(value.Name) > 100 || value.Position < 1 || !validImage(value.Image) || strings.TrimSpace(value.Command) == "" || len(value.Command) > 4000 || value.TimeoutSeconds < 1 || value.TimeoutSeconds > 3600 || value.RequiredApprovals < 0 || value.RequiredApprovals > 20 || value.Concurrency < 1 || value.Concurrency > 20 || len(value.Configuration) > 50 || len(value.Credentials) > 50 {
 		return Environment{}, ErrInvalid
 	}
 	for k, v := range value.Configuration {
@@ -157,6 +160,14 @@ func (s *Store) GetEnvironment(repo, id string) (Environment, error) {
 	value, err := s.getEnvironment(repo, id)
 	return public(value), err
 }
+
+// ExecutionEnvironment is reserved for the in-process executor. HTTP reads
+// use GetEnvironment, which always removes protected values.
+func (s *Store) ExecutionEnvironment(repo, id string) (Environment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.getEnvironment(repo, id)
+}
 func (s *Store) getEnvironment(repo, id string) (Environment, error) {
 	var v Environment
 	if !validID(repo) || !validID(id) {
@@ -206,10 +217,14 @@ func (s *Store) CreatePromotion(value Promotion) (Promotion, error) {
 	if err != nil {
 		return Promotion{}, err
 	}
+	active := 0
 	for _, p := range promotions {
 		if p.EnvironmentID == env.ID && (p.State == "pending_approval" || p.State == "queued" || p.State == "running") {
-			return Promotion{}, ErrBlocked
+			active++
 		}
+	}
+	if active >= env.Concurrency {
+		return Promotion{}, ErrBlocked
 	}
 	if env.Position > 1 {
 		ok := false
@@ -334,6 +349,32 @@ func (s *Store) ListPromotions(repo string) ([]Promotion, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.listPromotions(repo)
+}
+
+// Nonterminal returns durable queued and interrupted work for recovery.
+func (s *Store) Nonterminal() ([]Promotion, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return nil, err
+	}
+	var result []Promotion
+	for _, entry := range entries {
+		if !entry.IsDir() || !validID(entry.Name()) {
+			continue
+		}
+		items, err := s.listPromotions(entry.Name())
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range items {
+			if item.State == "queued" || item.State == "running" {
+				result = append(result, item)
+			}
+		}
+	}
+	return result, nil
 }
 func (s *Store) listPromotions(repo string) ([]Promotion, error) {
 	var p []Promotion
@@ -483,6 +524,17 @@ func validName(v string) bool {
 	}
 	for _, r := range v {
 		if !(r == '_' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+			return false
+		}
+	}
+	return true
+}
+func validImage(image string) bool {
+	if image == "" || len(image) > 200 || strings.ContainsAny(image, " \t\r\n@") {
+		return false
+	}
+	for _, r := range image {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("./:_-", r)) {
 			return false
 		}
 	}

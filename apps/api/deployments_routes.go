@@ -12,6 +12,7 @@ import (
 )
 
 func registerDeploymentRoutes(mux *http.ServeMux, repositories *repositories.Store, releases *releases.Store, builds *checkruns.Store, store *deployments.Store, credentials *auth.Store) {
+	executor := deployments.NewExecutor(store, builds)
 	read := func(w http.ResponseWriter, r *http.Request) bool {
 		_, _, ok := authorizeRepositoryRead(w, r, repositories, credentials, r.PathValue("id"))
 		return ok
@@ -39,6 +40,9 @@ func registerDeploymentRoutes(mux *http.ServeMux, repositories *repositories.Sto
 		var input struct {
 			Name              string            `json:"name"`
 			Position          int               `json:"position"`
+			Image             string            `json:"image"`
+			Command           string            `json:"command"`
+			TimeoutSeconds    int               `json:"timeout_seconds"`
 			Configuration     map[string]string `json:"configuration"`
 			Credentials       map[string]string `json:"credentials"`
 			RequiredApprovals int               `json:"required_approvals"`
@@ -48,7 +52,7 @@ func registerDeploymentRoutes(mux *http.ServeMux, repositories *repositories.Sto
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
-		value, err := store.PutEnvironment(deployments.Environment{ID: r.PathValue("environment_id"), RepositoryID: r.PathValue("id"), Name: input.Name, Position: input.Position, Configuration: input.Configuration, Credentials: input.Credentials, RequiredApprovals: input.RequiredApprovals, Concurrency: input.Concurrency, UpdatedBy: actor.UserID})
+		value, err := store.PutEnvironment(deployments.Environment{ID: r.PathValue("environment_id"), RepositoryID: r.PathValue("id"), Name: input.Name, Position: input.Position, Image: input.Image, Command: input.Command, TimeoutSeconds: input.TimeoutSeconds, Configuration: input.Configuration, Credentials: input.Credentials, RequiredApprovals: input.RequiredApprovals, Concurrency: input.Concurrency, UpdatedBy: actor.UserID})
 		if errors.Is(err, deployments.ErrInvalid) {
 			writeAPIError(w, 422, "invalid_environment", "environment policy is invalid or conflicts with its ordered position")
 			return
@@ -122,7 +126,7 @@ func registerDeploymentRoutes(mux *http.ServeMux, repositories *repositories.Sto
 		}
 		writeJSON(w, 202, value)
 		if value.State == "queued" {
-			go executeDeployment(store, value.RepositoryID, value.ID)
+			go executor.Execute(value.RepositoryID, value.ID)
 		}
 	})
 	mux.HandleFunc("POST /repositories/{id}/deployments/{deployment_id}/approvals", func(w http.ResponseWriter, r *http.Request) {
@@ -141,15 +145,7 @@ func registerDeploymentRoutes(mux *http.ServeMux, repositories *repositories.Sto
 		}
 		writeJSON(w, 200, value)
 		if value.State == "queued" {
-			go executeDeployment(store, value.RepositoryID, value.ID)
+			go executor.Execute(value.RepositoryID, value.ID)
 		}
 	})
-}
-
-func executeDeployment(store *deployments.Store, repositoryID, id string) {
-	value, err := store.Transition(repositoryID, id, "running", "Protected configuration and credentials were provisioned for the exact artifact.")
-	if err != nil {
-		return
-	}
-	_, _ = store.Transition(repositoryID, value.ID, "succeeded", "Artifact checksum verified and deployment transition completed.")
 }

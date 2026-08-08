@@ -132,7 +132,12 @@ whenever dependencies change or the web job fails before it starts.
   one successful exact-release artifact; later environments require the same
   release, build, artifact, and checksum to have succeeded immediately before.
   Initiators cannot self-approve, and immutable deployment events retain every
-  request, approval, queue, status/log, and completion transition.
+  request, approval, queue, status/log, and completion transition. Execution
+  reopens and SHA-256 verifies the exact build artifact before mounting it
+  read-only into the owner-defined container command; decrypted values enter
+  only that boundary and output is bounded and secret-redacted. Startup and a
+  periodic recovery pass resume queued work and fail interrupted running work
+  whose external outcome is unknowable.
   Pull request discovery at `/pulls` aggregates reviewable work across the
   authenticated actor's repository catalog and opens candidate branches
   against distinct targets or owned-fork branches against their upstream,

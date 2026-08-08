@@ -84,6 +84,9 @@ export function DeploymentWorkspace({
           body: JSON.stringify({
             name: data.get("name"),
             position: Number(data.get("position")),
+            image: data.get("image"),
+            command: data.get("command"),
+            timeout_seconds: Number(data.get("timeout")),
             required_approvals: Number(data.get("approvals")),
             concurrency: Number(data.get("concurrency")),
             configuration: pairs("configuration"),
@@ -209,6 +212,36 @@ export function DeploymentWorkspace({
                 defaultValue="1"
                 required
                 className="mt-1 min-h-10 w-full rounded-lg border px-3 text-sm font-normal"
+              />
+            </label>
+            <label className="text-xs font-semibold">
+              Executor image
+              <input
+                name="image"
+                required
+                defaultValue="alpine:3.22"
+                className="mt-1 min-h-10 w-full rounded-lg border px-3 font-mono text-sm font-normal"
+              />
+            </label>
+            <label className="text-xs font-semibold">
+              Timeout seconds
+              <input
+                name="timeout"
+                type="number"
+                min="1"
+                max="3600"
+                defaultValue="600"
+                required
+                className="mt-1 min-h-10 w-full rounded-lg border px-3 text-sm font-normal"
+              />
+            </label>
+            <label className="text-xs font-semibold md:col-span-2">
+              Deployment command
+              <textarea
+                name="command"
+                required
+                placeholder={'deploy "$VIVARIUM_ARTIFACT"'}
+                className="mt-1 w-full rounded-lg border p-3 font-mono text-xs"
               />
             </label>
             <label className="text-xs font-semibold">

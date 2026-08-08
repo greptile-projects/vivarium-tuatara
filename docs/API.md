@@ -847,7 +847,7 @@ Owners create environments with `POST /repositories/{id}/environments` and
 replace one with `PUT /repositories/{id}/environments/{environment_id}`:
 
 ```json
-{"name":"production","position":2,"configuration":{"REGION":"us-east"},"credentials":{"DEPLOY_TOKEN":"write-only"},"required_approvals":2,"concurrency":1}
+{"name":"production","position":2,"image":"alpine:3.22","command":"deploy \"$VIVARIUM_ARTIFACT\"","timeout_seconds":600,"configuration":{"REGION":"us-east"},"credentials":{"DEPLOY_TOKEN":"write-only"},"required_approvals":2,"concurrency":1}
 ```
 
 Positions and names are unique. Configuration is readable to repository
@@ -870,3 +870,10 @@ threshold queues execution, subject to its concurrency limit. `GET
 artifact SHA-256, initiator, approvals, current state, timestamps, and ordered
 request, queue, deployment-status, log, and completion events. Reads inherit
 normal repository visibility; protected values never enter this history.
+The executor reopens and SHA-256 verifies the artifact, mounts it read-only at
+`$VIVARIUM_ARTIFACT`, and runs the environment command in its configured image
+with dropped capabilities, a read-only root, and a bounded timeout. Protected
+values exist only in the executor's mode-0600 environment file; logs are
+bounded and secret-redacted. Verification or command failures are terminal and
+do not satisfy the next environment. Queued records resume after restart;
+interrupted running records become failed with an unknown-outcome event.

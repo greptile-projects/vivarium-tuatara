@@ -686,3 +686,14 @@ immediately preceding environment. Every request, independent approval, queue
 transition, provision/status message, and completion is retained with actor and
 time through the API and release-detail workspace. Records live beneath
 `DEPLOYMENT_STORAGE_ROOT` (default `deployments`).
+
+Each environment also defines an executor image, command, and timeout. The
+worker reopens the immutable build artifact, recomputes and matches its SHA-256,
+then mounts it read-only at `$VIVARIUM_ARTIFACT` in a capability-free,
+read-only container. Visible configuration and decrypted protected values are
+provided only through a mode-0600 environment file at this execution boundary;
+retained output is bounded and credential values are redacted. A command or
+verification failure becomes durable failed evidence and cannot unlock a later
+environment. Recovery continuously resumes queued work and conservatively
+fails a running record interrupted by restart because its external result is
+unknown.

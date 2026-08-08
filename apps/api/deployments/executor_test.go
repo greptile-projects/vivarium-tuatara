@@ -1,0 +1,95 @@
+package deployments
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+)
+
+func TestExecutorFailsBeforeCommandWhenArtifactChecksumChanged(t *testing.T) {
+	deploymentStore, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	buildRoot := t.TempDir()
+	buildStore, err := checkruns.New(buildRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, release, actor := id('1'), id('2'), id('3')
+	environment, err := deploymentStore.PutEnvironment(Environment{RepositoryID: repo, Name: "production", Position: 1, Image: "alpine:3.22", Command: "exit 99", TimeoutSeconds: 30, RequiredApprovals: 0, Concurrency: 1, UpdatedBy: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := buildStore.CreateRequested(repo, release, id('4'), []checkruns.Definition{{Name: "package", Image: "alpine:3.22", Command: "true", WorkingDirectory: ".", TimeoutSeconds: 30}}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := runs[0]
+	artifactID := id('5')
+	expected := sha256.Sum256([]byte("expected"))
+	run.State = "succeeded"
+	run.Artifacts = []checkruns.Artifact{{ID: artifactID, SHA256: hex.EncodeToString(expected[:])}}
+	if err = buildStore.Update(run); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(buildRoot, repo, release, "artifacts", run.ID)
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, artifactID), []byte("tampered"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	promotion, err := deploymentStore.CreatePromotion(Promotion{RepositoryID: repo, EnvironmentID: environment.ID, ReleaseID: release, BuildID: run.ID, ArtifactID: artifactID, ArtifactSHA256: hex.EncodeToString(expected[:]), InitiatedBy: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = NewExecutor(deploymentStore, buildStore).Execute(repo, promotion.ID); err != nil {
+		t.Fatal(err)
+	}
+	promotion, err = deploymentStore.GetPromotion(repo, promotion.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if promotion.State != "failed" {
+		t.Fatalf("state = %q", promotion.State)
+	}
+}
+
+func TestRecoveryFailsInterruptedRunningPromotion(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, actor := id('6'), id('7')
+	environment, err := store.PutEnvironment(Environment{RepositoryID: repo, Name: "staging", Position: 1, Image: "alpine:3.22", Command: "true", TimeoutSeconds: 30, RequiredApprovals: 0, Concurrency: 1, UpdatedBy: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	promotion, err := store.CreatePromotion(Promotion{RepositoryID: repo, EnvironmentID: environment.ID, ReleaseID: id('8'), BuildID: id('9'), ArtifactID: id('a'), ArtifactSHA256: string(make([]byte, 64)), InitiatedBy: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	promotion, err = store.Transition(repo, promotion.ID, "running", "claimed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	builds, err := checkruns.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = NewExecutor(store, builds).Recover(); err != nil {
+		t.Fatal(err)
+	}
+	promotion, err = store.GetPromotion(repo, promotion.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if promotion.State != "failed" {
+		t.Fatalf("state = %q", promotion.State)
+	}
+}

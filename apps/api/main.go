@@ -158,10 +158,28 @@ func main() {
 	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, releaseStore, deploymentStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
+	startDeploymentRecovery(deploymentStore, checkRunStore)
 	log.Printf("listening on http://localhost:%s", port)
 	if err := http.ListenAndServe(":"+port, handler); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func startDeploymentRecovery(store *deployments.Store, builds *checkruns.Store) {
+	executor := deployments.NewExecutor(store, builds)
+	recover := func() {
+		if err := executor.Recover(); err != nil {
+			log.Printf("recover deployments: %v", err)
+		}
+	}
+	recover()
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			recover()
+		}
+	}()
 }
 
 func startIntegrationQueueRecovery(store *pullrequests.Store) {

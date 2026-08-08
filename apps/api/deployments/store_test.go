@@ -12,7 +12,7 @@ func TestGovernedPromotionRetainsSecretAndExactArtifactHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo, owner, initiator, approver := id('1'), id('2'), id('3'), id('4')
-	env, err := s.PutEnvironment(Environment{RepositoryID: repo, Name: "production", Position: 1, Configuration: map[string]string{"REGION": "east"}, Credentials: map[string]string{"DEPLOY_TOKEN": "secret-value"}, RequiredApprovals: 1, Concurrency: 1, UpdatedBy: owner})
+	env, err := s.PutEnvironment(Environment{RepositoryID: repo, Name: "production", Position: 1, Image: "alpine:3.22", Command: "test -f \"$VIVARIUM_ARTIFACT\"", TimeoutSeconds: 30, Configuration: map[string]string{"REGION": "east"}, Credentials: map[string]string{"DEPLOY_TOKEN": "secret-value"}, RequiredApprovals: 1, Concurrency: 1, UpdatedBy: owner})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,6 +44,31 @@ func TestGovernedPromotionRetainsSecretAndExactArtifactHistory(t *testing.T) {
 	p, err = s.Transition(repo, p.ID, "succeeded", "deployed")
 	if err != nil || p.CompletedAt == nil || len(p.Events) != 5 {
 		t.Fatalf("completed = %#v, %v", p, err)
+	}
+}
+
+func TestPromotionAdmissionHonorsEnvironmentConcurrency(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, owner := id('a'), id('b')
+	env, err := s.PutEnvironment(Environment{RepositoryID: repo, Name: "staging", Position: 1, Image: "alpine:3.22", Command: "true", TimeoutSeconds: 30, RequiredApprovals: 0, Concurrency: 2, UpdatedBy: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	makePromotion := func(release, build, artifact, actor byte) error {
+		_, err := s.CreatePromotion(Promotion{RepositoryID: repo, EnvironmentID: env.ID, ReleaseID: id(release), BuildID: id(build), ArtifactID: id(artifact), ArtifactSHA256: string(make([]byte, 64)), InitiatedBy: id(actor)})
+		return err
+	}
+	if err = makePromotion('1', '2', '3', '4'); err != nil {
+		t.Fatal(err)
+	}
+	if err = makePromotion('5', '6', '7', '8'); err != nil {
+		t.Fatalf("second promotion = %v", err)
+	}
+	if err = makePromotion('9', 'c', 'd', 'e'); err != ErrBlocked {
+		t.Fatalf("third promotion = %v", err)
 	}
 }
 

@@ -96,6 +96,9 @@ export type DeploymentEnvironment = {
   repository_id: string;
   name: string;
   position: number;
+  image: string;
+  command: string;
+  timeout_seconds: number;
   configuration: Record<string, string>;
   credential_names: string[];
   required_approvals: number;
