@@ -55,7 +55,7 @@ func TestHumanTaskContributionLinksReviewAndDoesNotCompleteBeforeMerge(t *testin
 	var pull pullrequests.PullRequest
 	json.NewDecoder(createdResponse.Body).Decode(&pull)
 	createdResponse.Body.Close()
-	if pull.TaskID == nil || *pull.TaskID != task.ID || pull.ProposalID == nil || *pull.ProposalID != proposal.ID || pull.SourceCommitID != string(head) {
+	if pull.TaskID == nil || *pull.TaskID != task.ID || pull.ProposalID == nil || *pull.ProposalID != proposal.ID || pull.SourceCommitID != string(head) || pull.TaskStatePending != "" || len(pull.TaskCommitIDs) != 1 || pull.TaskCommitIDs[0] != string(head) {
 		t.Fatalf("pull = %#v", pull)
 	}
 	linked, _ := proposalStore.GetTask(repository.ID, proposal.ID, task.ID)

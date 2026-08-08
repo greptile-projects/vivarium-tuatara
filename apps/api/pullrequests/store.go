@@ -58,6 +58,8 @@ type PullRequest struct {
 	TaskID                   *string                `json:"task_id,omitempty"`
 	TaskSessionID            *string                `json:"task_session_id,omitempty"`
 	TaskRunID                *string                `json:"task_run_id,omitempty"`
+	TaskCommitIDs            []string               `json:"task_commit_ids,omitempty"`
+	TaskStatePending         string                 `json:"task_state_pending,omitempty"`
 	Status                   string                 `json:"status"`
 	MaintainerEditsAllowed   bool                   `json:"maintainer_edits_allowed"`
 	CreatedAt                time.Time              `json:"created_at"`
@@ -174,6 +176,36 @@ func (s *Store) Close(repositoryID, id, actorID string) (PullRequest, error) {
 	p.MaintainerEditsAllowed = false
 	p.QueuedAt, p.QueueRank = nil, ""
 	p.QueuedBy = nil
+	if p.TaskID != nil {
+		p.TaskStatePending = "closed"
+	}
+	if committed, err := s.write(p); err != nil {
+		if committed {
+			return p, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+		}
+		return PullRequest{}, err
+	}
+	return p, nil
+}
+
+// ConfirmTaskState clears cross-store repair intent only after the linked task
+// reflects this pull's durable lifecycle state.
+func (s *Store) ConfirmTaskState(repositoryID, id, expected string) (PullRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return PullRequest{}, err
+	}
+	defer unlock()
+	p, err := s.read(repositoryID, id)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	if expected == "" || p.TaskStatePending != expected {
+		return PullRequest{}, ErrSourceChanged
+	}
+	p.TaskStatePending = ""
 	if committed, err := s.write(p); err != nil {
 		if committed {
 			return p, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
@@ -336,16 +368,16 @@ func (s *Store) Create(repositoryID, authorID, title, body, sourceBranch, target
 // Its reachable objects are imported into the target without publishing a ref,
 // keeping every later review and merge operation pinned to the adopted commit.
 func (s *Store) CreateFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, proposalID *string) (PullRequest, error) {
-	return s.createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, proposalID, nil, nil, nil)
+	return s.createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, "", nil, proposalID, nil, nil, nil)
 }
 
 // CreateTaskContribution publishes task-scoped work into ordinary review while
 // retaining stable links to the agreed intent and optional execution evidence.
-func (s *Store) CreateTaskContribution(repositoryID, authorID, title, body, sourceBranch, targetBranch string, proposalID, taskID *string, sessionID, runID *string) (PullRequest, error) {
-	return s.createFrom(repositoryID, repositoryID, authorID, title, body, sourceBranch, targetBranch, proposalID, taskID, sessionID, runID)
+func (s *Store) CreateTaskContribution(repositoryID, authorID, title, body, sourceBranch, targetBranch, expectedSourceCommit string, commitIDs []string, proposalID, taskID *string, sessionID, runID *string) (PullRequest, error) {
+	return s.createFrom(repositoryID, repositoryID, authorID, title, body, sourceBranch, targetBranch, expectedSourceCommit, commitIDs, proposalID, taskID, sessionID, runID)
 }
 
-func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, proposalID, taskID, sessionID, runID *string) (PullRequest, error) {
+func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, expectedSourceCommit string, commitIDs []string, proposalID, taskID, sessionID, runID *string) (PullRequest, error) {
 	if !validID(repositoryID) || !validID(sourceRepositoryID) || !validID(authorID) {
 		return PullRequest{}, ErrInvalid
 	}
@@ -363,6 +395,11 @@ func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, bo
 	if (taskID != nil && !validID(*taskID)) || (sessionID != nil && !validID(*sessionID)) || (runID != nil && !validID(*runID)) || (taskID == nil && (sessionID != nil || runID != nil)) {
 		return PullRequest{}, ErrInvalid
 	}
+	for _, commitID := range commitIDs {
+		if !validCommitID(commitID) {
+			return PullRequest{}, ErrInvalid
+		}
+	}
 	repository, err := s.git.Open(repositoryID)
 	if err != nil {
 		return PullRequest{}, fmt.Errorf("open Git repository: %w", err)
@@ -374,6 +411,9 @@ func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, bo
 	sourceCommit, err := branchCommit(sourceRepository, sourceBranch)
 	if err != nil {
 		return PullRequest{}, err
+	}
+	if expectedSourceCommit != "" && sourceCommit != expectedSourceCommit {
+		return PullRequest{}, ErrSourceChanged
 	}
 	targetCommit, err := branchCommit(repository, targetBranch)
 	if err != nil {
@@ -389,7 +429,13 @@ func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, bo
 			return PullRequest{}, fmt.Errorf("import source commit: %w", err)
 		}
 	}
-	p := PullRequest{ID: id, RepositoryID: repositoryID, SourceRepositoryID: sourceRepositoryID, AuthorID: authorID, Title: title, Body: body, SourceBranch: sourceBranch, TargetBranch: targetBranch, SourceCommitID: sourceCommit, TargetCommitID: targetCommit, ProposalID: proposalID, TaskID: taskID, TaskSessionID: sessionID, TaskRunID: runID, Status: Open, CreatedAt: now, UpdatedAt: now}
+	if taskID != nil && len(commitIDs) == 0 {
+		commitIDs = []string{sourceCommit}
+	}
+	p := PullRequest{ID: id, RepositoryID: repositoryID, SourceRepositoryID: sourceRepositoryID, AuthorID: authorID, Title: title, Body: body, SourceBranch: sourceBranch, TargetBranch: targetBranch, SourceCommitID: sourceCommit, TargetCommitID: targetCommit, ProposalID: proposalID, TaskID: taskID, TaskSessionID: sessionID, TaskRunID: runID, TaskCommitIDs: append([]string(nil), commitIDs...), Status: Open, CreatedAt: now, UpdatedAt: now}
+	if taskID != nil {
+		p.TaskStatePending = "review"
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	unlock, err := s.lock()
@@ -1018,6 +1064,9 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 	if p.Status != Open {
 		addBlocker("pull_request_not_open", "pull request must be open")
 	}
+	if p.TaskStatePending != "" {
+		addBlocker("task_state_pending", "linked task state must be reconciled")
+	}
 
 	sourceID, sourceState, err := s.liveReviewSourceState(p, repository)
 	if err != nil {
@@ -1632,6 +1681,9 @@ func (s *Store) advanceIntegrationQueue(repositoryID, branch string) error {
 		}
 		commit, mergedBy := candidate.CommitID, merger
 		head.Status, head.UpdatedAt, head.MergedAt, head.MergedBy, head.MergeCommitID = Merged, now, &now, &mergedBy, &commit
+		if head.TaskID != nil {
+			head.TaskStatePending = "merged"
+		}
 		head.QueueFinalizationPending = true
 		head.QueuedAt, head.QueuedBy, head.QueueRank, head.mergeIntent = nil, nil, "", nil
 		if _, err := s.write(*head); err != nil {
@@ -1870,6 +1922,9 @@ func (s *Store) Merge(repositoryID, pullRequestID, mergerID string) (PullRequest
 	}
 	mergedBy, commitID := mergerID, string(commit)
 	p.Status, p.UpdatedAt, p.MergedAt, p.MergedBy, p.MergeCommitID, p.mergeIntent = Merged, now, &now, &mergedBy, &commitID, nil
+	if p.TaskID != nil {
+		p.TaskStatePending = "merged"
+	}
 	if committed, err := s.write(p); err != nil {
 		if committed {
 			return p, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
@@ -1909,6 +1964,9 @@ func (s *Store) reconcileMerged(repository *storage.Repository, p PullRequest) (
 		merger, mergedAt := p.mergeIntent.MergerID, p.mergeIntent.MergedAt
 		commitID := string(commit.ID)
 		p.Status, p.UpdatedAt, p.MergedAt, p.MergedBy, p.MergeCommitID, p.mergeIntent = Merged, mergedAt, &mergedAt, &merger, &commitID, nil
+		if p.TaskID != nil {
+			p.TaskStatePending = "merged"
+		}
 		if p.QueuedAt != nil {
 			p.QueuedAt, p.QueuedBy, p.QueueRank, p.QueueFinalizationPending = nil, nil, "", true
 		}
@@ -2266,8 +2324,13 @@ func (s *Store) read(repositoryID, id string) (PullRequest, error) {
 	_, validRank := new(big.Rat).SetString(p.QueueRank)
 	validQueue := (p.QueuedAt == nil && p.QueuedBy == nil && p.QueueRank == "") || (p.Status == Open && p.QueuedAt != nil && !p.QueuedAt.IsZero() && p.QueuedBy != nil && validID(*p.QueuedBy) && (p.QueueRank == "" || validRank))
 	validFinalization := (!p.QueueFinalizationPending || (p.Status == Merged && p.QueueFinalizedAt == nil)) && (p.QueueFinalizedAt == nil || (p.Status == Merged && !p.QueueFinalizationPending && !p.QueueFinalizedAt.IsZero()))
-	if p.ID != id || !validID(p.RepositoryID) || !validID(p.SourceRepositoryID) || !validID(p.AuthorID) || !validOutcome || !validIntent || !validQueue || !validFinalization || !validCommitID(p.SourceCommitID) || !validCommitID(p.TargetCommitID) || (p.SourceRepositoryID == p.RepositoryID && p.SourceBranch == p.TargetBranch) || p.SourceBranch == "" || p.TargetBranch == "" || strings.HasPrefix(p.SourceBranch, "refs/") || strings.HasPrefix(p.TargetBranch, "refs/") || p.CreatedAt.IsZero() || p.UpdatedAt.IsZero() || (p.ProposalID != nil && !validID(*p.ProposalID)) || (p.TaskID != nil && !validID(*p.TaskID)) || (p.TaskSessionID != nil && !validID(*p.TaskSessionID)) || (p.TaskRunID != nil && !validID(*p.TaskRunID)) || (p.TaskID == nil && (p.TaskSessionID != nil || p.TaskRunID != nil)) {
+	if p.ID != id || !validID(p.RepositoryID) || !validID(p.SourceRepositoryID) || !validID(p.AuthorID) || !validOutcome || !validIntent || !validQueue || !validFinalization || !validCommitID(p.SourceCommitID) || !validCommitID(p.TargetCommitID) || (p.SourceRepositoryID == p.RepositoryID && p.SourceBranch == p.TargetBranch) || p.SourceBranch == "" || p.TargetBranch == "" || strings.HasPrefix(p.SourceBranch, "refs/") || strings.HasPrefix(p.TargetBranch, "refs/") || p.CreatedAt.IsZero() || p.UpdatedAt.IsZero() || (p.ProposalID != nil && !validID(*p.ProposalID)) || (p.TaskID != nil && (!validID(*p.TaskID) || len(p.TaskCommitIDs) == 0)) || (p.TaskSessionID != nil && !validID(*p.TaskSessionID)) || (p.TaskRunID != nil && !validID(*p.TaskRunID)) || (p.TaskID == nil && (p.TaskSessionID != nil || p.TaskRunID != nil || p.TaskStatePending != "" || len(p.TaskCommitIDs) != 0)) || (p.TaskStatePending != "" && p.TaskStatePending != "review" && p.TaskStatePending != "closed" && p.TaskStatePending != "merged") {
 		return PullRequest{}, fmt.Errorf("corrupt pull request %s", id)
+	}
+	for _, commitID := range p.TaskCommitIDs {
+		if !validCommitID(commitID) {
+			return PullRequest{}, fmt.Errorf("corrupt pull request %s", id)
+		}
 	}
 	if _, _, err := validatePurpose(p.Title, p.Body); err != nil {
 		return PullRequest{}, fmt.Errorf("corrupt pull request %s", id)

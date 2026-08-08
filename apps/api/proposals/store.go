@@ -432,6 +432,12 @@ func (s *Store) LinkTaskContribution(repositoryID, proposalID, taskID, actorID s
 		return Task{}, ErrInvalid
 	}
 	return s.mutateContribution(repositoryID, proposalID, taskID, actorID, func(task *Task) error {
+		if task.Contribution != nil && task.Contribution.PullRequestID == contribution.PullRequestID && task.Contribution.Status == "review" {
+			return nil
+		}
+		if task.Status != TaskTodo {
+			return ErrInvalid
+		}
 		if task.Contribution != nil {
 			task.Contribution.Status = "superseded"
 			if len(task.Contributions) > 0 {
@@ -477,6 +483,9 @@ func (s *Store) mutateContribution(repositoryID, proposalID, taskID, actorID str
 	r, err := s.read(proposalID)
 	if err != nil || r.Proposal.RepositoryID != repositoryID {
 		return Task{}, ErrNotFound
+	}
+	if action == "contribution_published" && r.Proposal.Status != Open {
+		return Task{}, ErrInvalid
 	}
 	for i := range r.Tasks {
 		if r.Tasks[i].ID == taskID {

@@ -276,7 +276,11 @@ Publication records `review` and moves the task to `in_progress`, never
 `completed`. A later attempt marks the prior candidate `superseded`. Closing an
 unmerged pull records `closed` and returns the task to `todo`; only merge records
 `merged` and completes it. Task-linked merges do not automatically close the
-whole multi-task proposal.
+whole multi-task proposal. Pull records retain `task_state_pending` until the
+corresponding task mutation is durable; pending pulls are not mergeable, and
+pull collection/detail reads retry the exact idempotent link, close, or merge
+projection before clearing that repair intent. Agent publication also requires
+the live branch tip to equal the completed run's exact outcome commit.
 
 ## Automated checks
 
