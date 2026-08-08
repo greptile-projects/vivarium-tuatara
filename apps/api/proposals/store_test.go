@@ -125,6 +125,37 @@ func TestProposalTasksRejectInvalidGraphAndDiscussionLinks(t *testing.T) {
 	}
 }
 
+func TestTaskAssignmentClaimsAreAtomicAndAttributable(t *testing.T) {
+	root := t.TempDir()
+	first, _ := New(root)
+	second, _ := New(root)
+	proposal, _ := first.Create(repositoryID, authorID, "Plan", "")
+	task, _ := first.CreateTask(repositoryID, proposal.ID, authorID, "Build", "A bounded result", nil, nil)
+	base := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	assigned, err := first.AssignTask(repositoryID, proposal.ID, task.ID, authorID, TaskAssignmentInput{AssigneeType: "human", AssigneeID: commenterID, Mandate: "Deliver the result", RepositoryID: repositoryID, BaseRevision: base})
+	if err != nil || assigned.Assignment == nil || assigned.Assignment.AssigneeID != commenterID || len(assigned.Assignment.Access.Scopes) != 0 {
+		t.Fatalf("assigned = %#v, %v", assigned, err)
+	}
+	if _, err := second.AssignTask(repositoryID, proposal.ID, task.ID, commenterID, TaskAssignmentInput{AssigneeType: "agent", Mandate: "Competing claim", RepositoryID: repositoryID, BaseRevision: base}); !errors.Is(err, ErrTaskAssignmentConflict) {
+		t.Fatalf("concurrent claim = %v", err)
+	}
+	reassigned, err := second.AssignTask(repositoryID, proposal.ID, task.ID, commenterID, TaskAssignmentInput{AssigneeType: "agent", Mandate: "Delegated result", RepositoryID: repositoryID, BaseRevision: base, ExpectedAssignmentID: assigned.Assignment.ID})
+	if err != nil || reassigned.Assignment == nil || reassigned.Assignment.AssigneeType != "agent" || len(reassigned.Assignment.Access.Scopes) != 2 {
+		t.Fatalf("reassigned = %#v, %v", reassigned, err)
+	}
+	if _, err := first.RevokeTaskAssignment(repositoryID, proposal.ID, task.ID, authorID, assigned.Assignment.ID); !errors.Is(err, ErrTaskAssignmentConflict) {
+		t.Fatalf("stale revoke = %v", err)
+	}
+	revoked, err := first.RevokeTaskAssignment(repositoryID, proposal.ID, task.ID, authorID, reassigned.Assignment.ID)
+	if err != nil || revoked.Assignment != nil {
+		t.Fatalf("revoked = %#v, %v", revoked, err)
+	}
+	history, _ := first.ListTaskChanges(repositoryID, proposal.ID, task.ID)
+	if len(history) != 4 || history[1].Action != "assigned" || history[2].Action != "reassigned" || history[3].Action != "assignment_revoked" {
+		t.Fatalf("history = %#v", history)
+	}
+}
+
 func TestGetPreservesCorruptRecordError(t *testing.T) {
 	root := t.TempDir()
 	store, _ := New(root)

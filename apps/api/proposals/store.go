@@ -17,9 +17,10 @@ import (
 )
 
 var (
-	ErrNotFound            = errors.New("proposal not found")
-	ErrInvalid             = errors.New("invalid proposal")
-	ErrDurabilityUncertain = errors.New("proposal mutation is visible but durability is uncertain")
+	ErrNotFound               = errors.New("proposal not found")
+	ErrInvalid                = errors.New("invalid proposal")
+	ErrDurabilityUncertain    = errors.New("proposal mutation is visible but durability is uncertain")
+	ErrTaskAssignmentConflict = errors.New("task assignment changed")
 )
 
 const (
@@ -52,20 +53,38 @@ type Comment struct {
 }
 
 type Task struct {
-	ID                   string    `json:"id"`
-	ProposalID           string    `json:"proposal_id"`
-	Title                string    `json:"title"`
-	Outcome              string    `json:"outcome"`
-	Status               string    `json:"status"`
-	Position             int       `json:"position"`
-	DependencyIDs        []string  `json:"dependency_ids"`
-	DiscussionCommentIDs []string  `json:"discussion_comment_ids"`
-	Ready                bool      `json:"ready"`
-	BlockedBy            []string  `json:"blocked_by"`
-	CreatedBy            string    `json:"created_by"`
-	UpdatedBy            string    `json:"updated_by"`
-	CreatedAt            time.Time `json:"created_at"`
-	UpdatedAt            time.Time `json:"updated_at"`
+	ID                   string          `json:"id"`
+	ProposalID           string          `json:"proposal_id"`
+	Title                string          `json:"title"`
+	Outcome              string          `json:"outcome"`
+	Status               string          `json:"status"`
+	Position             int             `json:"position"`
+	DependencyIDs        []string        `json:"dependency_ids"`
+	DiscussionCommentIDs []string        `json:"discussion_comment_ids"`
+	Ready                bool            `json:"ready"`
+	BlockedBy            []string        `json:"blocked_by"`
+	CreatedBy            string          `json:"created_by"`
+	UpdatedBy            string          `json:"updated_by"`
+	CreatedAt            time.Time       `json:"created_at"`
+	UpdatedAt            time.Time       `json:"updated_at"`
+	Assignment           *TaskAssignment `json:"assignment,omitempty"`
+}
+
+type TaskAccess struct {
+	RepositoryID string   `json:"repository_id"`
+	BaseRevision string   `json:"base_revision"`
+	Scopes       []string `json:"scopes"`
+	Branch       string   `json:"branch"`
+}
+
+type TaskAssignment struct {
+	ID           string     `json:"id"`
+	AssigneeType string     `json:"assignee_type"`
+	AssigneeID   string     `json:"assignee_id"`
+	Mandate      string     `json:"mandate"`
+	Access       TaskAccess `json:"access"`
+	AssignedBy   string     `json:"assigned_by"`
+	AssignedAt   time.Time  `json:"assigned_at"`
 }
 
 type TaskChange struct {
@@ -84,6 +103,15 @@ type TaskPatch struct {
 	Position             *int
 	DependencyIDs        *[]string
 	DiscussionCommentIDs *[]string
+}
+
+type TaskAssignmentInput struct {
+	AssigneeType         string
+	AssigneeID           string
+	Mandate              string
+	RepositoryID         string
+	BaseRevision         string
+	ExpectedAssignmentID string
 }
 
 type Patch struct {
@@ -482,6 +510,132 @@ func (s *Store) ListTaskChanges(repositoryID, proposalID, taskID string) ([]Task
 	return result, nil
 }
 
+// AssignTask atomically establishes one accountable owner. ExpectedAssignmentID
+// is empty for a claim and must match for reassignment, preventing stale clients
+// from silently replacing another collaborator's claim.
+func (s *Store) AssignTask(repositoryID, proposalID, taskID, actorID string, input TaskAssignmentInput) (Task, error) {
+	mandate := strings.TrimSpace(input.Mandate)
+	if input.AssigneeType == "agent" && input.AssigneeID == "" {
+		var err error
+		input.AssigneeID, err = newID()
+		if err != nil {
+			return Task{}, err
+		}
+	}
+	if !validID(actorID) || !validID(input.AssigneeID) || !validID(input.RepositoryID) || len(input.BaseRevision) != 40 ||
+		(input.AssigneeType != "human" && input.AssigneeType != "agent") || mandate == "" || len([]rune(mandate)) > 4000 {
+		return Task{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Task{}, err
+	}
+	defer unlock()
+	r, err := s.read(proposalID)
+	if err != nil || r.Proposal.RepositoryID != repositoryID {
+		return Task{}, ErrNotFound
+	}
+	if r.Proposal.Status != Open {
+		return Task{}, ErrInvalid
+	}
+	index := -1
+	for i := range r.Tasks {
+		if r.Tasks[i].ID == taskID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return Task{}, ErrNotFound
+	}
+	deriveTasks(r.Tasks)
+	task := r.Tasks[index]
+	if !task.Ready || task.Status != TaskTodo {
+		return Task{}, ErrInvalid
+	}
+	if task.Assignment == nil {
+		if input.ExpectedAssignmentID != "" {
+			return Task{}, ErrTaskAssignmentConflict
+		}
+	} else if input.ExpectedAssignmentID == "" || task.Assignment.ID != input.ExpectedAssignmentID {
+		return Task{}, ErrTaskAssignmentConflict
+	}
+	id, err := newID()
+	if err != nil {
+		return Task{}, err
+	}
+	now := s.now().Truncate(time.Microsecond)
+	scopes, branch := []string{"git:read", "git:write"}, "task-scoped branch (created when work starts)"
+	if input.AssigneeType == "human" {
+		scopes, branch = []string{}, "no new access; existing collaborator authority only"
+	}
+	task.Assignment = &TaskAssignment{ID: id, AssigneeType: input.AssigneeType, AssigneeID: input.AssigneeID, Mandate: mandate,
+		Access: TaskAccess{RepositoryID: input.RepositoryID, BaseRevision: strings.ToLower(input.BaseRevision), Scopes: scopes, Branch: branch}, AssignedBy: actorID, AssignedAt: now}
+	task.UpdatedBy, task.UpdatedAt = actorID, now
+	r.Tasks[index] = task
+	change, err := newTaskChange(task, actorID, map[bool]string{true: "reassigned", false: "assigned"}[input.ExpectedAssignmentID != ""], now)
+	if err != nil {
+		return Task{}, err
+	}
+	r.TaskChanges = append(r.TaskChanges, change)
+	if committed, err := s.write(r); err != nil {
+		if committed {
+			return task, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+		}
+		return Task{}, err
+	}
+	return task, nil
+}
+
+func (s *Store) RevokeTaskAssignment(repositoryID, proposalID, taskID, actorID, expectedID string) (Task, error) {
+	if !validID(actorID) || !validID(expectedID) {
+		return Task{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Task{}, err
+	}
+	defer unlock()
+	r, err := s.read(proposalID)
+	if err != nil || r.Proposal.RepositoryID != repositoryID {
+		return Task{}, ErrNotFound
+	}
+	index := -1
+	for i := range r.Tasks {
+		if r.Tasks[i].ID == taskID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return Task{}, ErrNotFound
+	}
+	task := r.Tasks[index]
+	if task.Assignment == nil || task.Assignment.ID != expectedID {
+		return Task{}, ErrTaskAssignmentConflict
+	}
+	now := s.now().Truncate(time.Microsecond)
+	task.Assignment = nil
+	task.UpdatedBy, task.UpdatedAt = actorID, now
+	r.Tasks[index] = task
+	change, err := newTaskChange(task, actorID, "assignment_revoked", now)
+	if err != nil {
+		return Task{}, err
+	}
+	r.TaskChanges = append(r.TaskChanges, change)
+	if committed, err := s.write(r); err != nil {
+		if committed {
+			return task, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+		}
+		return Task{}, err
+	}
+	return task, nil
+}
+
 func validateTaskContent(title, outcome string) (string, string, error) {
 	title, outcome = strings.TrimSpace(title), strings.TrimSpace(outcome)
 	if title == "" || outcome == "" || strings.ContainsAny(title, "\r\n") || len([]rune(title)) > 200 || len([]rune(outcome)) > 2000 {
@@ -655,7 +809,7 @@ func (s *Store) read(id string) (record, error) {
 	}
 	seenChanges := map[string]bool{}
 	for _, change := range r.TaskChanges {
-		if !validID(change.ID) || !seenTasks[change.TaskID] || !validID(change.ActorID) || seenChanges[change.ID] || (change.Action != "created" && change.Action != "updated" && change.Action != "status_changed" && change.Action != "reordered") || !validStoredTask(change.Task, id) || change.Task.ID != change.TaskID {
+		if !validID(change.ID) || !seenTasks[change.TaskID] || !validID(change.ActorID) || seenChanges[change.ID] || (change.Action != "created" && change.Action != "updated" && change.Action != "status_changed" && change.Action != "reordered" && change.Action != "assigned" && change.Action != "reassigned" && change.Action != "assignment_revoked") || !validStoredTask(change.Task, id) || change.Task.ID != change.TaskID {
 			return record{}, fmt.Errorf("corrupt proposal %s", id)
 		}
 		seenChanges[change.ID] = true
@@ -666,6 +820,12 @@ func (s *Store) read(id string) (record, error) {
 func validStoredTask(task Task, proposalID string) bool {
 	if !validID(task.ID) || task.ProposalID != proposalID || !validID(task.CreatedBy) || !validID(task.UpdatedBy) || !validTaskStatus(task.Status) || task.CreatedAt.IsZero() || task.UpdatedAt.Before(task.CreatedAt) {
 		return false
+	}
+	if task.Assignment != nil {
+		a := task.Assignment
+		if !validID(a.ID) || !validID(a.AssigneeID) || !validID(a.AssignedBy) || !validID(a.Access.RepositoryID) || len(a.Access.BaseRevision) != 40 || a.AssignedAt.IsZero() || strings.TrimSpace(a.Mandate) == "" || len([]rune(a.Mandate)) > 4000 || (a.AssigneeType != "human" && a.AssigneeType != "agent") {
+			return false
+		}
 	}
 	seen := map[string]bool{}
 	for _, dependencyID := range task.DependencyIDs {
