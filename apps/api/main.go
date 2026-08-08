@@ -1147,6 +1147,7 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 		}
 		var completed changesessions.Run
 		var event changesessions.Event
+		var synchronizedPull pullrequests.PullRequest
 		synchronized := false
 		complete := func() error {
 			headHistory, historyErr := repository.ListCommitAncestry(storage.ObjectID(input.CommitID))
@@ -1182,7 +1183,8 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 				files[i] = changesessions.ChangedFile{Path: change.Path, Status: change.Status}
 			}
 			var completionErr error
-			updated, syncErr := pullRequestStore.SynchronizeSourceAfter(r.PathValue("id"), pull.ID, func() error {
+			var syncErr error
+			synchronizedPull, syncErr = pullRequestStore.SynchronizeSourceAfter(r.PathValue("id"), pull.ID, func() error {
 				completed, event, completionErr = store.CompleteRun(r.PathValue("id"), pull.ID, run.SessionID, run.ID, credential.ID, input.Summary, input.CommitID, commits, files, input.Checks, input.UnresolvedConcerns)
 				if errors.Is(completionErr, changesessions.ErrDurabilityUncertain) {
 					return nil
@@ -1192,7 +1194,7 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 			if syncErr != nil && !errors.Is(syncErr, pullrequests.ErrDurabilityUncertain) {
 				return syncErr
 			}
-			if updated.SourceCommitID != input.CommitID {
+			if synchronizedPull.SourceCommitID != input.CommitID {
 				return changesessions.ErrInvalid
 			}
 			synchronized = true
@@ -1206,6 +1208,7 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 		}
 		err = repository.WithReferenceTarget("refs/heads/"+run.WorkingBranch, input.CommitID, complete)
 		if completed.ID != "" && synchronized {
+			startCheckRuns(gitStore, checkRunStore, synchronizedPull)
 			if _, revokeErr := authStore.Revoke(run.InitiatorID, credential.ID); revokeErr != nil && !errors.Is(revokeErr, auth.ErrNotFound) {
 				writeAPIError(w, 500, "internal_error", "work was published but agent access revocation must be retried")
 				return

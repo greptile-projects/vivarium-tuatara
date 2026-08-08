@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -29,7 +29,10 @@ async function git(cwd: string, ...args: string[]) {
   return stdout.trim();
 }
 
-test("two users carry one attributed change from onboarding through merge", async ({ browser }) => {
+test("humans and an agent verify, repair, and merge one attributed change", async ({ browser }) => {
+  await run("docker", ["image", "inspect", "alpine:3.22"]).catch(() =>
+    run("docker", ["pull", "alpine:3.22"]),
+  );
   const suffix = Date.now().toString(36);
   const maintainerContext = await browser.newContext();
   const newcomerContext = await browser.newContext();
@@ -51,9 +54,26 @@ test("two users carry one attributed change from onboarding through merge", asyn
   await git(maintainerCopy, "config", "user.name", "Journey Maintainer");
   await git(maintainerCopy, "config", "user.email", "maintainer@example.com");
   await writeFile(join(maintainerCopy, "README.md"), "# Welcome\n");
-  await git(maintainerCopy, "add", "README.md");
+  await mkdir(join(maintainerCopy, ".vivarium"));
+  await writeFile(join(maintainerCopy, ".vivarium", "checks.json"), JSON.stringify({
+    version: 1,
+    checks: [{
+      name: "greeting verification",
+      image: "alpine:3.22",
+      command: "echo 'checking for delegated verification'; printf 'expected agent verified marker\\n' > \"$VIVARIUM_OUTPUT/diagnosis.txt\"; grep -qx 'agent verified' greeting.txt",
+    }],
+  }, null, 2) + "\n");
+  await git(maintainerCopy, "add", "README.md", ".vivarium/checks.json");
   await git(maintainerCopy, "commit", "-m", "Start project");
   await git(maintainerCopy, "push", "origin", "main");
+
+  await maintainer.goto(`/repositories/${repositoryID}`);
+  await maintainer.getByLabel("Required check names").fill("greeting verification");
+  const requirementSaved = maintainer.waitForResponse((response) =>
+    response.request().method() === "PUT" && response.url().includes(`/repositories/${repositoryID}/branches/main/required-checks`),
+  );
+  await maintainer.getByRole("button", { name: "Save requirements" }).click();
+  expect((await requirementSaved).status()).toBe(200);
 
   await createAccount(newcomer, "Journey Newcomer", `newcomer-${suffix}`);
   const newcomerToken = await issueGitToken(newcomer, "Journey Git");
@@ -100,59 +120,21 @@ test("two users carry one attributed change from onboarding through merge", asyn
   await expect(newcomer.getByText(`@newcomer-${suffix}`, { exact: true }).first()).toBeVisible();
 
   await maintainer.goto(newcomer.url());
-  const uncertainSessionID = "f".repeat(32);
-  const sessionEndpoint = `**/api/repositories/${repositoryID}/pulls/${pullRequestID}/sessions`;
-  const uncertainDetailEndpoint = `${sessionEndpoint}/${uncertainSessionID}`;
-  await maintainer.route(sessionEndpoint, async (route) => {
-    if (route.request().method() !== "POST") return route.continue();
-    await route.fulfill({
-      status: 202,
-      headers: { "Content-Type": "application/json", "Vivarium-Durability": "uncertain" },
-      body: JSON.stringify({
-        id: uncertainSessionID,
-        repository_id: repositoryID,
-        pull_request_id: pullRequestID,
-        initiator_id: collaborationID,
-        source_commit_id: "a".repeat(40),
-        state: "open",
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      }),
-    });
-  });
-  await maintainer.getByRole("button", { name: "Start change session" }).click();
-  await expect(maintainer.getByText("Session created with uncertain durability")).toBeVisible();
-  await expect(maintainer.getByRole("link", { name: "Inspect session fffffff" })).toBeVisible();
-  await expect(maintainer.getByRole("link", { name: "Session fffffff", exact: true })).toHaveCount(0);
-  await maintainer.route(uncertainDetailEndpoint, async (route) => {
-    await route.fulfill({
-      status: 202,
-      headers: { "Content-Type": "application/json", "Vivarium-Durability": "uncertain" },
-      body: JSON.stringify({
-        id: uncertainSessionID,
-        repository_id: repositoryID,
-        pull_request_id: pullRequestID,
-        initiator_id: collaborationID,
-        source_commit_id: "a".repeat(40),
-        state: "open",
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      }),
-    });
-  });
-  await maintainer.getByRole("link", { name: "Inspect session fffffff" }).click();
-  await expect(maintainer.getByRole("heading", { name: "Session durability remains uncertain" })).toBeVisible();
-  await expect(maintainer.getByText("Timeline events are withheld until session durability is confirmed.")).toBeVisible();
-  await maintainer.reload();
-  await expect(maintainer.getByRole("heading", { name: "Session durability remains uncertain" })).toBeVisible();
-  await maintainer.getByRole("link", { name: "← Back to pull request" }).click();
-  await maintainer.unroute(sessionEndpoint);
-  await maintainer.unroute(uncertainDetailEndpoint);
-  await maintainer.getByRole("button", { name: "Start change session" }).click();
-  await maintainer.getByRole("link", { name: /Session [a-f0-9]{7}/ }).click();
+  const checks = maintainer.locator("#checks");
+  await expect(checks.getByText("failed", { exact: true })).toBeVisible({ timeout: 60_000 });
+  await checks.getByText("greeting verification", { exact: true }).click();
+  await expect(checks.getByText(/checking for delegated verification/)).toBeVisible();
+  await expect(checks.getByText(/diagnosis\.txt/)).toBeVisible();
+  await expect(maintainer.getByText("failed", { exact: true }).last()).toBeVisible();
+  await expect(maintainer.getByRole("button", { name: "Merge into main" })).toBeDisabled();
+  await checks.getByRole("button", { name: "Repair with agent" }).click();
   await expect(maintainer).toHaveURL(new RegExp(`/pulls/${repositoryID}/[a-f0-9]{32}/sessions/[a-f0-9]{32}$`));
   await expect(maintainer.getByRole("heading", { name: "Session timeline" })).toBeVisible();
   await expect(maintainer.getByText("Change session opened")).toBeVisible();
+  await expect(maintainer.getByText("Automated failure")).toBeVisible();
+  await expect(maintainer.getByRole("heading", { name: "greeting verification" })).toBeVisible();
+  await expect(maintainer.getByText(/checking for delegated verification/).last()).toBeVisible();
+  await expect(maintainer.getByText(/diagnosis\.txt/).last()).toBeVisible();
   await maintainer.reload();
   await expect(maintainer.getByText(`@maintainer-${suffix}`, { exact: true })).toBeVisible();
   await maintainer.getByLabel("Instructions").fill("Verify the greeting behavior and add focused coverage.");
@@ -188,7 +170,7 @@ test("two users carry one attributed change from onboarding through merge", asyn
   await maintainer.getByRole("link", { name: "← Back to pull request" }).click();
   await maintainer.getByRole("button", { name: "Approve" }).click();
   await expect(maintainer.getByText(`@maintainer-${suffix}`, { exact: true }).first()).toBeVisible();
-  await expect(maintainer.getByRole("button", { name: "Merge into main" })).toBeEnabled();
+  await expect(maintainer.getByRole("button", { name: "Merge into main" })).toBeDisabled();
 
   const agentCopy = await mkdtemp(join(tmpdir(), "vivarium-agent-"));
   const agentRemote = `http://git:${launched.credential.token}@localhost:3000/git/${repositoryID}.git`;
@@ -231,6 +213,11 @@ test("two users carry one attributed change from onboarding through merge", asyn
   await maintainer.getByRole("link", { name: new RegExp(`Review revision ${agentCommit.slice(0, 7)}`) }).click();
   await expect(maintainer.getByText("0 / 1 required approvals")).toBeVisible();
   await expect(maintainer.getByRole("button", { name: "Merge into main" })).toBeDisabled();
+  const repairedChecks = maintainer.locator("#checks");
+  await expect(repairedChecks.getByText("succeeded", { exact: true })).toBeVisible({ timeout: 60_000 });
+  await expect(repairedChecks.getByText("greeting verification", { exact: true })).toHaveCount(2);
+  await expect(repairedChecks.getByText("failed", { exact: true })).toBeVisible();
+  await expect(maintainer.getByText("passed", { exact: true }).last()).toBeVisible();
   await maintainer.getByRole("button", { name: "Approve" }).click();
   await expect(maintainer.getByRole("button", { name: "Merge into main" })).toBeEnabled();
   await maintainer.getByRole("button", { name: "Merge into main" }).click();
