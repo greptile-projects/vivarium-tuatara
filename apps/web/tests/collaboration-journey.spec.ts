@@ -550,6 +550,15 @@ test("a proposal plan coordinates dependent human and agent work through verifie
 		version: 1,
 		checks: [{ name: "plan verification", image: "alpine:3.22", command: "test -f README.md" }],
 	}, null, 2) + "\n");
+	await writeFile(join(maintainerCopy, ".vivarium", "release.json"), JSON.stringify({
+		version: 1,
+		steps: [{ name: "package service", image: "alpine:3.22", command: "cp rollout-state.txt \"$VIVARIUM_OUTPUT/app.txt\"" }],
+	}, null, 2) + "\n");
+	await writeFile(join(maintainerCopy, ".vivarium", "deployment.json"), JSON.stringify({
+		version: 1,
+		stages: [{ name: "production health", signals: [{ name: "service responds", command: "grep -qx healthy \"$VIVARIUM_ARTIFACT\"" }] }],
+	}, null, 2) + "\n");
+	await writeFile(join(maintainerCopy, "rollout-state.txt"), "healthy\n");
 	await git(maintainerCopy, "add", ".");
 	await git(maintainerCopy, "commit", "-m", "Start coordinated project");
   await git(maintainerCopy, "push", "origin", "main");
@@ -593,6 +602,15 @@ test("a proposal plan coordinates dependent human and agent work through verifie
 		expect(response.status(), `PUT ${path}`).toBeLessThan(300);
 		return response.json();
 	}
+	async function getJSON(page: Page, path: string, headers: Record<string, string>) {
+		const response = await page.request.get(`/api${path}`, { headers });
+		expect(response.status(), `GET ${path}: ${await response.text()}`).toBe(200);
+		return response.json();
+	}
+	async function eventually<T>(read: () => Promise<T>, ready: (value: T) => boolean, label: string) {
+		await expect.poll(async () => ready(await read()), { message: label, timeout: 60_000, intervals: [250, 500, 1000] }).toBe(true);
+		return read();
+	}
 	const commentsResponse = await contributor.request.get(`/api/repositories/${repositoryID}/proposals/${proposalID}/comments`, { headers: contributorHeaders });
 	const comments = await commentsResponse.json() as { comments: Array<{ id: string }> };
 	const humanTask = await postJSON(contributor, `/repositories/${repositoryID}/proposals/${proposalID}/tasks`, contributorHeaders, {
@@ -629,7 +647,7 @@ test("a proposal plan coordinates dependent human and agent work through verifie
 		title: "Build the human foundation", body: "Implements the first agreed outcome.", source_branch: "human-foundation", target_branch: "main",
 	}) as { id: string };
 	await maintainer.goto(`/pulls/${repositoryID}/${humanPull.id}`);
-	await expect(maintainer.locator("#checks").getByText("succeeded", { exact: true })).toBeVisible({ timeout: 60_000 });
+	await expect(maintainer.locator("#checks").getByText("succeeded", { exact: true }).last()).toBeVisible({ timeout: 60_000 });
 	await maintainer.getByRole("button", { name: "Approve" }).click();
 	await expect(maintainer.getByRole("button", { name: "Merge into main" })).toBeEnabled();
 	await maintainer.getByRole("button", { name: "Merge into main" }).click();
@@ -654,7 +672,8 @@ test("a proposal plan coordinates dependent human and agent work through verifie
 	await git(agentCopy, "config", "user.email", "plan-agent@users.vivarium");
 	await git(agentCopy, "switch", "-c", "agent-work", `origin/${launched.run.working_branch}`);
 	await writeFile(join(agentCopy, "agent-result.txt"), "guided delegated result\n");
-	await git(agentCopy, "add", "agent-result.txt");
+	await writeFile(join(agentCopy, "rollout-state.txt"), "unhealthy\n");
+	await git(agentCopy, "add", "agent-result.txt", "rollout-state.txt");
 	await git(agentCopy, "commit", "-m", "Add delegated follow-up");
 	await git(agentCopy, "push", "origin", `HEAD:refs/heads/${launched.run.working_branch}`);
 	const agentCommit = await git(agentCopy, "rev-parse", "HEAD");
@@ -698,6 +717,144 @@ test("a proposal plan coordinates dependent human and agent work through verifie
 	await git(maintainerCopy, "pull", "--ff-only");
 	expect(await readFile(join(maintainerCopy, "foundation.txt"), "utf8")).toBe("human foundation\n");
 	expect(await readFile(join(maintainerCopy, "agent-result.txt"), "utf8")).toBe("guided delegated result\n");
+
+	// The same public collaboration boundary now carries both merged authors'
+	// work through release, failure, restoration, delegated repair, and delivery.
+	type Release = { id: string; commit_id: string; inclusions: { pull_request_ids: string[]; contributor_ids: string[] } };
+	type Build = { id: string; state: string; commit_id: string; artifacts: Array<{ id: string; sha256: string }> };
+	type Deployment = { id: string; release_id: string; state: string; commit_id: string; artifact_sha256: string; recovery_kind?: string; recovery_of?: string; restores_deployment_id?: string; approvals: Array<{ actor_id: string }>; evidence: Array<{ state: string; signal: string }>; events: Array<{ kind: string; actor_id?: string }> };
+	const createRelease = (page: Page, headers: Record<string, string>, version: string, notes: string, commitID: string, previousReleaseID?: string) =>
+		postJSON(page, `/repositories/${repositoryID}/releases`, headers, { version, notes, commit_id: commitID, previous_release_id: previousReleaseID }) as Promise<Release>;
+	const buildRelease = async (page: Page, headers: Record<string, string>, release: Release) => {
+		await postJSON(page, `/repositories/${repositoryID}/releases/${release.id}/builds`, headers, {});
+		const result = await eventually(
+			() => getJSON(page, `/repositories/${repositoryID}/releases/${release.id}/builds`, headers) as Promise<{ builds: Build[] }>,
+			(value) => value.builds.length > 0 && value.builds.every((build) => build.state === "succeeded"),
+			`release ${release.id} builds become verified`,
+		);
+		return result.builds[0];
+	};
+	const listDeployments = (page: Page, headers: Record<string, string>) =>
+		getJSON(page, `/repositories/${repositoryID}/deployments`, headers) as Promise<{ deployments: Deployment[] }>;
+	const waitForDeployment = async (page: Page, headers: Record<string, string>, id: string, state: string) => {
+		const result = await eventually(
+			() => listDeployments(page, headers),
+			(value) => value.deployments.some((deployment) => deployment.id === id && (deployment.state === state || ["failed", "canceled"].includes(deployment.state))),
+			`deployment ${id} becomes ${state}`,
+		);
+		const deployment = result.deployments.find((item) => item.id === id)!;
+		expect(deployment.state, JSON.stringify(deployment.events, null, 2)).toBe(state);
+		return deployment;
+	};
+
+	const baselineRelease = await createRelease(maintainer, maintainerHeaders, `v1.0.0-${suffix}`, "Known-good service before the coordinated work.", baseCommit);
+	const baselineBuild = await buildRelease(maintainer, maintainerHeaders, baselineRelease);
+	const environment = await postJSON(maintainer, `/repositories/${repositoryID}/environments`, maintainerHeaders, {
+		name: "production", position: 1, image: "alpine:3.22", command: "test -r \"$VIVARIUM_ARTIFACT\"", timeout_seconds: 30,
+		required_approvals: 1, concurrency: 1, configuration: { REGION: "test" }, credentials: { DEPLOY_TOKEN: `secret-${suffix}` },
+	}) as { id: string; credential_names: string[] };
+	expect(environment.credential_names).toEqual(["DEPLOY_TOKEN"]);
+	const baselineDeployment = await postJSON(maintainer, `/repositories/${repositoryID}/deployments`, maintainerHeaders, {
+		environment_id: environment.id, release_id: baselineRelease.id, build_id: baselineBuild.id, artifact_id: baselineBuild.artifacts[0].id,
+	}) as Deployment;
+	expect(baselineDeployment.state).toBe("pending_approval");
+	await postJSON(contributor, `/repositories/${repositoryID}/deployments/${baselineDeployment.id}/approvals`, contributorHeaders, {});
+	const knownGood = await waitForDeployment(maintainer, maintainerHeaders, baselineDeployment.id, "succeeded");
+	expect(knownGood.approvals).toEqual([expect.objectContaining({ actor_id: contributorUser.id })]);
+	expect(knownGood.evidence).toEqual([expect.objectContaining({ state: "passed", signal: "service responds" })]);
+
+	const deliveredCommit = await git(maintainerCopy, "rev-parse", "HEAD");
+	const unhealthyRelease = await createRelease(contributor, contributorHeaders, `v1.1.0-${suffix}`, "Deliver the merged human foundation and delegated follow-up.", deliveredCommit, baselineRelease.id);
+	expect(unhealthyRelease.inclusions.pull_request_ids).toEqual(expect.arrayContaining([humanPull.id, agentPull.id]));
+	expect(unhealthyRelease.inclusions.contributor_ids).toEqual(expect.arrayContaining([maintainerUser.id, contributorUser.id]));
+	const unhealthyBuild = await buildRelease(contributor, contributorHeaders, unhealthyRelease);
+	const failedRequest = await postJSON(contributor, `/repositories/${repositoryID}/deployments`, contributorHeaders, {
+		environment_id: environment.id, release_id: unhealthyRelease.id, build_id: unhealthyBuild.id, artifact_id: unhealthyBuild.artifacts[0].id,
+	}) as Deployment;
+	await postJSON(maintainer, `/repositories/${repositoryID}/deployments/${failedRequest.id}/approvals`, maintainerHeaders, {});
+	const failed = await waitForDeployment(contributor, contributorHeaders, failedRequest.id, "failed");
+	expect(failed.evidence).toEqual([expect.objectContaining({ state: "failed", signal: "service responds" })]);
+	expect(failed.events).toEqual(expect.arrayContaining([
+		expect.objectContaining({ kind: "promotion.requested", actor_id: contributorUser.id }),
+		expect.objectContaining({ kind: "promotion.approved", actor_id: maintainerUser.id }),
+		expect.objectContaining({ kind: "deployment.failed" }),
+	]));
+
+	await contributor.goto(`/repositories/${repositoryID}/releases/${unhealthyRelease.id}`);
+	await expect(contributor.getByRole("heading", { name: `v1.1.0-${suffix}` })).toBeVisible();
+	await expect(contributor.getByLabel("Health evidence").getByText("failed", { exact: true })).toBeVisible();
+	await contributor.getByRole("button", { name: "Restore last known-good" }).click();
+	await expect(contributor.getByText("Rollback requested with the last known-good artifact.")).toBeVisible();
+	const rollbackSet = await listDeployments(contributor, contributorHeaders);
+	const rollback = rollbackSet.deployments.find((deployment) => deployment.recovery_of === failed.id)!;
+	expect(rollback).toMatchObject({ recovery_kind: "rollback", restores_deployment_id: knownGood.id, state: "pending_approval" });
+	await postJSON(maintainer, `/repositories/${repositoryID}/deployments/${rollback.id}/approvals`, maintainerHeaders, {});
+	const restored = await waitForDeployment(contributor, contributorHeaders, rollback.id, "succeeded");
+	expect(restored.artifact_sha256).toBe(knownGood.artifact_sha256);
+
+	await contributor.reload();
+	const repairResponsePromise = contributor.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith(`/deployments/${failed.id}/recoveries`));
+	await contributor.getByRole("button", { name: "Open repair session" }).click();
+	const repairResponse = await repairResponsePromise;
+	expect(repairResponse.status()).toBe(201);
+	await expect(contributor).toHaveURL(new RegExp(`/pulls/${repositoryID}/[a-f0-9]{32}/sessions/[a-f0-9]{32}$`));
+	const repairParts = new URL(contributor.url()).pathname.split("/");
+	const repairPullID = repairParts[3], repairSessionID = repairParts[5];
+	const repair = {
+		pull_request: await getJSON(contributor, `/repositories/${repositoryID}/pulls/${repairPullID}`, contributorHeaders) as { id: string; source_branch: string; source_commit_id: string },
+		session: await getJSON(contributor, `/repositories/${repositoryID}/pulls/${repairPullID}/sessions/${repairSessionID}`, contributorHeaders) as { id: string; source_commit_id: string; deployment_evidence: { deployment_id: string; release_id: string; artifact_sha256: string; state: string; evidence: Array<{ state: string }>; events: Array<{ kind: string }> } },
+	};
+	expect(repair.session.deployment_evidence).toMatchObject({ deployment_id: failed.id, release_id: unhealthyRelease.id, artifact_sha256: unhealthyBuild.artifacts[0].sha256, state: "failed" });
+	expect(repair.session.deployment_evidence.evidence).toEqual([expect.objectContaining({ state: "failed" })]);
+
+	const repairRun = await postJSON(contributor, `/repositories/${repositoryID}/pulls/${repair.pull_request.id}/sessions/${repair.session.id}/runs`, contributorHeaders, {
+		instructions: "Restore the service health contract using the attached failed rollout evidence.", source_commit_id: repair.session.source_commit_id,
+		context_paths: ["rollout-state.txt", ".vivarium/deployment.json"], working_branch: repair.pull_request.source_branch, expires_in: 3600,
+	}) as { run: { id: string }; credential: { token: string } };
+	const recoveryCopy = await mkdtemp(join(tmpdir(), "vivarium-delivery-repair-"));
+	await git(tmpdir(), "clone", `http://git:${repairRun.credential.token}@localhost:3000/git/${repositoryID}.git`, recoveryCopy);
+	await git(recoveryCopy, "config", "user.name", "Vivarium Recovery Agent");
+	await git(recoveryCopy, "config", "user.email", "recovery-agent@users.vivarium");
+	await git(recoveryCopy, "switch", "-c", "repair-work", `origin/${repair.pull_request.source_branch}`);
+	await writeFile(join(recoveryCopy, "rollout-state.txt"), "healthy\n");
+	await git(recoveryCopy, "add", "rollout-state.txt");
+	await git(recoveryCopy, "commit", "-m", "Restore service health contract");
+	await git(recoveryCopy, "push", "origin", `HEAD:refs/heads/${repair.pull_request.source_branch}`);
+	const repairCommit = await git(recoveryCopy, "rev-parse", "HEAD");
+	const repairAgentHeaders = { Authorization: `Bearer ${repairRun.credential.token}` };
+	const repairRunBase = `/repositories/${repositoryID}/pulls/${repair.pull_request.id}/sessions/${repair.session.id}/runs/${repairRun.run.id}`;
+	await postJSON(contributor, `${repairRunBase}/events`, repairAgentHeaders, { kind: "branch.updated", state: "working", message: "Published the evidence-driven health repair.", branch: repair.pull_request.source_branch, commit_id: repairCommit });
+	await postJSON(contributor, `${repairRunBase}/completion`, repairAgentHeaders, {
+		summary: "Restored the health contract identified by the failed production signal.", commit_id: repairCommit,
+		checks: [{ name: "rollout contract", status: "passed", details: "The artifact again reports healthy." }], unresolved_concerns: [],
+	});
+
+	await maintainer.goto(`/pulls/${repositoryID}/${repair.pull_request.id}`);
+	await expect(maintainer.locator("#checks").getByText("succeeded", { exact: true }).last()).toBeVisible({ timeout: 60_000 });
+	await maintainer.getByRole("button", { name: "Approve" }).click();
+	await expect(maintainer.getByRole("button", { name: "Merge into main" })).toBeEnabled();
+	await maintainer.getByRole("button", { name: "Merge into main" }).click();
+	await expect(maintainer.getByText("Merged", { exact: true })).toBeVisible();
+	const repairedPull = await getJSON(maintainer, `/repositories/${repositoryID}/pulls/${repair.pull_request.id}`, maintainerHeaders) as { merge_commit_id: string; author_id: string; merged_by: string };
+	expect(repairedPull).toMatchObject({ author_id: contributorUser.id, merged_by: maintainerUser.id });
+
+	const correctedRelease = await createRelease(maintainer, maintainerHeaders, `v1.1.1-${suffix}`, "Repair the failed rollout using its retained evidence.", repairedPull.merge_commit_id, unhealthyRelease.id);
+	expect(correctedRelease.inclusions.pull_request_ids).toContain(repair.pull_request.id);
+	const correctedBuild = await buildRelease(maintainer, maintainerHeaders, correctedRelease);
+	const correctedRequest = await postJSON(maintainer, `/repositories/${repositoryID}/deployments`, maintainerHeaders, {
+		environment_id: environment.id, release_id: correctedRelease.id, build_id: correctedBuild.id, artifact_id: correctedBuild.artifacts[0].id,
+	}) as Deployment;
+	await postJSON(contributor, `/repositories/${repositoryID}/deployments/${correctedRequest.id}/approvals`, contributorHeaders, {});
+	const corrected = await waitForDeployment(maintainer, maintainerHeaders, correctedRequest.id, "succeeded");
+	expect(corrected).toMatchObject({ commit_id: repairedPull.merge_commit_id, artifact_sha256: correctedBuild.artifacts[0].sha256 });
+	expect(corrected.events).toEqual(expect.arrayContaining([
+		expect.objectContaining({ kind: "promotion.requested", actor_id: maintainerUser.id }),
+		expect.objectContaining({ kind: "promotion.approved", actor_id: contributorUser.id }),
+		expect.objectContaining({ kind: "deployment.succeeded" }),
+	]));
+	await maintainer.goto(`/repositories/${repositoryID}/releases/${correctedRelease.id}`);
+	await expect(maintainer.getByRole("heading", { name: `v1.1.1-${suffix}` })).toBeVisible();
+	await expect(maintainer.getByLabel("Health evidence").getByText("passed", { exact: true })).toBeVisible();
 
   await maintainerContext.close();
   await contributorContext.close();

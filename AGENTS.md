@@ -171,6 +171,14 @@ whenever dependencies change or the web job fails before it starts.
   Pull and session stores also enforce recovery uniqueness under their
   cross-process locks, so simultaneous commands converge on one deterministic
   branch, pull request, and deployment-evidence session.
+  The connected orchestration browser journey continues its merged human/agent
+  plan through a known-good release, immutable builds, independently approved
+  promotion, retained rollout failure, governed rollback, evidence-pinned agent
+  repair, ordinary re-review, and successful corrected delivery. Deployment
+  execution verifies the private durable artifact, then bind-mounts an
+  ephemeral owner-only copy read-only into containers running as the API host
+  identity, so they can read the exact verified bytes without widening host
+  access to the release.
   Pull request discovery at `/pulls` aggregates reviewable work across the
   authenticated actor's repository catalog and opens candidate branches
   against distinct targets or owned-fork branches against their upstream,
