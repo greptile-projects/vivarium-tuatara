@@ -630,7 +630,16 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 			writeAPIError(w, http.StatusNotFound, "pull_request_not_found", "pull request not found")
 			return
 		}
-		updated, err := store.SynchronizeSource(r.PathValue("id"), existing.ID)
+		var updated pullrequests.PullRequest
+		err = repositoriesStore.WithContributionAuthorization(actor.UserID, existing.RepositoryID, existing.SourceRepositoryID, func() error {
+			var synchronizeErr error
+			updated, synchronizeErr = store.SynchronizeSource(r.PathValue("id"), existing.ID)
+			return synchronizeErr
+		})
+		if errors.Is(err, repositories.ErrNotFound) {
+			writeAPIError(w, http.StatusNotFound, "pull_request_not_found", "pull request not found")
+			return
+		}
 		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
 			startCheckRuns(gitStore, checkRunStore, updated)
 			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.synchronized", ActorID: actor.UserID, RepositoryID: updated.RepositoryID, ResourceType: "pull_request", ResourceID: updated.ID, ResourceTitle: updated.Title})

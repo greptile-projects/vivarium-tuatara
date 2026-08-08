@@ -233,7 +233,9 @@ target reference, letting the existing commit, file, check, review, and merge
 surfaces operate on the same exact evidence as an in-repository branch. A
 deleted fork therefore ends future synchronization but does not destroy the
 adopted review boundary, while revoked private-upstream access prevents any
-later fork commit from being adopted or imported.
+later fork commit from being adopted or imported. The catalog's cross-process
+lock spans that authorization decision, object import, and pull revision
+publication, preventing revocation from committing mid-adoption.
 
 Candidate revisions can carry their reproducible verification contract in
 `.vivarium/checks.json`. Opening a pull request or explicitly adopting a new

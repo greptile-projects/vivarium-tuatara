@@ -293,7 +293,9 @@ and is unavailable after merge. For a fork contribution, synchronization reads
 the live branch in the source repository and remains available to that fork
 owner while they retain access to the target; private-upstream revocation takes
 effect before the next synchronization and returns not-found. A different
-participant receives not-found.
+participant receives not-found. Target/source authorization, object import,
+and pull revision publication share the catalog's cross-process mutation lock,
+so a revocation commits wholly before or after an authorized adoption.
 New pull requests have `status: "open"` and creation and update timestamps.
 The linked `proposal_id` is nullable.
 
