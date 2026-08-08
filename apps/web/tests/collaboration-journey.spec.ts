@@ -258,6 +258,264 @@ test("an unknown contributor and an agent take a forked change through verified 
   await newcomerContext.close();
 });
 
+test("a protected queue lands parallel human and agent changes without stale evidence", async ({ browser }) => {
+  test.setTimeout(240_000);
+  await run("docker", ["image", "inspect", "alpine:3.22"]).catch(() =>
+    run("docker", ["pull", "alpine:3.22"]),
+  );
+  const suffix = Date.now().toString(36);
+  const maintainerContext = await browser.newContext();
+  const contributorContext = await browser.newContext();
+  const maintainer = await maintainerContext.newPage();
+  const contributor = await contributorContext.newPage();
+
+  await createAccount(maintainer, "Queue Maintainer", `queue-maintainer-${suffix}`);
+  const maintainerGitToken = await issueGitToken(maintainer, "Queue Git");
+  const maintainerAPIToken = await maintainer.evaluate(() => localStorage.getItem("vivarium.access-token"));
+  expect(maintainerAPIToken).toBeTruthy();
+  const maintainerHeaders = { Authorization: `Bearer ${maintainerAPIToken}` };
+  const maintainerUserResponse = await maintainer.request.get("/api/user", { headers: maintainerHeaders });
+  expect(maintainerUserResponse.status()).toBe(200);
+  const maintainerUser: { id: string } = await maintainerUserResponse.json();
+
+  await maintainer.goto("/repositories");
+  await maintainer.getByLabel("Repository name").fill(`queue-${suffix}`);
+  await maintainer.getByRole("button", { name: "Create repository" }).click();
+  await maintainer.getByRole("link", { name: new RegExp(`queue-${suffix}`) }).click();
+  await expect(maintainer).toHaveURL(/\/repositories\/[a-f0-9]{32}$/);
+  const repositoryID = new URL(maintainer.url()).pathname.split("/").pop()!;
+  const remote = `http://git:${maintainerGitToken}@localhost:3000/git/${repositoryID}.git`;
+  const maintainerCopy = await mkdtemp(join(tmpdir(), "vivarium-queue-maintainer-"));
+  await git(tmpdir(), "clone", remote, maintainerCopy);
+  await git(maintainerCopy, "config", "user.name", "Queue Maintainer");
+  await git(maintainerCopy, "config", "user.email", "queue-maintainer@example.com");
+  await writeFile(join(maintainerCopy, "README.md"), "# Continuous integration\n");
+  await writeFile(join(maintainerCopy, "shared.txt"), "base\n");
+  await mkdir(join(maintainerCopy, ".vivarium"));
+  await writeFile(join(maintainerCopy, ".vivarium", "checks.json"), JSON.stringify({
+    version: 1,
+    checks: [{
+      name: "integration safety",
+      image: "alpine:3.22",
+      command: "sleep 5; test -f README.md && test -f shared.txt",
+    }],
+  }, null, 2) + "\n");
+  await git(maintainerCopy, "add", ".");
+  await git(maintainerCopy, "commit", "-m", "Protect continuous integration");
+  await git(maintainerCopy, "push", "origin", "main");
+
+  await createAccount(contributor, "Queue Contributor", `queue-contributor-${suffix}`);
+  const contributorGitToken = await issueGitToken(contributor, "Queue Git");
+  const contributorAPIToken = await contributor.evaluate(() => localStorage.getItem("vivarium.access-token"));
+  expect(contributorAPIToken).toBeTruthy();
+  const contributorHeaders = { Authorization: `Bearer ${contributorAPIToken}` };
+  const contributorUserResponse = await contributor.request.get("/api/user", { headers: contributorHeaders });
+  expect(contributorUserResponse.status()).toBe(200);
+  const contributorUser: { id: string } = await contributorUserResponse.json();
+  const collaborationID = (await contributor.getByTestId("collaboration-id").textContent())!;
+  await maintainer.goto(`/repositories/${repositoryID}`);
+  await maintainer.getByLabel("Collaboration ID").fill(collaborationID);
+  await maintainer.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(maintainer.getByText(`@queue-contributor-${suffix}`)).toBeVisible();
+
+  const contributorCopy = await mkdtemp(join(tmpdir(), "vivarium-queue-contributor-"));
+  await git(tmpdir(), "clone", `http://git:${contributorGitToken}@localhost:3000/git/${repositoryID}.git`, contributorCopy);
+  await git(contributorCopy, "config", "user.name", "Queue Contributor");
+  await git(contributorCopy, "config", "user.email", "queue-contributor@example.com");
+  await git(contributorCopy, "switch", "-c", "human-first");
+  await writeFile(join(contributorCopy, "shared.txt"), "first compatible decision\n");
+  await git(contributorCopy, "add", "shared.txt");
+  await git(contributorCopy, "commit", "-m", "Choose the first shared value");
+  await git(contributorCopy, "push", "origin", "human-first");
+  await git(contributorCopy, "switch", "-c", "human-conflict", "origin/main");
+  await writeFile(join(contributorCopy, "shared.txt"), "conflicting decision\n");
+  await git(contributorCopy, "add", "shared.txt");
+  await git(contributorCopy, "commit", "-m", "Choose a conflicting shared value");
+  await git(contributorCopy, "push", "origin", "human-conflict");
+  await git(contributorCopy, "switch", "-c", "agent-compatible", "origin/main");
+  await writeFile(join(contributorCopy, "agent-draft.txt"), "ready for delegated completion\n");
+  await git(contributorCopy, "add", "agent-draft.txt");
+  await git(contributorCopy, "commit", "-m", "Prepare delegated change");
+  await git(contributorCopy, "push", "origin", "agent-compatible");
+
+  async function postJSON(page: Page, path: string, headers: Record<string, string>, data?: unknown) {
+    const response = await page.request.post(`/api${path}`, { headers, data });
+    expect(response.status(), `POST ${path}: ${await response.text()}`).toBeGreaterThanOrEqual(200);
+    expect(response.status(), `POST ${path}`).toBeLessThan(300);
+    return response.json();
+  }
+  async function createPull(title: string, sourceBranch: string) {
+    return postJSON(contributor, `/repositories/${repositoryID}/pulls`, contributorHeaders, {
+      title,
+      body: "Independently reviewed parallel queue work.",
+      source_branch: sourceBranch,
+      target_branch: "main",
+    }) as Promise<{ id: string; source_commit_id: string }>;
+  }
+  const firstPull = await createPull("Land the first compatible change", "human-first");
+  const conflictPull = await createPull("Isolate the conflicting change", "human-conflict");
+  const agentPull = await createPull("Land the delegated compatible change", "agent-compatible");
+
+  const session = await postJSON(
+    contributor,
+    `/repositories/${repositoryID}/pulls/${agentPull.id}/sessions`,
+    contributorHeaders,
+  ) as { id: string; source_commit_id: string };
+  const launched = await postJSON(
+    contributor,
+    `/repositories/${repositoryID}/pulls/${agentPull.id}/sessions/${session.id}/runs`,
+    contributorHeaders,
+    {
+      instructions: "Complete the independent agent contribution without touching the shared decision.",
+      source_commit_id: session.source_commit_id,
+      context_paths: ["README.md", "agent-draft.txt"],
+      working_branch: "agent-compatible",
+      expires_in: 3600,
+    },
+  ) as { run: { id: string; agent_id: string }; credential: { token: string } };
+  const agentCopy = await mkdtemp(join(tmpdir(), "vivarium-queue-agent-"));
+  await git(tmpdir(), "clone", `http://git:${launched.credential.token}@localhost:3000/git/${repositoryID}.git`, agentCopy);
+  await git(agentCopy, "config", "user.name", "Vivarium Queue Agent");
+  await git(agentCopy, "config", "user.email", "queue-agent@users.vivarium");
+  await git(agentCopy, "switch", "-c", "agent-work", "origin/agent-compatible");
+  await writeFile(join(agentCopy, "agent-result.txt"), "compatible delegated result\n");
+  await git(agentCopy, "add", "agent-result.txt");
+  await git(agentCopy, "commit", "-m", "Complete compatible delegated work");
+  await git(agentCopy, "push", "origin", "HEAD:refs/heads/agent-compatible");
+  const agentCommit = await git(agentCopy, "rev-parse", "HEAD");
+  const agentHeaders = { Authorization: `Bearer ${launched.credential.token}` };
+  await postJSON(
+    contributor,
+    `/repositories/${repositoryID}/pulls/${agentPull.id}/sessions/${session.id}/runs/${launched.run.id}/events`,
+    agentHeaders,
+    { kind: "branch.updated", state: "working", message: "Published the compatible queue contribution.", branch: "agent-compatible", commit_id: agentCommit },
+  );
+  await postJSON(
+    contributor,
+    `/repositories/${repositoryID}/pulls/${agentPull.id}/sessions/${session.id}/runs/${launched.run.id}/completion`,
+    agentHeaders,
+    { summary: "Completed an independently reviewable compatible change.", commit_id: agentCommit, checks: [{ name: "agent scope", status: "passed", details: "The shared file is unchanged." }], unresolved_concerns: [] },
+  );
+
+  for (const pull of [firstPull, conflictPull, agentPull]) {
+    await postJSON(maintainer, `/repositories/${repositoryID}/pulls/${pull.id}/reviews`, maintainerHeaders, { decision: "approved" });
+  }
+  await maintainer.goto(`/repositories/${repositoryID}`);
+  await maintainer.getByLabel("Required check names").fill("integration safety");
+  await maintainer.getByRole("button", { name: "Save requirements" }).click();
+  await maintainer.getByLabel("Require queue").check();
+  await maintainer.getByLabel("Concurrent candidates").fill("3");
+  await maintainer.getByLabel("On candidate failure").selectOption("remove");
+  await maintainer.getByRole("button", { name: "Save queue policy" }).click();
+
+  for (const pull of [firstPull, conflictPull, agentPull]) {
+    await expect.poll(async () => {
+      const response = await maintainer.request.get(
+        `/api/repositories/${repositoryID}/pulls/${pull.id}/merge-readiness`,
+        { headers: maintainerHeaders },
+      );
+      if (response.status() !== 200) return false;
+      return (await response.json()).can_enqueue;
+    }, { timeout: 60_000 }).toBe(true);
+  }
+  for (const pull of [firstPull, conflictPull, agentPull]) {
+    await postJSON(maintainer, `/repositories/${repositoryID}/pulls/${pull.id}/queue`, maintainerHeaders);
+  }
+
+  await maintainer.goto(`/repositories/${repositoryID}/queue/main`);
+  await expect(maintainer.getByRole("heading", { name: "main queue" })).toBeVisible();
+  await expect(maintainer.getByRole("link", { name: "Land the first compatible change" })).toBeVisible();
+  await expect(maintainer.getByRole("link", { name: "Isolate the conflicting change" })).toBeVisible();
+  await expect(maintainer.getByRole("link", { name: "Land the delegated compatible change" })).toBeVisible();
+
+  type DurablePull = {
+    status: string;
+    queued_at?: string;
+    queued_by?: string;
+    merged_by?: string;
+    merge_commit_id?: string;
+    integration_candidates: Array<{
+      base_commit_id: string;
+      commit_id: string;
+      superseded_at?: string;
+      superseded_reason?: string;
+    }>;
+    queue_actions: Array<{ action: string; actor_id: string }>;
+  };
+  async function durablePull(id: string) {
+    const response = await maintainer.request.get(`/api/repositories/${repositoryID}/pulls/${id}`, { headers: maintainerHeaders });
+    expect(response.status()).toBe(200);
+    return response.json() as Promise<DurablePull>;
+  }
+  await expect.poll(async () => {
+    const [first, conflict, agent] = await Promise.all([
+      durablePull(firstPull.id), durablePull(conflictPull.id), durablePull(agentPull.id),
+    ]);
+    return `${first.status}:${conflict.status}:${Boolean(conflict.queued_at)}:${agent.status}`;
+  }, { timeout: 120_000, intervals: [1000, 2000, 5000] }).toBe("merged:open:false:merged");
+
+  const firstResult = await durablePull(firstPull.id);
+  const conflictResult = await durablePull(conflictPull.id);
+  const agentResult = await durablePull(agentPull.id);
+  expect(firstResult.merged_by).toBe(maintainerUser.id);
+  expect(agentResult.merged_by).toBe(maintainerUser.id);
+  expect(firstResult.merge_commit_id).toMatch(/^[a-f0-9]{40}$/);
+  expect(agentResult.merge_commit_id).toMatch(/^[a-f0-9]{40}$/);
+  expect(conflictResult.integration_candidates).toHaveLength(1);
+  expect(conflictResult.integration_candidates[0].superseded_reason).toBe("target_changed");
+  expect(conflictResult.integration_candidates[0].superseded_at).toBeTruthy();
+  expect(agentResult.integration_candidates).toHaveLength(2);
+  expect(agentResult.integration_candidates[0].superseded_reason).toBe("target_changed");
+  expect(agentResult.integration_candidates[1].base_commit_id).toBe(firstResult.merge_commit_id);
+  for (const result of [firstResult, conflictResult, agentResult]) {
+    expect(result.queue_actions[0]).toMatchObject({ action: "enqueued", actor_id: maintainerUser.id });
+  }
+
+  const candidateResponse = await maintainer.request.get(
+    `/api/repositories/${repositoryID}/pulls/${conflictPull.id}/candidates`,
+    { headers: maintainerHeaders },
+  );
+  expect(candidateResponse.status()).toBe(200);
+  const candidateEvidence: { candidates: Array<{ state: string; checks: Array<{ state: string; commit_id: string }> }> } = await candidateResponse.json();
+  expect(candidateEvidence.candidates).toHaveLength(1);
+  expect(candidateEvidence.candidates[0].state).toBe("superseded");
+  expect(candidateEvidence.candidates[0].checks).toEqual([
+    expect.objectContaining({ state: "succeeded", commit_id: conflictResult.integration_candidates[0].commit_id }),
+  ]);
+
+  const timelineResponse = await contributor.request.get(
+    `/api/repositories/${repositoryID}/pulls/${agentPull.id}/sessions/${session.id}/events?limit=100`,
+    { headers: contributorHeaders },
+  );
+  expect(timelineResponse.status()).toBe(200);
+  const timeline: { events: Array<{ kind: string; actor_id: string; agent_id?: string; initiator_id?: string; run_id?: string }> } = await timelineResponse.json();
+  expect(timeline.events).toEqual(expect.arrayContaining([
+    expect.objectContaining({ kind: "run.completed", agent_id: launched.run.agent_id, initiator_id: contributorUser.id, run_id: launched.run.id }),
+  ]));
+
+  const activityResponse = await maintainer.request.get("/api/activity?limit=100", { headers: maintainerHeaders });
+  expect(activityResponse.status()).toBe(200);
+  const activity: { events: Array<{ kind: string; actor_id: string; resource_id: string }> } = await activityResponse.json();
+  for (const pull of [firstPull, conflictPull, agentPull]) {
+    expect(activity.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "integration_queue.enqueued", actor_id: maintainerUser.id, resource_id: pull.id }),
+    ]));
+  }
+  for (const pull of [firstPull, agentPull]) {
+    expect(activity.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "pull_request.merged", actor_id: maintainerUser.id, resource_id: pull.id }),
+    ]));
+  }
+
+  await git(maintainerCopy, "pull", "--ff-only");
+  expect(await readFile(join(maintainerCopy, "shared.txt"), "utf8")).toBe("first compatible decision\n");
+  expect(await readFile(join(maintainerCopy, "agent-result.txt"), "utf8")).toBe("compatible delegated result\n");
+  await expect(readFile(join(maintainerCopy, "agent-draft.txt"), "utf8")).resolves.toBe("ready for delegated completion\n");
+
+  await maintainerContext.close();
+  await contributorContext.close();
+});
+
 test("a linked proposal closes into a clearable merge outcome", async ({ browser }) => {
   const suffix = Date.now().toString(36);
   const maintainerContext = await browser.newContext();

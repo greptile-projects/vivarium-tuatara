@@ -470,6 +470,16 @@ automatic or human action. Owners can pause, resume, retry, remove, or move an
 entry; each intervention retains actor and time, while queue activity gives
 the pull author a direct inbox path back to the change.
 
+The connected browser regression proves this policy under parallel load using
+only the web application, public API, and stock Git. Three independently
+reviewed changes enter one protected branch together, including a revision
+completed by a bounded agent. After the first change lands, an already-passing
+candidate that now conflicts is retained as superseded evidence and removed by
+policy; the compatible agent change is rebuilt against the evolved target,
+verified again, and lands next. The journey inspects durable candidate, review,
+run, activity, queue-action, and merge attribution before pulling the final
+branch state.
+
 An owner applies an accepted request through its merge endpoint. The operation
 rechecks readiness, materializes a two-parent merge commit through the storage
 boundary, and compare-and-swaps the live target reference. The durable pull

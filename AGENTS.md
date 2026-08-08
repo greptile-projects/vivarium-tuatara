@@ -134,6 +134,11 @@ whenever dependencies change or the web job fails before it starts.
   repository-defined check, retains its failed evidence in an agent repair
   session, proves completion starts fresh exact-revision checks, and merges only
   after the repaired run passes and stale review is replaced.
+  A separate queued-integration journey protects `main`, submits three approved
+  parallel changes, completes one through a bounded agent run, and proves a
+  passing candidate that conflicts after an earlier merge is superseded and
+  removed while the compatible agent change rebuilds and lands. Keep its public
+  API, browser queue, stock Git, evidence, and attribution assertions connected.
   The authenticated `/activity` workspace shows newest-first attributable
   proposal, pull request, review, merge, mention, and access changes across
   repositories the actor currently collaborates on; every event remains
