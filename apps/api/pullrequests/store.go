@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
@@ -126,6 +127,13 @@ type ReadinessBlocker struct {
 	Message string `json:"message"`
 }
 
+type CheckRequirement struct {
+	Name     string  `json:"name"`
+	Status   string  `json:"status"`
+	CommitID *string `json:"commit_id,omitempty"`
+	RunID    *string `json:"run_id,omitempty"`
+}
+
 // MergeReadiness is derived entirely from durable pull-request, review, and
 // Git state. It is never persisted and computing it does not modify the
 // repository.
@@ -134,6 +142,8 @@ type MergeReadiness struct {
 	CanMerge          bool               `json:"can_merge"`
 	RequiredApprovals int                `json:"required_approvals"`
 	Approvals         int                `json:"approvals"`
+	EvaluatedCommitID string             `json:"evaluated_commit_id"`
+	RequiredChecks    []CheckRequirement `json:"required_checks"`
 	Source            BranchState        `json:"source"`
 	Target            BranchState        `json:"target"`
 	HasConflicts      bool               `json:"has_conflicts"`
@@ -155,6 +165,18 @@ type Store struct {
 	now           func() time.Time
 	directorySync func(string) error
 	rootSync      func(string) error
+	checkRuns     *checkruns.Store
+	requirements  interface {
+		RequiredChecks(string, string) ([]string, error)
+		LockRequiredChecks() (func(), error)
+	}
+}
+
+func (s *Store) ConfigureRequiredChecks(requirements interface {
+	RequiredChecks(string, string) ([]string, error)
+	LockRequiredChecks() (func(), error)
+}, runs *checkruns.Store) {
+	s.requirements, s.checkRuns = requirements, runs
 }
 
 func New(root string, git *storage.Store) (*Store, error) {
@@ -749,6 +771,8 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 	}
 	report := MergeReadiness{
 		RequiredApprovals: 1,
+		EvaluatedCommitID: p.SourceCommitID,
+		RequiredChecks:    []CheckRequirement{},
 		Source:            BranchState{Branch: p.SourceBranch, SnapshotCommitID: p.SourceCommitID},
 		Target:            BranchState{Branch: p.TargetBranch, SnapshotCommitID: p.TargetCommitID},
 		Blockers:          []ReadinessBlocker{},
@@ -803,6 +827,57 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 	}
 	if changesRequested {
 		addBlocker("changes_requested", "a current review requests changes")
+	}
+	if s.requirements != nil {
+		names, requirementErr := s.requirements.RequiredChecks(repositoryID, p.TargetBranch)
+		if requirementErr != nil {
+			return MergeReadiness{}, requirementErr
+		}
+		runs := []checkruns.Run{}
+		if s.checkRuns != nil {
+			runs, requirementErr = s.checkRuns.List(repositoryID, pullRequestID)
+		}
+		if requirementErr != nil {
+			return MergeReadiness{}, requirementErr
+		}
+		for _, name := range names {
+			requirement := CheckRequirement{Name: name, Status: "missing"}
+			var stale *checkruns.Run
+			for i := len(runs) - 1; i >= 0; i-- {
+				run := runs[i]
+				if run.Definition.Name != name {
+					continue
+				}
+				if run.CommitID != p.SourceCommitID {
+					if stale == nil {
+						candidate := run
+						stale = &candidate
+					}
+					continue
+				}
+				commit, runID := run.CommitID, run.ID
+				requirement.CommitID, requirement.RunID = &commit, &runID
+				switch run.State {
+				case "succeeded":
+					requirement.Status = "passed"
+				case "failed":
+					requirement.Status = "failed"
+				case "canceled":
+					requirement.Status = "cancelled"
+				default:
+					requirement.Status = "pending"
+				}
+				break
+			}
+			if requirement.Status == "missing" && stale != nil {
+				commit, runID := stale.CommitID, stale.ID
+				requirement.Status, requirement.CommitID, requirement.RunID = "stale", &commit, &runID
+			}
+			report.RequiredChecks = append(report.RequiredChecks, requirement)
+			if requirement.Status != "passed" {
+				addBlocker("required_check_"+requirement.Status, fmt.Sprintf("required check %q is %s for revision %s", name, requirement.Status, p.SourceCommitID))
+			}
+		}
 	}
 
 	if sourceID != nil && targetID != nil && *sourceID == p.SourceCommitID {
@@ -859,6 +934,13 @@ func (s *Store) Merge(repositoryID, pullRequestID, mergerID string) (PullRequest
 		return PullRequest{}, reconcileErr
 	} else if found {
 		return reconciled, nil
+	}
+	if s.requirements != nil {
+		unlockRequirements, lockErr := s.requirements.LockRequiredChecks()
+		if lockErr != nil {
+			return PullRequest{}, lockErr
+		}
+		defer unlockRequirements()
 	}
 	report, err := s.Readiness(repositoryID, pullRequestID, true)
 	if err != nil {

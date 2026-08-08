@@ -41,6 +41,12 @@ type Repository struct {
 	GitRemote       string    `json:"git_remote"`
 	CreatedAt       time.Time `json:"created_at"`
 	collaboratorIDs string
+	requiredChecks  string
+}
+
+type BranchCheckRequirements struct {
+	Branch string   `json:"branch"`
+	Checks []string `json:"checks"`
 }
 
 type Collaborator struct {
@@ -109,7 +115,7 @@ func (s *Store) Create(ownerID, name string) (Repository, error) {
 	if _, err := s.git.Create(id); err != nil {
 		return Repository{}, fmt.Errorf("create Git repository: %w", err)
 	}
-	repository := Repository{ID: id, OwnerID: ownerID, Name: name, Visibility: Private, DefaultBranch: "main", GitRemote: "/git/" + id + ".git", CreatedAt: s.now().Truncate(time.Microsecond)}
+	repository := Repository{ID: id, OwnerID: ownerID, Name: name, Visibility: Private, DefaultBranch: "main", GitRemote: "/git/" + id + ".git", CreatedAt: s.now().Truncate(time.Microsecond), requiredChecks: "[]"}
 	if err := s.write(repository); err != nil {
 		if persisted, readErr := s.read(id); readErr == nil && persisted == repository {
 			return repository, nil
@@ -170,6 +176,81 @@ func (s *Store) SetVisibility(ownerID, id, visibility string) (Repository, error
 		return Repository{}, err
 	}
 	return repository, nil
+}
+
+// SetRequiredChecks replaces the owner-managed quality gate for one target branch.
+func (s *Store) SetRequiredChecks(ownerID, id, branch string, checks []string) ([]string, error) {
+	branch = strings.TrimSpace(branch)
+	if branch == "" || strings.HasPrefix(branch, "refs/") || strings.ContainsAny(branch, " ~^:?*[\\\r\n") || strings.HasSuffix(branch, ".") || strings.Contains(branch, "..") {
+		return nil, ErrInvalidName
+	}
+	cleaned, seen := make([]string, 0, len(checks)), map[string]bool{}
+	if len(checks) > 20 {
+		return nil, ErrInvalidName
+	}
+	for _, check := range checks {
+		check = strings.TrimSpace(check)
+		if check == "" || len([]rune(check)) > 100 || seen[check] {
+			return nil, ErrInvalidName
+		}
+		seen[check], cleaned = true, append(cleaned, check)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	repository, err := s.read(id)
+	if err != nil || repository.OwnerID != ownerID {
+		return nil, ErrNotFound
+	}
+	policies := decodeRequirements(repository.requiredChecks)
+	updated := make([]BranchCheckRequirements, 0, len(policies)+1)
+	for _, policy := range policies {
+		if policy.Branch != branch {
+			updated = append(updated, policy)
+		}
+	}
+	if len(cleaned) > 0 {
+		updated = append(updated, BranchCheckRequirements{Branch: branch, Checks: cleaned})
+	}
+	sort.Slice(updated, func(i, j int) bool { return updated[i].Branch < updated[j].Branch })
+	body, _ := json.Marshal(updated)
+	repository.requiredChecks = string(body)
+	if err := s.write(repository); err != nil {
+		return nil, err
+	}
+	return append([]string(nil), cleaned...), nil
+}
+
+func (s *Store) RequiredChecks(id, branch string) ([]string, error) {
+	repository, err := s.read(id)
+	if err != nil {
+		return nil, ErrNotFound
+	}
+	for _, policy := range decodeRequirements(repository.requiredChecks) {
+		if policy.Branch == branch {
+			return append([]string(nil), policy.Checks...), nil
+		}
+	}
+	return []string{}, nil
+}
+
+// LockRequiredChecks prevents a branch quality policy from changing while a
+// merge revalidates its evidence and advances the target reference.
+func (s *Store) LockRequiredChecks() (func(), error) { return s.lockRoot() }
+
+func decodeRequirements(encoded string) []BranchCheckRequirements {
+	if encoded == "" {
+		return []BranchCheckRequirements{}
+	}
+	var policies []BranchCheckRequirements
+	if json.Unmarshal([]byte(encoded), &policies) != nil {
+		return []BranchCheckRequirements{}
+	}
+	return policies
 }
 
 func (s *Store) AddCollaborator(ownerID, id, userID string) (Collaborator, error) {
@@ -369,19 +450,31 @@ func (s *Store) read(id string) (Repository, error) {
 	}
 	var repository Repository
 	var record struct {
-		ID              string    `json:"id"`
-		OwnerID         string    `json:"owner_id"`
-		Name            string    `json:"name"`
-		Visibility      string    `json:"visibility"`
-		DefaultBranch   string    `json:"default_branch"`
-		GitRemote       string    `json:"git_remote"`
-		CreatedAt       time.Time `json:"created_at"`
-		CollaboratorIDs []string  `json:"collaborator_ids,omitempty"`
+		ID              string                    `json:"id"`
+		OwnerID         string                    `json:"owner_id"`
+		Name            string                    `json:"name"`
+		Visibility      string                    `json:"visibility"`
+		DefaultBranch   string                    `json:"default_branch"`
+		GitRemote       string                    `json:"git_remote"`
+		CreatedAt       time.Time                 `json:"created_at"`
+		CollaboratorIDs []string                  `json:"collaborator_ids,omitempty"`
+		RequiredChecks  []BranchCheckRequirements `json:"required_checks,omitempty"`
 	}
 	if json.Unmarshal(data, &record) != nil {
 		return Repository{}, fmt.Errorf("corrupt repository metadata %s", id)
 	}
-	repository = Repository{ID: record.ID, OwnerID: record.OwnerID, Name: record.Name, Visibility: record.Visibility, DefaultBranch: record.DefaultBranch, GitRemote: record.GitRemote, CreatedAt: record.CreatedAt, collaboratorIDs: strings.Join(record.CollaboratorIDs, ",")}
+	if record.RequiredChecks == nil {
+		record.RequiredChecks = []BranchCheckRequirements{}
+	}
+	seenBranches := map[string]bool{}
+	for _, policy := range record.RequiredChecks {
+		if seenBranches[policy.Branch] || !validRequiredPolicy(policy) {
+			return Repository{}, fmt.Errorf("corrupt repository metadata %s", id)
+		}
+		seenBranches[policy.Branch] = true
+	}
+	requirements, _ := json.Marshal(record.RequiredChecks)
+	repository = Repository{ID: record.ID, OwnerID: record.OwnerID, Name: record.Name, Visibility: record.Visibility, DefaultBranch: record.DefaultBranch, GitRemote: record.GitRemote, CreatedAt: record.CreatedAt, collaboratorIDs: strings.Join(record.CollaboratorIDs, ","), requiredChecks: string(requirements)}
 	if repository.ID != id || !validID(repository.OwnerID) || repository.GitRemote != "/git/"+id+".git" || repository.DefaultBranch != "main" {
 		return Repository{}, fmt.Errorf("corrupt repository metadata %s", id)
 	}
@@ -446,15 +539,16 @@ func (s *Store) loadActive() ([]Repository, error) {
 
 func (s *Store) write(repository Repository) error {
 	record := struct {
-		ID              string    `json:"id"`
-		OwnerID         string    `json:"owner_id"`
-		Name            string    `json:"name"`
-		Visibility      string    `json:"visibility"`
-		DefaultBranch   string    `json:"default_branch"`
-		GitRemote       string    `json:"git_remote"`
-		CreatedAt       time.Time `json:"created_at"`
-		CollaboratorIDs []string  `json:"collaborator_ids,omitempty"`
-	}{repository.ID, repository.OwnerID, repository.Name, repository.Visibility, repository.DefaultBranch, repository.GitRemote, repository.CreatedAt, collaboratorIDs(repository)}
+		ID              string                    `json:"id"`
+		OwnerID         string                    `json:"owner_id"`
+		Name            string                    `json:"name"`
+		Visibility      string                    `json:"visibility"`
+		DefaultBranch   string                    `json:"default_branch"`
+		GitRemote       string                    `json:"git_remote"`
+		CreatedAt       time.Time                 `json:"created_at"`
+		CollaboratorIDs []string                  `json:"collaborator_ids,omitempty"`
+		RequiredChecks  []BranchCheckRequirements `json:"required_checks,omitempty"`
+	}{repository.ID, repository.OwnerID, repository.Name, repository.Visibility, repository.DefaultBranch, repository.GitRemote, repository.CreatedAt, collaboratorIDs(repository), decodeRequirements(repository.requiredChecks)}
 	data, err := json.Marshal(record)
 	if err != nil {
 		return err
@@ -500,6 +594,20 @@ func (s *Store) lockRoot() (func(), error) {
 		return nil, err
 	}
 	return func() { _ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN); _ = file.Close() }, nil
+}
+
+func validRequiredPolicy(policy BranchCheckRequirements) bool {
+	if policy.Branch == "" || strings.HasPrefix(policy.Branch, "refs/") || strings.ContainsAny(policy.Branch, " ~^:?*[\\\r\n") || strings.HasSuffix(policy.Branch, ".") || strings.Contains(policy.Branch, "..") || len(policy.Checks) == 0 || len(policy.Checks) > 20 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, check := range policy.Checks {
+		if check == "" || check != strings.TrimSpace(check) || len([]rune(check)) > 100 || seen[check] {
+			return false
+		}
+		seen[check] = true
+	}
+	return true
 }
 
 func validID(id string) bool {

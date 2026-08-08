@@ -275,7 +275,8 @@ func TestPullRequestMergeReadinessReportsRequirementsConflictsAndPermission(t *t
 	credentials, _ := auth.New(t.TempDir())
 	catalog, _ := repositories.New(t.TempDir(), gitStore)
 	pullRequestStore, _ := pullrequests.New(t.TempDir(), gitStore)
-	server := httptest.NewServer(newPlatformHandler(gitStore, identities, credentials, catalog, nil, pullRequestStore, nil))
+	checkRunStore, _ := checkruns.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, pullRequestStore, nil, nil, checkRunStore))
 	defer server.Close()
 
 	owner := createTestAccount(t, server.URL, "ready-owner")
@@ -284,6 +285,7 @@ func TestPullRequestMergeReadinessReportsRequirementsConflictsAndPermission(t *t
 	var repository repositories.Repository
 	json.NewDecoder(response.Body).Decode(&repository)
 	response.Body.Close()
+	authenticatedRequest(t, http.MethodPut, server.URL+"/repositories/"+repository.ID+"/branches/main/required-checks", `{"checks":["quality"]}`, owner.Credential.Token, http.StatusOK).Body.Close()
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/collaborators", `{"user_id":"`+contributor.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
 
 	gitRepository, _ := gitStore.Open(repository.ID)
@@ -314,13 +316,21 @@ func TestPullRequestMergeReadinessReportsRequirementsConflictsAndPermission(t *t
 		return report
 	}
 	report := readReport(contributor.Credential.Token)
-	if report.Mergeable || report.CanMerge || report.RequiredApprovals != 1 || report.Approvals != 0 || len(report.Blockers) != 1 || report.Blockers[0].Code != "approval_required" || report.Source.State != "current" || report.Target.State != "current" || report.HasConflicts {
+	if report.Mergeable || report.CanMerge || report.RequiredApprovals != 1 || report.Approvals != 0 || len(report.Blockers) != 2 || report.Blockers[0].Code != "approval_required" || report.Blockers[1].Code != "required_check_missing" || report.EvaluatedCommitID != string(source) || len(report.RequiredChecks) != 1 || report.RequiredChecks[0].Status != "missing" || report.Source.State != "current" || report.Target.State != "current" || report.HasConflicts {
 		t.Fatalf("initial readiness = %#v", report)
 	}
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/pulls/"+pullRequest.ID+"/reviews", `{"decision":"approved"}`, owner.Credential.Token, http.StatusOK).Body.Close()
+	runs, err := checkRunStore.Create(repository.ID, pullRequest.ID, string(source), []checkruns.Definition{{Name: "quality", Image: "alpine:3.22", Command: "true"}})
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("create required run: %#v, %v", runs, err)
+	}
+	runs[0].State = "succeeded"
+	if err := checkRunStore.Update(runs[0]); err != nil {
+		t.Fatal(err)
+	}
 	contributorReport := readReport(contributor.Credential.Token)
 	ownerReport := readReport(owner.Credential.Token)
-	if !contributorReport.Mergeable || contributorReport.CanMerge || !ownerReport.Mergeable || !ownerReport.CanMerge || len(ownerReport.Blockers) != 0 {
+	if !contributorReport.Mergeable || contributorReport.CanMerge || !ownerReport.Mergeable || !ownerReport.CanMerge || len(ownerReport.Blockers) != 0 || ownerReport.RequiredChecks[0].Status != "passed" || ownerReport.RequiredChecks[0].CommitID == nil || *ownerReport.RequiredChecks[0].CommitID != string(source) {
 		t.Fatalf("approved readiness: contributor=%#v owner=%#v", contributorReport, ownerReport)
 	}
 

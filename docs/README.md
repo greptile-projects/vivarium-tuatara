@@ -217,7 +217,14 @@ from a disposable exported snapshot, using a preinstalled image and no
 repository credential. The snapshot is read-only; only bounded temporary and
 output filesystems are writable. Each execution publishes an immutable
 sequence of status changes, stdout/stderr chunks, command outcome, and artifact
-metadata while it runs; clients reconnect from the last sequence they
+metadata while it runs. Repository owners select required check names per
+target branch. Readiness joins that durable policy to evidence for the pull
+request's exact adopted source commit; missing, active, failed, canceled, and
+other-revision results block merging and remain explicitly reported alongside
+the evaluated revision. The merge transaction revalidates the same policy and
+evidence.
+
+Clients reconnect from the last sequence they
 observed. Numbered attempt history retains interrupted and failed executions
 against the exact commit, and artifact bytes remain downloadable by stable ID
 with size and SHA-256 evidence. Interrupted execution and cleanup work is
