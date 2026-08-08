@@ -128,7 +128,7 @@ export type PullRequestBranchState = {
   branch: string;
   snapshot_commit_id: string;
   current_commit_id: string | null;
-  state: "current" | "advanced" | "rewritten" | "missing";
+  state: "current" | "advanced" | "rewritten" | "missing" | "unavailable";
 };
 export type MergeReadiness = {
   mergeable: boolean;

@@ -357,6 +357,20 @@ func TestForkOwnerOpensAndSynchronizesUpstreamPullRequest(t *testing.T) {
 	if _, err := upstreamGit.ReadCommit(revised); err != nil {
 		t.Fatalf("adopted source was not imported: %v", err)
 	}
+
+	// A private upstream revocation takes effect before the next adoption; fork
+	// ownership alone is not authority to import more objects into the target.
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+upstream.ID+"/collaborators", `{"user_id":"`+author.User.ID+`"}`, maintainer.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+upstream.ID, `{"visibility":"private"}`, maintainer.Credential.Token, http.StatusOK).Body.Close()
+	denied := writeTestCommit(t, forkGit, featureTree, []storage.ObjectID{revised}, 1700000103, "revoked follow-up")
+	if err := forkGit.UpdateReference(storage.Reference{Name: "refs/heads/contribution", Target: string(denied)}); err != nil {
+		t.Fatal(err)
+	}
+	authenticatedRequest(t, http.MethodDelete, server.URL+"/repositories/"+upstream.ID+"/collaborators/"+author.User.ID, "", maintainer.Credential.Token, http.StatusNoContent).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+upstream.ID+"/pulls/"+pull.ID+"/synchronize", "", author.Credential.Token, http.StatusNotFound).Body.Close()
+	if _, err := upstreamGit.ReadCommit(denied); err == nil {
+		t.Fatal("revoked source commit was imported into private upstream")
+	}
 }
 
 func TestPullRequestMergeReadinessReportsRequirementsConflictsAndPermission(t *testing.T) {

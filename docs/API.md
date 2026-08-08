@@ -291,7 +291,9 @@ the source branch's current commit as a new reviewable revision with `POST
 requires `repositories:write`, rejects a missing or non-commit source branch,
 and is unavailable after merge. For a fork contribution, synchronization reads
 the live branch in the source repository and remains available to that fork
-owner; a different participant receives not-found.
+owner while they retain access to the target; private-upstream revocation takes
+effect before the next synchronization and returns not-found. A different
+participant receives not-found.
 New pull requests have `status: "open"` and creation and update timestamps.
 The linked `proposal_id` is nullable.
 
@@ -366,6 +368,10 @@ stable `code` and explanatory `message`. Branch state includes the branch
 name, immutable pull-request `snapshot_commit_id`, nullable
 `current_commit_id`, and a state of `current`, `advanced`, `rewritten`, or
 `missing`.
+If an independently owned source repository is later deleted, its already
+imported adopted commit remains reviewable and mergeable. The report returns
+that verified commit as `current_commit_id` with source state `unavailable`;
+only synchronization requires the live fork to discover a newer revision.
 
 The report also identifies `evaluated_commit_id` and returns every target-
 branch requirement in `required_checks`, including its exact name, derived

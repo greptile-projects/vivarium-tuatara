@@ -695,11 +695,7 @@ func (s *Store) SetReview(repositoryID, pullRequestID, reviewerID, decision stri
 	if p.Status != Open {
 		return Review{}, ErrNotReady
 	}
-	sourceRepository, err := s.git.Open(p.SourceRepositoryID)
-	if err != nil {
-		return Review{}, err
-	}
-	commitID, err := branchCommit(sourceRepository, p.SourceBranch)
+	commitID, err := s.reviewSourceCommit(p)
 	if err != nil {
 		return Review{}, err
 	}
@@ -786,11 +782,7 @@ func (s *Store) ListReviews(repositoryID, pullRequestID string) ([]Review, error
 	if err != nil {
 		return nil, err
 	}
-	repository, err := s.git.Open(p.SourceRepositoryID)
-	if err != nil {
-		return nil, err
-	}
-	currentCommitID, err := branchCommit(repository, p.SourceBranch)
+	currentCommitID, err := s.reviewSourceCommit(p)
 	if errors.Is(err, ErrBranchNotFound) {
 		currentCommitID = ""
 		err = nil
@@ -840,11 +832,7 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 		addBlocker("pull_request_not_open", "pull request must be open")
 	}
 
-	sourceRepository, err := s.git.Open(p.SourceRepositoryID)
-	if err != nil {
-		return MergeReadiness{}, err
-	}
-	sourceID, sourceState, err := liveBranchState(sourceRepository, p.SourceBranch, p.SourceCommitID)
+	sourceID, sourceState, err := s.liveReviewSourceState(p, repository)
 	if err != nil {
 		return MergeReadiness{}, err
 	}
@@ -1177,6 +1165,44 @@ func liveBranchState(repository *storage.Repository, branch, snapshot string) (*
 		}
 	}
 	return &current, state, nil
+}
+
+// reviewSourceCommit follows a live source branch when it exists. If an
+// independently owned source repository has been deleted, the exact adopted
+// commit remains a valid review boundary because CreateFrom imported and
+// verified its reachable objects in the target repository. Synchronization is
+// intentionally stricter and never uses this fallback.
+func (s *Store) reviewSourceCommit(p PullRequest) (string, error) {
+	source, err := s.git.Open(p.SourceRepositoryID)
+	if err == nil {
+		return branchCommit(source, p.SourceBranch)
+	}
+	if p.SourceRepositoryID == p.RepositoryID || !errors.Is(err, storage.ErrRepositoryNotFound) {
+		return "", err
+	}
+	target, targetErr := s.git.Open(p.RepositoryID)
+	if targetErr != nil {
+		return "", targetErr
+	}
+	if _, targetErr = target.ReadCommit(storage.ObjectID(p.SourceCommitID)); targetErr != nil {
+		return "", targetErr
+	}
+	return p.SourceCommitID, nil
+}
+
+func (s *Store) liveReviewSourceState(p PullRequest, target *storage.Repository) (*string, string, error) {
+	source, err := s.git.Open(p.SourceRepositoryID)
+	if err == nil {
+		return liveBranchState(source, p.SourceBranch, p.SourceCommitID)
+	}
+	if p.SourceRepositoryID == p.RepositoryID || !errors.Is(err, storage.ErrRepositoryNotFound) {
+		return nil, "", err
+	}
+	if _, err := target.ReadCommit(storage.ObjectID(p.SourceCommitID)); err != nil {
+		return nil, "", err
+	}
+	commit := p.SourceCommitID
+	return &commit, "unavailable", nil
 }
 
 func commitReachable(repository *storage.Repository, ancestor, descendant string) (bool, error) {

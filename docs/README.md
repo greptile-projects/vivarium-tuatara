@@ -230,7 +230,10 @@ to feedback with another source-branch push, the author explicitly
 synchronizes the request to adopt that tip as its next reviewable revision;
 the target snapshot remains fixed. Adopted fork objects are imported without a
 target reference, letting the existing commit, file, check, review, and merge
-surfaces operate on the same exact evidence as an in-repository branch.
+surfaces operate on the same exact evidence as an in-repository branch. A
+deleted fork therefore ends future synchronization but does not destroy the
+adopted review boundary, while revoked private-upstream access prevents any
+later fork commit from being adopted or imported.
 
 Candidate revisions can carry their reproducible verification contract in
 `.vivarium/checks.json`. Opening a pull request or explicitly adopting a new

@@ -610,6 +610,16 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 			writeAPIError(w, http.StatusNotFound, "pull_request_not_found", "pull request not found")
 			return
 		}
+		target, targetErr := repositoriesStore.GetByID(existing.RepositoryID)
+		if targetErr != nil {
+			writeAPIError(w, http.StatusNotFound, "pull_request_not_found", "pull request not found")
+			return
+		}
+		targetCollaborator, collaboratorErr := repositoriesStore.HasCollaborator(actor.UserID, existing.RepositoryID)
+		if collaboratorErr != nil || (target.Visibility != repositories.Public && target.OwnerID != actor.UserID && !targetCollaborator) {
+			writeAPIError(w, http.StatusNotFound, "pull_request_not_found", "pull request not found")
+			return
+		}
 		source, sourceErr := repositoriesStore.GetByID(existing.SourceRepositoryID)
 		allowedSource := sourceErr == nil && source.OwnerID == actor.UserID
 		if sourceErr == nil && existing.SourceRepositoryID == existing.RepositoryID {

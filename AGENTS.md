@@ -246,6 +246,10 @@ whenever dependencies change or the web job fails before it starts.
   can create them; reads inherit repository visibility and access. Pull request
   collections use shared cursor pagination and creation uses the same uncertain-
   durability response contract as proposals.
+  Fork-source synchronization rechecks current target access before importing
+  a newer revision. If the source fork is deleted, synchronization stops but
+  its verified imported snapshot remains reviewable and mergeable with source
+  branch state reported as `unavailable`.
   Pull request inspection derives source-only commits and path-ordered file
   changes from the fixed target snapshot and explicitly recorded source
   revision rather than silently following live branches. Authors adopt a
