@@ -152,6 +152,16 @@ whenever dependencies change or the web job fails before it starts.
   before the executor waits for resume. Owned failed signals may terminalize a
   paused rollout; recovery scans paused work and fails an expired owner with an
   unknown-outcome record before any later resume.
+  Failed or canceled deployments expose two participant recovery paths. A
+  rollback derives the newest earlier successful artifact for that exact
+  environment and submits it as another approval-gated promotion with durable
+  failed/restored deployment provenance. A repair creates an isolated
+  `agent/recovery/*` branch and ordinary pull request at the unhealthy release
+  commit, then freezes release notes, deployment logs, health evidence,
+  artifact checksum, and source revision into its change session. Its agent
+  credential remains repository/branch-bound; repaired code must complete the
+  normal review, required-check, integration, build, release, and promotion
+  flow and never receives environment authority.
   Pull request discovery at `/pulls` aggregates reviewable work across the
   authenticated actor's repository catalog and opens candidate branches
   against distinct targets or owned-fork branches against their upstream,

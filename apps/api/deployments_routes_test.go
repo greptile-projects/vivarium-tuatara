@@ -1,0 +1,79 @@
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
+)
+
+func TestUnhealthyDeploymentOpensEvidencePinnedRepairReview(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	pulls, _ := pullrequests.New(t.TempDir(), gitStore)
+	sessions, _ := changesessions.New(t.TempDir())
+	checks, _ := checkruns.New(t.TempDir())
+	releaseStore, _ := releases.New(t.TempDir())
+	deploymentStore, _ := deployments.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, pulls, nil, sessions, checks, releaseStore, deploymentStore))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "recovery-owner")
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"service"}`, owner.Credential.Token, http.StatusCreated)
+	var repository repositories.Repository
+	decodeResponse(t, response, &repository)
+	gitRepository, _ := gitStore.Open(repository.ID)
+	readme, _ := gitRepository.WriteObject(storage.BlobObject, []byte("healthy source\n"))
+	tree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "README.md", id: readme})
+	commit := writeTestCommit(t, gitRepository, tree, nil, 1700000000, "release source")
+	if err := gitRepository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(commit)}); err != nil {
+		t.Fatal(err)
+	}
+	release, err := releaseStore.Create(releases.Candidate{RepositoryID: repository.ID, Version: "v1.2.3", Notes: "Repair the observed canary regression.", CommitID: string(commit), CreatedBy: owner.User.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment, err := deploymentStore.PutEnvironment(deployments.Environment{RepositoryID: repository.ID, Name: "production", Position: 1, Image: "alpine:3.22", Command: "true", TimeoutSeconds: 30, RequiredApprovals: 0, Concurrency: 1, UpdatedBy: owner.User.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	promotion, err := deploymentStore.CreatePromotion(deployments.Promotion{RepositoryID: repository.ID, EnvironmentID: environment.ID, ReleaseID: release.ID, BuildID: strings.Repeat("b", 32), ArtifactID: strings.Repeat("a", 32), ArtifactSHA256: strings.Repeat("c", 64), CommitID: string(commit), Rollout: deployments.RolloutDefinition{Version: 1, Stages: []deployments.RolloutStage{{Name: "canary", Signals: []deployments.HealthSignal{{Name: "errors", Command: "false"}}}}}, InitiatedBy: owner.User.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	promotion, err = deploymentStore.Reject(repository.ID, promotion.ID, "customer errors increased")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repairResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/deployments/"+promotion.ID+"/recoveries", `{"action":"repair","expected_state":"failed"}`, owner.Credential.Token, http.StatusCreated)
+	var repair struct {
+		PullRequest pullrequests.PullRequest `json:"pull_request"`
+		Session     changesessions.Session   `json:"session"`
+	}
+	if err := json.NewDecoder(repairResponse.Body).Decode(&repair); err != nil {
+		t.Fatal(err)
+	}
+	repairResponse.Body.Close()
+	if !strings.HasPrefix(repair.PullRequest.SourceBranch, "agent/recovery/") || repair.PullRequest.TargetBranch != "main" || repair.Session.DeploymentEvidence == nil {
+		t.Fatalf("repair = %#v", repair)
+	}
+	evidence := repair.Session.DeploymentEvidence
+	if evidence.ReleaseVersion != "v1.2.3" || evidence.ReleaseNotes != release.Notes || evidence.CommitID != string(commit) || evidence.State != "failed" {
+		t.Fatalf("evidence = %#v", evidence)
+	}
+	if repairResponse.Header.Get("Location") != "/repositories/"+repository.ID+"/pulls/"+repair.PullRequest.ID+"/sessions/"+repair.Session.ID {
+		t.Fatalf("Location = %q", repairResponse.Header.Get("Location"))
+	}
+}

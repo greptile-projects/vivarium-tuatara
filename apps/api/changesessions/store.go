@@ -42,18 +42,51 @@ var workEventKinds = map[string]bool{
 }
 
 type Session struct {
-	ID             string         `json:"id"`
-	RepositoryID   string         `json:"repository_id"`
-	PullRequestID  string         `json:"pull_request_id,omitempty"`
-	ProposalID     string         `json:"proposal_id,omitempty"`
-	TaskID         string         `json:"task_id,omitempty"`
-	TaskContext    *TaskContext   `json:"task_context,omitempty"`
-	InitiatorID    string         `json:"initiator_id"`
-	SourceCommitID string         `json:"source_commit_id"`
-	CheckEvidence  *CheckEvidence `json:"check_evidence,omitempty"`
-	State          string         `json:"state"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at"`
+	ID                 string              `json:"id"`
+	RepositoryID       string              `json:"repository_id"`
+	PullRequestID      string              `json:"pull_request_id,omitempty"`
+	ProposalID         string              `json:"proposal_id,omitempty"`
+	TaskID             string              `json:"task_id,omitempty"`
+	TaskContext        *TaskContext        `json:"task_context,omitempty"`
+	InitiatorID        string              `json:"initiator_id"`
+	SourceCommitID     string              `json:"source_commit_id"`
+	CheckEvidence      *CheckEvidence      `json:"check_evidence,omitempty"`
+	DeploymentEvidence *DeploymentEvidence `json:"deployment_evidence,omitempty"`
+	State              string              `json:"state"`
+	CreatedAt          time.Time           `json:"created_at"`
+	UpdatedAt          time.Time           `json:"updated_at"`
+}
+
+// DeploymentEvidence freezes the failed delivery context at the point a
+// repair enters source review. It intentionally excludes environment secrets.
+type DeploymentEvidence struct {
+	DeploymentID   string             `json:"deployment_id"`
+	ReleaseID      string             `json:"release_id"`
+	EnvironmentID  string             `json:"environment_id"`
+	ArtifactID     string             `json:"artifact_id"`
+	ArtifactSHA256 string             `json:"artifact_sha256"`
+	CommitID       string             `json:"commit_id"`
+	State          string             `json:"state"`
+	ReleaseVersion string             `json:"release_version"`
+	ReleaseNotes   string             `json:"release_notes"`
+	CurrentStage   int                `json:"current_stage"`
+	Evidence       []DeploymentSignal `json:"evidence"`
+	Events         []DeploymentEvent  `json:"events"`
+}
+
+type DeploymentSignal struct {
+	Stage   string `json:"stage"`
+	Signal  string `json:"signal"`
+	State   string `json:"state"`
+	Message string `json:"message,omitempty"`
+}
+
+type DeploymentEvent struct {
+	Sequence int    `json:"sequence"`
+	Kind     string `json:"kind"`
+	ActorID  string `json:"actor_id,omitempty"`
+	State    string `json:"state,omitempty"`
+	Message  string `json:"message,omitempty"`
 }
 
 // TaskContext freezes the shared intent supplied to an agent before a pull
@@ -217,10 +250,17 @@ func (s *Store) Create(repositoryID, pullRequestID, initiatorID, sourceCommitID 
 }
 
 func (s *Store) CreateWithEvidence(repositoryID, pullRequestID, initiatorID, sourceCommitID string, evidence *CheckEvidence) (Session, error) {
+	return s.CreateWithRecoveryEvidence(repositoryID, pullRequestID, initiatorID, sourceCommitID, evidence, nil)
+}
+
+func (s *Store) CreateWithRecoveryEvidence(repositoryID, pullRequestID, initiatorID, sourceCommitID string, evidence *CheckEvidence, deployment *DeploymentEvidence) (Session, error) {
 	if !validID(repositoryID) || !validID(pullRequestID) || !validID(initiatorID) || !validObjectID(sourceCommitID) {
 		return Session{}, ErrInvalid
 	}
 	if evidence != nil && (!validID(evidence.RunID) || evidence.Definition.Name == "" || evidence.Definition.Command == "") {
+		return Session{}, ErrInvalid
+	}
+	if deployment != nil && (!validID(deployment.DeploymentID) || !validID(deployment.ReleaseID) || !validID(deployment.EnvironmentID) || !validID(deployment.ArtifactID) || !validObjectID(deployment.CommitID) || len(deployment.ArtifactSHA256) != 64 || deployment.State == "" || strings.TrimSpace(deployment.ReleaseVersion) == "") {
 		return Session{}, ErrInvalid
 	}
 	sessionID, err := newID()
@@ -232,7 +272,7 @@ func (s *Store) CreateWithEvidence(repositoryID, pullRequestID, initiatorID, sou
 		return Session{}, err
 	}
 	now := s.now().Truncate(time.Microsecond)
-	session := Session{ID: sessionID, RepositoryID: repositoryID, PullRequestID: pullRequestID, InitiatorID: initiatorID, SourceCommitID: sourceCommitID, CheckEvidence: evidence, State: Open, CreatedAt: now, UpdatedAt: now}
+	session := Session{ID: sessionID, RepositoryID: repositoryID, PullRequestID: pullRequestID, InitiatorID: initiatorID, SourceCommitID: sourceCommitID, CheckEvidence: evidence, DeploymentEvidence: deployment, State: Open, CreatedAt: now, UpdatedAt: now}
 	rec := record{Session: session, Events: []Event{{ID: eventID, SessionID: sessionID, Kind: "session.opened", ActorID: initiatorID, State: Open, CreatedAt: now}}}
 
 	s.mu.Lock()

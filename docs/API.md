@@ -900,3 +900,41 @@ Participants with `repositories:write` may `POST
 `expected_state` and an optional `reason`. State comparison prevents stale
 decisions. Every intervention retains its actor and reason in deployment
 history and creates recipient-specific inbox activity for the initiator.
+
+### Failed deployment recovery
+
+Current owners and contributors with `repositories:write` may `POST
+/repositories/{id}/deployments/{deployment_id}/recoveries` for a deployment in
+`failed` or `canceled` state. Include the observed state to reject stale
+decisions:
+
+```json
+{"action":"rollback","expected_state":"failed"}
+```
+
+`rollback` derives the newest earlier `succeeded` deployment to the same
+environment. It creates a new ordinary promotion for that exact release,
+build, artifact, checksum, commit, and rollout definition, returning `202`
+with `deployment` and `restores_deployment`. The new record carries
+`recovery_kind: "rollback"`, `recovery_of`, and `restores_deployment_id`.
+Environment concurrency, prior-environment provenance, independent approvals,
+artifact verification, and health observation still apply. `409
+rollback_unavailable` means no earlier known-good deployment exists;
+`rollback_blocked` means current delivery policy prevents admission.
+
+```json
+{"action":"repair","expected_state":"failed"}
+```
+
+`repair` returns `201` with `pull_request` and `session` and a `Location` for
+the session workspace. The server creates an `agent/recovery/*` branch at the
+unhealthy release commit and an ordinary open pull against the repository's
+default branch. `session.deployment_evidence` immutably snapshots release
+version and notes, deployment and environment IDs, source commit, artifact ID
+and SHA-256, terminal state, current rollout stage, health evidence, and
+ordered attributed deployment events/logs. Launching an agent uses the normal
+pull-session API and issues only repository/repair-branch Git access. Agent
+completion synchronizes the pull, starts exact-revision checks, and remains
+subject to review, integration policy, merge, new release build, and governed
+promotion; it grants no environment configuration, credential, approval, or
+execution authority.

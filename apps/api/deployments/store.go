@@ -91,26 +91,29 @@ type Event struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 type Promotion struct {
-	ID             string            `json:"id"`
-	RepositoryID   string            `json:"repository_id"`
-	EnvironmentID  string            `json:"environment_id"`
-	ReleaseID      string            `json:"release_id"`
-	BuildID        string            `json:"build_id"`
-	ArtifactID     string            `json:"artifact_id"`
-	ArtifactSHA256 string            `json:"artifact_sha256"`
-	CommitID       string            `json:"commit_id"`
-	Rollout        RolloutDefinition `json:"rollout"`
-	CurrentStage   int               `json:"current_stage"`
-	Evidence       []SignalEvidence  `json:"evidence"`
-	State          string            `json:"state"`
-	InitiatedBy    string            `json:"initiated_by"`
-	Approvals      []Approval        `json:"approvals"`
-	Events         []Event           `json:"events"`
-	CreatedAt      time.Time         `json:"created_at"`
-	StartedAt      *time.Time        `json:"started_at,omitempty"`
-	CompletedAt    *time.Time        `json:"completed_at,omitempty"`
-	ExecutionOwner string            `json:"execution_owner,omitempty"`
-	LeaseExpiresAt *time.Time        `json:"lease_expires_at,omitempty"`
+	ID                   string            `json:"id"`
+	RepositoryID         string            `json:"repository_id"`
+	EnvironmentID        string            `json:"environment_id"`
+	ReleaseID            string            `json:"release_id"`
+	BuildID              string            `json:"build_id"`
+	ArtifactID           string            `json:"artifact_id"`
+	ArtifactSHA256       string            `json:"artifact_sha256"`
+	CommitID             string            `json:"commit_id"`
+	Rollout              RolloutDefinition `json:"rollout"`
+	CurrentStage         int               `json:"current_stage"`
+	Evidence             []SignalEvidence  `json:"evidence"`
+	State                string            `json:"state"`
+	InitiatedBy          string            `json:"initiated_by"`
+	Approvals            []Approval        `json:"approvals"`
+	Events               []Event           `json:"events"`
+	CreatedAt            time.Time         `json:"created_at"`
+	StartedAt            *time.Time        `json:"started_at,omitempty"`
+	CompletedAt          *time.Time        `json:"completed_at,omitempty"`
+	ExecutionOwner       string            `json:"execution_owner,omitempty"`
+	LeaseExpiresAt       *time.Time        `json:"lease_expires_at,omitempty"`
+	RecoveryOf           string            `json:"recovery_of,omitempty"`
+	RecoveryKind         string            `json:"recovery_kind,omitempty"`
+	RestoresDeploymentID string            `json:"restores_deployment_id,omitempty"`
 }
 
 type Store struct {
@@ -242,7 +245,7 @@ func (s *Store) listEnvironments(repo string) ([]Environment, error) {
 
 func (s *Store) CreatePromotion(value Promotion) (Promotion, error) {
 	legacyDefinition := value.CommitID == "" && value.Rollout.Version == 0 && len(value.Rollout.Stages) == 0
-	if !validID(value.RepositoryID) || !validID(value.EnvironmentID) || !validID(value.ReleaseID) || !validID(value.BuildID) || !validID(value.ArtifactID) || !validID(value.InitiatedBy) || len(value.ArtifactSHA256) != 64 || (!legacyDefinition && (len(value.CommitID) != 40 || !validRollout(value.Rollout))) {
+	if !validID(value.RepositoryID) || !validID(value.EnvironmentID) || !validID(value.ReleaseID) || !validID(value.BuildID) || !validID(value.ArtifactID) || !validID(value.InitiatedBy) || len(value.ArtifactSHA256) != 64 || (!legacyDefinition && (len(value.CommitID) != 40 || !validRollout(value.Rollout))) || (value.RecoveryOf != "" && (!validID(value.RecoveryOf) || value.RecoveryKind != "rollback" || !validID(value.RestoresDeploymentID))) {
 		return Promotion{}, ErrInvalid
 	}
 	s.mu.Lock()
@@ -296,6 +299,34 @@ func (s *Store) CreatePromotion(value Promotion) (Promotion, error) {
 		value.Events = append(value.Events, Event{Sequence: 2, Kind: "promotion.queued", ActorID: value.InitiatedBy, State: value.State, CreatedAt: value.CreatedAt})
 	}
 	return value, s.write(filepath.Join(s.root, value.RepositoryID, "promotions", value.ID+".json"), value)
+}
+
+// RollbackTarget derives the newest successful deployment to the same
+// environment that predates an unhealthy deployment.
+func (s *Store) RollbackTarget(repo, id string) (Promotion, Promotion, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	failed, err := s.getPromotion(repo, id)
+	if err != nil {
+		return Promotion{}, Promotion{}, err
+	}
+	if failed.State != "failed" && failed.State != "canceled" {
+		return failed, Promotion{}, ErrBlocked
+	}
+	items, err := s.listPromotions(repo)
+	if err != nil {
+		return failed, Promotion{}, err
+	}
+	var target Promotion
+	for _, candidate := range items {
+		if candidate.EnvironmentID == failed.EnvironmentID && candidate.State == "succeeded" && candidate.CreatedAt.Before(failed.CreatedAt) && (target.ID == "" || candidate.CreatedAt.After(target.CreatedAt)) {
+			target = candidate
+		}
+	}
+	if target.ID == "" {
+		return failed, target, ErrBlocked
+	}
+	return failed, target, nil
 }
 
 // Control records a participant decision without discarding execution or
