@@ -55,6 +55,45 @@ func TestProposalLifecycleDiscussionAndAuthorization(t *testing.T) {
 	if len(conversation.Comments) != 1 || conversation.Comments[0].AuthorID != owner.User.ID {
 		t.Fatalf("conversation = %#v", conversation)
 	}
+	firstResponse := authenticatedRequest(t, http.MethodPost, base+"/tasks", `{"title":"Define the path","outcome":"The API contract is agreed","discussion_comment_ids":["`+conversation.Comments[0].ID+`"]}`, contributor.Credential.Token, http.StatusCreated)
+	var firstTask proposals.Task
+	if err := json.NewDecoder(firstResponse.Body).Decode(&firstTask); err != nil {
+		t.Fatal(err)
+	}
+	firstResponse.Body.Close()
+	secondResponse := authenticatedRequest(t, http.MethodPost, base+"/tasks", `{"title":"Build the path","outcome":"A contributor can follow it","dependency_ids":["`+firstTask.ID+`"]}`, owner.Credential.Token, http.StatusCreated)
+	var secondTask proposals.Task
+	if err := json.NewDecoder(secondResponse.Body).Decode(&secondTask); err != nil {
+		t.Fatal(err)
+	}
+	secondResponse.Body.Close()
+	if !firstTask.Ready || secondTask.Ready || len(secondTask.BlockedBy) != 1 {
+		t.Fatalf("tasks = %#v, %#v", firstTask, secondTask)
+	}
+	authenticatedRequest(t, http.MethodPatch, base+"/tasks/"+firstTask.ID, `{"status":"completed"}`, owner.Credential.Token, http.StatusOK).Body.Close()
+	planResponse := authenticatedRequest(t, http.MethodGet, base+"/tasks", "", contributor.Credential.Token, http.StatusOK)
+	var plan struct {
+		Tasks []proposals.Task `json:"tasks"`
+	}
+	if err := json.NewDecoder(planResponse.Body).Decode(&plan); err != nil {
+		t.Fatal(err)
+	}
+	planResponse.Body.Close()
+	if len(plan.Tasks) != 2 || !plan.Tasks[1].Ready {
+		t.Fatalf("plan = %#v", plan)
+	}
+	historyResponse := authenticatedRequest(t, http.MethodGet, base+"/tasks/"+firstTask.ID+"/history", "", contributor.Credential.Token, http.StatusOK)
+	var history struct {
+		History []proposals.TaskChange `json:"history"`
+	}
+	if err := json.NewDecoder(historyResponse.Body).Decode(&history); err != nil {
+		t.Fatal(err)
+	}
+	historyResponse.Body.Close()
+	if len(history.History) != 2 || history.History[0].ActorID != contributor.User.ID || history.History[1].ActorID != owner.User.ID {
+		t.Fatalf("history = %#v", history)
+	}
+	authenticatedRequest(t, http.MethodPost, base+"/tasks", `{"title":"No access","outcome":"Never"}`, outsider.Credential.Token, http.StatusNotFound).Body.Close()
 	authenticatedRequest(t, http.MethodPatch, base, `{"title":"Improve newcomer onboarding"}`, contributor.Credential.Token, http.StatusOK).Body.Close()
 	authenticatedRequest(t, http.MethodPatch, base, `{"body":"owner rewrite"}`, owner.Credential.Token, http.StatusNotFound).Body.Close()
 	authenticatedRequest(t, http.MethodPatch, base, `{"status":"closed"}`, owner.Credential.Token, http.StatusOK).Body.Close()
@@ -64,6 +103,8 @@ func TestProposalLifecycleDiscussionAndAuthorization(t *testing.T) {
 	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+repository.ID, `{"visibility":"public"}`, owner.Credential.Token, http.StatusOK).Body.Close()
 	requestStatus(t, http.MethodGet, base, "", http.StatusOK).Body.Close()
 	requestStatus(t, http.MethodGet, base+"/comments", "", http.StatusOK).Body.Close()
+	requestStatus(t, http.MethodGet, base+"/tasks", "", http.StatusOK).Body.Close()
+	requestStatus(t, http.MethodGet, base+"/tasks/"+firstTask.ID+"/history", "", http.StatusOK).Body.Close()
 }
 
 func TestUncertainProposalMutationPreservesResourceForClient(t *testing.T) {

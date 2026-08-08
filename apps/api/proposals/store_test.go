@@ -70,6 +70,61 @@ func TestConcurrentCommentsAreNotLostAcrossStores(t *testing.T) {
 	}
 }
 
+func TestProposalTasksDeriveReadinessAndRetainHistory(t *testing.T) {
+	store, _ := New(t.TempDir())
+	proposal, _ := store.Create(repositoryID, authorID, "Ship onboarding", "Discuss the path")
+	comment, _ := store.AddComment(repositoryID, proposal.ID, commenterID, "Start with the API")
+	first, err := store.CreateTask(repositoryID, proposal.ID, authorID, "Define contract", "A documented task API", nil, []string{comment.ID})
+	if err != nil || !first.Ready || len(first.DependencyIDs) != 0 {
+		t.Fatalf("first = %#v, %v", first, err)
+	}
+	second, err := store.CreateTask(repositoryID, proposal.ID, commenterID, "Build UI", "Collaborators can manage the plan", []string{first.ID}, nil)
+	if err != nil || second.Ready || len(second.BlockedBy) != 1 {
+		t.Fatalf("second = %#v, %v", second, err)
+	}
+	completed := TaskCompleted
+	if _, err := store.UpdateTask(repositoryID, proposal.ID, first.ID, commenterID, TaskPatch{Status: &completed}); err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := store.ListTasks(repositoryID, proposal.ID)
+	if err != nil || len(tasks) != 2 || !tasks[1].Ready || len(tasks[1].BlockedBy) != 0 {
+		t.Fatalf("tasks = %#v, %v", tasks, err)
+	}
+	position, started := 0, TaskInProgress
+	moved, err := store.UpdateTask(repositoryID, proposal.ID, second.ID, authorID, TaskPatch{Position: &position, Status: &started})
+	if err != nil || moved.Position != 0 || moved.Status != TaskInProgress {
+		t.Fatalf("moved = %#v, %v", moved, err)
+	}
+	history, err := store.ListTaskChanges(repositoryID, proposal.ID, first.ID)
+	if err != nil || len(history) != 2 || history[0].ActorID != authorID || history[1].ActorID != commenterID || history[1].Action != "status_changed" || history[1].Task.Status != TaskCompleted {
+		t.Fatalf("history = %#v, %v", history, err)
+	}
+	secondHistory, err := store.ListTaskChanges(repositoryID, proposal.ID, second.ID)
+	if err != nil || len(secondHistory) != 2 || secondHistory[1].Action != "status_changed" || secondHistory[1].Task.Status != TaskInProgress || secondHistory[1].Task.Position != 0 {
+		t.Fatalf("combined update history = %#v, %v", secondHistory, err)
+	}
+	reopened, _ := New(store.root)
+	persisted, err := reopened.ListTasks(repositoryID, proposal.ID)
+	if err != nil || len(persisted) != 2 || persisted[0].ID != second.ID {
+		t.Fatalf("persisted = %#v, %v", persisted, err)
+	}
+}
+
+func TestProposalTasksRejectInvalidGraphAndDiscussionLinks(t *testing.T) {
+	store, _ := New(t.TempDir())
+	proposal, _ := store.Create(repositoryID, authorID, "Plan", "")
+	first, _ := store.CreateTask(repositoryID, proposal.ID, authorID, "First", "First result", nil, nil)
+	second, _ := store.CreateTask(repositoryID, proposal.ID, authorID, "Second", "Second result", []string{first.ID}, nil)
+	deps := []string{second.ID}
+	if _, err := store.UpdateTask(repositoryID, proposal.ID, first.ID, authorID, TaskPatch{DependencyIDs: &deps}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("cycle error = %v", err)
+	}
+	unknown := []string{"22222222222222222222222222222222"}
+	if _, err := store.UpdateTask(repositoryID, proposal.ID, first.ID, authorID, TaskPatch{DiscussionCommentIDs: &unknown}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("comment error = %v", err)
+	}
+}
+
 func TestGetPreservesCorruptRecordError(t *testing.T) {
 	root := t.TempDir()
 	store, _ := New(root)
