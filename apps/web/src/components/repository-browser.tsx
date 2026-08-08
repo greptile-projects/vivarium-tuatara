@@ -150,6 +150,28 @@ export function RepositoryBrowser({ id }: { id: string }) {
     }
   }
 
+  async function updateVisibility(visibility: Repository["visibility"]) {
+    if (!token || !repository) return;
+    setActionPending(true);
+    setActionError("");
+    try {
+      const updated = await api<Repository>(
+        `/repositories/${id}`,
+        { method: "PATCH", body: JSON.stringify({ visibility }) },
+        token,
+      );
+      setRepository(updated);
+    } catch (reason) {
+      setActionError(
+        reason instanceof Error
+          ? reason.message
+          : "Repository visibility could not be updated.",
+      );
+    } finally {
+      setActionPending(false);
+    }
+  }
+
   if (loading)
     return (
       <Card className="p-8 text-sm text-[var(--muted)]">
@@ -309,6 +331,26 @@ export function RepositoryBrowser({ id }: { id: string }) {
               <Link href={`/repositories/${repository.upstream_repository_id}`} className="mt-3 block break-all font-mono text-xs font-semibold text-[var(--brand)] hover:underline">{repository.upstream_repository_id}</Link>
               {policyBranch ? <Button className="mt-4 w-full" variant="secondary" disabled={actionPending} onClick={() => void synchronize(policyBranch)}>{actionPending ? "Synchronizing…" : `Sync ${policyBranch}`}</Button> : <p className="mt-3 text-xs text-[var(--muted)]">Select a named branch to synchronize it.</p>}
               {syncResult && <p role="status" className="mt-3 text-xs text-[var(--success)]">{syncResult.previous_commit_id === syncResult.commit_id ? "Already current with upstream." : `Updated to ${syncResult.commit_id.slice(0, 7)}.`}</p>}
+            </Card>
+          )}
+          {token && user?.id === repository.owner_id && (
+            <Card className="p-5">
+              <h2 className="font-semibold">Repository visibility</h2>
+              <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
+                Public repositories can be discovered, cloned, and forked without granting upstream membership.
+              </p>
+              <label className="mt-4 block text-xs font-semibold">
+                Visibility
+                <select
+                  value={repository.visibility}
+                  disabled={actionPending}
+                  onChange={(event) => void updateVisibility(event.target.value as Repository["visibility"])}
+                  className="mt-2 min-h-10 w-full rounded-lg border border-[var(--line-strong)] bg-white px-3 text-sm font-normal"
+                >
+                  <option value="private">Private</option>
+                  <option value="public">Public</option>
+                </select>
+              </label>
             </Card>
           )}
           {actionError && <p role="alert" className="rounded-lg bg-[var(--danger-soft)] p-3 text-sm text-[var(--danger)]">{actionError}</p>}

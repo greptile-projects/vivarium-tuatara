@@ -29,7 +29,8 @@ async function git(cwd: string, ...args: string[]) {
   return stdout.trim();
 }
 
-test("humans and an agent verify, repair, and merge one attributed change", async ({ browser }) => {
+test("an unknown contributor and an agent take a forked change through verified merge", async ({ browser }) => {
+  test.setTimeout(180_000);
   await run("docker", ["image", "inspect", "alpine:3.22"]).catch(() =>
     run("docker", ["pull", "alpine:3.22"]),
   );
@@ -68,6 +69,8 @@ test("humans and an agent verify, repair, and merge one attributed change", asyn
   await git(maintainerCopy, "push", "origin", "main");
 
   await maintainer.goto(`/repositories/${repositoryID}`);
+  await maintainer.getByLabel("Visibility").selectOption("public");
+  await expect(maintainer.getByText("public", { exact: true }).first()).toBeVisible();
   await maintainer.getByLabel("Required check names").fill("greeting verification");
   const requirementSaved = maintainer.waitForResponse((response) =>
     response.request().method() === "PUT" && response.url().includes(`/repositories/${repositoryID}/branches/main/required-checks`),
@@ -77,28 +80,26 @@ test("humans and an agent verify, repair, and merge one attributed change", asyn
 
   await createAccount(newcomer, "Journey Newcomer", `newcomer-${suffix}`);
   const newcomerToken = await issueGitToken(newcomer, "Journey Git");
-  const collaborationID = (await newcomer.getByTestId("collaboration-id").textContent())!;
-  await maintainer.goto(`/repositories/${repositoryID}`);
-  await maintainer.getByLabel("Collaboration ID").fill(collaborationID);
-  await maintainer.getByRole("button", { name: "Add", exact: true }).click();
-  await expect(maintainer.getByText(`@newcomer-${suffix}`)).toBeVisible();
+  await newcomer.goto(`/repositories/${repositoryID}`);
+  await expect(newcomer.getByRole("heading", { name: `welcome-${suffix}` })).toBeVisible();
+  await expect(newcomer.getByText("public", { exact: true }).first()).toBeVisible();
+  await newcomer.getByRole("button", { name: "Create fork" }).click();
+  await newcomer.waitForURL((url) =>
+    url.pathname.startsWith("/repositories/") && !url.pathname.endsWith(repositoryID),
+  );
+  const forkID = new URL(newcomer.url()).pathname.split("/").pop()!;
+  expect(forkID).not.toBe(repositoryID);
+  await expect(newcomer.getByText("fork", { exact: true }).first()).toBeVisible();
 
-  await newcomer.goto("/proposals");
-  await newcomer.getByRole("button", { name: "New proposal" }).click();
-  await newcomer.getByLabel("Title").fill("Add a greeting");
-  await newcomer.getByLabel("Context", { exact: true }).fill("Welcome developers and agents.");
-  await newcomer.getByRole("button", { name: "Publish proposal" }).click();
-  await expect(newcomer).toHaveURL(new RegExp(`/proposals/${repositoryID}/[a-f0-9]{32}$`));
-  const proposalID = new URL(newcomer.url()).pathname.split("/").pop()!;
-  await expect(newcomer.getByText(`@newcomer-${suffix}`, { exact: true }).first()).toBeVisible();
-
-  await maintainer.goto(newcomer.url());
-  await maintainer.getByLabel("Add to the conversation").fill("Please include a friendly example.");
-  await maintainer.getByRole("button", { name: "Comment" }).click();
-  await expect(maintainer.getByText("Please include a friendly example.")).toBeVisible();
+  await writeFile(join(maintainerCopy, "CONTRIBUTING.md"), "Please keep examples welcoming.\n");
+  await git(maintainerCopy, "add", "CONTRIBUTING.md");
+  await git(maintainerCopy, "commit", "-m", "Document contribution guidance");
+  await git(maintainerCopy, "push", "origin", "main");
+  await newcomer.getByRole("button", { name: "Sync main" }).click();
+  await expect(newcomer.getByText(/Updated to [a-f0-9]{7}\./)).toBeVisible();
 
   const newcomerCopy = await mkdtemp(join(tmpdir(), "vivarium-newcomer-"));
-  await git(tmpdir(), "clone", `http://git:${newcomerToken}@localhost:3000/git/${repositoryID}.git`, newcomerCopy);
+  await git(tmpdir(), "clone", `http://git:${newcomerToken}@localhost:3000/git/${forkID}.git`, newcomerCopy);
   await git(newcomerCopy, "config", "user.name", "Journey Newcomer");
   await git(newcomerCopy, "config", "user.email", "newcomer@example.com");
   await git(newcomerCopy, "switch", "-c", "greeting");
@@ -111,15 +112,22 @@ test("humans and an agent verify, repair, and merge one attributed change", asyn
   await newcomer.getByRole("button", { name: "New pull request" }).click();
   await newcomer.getByLabel("Candidate branch").selectOption("greeting");
   await newcomer.getByLabel("Target branch").selectOption("main");
-  await newcomer.getByLabel("Linked proposal").selectOption(proposalID);
   await newcomer.getByLabel("Title").fill("Add a greeting");
   await newcomer.getByLabel("Purpose and feedback needed").fill("Implements the agreed welcome.");
   await newcomer.getByRole("button", { name: "Open pull request" }).click();
   await expect(newcomer).toHaveURL(new RegExp(`/pulls/${repositoryID}/[a-f0-9]{32}$`));
   const pullRequestID = new URL(newcomer.url()).pathname.split("/").pop()!;
+  const pullRequestURL = newcomer.url();
   await expect(newcomer.getByText(`@newcomer-${suffix}`, { exact: true }).first()).toBeVisible();
+  await expect(newcomer.getByText(new RegExp(`welcome-${suffix}:greeting.*welcome-${suffix}:main`))).toBeVisible();
+  await newcomer.getByRole("button", { name: "Allow maintainer edits" }).click();
+  await expect(newcomer.getByRole("button", { name: "Disable maintainer edits" })).toBeVisible();
 
   await maintainer.goto(newcomer.url());
+  await maintainer.getByLabel("Add review feedback").fill("Please include a friendly verified example.");
+  await maintainer.getByRole("button", { name: "Comment" }).click();
+  await expect(maintainer.getByText("Please include a friendly verified example.")).toBeVisible();
+
   const checks = maintainer.locator("#checks");
   await expect(checks.getByText("failed", { exact: true })).toBeVisible({ timeout: 60_000 });
   await checks.getByText("greeting verification", { exact: true }).click();
@@ -173,7 +181,7 @@ test("humans and an agent verify, repair, and merge one attributed change", asyn
   await expect(maintainer.getByRole("button", { name: "Merge into main" })).toBeDisabled();
 
   const agentCopy = await mkdtemp(join(tmpdir(), "vivarium-agent-"));
-  const agentRemote = `http://git:${launched.credential.token}@localhost:3000/git/${repositoryID}.git`;
+  const agentRemote = `http://git:${launched.credential.token}@localhost:3000/git/${forkID}.git`;
   await git(tmpdir(), "clone", agentRemote, agentCopy);
   await git(agentCopy, "config", "user.name", "Vivarium Agent");
   await git(agentCopy, "config", "user.email", "agent@users.vivarium");
@@ -226,16 +234,107 @@ test("humans and an agent verify, repair, and merge one attributed change", asyn
 
   await git(maintainerCopy, "pull", "--ff-only");
   expect(await readFile(join(maintainerCopy, "greeting.txt"), "utf8")).toBe("hello developers and agents\nagent verified\n");
-  await newcomer.goto(`/proposals/${repositoryID}/${proposalID}`);
-  await expect(newcomer.getByText("closed", { exact: true }).first()).toBeVisible();
+  expect(await readFile(join(maintainerCopy, "CONTRIBUTING.md"), "utf8")).toBe("Please keep examples welcoming.\n");
 
-  await newcomer.goto("/inbox");
-  const mergeItem = newcomer.getByRole("article").filter({ hasText: "Review merge outcome" });
-  await expect(mergeItem).toBeVisible();
-  await expect(mergeItem.getByText("awareness", { exact: true })).toBeVisible();
-  await mergeItem.getByRole("button", { name: "Clear Add a greeting" }).click();
-  await expect(mergeItem).toBeHidden();
+  await newcomer.goto(pullRequestURL);
+  await expect(newcomer.getByText("Merged", { exact: true })).toBeVisible();
+  await expect(newcomer.getByText(`@newcomer-${suffix}`, { exact: true }).first()).toBeVisible();
+  await expect(newcomer.getByText(`@maintainer-${suffix}`, { exact: true }).first()).toBeVisible();
+  const newcomerSession = await newcomer.evaluate(() => localStorage.getItem("vivarium.access-token"));
+  const durablePullResponse = await newcomer.request.get(
+    `/api/repositories/${repositoryID}/pulls/${pullRequestID}`,
+    { headers: { Authorization: `Bearer ${newcomerSession}` } },
+  );
+  expect(durablePullResponse.status()).toBe(200);
+  const durablePull = await durablePullResponse.json();
+  expect(durablePull.source_repository_id).toBe(forkID);
+  expect(durablePull.repository_id).toBe(repositoryID);
+  expect(durablePull.author_id).not.toBe(durablePull.merged_by);
+  expect(durablePull.merge_commit_id).toMatch(/^[a-f0-9]{40}$/);
+  await newcomer.reload();
+  await expect(newcomer.getByText("Merged", { exact: true })).toBeVisible();
 
   await maintainerContext.close();
   await newcomerContext.close();
+});
+
+test("a linked proposal closes into a clearable merge outcome", async ({ browser }) => {
+  const suffix = Date.now().toString(36);
+  const maintainerContext = await browser.newContext();
+  const contributorContext = await browser.newContext();
+  const maintainer = await maintainerContext.newPage();
+  const contributor = await contributorContext.newPage();
+
+  await createAccount(maintainer, "Proposal Maintainer", `proposal-maintainer-${suffix}`);
+  const maintainerToken = await issueGitToken(maintainer, "Proposal Git");
+  await maintainer.goto("/repositories");
+  await maintainer.getByLabel("Repository name").fill(`proposal-${suffix}`);
+  await maintainer.getByRole("button", { name: "Create repository" }).click();
+  await maintainer.getByRole("link", { name: new RegExp(`proposal-${suffix}`) }).click();
+  await expect(maintainer).toHaveURL(/\/repositories\/[a-f0-9]{32}$/);
+  const repositoryID = new URL(maintainer.url()).pathname.split("/").pop()!;
+
+  const maintainerCopy = await mkdtemp(join(tmpdir(), "vivarium-proposal-maintainer-"));
+  await git(tmpdir(), "clone", `http://git:${maintainerToken}@localhost:3000/git/${repositoryID}.git`, maintainerCopy);
+  await git(maintainerCopy, "config", "user.name", "Proposal Maintainer");
+  await git(maintainerCopy, "config", "user.email", "proposal-maintainer@example.com");
+  await writeFile(join(maintainerCopy, "README.md"), "# Proposal workflow\n");
+  await git(maintainerCopy, "add", "README.md");
+  await git(maintainerCopy, "commit", "-m", "Start proposal project");
+  await git(maintainerCopy, "push", "origin", "main");
+
+  await createAccount(contributor, "Proposal Contributor", `proposal-contributor-${suffix}`);
+  const contributorToken = await issueGitToken(contributor, "Proposal Git");
+  const collaborationID = (await contributor.getByTestId("collaboration-id").textContent())!;
+  await maintainer.goto(`/repositories/${repositoryID}`);
+  await maintainer.getByLabel("Collaboration ID").fill(collaborationID);
+  await maintainer.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(maintainer.getByText(`@proposal-contributor-${suffix}`)).toBeVisible();
+
+  await contributor.goto("/proposals");
+  await contributor.getByRole("button", { name: "New proposal" }).click();
+  await contributor.getByLabel("Title").fill("Document the proposal outcome");
+  await contributor.getByLabel("Context", { exact: true }).fill("Keep the discussion linked through merge.");
+  await contributor.getByRole("button", { name: "Publish proposal" }).click();
+  await expect(contributor).toHaveURL(new RegExp(`/proposals/${repositoryID}/[a-f0-9]{32}$`));
+  const proposalID = new URL(contributor.url()).pathname.split("/").pop()!;
+
+  const contributorCopy = await mkdtemp(join(tmpdir(), "vivarium-proposal-contributor-"));
+  await git(tmpdir(), "clone", `http://git:${contributorToken}@localhost:3000/git/${repositoryID}.git`, contributorCopy);
+  await git(contributorCopy, "config", "user.name", "Proposal Contributor");
+  await git(contributorCopy, "config", "user.email", "proposal-contributor@example.com");
+  await git(contributorCopy, "switch", "-c", "proposal-outcome");
+  await writeFile(join(contributorCopy, "OUTCOME.md"), "The proposal became a merged change.\n");
+  await git(contributorCopy, "add", "OUTCOME.md");
+  await git(contributorCopy, "commit", "-m", "Document proposal outcome");
+  await git(contributorCopy, "push", "origin", "proposal-outcome");
+
+  await contributor.goto("/pulls");
+  await contributor.getByRole("button", { name: "New pull request" }).click();
+  await contributor.getByLabel("Candidate branch").selectOption("proposal-outcome");
+  await contributor.getByLabel("Target branch").selectOption("main");
+  await contributor.getByLabel("Linked proposal").selectOption(proposalID);
+  await contributor.getByLabel("Title").fill("Document the proposal outcome");
+  await contributor.getByLabel("Purpose and feedback needed").fill("Carries the proposal into review.");
+  await contributor.getByRole("button", { name: "Open pull request" }).click();
+  await expect(contributor).toHaveURL(new RegExp(`/pulls/${repositoryID}/[a-f0-9]{32}$`));
+  const pullRequestURL = contributor.url();
+
+  await maintainer.goto(pullRequestURL);
+  await maintainer.getByRole("button", { name: "Approve" }).click();
+  await expect(maintainer.getByRole("button", { name: "Merge into main" })).toBeEnabled();
+  await maintainer.getByRole("button", { name: "Merge into main" }).click();
+  await expect(maintainer.getByText("Merged", { exact: true })).toBeVisible();
+
+  await contributor.goto(`/proposals/${repositoryID}/${proposalID}`);
+  await expect(contributor.getByText("closed", { exact: true }).first()).toBeVisible();
+  await contributor.goto("/inbox");
+  const mergeItem = contributor.getByRole("article").filter({ hasText: "Review merge outcome" });
+  await expect(mergeItem).toBeVisible();
+  await expect(mergeItem.getByText("awareness", { exact: true })).toBeVisible();
+  await mergeItem.getByRole("button", { name: "Clear Document the proposal outcome" }).click();
+  await expect(mergeItem).toBeHidden();
+
+  await maintainerContext.close();
+  await contributorContext.close();
 });
