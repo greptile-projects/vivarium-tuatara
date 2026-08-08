@@ -25,6 +25,9 @@ var (
 	ErrInvalidName         = errors.New("invalid repository name")
 	ErrVisibility          = errors.New("invalid repository visibility")
 	ErrInvalidCollaborator = errors.New("invalid repository collaborator")
+	ErrInvalidBranch       = errors.New("invalid repository branch")
+	ErrForkDiverged        = errors.New("fork branch has diverged from upstream")
+	ErrBranchChanged       = errors.New("repository branch changed")
 )
 
 const (
@@ -33,15 +36,16 @@ const (
 )
 
 type Repository struct {
-	ID              string    `json:"id"`
-	OwnerID         string    `json:"owner_id"`
-	Name            string    `json:"name"`
-	Visibility      string    `json:"visibility"`
-	DefaultBranch   string    `json:"default_branch"`
-	GitRemote       string    `json:"git_remote"`
-	CreatedAt       time.Time `json:"created_at"`
-	collaboratorIDs string
-	requiredChecks  string
+	ID                   string    `json:"id"`
+	OwnerID              string    `json:"owner_id"`
+	Name                 string    `json:"name"`
+	Visibility           string    `json:"visibility"`
+	DefaultBranch        string    `json:"default_branch"`
+	GitRemote            string    `json:"git_remote"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpstreamRepositoryID string    `json:"upstream_repository_id,omitempty"`
+	collaboratorIDs      string
+	requiredChecks       string
 }
 
 type BranchCheckRequirements struct {
@@ -60,6 +64,17 @@ type gitStore interface {
 	Create(string) (*storage.Repository, error)
 	Open(string) (*storage.Repository, error)
 	Delete(string) error
+}
+
+type forkGitStore interface {
+	Fork(string, string) (*storage.Repository, error)
+}
+
+type ForkSynchronization struct {
+	Branch               string `json:"branch"`
+	PreviousCommitID     string `json:"previous_commit_id,omitempty"`
+	CommitID             string `json:"commit_id"`
+	UpstreamRepositoryID string `json:"upstream_repository_id"`
 }
 
 type Store struct {
@@ -126,6 +141,153 @@ func (s *Store) Create(ownerID, name string) (Repository, error) {
 		return Repository{}, err
 	}
 	return repository, nil
+}
+
+// CreateFork creates an independently owned repository while retaining the
+// immutable catalog identity of the source repository as upstream lineage.
+func (s *Store) CreateFork(ownerID, sourceID, name string) (Repository, error) {
+	name, err := validateName(name)
+	if err != nil {
+		return Repository{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return Repository{}, err
+	}
+	defer unlock()
+	source, err := s.read(sourceID)
+	if err != nil {
+		return Repository{}, ErrNotFound
+	}
+	if _, err := s.git.Open(source.ID); err != nil {
+		if errors.Is(err, storage.ErrRepositoryNotFound) {
+			return Repository{}, ErrNotFound
+		}
+		return Repository{}, err
+	}
+	all, err := s.loadActive()
+	if err != nil {
+		return Repository{}, err
+	}
+	for _, repository := range all {
+		if repository.OwnerID == ownerID && strings.EqualFold(repository.Name, name) {
+			return Repository{}, ErrNameTaken
+		}
+	}
+	idBytes := make([]byte, 16)
+	if _, err := rand.Read(idBytes); err != nil {
+		return Repository{}, err
+	}
+	id := hex.EncodeToString(idBytes)
+	forker, ok := s.git.(forkGitStore)
+	if !ok {
+		return Repository{}, errors.New("Git storage does not support forks")
+	}
+	if _, err := forker.Fork(source.ID, id); err != nil {
+		return Repository{}, fmt.Errorf("fork Git repository: %w", err)
+	}
+	repository := Repository{ID: id, OwnerID: ownerID, Name: name, Visibility: Private, DefaultBranch: source.DefaultBranch, GitRemote: "/git/" + id + ".git", CreatedAt: s.now().Truncate(time.Microsecond), UpstreamRepositoryID: source.ID, requiredChecks: "[]"}
+	if err := s.write(repository); err != nil {
+		if persisted, readErr := s.read(id); readErr == nil && persisted == repository {
+			return repository, nil
+		}
+		if deleteErr := s.git.Delete(id); deleteErr != nil {
+			return Repository{}, fmt.Errorf("publish fork metadata: %v; rollback Git repository: %w", err, deleteErr)
+		}
+		return Repository{}, err
+	}
+	return repository, nil
+}
+
+// SynchronizeFork fast-forwards one fork branch to the same named branch in
+// its recorded upstream repository. Divergent independent work is preserved.
+func (s *Store) SynchronizeFork(ownerID, id, branch string) (ForkSynchronization, error) {
+	if branch == "" || strings.HasPrefix(branch, "refs/") {
+		return ForkSynchronization{}, ErrInvalidBranch
+	}
+	repository, err := s.Get(ownerID, id)
+	if err != nil {
+		return ForkSynchronization{}, err
+	}
+	if repository.UpstreamRepositoryID == "" {
+		return ForkSynchronization{}, ErrNotFound
+	}
+	upstream, err := s.GetByID(repository.UpstreamRepositoryID)
+	if err != nil {
+		return ForkSynchronization{}, err
+	}
+	upstreamGit, err := s.git.Open(upstream.ID)
+	if err != nil {
+		return ForkSynchronization{}, err
+	}
+	forkGit, err := s.git.Open(repository.ID)
+	if err != nil {
+		return ForkSynchronization{}, err
+	}
+	name := "refs/heads/" + branch
+	upstreamRef, err := upstreamGit.ReadReference(name)
+	if err != nil || upstreamRef.Symbolic {
+		if errors.Is(err, storage.ErrInvalidReference) || errors.Is(err, storage.ErrReferenceNotFound) {
+			return ForkSynchronization{}, ErrInvalidBranch
+		}
+		if err != nil {
+			return ForkSynchronization{}, err
+		}
+		return ForkSynchronization{}, ErrInvalidBranch
+	}
+	if _, err := upstreamGit.ReadCommit(storage.ObjectID(upstreamRef.Target)); err != nil {
+		return ForkSynchronization{}, err
+	}
+	current, readErr := forkGit.ReadReference(name)
+	if readErr != nil && !errors.Is(readErr, storage.ErrReferenceNotFound) && !errors.Is(readErr, storage.ErrInvalidReference) {
+		return ForkSynchronization{}, readErr
+	}
+	if errors.Is(readErr, storage.ErrInvalidReference) {
+		return ForkSynchronization{}, ErrInvalidBranch
+	}
+	previous := ""
+	if readErr == nil {
+		if current.Symbolic {
+			return ForkSynchronization{}, ErrInvalidBranch
+		}
+		previous = current.Target
+		if previous == upstreamRef.Target {
+			return ForkSynchronization{Branch: branch, PreviousCommitID: previous, CommitID: upstreamRef.Target, UpstreamRepositoryID: upstream.ID}, nil
+		}
+	}
+	if err := forkGit.ImportCommit(upstreamGit, storage.ObjectID(upstreamRef.Target)); err != nil {
+		return ForkSynchronization{}, err
+	}
+	if previous != "" {
+		ancestry, err := forkGit.ListCommitAncestry(storage.ObjectID(upstreamRef.Target))
+		if err != nil {
+			return ForkSynchronization{}, err
+		}
+		found := false
+		for _, commit := range ancestry {
+			if string(commit.ID) == previous {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return ForkSynchronization{}, ErrForkDiverged
+		}
+		if err := forkGit.UpdateReferenceIfTarget(storage.Reference{Name: name, Target: upstreamRef.Target}, previous); err != nil {
+			if errors.Is(err, storage.ErrReferenceExists) || errors.Is(err, storage.ErrReferenceLocked) {
+				return ForkSynchronization{}, ErrBranchChanged
+			}
+			return ForkSynchronization{}, err
+		}
+	} else if err := forkGit.CreateReference(storage.Reference{Name: name, Target: upstreamRef.Target}); err != nil {
+		if errors.Is(err, storage.ErrReferenceExists) || errors.Is(err, storage.ErrReferenceLocked) {
+			return ForkSynchronization{}, ErrBranchChanged
+		}
+		return ForkSynchronization{}, err
+	}
+	return ForkSynchronization{Branch: branch, PreviousCommitID: previous, CommitID: upstreamRef.Target, UpstreamRepositoryID: upstream.ID}, nil
 }
 
 // GetByID resolves an active repository without applying an actor policy. It
@@ -450,15 +612,16 @@ func (s *Store) read(id string) (Repository, error) {
 	}
 	var repository Repository
 	var record struct {
-		ID              string                    `json:"id"`
-		OwnerID         string                    `json:"owner_id"`
-		Name            string                    `json:"name"`
-		Visibility      string                    `json:"visibility"`
-		DefaultBranch   string                    `json:"default_branch"`
-		GitRemote       string                    `json:"git_remote"`
-		CreatedAt       time.Time                 `json:"created_at"`
-		CollaboratorIDs []string                  `json:"collaborator_ids,omitempty"`
-		RequiredChecks  []BranchCheckRequirements `json:"required_checks,omitempty"`
+		ID                   string                    `json:"id"`
+		OwnerID              string                    `json:"owner_id"`
+		Name                 string                    `json:"name"`
+		Visibility           string                    `json:"visibility"`
+		DefaultBranch        string                    `json:"default_branch"`
+		GitRemote            string                    `json:"git_remote"`
+		CreatedAt            time.Time                 `json:"created_at"`
+		UpstreamRepositoryID string                    `json:"upstream_repository_id,omitempty"`
+		CollaboratorIDs      []string                  `json:"collaborator_ids,omitempty"`
+		RequiredChecks       []BranchCheckRequirements `json:"required_checks,omitempty"`
 	}
 	if json.Unmarshal(data, &record) != nil {
 		return Repository{}, fmt.Errorf("corrupt repository metadata %s", id)
@@ -474,8 +637,11 @@ func (s *Store) read(id string) (Repository, error) {
 		seenBranches[policy.Branch] = true
 	}
 	requirements, _ := json.Marshal(record.RequiredChecks)
-	repository = Repository{ID: record.ID, OwnerID: record.OwnerID, Name: record.Name, Visibility: record.Visibility, DefaultBranch: record.DefaultBranch, GitRemote: record.GitRemote, CreatedAt: record.CreatedAt, collaboratorIDs: strings.Join(record.CollaboratorIDs, ","), requiredChecks: string(requirements)}
+	repository = Repository{ID: record.ID, OwnerID: record.OwnerID, Name: record.Name, Visibility: record.Visibility, DefaultBranch: record.DefaultBranch, GitRemote: record.GitRemote, CreatedAt: record.CreatedAt, UpstreamRepositoryID: record.UpstreamRepositoryID, collaboratorIDs: strings.Join(record.CollaboratorIDs, ","), requiredChecks: string(requirements)}
 	if repository.ID != id || !validID(repository.OwnerID) || repository.GitRemote != "/git/"+id+".git" || repository.DefaultBranch != "main" {
+		return Repository{}, fmt.Errorf("corrupt repository metadata %s", id)
+	}
+	if repository.UpstreamRepositoryID != "" && (!validID(repository.UpstreamRepositoryID) || repository.UpstreamRepositoryID == repository.ID) {
 		return Repository{}, fmt.Errorf("corrupt repository metadata %s", id)
 	}
 	seen := map[string]bool{}
@@ -539,16 +705,17 @@ func (s *Store) loadActive() ([]Repository, error) {
 
 func (s *Store) write(repository Repository) error {
 	record := struct {
-		ID              string                    `json:"id"`
-		OwnerID         string                    `json:"owner_id"`
-		Name            string                    `json:"name"`
-		Visibility      string                    `json:"visibility"`
-		DefaultBranch   string                    `json:"default_branch"`
-		GitRemote       string                    `json:"git_remote"`
-		CreatedAt       time.Time                 `json:"created_at"`
-		CollaboratorIDs []string                  `json:"collaborator_ids,omitempty"`
-		RequiredChecks  []BranchCheckRequirements `json:"required_checks,omitempty"`
-	}{repository.ID, repository.OwnerID, repository.Name, repository.Visibility, repository.DefaultBranch, repository.GitRemote, repository.CreatedAt, collaboratorIDs(repository), decodeRequirements(repository.requiredChecks)}
+		ID                   string                    `json:"id"`
+		OwnerID              string                    `json:"owner_id"`
+		Name                 string                    `json:"name"`
+		Visibility           string                    `json:"visibility"`
+		DefaultBranch        string                    `json:"default_branch"`
+		GitRemote            string                    `json:"git_remote"`
+		CreatedAt            time.Time                 `json:"created_at"`
+		UpstreamRepositoryID string                    `json:"upstream_repository_id,omitempty"`
+		CollaboratorIDs      []string                  `json:"collaborator_ids,omitempty"`
+		RequiredChecks       []BranchCheckRequirements `json:"required_checks,omitempty"`
+	}{repository.ID, repository.OwnerID, repository.Name, repository.Visibility, repository.DefaultBranch, repository.GitRemote, repository.CreatedAt, repository.UpstreamRepositoryID, collaboratorIDs(repository), decodeRequirements(repository.requiredChecks)}
 	data, err := json.Marshal(record)
 	if err != nil {
 		return err

@@ -8,6 +8,7 @@ import {
   type Branch,
   type Collaborator,
   type Commit,
+  type ForkSynchronization,
   type Repository,
   type TreeEntry,
   type User,
@@ -39,6 +40,9 @@ export function RepositoryBrowser({ id }: { id: string }) {
   const [blob, setBlob] = useState<BlobResult | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [actionPending, setActionPending] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const [syncResult, setSyncResult] = useState<ForkSynchronization | null>(null);
   const loadGeneration = useRef(0);
 
   const load = useCallback(async () => {
@@ -115,6 +119,37 @@ export function RepositoryBrowser({ id }: { id: string }) {
     void Promise.resolve().then(load);
   }, [load]);
 
+  async function createFork(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!token) return;
+    setActionPending(true);
+    setActionError("");
+    const name = String(new FormData(event.currentTarget).get("name") ?? "");
+    try {
+      const fork = await api<Repository>(`/repositories/${id}/forks`, { method: "POST", body: JSON.stringify({ name }) }, token);
+      router.push(`/repositories/${fork.id}`);
+    } catch (reason) {
+      setActionError(reason instanceof Error ? reason.message : "Repository could not be forked.");
+      setActionPending(false);
+    }
+  }
+
+  async function synchronize(branch: string) {
+    if (!token) return;
+    setActionPending(true);
+    setActionError("");
+    setSyncResult(null);
+    try {
+      const result = await api<ForkSynchronization>(`/repositories/${id}/synchronizations`, { method: "POST", body: JSON.stringify({ branch }) }, token);
+      setSyncResult(result);
+      await load();
+    } catch (reason) {
+      setActionError(reason instanceof Error ? reason.message : "Fork could not be synchronized.");
+    } finally {
+      setActionPending(false);
+    }
+  }
+
   if (loading)
     return (
       <Card className="p-8 text-sm text-[var(--muted)]">
@@ -164,11 +199,17 @@ export function RepositoryBrowser({ id }: { id: string }) {
               {repository.name}
             </h1>
             <Badge>{repository.visibility}</Badge>
+            {repository.upstream_repository_id && <Badge tone="info">fork</Badge>}
           </div>
           <p className="mt-2 text-sm text-[var(--muted)]">
             Created {new Date(repository.created_at).toLocaleDateString()} ·
             default branch <code>{repository.default_branch}</code>
           </p>
+          {repository.upstream_repository_id && (
+            <p className="mt-2 text-sm text-[var(--muted)]">
+              Forked from <Link href={`/repositories/${repository.upstream_repository_id}`} className="font-mono font-semibold text-[var(--brand)] hover:underline">upstream repository</Link>
+            </p>
+          )}
         </div>
         <div className="min-w-0 rounded-xl border border-[var(--line)] bg-white p-3">
           <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
@@ -251,6 +292,26 @@ export function RepositoryBrowser({ id }: { id: string }) {
           </Card>
         </section>
         <aside className="space-y-4">
+          {token && user?.id !== repository.owner_id && (
+            <Card className="p-5">
+              <h2 className="font-semibold">Fork this repository</h2>
+              <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Create an independently owned copy with this repository recorded as upstream.</p>
+              <form onSubmit={createFork} className="mt-4 space-y-3">
+                <label className="block text-xs font-semibold">Fork name<input name="name" defaultValue={repository.name} required maxLength={100} pattern="[A-Za-z0-9._-]+" className="mt-2 min-h-10 w-full rounded-lg border border-[var(--line-strong)] px-3 font-mono text-sm font-normal" /></label>
+                <Button type="submit" disabled={actionPending}>{actionPending ? "Forking…" : "Create fork"}</Button>
+              </form>
+            </Card>
+          )}
+          {token && user?.id === repository.owner_id && repository.upstream_repository_id && (
+            <Card className="p-5">
+              <h2 className="font-semibold">Upstream lineage</h2>
+              <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Fast-forward the selected fork branch when its same-named upstream branch publishes new history. Independent divergent work is never overwritten.</p>
+              <Link href={`/repositories/${repository.upstream_repository_id}`} className="mt-3 block break-all font-mono text-xs font-semibold text-[var(--brand)] hover:underline">{repository.upstream_repository_id}</Link>
+              {policyBranch ? <Button className="mt-4 w-full" variant="secondary" disabled={actionPending} onClick={() => void synchronize(policyBranch)}>{actionPending ? "Synchronizing…" : `Sync ${policyBranch}`}</Button> : <p className="mt-3 text-xs text-[var(--muted)]">Select a named branch to synchronize it.</p>}
+              {syncResult && <p role="status" className="mt-3 text-xs text-[var(--success)]">{syncResult.previous_commit_id === syncResult.commit_id ? "Already current with upstream." : `Updated to ${syncResult.commit_id.slice(0, 7)}.`}</p>}
+            </Card>
+          )}
+          {actionError && <p role="alert" className="rounded-lg bg-[var(--danger-soft)] p-3 text-sm text-[var(--danger)]">{actionError}</p>}
           {user?.id === repository.owner_id && token && (
             <>
               {policyBranch ? (

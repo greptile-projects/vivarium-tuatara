@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -191,6 +192,130 @@ func (s *Store) Create(id string) (*Repository, error) {
 	}
 
 	return s.Open(id)
+}
+
+// Fork atomically creates an independent bare repository from source. It uses
+// upload-pack rather than a local filesystem copy so only published reachable
+// objects cross the repository boundary.
+func (s *Store) Fork(sourceID, id string) (*Repository, error) {
+	source, err := s.Open(sourceID)
+	if err != nil {
+		return nil, err
+	}
+	path, err := s.pathFor(id)
+	if err != nil {
+		return nil, err
+	}
+	if sourceID == id {
+		return nil, fmt.Errorf("fork source and target match: %w", ErrInvalidID)
+	}
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		return nil, fmt.Errorf("create storage root: %w", err)
+	}
+	if _, err := os.Lstat(s.deletionPath(id)); err == nil {
+		return nil, fmt.Errorf("%s deletion is pending: %w", id, ErrRepositoryExists)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("inspect pending repository deletion: %w", err)
+	}
+	staging, err := os.MkdirTemp(s.root, ".forking-")
+	if err != nil {
+		return nil, fmt.Errorf("create fork staging path: %w", err)
+	}
+	if err := os.Remove(staging); err != nil {
+		return nil, fmt.Errorf("prepare fork staging path: %w", err)
+	}
+	defer os.RemoveAll(staging)
+	command := exec.Command("git", "clone", "--bare", "--no-local", source.Path(), staging)
+	if output, err := command.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("clone fork repository: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	if err := unpackCloneObjects(staging); err != nil {
+		return nil, err
+	}
+	// The application metadata is the durable lineage boundary. Do not retain
+	// a machine-local path as a user-visible or operational Git remote.
+	removeOrigin := exec.Command("git", "--git-dir="+staging, "config", "--remove-section", "remote.origin")
+	if output, err := removeOrigin.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("remove fork staging remote: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	// A source receive or maintenance process may overlap a local clone. Never
+	// publish its snapshot until stock Git proves every copied reference and
+	// reachable object is complete and internally consistent.
+	fsck := exec.Command("git", "--git-dir="+staging, "fsck", "--full")
+	if output, err := fsck.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("verify fork repository: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	if err := os.Rename(staging, path); err != nil {
+		if _, statErr := os.Stat(path); statErr == nil {
+			return nil, fmt.Errorf("%s: %w", id, ErrRepositoryExists)
+		}
+		return nil, fmt.Errorf("publish fork repository: %w", err)
+	}
+	if err := syncDirectory(path); err != nil {
+		return nil, fmt.Errorf("sync fork repository: %w", err)
+	}
+	if err := syncDirectory(s.root); err != nil {
+		return nil, fmt.Errorf("sync storage root: %w", err)
+	}
+	return s.Open(id)
+}
+
+// unpackCloneObjects restores the storage package's verified loose-object
+// boundary after upload-pack delivers its safe reachable snapshot as packs.
+func unpackCloneObjects(repositoryPath string) error {
+	packs, err := filepath.Glob(filepath.Join(repositoryPath, "objects", "pack", "*.pack"))
+	if err != nil {
+		return fmt.Errorf("list fork object packs: %w", err)
+	}
+	type stagedPack struct{ original, staged string }
+	staged := make([]stagedPack, 0, len(packs))
+	for index, pack := range packs {
+		target := filepath.Join(repositoryPath, fmt.Sprintf(".fork-pack-%d", index))
+		if err := os.Rename(pack, target); err != nil {
+			return fmt.Errorf("stage fork object pack: %w", err)
+		}
+		staged = append(staged, stagedPack{original: pack, staged: target})
+	}
+	for _, pack := range staged {
+		input, err := os.Open(pack.staged)
+		if err != nil {
+			return fmt.Errorf("open fork object pack: %w", err)
+		}
+		command := exec.Command("git", "--git-dir="+repositoryPath, "unpack-objects", "-r")
+		command.Stdin = input
+		output, runErr := command.CombinedOutput()
+		closeErr := input.Close()
+		if runErr != nil {
+			return fmt.Errorf("unpack fork objects: %w: %s", runErr, strings.TrimSpace(string(output)))
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close fork object pack: %w", closeErr)
+		}
+		base := strings.TrimSuffix(pack.original, ".pack")
+		for _, path := range []string{pack.staged, base + ".idx", base + ".rev"} {
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("remove unpacked fork object pack: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// ImportCommit copies the objects reachable from one exact source commit into
+// this repository without changing any reference. A high unpack limit keeps
+// imported objects behind the package's loose-object verification boundary.
+func (r *Repository) ImportCommit(source *Repository, commit ObjectID) error {
+	if source == nil || !validObjectID(commit) {
+		return fmt.Errorf("import commit: %w", ErrInvalidObject)
+	}
+	command := exec.Command("git", "-c", "fetch.unpackLimit=2147483647", "--git-dir="+r.Path(), "fetch", "--no-tags", "--no-write-fetch-head", source.Path(), string(commit))
+	if output, err := command.CombinedOutput(); err != nil {
+		return fmt.Errorf("import commit %s: %w: %s", commit, err, strings.TrimSpace(string(output)))
+	}
+	if _, err := r.ReadCommit(commit); err != nil {
+		return fmt.Errorf("verify imported commit %s: %w", commit, err)
+	}
+	return nil
 }
 
 // Open reopens an existing repository and verifies its storage boundary.

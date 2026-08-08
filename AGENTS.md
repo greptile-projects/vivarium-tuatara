@@ -210,6 +210,16 @@ whenever dependencies change or the web job fails before it starts.
   private repository and use Git receive-pack for branches other than `main`;
   default-branch writes, visibility, access management, and deletion remain
   owner-only. Revocation applies on the next request.
+  Any authenticated user can fork a repository they can read through
+  `/repositories/{id}/forks`; the private result is independently owned and
+  retains immutable `upstream_repository_id` lineage without granting source
+  authority. Fork storage transfers only published reachable Git objects and
+  keeps references independent. Fork owners synchronize one selected,
+  same-named upstream branch through `/repositories/{id}/synchronizations`;
+  only fast-forwards are allowed, exact upstream objects are imported before a
+  compare-and-swap reference update, and divergence or concurrent pushes are
+  preserved as conflicts. Repository detail exposes fork creation, lineage,
+  and selected-branch synchronization.
   Durable repository proposals live beneath `$PROPOSAL_STORAGE_ROOT` (default
   `proposals`). Owners and contributors can create and discuss proposals;
   authors can edit and close their own proposals, and owners can close any.

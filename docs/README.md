@@ -153,6 +153,21 @@ remote, so profile edits and future name changes cannot change repository
 identity. Names are case-insensitively unique within one owner's repositories
 but may be reused by other owners.
 
+A readable repository can become the immutable upstream of a private fork.
+Fork creation transfers only published reachable content-addressed objects and
+publishes a distinct bare repository with independent references,
+ownership, visibility, collaborators, policy, and remote. Catalog metadata
+retains `upstream_repository_id`; creating the fork grants no authority over
+the source. The web repository surface exposes both lineage and fork creation.
+
+Fork owners can synchronize a selected named branch against the same-named
+upstream branch. The server snapshots the upstream tip, imports its missing
+reachable content-addressed objects, proves the fork branch is an ancestor,
+and compare-and-swap fast-forwards that one reference. Missing branches,
+divergent work, and concurrent pushes remain explicit failures, so independent
+branches are not overwritten. The web lineage panel applies this operation to
+the currently selected named branch.
+
 `GET /repositories` lists only the authenticated actor's repositories in
 creation order using the shared cursor pagination contract. Repositories are
 private by default, and their owner can use
