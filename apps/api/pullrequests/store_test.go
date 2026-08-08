@@ -461,6 +461,7 @@ func TestIntegrationQueueRebuildsConcurrentCandidateBeforeLanding(t *testing.T) 
 	}
 	first.QueuedAt, first.QueuedBy, first.IntegrationCandidates = &firstTime, &actor, []IntegrationCandidate{firstCandidate}
 	second.QueuedAt, second.QueuedBy, second.IntegrationCandidates = &secondTime, &actor, []IntegrationCandidate{secondCandidate}
+	second.QueuePaused = true
 	if _, err := store.write(first); err != nil {
 		t.Fatal(err)
 	}
@@ -480,7 +481,17 @@ func TestIntegrationQueueRebuildsConcurrentCandidateBeforeLanding(t *testing.T) 
 	}
 	first, _ = store.Get(repository.ID(), first.ID)
 	second, _ = store.Get(repository.ID(), second.ID)
-	if first.Status != Merged || second.Status != Merged || first.MergeCommitID == nil || second.MergeCommitID == nil {
+	if first.Status != Merged || second.Status != Open || first.MergeCommitID == nil || second.MergeCommitID != nil || len(second.IntegrationCandidates) != 1 || second.IntegrationCandidates[0].SupersededAt != nil {
+		t.Fatalf("paused queue results: first=%#v second=%#v", first, second)
+	}
+	if _, err := store.OperateQueue(repository.ID(), second.ID, actor, "resume", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AdvanceIntegrationQueues(); err == nil {
+		t.Fatal("queue scan did not retain the isolated corrupt repository error")
+	}
+	second, _ = store.Get(repository.ID(), second.ID)
+	if second.Status != Merged || second.MergeCommitID == nil {
 		t.Fatalf("queue results: first=%#v second=%#v", first, second)
 	}
 	if len(finalized) != 2 || finalized[0] != first.ID || finalized[1] != second.ID {
@@ -586,6 +597,10 @@ func TestIntegrationQueueProjectionAndAttributedOperations(t *testing.T) {
 	second, err = store.OperateQueue(repository.ID(), second.ID, actor, "reprioritize", 1)
 	if err != nil || len(second.QueueActions) != 2 || second.QueueActions[1].Action != "reprioritize" || second.QueueActions[1].ActorID != actor {
 		t.Fatalf("reprioritized = %#v, %v", second, err)
+	}
+	firstAfterReorder, _ := store.Get(repository.ID(), first.ID)
+	if !firstAfterReorder.QueuedAt.Equal(firstTime) {
+		t.Fatalf("reprioritization rewrote unaffected entry: %s", firstAfterReorder.QueuedAt)
 	}
 	second, err = store.OperateQueue(repository.ID(), second.ID, actor, "pause", 0)
 	view, _ = store.IntegrationQueue(repository.ID(), "main")

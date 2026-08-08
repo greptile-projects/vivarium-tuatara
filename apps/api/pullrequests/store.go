@@ -1256,17 +1256,23 @@ func (s *Store) OperateQueue(repositoryID, pullRequestID, actorID, action string
 		queued = append(queued, PullRequest{})
 		copy(queued[position:], queued[position-1:])
 		queued[position-1] = p
-		base := now.Add(-time.Duration(len(queued)) * time.Microsecond)
-		for i := range queued {
-			stamp := base.Add(time.Duration(i) * time.Microsecond)
-			queued[i].QueuedAt, queued[i].UpdatedAt = &stamp, now
-			if queued[i].ID == p.ID {
-				p = queued[i]
+		var stamp time.Time
+		switch {
+		case len(queued) == 1:
+			stamp = *p.QueuedAt
+		case position == 1:
+			stamp = queued[1].QueuedAt.Add(-time.Nanosecond)
+		case position == len(queued):
+			stamp = queued[len(queued)-2].QueuedAt.Add(time.Nanosecond)
+		default:
+			before, after := *queued[position-2].QueuedAt, *queued[position].QueuedAt
+			gap := after.Sub(before)
+			if gap <= time.Nanosecond {
+				return PullRequest{}, ErrNotReady
 			}
-			if _, writeErr := s.write(queued[i]); writeErr != nil {
-				return PullRequest{}, writeErr
-			}
+			stamp = before.Add(gap / 2)
 		}
+		p.QueuedAt = &stamp
 	}
 	p.UpdatedAt = now
 	p.QueueActions = append(p.QueueActions, QueueAction{Action: action, ActorID: actorID, CreatedAt: now})
@@ -1507,6 +1513,9 @@ func (s *Store) advanceIntegrationQueue(repositoryID, branch string) error {
 		}
 		for i := 0; i < limit; i++ {
 			p := &queued[i]
+			if p.QueuePaused {
+				continue
+			}
 			candidate := activeCandidate(*p)
 			if candidate != nil && candidate.SourceCommitID == p.SourceCommitID && candidate.BaseCommitID == target {
 				s.launchCandidate(*p, *candidate)
