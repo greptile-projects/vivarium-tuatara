@@ -375,6 +375,10 @@ type collaboratorInput struct {
 	UserID *string `json:"user_id"`
 }
 
+type requiredChecksInput struct {
+	Checks []string `json:"checks"`
+}
+
 type proposalInput struct {
 	Title *string `json:"title"`
 	Body  *string `json:"body"`
@@ -468,6 +472,7 @@ func startCheckRunRecovery(gitStore *storage.Store, runStore *checkruns.Store) {
 }
 
 func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoriesStore *repositories.Store, proposalStore *proposals.Store, store *pullrequests.Store, authStore *auth.Store, activityStore *activities.Store, userStore *users.Store, checkRunStore *checkruns.Store) {
+	store.ConfigureRequiredChecks(repositoriesStore, checkRunStore)
 	mux.HandleFunc("GET /repositories/{id}/pulls", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
 			return
@@ -2031,6 +2036,40 @@ func registerRepositoryRoutes(mux *http.ServeMux, gitStore *storage.Store, store
 			return
 		}
 		writeJSON(w, http.StatusOK, repository)
+	})
+	mux.HandleFunc("GET /repositories/{id}/branches/{branch}/required-checks", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, store, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		checks, err := store.RequiredChecks(r.PathValue("id"), r.PathValue("branch"))
+		if writeRepositoryError(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"branch": r.PathValue("branch"), "checks": checks})
+	})
+	mux.HandleFunc("PUT /repositories/{id}/branches/{branch}/required-checks", func(w http.ResponseWriter, r *http.Request) {
+		actor, owner, ok := authorizeRepositoryParticipant(w, r, store, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if !owner {
+			writeAPIError(w, http.StatusNotFound, "repository_not_found", "repository not found")
+			return
+		}
+		var input requiredChecksInput
+		if decodeJSON(r, &input) != nil || input.Checks == nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid_required_checks", "checks must be an array of unique check names")
+			return
+		}
+		checks, err := store.SetRequiredChecks(actor.UserID, r.PathValue("id"), r.PathValue("branch"), input.Checks)
+		if errors.Is(err, repositories.ErrInvalidName) {
+			writeAPIError(w, http.StatusBadRequest, "invalid_required_checks", "branch and checks must be valid and unique")
+			return
+		}
+		if writeRepositoryError(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"branch": r.PathValue("branch"), "checks": checks})
 	})
 	mux.HandleFunc("DELETE /repositories/{id}", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)

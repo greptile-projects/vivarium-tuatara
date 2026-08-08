@@ -251,7 +251,10 @@ export function RepositoryBrowser({ id }: { id: string }) {
         </section>
         <aside className="space-y-4">
           {user?.id === repository.owner_id && token && (
-            <CollaboratorPanel repositoryID={id} token={token} />
+            <>
+              <RequiredChecksPanel repositoryID={id} branch={repository.default_branch} token={token} />
+              <CollaboratorPanel repositoryID={id} token={token} />
+            </>
           )}
           <Card className="p-5">
             <h2 className="font-semibold">Current revision</h2>
@@ -305,6 +308,28 @@ export function RepositoryBrowser({ id }: { id: string }) {
       </div>
     </div>
   );
+}
+
+function RequiredChecksPanel({ repositoryID, branch, token }: { repositoryID: string; branch: string; token: string }) {
+  const [checks, setChecks] = useState<string[]>([]);
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
+  const endpoint = `/repositories/${repositoryID}/branches/${encodeURIComponent(branch)}/required-checks`;
+  useEffect(() => {
+    let active = true;
+    api<{ checks: string[] }>(endpoint, {}, token).then((result) => { if (active) setChecks(result.checks); }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "Required checks could not be loaded."); });
+    return () => { active = false; };
+  }, [endpoint, token]);
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setPending(true); setError("");
+    const names = String(new FormData(event.currentTarget).get("checks") ?? "").split("\n").map((name) => name.trim()).filter(Boolean);
+    try {
+      const result = await api<{ checks: string[] }>(endpoint, { method: "PUT", body: JSON.stringify({ checks: names }) }, token);
+      setChecks(result.checks);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Required checks could not be saved."); }
+    finally { setPending(false); }
+  }
+  return <Card className="p-5"><h2 className="font-semibold">Required checks</h2><p className="mt-1 text-xs leading-5 text-[var(--muted)]">One repository-defined check name per line. Pull requests into <code>{branch}</code> must pass every name on their exact revision.</p><form onSubmit={save} className="mt-4 space-y-3"><label className="sr-only" htmlFor="required-checks">Required check names</label><textarea id="required-checks" name="checks" rows={3} maxLength={2020} defaultValue={checks.join("\n")} key={checks.join("\n")} placeholder={"web\napi"} className="w-full rounded-lg border border-[var(--line-strong)] p-3 font-mono text-xs"/><Button type="submit" disabled={pending}>{pending ? "Saving…" : "Save requirements"}</Button></form>{error && <p role="alert" className="mt-3 text-sm text-[var(--danger)]">{error}</p>}</Card>;
 }
 
 function CollaboratorPanel({ repositoryID, token }: { repositoryID: string; token: string }) {

@@ -80,6 +80,9 @@ whenever dependencies change or the web job fails before it starts.
   proposal, attributable discussion, current and stale review decisions,
   source synchronization for authors, server-derived merge blockers, and
   owner-only merge controls. Completed requests retain their merge attribution.
+  Owners select required verification names per target branch from repository
+  detail; readiness and merge require successful durable runs for the pull
+  request's exact adopted source revision and report every requirement status.
   Owners manage contributors from repository detail pages using the stable
   collaboration ID each user can copy from Settings. The Playwright journey in
   `apps/web/tests` is the connected-product regression and uses isolated

@@ -171,6 +171,12 @@ cannot be confirmed, preserving attribution IDs without overstating storage.
 
 ## Automated checks
 
+Repository owners manage the quality gate for a target branch with `GET` and
+`PUT /repositories/{id}/branches/{branch}/required-checks`. The `PUT` body is
+`{"checks":["web","api"]}`; names must exactly match check names in the
+candidate's versioned configuration. An empty array removes the branch gate.
+Participants may read the policy, but only the owner may replace it.
+
 A repository opts into automatic pull-request verification by committing
 `.vivarium/checks.json` on the candidate branch. The file has `version: 1` and
 a non-empty `checks` array (at most 20). Each check defines a unique `name`, a
@@ -332,6 +338,14 @@ stable `code` and explanatory `message`. Branch state includes the branch
 name, immutable pull-request `snapshot_commit_id`, nullable
 `current_commit_id`, and a state of `current`, `advanced`, `rewritten`, or
 `missing`.
+
+The report also identifies `evaluated_commit_id` and returns every target-
+branch requirement in `required_checks`, including its exact name, derived
+status, and the matching run and commit IDs when evidence exists. Required
+statuses are `passed`, `missing`, `pending`, `failed`, `cancelled`, or `stale`.
+Only a successful run whose recorded commit equals the pull request's adopted
+source revision passes. Every other status is a blocker, and merge repeats the
+same evaluation while holding its mutation lock.
 
 An open request is mergeable only while its source branch still identifies the
 snapshotted commit, its target exists, the source is not already reachable

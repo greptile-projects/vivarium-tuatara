@@ -127,6 +127,8 @@ export type MergeReadiness = {
   can_merge: boolean;
   required_approvals: number;
   approvals: number;
+  evaluated_commit_id: string;
+  required_checks: { name: string; status: "missing" | "pending" | "failed" | "cancelled" | "stale" | "passed"; commit_id?: string; run_id?: string }[];
   source: PullRequestBranchState;
   target: PullRequestBranchState;
   has_conflicts: boolean;

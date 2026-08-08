@@ -1163,6 +1163,7 @@ export function PullRequestDetail({
                   </ul>
                 )}
                 <div className="mt-4 border-t border-[var(--line)] pt-4 text-xs text-[var(--muted)]">
+                  <p>Evaluated revision <code title={readiness.evaluated_commit_id}>{short(readiness.evaluated_commit_id)}</code></p>
                   <p>
                     {readiness.approvals} / {readiness.required_approvals}{" "}
                     required approvals
@@ -1172,6 +1173,7 @@ export function PullRequestDetail({
                     {readiness.has_conflicts ? "detected" : "none detected"}
                   </p>
                 </div>
+                {readiness.required_checks.length > 0 && <div className="mt-4 space-y-2"><p className="text-xs font-semibold text-[var(--muted)]">Required checks</p>{readiness.required_checks.map((check) => <div key={check.name} className="flex items-center justify-between gap-3 text-xs"><span className="font-medium">{check.name}</span><Badge tone={check.status === "passed" ? "success" : check.status === "pending" ? "warning" : "neutral"}>{check.status}</Badge></div>)}</div>}
                 {isAuthor && readiness.source.state !== "current" && (
                   <Button
                     className="mt-4 w-full"
