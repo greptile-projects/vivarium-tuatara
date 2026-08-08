@@ -592,6 +592,9 @@ func repairEvidence(run checkruns.Run, events []checkruns.Event) *changesessions
 
 func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoriesStore *repositories.Store, proposalStore *proposals.Store, store *pullrequests.Store, authStore *auth.Store, activityStore *activities.Store, userStore *users.Store, checkRunStore *checkruns.Store) {
 	store.ConfigureRequiredChecks(repositoriesStore, checkRunStore)
+	store.ConfigureQueueFinalizer(func(merged pullrequests.PullRequest) {
+		finalizeQueuedMerge(merged, repositoriesStore, proposalStore, activityStore)
+	})
 	mux.HandleFunc("GET /repositories/{id}/pulls", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
 			return
@@ -1233,6 +1236,27 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		}
 		writeJSON(w, 200, review)
 	})
+}
+
+func finalizeQueuedMerge(merged pullrequests.PullRequest, repositoriesStore *repositories.Store, proposalStore *proposals.Store, activityStore *activities.Store) {
+	if merged.MergedBy == nil {
+		return
+	}
+	actorID := *merged.MergedBy
+	if merged.ProposalID != nil && proposalStore != nil {
+		proposal, err := proposalStore.Get(merged.RepositoryID, *merged.ProposalID)
+		if err == nil && proposal.Status == proposals.Open {
+			closed := proposals.Closed
+			_, err = proposalStore.Update(merged.RepositoryID, proposal.ID, proposals.Patch{Status: &closed})
+			if err == nil || errors.Is(err, proposals.ErrDurabilityUncertain) {
+				recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "proposal.closed", ActorID: actorID, RepositoryID: merged.RepositoryID, ResourceType: "proposal", ResourceID: proposal.ID, ResourceTitle: proposal.Title})
+			}
+		}
+		if err != nil && !errors.Is(err, proposals.ErrDurabilityUncertain) && !errors.Is(err, proposals.ErrNotFound) {
+			log.Printf("close linked proposal after queued merge: %v", err)
+		}
+	}
+	recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.merged", ActorID: actorID, RepositoryID: merged.RepositoryID, ResourceType: "pull_request", ResourceID: merged.ID, ResourceTitle: merged.Title})
 }
 
 func writePullRequestError(w http.ResponseWriter, err error) bool {

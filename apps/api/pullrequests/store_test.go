@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
@@ -441,6 +442,8 @@ func TestIntegrationQueueRebuildsConcurrentCandidateBeforeLanding(t *testing.T) 
 	repository.CreateReference(storage.Reference{Name: "refs/heads/two", Target: string(two)})
 	store, _ := New(t.TempDir(), gitStore)
 	store.ConfigureRequiredChecks(queueRequirements{repositories.IntegrationQueuePolicy{Branch: "main", Enabled: true, Concurrency: 2, FailureBehavior: repositories.QueueFailurePause, RequiredChecks: []string{}}}, nil)
+	finalized := []string{}
+	store.ConfigureQueueFinalizer(func(p PullRequest) { finalized = append(finalized, p.ID) })
 	first, _ := store.Create(repository.ID(), testID('a'), "First", "", "one", "main", nil)
 	second, _ := store.Create(repository.ID(), testID('b'), "Second", "", "two", "main", nil)
 	actor := testID('c')
@@ -461,14 +464,24 @@ func TestIntegrationQueueRebuildsConcurrentCandidateBeforeLanding(t *testing.T) 
 	if _, err := store.write(second); err != nil {
 		t.Fatal(err)
 	}
-
-	if err := store.AdvanceIntegrationQueues(); err != nil {
+	corruptRepository := filepath.Join(store.root, testID('0'))
+	if err := os.MkdirAll(corruptRepository, 0o700); err != nil {
 		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(corruptRepository, testID('d')+".json"), []byte("not json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.AdvanceIntegrationQueues(); err == nil {
+		t.Fatal("queue scan did not report isolated corrupt repository")
 	}
 	first, _ = store.Get(repository.ID(), first.ID)
 	second, _ = store.Get(repository.ID(), second.ID)
 	if first.Status != Merged || second.Status != Merged || first.MergeCommitID == nil || second.MergeCommitID == nil {
 		t.Fatalf("queue results: first=%#v second=%#v", first, second)
+	}
+	if len(finalized) != 2 || finalized[0] != first.ID || finalized[1] != second.ID {
+		t.Fatalf("finalized queue pulls = %v", finalized)
 	}
 	if len(second.IntegrationCandidates) != 2 || second.IntegrationCandidates[0].SupersededAt == nil || second.IntegrationCandidates[0].SupersededReason != "target_changed" {
 		t.Fatalf("second candidate history = %#v", second.IntegrationCandidates)
@@ -480,6 +493,38 @@ func TestIntegrationQueueRebuildsConcurrentCandidateBeforeLanding(t *testing.T) 
 	main, _ := repository.ReadReference("refs/heads/main")
 	if main.Target != *second.MergeCommitID {
 		t.Fatalf("main = %s", main.Target)
+	}
+}
+
+func TestCandidateLaunchRetriesAfterCheckStoreRecovers(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	repository, _ := gitStore.Create(testID('1'))
+	tree, _ := repository.WriteObject(storage.TreeObject, nil)
+	commit := writeCommit(t, repository, tree, "candidate")
+	checkRoot := t.TempDir()
+	checkStore, _ := checkruns.New(checkRoot)
+	store, _ := New(t.TempDir(), gitStore)
+	store.checkRuns = checkStore
+	pull := PullRequest{ID: testID('2'), RepositoryID: repository.ID()}
+	candidate := IntegrationCandidate{CommitID: string(commit), CheckDefinitions: []checkruns.Definition{{Name: "quality", Image: "alpine:3.22", Command: "true", WorkingDirectory: ".", TimeoutSeconds: 1}}}
+	if err := os.Chmod(checkRoot, 0); err != nil {
+		t.Fatal(err)
+	}
+	store.launchCandidate(pull, candidate)
+	if err := os.Chmod(checkRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store.launchCandidate(pull, candidate)
+	deadline := time.Now().Add(time.Second)
+	for {
+		runs, err := checkStore.List(repository.ID(), pull.ID)
+		if err == nil && len(runs) == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("candidate checks were not created after recovery: %#v, %v", runs, err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

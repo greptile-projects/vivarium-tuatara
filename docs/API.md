@@ -440,7 +440,8 @@ commit. A moved target supersedes every affected active candidate and creates
 new candidates, up to the configured concurrency, before considering their
 evidence. Superseded runs remain inspectable but can never authorize a target
 update. A passing head becomes the pull request's durable merge result; its
-success immediately causes later candidates to be rebuilt against that merge.
+success closes a linked open proposal, records attributable collaboration
+activity, and immediately rebuilds later candidates against that merge.
 Source synchronization and closure remove an entry without deleting candidate
 history. Failed or cancelled head checks and candidate conflicts either leave
 the entry blocking for `pause`, or clear admission and continue for `remove`.

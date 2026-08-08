@@ -253,14 +253,15 @@ type reviewRecord struct {
 }
 
 type Store struct {
-	root          string
-	git           *storage.Store
-	mu            sync.Mutex
-	now           func() time.Time
-	directorySync func(string) error
-	rootSync      func(string) error
-	checkRuns     *checkruns.Store
-	requirements  interface {
+	root           string
+	git            *storage.Store
+	mu             sync.Mutex
+	now            func() time.Time
+	directorySync  func(string) error
+	rootSync       func(string) error
+	checkRuns      *checkruns.Store
+	queueFinalizer func(PullRequest)
+	requirements   interface {
 		RequiredChecks(string, string) ([]string, error)
 		LockRequiredChecks() (func(), error)
 		IntegrationQueuePolicy(string, string) (repositories.IntegrationQueuePolicy, error)
@@ -273,6 +274,13 @@ func (s *Store) ConfigureRequiredChecks(requirements interface {
 	IntegrationQueuePolicy(string, string) (repositories.IntegrationQueuePolicy, error)
 }, runs *checkruns.Store) {
 	s.requirements, s.checkRuns = requirements, runs
+}
+
+// ConfigureQueueFinalizer connects an automatically completed pull request to
+// application-level collaboration side effects without moving those stores
+// into the pull-request persistence package.
+func (s *Store) ConfigureQueueFinalizer(finalize func(PullRequest)) {
+	s.queueFinalizer = finalize
 }
 
 func New(root string, git *storage.Store) (*Store, error) {
@@ -1236,13 +1244,15 @@ func (s *Store) AdvanceIntegrationQueues() error {
 	if err != nil {
 		return err
 	}
+	var failures []error
 	for _, entry := range entries {
 		if !entry.IsDir() || !validID(entry.Name()) {
 			continue
 		}
 		pulls, listErr := s.List(entry.Name())
 		if listErr != nil {
-			return listErr
+			failures = append(failures, fmt.Errorf("scan integration queues for repository %s: %w", entry.Name(), listErr))
+			continue
 		}
 		branches := map[string]bool{}
 		for _, p := range pulls {
@@ -1252,11 +1262,11 @@ func (s *Store) AdvanceIntegrationQueues() error {
 		}
 		for branch := range branches {
 			if err := s.advanceIntegrationQueue(entry.Name(), branch); err != nil {
-				return err
+				failures = append(failures, fmt.Errorf("advance integration queue %s/%s: %w", entry.Name(), branch, err))
 			}
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 func (s *Store) advanceIntegrationQueue(repositoryID, branch string) error {
@@ -1303,11 +1313,14 @@ func (s *Store) advanceIntegrationQueue(repositoryID, branch string) error {
 	for _, p := range pulls {
 		if p.Status == Open && p.TargetBranch == branch && p.QueuedAt != nil {
 			if p.mergeIntent != nil {
-				_, found, reconcileErr := s.reconcileMerged(repository, p)
+				reconciled, found, reconcileErr := s.reconcileMerged(repository, p)
 				if reconcileErr != nil {
 					return reconcileErr
 				}
 				if found {
+					if s.queueFinalizer != nil {
+						s.queueFinalizer(reconciled)
+					}
 					continue
 				}
 				p, err = s.read(repositoryID, p.ID)
@@ -1331,6 +1344,7 @@ func (s *Store) advanceIntegrationQueue(repositoryID, branch string) error {
 			p := &queued[i]
 			candidate := activeCandidate(*p)
 			if candidate != nil && candidate.SourceCommitID == p.SourceCommitID && candidate.BaseCommitID == target {
+				s.launchCandidate(*p, *candidate)
 				continue
 			}
 			if candidate != nil {
@@ -1413,6 +1427,9 @@ func (s *Store) advanceIntegrationQueue(repositoryID, branch string) error {
 		if _, err := s.write(*head); err != nil {
 			return err
 		}
+		if s.queueFinalizer != nil {
+			s.queueFinalizer(*head)
+		}
 		queued = queued[1:]
 	}
 	return nil
@@ -1470,6 +1487,15 @@ func (s *Store) newIntegrationCandidate(repository *storage.Repository, p PullRe
 func (s *Store) launchCandidate(p PullRequest, candidate IntegrationCandidate) {
 	if s.checkRuns == nil || len(candidate.CheckDefinitions) == 0 {
 		return
+	}
+	existing, err := s.checkRuns.List(p.RepositoryID, p.ID)
+	if err != nil {
+		return
+	}
+	for _, run := range existing {
+		if run.CommitID == candidate.CommitID {
+			return
+		}
 	}
 	runs, err := s.checkRuns.Create(p.RepositoryID, p.ID, candidate.CommitID, candidate.CheckDefinitions)
 	if err != nil {
