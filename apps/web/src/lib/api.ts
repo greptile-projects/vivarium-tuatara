@@ -13,6 +13,13 @@ export type Repository = {
   default_branch: string;
   git_remote: string;
   created_at: string;
+  upstream_repository_id?: string;
+};
+export type ForkSynchronization = {
+  branch: string;
+  previous_commit_id?: string;
+  commit_id: string;
+  upstream_repository_id: string;
 };
 export type Collaborator = {
   user_id: string;

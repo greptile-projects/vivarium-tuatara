@@ -367,6 +367,14 @@ type repositoryInput struct {
 	Name *string `json:"name"`
 }
 
+type forkInput struct {
+	Name *string `json:"name"`
+}
+
+type forkSyncInput struct {
+	Branch *string `json:"branch"`
+}
+
 type repositoryPatch struct {
 	Visibility *string `json:"visibility"`
 }
@@ -2086,6 +2094,62 @@ func registerRepositoryRoutes(mux *http.ServeMux, gitStore *storage.Store, store
 		}
 		w.Header().Set("Location", "/repositories/"+repository.ID)
 		writeJSON(w, http.StatusCreated, repository)
+	})
+	mux.HandleFunc("POST /repositories/{id}/forks", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)
+		if !ok {
+			return
+		}
+		source, err := store.GetByID(r.PathValue("id"))
+		if writeRepositoryError(w, err) {
+			return
+		}
+		if source.Visibility != repositories.Public {
+			readActor, readOK := authenticateRequest(w, r, authStore, "repositories:read", false)
+			if !readOK {
+				return
+			}
+			actor = readActor
+		}
+		var input forkInput
+		if decodeJSON(r, &input) != nil || input.Name == nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid_request", "name is required")
+			return
+		}
+		fork, err := store.CreateFork(actor.UserID, source.ID, *input.Name)
+		if writeRepositoryError(w, err) {
+			return
+		}
+		w.Header().Set("Location", "/repositories/"+fork.ID)
+		writeJSON(w, http.StatusCreated, fork)
+	})
+	mux.HandleFunc("POST /repositories/{id}/synchronizations", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)
+		if !ok {
+			return
+		}
+		var input forkSyncInput
+		if decodeJSON(r, &input) != nil || input.Branch == nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid_request", "branch is required")
+			return
+		}
+		result, err := store.SynchronizeFork(actor.UserID, r.PathValue("id"), *input.Branch)
+		if errors.Is(err, repositories.ErrInvalidBranch) {
+			writeAPIError(w, http.StatusBadRequest, "invalid_branch", "branch must identify an upstream branch")
+			return
+		}
+		if errors.Is(err, repositories.ErrForkDiverged) {
+			writeAPIError(w, http.StatusConflict, "fork_diverged", "fork branch contains work that is not in upstream")
+			return
+		}
+		if errors.Is(err, repositories.ErrBranchChanged) {
+			writeAPIError(w, http.StatusConflict, "branch_changed", "fork branch changed during synchronization")
+			return
+		}
+		if writeRepositoryError(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
 	})
 	mux.HandleFunc("GET /repositories", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, authStore, "repositories:read", false)

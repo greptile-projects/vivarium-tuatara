@@ -106,6 +106,21 @@ repository. `PATCH /repositories/{id}` accepts `visibility` as `private` or
 `public`; `DELETE /repositories/{id}` removes the owned repository and its Git
 remote.
 
+`POST /repositories/{id}/forks` accepts `name` and creates a private,
+independently owned repository from any source the actor can read. The source
+is not modified and the actor receives no source collaborator grant. Fork
+responses include immutable `upstream_repository_id` lineage and preserve the
+source's published branches with independent references and administration.
+
+The fork owner uses `POST /repositories/{id}/synchronizations` with `branch` to
+synchronize from the same-named branch in its recorded upstream. The response
+contains `branch`, optional `previous_commit_id`, `commit_id`, and
+`upstream_repository_id`. Invalid upstream branches return `invalid_branch`,
+independent history that would be overwritten returns `409 fork_diverged`, and
+a concurrent fork push returns `409 branch_changed`. The server imports the
+exact tip's missing content-addressed objects before compare-and-swap
+fast-forwarding only the selected reference.
+
 Owners manage limited access with `GET` and `POST
 /repositories/{id}/collaborators` and `DELETE
 /repositories/{id}/collaborators/{user_id}`. A grant request contains an
@@ -114,8 +129,9 @@ existing `user_id`; collaborator resources contain that stable ID and
 idempotent. Only the owner may inspect or change grants.
 
 Repository responses include immutable `id` and `owner_id`, user-facing
-`name`, `visibility`, `default_branch`, `created_at`, and `git_remote`. Use the
-returned `git_remote` relative to the API origin. Private reads and writes
+`name`, `visibility`, `default_branch`, `created_at`, and `git_remote`. Forks
+also include `upstream_repository_id`. Use the returned `git_remote` relative
+to the API origin. Private reads and writes
 require matching repository or Git credential scopes. Owners retain every
 administrative power. Contributors can inspect and fetch a private repository
 and can create, update, force-update, or delete non-default branches through

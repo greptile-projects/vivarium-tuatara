@@ -2,12 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,6 +161,158 @@ func TestRepositoryNamesAreUniquePerOwner(t *testing.T) {
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"Project"}`, first.Credential.Token, http.StatusCreated).Body.Close()
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"project"}`, first.Credential.Token, http.StatusConflict).Body.Close()
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"Project"}`, second.Credential.Token, http.StatusCreated).Body.Close()
+}
+
+func TestReadableRepositoryCanBeForkedAndSynchronizedWithoutSourceAuthority(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	server := httptest.NewServer(newAuthenticatedAppHandler(gitStore, identities, credentials, catalog))
+	defer server.Close()
+
+	maintainer := createTestAccount(t, server.URL, "fork-maintainer")
+	newcomer := createTestAccount(t, server.URL, "fork-newcomer")
+	created := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"upstream"}`, maintainer.Credential.Token, http.StatusCreated)
+	var upstream repositories.Repository
+	if err := json.NewDecoder(created.Body).Decode(&upstream); err != nil {
+		t.Fatal(err)
+	}
+	created.Body.Close()
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+upstream.ID, `{"visibility":"public"}`, maintainer.Credential.Token, http.StatusOK).Body.Close()
+
+	maintainerGit, _ := credentials.Issue(maintainer.User.ID, auth.Git, "upstream", []string{"git:read", "git:write"}, time.Hour)
+	newcomerGit, _ := credentials.Issue(newcomer.User.ID, auth.Git, "fork", []string{"git:read", "git:write"}, time.Hour)
+	remoteWith := func(repository repositories.Repository, token string) string {
+		parsed, _ := url.Parse(server.URL + repository.GitRemote)
+		parsed.User = url.UserPassword("git", token)
+		return parsed.String()
+	}
+	upstreamCopy := filepath.Join(t.TempDir(), "upstream")
+	gitCommand(t, "", "clone", remoteWith(upstream, maintainerGit.Token), upstreamCopy)
+	gitCommand(t, upstreamCopy, "config", "user.name", "Maintainer")
+	gitCommand(t, upstreamCopy, "config", "user.email", "maintainer@example.com")
+	if err := os.WriteFile(filepath.Join(upstreamCopy, "README.md"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommand(t, upstreamCopy, "add", "README.md")
+	gitCommand(t, upstreamCopy, "commit", "-m", "initial upstream")
+	initial := strings.TrimSpace(gitCommand(t, upstreamCopy, "rev-parse", "HEAD"))
+	gitCommand(t, upstreamCopy, "push", "origin", "main")
+
+	forkResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+upstream.ID+"/forks", `{"name":"independent"}`, newcomer.Credential.Token, http.StatusCreated)
+	var fork repositories.Repository
+	if err := json.NewDecoder(forkResponse.Body).Decode(&fork); err != nil {
+		t.Fatal(err)
+	}
+	forkResponse.Body.Close()
+	if fork.OwnerID != newcomer.User.ID || fork.UpstreamRepositoryID != upstream.ID || fork.Visibility != repositories.Private {
+		t.Fatalf("fork = %#v", fork)
+	}
+	if _, err := catalog.HasCollaborator(newcomer.User.ID, upstream.ID); err != nil {
+		t.Fatal(err)
+	}
+	if collaborator, _ := catalog.HasCollaborator(newcomer.User.ID, upstream.ID); collaborator {
+		t.Fatal("fork owner gained upstream contributor authority")
+	}
+
+	forkCopy := filepath.Join(t.TempDir(), "fork")
+	gitCommand(t, "", "clone", remoteWith(fork, newcomerGit.Token), forkCopy)
+	if got := strings.TrimSpace(gitCommand(t, forkCopy, "rev-parse", "HEAD")); got != initial {
+		t.Fatalf("fork head = %s, want %s", got, initial)
+	}
+	gitCommand(t, forkCopy, "config", "user.name", "Newcomer")
+	gitCommand(t, forkCopy, "config", "user.email", "newcomer@example.com")
+	gitCommand(t, forkCopy, "switch", "-c", "experiment")
+	if err := os.WriteFile(filepath.Join(forkCopy, "idea.txt"), []byte("independent\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommand(t, forkCopy, "add", "idea.txt")
+	gitCommand(t, forkCopy, "commit", "-m", "independent work")
+	gitCommand(t, forkCopy, "push", "origin", "experiment")
+
+	if err := os.WriteFile(filepath.Join(upstreamCopy, "README.md"), []byte("two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommand(t, upstreamCopy, "add", "README.md")
+	gitCommand(t, upstreamCopy, "commit", "-m", "new upstream history")
+	updated := strings.TrimSpace(gitCommand(t, upstreamCopy, "rev-parse", "HEAD"))
+	gitCommand(t, upstreamCopy, "push", "origin", "main")
+	syncResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+fork.ID+"/synchronizations", `{"branch":"main"}`, newcomer.Credential.Token, http.StatusOK)
+	var synchronized repositories.ForkSynchronization
+	if err := json.NewDecoder(syncResponse.Body).Decode(&synchronized); err != nil {
+		t.Fatal(err)
+	}
+	syncResponse.Body.Close()
+	if synchronized.PreviousCommitID != initial || synchronized.CommitID != updated || synchronized.UpstreamRepositoryID != upstream.ID {
+		t.Fatalf("synchronization = %#v", synchronized)
+	}
+	gitCommand(t, forkCopy, "fetch", "origin", "main")
+	if got := strings.TrimSpace(gitCommand(t, forkCopy, "rev-parse", "origin/main")); got != updated {
+		t.Fatalf("synchronized fork head = %s, want %s", got, updated)
+	}
+	if got := strings.TrimSpace(gitCommand(t, forkCopy, "rev-parse", "origin/experiment")); got == "" {
+		t.Fatal("independent fork branch disappeared")
+	}
+
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+fork.ID+"/synchronizations", `{"branch":"main"}`, maintainer.Credential.Token, http.StatusNotFound).Body.Close()
+	authenticatedRequest(t, http.MethodDelete, server.URL+"/repositories/"+upstream.ID, "", maintainer.Credential.Token, http.StatusNoContent).Body.Close()
+	independentClone := filepath.Join(t.TempDir(), "independent-after-upstream-delete")
+	gitCommand(t, "", "clone", remoteWith(fork, newcomerGit.Token), independentClone)
+	if got := strings.TrimSpace(gitCommand(t, independentClone, "rev-parse", "HEAD")); got != updated {
+		t.Fatalf("fork after upstream deletion = %s, want %s", got, updated)
+	}
+	gitCommand(t, independentClone, "fsck", "--full")
+}
+
+func TestForkSynchronizationRechecksPrivateUpstreamAccess(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	server := httptest.NewServer(newAuthenticatedAppHandler(gitStore, identities, credentials, catalog))
+	defer server.Close()
+
+	maintainer := createTestAccount(t, server.URL, "private-upstream-owner")
+	reader := createTestAccount(t, server.URL, "private-upstream-reader")
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"private-upstream"}`, maintainer.Credential.Token, http.StatusCreated)
+	var upstream repositories.Repository
+	if err := json.NewDecoder(response.Body).Decode(&upstream); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+upstream.ID+"/collaborators", `{"user_id":"`+reader.User.ID+`"}`, maintainer.Credential.Token, http.StatusCreated).Body.Close()
+
+	upstreamGit, _ := gitStore.Open(upstream.ID)
+	tree, err := upstreamGit.WriteObject(storage.TreeObject, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := writeTestCommit(t, upstreamGit, tree, nil, 1700000000, "initial private history")
+	if err := upstreamGit.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(initial)}); err != nil {
+		t.Fatal(err)
+	}
+	forkResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+upstream.ID+"/forks", `{"name":"private-fork"}`, reader.Credential.Token, http.StatusCreated)
+	var fork repositories.Repository
+	if err := json.NewDecoder(forkResponse.Body).Decode(&fork); err != nil {
+		t.Fatal(err)
+	}
+	forkResponse.Body.Close()
+
+	authenticatedRequest(t, http.MethodDelete, server.URL+"/repositories/"+upstream.ID+"/collaborators/"+reader.User.ID, "", maintainer.Credential.Token, http.StatusNoContent).Body.Close()
+	later := writeTestCommit(t, upstreamGit, tree, []storage.ObjectID{initial}, 1700000100, "later private history")
+	if err := upstreamGit.UpdateReference(storage.Reference{Name: "refs/heads/main", Target: string(later)}); err != nil {
+		t.Fatal(err)
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+fork.ID+"/synchronizations", `{"branch":"main"}`, reader.Credential.Token, http.StatusNotFound).Body.Close()
+	forkGit, _ := gitStore.Open(fork.ID)
+	main, err := forkGit.ReadReference("refs/heads/main")
+	if err != nil || main.Target != string(initial) {
+		t.Fatalf("fork main after revoked synchronization = %#v, %v", main, err)
+	}
+	if _, err := forkGit.ReadObject(later); !errors.Is(err, storage.ErrObjectNotFound) {
+		t.Fatalf("private upstream object imported after revocation: %v", err)
+	}
 }
 
 func TestRepositoryAuthorizationIsConsistentAcrossAPIAndGit(t *testing.T) {

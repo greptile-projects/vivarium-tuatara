@@ -100,14 +100,8 @@ func (r *Repository) UpdateReferenceIfTarget(reference Reference, expected strin
 		return err
 	}
 	defer unlinkAt(parent, base+".lock")
-	file, err := openReferenceFile(parent, base)
-	if err != nil {
-		_ = lock.Close()
-		return fmt.Errorf("inspect reference %q: %w", reference.Name, err)
-	}
-	current, readErr := io.ReadAll(io.LimitReader(file, 1025))
-	_ = file.Close()
-	if readErr != nil || string(current) != expected+"\n" {
+	current, err := r.ReadReference(reference.Name)
+	if err != nil || current.Symbolic || current.Target != expected {
 		_ = lock.Close()
 		return fmt.Errorf("reference %q changed: %w", reference.Name, ErrReferenceExists)
 	}
