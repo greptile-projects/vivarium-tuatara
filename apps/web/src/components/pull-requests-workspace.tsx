@@ -1002,6 +1002,7 @@ export function PullRequestDetail({
             repositoryID={repositoryID}
             pullRequestID={pullRequestID}
             participant={participant}
+            sourceCommitID={pull.source_commit_id}
           />
           <section id="commits" className="scroll-mt-24">
             <div className="mb-3 flex items-baseline justify-between">

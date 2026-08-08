@@ -327,6 +327,15 @@ whenever dependencies change or the web job fails before it starts.
   checks, and unresolved concerns, appends `run.completed`, and synchronizes
   the pull request to that revision while revoking further run access. Existing reviews then become stale and
   merge readiness applies without agent-specific exceptions.
+  Failed checks on the pull request's currently adopted revision can seed a
+  repair change session with an immutable snapshot of the definition, logs,
+  command outcomes, and artifact identities. The bounded run control response
+  carries that evidence and permits credential-scoped downloads of only those
+  artifacts; completion uses ordinary pull synchronization so the repaired
+  revision starts its checks automatically. Repair-session publication holds
+  the pull-request mutation lock across its final source-revision comparison
+  and durable session write, preventing concurrent synchronization from
+  producing an obsolete workspace.
   Bounded receive-pack also checks durable run state, independently denying
   terminal credentials if auth revocation fails. Completion persists before
   pull synchronization so validation/storage failures cannot move the request;

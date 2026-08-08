@@ -55,6 +55,62 @@ func TestCreateSnapshotsBranchesAndListsByRepository(t *testing.T) {
 	}
 }
 
+func TestWithSourceRevisionSerializesSynchronization(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	repository, _ := gitStore.Create(testID('1'))
+	tree, _ := repository.WriteObject(storage.TreeObject, nil)
+	base := writeCommit(t, repository, tree, "base")
+	head := writeCommit(t, repository, tree, "head")
+	if err := repository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.CreateReference(storage.Reference{Name: "refs/heads/topic", Target: string(head)}); err != nil {
+		t.Fatal(err)
+	}
+	store, _ := New(t.TempDir(), gitStore)
+	pull, err := store.Create(repository.ID(), testID('2'), "Repair", "", "topic", "main", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := writeCommit(t, repository, tree, "next")
+	if err := repository.UpdateReference(storage.Reference{Name: "refs/heads/topic", Target: string(next)}); err != nil {
+		t.Fatal(err)
+	}
+
+	entered, release, protectedDone := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		protectedDone <- store.WithSourceRevision(repository.ID(), pull.ID, string(head), func(current PullRequest) error {
+			if current.SourceCommitID != string(head) {
+				t.Errorf("protected revision = %s", current.SourceCommitID)
+			}
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+	synchronized := make(chan PullRequest, 1)
+	go func() {
+		updated, syncErr := store.SynchronizeSource(repository.ID(), pull.ID)
+		if syncErr != nil {
+			t.Errorf("SynchronizeSource: %v", syncErr)
+		}
+		synchronized <- updated
+	}()
+	select {
+	case <-synchronized:
+		t.Fatal("source synchronization escaped the protected revision boundary")
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(release)
+	if err := <-protectedDone; err != nil {
+		t.Fatal(err)
+	}
+	if updated := <-synchronized; updated.SourceCommitID != string(next) {
+		t.Fatalf("synchronized revision = %s, want %s", updated.SourceCommitID, next)
+	}
+}
+
 func TestCreateRejectsMissingAndNonCommitBranches(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	repository, _ := gitStore.Create(testID('4'))

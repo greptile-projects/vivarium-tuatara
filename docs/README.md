@@ -234,6 +234,14 @@ attempt into its logs and artifacts, and lets current collaborators cancel or
 rerun verification. Those controls append stable actor attribution while
 preserving all earlier evidence, so investigation and intervention stay in the
 same conversation as the change.
+From a failed check on the currently adopted revision, a participant can open
+a repair change session directly. That session snapshots the failing revision,
+versioned definition, logs, command outcomes, and artifact identities instead
+of asking the collaborator or agent to reconstruct them. Bounded agents receive
+the same evidence through their control boundary and may retrieve only the
+snapshotted artifacts. Their completed descendant commit follows the existing
+pull synchronization path, which automatically starts the new revision's
+versioned checks.
 Lifecycle metadata, event streams, and artifacts live beneath
 `CHECK_RUN_STORAGE_ROOT` (default `check-runs`) independently of Git and
 pull-request records.

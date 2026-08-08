@@ -284,6 +284,37 @@ func (s *Store) SynchronizeSource(repositoryID, id string) (PullRequest, error) 
 	return s.SynchronizeSourceAfter(repositoryID, id, nil)
 }
 
+// WithSourceRevision runs fn while holding the pull-request mutation lock,
+// provided the request is still open at the expected adopted source revision.
+// Cross-store revision-pinned publications use this boundary so they cannot
+// race source synchronization.
+func (s *Store) WithSourceRevision(repositoryID, id, expected string, fn func(PullRequest) error) error {
+	if !validID(repositoryID) || !validID(id) {
+		return ErrNotFound
+	}
+	if !validCommitID(expected) || fn == nil {
+		return ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	p, err := s.read(repositoryID, id)
+	if err != nil {
+		return err
+	}
+	if p.Status != Open || p.mergeIntent != nil {
+		return ErrNotReady
+	}
+	if p.SourceCommitID != expected {
+		return ErrSourceChanged
+	}
+	return fn(p)
+}
+
 // SynchronizeSourceAfter checks synchronization eligibility and the live
 // source tip under the pull-request lock, then invokes before immediately
 // before publishing the new snapshot. Callers can durably prepare a related

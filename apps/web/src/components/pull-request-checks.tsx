@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   api,
+  apiResponse,
   type CheckEvent,
   type CheckRun,
   type User,
@@ -26,12 +28,15 @@ export function PullRequestChecks({
   repositoryID,
   pullRequestID,
   participant,
+  sourceCommitID,
 }: {
   repositoryID: string;
   pullRequestID: string;
   participant: boolean;
+  sourceCommitID: string;
 }) {
   const { token } = useAuth();
+  const router = useRouter();
   const [runs, setRuns] = useState<CheckRun[]>([]);
   const [events, setEvents] = useState<Record<string, CheckEvent[]>>({});
   const [actors, setActors] = useState<Record<string, User>>({});
@@ -119,6 +124,19 @@ export function PullRequestChecks({
     }
   }
 
+  async function repair(run: CheckRun) {
+    setPending(run.id); setError("");
+    try {
+      const response = await apiResponse<import("@/lib/api").ChangeSession>(
+        `/repositories/${repositoryID}/pulls/${pullRequestID}/sessions`,
+        { method: "POST", body: JSON.stringify({ check_run_id: run.id }) }, token,
+      );
+      router.push(`/pulls/${repositoryID}/${pullRequestID}/sessions/${response.data.id}`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "A repair session could not be started.");
+    } finally { setPending(null); }
+  }
+
   return (
     <section id="checks" className="scroll-mt-24 space-y-3">
       <div className="flex items-baseline justify-between gap-3">
@@ -138,7 +156,7 @@ export function PullRequestChecks({
                     <span className="flex items-center gap-2"><Badge tone={tone(run.state)}>{run.state.replace("_", " ")}</Badge><span className="font-semibold">{run.definition.name}</span></span>
                     <span className="mt-1 block text-xs text-[var(--muted)]">Revision <code>{short(run.commit_id)}</code> · {run.attempts.length} {run.attempts.length === 1 ? "attempt" : "attempts"} · {open ? "hide details" : "inspect logs and artifacts"}</span>
                   </button>
-                  {participant && <div className="flex gap-2">{terminal(run.state) ? <Button variant="secondary" disabled={pending === run.id} onClick={() => void control(run, "rerun")}>Rerun</Button> : <Button variant="quiet" disabled={pending === run.id} onClick={() => void control(run, "cancel")}>Cancel</Button>}</div>}
+                  {participant && <div className="flex gap-2">{run.state === "failed" && run.commit_id === sourceCommitID && <Button disabled={pending === run.id} onClick={() => void repair(run)}>Repair with agent</Button>}{terminal(run.state) ? <Button variant="secondary" disabled={pending === run.id} onClick={() => void control(run, "rerun")}>Rerun</Button> : <Button variant="quiet" disabled={pending === run.id} onClick={() => void control(run, "cancel")}>Cancel</Button>}</div>}
                 </div>
                 {open && <div className="mt-4 space-y-4 border-t border-[var(--line)] pt-4">
                   <ol className="space-y-2">{run.attempts.map((attempt) => <li key={attempt.number} className="text-xs"><span className="font-semibold">Attempt {attempt.number}</span> · {attempt.state}{attempt.actor_id && <> · requested by {actors[attempt.actor_id] ? `@${actors[attempt.actor_id].handle}` : short(attempt.actor_id)}</>}{attempt.failure && <span className="text-[var(--danger)]"> · {attempt.failure}</span>}</li>)}</ol>
