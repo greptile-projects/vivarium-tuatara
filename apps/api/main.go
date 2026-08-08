@@ -476,6 +476,11 @@ type proposalTaskAssignmentInput struct {
 	ExpectedAssignmentID string  `json:"expected_assignment_id"`
 }
 
+type proposalTaskRebaseInput struct {
+	BaseRevision         string `json:"base_revision"`
+	ExpectedAssignmentID string `json:"expected_assignment_id"`
+}
+
 type pullRequestInput struct {
 	Title              *string `json:"title"`
 	Body               *string `json:"body"`
@@ -632,6 +637,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 			return pull, nil
 		}
 		actorID := pull.AuthorID
+		before, _ := proposalStore.ListTasks(pull.RepositoryID, *pull.ProposalID)
 		var err error
 		switch pull.TaskStatePending {
 		case "review":
@@ -654,6 +660,8 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		if confirmErr != nil {
 			return pull, confirmErr
 		}
+		after, _ := proposalStore.ListTasks(pull.RepositoryID, *pull.ProposalID)
+		recordTaskTransitions(activityStore, repositoriesStore, actorID, pull.RepositoryID, *pull.ProposalID, before, after)
 		return confirmed, nil
 	}
 	store.ConfigureQueueFinalizer(func(merged pullrequests.PullRequest) error {
@@ -785,7 +793,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		if writeProposalError(w, err) {
 			return
 		}
-		if proposal.Status != proposals.Open || task.Status != proposals.TaskTodo || task.Assignment == nil || (task.Assignment.AssigneeType == "human" && task.Assignment.AssigneeID != actor.UserID) {
+		if proposal.Status != proposals.Open || task.Status != proposals.TaskTodo || task.Assignment == nil || task.Assignment.ContextRevision != task.ContextRevision || (task.Assignment.AssigneeType == "human" && task.Assignment.AssigneeID != actor.UserID) {
 			writeAPIError(w, 409, "task_not_publishable", "task work must be published by its current assignee")
 			return
 		}
@@ -808,8 +816,9 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 				return
 			}
 			found := false
+			expectedBranch := "agent/tasks/" + task.ID + "-" + task.Assignment.ID[:8]
 			for _, run := range runs {
-				if run.ID == input.RunID && run.State == changesessions.Completed && run.Outcome != nil && run.WorkingBranch == input.SourceBranch {
+				if run.ID == input.RunID && run.State == changesessions.Completed && run.Outcome != nil && run.WorkingBranch == input.SourceBranch && run.WorkingBranch == expectedBranch {
 					found = true
 					commits = append(commits, run.Outcome.Commits...)
 					expectedSourceCommit = run.Outcome.CommitID
@@ -2413,14 +2422,19 @@ func registerProposalRoutes(mux *http.ServeMux, gitStore *storage.Store, reposit
 			writeAPIError(w, 400, "invalid_task", "task patch is invalid")
 			return
 		}
+		before, _ := store.ListTasks(r.PathValue("id"), r.PathValue("proposal_id"))
 		task, err := store.UpdateTask(r.PathValue("id"), r.PathValue("proposal_id"), r.PathValue("task_id"), actor.UserID, proposals.TaskPatch{Title: input.Title, Outcome: input.Outcome, Status: input.Status, Position: input.Position, DependencyIDs: input.DependencyIDs, DiscussionCommentIDs: input.DiscussionCommentIDs})
 		if errors.Is(err, proposals.ErrDurabilityUncertain) {
+			after, _ := store.ListTasks(r.PathValue("id"), r.PathValue("proposal_id"))
+			recordTaskTransitions(activityStore, repositoriesStore, actor.UserID, r.PathValue("id"), r.PathValue("proposal_id"), before, after)
 			writeUncertainMutation(w, task)
 			return
 		}
 		if writeProposalError(w, err) {
 			return
 		}
+		after, _ := store.ListTasks(r.PathValue("id"), r.PathValue("proposal_id"))
+		recordTaskTransitions(activityStore, repositoriesStore, actor.UserID, r.PathValue("id"), r.PathValue("proposal_id"), before, after)
 		writeJSON(w, 200, task)
 	})
 	mux.HandleFunc("GET /repositories/{id}/proposals/{proposal_id}/tasks/{task_id}/history", func(w http.ResponseWriter, r *http.Request) {
@@ -2516,6 +2530,76 @@ func registerProposalRoutes(mux *http.ServeMux, gitStore *storage.Store, reposit
 		}
 		writeJSON(w, 200, task)
 	})
+	mux.HandleFunc("POST /repositories/{id}/proposals/{proposal_id}/tasks/{task_id}/rebase", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var input proposalTaskRebaseInput
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_task_rebase", "exact base revision and expected assignment are required")
+			return
+		}
+		gitRepository, err := gitStore.Open(r.PathValue("id"))
+		if err == nil {
+			_, err = gitRepository.ReadCommit(storage.ObjectID(strings.ToLower(input.BaseRevision)))
+		}
+		if errors.Is(err, storage.ErrObjectNotFound) || errors.Is(err, storage.ErrInvalidObject) || errors.Is(err, storage.ErrCorruptObject) {
+			writeAPIError(w, 400, "invalid_base_revision", "base revision must be an existing commit")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 500, "storage_error", "repository storage is unavailable")
+			return
+		}
+		before, _ := store.ListTasks(r.PathValue("id"), r.PathValue("proposal_id"))
+		task, err := store.RebaseTaskAssignment(r.PathValue("id"), r.PathValue("proposal_id"), r.PathValue("task_id"), actor.UserID, proposals.TaskRebaseInput{BaseRevision: input.BaseRevision, ExpectedAssignmentID: input.ExpectedAssignmentID})
+		if errors.Is(err, proposals.ErrTaskAssignmentConflict) {
+			writeAPIError(w, 409, "task_assignment_conflict", "task ownership or lifecycle changed; reload before rebasing")
+			return
+		}
+		if errors.Is(err, proposals.ErrDurabilityUncertain) {
+			after, _ := store.ListTasks(r.PathValue("id"), r.PathValue("proposal_id"))
+			recordTaskTransitions(activityStore, repositoriesStore, actor.UserID, r.PathValue("id"), r.PathValue("proposal_id"), before, after)
+			writeUncertainMutation(w, task)
+			return
+		}
+		if writeProposalError(w, err) {
+			return
+		}
+		after, _ := store.ListTasks(r.PathValue("id"), r.PathValue("proposal_id"))
+		recordTaskTransitions(activityStore, repositoriesStore, actor.UserID, r.PathValue("id"), r.PathValue("proposal_id"), before, after)
+		writeJSON(w, 200, task)
+	})
+}
+
+func recordTaskTransitions(activityStore *activities.Store, repositoriesStore *repositories.Store, actorID, repositoryID, proposalID string, before, after []proposals.Task) {
+	prior := make(map[string]proposals.Task, len(before))
+	for _, task := range before {
+		prior[task.ID] = task
+	}
+	for _, task := range after {
+		if task.Assignment == nil || task.Assignment.AssigneeType != "human" {
+			continue
+		}
+		old, existed := prior[task.ID]
+		kind := ""
+		switch {
+		case existed && old.ContextState != task.ContextState && task.ContextState == "obsolete":
+			kind = "task.obsolete"
+		case existed && old.ContextState != task.ContextState && task.ContextState == "changed":
+			kind = "task.changed"
+		case existed && !old.Ready && task.Ready:
+			kind = "task.ready"
+		case existed && old.Ready && !task.Ready:
+			kind = "task.blocked"
+		}
+		if kind == "" {
+			continue
+		}
+		target := task.Assignment.AssigneeID
+		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: kind, ActorID: actorID, RepositoryID: repositoryID, ResourceType: "proposal", ResourceID: proposalID, ResourceTitle: task.Title, TargetUserID: &target})
+	}
 }
 
 func writeUncertainMutation(w http.ResponseWriter, resource any) {
@@ -2775,6 +2859,18 @@ func classifyInboxEvent(userID, ownerID string, event activities.Event, proposal
 		}
 		if err != nil {
 			return "", "", err
+		}
+		if event.TargetUserID != nil && *event.TargetUserID == userID && proposal.Status == proposals.Open {
+			switch event.Kind {
+			case "task.ready":
+				return "response", "Start ready task", nil
+			case "task.blocked":
+				return "awareness", "Review blocked task", nil
+			case "task.changed":
+				return "response", "Rebase changed task", nil
+			case "task.obsolete":
+				return "response", "Replace obsolete contribution", nil
+			}
 		}
 		if event.Kind == "proposal.commented" && proposal.AuthorID == userID && proposal.Status == proposals.Open {
 			return "response", "Respond to proposal feedback", nil

@@ -197,8 +197,9 @@ proposal. Duplicate, missing, self, and cyclic links are rejected.
 `GET .../tasks` returns the complete plan in `position` order. Each task has one
 of `todo`, `in_progress`, `completed`, or `cancelled` status and includes
 immutable `created_by`/`created_at` plus current `updated_by`/`updated_at`
-attribution. `ready` is true only for a `todo` task whose dependencies are all
-completed; `blocked_by` names the unmet dependency IDs. These derived fields let
+attribution. `ready` is true only for a `todo` task whose dependencies have a
+current completed result; an obsolete or closed linked contribution does not
+satisfy a dependency. `blocked_by` names the unmet dependency IDs. These derived fields let
 clients answer what can start without independently interpreting the graph.
 
 Participants edit a task with `PATCH .../tasks/{task_id}`. Any supplied
@@ -210,6 +211,10 @@ Every history entry records the stable actor, action, timestamp, and full task
 snapshot for creation, edits, status decisions, and reordering. Plan reads
 inherit proposal visibility; mutations require a current owner or contributor
 with `repositories:write` and use the proposal uncertain-durability contract.
+Definition edits advance `context_revision`. `context_state` is `changed` when
+an assignment predates that revision and `obsolete` when linked contribution
+evidence does; those sessions and pull requests remain inspectable and are
+never silently rewritten as current work.
 
 A ready `todo` task gains one accountable owner through `PUT
 .../tasks/{task_id}/assignment`. The body contains `assignee_type` (`human` or
@@ -233,16 +238,28 @@ repository catalog mutation lock, so collaborator removal cannot commit between
 authorization and assignment. Closed proposals reject assignment revocation and
 retain their final task history unchanged.
 
+Participants deliberately move an assigned nonterminal task onto a new commit
+with `POST .../tasks/{task_id}/rebase`. Its body supplies `base_revision` and
+the current `expected_assignment_id`. The commit is verified, and success
+creates a new assignment ID at the current context revision while preserving
+the assignee and mandate. A stale ID returns `409 task_assignment_conflict`.
+This boundary leaves earlier sessions and pull requests attributable but
+obsolete. Assignee-targeted activity/inbox events report transitions to ready,
+blocked, changed, and obsolete as dependencies, plan revisions, and linked
+contributions evolve.
+
 An agent assignment can start before a pull request exists with `POST
 .../tasks/{task_id}/sessions`. The body supplies the current
 `expected_assignment_id`, optional `context_paths`, and an optional
 `expires_in` from five minutes to 24 hours. The proposal and task must remain
-open and ready, and the assignment must still target an agent. Success creates
-exactly one session for the task, an isolated
+open and ready, the context must be current, and the assignment must still
+target an agent. Success creates exactly one session for the current assignment,
+while sessions from earlier rebased assignments remain inspectable, plus an isolated
 `refs/heads/agent/tasks/<task-id>-<assignment-prefix>` branch at the frozen
 base revision, a launched run carrying the assignment mandate, and a one-time
-Git credential restricted to that repository and branch. A repeated start
-returns `409 task_session_exists`; an existing branch is never overwritten.
+Git credential restricted to that repository and branch. A repeated start for
+the same assignment returns `409 task_session_exists`; an existing branch is
+never overwritten.
 Start holds the proposal mutation lock from exact assignment revalidation
 through branch, credential, and session publication, so revocation, task edits,
 dependency changes, and proposal closure cannot commit midway. The session and

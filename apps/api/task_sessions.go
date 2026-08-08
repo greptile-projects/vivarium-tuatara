@@ -83,9 +83,22 @@ func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store
 				writeChangeSessionError(w, listErr)
 				return responseWritten
 			}
-			if len(existing) != 0 {
-				writeAPIError(w, 409, "task_session_exists", "assigned task already has a change session")
-				return responseWritten
+			for _, candidate := range existing {
+				sameAssignment := candidate.TaskContext != nil && candidate.TaskContext.AssignmentID == task.Assignment.ID
+				if candidate.TaskContext == nil || candidate.TaskContext.AssignmentID == "" {
+					runs, runErr := sessionStore.ListRuns(r.PathValue("id"), task.ID, candidate.ID)
+					if runErr != nil {
+						writeChangeSessionError(w, runErr)
+						return responseWritten
+					}
+					for _, existingRun := range runs {
+						sameAssignment = sameAssignment || strings.HasSuffix(existingRun.WorkingBranch, "-"+task.Assignment.ID[:8])
+					}
+				}
+				if sameAssignment {
+					writeAPIError(w, 409, "task_session_exists", "this task assignment already has a change session")
+					return responseWritten
+				}
 			}
 			commit, readErr := repository.ReadCommit(storage.ObjectID(task.Assignment.Access.BaseRevision))
 			if readErr != nil {
@@ -156,7 +169,7 @@ func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store
 				writeAPIError(w, 500, "internal_error", "agent access could not be issued")
 				return responseWritten
 			}
-			context := changesessions.TaskContext{RepositoryName: repositoryRecord.Name, ProposalTitle: proposal.Title, ProposalBody: proposal.Body, TaskTitle: task.Title, TaskOutcome: task.Outcome, Mandate: task.Assignment.Mandate, Dependencies: dependencies, Discussion: discussion}
+			context := changesessions.TaskContext{AssignmentID: task.Assignment.ID, ContextRevision: task.ContextRevision, RepositoryName: repositoryRecord.Name, ProposalTitle: proposal.Title, ProposalBody: proposal.Body, TaskTitle: task.Title, TaskOutcome: task.Outcome, Mandate: task.Assignment.Mandate, Dependencies: dependencies, Discussion: discussion}
 			var createErr error
 			session, run, createErr = sessionStore.CreateForTaskWithRun(r.PathValue("id"), proposal.ID, task.ID, actor.UserID, task.Assignment.AssigneeID, task.Assignment.Access.BaseRevision, context, input.ContextPaths, branch, issued.ID, issued.ExpiresAt)
 			if createErr != nil && !errors.Is(createErr, changesessions.ErrDurabilityUncertain) {

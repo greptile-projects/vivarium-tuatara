@@ -85,6 +85,8 @@ export type ProposalTask = {
   discussion_comment_ids: string[];
   ready: boolean;
   blocked_by: string[];
+  context_revision: number;
+  context_state: "current" | "changed" | "obsolete";
   created_by: string;
   updated_by: string;
   created_at: string;
@@ -97,14 +99,15 @@ export type ProposalTask = {
 		access: { repository_id: string; base_revision: string; scopes: string[]; branch: string };
 		assigned_by: string;
 		assigned_at: string;
+		context_revision: number;
 	};
-	contribution?: { pull_request_id: string; session_id?: string; run_id?: string; source_commit_id: string; commit_ids: string[]; status: "review" | "merged" | "closed" | "superseded" };
+	contribution?: { pull_request_id: string; session_id?: string; run_id?: string; source_commit_id: string; commit_ids: string[]; status: "review" | "merged" | "closed" | "superseded"; context_revision: number };
 };
 export type ProposalTaskChange = {
   id: string;
   task_id: string;
   actor_id: string;
-  action: "created" | "updated" | "status_changed" | "reordered" | "assigned" | "reassigned" | "assignment_revoked";
+  action: "created" | "updated" | "status_changed" | "reordered" | "assigned" | "reassigned" | "rebased" | "assignment_revoked" | "contribution_published" | "contribution_merged" | "contribution_closed" | "contribution_superseded";
   task: ProposalTask;
   created_at: string;
 };
