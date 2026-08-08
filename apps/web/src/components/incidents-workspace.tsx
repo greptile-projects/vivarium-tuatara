@@ -553,6 +553,39 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
       setPending(false);
     }
   }
+  async function proposeMitigation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!incident) return;
+    const form = event.currentTarget, data = new FormData(form), selected = new Set(data.getAll("evidence_ids").map(String));
+    const evidence = incident.timeline.filter((x) => selected.has(x.id)).flatMap((x) => x.evidence ?? []);
+    const [stage, signal] = String(data.get("criterion")).split("/");
+    if (await submit(`/incidents/${incidentID}/actions`, {kind:data.get("kind"),repository_id:data.get("repository_id"),deployment_id:data.get("deployment_id"),rationale:data.get("rationale"),evidence,health_criteria:[{stage,signal}]})) form.reset();
+  }
+  async function decideMitigation(id: string, decision: "approve" | "reject") {
+    const message = prompt(`${decision === "approve" ? "Approval" : "Rejection"} rationale`) ?? "";
+    if (!message) return;
+    await submit(`/incidents/${incidentID}/actions/${id}/decisions`, {decision,message,override:false});
+  }
+  async function executeMitigation(action: NonNullable<Incident["actions"]>[number]) {
+    if (!token) return;
+    setPending(true); setError("");
+    let outcome: "started" | "failed" = "started", resourceID = action.deployment_id, message = "Governed execution was accepted.";
+    try {
+      if (action.kind === "pause_rollout") await api(`/repositories/${action.repository_id}/deployments/${action.deployment_id}/controls`, {method:"POST",body:JSON.stringify({action:"pause",expected_state:"running",reason:action.rationale})}, token);
+      else {
+        const result = await api<{deployment?:{id:string};pull_request?:{id:string}}>(`/repositories/${action.repository_id}/deployments/${action.deployment_id}/recoveries`, {method:"POST",body:JSON.stringify({action:action.kind === "restore_release" ? "rollback" : "repair"})}, token);
+        resourceID = result.deployment?.id ?? result.pull_request?.id ?? resourceID;
+      }
+    } catch (reason) { outcome="failed"; message=errorMessage(reason); }
+    try { setIncident(await api<Incident>(`/incidents/${incidentID}/actions/${action.id}/attempts`, {method:"POST",body:JSON.stringify({outcome,resource_id:resourceID,message})}, token)); }
+    catch (reason) { setError(errorMessage(reason)); }
+    finally { setPending(false); }
+  }
+  async function verifyMitigation(action: NonNullable<Incident["actions"]>[number]) {
+    const resourceID = prompt("Recovery deployment ID to verify against the declared health criteria") ?? "";
+    if (!resourceID) return;
+    await submit(`/incidents/${incidentID}/actions/${action.id}/attempts`, {outcome:"recovered",resource_id:resourceID,message:"Declared health criteria passed on the retained recovery deployment."});
+  }
   const evidenceHref = (
     source: NonNullable<Incident["timeline"][number]["evidence"]>[number],
   ) =>
@@ -606,6 +639,20 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
       )}
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <main className="space-y-5">
+          <Card className="p-5">
+            <h2 className="font-semibold">Mitigation decisions</h2>
+            <p className="mt-1 text-xs text-[var(--muted)]">Proposals retain their evidence, independent authorization, governed execution attempts, and recovery criteria.</p>
+            <form className="mt-4 grid gap-3 sm:grid-cols-2" onSubmit={proposeMitigation}>
+              <select className={field} name="kind"><option value="pause_rollout">Pause rollout</option><option value="restore_release">Restore attested release</option><option value="emergency_repair">Emergency repair</option></select>
+              <select className={field} name="repository_id">{incident.scopes.map((x)=><option key={x.repository_id} value={x.repository_id}>{repos[x.repository_id]?.name ?? x.repository_id}</option>)}</select>
+              <input className={field} name="deployment_id" required placeholder="Affected deployment ID" />
+              <input className={field} name="criterion" required placeholder="Declared health criterion: stage/signal" />
+              <textarea className={`${field} py-3 sm:col-span-2`} name="rationale" required rows={3} placeholder="Expected effect, risk, and reason to act" />
+              <fieldset className="sm:col-span-2"><legend className="text-xs font-semibold">Exact supporting evidence</legend>{incident.timeline.filter((x)=>x.evidence?.length).map((entry)=><label className="mt-2 flex gap-2 text-xs" key={entry.id}><input type="checkbox" name="evidence_ids" value={entry.id}/>{entry.message}</label>)}</fieldset>
+              <div><Button disabled={pending}>Propose mitigation</Button></div>
+            </form>
+            {(incident.actions ?? []).map((action)=><div key={action.id} className="mt-4 rounded-lg border border-[var(--line)] p-4"><div className="flex flex-wrap justify-between gap-2"><b>{action.kind.replaceAll("_"," ")}</b><Badge tone={action.status === "recovered" ? "success" : action.status === "failed" || action.status === "rejected" ? "danger" : "neutral"}>{action.status}</Badge></div><p className="mt-2 text-sm">{action.rationale}</p><p className="mt-2 text-xs text-[var(--muted)]">{action.evidence.length} evidence sources · recovery requires {action.health_criteria.map((x)=>`${x.stage}/${x.signal}`).join(", ")}</p>{action.status === "proposed" && <div className="mt-3 flex gap-2"><Button onClick={()=>void decideMitigation(action.id,"approve")}>Approve</Button><Button variant="secondary" onClick={()=>void decideMitigation(action.id,"reject")}>Reject</Button></div>}{action.status === "approved" && <Button className="mt-3" onClick={()=>void executeMitigation(action)} disabled={pending}>Execute through environment policy</Button>}{(action.status === "executing" || action.status === "failed") && <Button className="mt-3" variant="secondary" onClick={()=>void verifyMitigation(action)} disabled={pending}>Verify recovery</Button>}{action.attempts.map((attempt)=><p key={attempt.id} className="mt-2 text-xs"><b>{attempt.outcome}:</b> {attempt.message}</p>)}</div>)}
+          </Card>
           <Card className="p-5">
             <h2 className="font-semibold">Delegate investigation</h2>
             <p className="mt-1 text-xs text-[var(--muted)]">

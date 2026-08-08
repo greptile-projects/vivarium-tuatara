@@ -69,6 +69,40 @@ type Investigation struct {
 	CreatedAt          time.Time         `json:"created_at"`
 	UpdatedAt          time.Time         `json:"updated_at"`
 }
+type HealthCriterion struct {
+	Stage  string `json:"stage"`
+	Signal string `json:"signal"`
+}
+type ActionAttempt struct {
+	ID         string    `json:"id"`
+	ActorID    string    `json:"actor_id"`
+	Outcome    string    `json:"outcome"`
+	ResourceID string    `json:"resource_id,omitempty"`
+	Message    string    `json:"message"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+type ActionDecision struct {
+	ActorID   string    `json:"actor_id"`
+	Decision  string    `json:"decision"`
+	Message   string    `json:"message"`
+	Override  bool      `json:"override,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+type Action struct {
+	ID             string            `json:"id"`
+	Kind           string            `json:"kind"`
+	RepositoryID   string            `json:"repository_id"`
+	DeploymentID   string            `json:"deployment_id"`
+	Rationale      string            `json:"rationale"`
+	Status         string            `json:"status"`
+	ProposedBy     string            `json:"proposed_by"`
+	Evidence       []Evidence        `json:"evidence"`
+	HealthCriteria []HealthCriterion `json:"health_criteria"`
+	Decisions      []ActionDecision  `json:"decisions"`
+	Attempts       []ActionAttempt   `json:"attempts"`
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
+}
 type Evidence struct {
 	Kind         string     `json:"kind"`
 	RepositoryID string     `json:"repository_id,omitempty"`
@@ -91,10 +125,117 @@ type Incident struct {
 	DeclaredBy     string          `json:"declared_by"`
 	Timeline       []Entry         `json:"timeline"`
 	Investigations []Investigation `json:"investigations"`
+	Actions        []Action        `json:"actions"`
 	Version        int             `json:"version"`
 	CreatedAt      time.Time       `json:"created_at"`
 	UpdatedAt      time.Time       `json:"updated_at"`
 	ResolvedAt     *time.Time      `json:"resolved_at,omitempty"`
+}
+
+func (s *Store) ProposeAction(id, actor, kind, repositoryID, deploymentID, rationale string, evidence []Evidence, criteria []HealthCriterion) (Incident, Action, error) {
+	var v Incident
+	var out Action
+	e := s.mutate(func() error {
+		if e := s.read(id, &v); e != nil {
+			return e
+		}
+		rationale = strings.TrimSpace(rationale)
+		if !validID(actor) || !validID(repositoryID) || !validID(deploymentID) || !validActionKind(kind) || rationale == "" || len(rationale) > 10000 || len(evidence) == 0 || len(evidence) > 20 || len(criteria) == 0 || len(criteria) > 20 {
+			return ErrInvalid
+		}
+		for _, x := range evidence {
+			if !validEvidence(x) {
+				return ErrInvalid
+			}
+		}
+		for _, x := range criteria {
+			if strings.TrimSpace(x.Stage) == "" || strings.TrimSpace(x.Signal) == "" || len(x.Stage) > 100 || len(x.Signal) > 100 {
+				return ErrInvalid
+			}
+		}
+		now := s.now()
+		out = Action{ID: mustID(), Kind: kind, RepositoryID: repositoryID, DeploymentID: deploymentID, Rationale: rationale, Status: "proposed", ProposedBy: actor, Evidence: evidence, HealthCriteria: criteria, Decisions: []ActionDecision{}, Attempts: []ActionAttempt{}, CreatedAt: now, UpdatedAt: now}
+		v.Actions = append(v.Actions, out)
+		v.Version++
+		v.UpdatedAt = now
+		v.Timeline = append(v.Timeline, Entry{ID: mustID(), Kind: "mitigation_proposed", ActorID: actor, Message: rationale, Audience: "participants", Evidence: evidence, CreatedAt: now})
+		return s.write(v)
+	})
+	return v, out, e
+}
+
+func (s *Store) DecideAction(id, actionID, actor, decision, message string, override bool) (Incident, Action, error) {
+	var v Incident
+	var out Action
+	e := s.mutate(func() error {
+		if e := s.read(id, &v); e != nil {
+			return e
+		}
+		var x *Action
+		for i := range v.Actions {
+			if v.Actions[i].ID == actionID {
+				x = &v.Actions[i]
+			}
+		}
+		message = strings.TrimSpace(message)
+		if x == nil {
+			return ErrNotFound
+		}
+		if !validID(actor) || (decision != "approve" && decision != "reject") || len(message) > 10000 || x.Status != "proposed" {
+			return ErrConflict
+		}
+		if decision == "approve" && actor == x.ProposedBy && !override {
+			return ErrConflict
+		}
+		now := s.now()
+		x.Status = map[bool]string{true: "approved", false: "rejected"}[decision == "approve"]
+		x.UpdatedAt = now
+		x.Decisions = append(x.Decisions, ActionDecision{ActorID: actor, Decision: decision, Message: message, Override: override, CreatedAt: now})
+		v.Version++
+		v.UpdatedAt = now
+		out = *x
+		v.Timeline = append(v.Timeline, Entry{ID: mustID(), Kind: "mitigation_" + decision, ActorID: actor, Message: message, Audience: "participants", Evidence: x.Evidence, CreatedAt: now})
+		return s.write(v)
+	})
+	return v, out, e
+}
+
+func (s *Store) RecordActionAttempt(id, actionID, actor, outcome, resourceID, message string) (Incident, Action, error) {
+	var v Incident
+	var out Action
+	e := s.mutate(func() error {
+		if e := s.read(id, &v); e != nil {
+			return e
+		}
+		var x *Action
+		for i := range v.Actions {
+			if v.Actions[i].ID == actionID {
+				x = &v.Actions[i]
+			}
+		}
+		message = strings.TrimSpace(message)
+		resourceID = strings.TrimSpace(resourceID)
+		if x == nil {
+			return ErrNotFound
+		}
+		if !validID(actor) || (outcome != "started" && outcome != "failed" && outcome != "recovered") || message == "" || len(message) > 10000 || x.Status == "proposed" || x.Status == "rejected" {
+			return ErrConflict
+		}
+		now := s.now()
+		x.Status = map[string]string{"started": "executing", "failed": "failed", "recovered": "recovered"}[outcome]
+		x.UpdatedAt = now
+		x.Attempts = append(x.Attempts, ActionAttempt{ID: mustID(), ActorID: actor, Outcome: outcome, ResourceID: resourceID, Message: message, CreatedAt: now})
+		v.Version++
+		v.UpdatedAt = now
+		out = *x
+		v.Timeline = append(v.Timeline, Entry{ID: mustID(), Kind: "mitigation_" + outcome, ActorID: actor, Message: message, Audience: "participants", Evidence: x.Evidence, CreatedAt: now})
+		return s.write(v)
+	})
+	return v, out, e
+}
+
+func validActionKind(v string) bool {
+	return v == "pause_rollout" || v == "restore_release" || v == "emergency_repair"
 }
 
 func (s *Store) StartInvestigation(id, actor, agent, credential, mandate string, evidence []Evidence, revisions []Revision, context []EvidenceContext) (Incident, Investigation, error) {
@@ -509,6 +650,32 @@ func validInvestigation(v Investigation) bool {
 	}
 	return true
 }
+func validAction(v Action) bool {
+	if !validID(v.ID) || !validActionKind(v.Kind) || !validID(v.RepositoryID) || !validID(v.DeploymentID) || !validID(v.ProposedBy) || strings.TrimSpace(v.Rationale) == "" || (v.Status != "proposed" && v.Status != "approved" && v.Status != "rejected" && v.Status != "executing" && v.Status != "failed" && v.Status != "recovered") || len(v.Evidence) == 0 || len(v.HealthCriteria) == 0 || v.CreatedAt.IsZero() || v.UpdatedAt.IsZero() {
+		return false
+	}
+	for _, x := range v.Evidence {
+		if !validEvidence(x) {
+			return false
+		}
+	}
+	for _, x := range v.HealthCriteria {
+		if strings.TrimSpace(x.Stage) == "" || strings.TrimSpace(x.Signal) == "" || len(x.Stage) > 100 || len(x.Signal) > 100 {
+			return false
+		}
+	}
+	for _, x := range v.Decisions {
+		if !validID(x.ActorID) || (x.Decision != "approve" && x.Decision != "reject") || x.CreatedAt.IsZero() {
+			return false
+		}
+	}
+	for _, x := range v.Attempts {
+		if !validID(x.ID) || !validID(x.ActorID) || (x.Outcome != "started" && x.Outcome != "failed" && x.Outcome != "recovered") || strings.TrimSpace(x.Message) == "" || x.CreatedAt.IsZero() {
+			return false
+		}
+	}
+	return true
+}
 func validScopes(v []Scope) bool {
 	seen := map[string]bool{}
 	for _, s := range v {
@@ -575,6 +742,11 @@ func (s *Store) read(id string, v *Incident) error {
 	for _, investigation := range v.Investigations {
 		if !validInvestigation(investigation) {
 			return errors.New("corrupt incident investigation")
+		}
+	}
+	for _, action := range v.Actions {
+		if !validAction(action) {
+			return errors.New("corrupt incident action")
 		}
 	}
 	return nil

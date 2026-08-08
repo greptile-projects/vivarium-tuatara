@@ -281,6 +281,11 @@ whenever dependencies change or the web job fails before it starts.
   and uncertainty into the timeline; responders exclusively guide, pause,
   resume, or cancel, without granting Git, deployment, environment, credential,
   secret, or repository mutation authority.
+  Incident mitigations retain exact evidence, affected deployment, declared
+  rollout health criteria, proposer, decisions, overrides, and every execution
+  attempt. Pause, attested rollback, and emergency repair execute only through
+  established deployment and change-workflow APIs; recovery requires every
+  frozen criterion to pass on the referenced retained deployment.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's

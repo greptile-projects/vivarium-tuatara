@@ -185,10 +185,26 @@ export type Incident = {
     investigation_id?: string;
   }[];
   investigations: IncidentInvestigation[];
+  actions: IncidentAction[];
   version: number;
   created_at: string;
   updated_at: string;
   resolved_at?: string;
+};
+export type IncidentAction = {
+  id: string;
+  kind: "pause_rollout" | "restore_release" | "emergency_repair";
+  repository_id: string;
+  deployment_id: string;
+  rationale: string;
+  status: "proposed" | "approved" | "rejected" | "executing" | "failed" | "recovered";
+  proposed_by: string;
+  evidence: IncidentEvidence[];
+  health_criteria: { stage: string; signal: string }[];
+  decisions: { actor_id: string; decision: "approve" | "reject"; message: string; override?: boolean; created_at: string }[];
+  attempts: { id: string; actor_id: string; outcome: "started" | "failed" | "recovered"; resource_id?: string; message: string; created_at: string }[];
+  created_at: string;
+  updated_at: string;
 };
 export type IncidentInvestigation = {
   id: string;

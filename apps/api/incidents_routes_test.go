@@ -73,6 +73,21 @@ func TestIncidentOperatingPictureFromHealthSignal(t *testing.T) {
 	if len(incident.Timeline) != 2 {
 		t.Fatalf("retry duplicated finding: %#v", incident.Timeline)
 	}
+	mitigationBody := `{"kind":"pause_rollout","repository_id":"` + repository.ID + `","deployment_id":"` + promotion.ID + `","rationale":"Stop further exposure while the error signal is investigated.","evidence":` + mustJSON(t, attached.Evidence) + `,"health_criteria":[{"stage":"canary","signal":"errors"}]}`
+	proposed := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/actions", mitigationBody, responder.Credential.Token, http.StatusCreated)
+	decodeResponse(t, proposed, &incident)
+	if len(incident.Actions) != 1 || incident.Actions[0].Status != "proposed" {
+		t.Fatalf("mitigation = %#v", incident.Actions)
+	}
+	actionID := incident.Actions[0].ID
+	authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/actions/"+actionID+"/decisions", `{"decision":"approve","message":"The bounded pause is justified by the attached failure."}`, responder.Credential.Token, http.StatusConflict).Body.Close()
+	approved := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/actions/"+actionID+"/decisions", `{"decision":"approve","message":"The bounded pause is justified by the attached failure."}`, owner.Credential.Token, http.StatusCreated)
+	decodeResponse(t, approved, &incident)
+	attempted := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/actions/"+actionID+"/attempts", `{"outcome":"failed","message":"Deployment was already terminal; no environment mutation occurred."}`, owner.Credential.Token, http.StatusCreated)
+	decodeResponse(t, attempted, &incident)
+	if incident.Actions[0].Status != "failed" || len(incident.Actions[0].Attempts) != 1 {
+		t.Fatalf("attempt = %#v", incident.Actions[0])
+	}
 	repo, err := gitStore.Open(repository.ID)
 	if err != nil {
 		t.Fatal(err)

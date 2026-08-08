@@ -46,6 +46,12 @@ then append findings, tool
 actions, questions, and uncertainty to the participant timeline. Responders
 retain guide, pause, resume, and cancel authority; the agent receives no Git,
 deployment, environment, credential, secret, or repository mutation scope.
+Responders turn that diagnosis into explicit pause, attested-restore, or
+emergency-repair proposals linked to exact evidence and declared rollout health
+signals. Independent approvals (or visible self-approval overrides), governed
+deployment/recovery execution, failed attempts, and resulting resource IDs stay
+on the incident. Recovery is recorded only after the named signals pass on a
+retained recovery deployment.
 
 ## Web interface foundation
 

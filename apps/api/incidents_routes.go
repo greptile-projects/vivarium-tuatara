@@ -314,6 +314,194 @@ func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *
 		}
 		writeJSON(w, 200, v)
 	})
+	mux.HandleFunc("POST /incidents/{incident_id}/actions", func(w http.ResponseWriter, r *http.Request) {
+		actor, current, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var input struct {
+			Kind           string                      `json:"kind"`
+			RepositoryID   string                      `json:"repository_id"`
+			DeploymentID   string                      `json:"deployment_id"`
+			Rationale      string                      `json:"rationale"`
+			Evidence       []incidents.Evidence        `json:"evidence"`
+			HealthCriteria []incidents.HealthCriterion `json:"health_criteria"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		inScope := false
+		for _, scope := range current.Scopes {
+			if scope.RepositoryID == input.RepositoryID {
+				for _, environmentID := range scope.EnvironmentIDs {
+					if p, e := deploymentStore.GetPromotion(input.RepositoryID, input.DeploymentID); e == nil && p.EnvironmentID == environmentID {
+						inScope = true
+					}
+				}
+			}
+		}
+		if !inScope {
+			writeAPIError(w, 422, "invalid_mitigation_target", "deployment must belong to an affected environment")
+			return
+		}
+		promotion, e := deploymentStore.GetPromotion(input.RepositoryID, input.DeploymentID)
+		if e != nil {
+			writeAPIError(w, 422, "invalid_mitigation_target", "deployment is unavailable")
+			return
+		}
+		for i := range input.Evidence {
+			label, valid := incidentEvidenceLabel(gitStore, store, deploymentStore, releaseStore, pullStore, input.Evidence[i])
+			if !valid || input.Evidence[i].RepositoryID != input.RepositoryID {
+				writeAPIError(w, 422, "invalid_mitigation_evidence", "evidence is unavailable or outside the target repository")
+				return
+			}
+			input.Evidence[i].Label = label
+		}
+		for _, criterion := range input.HealthCriteria {
+			found := false
+			for _, stage := range promotion.Rollout.Stages {
+				if stage.Name == criterion.Stage {
+					for _, signal := range stage.Signals {
+						found = found || signal.Name == criterion.Signal
+					}
+				}
+			}
+			if !found {
+				writeAPIError(w, 422, "invalid_recovery_criterion", "health criterion is not declared by the target deployment")
+				return
+			}
+		}
+		var v incidents.Incident
+		var action incidents.Action
+		e = mutate(current, actor.UserID, current.Roles, func() error {
+			var x error
+			v, action, x = store.ProposeAction(current.ID, actor.UserID, input.Kind, input.RepositoryID, input.DeploymentID, input.Rationale, input.Evidence, input.HealthCriteria)
+			return x
+		})
+		if e != nil {
+			writeIncidentError(w, e)
+			return
+		}
+		w.Header().Set("Location", r.URL.Path+"/"+action.ID)
+		writeJSON(w, 201, v)
+	})
+	mux.HandleFunc("POST /incidents/{incident_id}/actions/{action_id}/decisions", func(w http.ResponseWriter, r *http.Request) {
+		actor, current, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var input struct {
+			Decision string `json:"decision"`
+			Message  string `json:"message"`
+			Override bool   `json:"override"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		var v incidents.Incident
+		e := mutate(current, actor.UserID, current.Roles, func() error {
+			var x error
+			v, _, x = store.DecideAction(current.ID, r.PathValue("action_id"), actor.UserID, input.Decision, input.Message, input.Override)
+			return x
+		})
+		if errors.Is(e, incidents.ErrConflict) {
+			writeAPIError(w, 409, "mitigation_decision_blocked", "decision is stale, duplicated, or requires an explicit self-approval override")
+			return
+		}
+		if e != nil {
+			writeIncidentError(w, e)
+			return
+		}
+		writeJSON(w, 201, v)
+	})
+	mux.HandleFunc("POST /incidents/{incident_id}/actions/{action_id}/attempts", func(w http.ResponseWriter, r *http.Request) {
+		actor, current, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var input struct {
+			Outcome    string `json:"outcome"`
+			ResourceID string `json:"resource_id"`
+			Message    string `json:"message"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if input.Outcome == "recovered" {
+			var action *incidents.Action
+			for i := range current.Actions {
+				if current.Actions[i].ID == r.PathValue("action_id") {
+					action = &current.Actions[i]
+				}
+			}
+			if action == nil {
+				writeAPIError(w, 404, "mitigation_not_found", "mitigation not found")
+				return
+			}
+			promotion, e := deploymentStore.GetPromotion(action.RepositoryID, input.ResourceID)
+			if e != nil {
+				writeAPIError(w, 422, "recovery_unverified", "recovery must reference a retained deployment")
+				return
+			}
+			for _, criterion := range action.HealthCriteria {
+				passed := false
+				for _, evidence := range promotion.Evidence {
+					passed = passed || (evidence.Stage == criterion.Stage && evidence.Signal == criterion.Signal && evidence.State == "passed")
+				}
+				if !passed {
+					writeAPIError(w, 409, "recovery_unverified", "declared health criteria have not all passed on the recovery deployment")
+					return
+				}
+			}
+		}
+		if input.Outcome == "started" {
+			var action *incidents.Action
+			for i := range current.Actions {
+				if current.Actions[i].ID == r.PathValue("action_id") {
+					action = &current.Actions[i]
+				}
+			}
+			valid := false
+			if action != nil && action.Kind == "pause_rollout" && input.ResourceID == action.DeploymentID {
+				promotion, e := deploymentStore.GetPromotion(action.RepositoryID, input.ResourceID)
+				if e == nil {
+					for _, event := range promotion.Events {
+						valid = valid || (event.Kind == "deployment.pause" && event.ActorID == actor.UserID)
+					}
+				}
+			}
+			if action != nil && action.Kind == "restore_release" {
+				promotion, e := deploymentStore.GetPromotion(action.RepositoryID, input.ResourceID)
+				valid = e == nil && promotion.RecoveryOf == action.DeploymentID && promotion.RecoveryKind == "rollback" && promotion.InitiatedBy == actor.UserID
+			}
+			if action != nil && action.Kind == "emergency_repair" && pullStore != nil {
+				pull, e := pullStore.Get(action.RepositoryID, input.ResourceID)
+				valid = e == nil && pull.SourceBranch == "agent/recovery/"+action.DeploymentID && pull.AuthorID == actor.UserID
+			}
+			if !valid {
+				writeAPIError(w, 422, "mitigation_execution_unverified", "attempt must reference the actor's governed deployment or repair result")
+				return
+			}
+		}
+		var v incidents.Incident
+		e := mutate(current, actor.UserID, current.Roles, func() error {
+			var x error
+			v, _, x = store.RecordActionAttempt(current.ID, r.PathValue("action_id"), actor.UserID, input.Outcome, input.ResourceID, input.Message)
+			return x
+		})
+		if errors.Is(e, incidents.ErrConflict) {
+			writeAPIError(w, 409, "mitigation_attempt_blocked", "mitigation is not approved or its state changed")
+			return
+		}
+		if e != nil {
+			writeIncidentError(w, e)
+			return
+		}
+		writeJSON(w, 201, v)
+	})
 	// Investigation credentials carry only this purpose-built scope. They can
 	// read their frozen packet and append diagnostic evidence, but cannot call
 	// repository mutation, deployment, credential, or secret-management APIs.
