@@ -15,6 +15,24 @@ export type Repository = {
   created_at: string;
   upstream_repository_id?: string;
 };
+export type ReleaseCandidate = {
+  id: string;
+  repository_id: string;
+  version: string;
+  notes: string;
+  commit_id: string;
+  previous_release_id?: string;
+  previous_commit_id?: string;
+  status: "candidate";
+  created_by: string;
+  created_at: string;
+  inclusions: {
+    pull_request_ids: string[];
+    proposal_ids: string[];
+    task_ids: string[];
+    contributor_ids: string[];
+  };
+};
 export type ForkSynchronization = {
   branch: string;
   previous_commit_id?: string;

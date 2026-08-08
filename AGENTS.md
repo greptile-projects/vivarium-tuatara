@@ -116,6 +116,12 @@ whenever dependencies change or the web job fails before it starts.
   human/agent plan through dependency-gated assignment, stock Git publication,
   guidance, task-run completion, exact-revision checks, review, ordered merges,
   proposal closure, and durable attribution assertions.
+  Repository release candidates at `/repositories/{id}/releases` freeze a
+  verified commit, version, notes, creator, optional prior-release boundary,
+  and the server-derived merged pulls, proposals, tasks, and contributors in
+  that ancestry range. They remain immutable `candidate` records for later
+  build and promotion workflows; the web surface lives beneath repository
+  detail at `/repositories/{id}/releases`.
   Pull request discovery at `/pulls` aggregates reviewable work across the
   authenticated actor's repository catalog and opens candidate branches
   against distinct targets or owned-fork branches against their upstream,

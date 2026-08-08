@@ -21,6 +21,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
@@ -132,12 +133,20 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	releaseRoot := os.Getenv("RELEASE_STORAGE_ROOT")
+	if releaseRoot == "" {
+		releaseRoot = "releases"
+	}
+	releaseStore, err := releases.New(releaseRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, releaseStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	log.Printf("listening on http://localhost:%s", port)
@@ -186,7 +195,11 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 	return newPlatformHandlerWithChecks(store, userStore, authStore, repositoryCatalog, proposalStore, pullRequestStore, activityStore, changeSessionStore, nil)
 }
 
-func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, authStore *auth.Store, repositoryCatalog *repositories.Store, proposalStore *proposals.Store, pullRequestStore *pullrequests.Store, activityStore *activities.Store, changeSessionStore *changesessions.Store, checkRunStore *checkruns.Store) http.Handler {
+func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, authStore *auth.Store, repositoryCatalog *repositories.Store, proposalStore *proposals.Store, pullRequestStore *pullrequests.Store, activityStore *activities.Store, changeSessionStore *changesessions.Store, checkRunStore *checkruns.Store, releaseStores ...*releases.Store) http.Handler {
+	var releaseStore *releases.Store
+	if len(releaseStores) > 0 {
+		releaseStore = releaseStores[0]
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -216,6 +229,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	if authStore != nil && repositoryCatalog != nil && activityStore != nil {
 		registerActivityRoutes(mux, repositoryCatalog, activityStore, authStore)
 		registerInboxRoutes(mux, repositoryCatalog, proposalStore, pullRequestStore, activityStore, authStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && releaseStore != nil {
+		registerReleaseRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, releaseStore, authStore)
 	}
 	mux.HandleFunc("GET /git/{remote}/info/refs", func(w http.ResponseWriter, r *http.Request) {
 		service := r.URL.Query().Get("service")
@@ -2880,6 +2896,165 @@ func classifyInboxEvent(userID, ownerID string, event activities.Event, proposal
 		}
 	}
 	return "", "", nil
+}
+
+func registerReleaseRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoryStore *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, authStore *auth.Store) {
+	mux.HandleFunc("GET /repositories/{id}/releases", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoryStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		items, err := releaseStore.List(r.PathValue("id"))
+		if err != nil {
+			writeAPIError(w, 500, "release_read_failed", "release candidates could not be read")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"releases": items})
+	})
+	mux.HandleFunc("GET /repositories/{id}/releases/{release_id}", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoryStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		item, err := releaseStore.Get(r.PathValue("id"), r.PathValue("release_id"))
+		if errors.Is(err, releases.ErrNotFound) {
+			writeAPIError(w, 404, "release_not_found", "release candidate not found")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 500, "release_read_failed", "release candidate could not be read")
+			return
+		}
+		writeJSON(w, 200, item)
+	})
+	mux.HandleFunc("POST /repositories/{id}/releases", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoryStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var input struct {
+			Version           string  `json:"version"`
+			Notes             string  `json:"notes"`
+			CommitID          string  `json:"commit_id"`
+			PreviousReleaseID *string `json:"previous_release_id"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		repository, err := gitStore.Open(r.PathValue("id"))
+		if err != nil {
+			writeAPIError(w, 404, "repository_not_found", "repository not found")
+			return
+		}
+		if _, err = repository.ReadCommit(storage.ObjectID(input.CommitID)); err != nil {
+			writeAPIError(w, 422, "invalid_release_commit", "commit_id must name a verified commit in this repository")
+			return
+		}
+		candidate := releases.Candidate{RepositoryID: r.PathValue("id"), Version: input.Version, Notes: input.Notes, CommitID: input.CommitID, PreviousReleaseID: input.PreviousReleaseID, CreatedBy: actor.UserID}
+		if input.PreviousReleaseID != nil {
+			previous, previousErr := releaseStore.Get(r.PathValue("id"), *input.PreviousReleaseID)
+			if previousErr != nil {
+				writeAPIError(w, 422, "invalid_previous_release", "previous_release_id must name a release in this repository")
+				return
+			}
+			candidate.PreviousCommitID = &previous.CommitID
+		}
+		candidate.Inclusions, err = deriveReleaseInclusions(repository, candidate.CommitID, candidate.PreviousCommitID, proposalStore, pullStore, candidate.RepositoryID)
+		if err != nil {
+			writeAPIError(w, 422, "invalid_release_range", err.Error())
+			return
+		}
+		created, err := releaseStore.Create(candidate)
+		if errors.Is(err, releases.ErrVersionExists) {
+			writeAPIError(w, 409, "release_version_exists", "release version already exists")
+			return
+		}
+		if errors.Is(err, releases.ErrInvalid) {
+			writeAPIError(w, 422, "invalid_release", "version, notes, or release identity is invalid")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 500, "release_create_failed", "release candidate could not be created")
+			return
+		}
+		w.Header().Set("Location", "/repositories/"+created.RepositoryID+"/releases/"+created.ID)
+		writeJSON(w, 201, created)
+	})
+}
+
+func deriveReleaseInclusions(repository *storage.Repository, commitID string, previousCommitID *string, proposalStore *proposals.Store, pullStore *pullrequests.Store, repositoryID string) (releases.Inclusion, error) {
+	ancestry, err := repository.ListCommitAncestry(storage.ObjectID(commitID))
+	if err != nil {
+		return releases.Inclusion{}, errors.New("release commit history is invalid")
+	}
+	rangeCommits := map[string]bool{}
+	for _, commit := range ancestry {
+		rangeCommits[string(commit.ID)] = true
+	}
+	if previousCommitID != nil {
+		if !rangeCommits[*previousCommitID] {
+			return releases.Inclusion{}, errors.New("previous release commit is not an ancestor of commit_id")
+		}
+		previous, err := repository.ListCommitAncestry(storage.ObjectID(*previousCommitID))
+		if err != nil {
+			return releases.Inclusion{}, errors.New("previous release history is invalid")
+		}
+		for _, commit := range previous {
+			delete(rangeCommits, string(commit.ID))
+		}
+	}
+	result := releases.Inclusion{PullRequestIDs: []string{}, ProposalIDs: []string{}, TaskIDs: []string{}, ContributorIDs: []string{}}
+	if pullStore == nil {
+		return result, nil
+	}
+	pulls, err := pullStore.List(repositoryID)
+	if err != nil {
+		return result, err
+	}
+	proposalIDs, taskIDs, contributorIDs := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for _, pull := range pulls {
+		if pull.Status != pullrequests.Merged || pull.MergeCommitID == nil || !rangeCommits[*pull.MergeCommitID] {
+			continue
+		}
+		result.PullRequestIDs = append(result.PullRequestIDs, pull.ID)
+		contributorIDs[pull.AuthorID] = true
+		if pull.MergedBy != nil {
+			contributorIDs[*pull.MergedBy] = true
+		}
+		if pull.ProposalID != nil {
+			proposalIDs[*pull.ProposalID] = true
+		}
+		if pull.TaskID != nil {
+			taskIDs[*pull.TaskID] = true
+		}
+	}
+	if proposalStore != nil {
+		for id := range proposalIDs {
+			if proposal, err := proposalStore.Get(repositoryID, id); err == nil {
+				contributorIDs[proposal.AuthorID] = true
+				if tasks, err := proposalStore.ListTasks(repositoryID, id); err == nil {
+					for _, task := range tasks {
+						if taskIDs[task.ID] {
+							contributorIDs[task.CreatedBy] = true
+							contributorIDs[task.UpdatedBy] = true
+							if task.Assignment != nil && task.Assignment.AssigneeType == "human" {
+								contributorIDs[task.Assignment.AssigneeID] = true
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	for id := range proposalIDs {
+		result.ProposalIDs = append(result.ProposalIDs, id)
+	}
+	for id := range taskIDs {
+		result.TaskIDs = append(result.TaskIDs, id)
+	}
+	for id := range contributorIDs {
+		result.ContributorIDs = append(result.ContributorIDs, id)
+	}
+	return result, nil
 }
 
 func authorizeRepositoryRead(w http.ResponseWriter, r *http.Request, store *repositories.Store, authStore *auth.Store, id string) (auth.Credential, bool, bool) {
