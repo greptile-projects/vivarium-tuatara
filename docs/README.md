@@ -452,6 +452,10 @@ pauses the queue or is removed. Inspection includes the existing one-approval
 rule and current required-check names as admission criteria. A protected pull
 can be mergeable but cannot merge directly; its exact ready revision enters
 durable FIFO order, and source synchronization invalidates that admission.
+Each admission freezes a synthetic two-parent prospective merge against the
+latest eligible target tip and runs repository checks from that exact snapshot.
+The API and pull workspace expose the immutable source, base, result commit,
+derived lifecycle, and the existing reconnectable logs and artifact evidence.
 
 An owner applies an accepted request through its merge endpoint. The operation
 rechecks readiness, materializes a two-parent merge commit through the storage

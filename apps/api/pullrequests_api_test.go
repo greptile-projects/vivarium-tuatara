@@ -562,8 +562,24 @@ func TestPullRequestMergeReadinessReportsRequirementsConflictsAndPermission(t *t
 	queuedResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/pulls/"+pullRequest.ID+"/queue", "", owner.Credential.Token, http.StatusOK)
 	var queued pullrequests.PullRequest
 	decodeResponse(t, queuedResponse, &queued)
-	if queued.QueuedAt == nil {
+	if queued.QueuedAt == nil || len(queued.IntegrationCandidates) != 1 {
 		t.Fatalf("queued pull = %#v", queued)
+	}
+	candidate := queued.IntegrationCandidates[0]
+	if candidate.SourceCommitID != string(source) || candidate.BaseCommitID != string(base) || candidate.CommitID == string(source) || candidate.CommitID == string(base) {
+		t.Fatalf("integration candidate = %#v", candidate)
+	}
+	candidateCommit, candidateErr := gitRepository.ReadCommit(storage.ObjectID(candidate.CommitID))
+	if candidateErr != nil || len(candidateCommit.Parents) != 2 || candidateCommit.Parents[0] != base || candidateCommit.Parents[1] != source {
+		t.Fatalf("candidate commit = %#v, %v", candidateCommit, candidateErr)
+	}
+	candidatesResponse := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/pulls/"+pullRequest.ID+"/candidates", "", owner.Credential.Token, http.StatusOK)
+	var candidates struct {
+		Candidates []pullrequests.IntegrationCandidateView `json:"candidates"`
+	}
+	decodeResponse(t, candidatesResponse, &candidates)
+	if len(candidates.Candidates) != 1 || candidates.Candidates[0].CommitID != candidate.CommitID || candidates.Candidates[0].State == "" || candidates.Candidates[0].Checks == nil {
+		t.Fatalf("candidate surface = %#v", candidates.Candidates)
 	}
 
 	targetBlob, _ := gitRepository.WriteObject(storage.BlobObject, []byte("target\n"))
@@ -575,7 +591,7 @@ func TestPullRequestMergeReadinessReportsRequirementsConflictsAndPermission(t *t
 		t.Fatalf("conflicting readiness = %#v", report)
 	}
 	objectsAfterReadiness, _ := gitRepository.ListObjects()
-	if len(objectsAfterReadiness) != len(objectsBeforeReadiness)+3 { // target blob, tree, and commit only
+	if len(objectsAfterReadiness) != len(objectsBeforeReadiness)+4 { // immutable candidate plus target blob, tree, and commit
 		t.Fatalf("readiness wrote repository objects: before=%d after=%d", len(objectsBeforeReadiness), len(objectsAfterReadiness))
 	}
 }
