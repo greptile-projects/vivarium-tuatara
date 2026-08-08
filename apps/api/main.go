@@ -19,6 +19,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
@@ -141,18 +142,44 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	deploymentRoot := os.Getenv("DEPLOYMENT_STORAGE_ROOT")
+	if deploymentRoot == "" {
+		deploymentRoot = "deployments"
+	}
+	deploymentStore, err := deployments.New(deploymentRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, releaseStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, releaseStore, deploymentStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
+	startDeploymentRecovery(deploymentStore, checkRunStore)
 	log.Printf("listening on http://localhost:%s", port)
 	if err := http.ListenAndServe(":"+port, handler); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func startDeploymentRecovery(store *deployments.Store, builds *checkruns.Store) {
+	executor := deployments.NewExecutor(store, builds)
+	recover := func() {
+		if err := executor.Recover(); err != nil {
+			log.Printf("recover deployments: %v", err)
+		}
+	}
+	recover()
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			recover()
+		}
+	}()
 }
 
 func startIntegrationQueueRecovery(store *pullrequests.Store) {
@@ -195,10 +222,16 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 	return newPlatformHandlerWithChecks(store, userStore, authStore, repositoryCatalog, proposalStore, pullRequestStore, activityStore, changeSessionStore, nil)
 }
 
-func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, authStore *auth.Store, repositoryCatalog *repositories.Store, proposalStore *proposals.Store, pullRequestStore *pullrequests.Store, activityStore *activities.Store, changeSessionStore *changesessions.Store, checkRunStore *checkruns.Store, releaseStores ...*releases.Store) http.Handler {
+func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, authStore *auth.Store, repositoryCatalog *repositories.Store, proposalStore *proposals.Store, pullRequestStore *pullrequests.Store, activityStore *activities.Store, changeSessionStore *changesessions.Store, checkRunStore *checkruns.Store, optionalStores ...any) http.Handler {
 	var releaseStore *releases.Store
-	if len(releaseStores) > 0 {
-		releaseStore = releaseStores[0]
+	var deploymentStore *deployments.Store
+	for _, optional := range optionalStores {
+		switch value := optional.(type) {
+		case *releases.Store:
+			releaseStore = value
+		case *deployments.Store:
+			deploymentStore = value
+		}
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
@@ -232,6 +265,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && releaseStore != nil {
 		registerReleaseRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, releaseStore, authStore, checkRunStore)
+		if deploymentStore != nil {
+			registerDeploymentRoutes(mux, repositoryCatalog, releaseStore, checkRunStore, deploymentStore, authStore)
+		}
 	}
 	mux.HandleFunc("GET /git/{remote}/info/refs", func(w http.ResponseWriter, r *http.Request) {
 		service := r.URL.Query().Get("service")

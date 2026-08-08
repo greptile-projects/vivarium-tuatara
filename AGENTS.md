@@ -126,6 +126,21 @@ whenever dependencies change or the web job fails before it starts.
   check executor, retain immutable attempts, logs, and checksummed artifacts,
   and expose source/command/dependency/actor/result attestations. Reruns append
   evidence for the same frozen candidate.
+  Owners define ordered delivery environments with scoped visible configuration,
+  encrypted write-only credentials, independent approval thresholds, and
+  concurrency limits beneath `$DEPLOYMENT_STORAGE_ROOT`. Participants promote
+  one successful exact-release artifact; later environments require the same
+  release, build, artifact, and checksum to have succeeded immediately before.
+  Initiators cannot self-approve, and immutable deployment events retain every
+  request, approval, queue, status/log, and completion transition. Execution
+  reopens and SHA-256 verifies the exact build artifact before mounting it
+  read-only into the owner-defined container command; decrypted values enter
+  only that boundary and output is bounded and secret-redacted. Startup and a
+  periodic recovery pass resume queued work; running work carries a bounded
+  renewable execution-owner lease so live commands are preserved, while an
+  expired lease fails closed because its external outcome is unknowable.
+  Pre-execution policy failures terminalize queued work without consuming
+  environment capacity indefinitely.
   Pull request discovery at `/pulls` aggregates reviewable work across the
   authenticated actor's repository catalog and opens candidate branches
   against distinct targets or owned-fork branches against their upstream,
