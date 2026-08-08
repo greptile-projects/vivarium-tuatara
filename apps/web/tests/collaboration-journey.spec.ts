@@ -257,3 +257,84 @@ test("an unknown contributor and an agent take a forked change through verified 
   await maintainerContext.close();
   await newcomerContext.close();
 });
+
+test("a linked proposal closes into a clearable merge outcome", async ({ browser }) => {
+  const suffix = Date.now().toString(36);
+  const maintainerContext = await browser.newContext();
+  const contributorContext = await browser.newContext();
+  const maintainer = await maintainerContext.newPage();
+  const contributor = await contributorContext.newPage();
+
+  await createAccount(maintainer, "Proposal Maintainer", `proposal-maintainer-${suffix}`);
+  const maintainerToken = await issueGitToken(maintainer, "Proposal Git");
+  await maintainer.goto("/repositories");
+  await maintainer.getByLabel("Repository name").fill(`proposal-${suffix}`);
+  await maintainer.getByRole("button", { name: "Create repository" }).click();
+  await maintainer.getByRole("link", { name: new RegExp(`proposal-${suffix}`) }).click();
+  await expect(maintainer).toHaveURL(/\/repositories\/[a-f0-9]{32}$/);
+  const repositoryID = new URL(maintainer.url()).pathname.split("/").pop()!;
+
+  const maintainerCopy = await mkdtemp(join(tmpdir(), "vivarium-proposal-maintainer-"));
+  await git(tmpdir(), "clone", `http://git:${maintainerToken}@localhost:3000/git/${repositoryID}.git`, maintainerCopy);
+  await git(maintainerCopy, "config", "user.name", "Proposal Maintainer");
+  await git(maintainerCopy, "config", "user.email", "proposal-maintainer@example.com");
+  await writeFile(join(maintainerCopy, "README.md"), "# Proposal workflow\n");
+  await git(maintainerCopy, "add", "README.md");
+  await git(maintainerCopy, "commit", "-m", "Start proposal project");
+  await git(maintainerCopy, "push", "origin", "main");
+
+  await createAccount(contributor, "Proposal Contributor", `proposal-contributor-${suffix}`);
+  const contributorToken = await issueGitToken(contributor, "Proposal Git");
+  const collaborationID = (await contributor.getByTestId("collaboration-id").textContent())!;
+  await maintainer.goto(`/repositories/${repositoryID}`);
+  await maintainer.getByLabel("Collaboration ID").fill(collaborationID);
+  await maintainer.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(maintainer.getByText(`@proposal-contributor-${suffix}`)).toBeVisible();
+
+  await contributor.goto("/proposals");
+  await contributor.getByRole("button", { name: "New proposal" }).click();
+  await contributor.getByLabel("Title").fill("Document the proposal outcome");
+  await contributor.getByLabel("Context", { exact: true }).fill("Keep the discussion linked through merge.");
+  await contributor.getByRole("button", { name: "Publish proposal" }).click();
+  await expect(contributor).toHaveURL(new RegExp(`/proposals/${repositoryID}/[a-f0-9]{32}$`));
+  const proposalID = new URL(contributor.url()).pathname.split("/").pop()!;
+
+  const contributorCopy = await mkdtemp(join(tmpdir(), "vivarium-proposal-contributor-"));
+  await git(tmpdir(), "clone", `http://git:${contributorToken}@localhost:3000/git/${repositoryID}.git`, contributorCopy);
+  await git(contributorCopy, "config", "user.name", "Proposal Contributor");
+  await git(contributorCopy, "config", "user.email", "proposal-contributor@example.com");
+  await git(contributorCopy, "switch", "-c", "proposal-outcome");
+  await writeFile(join(contributorCopy, "OUTCOME.md"), "The proposal became a merged change.\n");
+  await git(contributorCopy, "add", "OUTCOME.md");
+  await git(contributorCopy, "commit", "-m", "Document proposal outcome");
+  await git(contributorCopy, "push", "origin", "proposal-outcome");
+
+  await contributor.goto("/pulls");
+  await contributor.getByRole("button", { name: "New pull request" }).click();
+  await contributor.getByLabel("Candidate branch").selectOption("proposal-outcome");
+  await contributor.getByLabel("Target branch").selectOption("main");
+  await contributor.getByLabel("Linked proposal").selectOption(proposalID);
+  await contributor.getByLabel("Title").fill("Document the proposal outcome");
+  await contributor.getByLabel("Purpose and feedback needed").fill("Carries the proposal into review.");
+  await contributor.getByRole("button", { name: "Open pull request" }).click();
+  await expect(contributor).toHaveURL(new RegExp(`/pulls/${repositoryID}/[a-f0-9]{32}$`));
+  const pullRequestURL = contributor.url();
+
+  await maintainer.goto(pullRequestURL);
+  await maintainer.getByRole("button", { name: "Approve" }).click();
+  await expect(maintainer.getByRole("button", { name: "Merge into main" })).toBeEnabled();
+  await maintainer.getByRole("button", { name: "Merge into main" }).click();
+  await expect(maintainer.getByText("Merged", { exact: true })).toBeVisible();
+
+  await contributor.goto(`/proposals/${repositoryID}/${proposalID}`);
+  await expect(contributor.getByText("closed", { exact: true }).first()).toBeVisible();
+  await contributor.goto("/inbox");
+  const mergeItem = contributor.getByRole("article").filter({ hasText: "Review merge outcome" });
+  await expect(mergeItem).toBeVisible();
+  await expect(mergeItem.getByText("awareness", { exact: true })).toBeVisible();
+  await mergeItem.getByRole("button", { name: "Clear Document the proposal outcome" }).click();
+  await expect(mergeItem).toBeHidden();
+
+  await maintainerContext.close();
+  await contributorContext.close();
+});
