@@ -141,6 +141,17 @@ whenever dependencies change or the web job fails before it starts.
   expired lease fails closed because its external outcome is unknowable.
   Pre-execution policy failures terminalize queued work without consuming
   environment capacity indefinitely.
+  Exact release commits define ordered rollout stages and isolated health
+  signals in `.vivarium/deployment.json`; deployments freeze that definition,
+  affected commit, live stage, and retained signal evidence. Participants use
+  compare-and-swap pause, resume, cancel, and unsuccessful controls, whose
+  actor-stamped decisions notify the initiator through activity and inbox.
+  A pause retains the renewable execution owner and suspends rollout
+  observation time; deployment and health commands keep independent bounded
+  timeouts, and signal evidence that finishes during a pause remains durable
+  before the executor waits for resume. Owned failed signals may terminalize a
+  paused rollout; recovery scans paused work and fails an expired owner with an
+  unknown-outcome record before any later resume.
   Pull request discovery at `/pulls` aggregates reviewable work across the
   authenticated actor's repository catalog and opens candidate branches
   against distinct targets or owned-fork branches against their upstream,

@@ -156,6 +156,19 @@ export function DeploymentWorkspace({
       );
     }
   }
+  async function control(run: Deployment, action: "pause" | "resume" | "cancel" | "mark_unsuccessful") {
+    if (!token) return;
+    const reason = window.prompt("Reason for this rollout decision (optional)") ?? "";
+    try {
+      await api(`/repositories/${repositoryID}/deployments/${run.id}/controls`, {
+        method: "POST",
+        body: JSON.stringify({ action, expected_state: run.state, reason }),
+      }, token);
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Rollout control could not be applied.");
+    }
+  }
   const exactArtifacts = builds.flatMap((build) =>
     build.state === "succeeded" ? build.artifacts : [],
   );
@@ -345,6 +358,22 @@ export function DeploymentWorkspace({
                           </Button>
                         )}
                     </div>
+                    <p className="mt-2 text-xs">
+                      Revision <code>{run.commit_id.slice(0, 12)}</code> · stage {Math.min(run.current_stage + 1, run.rollout.stages.length)} of {run.rollout.stages.length}: {run.rollout.stages[run.current_stage]?.name || "awaiting rollout"}
+                    </p>
+                    {token && ["pending_approval", "queued", "running", "paused", "succeeded"].includes(run.state) && (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {run.state === "running" && <Button variant="secondary" onClick={() => control(run, "pause")}>Pause</Button>}
+                        {run.state === "paused" && <Button variant="secondary" onClick={() => control(run, "resume")}>Resume</Button>}
+                        {["pending_approval", "queued", "running", "paused"].includes(run.state) && <Button variant="secondary" onClick={() => control(run, "cancel")}>Cancel</Button>}
+                        {["running", "paused", "succeeded"].includes(run.state) && <Button variant="secondary" onClick={() => control(run, "mark_unsuccessful")}>Mark unsuccessful</Button>}
+                      </div>
+                    )}
+                    {run.evidence.length > 0 && <ul className="mt-3 space-y-1" aria-label="Health evidence">
+                      {run.evidence.map((item, index) => <li key={`${item.stage}-${item.signal}-${index}`} className="text-xs">
+                        <Badge tone={item.state === "passed" ? "success" : "danger"}>{item.state}</Badge>{" "}{item.stage} / {item.signal}{item.message ? ` — ${item.message}` : ""}
+                      </li>)}
+                    </ul>}
                     <p className="mt-2 text-xs">
                       Initiated by <code>{run.initiated_by}</code> · approvals:{" "}
                       {run.approvals.map((x) => x.actor_id).join(", ") ||

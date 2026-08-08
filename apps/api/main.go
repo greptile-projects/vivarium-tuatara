@@ -266,7 +266,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	if authStore != nil && repositoryCatalog != nil && releaseStore != nil {
 		registerReleaseRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, releaseStore, authStore, checkRunStore)
 		if deploymentStore != nil {
-			registerDeploymentRoutes(mux, repositoryCatalog, releaseStore, checkRunStore, deploymentStore, authStore)
+			registerDeploymentRoutes(mux, store, repositoryCatalog, releaseStore, checkRunStore, deploymentStore, authStore, activityStore)
 		}
 	}
 	mux.HandleFunc("GET /git/{remote}/info/refs", func(w http.ResponseWriter, r *http.Request) {
@@ -2868,6 +2868,14 @@ func classifyInboxEvent(userID, ownerID string, event activities.Event, proposal
 	}
 	if strings.HasPrefix(event.Kind, "access.") && event.TargetUserID != nil && *event.TargetUserID == userID {
 		return "awareness", "Review repository access", nil
+	}
+	if event.ResourceType == "deployment" && event.TargetUserID != nil && *event.TargetUserID == userID {
+		switch event.Kind {
+		case "deployment.pause", "deployment.mark_unsuccessful":
+			return "response", "Review deployment intervention", nil
+		case "deployment.resume", "deployment.cancel":
+			return "awareness", "Review rollout decision", nil
+		}
 	}
 	if event.ResourceType == "pull_request" && pullRequestStore != nil {
 		pull, err := pullRequestStore.Get(event.RepositoryID, event.ResourceID)

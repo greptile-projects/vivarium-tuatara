@@ -863,6 +863,18 @@ only the identical release/build/artifact/checksum after success in the
 immediately preceding environment. One pending or active promotion excludes a
 second request for the environment.
 
+The exact release commit must also contain `.vivarium/deployment.json`. Version
+1 freezes ordered rollout stages and executable health signals into the
+deployment record:
+
+```json
+{"version":1,"stages":[{"name":"canary","observation_seconds":30,"signals":[{"name":"service health","command":"wget -qO- $HEALTH_URL | grep -q ok"}]},{"name":"full rollout","observation_seconds":120,"signals":[{"name":"error budget","command":"./observe-errors"}]}]}
+```
+
+Each signal runs in the environment's isolated image with the exact artifact
+and scoped values. Its pass/fail output, stage, time, and affected commit are
+retained publicly with the deployment; a failure terminalizes rollout.
+
 `POST /repositories/{id}/deployments/{deployment_id}/approvals` records one
 approval from a participant other than the initiator. Reaching the environment
 threshold queues execution, subject to its concurrency limit. `GET
@@ -881,3 +893,10 @@ does not contradict a live command, including during slow executor cleanup.
 Finalization compare-and-swaps that owner; an expired lease becomes failed with
 an unknown-outcome event. Pre-execution policy failures terminalize the queued
 record so they cannot consume concurrency indefinitely.
+
+Participants with `repositories:write` may `POST
+/repositories/{id}/deployments/{deployment_id}/controls` with `action` set to
+`pause`, `resume`, `cancel`, or `mark_unsuccessful`, plus the currently observed
+`expected_state` and an optional `reason`. State comparison prevents stale
+decisions. Every intervention retains its actor and reason in deployment
+history and creates recipient-specific inbox activity for the initiator.
