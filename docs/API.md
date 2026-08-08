@@ -268,11 +268,20 @@ Repository participants open a pull request with `POST
 /repositories/{id}/pulls`. The request requires `title`, `body`,
 `source_branch`, and `target_branch`; `proposal_id` may link an existing
 proposal in the same repository. Branch names are repository-relative (for
-example, `feature`, not `refs/heads/feature`), must be different, and must both
+example, `feature`, not `refs/heads/feature`), and must both
 currently identify commit objects. A missing, unborn, or non-commit branch is
 rejected without creating a resource.
 
-The created resource records immutable `repository_id` and `author_id`, its
+`source_repository_id` optionally identifies an independently owned direct
+fork whose immutable `upstream_repository_id` is the target `{id}`. The actor
+must own that fork and retain read access to the target; a public upstream does
+not otherwise grant repository participation. When source and target are the
+same repository, their branch names must differ. The server imports only the
+objects reachable from the adopted fork commit into the target object database
+without publishing a target reference.
+
+The created resource records immutable target `repository_id`, immutable
+`source_repository_id`, and `author_id`, its
 purpose in `title` and `body`, the source and target branch names, and the exact
 branch tips as `source_commit_id` and `target_commit_id`. These commit IDs do
 not silently change when a branch advances. The author can explicitly adopt
@@ -280,16 +289,19 @@ the source branch's current commit as a new reviewable revision with `POST
 /repositories/{id}/pulls/{pull_id}/synchronize`; this updates
 `source_commit_id`, while the target snapshot remains fixed. Synchronization
 requires `repositories:write`, rejects a missing or non-commit source branch,
-and is unavailable after merge. A different participant receives not-found.
+and is unavailable after merge. For a fork contribution, synchronization reads
+the live branch in the source repository and remains available to that fork
+owner; a different participant receives not-found.
 New pull requests have `status: "open"` and creation and update timestamps.
 The linked `proposal_id` is nullable.
 
 `GET /repositories/{id}/pulls` returns pull requests in the shared cursor-
 paginated collection shape under `pull_requests`; `GET
 /repositories/{id}/pulls/{pull_id}` inspects one. Reads inherit repository
-visibility and collaborator access. Creation requires a current owner or
-contributor with `repositories:write`; public readability alone does not
-grant permission to open a pull request. Pull request metadata is stored as
+visibility and collaborator access. Creation requires either a current owner
+or contributor, or the owner of a direct fork targeting that readable
+repository, with `repositories:write`; public readability alone does not grant
+permission to submit arbitrary repository state. Pull request metadata is stored as
 private atomic JSON beneath `PULL_REQUEST_STORAGE_ROOT`, defaulting to
 `pull-requests`, partitioned by repository ID so one repository's damaged
 metadata cannot make another repository's collection unavailable. A create
@@ -345,8 +357,8 @@ and contributors may review with `repositories:read`; public readability does
 not grant review participation. Review mutations use the shared uncertain-
 durability response when publication is visible but its directory sync fails.
 
-`GET /repositories/{id}/pulls/{pull_id}/merge-readiness` gives a current owner
-or contributor a read-only answer about what remains before merge. The report
+`GET /repositories/{id}/pulls/{pull_id}/merge-readiness` gives any actor who
+can read the pull request a read-only answer about what remains before merge. The report
 contains `mergeable`, caller-specific `can_merge`, one required current
 approval and the current approval count, live `source` and `target` branch
 state, `has_conflicts`, and an ordered `blockers` array whose entries have a

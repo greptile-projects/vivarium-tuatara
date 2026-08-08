@@ -76,6 +76,7 @@ export type ProposalComment = {
 export type PullRequest = {
   id: string;
   repository_id: string;
+  source_repository_id: string;
   author_id: string;
   title: string;
   body: string;

@@ -74,7 +74,8 @@ whenever dependencies change or the web job fails before it starts.
   attributable comments, author edits, and participant closure controls.
   Pull request discovery at `/pulls` aggregates reviewable work across the
   authenticated actor's repository catalog and opens candidate branches
-  against distinct targets with optional proposal context. Durable detail
+  against distinct targets or owned-fork branches against their upstream,
+  with optional proposal context. Durable detail
   routes at `/pulls/{repository-id}/{pull-request-id}` expose the recorded
   branch snapshots, source-only commits, path-ordered file changes, linked
   proposal, attributable discussion, current and stale review decisions,
@@ -237,7 +238,9 @@ whenever dependencies change or the web job fails before it starts.
   Durable pull requests beneath `$PULL_REQUEST_STORAGE_ROOT` (default
   `pull-requests`) are partitioned by repository ID so damaged metadata cannot
   affect another repository's collection. They connect an existing source branch to a distinct target
-  branch. Creation snapshots both verified commit IDs, attributes the request
+  branch, or an actor-owned direct fork source branch to its readable upstream.
+  Creation records both repository identities, imports the exact fork revision
+  without publishing a target ref, snapshots both verified commit IDs, attributes the request
   to its actor, records title/body purpose and optional same-repository
   proposal linkage, and starts it with `open` status. Owners and contributors
   can create them; reads inherit repository visibility and access. Pull request
