@@ -445,6 +445,14 @@ The conflict calculation uses the bare repository only as an object source and
 redirects generated merge objects to a disposable directory, preserving the
 storage package as the sole durable write boundary.
 
+Maintainers may require a target branch to use coordinated integration without
+changing its review or required-check bar. The branch policy records whether
+the queue is enabled, candidate concurrency, and whether a failed candidate
+pauses the queue or is removed. Inspection includes the existing one-approval
+rule and current required-check names as admission criteria. A protected pull
+can be mergeable but cannot merge directly; its exact ready revision enters
+durable FIFO order, and source synchronization invalidates that admission.
+
 An owner applies an accepted request through its merge endpoint. The operation
 rechecks readiness, materializes a two-parent merge commit through the storage
 boundary, and compare-and-swaps the live target reference. The durable pull

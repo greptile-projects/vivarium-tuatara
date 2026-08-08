@@ -72,6 +72,29 @@ func TestRepositoryVisibilityDefaultsPrivateAndPersists(t *testing.T) {
 	}
 }
 
+func TestIntegrationQueuePolicyPersistsAndIncludesAdmissionRules(t *testing.T) {
+	gitRoot, metadataRoot := t.TempDir(), t.TempDir()
+	gitStore, _ := storage.New(gitRoot)
+	store, _ := New(metadataRoot, gitStore)
+	repository, _ := store.Create(testOwnerID, "queued")
+	if _, err := store.SetRequiredChecks(testOwnerID, repository.ID, "main", []string{"api", "web"}); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := store.SetIntegrationQueuePolicy(testOwnerID, repository.ID, "main", true, 3, QueueFailureRemove)
+	if err != nil || !policy.Enabled || policy.Concurrency != 3 || policy.FailureBehavior != QueueFailureRemove || policy.RequiredApprovals != 1 || len(policy.RequiredChecks) != 2 {
+		t.Fatalf("policy = %#v, %v", policy, err)
+	}
+	reopenedGit, _ := storage.New(gitRoot)
+	reopened, _ := New(metadataRoot, reopenedGit)
+	got, err := reopened.IntegrationQueuePolicy(repository.ID, "main")
+	if err != nil || got.Concurrency != 3 || len(got.RequiredChecks) != 2 {
+		t.Fatalf("reopened policy = %#v, %v", got, err)
+	}
+	if _, err := reopened.SetIntegrationQueuePolicy(testCollaboratorID, repository.ID, "main", true, 1, QueueFailurePause); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("non-owner error = %v", err)
+	}
+}
+
 func TestRepositoryCollaboratorsPersistAndRemainOwnerManaged(t *testing.T) {
 	gitRoot, metadataRoot := t.TempDir(), t.TempDir()
 	gitStore, _ := storage.New(gitRoot)
