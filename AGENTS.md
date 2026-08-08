@@ -85,8 +85,9 @@ whenever dependencies change or the web job fails before it starts.
   configure 1-10 concurrent candidates and `pause` or `remove` failure
   behavior, and inspect the existing approval and required-check admission
   rules. Protected ready pulls must be admitted instead of merged directly;
-  `queued_at` supplies durable FIFO order and clears when the source changes or
-  the pull closes. Admission freezes an immutable synthetic two-parent
+  `queued_at` supplies initial FIFO order; exact rational `queue_rank` values
+  allow reprioritization to atomically update only the moved entry. Both clear
+  when the source changes or the pull closes. Admission freezes an immutable synthetic two-parent
   candidate from the exact pull revision and latest eligible target, launches
   target-base-bound required-check definitions on that prospective result,
   and exposes candidate identity, base, lifecycle, logs, and artifacts. A

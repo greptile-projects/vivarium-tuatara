@@ -416,8 +416,10 @@ target, ordinary rules still determine `mergeable`, but `can_merge` is false
 and direct merge is rejected. An owner with an eligible request receives
 `can_enqueue: true` and uses `POST
 /repositories/{id}/pulls/{pull_id}/queue`. Admission persists `queued_at`; its
-timestamp establishes durable FIFO order, and retrying admission is
-idempotent. Source synchronization or pull closure clears stale admission.
+timestamp establishes initial FIFO order, while an exact rational `queue_rank`
+supports atomic single-entry reprioritization without finite timestamp gaps.
+Retrying admission is idempotent. Source synchronization or pull closure
+clears stale admission.
 Admission also creates an immutable synthetic two-parent commit: the first
 parent and `base_commit_id` are the latest eligible target tip, while the
 second parent and `source_commit_id` are the exact admitted pull revision.

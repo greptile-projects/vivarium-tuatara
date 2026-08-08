@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
@@ -614,6 +615,24 @@ func TestIntegrationQueueProjectionAndAttributedOperations(t *testing.T) {
 	second, err = store.OperateQueue(repository.ID(), second.ID, actor, "remove", 0)
 	if err != nil || second.QueuedAt != nil || second.QueueActions[len(second.QueueActions)-1].Action != "remove" {
 		t.Fatalf("removed = %#v, %v", second, err)
+	}
+	template, _ := store.Get(repository.ID(), first.ID)
+	ids := make([]string, 40)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("%032x", i+100)
+		copy := template
+		copy.ID, copy.Title = ids[i], fmt.Sprintf("Queued %d", i)
+		queuedAt := firstTime.Add(time.Duration(i+1) * time.Second)
+		copy.QueuedAt, copy.QueueRank = &queuedAt, new(big.Int).SetInt64(queuedAt.UnixNano()).String()
+		copy.QueueActions = []QueueAction{{Action: "enqueued", ActorID: actor, CreatedAt: queuedAt}}
+		if _, err := store.write(copy); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := len(ids) - 1; i >= 0; i-- {
+		if _, err := store.OperateQueue(repository.ID(), ids[i], actor, "reprioritize", 2); err != nil {
+			t.Fatalf("exact rank exhausted after %d moves: %v", len(ids)-i, err)
+		}
 	}
 }
 

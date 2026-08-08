@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,6 +66,7 @@ type PullRequest struct {
 	MergeCommitID            *string                `json:"merge_commit_id"`
 	QueuedAt                 *time.Time             `json:"queued_at,omitempty"`
 	QueuedBy                 *string                `json:"queued_by,omitempty"`
+	QueueRank                string                 `json:"queue_rank,omitempty"`
 	QueuePaused              bool                   `json:"queue_paused,omitempty"`
 	QueueActions             []QueueAction          `json:"queue_actions,omitempty"`
 	QueueFinalizationPending bool                   `json:"queue_finalization_pending,omitempty"`
@@ -167,7 +169,7 @@ func (s *Store) Close(repositoryID, id, actorID string) (PullRequest, error) {
 	now := s.now().Truncate(time.Microsecond)
 	p.Status, p.ClosedAt, p.ClosedBy, p.UpdatedAt = Closed, &now, &actorID, now
 	p.MaintainerEditsAllowed = false
-	p.QueuedAt = nil
+	p.QueuedAt, p.QueueRank = nil, ""
 	p.QueuedBy = nil
 	if committed, err := s.write(p); err != nil {
 		if committed {
@@ -509,7 +511,7 @@ func (s *Store) SynchronizeSourceAfter(repositoryID, id string, before func() er
 		}
 	}
 	p.SourceCommitID = commitID
-	p.QueuedAt, p.QueuedBy = nil, nil
+	p.QueuedAt, p.QueuedBy, p.QueueRank = nil, nil, ""
 	p.UpdatedAt = s.now().Truncate(time.Microsecond)
 	if committed, err := s.write(p); err != nil {
 		if committed {
@@ -1190,6 +1192,7 @@ func (s *Store) Enqueue(repositoryID, pullRequestID, actorID string) (PullReques
 	}
 	p.IntegrationCandidates = append(p.IntegrationCandidates, IntegrationCandidate{ID: candidateID, SourceCommitID: p.SourceCommitID, BaseCommitID: *report.Target.CurrentCommitID, CommitID: string(commit), RequiredChecks: requiredChecks, CheckDefinitions: definitions, CreatedAt: now})
 	p.QueuedAt, p.QueuedBy, p.UpdatedAt = &now, &actorID, now
+	p.QueueRank = new(big.Int).SetInt64(now.UnixNano()).String()
 	p.QueuePaused = false
 	p.QueueActions = append(p.QueueActions, QueueAction{Action: "enqueued", ActorID: actorID, CreatedAt: now})
 	if committed, writeErr := s.write(p); writeErr != nil {
@@ -1237,7 +1240,7 @@ func (s *Store) OperateQueue(repositoryID, pullRequestID, actorID, action string
 			}
 		}
 	case "remove":
-		p.QueuePaused, p.QueuedAt, p.QueuedBy = false, nil, nil
+		p.QueuePaused, p.QueuedAt, p.QueuedBy, p.QueueRank = false, nil, nil, ""
 	case "reprioritize":
 		pulls, listErr := s.List(repositoryID)
 		if listErr != nil {
@@ -1249,30 +1252,26 @@ func (s *Store) OperateQueue(repositoryID, pullRequestID, actorID, action string
 				queued = append(queued, candidate)
 			}
 		}
-		sort.SliceStable(queued, func(i, j int) bool { return queued[i].QueuedAt.Before(*queued[j].QueuedAt) })
+		sort.SliceStable(queued, func(i, j int) bool { return queueLess(queued[i], queued[j]) })
 		if position < 1 || position > len(queued)+1 {
 			return PullRequest{}, ErrInvalid
 		}
 		queued = append(queued, PullRequest{})
 		copy(queued[position:], queued[position-1:])
 		queued[position-1] = p
-		var stamp time.Time
+		var rank *big.Rat
 		switch {
 		case len(queued) == 1:
-			stamp = *p.QueuedAt
+			rank = queueRank(p)
 		case position == 1:
-			stamp = queued[1].QueuedAt.Add(-time.Nanosecond)
+			rank = new(big.Rat).Sub(queueRank(queued[1]), big.NewRat(1, 1))
 		case position == len(queued):
-			stamp = queued[len(queued)-2].QueuedAt.Add(time.Nanosecond)
+			rank = new(big.Rat).Add(queueRank(queued[len(queued)-2]), big.NewRat(1, 1))
 		default:
-			before, after := *queued[position-2].QueuedAt, *queued[position].QueuedAt
-			gap := after.Sub(before)
-			if gap <= time.Nanosecond {
-				return PullRequest{}, ErrNotReady
-			}
-			stamp = before.Add(gap / 2)
+			rank = new(big.Rat).Add(queueRank(queued[position-2]), queueRank(queued[position]))
+			rank.Quo(rank, big.NewRat(2, 1))
 		}
-		p.QueuedAt = &stamp
+		p.QueueRank = rank.RatString()
 	}
 	p.UpdatedAt = now
 	p.QueueActions = append(p.QueueActions, QueueAction{Action: action, ActorID: actorID, CreatedAt: now})
@@ -1299,7 +1298,7 @@ func (s *Store) IntegrationQueue(repositoryID, branch string) (IntegrationQueueV
 		if pulls[j].QueuedAt == nil {
 			return true
 		}
-		return pulls[i].QueuedAt.Before(*pulls[j].QueuedAt)
+		return queueLess(pulls[i], pulls[j])
 	})
 	view := IntegrationQueueView{Branch: branch, Entries: []IntegrationQueueEntry{}}
 	for _, p := range pulls {
@@ -1334,6 +1333,26 @@ func (s *Store) IntegrationQueue(repositoryID, branch string) (IntegrationQueueV
 		view.Entries = append(view.Entries, entry)
 	}
 	return view, nil
+}
+
+func queueRank(p PullRequest) *big.Rat {
+	if p.QueueRank != "" {
+		if rank, ok := new(big.Rat).SetString(p.QueueRank); ok {
+			return rank
+		}
+	}
+	if p.QueuedAt != nil {
+		return new(big.Rat).SetInt64(p.QueuedAt.UnixNano())
+	}
+	return new(big.Rat)
+}
+
+func queueLess(left, right PullRequest) bool {
+	comparison := queueRank(left).Cmp(queueRank(right))
+	if comparison == 0 {
+		return left.ID < right.ID
+	}
+	return comparison < 0
 }
 
 func requiredDefinitions(repository *storage.Repository, commitID string, required []string) ([]checkruns.Definition, error) {
@@ -1478,7 +1497,7 @@ func (s *Store) advanceIntegrationQueue(repositoryID, branch string) error {
 		if pulls[i].QueuedAt.Equal(*pulls[j].QueuedAt) {
 			return pulls[i].ID < pulls[j].ID
 		}
-		return pulls[i].QueuedAt.Before(*pulls[j].QueuedAt)
+		return queueLess(pulls[i], pulls[j])
 	})
 	queued := make([]PullRequest, 0, len(pulls))
 	for _, p := range pulls {
@@ -1537,7 +1556,7 @@ func (s *Store) advanceIntegrationQueue(repositoryID, branch string) error {
 					}
 					return errors.Join(finalizationFailures...)
 				}
-				p.QueuedAt, p.QueuedBy = nil, nil
+				p.QueuedAt, p.QueuedBy, p.QueueRank = nil, nil, ""
 				p.UpdatedAt = s.now().Truncate(time.Microsecond)
 				if _, e := s.write(*p); e != nil {
 					return e
@@ -1573,7 +1592,7 @@ func (s *Store) advanceIntegrationQueue(repositoryID, branch string) error {
 			if policy.FailureBehavior == repositories.QueueFailurePause {
 				return errors.Join(finalizationFailures...)
 			}
-			head.QueuedAt, head.QueuedBy = nil, nil
+			head.QueuedAt, head.QueuedBy, head.QueueRank = nil, nil, ""
 			head.UpdatedAt = s.now().Truncate(time.Microsecond)
 			if _, err := s.write(*head); err != nil {
 				return err
@@ -1601,7 +1620,7 @@ func (s *Store) advanceIntegrationQueue(repositoryID, branch string) error {
 		commit, mergedBy := candidate.CommitID, merger
 		head.Status, head.UpdatedAt, head.MergedAt, head.MergedBy, head.MergeCommitID = Merged, now, &now, &mergedBy, &commit
 		head.QueueFinalizationPending = true
-		head.QueuedAt, head.QueuedBy, head.mergeIntent = nil, nil, nil
+		head.QueuedAt, head.QueuedBy, head.QueueRank, head.mergeIntent = nil, nil, "", nil
 		if _, err := s.write(*head); err != nil {
 			return err
 		}
@@ -1878,7 +1897,7 @@ func (s *Store) reconcileMerged(repository *storage.Repository, p PullRequest) (
 		commitID := string(commit.ID)
 		p.Status, p.UpdatedAt, p.MergedAt, p.MergedBy, p.MergeCommitID, p.mergeIntent = Merged, mergedAt, &mergedAt, &merger, &commitID, nil
 		if p.QueuedAt != nil {
-			p.QueuedAt, p.QueuedBy, p.QueueFinalizationPending = nil, nil, true
+			p.QueuedAt, p.QueuedBy, p.QueueRank, p.QueueFinalizationPending = nil, nil, "", true
 		}
 		if committed, writeErr := s.write(p); writeErr != nil {
 			if committed {
@@ -2231,7 +2250,8 @@ func (s *Store) read(repositoryID, id string) (PullRequest, error) {
 		(p.Status == Closed && p.ClosedAt != nil && !p.ClosedAt.IsZero() && p.ClosedBy != nil && validID(*p.ClosedBy) && p.MergedAt == nil && p.MergedBy == nil && p.MergeCommitID == nil) ||
 		(p.Status == Merged && p.ClosedAt == nil && p.ClosedBy == nil && p.MergedAt != nil && p.MergedBy != nil && validID(*p.MergedBy) && p.MergeCommitID != nil && validCommitID(*p.MergeCommitID))
 	validIntent := p.mergeIntent == nil || (p.Status == Open && validCommitID(p.mergeIntent.CommitID) && validID(p.mergeIntent.MergerID) && !p.mergeIntent.MergedAt.IsZero())
-	validQueue := (p.QueuedAt == nil && p.QueuedBy == nil) || (p.Status == Open && p.QueuedAt != nil && !p.QueuedAt.IsZero() && p.QueuedBy != nil && validID(*p.QueuedBy))
+	_, validRank := new(big.Rat).SetString(p.QueueRank)
+	validQueue := (p.QueuedAt == nil && p.QueuedBy == nil && p.QueueRank == "") || (p.Status == Open && p.QueuedAt != nil && !p.QueuedAt.IsZero() && p.QueuedBy != nil && validID(*p.QueuedBy) && (p.QueueRank == "" || validRank))
 	validFinalization := (!p.QueueFinalizationPending || (p.Status == Merged && p.QueueFinalizedAt == nil)) && (p.QueueFinalizedAt == nil || (p.Status == Merged && !p.QueueFinalizationPending && !p.QueueFinalizedAt.IsZero()))
 	if p.ID != id || !validID(p.RepositoryID) || !validID(p.SourceRepositoryID) || !validID(p.AuthorID) || !validOutcome || !validIntent || !validQueue || !validFinalization || !validCommitID(p.SourceCommitID) || !validCommitID(p.TargetCommitID) || (p.SourceRepositoryID == p.RepositoryID && p.SourceBranch == p.TargetBranch) || p.SourceBranch == "" || p.TargetBranch == "" || strings.HasPrefix(p.SourceBranch, "refs/") || strings.HasPrefix(p.TargetBranch, "refs/") || p.CreatedAt.IsZero() || p.UpdatedAt.IsZero() || (p.ProposalID != nil && !validID(*p.ProposalID)) {
 		return PullRequest{}, fmt.Errorf("corrupt pull request %s", id)
