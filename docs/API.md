@@ -978,7 +978,9 @@ defaults to `incidents`.
 incident, durable investigation, and a one-time API credential carrying only
 `incidents:investigate`. `GET
 /incidents/{incident_id}/investigations/{investigation_id}` uses that credential
-to return the frozen packet plus only its selected live operational resources.
+to return the frozen packet plus delegation-time snapshots of only its selected
+operational resources. Later incident, pull, release, or deployment mutations
+cannot silently widen that context.
 The agent appends `finding`, `tool_action`, `question`, or `uncertainty` with
 `POST .../events`; all become agent-attributed participant timeline entries.
 Responders use `POST .../controls` with `guide`, `pause`, `resume`, or `cancel`.

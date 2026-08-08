@@ -41,7 +41,8 @@ state without weakening the incident's current-participant access boundary.
 Authorized responders can delegate a bounded investigation by freezing a
 mandate, selected diagnostic evidence, and exact verified repository commits.
 The one-time agent credential has only `incidents:investigate`: it can inspect
-that packet and selected live operational resources, then append findings, tool
+that packet and delegation-time snapshots of selected operational resources,
+then append findings, tool
 actions, questions, and uncertainty to the participant timeline. Responders
 retain guide, pause, resume, and cancel authority; the agent receives no Git,
 deployment, environment, credential, secret, or repository mutation scope.

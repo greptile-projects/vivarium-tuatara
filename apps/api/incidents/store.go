@@ -51,18 +51,23 @@ type Revision struct {
 	CommitID     string `json:"commit_id"`
 	Label        string `json:"label"`
 }
+type EvidenceContext struct {
+	Selection Evidence        `json:"selection"`
+	Resource  json.RawMessage `json:"resource"`
+}
 type Investigation struct {
-	ID           string     `json:"id"`
-	AgentID      string     `json:"agent_id"`
-	InitiatorID  string     `json:"initiator_id"`
-	CredentialID string     `json:"credential_id,omitempty"`
-	Mandate      string     `json:"mandate"`
-	State        string     `json:"state"`
-	Evidence     []Evidence `json:"evidence"`
-	Revisions    []Revision `json:"revisions"`
-	Access       []string   `json:"access"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	ID                 string            `json:"id"`
+	AgentID            string            `json:"agent_id"`
+	InitiatorID        string            `json:"initiator_id"`
+	CredentialID       string            `json:"credential_id,omitempty"`
+	Mandate            string            `json:"mandate"`
+	State              string            `json:"state"`
+	Evidence           []Evidence        `json:"evidence"`
+	Revisions          []Revision        `json:"revisions"`
+	OperationalContext []EvidenceContext `json:"operational_context"`
+	Access             []string          `json:"access"`
+	CreatedAt          time.Time         `json:"created_at"`
+	UpdatedAt          time.Time         `json:"updated_at"`
 }
 type Evidence struct {
 	Kind         string     `json:"kind"`
@@ -92,7 +97,7 @@ type Incident struct {
 	ResolvedAt     *time.Time      `json:"resolved_at,omitempty"`
 }
 
-func (s *Store) StartInvestigation(id, actor, agent, credential, mandate string, evidence []Evidence, revisions []Revision) (Incident, Investigation, error) {
+func (s *Store) StartInvestigation(id, actor, agent, credential, mandate string, evidence []Evidence, revisions []Revision, context []EvidenceContext) (Incident, Investigation, error) {
 	var v Incident
 	var investigation Investigation
 	e := s.mutate(func() error {
@@ -100,7 +105,7 @@ func (s *Store) StartInvestigation(id, actor, agent, credential, mandate string,
 			return e
 		}
 		mandate = strings.TrimSpace(mandate)
-		if !validID(actor) || !validID(agent) || !validID(credential) || mandate == "" || len(mandate) > 10000 || len(evidence) > 20 || len(revisions) == 0 || len(revisions) > 20 {
+		if !validID(actor) || !validID(agent) || !validID(credential) || mandate == "" || len(mandate) > 10000 || len(evidence) > 20 || len(revisions) == 0 || len(revisions) > 20 || len(context) != len(evidence) {
 			return ErrInvalid
 		}
 		for _, x := range evidence {
@@ -113,8 +118,13 @@ func (s *Store) StartInvestigation(id, actor, agent, credential, mandate string,
 				return ErrInvalid
 			}
 		}
+		for i, x := range context {
+			if len(x.Resource) == 0 || !json.Valid(x.Resource) || !sameEvidence([]Evidence{x.Selection}, []Evidence{evidence[i]}) {
+				return ErrInvalid
+			}
+		}
 		now := s.now()
-		investigation = Investigation{ID: mustID(), AgentID: agent, InitiatorID: actor, CredentialID: credential, Mandate: mandate, State: "running", Evidence: evidence, Revisions: revisions, Access: []string{"selected incident evidence", "selected repository revisions", "incident investigation timeline:write"}, CreatedAt: now, UpdatedAt: now}
+		investigation = Investigation{ID: mustID(), AgentID: agent, InitiatorID: actor, CredentialID: credential, Mandate: mandate, State: "running", Evidence: evidence, Revisions: revisions, OperationalContext: context, Access: []string{"selected incident evidence", "selected repository revisions", "incident investigation timeline:write"}, CreatedAt: now, UpdatedAt: now}
 		v.Investigations = append(v.Investigations, investigation)
 		v.Version++
 		v.UpdatedAt = now
@@ -486,6 +496,14 @@ func validInvestigation(v Investigation) bool {
 	}
 	for _, x := range v.Revisions {
 		if !validID(x.RepositoryID) || len(x.CommitID) != 40 || strings.TrimSpace(x.Label) == "" {
+			return false
+		}
+	}
+	if len(v.OperationalContext) != len(v.Evidence) {
+		return false
+	}
+	for i, x := range v.OperationalContext {
+		if len(x.Resource) == 0 || !json.Valid(x.Resource) || !sameEvidence([]Evidence{x.Selection}, []Evidence{v.Evidence[i]}) {
 			return false
 		}
 	}

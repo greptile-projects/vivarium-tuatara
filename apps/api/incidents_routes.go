@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -375,6 +376,11 @@ func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *
 			}
 			revision.Label = "commit " + revision.CommitID[:12]
 		}
+		context, contextErr := snapshotInvestigationContext(gitStore, store, deploymentStore, releaseStore, pullStore, input.Evidence)
+		if contextErr != nil {
+			writeAPIError(w, 422, "invalid_investigation_evidence", "selected evidence could not be frozen")
+			return
+		}
 		bytes := make([]byte, 16)
 		if _, e := rand.Read(bytes); e != nil {
 			writeAPIError(w, 500, "investigation_start_failed", "investigation could not be started")
@@ -390,7 +396,7 @@ func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *
 		var investigation incidents.Investigation
 		e = mutate(current, actor.UserID, current.Roles, func() error {
 			var x error
-			v, investigation, x = store.StartInvestigation(current.ID, actor.UserID, agentID, issued.ID, input.Mandate, input.Evidence, input.Revisions)
+			v, investigation, x = store.StartInvestigation(current.ID, actor.UserID, agentID, issued.ID, input.Mandate, input.Evidence, input.Revisions, context)
 			return x
 		})
 		if e != nil {
@@ -411,34 +417,7 @@ func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *
 			writeAPIError(w, 404, "investigation_not_found", "investigation not found")
 			return
 		}
-		context := make([]any, 0, len(x.Evidence))
-		for _, source := range x.Evidence {
-			var resource any
-			switch source.Kind {
-			case "log", "health_signal", "deployment":
-				if deploymentStore != nil {
-					if promotion, getErr := deploymentStore.GetPromotion(source.RepositoryID, source.ResourceID); getErr == nil {
-						resource = boundedPromotionContext(source, promotion)
-					}
-				}
-			case "release":
-				if releaseStore != nil {
-					resource, _ = releaseStore.Get(source.RepositoryID, source.ResourceID)
-				}
-			case "pull_request":
-				if pullStore != nil {
-					resource, _ = pullStore.Get(source.RepositoryID, source.ResourceID)
-				}
-			case "incident":
-				resource, _ = store.Get(source.ResourceID)
-			case "commit":
-				if repository, openErr := gitStore.Open(source.RepositoryID); openErr == nil {
-					resource, _ = repository.ReadCommit(storage.ObjectID(source.ResourceID))
-				}
-			}
-			context = append(context, map[string]any{"selection": source, "resource": resource})
-		}
-		writeJSON(w, 200, map[string]any{"investigation": x, "operational_context": context})
+		writeJSON(w, 200, map[string]any{"investigation": x, "operational_context": x.OperationalContext})
 	})
 	mux.HandleFunc("POST /incidents/{incident_id}/investigations/{investigation_id}/events", func(w http.ResponseWriter, r *http.Request) {
 		credential, ok := authenticateRequest(w, r, credentials, "incidents:investigate", false)
@@ -540,6 +519,54 @@ func boundedPromotionContext(source incidents.Evidence, promotion deployments.Pr
 		base["evidence"], base["events"] = promotion.Evidence, promotion.Events
 	}
 	return base
+}
+
+func snapshotInvestigationContext(gitStore *storage.Store, incidentStore *incidents.Store, deploymentStore *deployments.Store, releaseStore *releases.Store, pullStore *pullrequests.Store, evidence []incidents.Evidence) ([]incidents.EvidenceContext, error) {
+	context := make([]incidents.EvidenceContext, 0, len(evidence))
+	for _, source := range evidence {
+		var resource any
+		var err error
+		switch source.Kind {
+		case "log", "health_signal", "deployment":
+			if deploymentStore == nil {
+				return nil, incidents.ErrNotFound
+			}
+			var promotion deployments.Promotion
+			promotion, err = deploymentStore.GetPromotion(source.RepositoryID, source.ResourceID)
+			if err == nil {
+				resource = boundedPromotionContext(source, promotion)
+			}
+		case "release":
+			if releaseStore == nil {
+				return nil, incidents.ErrNotFound
+			}
+			resource, err = releaseStore.Get(source.RepositoryID, source.ResourceID)
+		case "pull_request":
+			if pullStore == nil {
+				return nil, incidents.ErrNotFound
+			}
+			resource, err = pullStore.Get(source.RepositoryID, source.ResourceID)
+		case "incident":
+			resource, err = incidentStore.Get(source.ResourceID)
+		case "commit":
+			var repository *storage.Repository
+			repository, err = gitStore.Open(source.RepositoryID)
+			if err == nil {
+				resource, err = repository.ReadCommit(storage.ObjectID(source.ResourceID))
+			}
+		default:
+			err = incidents.ErrInvalid
+		}
+		if err != nil {
+			return nil, err
+		}
+		encoded, marshalErr := json.Marshal(resource)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		context = append(context, incidents.EvidenceContext{Selection: source, Resource: encoded})
+	}
+	return context, nil
 }
 
 func incidentEvidenceLabel(gitStore *storage.Store, incidentStore *incidents.Store, deploymentStore *deployments.Store, releaseStore *releases.Store, pullStore *pullrequests.Store, source incidents.Evidence) (string, bool) {

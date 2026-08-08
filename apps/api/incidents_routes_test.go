@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -76,7 +78,13 @@ func TestIncidentOperatingPictureFromHealthSignal(t *testing.T) {
 		t.Fatal(err)
 	}
 	commit := writeCommit(t, repo, time.Now().Unix(), "diagnostic revision")
-	delegationBody := `{"mandate":"Determine whether the canary failure is consistent with this revision; report uncertainty.","evidence":` + mustJSON(t, attached.Evidence) + `,"revisions":[{"repository_id":"` + repository.ID + `","commit_id":"` + string(commit) + `"}],"expires_in":3600}`
+	referenced, err := incidentStore.Create(incidents.Incident{Title: "Related degradation", Summary: "Initial context only.", Severity: "sev2", Status: "investigating", DeclaredBy: owner.User.ID, Scopes: []incidents.Scope{{RepositoryID: repository.ID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectedEvidence := append([]incidents.Evidence{}, attached.Evidence...)
+	selectedEvidence = append(selectedEvidence, incidents.Evidence{Kind: "incident", RepositoryID: repository.ID, ResourceID: referenced.ID})
+	delegationBody := `{"mandate":"Determine whether the canary failure is consistent with this revision; report uncertainty.","evidence":` + mustJSON(t, selectedEvidence) + `,"revisions":[{"repository_id":"` + repository.ID + `","commit_id":"` + string(commit) + `"}],"expires_in":3600}`
 	delegated := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/investigations", delegationBody, responder.Credential.Token, http.StatusCreated)
 	var launch struct {
 		Incident      incidents.Incident      `json:"incident"`
@@ -86,6 +94,18 @@ func TestIncidentOperatingPictureFromHealthSignal(t *testing.T) {
 	decodeResponse(t, delegated, &launch)
 	if launch.Credential.Scopes[0] != "incidents:investigate" || len(launch.Investigation.Access) != 3 || launch.Investigation.State != "running" {
 		t.Fatalf("launch = %#v", launch)
+	}
+	if _, err = incidentStore.AddUpdate(referenced.ID, strings.Repeat("7", 32), owner.User.ID, "POST_DELEGATION_SECRET", "participants"); err != nil {
+		t.Fatal(err)
+	}
+	contextResponse := authenticatedRequest(t, http.MethodGet, server.URL+"/incidents/"+incident.ID+"/investigations/"+launch.Investigation.ID, "", launch.Credential.Token, http.StatusOK)
+	contextBytes, err := io.ReadAll(contextResponse.Body)
+	contextResponse.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(contextBytes, []byte("POST_DELEGATION_SECRET")) || !bytes.Contains(contextBytes, []byte("Initial context only.")) {
+		t.Fatalf("investigation context was not frozen: %s", contextBytes)
 	}
 	// The purpose credential can inspect only its frozen packet and stream
 	// attributable diagnosis. It cannot exercise a responder mutation scope.
@@ -113,7 +133,7 @@ func TestIncidentOperatingPictureFromHealthSignal(t *testing.T) {
 	var page struct {
 		Incidents []incidents.Incident `json:"incidents"`
 	}
-	if json.NewDecoder(list.Body).Decode(&page) != nil || len(page.Incidents) != 1 {
+	if json.NewDecoder(list.Body).Decode(&page) != nil || len(page.Incidents) != 2 || page.Incidents[0].ID != incident.ID {
 		t.Fatalf("incident list = %#v", page)
 	}
 }
