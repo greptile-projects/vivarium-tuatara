@@ -362,7 +362,7 @@ func (s *Store) RecordStage(repo, id, owner string, stage int, evidence SignalEv
 	if err != nil {
 		return p, err
 	}
-	if p.State != "running" || p.ExecutionOwner != owner || stage < 0 || stage >= len(p.Rollout.Stages) {
+	if (p.State != "running" && p.State != "paused") || p.ExecutionOwner != owner || stage < 0 || stage >= len(p.Rollout.Stages) {
 		return p, ErrBlocked
 	}
 	p.CurrentStage = stage

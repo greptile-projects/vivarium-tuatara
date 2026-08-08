@@ -109,6 +109,13 @@ func TestRolloutControlsRetainAttributedDecisionsAndHealthEvidence(t *testing.T)
 	if p.State != "paused" || len(p.Evidence) != 1 || p.Events[len(p.Events)-1].ActorID != other {
 		t.Fatalf("paused promotion = %#v", p)
 	}
+	p, err = store.RecordStage(repo, p.ID, p.ExecutionOwner, 0, SignalEvidence{Stage: "canary", Signal: "latency", State: "passed", Message: "completed while paused"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.State != "paused" || len(p.Evidence) != 2 {
+		t.Fatalf("paused signal evidence = %#v", p)
+	}
 	p, err = store.Control(repo, p.ID, other, "resume", "paused", "signal recovered")
 	if err != nil {
 		t.Fatal(err)

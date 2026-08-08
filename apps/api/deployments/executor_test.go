@@ -173,6 +173,55 @@ func TestHeartbeatRenewsLiveExecutionLease(t *testing.T) {
 	}
 }
 
+func TestPausedObservationRetainsExecutorUntilResume(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, actor, controller := id('d'), id('e'), id('f')
+	environment, err := store.PutEnvironment(Environment{RepositoryID: repo, Name: "canary", Position: 1, Image: "alpine:3.22", Command: "true", TimeoutSeconds: 1, RequiredApprovals: 0, Concurrency: 1, UpdatedBy: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	promotion, err := store.CreatePromotion(Promotion{RepositoryID: repo, EnvironmentID: environment.ID, ReleaseID: id('1'), BuildID: id('2'), ArtifactID: id('3'), ArtifactSHA256: string(make([]byte, 64)), InitiatedBy: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := NewExecutor(store, nil)
+	promotion, err = store.Claim(repo, promotion.ID, executor.owner, time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Control(repo, promotion.ID, controller, "pause", "running", "observe longer"); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- executor.waitAvailable(context.Background(), promotion, 10*time.Millisecond) }()
+	select {
+	case err := <-done:
+		t.Fatalf("paused observation returned early: %v", err)
+	case <-time.After(1100 * time.Millisecond):
+	}
+	if _, err = store.Control(repo, promotion.ID, controller, "resume", "paused", "continue"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("observation remained stranded after resume")
+	}
+	current, err := store.GetPromotion(repo, promotion.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.State != "running" || current.ExecutionOwner != executor.owner {
+		t.Fatalf("resumed promotion = %#v", current)
+	}
+}
+
 func TestUnavailableEnvironmentRejectsQueuedPromotion(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {

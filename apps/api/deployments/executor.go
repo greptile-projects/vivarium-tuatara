@@ -100,34 +100,38 @@ func (e *Executor) Execute(repositoryID, id string) error {
 	if err != nil {
 		return e.fail(promotion, "protected environment could not be prepared")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(environment.TimeoutSeconds)*time.Second)
+	executionContext, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	heartbeatDone := make(chan struct{})
 	defer close(heartbeatDone)
-	go e.heartbeat(ctx, cancel, promotion, time.Duration(environment.TimeoutSeconds)*time.Second+time.Minute, heartbeatDone)
-	command := exec.CommandContext(ctx, "docker", "run", "--rm", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m", "--env-file", envName, "--mount", "type=bind,src="+artifact.Name()+",dst=/vivarium/artifact,readonly", environment.Image, "sh", "-c", environment.Command)
+	go e.heartbeat(executionContext, cancel, promotion, time.Duration(environment.TimeoutSeconds)*time.Second+time.Minute, heartbeatDone)
+	commandContext, commandCancel := context.WithTimeout(executionContext, time.Duration(environment.TimeoutSeconds)*time.Second)
+	command := exec.CommandContext(commandContext, "docker", "run", "--rm", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m", "--env-file", envName, "--mount", "type=bind,src="+artifact.Name()+",dst=/vivarium/artifact,readonly", environment.Image, "sh", "-c", environment.Command)
 	var output limitedBuffer
 	command.Stdout, command.Stderr = &output, &output
 	err = command.Run()
+	commandCancel()
 	log := redact(output.String(), environment.Credentials)
-	if ctx.Err() == context.DeadlineExceeded {
+	if commandContext.Err() == context.DeadlineExceeded {
 		return e.fail(promotion, "deployment command timed out\n"+log)
 	}
 	if err != nil {
 		return e.fail(promotion, "deployment command failed\n"+log)
 	}
 	for stageIndex, stage := range promotion.Rollout.Stages {
-		if err := e.waitAvailable(ctx, promotion, time.Duration(stage.ObservationSeconds)*time.Second); err != nil {
+		if err := e.waitAvailable(executionContext, promotion, time.Duration(stage.ObservationSeconds)*time.Second); err != nil {
 			return err
 		}
 		for _, signal := range stage.Signals {
-			if err := e.waitAvailable(ctx, promotion, 0); err != nil {
+			if err := e.waitAvailable(executionContext, promotion, 0); err != nil {
 				return err
 			}
 			var signalOutput limitedBuffer
-			signalCommand := exec.CommandContext(ctx, "docker", "run", "--rm", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m", "--env-file", envName, "--mount", "type=bind,src="+artifact.Name()+",dst=/vivarium/artifact,readonly", environment.Image, "sh", "-c", signal.Command)
+			signalContext, signalCancel := context.WithTimeout(executionContext, time.Duration(environment.TimeoutSeconds)*time.Second)
+			signalCommand := exec.CommandContext(signalContext, "docker", "run", "--rm", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m", "--env-file", envName, "--mount", "type=bind,src="+artifact.Name()+",dst=/vivarium/artifact,readonly", environment.Image, "sh", "-c", signal.Command)
 			signalCommand.Stdout, signalCommand.Stderr = &signalOutput, &signalOutput
 			runErr := signalCommand.Run()
+			signalCancel()
 			message := redact(signalOutput.String(), environment.Credentials)
 			state := "passed"
 			if runErr != nil {
@@ -145,6 +149,9 @@ func (e *Executor) Execute(repositoryID, id string) error {
 				return e.fail(promotion, "health signal failed: "+stage.Name+" / "+signal.Name)
 			}
 		}
+	}
+	if err := e.waitAvailable(executionContext, promotion, 0); err != nil {
+		return err
 	}
 	_, err = e.store.Complete(repositoryID, promotion.ID, e.owner, "succeeded", "Artifact SHA-256 verified; deployment command completed.\n"+log)
 	return err
