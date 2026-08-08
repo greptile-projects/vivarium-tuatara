@@ -1035,8 +1035,23 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		writeJSON(w, 200, map[string]any{"comments": page, "next_cursor": next})
 	})
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/comments", func(w http.ResponseWriter, r *http.Request) {
-		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:read")
+		actor, ok := authenticateRequest(w, r, authStore, "repositories:read", false)
 		if !ok {
+			return
+		}
+		pull, err := store.Get(r.PathValue("id"), r.PathValue("pull_id"))
+		if writePullRequestError(w, err) {
+			return
+		}
+		target, err := repositoriesStore.GetByID(r.PathValue("id"))
+		if writeRepositoryError(w, err) {
+			return
+		}
+		collaborator, collaboratorErr := repositoriesStore.HasCollaborator(actor.UserID, target.ID)
+		participant := collaboratorErr == nil && (target.OwnerID == actor.UserID || collaborator)
+		outsideAuthor := pull.SourceRepositoryID != pull.RepositoryID && pull.AuthorID == actor.UserID && target.Visibility == repositories.Public
+		if !participant && !outsideAuthor {
+			writeAPIError(w, http.StatusNotFound, "repository_not_found", "repository not found")
 			return
 		}
 		var input commentInput
