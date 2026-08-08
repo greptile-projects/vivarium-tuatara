@@ -758,6 +758,7 @@ export function PullRequestDetail({
   const ownReview = reviews.find((review) => review.reviewer_id === user?.id);
   const isAuthor = user?.id === pull.author_id;
   const isOwner = user?.id === repository.owner_id;
+  const activelyQueued = Boolean(readiness?.integration_queue?.enabled && pull.queued_at);
   const additions = files.filter((file) => file.status === "added").length;
   const deletions = files.filter((file) => file.status === "deleted").length;
   const modifications = files.length - additions - deletions;
@@ -1260,10 +1261,10 @@ export function PullRequestDetail({
                 {isOwner && (
                   <Button
                     className="mt-4 w-full"
-                    disabled={pending || refreshRequired || !(readiness.integration_queue?.enabled ? readiness.can_enqueue : readiness.can_merge) || Boolean(pull.queued_at)}
+                    disabled={pending || refreshRequired || !(readiness.integration_queue?.enabled ? readiness.can_enqueue : readiness.can_merge) || activelyQueued}
                     onClick={() => void (readiness.integration_queue?.enabled ? enqueue() : merge())}
                   >
-                    {pending ? "Updating…" : pull.queued_at ? "Queued for integration" : readiness.integration_queue?.enabled ? `Queue for ${pull.target_branch}` : `Merge into ${pull.target_branch}`}
+                    {pending ? "Updating…" : activelyQueued ? "Queued for integration" : readiness.integration_queue?.enabled ? `Queue for ${pull.target_branch}` : `Merge into ${pull.target_branch}`}
                   </Button>
                 )}
               </Card>
