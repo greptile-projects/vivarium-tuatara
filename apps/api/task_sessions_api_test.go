@@ -96,6 +96,15 @@ func TestAgentAssignedTaskStartsIsolatedObservableSession(t *testing.T) {
 	authenticatedRequest(t, http.MethodPost, detail+"/runs/"+launched.Run.ID+"/events", `{"kind":"agent.message","state":"working","message":"still working"}`, launched.Credential.Token, http.StatusConflict).Body.Close()
 	authenticatedRequest(t, http.MethodPost, detail+"/runs/"+launched.Run.ID+"/interventions", `{"kind":"run.resumed"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
 	authenticatedRequest(t, http.MethodGet, detail+"/runs/"+launched.Run.ID+"/control", "", launched.Credential.Token, http.StatusOK).Body.Close()
+	baseCommit, err := gitRepository.ReadCommit(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completedTip := writeTestCommit(t, gitRepository, baseCommit.Tree, []storage.ObjectID{base}, 1700000001, "completed task work")
+	if err := gitRepository.UpdateReference(storage.Reference{Name: "refs/heads/" + launched.Run.WorkingBranch, Target: string(completedTip)}); err != nil {
+		t.Fatal(err)
+	}
+	authenticatedRequest(t, http.MethodPost, detail+"/runs/"+launched.Run.ID+"/completion", `{"summary":"Completed valid task work.","commit_id":"`+string(completedTip)+`","checks":[],"unresolved_concerns":[]}`, launched.Credential.Token, http.StatusInternalServerError).Body.Close()
 	authenticatedRequest(t, http.MethodPost, detail+"/runs/"+launched.Run.ID+"/interventions", `{"kind":"run.canceled"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
 	authenticatedRequest(t, http.MethodPost, detail+"/runs/"+launched.Run.ID+"/events", `{"kind":"agent.message","state":"working","message":"late"}`, launched.Credential.Token, http.StatusUnauthorized).Body.Close()
 	eventsResponse := authenticatedRequest(t, http.MethodGet, detail+"/events", "", owner.Credential.Token, http.StatusOK)

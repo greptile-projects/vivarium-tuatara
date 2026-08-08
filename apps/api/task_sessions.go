@@ -368,6 +368,10 @@ func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store
 		if writeChangeSessionError(w, err) {
 			return
 		}
+		if pullStore == nil {
+			writeAPIError(w, 500, "internal_error", "pull request storage unavailable")
+			return
+		}
 		repository, err := gitStore.Open(r.PathValue("id"))
 		if err != nil {
 			writeAPIError(w, 500, "internal_error", "repository storage unavailable")
