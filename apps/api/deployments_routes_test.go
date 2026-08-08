@@ -24,7 +24,8 @@ func TestUnhealthyDeploymentOpensEvidencePinnedRepairReview(t *testing.T) {
 	identities, _ := users.New(t.TempDir())
 	credentials, _ := auth.New(t.TempDir())
 	catalog, _ := repositories.New(t.TempDir(), gitStore)
-	pulls, _ := pullrequests.New(t.TempDir(), gitStore)
+	pullRoot := t.TempDir()
+	pulls, _ := pullrequests.New(pullRoot, gitStore)
 	sessionRoot := t.TempDir()
 	sessions, _ := changesessions.New(sessionRoot)
 	checks, _ := checkruns.New(t.TempDir())
@@ -65,6 +66,30 @@ func TestUnhealthyDeploymentOpensEvidencePinnedRepairReview(t *testing.T) {
 	if err := gitRepository.UpdateReferenceIfTarget(storage.Reference{Name: "refs/heads/main", Target: string(current)}, string(commit)); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(pullRoot, 0500); err != nil {
+		t.Fatal(err)
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/deployments/"+promotion.ID+"/recoveries", `{"action":"repair","expected_state":"failed"}`, owner.Credential.Token, http.StatusInternalServerError).Body.Close()
+	if err := os.Chmod(pullRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	latestReadme, _ := gitRepository.WriteObject(storage.BlobObject, []byte("latest default-branch work\n"))
+	latestTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "README.md", id: latestReadme})
+	latest := writeTestCommit(t, gitRepository, latestTree, []storage.ObjectID{current}, 1700000200, "work after interrupted repair")
+	if err := gitRepository.UpdateReferenceIfTarget(storage.Reference{Name: "refs/heads/main", Target: string(latest)}, string(current)); err != nil {
+		t.Fatal(err)
+	}
+	divergentReadme, _ := gitRepository.WriteObject(storage.BlobObject, []byte("unexpected repair work\n"))
+	divergentTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "README.md", id: divergentReadme})
+	divergent := writeTestCommit(t, gitRepository, divergentTree, []storage.ObjectID{current}, 1700000300, "divergent unpublished repair")
+	recoveryRef := "refs/heads/agent/recovery/" + promotion.ID
+	if err := gitRepository.UpdateReferenceIfTarget(storage.Reference{Name: recoveryRef, Target: string(divergent)}, string(current)); err != nil {
+		t.Fatal(err)
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/deployments/"+promotion.ID+"/recoveries", `{"action":"repair","expected_state":"failed"}`, owner.Credential.Token, http.StatusConflict).Body.Close()
+	if err := gitRepository.UpdateReferenceIfTarget(storage.Reference{Name: recoveryRef, Target: string(current)}, string(divergent)); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Chmod(sessionRoot, 0500); err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +106,7 @@ func TestUnhealthyDeploymentOpensEvidencePinnedRepairReview(t *testing.T) {
 		t.Fatal(err)
 	}
 	repairResponse.Body.Close()
-	if repair.PullRequest.SourceBranch != "agent/recovery/"+promotion.ID || repair.PullRequest.SourceCommitID != string(current) || repair.PullRequest.TargetBranch != "main" || repair.Session.SourceCommitID != string(current) || repair.Session.DeploymentEvidence == nil {
+	if repair.PullRequest.SourceBranch != "agent/recovery/"+promotion.ID || repair.PullRequest.SourceCommitID != string(latest) || repair.PullRequest.TargetBranch != "main" || repair.Session.SourceCommitID != string(latest) || repair.Session.DeploymentEvidence == nil {
 		t.Fatalf("repair = %#v", repair)
 	}
 	evidence := repair.Session.DeploymentEvidence

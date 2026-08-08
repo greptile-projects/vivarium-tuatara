@@ -944,3 +944,7 @@ session after a definitive or uncertain session-storage failure. Rollback
 creation similarly derives the current known-good target, rechecks the
 unhealthy deployment, and writes the promotion within one deployment-store
 critical section.
+If publication stopped after creating only the deterministic Git ref, retry
+reconciles it to the latest default tip only by an ancestry check and
+compare-and-swap fast-forward. A divergent or concurrently changed ref returns
+`409 repair_branch_changed` and is never overwritten.

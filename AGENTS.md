@@ -164,7 +164,9 @@ whenever dependencies change or the web job fails before it starts.
   normal review, required-check, integration, build, release, and promotion
   flow and never receives environment authority.
   Repair retries reconnect the same branch, pull, and session after partial
-  publication. Rollback target derivation, unhealthy-state revalidation, and
+  publication. An unpublished branch left before pull publication is
+  fast-forwarded to the current default tip only when its prior tip remains an
+  ancestor; divergence and concurrent changes fail closed. Rollback target derivation, unhealthy-state revalidation, and
   promotion publication occur under one deployment-store lock.
   Pull request discovery at `/pulls` aggregates reviewable work across the
   authenticated actor's repository catalog and opens candidate branches

@@ -298,6 +298,28 @@ func registerDeploymentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos
 				writeAPIError(w, 500, "repair_unavailable", "isolated repair branch could not be created")
 				return
 			}
+			if errors.Is(err, storage.ErrReferenceExists) {
+				existing, existingErr := repository.ReadReference(ref)
+				if existingErr != nil || existing.Symbolic {
+					writeAPIError(w, 409, "repair_branch_changed", "the unpublished repair branch could not be safely reconciled")
+					return
+				}
+				if existing.Target != base.Target {
+					ancestry, ancestryErr := repository.ListCommitAncestry(storage.ObjectID(base.Target))
+					ancestor := false
+					for _, commit := range ancestry {
+						ancestor = ancestor || string(commit.ID) == existing.Target
+					}
+					if ancestryErr != nil || !ancestor {
+						writeAPIError(w, 409, "repair_branch_changed", "the unpublished repair branch diverged from the default branch")
+						return
+					}
+					if updateErr := repository.UpdateReferenceIfTarget(storage.Reference{Name: ref, Target: base.Target}, existing.Target); updateErr != nil {
+						writeAPIError(w, 409, "repair_branch_changed", "the unpublished repair branch changed during recovery")
+						return
+					}
+				}
+			}
 			body := "Diagnose and repair unhealthy deployment " + failed.ID + ". The attached change session freezes release, deployment, log, health, artifact, and source evidence. This branch has no environment authority."
 			pull, err = pulls.Create(failed.RepositoryID, actor.UserID, "Repair deployment for release "+failed.ReleaseID, body, branch, repositoryRecord.DefaultBranch, nil)
 			pullUncertain = errors.Is(err, pullrequests.ErrDurabilityUncertain)

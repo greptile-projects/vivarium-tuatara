@@ -710,6 +710,10 @@ or session published before a storage failure instead of duplicating repair
 work. Rollback selection and promotion publication share one cross-process
 store lock, so the failed deployment and known-good target cannot become stale
 between derivation and the durable recovery write.
+If failure leaves only the deterministic repair ref, retry fast-forwards it to
+the current default tip only when the old ref remains an ancestor. Divergence
+or a concurrent branch update is rejected instead of overwriting work or
+opening a stale repair pull.
 
 Each environment also defines an executor image, command, and timeout. The
 worker reopens the immutable build artifact, recomputes and matches its SHA-256,
