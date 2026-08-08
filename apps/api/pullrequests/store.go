@@ -1536,10 +1536,18 @@ func (s *Store) launchCandidate(p PullRequest, candidate IntegrationCandidate) {
 	if err != nil {
 		return
 	}
+	present := map[string]bool{}
 	for _, run := range existing {
 		if run.CommitID == candidate.CommitID {
-			return
+			present[run.Definition.Name] = true
 		}
+	}
+	complete := true
+	for _, definition := range candidate.CheckDefinitions {
+		complete = complete && present[definition.Name]
+	}
+	if complete {
+		return
 	}
 	runs, err := s.checkRuns.Create(p.RepositoryID, p.ID, candidate.CommitID, candidate.CheckDefinitions)
 	if err != nil {

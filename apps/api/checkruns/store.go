@@ -195,7 +195,7 @@ func (s *Store) Create(repositoryID, pullRequestID, commitID string, definitions
 	if err != nil {
 		return nil, err
 	}
-	var existingCommit bool
+	existingNames := map[string]bool{}
 	var resumable []Run
 	for _, entry := range entries {
 		if !strings.HasSuffix(entry.Name(), ".json") {
@@ -210,16 +210,22 @@ func (s *Store) Create(repositoryID, pullRequestID, commitID string, definitions
 			return nil, errors.New("invalid check run record")
 		}
 		if existing.CommitID == commitID {
-			existingCommit = true
+			existingNames[existing.Definition.Name] = true
 			if nonterminal(existing.State) {
 				resumable = append(resumable, existing)
 			}
 		}
 	}
-	if existingCommit {
+	missing := make([]Run, 0, len(runs))
+	for _, run := range runs {
+		if !existingNames[run.Definition.Name] {
+			missing = append(missing, run)
+		}
+	}
+	if len(missing) == 0 {
 		return resumable, nil
 	}
-	for _, run := range runs {
+	for _, run := range missing {
 		if err := s.write(dir, run); err != nil && !errors.Is(err, ErrDurabilityUncertain) {
 			return nil, err
 		}
@@ -227,7 +233,7 @@ func (s *Store) Create(repositoryID, pullRequestID, commitID string, definitions
 			return nil, err
 		}
 	}
-	return runs, nil
+	return append(resumable, missing...), nil
 }
 
 func (s *Store) List(repositoryID, pullRequestID string) ([]Run, error) {

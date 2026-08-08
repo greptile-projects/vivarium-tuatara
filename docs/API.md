@@ -432,6 +432,9 @@ prospective result snapshot. Run IDs use the ordinary check detail,
 events, logs, artifact, cancel, and rerun routes. Candidate checks execute the
 prospective result snapshot, so successful required-check evidence describes
 the repository state integration would create rather than either parent.
+If publishing a candidate's required runs stops after a durable prefix,
+reconciliation compares run names with the frozen definitions and creates only
+the missing runs before resuming execution.
 
 The server continuously reconciles protected queues under the pull-request
 mutation lock. Only the FIFO head may advance the target, and it does so with a

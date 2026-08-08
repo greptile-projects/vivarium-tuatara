@@ -540,10 +540,10 @@ func TestCandidateLaunchRetriesAfterCheckStoreRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.launchCandidate(pull, candidate)
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for {
 		runs, err := checkStore.List(repository.ID(), pull.ID)
-		if err == nil && len(runs) == 1 {
+		if err == nil && len(runs) == 1 && (runs[0].State == "succeeded" || runs[0].State == "failed" || runs[0].State == "canceled") {
 			break
 		}
 		if time.Now().After(deadline) {

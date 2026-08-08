@@ -90,6 +90,8 @@ whenever dependencies change or the web job fails before it starts.
   candidate from the exact pull revision and latest eligible target, launches
   target-base-bound required-check definitions on that prospective result,
   and exposes candidate identity, base, lifecycle, logs, and artifacts. A
+  partial candidate check-run publication is repaired definition-by-definition
+  on reconciliation, so a durable prefix cannot strand a required run. A
   cross-process reconciler advances only a passing FIFO head by compare-and-
   swapping its frozen base to that exact candidate, records it as the durable
   pull merge, and rebuilds affected concurrent candidates after either that
