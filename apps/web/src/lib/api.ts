@@ -179,6 +179,17 @@ export type CheckRun = {
   attempts: CheckAttempt[];
   artifacts: CheckArtifact[];
 };
+export type IntegrationCandidate = {
+  id: string;
+  source_commit_id: string;
+  base_commit_id: string;
+  commit_id: string;
+  required_checks: string[];
+  check_definitions: CheckRun["definition"][];
+  created_at: string;
+  state: "pending" | "verifying" | "passed" | "failed";
+  checks: CheckRun[];
+};
 export type CheckEvent = {
   sequence: number;
   attempt: number;

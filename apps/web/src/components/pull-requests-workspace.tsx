@@ -15,6 +15,7 @@ import {
   type Branch,
   type Credential,
   type FileChange,
+  type IntegrationCandidate,
   type MergeReadiness,
   type Proposal,
   type PullRequest,
@@ -527,6 +528,8 @@ export function PullRequestDetail({
   const [comments, setComments] = useState<PullRequestComment[]>([]);
   const [reviews, setReviews] = useState<PullRequestReview[]>([]);
   const [readiness, setReadiness] = useState<MergeReadiness | null>(null);
+  const [candidates, setCandidates] = useState<IntegrationCandidate[]>([]);
+  const [candidateError, setCandidateError] = useState("");
   const [proposal, setProposal] = useState<Proposal | null>(null);
   const [authors, setAuthors] = useState<Record<string, User>>({});
   const [participant, setParticipant] = useState(false);
@@ -546,7 +549,7 @@ export function PullRequestDetail({
     setError("");
     try {
       const base = `/repositories/${repositoryID}/pulls/${pullRequestID}`;
-      const [repo, item, commitPage, filePage, discussion, reviewList] =
+      const [repo, item, commitPage, filePage, discussion, reviewList, candidatePage] =
         await Promise.all([
           api<Repository>(`/repositories/${repositoryID}`, {}, token),
           api<PullRequest>(base, {}, token),
@@ -554,6 +557,9 @@ export function PullRequestDetail({
           api<{ files: FileChange[] }>(`${base}/files`, {}, token),
           allPages<PullRequestComment>(`${base}/comments`, "comments", token),
           allPages<PullRequestReview>(`${base}/reviews`, "reviews", token),
+          api<{ candidates: IntegrationCandidate[] }>(`${base}/candidates`, {}, token)
+            .then((page) => ({ page, error: "" }))
+            .catch(() => ({ page: { candidates: [] }, error: "Integration candidate evidence is temporarily unavailable." })),
         ]);
       if (!active()) return false;
       setRepository(repo);
@@ -562,6 +568,8 @@ export function PullRequestDetail({
       setFiles(filePage.files);
       setComments(discussion);
       setReviews(reviewList);
+      setCandidates(candidatePage.page.candidates);
+      setCandidateError(candidatePage.error);
       setSourceRepository(
         item.source_repository_id === repositoryID
           ? repo
@@ -1064,6 +1072,13 @@ export function PullRequestDetail({
               </Card>
             )}
           </section>
+          {(candidates.length > 0 || candidateError) && (
+            <section id="integration-candidates" className="scroll-mt-24 space-y-3">
+              <div className="flex items-baseline justify-between gap-3"><h2 className="text-lg font-semibold">Integration candidates</h2><span className="text-xs text-[var(--muted)]">Prospective merge evidence</span></div>
+              {candidateError && <p role="alert" className="rounded-lg bg-[var(--danger-soft)] p-3 text-sm text-[var(--danger)]">{candidateError}</p>}
+              {[...candidates].reverse().map((candidate) => <Card key={candidate.id} className="p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="font-semibold">Candidate <code>{short(candidate.commit_id)}</code></p><p className="mt-1 text-xs text-[var(--muted)]">Source <code>{short(candidate.source_commit_id)}</code> combined with base <code>{short(candidate.base_commit_id)}</code> · {formatDate(candidate.created_at)}</p></div><Badge tone={candidate.state === "passed" ? "success" : candidate.state === "failed" ? "danger" : "warning"}>{candidate.state}</Badge></div><div className="mt-4 grid gap-2 sm:grid-cols-3"><div className="rounded-lg bg-[var(--canvas)] p-3"><p className="text-xs text-[var(--muted)]">Base</p><code className="text-xs">{candidate.base_commit_id}</code></div><div className="rounded-lg bg-[var(--canvas)] p-3"><p className="text-xs text-[var(--muted)]">Pull revision</p><code className="text-xs">{candidate.source_commit_id}</code></div><div className="rounded-lg bg-[var(--canvas)] p-3"><p className="text-xs text-[var(--muted)]">Prospective result</p><code className="text-xs">{candidate.commit_id}</code></div></div><p className="mt-4 text-xs text-[var(--muted)]">{candidate.checks.length} candidate {candidate.checks.length === 1 ? "check" : "checks"}; logs and artifacts are retained in Verification checks below.</p></Card>)}
+            </section>
+          )}
           <PullRequestChecks
             repositoryID={repositoryID}
             pullRequestID={pullRequestID}

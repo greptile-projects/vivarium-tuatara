@@ -510,8 +510,12 @@ func TestPullRequestMergeReadinessReportsRequirementsConflictsAndPermission(t *t
 	gitRepository, _ := gitStore.Open(repository.ID)
 	baseBlob, _ := gitRepository.WriteObject(storage.BlobObject, []byte("base\n"))
 	sourceBlob, _ := gitRepository.WriteObject(storage.BlobObject, []byte("source\n"))
-	baseTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "file.txt", id: baseBlob})
-	sourceTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "file.txt", id: sourceBlob})
+	configBlob, _ := gitRepository.WriteObject(storage.BlobObject, []byte(`{"version":1,"checks":[{"name":"quality","image":"alpine:3.22","command":"exit 7"}]}`))
+	configTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "checks.json", id: configBlob})
+	replacementBlob, _ := gitRepository.WriteObject(storage.BlobObject, []byte(`{"version":1,"checks":[{"name":"quality","image":"alpine:3.22","command":"true"}]}`))
+	replacementTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "checks.json", id: replacementBlob})
+	baseTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "40000", name: ".vivarium", id: configTree}, testTreeEntry{mode: "100644", name: "file.txt", id: baseBlob})
+	sourceTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "40000", name: ".vivarium", id: replacementTree}, testTreeEntry{mode: "100644", name: "file.txt", id: sourceBlob})
 	base := writeTestCommit(t, gitRepository, baseTree, nil, 1700000000, "base")
 	source := writeTestCommit(t, gitRepository, sourceTree, []storage.ObjectID{base}, 1700000001, "source")
 	gitRepository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)})
@@ -535,17 +539,20 @@ func TestPullRequestMergeReadinessReportsRequirementsConflictsAndPermission(t *t
 		return report
 	}
 	report := readReport(contributor.Credential.Token)
-	if report.Mergeable || report.CanMerge || report.RequiredApprovals != 1 || report.Approvals != 0 || len(report.Blockers) != 2 || report.Blockers[0].Code != "approval_required" || report.Blockers[1].Code != "required_check_missing" || report.EvaluatedCommitID != string(source) || len(report.RequiredChecks) != 1 || report.RequiredChecks[0].Status != "missing" || report.Source.State != "current" || report.Target.State != "current" || report.HasConflicts {
+	if report.Mergeable || report.CanMerge || report.RequiredApprovals != 1 || report.Approvals != 0 || len(report.Blockers) != 2 || report.Blockers[0].Code != "approval_required" || report.Blockers[1].Code != "required_check_pending" || report.EvaluatedCommitID != string(source) || len(report.RequiredChecks) != 1 || report.RequiredChecks[0].Status != "pending" || report.Source.State != "current" || report.Target.State != "current" || report.HasConflicts {
 		t.Fatalf("initial readiness = %#v", report)
 	}
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/pulls/"+pullRequest.ID+"/reviews", `{"decision":"approved"}`, owner.Credential.Token, http.StatusOK).Body.Close()
-	runs, err := checkRunStore.Create(repository.ID, pullRequest.ID, string(source), []checkruns.Definition{{Name: "quality", Image: "alpine:3.22", Command: "true"}})
-	if err != nil || len(runs) != 1 {
-		t.Fatalf("create required run: %#v, %v", runs, err)
-	}
-	runs[0].State = "succeeded"
-	if err := checkRunStore.Update(runs[0]); err != nil {
-		t.Fatal(err)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		runs, err := checkRunStore.List(repository.ID, pullRequest.ID)
+		if err == nil && len(runs) == 1 && runs[0].State == "succeeded" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("replacement source check did not pass: %#v, %v", runs, err)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	contributorReport := readReport(contributor.Credential.Token)
 	ownerReport := readReport(owner.Credential.Token)
@@ -562,8 +569,35 @@ func TestPullRequestMergeReadinessReportsRequirementsConflictsAndPermission(t *t
 	queuedResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/pulls/"+pullRequest.ID+"/queue", "", owner.Credential.Token, http.StatusOK)
 	var queued pullrequests.PullRequest
 	decodeResponse(t, queuedResponse, &queued)
-	if queued.QueuedAt == nil {
+	if queued.QueuedAt == nil || len(queued.IntegrationCandidates) != 1 {
 		t.Fatalf("queued pull = %#v", queued)
+	}
+	candidate := queued.IntegrationCandidates[0]
+	if candidate.SourceCommitID != string(source) || candidate.BaseCommitID != string(base) || candidate.CommitID == string(source) || candidate.CommitID == string(base) || len(candidate.CheckDefinitions) != 1 || candidate.CheckDefinitions[0].Name != "quality" || candidate.CheckDefinitions[0].Command != "exit 7" {
+		t.Fatalf("integration candidate = %#v", candidate)
+	}
+	candidateCommit, candidateErr := gitRepository.ReadCommit(storage.ObjectID(candidate.CommitID))
+	if candidateErr != nil || len(candidateCommit.Parents) != 2 || candidateCommit.Parents[0] != base || candidateCommit.Parents[1] != source {
+		t.Fatalf("candidate commit = %#v, %v", candidateCommit, candidateErr)
+	}
+	candidatesResponse := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/pulls/"+pullRequest.ID+"/candidates", "", owner.Credential.Token, http.StatusOK)
+	var candidates struct {
+		Candidates []pullrequests.IntegrationCandidateView `json:"candidates"`
+	}
+	decodeResponse(t, candidatesResponse, &candidates)
+	if len(candidates.Candidates) != 1 || candidates.Candidates[0].CommitID != candidate.CommitID || candidates.Candidates[0].State == "" || candidates.Candidates[0].Checks == nil {
+		t.Fatalf("candidate surface = %#v", candidates.Candidates)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		candidateRuns, listErr := checkRunStore.List(repository.ID, pullRequest.ID)
+		if listErr == nil && len(candidateRuns) == 2 && candidateRuns[1].CommitID == candidate.CommitID && candidateRuns[1].Definition.Command == "exit 7" && candidateRuns[1].State == "failed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("bound target check did not fail candidate: %#v, %v", candidateRuns, listErr)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 
 	targetBlob, _ := gitRepository.WriteObject(storage.BlobObject, []byte("target\n"))
@@ -575,7 +609,7 @@ func TestPullRequestMergeReadinessReportsRequirementsConflictsAndPermission(t *t
 		t.Fatalf("conflicting readiness = %#v", report)
 	}
 	objectsAfterReadiness, _ := gitRepository.ListObjects()
-	if len(objectsAfterReadiness) != len(objectsBeforeReadiness)+3 { // target blob, tree, and commit only
+	if len(objectsAfterReadiness) != len(objectsBeforeReadiness)+4 { // immutable candidate plus target blob, tree, and commit
 		t.Fatalf("readiness wrote repository objects: before=%d after=%d", len(objectsBeforeReadiness), len(objectsAfterReadiness))
 	}
 }

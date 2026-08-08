@@ -43,28 +43,48 @@ const (
 )
 
 type PullRequest struct {
-	ID                     string     `json:"id"`
-	RepositoryID           string     `json:"repository_id"`
-	SourceRepositoryID     string     `json:"source_repository_id"`
-	AuthorID               string     `json:"author_id"`
-	Title                  string     `json:"title"`
-	Body                   string     `json:"body"`
-	SourceBranch           string     `json:"source_branch"`
-	TargetBranch           string     `json:"target_branch"`
-	SourceCommitID         string     `json:"source_commit_id"`
-	TargetCommitID         string     `json:"target_commit_id"`
-	ProposalID             *string    `json:"proposal_id"`
-	Status                 string     `json:"status"`
-	MaintainerEditsAllowed bool       `json:"maintainer_edits_allowed"`
-	CreatedAt              time.Time  `json:"created_at"`
-	UpdatedAt              time.Time  `json:"updated_at"`
-	ClosedAt               *time.Time `json:"closed_at"`
-	ClosedBy               *string    `json:"closed_by"`
-	MergedAt               *time.Time `json:"merged_at"`
-	MergedBy               *string    `json:"merged_by"`
-	MergeCommitID          *string    `json:"merge_commit_id"`
-	QueuedAt               *time.Time `json:"queued_at,omitempty"`
+	ID                     string                 `json:"id"`
+	RepositoryID           string                 `json:"repository_id"`
+	SourceRepositoryID     string                 `json:"source_repository_id"`
+	AuthorID               string                 `json:"author_id"`
+	Title                  string                 `json:"title"`
+	Body                   string                 `json:"body"`
+	SourceBranch           string                 `json:"source_branch"`
+	TargetBranch           string                 `json:"target_branch"`
+	SourceCommitID         string                 `json:"source_commit_id"`
+	TargetCommitID         string                 `json:"target_commit_id"`
+	ProposalID             *string                `json:"proposal_id"`
+	Status                 string                 `json:"status"`
+	MaintainerEditsAllowed bool                   `json:"maintainer_edits_allowed"`
+	CreatedAt              time.Time              `json:"created_at"`
+	UpdatedAt              time.Time              `json:"updated_at"`
+	ClosedAt               *time.Time             `json:"closed_at"`
+	ClosedBy               *string                `json:"closed_by"`
+	MergedAt               *time.Time             `json:"merged_at"`
+	MergedBy               *string                `json:"merged_by"`
+	MergeCommitID          *string                `json:"merge_commit_id"`
+	QueuedAt               *time.Time             `json:"queued_at,omitempty"`
+	IntegrationCandidates  []IntegrationCandidate `json:"integration_candidates,omitempty"`
 	mergeIntent            *mergeIntent
+}
+
+// IntegrationCandidate is an immutable prospective merge. CommitID names a
+// synthetic two-parent commit whose first parent is BaseCommitID and whose
+// second parent is SourceCommitID. Its lifecycle is derived from check runs.
+type IntegrationCandidate struct {
+	ID               string                 `json:"id"`
+	SourceCommitID   string                 `json:"source_commit_id"`
+	BaseCommitID     string                 `json:"base_commit_id"`
+	CommitID         string                 `json:"commit_id"`
+	RequiredChecks   []string               `json:"required_checks"`
+	CheckDefinitions []checkruns.Definition `json:"check_definitions"`
+	CreatedAt        time.Time              `json:"created_at"`
+}
+
+type IntegrationCandidateView struct {
+	IntegrationCandidate
+	State  string          `json:"state"`
+	Checks []checkruns.Run `json:"checks"`
 }
 
 // UpdatePolicy changes the source owner's explicit grant allowing target
@@ -1072,9 +1092,8 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 	return report, nil
 }
 
-// Enqueue admits a currently mergeable pull request into branch order. Later
-// queue workers consume this durable timestamp; admission itself never changes
-// review, check, or branch policy.
+// Enqueue admits a currently mergeable pull request and freezes the exact
+// prospective merge that verification must evaluate.
 func (s *Store) Enqueue(repositoryID, pullRequestID string) (PullRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1098,10 +1117,37 @@ func (s *Store) Enqueue(repositoryID, pullRequestID string) (PullRequest, error)
 		defer unlockRequirements()
 	}
 	report, err := s.Readiness(repositoryID, pullRequestID, true)
-	if err != nil || !report.CanEnqueue {
+	if err != nil || !report.CanEnqueue || report.Target.CurrentCommitID == nil {
 		return PullRequest{}, ErrNotReady
 	}
+	repository, err := s.git.Open(repositoryID)
+	if err != nil {
+		return PullRequest{}, err
+	}
 	now := s.now().Truncate(time.Microsecond)
+	requiredChecks := make([]string, len(report.RequiredChecks))
+	for i, requirement := range report.RequiredChecks {
+		requiredChecks[i] = requirement.Name
+	}
+	definitions, err := requiredDefinitions(repository, *report.Target.CurrentCommitID, requiredChecks)
+	if err != nil {
+		return PullRequest{}, ErrNotReady
+	}
+	tree, err := mergeTree(repository, *report.Target.CurrentCommitID, p.SourceCommitID)
+	if err != nil {
+		return PullRequest{}, ErrNotReady
+	}
+	candidateID, err := newID()
+	if err != nil {
+		return PullRequest{}, err
+	}
+	stamp := fmt.Sprintf("%d +0000", now.Unix())
+	content := fmt.Sprintf("tree %s\nparent %s\nparent %s\nauthor Vivarium Integration Queue <queue@vivarium> %s\ncommitter Vivarium Integration Queue <queue@vivarium> %s\n\nVerify pull request %s against %s\n", tree, *report.Target.CurrentCommitID, p.SourceCommitID, stamp, stamp, p.ID, *report.Target.CurrentCommitID)
+	commit, err := repository.WriteObject(storage.CommitObject, []byte(content))
+	if err != nil {
+		return PullRequest{}, fmt.Errorf("write integration candidate: %w", err)
+	}
+	p.IntegrationCandidates = append(p.IntegrationCandidates, IntegrationCandidate{ID: candidateID, SourceCommitID: p.SourceCommitID, BaseCommitID: *report.Target.CurrentCommitID, CommitID: string(commit), RequiredChecks: requiredChecks, CheckDefinitions: definitions, CreatedAt: now})
 	p.QueuedAt, p.UpdatedAt = &now, now
 	if committed, writeErr := s.write(p); writeErr != nil {
 		if committed {
@@ -1110,6 +1156,92 @@ func (s *Store) Enqueue(repositoryID, pullRequestID string) (PullRequest, error)
 		return PullRequest{}, writeErr
 	}
 	return p, nil
+}
+
+func requiredDefinitions(repository *storage.Repository, commitID string, required []string) ([]checkruns.Definition, error) {
+	if len(required) == 0 {
+		return []checkruns.Definition{}, nil
+	}
+	command := exec.Command("git", "--git-dir="+repository.Path(), "show", commitID+":"+checkruns.ConfigPath)
+	data, err := command.Output()
+	if err != nil {
+		return nil, err
+	}
+	config, err := checkruns.ParseConfig(data)
+	if err != nil {
+		return nil, err
+	}
+	byName := map[string]checkruns.Definition{}
+	for _, definition := range config.Checks {
+		byName[definition.Name] = definition
+	}
+	definitions := make([]checkruns.Definition, 0, len(required))
+	for _, name := range required {
+		definition, exists := byName[name]
+		if !exists {
+			return nil, ErrNotReady
+		}
+		definitions = append(definitions, definition)
+	}
+	return definitions, nil
+}
+
+// Candidates returns immutable candidate identity together with its derived
+// verification lifecycle and evidence handles.
+func (s *Store) Candidates(repositoryID, pullRequestID string) ([]IntegrationCandidateView, error) {
+	p, err := s.Get(repositoryID, pullRequestID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]IntegrationCandidateView, len(p.IntegrationCandidates))
+	for i, candidate := range p.IntegrationCandidates {
+		result[i].IntegrationCandidate = candidate
+		result[i].Checks = []checkruns.Run{}
+	}
+	runs := []checkruns.Run{}
+	if s.checkRuns != nil {
+		runs, err = s.checkRuns.List(repositoryID, pullRequestID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for i := range result {
+		for _, run := range runs {
+			if run.CommitID == result[i].CommitID {
+				result[i].Checks = append(result[i].Checks, run)
+			}
+		}
+		result[i].State = candidateState(result[i].Checks, result[i].RequiredChecks)
+	}
+	return result, nil
+}
+
+func candidateState(runs []checkruns.Run, required []string) string {
+	if len(required) == 0 {
+		return "passed"
+	}
+	byName := map[string]checkruns.Run{}
+	for _, run := range runs {
+		byName[run.Definition.Name] = run
+	}
+	if len(runs) == 0 {
+		return "pending"
+	}
+	state := "passed"
+	for _, name := range required {
+		run, exists := byName[name]
+		if !exists {
+			state = "pending"
+			continue
+		}
+		if run.State == "failed" || run.State == "canceled" {
+			return "failed"
+		}
+		if run.State != "succeeded" {
+			state = "verifying"
+		}
+	}
+	return state
 }
 
 // Merge revalidates readiness while holding the cross-process mutation lock,
@@ -1576,6 +1708,9 @@ func (s *Store) read(repositoryID, id string) (PullRequest, error) {
 		p.SourceRepositoryID = p.RepositoryID
 	}
 	p.mergeIntent = record.MergeIntent
+	if p.IntegrationCandidates == nil {
+		p.IntegrationCandidates = []IntegrationCandidate{}
+	}
 	validOutcome := (p.Status == Open && p.ClosedAt == nil && p.ClosedBy == nil && p.MergedAt == nil && p.MergedBy == nil && p.MergeCommitID == nil) ||
 		(p.Status == Closed && p.ClosedAt != nil && !p.ClosedAt.IsZero() && p.ClosedBy != nil && validID(*p.ClosedBy) && p.MergedAt == nil && p.MergedBy == nil && p.MergeCommitID == nil) ||
 		(p.Status == Merged && p.ClosedAt == nil && p.ClosedBy == nil && p.MergedAt != nil && p.MergedBy != nil && validID(*p.MergedBy) && p.MergeCommitID != nil && validCommitID(*p.MergeCommitID))
@@ -1585,6 +1720,16 @@ func (s *Store) read(repositoryID, id string) (PullRequest, error) {
 	}
 	if _, _, err := validatePurpose(p.Title, p.Body); err != nil {
 		return PullRequest{}, fmt.Errorf("corrupt pull request %s", id)
+	}
+	for _, candidate := range p.IntegrationCandidates {
+		if !validID(candidate.ID) || !validCommitID(candidate.SourceCommitID) || !validCommitID(candidate.BaseCommitID) || !validCommitID(candidate.CommitID) || candidate.RequiredChecks == nil || candidate.CheckDefinitions == nil || len(candidate.RequiredChecks) != len(candidate.CheckDefinitions) || candidate.CreatedAt.IsZero() {
+			return PullRequest{}, fmt.Errorf("corrupt pull request %s", id)
+		}
+		for i, definition := range candidate.CheckDefinitions {
+			if definition.Name != candidate.RequiredChecks[i] {
+				return PullRequest{}, fmt.Errorf("corrupt pull request %s", id)
+			}
+		}
 	}
 	return p, nil
 }

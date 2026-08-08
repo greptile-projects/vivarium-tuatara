@@ -449,15 +449,22 @@ type reviewInput struct {
 }
 
 func startCheckRuns(gitStore *storage.Store, runStore *checkruns.Store, pull pullrequests.PullRequest) {
+	startCheckRunsForCommit(gitStore, runStore, pull.RepositoryID, pull.ID, pull.SourceCommitID, nil)
+}
+
+func startCheckRunsForCommit(gitStore *storage.Store, runStore *checkruns.Store, repositoryID, pullRequestID, commitID string, required []string) {
 	if gitStore == nil || runStore == nil {
 		return
 	}
-	repository, err := gitStore.Open(pull.RepositoryID)
+	if required != nil && len(required) == 0 {
+		return
+	}
+	repository, err := gitStore.Open(repositoryID)
 	if err != nil {
 		log.Printf("open repository for checks: %v", err)
 		return
 	}
-	command := exec.Command("git", "--git-dir="+repository.Path(), "show", pull.SourceCommitID+":"+checkruns.ConfigPath)
+	command := exec.Command("git", "--git-dir="+repository.Path(), "show", commitID+":"+checkruns.ConfigPath)
 	data, err := command.Output()
 	if err != nil {
 		// A repository opts in by versioning the configuration at the candidate commit.
@@ -469,16 +476,48 @@ func startCheckRuns(gitStore *storage.Store, runStore *checkruns.Store, pull pul
 	}
 	config, err := checkruns.ParseConfig(data)
 	if err != nil {
-		log.Printf("invalid check configuration for %s: %v", pull.SourceCommitID, err)
-		runs, createErr := runStore.Create(pull.RepositoryID, pull.ID, pull.SourceCommitID, []checkruns.Definition{{Name: "configuration", Image: "invalid", Command: "invalid configuration", TimeoutSeconds: 1, WorkingDirectory: "."}})
+		log.Printf("invalid check configuration for %s: %v", commitID, err)
+		runs, createErr := runStore.Create(repositoryID, pullRequestID, commitID, []checkruns.Definition{{Name: "configuration", Image: "invalid", Command: "invalid configuration", TimeoutSeconds: 1, WorkingDirectory: "."}})
 		if createErr == nil && len(runs) == 1 {
 			_ = runStore.RecordFailure(runs[0], err.Error())
 		}
 		return
 	}
-	runs, err := runStore.Create(pull.RepositoryID, pull.ID, pull.SourceCommitID, config.Checks)
+	if required != nil {
+		wanted := map[string]bool{}
+		for _, name := range required {
+			wanted[name] = true
+		}
+		definitions := make([]checkruns.Definition, 0, len(required))
+		for _, definition := range config.Checks {
+			if wanted[definition.Name] {
+				definitions = append(definitions, definition)
+			}
+		}
+		config.Checks = definitions
+	}
+	runs, err := runStore.Create(repositoryID, pullRequestID, commitID, config.Checks)
 	if err != nil {
 		log.Printf("create check runs: %v", err)
+		return
+	}
+	for _, run := range runs {
+		go runStore.Execute(run, repository.Path())
+	}
+}
+
+func startBoundCheckRuns(gitStore *storage.Store, runStore *checkruns.Store, repositoryID, pullRequestID, commitID string, definitions []checkruns.Definition) {
+	if gitStore == nil || runStore == nil || len(definitions) == 0 {
+		return
+	}
+	repository, err := gitStore.Open(repositoryID)
+	if err != nil {
+		log.Printf("open repository for candidate checks: %v", err)
+		return
+	}
+	runs, err := runStore.Create(repositoryID, pullRequestID, commitID, definitions)
+	if err != nil {
+		log.Printf("create candidate check runs: %v", err)
 		return
 	}
 	for _, run := range runs {
@@ -787,6 +826,16 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		}
 		writeJSON(w, 200, map[string]any{"check_runs": runs})
 	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/candidates", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		candidates, err := store.Candidates(r.PathValue("id"), r.PathValue("pull_id"))
+		if writePullRequestError(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"candidates": candidates})
+	})
 	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/checks/{check_id}", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
 			return
@@ -1036,11 +1085,19 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		}
 		queued, err := store.Enqueue(r.PathValue("id"), r.PathValue("pull_id"))
 		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
+			if len(queued.IntegrationCandidates) > 0 {
+				candidate := queued.IntegrationCandidates[len(queued.IntegrationCandidates)-1]
+				startBoundCheckRuns(gitStore, checkRunStore, queued.RepositoryID, queued.ID, candidate.CommitID, candidate.CheckDefinitions)
+			}
 			writeUncertainMutation(w, queued)
 			return
 		}
 		if writePullRequestError(w, err) {
 			return
+		}
+		if len(queued.IntegrationCandidates) > 0 {
+			candidate := queued.IntegrationCandidates[len(queued.IntegrationCandidates)-1]
+			startBoundCheckRuns(gitStore, checkRunStore, queued.RepositoryID, queued.ID, candidate.CommitID, candidate.CheckDefinitions)
 		}
 		writeJSON(w, http.StatusOK, queued)
 	})
