@@ -112,6 +112,31 @@ func TestProposalTasksDeriveReadinessAndRetainHistory(t *testing.T) {
 	}
 }
 
+func TestTaskContributionCannotReopenTerminalTaskOrClosedProposal(t *testing.T) {
+	contribution := TaskContribution{PullRequestID: commenterID, SourceCommitID: strings.Repeat("a", 40), CommitIDs: []string{strings.Repeat("a", 40)}, Status: "review"}
+	for _, status := range []string{TaskCompleted, TaskCancelled} {
+		store, _ := New(t.TempDir())
+		proposal, _ := store.Create(repositoryID, authorID, "Intent", "Context")
+		task, _ := store.CreateTask(repositoryID, proposal.ID, authorID, "Work", "Outcome", nil, nil)
+		if _, err := store.UpdateTask(repositoryID, proposal.ID, task.ID, authorID, TaskPatch{Status: &status}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.LinkTaskContribution(repositoryID, proposal.ID, task.ID, authorID, contribution); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("status %s link: %v", status, err)
+		}
+	}
+	store, _ := New(t.TempDir())
+	proposal, _ := store.Create(repositoryID, authorID, "Intent", "Context")
+	task, _ := store.CreateTask(repositoryID, proposal.ID, authorID, "Work", "Outcome", nil, nil)
+	closed := Closed
+	if _, err := store.Update(repositoryID, proposal.ID, Patch{Status: &closed}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LinkTaskContribution(repositoryID, proposal.ID, task.ID, authorID, contribution); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("closed proposal link: %v", err)
+	}
+}
+
 func TestProposalTasksRejectInvalidGraphAndDiscussionLinks(t *testing.T) {
 	store, _ := New(t.TempDir())
 	proposal, _ := store.Create(repositoryID, authorID, "Plan", "")

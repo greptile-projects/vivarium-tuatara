@@ -626,3 +626,9 @@ End-to-end compatibility suites treat the HTTP endpoint as an opaque remote and
 drive it with stock Git commands. They cover the entire primary-branch
 lifecycle as well as discovery, fetch, creation, advancement, and deletion of
 a candidate branch while verifying that the maintained branch remains fixed.
+
+Assigned proposal tasks publish human or completed-agent branch work through a
+task-scoped command that creates an ordinary pull request. Pulls retain stable
+proposal, task, session, and run provenance; tasks retain each exact candidate
+attempt. Review, checks, closure, supersession, and merge stay traceable, while
+only a merge completes planned work.

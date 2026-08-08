@@ -205,7 +205,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerProposalRoutes(mux, store, repositoryCatalog, proposalStore, authStore, activityStore, userStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil {
-		registerPullRequestRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, authStore, activityStore, userStore, checkRunStore)
+		registerPullRequestRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, authStore, activityStore, userStore, checkRunStore, changeSessionStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil && changeSessionStore != nil {
 		registerChangeSessionRoutes(mux, store, repositoryCatalog, pullRequestStore, changeSessionStore, authStore, activityStore, checkRunStore)
@@ -489,6 +489,13 @@ type pullRequestPolicyInput struct {
 	MaintainerEditsAllowed *bool `json:"maintainer_edits_allowed"`
 }
 
+func valueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
 type reviewInput struct {
 	Decision *string `json:"decision"`
 }
@@ -618,10 +625,43 @@ func repairEvidence(run checkruns.Run, events []checkruns.Event) *changesessions
 	return evidence
 }
 
-func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoriesStore *repositories.Store, proposalStore *proposals.Store, store *pullrequests.Store, authStore *auth.Store, activityStore *activities.Store, userStore *users.Store, checkRunStore *checkruns.Store) {
+func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoriesStore *repositories.Store, proposalStore *proposals.Store, store *pullrequests.Store, authStore *auth.Store, activityStore *activities.Store, userStore *users.Store, checkRunStore *checkruns.Store, sessionStore *changesessions.Store) {
 	store.ConfigureRequiredChecks(repositoriesStore, checkRunStore)
+	reconcileTaskState := func(pull pullrequests.PullRequest) (pullrequests.PullRequest, error) {
+		if pull.TaskStatePending == "" || pull.ProposalID == nil || pull.TaskID == nil || proposalStore == nil {
+			return pull, nil
+		}
+		actorID := pull.AuthorID
+		var err error
+		switch pull.TaskStatePending {
+		case "review":
+			_, err = proposalStore.LinkTaskContribution(pull.RepositoryID, *pull.ProposalID, *pull.TaskID, actorID, proposals.TaskContribution{PullRequestID: pull.ID, SessionID: valueOrEmpty(pull.TaskSessionID), RunID: valueOrEmpty(pull.TaskRunID), SourceCommitID: pull.SourceCommitID, CommitIDs: append([]string(nil), pull.TaskCommitIDs...), Status: "review"})
+		case "closed":
+			if pull.ClosedBy != nil {
+				actorID = *pull.ClosedBy
+			}
+			_, err = proposalStore.UpdateTaskContribution(pull.RepositoryID, *pull.ProposalID, *pull.TaskID, actorID, pull.ID, "closed")
+		case "merged":
+			if pull.MergedBy != nil {
+				actorID = *pull.MergedBy
+			}
+			_, err = proposalStore.UpdateTaskContribution(pull.RepositoryID, *pull.ProposalID, *pull.TaskID, actorID, pull.ID, "merged")
+		}
+		if err != nil && !errors.Is(err, proposals.ErrDurabilityUncertain) {
+			return pull, err
+		}
+		confirmed, confirmErr := store.ConfirmTaskState(pull.RepositoryID, pull.ID, pull.TaskStatePending)
+		if confirmErr != nil {
+			return pull, confirmErr
+		}
+		return confirmed, nil
+	}
 	store.ConfigureQueueFinalizer(func(merged pullrequests.PullRequest) error {
-		return finalizeQueuedMerge(merged, repositoriesStore, proposalStore, activityStore)
+		if err := finalizeQueuedMerge(merged, repositoriesStore, proposalStore, activityStore); err != nil {
+			return err
+		}
+		_, err := reconcileTaskState(merged)
+		return err
 	})
 	mux.HandleFunc("GET /repositories/{id}/pulls", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
@@ -630,6 +670,13 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		all, err := store.List(r.PathValue("id"))
 		if writePullRequestError(w, err) {
 			return
+		}
+		for i := range all {
+			if all[i].TaskStatePending != "" {
+				if repaired, repairErr := reconcileTaskState(all[i]); repairErr == nil {
+					all[i] = repaired
+				}
+			}
 		}
 		page, next, ok := paginate(r, all, func(p pullrequests.PullRequest) string { return p.ID })
 		if !ok {
@@ -707,6 +754,94 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		w.Header().Set("Location", location)
 		writeJSON(w, 201, created)
 	})
+	// Task publication is intentionally a distinct command: it verifies the
+	// assignment/session evidence before creating an otherwise ordinary pull.
+	mux.HandleFunc("POST /repositories/{id}/proposals/{proposal_id}/tasks/{task_id}/contributions", func(w http.ResponseWriter, r *http.Request) {
+		if proposalStore == nil {
+			writeAPIError(w, 404, "proposal_not_found", "proposal not found")
+			return
+		}
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var input struct {
+			Title        string `json:"title"`
+			Body         string `json:"body"`
+			SourceBranch string `json:"source_branch"`
+			TargetBranch string `json:"target_branch"`
+			SessionID    string `json:"session_id"`
+			RunID        string `json:"run_id"`
+		}
+		if decodeJSON(r, &input) != nil || strings.TrimSpace(input.Title) == "" || strings.TrimSpace(input.SourceBranch) == "" || strings.TrimSpace(input.TargetBranch) == "" {
+			writeAPIError(w, 400, "invalid_task_contribution", "title, body, source_branch, and target_branch are required")
+			return
+		}
+		task, err := proposalStore.GetTask(r.PathValue("id"), r.PathValue("proposal_id"), r.PathValue("task_id"))
+		if writeProposalError(w, err) {
+			return
+		}
+		proposal, err := proposalStore.Get(r.PathValue("id"), r.PathValue("proposal_id"))
+		if writeProposalError(w, err) {
+			return
+		}
+		if proposal.Status != proposals.Open || task.Status != proposals.TaskTodo || task.Assignment == nil || (task.Assignment.AssigneeType == "human" && task.Assignment.AssigneeID != actor.UserID) {
+			writeAPIError(w, 409, "task_not_publishable", "task work must be published by its current assignee")
+			return
+		}
+		var sessionID, runID *string
+		commits := []string{}
+		expectedSourceCommit := ""
+		if task.Assignment.AssigneeType == "agent" {
+			if sessionStore == nil || input.SessionID == "" || input.RunID == "" {
+				writeAPIError(w, 409, "task_not_publishable", "completed agent session evidence is required")
+				return
+			}
+			session, getErr := sessionStore.Get(r.PathValue("id"), task.ID, input.SessionID)
+			if getErr != nil || session.ProposalID != r.PathValue("proposal_id") {
+				writeAPIError(w, 409, "task_not_publishable", "completed agent session evidence is required")
+				return
+			}
+			runs, listErr := sessionStore.ListRuns(r.PathValue("id"), task.ID, input.SessionID)
+			if listErr != nil {
+				writeChangeSessionError(w, listErr)
+				return
+			}
+			found := false
+			for _, run := range runs {
+				if run.ID == input.RunID && run.State == changesessions.Completed && run.Outcome != nil && run.WorkingBranch == input.SourceBranch {
+					found = true
+					commits = append(commits, run.Outcome.Commits...)
+					expectedSourceCommit = run.Outcome.CommitID
+					break
+				}
+			}
+			if !found {
+				writeAPIError(w, 409, "task_not_publishable", "completed agent session evidence does not match the source branch")
+				return
+			}
+			sessionID, runID = &input.SessionID, &input.RunID
+		}
+		proposalID, taskID := r.PathValue("proposal_id"), r.PathValue("task_id")
+		created, err := store.CreateTaskContribution(r.PathValue("id"), actor.UserID, input.Title, input.Body, input.SourceBranch, input.TargetBranch, expectedSourceCommit, commits, &proposalID, &taskID, sessionID, runID)
+		if errors.Is(err, pullrequests.ErrSourceChanged) {
+			writeAPIError(w, 409, "task_not_publishable", "the source branch no longer matches the completed task work")
+			return
+		}
+		if err != nil && !errors.Is(err, pullrequests.ErrDurabilityUncertain) {
+			writePullRequestError(w, err)
+			return
+		}
+		created, linkErr := reconcileTaskState(created)
+		startCheckRuns(gitStore, checkRunStore, created)
+		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.created", ActorID: actor.UserID, RepositoryID: created.RepositoryID, ResourceType: "pull_request", ResourceID: created.ID, ResourceTitle: created.Title})
+		w.Header().Set("Location", "/repositories/"+created.RepositoryID+"/pulls/"+created.ID)
+		if errors.Is(err, pullrequests.ErrDurabilityUncertain) || linkErr != nil {
+			writeUncertainMutation(w, created)
+			return
+		}
+		writeJSON(w, 201, created)
+	})
 	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
 			return
@@ -714,6 +849,14 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		pullRequest, err := store.Get(r.PathValue("id"), r.PathValue("pull_id"))
 		if writePullRequestError(w, err) {
 			return
+		}
+		if pullRequest.TaskStatePending != "" {
+			var repairErr error
+			pullRequest, repairErr = reconcileTaskState(pullRequest)
+			if repairErr != nil {
+				writeUncertainMutation(w, pullRequest)
+				return
+			}
 		}
 		writeJSON(w, 200, pullRequest)
 	})
@@ -759,6 +902,13 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		if writePullRequestError(w, err) {
 			return
 		}
+		if existing.TaskStatePending != "" {
+			existing, err = reconcileTaskState(existing)
+			if err != nil {
+				writeUncertainMutation(w, existing)
+				return
+			}
+		}
 		target, err := repositoriesStore.GetByID(existing.RepositoryID)
 		if err != nil || (actor.UserID != existing.AuthorID && actor.UserID != target.OwnerID) {
 			writeAPIError(w, 404, "pull_request_not_found", "pull request not found")
@@ -766,10 +916,16 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		}
 		updated, err := store.Close(existing.RepositoryID, existing.ID, actor.UserID)
 		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
+			updated, _ = reconcileTaskState(updated)
 			writeUncertainMutation(w, updated)
 			return
 		}
 		if writePullRequestError(w, err) {
+			return
+		}
+		updated, taskErr := reconcileTaskState(updated)
+		if taskErr != nil {
+			writeUncertainMutation(w, updated)
 			return
 		}
 		writeJSON(w, 200, updated)
@@ -1085,8 +1241,18 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 			writeAPIError(w, http.StatusNotFound, "repository_not_found", "repository not found")
 			return
 		}
+		if existing, getErr := store.Get(r.PathValue("id"), r.PathValue("pull_id")); getErr == nil && existing.TaskStatePending != "" {
+			if repaired, repairErr := reconcileTaskState(existing); repairErr != nil {
+				writeUncertainMutation(w, repaired)
+				return
+			}
+		} else if getErr != nil {
+			writePullRequestError(w, getErr)
+			return
+		}
 		merged, err := store.Merge(r.PathValue("id"), r.PathValue("pull_id"), actor.UserID)
 		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
+			merged, _ = reconcileTaskState(merged)
 			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.merged", ActorID: actor.UserID, RepositoryID: merged.RepositoryID, ResourceType: "pull_request", ResourceID: merged.ID, ResourceTitle: merged.Title})
 			writeUncertainMutation(w, merged)
 			return
@@ -1094,7 +1260,12 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		if writePullRequestError(w, err) {
 			return
 		}
-		if merged.ProposalID != nil && proposalStore != nil {
+		merged, taskErr := reconcileTaskState(merged)
+		if taskErr != nil {
+			writeUncertainMutation(w, merged)
+			return
+		}
+		if merged.ProposalID != nil && merged.TaskID == nil && proposalStore != nil {
 			proposal, proposalErr := proposalStore.Get(r.PathValue("id"), *merged.ProposalID)
 			closedLinkedProposal := false
 			if proposalErr == nil && proposal.Status == proposals.Open {
@@ -1319,7 +1490,7 @@ func finalizeQueuedMerge(merged pullrequests.PullRequest, repositoriesStore *rep
 		return errors.New("queued merge attribution is missing")
 	}
 	actorID := *merged.MergedBy
-	if merged.ProposalID != nil && proposalStore != nil {
+	if merged.ProposalID != nil && merged.TaskID == nil && proposalStore != nil {
 		proposal, err := proposalStore.Get(merged.RepositoryID, *merged.ProposalID)
 		if err != nil {
 			return err

@@ -263,6 +263,25 @@ denies later writes if credential revocation cannot be relied upon. Publishing
 task results into review is a separate workflow; starting work does not create
 an empty pull request.
 
+An assigned human, or a participant publishing a completed assigned-agent run,
+hands task work to review with `POST .../tasks/{task_id}/contributions`. The body
+uses ordinary pull-request `title`, `body`, `source_branch`, and `target_branch`
+fields; agent work additionally supplies its completed `session_id` and
+`run_id`. The resulting pull retains `proposal_id`, `task_id`, optional
+`task_session_id`, and optional `task_run_id`; the task retains every candidate
+and its exact commits in the other direction. Repository-defined checks run on
+the pull's exact source snapshot.
+
+Publication records `review` and moves the task to `in_progress`, never
+`completed`. A later attempt marks the prior candidate `superseded`. Closing an
+unmerged pull records `closed` and returns the task to `todo`; only merge records
+`merged` and completes it. Task-linked merges do not automatically close the
+whole multi-task proposal. Pull records retain `task_state_pending` until the
+corresponding task mutation is durable; pending pulls are not mergeable, and
+pull collection/detail reads retry the exact idempotent link, close, or merge
+projection before clearing that repair intent. Agent publication also requires
+the live branch tip to equal the completed run's exact outcome commit.
+
 ## Automated checks
 
 Repository owners manage the quality gate for a target branch with `GET` and
