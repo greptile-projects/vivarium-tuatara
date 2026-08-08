@@ -243,6 +243,18 @@ whenever dependencies change or the web job fails before it starts.
   stable ID and carry path, size, SHA-256, media type, attempt, and timing
   metadata. Recovery records an interrupted attempt before relaunching so a
   later success never erases prior failure evidence.
+  Pull request detail renders live and historical attempts, logs, and
+  authenticated artifact downloads in the shared review surface. Current
+  owners and contributors can cancel active checks or rerun terminal checks;
+  durable control events and collaborator-requested attempts retain stable
+  actor IDs without replacing earlier evidence. Cancellation publishes a
+  durable intent before interrupting the executor, and recovery honors that
+  intent even if the command first reports failure. Run records are the source
+  of truth for control attribution; event reads repair a missing projection
+  under a cross-process projection lock. Cancellation intent remains until
+  terminal-state directory durability is confirmed. If an executor completes
+  while cancellation waits for its lock, the confirmed terminal result wins
+  and cancellation must not contradict its attempt or evidence.
   Immutable pull request comments are attributable by stable user ID,
   readable under repository visibility rules, and writable by current owners
   and contributors; comment publication uses the uncertain-durability contract.

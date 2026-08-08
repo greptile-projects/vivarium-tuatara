@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -48,6 +49,222 @@ func TestEvidenceSequenceHandlesEscapedMaximumLogChunk(t *testing.T) {
 	events, err := store.Events(runs[0].RepositoryID, runs[0].PullRequestID, runs[0].ID, 0)
 	if err != nil || len(events) != 3 || events[2].Sequence != 3 || events[2].State != "succeeded" {
 		t.Fatalf("Events() = %#v, %v", events, err)
+	}
+}
+
+func TestCollaboratorControlsPreserveAttemptsAndAttribution(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.Create("0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789", strings.Repeat("d", 40), []Definition{{Name: "test", Image: "alpine:3.22", Command: "true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := runs[0]
+	now := time.Now().UTC()
+	run.State, run.CompletedAt = "succeeded", &now
+	run.Attempts = []Attempt{{Number: 1, State: "succeeded", StartedAt: now, CompletedAt: &now}}
+	if err := store.Update(run); err != nil {
+		t.Fatal(err)
+	}
+	actor := "11111111111111111111111111111111"
+	queued, err := store.Rerun(run.RepositoryID, run.PullRequestID, run.ID, actor)
+	if err != nil || queued.State != "queued" || queued.RequestedBy != actor || len(queued.Attempts) != 1 {
+		t.Fatalf("Rerun() = %#v, %v", queued, err)
+	}
+	canceled, err := store.Cancel(run.RepositoryID, run.PullRequestID, run.ID, actor)
+	if err != nil || canceled.State != "canceled" || len(canceled.Attempts) != 1 {
+		t.Fatalf("Cancel() = %#v, %v", canceled, err)
+	}
+	events, err := store.Events(run.RepositoryID, run.PullRequestID, run.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 4 || events[1].Kind != "control" || events[1].ActorID != actor || events[3].Message != "cancel" || events[3].ActorID != actor {
+		t.Fatalf("events = %#v", events)
+	}
+	if _, err := store.Rerun(run.RepositoryID, run.PullRequestID, run.ID, actor); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRerunSurvivesEvidenceAppendFailureAndRepairsAttribution(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.Create("0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789", strings.Repeat("e", 40), []Definition{{Name: "test", Image: "alpine:3.22", Command: "true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, now := runs[0], time.Now().UTC()
+	run.State, run.CompletedAt = "succeeded", &now
+	if err := store.Update(run); err != nil {
+		t.Fatal(err)
+	}
+	evidencePath := filepath.Join(store.root, run.RepositoryID, run.PullRequestID, run.ID+".events")
+	if err := os.Remove(evidencePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(evidencePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	actor := "11111111111111111111111111111111"
+	queued, err := store.Rerun(run.RepositoryID, run.PullRequestID, run.ID, actor)
+	if err != nil || queued.State != "queued" || len(queued.Controls) != 1 {
+		t.Fatalf("Rerun() = %#v, %v", queued, err)
+	}
+	if err := os.Remove(evidencePath); err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.Events(run.RepositoryID, run.PullRequestID, run.ID, 0)
+	if err != nil || len(events) != 1 || events[0].Kind != "control" || events[0].ActorID != actor {
+		t.Fatalf("Events() = %#v, %v", events, err)
+	}
+}
+
+func TestTerminalResultWinsCancellationWaitingForExecutionLock(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.Create("0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789", strings.Repeat("f", 40), []Definition{{Name: "test", Image: "alpine:3.22", Command: "true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, now := runs[0], time.Now().UTC()
+	run.State, run.StartedAt, run.Attempts = "running", &now, []Attempt{{Number: 1, State: "running", StartedAt: now}}
+	if err := store.Update(run); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := os.OpenFile(filepath.Join(store.root, run.RepositoryID, run.PullRequestID, run.ID+".execution.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	actor := "22222222222222222222222222222222"
+	go func() {
+		_, cancelErr := store.Cancel(run.RepositoryID, run.PullRequestID, run.ID, actor)
+		result <- cancelErr
+	}()
+	intentPath := filepath.Join(store.root, run.RepositoryID, run.PullRequestID, run.ID+".cancel")
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, statErr := os.Stat(intentPath); statErr == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("cancel intent was not published")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	succeeded := run
+	succeeded.State, succeeded.CompletedAt = "succeeded", &now
+	succeeded.Attempts[0].State, succeeded.Attempts[0].CompletedAt = "succeeded", &now
+	if err := store.Update(succeeded); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.appendEvent(succeeded, Event{Attempt: 1, Kind: "status", Timestamp: now, State: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	lock.Close()
+	if err := <-result; !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("Cancel() error = %v", err)
+	}
+	persisted, err := store.Get(run.RepositoryID, run.PullRequestID, run.ID)
+	if err != nil || persisted.State != "succeeded" || persisted.Attempts[0].State != "succeeded" || len(persisted.Controls) != 0 {
+		t.Fatalf("run = %#v, %v", persisted, err)
+	}
+	events, err := store.Events(run.RepositoryID, run.PullRequestID, run.ID, 0)
+	if err != nil || events[len(events)-1].State != "succeeded" {
+		t.Fatalf("events = %#v, %v", events, err)
+	}
+	if _, err := os.Stat(intentPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("obsolete cancellation intent remains: %v", err)
+	}
+}
+
+func TestCancellationIntentSurvivesUncertainTerminalPublication(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.Create("0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789", strings.Repeat("1", 40), []Definition{{Name: "test", Image: "alpine:3.22", Command: "true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := runs[0]
+	control, err := newControl("cancel", "33333333333333333333333333333333", 0, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.writeCancelIntent(run, control); err != nil {
+		t.Fatal(err)
+	}
+	store.syncDirectory = func(*os.File) error { return errors.New("injected post-rename sync failure") }
+	if _, err := store.finalizeCancellation(run, control); err != nil {
+		t.Fatal(err)
+	}
+	intent := filepath.Join(store.root, run.RepositoryID, run.PullRequestID, run.ID+".cancel")
+	if _, err := os.Stat(intent); err != nil {
+		t.Fatalf("cancel intent was removed after uncertain publication: %v", err)
+	}
+	recoverable, err := store.Nonterminal()
+	if err != nil || len(recoverable) != 1 || recoverable[0].ID != run.ID {
+		t.Fatalf("Nonterminal() = %#v, %v", recoverable, err)
+	}
+}
+
+func TestConcurrentEventsRepairProjectsControlOnce(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.Create("0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789", strings.Repeat("2", 40), []Definition{{Name: "test", Image: "alpine:3.22", Command: "true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := runs[0]
+	control, err := newControl("rerun", "44444444444444444444444444444444", 1, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Controls = []Control{control}
+	if err := store.Update(run); err != nil {
+		t.Fatal(err)
+	}
+	evidence := filepath.Join(store.root, run.RepositoryID, run.PullRequestID, run.ID+".events")
+	if err := os.Remove(evidence); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	errs := make(chan error, 16)
+	for range 16 {
+		go func() {
+			<-start
+			events, eventErr := store.Events(run.RepositoryID, run.PullRequestID, run.ID, 0)
+			if eventErr == nil && len(events) != 1 {
+				eventErr = fmt.Errorf("events = %#v", events)
+			}
+			errs <- eventErr
+		}()
+	}
+	close(start)
+	for range 16 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, err := store.readEvents(run)
+	if err != nil || len(events) != 1 || events[0].ControlID != control.ID {
+		t.Fatalf("persisted events = %#v, %v", events, err)
 	}
 }
 

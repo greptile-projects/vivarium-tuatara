@@ -24,6 +24,7 @@ import (
 
 var (
 	ErrNotFound            = errors.New("check run not found")
+	ErrInvalidState        = errors.New("check run state does not allow this action")
 	ErrDurabilityUncertain = errors.New("check run durability uncertain")
 )
 
@@ -58,6 +59,16 @@ type Run struct {
 	CompletedAt    *time.Time `json:"completed_at,omitempty"`
 	Attempts       []Attempt  `json:"attempts"`
 	Artifacts      []Artifact `json:"artifacts"`
+	RequestedBy    string     `json:"requested_by,omitempty"`
+	Controls       []Control  `json:"controls,omitempty"`
+}
+
+type Control struct {
+	ID        string    `json:"id"`
+	Action    string    `json:"action"`
+	ActorID   string    `json:"actor_id"`
+	Attempt   int       `json:"attempt"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type Attempt struct {
@@ -67,6 +78,7 @@ type Attempt struct {
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 	ExitCode    *int       `json:"exit_code,omitempty"`
 	Failure     string     `json:"failure,omitempty"`
+	ActorID     string     `json:"actor_id,omitempty"`
 }
 
 type Artifact struct {
@@ -89,6 +101,8 @@ type Event struct {
 	Message   string    `json:"message,omitempty"`
 	ExitCode  *int      `json:"exit_code,omitempty"`
 	Artifact  *Artifact `json:"artifact,omitempty"`
+	ActorID   string    `json:"actor_id,omitempty"`
+	ControlID string    `json:"control_id,omitempty"`
 }
 
 type Store struct {
@@ -281,12 +295,81 @@ func (s *Store) Get(repositoryID, pullRequestID, runID string) (Run, error) {
 
 // Events returns immutable execution evidence after the supplied sequence.
 func (s *Store) Events(repositoryID, pullRequestID, runID string, after int64) ([]Event, error) {
-	if _, err := s.Get(repositoryID, pullRequestID, runID); err != nil {
+	run, err := s.Get(repositoryID, pullRequestID, runID)
+	if err != nil {
 		return nil, err
 	}
+	lock, err := s.lockProjection(run)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close()
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	events, err := s.projectControlsLocked(run)
+	if err != nil {
+		return nil, err
+	}
+	filtered := events[:0]
+	for _, event := range events {
+		if event.Sequence > after {
+			filtered = append(filtered, event)
+		}
+	}
+	return filtered, nil
+}
+
+func (s *Store) projectControls(run Run) error {
+	lock, err := s.lockProjection(run)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	_, err = s.projectControlsLocked(run)
+	return err
+}
+
+func (s *Store) projectControlsLocked(run Run) ([]Event, error) {
+	events, err := s.readEvents(run)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	for _, event := range events {
+		if event.ControlID != "" {
+			seen[event.ControlID] = true
+		}
+	}
+	for _, control := range run.Controls {
+		if !seen[control.ID] {
+			if err := s.appendEvent(run, Event{Attempt: control.Attempt, Kind: "control", Timestamp: control.CreatedAt, State: run.State, Message: control.Action, ActorID: control.ActorID, ControlID: control.ID}); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if len(run.Controls) > 0 {
+		events, err = s.readEvents(run)
+	}
+	return events, err
+}
+
+func (s *Store) lockProjection(run Run) (*os.File, error) {
+	path := filepath.Join(s.root, run.RepositoryID, run.PullRequestID, run.ID+".events.projection.lock")
+	lock, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		lock.Close()
+		return nil, err
+	}
+	return lock, nil
+}
+
+func (s *Store) readEvents(run Run) ([]Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	file, err := os.Open(filepath.Join(s.root, repositoryID, pullRequestID, runID+".events"))
+	file, err := os.Open(filepath.Join(s.root, run.RepositoryID, run.PullRequestID, run.ID+".events"))
 	if errors.Is(err, os.ErrNotExist) {
 		return []Event{}, nil
 	}
@@ -305,9 +388,7 @@ func (s *Store) Events(repositoryID, pullRequestID, runID string, after int64) (
 		if json.Unmarshal([]byte(line), &event) != nil || event.Sequence < 1 {
 			return nil, errors.New("invalid check evidence")
 		}
-		if event.Sequence > after {
-			events = append(events, event)
-		}
+		events = append(events, event)
 	}
 	return events, nil
 }
@@ -393,11 +474,30 @@ func (s *Store) Nonterminal() ([]Run, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var runs []Run
+	seen := map[string]bool{}
 	err := filepath.WalkDir(s.root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+		if entry.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(entry.Name(), ".cancel") {
+			runPath := strings.TrimSuffix(path, ".cancel") + ".json"
+			body, readErr := os.ReadFile(runPath)
+			if readErr != nil {
+				return readErr
+			}
+			var run Run
+			if json.Unmarshal(body, &run) != nil {
+				return errors.New("invalid check run record")
+			}
+			if !seen[run.ID] {
+				runs, seen[run.ID] = append(runs, run), true
+			}
+			return nil
+		}
+		if !strings.HasSuffix(entry.Name(), ".json") {
 			return nil
 		}
 		body, err := os.ReadFile(path)
@@ -408,8 +508,8 @@ func (s *Store) Nonterminal() ([]Run, error) {
 		if json.Unmarshal(body, &run) != nil {
 			return errors.New("invalid check run record")
 		}
-		if nonterminal(run.State) {
-			runs = append(runs, run)
+		if nonterminal(run.State) && !seen[run.ID] {
+			runs, seen[run.ID] = append(runs, run), true
 		}
 		return nil
 	})
@@ -424,6 +524,183 @@ func (s *Store) Update(run Run) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.write(filepath.Join(s.root, run.RepositoryID, run.PullRequestID), run)
+}
+
+// Rerun queues another attempt on the same exact commit while retaining all
+// prior attempts, evidence, and artifacts.
+func (s *Store) Rerun(repositoryID, pullRequestID, runID, actorID string) (Run, error) {
+	return s.control(repositoryID, pullRequestID, runID, actorID, "rerun")
+}
+
+// Cancel stops a nonterminal run and records the collaborator who requested it.
+func (s *Store) Cancel(repositoryID, pullRequestID, runID, actorID string) (Run, error) {
+	run, err := s.Get(repositoryID, pullRequestID, runID)
+	if err != nil {
+		return Run{}, err
+	}
+	if !nonterminal(run.State) {
+		return Run{}, ErrInvalidState
+	}
+	control, err := newControl("cancel", actorID, len(run.Attempts), s.now().Truncate(time.Microsecond))
+	if err != nil {
+		return Run{}, err
+	}
+	if err := s.writeCancelIntent(run, control); err != nil {
+		return Run{}, err
+	}
+	// Force removal interrupts a live executor. The execution lock below waits
+	// for that executor, which must honor the durable intent before publishing.
+	_ = removeContainer("vivarium-check-" + run.ID)
+	lockPath := filepath.Join(s.root, repositoryID, pullRequestID, runID+".execution.lock")
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return Run{}, err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return Run{}, err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	current, err := s.Get(repositoryID, pullRequestID, runID)
+	if err != nil {
+		return Run{}, err
+	}
+	if current.State == "canceled" {
+		return current, nil
+	}
+	if !nonterminal(current.State) {
+		// The executor completed before cancellation obtained the lock. Its
+		// already-published terminal result wins; do not contradict its attempt
+		// and immutable status evidence with a later canceled top-level state.
+		// Rewrite it under this lock to confirm post-rename directory durability
+		// before discarding the recovery intent.
+		if err := s.Update(current); err != nil {
+			return Run{}, err
+		}
+		_ = os.Remove(filepath.Join(s.root, repositoryID, pullRequestID, runID+".cancel"))
+		return Run{}, ErrInvalidState
+	}
+	return s.finalizeCancellation(current, control)
+}
+
+func (s *Store) control(repositoryID, pullRequestID, runID, actorID, action string) (Run, error) {
+	lockPath := filepath.Join(s.root, repositoryID, pullRequestID, runID+".execution.lock")
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return Run{}, err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return Run{}, err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	run, err := s.Get(repositoryID, pullRequestID, runID)
+	if err != nil {
+		return Run{}, err
+	}
+	now := s.now().Truncate(time.Microsecond)
+	switch action {
+	case "rerun":
+		if nonterminal(run.State) {
+			return Run{}, ErrInvalidState
+		}
+		run.State, run.ExitCode, run.Failure, run.CleanupFailure = "queued", nil, "", ""
+		run.StartedAt, run.CompletedAt = nil, nil
+		run.RequestedBy = actorID
+	default:
+		return Run{}, ErrInvalidState
+	}
+	control, err := newControl(action, actorID, len(run.Attempts)+1, now)
+	if err != nil {
+		return Run{}, err
+	}
+	run.Controls = append(run.Controls, control)
+	if err := s.Update(run); err != nil && !errors.Is(err, ErrDurabilityUncertain) {
+		return Run{}, err
+	}
+	// The run record is the durable source of control attribution. Events()
+	// repairs this projection if either append is temporarily unavailable.
+	_ = s.projectControls(run)
+	if action == "rerun" {
+		_ = s.appendEvent(run, Event{Attempt: len(run.Attempts) + 1, Kind: "status", Timestamp: now, State: "queued", ActorID: actorID})
+	}
+	return run, nil
+}
+
+func newControl(action, actorID string, attempt int, at time.Time) (Control, error) {
+	id, err := newID()
+	return Control{ID: id, Action: action, ActorID: actorID, Attempt: attempt, CreatedAt: at}, err
+}
+
+func (s *Store) cancelIntent(run Run) (Control, bool) {
+	body, err := os.ReadFile(filepath.Join(s.root, run.RepositoryID, run.PullRequestID, run.ID+".cancel"))
+	if err != nil {
+		return Control{}, false
+	}
+	var control Control
+	return control, json.Unmarshal(body, &control) == nil && control.Action == "cancel"
+}
+
+func (s *Store) writeCancelIntent(run Run, control Control) error {
+	dir := filepath.Join(s.root, run.RepositoryID, run.PullRequestID)
+	body, err := json.Marshal(control)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".cancel-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if _, err = tmp.Write(body); err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(name, filepath.Join(dir, run.ID+".cancel"))
+	}
+	if err == nil {
+		directory, openErr := os.Open(dir)
+		if openErr != nil {
+			return openErr
+		}
+		err = s.syncDirectory(directory)
+		if closeErr := directory.Close(); err == nil {
+			err = closeErr
+		}
+	}
+	return err
+}
+
+func (s *Store) finalizeCancellation(run Run, control Control) (Run, error) {
+	now := s.now().Truncate(time.Microsecond)
+	run.State, run.CompletedAt, run.Failure = "canceled", &now, "canceled by collaborator"
+	if len(run.Attempts) > 0 && run.Attempts[len(run.Attempts)-1].State == "running" {
+		last := &run.Attempts[len(run.Attempts)-1]
+		last.State, last.CompletedAt, last.Failure = "canceled", &now, run.Failure
+	}
+	found := false
+	for _, existing := range run.Controls {
+		found = found || existing.ID == control.ID
+	}
+	if !found {
+		run.Controls = append(run.Controls, control)
+	}
+	updateErr := s.Update(run)
+	if updateErr != nil && !errors.Is(updateErr, ErrDurabilityUncertain) {
+		return Run{}, updateErr
+	}
+	_ = s.projectControls(run)
+	// The intent is the recovery authority until the terminal run rename is
+	// confirmed durable. Retaining it makes an older nonterminal JSON image
+	// recover as cancellation rather than executable work.
+	if updateErr == nil {
+		_ = os.Remove(filepath.Join(s.root, run.RepositoryID, run.PullRequestID, run.ID+".cancel"))
+	}
+	return run, nil
 }
 
 // RecordFailure terminalizes work that cannot enter the executor, while
@@ -500,6 +777,13 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 		return
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	if control, ok := s.cancelIntent(run); ok {
+		current, getErr := s.Get(run.RepositoryID, run.PullRequestID, run.ID)
+		if getErr == nil {
+			_, _ = s.finalizeCancellation(current, control)
+		}
+		return
+	}
 	containerName := "vivarium-check-" + run.ID
 	if run.State == "cleanup_pending" {
 		if cleanupErr := removeContainer(containerName); cleanupErr != nil {
@@ -534,7 +818,8 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 		interruptedAttempt, interruptedFailure = previous.Number, previous.Failure
 	}
 	attemptNumber := len(run.Attempts) + 1
-	run.Attempts = append(run.Attempts, Attempt{Number: attemptNumber, State: "running", StartedAt: now})
+	run.Attempts = append(run.Attempts, Attempt{Number: attemptNumber, State: "running", StartedAt: now, ActorID: run.RequestedBy})
+	run.RequestedBy = ""
 	run.State = "running"
 	run.StartedAt = &now
 	if updateErr := s.Update(run); updateErr != nil && !errors.Is(updateErr, ErrDurabilityUncertain) {
@@ -618,6 +903,13 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 				}
 			}
 			if cleanupErr != nil {
+				if control, ok := s.cancelIntent(run); ok {
+					current, getErr := s.Get(run.RepositoryID, run.PullRequestID, run.ID)
+					if getErr == nil {
+						_, _ = s.finalizeCancellation(current, control)
+					}
+					return
+				}
 				run.State = "cleanup_pending"
 				run.CleanupFailure = cleanupErr.Error()
 				if ee := new(exec.ExitError); errors.As(err, &ee) {
@@ -644,6 +936,13 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 	}
 executionDone:
 	done := s.now().Truncate(time.Microsecond)
+	if control, ok := s.cancelIntent(run); ok {
+		current, getErr := s.Get(run.RepositoryID, run.PullRequestID, run.ID)
+		if getErr == nil {
+			_, _ = s.finalizeCancellation(current, control)
+		}
+		return
+	}
 	run.CompletedAt = &done
 	run.ExitCode = &exit
 	if err != nil {
