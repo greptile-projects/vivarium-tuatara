@@ -254,6 +254,42 @@ func TestForkCreationSerializesPrivateSourceRevocation(t *testing.T) {
 	}
 }
 
+func TestCurrentParticipantBoundarySerializesCollaboratorRevocation(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	root := t.TempDir()
+	assigner, _ := New(root, gitStore)
+	revoker, _ := New(root, gitStore)
+	repository, _ := assigner.Create(testOwnerID, "assignment")
+	if _, err := assigner.AddCollaborator(testOwnerID, repository.ID, testCollaboratorID); err != nil {
+		t.Fatal(err)
+	}
+	authorized := make(chan struct{})
+	release := make(chan struct{})
+	assigner.afterParticipantAuthorization = func() { close(authorized); <-release }
+	assignmentDone := make(chan error, 1)
+	go func() {
+		assignmentDone <- assigner.WithCurrentParticipant(testCollaboratorID, repository.ID, func() error { return nil })
+	}()
+	<-authorized
+	removalDone := make(chan error, 1)
+	go func() { removalDone <- revoker.RemoveCollaborator(testOwnerID, repository.ID, testCollaboratorID) }()
+	select {
+	case err := <-removalDone:
+		t.Fatalf("removal escaped participant boundary: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	if err := <-assignmentDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-removalDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := assigner.WithCurrentParticipant(testCollaboratorID, repository.ID, func() error { return nil }); !errors.Is(err, ErrInvalidCollaborator) {
+		t.Fatalf("authorization after removal = %v", err)
+	}
+}
+
 func TestContributionAuthorizationSerializesPrivateTargetRevocation(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	metadataRoot := t.TempDir()

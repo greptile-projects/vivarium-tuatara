@@ -156,6 +156,28 @@ func TestTaskAssignmentClaimsAreAtomicAndAttributable(t *testing.T) {
 	}
 }
 
+func TestClosedProposalRejectsAssignmentRevocation(t *testing.T) {
+	store, _ := New(t.TempDir())
+	proposal, _ := store.Create(repositoryID, authorID, "Plan", "")
+	task, _ := store.CreateTask(repositoryID, proposal.ID, authorID, "Build", "A bounded result", nil, nil)
+	assigned, err := store.AssignTask(repositoryID, proposal.ID, task.ID, authorID, TaskAssignmentInput{AssigneeType: "human", AssigneeID: commenterID, Mandate: "Deliver", RepositoryID: repositoryID, BaseRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := Closed
+	if _, err := store.Update(repositoryID, proposal.ID, Patch{Status: &closed}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RevokeTaskAssignment(repositoryID, proposal.ID, task.ID, authorID, assigned.Assignment.ID); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("revoke closed proposal = %v", err)
+	}
+	persisted, _ := store.GetTask(repositoryID, proposal.ID, task.ID)
+	history, _ := store.ListTaskChanges(repositoryID, proposal.ID, task.ID)
+	if persisted.Assignment == nil || persisted.Assignment.ID != assigned.Assignment.ID || len(history) != 2 || history[1].Action != "assigned" {
+		t.Fatalf("task = %#v, history = %#v", persisted, history)
+	}
+}
+
 func TestGetPreservesCorruptRecordError(t *testing.T) {
 	root := t.TempDir()
 	store, _ := New(root)

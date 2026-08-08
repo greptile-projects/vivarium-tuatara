@@ -228,7 +228,10 @@ preconditions return `409 task_assignment_conflict` when another collaborator
 claimed, reassigned, or revoked first, so no stale request silently replaces an
 owner. Successful assignment, reassignment, and revocation append full
 actor-stamped snapshots to task history and share the uncertain-durability
-contract.
+contract. Human participant validation and assignment publication share the
+repository catalog mutation lock, so collaborator removal cannot commit between
+authorization and assignment. Closed proposals reject assignment revocation and
+retain their final task history unchanged.
 
 ## Automated checks
 

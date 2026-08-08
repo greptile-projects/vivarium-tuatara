@@ -103,6 +103,37 @@ type Store struct {
 	afterCreateForkAuthorization   func()
 	afterSynchronizeAuthorization  func()
 	afterContributionAuthorization func()
+	afterParticipantAuthorization  func()
+}
+
+// WithCurrentParticipant runs fn while holding the catalog mutation lock after
+// proving userID is a current owner or contributor. Access removal therefore
+// commits wholly before or after the dependent mutation performed by fn.
+func (s *Store) WithCurrentParticipant(userID, repositoryID string, fn func() error) error {
+	if !validID(userID) || !validID(repositoryID) || fn == nil {
+		return ErrInvalidCollaborator
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	repository, err := s.read(repositoryID)
+	if err != nil {
+		return ErrNotFound
+	}
+	if _, err := s.git.Open(repositoryID); err != nil {
+		return ErrNotFound
+	}
+	if repository.OwnerID != userID && !slices.Contains(collaboratorIDs(repository), userID) {
+		return ErrInvalidCollaborator
+	}
+	if s.afterParticipantAuthorization != nil {
+		s.afterParticipantAuthorization()
+	}
+	return fn()
 }
 
 // WithContributionAuthorization runs fn while holding the catalog's

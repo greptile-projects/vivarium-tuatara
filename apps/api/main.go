@@ -2273,41 +2273,42 @@ func registerProposalRoutes(mux *http.ServeMux, gitStore *storage.Store, reposit
 		if input.AssigneeID != nil {
 			assigneeID = *input.AssigneeID
 		}
-		repository, err := repositoriesStore.GetByID(input.RepositoryID)
-		if err != nil {
-			writeAPIError(w, 404, "repository_not_found", "repository not found")
-			return
-		}
 		if input.AssigneeType == "human" {
 			if _, err := userStore.Get(assigneeID); err != nil {
 				writeAPIError(w, 400, "invalid_task_assignee", "human assignee does not exist")
 				return
 			}
-			allowed := assigneeID == repository.OwnerID
-			if !allowed {
-				collaborators, _ := repositoriesStore.ListCollaborators(repository.OwnerID, repository.ID)
-				for _, collaborator := range collaborators {
-					if collaborator.UserID == assigneeID {
-						allowed = true
-						break
-					}
-				}
-			}
-			if !allowed {
-				writeAPIError(w, 400, "invalid_task_assignee", "human assignee must be a current repository participant")
-				return
-			}
 		}
-		gitRepository, err := gitStore.Open(input.RepositoryID)
-		if err != nil {
+		var task proposals.Task
+		assign := func() error {
+			gitRepository, err := gitStore.Open(input.RepositoryID)
+			if err != nil {
+				return repositories.ErrNotFound
+			}
+			if _, err := gitRepository.ReadCommit(storage.ObjectID(strings.ToLower(input.BaseRevision))); err != nil {
+				return storage.ErrObjectNotFound
+			}
+			task, err = store.AssignTask(r.PathValue("id"), r.PathValue("proposal_id"), r.PathValue("task_id"), actor.UserID, proposals.TaskAssignmentInput{AssigneeType: input.AssigneeType, AssigneeID: assigneeID, Mandate: input.Mandate, RepositoryID: input.RepositoryID, BaseRevision: input.BaseRevision, ExpectedAssignmentID: input.ExpectedAssignmentID})
+			return err
+		}
+		var err error
+		if input.AssigneeType == "human" {
+			err = repositoriesStore.WithCurrentParticipant(assigneeID, input.RepositoryID, assign)
+		} else {
+			err = assign()
+		}
+		if errors.Is(err, repositories.ErrInvalidCollaborator) {
+			writeAPIError(w, 400, "invalid_task_assignee", "human assignee must be a current repository participant")
+			return
+		}
+		if errors.Is(err, repositories.ErrNotFound) {
 			writeAPIError(w, 404, "repository_not_found", "repository not found")
 			return
 		}
-		if _, err := gitRepository.ReadCommit(storage.ObjectID(strings.ToLower(input.BaseRevision))); err != nil {
+		if errors.Is(err, storage.ErrObjectNotFound) || errors.Is(err, storage.ErrInvalidObject) || errors.Is(err, storage.ErrCorruptObject) {
 			writeAPIError(w, 400, "invalid_base_revision", "base revision must be an existing commit")
 			return
 		}
-		task, err := store.AssignTask(r.PathValue("id"), r.PathValue("proposal_id"), r.PathValue("task_id"), actor.UserID, proposals.TaskAssignmentInput{AssigneeType: input.AssigneeType, AssigneeID: assigneeID, Mandate: input.Mandate, RepositoryID: input.RepositoryID, BaseRevision: input.BaseRevision, ExpectedAssignmentID: input.ExpectedAssignmentID})
 		if errors.Is(err, proposals.ErrTaskAssignmentConflict) {
 			writeAPIError(w, 409, "task_assignment_conflict", "task ownership changed; reload before claiming or reassigning")
 			return

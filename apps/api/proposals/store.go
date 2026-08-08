@@ -604,6 +604,9 @@ func (s *Store) RevokeTaskAssignment(repositoryID, proposalID, taskID, actorID, 
 	if err != nil || r.Proposal.RepositoryID != repositoryID {
 		return Task{}, ErrNotFound
 	}
+	if r.Proposal.Status != Open {
+		return Task{}, ErrInvalid
+	}
 	index := -1
 	for i := range r.Tasks {
 		if r.Tasks[i].ID == taskID {
