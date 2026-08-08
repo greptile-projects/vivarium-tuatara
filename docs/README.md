@@ -464,6 +464,11 @@ target movement follows the same rebuild path. Superseded evidence remains
 inspectable but cannot land; source changes and closure clear admission, while
 conflicts and failed or cancelled checks deterministically pause the head or
 remove it according to branch policy without deleting the pull request.
+The branch queue workspace turns that reconciler into shared coordination:
+participants see durable order, candidate attempts, blockers, and the next
+automatic or human action. Owners can pause, resume, retry, remove, or move an
+entry; each intervention retains actor and time, while queue activity gives
+the pull author a direct inbox path back to the change.
 
 An owner applies an accepted request through its merge endpoint. The operation
 rechecks readiness, materializes a two-parent merge commit through the storage

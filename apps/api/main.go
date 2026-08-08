@@ -1109,6 +1109,8 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 				candidate := queued.IntegrationCandidates[len(queued.IntegrationCandidates)-1]
 				startBoundCheckRuns(gitStore, checkRunStore, queued.RepositoryID, queued.ID, candidate.CommitID, candidate.CheckDefinitions)
 			}
+			target := queued.AuthorID
+			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "integration_queue.enqueued", ActorID: actor.UserID, RepositoryID: queued.RepositoryID, ResourceType: "pull_request", ResourceID: queued.ID, ResourceTitle: queued.Title, TargetUserID: &target})
 			writeUncertainMutation(w, queued)
 			return
 		}
@@ -1119,7 +1121,53 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 			candidate := queued.IntegrationCandidates[len(queued.IntegrationCandidates)-1]
 			startBoundCheckRuns(gitStore, checkRunStore, queued.RepositoryID, queued.ID, candidate.CommitID, candidate.CheckDefinitions)
 		}
+		target := queued.AuthorID
+		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "integration_queue.enqueued", ActorID: actor.UserID, RepositoryID: queued.RepositoryID, ResourceType: "pull_request", ResourceID: queued.ID, ResourceTitle: queued.Title, TargetUserID: &target})
 		writeJSON(w, http.StatusOK, queued)
+	})
+	mux.HandleFunc("GET /repositories/{id}/branches/{branch}/queue", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		view, err := store.IntegrationQueue(r.PathValue("id"), r.PathValue("branch"))
+		if writePullRequestError(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, view)
+	})
+	mux.HandleFunc("PATCH /repositories/{id}/pulls/{pull_id}/queue", func(w http.ResponseWriter, r *http.Request) {
+		actor, owner, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if !owner {
+			writeAPIError(w, http.StatusNotFound, "repository_not_found", "repository not found")
+			return
+		}
+		var input struct {
+			Action   string `json:"action"`
+			Position int    `json:"position"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid_queue_action", "action and optional position are required")
+			return
+		}
+		updated, err := store.OperateQueue(r.PathValue("id"), r.PathValue("pull_id"), actor.UserID, input.Action, input.Position)
+		if errors.Is(err, pullrequests.ErrInvalid) {
+			writeAPIError(w, http.StatusBadRequest, "invalid_queue_action", "action or position is invalid")
+			return
+		}
+		if writePullRequestError(w, err) {
+			return
+		}
+		target := updated.AuthorID
+		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "integration_queue." + input.Action, ActorID: actor.UserID, RepositoryID: updated.RepositoryID, ResourceType: "pull_request", ResourceID: updated.ID, ResourceTitle: updated.Title, TargetUserID: &target})
+		go func() {
+			if err := store.AdvanceIntegrationQueues(); err != nil {
+				log.Printf("advance integration queue after intervention: %v", err)
+			}
+		}()
+		writeJSON(w, http.StatusOK, updated)
 	})
 	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/comments", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
@@ -2339,6 +2387,14 @@ func classifyInboxEvent(userID, ownerID string, event activities.Event, proposal
 			return "", "", err
 		}
 		switch event.Kind {
+		case "integration_queue.failed", "integration_queue.pause", "integration_queue.remove", "integration_queue.retry":
+			if event.TargetUserID != nil && *event.TargetUserID == userID && pull.Status == pullrequests.Open {
+				return "response", "Review integration queue outcome", nil
+			}
+		case "integration_queue.enqueued", "integration_queue.reprioritize", "integration_queue.resume":
+			if event.TargetUserID != nil && *event.TargetUserID == userID && pull.Status == pullrequests.Open {
+				return "awareness", "View integration queue", nil
+			}
 		case "pull_request.created", "pull_request.synchronized":
 			if ownerID == userID && pull.Status == pullrequests.Open {
 				return "review", "Review pull request", nil

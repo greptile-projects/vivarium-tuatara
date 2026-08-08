@@ -452,6 +452,17 @@ Source synchronization and closure remove an entry without deleting candidate
 history. Failed or cancelled head checks and candidate conflicts either leave
 the entry blocking for `pause`, or clear admission and continue for `remove`.
 
+`GET /repositories/{id}/branches/{branch}/queue` is the shared branch queue
+projection. It returns durable one-based order plus each pull request, its
+current candidate and retained attempt history, derived lifecycle, explicit
+blockers, and a plain-language `next_action`. Owners operate an admitted entry
+with `PATCH /repositories/{id}/pulls/{pull_id}/queue` and an `action` of
+`pause`, `resume`, `retry`, `remove`, or `reprioritize` (the latter also takes
+a one-based `position`). Retry supersedes rather than deletes failed candidate
+evidence. Every admission and intervention retains actor and time on the pull
+request, emits collaboration activity targeted to the pull author, and
+projects relevant outcomes into that user's actionable inbox.
+
 An open request is mergeable only while its source branch still identifies the
 snapshotted commit, its target exists, the source is not already reachable
 from the target, at least one non-stale approval exists, no non-stale review

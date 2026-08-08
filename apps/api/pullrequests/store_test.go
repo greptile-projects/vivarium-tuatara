@@ -553,6 +553,55 @@ func TestCandidateLaunchRetriesAfterCheckStoreRecovers(t *testing.T) {
 	}
 }
 
+func TestIntegrationQueueProjectionAndAttributedOperations(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	repository, _ := gitStore.Create(testID('1'))
+	tree, _ := repository.WriteObject(storage.TreeObject, nil)
+	base := writeCommit(t, repository, tree, "base")
+	one := writeCommitWithParents(t, repository, tree, []storage.ObjectID{base}, "one")
+	two := writeCommitWithParents(t, repository, tree, []storage.ObjectID{base}, "two")
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)})
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/one", Target: string(one)})
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/two", Target: string(two)})
+	store, _ := New(t.TempDir(), gitStore)
+	store.ConfigureRequiredChecks(queueRequirements{repositories.IntegrationQueuePolicy{Branch: "main", Enabled: true, Concurrency: 2, FailureBehavior: repositories.QueueFailurePause, RequiredChecks: []string{}}}, nil)
+	first, _ := store.Create(repository.ID(), testID('a'), "First", "", "one", "main", nil)
+	second, _ := store.Create(repository.ID(), testID('b'), "Second", "", "two", "main", nil)
+	actor := testID('c')
+	firstTime, secondTime := time.Unix(1700000000, 0).UTC(), time.Unix(1700000001, 0).UTC()
+	firstCandidate, _ := store.newIntegrationCandidate(repository, first, string(base), []string{})
+	secondCandidate, _ := store.newIntegrationCandidate(repository, second, string(base), []string{})
+	first.QueuedAt, first.QueuedBy, first.IntegrationCandidates = &firstTime, &actor, []IntegrationCandidate{firstCandidate}
+	second.QueuedAt, second.QueuedBy, second.IntegrationCandidates = &secondTime, &actor, []IntegrationCandidate{secondCandidate}
+	first.QueueActions = []QueueAction{{Action: "enqueued", ActorID: actor, CreatedAt: firstTime}}
+	second.QueueActions = []QueueAction{{Action: "enqueued", ActorID: actor, CreatedAt: secondTime}}
+	_, _ = store.write(first)
+	_, _ = store.write(second)
+	store.now = func() time.Time { return time.Unix(1700000002, 0).UTC() }
+
+	view, err := store.IntegrationQueue(repository.ID(), "main")
+	if err != nil || len(view.Entries) != 2 || view.Entries[0].PullRequest.ID != first.ID || view.Entries[0].State != "passed" || view.Entries[0].NextAction == "" {
+		t.Fatalf("initial queue = %#v, %v", view, err)
+	}
+	second, err = store.OperateQueue(repository.ID(), second.ID, actor, "reprioritize", 1)
+	if err != nil || len(second.QueueActions) != 2 || second.QueueActions[1].Action != "reprioritize" || second.QueueActions[1].ActorID != actor {
+		t.Fatalf("reprioritized = %#v, %v", second, err)
+	}
+	second, err = store.OperateQueue(repository.ID(), second.ID, actor, "pause", 0)
+	view, _ = store.IntegrationQueue(repository.ID(), "main")
+	if err != nil || !second.QueuePaused || view.Entries[0].PullRequest.ID != second.ID || view.Entries[0].State != "paused" || len(view.Entries[0].PullRequest.QueueActions) != 3 {
+		t.Fatalf("paused queue = %#v, %v", view, err)
+	}
+	second, err = store.OperateQueue(repository.ID(), second.ID, actor, "retry", 0)
+	if err != nil || second.QueuePaused || second.IntegrationCandidates[0].SupersededReason != "retried" {
+		t.Fatalf("retried = %#v, %v", second, err)
+	}
+	second, err = store.OperateQueue(repository.ID(), second.ID, actor, "remove", 0)
+	if err != nil || second.QueuedAt != nil || second.QueueActions[len(second.QueueActions)-1].Action != "remove" {
+		t.Fatalf("removed = %#v, %v", second, err)
+	}
+}
+
 func writeCommit(t *testing.T, repository *storage.Repository, tree storage.ObjectID, message string) storage.ObjectID {
 	return writeCommitWithParents(t, repository, tree, nil, message)
 }

@@ -360,6 +360,9 @@ export function RepositoryBrowser({ id }: { id: string }) {
                 <>
                   <RequiredChecksPanel repositoryID={id} branch={policyBranch} token={token} />
                   <IntegrationQueuePanel repositoryID={id} branch={policyBranch} token={token} />
+                  <Link href={`/repositories/${id}/queue/${encodeURIComponent(policyBranch)}`} className="inline-flex text-sm font-semibold text-[var(--brand)] hover:underline">
+                    View the shared {policyBranch} queue
+                  </Link>
                 </>
               ) : (
                 <Card className="p-5">

@@ -65,10 +65,34 @@ type PullRequest struct {
 	MergeCommitID            *string                `json:"merge_commit_id"`
 	QueuedAt                 *time.Time             `json:"queued_at,omitempty"`
 	QueuedBy                 *string                `json:"queued_by,omitempty"`
+	QueuePaused              bool                   `json:"queue_paused,omitempty"`
+	QueueActions             []QueueAction          `json:"queue_actions,omitempty"`
 	QueueFinalizationPending bool                   `json:"queue_finalization_pending,omitempty"`
 	QueueFinalizedAt         *time.Time             `json:"queue_finalized_at,omitempty"`
 	IntegrationCandidates    []IntegrationCandidate `json:"integration_candidates,omitempty"`
 	mergeIntent              *mergeIntent
+}
+
+// QueueAction is the durable, attributable operating history for one entry.
+type QueueAction struct {
+	Action    string    `json:"action"`
+	ActorID   string    `json:"actor_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// IntegrationQueueEntry is the branch-level shared coordination projection.
+type IntegrationQueueEntry struct {
+	Position    int                       `json:"position"`
+	PullRequest PullRequest               `json:"pull_request"`
+	Candidate   *IntegrationCandidateView `json:"candidate,omitempty"`
+	State       string                    `json:"state"`
+	Blockers    []ReadinessBlocker        `json:"blockers"`
+	NextAction  string                    `json:"next_action"`
+}
+
+type IntegrationQueueView struct {
+	Branch  string                  `json:"branch"`
+	Entries []IntegrationQueueEntry `json:"entries"`
 }
 
 // IntegrationCandidate is an immutable prospective merge. CommitID names a
@@ -1166,6 +1190,8 @@ func (s *Store) Enqueue(repositoryID, pullRequestID, actorID string) (PullReques
 	}
 	p.IntegrationCandidates = append(p.IntegrationCandidates, IntegrationCandidate{ID: candidateID, SourceCommitID: p.SourceCommitID, BaseCommitID: *report.Target.CurrentCommitID, CommitID: string(commit), RequiredChecks: requiredChecks, CheckDefinitions: definitions, CreatedAt: now})
 	p.QueuedAt, p.QueuedBy, p.UpdatedAt = &now, &actorID, now
+	p.QueuePaused = false
+	p.QueueActions = append(p.QueueActions, QueueAction{Action: "enqueued", ActorID: actorID, CreatedAt: now})
 	if committed, writeErr := s.write(p); writeErr != nil {
 		if committed {
 			return p, fmt.Errorf("%w: %v", ErrDurabilityUncertain, writeErr)
@@ -1173,6 +1199,135 @@ func (s *Store) Enqueue(repositoryID, pullRequestID, actorID string) (PullReques
 		return PullRequest{}, writeErr
 	}
 	return p, nil
+}
+
+// OperateQueue applies an owner-authorized intervention while retaining its
+// attribution on the pull request. Position is one-based for reprioritization.
+func (s *Store) OperateQueue(repositoryID, pullRequestID, actorID, action string, position int) (PullRequest, error) {
+	if !validID(actorID) || (action != "pause" && action != "resume" && action != "retry" && action != "remove" && action != "reprioritize") {
+		return PullRequest{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return PullRequest{}, err
+	}
+	defer unlock()
+	p, err := s.read(repositoryID, pullRequestID)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	if p.Status != Open || p.QueuedAt == nil {
+		return PullRequest{}, ErrNotReady
+	}
+	now := s.now().Truncate(time.Microsecond)
+	switch action {
+	case "pause":
+		p.QueuePaused = true
+	case "resume":
+		p.QueuePaused = false
+	case "retry":
+		p.QueuePaused = false
+		if candidate := activeCandidate(p); candidate != nil {
+			for i := range p.IntegrationCandidates {
+				if p.IntegrationCandidates[i].ID == candidate.ID {
+					p.IntegrationCandidates[i].SupersededAt, p.IntegrationCandidates[i].SupersededReason = &now, "retried"
+				}
+			}
+		}
+	case "remove":
+		p.QueuePaused, p.QueuedAt, p.QueuedBy = false, nil, nil
+	case "reprioritize":
+		pulls, listErr := s.List(repositoryID)
+		if listErr != nil {
+			return PullRequest{}, listErr
+		}
+		queued := make([]PullRequest, 0)
+		for _, candidate := range pulls {
+			if candidate.Status == Open && candidate.TargetBranch == p.TargetBranch && candidate.QueuedAt != nil && candidate.ID != p.ID {
+				queued = append(queued, candidate)
+			}
+		}
+		sort.SliceStable(queued, func(i, j int) bool { return queued[i].QueuedAt.Before(*queued[j].QueuedAt) })
+		if position < 1 || position > len(queued)+1 {
+			return PullRequest{}, ErrInvalid
+		}
+		queued = append(queued, PullRequest{})
+		copy(queued[position:], queued[position-1:])
+		queued[position-1] = p
+		base := now.Add(-time.Duration(len(queued)) * time.Microsecond)
+		for i := range queued {
+			stamp := base.Add(time.Duration(i) * time.Microsecond)
+			queued[i].QueuedAt, queued[i].UpdatedAt = &stamp, now
+			if queued[i].ID == p.ID {
+				p = queued[i]
+			}
+			if _, writeErr := s.write(queued[i]); writeErr != nil {
+				return PullRequest{}, writeErr
+			}
+		}
+	}
+	p.UpdatedAt = now
+	p.QueueActions = append(p.QueueActions, QueueAction{Action: action, ActorID: actorID, CreatedAt: now})
+	if committed, writeErr := s.write(p); writeErr != nil {
+		if committed {
+			return p, fmt.Errorf("%w: %v", ErrDurabilityUncertain, writeErr)
+		}
+		return PullRequest{}, writeErr
+	}
+	return p, nil
+}
+
+// IntegrationQueue returns ordered entries with current evidence, blockers,
+// and a concise prediction of the next automatic or human action.
+func (s *Store) IntegrationQueue(repositoryID, branch string) (IntegrationQueueView, error) {
+	pulls, err := s.List(repositoryID)
+	if err != nil {
+		return IntegrationQueueView{}, err
+	}
+	sort.SliceStable(pulls, func(i, j int) bool {
+		if pulls[i].QueuedAt == nil {
+			return false
+		}
+		if pulls[j].QueuedAt == nil {
+			return true
+		}
+		return pulls[i].QueuedAt.Before(*pulls[j].QueuedAt)
+	})
+	view := IntegrationQueueView{Branch: branch, Entries: []IntegrationQueueEntry{}}
+	for _, p := range pulls {
+		if p.Status != Open || p.TargetBranch != branch || p.QueuedAt == nil {
+			continue
+		}
+		entry := IntegrationQueueEntry{Position: len(view.Entries) + 1, PullRequest: p, Blockers: []ReadinessBlocker{}}
+		candidates, candidateErr := s.Candidates(repositoryID, p.ID)
+		if candidateErr != nil {
+			return IntegrationQueueView{}, candidateErr
+		}
+		if len(candidates) > 0 {
+			entry.Candidate = &candidates[len(candidates)-1]
+			entry.State = entry.Candidate.State
+		}
+		if entry.State == "" {
+			entry.State = "waiting"
+		}
+		switch {
+		case p.QueuePaused:
+			entry.State, entry.NextAction = "paused", "Resume, retry, reprioritize, or remove this entry"
+		case entry.State == "failed":
+			entry.Blockers = append(entry.Blockers, ReadinessBlocker{Code: "candidate_failed", Message: "The current integration candidate did not pass verification"})
+			entry.NextAction = "Retry or remove the entry"
+		case entry.Position > 1:
+			entry.NextAction = "Wait for earlier entries, or reprioritize"
+		case entry.State == "passed":
+			entry.NextAction = "Merge automatically when the reconciler advances"
+		default:
+			entry.NextAction = "Wait for candidate verification"
+		}
+		view.Entries = append(view.Entries, entry)
+	}
+	return view, nil
 }
 
 func requiredDefinitions(repository *storage.Repository, commitID string, required []string) ([]checkruns.Definition, error) {
@@ -1394,6 +1549,9 @@ func (s *Store) advanceIntegrationQueue(repositoryID, branch string) error {
 			break
 		}
 		head := &queued[0]
+		if head.QueuePaused {
+			return errors.Join(finalizationFailures...)
+		}
 		candidate := activeCandidate(*head)
 		if candidate == nil || candidate.BaseCommitID != target {
 			return errors.Join(finalizationFailures...)
@@ -2073,7 +2231,7 @@ func (s *Store) read(repositoryID, id string) (PullRequest, error) {
 		return PullRequest{}, fmt.Errorf("corrupt pull request %s", id)
 	}
 	for _, candidate := range p.IntegrationCandidates {
-		validSupersession := (candidate.SupersededAt == nil && candidate.SupersededReason == "") || (candidate.SupersededAt != nil && !candidate.SupersededAt.IsZero() && candidate.SupersededReason == "target_changed")
+		validSupersession := (candidate.SupersededAt == nil && candidate.SupersededReason == "") || (candidate.SupersededAt != nil && !candidate.SupersededAt.IsZero() && (candidate.SupersededReason == "target_changed" || candidate.SupersededReason == "retried"))
 		if !validID(candidate.ID) || !validCommitID(candidate.SourceCommitID) || !validCommitID(candidate.BaseCommitID) || !validCommitID(candidate.CommitID) || candidate.RequiredChecks == nil || candidate.CheckDefinitions == nil || len(candidate.RequiredChecks) != len(candidate.CheckDefinitions) || candidate.CreatedAt.IsZero() || !validSupersession {
 			return PullRequest{}, fmt.Errorf("corrupt pull request %s", id)
 		}
@@ -2081,6 +2239,11 @@ func (s *Store) read(repositoryID, id string) (PullRequest, error) {
 			if definition.Name != candidate.RequiredChecks[i] {
 				return PullRequest{}, fmt.Errorf("corrupt pull request %s", id)
 			}
+		}
+	}
+	for _, action := range p.QueueActions {
+		if !validID(action.ActorID) || action.CreatedAt.IsZero() || (action.Action != "enqueued" && action.Action != "pause" && action.Action != "resume" && action.Action != "retry" && action.Action != "remove" && action.Action != "reprioritize") {
+			return PullRequest{}, fmt.Errorf("corrupt pull request %s", p.ID)
 		}
 	}
 	return p, nil

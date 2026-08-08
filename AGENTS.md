@@ -98,7 +98,11 @@ whenever dependencies change or the web job fails before it starts.
   merge or an external target update. Superseded evidence is retained but
   never lands; source changes and closure clear admission, while conflicts and
   failed or cancelled checks follow `pause` or `remove` without deleting pull
-  request history. Automatic completion closes a linked open proposal and
+  request history. The branch queue surface exposes durable order, current
+  candidate state, blockers, predicted next action, and retained attempts;
+  owners can pause, resume, retry, remove, or reprioritize entries, with
+  attributed history and author-targeted activity/inbox outcomes. Automatic
+  completion closes a linked open proposal and
   records the same attributable proposal and merge activity as direct merge.
   Pull metadata retains pending finalization until those cross-store effects
   succeed; recovery retries them with stable idempotent activity identities.
