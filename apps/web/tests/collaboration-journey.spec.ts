@@ -516,82 +516,188 @@ test("a protected queue lands parallel human and agent changes without stale evi
   await contributorContext.close();
 });
 
-test("a linked proposal closes into a clearable merge outcome", async ({ browser }) => {
+test("a proposal plan coordinates dependent human and agent work through verified merges", async ({ browser }) => {
+	test.setTimeout(240_000);
+	await run("docker", ["image", "inspect", "alpine:3.22"]).catch(() =>
+		run("docker", ["pull", "alpine:3.22"]),
+	);
   const suffix = Date.now().toString(36);
   const maintainerContext = await browser.newContext();
   const contributorContext = await browser.newContext();
   const maintainer = await maintainerContext.newPage();
   const contributor = await contributorContext.newPage();
 
-  await createAccount(maintainer, "Proposal Maintainer", `proposal-maintainer-${suffix}`);
-  const maintainerToken = await issueGitToken(maintainer, "Proposal Git");
+	await createAccount(maintainer, "Plan Maintainer", `plan-maintainer-${suffix}`);
+	const maintainerToken = await issueGitToken(maintainer, "Plan Git");
+	const maintainerAPIToken = await maintainer.evaluate(() => localStorage.getItem("vivarium.access-token"));
+	expect(maintainerAPIToken).toBeTruthy();
+	const maintainerHeaders = { Authorization: `Bearer ${maintainerAPIToken}` };
+	const maintainerUser = await (await maintainer.request.get("/api/user", { headers: maintainerHeaders })).json() as { id: string };
   await maintainer.goto("/repositories");
-  await maintainer.getByLabel("Repository name").fill(`proposal-${suffix}`);
+	await maintainer.getByLabel("Repository name").fill(`plan-${suffix}`);
   await maintainer.getByRole("button", { name: "Create repository" }).click();
-  await maintainer.getByRole("link", { name: new RegExp(`proposal-${suffix}`) }).click();
+	await maintainer.getByRole("link", { name: new RegExp(`plan-${suffix}`) }).click();
   await expect(maintainer).toHaveURL(/\/repositories\/[a-f0-9]{32}$/);
   const repositoryID = new URL(maintainer.url()).pathname.split("/").pop()!;
 
-  const maintainerCopy = await mkdtemp(join(tmpdir(), "vivarium-proposal-maintainer-"));
+	const maintainerCopy = await mkdtemp(join(tmpdir(), "vivarium-plan-maintainer-"));
   await git(tmpdir(), "clone", `http://git:${maintainerToken}@localhost:3000/git/${repositoryID}.git`, maintainerCopy);
-  await git(maintainerCopy, "config", "user.name", "Proposal Maintainer");
-  await git(maintainerCopy, "config", "user.email", "proposal-maintainer@example.com");
-  await writeFile(join(maintainerCopy, "README.md"), "# Proposal workflow\n");
-  await git(maintainerCopy, "add", "README.md");
-  await git(maintainerCopy, "commit", "-m", "Start proposal project");
+	await git(maintainerCopy, "config", "user.name", "Plan Maintainer");
+	await git(maintainerCopy, "config", "user.email", "plan-maintainer@example.com");
+	await writeFile(join(maintainerCopy, "README.md"), "# Coordinated delivery\n");
+	await mkdir(join(maintainerCopy, ".vivarium"));
+	await writeFile(join(maintainerCopy, ".vivarium", "checks.json"), JSON.stringify({
+		version: 1,
+		checks: [{ name: "plan verification", image: "alpine:3.22", command: "test -f README.md" }],
+	}, null, 2) + "\n");
+	await git(maintainerCopy, "add", ".");
+	await git(maintainerCopy, "commit", "-m", "Start coordinated project");
   await git(maintainerCopy, "push", "origin", "main");
+	const baseCommit = await git(maintainerCopy, "rev-parse", "HEAD");
+	await maintainer.goto(`/repositories/${repositoryID}`);
+	await maintainer.getByLabel("Required check names").fill("plan verification");
+	await maintainer.getByRole("button", { name: "Save requirements" }).click();
 
-  await createAccount(contributor, "Proposal Contributor", `proposal-contributor-${suffix}`);
-  const contributorToken = await issueGitToken(contributor, "Proposal Git");
+	await createAccount(contributor, "Plan Contributor", `plan-contributor-${suffix}`);
+	const contributorToken = await issueGitToken(contributor, "Plan Git");
+	const contributorAPIToken = await contributor.evaluate(() => localStorage.getItem("vivarium.access-token"));
+	expect(contributorAPIToken).toBeTruthy();
+	const contributorHeaders = { Authorization: `Bearer ${contributorAPIToken}` };
+	const contributorUser = await (await contributor.request.get("/api/user", { headers: contributorHeaders })).json() as { id: string };
   const collaborationID = (await contributor.getByTestId("collaboration-id").textContent())!;
   await maintainer.goto(`/repositories/${repositoryID}`);
   await maintainer.getByLabel("Collaboration ID").fill(collaborationID);
   await maintainer.getByRole("button", { name: "Add", exact: true }).click();
-  await expect(maintainer.getByText(`@proposal-contributor-${suffix}`)).toBeVisible();
+	await expect(maintainer.getByText(`@plan-contributor-${suffix}`)).toBeVisible();
 
   await contributor.goto("/proposals");
   await contributor.getByRole("button", { name: "New proposal" }).click();
-  await contributor.getByLabel("Title").fill("Document the proposal outcome");
-  await contributor.getByLabel("Context", { exact: true }).fill("Keep the discussion linked through merge.");
+	await contributor.getByLabel("Title").fill("Ship a coordinated feature");
+	await contributor.getByLabel("Context", { exact: true }).fill("Deliver the human foundation before the delegated follow-up.");
   await contributor.getByRole("button", { name: "Publish proposal" }).click();
   await expect(contributor).toHaveURL(new RegExp(`/proposals/${repositoryID}/[a-f0-9]{32}$`));
   const proposalID = new URL(contributor.url()).pathname.split("/").pop()!;
+	await contributor.getByLabel("Add to the conversation").fill("Keep both outcomes independently reviewable and verified.");
+	await contributor.getByRole("button", { name: "Comment" }).click();
+	await expect(contributor.getByText("Keep both outcomes independently reviewable and verified.", { exact: true })).toBeVisible();
 
-  const contributorCopy = await mkdtemp(join(tmpdir(), "vivarium-proposal-contributor-"));
+	async function postJSON(page: Page, path: string, headers: Record<string, string>, data: unknown) {
+		const response = await page.request.post(`/api${path}`, { headers, data });
+		expect(response.status(), `POST ${path}: ${await response.text()}`).toBeGreaterThanOrEqual(200);
+		expect(response.status(), `POST ${path}`).toBeLessThan(300);
+		return response.json();
+	}
+	async function putJSON(page: Page, path: string, headers: Record<string, string>, data: unknown) {
+		const response = await page.request.put(`/api${path}`, { headers, data });
+		expect(response.status(), `PUT ${path}: ${await response.text()}`).toBeGreaterThanOrEqual(200);
+		expect(response.status(), `PUT ${path}`).toBeLessThan(300);
+		return response.json();
+	}
+	const commentsResponse = await contributor.request.get(`/api/repositories/${repositoryID}/proposals/${proposalID}/comments`, { headers: contributorHeaders });
+	const comments = await commentsResponse.json() as { comments: Array<{ id: string }> };
+	const humanTask = await postJSON(contributor, `/repositories/${repositoryID}/proposals/${proposalID}/tasks`, contributorHeaders, {
+		title: "Build the human foundation", outcome: "The foundation is merged first.", discussion_comment_ids: [comments.comments[0].id],
+	}) as { id: string };
+	const agentTask = await postJSON(contributor, `/repositories/${repositoryID}/proposals/${proposalID}/tasks`, contributorHeaders, {
+		title: "Add the delegated follow-up", outcome: "Agent work builds on the merged foundation.", dependency_ids: [humanTask.id], discussion_comment_ids: [comments.comments[0].id],
+	}) as { id: string; ready: boolean };
+	expect(agentTask.ready).toBe(false);
+	const blockedAssignment = await maintainer.request.put(`/api/repositories/${repositoryID}/proposals/${proposalID}/tasks/${agentTask.id}/assignment`, {
+		headers: maintainerHeaders,
+		data: { assignee_type: "agent", mandate: "Do not start before the foundation.", repository_id: repositoryID, base_revision: baseCommit },
+	});
+	expect(blockedAssignment.status()).toBeGreaterThanOrEqual(400);
+	await putJSON(maintainer, `/repositories/${repositoryID}/proposals/${proposalID}/tasks/${humanTask.id}/assignment`, maintainerHeaders, {
+		assignee_type: "human", assignee_id: contributorUser.id, mandate: "Publish the independently reviewable foundation.", repository_id: repositoryID, base_revision: baseCommit,
+	});
+
+	await contributor.reload();
+	await expect(contributor.getByRole("heading", { name: "What can start now" })).toBeVisible();
+	await expect(contributor.getByText("Blocked by Build the human foundation")).toBeVisible();
+	await expect(contributor.getByText("owned by human", { exact: true })).toBeVisible();
+
+	const contributorCopy = await mkdtemp(join(tmpdir(), "vivarium-plan-contributor-"));
   await git(tmpdir(), "clone", `http://git:${contributorToken}@localhost:3000/git/${repositoryID}.git`, contributorCopy);
-  await git(contributorCopy, "config", "user.name", "Proposal Contributor");
-  await git(contributorCopy, "config", "user.email", "proposal-contributor@example.com");
-  await git(contributorCopy, "switch", "-c", "proposal-outcome");
-  await writeFile(join(contributorCopy, "OUTCOME.md"), "The proposal became a merged change.\n");
-  await git(contributorCopy, "add", "OUTCOME.md");
-  await git(contributorCopy, "commit", "-m", "Document proposal outcome");
-  await git(contributorCopy, "push", "origin", "proposal-outcome");
+	await git(contributorCopy, "config", "user.name", "Plan Contributor");
+	await git(contributorCopy, "config", "user.email", "plan-contributor@example.com");
+	await git(contributorCopy, "switch", "-c", "human-foundation");
+	await writeFile(join(contributorCopy, "foundation.txt"), "human foundation\n");
+	await git(contributorCopy, "add", "foundation.txt");
+	await git(contributorCopy, "commit", "-m", "Build human foundation");
+	await git(contributorCopy, "push", "origin", "human-foundation");
+	const humanPull = await postJSON(contributor, `/repositories/${repositoryID}/proposals/${proposalID}/tasks/${humanTask.id}/contributions`, contributorHeaders, {
+		title: "Build the human foundation", body: "Implements the first agreed outcome.", source_branch: "human-foundation", target_branch: "main",
+	}) as { id: string };
+	await maintainer.goto(`/pulls/${repositoryID}/${humanPull.id}`);
+	await expect(maintainer.locator("#checks").getByText("succeeded", { exact: true })).toBeVisible({ timeout: 60_000 });
+	await maintainer.getByRole("button", { name: "Approve" }).click();
+	await expect(maintainer.getByRole("button", { name: "Merge into main" })).toBeEnabled();
+	await maintainer.getByRole("button", { name: "Merge into main" }).click();
+	await expect(maintainer.getByText("Merged", { exact: true })).toBeVisible();
+	const humanResult = await (await maintainer.request.get(`/api/repositories/${repositoryID}/pulls/${humanPull.id}`, { headers: maintainerHeaders })).json() as { merge_commit_id: string };
 
-  await contributor.goto("/pulls");
-  await contributor.getByRole("button", { name: "New pull request" }).click();
-  await contributor.getByLabel("Candidate branch").selectOption("proposal-outcome");
-  await contributor.getByLabel("Target branch").selectOption("main");
-  await contributor.getByLabel("Linked proposal").selectOption(proposalID);
-  await contributor.getByLabel("Title").fill("Document the proposal outcome");
-  await contributor.getByLabel("Purpose and feedback needed").fill("Carries the proposal into review.");
-  await contributor.getByRole("button", { name: "Open pull request" }).click();
-  await expect(contributor).toHaveURL(new RegExp(`/pulls/${repositoryID}/[a-f0-9]{32}$`));
-  const pullRequestURL = contributor.url();
+	const readyTasks = await (await maintainer.request.get(`/api/repositories/${repositoryID}/proposals/${proposalID}/tasks`, { headers: maintainerHeaders })).json() as { tasks: Array<{ id: string; ready: boolean; status: string }> };
+	expect(readyTasks.tasks.find((task) => task.id === humanTask.id)).toMatchObject({ status: "completed" });
+	expect(readyTasks.tasks.find((task) => task.id === agentTask.id)).toMatchObject({ ready: true });
+	const assignedAgentTask = await putJSON(maintainer, `/repositories/${repositoryID}/proposals/${proposalID}/tasks/${agentTask.id}/assignment`, maintainerHeaders, {
+		assignee_type: "agent", mandate: "Add the delegated result on the merged foundation.", repository_id: repositoryID, base_revision: humanResult.merge_commit_id,
+	}) as { assignment: { id: string; assignee_id: string } };
+	const launched = await postJSON(maintainer, `/repositories/${repositoryID}/proposals/${proposalID}/tasks/${agentTask.id}/sessions`, maintainerHeaders, {
+		expected_assignment_id: assignedAgentTask.assignment.id, context_paths: ["foundation.txt"], expires_in: 3600,
+	}) as { session: { id: string }; run: { id: string; working_branch: string; agent_id: string }; credential: { token: string } };
+	const taskRunBase = `/repositories/${repositoryID}/proposals/${proposalID}/tasks/${agentTask.id}/sessions/${launched.session.id}/runs/${launched.run.id}`;
+	await postJSON(contributor, `${taskRunBase}/interventions`, contributorHeaders, { kind: "run.guidance", message: "Preserve the human foundation and add a separate result." });
 
-  await maintainer.goto(pullRequestURL);
-  await maintainer.getByRole("button", { name: "Approve" }).click();
-  await expect(maintainer.getByRole("button", { name: "Merge into main" })).toBeEnabled();
-  await maintainer.getByRole("button", { name: "Merge into main" }).click();
-  await expect(maintainer.getByText("Merged", { exact: true })).toBeVisible();
+	const agentCopy = await mkdtemp(join(tmpdir(), "vivarium-plan-agent-"));
+	await git(tmpdir(), "clone", `http://git:${launched.credential.token}@localhost:3000/git/${repositoryID}.git`, agentCopy);
+	await git(agentCopy, "config", "user.name", "Vivarium Plan Agent");
+	await git(agentCopy, "config", "user.email", "plan-agent@users.vivarium");
+	await git(agentCopy, "switch", "-c", "agent-work", `origin/${launched.run.working_branch}`);
+	await writeFile(join(agentCopy, "agent-result.txt"), "guided delegated result\n");
+	await git(agentCopy, "add", "agent-result.txt");
+	await git(agentCopy, "commit", "-m", "Add delegated follow-up");
+	await git(agentCopy, "push", "origin", `HEAD:refs/heads/${launched.run.working_branch}`);
+	const agentCommit = await git(agentCopy, "rev-parse", "HEAD");
+	const agentHeaders = { Authorization: `Bearer ${launched.credential.token}` };
+	await postJSON(maintainer, `${taskRunBase}/events`, agentHeaders, { kind: "branch.updated", state: "working", message: "Published the guided follow-up.", branch: launched.run.working_branch, commit_id: agentCommit });
+	await postJSON(maintainer, `${taskRunBase}/completion`, agentHeaders, {
+		summary: "Preserved the human foundation and added the delegated result.", commit_id: agentCommit,
+		checks: [{ name: "agent scope", status: "passed", details: "The result is a separate file." }], unresolved_concerns: [],
+	});
+	const agentPull = await postJSON(maintainer, `/repositories/${repositoryID}/proposals/${proposalID}/tasks/${agentTask.id}/contributions`, maintainerHeaders, {
+		title: "Add the delegated follow-up", body: "Carries planning and execution evidence into review.", source_branch: launched.run.working_branch, target_branch: "main", session_id: launched.session.id, run_id: launched.run.id,
+	}) as { id: string };
 
-  await contributor.goto(`/proposals/${repositoryID}/${proposalID}`);
-  await expect(contributor.getByText("closed", { exact: true }).first()).toBeVisible();
-  await contributor.goto("/inbox");
-  const mergeItem = contributor.getByRole("article").filter({ hasText: "Review merge outcome" });
-  await expect(mergeItem).toBeVisible();
-  await expect(mergeItem.getByText("awareness", { exact: true })).toBeVisible();
-  await mergeItem.getByRole("button", { name: "Clear Document the proposal outcome" }).click();
-  await expect(mergeItem).toBeHidden();
+	await contributor.goto(`/pulls/${repositoryID}/${agentPull.id}`);
+	await expect(contributor.getByText("Connected proposal task", { exact: true })).toBeVisible();
+	await expect(contributor.getByText(new RegExp(`session ${launched.session.id} · run ${launched.run.id}`))).toBeVisible();
+	await contributor.getByRole("button", { name: "Approve" }).click();
+	await maintainer.goto(`/pulls/${repositoryID}/${agentPull.id}`);
+	await expect(maintainer.locator("#checks").getByText("succeeded", { exact: true })).toBeVisible({ timeout: 60_000 });
+	await expect(maintainer.getByRole("button", { name: "Merge into main" })).toBeEnabled();
+	await maintainer.getByRole("button", { name: "Merge into main" }).click();
+	await expect(maintainer.getByText("Merged", { exact: true })).toBeVisible();
+
+	await contributor.goto(`/proposals/${repositoryID}/${proposalID}`);
+	await expect(contributor.getByText("merged", { exact: true })).toHaveCount(2);
+	await contributor.getByRole("button", { name: "Close proposal" }).click();
+	await expect(contributor.getByText("closed", { exact: true }).first()).toBeVisible();
+	const historyResponse = await contributor.request.get(`/api/repositories/${repositoryID}/proposals/${proposalID}/tasks/${agentTask.id}/history`, { headers: contributorHeaders });
+	const history = await historyResponse.json() as { history: Array<{ action: string; actor_id: string }> };
+	expect(history.history).toEqual(expect.arrayContaining([
+		expect.objectContaining({ action: "assigned", actor_id: maintainerUser.id }),
+		expect.objectContaining({ action: "contribution_published", actor_id: maintainerUser.id }),
+		expect.objectContaining({ action: "contribution_merged", actor_id: maintainerUser.id }),
+	]));
+	const timelineResponse = await contributor.request.get(`/api/repositories/${repositoryID}/proposals/${proposalID}/tasks/${agentTask.id}/sessions/${launched.session.id}/events?limit=100`, { headers: contributorHeaders });
+	const timeline = await timelineResponse.json() as { events: Array<{ kind: string; agent_id?: string; initiator_id?: string }> };
+	expect(timeline.events).toEqual(expect.arrayContaining([
+		expect.objectContaining({ kind: "run.guidance", actor_id: contributorUser.id }),
+		expect.objectContaining({ kind: "run.completed", agent_id: assignedAgentTask.assignment.assignee_id, initiator_id: maintainerUser.id }),
+	]));
+	await git(maintainerCopy, "pull", "--ff-only");
+	expect(await readFile(join(maintainerCopy, "foundation.txt"), "utf8")).toBe("human foundation\n");
+	expect(await readFile(join(maintainerCopy, "agent-result.txt"), "utf8")).toBe("guided delegated result\n");
 
   await maintainerContext.close();
   await contributorContext.close();
