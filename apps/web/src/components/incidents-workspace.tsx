@@ -573,7 +573,7 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
     let outcome: "started" | "failed" = "started", resourceID = action.deployment_id, message = "Governed execution was accepted.";
     try {
       setIncident(await api<Incident>(`/incidents/${incidentID}/actions/${action.id}/attempts`, {method:"POST",body:JSON.stringify({operation_id:operationID,outcome:"pending",message:"Governed execution reserved before environment mutation."})}, token));
-      if (action.kind === "pause_rollout") await api(`/repositories/${action.repository_id}/deployments/${action.deployment_id}/controls`, {method:"POST",body:JSON.stringify({action:"pause",expected_state:"running",reason:action.rationale})}, token);
+      if (action.kind === "pause_rollout") await api(`/repositories/${action.repository_id}/deployments/${action.deployment_id}/controls`, {method:"POST",body:JSON.stringify({action:"pause",expected_state:"running",reason:`incident-mitigation:${action.id}:${operationID}`})}, token);
       else {
         const result = await api<{deployment?:{id:string};pull_request?:{id:string}}>(`/repositories/${action.repository_id}/deployments/${action.deployment_id}/recoveries`, {method:"POST",body:JSON.stringify({action:action.kind === "restore_release" ? "rollback" : "repair"})}, token);
         resourceID = result.deployment?.id ?? result.pull_request?.id ?? resourceID;

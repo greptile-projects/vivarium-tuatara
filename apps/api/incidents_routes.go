@@ -464,7 +464,24 @@ func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *
 				case "restore_release":
 					governed = governed || attempt.ResourceID == promotion.ID
 				case "emergency_repair":
-					governed = true
+					if pullStore == nil || gitStore == nil {
+						continue
+					}
+					pull, pullErr := pullStore.Get(action.RepositoryID, attempt.ResourceID)
+					if pullErr != nil || pull.Status != pullrequests.Merged || pull.MergeCommitID == nil {
+						continue
+					}
+					repository, openErr := gitStore.Open(action.RepositoryID)
+					if openErr != nil {
+						continue
+					}
+					ancestry, ancestryErr := repository.ListCommitAncestry(storage.ObjectID(promotion.CommitID))
+					if ancestryErr != nil {
+						continue
+					}
+					for _, commit := range ancestry {
+						governed = governed || string(commit.ID) == *pull.MergeCommitID
+					}
 				}
 			}
 			if !governed {
@@ -491,10 +508,17 @@ func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *
 			}
 			valid := false
 			if action != nil && action.Kind == "pause_rollout" && input.ResourceID == action.DeploymentID {
+				var reservation *incidents.ActionAttempt
+				for i := range action.Attempts {
+					if action.Attempts[i].ID == input.OperationID && action.Attempts[i].Outcome == "pending" && action.Attempts[i].ActorID == actor.UserID {
+						reservation = &action.Attempts[i]
+					}
+				}
 				promotion, e := deploymentStore.GetPromotion(action.RepositoryID, input.ResourceID)
-				if e == nil {
+				if e == nil && reservation != nil {
 					for _, event := range promotion.Events {
-						valid = valid || (event.Kind == "deployment.pause" && event.ActorID == actor.UserID)
+						expectedReason := "incident-mitigation:" + action.ID + ":" + input.OperationID
+						valid = valid || (event.Kind == "deployment.pause" && event.ActorID == actor.UserID && event.Message == expectedReason && !event.CreatedAt.Before(reservation.CreatedAt))
 					}
 				}
 			}

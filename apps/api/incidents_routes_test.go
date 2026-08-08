@@ -134,6 +134,28 @@ func TestIncidentOperatingPictureFromHealthSignal(t *testing.T) {
 	if incident.Actions[0].Status != "failed" || len(incident.Actions[0].Attempts) != 2 || incident.Actions[0].Attempts[1].Outcome != "failed" {
 		t.Fatalf("attempt = %#v", incident.Actions[0])
 	}
+	legacy, err := deploymentsStore.CreatePromotion(deployments.Promotion{RepositoryID: repository.ID, EnvironmentID: environment.ID, ReleaseID: strings.Repeat("7", 32), BuildID: strings.Repeat("8", 32), ArtifactID: strings.Repeat("9", 32), ArtifactSHA256: strings.Repeat("a", 64), CommitID: strings.Repeat("b", 40), Rollout: promotion.Rollout, InitiatedBy: owner.User.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyOwner := strings.Repeat("c", 32)
+	legacy, err = deploymentsStore.Claim(repository.ID, legacy.ID, legacyOwner, time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyRationale := "Pause the newly identified rollout."
+	_, err = deploymentsStore.Control(repository.ID, legacy.ID, owner.User.ID, "pause", "running", legacyRationale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyBody := `{"operation_id":"` + strings.Repeat("d", 32) + `","kind":"pause_rollout","repository_id":"` + repository.ID + `","deployment_id":"` + legacy.ID + `","rationale":"` + legacyRationale + `","evidence":[{"kind":"deployment","repository_id":"` + repository.ID + `","resource_id":"` + legacy.ID + `"}],"health_criteria":[{"stage":"canary","signal":"errors"}]}`
+	legacyProposed := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/actions", legacyBody, responder.Credential.Token, http.StatusCreated)
+	decodeResponse(t, legacyProposed, &incident)
+	legacyAction := incident.Actions[len(incident.Actions)-1]
+	authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/actions/"+legacyAction.ID+"/decisions", `{"decision":"approve","message":"approve a new pause only"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	legacyOperation := strings.Repeat("e", 32)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/actions/"+legacyAction.ID+"/attempts", `{"operation_id":"`+legacyOperation+`","outcome":"pending","message":"reserve a new pause"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/actions/"+legacyAction.ID+"/attempts", `{"operation_id":"`+legacyOperation+`","outcome":"started","resource_id":"`+legacy.ID+`","message":"claim old pause"}`, owner.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
 	repo, err := gitStore.Open(repository.ID)
 	if err != nil {
 		t.Fatal(err)

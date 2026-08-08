@@ -288,6 +288,9 @@ whenever dependencies change or the web job fails before it starts.
   frozen criterion to pass on a governed-attempt-bound deployment in the
   affected environment. Proposal and attempt operation IDs deduplicate exact
   retries, and attempts are durably reserved before an environment mutation.
+  Pause events embed the action/reservation identity, and emergency-repair
+  recovery proves the governed repair pull's merge commit is ancestral to the
+  exact recovery deployment commit.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's

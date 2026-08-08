@@ -1011,6 +1011,11 @@ governed attempt and must reference a retained deployment in the affected
 environment on which every declared stage/signal criterion has passed;
 otherwise the API returns `409 recovery_unverified`. Failed attempts remain
 visible and may be followed by later governed attempts or verified recovery.
+Pause controls carry the action and reserved-operation IDs in their durable
+deployment event, so a historical control cannot be claimed by a later
+authorization. Emergency-repair recovery additionally requires the governed
+repair pull to be merged and its immutable merge commit to be in the exact
+recovery deployment commit's ancestry.
 
 `PATCH /incidents/{incident_id}` accepts `expected_version`, `severity`,
 `status`, `roles`, and an optional decision `message`. Status is one of
