@@ -33,6 +33,20 @@ export type ReleaseCandidate = {
     contributor_ids: string[];
   };
 };
+export type ReleaseArtifact = { id: string; attempt: number; path: string; size: number; sha256: string; content_type: string; created_at: string };
+export type ReleaseBuild = {
+  id: string; commit_id: string; state: "queued" | "running" | "cleanup_pending" | "succeeded" | "failed" | "canceled";
+  definition: { name: string; image: string; command: string; working_directory?: string };
+  failure?: string; requested_by?: string; created_at: string; completed_at?: string;
+  attempts: { number: number; state: string; actor_id?: string; exit_code?: number; failure?: string }[];
+  artifacts: ReleaseArtifact[];
+};
+export type ReleaseAttestation = {
+  version: number; release_id: string; repository_id: string; source_commit: string; build_id: string;
+  step: string; command: string; dependencies: string[]; actor_id: string;
+  verification: { state: string; exit_code?: number; failure?: string; attempts: ReleaseBuild["attempts"] };
+  artifacts: ReleaseArtifact[]; created_at: string; completed_at?: string;
+};
 export type ForkSynchronization = {
   branch: string;
   previous_commit_id?: string;

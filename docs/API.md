@@ -800,3 +800,42 @@ response has `status: "candidate"`, `created_by`, `created_at`, the exact prior
 commit boundary when selected, and `inclusions` arrays for `pull_request_ids`,
 `proposal_ids`, `task_ids`, and `contributor_ids`. Those inclusions are computed
 from merged history by the server and cannot be supplied by the caller.
+
+### Release builds and attestations
+
+A candidate's exact commit opts into distributable builds with
+`.vivarium/release.json`:
+
+```json
+{
+  "version": 1,
+  "steps": [{
+    "name": "package",
+    "image": "alpine:3.22",
+    "command": "tar -czf \"$VIVARIUM_OUTPUT/app.tgz\" dist"
+  }]
+}
+```
+
+Steps use the verification definition contract (`working_directory`, bounded
+`environment`, and `timeout_seconds` are optional). `POST
+/repositories/{id}/releases/{release_id}/builds` requires a current owner or
+contributor with `repositories:write`, snapshots that definition from the
+candidate commit, and returns `202` with `{ "builds": [...] }`. Each step runs
+against a read-only export of that commit in a capability-free,
+network-disabled OCI container. Only `$VIVARIUM_OUTPUT` is writable and its
+regular files become immutable artifacts (256 MiB total limit).
+
+`GET /repositories/{id}/releases/{release_id}/builds` and the following
+release-build routes inherit repository visibility:
+
+- `GET .../releases/{release_id}/attestation` gives the aggregate `unbuilt`,
+  `pending`, `failed`, or `verified` result and every required step for the
+  frozen source commit.
+- `GET .../builds/{build_id}/events` returns ordered status and bounded logs.
+- `GET .../builds/{build_id}/artifacts/{artifact_id}` downloads immutable bytes
+  recorded with path, size, media type, attempt, and SHA-256.
+- `GET .../builds/{build_id}/attestation` returns source commit, exact command,
+  container-image dependency, actor, verification attempts, and artifacts.
+- `POST .../builds/{build_id}/rerun` appends a same-source attempt; earlier
+  attempts, logs, failures, and artifacts remain unchanged.
