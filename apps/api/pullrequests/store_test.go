@@ -450,8 +450,11 @@ func TestIntegrationQueueRebuildsConcurrentCandidateBeforeLanding(t *testing.T) 
 	})
 	first, _ := store.Create(repository.ID(), testID('a'), "First", "", "one", "main", nil)
 	second, _ := store.Create(repository.ID(), testID('b'), "Second", "", "two", "main", nil)
+	// Make ID order oppose the authoritative rank order while admission times
+	// collide, so automatic advancement must use the same comparator as views.
+	first.ID, second.ID = testID('e'), testID('d')
 	actor := testID('c')
-	firstTime, secondTime := time.Unix(1700000000, 0).UTC(), time.Unix(1700000001, 0).UTC()
+	firstTime, secondTime := time.Unix(1700000000, 0).UTC(), time.Unix(1700000000, 0).UTC()
 	firstCandidate, err := store.newIntegrationCandidate(repository, first, string(base), []string{})
 	if err != nil {
 		t.Fatal(err)
@@ -462,6 +465,7 @@ func TestIntegrationQueueRebuildsConcurrentCandidateBeforeLanding(t *testing.T) 
 	}
 	first.QueuedAt, first.QueuedBy, first.IntegrationCandidates = &firstTime, &actor, []IntegrationCandidate{firstCandidate}
 	second.QueuedAt, second.QueuedBy, second.IntegrationCandidates = &secondTime, &actor, []IntegrationCandidate{secondCandidate}
+	first.QueueRank, second.QueueRank = "1", "2"
 	second.QueuePaused = true
 	if _, err := store.write(first); err != nil {
 		t.Fatal(err)
@@ -633,6 +637,15 @@ func TestIntegrationQueueProjectionAndAttributedOperations(t *testing.T) {
 		if _, err := store.OperateQueue(repository.ID(), ids[i], actor, "reprioritize", 2); err != nil {
 			t.Fatalf("exact rank exhausted after %d moves: %v", len(ids)-i, err)
 		}
+	}
+}
+
+func TestQueueRankOrdersEqualAdmissionTimestamps(t *testing.T) {
+	queuedAt := time.Unix(1700000000, 123456000).UTC()
+	lowerID := PullRequest{ID: testID('1'), QueuedAt: &queuedAt, QueueRank: "2"}
+	higherID := PullRequest{ID: testID('2'), QueuedAt: &queuedAt, QueueRank: "1"}
+	if !queueLess(higherID, lowerID) || queueLess(lowerID, higherID) {
+		t.Fatal("queue rank did not override ID order for equal admission timestamps")
 	}
 }
 

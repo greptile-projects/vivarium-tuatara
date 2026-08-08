@@ -1494,9 +1494,6 @@ func (s *Store) advanceIntegrationQueue(repositoryID, branch string) error {
 		if pulls[j].QueuedAt == nil {
 			return true
 		}
-		if pulls[i].QueuedAt.Equal(*pulls[j].QueuedAt) {
-			return pulls[i].ID < pulls[j].ID
-		}
 		return queueLess(pulls[i], pulls[j])
 	})
 	queued := make([]PullRequest, 0, len(pulls))
