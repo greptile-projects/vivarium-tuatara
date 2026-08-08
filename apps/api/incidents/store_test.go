@@ -56,4 +56,8 @@ func TestFindingRequiresBoundedOperationalEvidence(t *testing.T) {
 	if err != nil || len(created.Timeline) != 2 || created.Timeline[1].Evidence[0].CapturedAt.IsZero() {
 		t.Fatalf("finding = %#v, %v", created, err)
 	}
+	retried, err := store.AddFinding(incident.ID, strings.Repeat("c", 32), actor, "observation", "Logs show errors.", "participants", []Evidence{{Kind: "log", RepositoryID: repository, ResourceID: strings.Repeat("d", 32), Label: "deployment logs · failed", WindowStart: &start, WindowEnd: &end}})
+	if err != nil || len(retried.Timeline) != 2 || retried.Timeline[1].Evidence[0].Label != "deployment logs" {
+		t.Fatalf("mutable-label retry = %#v, %v", retried, err)
+	}
 }

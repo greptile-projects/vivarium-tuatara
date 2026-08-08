@@ -264,7 +264,10 @@ func sameEvidence(a, b []Evidence) bool {
 		x, y := a[i], b[i]
 		x.CapturedAt = time.Time{}
 		y.CapturedAt = time.Time{}
-		if x.Kind != y.Kind || x.RepositoryID != y.RepositoryID || x.ResourceID != y.ResourceID || x.Label != y.Label || x.Query != y.Query || !sameTime(x.WindowStart, y.WindowStart) || !sameTime(x.WindowEnd, y.WindowEnd) {
+		// Label is a server-derived historical snapshot, not part of the caller's
+		// operation identity. A live resource may change between a committed
+		// request and its lost-response retry.
+		if x.Kind != y.Kind || x.RepositoryID != y.RepositoryID || x.ResourceID != y.ResourceID || x.Query != y.Query || !sameTime(x.WindowStart, y.WindowStart) || !sameTime(x.WindowEnd, y.WindowEnd) {
 			return false
 		}
 	}
