@@ -142,6 +142,7 @@ export function RepositoryBrowser({ id }: { id: string }) {
   const immutableRevision = resolved ?? commits[0]?.id ?? revision;
 
   const namedRevision = branches.some((branch) => branch.name === revision);
+  const policyBranch = selectedRef ? (namedRevision ? revision : null) : repository.default_branch;
   const cloneURL =
     typeof window === "undefined"
       ? repository.git_remote
@@ -252,7 +253,16 @@ export function RepositoryBrowser({ id }: { id: string }) {
         <aside className="space-y-4">
           {user?.id === repository.owner_id && token && (
             <>
-              <RequiredChecksPanel repositoryID={id} branch={repository.default_branch} token={token} />
+              {policyBranch ? (
+                <RequiredChecksPanel repositoryID={id} branch={policyBranch} token={token} />
+              ) : (
+                <Card className="p-5">
+                  <h2 className="font-semibold">Required checks</h2>
+                  <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
+                    This is a detached commit view. Select a named branch to manage its merge requirements.
+                  </p>
+                </Card>
+              )}
               <CollaboratorPanel repositoryID={id} token={token} />
             </>
           )}
