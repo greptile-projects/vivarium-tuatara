@@ -148,11 +148,21 @@ export type Incident = {
   roles: { name: string; user_id: string }[];
   source?: { repository_id: string; deployment_id: string; stage?: string; signal?: string };
   declared_by: string;
-  timeline: { id: string; kind: string; actor_id: string; message: string; audience: "participants" | "public"; created_at: string; acknowledged_by?: string[] }[];
+  timeline: { id: string; kind: string; actor_id: string; message: string; audience: "participants" | "public"; created_at: string; acknowledged_by?: string[]; evidence?: IncidentEvidence[] }[];
   version: number;
   created_at: string;
   updated_at: string;
   resolved_at?: string;
+};
+export type IncidentEvidence = {
+  kind: "log" | "health_signal" | "deployment" | "release" | "commit" | "pull_request" | "incident";
+  repository_id: string;
+  resource_id: string;
+  label: string;
+  query?: string;
+  window_start?: string;
+  window_end?: string;
+  captured_at: string;
 };
 export type ForkSynchronization = {
   branch: string;
