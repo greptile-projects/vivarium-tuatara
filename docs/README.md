@@ -457,6 +457,13 @@ latest eligible target tip and freezes required-check definitions from that
 owner-controlled base before running them against the exact merged snapshot.
 The API and pull workspace expose the immutable source, base, result commit,
 derived lifecycle, and the existing reconnectable logs and artifact evidence.
+The durable queue reconciler compare-and-swaps only a passing FIFO head from
+its frozen base, records that exact candidate as the pull's merge result, and
+then rebuilds affected concurrent candidates against the new target. External
+target movement follows the same rebuild path. Superseded evidence remains
+inspectable but cannot land; source changes and closure clear admission, while
+conflicts and failed or cancelled checks deterministically pause the head or
+remove it according to branch policy without deleting the pull request.
 
 An owner applies an accepted request through its merge endpoint. The operation
 rechecks readiness, materializes a two-parent merge commit through the storage

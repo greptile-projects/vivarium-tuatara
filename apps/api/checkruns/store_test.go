@@ -29,6 +29,28 @@ func TestParseConfigValidatesExecutionContext(t *testing.T) {
 	}
 }
 
+func TestCreateRepairsMissingDefinitionForExistingCommit(t *testing.T) {
+	store, _ := New(t.TempDir())
+	repositoryID, pullID, commitID := "0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789", strings.Repeat("a", 40)
+	first := Definition{Name: "first", Image: "alpine:3.22", Command: "true"}
+	second := Definition{Name: "second", Image: "alpine:3.22", Command: "true"}
+	if runs, err := store.Create(repositoryID, pullID, commitID, []Definition{first}); err != nil || len(runs) != 1 {
+		t.Fatalf("initial Create() = %#v, %v", runs, err)
+	}
+	runs, err := store.Create(repositoryID, pullID, commitID, []Definition{first, second})
+	if err != nil || len(runs) != 2 {
+		t.Fatalf("repair Create() = %#v, %v", runs, err)
+	}
+	stored, err := store.List(repositoryID, pullID)
+	names := map[string]bool{}
+	for _, run := range stored {
+		names[run.Definition.Name] = true
+	}
+	if err != nil || len(stored) != 2 || !names["first"] || !names["second"] {
+		t.Fatalf("stored runs = %#v, %v", stored, err)
+	}
+}
+
 func TestEvidenceSequenceHandlesEscapedMaximumLogChunk(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {

@@ -1,6 +1,7 @@
 package pullrequests
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -8,8 +9,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
+
+type queueRequirements struct {
+	policy repositories.IntegrationQueuePolicy
+}
+
+func (q queueRequirements) RequiredChecks(string, string) ([]string, error) {
+	return append([]string(nil), q.policy.RequiredChecks...), nil
+}
+func (q queueRequirements) LockRequiredChecks() (func(), error) { return func() {}, nil }
+func (q queueRequirements) IntegrationQueuePolicy(string, string) (repositories.IntegrationQueuePolicy, error) {
+	return q.policy, nil
+}
 
 func TestCreateSnapshotsBranchesAndListsByRepository(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
@@ -411,8 +426,140 @@ func TestMergeReconcilesAttributedCommitAfterLaterTargetAdvance(t *testing.T) {
 	}
 }
 
+func TestIntegrationQueueRebuildsConcurrentCandidateBeforeLanding(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	repository, _ := gitStore.Create(testID('1'))
+	baseTree, _ := repository.WriteObject(storage.TreeObject, nil)
+	base := writeCommit(t, repository, baseTree, "base")
+	oneBlob, _ := repository.WriteObject(storage.BlobObject, []byte("one\n"))
+	oneTree, _ := repository.WriteObject(storage.TreeObject, testTree("one.txt", oneBlob))
+	twoBlob, _ := repository.WriteObject(storage.BlobObject, []byte("two\n"))
+	twoTree, _ := repository.WriteObject(storage.TreeObject, testTree("two.txt", twoBlob))
+	one := writeCommitWithParents(t, repository, oneTree, []storage.ObjectID{base}, "one")
+	two := writeCommitWithParents(t, repository, twoTree, []storage.ObjectID{base}, "two")
+	repository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)})
+	repository.CreateReference(storage.Reference{Name: "refs/heads/one", Target: string(one)})
+	repository.CreateReference(storage.Reference{Name: "refs/heads/two", Target: string(two)})
+	store, _ := New(t.TempDir(), gitStore)
+	store.ConfigureRequiredChecks(queueRequirements{repositories.IntegrationQueuePolicy{Branch: "main", Enabled: true, Concurrency: 2, FailureBehavior: repositories.QueueFailurePause, RequiredChecks: []string{}}}, nil)
+	finalized := []string{}
+	store.ConfigureQueueFinalizer(func(p PullRequest) error {
+		finalized = append(finalized, p.ID)
+		return nil
+	})
+	first, _ := store.Create(repository.ID(), testID('a'), "First", "", "one", "main", nil)
+	second, _ := store.Create(repository.ID(), testID('b'), "Second", "", "two", "main", nil)
+	actor := testID('c')
+	firstTime, secondTime := time.Unix(1700000000, 0).UTC(), time.Unix(1700000001, 0).UTC()
+	firstCandidate, err := store.newIntegrationCandidate(repository, first, string(base), []string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondCandidate, err := store.newIntegrationCandidate(repository, second, string(base), []string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.QueuedAt, first.QueuedBy, first.IntegrationCandidates = &firstTime, &actor, []IntegrationCandidate{firstCandidate}
+	second.QueuedAt, second.QueuedBy, second.IntegrationCandidates = &secondTime, &actor, []IntegrationCandidate{secondCandidate}
+	if _, err := store.write(first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.write(second); err != nil {
+		t.Fatal(err)
+	}
+	corruptRepository := filepath.Join(store.root, testID('0'))
+	if err := os.MkdirAll(corruptRepository, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(corruptRepository, testID('d')+".json"), []byte("not json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.AdvanceIntegrationQueues(); err == nil {
+		t.Fatal("queue scan did not report isolated corrupt repository")
+	}
+	first, _ = store.Get(repository.ID(), first.ID)
+	second, _ = store.Get(repository.ID(), second.ID)
+	if first.Status != Merged || second.Status != Merged || first.MergeCommitID == nil || second.MergeCommitID == nil {
+		t.Fatalf("queue results: first=%#v second=%#v", first, second)
+	}
+	if len(finalized) != 2 || finalized[0] != first.ID || finalized[1] != second.ID {
+		t.Fatalf("finalized queue pulls = %v", finalized)
+	}
+	if len(second.IntegrationCandidates) != 2 || second.IntegrationCandidates[0].SupersededAt == nil || second.IntegrationCandidates[0].SupersededReason != "target_changed" {
+		t.Fatalf("second candidate history = %#v", second.IntegrationCandidates)
+	}
+	landed, err := repository.ReadCommit(storage.ObjectID(*second.MergeCommitID))
+	if err != nil || len(landed.Parents) != 2 || string(landed.Parents[0]) != *first.MergeCommitID || string(landed.Parents[1]) != second.SourceCommitID {
+		t.Fatalf("second landed commit = %#v, %v", landed, err)
+	}
+	main, _ := repository.ReadReference("refs/heads/main")
+	if main.Target != *second.MergeCommitID {
+		t.Fatalf("main = %s", main.Target)
+	}
+	first.QueueFinalizationPending, first.QueueFinalizedAt = true, nil
+	if _, err := store.write(first); err != nil {
+		t.Fatal(err)
+	}
+	attempts := 0
+	store.ConfigureQueueFinalizer(func(PullRequest) error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("activity unavailable")
+		}
+		return nil
+	})
+	_ = store.AdvanceIntegrationQueues()
+	first, _ = store.Get(repository.ID(), first.ID)
+	if !first.QueueFinalizationPending || first.QueueFinalizedAt != nil {
+		t.Fatalf("failed finalization was acknowledged: %#v", first)
+	}
+	_ = store.AdvanceIntegrationQueues()
+	first, _ = store.Get(repository.ID(), first.ID)
+	if first.QueueFinalizationPending || first.QueueFinalizedAt == nil || attempts != 2 {
+		t.Fatalf("finalization did not recover: pull=%#v attempts=%d", first, attempts)
+	}
+}
+
+func TestCandidateLaunchRetriesAfterCheckStoreRecovers(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	repository, _ := gitStore.Create(testID('1'))
+	tree, _ := repository.WriteObject(storage.TreeObject, nil)
+	commit := writeCommit(t, repository, tree, "candidate")
+	checkRoot := t.TempDir()
+	checkStore, _ := checkruns.New(checkRoot)
+	store, _ := New(t.TempDir(), gitStore)
+	store.checkRuns = checkStore
+	pull := PullRequest{ID: testID('2'), RepositoryID: repository.ID()}
+	candidate := IntegrationCandidate{CommitID: string(commit), CheckDefinitions: []checkruns.Definition{{Name: "quality", Image: "alpine:3.22", Command: "true", WorkingDirectory: ".", TimeoutSeconds: 1}}}
+	if err := os.Chmod(checkRoot, 0); err != nil {
+		t.Fatal(err)
+	}
+	store.launchCandidate(pull, candidate)
+	if err := os.Chmod(checkRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store.launchCandidate(pull, candidate)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		runs, err := checkStore.List(repository.ID(), pull.ID)
+		if err == nil && len(runs) == 1 && (runs[0].State == "succeeded" || runs[0].State == "failed" || runs[0].State == "canceled") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("candidate checks were not created after recovery: %#v, %v", runs, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func writeCommit(t *testing.T, repository *storage.Repository, tree storage.ObjectID, message string) storage.ObjectID {
 	return writeCommitWithParents(t, repository, tree, nil, message)
+}
+
+func testTree(name string, id storage.ObjectID) []byte {
+	raw, _ := hex.DecodeString(string(id))
+	return append(append([]byte("100644 "+name+"\x00"), raw...), []byte{}...)
 }
 
 func writeCommitWithParents(t *testing.T, repository *storage.Repository, tree storage.ObjectID, parents []storage.ObjectID, message string) storage.ObjectID {

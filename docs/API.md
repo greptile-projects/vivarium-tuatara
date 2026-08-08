@@ -425,12 +425,32 @@ Required check definitions are resolved from that owner-controlled target
 base and frozen on the candidate; a pull's same-named configuration cannot
 replace their image, command, environment, working directory, or timeout.
 `GET /repositories/{id}/pulls/{pull_id}/candidates` returns these identities,
-creation time, derived `pending`, `verifying`, `passed`, or `failed` lifecycle,
+creation time, derived `pending`, `verifying`, `passed`, `failed`, or
+`superseded` lifecycle,
 and candidate-scoped check runs. Those bound definitions execute against the
 prospective result snapshot. Run IDs use the ordinary check detail,
 events, logs, artifact, cancel, and rerun routes. Candidate checks execute the
 prospective result snapshot, so successful required-check evidence describes
 the repository state integration would create rather than either parent.
+If publishing a candidate's required runs stops after a durable prefix,
+reconciliation compares run names with the frozen definitions and creates only
+the missing runs before resuming execution.
+
+The server continuously reconciles protected queues under the pull-request
+mutation lock. Only the FIFO head may advance the target, and it does so with a
+compare-and-swap from its recorded `base_commit_id` to its exact candidate
+commit. A moved target supersedes every affected active candidate and creates
+new candidates, up to the configured concurrency, before considering their
+evidence. Superseded runs remain inspectable but can never authorize a target
+update. A passing head becomes the pull request's durable merge result; its
+success closes a linked open proposal, records attributable collaboration
+activity, and immediately rebuilds later candidates against that merge.
+Finalization remains durably pending until every cross-store effect succeeds;
+recovery retries it with stable event identities so outages neither lose nor
+duplicate activity.
+Source synchronization and closure remove an entry without deleting candidate
+history. Failed or cancelled head checks and candidate conflicts either leave
+the entry blocking for `pause`, or clear admission and continue for `remove`.
 
 An open request is mergeable only while its source branch still identifies the
 snapshotted commit, its target exists, the source is not already reachable

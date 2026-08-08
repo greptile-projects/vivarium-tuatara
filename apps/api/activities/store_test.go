@@ -26,6 +26,23 @@ func TestAppendAndListNewestFirst(t *testing.T) {
 	}
 }
 
+func TestAppendOnceRetainsOneStableEvent(t *testing.T) {
+	store, _ := New(t.TempDir())
+	event := Event{Kind: "pull_request.merged", ActorID: "11111111111111111111111111111111", RepositoryID: "22222222222222222222222222222222", RepositoryName: "garden", ResourceType: "pull_request", ResourceID: "33333333333333333333333333333333", ResourceTitle: "Ship tests"}
+	first, err := store.AppendOnce("queue-merge:33333333333333333333333333333333", event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.AppendOnce("queue-merge:33333333333333333333333333333333", event)
+	if err != nil || second.ID != first.ID || !second.CreatedAt.Equal(first.CreatedAt) {
+		t.Fatalf("idempotent append = %#v, %#v, %v", first, second, err)
+	}
+	events, err := store.List()
+	if err != nil || len(events) != 1 || events[0].ID != first.ID {
+		t.Fatalf("events = %#v, %v", events, err)
+	}
+}
+
 func TestClearPersistsPerUserWithoutChangingActivity(t *testing.T) {
 	root := t.TempDir()
 	store, err := New(root)

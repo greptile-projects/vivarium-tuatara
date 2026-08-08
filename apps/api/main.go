@@ -132,17 +132,34 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	startCheckRunRecovery(store, checkRunStore)
-
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore)
+	startCheckRunRecovery(store, checkRunStore)
+	startIntegrationQueueRecovery(pullRequestStore)
 	log.Printf("listening on http://localhost:%s", port)
-	if err := http.ListenAndServe(":"+port, newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore)); err != nil {
+	if err := http.ListenAndServe(":"+port, handler); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func startIntegrationQueueRecovery(store *pullrequests.Store) {
+	advance := func() {
+		if err := store.AdvanceIntegrationQueues(); err != nil {
+			log.Printf("advance integration queues: %v", err)
+		}
+	}
+	advance()
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			advance()
+		}
+	}()
 }
 
 func newHandler(store *storage.Store) http.Handler {
@@ -575,6 +592,9 @@ func repairEvidence(run checkruns.Run, events []checkruns.Event) *changesessions
 
 func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoriesStore *repositories.Store, proposalStore *proposals.Store, store *pullrequests.Store, authStore *auth.Store, activityStore *activities.Store, userStore *users.Store, checkRunStore *checkruns.Store) {
 	store.ConfigureRequiredChecks(repositoriesStore, checkRunStore)
+	store.ConfigureQueueFinalizer(func(merged pullrequests.PullRequest) error {
+		return finalizeQueuedMerge(merged, repositoriesStore, proposalStore, activityStore)
+	})
 	mux.HandleFunc("GET /repositories/{id}/pulls", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
 			return
@@ -1075,7 +1095,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		writeJSON(w, http.StatusOK, merged)
 	})
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/queue", func(w http.ResponseWriter, r *http.Request) {
-		_, owner, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		actor, owner, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
 		if !ok {
 			return
 		}
@@ -1083,7 +1103,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 			writeAPIError(w, http.StatusNotFound, "repository_not_found", "repository not found")
 			return
 		}
-		queued, err := store.Enqueue(r.PathValue("id"), r.PathValue("pull_id"))
+		queued, err := store.Enqueue(r.PathValue("id"), r.PathValue("pull_id"), actor.UserID)
 		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
 			if len(queued.IntegrationCandidates) > 0 {
 				candidate := queued.IntegrationCandidates[len(queued.IntegrationCandidates)-1]
@@ -1216,6 +1236,30 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		}
 		writeJSON(w, 200, review)
 	})
+}
+
+func finalizeQueuedMerge(merged pullrequests.PullRequest, repositoriesStore *repositories.Store, proposalStore *proposals.Store, activityStore *activities.Store) error {
+	if merged.MergedBy == nil {
+		return errors.New("queued merge attribution is missing")
+	}
+	actorID := *merged.MergedBy
+	if merged.ProposalID != nil && proposalStore != nil {
+		proposal, err := proposalStore.Get(merged.RepositoryID, *merged.ProposalID)
+		if err != nil {
+			return err
+		}
+		if proposal.Status == proposals.Open {
+			closed := proposals.Closed
+			_, err = proposalStore.Update(merged.RepositoryID, proposal.ID, proposals.Patch{Status: &closed})
+			if err != nil && !errors.Is(err, proposals.ErrDurabilityUncertain) {
+				return err
+			}
+		}
+		if err := recordActivityOnce(activityStore, repositoriesStore, "queue-proposal-closed:"+merged.RepositoryID+":"+merged.ID, activities.Event{Kind: "proposal.closed", ActorID: actorID, RepositoryID: merged.RepositoryID, ResourceType: "proposal", ResourceID: proposal.ID, ResourceTitle: proposal.Title}); err != nil {
+			return err
+		}
+	}
+	return recordActivityOnce(activityStore, repositoriesStore, "queue-pull-merged:"+merged.RepositoryID+":"+merged.ID, activities.Event{Kind: "pull_request.merged", ActorID: actorID, RepositoryID: merged.RepositoryID, ResourceType: "pull_request", ResourceID: merged.ID, ResourceTitle: merged.Title})
 }
 
 func writePullRequestError(w http.ResponseWriter, err error) bool {
@@ -2089,6 +2133,19 @@ func recordActivity(activityStore *activities.Store, repositoriesStore *reposito
 	if _, err := activityStore.Append(event); err != nil {
 		log.Printf("record activity: %v", err)
 	}
+}
+
+func recordActivityOnce(activityStore *activities.Store, repositoriesStore *repositories.Store, key string, event activities.Event) error {
+	if activityStore == nil {
+		return nil
+	}
+	repository, err := repositoriesStore.GetByID(event.RepositoryID)
+	if err != nil {
+		return err
+	}
+	event.RepositoryName = repository.Name
+	_, err = activityStore.AppendOnce(key, event)
+	return err
 }
 
 func recordMentions(activityStore *activities.Store, repositoriesStore *repositories.Store, userStore *users.Store, actorID, repositoryID, resourceType, resourceID, resourceTitle, body string) {
