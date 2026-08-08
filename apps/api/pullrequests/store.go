@@ -31,6 +31,7 @@ var (
 
 const (
 	Open   = "open"
+	Closed = "closed"
 	Merged = "merged"
 )
 
@@ -41,24 +42,87 @@ const (
 )
 
 type PullRequest struct {
-	ID                 string     `json:"id"`
-	RepositoryID       string     `json:"repository_id"`
-	SourceRepositoryID string     `json:"source_repository_id"`
-	AuthorID           string     `json:"author_id"`
-	Title              string     `json:"title"`
-	Body               string     `json:"body"`
-	SourceBranch       string     `json:"source_branch"`
-	TargetBranch       string     `json:"target_branch"`
-	SourceCommitID     string     `json:"source_commit_id"`
-	TargetCommitID     string     `json:"target_commit_id"`
-	ProposalID         *string    `json:"proposal_id"`
-	Status             string     `json:"status"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
-	MergedAt           *time.Time `json:"merged_at"`
-	MergedBy           *string    `json:"merged_by"`
-	MergeCommitID      *string    `json:"merge_commit_id"`
-	mergeIntent        *mergeIntent
+	ID                     string     `json:"id"`
+	RepositoryID           string     `json:"repository_id"`
+	SourceRepositoryID     string     `json:"source_repository_id"`
+	AuthorID               string     `json:"author_id"`
+	Title                  string     `json:"title"`
+	Body                   string     `json:"body"`
+	SourceBranch           string     `json:"source_branch"`
+	TargetBranch           string     `json:"target_branch"`
+	SourceCommitID         string     `json:"source_commit_id"`
+	TargetCommitID         string     `json:"target_commit_id"`
+	ProposalID             *string    `json:"proposal_id"`
+	Status                 string     `json:"status"`
+	MaintainerEditsAllowed bool       `json:"maintainer_edits_allowed"`
+	CreatedAt              time.Time  `json:"created_at"`
+	UpdatedAt              time.Time  `json:"updated_at"`
+	ClosedAt               *time.Time `json:"closed_at"`
+	ClosedBy               *string    `json:"closed_by"`
+	MergedAt               *time.Time `json:"merged_at"`
+	MergedBy               *string    `json:"merged_by"`
+	MergeCommitID          *string    `json:"merge_commit_id"`
+	mergeIntent            *mergeIntent
+}
+
+// UpdatePolicy changes the source owner's explicit grant allowing target
+// repository participants to help update an independently owned branch.
+func (s *Store) UpdatePolicy(repositoryID, id string, allowed bool) (PullRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return PullRequest{}, err
+	}
+	defer unlock()
+	p, err := s.read(repositoryID, id)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	if p.Status != Open || p.SourceRepositoryID == p.RepositoryID {
+		return PullRequest{}, ErrNotReady
+	}
+	p.MaintainerEditsAllowed = allowed
+	p.UpdatedAt = s.now().Truncate(time.Microsecond)
+	if committed, err := s.write(p); err != nil {
+		if committed {
+			return p, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+		}
+		return PullRequest{}, err
+	}
+	return p, nil
+}
+
+// Close preserves the review record while stopping synchronization, review,
+// checks, and merge mutations. Authorization belongs to the HTTP boundary.
+func (s *Store) Close(repositoryID, id, actorID string) (PullRequest, error) {
+	if !validID(actorID) {
+		return PullRequest{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return PullRequest{}, err
+	}
+	defer unlock()
+	p, err := s.read(repositoryID, id)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	if p.Status != Open || p.mergeIntent != nil {
+		return PullRequest{}, ErrNotReady
+	}
+	now := s.now().Truncate(time.Microsecond)
+	p.Status, p.ClosedAt, p.ClosedBy, p.UpdatedAt = Closed, &now, &actorID, now
+	p.MaintainerEditsAllowed = false
+	if committed, err := s.write(p); err != nil {
+		if committed {
+			return p, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+		}
+		return PullRequest{}, err
+	}
+	return p, nil
 }
 
 type mergeIntent struct {
@@ -422,6 +486,45 @@ func (s *Store) List(repositoryID string) ([]PullRequest, error) {
 		return result[i].CreatedAt.Before(result[j].CreatedAt)
 	})
 	return result, nil
+}
+
+// AllowsMaintainerEdit validates a branch-scoped cross-repository grant. The
+// callback deliberately rechecks current target participation on every Git
+// request, so revocation closes access without changing source ownership.
+func (s *Store) AllowsMaintainerEdit(sourceRepositoryID, branch, pullRequestID, actorID string, participant func(string, string) bool) bool {
+	if !validID(pullRequestID) {
+		return false
+	}
+	source, err := s.git.Open(sourceRepositoryID)
+	if err != nil {
+		return false
+	}
+	branchName, ok := strings.CutPrefix(branch, "refs/heads/")
+	if !ok {
+		return false
+	}
+	if _, err := branchCommit(source, branchName); err != nil {
+		return false
+	}
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !validID(entry.Name()) {
+			continue
+		}
+		pulls, err := s.List(entry.Name())
+		if err != nil {
+			continue
+		}
+		for _, p := range pulls {
+			if p.ID == pullRequestID && p.Status == Open && p.MaintainerEditsAllowed && p.SourceRepositoryID == sourceRepositoryID && "refs/heads/"+p.SourceBranch == branch && participant(p.RepositoryID, actorID) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Commits returns the source commits that are not reachable from the target
@@ -1414,7 +1517,9 @@ func (s *Store) read(repositoryID, id string) (PullRequest, error) {
 		p.SourceRepositoryID = p.RepositoryID
 	}
 	p.mergeIntent = record.MergeIntent
-	validOutcome := (p.Status == Open && p.MergedAt == nil && p.MergedBy == nil && p.MergeCommitID == nil) || (p.Status == Merged && p.MergedAt != nil && p.MergedBy != nil && validID(*p.MergedBy) && p.MergeCommitID != nil && validCommitID(*p.MergeCommitID))
+	validOutcome := (p.Status == Open && p.ClosedAt == nil && p.ClosedBy == nil && p.MergedAt == nil && p.MergedBy == nil && p.MergeCommitID == nil) ||
+		(p.Status == Closed && p.ClosedAt != nil && !p.ClosedAt.IsZero() && p.ClosedBy != nil && validID(*p.ClosedBy) && p.MergedAt == nil && p.MergedBy == nil && p.MergeCommitID == nil) ||
+		(p.Status == Merged && p.ClosedAt == nil && p.ClosedBy == nil && p.MergedAt != nil && p.MergedBy != nil && validID(*p.MergedBy) && p.MergeCommitID != nil && validCommitID(*p.MergeCommitID))
 	validIntent := p.mergeIntent == nil || (p.Status == Open && validCommitID(p.mergeIntent.CommitID) && validID(p.mergeIntent.MergerID) && !p.mergeIntent.MergedAt.IsZero())
 	if p.ID != id || !validID(p.RepositoryID) || !validID(p.SourceRepositoryID) || !validID(p.AuthorID) || !validOutcome || !validIntent || !validCommitID(p.SourceCommitID) || !validCommitID(p.TargetCommitID) || (p.SourceRepositoryID == p.RepositoryID && p.SourceBranch == p.TargetBranch) || p.SourceBranch == "" || p.TargetBranch == "" || strings.HasPrefix(p.SourceBranch, "refs/") || strings.HasPrefix(p.TargetBranch, "refs/") || p.CreatedAt.IsZero() || p.UpdatedAt.IsZero() || (p.ProposalID != nil && !validID(*p.ProposalID)) {
 		return PullRequest{}, fmt.Errorf("corrupt pull request %s", id)
