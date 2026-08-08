@@ -193,6 +193,7 @@ export type Incident = {
 };
 export type IncidentAction = {
   id: string;
+  operation_id: string;
   kind: "pause_rollout" | "restore_release" | "emergency_repair";
   repository_id: string;
   deployment_id: string;
@@ -202,7 +203,7 @@ export type IncidentAction = {
   evidence: IncidentEvidence[];
   health_criteria: { stage: string; signal: string }[];
   decisions: { actor_id: string; decision: "approve" | "reject"; message: string; override?: boolean; created_at: string }[];
-  attempts: { id: string; actor_id: string; outcome: "started" | "failed" | "recovered"; resource_id?: string; message: string; created_at: string }[];
+  attempts: { id: string; actor_id: string; outcome: "pending" | "started" | "failed" | "recovered"; resource_id?: string; message: string; created_at: string }[];
   created_at: string;
   updated_at: string;
 };

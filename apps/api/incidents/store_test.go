@@ -70,7 +70,8 @@ func TestMitigationRequiresIndependentDecisionAndRetainsFailedAttempts(t *testin
 		t.Fatal(err)
 	}
 	evidence := []Evidence{{Kind: "deployment", RepositoryID: repository, ResourceID: deployment, Label: "failed production deployment"}}
-	incident, action, err := store.ProposeAction(incident.ID, proposer, "restore_release", repository, deployment, "Restore the last attested release.", evidence, []HealthCriterion{{Stage: "steady", Signal: "availability"}})
+	proposalOperation := strings.Repeat("e", 32)
+	incident, action, err := store.ProposeAction(incident.ID, proposalOperation, proposer, "restore_release", repository, deployment, "Restore the last attested release.", evidence, []HealthCriterion{{Stage: "steady", Signal: "availability"}})
 	if err != nil || action.Status != "proposed" || len(incident.Timeline) != 2 {
 		t.Fatalf("proposal = %#v, %v", action, err)
 	}
@@ -81,8 +82,18 @@ func TestMitigationRequiresIndependentDecisionAndRetainsFailedAttempts(t *testin
 	if err != nil || action.Status != "approved" || action.Decisions[0].ActorID != approver {
 		t.Fatalf("approval = %#v, %v", action, err)
 	}
-	incident, action, err = store.RecordActionAttempt(incident.ID, action.ID, proposer, "failed", "", "No earlier artifact passed policy.")
+	attemptOperation := strings.Repeat("f", 32)
+	incident, action, err = store.RecordActionAttempt(incident.ID, action.ID, attemptOperation, proposer, "failed", "", "No earlier artifact passed policy.")
 	if err != nil || action.Status != "failed" || len(action.Attempts) != 1 || incident.Timeline[len(incident.Timeline)-1].Kind != "mitigation_failed" {
 		t.Fatalf("attempt = %#v, %v", action, err)
+	}
+	reopened, _ := New(store.root)
+	retried, sameAction, err := reopened.ProposeAction(incident.ID, proposalOperation, proposer, "restore_release", repository, deployment, "Restore the last attested release.", evidence, []HealthCriterion{{Stage: "steady", Signal: "availability"}})
+	if err != nil || sameAction.ID != action.ID || len(retried.Actions) != 1 {
+		t.Fatalf("proposal retry = %#v, %#v, %v", retried.Actions, sameAction, err)
+	}
+	retried, sameAction, err = reopened.RecordActionAttempt(incident.ID, action.ID, attemptOperation, proposer, "failed", "", "No earlier artifact passed policy.")
+	if err != nil || len(sameAction.Attempts) != 1 || len(retried.Timeline) != len(incident.Timeline) {
+		t.Fatalf("attempt retry = %#v, %v", sameAction, err)
 	}
 }

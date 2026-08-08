@@ -392,7 +392,7 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
     if (!token) return false;
     setPending(true);
     setError("");
-    const isOperation = path.endsWith("/updates") || path.endsWith("/findings"),
+    const isOperation = path.endsWith("/updates") || path.endsWith("/findings") || path.endsWith("/actions") || path.endsWith("/attempts"),
       draft = JSON.stringify(body),
       storageKey = `vivarium.incident-operation.${incidentID}.${path.split("/").at(-1)}`;
     let operationID = "";
@@ -569,15 +569,17 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
   async function executeMitigation(action: NonNullable<Incident["actions"]>[number]) {
     if (!token) return;
     setPending(true); setError("");
+    const operationID = crypto.randomUUID().replaceAll("-", "");
     let outcome: "started" | "failed" = "started", resourceID = action.deployment_id, message = "Governed execution was accepted.";
     try {
+      setIncident(await api<Incident>(`/incidents/${incidentID}/actions/${action.id}/attempts`, {method:"POST",body:JSON.stringify({operation_id:operationID,outcome:"pending",message:"Governed execution reserved before environment mutation."})}, token));
       if (action.kind === "pause_rollout") await api(`/repositories/${action.repository_id}/deployments/${action.deployment_id}/controls`, {method:"POST",body:JSON.stringify({action:"pause",expected_state:"running",reason:action.rationale})}, token);
       else {
         const result = await api<{deployment?:{id:string};pull_request?:{id:string}}>(`/repositories/${action.repository_id}/deployments/${action.deployment_id}/recoveries`, {method:"POST",body:JSON.stringify({action:action.kind === "restore_release" ? "rollback" : "repair"})}, token);
         resourceID = result.deployment?.id ?? result.pull_request?.id ?? resourceID;
       }
     } catch (reason) { outcome="failed"; message=errorMessage(reason); }
-    try { setIncident(await api<Incident>(`/incidents/${incidentID}/actions/${action.id}/attempts`, {method:"POST",body:JSON.stringify({outcome,resource_id:resourceID,message})}, token)); }
+    try { setIncident(await api<Incident>(`/incidents/${incidentID}/actions/${action.id}/attempts`, {method:"POST",body:JSON.stringify({operation_id:operationID,outcome,resource_id:resourceID,message})}, token)); }
     catch (reason) { setError(errorMessage(reason)); }
     finally { setPending(false); }
   }

@@ -53,6 +53,10 @@ func TestIncidentOperatingPictureFromHealthSignal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	promotion, err = deploymentsStore.Complete(repository.ID, promotion.ID, executorID, "failed", "canary signal failed")
+	if err != nil {
+		t.Fatal(err)
+	}
 	body := `{"title":"Elevated checkout errors","summary":"Customers cannot complete checkout.","severity":"sev1","scopes":[{"repository_id":"` + repository.ID + `","environment_ids":["` + environment.ID + `"]}],"roles":[{"name":"incident commander","user_id":"` + owner.User.ID + `"}],"source":{"repository_id":"` + repository.ID + `","deployment_id":"` + promotion.ID + `","stage":"canary","signal":"errors"}}`
 	response := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents", body, responder.Credential.Token, http.StatusCreated)
 	var incident incidents.Incident
@@ -73,7 +77,7 @@ func TestIncidentOperatingPictureFromHealthSignal(t *testing.T) {
 	if len(incident.Timeline) != 2 {
 		t.Fatalf("retry duplicated finding: %#v", incident.Timeline)
 	}
-	mitigationBody := `{"kind":"pause_rollout","repository_id":"` + repository.ID + `","deployment_id":"` + promotion.ID + `","rationale":"Stop further exposure while the error signal is investigated.","evidence":` + mustJSON(t, attached.Evidence) + `,"health_criteria":[{"stage":"canary","signal":"errors"}]}`
+	mitigationBody := `{"operation_id":"` + strings.Repeat("6", 32) + `","kind":"pause_rollout","repository_id":"` + repository.ID + `","deployment_id":"` + promotion.ID + `","rationale":"Stop further exposure while the error signal is investigated.","evidence":` + mustJSON(t, attached.Evidence) + `,"health_criteria":[{"stage":"canary","signal":"errors"}]}`
 	proposed := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/actions", mitigationBody, responder.Credential.Token, http.StatusCreated)
 	decodeResponse(t, proposed, &incident)
 	if len(incident.Actions) != 1 || incident.Actions[0].Status != "proposed" {
@@ -83,9 +87,51 @@ func TestIncidentOperatingPictureFromHealthSignal(t *testing.T) {
 	authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/actions/"+actionID+"/decisions", `{"decision":"approve","message":"The bounded pause is justified by the attached failure."}`, responder.Credential.Token, http.StatusConflict).Body.Close()
 	approved := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/actions/"+actionID+"/decisions", `{"decision":"approve","message":"The bounded pause is justified by the attached failure."}`, owner.Credential.Token, http.StatusCreated)
 	decodeResponse(t, approved, &incident)
-	attempted := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/actions/"+actionID+"/attempts", `{"outcome":"failed","message":"Deployment was already terminal; no environment mutation occurred."}`, owner.Credential.Token, http.StatusCreated)
+	governedOperation := strings.Repeat("4", 32)
+	if _, _, err = incidentStore.RecordActionAttempt(incident.ID, actionID, governedOperation, owner.User.ID, "pending", "", "Execution reserved."); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = incidentStore.RecordActionAttempt(incident.ID, actionID, governedOperation, owner.User.ID, "started", promotion.ID, "Affected rollout paused."); err != nil {
+		t.Fatal(err)
+	}
+	staging, err := deploymentsStore.PutEnvironment(deployments.Environment{RepositoryID: repository.ID, Name: "staging", Position: 2, Image: "alpine:3.22", Command: "true", TimeoutSeconds: 30, Concurrency: 1, UpdatedBy: owner.User.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryRelease, recoveryBuild, recoveryArtifact, recoverySHA, recoveryCommit := strings.Repeat("1", 32), strings.Repeat("2", 32), strings.Repeat("3", 32), strings.Repeat("4", 64), strings.Repeat("5", 40)
+	knownGood, err := deploymentsStore.CreatePromotion(deployments.Promotion{RepositoryID: repository.ID, EnvironmentID: environment.ID, ReleaseID: recoveryRelease, BuildID: recoveryBuild, ArtifactID: recoveryArtifact, ArtifactSHA256: recoverySHA, CommitID: recoveryCommit, Rollout: promotion.Rollout, InitiatedBy: owner.User.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	knownOwner := strings.Repeat("1", 32)
+	knownGood, err = deploymentsStore.Claim(repository.ID, knownGood.ID, knownOwner, time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = deploymentsStore.RecordStage(repository.ID, knownGood.ID, knownOwner, 0, deployments.SignalEvidence{Stage: "canary", Signal: "errors", State: "passed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = deploymentsStore.Complete(repository.ID, knownGood.ID, knownOwner, "succeeded", "healthy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unrelated, err := deploymentsStore.CreatePromotion(deployments.Promotion{RepositoryID: repository.ID, EnvironmentID: staging.ID, ReleaseID: recoveryRelease, BuildID: recoveryBuild, ArtifactID: recoveryArtifact, ArtifactSHA256: recoverySHA, CommitID: recoveryCommit, Rollout: promotion.Rollout, InitiatedBy: owner.User.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unrelated, err = deploymentsStore.Claim(repository.ID, unrelated.ID, strings.Repeat("3", 32), time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = deploymentsStore.RecordStage(repository.ID, unrelated.ID, strings.Repeat("3", 32), 0, deployments.SignalEvidence{Stage: "canary", Signal: "errors", State: "passed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/actions/"+actionID+"/attempts", `{"operation_id":"`+strings.Repeat("2", 32)+`","outcome":"recovered","resource_id":"`+unrelated.ID+`","message":"unrelated staging is healthy"}`, owner.Credential.Token, http.StatusConflict).Body.Close()
+	attempted := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/actions/"+actionID+"/attempts", `{"operation_id":"`+strings.Repeat("5", 32)+`","outcome":"failed","message":"Deployment was already terminal; no environment mutation occurred."}`, owner.Credential.Token, http.StatusCreated)
 	decodeResponse(t, attempted, &incident)
-	if incident.Actions[0].Status != "failed" || len(incident.Actions[0].Attempts) != 1 {
+	if incident.Actions[0].Status != "failed" || len(incident.Actions[0].Attempts) != 2 || incident.Actions[0].Attempts[1].Outcome != "failed" {
 		t.Fatalf("attempt = %#v", incident.Actions[0])
 	}
 	repo, err := gitStore.Open(repository.ID)

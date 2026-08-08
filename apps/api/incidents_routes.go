@@ -320,6 +320,7 @@ func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *
 			return
 		}
 		var input struct {
+			OperationID    string                      `json:"operation_id"`
 			Kind           string                      `json:"kind"`
 			RepositoryID   string                      `json:"repository_id"`
 			DeploymentID   string                      `json:"deployment_id"`
@@ -376,7 +377,7 @@ func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *
 		var action incidents.Action
 		e = mutate(current, actor.UserID, current.Roles, func() error {
 			var x error
-			v, action, x = store.ProposeAction(current.ID, actor.UserID, input.Kind, input.RepositoryID, input.DeploymentID, input.Rationale, input.Evidence, input.HealthCriteria)
+			v, action, x = store.ProposeAction(current.ID, input.OperationID, actor.UserID, input.Kind, input.RepositoryID, input.DeploymentID, input.Rationale, input.Evidence, input.HealthCriteria)
 			return x
 		})
 		if e != nil {
@@ -422,9 +423,10 @@ func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *
 			return
 		}
 		var input struct {
-			Outcome    string `json:"outcome"`
-			ResourceID string `json:"resource_id"`
-			Message    string `json:"message"`
+			OperationID string `json:"operation_id"`
+			Outcome     string `json:"outcome"`
+			ResourceID  string `json:"resource_id"`
+			Message     string `json:"message"`
 		}
 		if decodeJSON(r, &input) != nil {
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
@@ -444,6 +446,29 @@ func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *
 			promotion, e := deploymentStore.GetPromotion(action.RepositoryID, input.ResourceID)
 			if e != nil {
 				writeAPIError(w, 422, "recovery_unverified", "recovery must reference a retained deployment")
+				return
+			}
+			affected, e := deploymentStore.GetPromotion(action.RepositoryID, action.DeploymentID)
+			if e != nil || promotion.EnvironmentID != affected.EnvironmentID {
+				writeAPIError(w, 409, "recovery_unverified", "recovery deployment must target the affected environment")
+				return
+			}
+			governed := false
+			for _, attempt := range action.Attempts {
+				if attempt.Outcome != "started" {
+					continue
+				}
+				switch action.Kind {
+				case "pause_rollout":
+					governed = governed || attempt.ResourceID == action.DeploymentID
+				case "restore_release":
+					governed = governed || attempt.ResourceID == promotion.ID
+				case "emergency_repair":
+					governed = true
+				}
+			}
+			if !governed {
+				writeAPIError(w, 409, "recovery_unverified", "recovery requires a matching governed execution attempt")
 				return
 			}
 			for _, criterion := range action.HealthCriteria {
@@ -489,7 +514,7 @@ func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *
 		var v incidents.Incident
 		e := mutate(current, actor.UserID, current.Roles, func() error {
 			var x error
-			v, _, x = store.RecordActionAttempt(current.ID, r.PathValue("action_id"), actor.UserID, input.Outcome, input.ResourceID, input.Message)
+			v, _, x = store.RecordActionAttempt(current.ID, r.PathValue("action_id"), input.OperationID, actor.UserID, input.Outcome, input.ResourceID, input.Message)
 			return x
 		})
 		if errors.Is(e, incidents.ErrConflict) {

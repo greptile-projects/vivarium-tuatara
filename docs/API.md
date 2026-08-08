@@ -992,7 +992,9 @@ environment, credential, approval, or secret-management API access.
 mitigation proposal. The request names `pause_rollout`, `restore_release`, or
 `emergency_repair`, an affected repository and deployment, a rationale, one to
 20 verified evidence selectors, and one to 20 `health_criteria` stage/signal
-pairs declared by that exact deployment. `POST .../actions/{action_id}/decisions`
+pairs declared by that exact deployment. It also requires a stable
+`operation_id`; an exact replay returns the original action without duplicating
+timeline history, while changed reuse conflicts. `POST .../actions/{action_id}/decisions`
 records an approval or rejection. A proposer cannot approve their own action
 unless the caller sets `override: true`; that exception remains explicit in
 the immutable decision history.
@@ -1001,10 +1003,14 @@ Approved work executes through the ordinary deployment control or recovery
 routes, so environment membership, approval, concurrency, artifact, and change
 workflow rules remain authoritative. `POST .../actions/{action_id}/attempts`
 records each accepted or failed attempt with its actor and resulting deployment
-or pull identity. A `recovered` attempt must reference a retained deployment on
-which every declared stage/signal criterion has passed; otherwise the API
-returns `409 recovery_unverified`. Failed attempts remain visible and may be
-followed by later governed attempts or verified recovery.
+or pull identity. Execution first persists a `pending` attempt under a stable
+operation ID, then finalizes that same record after the environment operation;
+this reservation prevents a lost audit response from making the mutation
+silently repeatable. A `recovered` attempt requires a matching validated
+governed attempt and must reference a retained deployment in the affected
+environment on which every declared stage/signal criterion has passed;
+otherwise the API returns `409 recovery_unverified`. Failed attempts remain
+visible and may be followed by later governed attempts or verified recovery.
 
 `PATCH /incidents/{incident_id}` accepts `expected_version`, `severity`,
 `status`, `roles`, and an optional decision `message`. Status is one of

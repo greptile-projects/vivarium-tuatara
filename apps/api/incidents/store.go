@@ -90,6 +90,7 @@ type ActionDecision struct {
 }
 type Action struct {
 	ID             string            `json:"id"`
+	OperationID    string            `json:"operation_id"`
 	Kind           string            `json:"kind"`
 	RepositoryID   string            `json:"repository_id"`
 	DeploymentID   string            `json:"deployment_id"`
@@ -132,7 +133,7 @@ type Incident struct {
 	ResolvedAt     *time.Time      `json:"resolved_at,omitempty"`
 }
 
-func (s *Store) ProposeAction(id, actor, kind, repositoryID, deploymentID, rationale string, evidence []Evidence, criteria []HealthCriterion) (Incident, Action, error) {
+func (s *Store) ProposeAction(id, operationID, actor, kind, repositoryID, deploymentID, rationale string, evidence []Evidence, criteria []HealthCriterion) (Incident, Action, error) {
 	var v Incident
 	var out Action
 	e := s.mutate(func() error {
@@ -140,7 +141,7 @@ func (s *Store) ProposeAction(id, actor, kind, repositoryID, deploymentID, ratio
 			return e
 		}
 		rationale = strings.TrimSpace(rationale)
-		if !validID(actor) || !validID(repositoryID) || !validID(deploymentID) || !validActionKind(kind) || rationale == "" || len(rationale) > 10000 || len(evidence) == 0 || len(evidence) > 20 || len(criteria) == 0 || len(criteria) > 20 {
+		if !validID(operationID) || !validID(actor) || !validID(repositoryID) || !validID(deploymentID) || !validActionKind(kind) || rationale == "" || len(rationale) > 10000 || len(evidence) == 0 || len(evidence) > 20 || len(criteria) == 0 || len(criteria) > 20 {
 			return ErrInvalid
 		}
 		for _, x := range evidence {
@@ -153,8 +154,18 @@ func (s *Store) ProposeAction(id, actor, kind, repositoryID, deploymentID, ratio
 				return ErrInvalid
 			}
 		}
+		for _, existing := range v.Actions {
+			if existing.OperationID != operationID {
+				continue
+			}
+			if existing.ProposedBy != actor || existing.Kind != kind || existing.RepositoryID != repositoryID || existing.DeploymentID != deploymentID || existing.Rationale != rationale || !sameEvidence(existing.Evidence, evidence) || !sameCriteria(existing.HealthCriteria, criteria) {
+				return ErrConflict
+			}
+			out = existing
+			return nil
+		}
 		now := s.now()
-		out = Action{ID: mustID(), Kind: kind, RepositoryID: repositoryID, DeploymentID: deploymentID, Rationale: rationale, Status: "proposed", ProposedBy: actor, Evidence: evidence, HealthCriteria: criteria, Decisions: []ActionDecision{}, Attempts: []ActionAttempt{}, CreatedAt: now, UpdatedAt: now}
+		out = Action{ID: mustID(), OperationID: operationID, Kind: kind, RepositoryID: repositoryID, DeploymentID: deploymentID, Rationale: rationale, Status: "proposed", ProposedBy: actor, Evidence: evidence, HealthCriteria: criteria, Decisions: []ActionDecision{}, Attempts: []ActionAttempt{}, CreatedAt: now, UpdatedAt: now}
 		v.Actions = append(v.Actions, out)
 		v.Version++
 		v.UpdatedAt = now
@@ -200,7 +211,7 @@ func (s *Store) DecideAction(id, actionID, actor, decision, message string, over
 	return v, out, e
 }
 
-func (s *Store) RecordActionAttempt(id, actionID, actor, outcome, resourceID, message string) (Incident, Action, error) {
+func (s *Store) RecordActionAttempt(id, actionID, operationID, actor, outcome, resourceID, message string) (Incident, Action, error) {
 	var v Incident
 	var out Action
 	e := s.mutate(func() error {
@@ -218,13 +229,38 @@ func (s *Store) RecordActionAttempt(id, actionID, actor, outcome, resourceID, me
 		if x == nil {
 			return ErrNotFound
 		}
-		if !validID(actor) || (outcome != "started" && outcome != "failed" && outcome != "recovered") || message == "" || len(message) > 10000 || x.Status == "proposed" || x.Status == "rejected" {
+		if !validID(operationID) || !validID(actor) || (outcome != "pending" && outcome != "started" && outcome != "failed" && outcome != "recovered") || message == "" || len(message) > 10000 || x.Status == "proposed" || x.Status == "rejected" {
 			return ErrConflict
 		}
+		for i := range x.Attempts {
+			existing := &x.Attempts[i]
+			if existing.ID != operationID {
+				continue
+			}
+			if existing.ActorID != actor {
+				return ErrConflict
+			}
+			if existing.Outcome == outcome && existing.ResourceID == resourceID && existing.Message == message {
+				out = *x
+				return nil
+			}
+			if existing.Outcome != "pending" || (outcome != "started" && outcome != "failed") {
+				return ErrConflict
+			}
+			now := s.now()
+			existing.Outcome, existing.ResourceID, existing.Message = outcome, resourceID, message
+			x.Status = map[string]string{"started": "executing", "failed": "failed"}[outcome]
+			x.UpdatedAt = now
+			v.Version++
+			v.UpdatedAt = now
+			out = *x
+			v.Timeline = append(v.Timeline, Entry{ID: mustID(), Kind: "mitigation_" + outcome, ActorID: actor, Message: message, Audience: "participants", Evidence: x.Evidence, CreatedAt: now})
+			return s.write(v)
+		}
 		now := s.now()
-		x.Status = map[string]string{"started": "executing", "failed": "failed", "recovered": "recovered"}[outcome]
+		x.Status = map[string]string{"pending": "executing", "started": "executing", "failed": "failed", "recovered": "recovered"}[outcome]
 		x.UpdatedAt = now
-		x.Attempts = append(x.Attempts, ActionAttempt{ID: mustID(), ActorID: actor, Outcome: outcome, ResourceID: resourceID, Message: message, CreatedAt: now})
+		x.Attempts = append(x.Attempts, ActionAttempt{ID: operationID, ActorID: actor, Outcome: outcome, ResourceID: resourceID, Message: message, CreatedAt: now})
 		v.Version++
 		v.UpdatedAt = now
 		out = *x
@@ -236,6 +272,17 @@ func (s *Store) RecordActionAttempt(id, actionID, actor, outcome, resourceID, me
 
 func validActionKind(v string) bool {
 	return v == "pause_rollout" || v == "restore_release" || v == "emergency_repair"
+}
+func sameCriteria(a, b []HealthCriterion) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) StartInvestigation(id, actor, agent, credential, mandate string, evidence []Evidence, revisions []Revision, context []EvidenceContext) (Incident, Investigation, error) {
@@ -651,7 +698,7 @@ func validInvestigation(v Investigation) bool {
 	return true
 }
 func validAction(v Action) bool {
-	if !validID(v.ID) || !validActionKind(v.Kind) || !validID(v.RepositoryID) || !validID(v.DeploymentID) || !validID(v.ProposedBy) || strings.TrimSpace(v.Rationale) == "" || (v.Status != "proposed" && v.Status != "approved" && v.Status != "rejected" && v.Status != "executing" && v.Status != "failed" && v.Status != "recovered") || len(v.Evidence) == 0 || len(v.HealthCriteria) == 0 || v.CreatedAt.IsZero() || v.UpdatedAt.IsZero() {
+	if !validID(v.ID) || !validID(v.OperationID) || !validActionKind(v.Kind) || !validID(v.RepositoryID) || !validID(v.DeploymentID) || !validID(v.ProposedBy) || strings.TrimSpace(v.Rationale) == "" || (v.Status != "proposed" && v.Status != "approved" && v.Status != "rejected" && v.Status != "executing" && v.Status != "failed" && v.Status != "recovered") || len(v.Evidence) == 0 || len(v.HealthCriteria) == 0 || v.CreatedAt.IsZero() || v.UpdatedAt.IsZero() {
 		return false
 	}
 	for _, x := range v.Evidence {
@@ -670,7 +717,7 @@ func validAction(v Action) bool {
 		}
 	}
 	for _, x := range v.Attempts {
-		if !validID(x.ID) || !validID(x.ActorID) || (x.Outcome != "started" && x.Outcome != "failed" && x.Outcome != "recovered") || strings.TrimSpace(x.Message) == "" || x.CreatedAt.IsZero() {
+		if !validID(x.ID) || !validID(x.ActorID) || (x.Outcome != "pending" && x.Outcome != "started" && x.Outcome != "failed" && x.Outcome != "recovered") || strings.TrimSpace(x.Message) == "" || x.CreatedAt.IsZero() {
 			return false
 		}
 	}

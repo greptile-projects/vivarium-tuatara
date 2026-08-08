@@ -285,7 +285,9 @@ whenever dependencies change or the web job fails before it starts.
   rollout health criteria, proposer, decisions, overrides, and every execution
   attempt. Pause, attested rollback, and emergency repair execute only through
   established deployment and change-workflow APIs; recovery requires every
-  frozen criterion to pass on the referenced retained deployment.
+  frozen criterion to pass on a governed-attempt-bound deployment in the
+  affected environment. Proposal and attempt operation IDs deduplicate exact
+  retries, and attempts are durably reserved before an environment mutation.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's
