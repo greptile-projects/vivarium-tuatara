@@ -319,6 +319,17 @@ func TestForkOwnerOpensAndSynchronizesUpstreamPullRequest(t *testing.T) {
 	if pull.RepositoryID != upstream.ID || pull.SourceRepositoryID != fork.ID || pull.SourceCommitID != string(feature) || pull.TargetCommitID != string(base) {
 		t.Fatalf("cross-repository pull = %#v", pull)
 	}
+	credentialURL := server.URL + "/repositories/" + upstream.ID + "/pulls/" + pull.ID + "/maintainer-credential"
+	authenticatedRequest(t, http.MethodPost, credentialURL, "", maintainer.Credential.Token, http.StatusConflict).Body.Close()
+	policyURL := server.URL + "/repositories/" + upstream.ID + "/pulls/" + pull.ID
+	authenticatedRequest(t, http.MethodPatch, policyURL, `{"maintainer_edits_allowed":true}`, maintainer.Credential.Token, http.StatusNotFound).Body.Close()
+	authenticatedRequest(t, http.MethodPatch, policyURL, `{"maintainer_edits_allowed":true}`, author.Credential.Token, http.StatusOK).Body.Close()
+	credentialResponse := authenticatedRequest(t, http.MethodPost, credentialURL, "", maintainer.Credential.Token, http.StatusCreated)
+	var branchCredential auth.IssuedCredential
+	decodeResponse(t, credentialResponse, &branchCredential)
+	assertGitDiscoveryStatus(t, server.URL+fork.GitRemote+"/info/refs?service=git-receive-pack", branchCredential.Token, http.StatusOK)
+	authenticatedRequest(t, http.MethodPatch, policyURL, `{"maintainer_edits_allowed":false}`, author.Credential.Token, http.StatusOK).Body.Close()
+	assertGitDiscoveryStatus(t, server.URL+fork.GitRemote+"/info/refs?service=git-receive-pack", branchCredential.Token, http.StatusNotFound)
 	commits := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+upstream.ID+"/pulls/"+pull.ID+"/commits", "", maintainer.Credential.Token, http.StatusOK)
 	var commitPage struct {
 		Commits []pullrequests.Commit `json:"commits"`
@@ -368,6 +379,12 @@ func TestForkOwnerOpensAndSynchronizesUpstreamPullRequest(t *testing.T) {
 	}
 	authenticatedRequest(t, http.MethodDelete, server.URL+"/repositories/"+upstream.ID+"/collaborators/"+author.User.ID, "", maintainer.Credential.Token, http.StatusNoContent).Body.Close()
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+upstream.ID+"/pulls/"+pull.ID+"/synchronize", "", author.Credential.Token, http.StatusNotFound).Body.Close()
+	closedResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+upstream.ID+"/pulls/"+pull.ID+"/close", "", maintainer.Credential.Token, http.StatusOK)
+	var closed pullrequests.PullRequest
+	decodeResponse(t, closedResponse, &closed)
+	if closed.Status != pullrequests.Closed || closed.ClosedAt == nil || closed.ClosedBy == nil || *closed.ClosedBy != maintainer.User.ID || closed.MaintainerEditsAllowed {
+		t.Fatalf("closed pull = %#v", closed)
+	}
 	if _, err := upstreamGit.ReadCommit(denied); err == nil {
 		t.Fatal("revoked source commit was imported into private upstream")
 	}

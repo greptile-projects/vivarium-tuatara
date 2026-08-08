@@ -85,12 +85,15 @@ export type PullRequest = {
   source_commit_id: string;
   target_commit_id: string;
   proposal_id: string | null;
-  status: "open" | "merged";
+  status: "open" | "closed" | "merged";
+  maintainer_edits_allowed: boolean;
   created_at: string;
   updated_at: string;
   merged_at?: string | null;
   merged_by?: string | null;
   merge_commit_id?: string | null;
+  closed_at?: string | null;
+  closed_by?: string | null;
 };
 export type PullRequestCommit = {
   id: string;

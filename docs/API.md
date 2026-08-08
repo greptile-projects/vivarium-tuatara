@@ -299,6 +299,23 @@ so a revocation commits wholly before or after an authorized adoption.
 New pull requests have `status: "open"` and creation and update timestamps.
 The linked `proposal_id` is nullable.
 
+For an independently owned source, only the pull author/source owner can
+`PATCH /repositories/{id}/pulls/{pull_id}` with
+`maintainer_edits_allowed`. When enabled, a current target owner or contributor
+can `POST .../maintainer-credential` to receive a one-hour Git credential bound
+to the source repository and exact contribution branch. Git advertisement and
+push are restricted to that branch. Disabling the policy, closing the request,
+deleting the branch or source repository, or revoking target participation
+invalidates the grant on the next request; it never creates repository-wide
+source access.
+
+The pull author or target repository owner can `POST
+/repositories/{id}/pulls/{pull_id}/close`. Closure records `status: "closed"`,
+`closed_at`, and `closed_by`, disables the edit grant, and stops synchronization,
+new reviews, checks, sessions, and merge while retaining snapshots, discussion,
+reviews, and check evidence. Target contributors cannot close someone else's
+contribution, and only the target owner can merge.
+
 `GET /repositories/{id}/pulls` returns pull requests in the shared cursor-
 paginated collection shape under `pull_requests`; `GET
 /repositories/{id}/pulls/{pull_id}` inspects one. Reads inherit repository

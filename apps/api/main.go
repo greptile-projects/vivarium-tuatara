@@ -207,12 +207,14 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		if service == receivePackService {
 			required = "git:write"
 		}
+		onlyBranch := ""
 		if authStore != nil {
-			credential, _, ok := authorizeGitRepository(w, r, authStore, repositoryCatalog, r.PathValue("remote"), required)
+			credential, _, ok := authorizeGitRepository(w, r, authStore, repositoryCatalog, pullRequestStore, r.PathValue("remote"), required)
 			if !ok {
 				return
 			}
-			if service == receivePackService && credential.GitWriteBranch != "" && !activeRunCredential(changeSessionStore, r.PathValue("remote"), credential.ID) {
+			onlyBranch = credential.GitWriteBranch
+			if service == receivePackService && credential.GitWriteBranch != "" && !activeRunCredential(changeSessionStore, r.PathValue("remote"), credential.ID) && !activeMaintainerCredential(pullRequestStore, repositoryCatalog, r.PathValue("remote"), credential) {
 				writeAPIError(w, 401, "invalid_credential", "credential is not active")
 				return
 			}
@@ -226,13 +228,16 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		if _, err := io.WriteString(w, pktLine("# service="+service+"\n")+"0000"); err != nil {
 			return
 		}
-		runGitService(w, r, repo, service, true, false, "")
+		runGitService(w, r, repo, service, true, false, onlyBranch)
 	})
 	mux.HandleFunc("POST /git/{remote}/git-upload-pack", func(w http.ResponseWriter, r *http.Request) {
+		onlyBranch := ""
 		if authStore != nil {
-			if _, _, ok := authorizeGitRepository(w, r, authStore, repositoryCatalog, r.PathValue("remote"), "git:read"); !ok {
+			credential, _, ok := authorizeGitRepository(w, r, authStore, repositoryCatalog, pullRequestStore, r.PathValue("remote"), "git:read")
+			if !ok {
 				return
 			}
+			onlyBranch = credential.GitWriteBranch
 		}
 		repo, ok := openRemoteRepository(w, store, r.PathValue("remote"))
 		if !ok {
@@ -240,19 +245,19 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		}
 		w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
 		setGitCacheHeaders(w)
-		runGitService(w, r, repo, uploadPackService, false, false, "")
+		runGitService(w, r, repo, uploadPackService, false, false, onlyBranch)
 	})
 	mux.HandleFunc("POST /git/{remote}/git-receive-pack", func(w http.ResponseWriter, r *http.Request) {
 		contributor := false
 		onlyBranch := ""
 		if authStore != nil {
-			credential, owner, ok := authorizeGitRepository(w, r, authStore, repositoryCatalog, r.PathValue("remote"), "git:write")
+			credential, owner, ok := authorizeGitRepository(w, r, authStore, repositoryCatalog, pullRequestStore, r.PathValue("remote"), "git:write")
 			if !ok {
 				return
 			}
 			contributor = !owner
 			onlyBranch = credential.GitWriteBranch
-			if onlyBranch != "" && !activeRunCredential(changeSessionStore, r.PathValue("remote"), credential.ID) {
+			if onlyBranch != "" && !activeRunCredential(changeSessionStore, r.PathValue("remote"), credential.ID) && !activeMaintainerCredential(pullRequestStore, repositoryCatalog, r.PathValue("remote"), credential) {
 				writeAPIError(w, 401, "invalid_credential", "credential is not active")
 				return
 			}
@@ -266,6 +271,24 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		runGitService(w, r, repo, receivePackService, false, contributor, onlyBranch)
 	})
 	return mux
+}
+
+func activeMaintainerCredential(pulls *pullrequests.Store, catalog *repositories.Store, remote string, credential auth.Credential) bool {
+	repositoryID, ok := strings.CutSuffix(remote, ".git")
+	if !ok || pulls == nil || catalog == nil {
+		return false
+	}
+	return pulls.AllowsMaintainerEdit(repositoryID, credential.GitWriteBranch, credential.UserID, func(targetID, userID string) bool {
+		target, err := catalog.GetByID(targetID)
+		if err != nil {
+			return false
+		}
+		if target.OwnerID == userID {
+			return true
+		}
+		allowed, err := catalog.HasCollaborator(userID, targetID)
+		return err == nil && allowed
+	})
 }
 
 func activeRunCredential(store *changesessions.Store, remote, credentialID string) bool {
@@ -409,6 +432,10 @@ type pullRequestInput struct {
 	SourceBranch       *string `json:"source_branch"`
 	TargetBranch       *string `json:"target_branch"`
 	ProposalID         *string `json:"proposal_id"`
+}
+
+type pullRequestPolicyInput struct {
+	MaintainerEditsAllowed *bool `json:"maintainer_edits_allowed"`
 }
 
 type reviewInput struct {
@@ -597,6 +624,88 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		}
 		writeJSON(w, 200, pullRequest)
 	})
+	mux.HandleFunc("PATCH /repositories/{id}/pulls/{pull_id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)
+		if !ok {
+			return
+		}
+		existing, err := store.Get(r.PathValue("id"), r.PathValue("pull_id"))
+		if writePullRequestError(w, err) {
+			return
+		}
+		if existing.AuthorID != actor.UserID || existing.SourceRepositoryID == existing.RepositoryID {
+			writeAPIError(w, 404, "pull_request_not_found", "pull request not found")
+			return
+		}
+		source, err := repositoriesStore.GetByID(existing.SourceRepositoryID)
+		if err != nil || source.OwnerID != actor.UserID {
+			writeAPIError(w, 404, "pull_request_not_found", "pull request not found")
+			return
+		}
+		var input pullRequestPolicyInput
+		if decodeJSON(r, &input) != nil || input.MaintainerEditsAllowed == nil {
+			writeAPIError(w, 400, "invalid_pull_request", "maintainer_edits_allowed is required")
+			return
+		}
+		updated, err := store.UpdatePolicy(existing.RepositoryID, existing.ID, *input.MaintainerEditsAllowed)
+		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
+			writeUncertainMutation(w, updated)
+			return
+		}
+		if writePullRequestError(w, err) {
+			return
+		}
+		writeJSON(w, 200, updated)
+	})
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/close", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)
+		if !ok {
+			return
+		}
+		existing, err := store.Get(r.PathValue("id"), r.PathValue("pull_id"))
+		if writePullRequestError(w, err) {
+			return
+		}
+		target, err := repositoriesStore.GetByID(existing.RepositoryID)
+		if err != nil || (actor.UserID != existing.AuthorID && actor.UserID != target.OwnerID) {
+			writeAPIError(w, 404, "pull_request_not_found", "pull request not found")
+			return
+		}
+		updated, err := store.Close(existing.RepositoryID, existing.ID, actor.UserID)
+		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
+			writeUncertainMutation(w, updated)
+			return
+		}
+		if writePullRequestError(w, err) {
+			return
+		}
+		writeJSON(w, 200, updated)
+	})
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/maintainer-credential", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		pull, err := store.Get(r.PathValue("id"), r.PathValue("pull_id"))
+		if writePullRequestError(w, err) {
+			return
+		}
+		if pull.Status != pullrequests.Open || pull.SourceRepositoryID == pull.RepositoryID || !pull.MaintainerEditsAllowed {
+			writeAPIError(w, 409, "maintainer_edits_not_allowed", "the contribution owner has not allowed participant edits")
+			return
+		}
+		source, err := repositoriesStore.GetByID(pull.SourceRepositoryID)
+		if err != nil {
+			writeAPIError(w, 409, "source_repository_unavailable", "the contribution repository is unavailable")
+			return
+		}
+		issued, err := authStore.IssueBound(actor.UserID, auth.Git, "Pull request participant edit", []string{"git:read", "git:write"}, time.Hour, source.ID, "refs/heads/"+pull.SourceBranch)
+		if err != nil {
+			writeAPIError(w, 500, "internal_error", "branch credential could not be issued")
+			return
+		}
+		writeJSON(w, 201, issued)
+	})
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/synchronize", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)
 		if !ok {
@@ -696,7 +805,12 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		if !ok {
 			return
 		}
-		if _, err := store.Get(r.PathValue("id"), r.PathValue("pull_id")); writePullRequestError(w, err) {
+		pull, err := store.Get(r.PathValue("id"), r.PathValue("pull_id"))
+		if writePullRequestError(w, err) {
+			return
+		}
+		if pull.Status != pullrequests.Open {
+			writeAPIError(w, 409, "pull_request_closed", "checks on a closed pull request cannot be rerun")
 			return
 		}
 		existing, err := checkRunStore.Get(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("check_id"))
@@ -735,7 +849,12 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		if !ok {
 			return
 		}
-		if _, err := store.Get(r.PathValue("id"), r.PathValue("pull_id")); writePullRequestError(w, err) {
+		pull, err := store.Get(r.PathValue("id"), r.PathValue("pull_id"))
+		if writePullRequestError(w, err) {
+			return
+		}
+		if pull.Status != pullrequests.Open {
+			writeAPIError(w, 409, "pull_request_closed", "checks on a closed pull request cannot be canceled")
 			return
 		}
 		run, err := checkRunStore.Cancel(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("check_id"), actor.UserID)
@@ -2512,7 +2631,7 @@ func writeAuthenticationRequired(w http.ResponseWriter, git bool) {
 	writeAPIError(w, http.StatusUnauthorized, "unauthorized", "valid authentication is required")
 }
 
-func authorizeGitRepository(w http.ResponseWriter, r *http.Request, authStore *auth.Store, catalog *repositories.Store, remote, scope string) (auth.Credential, bool, bool) {
+func authorizeGitRepository(w http.ResponseWriter, r *http.Request, authStore *auth.Store, catalog *repositories.Store, pulls *pullrequests.Store, remote, scope string) (auth.Credential, bool, bool) {
 	// Handlers without an application catalog are retained for storage-level
 	// compatibility tests. Production always supplies the catalog.
 	if catalog == nil {
@@ -2555,6 +2674,19 @@ func authorizeGitRepository(w http.ResponseWriter, r *http.Request, authStore *a
 		return auth.Credential{}, false, false
 	}
 	if !owner && !collaborator {
+		if actor.GitWriteBranch != "" && pulls != nil && pulls.AllowsMaintainerEdit(id, actor.GitWriteBranch, actor.UserID, func(targetID, userID string) bool {
+			target, targetErr := catalog.GetByID(targetID)
+			if targetErr != nil {
+				return false
+			}
+			if target.OwnerID == userID {
+				return true
+			}
+			ok, collaboratorErr := catalog.HasCollaborator(userID, targetID)
+			return collaboratorErr == nil && ok
+		}) {
+			return actor, false, true
+		}
 		http.Error(w, "repository not found", http.StatusNotFound)
 		return auth.Credential{}, false, false
 	}
@@ -2682,6 +2814,11 @@ func runUploadPack(w http.ResponseWriter, r *http.Request, repo *storage.Reposit
 func runGitService(w http.ResponseWriter, r *http.Request, repo *storage.Repository, service string, advertise, contributor bool, onlyBranch string) {
 	commandName := strings.TrimPrefix(service, "git-")
 	args := []string{commandName, "--stateless-rpc"}
+	if onlyBranch != "" {
+		// A pull-request grant exposes only its contribution branch, never the
+		// rest of an independently owned private fork.
+		args = append([]string{"-c", "transfer.hideRefs=refs", "-c", "transfer.hideRefs=!" + onlyBranch}, args...)
+	}
 	var removeHooks func()
 	if service == receivePackService {
 		// Receive-pack applies each requested ref update transactionally. The

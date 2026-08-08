@@ -13,6 +13,7 @@ import {
 import {
   api,
   type Branch,
+  type Credential,
   type FileChange,
   type MergeReadiness,
   type Proposal,
@@ -534,6 +535,7 @@ export function PullRequestDetail({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [refreshRequired, setRefreshRequired] = useState(false);
+  const [branchCredential, setBranchCredential] = useState<Credential | null>(null);
   const generation = useRef(0);
 
   const load = useCallback(async () => {
@@ -700,6 +702,29 @@ export function PullRequestDetail({
       "The pull request could not be merged. Review the current blockers and try again.",
       "Pull request merged.",
     );
+  const close = () =>
+    mutate(
+      `/repositories/${repositoryID}/pulls/${pullRequestID}/close`,
+      { method: "POST" },
+      "The pull request could not be closed.",
+      "Pull request closed.",
+    );
+  const setMaintainerEdits = (allowed: boolean) =>
+    mutate(
+      `/repositories/${repositoryID}/pulls/${pullRequestID}`,
+      { method: "PATCH", body: JSON.stringify({ maintainer_edits_allowed: allowed }) },
+      "The contribution branch policy could not be updated.",
+      allowed ? "Maintainer branch updates enabled." : "Maintainer branch updates disabled.",
+    );
+  const issueMaintainerCredential = async () => {
+    setPending(true);
+    setError("");
+    try {
+      setBranchCredential(await api<Credential>(`/repositories/${repositoryID}/pulls/${pullRequestID}/maintainer-credential`, { method: "POST" }, token));
+    } catch (reason) {
+      setError(errorMessage(reason, "A branch credential could not be issued."));
+    } finally { setPending(false); }
+  };
 
   if (loading)
     return (
@@ -1291,7 +1316,15 @@ export function PullRequestDetail({
                 </dd>
               </div>
             </dl>
+            {pull.status === "open" && pull.source_repository_id !== pull.repository_id && (
+              <div className="mt-4 border-t border-[var(--line)] pt-4">
+                <p className="text-xs leading-5 text-[var(--muted)]">The fork owner keeps source ownership. When enabled, current target participants can receive a one-hour credential restricted to this contribution branch.</p>
+                {isAuthor ? <Button className="mt-3 w-full" variant="secondary" disabled={pending || refreshRequired} onClick={() => void setMaintainerEdits(!pull.maintainer_edits_allowed)}>{pull.maintainer_edits_allowed ? "Disable maintainer edits" : "Allow maintainer edits"}</Button> : participant && pull.maintainer_edits_allowed ? <Button className="mt-3 w-full" variant="secondary" disabled={pending || refreshRequired} onClick={() => void issueMaintainerCredential()}>Issue branch credential</Button> : null}
+                {branchCredential?.token && <code className="mt-3 block break-all rounded bg-[var(--canvas)] p-3 text-xs select-all">{branchCredential.token}</code>}
+              </div>
+            )}
           </Card>
+          {pull.status === "open" && (isAuthor || isOwner) && <Button className="w-full" variant="quiet" disabled={pending || refreshRequired} onClick={() => void close()}>Close pull request</Button>}
           <Card className="p-5">
             <h2 className="font-semibold">Related context</h2>
             {proposal && pull.proposal_id ? (

@@ -295,6 +295,13 @@ from the fixed target snapshot and explicitly synchronized source revision.
 Immutable pull request comments retain stable author IDs; owners and
 contributors may participate, while reads continue to follow repository
 visibility.
+Fork pull requests keep two explicit authority domains. The fork owner may
+optionally allow current upstream participants to mint a short-lived Git
+credential restricted to the contribution branch; the source repository's
+other refs remain hidden, and opt-out, closure, or upstream access revocation
+takes effect on the next Git request. Authors and upstream owners can close an
+open request without deleting its durable review evidence, while only the
+upstream owner can merge into the maintained branch.
 The web pull request workspace aggregates candidate work across the signed-in
 actor's repository catalog and opens requests from existing branch pairs or
 from an owned fork to its upstream, with optional proposal context. Its directly addressable detail pages use the
