@@ -725,9 +725,10 @@ and promotes exact artifacts with independent approval, releases both merged
 contributions, retains a failed production health signal, restores the earlier
 artifact through the same governance, delegates an evidence-pinned repair, and
 requires fresh checks, review, merge, build, and approval before the corrected
-release succeeds. The executor keeps durable artifact files private: after
-SHA-256 verification it creates a short-lived read-only mount copy for the
-deployment and health containers, then removes that copy after execution.
+release succeeds. The executor keeps artifact bytes private on the host: after
+SHA-256 verification it creates a short-lived owner-only copy, bind-mounts that
+copy read-only into deployment and health containers running as the API host
+identity, and removes it after execution.
 
 Each environment also defines an executor image, command, and timeout. The
 worker reopens the immutable build artifact, recomputes and matches its SHA-256,

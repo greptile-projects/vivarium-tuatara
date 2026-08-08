@@ -175,9 +175,10 @@ whenever dependencies change or the web job fails before it starts.
   plan through a known-good release, immutable builds, independently approved
   promotion, retained rollout failure, governed rollback, evidence-pinned agent
   repair, ordinary re-review, and successful corrected delivery. Deployment
-  execution verifies the private durable artifact, then mounts an ephemeral
-  read-only copy so container user mappings can read the exact verified bytes
-  without widening the stored artifact's permissions.
+  execution verifies the private durable artifact, then bind-mounts an
+  ephemeral owner-only copy read-only into containers running as the API host
+  identity, so they can read the exact verified bytes without widening host
+  access to the release.
   Pull request discovery at `/pulls` aggregates reviewable work across the
   authenticated actor's repository catalog and opens candidate branches
   against distinct targets or owned-fork branches against their upstream,
