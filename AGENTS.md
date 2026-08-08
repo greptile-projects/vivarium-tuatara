@@ -77,6 +77,13 @@ whenever dependencies change or the web job fails before it starts.
   to motivating comments; readiness is derived from completed dependencies,
   while task edits, status decisions, and reordering retain actor-stamped
   immutable history through the public proposal task APIs.
+  Ready proposal tasks have at most one explicit human or generated-agent
+  assignment. Each freezes a mandate, repository, and exact base commit;
+  assignment IDs provide compare-and-swap claim, reassignment, and revocation
+  semantics, and the access preview grants humans nothing while limiting future
+  agent credentials to the repository and task branch. Human assignment holds
+  the catalog mutation lock across participant revalidation and proposal write,
+  excluding collaborator removal; closed proposals reject revocation.
   Pull request discovery at `/pulls` aggregates reviewable work across the
   authenticated actor's repository catalog and opens candidate branches
   against distinct targets or owned-fork branches against their upstream,

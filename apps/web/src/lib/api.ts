@@ -89,12 +89,21 @@ export type ProposalTask = {
   updated_by: string;
   created_at: string;
   updated_at: string;
+	assignment?: {
+		id: string;
+		assignee_type: "human" | "agent";
+		assignee_id: string;
+		mandate: string;
+		access: { repository_id: string; base_revision: string; scopes: string[]; branch: string };
+		assigned_by: string;
+		assigned_at: string;
+	};
 };
 export type ProposalTaskChange = {
   id: string;
   task_id: string;
   actor_id: string;
-  action: "created" | "updated" | "status_changed" | "reordered";
+  action: "created" | "updated" | "status_changed" | "reordered" | "assigned" | "reassigned" | "assignment_revoked";
   task: ProposalTask;
   created_at: string;
 };

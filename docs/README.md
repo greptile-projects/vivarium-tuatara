@@ -234,6 +234,14 @@ change task status and order from the proposal detail page, while immutable
 actor-stamped snapshots retain creation, edit, decision, and reorder history.
 Plan storage shares the proposal's atomic record and visibility boundary, so a
 public idea remains understandable without granting public mutation authority.
+Ready tasks can be claimed or assigned to exactly one current human participant
+or a generated available-agent identity. Each assignment freezes a mandate,
+repository, and exact base commit and shows the authority boundary before work
+starts: humans retain only their existing collaboration rights, while agents
+are previewed with repository- and future-task-branch-scoped Git access.
+Assignment IDs act as compare-and-swap versions for reassignment and revocation,
+making concurrent outcomes explicit and retaining every decision in task
+history.
 
 Pull requests connect that context to exact repository state. An owner or
 contributor opens one from an existing source branch, while a fork owner can

@@ -202,7 +202,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerRepositoryRoutes(mux, store, repositoryCatalog, userStore, authStore, activityStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && proposalStore != nil {
-		registerProposalRoutes(mux, repositoryCatalog, proposalStore, authStore, activityStore, userStore)
+		registerProposalRoutes(mux, store, repositoryCatalog, proposalStore, authStore, activityStore, userStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil {
 		registerPullRequestRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, authStore, activityStore, userStore, checkRunStore)
@@ -462,6 +462,15 @@ type proposalTaskPatch struct {
 	Position             *int      `json:"position"`
 	DependencyIDs        *[]string `json:"dependency_ids"`
 	DiscussionCommentIDs *[]string `json:"discussion_comment_ids"`
+}
+
+type proposalTaskAssignmentInput struct {
+	AssigneeType         string  `json:"assignee_type"`
+	AssigneeID           *string `json:"assignee_id"`
+	Mandate              string  `json:"mandate"`
+	RepositoryID         string  `json:"repository_id"`
+	BaseRevision         string  `json:"base_revision"`
+	ExpectedAssignmentID string  `json:"expected_assignment_id"`
 }
 
 type pullRequestInput struct {
@@ -2045,7 +2054,7 @@ func writeChangeSessionError(w http.ResponseWriter, err error) bool {
 	return true
 }
 
-func registerProposalRoutes(mux *http.ServeMux, repositoriesStore *repositories.Store, store *proposals.Store, authStore *auth.Store, activityStore *activities.Store, userStore *users.Store) {
+func registerProposalRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoriesStore *repositories.Store, store *proposals.Store, authStore *auth.Store, activityStore *activities.Store, userStore *users.Store) {
 	mux.HandleFunc("GET /repositories/{id}/proposals", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
 			return
@@ -2249,6 +2258,89 @@ func registerProposalRoutes(mux *http.ServeMux, repositoriesStore *repositories.
 			return
 		}
 		writeJSON(w, 200, map[string]any{"history": changes})
+	})
+	mux.HandleFunc("PUT /repositories/{id}/proposals/{proposal_id}/tasks/{task_id}/assignment", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var input proposalTaskAssignmentInput
+		if decodeJSON(r, &input) != nil || input.RepositoryID != r.PathValue("id") || (input.AssigneeType != "human" && input.AssigneeType != "agent") {
+			writeAPIError(w, 400, "invalid_task_assignment", "assignee, mandate, repository, and base revision are required")
+			return
+		}
+		assigneeID := ""
+		if input.AssigneeID != nil {
+			assigneeID = *input.AssigneeID
+		}
+		if input.AssigneeType == "human" {
+			if _, err := userStore.Get(assigneeID); err != nil {
+				writeAPIError(w, 400, "invalid_task_assignee", "human assignee does not exist")
+				return
+			}
+		}
+		var task proposals.Task
+		assign := func() error {
+			gitRepository, err := gitStore.Open(input.RepositoryID)
+			if err != nil {
+				return repositories.ErrNotFound
+			}
+			if _, err := gitRepository.ReadCommit(storage.ObjectID(strings.ToLower(input.BaseRevision))); err != nil {
+				return storage.ErrObjectNotFound
+			}
+			task, err = store.AssignTask(r.PathValue("id"), r.PathValue("proposal_id"), r.PathValue("task_id"), actor.UserID, proposals.TaskAssignmentInput{AssigneeType: input.AssigneeType, AssigneeID: assigneeID, Mandate: input.Mandate, RepositoryID: input.RepositoryID, BaseRevision: input.BaseRevision, ExpectedAssignmentID: input.ExpectedAssignmentID})
+			return err
+		}
+		var err error
+		if input.AssigneeType == "human" {
+			err = repositoriesStore.WithCurrentParticipant(assigneeID, input.RepositoryID, assign)
+		} else {
+			err = assign()
+		}
+		if errors.Is(err, repositories.ErrInvalidCollaborator) {
+			writeAPIError(w, 400, "invalid_task_assignee", "human assignee must be a current repository participant")
+			return
+		}
+		if errors.Is(err, repositories.ErrNotFound) {
+			writeAPIError(w, 404, "repository_not_found", "repository not found")
+			return
+		}
+		if errors.Is(err, storage.ErrObjectNotFound) || errors.Is(err, storage.ErrInvalidObject) || errors.Is(err, storage.ErrCorruptObject) {
+			writeAPIError(w, 400, "invalid_base_revision", "base revision must be an existing commit")
+			return
+		}
+		if errors.Is(err, proposals.ErrTaskAssignmentConflict) {
+			writeAPIError(w, 409, "task_assignment_conflict", "task ownership changed; reload before claiming or reassigning")
+			return
+		}
+		if errors.Is(err, proposals.ErrDurabilityUncertain) {
+			writeUncertainMutation(w, task)
+			return
+		}
+		if writeProposalError(w, err) {
+			return
+		}
+		writeJSON(w, 200, task)
+	})
+	mux.HandleFunc("DELETE /repositories/{id}/proposals/{proposal_id}/tasks/{task_id}/assignment", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		expected := r.URL.Query().Get("expected_assignment_id")
+		task, err := store.RevokeTaskAssignment(r.PathValue("id"), r.PathValue("proposal_id"), r.PathValue("task_id"), actor.UserID, expected)
+		if errors.Is(err, proposals.ErrTaskAssignmentConflict) {
+			writeAPIError(w, 409, "task_assignment_conflict", "task ownership changed; reload before revoking")
+			return
+		}
+		if errors.Is(err, proposals.ErrDurabilityUncertain) {
+			writeUncertainMutation(w, task)
+			return
+		}
+		if writeProposalError(w, err) {
+			return
+		}
+		writeJSON(w, 200, task)
 	})
 }
 

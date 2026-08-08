@@ -82,6 +82,33 @@ func TestProposalLifecycleDiscussionAndAuthorization(t *testing.T) {
 	if len(plan.Tasks) != 2 || !plan.Tasks[1].Ready {
 		t.Fatalf("plan = %#v", plan)
 	}
+	gitRepository, err := gitStore.Open(repository.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseCommit := writeCommit(t, gitRepository, 1700000000, "assignment base")
+	assignmentURL := base + "/tasks/" + secondTask.ID + "/assignment"
+	assignedResponse := authenticatedRequest(t, http.MethodPut, assignmentURL, `{"assignee_type":"human","assignee_id":"`+contributor.User.ID+`","mandate":"Build exactly the agreed path","repository_id":"`+repository.ID+`","base_revision":"`+string(baseCommit)+`"}`, owner.Credential.Token, http.StatusOK)
+	var assigned proposals.Task
+	if err := json.NewDecoder(assignedResponse.Body).Decode(&assigned); err != nil {
+		t.Fatal(err)
+	}
+	assignedResponse.Body.Close()
+	if assigned.Assignment == nil || assigned.Assignment.AssigneeID != contributor.User.ID || len(assigned.Assignment.Access.Scopes) != 0 {
+		t.Fatalf("assignment = %#v", assigned.Assignment)
+	}
+	authenticatedRequest(t, http.MethodPut, assignmentURL, `{"assignee_type":"agent","mandate":"stale claim","repository_id":"`+repository.ID+`","base_revision":"`+string(baseCommit)+`"}`, contributor.Credential.Token, http.StatusConflict).Body.Close()
+	reassignedResponse := authenticatedRequest(t, http.MethodPut, assignmentURL, `{"assignee_type":"agent","mandate":"Bounded agent work","repository_id":"`+repository.ID+`","base_revision":"`+string(baseCommit)+`","expected_assignment_id":"`+assigned.Assignment.ID+`"}`, contributor.Credential.Token, http.StatusOK)
+	var reassigned proposals.Task
+	if err := json.NewDecoder(reassignedResponse.Body).Decode(&reassigned); err != nil {
+		t.Fatal(err)
+	}
+	reassignedResponse.Body.Close()
+	if reassigned.Assignment == nil || reassigned.Assignment.AssigneeType != "agent" || len(reassigned.Assignment.Access.Scopes) != 2 {
+		t.Fatalf("reassignment = %#v", reassigned.Assignment)
+	}
+	authenticatedRequest(t, http.MethodDelete, assignmentURL+"?expected_assignment_id="+assigned.Assignment.ID, "", owner.Credential.Token, http.StatusConflict).Body.Close()
+	authenticatedRequest(t, http.MethodDelete, assignmentURL+"?expected_assignment_id="+reassigned.Assignment.ID, "", owner.Credential.Token, http.StatusOK).Body.Close()
 	historyResponse := authenticatedRequest(t, http.MethodGet, base+"/tasks/"+firstTask.ID+"/history", "", contributor.Credential.Token, http.StatusOK)
 	var history struct {
 		History []proposals.TaskChange `json:"history"`

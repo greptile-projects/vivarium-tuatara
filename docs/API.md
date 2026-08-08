@@ -211,6 +211,28 @@ snapshot for creation, edits, status decisions, and reordering. Plan reads
 inherit proposal visibility; mutations require a current owner or contributor
 with `repositories:write` and use the proposal uncertain-durability contract.
 
+A ready `todo` task gains one accountable owner through `PUT
+.../tasks/{task_id}/assignment`. The body contains `assignee_type` (`human` or
+`agent`), an `assignee_id` for humans, `mandate`, the proposal's
+`repository_id`, an exact existing commit as `base_revision`, and an empty
+`expected_assignment_id` for an initial claim. Human assignees must already be
+the owner or a current contributor; assignment never grants them repository
+access. An available agent receives a generated durable assignee ID and an
+inspectable access preview limited to `git:read`/`git:write` on this repository,
+the exact base, and the task branch that the start-work flow will create.
+
+Reassignment repeats `PUT` with the current assignment ID in
+`expected_assignment_id`. Revocation uses `DELETE
+.../assignment?expected_assignment_id={assignment-id}`. These compare-and-swap
+preconditions return `409 task_assignment_conflict` when another collaborator
+claimed, reassigned, or revoked first, so no stale request silently replaces an
+owner. Successful assignment, reassignment, and revocation append full
+actor-stamped snapshots to task history and share the uncertain-durability
+contract. Human participant validation and assignment publication share the
+repository catalog mutation lock, so collaborator removal cannot commit between
+authorization and assignment. Closed proposals reject assignment revocation and
+retain their final task history unchanged.
+
 ## Automated checks
 
 Repository owners manage the quality gate for a target branch with `GET` and
