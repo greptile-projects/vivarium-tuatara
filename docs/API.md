@@ -839,3 +839,34 @@ release-build routes inherit repository visibility:
   container-image dependency, actor, verification attempts, and artifacts.
 - `POST .../builds/{build_id}/rerun` appends a same-source attempt; earlier
   attempts, logs, failures, and artifacts remain unchanged.
+
+### Governed release environments
+
+`GET /repositories/{id}/environments` returns ordered environment policy.
+Owners create environments with `POST /repositories/{id}/environments` and
+replace one with `PUT /repositories/{id}/environments/{environment_id}`:
+
+```json
+{"name":"production","position":2,"configuration":{"REGION":"us-east"},"credentials":{"DEPLOY_TOKEN":"write-only"},"required_approvals":2,"concurrency":1}
+```
+
+Positions and names are unique. Configuration is readable to repository
+readers. Credential values are encrypted at rest and never returned; responses
+contain sorted `credential_names` only. Omitting `credentials` on replacement
+preserves the protected values.
+
+`POST /repositories/{id}/deployments` requires a current owner or contributor
+with `repositories:write` and accepts `environment_id`, `release_id`,
+`build_id`, and `artifact_id`. The build must have succeeded for the release's
+exact commit and contain that checksummed artifact. A later environment accepts
+only the identical release/build/artifact/checksum after success in the
+immediately preceding environment. One pending or active promotion excludes a
+second request for the environment.
+
+`POST /repositories/{id}/deployments/{deployment_id}/approvals` records one
+approval from a participant other than the initiator. Reaching the environment
+threshold queues execution, subject to its concurrency limit. `GET
+/repositories/{id}/deployments` returns the durable history, including exact
+artifact SHA-256, initiator, approvals, current state, timestamps, and ordered
+request, queue, deployment-status, log, and completion events. Reads inherit
+normal repository visibility; protected values never enter this history.

@@ -673,3 +673,16 @@ web release workspace is linked from repository detail and supports exact-state
 creation, prior-release selection, lifecycle inspection, build controls,
 machine-readable attestations and checksums, and direct links back to included
 review and planning work.
+
+Release delivery is an explicit repository collaboration. Owners define a
+strictly ordered set of environments with visible scoped configuration,
+required independent approvals, and concurrency limits. Protected credential
+values are accepted only on environment writes, encrypted with a durable
+deployment-store key, and never returned; readers see only their names.
+Participants select one checksummed artifact from a successful build of the
+candidate's exact commit. Promotion to each later environment requires the
+same release, build, artifact identity, and checksum to have succeeded in the
+immediately preceding environment. Every request, independent approval, queue
+transition, provision/status message, and completion is retained with actor and
+time through the API and release-detail workspace. Records live beneath
+`DEPLOYMENT_STORAGE_ROOT` (default `deployments`).

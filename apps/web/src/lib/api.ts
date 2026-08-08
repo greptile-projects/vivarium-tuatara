@@ -33,19 +33,100 @@ export type ReleaseCandidate = {
     contributor_ids: string[];
   };
 };
-export type ReleaseArtifact = { id: string; attempt: number; path: string; size: number; sha256: string; content_type: string; created_at: string };
+export type ReleaseArtifact = {
+  id: string;
+  attempt: number;
+  path: string;
+  size: number;
+  sha256: string;
+  content_type: string;
+  created_at: string;
+};
 export type ReleaseBuild = {
-  id: string; commit_id: string; state: "queued" | "running" | "cleanup_pending" | "succeeded" | "failed" | "canceled";
-  definition: { name: string; image: string; command: string; working_directory?: string };
-  failure?: string; requested_by?: string; created_at: string; completed_at?: string;
-  attempts: { number: number; state: string; actor_id?: string; exit_code?: number; failure?: string }[];
+  id: string;
+  commit_id: string;
+  state:
+    | "queued"
+    | "running"
+    | "cleanup_pending"
+    | "succeeded"
+    | "failed"
+    | "canceled";
+  definition: {
+    name: string;
+    image: string;
+    command: string;
+    working_directory?: string;
+  };
+  failure?: string;
+  requested_by?: string;
+  created_at: string;
+  completed_at?: string;
+  attempts: {
+    number: number;
+    state: string;
+    actor_id?: string;
+    exit_code?: number;
+    failure?: string;
+  }[];
   artifacts: ReleaseArtifact[];
 };
 export type ReleaseAttestation = {
-  version: number; release_id: string; repository_id: string; source_commit: string; build_id: string;
-  step: string; command: string; dependencies: string[]; actor_id: string;
-  verification: { state: string; exit_code?: number; failure?: string; attempts: ReleaseBuild["attempts"] };
-  artifacts: ReleaseArtifact[]; created_at: string; completed_at?: string;
+  version: number;
+  release_id: string;
+  repository_id: string;
+  source_commit: string;
+  build_id: string;
+  step: string;
+  command: string;
+  dependencies: string[];
+  actor_id: string;
+  verification: {
+    state: string;
+    exit_code?: number;
+    failure?: string;
+    attempts: ReleaseBuild["attempts"];
+  };
+  artifacts: ReleaseArtifact[];
+  created_at: string;
+  completed_at?: string;
+};
+export type DeploymentEnvironment = {
+  id: string;
+  repository_id: string;
+  name: string;
+  position: number;
+  configuration: Record<string, string>;
+  credential_names: string[];
+  required_approvals: number;
+  concurrency: number;
+  created_by: string;
+  updated_by: string;
+  created_at: string;
+  updated_at: string;
+};
+export type Deployment = {
+  id: string;
+  repository_id: string;
+  environment_id: string;
+  release_id: string;
+  build_id: string;
+  artifact_id: string;
+  artifact_sha256: string;
+  state: "pending_approval" | "queued" | "running" | "succeeded" | "failed";
+  initiated_by: string;
+  approvals: { actor_id: string; created_at: string }[];
+  events: {
+    sequence: number;
+    kind: string;
+    actor_id?: string;
+    state?: string;
+    message?: string;
+    created_at: string;
+  }[];
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
 };
 export type ForkSynchronization = {
   branch: string;
@@ -123,23 +204,48 @@ export type ProposalTask = {
   updated_by: string;
   created_at: string;
   updated_at: string;
-	assignment?: {
-		id: string;
-		assignee_type: "human" | "agent";
-		assignee_id: string;
-		mandate: string;
-		access: { repository_id: string; base_revision: string; scopes: string[]; branch: string };
-		assigned_by: string;
-		assigned_at: string;
-		context_revision: number;
-	};
-	contribution?: { pull_request_id: string; session_id?: string; run_id?: string; source_commit_id: string; commit_ids: string[]; status: "review" | "merged" | "closed" | "superseded"; context_revision: number };
+  assignment?: {
+    id: string;
+    assignee_type: "human" | "agent";
+    assignee_id: string;
+    mandate: string;
+    access: {
+      repository_id: string;
+      base_revision: string;
+      scopes: string[];
+      branch: string;
+    };
+    assigned_by: string;
+    assigned_at: string;
+    context_revision: number;
+  };
+  contribution?: {
+    pull_request_id: string;
+    session_id?: string;
+    run_id?: string;
+    source_commit_id: string;
+    commit_ids: string[];
+    status: "review" | "merged" | "closed" | "superseded";
+    context_revision: number;
+  };
 };
 export type ProposalTaskChange = {
   id: string;
   task_id: string;
   actor_id: string;
-  action: "created" | "updated" | "status_changed" | "reordered" | "assigned" | "reassigned" | "rebased" | "assignment_revoked" | "contribution_published" | "contribution_merged" | "contribution_closed" | "contribution_superseded";
+  action:
+    | "created"
+    | "updated"
+    | "status_changed"
+    | "reordered"
+    | "assigned"
+    | "reassigned"
+    | "rebased"
+    | "assignment_revoked"
+    | "contribution_published"
+    | "contribution_merged"
+    | "contribution_closed"
+    | "contribution_superseded";
   task: ProposalTask;
   created_at: string;
 };
@@ -155,9 +261,9 @@ export type PullRequest = {
   source_commit_id: string;
   target_commit_id: string;
   proposal_id: string | null;
-	task_id?: string;
-	task_session_id?: string;
-	task_run_id?: string;
+  task_id?: string;
+  task_session_id?: string;
+  task_run_id?: string;
   status: "open" | "closed" | "merged";
   maintainer_edits_allowed: boolean;
   created_at: string;
