@@ -4,8 +4,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const (
@@ -175,6 +177,46 @@ func TestClosedProposalRejectsAssignmentRevocation(t *testing.T) {
 	history, _ := store.ListTaskChanges(repositoryID, proposal.ID, task.ID)
 	if persisted.Assignment == nil || persisted.Assignment.ID != assigned.Assignment.ID || len(history) != 2 || history[1].Action != "assigned" {
 		t.Fatalf("task = %#v, history = %#v", persisted, history)
+	}
+}
+
+func TestTaskStartBoundaryExcludesAssignmentRevocation(t *testing.T) {
+	root := t.TempDir()
+	starter, _ := New(root)
+	revoker, _ := New(root)
+	repositoryID := "11111111111111111111111111111111"
+	authorID := "22222222222222222222222222222222"
+	proposal, _ := starter.Create(repositoryID, authorID, "Plan", "Shared intent")
+	task, _ := starter.CreateTask(repositoryID, proposal.ID, authorID, "Build", "Working result", nil, nil)
+	assigned, _ := starter.AssignTask(repositoryID, proposal.ID, task.ID, authorID, TaskAssignmentInput{AssigneeType: "agent", Mandate: "Build it", RepositoryID: repositoryID, BaseRevision: strings.Repeat("a", 40)})
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	startDone := make(chan error, 1)
+	go func() {
+		startDone <- starter.WithStartableAgentTask(repositoryID, proposal.ID, task.ID, assigned.Assignment.ID, func(Proposal, Task, []Task, []Comment) error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+	revokeDone := make(chan error, 1)
+	go func() {
+		_, err := revoker.RevokeTaskAssignment(repositoryID, proposal.ID, task.ID, authorID, assigned.Assignment.ID)
+		revokeDone <- err
+	}()
+	select {
+	case err := <-revokeDone:
+		t.Fatalf("revocation crossed active start boundary: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if err := <-startDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-revokeDone; err != nil {
+		t.Fatal(err)
 	}
 }
 

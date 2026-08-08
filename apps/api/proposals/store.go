@@ -114,6 +114,37 @@ type TaskAssignmentInput struct {
 	ExpectedAssignmentID string
 }
 
+// WithStartableAgentTask serializes task-session publication with proposal and
+// task mutations. The callback receives snapshots from the same locked record
+// that proved the exact assignment is still startable.
+func (s *Store) WithStartableAgentTask(repositoryID, proposalID, taskID, assignmentID string, fn func(Proposal, Task, []Task, []Comment) error) error {
+	if !validID(repositoryID) || !validID(proposalID) || !validID(taskID) || !validID(assignmentID) || fn == nil {
+		return ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	r, err := s.read(proposalID)
+	if err != nil || r.Proposal.RepositoryID != repositoryID {
+		return ErrNotFound
+	}
+	deriveTasks(r.Tasks)
+	for _, task := range r.Tasks {
+		if task.ID != taskID {
+			continue
+		}
+		if r.Proposal.Status != Open || task.Status != TaskTodo || !task.Ready || task.Assignment == nil || task.Assignment.AssigneeType != "agent" || task.Assignment.ID != assignmentID {
+			return ErrTaskAssignmentConflict
+		}
+		return fn(r.Proposal, task, append([]Task(nil), r.Tasks...), append([]Comment(nil), r.Comments...))
+	}
+	return ErrNotFound
+}
+
 type Patch struct {
 	Title  *string
 	Body   *string

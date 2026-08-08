@@ -233,6 +233,36 @@ repository catalog mutation lock, so collaborator removal cannot commit between
 authorization and assignment. Closed proposals reject assignment revocation and
 retain their final task history unchanged.
 
+An agent assignment can start before a pull request exists with `POST
+.../tasks/{task_id}/sessions`. The body supplies the current
+`expected_assignment_id`, optional `context_paths`, and an optional
+`expires_in` from five minutes to 24 hours. The proposal and task must remain
+open and ready, and the assignment must still target an agent. Success creates
+exactly one session for the task, an isolated
+`refs/heads/agent/tasks/<task-id>-<assignment-prefix>` branch at the frozen
+base revision, a launched run carrying the assignment mandate, and a one-time
+Git credential restricted to that repository and branch. A repeated start
+returns `409 task_session_exists`; an existing branch is never overwritten.
+Start holds the proposal mutation lock from exact assignment revalidation
+through branch, credential, and session publication, so revocation, task edits,
+dependency changes, and proposal closure cannot commit midway. The session and
+initial run are one atomic durable record: a definitive failure revokes the
+credential and removes the new branch without exposing a half-launched
+workspace, while a post-publication durability uncertainty returns both stable
+resources for later reconciliation.
+
+Task sessions use `/repositories/{id}/proposals/{proposal_id}/tasks/{task_id}/sessions`
+and the same detail, `events`, `runs`, run `events`, `control`, and
+`interventions` suffixes as pull-request sessions. Their durable session
+snapshot adds `proposal_id`, `task_id`, and `task_context`: repository and
+proposal context, the task outcome and mandate, dependency snapshots, and
+linked motivating comments. Collaborators therefore reconnect, observe,
+guide, answer, pause, resume, and cancel through the established protocol.
+Cancellation revokes the bounded credential, while durable run state also
+denies later writes if credential revocation cannot be relied upon. Publishing
+task results into review is a separate workflow; starting work does not create
+an empty pull request.
+
 ## Automated checks
 
 Repository owners manage the quality gate for a target branch with `GET` and
