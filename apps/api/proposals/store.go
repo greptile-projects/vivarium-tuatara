@@ -438,11 +438,11 @@ func (s *Store) UpdateTask(repositoryID, proposalID, taskID, actorID string, pat
 		}
 	}
 	action := "updated"
-	if patch.Status != nil {
-		action = "status_changed"
-	}
 	if newPosition != oldPosition {
 		action = "reordered"
+	}
+	if patch.Status != nil {
+		action = "status_changed"
 	}
 	change, err := newTaskChange(task, actorID, action, now)
 	if err != nil {

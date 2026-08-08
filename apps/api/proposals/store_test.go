@@ -90,14 +90,18 @@ func TestProposalTasksDeriveReadinessAndRetainHistory(t *testing.T) {
 	if err != nil || len(tasks) != 2 || !tasks[1].Ready || len(tasks[1].BlockedBy) != 0 {
 		t.Fatalf("tasks = %#v, %v", tasks, err)
 	}
-	position := 0
-	moved, err := store.UpdateTask(repositoryID, proposal.ID, second.ID, authorID, TaskPatch{Position: &position})
-	if err != nil || moved.Position != 0 {
+	position, started := 0, TaskInProgress
+	moved, err := store.UpdateTask(repositoryID, proposal.ID, second.ID, authorID, TaskPatch{Position: &position, Status: &started})
+	if err != nil || moved.Position != 0 || moved.Status != TaskInProgress {
 		t.Fatalf("moved = %#v, %v", moved, err)
 	}
 	history, err := store.ListTaskChanges(repositoryID, proposal.ID, first.ID)
 	if err != nil || len(history) != 2 || history[0].ActorID != authorID || history[1].ActorID != commenterID || history[1].Action != "status_changed" || history[1].Task.Status != TaskCompleted {
 		t.Fatalf("history = %#v, %v", history, err)
+	}
+	secondHistory, err := store.ListTaskChanges(repositoryID, proposal.ID, second.ID)
+	if err != nil || len(secondHistory) != 2 || secondHistory[1].Action != "status_changed" || secondHistory[1].Task.Status != TaskInProgress || secondHistory[1].Task.Position != 0 {
+		t.Fatalf("combined update history = %#v, %v", secondHistory, err)
 	}
 	reopened, _ := New(store.root)
 	persisted, err := reopened.ListTasks(repositoryID, proposal.ID)
