@@ -101,7 +101,7 @@ func TestCollaboratorOpensAndReconnectsToChangeSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reconnectedServer := httptest.NewServer(newPlatformHandler(gitStore, identities, credentials, catalog, nil, pulls, nil, reopened))
+	reconnectedServer := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, pulls, nil, reopened, checkStore))
 	defer reconnectedServer.Close()
 	reconnectBase := reconnectedServer.URL + "/repositories/" + repository.ID + "/pulls/" + pull.ID + "/sessions/" + session.ID
 	inspected := authenticatedRequest(t, http.MethodGet, reconnectBase, "", contributor.Credential.Token, http.StatusOK)
@@ -207,7 +207,13 @@ func TestCollaboratorOpensAndReconnectsToChangeSession(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workingCopy, "README.md"), []byte("agent context\nreviewable agent work\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gitCommand(t, workingCopy, "add", "README.md")
+	if err := os.Mkdir(filepath.Join(workingCopy, ".vivarium"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workingCopy, ".vivarium", "checks.json"), []byte(`{"version":1,"checks":[{"name":"repair verification","image":"alpine:3.22","command":"true"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommand(t, workingCopy, "add", "README.md", ".vivarium/checks.json")
 	gitCommand(t, workingCopy, "commit", "-m", "agent work")
 	gitCommand(t, workingCopy, "push", "origin", "HEAD:refs/heads/feature")
 	agentCommit := strings.TrimSpace(gitCommand(t, workingCopy, "rev-parse", "HEAD"))
@@ -232,8 +238,21 @@ func TestCollaboratorOpensAndReconnectsToChangeSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	completionResponse.Body.Close()
-	if completion.Run.State != changesessions.Completed || completion.Run.Outcome == nil || completion.Run.Outcome.CommitID != agentCommit || len(completion.Run.Outcome.Commits) != 1 || len(completion.Run.Outcome.ChangedFiles) != 1 || completion.Run.Outcome.ChangedFiles[0].Path != "README.md" || completion.Event.Kind != "run.completed" || completion.PullRequest.SourceCommitID != agentCommit {
+	if completion.Run.State != changesessions.Completed || completion.Run.Outcome == nil || completion.Run.Outcome.CommitID != agentCommit || len(completion.Run.Outcome.Commits) != 1 || len(completion.Run.Outcome.ChangedFiles) != 2 || completion.Run.Outcome.ChangedFiles[0].Path != ".vivarium/checks.json" || completion.Run.Outcome.ChangedFiles[1].Path != "README.md" || completion.Event.Kind != "run.completed" || completion.PullRequest.SourceCommitID != agentCommit {
 		t.Fatalf("completion = %+v", completion)
+	}
+	verificationRuns, err := checkStore.List(repository.ID, pull.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundRepairedRevision := false
+	for _, verificationRun := range verificationRuns {
+		if verificationRun.CommitID == agentCommit && verificationRun.Definition.Name == "repair verification" {
+			foundRepairedRevision = true
+		}
+	}
+	if !foundRepairedRevision {
+		t.Fatalf("agent completion did not start repaired-revision checks: %+v", verificationRuns)
 	}
 	reviewsResponse := authenticatedRequest(t, http.MethodGet, reconnectedServer.URL+"/repositories/"+repository.ID+"/pulls/"+pull.ID+"/reviews", "", contributor.Credential.Token, http.StatusOK)
 	var reviews struct {

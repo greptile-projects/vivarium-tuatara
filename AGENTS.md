@@ -90,6 +90,10 @@ whenever dependencies change or the web job fails before it starts.
   carries delegated work through a bounded agent credential, public progress
   and completion APIs, a stock Git push, stale-review replacement, and merge;
   keep that full handoff intact when changing agent or review workflows.
+  The same journey is the verify-repair-merge regression: it installs a required
+  repository-defined check, retains its failed evidence in an agent repair
+  session, proves completion starts fresh exact-revision checks, and merges only
+  after the repaired run passes and stale review is replaced.
   The authenticated `/activity` workspace shows newest-first attributable
   proposal, pull request, review, merge, mention, and access changes across
   repositories the actor currently collaborates on; every event remains

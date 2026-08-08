@@ -452,14 +452,17 @@ move review state and a failed synchronization remains safely retryable. The
 pull-request lock checks open/merge-intent eligibility before terminalizing the
 run and excludes a concurrent merge from entering between those operations.
 
-The connected browser regression proves this as one developer-agent loop rather
-than independent surfaces: a maintainer opens and reconnects to a session,
-delegates bounded work, redirects and pauses it, then an agent uses only its
-one-time credential to push a descendant and publish the handoff through the
-public API. Invalid completion evidence leaves review state unchanged; valid
-completion survives reload, stales the earlier approval, receives a fresh
-review, merges through the ordinary owner control, and arrives through a stock
-Git pull with the same attributed collaboration history.
+The connected browser regression proves this as one developer-agent verification
+loop rather than independent surfaces. A repository-defined required check
+fails on the contributor's pull request with retained logs and an artifact; a
+maintainer opens a repair session directly from that evidence, delegates bounded
+work, redirects and pauses it, and an agent uses only its one-time credential to
+push a descendant and publish the handoff through the public API. Completion
+starts checks for the adopted revision, retains the earlier failed run beside
+the new passing run, stales the earlier approval, and permits a fresh approval
+and owner merge only after the exact revision satisfies policy. The merged
+result arrives through a stock Git pull with the same attributed collaboration
+history.
 
 ## Git HTTP transport
 
