@@ -552,6 +552,19 @@ func TestPullRequestMergeReadinessReportsRequirementsConflictsAndPermission(t *t
 	if !contributorReport.Mergeable || contributorReport.CanMerge || !ownerReport.Mergeable || !ownerReport.CanMerge || len(ownerReport.Blockers) != 0 || ownerReport.RequiredChecks[0].Status != "passed" || ownerReport.RequiredChecks[0].CommitID == nil || *ownerReport.RequiredChecks[0].CommitID != string(source) {
 		t.Fatalf("approved readiness: contributor=%#v owner=%#v", contributorReport, ownerReport)
 	}
+	policyURL := server.URL + "/repositories/" + repository.ID + "/branches/main/integration-queue"
+	authenticatedRequest(t, http.MethodPut, policyURL, `{"enabled":true,"concurrency":2,"failure_behavior":"pause"}`, owner.Credential.Token, http.StatusOK).Body.Close()
+	ownerReport = readReport(owner.Credential.Token)
+	if !ownerReport.Mergeable || ownerReport.CanMerge || !ownerReport.CanEnqueue || ownerReport.IntegrationQueue == nil || !ownerReport.IntegrationQueue.Enabled || ownerReport.IntegrationQueue.Concurrency != 2 || len(ownerReport.IntegrationQueue.RequiredChecks) != 1 {
+		t.Fatalf("queue readiness = %#v", ownerReport)
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/pulls/"+pullRequest.ID+"/merge", "", owner.Credential.Token, http.StatusConflict).Body.Close()
+	queuedResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/pulls/"+pullRequest.ID+"/queue", "", owner.Credential.Token, http.StatusOK)
+	var queued pullrequests.PullRequest
+	decodeResponse(t, queuedResponse, &queued)
+	if queued.QueuedAt == nil {
+		t.Fatalf("queued pull = %#v", queued)
+	}
 
 	targetBlob, _ := gitRepository.WriteObject(storage.BlobObject, []byte("target\n"))
 	targetTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "file.txt", id: targetBlob})

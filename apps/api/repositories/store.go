@@ -46,12 +46,27 @@ type Repository struct {
 	UpstreamRepositoryID string    `json:"upstream_repository_id,omitempty"`
 	collaboratorIDs      string
 	requiredChecks       string
+	integrationPolicies  string
 }
 
 type BranchCheckRequirements struct {
 	Branch string   `json:"branch"`
 	Checks []string `json:"checks"`
 }
+
+type IntegrationQueuePolicy struct {
+	Branch            string   `json:"branch"`
+	Enabled           bool     `json:"enabled"`
+	Concurrency       int      `json:"concurrency"`
+	FailureBehavior   string   `json:"failure_behavior"`
+	RequiredChecks    []string `json:"required_checks"`
+	RequiredApprovals int      `json:"required_approvals"`
+}
+
+const (
+	QueueFailurePause  = "pause"
+	QueueFailureRemove = "remove"
+)
 
 type Collaborator struct {
 	UserID string `json:"user_id"`
@@ -180,7 +195,7 @@ func (s *Store) Create(ownerID, name string) (Repository, error) {
 	if _, err := s.git.Create(id); err != nil {
 		return Repository{}, fmt.Errorf("create Git repository: %w", err)
 	}
-	repository := Repository{ID: id, OwnerID: ownerID, Name: name, Visibility: Private, DefaultBranch: "main", GitRemote: "/git/" + id + ".git", CreatedAt: s.now().Truncate(time.Microsecond), requiredChecks: "[]"}
+	repository := Repository{ID: id, OwnerID: ownerID, Name: name, Visibility: Private, DefaultBranch: "main", GitRemote: "/git/" + id + ".git", CreatedAt: s.now().Truncate(time.Microsecond), requiredChecks: "[]", integrationPolicies: "[]"}
 	if err := s.write(repository); err != nil {
 		if persisted, readErr := s.read(id); readErr == nil && persisted == repository {
 			return repository, nil
@@ -469,6 +484,76 @@ func (s *Store) RequiredChecks(id, branch string) ([]string, error) {
 	return []string{}, nil
 }
 
+// SetIntegrationQueuePolicy makes ordered admission mandatory for one target
+// branch. Review and required-check rules remain the admission criteria.
+func (s *Store) SetIntegrationQueuePolicy(ownerID, id, branch string, enabled bool, concurrency int, failureBehavior string) (IntegrationQueuePolicy, error) {
+	branch = strings.TrimSpace(branch)
+	if branch == "" || strings.HasPrefix(branch, "refs/") || strings.ContainsAny(branch, " ~^:?*[\\\r\n") || strings.Contains(branch, "..") || concurrency < 1 || concurrency > 10 || (failureBehavior != QueueFailurePause && failureBehavior != QueueFailureRemove) {
+		return IntegrationQueuePolicy{}, ErrInvalidName
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return IntegrationQueuePolicy{}, err
+	}
+	defer unlock()
+	repository, err := s.read(id)
+	if err != nil || repository.OwnerID != ownerID {
+		return IntegrationQueuePolicy{}, ErrNotFound
+	}
+	policies := decodeIntegrationPolicies(repository.integrationPolicies)
+	updated := make([]IntegrationQueuePolicy, 0, len(policies)+1)
+	for _, policy := range policies {
+		if policy.Branch != branch {
+			updated = append(updated, policy)
+		}
+	}
+	if enabled {
+		updated = append(updated, IntegrationQueuePolicy{Branch: branch, Enabled: true, Concurrency: concurrency, FailureBehavior: failureBehavior})
+	}
+	sort.Slice(updated, func(i, j int) bool { return updated[i].Branch < updated[j].Branch })
+	body, _ := json.Marshal(updated)
+	repository.integrationPolicies = string(body)
+	if err := s.write(repository); err != nil {
+		return IntegrationQueuePolicy{}, err
+	}
+	return s.IntegrationQueuePolicy(id, branch)
+}
+
+func (s *Store) IntegrationQueuePolicy(id, branch string) (IntegrationQueuePolicy, error) {
+	repository, err := s.read(id)
+	if err != nil {
+		return IntegrationQueuePolicy{}, ErrNotFound
+	}
+	checks, err := s.RequiredChecks(id, branch)
+	if err != nil {
+		return IntegrationQueuePolicy{}, err
+	}
+	policy := IntegrationQueuePolicy{Branch: branch, Concurrency: 1, FailureBehavior: QueueFailurePause, RequiredChecks: checks, RequiredApprovals: 1}
+	for _, candidate := range decodeIntegrationPolicies(repository.integrationPolicies) {
+		if candidate.Branch == branch {
+			policy.Enabled, policy.Concurrency, policy.FailureBehavior = true, candidate.Concurrency, candidate.FailureBehavior
+			break
+		}
+	}
+	return policy, nil
+}
+
+func decodeIntegrationPolicies(encoded string) []IntegrationQueuePolicy {
+	if encoded == "" {
+		return []IntegrationQueuePolicy{}
+	}
+	var policies []IntegrationQueuePolicy
+	if json.Unmarshal([]byte(encoded), &policies) != nil {
+		return []IntegrationQueuePolicy{}
+	}
+	if policies == nil {
+		return []IntegrationQueuePolicy{}
+	}
+	return policies
+}
+
 // LockRequiredChecks prevents a branch quality policy from changing while a
 // merge revalidates its evidence and advances the target reference.
 func (s *Store) LockRequiredChecks() (func(), error) { return s.lockRoot() }
@@ -691,12 +776,16 @@ func (s *Store) read(id string) (Repository, error) {
 		UpstreamRepositoryID string                    `json:"upstream_repository_id,omitempty"`
 		CollaboratorIDs      []string                  `json:"collaborator_ids,omitempty"`
 		RequiredChecks       []BranchCheckRequirements `json:"required_checks,omitempty"`
+		IntegrationQueues    []IntegrationQueuePolicy  `json:"integration_queues,omitempty"`
 	}
 	if json.Unmarshal(data, &record) != nil {
 		return Repository{}, fmt.Errorf("corrupt repository metadata %s", id)
 	}
 	if record.RequiredChecks == nil {
 		record.RequiredChecks = []BranchCheckRequirements{}
+	}
+	if record.IntegrationQueues == nil {
+		record.IntegrationQueues = []IntegrationQueuePolicy{}
 	}
 	seenBranches := map[string]bool{}
 	for _, policy := range record.RequiredChecks {
@@ -706,7 +795,15 @@ func (s *Store) read(id string) (Repository, error) {
 		seenBranches[policy.Branch] = true
 	}
 	requirements, _ := json.Marshal(record.RequiredChecks)
-	repository = Repository{ID: record.ID, OwnerID: record.OwnerID, Name: record.Name, Visibility: record.Visibility, DefaultBranch: record.DefaultBranch, GitRemote: record.GitRemote, CreatedAt: record.CreatedAt, UpstreamRepositoryID: record.UpstreamRepositoryID, collaboratorIDs: strings.Join(record.CollaboratorIDs, ","), requiredChecks: string(requirements)}
+	seenQueues := map[string]bool{}
+	for _, policy := range record.IntegrationQueues {
+		if seenQueues[policy.Branch] || policy.Branch == "" || !policy.Enabled || policy.Concurrency < 1 || policy.Concurrency > 10 || (policy.FailureBehavior != QueueFailurePause && policy.FailureBehavior != QueueFailureRemove) {
+			return Repository{}, fmt.Errorf("corrupt repository metadata %s", id)
+		}
+		seenQueues[policy.Branch] = true
+	}
+	integrationPolicies, _ := json.Marshal(record.IntegrationQueues)
+	repository = Repository{ID: record.ID, OwnerID: record.OwnerID, Name: record.Name, Visibility: record.Visibility, DefaultBranch: record.DefaultBranch, GitRemote: record.GitRemote, CreatedAt: record.CreatedAt, UpstreamRepositoryID: record.UpstreamRepositoryID, collaboratorIDs: strings.Join(record.CollaboratorIDs, ","), requiredChecks: string(requirements), integrationPolicies: string(integrationPolicies)}
 	if repository.ID != id || !validID(repository.OwnerID) || repository.GitRemote != "/git/"+id+".git" || repository.DefaultBranch != "main" {
 		return Repository{}, fmt.Errorf("corrupt repository metadata %s", id)
 	}
@@ -784,7 +881,8 @@ func (s *Store) write(repository Repository) error {
 		UpstreamRepositoryID string                    `json:"upstream_repository_id,omitempty"`
 		CollaboratorIDs      []string                  `json:"collaborator_ids,omitempty"`
 		RequiredChecks       []BranchCheckRequirements `json:"required_checks,omitempty"`
-	}{repository.ID, repository.OwnerID, repository.Name, repository.Visibility, repository.DefaultBranch, repository.GitRemote, repository.CreatedAt, repository.UpstreamRepositoryID, collaboratorIDs(repository), decodeRequirements(repository.requiredChecks)}
+		IntegrationQueues    []IntegrationQueuePolicy  `json:"integration_queues,omitempty"`
+	}{repository.ID, repository.OwnerID, repository.Name, repository.Visibility, repository.DefaultBranch, repository.GitRemote, repository.CreatedAt, repository.UpstreamRepositoryID, collaboratorIDs(repository), decodeRequirements(repository.requiredChecks), decodeIntegrationPolicies(repository.integrationPolicies)}
 	data, err := json.Marshal(record)
 	if err != nil {
 		return err

@@ -81,6 +81,13 @@ whenever dependencies change or the web job fails before it starts.
   proposal, attributable discussion, current and stale review decisions,
   source synchronization for authors, server-derived merge blockers, and
   owner-only merge controls. Completed requests retain their merge attribution.
+  Owners can protect individual target branches with an integration queue,
+  configure 1-10 concurrent candidates and `pause` or `remove` failure
+  behavior, and inspect the existing approval and required-check admission
+  rules. Protected ready pulls must be admitted instead of merged directly;
+  `queued_at` supplies durable FIFO order and clears when the source changes or
+  the pull closes. Candidate construction and automatic advancement remain
+  later queue work.
   Fork pull authors can opt current target participants into short-lived Git
   access restricted to the issuing pull request and exact contribution branch; policy removal, closure,
   or target-access revocation invalidates that access on the next request.

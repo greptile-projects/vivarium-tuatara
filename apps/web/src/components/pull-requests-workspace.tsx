@@ -702,6 +702,13 @@ export function PullRequestDetail({
       "The pull request could not be merged. Review the current blockers and try again.",
       "Pull request merged.",
     );
+  const enqueue = () =>
+    mutate(
+      `/repositories/${repositoryID}/pulls/${pullRequestID}/queue`,
+      { method: "POST" },
+      "The pull request could not enter the integration queue.",
+      "Pull request entered the integration queue.",
+    );
   const close = () =>
     mutate(
       `/repositories/${repositoryID}/pulls/${pullRequestID}/close`,
@@ -751,6 +758,7 @@ export function PullRequestDetail({
   const ownReview = reviews.find((review) => review.reviewer_id === user?.id);
   const isAuthor = user?.id === pull.author_id;
   const isOwner = user?.id === repository.owner_id;
+  const activelyQueued = Boolean(readiness?.integration_queue?.enabled && pull.queued_at);
   const additions = files.filter((file) => file.status === "added").length;
   const deletions = files.filter((file) => file.status === "deleted").length;
   const modifications = files.length - additions - deletions;
@@ -1233,6 +1241,7 @@ export function PullRequestDetail({
                   </p>
                 </div>
                 {readiness.required_checks.length > 0 && <div className="mt-4 space-y-2"><p className="text-xs font-semibold text-[var(--muted)]">Required checks</p>{readiness.required_checks.map((check) => <div key={check.name} className="flex items-center justify-between gap-3 text-xs"><span className="font-medium">{check.name}</span><Badge tone={check.status === "passed" ? "success" : check.status === "pending" ? "warning" : "neutral"}>{check.status}</Badge></div>)}</div>}
+                {readiness.integration_queue?.enabled && <div className="mt-4 rounded-lg bg-[var(--canvas)] p-3 text-xs leading-5"><p className="font-semibold">Ordered integration required</p><p className="text-[var(--muted)]">Up to {readiness.integration_queue.concurrency} candidate{readiness.integration_queue.concurrency === 1 ? "" : "s"}; failures {readiness.integration_queue.failure_behavior === "pause" ? "pause the queue" : "remove the failed entry"}. Admission uses the approval and checks shown above.</p></div>}
                 {isAuthor && readiness.source.state !== "current" && (
                   <Button
                     className="mt-4 w-full"
@@ -1252,10 +1261,10 @@ export function PullRequestDetail({
                 {isOwner && (
                   <Button
                     className="mt-4 w-full"
-                    disabled={pending || refreshRequired || !readiness.can_merge}
-                    onClick={() => void merge()}
+                    disabled={pending || refreshRequired || !(readiness.integration_queue?.enabled ? readiness.can_enqueue : readiness.can_merge) || activelyQueued}
+                    onClick={() => void (readiness.integration_queue?.enabled ? enqueue() : merge())}
                   >
-                    {pending ? "Merging…" : `Merge into ${pull.target_branch}`}
+                    {pending ? "Updating…" : activelyQueued ? "Queued for integration" : readiness.integration_queue?.enabled ? `Queue for ${pull.target_branch}` : `Merge into ${pull.target_branch}`}
                   </Button>
                 )}
               </Card>

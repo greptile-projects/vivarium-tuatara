@@ -95,6 +95,7 @@ export type PullRequest = {
   merge_commit_id?: string | null;
   closed_at?: string | null;
   closed_by?: string | null;
+  queued_at?: string | null;
 };
 export type PullRequestCommit = {
   id: string;
@@ -145,6 +146,8 @@ export type MergeReadiness = {
   target: PullRequestBranchState;
   has_conflicts: boolean;
   blockers: { code: string; message: string }[];
+  integration_queue?: { branch: string; enabled: boolean; concurrency: number; failure_behavior: "pause" | "remove"; required_checks: string[]; required_approvals: number };
+  can_enqueue: boolean;
 };
 export type CheckAttempt = {
   number: number;

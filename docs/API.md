@@ -193,6 +193,14 @@ Repository owners manage the quality gate for a target branch with `GET` and
 candidate's versioned configuration. An empty array removes the branch gate.
 Participants may read the policy, but only the owner may replace it.
 
+Owners can additionally protect a target branch with `GET` and `PUT
+/repositories/{id}/branches/{branch}/integration-queue`. The complete `PUT`
+body is `{"enabled":true,"concurrency":2,"failure_behavior":"pause"}`.
+Concurrency is between 1 and 10; failure behavior is `pause` or `remove`.
+Readable responses include the branch, configured controls, one required
+approval, and the branch's live `required_checks`. Only the owner may replace
+policy; anyone who can read the repository may inspect it.
+
 A repository opts into automatic pull-request verification by committing
 `.vivarium/checks.json` on the candidate branch. The file has `version: 1` and
 a non-empty `checks` array (at most 20). Each check defines a unique `name`, a
@@ -402,6 +410,14 @@ statuses are `passed`, `missing`, `pending`, `failed`, `cancelled`, or `stale`.
 Only a successful run whose recorded commit equals the pull request's adopted
 source revision passes. Every other status is a blocker, and merge repeats the
 same evaluation while holding its mutation lock.
+
+Readiness also returns `integration_queue` and `can_enqueue`. On a protected
+target, ordinary rules still determine `mergeable`, but `can_merge` is false
+and direct merge is rejected. An owner with an eligible request receives
+`can_enqueue: true` and uses `POST
+/repositories/{id}/pulls/{pull_id}/queue`. Admission persists `queued_at`; its
+timestamp establishes durable FIFO order, and retrying admission is
+idempotent. Source synchronization or pull closure clears stale admission.
 
 An open request is mergeable only while its source branch still identifies the
 snapshotted commit, its target exists, the source is not already reachable

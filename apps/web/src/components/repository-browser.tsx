@@ -357,7 +357,10 @@ export function RepositoryBrowser({ id }: { id: string }) {
           {user?.id === repository.owner_id && token && (
             <>
               {policyBranch ? (
-                <RequiredChecksPanel repositoryID={id} branch={policyBranch} token={token} />
+                <>
+                  <RequiredChecksPanel repositoryID={id} branch={policyBranch} token={token} />
+                  <IntegrationQueuePanel repositoryID={id} branch={policyBranch} token={token} />
+                </>
               ) : (
                 <Card className="p-5">
                   <h2 className="font-semibold">Required checks</h2>
@@ -421,6 +424,23 @@ export function RepositoryBrowser({ id }: { id: string }) {
       </div>
     </div>
   );
+}
+
+function IntegrationQueuePanel({ repositoryID, branch, token }: { repositoryID: string; branch: string; token: string }) {
+  type Policy = { enabled: boolean; concurrency: number; failure_behavior: "pause" | "remove"; required_checks: string[]; required_approvals: number };
+  const [policy, setPolicy] = useState<Policy | null>(null);
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
+  const endpoint = `/repositories/${repositoryID}/branches/${encodeURIComponent(branch)}/integration-queue`;
+  useEffect(() => { let active = true; api<Policy>(endpoint, {}, token).then((value) => { if (active) setPolicy(value); }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "Integration policy could not be loaded."); }); return () => { active = false; }; }, [endpoint, token]);
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setPending(true); setError("");
+    const data = new FormData(event.currentTarget);
+    try { setPolicy(await api<Policy>(endpoint, { method: "PUT", body: JSON.stringify({ enabled: data.get("enabled") === "on", concurrency: Number(data.get("concurrency")), failure_behavior: data.get("failure_behavior") }) }, token)); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Integration policy could not be saved."); }
+    finally { setPending(false); }
+  }
+  return <Card className="p-5"><h2 className="font-semibold">Integration queue</h2><p className="mt-1 text-xs leading-5 text-[var(--muted)]">Require ready pull requests targeting <code>{branch}</code> to enter ordered integration. Existing approval and check rules still govern admission.</p>{policy && <form onSubmit={save} className="mt-4 space-y-3"><label className="flex items-center gap-2 text-sm"><input type="checkbox" name="enabled" defaultChecked={policy.enabled} key={String(policy.enabled)} /> Require queue</label><label className="block text-xs font-semibold">Concurrent candidates<input type="number" name="concurrency" min={1} max={10} defaultValue={policy.concurrency} className="mt-2 min-h-10 w-full rounded-lg border border-[var(--line-strong)] px-3 text-sm font-normal" /></label><label className="block text-xs font-semibold">On candidate failure<select name="failure_behavior" defaultValue={policy.failure_behavior} className="mt-2 min-h-10 w-full rounded-lg border border-[var(--line-strong)] bg-white px-3 text-sm font-normal"><option value="pause">Pause the queue</option><option value="remove">Remove the failed entry</option></select></label><p className="text-xs text-[var(--muted)]">Admission: {policy.required_approvals} current approval; {policy.required_checks.length ? policy.required_checks.join(", ") : "no required checks"}.</p><Button type="submit" disabled={pending}>{pending ? "Saving…" : "Save queue policy"}</Button></form>}{error && <p role="alert" className="mt-3 text-sm text-[var(--danger)]">{error}</p>}</Card>;
 }
 
 function RequiredChecksPanel({ repositoryID, branch, token }: { repositoryID: string; branch: string; token: string }) {

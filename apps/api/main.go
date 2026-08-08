@@ -410,6 +410,12 @@ type requiredChecksInput struct {
 	Checks []string `json:"checks"`
 }
 
+type integrationQueuePolicyInput struct {
+	Enabled         *bool   `json:"enabled"`
+	Concurrency     *int    `json:"concurrency"`
+	FailureBehavior *string `json:"failure_behavior"`
+}
+
 type proposalInput struct {
 	Title *string `json:"title"`
 	Body  *string `json:"body"`
@@ -1018,6 +1024,25 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		}
 		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.merged", ActorID: actor.UserID, RepositoryID: merged.RepositoryID, ResourceType: "pull_request", ResourceID: merged.ID, ResourceTitle: merged.Title})
 		writeJSON(w, http.StatusOK, merged)
+	})
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/queue", func(w http.ResponseWriter, r *http.Request) {
+		_, owner, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if !owner {
+			writeAPIError(w, http.StatusNotFound, "repository_not_found", "repository not found")
+			return
+		}
+		queued, err := store.Enqueue(r.PathValue("id"), r.PathValue("pull_id"))
+		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
+			writeUncertainMutation(w, queued)
+			return
+		}
+		if writePullRequestError(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, queued)
 	})
 	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/comments", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
@@ -2469,6 +2494,40 @@ func registerRepositoryRoutes(mux *http.ServeMux, gitStore *storage.Store, store
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"branch": r.PathValue("branch"), "checks": checks})
+	})
+	mux.HandleFunc("GET /repositories/{id}/branches/{branch}/integration-queue", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, store, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		policy, err := store.IntegrationQueuePolicy(r.PathValue("id"), r.PathValue("branch"))
+		if writeRepositoryError(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, policy)
+	})
+	mux.HandleFunc("PUT /repositories/{id}/branches/{branch}/integration-queue", func(w http.ResponseWriter, r *http.Request) {
+		actor, owner, ok := authorizeRepositoryParticipant(w, r, store, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if !owner {
+			writeAPIError(w, http.StatusNotFound, "repository_not_found", "repository not found")
+			return
+		}
+		var input integrationQueuePolicyInput
+		if decodeJSON(r, &input) != nil || input.Enabled == nil || input.Concurrency == nil || input.FailureBehavior == nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid_integration_queue", "enabled, concurrency, and failure_behavior are required")
+			return
+		}
+		policy, err := store.SetIntegrationQueuePolicy(actor.UserID, r.PathValue("id"), r.PathValue("branch"), *input.Enabled, *input.Concurrency, *input.FailureBehavior)
+		if errors.Is(err, repositories.ErrInvalidName) {
+			writeAPIError(w, http.StatusBadRequest, "invalid_integration_queue", "branch, concurrency, or failure behavior is invalid")
+			return
+		}
+		if writeRepositoryError(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, policy)
 	})
 	mux.HandleFunc("DELETE /repositories/{id}", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)

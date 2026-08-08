@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
@@ -62,6 +63,7 @@ type PullRequest struct {
 	MergedAt               *time.Time `json:"merged_at"`
 	MergedBy               *string    `json:"merged_by"`
 	MergeCommitID          *string    `json:"merge_commit_id"`
+	QueuedAt               *time.Time `json:"queued_at,omitempty"`
 	mergeIntent            *mergeIntent
 }
 
@@ -116,6 +118,7 @@ func (s *Store) Close(repositoryID, id, actorID string) (PullRequest, error) {
 	now := s.now().Truncate(time.Microsecond)
 	p.Status, p.ClosedAt, p.ClosedBy, p.UpdatedAt = Closed, &now, &actorID, now
 	p.MaintainerEditsAllowed = false
+	p.QueuedAt = nil
 	if committed, err := s.write(p); err != nil {
 		if committed {
 			return p, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
@@ -203,16 +206,18 @@ type CheckRequirement struct {
 // Git state. It is never persisted and computing it does not modify the
 // repository.
 type MergeReadiness struct {
-	Mergeable         bool               `json:"mergeable"`
-	CanMerge          bool               `json:"can_merge"`
-	RequiredApprovals int                `json:"required_approvals"`
-	Approvals         int                `json:"approvals"`
-	EvaluatedCommitID string             `json:"evaluated_commit_id"`
-	RequiredChecks    []CheckRequirement `json:"required_checks"`
-	Source            BranchState        `json:"source"`
-	Target            BranchState        `json:"target"`
-	HasConflicts      bool               `json:"has_conflicts"`
-	Blockers          []ReadinessBlocker `json:"blockers"`
+	Mergeable         bool                                 `json:"mergeable"`
+	CanMerge          bool                                 `json:"can_merge"`
+	RequiredApprovals int                                  `json:"required_approvals"`
+	Approvals         int                                  `json:"approvals"`
+	EvaluatedCommitID string                               `json:"evaluated_commit_id"`
+	RequiredChecks    []CheckRequirement                   `json:"required_checks"`
+	Source            BranchState                          `json:"source"`
+	Target            BranchState                          `json:"target"`
+	HasConflicts      bool                                 `json:"has_conflicts"`
+	Blockers          []ReadinessBlocker                   `json:"blockers"`
+	IntegrationQueue  *repositories.IntegrationQueuePolicy `json:"integration_queue,omitempty"`
+	CanEnqueue        bool                                 `json:"can_enqueue"`
 }
 
 type commentRecord struct {
@@ -234,12 +239,14 @@ type Store struct {
 	requirements  interface {
 		RequiredChecks(string, string) ([]string, error)
 		LockRequiredChecks() (func(), error)
+		IntegrationQueuePolicy(string, string) (repositories.IntegrationQueuePolicy, error)
 	}
 }
 
 func (s *Store) ConfigureRequiredChecks(requirements interface {
 	RequiredChecks(string, string) ([]string, error)
 	LockRequiredChecks() (func(), error)
+	IntegrationQueuePolicy(string, string) (repositories.IntegrationQueuePolicy, error)
 }, runs *checkruns.Store) {
 	s.requirements, s.checkRuns = requirements, runs
 }
@@ -444,6 +451,7 @@ func (s *Store) SynchronizeSourceAfter(repositoryID, id string, before func() er
 		}
 	}
 	p.SourceCommitID = commitID
+	p.QueuedAt = nil
 	p.UpdatedAt = s.now().Truncate(time.Microsecond)
 	if committed, err := s.write(p); err != nil {
 		if committed {
@@ -1050,7 +1058,58 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 	}
 	report.Mergeable = len(report.Blockers) == 0
 	report.CanMerge = report.Mergeable && actorCanMerge
+	if s.requirements != nil {
+		policy, policyErr := s.requirements.IntegrationQueuePolicy(repositoryID, p.TargetBranch)
+		if policyErr != nil {
+			return MergeReadiness{}, policyErr
+		}
+		report.IntegrationQueue = &policy
+		if policy.Enabled {
+			report.CanEnqueue = report.Mergeable && actorCanMerge && p.QueuedAt == nil
+			report.CanMerge = false
+		}
+	}
 	return report, nil
+}
+
+// Enqueue admits a currently mergeable pull request into branch order. Later
+// queue workers consume this durable timestamp; admission itself never changes
+// review, check, or branch policy.
+func (s *Store) Enqueue(repositoryID, pullRequestID string) (PullRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return PullRequest{}, err
+	}
+	defer unlock()
+	p, err := s.Get(repositoryID, pullRequestID)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	if p.QueuedAt != nil {
+		return p, nil
+	}
+	if s.requirements != nil {
+		unlockRequirements, lockErr := s.requirements.LockRequiredChecks()
+		if lockErr != nil {
+			return PullRequest{}, lockErr
+		}
+		defer unlockRequirements()
+	}
+	report, err := s.Readiness(repositoryID, pullRequestID, true)
+	if err != nil || !report.CanEnqueue {
+		return PullRequest{}, ErrNotReady
+	}
+	now := s.now().Truncate(time.Microsecond)
+	p.QueuedAt, p.UpdatedAt = &now, now
+	if committed, writeErr := s.write(p); writeErr != nil {
+		if committed {
+			return p, fmt.Errorf("%w: %v", ErrDurabilityUncertain, writeErr)
+		}
+		return PullRequest{}, writeErr
+	}
+	return p, nil
 }
 
 // Merge revalidates readiness while holding the cross-process mutation lock,
