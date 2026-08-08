@@ -6,6 +6,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
@@ -105,6 +106,79 @@ func TestRepositoryCollaboratorsPersistAndRemainOwnerManaged(t *testing.T) {
 	accessible, err = reopened.ListAccessible(testCollaboratorID)
 	if err != nil || len(accessible) != 0 {
 		t.Fatalf("repositories after collaborator removal = %#v, %v", accessible, err)
+	}
+}
+
+func TestForkSynchronizationSerializesPrivateUpstreamRevocation(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	metadataRoot := t.TempDir()
+	store, _ := New(metadataRoot, gitStore)
+	revoker, _ := New(metadataRoot, gitStore)
+	upstream, err := store.Create(testOwnerID, "private-upstream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddCollaborator(testOwnerID, upstream.ID, testCollaboratorID); err != nil {
+		t.Fatal(err)
+	}
+	upstreamGit, _ := gitStore.Open(upstream.ID)
+	tree, err := upstreamGit.WriteObject(storage.TreeObject, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit := func(parent storage.ObjectID, timestamp int64, message string) storage.ObjectID {
+		parentLine := ""
+		if parent != "" {
+			parentLine = fmt.Sprintf("parent %s\n", parent)
+		}
+		content := fmt.Sprintf("tree %s\n%sauthor Test <test@example.com> %d +0000\ncommitter Test <test@example.com> %d +0000\n\n%s\n", tree, parentLine, timestamp, timestamp, message)
+		id, err := upstreamGit.WriteObject(storage.CommitObject, []byte(content))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	initial := commit("", 1700000000, "initial")
+	if err := upstreamGit.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(initial)}); err != nil {
+		t.Fatal(err)
+	}
+	fork, err := store.CreateFork(testCollaboratorID, upstream.ID, "private-fork")
+	if err != nil {
+		t.Fatal(err)
+	}
+	later := commit(initial, 1700000100, "later")
+	if err := upstreamGit.UpdateReference(storage.Reference{Name: "refs/heads/main", Target: string(later)}); err != nil {
+		t.Fatal(err)
+	}
+
+	authorized, release := make(chan struct{}), make(chan struct{})
+	store.afterSynchronizeAuthorization = func() {
+		close(authorized)
+		<-release
+	}
+	syncDone := make(chan error, 1)
+	go func() {
+		_, err := store.SynchronizeFork(testCollaboratorID, fork.ID, "main")
+		syncDone <- err
+	}()
+	<-authorized
+	revokeDone := make(chan error, 1)
+	go func() { revokeDone <- revoker.RemoveCollaborator(testOwnerID, upstream.ID, testCollaboratorID) }()
+	select {
+	case err := <-revokeDone:
+		t.Fatalf("revocation completed inside authorized synchronization: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	if err := <-syncDone; err != nil {
+		t.Fatalf("authorized synchronization: %v", err)
+	}
+	if err := <-revokeDone; err != nil {
+		t.Fatalf("revocation after synchronization: %v", err)
+	}
+	store.afterSynchronizeAuthorization = nil
+	if _, err := store.SynchronizeFork(testCollaboratorID, fork.ID, "main"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("synchronization after revocation error = %v", err)
 	}
 }
 

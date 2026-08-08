@@ -78,13 +78,14 @@ type ForkSynchronization struct {
 }
 
 type Store struct {
-	root          string
-	git           gitStore
-	mu            sync.Mutex
-	now           func() time.Time
-	remove        func(string) error
-	rename        func(string, string) error
-	directorySync func(string) error
+	root                          string
+	git                           gitStore
+	mu                            sync.Mutex
+	now                           func() time.Time
+	remove                        func(string) error
+	rename                        func(string, string) error
+	directorySync                 func(string) error
+	afterSynchronizeAuthorization func()
 }
 
 func New(root string, git *storage.Store) (*Store, error) {
@@ -207,6 +208,13 @@ func (s *Store) SynchronizeFork(ownerID, id, branch string) (ForkSynchronization
 	if branch == "" || strings.HasPrefix(branch, "refs/") {
 		return ForkSynchronization{}, ErrInvalidBranch
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return ForkSynchronization{}, err
+	}
+	defer unlock()
 	repository, err := s.Get(ownerID, id)
 	if err != nil {
 		return ForkSynchronization{}, err
@@ -220,6 +228,9 @@ func (s *Store) SynchronizeFork(ownerID, id, branch string) (ForkSynchronization
 	}
 	if upstream.Visibility != Public && upstream.OwnerID != ownerID && !slices.Contains(collaboratorIDs(upstream), ownerID) {
 		return ForkSynchronization{}, ErrNotFound
+	}
+	if s.afterSynchronizeAuthorization != nil {
+		s.afterSynchronizeAuthorization()
 	}
 	upstreamGit, err := s.git.Open(upstream.ID)
 	if err != nil {

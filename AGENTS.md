@@ -218,7 +218,9 @@ whenever dependencies change or the web job fails before it starts.
   same-named upstream branch through `/repositories/{id}/synchronizations`;
   only fast-forwards are allowed, exact upstream objects are imported before a
   compare-and-swap reference update, and divergence or concurrent pushes are
-  preserved as conflicts. Repository detail exposes fork creation, lineage,
+  preserved as conflicts. Private-upstream authorization, object import, and
+  fork reference publication hold the catalog's cross-process lock so access
+  revocation cannot commit mid-synchronization. Repository detail exposes fork creation, lineage,
   and selected-branch synchronization.
   Durable repository proposals live beneath `$PROPOSAL_STORAGE_ROOT` (default
   `proposals`). Owners and contributors can create and discuss proposals;
