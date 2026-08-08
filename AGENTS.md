@@ -275,6 +275,12 @@ whenever dependencies change or the web job fails before it starts.
   `$INCIDENT_STORAGE_ROOT` defaults to `incidents`; incident mutations hold the
   repository catalog lock across current participant and role revalidation plus
   publication, so collaborator revocation cannot commit mid-mutation.
+  Incident investigations freeze responder-selected evidence, verified commits,
+  and a mandate behind an `incidents:investigate`-only API credential. Agents
+  read that packet and stream attributable findings, tool actions, questions,
+  and uncertainty into the timeline; responders exclusively guide, pause,
+  resume, or cancel, without granting Git, deployment, environment, credential,
+  secret, or repository mutation authority.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's

@@ -971,6 +971,21 @@ operational provenance while leaving deployment execution state authoritative
 in the deployment store. `INCIDENT_STORAGE_ROOT` selects incident storage and
 defaults to `incidents`.
 
+`POST /incidents/{incident_id}/investigations` delegates diagnosis with a
+`mandate`, up to 20 previously verified `evidence` selectors, up to 20 exact
+`revisions` (`repository_id` and commit `commit_id`), and an optional
+`expires_in` from 300 through 86400 seconds. The response returns the updated
+incident, durable investigation, and a one-time API credential carrying only
+`incidents:investigate`. `GET
+/incidents/{incident_id}/investigations/{investigation_id}` uses that credential
+to return the frozen packet plus only its selected live operational resources.
+The agent appends `finding`, `tool_action`, `question`, or `uncertainty` with
+`POST .../events`; all become agent-attributed participant timeline entries.
+Responders use `POST .../controls` with `guide`, `pause`, `resume`, or `cancel`.
+Paused investigations reject agent publication, and cancellation revokes the
+credential. This scope grants no repository mutation, Git, deployment,
+environment, credential, approval, or secret-management API access.
+
 `PATCH /incidents/{incident_id}` accepts `expected_version`, `severity`,
 `status`, `roles`, and an optional decision `message`. Status is one of
 `investigating`, `identified`, `monitoring`, or `resolved`; a stale version

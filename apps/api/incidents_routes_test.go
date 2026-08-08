@@ -71,6 +71,33 @@ func TestIncidentOperatingPictureFromHealthSignal(t *testing.T) {
 	if len(incident.Timeline) != 2 {
 		t.Fatalf("retry duplicated finding: %#v", incident.Timeline)
 	}
+	repo, err := gitStore.Open(repository.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit := writeCommit(t, repo, time.Now().Unix(), "diagnostic revision")
+	delegationBody := `{"mandate":"Determine whether the canary failure is consistent with this revision; report uncertainty.","evidence":` + mustJSON(t, attached.Evidence) + `,"revisions":[{"repository_id":"` + repository.ID + `","commit_id":"` + string(commit) + `"}],"expires_in":3600}`
+	delegated := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/investigations", delegationBody, responder.Credential.Token, http.StatusCreated)
+	var launch struct {
+		Incident      incidents.Incident      `json:"incident"`
+		Investigation incidents.Investigation `json:"investigation"`
+		Credential    auth.IssuedCredential   `json:"credential"`
+	}
+	decodeResponse(t, delegated, &launch)
+	if launch.Credential.Scopes[0] != "incidents:investigate" || len(launch.Investigation.Access) != 3 || launch.Investigation.State != "running" {
+		t.Fatalf("launch = %#v", launch)
+	}
+	// The purpose credential can inspect only its frozen packet and stream
+	// attributable diagnosis. It cannot exercise a responder mutation scope.
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/incidents/"+incident.ID, `{}`, launch.Credential.Token, http.StatusUnauthorized).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/investigations/"+launch.Investigation.ID+"/events", `{"kind":"tool_action","tool":"log.query","message":"Read the selected canary window; no mutation requested."}`, launch.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/investigations/"+launch.Investigation.ID+"/events", `{"kind":"uncertainty","message":"The signal correlates with the revision but does not prove causation."}`, launch.Credential.Token, http.StatusCreated).Body.Close()
+	paused := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/investigations/"+launch.Investigation.ID+"/controls", `{"action":"pause"}`, owner.Credential.Token, http.StatusCreated)
+	decodeResponse(t, paused, &incident)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/investigations/"+launch.Investigation.ID+"/events", `{"kind":"finding","message":"blocked"}`, launch.Credential.Token, http.StatusConflict).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/investigations/"+launch.Investigation.ID+"/controls", `{"action":"resume"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/investigations/"+launch.Investigation.ID+"/controls", `{"action":"cancel"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodGet, server.URL+"/incidents/"+incident.ID+"/investigations/"+launch.Investigation.ID, "", launch.Credential.Token, http.StatusUnauthorized).Body.Close()
 	update := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/updates", `{"operation_id":"`+strings.Repeat("9", 32)+`","message":"Mitigation is holding.","audience":"public"}`, owner.Credential.Token, http.StatusCreated)
 	decodeResponse(t, update, &incident)
 	entry := incident.Timeline[len(incident.Timeline)-1]
@@ -89,4 +116,13 @@ func TestIncidentOperatingPictureFromHealthSignal(t *testing.T) {
 	if json.NewDecoder(list.Body).Decode(&page) != nil || len(page.Incidents) != 1 {
 		t.Fatalf("incident list = %#v", page)
 	}
+}
+
+func mustJSON(t *testing.T, value any) string {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
