@@ -58,6 +58,19 @@ func TestIncidentOperatingPictureFromHealthSignal(t *testing.T) {
 	if incident.Source == nil || incident.Source.DeploymentID != promotion.ID || len(incident.Timeline) != 1 {
 		t.Fatalf("incident = %#v", incident)
 	}
+	windowStart, windowEnd := time.Now().Add(-10*time.Minute).UTC().Format(time.RFC3339), time.Now().Add(time.Minute).UTC().Format(time.RFC3339)
+	findingBody := `{"operation_id":"` + strings.Repeat("8", 32) + `","kind":"hypothesis","message":"The failure began with the canary error spike.","audience":"participants","evidence":[{"kind":"health_signal","repository_id":"` + repository.ID + `","resource_id":"` + promotion.ID + `","query":"canary/errors","window_start":"` + windowStart + `","window_end":"` + windowEnd + `"}]}`
+	finding := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/findings", findingBody, responder.Credential.Token, http.StatusCreated)
+	decodeResponse(t, finding, &incident)
+	attached := incident.Timeline[len(incident.Timeline)-1]
+	if attached.Kind != "hypothesis" || len(attached.Evidence) != 1 || attached.Evidence[0].Label == "" || attached.Evidence[0].CapturedAt.IsZero() {
+		t.Fatalf("finding = %#v", attached)
+	}
+	retry := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/findings", findingBody, responder.Credential.Token, http.StatusCreated)
+	decodeResponse(t, retry, &incident)
+	if len(incident.Timeline) != 2 {
+		t.Fatalf("retry duplicated finding: %#v", incident.Timeline)
+	}
 	update := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/updates", `{"operation_id":"`+strings.Repeat("9", 32)+`","message":"Mitigation is holding.","audience":"public"}`, owner.Credential.Token, http.StatusCreated)
 	decodeResponse(t, update, &incident)
 	entry := incident.Timeline[len(incident.Timeline)-1]

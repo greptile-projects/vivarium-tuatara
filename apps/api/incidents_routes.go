@@ -8,10 +8,13 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
-func registerIncidentRoutes(mux *http.ServeMux, repos *repositories.Store, store *incidents.Store, deploymentStore *deployments.Store, credentials *auth.Store, activity *activities.Store) {
+func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *repositories.Store, store *incidents.Store, deploymentStore *deployments.Store, releaseStore *releases.Store, pullStore *pullrequests.Store, credentials *auth.Store, activity *activities.Store) {
 	participant := func(user string, incident incidents.Incident) bool {
 		for _, scope := range incident.Scopes {
 			repo, e := repos.GetByID(scope.RepositoryID)
@@ -237,6 +240,54 @@ func registerIncidentRoutes(mux *http.ServeMux, repos *repositories.Store, store
 		}
 		writeJSON(w, 201, v)
 	})
+	mux.HandleFunc("POST /incidents/{incident_id}/findings", func(w http.ResponseWriter, r *http.Request) {
+		actor, current, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var input struct {
+			OperationID string               `json:"operation_id"`
+			Kind        string               `json:"kind"`
+			Message     string               `json:"message"`
+			Audience    string               `json:"audience"`
+			Evidence    []incidents.Evidence `json:"evidence"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		for i := range input.Evidence {
+			source := &input.Evidence[i]
+			inScope := false
+			for _, scope := range current.Scopes {
+				if scope.RepositoryID == source.RepositoryID {
+					inScope = true
+					break
+				}
+			}
+			if !inScope {
+				writeAPIError(w, 422, "invalid_incident_evidence", "evidence must belong to an affected repository")
+				return
+			}
+			label, valid := incidentEvidenceLabel(gitStore, store, deploymentStore, releaseStore, pullStore, *source)
+			if !valid {
+				writeAPIError(w, 422, "invalid_incident_evidence", "evidence source is unavailable or invalid")
+				return
+			}
+			source.Label = label
+		}
+		var v incidents.Incident
+		e := mutate(current, actor.UserID, current.Roles, func() error {
+			var mutationErr error
+			v, mutationErr = store.AddFinding(current.ID, input.OperationID, actor.UserID, input.Kind, input.Message, input.Audience, input.Evidence)
+			return mutationErr
+		})
+		if e != nil {
+			writeIncidentError(w, e)
+			return
+		}
+		writeJSON(w, 201, v)
+	})
 	mux.HandleFunc("POST /incidents/{incident_id}/timeline/{entry_id}/acknowledgements", func(w http.ResponseWriter, r *http.Request) {
 		actor, current, ok := require(w, r, "repositories:write")
 		if !ok {
@@ -258,6 +309,89 @@ func registerIncidentRoutes(mux *http.ServeMux, repos *repositories.Store, store
 		}
 		writeJSON(w, 200, v)
 	})
+}
+
+func incidentEvidenceLabel(gitStore *storage.Store, incidentStore *incidents.Store, deploymentStore *deployments.Store, releaseStore *releases.Store, pullStore *pullrequests.Store, source incidents.Evidence) (string, bool) {
+	switch source.Kind {
+	case "log", "health_signal", "deployment":
+		if deploymentStore == nil {
+			return "", false
+		}
+		v, e := deploymentStore.GetPromotion(source.RepositoryID, source.ResourceID)
+		if e != nil {
+			return "", false
+		}
+		if source.Kind == "health_signal" {
+			matched := false
+			for _, item := range v.Evidence {
+				if source.Query == item.Stage+"/"+item.Signal && source.WindowStart != nil && source.WindowEnd != nil && !item.CreatedAt.Before(*source.WindowStart) && !item.CreatedAt.After(*source.WindowEnd) {
+					matched = true
+				}
+			}
+			if !matched {
+				return "", false
+			}
+		}
+		if source.Kind == "log" {
+			matched := false
+			for _, item := range v.Events {
+				if source.WindowStart != nil && source.WindowEnd != nil && !item.CreatedAt.Before(*source.WindowStart) && !item.CreatedAt.After(*source.WindowEnd) {
+					matched = true
+				}
+			}
+			if !matched {
+				return "", false
+			}
+		}
+		return "deployment " + v.ID[:8] + " · " + v.State, true
+	case "release":
+		if releaseStore == nil {
+			return "", false
+		}
+		v, e := releaseStore.Get(source.RepositoryID, source.ResourceID)
+		if e != nil {
+			return "", false
+		}
+		return "release " + v.Version + " · " + v.CommitID[:12], true
+	case "pull_request":
+		if pullStore == nil {
+			return "", false
+		}
+		v, e := pullStore.Get(source.RepositoryID, source.ResourceID)
+		if e != nil {
+			return "", false
+		}
+		return "pull request · " + v.Title, true
+	case "commit":
+		if gitStore == nil {
+			return "", false
+		}
+		repo, e := gitStore.Open(source.RepositoryID)
+		if e != nil {
+			return "", false
+		}
+		obj, e := repo.ReadObject(storage.ObjectID(source.ResourceID))
+		if e != nil || obj.Type != storage.CommitObject {
+			return "", false
+		}
+		return "commit " + source.ResourceID[:12], true
+	case "incident":
+		v, e := incidentStore.Get(source.ResourceID)
+		if e != nil {
+			return "", false
+		}
+		found := false
+		for _, scope := range v.Scopes {
+			if scope.RepositoryID == source.RepositoryID {
+				found = true
+			}
+		}
+		if !found {
+			return "", false
+		}
+		return "incident · " + v.Title, true
+	}
+	return "", false
 }
 
 func writeIncidentError(w http.ResponseWriter, e error) {

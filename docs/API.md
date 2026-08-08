@@ -988,3 +988,21 @@ Repeating an update with the same operation ID and exact content returns the
 original durable result without another timeline entry; reusing it for changed
 content returns `409 incident_changed`. Clients retain the operation ID across
 uncertain transport or durability failures before retrying.
+
+`POST /incidents/{incident_id}/findings` makes diagnosis part of that same
+durable timeline. It accepts an `operation_id`, a `kind` of `observation`,
+`hypothesis`, `query`, or `conclusion`, a `message`, an `audience`, and one to
+20 `evidence` references. Evidence kinds are `log`, `health_signal`,
+`deployment`, `release`, `commit`, `pull_request`, and `incident`; every source
+names an affected `repository_id` and the source's `resource_id`. Optional
+`query`, `window_start`, and `window_end` retain the responder's selection.
+Logs and health signals require an ordered time window; the server verifies a
+retained deployment event or the exact `stage/signal` query occurred inside
+that interval. Other sources are verified against their authoritative store.
+
+The server ignores caller labels and snapshots a source label and
+`captured_at` time when the finding is published. Reads therefore expose both
+historical diagnostic context and stable identifiers for inspecting the live,
+authoritative source. Findings inherit incident participation checks, retain
+their explicit participant/public audience, and use the same idempotent
+operation-ID conflict contract as updates.

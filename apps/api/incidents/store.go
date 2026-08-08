@@ -36,13 +36,24 @@ type Role struct {
 	UserID string `json:"user_id"`
 }
 type Entry struct {
-	ID             string    `json:"id"`
-	Kind           string    `json:"kind"`
-	ActorID        string    `json:"actor_id"`
-	Message        string    `json:"message"`
-	Audience       string    `json:"audience"`
-	CreatedAt      time.Time `json:"created_at"`
-	AcknowledgedBy []string  `json:"acknowledged_by,omitempty"`
+	ID             string     `json:"id"`
+	Kind           string     `json:"kind"`
+	ActorID        string     `json:"actor_id"`
+	Message        string     `json:"message"`
+	Audience       string     `json:"audience"`
+	CreatedAt      time.Time  `json:"created_at"`
+	AcknowledgedBy []string   `json:"acknowledged_by,omitempty"`
+	Evidence       []Evidence `json:"evidence,omitempty"`
+}
+type Evidence struct {
+	Kind         string     `json:"kind"`
+	RepositoryID string     `json:"repository_id,omitempty"`
+	ResourceID   string     `json:"resource_id"`
+	Label        string     `json:"label"`
+	Query        string     `json:"query,omitempty"`
+	WindowStart  *time.Time `json:"window_start,omitempty"`
+	WindowEnd    *time.Time `json:"window_end,omitempty"`
+	CapturedAt   time.Time  `json:"captured_at"`
 }
 type Incident struct {
 	ID         string     `json:"id"`
@@ -195,6 +206,75 @@ func (s *Store) AddUpdate(id, operationID, actor, message, audience string) (Inc
 		return s.write(v)
 	})
 	return v, e
+}
+func (s *Store) AddFinding(id, operationID, actor, kind, message, audience string, evidence []Evidence) (Incident, error) {
+	var v Incident
+	e := s.mutate(func() error {
+		var x error
+		if x = s.read(id, &v); x != nil {
+			return x
+		}
+		message = strings.TrimSpace(message)
+		if !validID(operationID) || !validID(actor) || !validFindingKind(kind) || message == "" || len(message) > 10000 || (audience != "participants" && audience != "public") || len(evidence) == 0 || len(evidence) > 20 {
+			return ErrInvalid
+		}
+		for _, source := range evidence {
+			if !validEvidence(source) {
+				return ErrInvalid
+			}
+		}
+		for _, entry := range v.Timeline {
+			if entry.ID == operationID {
+				if entry.Kind != kind || entry.ActorID != actor || entry.Message != message || entry.Audience != audience || !sameEvidence(entry.Evidence, evidence) {
+					return ErrConflict
+				}
+				return nil
+			}
+		}
+		now := s.now()
+		for i := range evidence {
+			evidence[i].CapturedAt = now
+		}
+		v.Version++
+		v.UpdatedAt = now
+		v.Timeline = append(v.Timeline, Entry{ID: operationID, Kind: kind, ActorID: actor, Message: message, Audience: audience, CreatedAt: now, Evidence: evidence})
+		return s.write(v)
+	})
+	return v, e
+}
+
+func validFindingKind(v string) bool {
+	return v == "observation" || v == "hypothesis" || v == "query" || v == "conclusion"
+}
+func validEvidence(v Evidence) bool {
+	validKind := v.Kind == "log" || v.Kind == "health_signal" || v.Kind == "deployment" || v.Kind == "release" || v.Kind == "commit" || v.Kind == "pull_request" || v.Kind == "incident"
+	if !validKind || !validID(v.RepositoryID) || strings.TrimSpace(v.ResourceID) == "" || len(v.ResourceID) > 200 || strings.TrimSpace(v.Label) == "" || len(v.Label) > 300 || len(v.Query) > 2000 {
+		return false
+	}
+	if (v.WindowStart == nil) != (v.WindowEnd == nil) || (v.WindowStart != nil && !v.WindowStart.Before(*v.WindowEnd)) {
+		return false
+	}
+	return (v.Kind != "log" && v.Kind != "health_signal") || v.WindowStart != nil
+}
+func sameEvidence(a, b []Evidence) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		x, y := a[i], b[i]
+		x.CapturedAt = time.Time{}
+		y.CapturedAt = time.Time{}
+		if x.Kind != y.Kind || x.RepositoryID != y.RepositoryID || x.ResourceID != y.ResourceID || x.Label != y.Label || x.Query != y.Query || !sameTime(x.WindowStart, y.WindowStart) || !sameTime(x.WindowEnd, y.WindowEnd) {
+			return false
+		}
+	}
+	return true
+}
+func sameTime(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
 }
 func (s *Store) Acknowledge(id, entryID, actor string) (Incident, error) {
 	var v Incident

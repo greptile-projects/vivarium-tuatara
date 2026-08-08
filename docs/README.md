@@ -30,6 +30,14 @@ The browser writes a pending incident update's operation identity and exact
 draft fingerprint to incident-scoped local storage before publication. A lost
 response can therefore be retried after reload with the same durable identity;
 confirmation clears it, while changed content intentionally replaces it.
+Diagnosis is recorded in the same operating picture as typed observations,
+hypotheses, queries, and conclusions. Each diagnostic entry attaches verified
+affected-repository sources for deployment logs, health signals, deployments,
+releases, commits, pull requests, or earlier incidents. Operational selections
+retain an exact query and time window; every attachment snapshots a label and
+capture time while keeping a path to the authoritative retained source. This
+lets responders compare the historical basis for a claim with live source
+state without weakening the incident's current-participant access boundary.
 
 ## Web interface foundation
 

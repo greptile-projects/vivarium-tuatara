@@ -265,6 +265,13 @@ whenever dependencies change or the web job fails before it starts.
   retries, and the web keeps the pending exact-draft identity in incident-scoped
   local storage across remounts, so lost responses and post-publication durability
   uncertainty cannot duplicate an update.
+  Incident diagnosis adds retry-safe typed observations, hypotheses, queries,
+  and conclusions to that timeline. Findings attach server-verified logs,
+  health signals, deployments, releases, commits, pulls, or prior incidents
+  from affected repositories; logs and signals retain bounded windows and
+  selectors, while every source snapshots its label and capture time alongside
+  the stable live-resource identity. Finding audience and reads inherit the
+  incident's current-participant authorization boundary.
   `$INCIDENT_STORAGE_ROOT` defaults to `incidents`; incident mutations hold the
   repository catalog lock across current participant and role revalidation plus
   publication, so collaborator revocation cannot commit mid-mutation.
