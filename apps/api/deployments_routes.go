@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"net/http"
 	"os/exec"
@@ -232,22 +230,21 @@ func registerDeploymentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos
 			return
 		}
 		if input.Action == "rollback" {
-			_, target, targetErr := store.RollbackTarget(failed.RepositoryID, failed.ID)
-			if errors.Is(targetErr, deployments.ErrBlocked) {
-				writeAPIError(w, 409, "rollback_unavailable", "no earlier successful artifact exists for this environment")
+			value, target, createErr := store.CreateRollback(failed.RepositoryID, failed.ID, actor.UserID)
+			if errors.Is(createErr, deployments.ErrRecoveryStateChanged) {
+				writeAPIError(w, 409, "recovery_state_changed", "deployment state changed before rollback publication")
 				return
 			}
-			if targetErr != nil {
-				writeAPIError(w, 500, "deployment_read_failed", "rollback evidence could not be read")
-				return
-			}
-			value, createErr := store.CreatePromotion(deployments.Promotion{RepositoryID: target.RepositoryID, EnvironmentID: target.EnvironmentID, ReleaseID: target.ReleaseID, BuildID: target.BuildID, ArtifactID: target.ArtifactID, ArtifactSHA256: target.ArtifactSHA256, CommitID: target.CommitID, Rollout: target.Rollout, InitiatedBy: actor.UserID, RecoveryOf: failed.ID, RecoveryKind: "rollback", RestoresDeploymentID: target.ID})
 			if errors.Is(createErr, deployments.ErrBlocked) {
-				writeAPIError(w, 409, "rollback_blocked", "the recovery environment is busy or its governed promotion prerequisites are no longer satisfied")
+				if target.ID == "" {
+					writeAPIError(w, 409, "rollback_unavailable", "no earlier successful artifact exists for this environment")
+				} else {
+					writeAPIError(w, 409, "rollback_blocked", "the recovery environment is busy or its governed promotion prerequisites are no longer satisfied")
+				}
 				return
 			}
 			if createErr != nil {
-				writeAPIError(w, 500, "rollback_failed", "rollback promotion could not be created")
+				writeAPIError(w, 500, "deployment_read_failed", "rollback evidence could not be read")
 				return
 			}
 			recordActivity(activityStore, repositories, activities.Event{Kind: "deployment.rollback_requested", ActorID: actor.UserID, RepositoryID: failed.RepositoryID, ResourceType: "deployment", ResourceID: value.ID, ResourceTitle: "Rollback for deployment " + failed.ID})
@@ -276,26 +273,41 @@ func registerDeploymentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos
 			writeAPIError(w, 500, "repair_session_failed", "release context could not be loaded")
 			return
 		}
-		random := make([]byte, 4)
-		if _, err = rand.Read(random); err != nil {
-			writeAPIError(w, 500, "repair_unavailable", "repair identity could not be created")
-			return
-		}
-		branch := "agent/recovery/" + failed.ID[:8] + "-" + hex.EncodeToString(random)
+		branch := "agent/recovery/" + failed.ID
 		ref := "refs/heads/" + branch
-		if err = repository.CreateReference(storage.Reference{Name: ref, Target: failed.CommitID}); err != nil {
-			writeAPIError(w, 500, "repair_unavailable", "isolated repair branch could not be created")
+		var pull pullrequests.PullRequest
+		pullUncertain, newPull := false, false
+		existingPulls, listErr := pulls.List(failed.RepositoryID)
+		if listErr != nil {
+			writeAPIError(w, 500, "repair_unavailable", "repair pull requests could not be inspected")
 			return
 		}
-		body := "Diagnose and repair unhealthy deployment " + failed.ID + ". The attached change session freezes release, deployment, log, health, artifact, and source evidence. This branch has no environment authority."
-		pull, pullErr := pulls.Create(failed.RepositoryID, actor.UserID, "Repair deployment for release "+failed.ReleaseID, body, branch, repositoryRecord.DefaultBranch, nil)
-		pullUncertain := errors.Is(pullErr, pullrequests.ErrDurabilityUncertain)
-		if pullErr != nil && !pullUncertain {
-			_ = repository.DeleteReference(ref)
-			writeAPIError(w, 500, "repair_unavailable", "repair pull request could not be created")
-			return
+		for _, candidate := range existingPulls {
+			if candidate.SourceRepositoryID == failed.RepositoryID && candidate.SourceBranch == branch {
+				pull = candidate
+				break
+			}
 		}
-		startCheckRuns(gitStore, builds, pull)
+		if pull.ID == "" {
+			base, readErr := repository.ReadReference("refs/heads/" + repositoryRecord.DefaultBranch)
+			if readErr != nil || base.Symbolic {
+				writeAPIError(w, 500, "repair_unavailable", "default branch revision could not be resolved")
+				return
+			}
+			if err = repository.CreateReference(storage.Reference{Name: ref, Target: base.Target}); err != nil && !errors.Is(err, storage.ErrReferenceExists) {
+				writeAPIError(w, 500, "repair_unavailable", "isolated repair branch could not be created")
+				return
+			}
+			body := "Diagnose and repair unhealthy deployment " + failed.ID + ". The attached change session freezes release, deployment, log, health, artifact, and source evidence. This branch has no environment authority."
+			pull, err = pulls.Create(failed.RepositoryID, actor.UserID, "Repair deployment for release "+failed.ReleaseID, body, branch, repositoryRecord.DefaultBranch, nil)
+			pullUncertain = errors.Is(err, pullrequests.ErrDurabilityUncertain)
+			if err != nil && !pullUncertain {
+				writeAPIError(w, 500, "repair_unavailable", "repair pull request could not be created")
+				return
+			}
+			newPull = true
+			startCheckRuns(gitStore, builds, pull)
+		}
 		evidence := &changesessions.DeploymentEvidence{DeploymentID: failed.ID, ReleaseID: failed.ReleaseID, ReleaseVersion: release.Version, ReleaseNotes: release.Notes, EnvironmentID: failed.EnvironmentID, ArtifactID: failed.ArtifactID, ArtifactSHA256: failed.ArtifactSHA256, CommitID: failed.CommitID, State: failed.State, CurrentStage: failed.CurrentStage, Evidence: make([]changesessions.DeploymentSignal, 0, len(failed.Evidence)), Events: make([]changesessions.DeploymentEvent, 0, len(failed.Events))}
 		for _, item := range failed.Evidence {
 			evidence.Evidence = append(evidence.Evidence, changesessions.DeploymentSignal{Stage: item.Stage, Signal: item.Signal, State: item.State, Message: item.Message})
@@ -303,20 +315,40 @@ func registerDeploymentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos
 		for _, item := range failed.Events {
 			evidence.Events = append(evidence.Events, changesessions.DeploymentEvent{Sequence: item.Sequence, Kind: item.Kind, ActorID: item.ActorID, State: item.State, Message: item.Message})
 		}
-		session, sessionErr := sessions.CreateWithRecoveryEvidence(failed.RepositoryID, pull.ID, actor.UserID, failed.CommitID, nil, evidence)
+		existingSessions, sessionListErr := sessions.List(failed.RepositoryID, pull.ID)
+		if sessionListErr != nil {
+			writeAPIError(w, 500, "repair_session_failed", "repair session could not be inspected for retry")
+			return
+		}
+		var session changesessions.Session
+		var sessionErr error
+		if len(existingSessions) > 0 {
+			session = existingSessions[0]
+		} else if pull.Status != pullrequests.Open {
+			writeAPIError(w, 409, "repair_pull_closed", "the existing repair pull request is closed")
+			return
+		} else {
+			session, sessionErr = sessions.CreateWithRecoveryEvidence(failed.RepositoryID, pull.ID, actor.UserID, pull.SourceCommitID, nil, evidence)
+		}
 		if sessionErr != nil && !errors.Is(sessionErr, changesessions.ErrDurabilityUncertain) {
 			// The pull remains a valid, visible review boundary even if the
 			// workspace could not be published; do not erase durable review state.
 			writeAPIError(w, 500, "repair_session_failed", "repair pull request was created but its change session could not be published")
 			return
 		}
-		recordActivity(activityStore, repositories, activities.Event{Kind: "deployment.repair_opened", ActorID: actor.UserID, RepositoryID: failed.RepositoryID, ResourceType: "pull_request", ResourceID: pull.ID, ResourceTitle: pull.Title})
+		if len(existingSessions) == 0 {
+			recordActivity(activityStore, repositories, activities.Event{Kind: "deployment.repair_opened", ActorID: actor.UserID, RepositoryID: failed.RepositoryID, ResourceType: "pull_request", ResourceID: pull.ID, ResourceTitle: pull.Title})
+		}
 		w.Header().Set("Location", "/repositories/"+failed.RepositoryID+"/pulls/"+pull.ID+"/sessions/"+session.ID)
 		response := map[string]any{"pull_request": pull, "session": session}
 		if pullUncertain || errors.Is(sessionErr, changesessions.ErrDurabilityUncertain) {
 			writeUncertainMutation(w, response)
 			return
 		}
-		writeJSON(w, 201, response)
+		if newPull || len(existingSessions) == 0 {
+			writeJSON(w, 201, response)
+		} else {
+			writeJSON(w, 200, response)
+		}
 	})
 }

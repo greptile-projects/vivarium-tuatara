@@ -31,9 +31,10 @@ func ParseRolloutDefinition(body []byte) (RolloutDefinition, error) {
 }
 
 var (
-	ErrNotFound = errors.New("deployment resource not found")
-	ErrInvalid  = errors.New("invalid deployment resource")
-	ErrBlocked  = errors.New("deployment transition blocked")
+	ErrNotFound             = errors.New("deployment resource not found")
+	ErrInvalid              = errors.New("invalid deployment resource")
+	ErrBlocked              = errors.New("deployment transition blocked")
+	ErrRecoveryStateChanged = errors.New("deployment recovery state changed")
 )
 
 type Environment struct {
@@ -245,7 +246,7 @@ func (s *Store) listEnvironments(repo string) ([]Environment, error) {
 
 func (s *Store) CreatePromotion(value Promotion) (Promotion, error) {
 	legacyDefinition := value.CommitID == "" && value.Rollout.Version == 0 && len(value.Rollout.Stages) == 0
-	if !validID(value.RepositoryID) || !validID(value.EnvironmentID) || !validID(value.ReleaseID) || !validID(value.BuildID) || !validID(value.ArtifactID) || !validID(value.InitiatedBy) || len(value.ArtifactSHA256) != 64 || (!legacyDefinition && (len(value.CommitID) != 40 || !validRollout(value.Rollout))) || (value.RecoveryOf != "" && (!validID(value.RecoveryOf) || value.RecoveryKind != "rollback" || !validID(value.RestoresDeploymentID))) {
+	if !validID(value.RepositoryID) || !validID(value.EnvironmentID) || !validID(value.ReleaseID) || !validID(value.BuildID) || !validID(value.ArtifactID) || !validID(value.InitiatedBy) || len(value.ArtifactSHA256) != 64 || (!legacyDefinition && (len(value.CommitID) != 40 || !validRollout(value.Rollout))) || value.RecoveryOf != "" || value.RecoveryKind != "" || value.RestoresDeploymentID != "" {
 		return Promotion{}, ErrInvalid
 	}
 	s.mu.Lock()
@@ -255,6 +256,10 @@ func (s *Store) CreatePromotion(value Promotion) (Promotion, error) {
 		return Promotion{}, err
 	}
 	defer unlock()
+	return s.createPromotionLocked(value)
+}
+
+func (s *Store) createPromotionLocked(value Promotion) (Promotion, error) {
 	env, err := s.getEnvironment(value.RepositoryID, value.EnvironmentID)
 	if err != nil {
 		return Promotion{}, err
@@ -301,17 +306,42 @@ func (s *Store) CreatePromotion(value Promotion) (Promotion, error) {
 	return value, s.write(filepath.Join(s.root, value.RepositoryID, "promotions", value.ID+".json"), value)
 }
 
+// CreateRollback derives and publishes a rollback while holding the same
+// process and filesystem locks. Callers cannot inject or race its provenance.
+func (s *Store) CreateRollback(repo, failedID, actor string) (Promotion, Promotion, error) {
+	if !validID(repo) || !validID(failedID) || !validID(actor) {
+		return Promotion{}, Promotion{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Promotion{}, Promotion{}, err
+	}
+	defer unlock()
+	failed, target, err := s.rollbackTargetLocked(repo, failedID)
+	if err != nil {
+		return Promotion{}, Promotion{}, err
+	}
+	value, err := s.createPromotionLocked(Promotion{RepositoryID: target.RepositoryID, EnvironmentID: target.EnvironmentID, ReleaseID: target.ReleaseID, BuildID: target.BuildID, ArtifactID: target.ArtifactID, ArtifactSHA256: target.ArtifactSHA256, CommitID: target.CommitID, Rollout: target.Rollout, InitiatedBy: actor, RecoveryOf: failed.ID, RecoveryKind: "rollback", RestoresDeploymentID: target.ID})
+	return value, target, err
+}
+
 // RollbackTarget derives the newest successful deployment to the same
 // environment that predates an unhealthy deployment.
 func (s *Store) RollbackTarget(repo, id string) (Promotion, Promotion, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.rollbackTargetLocked(repo, id)
+}
+
+func (s *Store) rollbackTargetLocked(repo, id string) (Promotion, Promotion, error) {
 	failed, err := s.getPromotion(repo, id)
 	if err != nil {
 		return Promotion{}, Promotion{}, err
 	}
 	if failed.State != "failed" && failed.State != "canceled" {
-		return failed, Promotion{}, ErrBlocked
+		return failed, Promotion{}, ErrRecoveryStateChanged
 	}
 	items, err := s.listPromotions(repo)
 	if err != nil {

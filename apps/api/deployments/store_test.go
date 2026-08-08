@@ -109,8 +109,11 @@ func TestRollbackTargetSelectsNewestEarlierSuccessfulArtifact(t *testing.T) {
 	if err != nil || unhealthy.ID != second.ID || target.ID != first.ID || target.ArtifactID != first.ArtifactID {
 		t.Fatalf("rollback target = %#v, %#v, %v", unhealthy, target, err)
 	}
-	rollback, err := store.CreatePromotion(Promotion{RepositoryID: repo, EnvironmentID: target.EnvironmentID, ReleaseID: target.ReleaseID, BuildID: target.BuildID, ArtifactID: target.ArtifactID, ArtifactSHA256: target.ArtifactSHA256, InitiatedBy: actor, RecoveryOf: second.ID, RecoveryKind: "rollback", RestoresDeploymentID: first.ID})
-	if err != nil || rollback.RecoveryOf != second.ID || rollback.ArtifactSHA256 != first.ArtifactSHA256 {
+	if _, err := store.CreatePromotion(Promotion{RepositoryID: repo, EnvironmentID: target.EnvironmentID, ReleaseID: target.ReleaseID, BuildID: target.BuildID, ArtifactID: target.ArtifactID, ArtifactSHA256: target.ArtifactSHA256, InitiatedBy: actor, RecoveryOf: second.ID, RecoveryKind: "rollback", RestoresDeploymentID: first.ID}); err != ErrInvalid {
+		t.Fatalf("caller-supplied recovery provenance = %v", err)
+	}
+	rollback, restored, err := store.CreateRollback(repo, second.ID, actor)
+	if err != nil || restored.ID != first.ID || rollback.RecoveryOf != second.ID || rollback.ArtifactSHA256 != first.ArtifactSHA256 {
 		t.Fatalf("rollback = %#v, %v", rollback, err)
 	}
 }

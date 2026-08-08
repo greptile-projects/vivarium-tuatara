@@ -156,12 +156,16 @@ whenever dependencies change or the web job fails before it starts.
   rollback derives the newest earlier successful artifact for that exact
   environment and submits it as another approval-gated promotion with durable
   failed/restored deployment provenance. A repair creates an isolated
-  `agent/recovery/*` branch and ordinary pull request at the unhealthy release
-  commit, then freezes release notes, deployment logs, health evidence,
+  deterministic `agent/recovery/*` branch and ordinary pull request at the
+  current default-branch tip, then freezes the unhealthy release commit,
+  release notes, deployment logs, health evidence,
   artifact checksum, and source revision into its change session. Its agent
   credential remains repository/branch-bound; repaired code must complete the
   normal review, required-check, integration, build, release, and promotion
   flow and never receives environment authority.
+  Repair retries reconnect the same branch, pull, and session after partial
+  publication. Rollback target derivation, unhealthy-state revalidation, and
+  promotion publication occur under one deployment-store lock.
   Pull request discovery at `/pulls` aggregates reviewable work across the
   authenticated actor's repository catalog and opens candidate branches
   against distinct targets or owned-fork branches against their upstream,

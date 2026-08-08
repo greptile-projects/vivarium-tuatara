@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -24,7 +25,8 @@ func TestUnhealthyDeploymentOpensEvidencePinnedRepairReview(t *testing.T) {
 	credentials, _ := auth.New(t.TempDir())
 	catalog, _ := repositories.New(t.TempDir(), gitStore)
 	pulls, _ := pullrequests.New(t.TempDir(), gitStore)
-	sessions, _ := changesessions.New(t.TempDir())
+	sessionRoot := t.TempDir()
+	sessions, _ := changesessions.New(sessionRoot)
 	checks, _ := checkruns.New(t.TempDir())
 	releaseStore, _ := releases.New(t.TempDir())
 	deploymentStore, _ := deployments.New(t.TempDir())
@@ -57,6 +59,19 @@ func TestUnhealthyDeploymentOpensEvidencePinnedRepairReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	newReadme, _ := gitRepository.WriteObject(storage.BlobObject, []byte("new default-branch work\n"))
+	newTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "README.md", id: newReadme})
+	current := writeTestCommit(t, gitRepository, newTree, []storage.ObjectID{commit}, 1700000100, "intervening integrated work")
+	if err := gitRepository.UpdateReferenceIfTarget(storage.Reference{Name: "refs/heads/main", Target: string(current)}, string(commit)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sessionRoot, 0500); err != nil {
+		t.Fatal(err)
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/deployments/"+promotion.ID+"/recoveries", `{"action":"repair","expected_state":"failed"}`, owner.Credential.Token, http.StatusInternalServerError).Body.Close()
+	if err := os.Chmod(sessionRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
 	repairResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/deployments/"+promotion.ID+"/recoveries", `{"action":"repair","expected_state":"failed"}`, owner.Credential.Token, http.StatusCreated)
 	var repair struct {
 		PullRequest pullrequests.PullRequest `json:"pull_request"`
@@ -66,7 +81,7 @@ func TestUnhealthyDeploymentOpensEvidencePinnedRepairReview(t *testing.T) {
 		t.Fatal(err)
 	}
 	repairResponse.Body.Close()
-	if !strings.HasPrefix(repair.PullRequest.SourceBranch, "agent/recovery/") || repair.PullRequest.TargetBranch != "main" || repair.Session.DeploymentEvidence == nil {
+	if repair.PullRequest.SourceBranch != "agent/recovery/"+promotion.ID || repair.PullRequest.SourceCommitID != string(current) || repair.PullRequest.TargetBranch != "main" || repair.Session.SourceCommitID != string(current) || repair.Session.DeploymentEvidence == nil {
 		t.Fatalf("repair = %#v", repair)
 	}
 	evidence := repair.Session.DeploymentEvidence
@@ -75,5 +90,18 @@ func TestUnhealthyDeploymentOpensEvidencePinnedRepairReview(t *testing.T) {
 	}
 	if repairResponse.Header.Get("Location") != "/repositories/"+repository.ID+"/pulls/"+repair.PullRequest.ID+"/sessions/"+repair.Session.ID {
 		t.Fatalf("Location = %q", repairResponse.Header.Get("Location"))
+	}
+	allPulls, err := pulls.List(repository.ID)
+	if err != nil || len(allPulls) != 1 || allPulls[0].ID != repair.PullRequest.ID {
+		t.Fatalf("idempotent repair pulls = %#v, %v", allPulls, err)
+	}
+	reconnectResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/deployments/"+promotion.ID+"/recoveries", `{"action":"repair","expected_state":"failed"}`, owner.Credential.Token, http.StatusOK)
+	var reconnected struct {
+		PullRequest pullrequests.PullRequest `json:"pull_request"`
+		Session     changesessions.Session   `json:"session"`
+	}
+	decodeResponse(t, reconnectResponse, &reconnected)
+	if reconnected.PullRequest.ID != repair.PullRequest.ID || reconnected.Session.ID != repair.Session.ID {
+		t.Fatalf("reconnected repair = %#v", reconnected)
 	}
 }
