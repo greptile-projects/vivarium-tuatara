@@ -121,7 +121,11 @@ whenever dependencies change or the web job fails before it starts.
   and the server-derived merged pulls, proposals, tasks, and contributors in
   that ancestry range. They remain immutable `candidate` records for later
   build and promotion workflows; the web surface lives beneath repository
-  detail at `/repositories/{id}/releases`.
+  detail at `/repositories/{id}/releases`. Exact candidates opt into isolated
+  builds through `.vivarium/release.json`; steps reuse the network-disabled
+  check executor, retain immutable attempts, logs, and checksummed artifacts,
+  and expose source/command/dependency/actor/result attestations. Reruns append
+  evidence for the same frozen candidate.
   Pull request discovery at `/pulls` aggregates reviewable work across the
   authenticated actor's repository catalog and opens candidate branches
   against distinct targets or owned-fork branches against their upstream,

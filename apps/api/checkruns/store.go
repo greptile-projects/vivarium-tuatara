@@ -29,6 +29,7 @@ var (
 )
 
 const ConfigPath = ".vivarium/checks.json"
+const ReleaseConfigPath = ".vivarium/release.json"
 
 type Definition struct {
 	Name             string            `json:"name"`
@@ -42,6 +43,13 @@ type Definition struct {
 type Config struct {
 	Version int          `json:"version"`
 	Checks  []Definition `json:"checks"`
+}
+
+// ReleaseConfig describes the ordered, repository-defined steps that produce
+// and verify distributable output for an exact release commit.
+type ReleaseConfig struct {
+	Version int          `json:"version"`
+	Steps   []Definition `json:"steps"`
 }
 
 type Run struct {
@@ -163,6 +171,28 @@ func ParseConfig(data []byte) (Config, error) {
 	return c, nil
 }
 
+func ParseReleaseConfig(data []byte) (ReleaseConfig, error) {
+	var config ReleaseConfig
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&config); err != nil || config.Version != 1 {
+		return ReleaseConfig{}, errors.New("invalid release configuration")
+	}
+	// Reuse the check-definition validation so release execution has exactly
+	// the same image, command, environment, working-directory, and timeout
+	// safety contract as change verification.
+	body, err := json.Marshal(Config{Version: config.Version, Checks: config.Steps})
+	if err != nil {
+		return ReleaseConfig{}, err
+	}
+	validated, err := ParseConfig(body)
+	if err != nil {
+		return ReleaseConfig{}, errors.New("invalid release configuration")
+	}
+	config.Steps = validated.Checks
+	return config, nil
+}
+
 func validImage(image string) bool {
 	if image == "" || len(image) > 200 || strings.ContainsAny(image, " \t\r\n@") {
 		return false
@@ -176,6 +206,10 @@ func validImage(image string) bool {
 }
 
 func (s *Store) Create(repositoryID, pullRequestID, commitID string, definitions []Definition) ([]Run, error) {
+	return s.CreateRequested(repositoryID, pullRequestID, commitID, definitions, "")
+}
+
+func (s *Store) CreateRequested(repositoryID, pullRequestID, commitID string, definitions []Definition, actorID string) ([]Run, error) {
 	now := s.now().Truncate(time.Microsecond)
 	runs := make([]Run, 0, len(definitions))
 	for _, definition := range definitions {
@@ -183,7 +217,7 @@ func (s *Store) Create(repositoryID, pullRequestID, commitID string, definitions
 		if err != nil {
 			return nil, err
 		}
-		runs = append(runs, Run{ID: id, RepositoryID: repositoryID, PullRequestID: pullRequestID, CommitID: commitID, Definition: definition, State: "queued", CreatedAt: now, Attempts: []Attempt{}, Artifacts: []Artifact{}})
+		runs = append(runs, Run{ID: id, RepositoryID: repositoryID, PullRequestID: pullRequestID, CommitID: commitID, Definition: definition, State: "queued", CreatedAt: now, Attempts: []Attempt{}, Artifacts: []Artifact{}, RequestedBy: actorID})
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

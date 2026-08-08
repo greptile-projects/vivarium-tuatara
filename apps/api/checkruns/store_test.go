@@ -29,6 +29,22 @@ func TestParseConfigValidatesExecutionContext(t *testing.T) {
 	}
 }
 
+func TestParseReleaseConfigUsesCheckIsolationContract(t *testing.T) {
+	config, err := ParseReleaseConfig([]byte(`{"version":1,"steps":[{"name":"package","image":"alpine:3.22","command":"sha256sum app > \"$VIVARIUM_OUTPUT/app.sha256\""}]}`))
+	if err != nil || len(config.Steps) != 1 || config.Steps[0].WorkingDirectory != "." || config.Steps[0].TimeoutSeconds != 600 {
+		t.Fatalf("ParseReleaseConfig() = %#v, %v", config, err)
+	}
+	for _, body := range []string{
+		`{"version":1,"steps":[]}`,
+		`{"version":1,"steps":[{"name":"escape","image":"alpine:3.22","command":"true","working_directory":"../host"}]}`,
+		`{"version":1,"steps":[{"name":"package","image":"alpine@sha256:bad","command":"true"}]}`,
+	} {
+		if _, err := ParseReleaseConfig([]byte(body)); err == nil {
+			t.Fatalf("ParseReleaseConfig(%s) unexpectedly succeeded", body)
+		}
+	}
+}
+
 func TestCreateRepairsMissingDefinitionForExistingCommit(t *testing.T) {
 	store, _ := New(t.TempDir())
 	repositoryID, pullID, commitID := "0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789", strings.Repeat("a", 40)

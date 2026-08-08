@@ -231,7 +231,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerInboxRoutes(mux, repositoryCatalog, proposalStore, pullRequestStore, activityStore, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && releaseStore != nil {
-		registerReleaseRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, releaseStore, authStore)
+		registerReleaseRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, releaseStore, authStore, checkRunStore)
 	}
 	mux.HandleFunc("GET /git/{remote}/info/refs", func(w http.ResponseWriter, r *http.Request) {
 		service := r.URL.Query().Get("service")
@@ -2898,7 +2898,7 @@ func classifyInboxEvent(userID, ownerID string, event activities.Event, proposal
 	return "", "", nil
 }
 
-func registerReleaseRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoryStore *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, authStore *auth.Store) {
+func registerReleaseRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoryStore *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, authStore *auth.Store, buildStore *checkruns.Store) {
 	mux.HandleFunc("GET /repositories/{id}/releases", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoryStore, authStore, r.PathValue("id")); !ok {
 			return
@@ -2978,6 +2978,189 @@ func registerReleaseRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 		}
 		w.Header().Set("Location", "/repositories/"+created.RepositoryID+"/releases/"+created.ID)
 		writeJSON(w, 201, created)
+	})
+	mux.HandleFunc("POST /repositories/{id}/releases/{release_id}/builds", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoryStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		candidate, err := releaseStore.Get(r.PathValue("id"), r.PathValue("release_id"))
+		if errors.Is(err, releases.ErrNotFound) {
+			writeAPIError(w, 404, "release_not_found", "release candidate not found")
+			return
+		}
+		if err != nil || buildStore == nil {
+			writeAPIError(w, 500, "release_build_unavailable", "release build storage unavailable")
+			return
+		}
+		repository, err := gitStore.Open(candidate.RepositoryID)
+		if err != nil {
+			writeAPIError(w, 500, "release_build_unavailable", "release repository unavailable")
+			return
+		}
+		body, err := exec.Command("git", "--git-dir="+repository.Path(), "show", candidate.CommitID+":"+checkruns.ReleaseConfigPath).Output()
+		if err != nil {
+			writeAPIError(w, 422, "release_definition_missing", "the release commit must contain .vivarium/release.json")
+			return
+		}
+		config, err := checkruns.ParseReleaseConfig(body)
+		if err != nil {
+			writeAPIError(w, 422, "invalid_release_definition", err.Error())
+			return
+		}
+		runs, err := buildStore.CreateRequested(candidate.RepositoryID, candidate.ID, candidate.CommitID, config.Steps, actor.UserID)
+		if err != nil {
+			writeAPIError(w, 500, "release_build_failed", "release build could not be created")
+			return
+		}
+		for _, run := range runs {
+			go buildStore.Execute(run, repository.Path())
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{"builds": runs})
+	})
+	mux.HandleFunc("GET /repositories/{id}/releases/{release_id}/builds", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoryStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		if _, err := releaseStore.Get(r.PathValue("id"), r.PathValue("release_id")); errors.Is(err, releases.ErrNotFound) {
+			writeAPIError(w, 404, "release_not_found", "release candidate not found")
+			return
+		} else if err != nil || buildStore == nil {
+			writeAPIError(w, 500, "release_build_unavailable", "release builds unavailable")
+			return
+		}
+		runs, err := buildStore.List(r.PathValue("id"), r.PathValue("release_id"))
+		if err != nil {
+			writeAPIError(w, 500, "release_build_unavailable", "release builds unavailable")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"builds": runs})
+	})
+	mux.HandleFunc("GET /repositories/{id}/releases/{release_id}/attestation", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoryStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		candidate, err := releaseStore.Get(r.PathValue("id"), r.PathValue("release_id"))
+		if errors.Is(err, releases.ErrNotFound) {
+			writeAPIError(w, 404, "release_not_found", "release candidate not found")
+			return
+		}
+		if err != nil || buildStore == nil {
+			writeAPIError(w, 500, "release_build_unavailable", "release attestation unavailable")
+			return
+		}
+		runs, err := buildStore.List(candidate.RepositoryID, candidate.ID)
+		if err != nil {
+			writeAPIError(w, 500, "release_build_unavailable", "release attestation unavailable")
+			return
+		}
+		state := "pending"
+		if len(runs) == 0 {
+			state = "unbuilt"
+		} else {
+			state = "verified"
+			for _, run := range runs {
+				if run.State == "failed" || run.State == "canceled" {
+					state = "failed"
+					break
+				}
+				if run.State != "succeeded" {
+					state = "pending"
+				}
+			}
+		}
+		writeJSON(w, 200, map[string]any{"version": 1, "release_id": candidate.ID, "repository_id": candidate.RepositoryID, "source_commit": candidate.CommitID, "state": state, "builds": runs})
+	})
+	mux.HandleFunc("GET /repositories/{id}/releases/{release_id}/builds/{build_id}/attestation", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoryStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		candidate, err := releaseStore.Get(r.PathValue("id"), r.PathValue("release_id"))
+		if errors.Is(err, releases.ErrNotFound) {
+			writeAPIError(w, 404, "release_not_found", "release candidate not found")
+			return
+		}
+		run, err := buildStore.Get(r.PathValue("id"), r.PathValue("release_id"), r.PathValue("build_id"))
+		if errors.Is(err, checkruns.ErrNotFound) {
+			writeAPIError(w, 404, "release_build_not_found", "release build not found")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 500, "release_build_unavailable", "release attestation unavailable")
+			return
+		}
+		actor := candidate.CreatedBy
+		if run.RequestedBy != "" {
+			actor = run.RequestedBy
+		}
+		if len(run.Attempts) > 0 && run.Attempts[0].ActorID != "" {
+			actor = run.Attempts[0].ActorID
+		}
+		writeJSON(w, 200, map[string]any{"version": 1, "release_id": candidate.ID, "repository_id": candidate.RepositoryID, "source_commit": run.CommitID, "build_id": run.ID, "step": run.Definition.Name, "command": run.Definition.Command, "dependencies": []string{run.Definition.Image}, "actor_id": actor, "verification": map[string]any{"state": run.State, "exit_code": run.ExitCode, "failure": run.Failure, "attempts": run.Attempts}, "artifacts": run.Artifacts, "created_at": run.CreatedAt, "completed_at": run.CompletedAt})
+	})
+	mux.HandleFunc("GET /repositories/{id}/releases/{release_id}/builds/{build_id}/events", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoryStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		events, err := buildStore.Events(r.PathValue("id"), r.PathValue("release_id"), r.PathValue("build_id"), 0)
+		if errors.Is(err, checkruns.ErrNotFound) {
+			writeAPIError(w, 404, "release_build_not_found", "release build not found")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 500, "release_build_unavailable", "release build logs unavailable")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"events": events})
+	})
+	mux.HandleFunc("GET /repositories/{id}/releases/{release_id}/builds/{build_id}/artifacts/{artifact_id}", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoryStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		file, artifact, err := buildStore.OpenArtifact(r.PathValue("id"), r.PathValue("release_id"), r.PathValue("build_id"), r.PathValue("artifact_id"))
+		if errors.Is(err, checkruns.ErrNotFound) {
+			writeAPIError(w, 404, "release_artifact_not_found", "release artifact not found")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 500, "release_build_unavailable", "release artifact unavailable")
+			return
+		}
+		defer file.Close()
+		w.Header().Set("Content-Type", artifact.ContentType)
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", path.Base(artifact.Path)))
+		http.ServeContent(w, r, path.Base(artifact.Path), artifact.CreatedAt, file)
+	})
+	mux.HandleFunc("POST /repositories/{id}/releases/{release_id}/builds/{build_id}/rerun", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoryStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		candidate, err := releaseStore.Get(r.PathValue("id"), r.PathValue("release_id"))
+		if errors.Is(err, releases.ErrNotFound) {
+			writeAPIError(w, 404, "release_not_found", "release candidate not found")
+			return
+		}
+		repository, err := gitStore.Open(candidate.RepositoryID)
+		if err != nil {
+			writeAPIError(w, 500, "release_build_unavailable", "release repository unavailable")
+			return
+		}
+		run, err := buildStore.Rerun(candidate.RepositoryID, candidate.ID, r.PathValue("build_id"), actor.UserID)
+		if errors.Is(err, checkruns.ErrInvalidState) {
+			writeAPIError(w, 409, "release_build_active", "an active release build cannot be rerun")
+			return
+		}
+		if errors.Is(err, checkruns.ErrNotFound) {
+			writeAPIError(w, 404, "release_build_not_found", "release build not found")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 500, "release_build_failed", "release build could not be rerun")
+			return
+		}
+		go buildStore.Execute(run, repository.Path())
+		writeJSON(w, http.StatusAccepted, run)
 	})
 }
 

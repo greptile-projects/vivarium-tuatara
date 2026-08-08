@@ -660,10 +660,16 @@ declared source, rationale, work, and people inspectable before artifact builds
 or environment delivery begins.
 
 Candidate records live beneath `RELEASE_STORAGE_ROOT` (default `releases`) and
-stay in `candidate` lifecycle state; later delivery work adds evidence and
-promotion without rewriting this source definition. Public repositories expose
+stay in `candidate` lifecycle state. Candidate commits define ordered release
+steps in `.vivarium/release.json`; those steps reuse the exact-commit,
+network-disabled OCI verification executor and retain bounded logs and
+immutable SHA-256 artifact evidence beneath `CHECK_RUN_STORAGE_ROOT`. Public
+attestations connect source, command, image dependency, initiating actor,
+attempt outcomes, and artifacts. Reruns append evidence rather than replacing
+failures. Public repositories expose
 candidate reads anonymously, private reads follow repository access, and only
 current owners or contributors with `repositories:write` can create them. The
 web release workspace is linked from repository detail and supports exact-state
-creation, prior-release selection, lifecycle inspection, and direct links back
-to included review and planning work.
+creation, prior-release selection, lifecycle inspection, build controls,
+machine-readable attestations and checksums, and direct links back to included
+review and planning work.
