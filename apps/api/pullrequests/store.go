@@ -41,23 +41,24 @@ const (
 )
 
 type PullRequest struct {
-	ID             string     `json:"id"`
-	RepositoryID   string     `json:"repository_id"`
-	AuthorID       string     `json:"author_id"`
-	Title          string     `json:"title"`
-	Body           string     `json:"body"`
-	SourceBranch   string     `json:"source_branch"`
-	TargetBranch   string     `json:"target_branch"`
-	SourceCommitID string     `json:"source_commit_id"`
-	TargetCommitID string     `json:"target_commit_id"`
-	ProposalID     *string    `json:"proposal_id"`
-	Status         string     `json:"status"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
-	MergedAt       *time.Time `json:"merged_at"`
-	MergedBy       *string    `json:"merged_by"`
-	MergeCommitID  *string    `json:"merge_commit_id"`
-	mergeIntent    *mergeIntent
+	ID                 string     `json:"id"`
+	RepositoryID       string     `json:"repository_id"`
+	SourceRepositoryID string     `json:"source_repository_id"`
+	AuthorID           string     `json:"author_id"`
+	Title              string     `json:"title"`
+	Body               string     `json:"body"`
+	SourceBranch       string     `json:"source_branch"`
+	TargetBranch       string     `json:"target_branch"`
+	SourceCommitID     string     `json:"source_commit_id"`
+	TargetCommitID     string     `json:"target_commit_id"`
+	ProposalID         *string    `json:"proposal_id"`
+	Status             string     `json:"status"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+	MergedAt           *time.Time `json:"merged_at"`
+	MergedBy           *string    `json:"merged_by"`
+	MergeCommitID      *string    `json:"merge_commit_id"`
+	mergeIntent        *mergeIntent
 }
 
 type mergeIntent struct {
@@ -194,7 +195,14 @@ func New(root string, git *storage.Store) (*Store, error) {
 }
 
 func (s *Store) Create(repositoryID, authorID, title, body, sourceBranch, targetBranch string, proposalID *string) (PullRequest, error) {
-	if !validID(repositoryID) || !validID(authorID) {
+	return s.CreateFrom(repositoryID, repositoryID, authorID, title, body, sourceBranch, targetBranch, proposalID)
+}
+
+// CreateFrom snapshots a source branch that may live in a distinct repository.
+// Its reachable objects are imported into the target without publishing a ref,
+// keeping every later review and merge operation pinned to the adopted commit.
+func (s *Store) CreateFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, proposalID *string) (PullRequest, error) {
+	if !validID(repositoryID) || !validID(sourceRepositoryID) || !validID(authorID) {
 		return PullRequest{}, ErrInvalid
 	}
 	title, body, err := validatePurpose(title, body)
@@ -202,7 +210,7 @@ func (s *Store) Create(repositoryID, authorID, title, body, sourceBranch, target
 		return PullRequest{}, err
 	}
 	sourceBranch, targetBranch = strings.TrimSpace(sourceBranch), strings.TrimSpace(targetBranch)
-	if sourceBranch == "" || targetBranch == "" || sourceBranch == targetBranch || strings.HasPrefix(sourceBranch, "refs/") || strings.HasPrefix(targetBranch, "refs/") {
+	if sourceBranch == "" || targetBranch == "" || (sourceRepositoryID == repositoryID && sourceBranch == targetBranch) || strings.HasPrefix(sourceBranch, "refs/") || strings.HasPrefix(targetBranch, "refs/") {
 		return PullRequest{}, ErrInvalid
 	}
 	if proposalID != nil && !validID(*proposalID) {
@@ -212,7 +220,11 @@ func (s *Store) Create(repositoryID, authorID, title, body, sourceBranch, target
 	if err != nil {
 		return PullRequest{}, fmt.Errorf("open Git repository: %w", err)
 	}
-	sourceCommit, err := branchCommit(repository, sourceBranch)
+	sourceRepository, err := s.git.Open(sourceRepositoryID)
+	if err != nil {
+		return PullRequest{}, fmt.Errorf("open source Git repository: %w", err)
+	}
+	sourceCommit, err := branchCommit(sourceRepository, sourceBranch)
 	if err != nil {
 		return PullRequest{}, err
 	}
@@ -225,7 +237,12 @@ func (s *Store) Create(repositoryID, authorID, title, body, sourceBranch, target
 		return PullRequest{}, err
 	}
 	now := s.now().Truncate(time.Microsecond)
-	p := PullRequest{ID: id, RepositoryID: repositoryID, AuthorID: authorID, Title: title, Body: body, SourceBranch: sourceBranch, TargetBranch: targetBranch, SourceCommitID: sourceCommit, TargetCommitID: targetCommit, ProposalID: proposalID, Status: Open, CreatedAt: now, UpdatedAt: now}
+	if sourceRepositoryID != repositoryID {
+		if err := repository.ImportCommit(sourceRepository, storage.ObjectID(sourceCommit)); err != nil {
+			return PullRequest{}, fmt.Errorf("import source commit: %w", err)
+		}
+	}
+	p := PullRequest{ID: id, RepositoryID: repositoryID, SourceRepositoryID: sourceRepositoryID, AuthorID: authorID, Title: title, Body: body, SourceBranch: sourceBranch, TargetBranch: targetBranch, SourceCommitID: sourceCommit, TargetCommitID: targetCommit, ProposalID: proposalID, Status: Open, CreatedAt: now, UpdatedAt: now}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	unlock, err := s.lock()
@@ -341,7 +358,11 @@ func (s *Store) SynchronizeSourceAfter(repositoryID, id string, before func() er
 	if p.Status != Open || p.mergeIntent != nil {
 		return PullRequest{}, ErrNotReady
 	}
-	commitID, err := branchCommit(repository, p.SourceBranch)
+	sourceRepository, err := s.git.Open(p.SourceRepositoryID)
+	if err != nil {
+		return PullRequest{}, fmt.Errorf("open source Git repository: %w", err)
+	}
+	commitID, err := branchCommit(sourceRepository, p.SourceBranch)
 	if err != nil {
 		return PullRequest{}, err
 	}
@@ -352,6 +373,11 @@ func (s *Store) SynchronizeSourceAfter(repositoryID, id string, before func() er
 	}
 	if commitID == p.SourceCommitID {
 		return p, nil
+	}
+	if p.SourceRepositoryID != repositoryID {
+		if err := repository.ImportCommit(sourceRepository, storage.ObjectID(commitID)); err != nil {
+			return PullRequest{}, fmt.Errorf("import source commit: %w", err)
+		}
 	}
 	p.SourceCommitID = commitID
 	p.UpdatedAt = s.now().Truncate(time.Microsecond)
@@ -655,11 +681,6 @@ func (s *Store) SetReview(repositoryID, pullRequestID, reviewerID, decision stri
 	if !validID(reviewerID) || (decision != Approved && decision != ChangesRequested) {
 		return Review{}, ErrInvalid
 	}
-	repository, err := s.git.Open(repositoryID)
-	if err != nil {
-		return Review{}, err
-	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	unlock, err := s.lock()
@@ -674,7 +695,7 @@ func (s *Store) SetReview(repositoryID, pullRequestID, reviewerID, decision stri
 	if p.Status != Open {
 		return Review{}, ErrNotReady
 	}
-	commitID, err := branchCommit(repository, p.SourceBranch)
+	commitID, err := s.reviewSourceCommit(p)
 	if err != nil {
 		return Review{}, err
 	}
@@ -761,11 +782,7 @@ func (s *Store) ListReviews(repositoryID, pullRequestID string) ([]Review, error
 	if err != nil {
 		return nil, err
 	}
-	repository, err := s.git.Open(repositoryID)
-	if err != nil {
-		return nil, err
-	}
-	currentCommitID, err := branchCommit(repository, p.SourceBranch)
+	currentCommitID, err := s.reviewSourceCommit(p)
 	if errors.Is(err, ErrBranchNotFound) {
 		currentCommitID = ""
 		err = nil
@@ -815,7 +832,7 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 		addBlocker("pull_request_not_open", "pull request must be open")
 	}
 
-	sourceID, sourceState, err := liveBranchState(repository, p.SourceBranch, p.SourceCommitID)
+	sourceID, sourceState, err := s.liveReviewSourceState(p, repository)
 	if err != nil {
 		return MergeReadiness{}, err
 	}
@@ -1150,6 +1167,44 @@ func liveBranchState(repository *storage.Repository, branch, snapshot string) (*
 	return &current, state, nil
 }
 
+// reviewSourceCommit follows a live source branch when it exists. If an
+// independently owned source repository has been deleted, the exact adopted
+// commit remains a valid review boundary because CreateFrom imported and
+// verified its reachable objects in the target repository. Synchronization is
+// intentionally stricter and never uses this fallback.
+func (s *Store) reviewSourceCommit(p PullRequest) (string, error) {
+	source, err := s.git.Open(p.SourceRepositoryID)
+	if err == nil {
+		return branchCommit(source, p.SourceBranch)
+	}
+	if p.SourceRepositoryID == p.RepositoryID || !errors.Is(err, storage.ErrRepositoryNotFound) {
+		return "", err
+	}
+	target, targetErr := s.git.Open(p.RepositoryID)
+	if targetErr != nil {
+		return "", targetErr
+	}
+	if _, targetErr = target.ReadCommit(storage.ObjectID(p.SourceCommitID)); targetErr != nil {
+		return "", targetErr
+	}
+	return p.SourceCommitID, nil
+}
+
+func (s *Store) liveReviewSourceState(p PullRequest, target *storage.Repository) (*string, string, error) {
+	source, err := s.git.Open(p.SourceRepositoryID)
+	if err == nil {
+		return liveBranchState(source, p.SourceBranch, p.SourceCommitID)
+	}
+	if p.SourceRepositoryID == p.RepositoryID || !errors.Is(err, storage.ErrRepositoryNotFound) {
+		return nil, "", err
+	}
+	if _, err := target.ReadCommit(storage.ObjectID(p.SourceCommitID)); err != nil {
+		return nil, "", err
+	}
+	commit := p.SourceCommitID
+	return &commit, "unavailable", nil
+}
+
 func commitReachable(repository *storage.Repository, ancestor, descendant string) (bool, error) {
 	commits, err := repository.ListCommitAncestry(storage.ObjectID(descendant))
 	if err != nil {
@@ -1353,10 +1408,15 @@ func (s *Store) read(repositoryID, id string) (PullRequest, error) {
 		return PullRequest{}, fmt.Errorf("corrupt pull request %s", id)
 	}
 	p := record.PullRequest
+	// Records created before cross-repository contributions were introduced
+	// implicitly sourced their branch from the target repository.
+	if p.SourceRepositoryID == "" {
+		p.SourceRepositoryID = p.RepositoryID
+	}
 	p.mergeIntent = record.MergeIntent
 	validOutcome := (p.Status == Open && p.MergedAt == nil && p.MergedBy == nil && p.MergeCommitID == nil) || (p.Status == Merged && p.MergedAt != nil && p.MergedBy != nil && validID(*p.MergedBy) && p.MergeCommitID != nil && validCommitID(*p.MergeCommitID))
 	validIntent := p.mergeIntent == nil || (p.Status == Open && validCommitID(p.mergeIntent.CommitID) && validID(p.mergeIntent.MergerID) && !p.mergeIntent.MergedAt.IsZero())
-	if p.ID != id || !validID(p.RepositoryID) || !validID(p.AuthorID) || !validOutcome || !validIntent || !validCommitID(p.SourceCommitID) || !validCommitID(p.TargetCommitID) || p.SourceBranch == p.TargetBranch || p.SourceBranch == "" || p.TargetBranch == "" || strings.HasPrefix(p.SourceBranch, "refs/") || strings.HasPrefix(p.TargetBranch, "refs/") || p.CreatedAt.IsZero() || p.UpdatedAt.IsZero() || (p.ProposalID != nil && !validID(*p.ProposalID)) {
+	if p.ID != id || !validID(p.RepositoryID) || !validID(p.SourceRepositoryID) || !validID(p.AuthorID) || !validOutcome || !validIntent || !validCommitID(p.SourceCommitID) || !validCommitID(p.TargetCommitID) || (p.SourceRepositoryID == p.RepositoryID && p.SourceBranch == p.TargetBranch) || p.SourceBranch == "" || p.TargetBranch == "" || strings.HasPrefix(p.SourceBranch, "refs/") || strings.HasPrefix(p.TargetBranch, "refs/") || p.CreatedAt.IsZero() || p.UpdatedAt.IsZero() || (p.ProposalID != nil && !validID(*p.ProposalID)) {
 		return PullRequest{}, fmt.Errorf("corrupt pull request %s", id)
 	}
 	if _, _, err := validatePurpose(p.Title, p.Body); err != nil {

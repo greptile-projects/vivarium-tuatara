@@ -238,6 +238,47 @@ func TestSynchronizeReturnsPersistedRevisionAfterUncertainDurability(t *testing.
 	}
 }
 
+func TestDeletedForkRetainsReviewableAndMergeableSnapshot(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	target, _ := gitStore.Create(testID('c'))
+	source, _ := gitStore.Create(testID('d'))
+	baseTree, err := target.WriteObject(storage.TreeObject, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := writeCommit(t, target, baseTree, "base")
+	if err := target.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.ImportCommit(target, base); err != nil {
+		t.Fatal(err)
+	}
+	feature := writeCommitWithParents(t, source, baseTree, []storage.ObjectID{base}, "feature")
+	if err := source.CreateReference(storage.Reference{Name: "refs/heads/topic", Target: string(feature)}); err != nil {
+		t.Fatal(err)
+	}
+	store, _ := New(t.TempDir(), gitStore)
+	pull, err := store.CreateFrom(target.ID(), source.ID(), testID('a'), "Outside", "Preserved snapshot", "topic", "main", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gitStore.Delete(source.ID()); err != nil {
+		t.Fatal(err)
+	}
+	review, err := store.SetReview(target.ID(), pull.ID, testID('b'), Approved)
+	if err != nil || review.ReviewedCommitID != string(feature) {
+		t.Fatalf("SetReview = %#v, %v", review, err)
+	}
+	report, err := store.Readiness(target.ID(), pull.ID, true)
+	if err != nil || !report.CanMerge || report.Source.State != "unavailable" || report.Source.CurrentCommitID == nil || *report.Source.CurrentCommitID != string(feature) {
+		t.Fatalf("Readiness = %#v, %v", report, err)
+	}
+	merged, err := store.Merge(target.ID(), pull.ID, testID('f'))
+	if err != nil || merged.Status != Merged || merged.MergeCommitID == nil {
+		t.Fatalf("Merge = %#v, %v", merged, err)
+	}
+}
+
 func TestSynchronizeSourceAfterRejectsMergeIntentBeforeCallback(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	repository, _ := gitStore.Create(testID('6'))

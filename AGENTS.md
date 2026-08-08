@@ -74,7 +74,8 @@ whenever dependencies change or the web job fails before it starts.
   attributable comments, author edits, and participant closure controls.
   Pull request discovery at `/pulls` aggregates reviewable work across the
   authenticated actor's repository catalog and opens candidate branches
-  against distinct targets with optional proposal context. Durable detail
+  against distinct targets or owned-fork branches against their upstream,
+  with optional proposal context. Durable detail
   routes at `/pulls/{repository-id}/{pull-request-id}` expose the recorded
   branch snapshots, source-only commits, path-ordered file changes, linked
   proposal, attributable discussion, current and stale review decisions,
@@ -237,12 +238,19 @@ whenever dependencies change or the web job fails before it starts.
   Durable pull requests beneath `$PULL_REQUEST_STORAGE_ROOT` (default
   `pull-requests`) are partitioned by repository ID so damaged metadata cannot
   affect another repository's collection. They connect an existing source branch to a distinct target
-  branch. Creation snapshots both verified commit IDs, attributes the request
+  branch, or an actor-owned direct fork source branch to its readable upstream.
+  Creation records both repository identities, imports the exact fork revision
+  without publishing a target ref, snapshots both verified commit IDs, attributes the request
   to its actor, records title/body purpose and optional same-repository
   proposal linkage, and starts it with `open` status. Owners and contributors
   can create them; reads inherit repository visibility and access. Pull request
   collections use shared cursor pagination and creation uses the same uncertain-
   durability response contract as proposals.
+  Fork-source synchronization holds the catalog's cross-process lock while it
+  rechecks current target access, imports a newer revision, and publishes the
+  pull snapshot, so revocation cannot commit mid-adoption. If the source fork is deleted, synchronization stops but
+  its verified imported snapshot remains reviewable and mergeable with source
+  branch state reported as `unavailable`.
   Pull request inspection derives source-only commits and path-ordered file
   changes from the fixed target snapshot and explicitly recorded source
   revision rather than silently following live branches. Authors adopt a

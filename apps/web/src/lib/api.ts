@@ -76,6 +76,7 @@ export type ProposalComment = {
 export type PullRequest = {
   id: string;
   repository_id: string;
+  source_repository_id: string;
   author_id: string;
   title: string;
   body: string;
@@ -127,7 +128,7 @@ export type PullRequestBranchState = {
   branch: string;
   snapshot_commit_id: string;
   current_commit_id: string | null;
-  state: "current" | "advanced" | "rewritten" | "missing";
+  state: "current" | "advanced" | "rewritten" | "missing" | "unavailable";
 };
 export type MergeReadiness = {
   mergeable: boolean;

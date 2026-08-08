@@ -221,13 +221,21 @@ editing, commenting, and closure controls follow the API's participant and
 ownership rules.
 
 Pull requests connect that context to exact repository state. An owner or
-contributor opens one from an existing source branch against a different
-target branch, optionally linking a repository proposal. The durable resource
-records its author, purpose, branch names, and both commit IDs at creation, so
+contributor opens one from an existing source branch, while a fork owner can
+submit a branch from their independently owned direct fork to its readable
+upstream. The durable resource records its author, purpose, both repository
+identities, branch names, and both commit IDs at creation, so
 later branch movement does not silently change the review. After responding
 to feedback with another source-branch push, the author explicitly
 synchronizes the request to adopt that tip as its next reviewable revision;
-the target snapshot remains fixed.
+the target snapshot remains fixed. Adopted fork objects are imported without a
+target reference, letting the existing commit, file, check, review, and merge
+surfaces operate on the same exact evidence as an in-repository branch. A
+deleted fork therefore ends future synchronization but does not destroy the
+adopted review boundary, while revoked private-upstream access prevents any
+later fork commit from being adopted or imported. The catalog's cross-process
+lock spans that authorization decision, object import, and pull revision
+publication, preventing revocation from committing mid-adoption.
 
 Candidate revisions can carry their reproducible verification contract in
 `.vivarium/checks.json`. Opening a pull request or explicitly adopting a new
@@ -288,8 +296,8 @@ Immutable pull request comments retain stable author IDs; owners and
 contributors may participate, while reads continue to follow repository
 visibility.
 The web pull request workspace aggregates candidate work across the signed-in
-actor's repository catalog and opens requests from existing branch pairs with
-optional proposal context. Its directly addressable detail pages use the
+actor's repository catalog and opens requests from existing branch pairs or
+from an owned fork to its upstream, with optional proposal context. Its directly addressable detail pages use the
 visibility-aware read APIs to present purpose, immutable review and target
 revisions, source-only commits, path-ordered file changes, linked proposal
 context, and attributable discussion. Public repositories remain inspectable

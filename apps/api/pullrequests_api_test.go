@@ -269,6 +269,110 @@ func TestContributorOpensPullRequestWithExactBranchState(t *testing.T) {
 	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/pulls/"+pullRequest.ID, "", owner.Credential.Token, http.StatusInternalServerError).Body.Close()
 }
 
+func TestForkOwnerOpensAndSynchronizesUpstreamPullRequest(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	pullStore, _ := pullrequests.New(t.TempDir(), gitStore)
+	server := httptest.NewServer(newPlatformHandler(gitStore, identities, credentials, catalog, nil, pullStore, nil, nil))
+	defer server.Close()
+
+	maintainer := createTestAccount(t, server.URL, "outside-maintainer")
+	author := createTestAccount(t, server.URL, "outside-author")
+	created := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"upstream-review"}`, maintainer.Credential.Token, http.StatusCreated)
+	var upstream repositories.Repository
+	if err := json.NewDecoder(created.Body).Decode(&upstream); err != nil {
+		t.Fatal(err)
+	}
+	created.Body.Close()
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+upstream.ID, `{"visibility":"public"}`, maintainer.Credential.Token, http.StatusOK).Body.Close()
+	upstreamGit, _ := gitStore.Open(upstream.ID)
+	baseBlob, _ := upstreamGit.WriteObject(storage.BlobObject, []byte("base\n"))
+	baseTree := writeTestTree(t, upstreamGit, testTreeEntry{mode: "100644", name: "README.md", id: baseBlob})
+	base := writeTestCommit(t, upstreamGit, baseTree, nil, 1700000100, "base")
+	if err := upstreamGit.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)}); err != nil {
+		t.Fatal(err)
+	}
+
+	forked := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+upstream.ID+"/forks", `{"name":"outside-work"}`, author.Credential.Token, http.StatusCreated)
+	var fork repositories.Repository
+	if err := json.NewDecoder(forked.Body).Decode(&fork); err != nil {
+		t.Fatal(err)
+	}
+	forked.Body.Close()
+	forkGit, _ := gitStore.Open(fork.ID)
+	featureBlob, _ := forkGit.WriteObject(storage.BlobObject, []byte("outside\n"))
+	featureTree := writeTestTree(t, forkGit, testTreeEntry{mode: "100644", name: "README.md", id: baseBlob}, testTreeEntry{mode: "100644", name: "outside.txt", id: featureBlob})
+	feature := writeTestCommit(t, forkGit, featureTree, []storage.ObjectID{base}, 1700000101, "outside feature")
+	if err := forkGit.CreateReference(storage.Reference{Name: "refs/heads/contribution", Target: string(feature)}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := `{"title":"Outside contribution","body":"Review independently owned work.","source_repository_id":"` + fork.ID + `","source_branch":"contribution","target_branch":"main"}`
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+upstream.ID+"/pulls", body, author.Credential.Token, http.StatusCreated)
+	var pull pullrequests.PullRequest
+	if err := json.NewDecoder(response.Body).Decode(&pull); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if pull.RepositoryID != upstream.ID || pull.SourceRepositoryID != fork.ID || pull.SourceCommitID != string(feature) || pull.TargetCommitID != string(base) {
+		t.Fatalf("cross-repository pull = %#v", pull)
+	}
+	commits := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+upstream.ID+"/pulls/"+pull.ID+"/commits", "", maintainer.Credential.Token, http.StatusOK)
+	var commitPage struct {
+		Commits []pullrequests.Commit `json:"commits"`
+	}
+	if err := json.NewDecoder(commits.Body).Decode(&commitPage); err != nil {
+		t.Fatal(err)
+	}
+	commits.Body.Close()
+	if len(commitPage.Commits) != 1 || commitPage.Commits[0].ID != string(feature) {
+		t.Fatalf("commits = %#v", commitPage.Commits)
+	}
+	files := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+upstream.ID+"/pulls/"+pull.ID+"/files", "", maintainer.Credential.Token, http.StatusOK)
+	var filePage struct {
+		Files []pullrequests.FileChange `json:"files"`
+	}
+	if err := json.NewDecoder(files.Body).Decode(&filePage); err != nil {
+		t.Fatal(err)
+	}
+	files.Body.Close()
+	if len(filePage.Files) != 1 || filePage.Files[0].Path != "outside.txt" {
+		t.Fatalf("files = %#v", filePage.Files)
+	}
+
+	revised := writeTestCommit(t, forkGit, featureTree, []storage.ObjectID{feature}, 1700000102, "follow-up")
+	if err := forkGit.UpdateReference(storage.Reference{Name: "refs/heads/contribution", Target: string(revised)}); err != nil {
+		t.Fatal(err)
+	}
+	synchronized := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+upstream.ID+"/pulls/"+pull.ID+"/synchronize", "", author.Credential.Token, http.StatusOK)
+	if err := json.NewDecoder(synchronized.Body).Decode(&pull); err != nil {
+		t.Fatal(err)
+	}
+	synchronized.Body.Close()
+	if pull.SourceCommitID != string(revised) {
+		t.Fatalf("synchronized source = %s", pull.SourceCommitID)
+	}
+	if _, err := upstreamGit.ReadCommit(revised); err != nil {
+		t.Fatalf("adopted source was not imported: %v", err)
+	}
+
+	// A private upstream revocation takes effect before the next adoption; fork
+	// ownership alone is not authority to import more objects into the target.
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+upstream.ID+"/collaborators", `{"user_id":"`+author.User.ID+`"}`, maintainer.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+upstream.ID, `{"visibility":"private"}`, maintainer.Credential.Token, http.StatusOK).Body.Close()
+	denied := writeTestCommit(t, forkGit, featureTree, []storage.ObjectID{revised}, 1700000103, "revoked follow-up")
+	if err := forkGit.UpdateReference(storage.Reference{Name: "refs/heads/contribution", Target: string(denied)}); err != nil {
+		t.Fatal(err)
+	}
+	authenticatedRequest(t, http.MethodDelete, server.URL+"/repositories/"+upstream.ID+"/collaborators/"+author.User.ID, "", maintainer.Credential.Token, http.StatusNoContent).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+upstream.ID+"/pulls/"+pull.ID+"/synchronize", "", author.Credential.Token, http.StatusNotFound).Body.Close()
+	if _, err := upstreamGit.ReadCommit(denied); err == nil {
+		t.Fatal("revoked source commit was imported into private upstream")
+	}
+}
+
 func TestPullRequestMergeReadinessReportsRequirementsConflictsAndPermission(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	identities, _ := users.New(t.TempDir())

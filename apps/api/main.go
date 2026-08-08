@@ -403,11 +403,12 @@ type commentInput struct {
 }
 
 type pullRequestInput struct {
-	Title        *string `json:"title"`
-	Body         *string `json:"body"`
-	SourceBranch *string `json:"source_branch"`
-	TargetBranch *string `json:"target_branch"`
-	ProposalID   *string `json:"proposal_id"`
+	Title              *string `json:"title"`
+	Body               *string `json:"body"`
+	SourceRepositoryID *string `json:"source_repository_id"`
+	SourceBranch       *string `json:"source_branch"`
+	TargetBranch       *string `json:"target_branch"`
+	ProposalID         *string `json:"proposal_id"`
 }
 
 type reviewInput struct {
@@ -518,7 +519,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		writeJSON(w, 200, map[string]any{"pull_requests": page, "next_cursor": next})
 	})
 	mux.HandleFunc("POST /repositories/{id}/pulls", func(w http.ResponseWriter, r *http.Request) {
-		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)
 		if !ok {
 			return
 		}
@@ -526,6 +527,32 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		if decodeJSON(r, &input) != nil || input.Title == nil || input.Body == nil || input.SourceBranch == nil || input.TargetBranch == nil {
 			writeAPIError(w, 400, "invalid_pull_request", "title, body, source_branch, and target_branch are required")
 			return
+		}
+		target, err := repositoriesStore.GetByID(r.PathValue("id"))
+		if writeRepositoryError(w, err) {
+			return
+		}
+		sourceRepositoryID := target.ID
+		if input.SourceRepositoryID != nil {
+			sourceRepositoryID = *input.SourceRepositoryID
+		}
+		targetCollaborator, err := repositoriesStore.HasCollaborator(actor.UserID, target.ID)
+		if err != nil {
+			writeRepositoryError(w, err)
+			return
+		}
+		participant := actor.UserID == target.OwnerID || targetCollaborator
+		if sourceRepositoryID == target.ID {
+			if !participant {
+				writeAPIError(w, 404, "repository_not_found", "repository not found")
+				return
+			}
+		} else {
+			source, sourceErr := repositoriesStore.GetByID(sourceRepositoryID)
+			if sourceErr != nil || source.OwnerID != actor.UserID || source.UpstreamRepositoryID != target.ID || (target.Visibility != repositories.Public && !participant) {
+				writeAPIError(w, 404, "repository_not_found", "repository not found")
+				return
+			}
 		}
 		if input.ProposalID != nil {
 			if proposalStore == nil {
@@ -541,7 +568,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 				return
 			}
 		}
-		created, err := store.Create(r.PathValue("id"), actor.UserID, *input.Title, *input.Body, *input.SourceBranch, *input.TargetBranch, input.ProposalID)
+		created, err := store.CreateFrom(r.PathValue("id"), sourceRepositoryID, actor.UserID, *input.Title, *input.Body, *input.SourceBranch, *input.TargetBranch, input.ProposalID)
 		location := "/repositories/" + r.PathValue("id") + "/pulls/" + created.ID
 		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
 			startCheckRuns(gitStore, checkRunStore, created)
@@ -571,7 +598,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		writeJSON(w, 200, pullRequest)
 	})
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/synchronize", func(w http.ResponseWriter, r *http.Request) {
-		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)
 		if !ok {
 			return
 		}
@@ -583,7 +610,36 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 			writeAPIError(w, http.StatusNotFound, "pull_request_not_found", "pull request not found")
 			return
 		}
-		updated, err := store.SynchronizeSource(r.PathValue("id"), existing.ID)
+		target, targetErr := repositoriesStore.GetByID(existing.RepositoryID)
+		if targetErr != nil {
+			writeAPIError(w, http.StatusNotFound, "pull_request_not_found", "pull request not found")
+			return
+		}
+		targetCollaborator, collaboratorErr := repositoriesStore.HasCollaborator(actor.UserID, existing.RepositoryID)
+		if collaboratorErr != nil || (target.Visibility != repositories.Public && target.OwnerID != actor.UserID && !targetCollaborator) {
+			writeAPIError(w, http.StatusNotFound, "pull_request_not_found", "pull request not found")
+			return
+		}
+		source, sourceErr := repositoriesStore.GetByID(existing.SourceRepositoryID)
+		allowedSource := sourceErr == nil && source.OwnerID == actor.UserID
+		if sourceErr == nil && existing.SourceRepositoryID == existing.RepositoryID {
+			collaborator, collaboratorErr := repositoriesStore.HasCollaborator(actor.UserID, existing.RepositoryID)
+			allowedSource = collaboratorErr == nil && (source.OwnerID == actor.UserID || collaborator)
+		}
+		if !allowedSource {
+			writeAPIError(w, http.StatusNotFound, "pull_request_not_found", "pull request not found")
+			return
+		}
+		var updated pullrequests.PullRequest
+		err = repositoriesStore.WithContributionAuthorization(actor.UserID, existing.RepositoryID, existing.SourceRepositoryID, func() error {
+			var synchronizeErr error
+			updated, synchronizeErr = store.SynchronizeSource(r.PathValue("id"), existing.ID)
+			return synchronizeErr
+		})
+		if errors.Is(err, repositories.ErrNotFound) {
+			writeAPIError(w, http.StatusNotFound, "pull_request_not_found", "pull request not found")
+			return
+		}
 		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
 			startCheckRuns(gitStore, checkRunStore, updated)
 			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.synchronized", ActorID: actor.UserID, RepositoryID: updated.RepositoryID, ResourceType: "pull_request", ResourceID: updated.ID, ResourceTitle: updated.Title})
@@ -777,10 +833,21 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		writeJSON(w, 200, map[string]any{"files": changes})
 	})
 	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/merge-readiness", func(w http.ResponseWriter, r *http.Request) {
-		_, owner, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:read")
+		actor, authenticated, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id"))
 		if !ok {
 			return
 		}
+		if !authenticated {
+			actor, authenticated, ok = authenticateOptionalRequest(w, r, authStore, "repositories:read", false)
+			if !ok {
+				return
+			}
+		}
+		target, err := repositoriesStore.GetByID(r.PathValue("id"))
+		if writeRepositoryError(w, err) {
+			return
+		}
+		owner := authenticated && actor.UserID == target.OwnerID
 		report, err := store.Readiness(r.PathValue("id"), r.PathValue("pull_id"), owner)
 		if writePullRequestError(w, err) {
 			return

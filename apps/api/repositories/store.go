@@ -78,15 +78,63 @@ type ForkSynchronization struct {
 }
 
 type Store struct {
-	root                          string
-	git                           gitStore
-	mu                            sync.Mutex
-	now                           func() time.Time
-	remove                        func(string) error
-	rename                        func(string, string) error
-	directorySync                 func(string) error
-	afterCreateForkAuthorization  func()
-	afterSynchronizeAuthorization func()
+	root                           string
+	git                            gitStore
+	mu                             sync.Mutex
+	now                            func() time.Time
+	remove                         func(string) error
+	rename                         func(string, string) error
+	directorySync                  func(string) error
+	afterCreateForkAuthorization   func()
+	afterSynchronizeAuthorization  func()
+	afterContributionAuthorization func()
+}
+
+// WithContributionAuthorization runs fn while holding the catalog's
+// cross-process mutation lock after proving the actor may contribute from the
+// named source into the target. Collaborator revocation and visibility changes
+// therefore commit wholly before or after source-object import and pull
+// revision publication performed by fn.
+func (s *Store) WithContributionAuthorization(actorID, targetID, sourceID string, fn func() error) error {
+	if !validID(actorID) || !validID(targetID) || !validID(sourceID) || fn == nil {
+		return ErrNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	target, err := s.read(targetID)
+	if err != nil {
+		return ErrNotFound
+	}
+	if _, err := s.git.Open(targetID); err != nil {
+		return ErrNotFound
+	}
+	participant := target.OwnerID == actorID || slices.Contains(collaboratorIDs(target), actorID)
+	if target.Visibility != Public && !participant {
+		return ErrNotFound
+	}
+	source, err := s.read(sourceID)
+	if err != nil {
+		return ErrNotFound
+	}
+	if _, err := s.git.Open(sourceID); err != nil {
+		return ErrNotFound
+	}
+	if sourceID == targetID {
+		if !participant {
+			return ErrNotFound
+		}
+	} else if source.OwnerID != actorID || source.UpstreamRepositoryID != targetID {
+		return ErrNotFound
+	}
+	if s.afterContributionAuthorization != nil {
+		s.afterContributionAuthorization()
+	}
+	return fn()
 }
 
 func New(root string, git *storage.Store) (*Store, error) {

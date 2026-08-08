@@ -231,6 +231,53 @@ func TestForkCreationSerializesPrivateSourceRevocation(t *testing.T) {
 	}
 }
 
+func TestContributionAuthorizationSerializesPrivateTargetRevocation(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	metadataRoot := t.TempDir()
+	store, _ := New(metadataRoot, gitStore)
+	revoker, _ := New(metadataRoot, gitStore)
+	target, err := store.Create(testOwnerID, "contribution-target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddCollaborator(testOwnerID, target.ID, testCollaboratorID); err != nil {
+		t.Fatal(err)
+	}
+	source, err := store.CreateFork(testCollaboratorID, target.ID, "contribution-source")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	authorized, release := make(chan struct{}), make(chan struct{})
+	store.afterContributionAuthorization = func() {
+		close(authorized)
+		<-release
+	}
+	contributionDone := make(chan error, 1)
+	go func() {
+		contributionDone <- store.WithContributionAuthorization(testCollaboratorID, target.ID, source.ID, func() error { return nil })
+	}()
+	<-authorized
+	revokeDone := make(chan error, 1)
+	go func() { revokeDone <- revoker.RemoveCollaborator(testOwnerID, target.ID, testCollaboratorID) }()
+	select {
+	case err := <-revokeDone:
+		t.Fatalf("revocation completed inside authorized contribution: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	if err := <-contributionDone; err != nil {
+		t.Fatalf("authorized contribution: %v", err)
+	}
+	if err := <-revokeDone; err != nil {
+		t.Fatalf("revocation after contribution: %v", err)
+	}
+	store.afterContributionAuthorization = nil
+	if err := store.WithContributionAuthorization(testCollaboratorID, target.ID, source.ID, func() error { return nil }); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("contribution after revocation error = %v", err)
+	}
+}
+
 func TestCollaboratorRemovalReconcilesPostRenameSyncFailure(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	store, _ := New(t.TempDir(), gitStore)

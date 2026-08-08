@@ -77,6 +77,8 @@ export function PullRequestsWorkspace() {
   const [showCreate, setShowCreate] = useState(false);
   const [selectedRepository, setSelectedRepository] = useState("");
   const [branches, setBranches] = useState<Branch[]>([]);
+  const [targetBranches, setTargetBranches] = useState<Branch[]>([]);
+  const [targetRepository, setTargetRepository] = useState<Repository | null>(null);
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState(false);
@@ -104,8 +106,19 @@ export function PullRequestsWorkspace() {
       if (generation.current !== current) return;
       setRepositories(repos);
       setSelectedRepository((value) => value || repos[0]?.id || "");
+      const upstreams = await Promise.all(
+        [...new Set(repos.map((repo) => repo.upstream_repository_id).filter((id): id is string => Boolean(id)))].map(
+          (id) => api<Repository>(`/repositories/${id}`, {}, token).catch(() => null),
+        ),
+      );
+      const reviewRepositories = [
+        ...repos,
+        ...upstreams
+          .filter((repo): repo is Repository => repo !== null)
+          .filter((repo) => !repos.some((item) => item.id === repo.id)),
+      ];
       const groups = await Promise.all(
-        repos.map(async (repository) =>
+        reviewRepositories.map(async (repository) =>
           (
             await allPages<PullRequest>(
               `/repositories/${repository.id}/pulls`,
@@ -147,21 +160,27 @@ export function PullRequestsWorkspace() {
   useEffect(() => {
     if (!showCreate || !selectedRepository) return;
     let active = true;
+    const source = repositories.find((item) => item.id === selectedRepository);
+    const targetID = source?.upstream_repository_id ?? selectedRepository;
     void Promise.all([
       api<{ branches: Branch[] }>(
         `/repositories/${selectedRepository}/branches`,
         {},
         token,
       ),
+      api<Repository>(`/repositories/${targetID}`, {}, token),
+      api<{ branches: Branch[] }>(`/repositories/${targetID}/branches`, {}, token),
       allPages<Proposal>(
-        `/repositories/${selectedRepository}/proposals`,
+        `/repositories/${targetID}/proposals`,
         "proposals",
         token,
       ),
     ])
-      .then(([branchPage, proposalList]) => {
+      .then(([branchPage, targetRepo, targetBranchPage, proposalList]) => {
         if (active) {
           setBranches(branchPage.branches);
+          setTargetRepository(targetRepo);
+          setTargetBranches(targetBranchPage.branches);
           setProposals(proposalList);
         }
       })
@@ -172,7 +191,7 @@ export function PullRequestsWorkspace() {
     return () => {
       active = false;
     };
-  }, [selectedRepository, showCreate, token]);
+  }, [repositories, selectedRepository, showCreate, token]);
 
   const filtered = useMemo(() => {
     const term = query.trim().toLowerCase();
@@ -192,7 +211,8 @@ export function PullRequestsWorkspace() {
     setPending(true);
     setError("");
     const data = new FormData(event.currentTarget);
-    const repositoryID = String(data.get("repository_id"));
+    const sourceRepositoryID = String(data.get("repository_id"));
+    const repositoryID = targetRepository?.id ?? sourceRepositoryID;
     try {
       const proposalID = String(data.get("proposal_id") ?? "");
       const pull = await api<PullRequest>(
@@ -202,6 +222,7 @@ export function PullRequestsWorkspace() {
           body: JSON.stringify({
             title: data.get("title"),
             body: data.get("body"),
+            source_repository_id: sourceRepositoryID,
             source_branch: data.get("source_branch"),
             target_branch: data.get("target_branch"),
             ...(proposalID ? { proposal_id: proposalID } : {}),
@@ -274,12 +295,14 @@ export function PullRequestsWorkspace() {
           </p>
           <form onSubmit={create} className="mt-5 grid gap-4">
             <label className="text-sm font-semibold">
-              Repository
+              Source repository
               <select
                 name="repository_id"
                 value={selectedRepository}
                 onChange={(event) => {
                   setBranches([]);
+                  setTargetBranches([]);
+                  setTargetRepository(null);
                   setProposals([]);
                   setSelectedRepository(event.target.value);
                 }}
@@ -293,6 +316,11 @@ export function PullRequestsWorkspace() {
                 ))}
               </select>
             </label>
+            {targetRepository && targetRepository.id !== selectedRepository && (
+              <p className="rounded-lg bg-[var(--brand-soft)] p-3 text-sm text-[var(--brand-strong)]">
+                Contributing from your fork to <strong>{targetRepository.name}</strong>.
+              </p>
+            )}
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="text-sm font-semibold">
                 Candidate branch
@@ -310,15 +338,13 @@ export function PullRequestsWorkspace() {
               <label className="text-sm font-semibold">
                 Target branch
                 <select
+                  key={targetRepository?.id}
                   name="target_branch"
-                  defaultValue={
-                    repositories.find((repo) => repo.id === selectedRepository)
-                      ?.default_branch
-                  }
+                  defaultValue={targetRepository?.default_branch}
                   required
                   className="mt-2 min-h-11 w-full rounded-lg border border-[var(--line-strong)] bg-white px-3 font-mono font-normal"
                 >
-                  {branches.map((branch) => (
+                  {targetBranches.map((branch) => (
                     <option key={branch.name}>{branch.name}</option>
                   ))}
                 </select>
@@ -363,12 +389,12 @@ export function PullRequestsWorkspace() {
               />
             </label>
             <div>
-              <Button type="submit" disabled={pending || branches.length < 2}>
+              <Button type="submit" disabled={pending || !branches.length || !targetBranches.length}>
                 {pending ? "Opening…" : "Open pull request"}
               </Button>
-              {branches.length < 2 && (
+              {(!branches.length || !targetBranches.length) && (
                 <p className="mt-2 text-xs text-[var(--muted)]">
-                  Push a candidate branch alongside the target branch before
+                  Both the candidate and target need a published branch before
                   opening a pull request.
                 </p>
               )}
@@ -493,6 +519,7 @@ export function PullRequestDetail({
 }) {
   const { token, user, loading: authLoading } = useAuth();
   const [repository, setRepository] = useState<Repository | null>(null);
+  const [sourceRepository, setSourceRepository] = useState<Repository | null>(null);
   const [pull, setPull] = useState<PullRequest | null>(null);
   const [commits, setCommits] = useState<PullRequestCommit[]>([]);
   const [files, setFiles] = useState<FileChange[]>([]);
@@ -533,6 +560,11 @@ export function PullRequestDetail({
       setFiles(filePage.files);
       setComments(discussion);
       setReviews(reviewList);
+      setSourceRepository(
+        item.source_repository_id === repositoryID
+          ? repo
+          : await api<Repository>(`/repositories/${item.source_repository_id}`, {}, token).catch(() => null),
+      );
       const [linked, available] = await Promise.all([
         item.proposal_id
           ? api<Proposal>(
@@ -552,7 +584,7 @@ export function PullRequestDetail({
       setProposal(linked);
       setParticipant(canParticipate);
       const report =
-        canParticipate && item.status === "open"
+        item.status === "open"
           ? await api<MergeReadiness>(`${base}/merge-readiness`, {}, token)
           : null;
       if (!active()) return false;
@@ -719,8 +751,9 @@ export function PullRequestDetail({
         </div>
         <p className="mt-3 text-sm text-[var(--muted)]">
           Opened by {author ? `@${author.handle}` : "an unknown author"} on{" "}
-          {formatDate(pull.created_at)} · <code>{pull.source_branch}</code> into{" "}
-          <code>{pull.target_branch}</code>
+          {formatDate(pull.created_at)} ·{" "}
+          <code>{sourceRepository?.name ?? short(pull.source_repository_id)}:{pull.source_branch}</code>{" "}
+          into <code>{repository.name}:{pull.target_branch}</code>
         </p>
       </header>
       {notice && (
