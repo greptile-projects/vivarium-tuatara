@@ -84,6 +84,9 @@ whenever dependencies change or the web job fails before it starts.
   Fork pull authors can opt current target participants into short-lived Git
   access restricted to the issuing pull request and exact contribution branch; policy removal, closure,
   or target-access revocation invalidates that access on the next request.
+  Cross-repository pull authors can participate in attributable discussion
+  while a public upstream remains readable without receiving upstream
+  membership; review, check control, and merge authority remain target-scoped.
   Pull authors and target owners can close open requests while retaining their
   snapshots and evidence; only target owners can merge.
   Owners select required verification names per target branch from repository
@@ -290,8 +293,9 @@ whenever dependencies change or the web job fails before it starts.
   while cancellation waits for its lock, the confirmed terminal result wins
   and cancellation must not contradict its attempt or evidence.
   Immutable pull request comments are attributable by stable user ID,
-  readable under repository visibility rules, and writable by current owners
-  and contributors; comment publication uses the uncertain-durability contract.
+  readable under repository visibility rules, and writable by current owners,
+  contributors, and a cross-repository author while the upstream remains
+  public; comment publication uses the uncertain-durability contract.
   Each owner or contributor can maintain one pull request review decision;
   approvals and change requests snapshot the live source-branch commit,
   replacements retain the review ID, withdrawals remain explicit, and reads

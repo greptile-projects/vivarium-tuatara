@@ -1110,7 +1110,7 @@ func (s *Store) Merge(repositoryID, pullRequestID, mergerID string) (PullRequest
 	if p.Body != "" {
 		message += "\n" + p.Body + "\n"
 	}
-	message += fmt.Sprintf("\nPull-Request: %s\nAuthored-by: %s\nMerged-by: %s\n", p.ID, p.AuthorID, mergerID)
+	message += fmt.Sprintf("\nPull-Request: %s\nSource-Repository: %s\nSource-Branch: %s\nSource-Commit: %s\nAuthored-by: %s\nMerged-by: %s\n", p.ID, p.SourceRepositoryID, p.SourceBranch, p.SourceCommitID, p.AuthorID, mergerID)
 	if p.ProposalID != nil {
 		message += "Proposal: " + *p.ProposalID + "\n"
 	}

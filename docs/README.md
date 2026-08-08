@@ -292,16 +292,22 @@ Pull request metadata lives beneath `PULL_REQUEST_STORAGE_ROOT` (default
 and follows repository visibility and participant access.
 The API derives the source-only commit set and recursive changed-file summary
 from the fixed target snapshot and explicitly synchronized source revision.
-Immutable pull request comments retain stable author IDs; owners and
-contributors may participate, while reads continue to follow repository
-visibility.
-Fork pull requests keep two explicit authority domains. The fork owner may
+Immutable pull request comments retain stable author IDs; owners, contributors,
+and an outside author while the upstream remains public may participate, while
+reads continue to follow repository visibility.
+Fork pull requests keep two explicit authority domains. Their author can join
+the attributable discussion while the upstream remains public without gaining
+upstream repository membership; review, check control, and merge authority
+remain governed by current upstream participation. The fork owner may
 optionally allow current upstream participants to mint a short-lived Git
 credential restricted to the contribution branch; the source repository's
 other refs remain hidden, and opt-out, closure, or upstream access revocation
 takes effect on the next Git request. Authors and upstream owners can close an
 open request without deleting its durable review evidence, while only the
-upstream owner can merge into the maintained branch.
+upstream owner can merge into the maintained branch. The resulting merge
+commit records the immutable source repository, branch, and adopted commit in
+addition to pull-request, author, and merger attribution, so provenance remains
+inspectable after source deletion.
 The web pull request workspace aggregates candidate work across the signed-in
 actor's repository catalog and opens requests from existing branch pairs or
 from an owned fork to its upstream, with optional proposal context. Its directly addressable detail pages use the

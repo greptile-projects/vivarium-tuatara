@@ -881,7 +881,7 @@ export function PullRequestDetail({
                 </Card>
               );
             })}
-            {participant ? (
+            {participant || (isAuthor && pull.source_repository_id !== pull.repository_id && repository.visibility === "public") ? (
               <Card className="p-5">
                 <form onSubmit={comment}>
                   <label className="text-sm font-semibold">
@@ -908,7 +908,7 @@ export function PullRequestDetail({
             ) : (
               <Card className="p-5 text-sm text-[var(--muted)]">
                 {user ? (
-                  "Only current repository participants can join this review."
+                  "Only current repository participants and the outside contribution author can join this discussion."
                 ) : (
                   <>
                     <Link

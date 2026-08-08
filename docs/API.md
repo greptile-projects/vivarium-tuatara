@@ -343,14 +343,17 @@ trees and returns `files` in path order. Each entry has `path`, `status`
 `old_mode`, and `new_mode`. Files, symbolic links, and gitlinks are reported;
 tree container entries are omitted. A mode-only change is `modified`.
 
-Owners and contributors append immutable pull request discussion with `POST
+Owners, contributors, and the author of a cross-repository pull request into a
+currently public upstream append immutable pull request discussion with `POST
 /repositories/{id}/pulls/{pull_id}/comments` and a non-empty `body`. `GET` on
 the same collection returns attributable comments under `comments` with the
 shared cursor pagination contract. Each comment records its stable `id`,
 `pull_request_id`, `author_id`, body, and creation time. Reads inherit pull
-request visibility, while participation requires current repository access
-and `repositories:read`; making a repository public does not grant comment
-permission. Comment publication uses the shared uncertain-durability response.
+request visibility. Commenting requires `repositories:read` plus current
+repository participation, except that the outside author may continue their
+own conversation while its upstream is public. Public visibility alone does
+not grant other users comment permission. Comment publication uses the shared
+uncertain-durability response.
 
 Current repository participants record an explicit review with `POST
 /repositories/{id}/pulls/{pull_id}/reviews` and a `decision` of `approved` or
@@ -418,7 +421,8 @@ branches and reviews and advances the target only if its tip still matches the
 calculation. Success creates a two-parent merge commit, changes the request to
 `status: "merged"`, and adds `merged_at`, `merged_by`, and `merge_commit_id`.
 The commit retains the request title and body plus stable `Pull-Request`,
-optional `Proposal`, `Authored-by`, and `Merged-by` trailers. A linked open
+`Source-Repository`, `Source-Branch`, `Source-Commit`, `Authored-by`,
+`Merged-by`, and optional `Proposal` trailers. A linked open
 proposal is closed while its existing discussion remains readable. Target
 advancement uses compare-and-swap protection so a concurrent push is never
 overwritten. Merge retries are idempotent; if target publication became

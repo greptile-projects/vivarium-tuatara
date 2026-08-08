@@ -397,6 +397,97 @@ func TestForkOwnerOpensAndSynchronizesUpstreamPullRequest(t *testing.T) {
 	}
 }
 
+func TestOutsideContributionRetainsGovernanceAndProvenanceAfterForkDeletion(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	pullStore, _ := pullrequests.New(t.TempDir(), gitStore)
+	checkRunStore, _ := checkruns.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, pullStore, nil, nil, checkRunStore))
+	defer server.Close()
+
+	maintainer := createTestAccount(t, server.URL, "governance-maintainer")
+	author := createTestAccount(t, server.URL, "governance-author")
+	observer := createTestAccount(t, server.URL, "governance-observer")
+	created := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"governed-upstream"}`, maintainer.Credential.Token, http.StatusCreated)
+	var upstream repositories.Repository
+	decodeResponse(t, created, &upstream)
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+upstream.ID, `{"visibility":"public"}`, maintainer.Credential.Token, http.StatusOK).Body.Close()
+	authenticatedRequest(t, http.MethodPut, server.URL+"/repositories/"+upstream.ID+"/branches/main/required-checks", `{"checks":["outside-quality"]}`, maintainer.Credential.Token, http.StatusOK).Body.Close()
+
+	upstreamGit, _ := gitStore.Open(upstream.ID)
+	baseTree := writeTestTree(t, upstreamGit)
+	base := writeTestCommit(t, upstreamGit, baseTree, nil, 1700000200, "base")
+	if err := upstreamGit.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)}); err != nil {
+		t.Fatal(err)
+	}
+	forked := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+upstream.ID+"/forks", `{"name":"governed-work"}`, author.Credential.Token, http.StatusCreated)
+	var fork repositories.Repository
+	decodeResponse(t, forked, &fork)
+	forkGit, _ := gitStore.Open(fork.ID)
+	featureBlob, _ := forkGit.WriteObject(storage.BlobObject, []byte("outside\n"))
+	featureTree := writeTestTree(t, forkGit, testTreeEntry{mode: "100644", name: "outside.txt", id: featureBlob})
+	feature := writeTestCommit(t, forkGit, featureTree, []storage.ObjectID{base}, 1700000201, "outside feature")
+	if err := forkGit.CreateReference(storage.Reference{Name: "refs/heads/contribution", Target: string(feature)}); err != nil {
+		t.Fatal(err)
+	}
+
+	pullResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+upstream.ID+"/pulls", `{"title":"Governed outside work","body":"Keep its origin.","source_repository_id":"`+fork.ID+`","source_branch":"contribution","target_branch":"main"}`, author.Credential.Token, http.StatusCreated)
+	var pull pullrequests.PullRequest
+	decodeResponse(t, pullResponse, &pull)
+	commentsURL := server.URL + "/repositories/" + upstream.ID + "/pulls/" + pull.ID + "/comments"
+	authenticatedRequest(t, http.MethodPost, commentsURL, `{"body":"Public visibility does not make me a participant."}`, observer.Credential.Token, http.StatusNotFound).Body.Close()
+	authorComment := authenticatedRequest(t, http.MethodPost, commentsURL, `{"body":"I authored this outside revision."}`, author.Credential.Token, http.StatusCreated)
+	var comment pullrequests.Comment
+	decodeResponse(t, authorComment, &comment)
+	if comment.AuthorID != author.User.ID {
+		t.Fatalf("comment attribution = %#v", comment)
+	}
+
+	runs, err := checkRunStore.Create(upstream.ID, pull.ID, string(feature), []checkruns.Definition{{Name: "outside-quality", Image: "alpine:3.22", Command: "true"}})
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("create check run: %#v, %v", runs, err)
+	}
+	runs[0].State = "succeeded"
+	if err := checkRunStore.Update(runs[0]); err != nil {
+		t.Fatal(err)
+	}
+	authenticatedRequest(t, http.MethodDelete, server.URL+"/repositories/"+fork.ID, "", author.Credential.Token, http.StatusNoContent).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+upstream.ID+"/pulls/"+pull.ID+"/reviews", `{"decision":"approved"}`, maintainer.Credential.Token, http.StatusOK).Body.Close()
+
+	readinessResponse := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+upstream.ID+"/pulls/"+pull.ID+"/merge-readiness", "", maintainer.Credential.Token, http.StatusOK)
+	var readiness pullrequests.MergeReadiness
+	decodeResponse(t, readinessResponse, &readiness)
+	if !readiness.CanMerge || readiness.Source.State != "unavailable" || len(readiness.RequiredChecks) != 1 || readiness.RequiredChecks[0].Status != "passed" {
+		t.Fatalf("outside readiness = %#v", readiness)
+	}
+	mergedResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+upstream.ID+"/pulls/"+pull.ID+"/merge", "", maintainer.Credential.Token, http.StatusOK)
+	var merged pullrequests.PullRequest
+	decodeResponse(t, mergedResponse, &merged)
+	if merged.Status != pullrequests.Merged || merged.AuthorID != author.User.ID || merged.SourceRepositoryID != fork.ID || merged.SourceCommitID != string(feature) || merged.MergeCommitID == nil {
+		t.Fatalf("retained pull provenance = %#v", merged)
+	}
+	mergeCommit, err := upstreamGit.ReadCommit(storage.ObjectID(*merged.MergeCommitID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := string(mergeCommit.Message)
+	for _, trailer := range []string{"Source-Repository: " + fork.ID, "Source-Branch: contribution", "Source-Commit: " + string(feature), "Authored-by: " + author.User.ID, "Merged-by: " + maintainer.User.ID} {
+		if !strings.Contains(message, trailer) {
+			t.Fatalf("merge message %q missing %q", message, trailer)
+		}
+	}
+	comments := authenticatedRequest(t, http.MethodGet, commentsURL, "", maintainer.Credential.Token, http.StatusOK)
+	var discussion struct {
+		Comments []pullrequests.Comment `json:"comments"`
+	}
+	decodeResponse(t, comments, &discussion)
+	if len(discussion.Comments) != 1 || discussion.Comments[0].AuthorID != author.User.ID {
+		t.Fatalf("retained discussion = %#v", discussion.Comments)
+	}
+}
+
 func TestPullRequestMergeReadinessReportsRequirementsConflictsAndPermission(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	identities, _ := users.New(t.TempDir())
