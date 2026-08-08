@@ -243,6 +243,13 @@ exactly one session for the task, an isolated
 base revision, a launched run carrying the assignment mandate, and a one-time
 Git credential restricted to that repository and branch. A repeated start
 returns `409 task_session_exists`; an existing branch is never overwritten.
+Start holds the proposal mutation lock from exact assignment revalidation
+through branch, credential, and session publication, so revocation, task edits,
+dependency changes, and proposal closure cannot commit midway. The session and
+initial run are one atomic durable record: a definitive failure revokes the
+credential and removes the new branch without exposing a half-launched
+workspace, while a post-publication durability uncertainty returns both stable
+resources for later reconciliation.
 
 Task sessions use `/repositories/{id}/proposals/{proposal_id}/tasks/{task_id}/sessions`
 and the same detail, `events`, `runs`, run `events`, `control`, and

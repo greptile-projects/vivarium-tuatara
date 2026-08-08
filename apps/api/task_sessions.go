@@ -46,10 +46,6 @@ func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store
 		if !ok {
 			return
 		}
-		proposal, task, ok := load(w, r)
-		if !ok {
-			return
-		}
 		var input startInput
 		if decodeJSON(r, &input) != nil {
 			writeAPIError(w, 400, "invalid_task_start", "task start input is invalid")
@@ -58,17 +54,8 @@ func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store
 		if input.ExpiresIn == 0 {
 			input.ExpiresIn = 3600
 		}
-		if proposal.Status != proposals.Open || !task.Ready || task.Status != proposals.TaskTodo || task.Assignment == nil || task.Assignment.AssigneeType != "agent" || task.Assignment.ID != input.ExpectedAssignmentID || input.ExpiresIn < 300 || input.ExpiresIn > 86400 {
+		if input.ExpiresIn < 300 || input.ExpiresIn > 86400 {
 			writeAPIError(w, 409, "task_not_startable", "task must be ready, open, and carry the expected agent assignment")
-			return
-		}
-		existing, err := sessionStore.List(r.PathValue("id"), r.PathValue("task_id"))
-		if err != nil {
-			writeChangeSessionError(w, err)
-			return
-		}
-		if len(existing) != 0 {
-			writeAPIError(w, 409, "task_session_exists", "assigned task already has a change session")
 			return
 		}
 		repositoryRecord, err := catalog.GetByID(r.PathValue("id"))
@@ -81,97 +68,119 @@ func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store
 			writeAPIError(w, 500, "internal_error", "repository storage unavailable")
 			return
 		}
-		commit, err := repository.ReadCommit(storage.ObjectID(task.Assignment.Access.BaseRevision))
-		if err != nil {
-			writeAPIError(w, 409, "base_revision_unavailable", "assigned base revision is unavailable")
-			return
-		}
-		entries, err := repository.WalkTree(commit.Tree)
-		if err != nil {
-			writeAPIError(w, 500, "internal_error", "repository context is unavailable")
-			return
-		}
-		available := map[string]bool{}
-		for _, entry := range entries {
-			available[entry.Path] = true
-		}
-		if len(input.ContextPaths) == 0 {
-			root, readErr := repository.ReadTree(commit.Tree)
-			if readErr != nil {
-				writeAPIError(w, 500, "internal_error", "repository context is unavailable")
-				return
-			}
-			for _, entry := range root {
-				if len(input.ContextPaths) == 50 {
-					break
-				}
-				input.ContextPaths = append(input.ContextPaths, entry.Name)
-			}
-		}
-		seen := map[string]bool{}
-		for i, selected := range input.ContextPaths {
-			selected = strings.TrimSpace(selected)
-			if selected == "" || !available[selected] || seen[selected] || len(selected) > 1000 {
-				writeAPIError(w, 400, "invalid_task_context", "repository context paths must be unique non-empty paths")
-				return
-			}
-			seen[selected], input.ContextPaths[i] = true, selected
-		}
 		if len(input.ContextPaths) > 50 {
 			writeAPIError(w, 400, "invalid_task_context", "at most 50 repository context paths may be selected")
 			return
 		}
-		allTasks, _ := proposalStore.ListTasks(r.PathValue("id"), proposal.ID)
-		dependencies := []changesessions.TaskDependency{}
-		for _, dependencyID := range task.DependencyIDs {
-			for _, candidate := range allTasks {
-				if candidate.ID == dependencyID {
-					dependencies = append(dependencies, changesessions.TaskDependency{ID: candidate.ID, Title: candidate.Title, Outcome: candidate.Outcome, Status: candidate.Status})
+		var session changesessions.Session
+		var run changesessions.Run
+		var issued auth.IssuedCredential
+		var uncertain bool
+		responseWritten := errors.New("task start response written")
+		err = proposalStore.WithStartableAgentTask(r.PathValue("id"), r.PathValue("proposal_id"), r.PathValue("task_id"), input.ExpectedAssignmentID, func(proposal proposals.Proposal, task proposals.Task, allTasks []proposals.Task, comments []proposals.Comment) error {
+			existing, listErr := sessionStore.List(r.PathValue("id"), task.ID)
+			if listErr != nil {
+				writeChangeSessionError(w, listErr)
+				return responseWritten
+			}
+			if len(existing) != 0 {
+				writeAPIError(w, 409, "task_session_exists", "assigned task already has a change session")
+				return responseWritten
+			}
+			commit, readErr := repository.ReadCommit(storage.ObjectID(task.Assignment.Access.BaseRevision))
+			if readErr != nil {
+				writeAPIError(w, 409, "base_revision_unavailable", "assigned base revision is unavailable")
+				return responseWritten
+			}
+			entries, walkErr := repository.WalkTree(commit.Tree)
+			if walkErr != nil {
+				writeAPIError(w, 500, "internal_error", "repository context is unavailable")
+				return responseWritten
+			}
+			available := map[string]bool{}
+			for _, entry := range entries {
+				available[entry.Path] = true
+			}
+			if len(input.ContextPaths) == 0 {
+				root, rootErr := repository.ReadTree(commit.Tree)
+				if rootErr != nil {
+					writeAPIError(w, 500, "internal_error", "repository context is unavailable")
+					return responseWritten
+				}
+				for _, entry := range root {
+					if len(input.ContextPaths) == 50 {
+						break
+					}
+					input.ContextPaths = append(input.ContextPaths, entry.Name)
 				}
 			}
-		}
-		comments, _ := proposalStore.ListComments(r.PathValue("id"), proposal.ID)
-		discussion := []changesessions.TaskDiscussion{}
-		for _, commentID := range task.DiscussionCommentIDs {
-			for _, comment := range comments {
-				if comment.ID == commentID {
-					discussion = append(discussion, changesessions.TaskDiscussion{ID: comment.ID, AuthorID: comment.AuthorID, Body: comment.Body})
+			seen := map[string]bool{}
+			for i, selected := range input.ContextPaths {
+				selected = strings.TrimSpace(selected)
+				if selected == "" || !available[selected] || seen[selected] || len(selected) > 1000 {
+					writeAPIError(w, 400, "invalid_task_context", "repository context paths must be unique existing paths")
+					return responseWritten
+				}
+				seen[selected], input.ContextPaths[i] = true, selected
+			}
+			dependencies := []changesessions.TaskDependency{}
+			for _, dependencyID := range task.DependencyIDs {
+				for _, candidate := range allTasks {
+					if candidate.ID == dependencyID {
+						dependencies = append(dependencies, changesessions.TaskDependency{ID: candidate.ID, Title: candidate.Title, Outcome: candidate.Outcome, Status: candidate.Status})
+					}
 				}
 			}
-		}
-		branch := "agent/tasks/" + task.ID + "-" + task.Assignment.ID[:8]
-		refName := "refs/heads/" + branch
-		if err := repository.CreateReference(storage.Reference{Name: refName, Target: task.Assignment.Access.BaseRevision}); err != nil {
-			if errors.Is(err, storage.ErrReferenceExists) {
-				writeAPIError(w, 409, "task_branch_exists", "the isolated task branch already exists")
-				return
+			discussion := []changesessions.TaskDiscussion{}
+			for _, commentID := range task.DiscussionCommentIDs {
+				for _, comment := range comments {
+					if comment.ID == commentID {
+						discussion = append(discussion, changesessions.TaskDiscussion{ID: comment.ID, AuthorID: comment.AuthorID, Body: comment.Body})
+					}
+				}
 			}
-			writeAPIError(w, 500, "internal_error", "task branch could not be created")
+			branch := "agent/tasks/" + task.ID + "-" + task.Assignment.ID[:8]
+			refName := "refs/heads/" + branch
+			if createRefErr := repository.CreateReference(storage.Reference{Name: refName, Target: task.Assignment.Access.BaseRevision}); createRefErr != nil {
+				if errors.Is(createRefErr, storage.ErrReferenceExists) {
+					writeAPIError(w, 409, "task_branch_exists", "the isolated task branch already exists")
+					return responseWritten
+				}
+				writeAPIError(w, 500, "internal_error", "task branch could not be created")
+				return responseWritten
+			}
+			var issueErr error
+			issued, issueErr = authStore.IssueBound(actor.UserID, auth.Git, "Agent task "+task.ID, []string{"git:read", "git:write"}, time.Duration(input.ExpiresIn)*time.Second, r.PathValue("id"), refName)
+			if issueErr != nil {
+				_ = repository.DeleteReference(refName)
+				writeAPIError(w, 500, "internal_error", "agent access could not be issued")
+				return responseWritten
+			}
+			context := changesessions.TaskContext{RepositoryName: repositoryRecord.Name, ProposalTitle: proposal.Title, ProposalBody: proposal.Body, TaskTitle: task.Title, TaskOutcome: task.Outcome, Mandate: task.Assignment.Mandate, Dependencies: dependencies, Discussion: discussion}
+			var createErr error
+			session, run, createErr = sessionStore.CreateForTaskWithRun(r.PathValue("id"), proposal.ID, task.ID, actor.UserID, task.Assignment.AssigneeID, task.Assignment.Access.BaseRevision, context, input.ContextPaths, branch, issued.ID, issued.ExpiresAt)
+			if createErr != nil && !errors.Is(createErr, changesessions.ErrDurabilityUncertain) {
+				_, _ = authStore.Revoke(actor.UserID, issued.ID)
+				_ = repository.DeleteReference(refName)
+				writeChangeSessionError(w, createErr)
+				return responseWritten
+			}
+			uncertain = errors.Is(createErr, changesessions.ErrDurabilityUncertain)
+			return nil
+		})
+		if errors.Is(err, responseWritten) {
 			return
 		}
-		issued, err := authStore.IssueBound(actor.UserID, auth.Git, "Agent task "+task.ID, []string{"git:read", "git:write"}, time.Duration(input.ExpiresIn)*time.Second, r.PathValue("id"), refName)
-		if err != nil {
-			_ = repository.DeleteReference(refName)
-			writeAPIError(w, 500, "internal_error", "agent access could not be issued")
+		if errors.Is(err, proposals.ErrTaskAssignmentConflict) {
+			writeAPIError(w, 409, "task_not_startable", "task must be ready, open, and carry the expected agent assignment")
 			return
 		}
-		context := changesessions.TaskContext{RepositoryName: repositoryRecord.Name, ProposalTitle: proposal.Title, ProposalBody: proposal.Body, TaskTitle: task.Title, TaskOutcome: task.Outcome, Mandate: task.Assignment.Mandate, Dependencies: dependencies, Discussion: discussion}
-		session, createErr := sessionStore.CreateForTask(r.PathValue("id"), proposal.ID, task.ID, actor.UserID, task.Assignment.Access.BaseRevision, context)
-		if createErr != nil && !errors.Is(createErr, changesessions.ErrDurabilityUncertain) {
-			_, _ = authStore.Revoke(actor.UserID, issued.ID)
-			_ = repository.DeleteReference(refName)
-			writeChangeSessionError(w, createErr)
-			return
-		}
-		run, launchErr := sessionStore.LaunchRunForAgent(r.PathValue("id"), task.ID, session.ID, actor.UserID, task.Assignment.AssigneeID, task.Assignment.Mandate, task.Assignment.Access.BaseRevision, input.ContextPaths, branch, issued.ID, issued.ExpiresAt)
-		if launchErr != nil {
-			_, _ = authStore.Revoke(actor.UserID, issued.ID)
-			writeChangeSessionError(w, launchErr)
+		if writeProposalError(w, err) {
 			return
 		}
 		response := map[string]any{"session": session, "run": run, "credential": issued}
 		w.Header().Set("Location", r.URL.Path+"/"+session.ID)
-		if errors.Is(createErr, changesessions.ErrDurabilityUncertain) {
+		if uncertain {
 			writeUncertainMutation(w, response)
 			return
 		}

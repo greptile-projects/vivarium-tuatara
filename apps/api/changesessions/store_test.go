@@ -77,6 +77,34 @@ func TestCreateWithEvidencePersistsFailureContext(t *testing.T) {
 	}
 }
 
+func TestCreateTaskSessionAndInitialRunAreOneRecord(t *testing.T) {
+	store, _ := New(t.TempDir())
+	repositoryID := strings.Repeat("1", 32)
+	proposalID := strings.Repeat("2", 32)
+	taskID := strings.Repeat("3", 32)
+	actorID := strings.Repeat("4", 32)
+	agentID := strings.Repeat("5", 32)
+	revision := strings.Repeat("6", 40)
+	credentialID := strings.Repeat("7", 32)
+	context := TaskContext{RepositoryName: "repo", ProposalTitle: "Plan", ProposalBody: "Context", TaskTitle: "Build", TaskOutcome: "Works", Mandate: "Implement it"}
+	session, run, err := store.CreateForTaskWithRun(repositoryID, proposalID, taskID, actorID, agentID, revision, context, []string{"README.md"}, "agent/tasks/work", credentialID, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.SessionID != session.ID || run.AgentID != agentID {
+		t.Fatalf("session/run = %+v / %+v", session, run)
+	}
+	reopened, _ := New(store.root)
+	runs, err := reopened.ListRuns(repositoryID, taskID, session.ID)
+	if err != nil || len(runs) != 1 || runs[0].ID != run.ID {
+		t.Fatalf("runs = %+v, %v", runs, err)
+	}
+	events, err := reopened.ListEvents(repositoryID, taskID, session.ID)
+	if err != nil || len(events) != 2 || events[0].Kind != "session.opened" || events[1].Kind != "run.launched" {
+		t.Fatalf("events = %+v, %v", events, err)
+	}
+}
+
 func TestCreateReportsVisibleRecordWhenDirectorySyncFails(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {

@@ -89,6 +89,9 @@ whenever dependencies change or the web job fails before it starts.
   request. The launched mandate snapshots proposal, task, dependency,
   discussion, and repository context and reuses the public session timeline,
   guidance, pause/resume/cancel, control, and bounded Git credential surfaces.
+  Start holds the proposal mutation lock across exact assignment revalidation
+  and publication; its session and initial run share one atomic durable record,
+  preventing revoked launches and stranded session-only retries.
   Pull request discovery at `/pulls` aggregates reviewable work across the
   authenticated actor's repository catalog and opens candidate branches
   against distinct targets or owned-fork branches against their upstream,

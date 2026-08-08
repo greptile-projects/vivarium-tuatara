@@ -293,6 +293,59 @@ func (s *Store) CreateForTask(repositoryID, proposalID, taskID, initiatorID, sou
 	return session, nil
 }
 
+// CreateForTaskWithRun publishes the task workspace and its initial delegated
+// run in one durable record. A caller can therefore compensate a definitive
+// failure without ever leaving an unlaunchable session behind, while an
+// uncertain result still carries both stable resources for reconciliation.
+func (s *Store) CreateForTaskWithRun(repositoryID, proposalID, taskID, initiatorID, agentID, sourceCommitID string, context TaskContext, contextPaths []string, workingBranch, credentialID string, credentialExpiresAt time.Time) (Session, Run, error) {
+	if !validID(repositoryID) || !validID(proposalID) || !validID(taskID) || !validID(initiatorID) || !validID(agentID) || !validObjectID(sourceCommitID) || !validID(credentialID) || strings.TrimSpace(context.RepositoryName) == "" || strings.TrimSpace(context.ProposalTitle) == "" || strings.TrimSpace(context.TaskTitle) == "" || strings.TrimSpace(context.TaskOutcome) == "" || strings.TrimSpace(context.Mandate) == "" || workingBranch == "" || credentialExpiresAt.IsZero() {
+		return Session{}, Run{}, ErrInvalid
+	}
+	sessionID, err := newID()
+	if err != nil {
+		return Session{}, Run{}, err
+	}
+	runID, err := newID()
+	if err != nil {
+		return Session{}, Run{}, err
+	}
+	openedEventID, err := newID()
+	if err != nil {
+		return Session{}, Run{}, err
+	}
+	launchedEventID, err := newID()
+	if err != nil {
+		return Session{}, Run{}, err
+	}
+	now := s.now().Truncate(time.Microsecond)
+	context.Dependencies = append([]TaskDependency(nil), context.Dependencies...)
+	context.Discussion = append([]TaskDiscussion(nil), context.Discussion...)
+	session := Session{ID: sessionID, RepositoryID: repositoryID, ProposalID: proposalID, TaskID: taskID, InitiatorID: initiatorID, SourceCommitID: sourceCommitID, TaskContext: &context, State: Open, CreatedAt: now, UpdatedAt: now}
+	run := Run{ID: runID, SessionID: sessionID, InitiatorID: initiatorID, AgentID: agentID, Instructions: context.Mandate, SourceCommitID: sourceCommitID, ContextPaths: append([]string(nil), contextPaths...), WorkingBranch: workingBranch, CredentialID: credentialID, CredentialExpiresAt: credentialExpiresAt, State: Launched, CreatedAt: now, UpdatedAt: now}
+	rec := record{Session: session, Runs: []Run{run}, Events: []Event{
+		{ID: openedEventID, SessionID: sessionID, Kind: "session.opened", ActorID: initiatorID, RevisionID: sourceCommitID, State: Open, CreatedAt: now},
+		{ID: launchedEventID, SessionID: sessionID, Kind: "run.launched", ActorID: initiatorID, InitiatorID: initiatorID, AgentID: agentID, RevisionID: sourceCommitID, State: Launched, RunID: runID, CreatedAt: now},
+	}}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Session{}, Run{}, err
+	}
+	defer unlock()
+	if err := s.ensureDirectory(repositoryID, taskID); err != nil {
+		return Session{}, Run{}, fmt.Errorf("create change session directory: %w", err)
+	}
+	committed, err := s.write(filepath.Join(s.root, repositoryID, taskID), rec)
+	if err != nil {
+		if committed {
+			return session, run, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+		}
+		return Session{}, Run{}, err
+	}
+	return session, run, nil
+}
+
 func (s *Store) ensureDirectory(repositoryID, pullRequestID string) error {
 	repositoryDirectory := filepath.Join(s.root, repositoryID)
 	if err := mkdirAndSyncParent(repositoryDirectory, s.root); err != nil {
