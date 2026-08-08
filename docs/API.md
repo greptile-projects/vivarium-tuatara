@@ -876,6 +876,8 @@ with dropped capabilities, a read-only root, and a bounded timeout. Protected
 values exist only in the executor's mode-0600 environment file; logs are
 bounded and secret-redacted. Verification or command failures are terminal and
 do not satisfy the next environment. Queued records resume after restart;
-running records retain a bounded execution-owner lease so periodic recovery
-does not contradict a live command. Finalization compare-and-swaps that owner;
-an expired lease becomes failed with an unknown-outcome event.
+running records retain a renewable execution-owner lease so periodic recovery
+does not contradict a live command, including during slow executor cleanup.
+Finalization compare-and-swaps that owner; an expired lease becomes failed with
+an unknown-outcome event. Pre-execution policy failures terminalize the queued
+record so they cannot consume concurrency indefinitely.

@@ -21,10 +21,11 @@ import (
 // It verifies the immutable artifact immediately before invoking the isolated
 // owner-defined delivery command.
 type Executor struct {
-	store  *Store
-	builds *checkruns.Store
-	owner  string
-	now    func() time.Time
+	store             *Store
+	builds            *checkruns.Store
+	owner             string
+	now               func() time.Time
+	heartbeatInterval time.Duration
 }
 
 func NewExecutor(store *Store, builds *checkruns.Store) *Executor {
@@ -32,7 +33,7 @@ func NewExecutor(store *Store, builds *checkruns.Store) *Executor {
 	if err != nil {
 		panic("deployment executor identity unavailable")
 	}
-	return &Executor{store: store, builds: builds, owner: owner, now: time.Now}
+	return &Executor{store: store, builds: builds, owner: owner, now: time.Now, heartbeatInterval: 10 * time.Second}
 }
 
 func (e *Executor) Execute(repositoryID, id string) error {
@@ -42,7 +43,8 @@ func (e *Executor) Execute(repositoryID, id string) error {
 	}
 	environment, err := e.store.ExecutionEnvironment(repositoryID, promotion.EnvironmentID)
 	if err != nil {
-		return e.fail(promotion, "environment policy is unavailable")
+		_, rejectErr := e.store.Reject(repositoryID, promotion.ID, "environment policy is unavailable")
+		return rejectErr
 	}
 	leaseExpires := e.now().UTC().Add(time.Duration(environment.TimeoutSeconds)*time.Second + time.Minute)
 	promotion, err = e.store.Claim(repositoryID, id, e.owner, leaseExpires)
@@ -100,6 +102,9 @@ func (e *Executor) Execute(repositoryID, id string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(environment.TimeoutSeconds)*time.Second)
 	defer cancel()
+	heartbeatDone := make(chan struct{})
+	defer close(heartbeatDone)
+	go e.heartbeat(ctx, cancel, promotion, time.Duration(environment.TimeoutSeconds)*time.Second+time.Minute, heartbeatDone)
 	command := exec.CommandContext(ctx, "docker", "run", "--rm", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m", "--env-file", envName, "--mount", "type=bind,src="+artifact.Name()+",dst=/vivarium/artifact,readonly", environment.Image, "sh", "-c", environment.Command)
 	var output limitedBuffer
 	command.Stdout, command.Stderr = &output, &output
@@ -113,6 +118,24 @@ func (e *Executor) Execute(repositoryID, id string) error {
 	}
 	_, err = e.store.Complete(repositoryID, promotion.ID, e.owner, "succeeded", "Artifact SHA-256 verified; deployment command completed.\n"+log)
 	return err
+}
+
+func (e *Executor) heartbeat(ctx context.Context, cancel context.CancelFunc, promotion Promotion, leaseDuration time.Duration, done <-chan struct{}) {
+	ticker := time.NewTicker(e.heartbeatInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := e.store.Renew(promotion.RepositoryID, promotion.ID, e.owner, e.now().UTC().Add(leaseDuration)); err != nil {
+				cancel()
+				return
+			}
+		}
+	}
 }
 
 func (e *Executor) Recover() error {

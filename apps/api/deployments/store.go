@@ -307,6 +307,35 @@ func (s *Store) Claim(repo, id, owner string, leaseExpires time.Time) (Promotion
 	return s.transition(repo, id, "running", "Execution claimed for exact artifact verification.", owner, &leaseExpires)
 }
 
+// Reject terminalizes setup work that cannot be claimed, without allowing a
+// caller to overwrite running or completed execution evidence.
+func (s *Store) Reject(repo, id, message string) (Promotion, error) {
+	return s.transition(repo, id, "failed", message, "", nil)
+}
+
+// Renew extends only the current owner's live execution lease.
+func (s *Store) Renew(repo, id, owner string, leaseExpires time.Time) (Promotion, error) {
+	if !validID(owner) || !leaseExpires.After(s.now()) {
+		return Promotion{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Promotion{}, err
+	}
+	defer unlock()
+	p, err := s.getPromotion(repo, id)
+	if err != nil {
+		return p, err
+	}
+	if p.State != "running" || p.ExecutionOwner != owner {
+		return p, ErrBlocked
+	}
+	p.LeaseExpiresAt = &leaseExpires
+	return p, s.write(filepath.Join(s.root, repo, "promotions", id+".json"), p)
+}
+
 // Complete compare-and-swaps the terminal result against its execution owner.
 func (s *Store) Complete(repo, id, owner, state, message string) (Promotion, error) {
 	return s.transition(repo, id, state, message, owner, nil)
@@ -324,7 +353,7 @@ func (s *Store) transition(repo, id, state, message, owner string, lease *time.T
 	if err != nil {
 		return p, err
 	}
-	valid := p.State == "queued" && state == "running" || p.State == "running" && (state == "succeeded" || state == "failed")
+	valid := p.State == "queued" && (state == "running" || state == "failed") || p.State == "running" && (state == "succeeded" || state == "failed")
 	if !valid {
 		return p, ErrBlocked
 	}

@@ -137,8 +137,10 @@ whenever dependencies change or the web job fails before it starts.
   read-only into the owner-defined container command; decrypted values enter
   only that boundary and output is bounded and secret-redacted. Startup and a
   periodic recovery pass resume queued work; running work carries a bounded
-  execution-owner lease so live commands are preserved, while an expired lease
-  fails closed because its external outcome is unknowable.
+  renewable execution-owner lease so live commands are preserved, while an
+  expired lease fails closed because its external outcome is unknowable.
+  Pre-execution policy failures terminalize queued work without consuming
+  environment capacity indefinitely.
   Pull request discovery at `/pulls` aggregates reviewable work across the
   authenticated actor's repository catalog and opens candidate branches
   against distinct targets or owned-fork branches against their upstream,

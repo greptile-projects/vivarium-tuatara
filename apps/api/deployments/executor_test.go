@@ -1,6 +1,7 @@
 package deployments
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -130,5 +131,77 @@ func TestRecoveryPreservesLiveLeasedPromotion(t *testing.T) {
 	}
 	if _, err = store.Complete(repo, promotion.ID, owner, "succeeded", "done"); err != nil {
 		t.Fatalf("live completion = %v", err)
+	}
+}
+
+func TestHeartbeatRenewsLiveExecutionLease(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, actor := id('1'), id('2')
+	environment, err := store.PutEnvironment(Environment{RepositoryID: repo, Name: "live", Position: 1, Image: "alpine:3.22", Command: "true", TimeoutSeconds: 30, RequiredApprovals: 0, Concurrency: 1, UpdatedBy: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	promotion, err := store.CreatePromotion(Promotion{RepositoryID: repo, EnvironmentID: environment.ID, ReleaseID: id('3'), BuildID: id('4'), ArtifactID: id('5'), ArtifactSHA256: string(make([]byte, 64)), InitiatedBy: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	builds, err := checkruns.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := NewExecutor(store, builds)
+	executor.heartbeatInterval = time.Millisecond
+	initial := time.Now().Add(time.Second)
+	promotion, err = store.Claim(repo, promotion.ID, executor.owner, initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go executor.heartbeat(ctx, cancel, promotion, time.Minute, done)
+	time.Sleep(10 * time.Millisecond)
+	close(done)
+	promotion, err = store.GetPromotion(repo, promotion.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if promotion.LeaseExpiresAt == nil || !promotion.LeaseExpiresAt.After(initial) {
+		t.Fatalf("lease = %v, initial = %v", promotion.LeaseExpiresAt, initial)
+	}
+}
+
+func TestUnavailableEnvironmentRejectsQueuedPromotion(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, actor := id('6'), id('7')
+	environment, err := store.PutEnvironment(Environment{RepositoryID: repo, Name: "gone", Position: 1, Image: "alpine:3.22", Command: "true", TimeoutSeconds: 30, RequiredApprovals: 0, Concurrency: 1, UpdatedBy: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	promotion, err := store.CreatePromotion(Promotion{RepositoryID: repo, EnvironmentID: environment.ID, ReleaseID: id('8'), BuildID: id('9'), ArtifactID: id('a'), ArtifactSHA256: string(make([]byte, 64)), InitiatedBy: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(filepath.Join(store.root, repo, "environments", environment.ID+".json")); err != nil {
+		t.Fatal(err)
+	}
+	builds, err := checkruns.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = NewExecutor(store, builds).Execute(repo, promotion.ID); err != nil {
+		t.Fatal(err)
+	}
+	promotion, err = store.GetPromotion(repo, promotion.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if promotion.State != "failed" {
+		t.Fatalf("state = %q", promotion.State)
 	}
 }

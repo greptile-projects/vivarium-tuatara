@@ -695,6 +695,8 @@ provided only through a mode-0600 environment file at this execution boundary;
 retained output is bounded and credential values are redacted. A command or
 verification failure becomes durable failed evidence and cannot unlock a later
 environment. Recovery continuously resumes queued work and conservatively
-uses a persisted execution-owner lease to distinguish live commands from work
-abandoned by a prior process. Live work completes through an owner compare-and-
-swap; only an expired lease fails closed because its external result is unknown.
+uses a persisted, renewable execution-owner lease to distinguish live commands
+from work abandoned by a prior process. Live work renews through the command
+and completes through an owner compare-and-swap; only an expired lease fails
+closed because its external result is unknown. Setup failures that occur before
+claiming execution reject the queued record into a terminal failed state.
