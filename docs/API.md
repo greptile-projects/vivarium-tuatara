@@ -275,6 +275,13 @@ snapshot adds `proposal_id`, `task_id`, and `task_context`: repository and
 proposal context, the task outcome and mandate, dependency snapshots, and
 linked motivating comments. Collaborators therefore reconnect, observe,
 guide, answer, pause, resume, and cancel through the established protocol.
+The credential-bound agent completes a task run with `POST
+.../sessions/{session_id}/runs/{run_id}/completion` and the same structured
+`summary`, exact `commit_id`, `checks`, and `unresolved_concerns` body used by
+pull-scoped runs. Completion requires the exact live task-branch tip to be a
+new descendant of the frozen assignment base, derives commits and changed
+files server-side, records the attributable outcome, and terminally revokes
+the bounded credential. It does not create or update a pull request.
 Cancellation revokes the bounded credential, while durable run state also
 denies later writes if credential revocation cannot be relied upon. Publishing
 task results into review is a separate workflow; starting work does not create

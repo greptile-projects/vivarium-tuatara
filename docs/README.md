@@ -639,3 +639,10 @@ task-scoped command that creates an ordinary pull request. Pulls retain stable
 proposal, task, session, and run provenance; tasks retain each exact candidate
 attempt. Review, checks, closure, supersession, and merge stay traceable, while
 only a merge completes planned work.
+The connected orchestration journey proves the complete boundary with two
+browser identities and stock Git: discussion becomes a dependent human/agent
+plan, blocked work remains unassignable, the human contribution verifies and
+merges first, the newly ready agent receives attributable guidance and
+publishes an exact completed outcome, and its connected pull verifies and
+merges before the team closes the proposal. Durable task history and the
+session timeline retain attribution across every handoff.

@@ -94,6 +94,9 @@ whenever dependencies change or the web job fails before it starts.
   request. The launched mandate snapshots proposal, task, dependency,
   discussion, and repository context and reuses the public session timeline,
   guidance, pause/resume/cancel, control, and bounded Git credential surfaces.
+  Task-run completion validates the exact live task branch as a new descendant
+  of the frozen base, derives commits and changed files, stores structured
+  evidence, and revokes the credential without creating a pull request.
   Start holds the proposal mutation lock across exact assignment revalidation
   and publication; its session and initial run share one atomic durable record,
   preventing revoked launches and stranded session-only retries.
@@ -109,6 +112,10 @@ whenever dependencies change or the web job fails before it starts.
   publication/close/merge projection succeeds; pending links block merge and
   reconcile on pull reads. Agent publication compare-and-swaps the live task
   branch against the completed run outcome commit.
+  The connected orchestration browser journey carries a discussed two-task
+  human/agent plan through dependency-gated assignment, stock Git publication,
+  guidance, task-run completion, exact-revision checks, review, ordered merges,
+  proposal closure, and durable attribution assertions.
   Pull request discovery at `/pulls` aggregates reviewable work across the
   authenticated actor's repository catalog and opens candidate branches
   against distinct targets or owned-fork branches against their upstream,

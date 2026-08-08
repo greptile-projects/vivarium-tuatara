@@ -9,13 +9,14 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
 // registerTaskChangeSessionRoutes connects proposal planning to the existing
 // durable session protocol without manufacturing a placeholder pull request.
-func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *repositories.Store, proposalStore *proposals.Store, sessionStore *changesessions.Store, authStore *auth.Store) {
+func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, sessionStore *changesessions.Store, authStore *auth.Store) {
 	key := func(r *http.Request) (string, string, string) {
 		return r.PathValue("id"), r.PathValue("proposal_id"), r.PathValue("task_id")
 	}
@@ -341,6 +342,118 @@ func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store
 			return
 		}
 		writeJSON(w, http.StatusCreated, event)
+	})
+	type completionInput struct {
+		Summary            string                 `json:"summary"`
+		CommitID           string                 `json:"commit_id"`
+		Checks             []changesessions.Check `json:"checks"`
+		UnresolvedConcerns []string               `json:"unresolved_concerns"`
+	}
+	mux.HandleFunc("POST /repositories/{id}/proposals/{proposal_id}/tasks/{task_id}/sessions/{session_id}/runs/{run_id}/completion", func(w http.ResponseWriter, r *http.Request) {
+		credential, ok := authenticateRequest(w, r, authStore, "git:write", false)
+		if !ok || credential.RepositoryID != r.PathValue("id") {
+			return
+		}
+		var input completionInput
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_run_completion", "run completion is invalid")
+			return
+		}
+		input.Summary, input.CommitID = strings.TrimSpace(input.Summary), strings.TrimSpace(input.CommitID)
+		run, _, err := sessionStore.GetRunControl(r.PathValue("id"), r.PathValue("task_id"), r.PathValue("session_id"), r.PathValue("run_id"), credential.ID)
+		if errors.Is(err, changesessions.ErrNotFound) {
+			writeAPIError(w, 404, "agent_run_not_found", "agent run not found")
+			return
+		}
+		if writeChangeSessionError(w, err) {
+			return
+		}
+		if pullStore == nil {
+			writeAPIError(w, 500, "internal_error", "pull request storage unavailable")
+			return
+		}
+		repository, err := gitStore.Open(r.PathValue("id"))
+		if err != nil {
+			writeAPIError(w, 500, "internal_error", "repository storage unavailable")
+			return
+		}
+		var completed changesessions.Run
+		var event changesessions.Event
+		complete := func() error {
+			headHistory, historyErr := repository.ListCommitAncestry(storage.ObjectID(input.CommitID))
+			if historyErr != nil {
+				return changesessions.ErrInvalid
+			}
+			baseHistory, baseErr := repository.ListCommitAncestry(storage.ObjectID(run.SourceCommitID))
+			if baseErr != nil {
+				return baseErr
+			}
+			baseSet := map[storage.ObjectID]bool{}
+			for _, commit := range baseHistory {
+				baseSet[commit.ID] = true
+			}
+			containsBase, commits := false, []string{}
+			for _, commit := range headHistory {
+				if commit.ID == storage.ObjectID(run.SourceCommitID) {
+					containsBase = true
+				}
+				if !baseSet[commit.ID] {
+					commits = append(commits, string(commit.ID))
+				}
+			}
+			if !containsBase || len(commits) == 0 {
+				return changesessions.ErrInvalid
+			}
+			changes, changeErr := pullStore.CompareCommits(r.PathValue("id"), run.SourceCommitID, input.CommitID)
+			if changeErr != nil {
+				return changeErr
+			}
+			files := make([]changesessions.ChangedFile, len(changes))
+			for i, change := range changes {
+				files[i] = changesessions.ChangedFile{Path: change.Path, Status: change.Status}
+			}
+			completed, event, err = sessionStore.CompleteRun(r.PathValue("id"), r.PathValue("task_id"), run.SessionID, run.ID, credential.ID, input.Summary, input.CommitID, commits, files, input.Checks, input.UnresolvedConcerns)
+			return err
+		}
+		err = repository.WithReferenceTarget("refs/heads/"+run.WorkingBranch, input.CommitID, complete)
+		if completed.ID != "" {
+			if _, revokeErr := authStore.Revoke(run.InitiatorID, credential.ID); revokeErr != nil && !errors.Is(revokeErr, auth.ErrNotFound) {
+				writeAPIError(w, 500, "internal_error", "work was completed but agent access revocation must be retried")
+				return
+			}
+			if revoked, revokeErr := sessionStore.RevokeRunAccess(r.PathValue("id"), r.PathValue("task_id"), run.SessionID, run.ID); revokeErr == nil || errors.Is(revokeErr, changesessions.ErrDurabilityUncertain) {
+				completed = revoked
+			} else {
+				writeChangeSessionError(w, revokeErr)
+				return
+			}
+		}
+		if errors.Is(err, storage.ErrReferenceExists) || errors.Is(err, storage.ErrReferenceNotFound) || errors.Is(err, storage.ErrReferenceLocked) {
+			writeAPIError(w, 409, "branch_tip_changed", "completion must identify the published branch tip")
+			return
+		}
+		if errors.Is(err, changesessions.ErrRunPaused) {
+			writeAPIError(w, 409, "agent_run_paused", "resume the run before publishing completion")
+			return
+		}
+		if errors.Is(err, changesessions.ErrRunCanceled) || errors.Is(err, changesessions.ErrRunCompleted) {
+			writeAPIError(w, 409, "agent_run_terminal", "agent run is already terminal")
+			return
+		}
+		if errors.Is(err, changesessions.ErrInvalid) || errors.Is(err, storage.ErrInvalidReference) {
+			writeAPIError(w, 400, "invalid_run_completion", "completion must identify new descendant commits and valid review evidence")
+			return
+		}
+		response := map[string]any{"run": completed, "event": event}
+		if errors.Is(err, changesessions.ErrDurabilityUncertain) {
+			writeUncertainMutation(w, response)
+			return
+		}
+		if writeChangeSessionError(w, err) {
+			return
+		}
+		w.Header().Set("Location", strings.TrimSuffix(r.URL.Path, "/completion")+"#outcome")
+		writeJSON(w, http.StatusCreated, response)
 	})
 	mux.HandleFunc("GET /repositories/{id}/proposals/{proposal_id}/tasks/{task_id}/sessions/{session_id}/runs/{run_id}/control", func(w http.ResponseWriter, r *http.Request) {
 		credential, ok := authenticateRequest(w, r, authStore, "git:read", false)

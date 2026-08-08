@@ -211,7 +211,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerChangeSessionRoutes(mux, store, repositoryCatalog, pullRequestStore, changeSessionStore, authStore, activityStore, checkRunStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && proposalStore != nil && changeSessionStore != nil {
-		registerTaskChangeSessionRoutes(mux, store, repositoryCatalog, proposalStore, changeSessionStore, authStore)
+		registerTaskChangeSessionRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, changeSessionStore, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && activityStore != nil {
 		registerActivityRoutes(mux, repositoryCatalog, activityStore, authStore)

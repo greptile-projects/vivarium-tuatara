@@ -261,14 +261,20 @@ export function ProposalConversation({ repositoryID, proposalID }: { repositoryI
         api<{ tasks: ProposalTask[] }>(`/repositories/${repositoryID}/proposals/${proposalID}/tasks`, {}, token),
       ]);
       if (!active()) return;
-      setRepository(repo); setProposal(item); setComments(discussion); setTasks(plan.tasks);
+      const planTasks = (plan.tasks ?? []).map((task) => ({
+        ...task,
+        dependency_ids: task.dependency_ids ?? [],
+        discussion_comment_ids: task.discussion_comment_ids ?? [],
+        blocked_by: task.blocked_by ?? [],
+      }));
+      setRepository(repo); setProposal(item); setComments(discussion); setTasks(planTasks);
       if (token) {
         const available = await allPages<Repository>("/repositories", "repositories", token);
         if (!active()) return;
         const participates = available.some((candidate) => candidate.id === repositoryID);
         setParticipant(participates);
         if (participates) {
-          const existing = await Promise.all(plan.tasks.map(async (task) => {
+          const existing = await Promise.all(planTasks.map(async (task) => {
             if (task.assignment?.assignee_type !== "agent") return [task.id, undefined] as const;
             const sessions = await allPages<{ id: string }>(`/repositories/${repositoryID}/proposals/${proposalID}/tasks/${task.id}/sessions`, "sessions", token);
             const expectedBranch = `agent/tasks/${task.id}-${task.assignment.id.slice(0, 8)}`;
@@ -285,10 +291,10 @@ export function ProposalConversation({ repositoryID, proposalID }: { repositoryI
       } else {
         setParticipant(false);
       }
-      const histories = await Promise.all(plan.tasks.map(async (task) => [task.id, (await api<{ history: ProposalTaskChange[] }>(`/repositories/${repositoryID}/proposals/${proposalID}/tasks/${task.id}/history`, {}, token)).history] as const));
+      const histories = await Promise.all(planTasks.map(async (task) => [task.id, (await api<{ history: ProposalTaskChange[] }>(`/repositories/${repositoryID}/proposals/${proposalID}/tasks/${task.id}/history`, {}, token)).history ?? []] as const));
       if (!active()) return;
       setTaskHistory(Object.fromEntries(histories));
-      const ids = [...new Set([item.author_id, ...discussion.map((comment) => comment.author_id), ...plan.tasks.flatMap((task) => [task.created_by, task.updated_by, task.assignment?.assigned_by, task.assignment?.assignee_type === "human" ? task.assignment.assignee_id : undefined]), ...histories.flatMap(([, changes]) => changes.map((change) => change.actor_id))].filter((id): id is string => Boolean(id)))];
+      const ids = [...new Set([item.author_id, ...discussion.map((comment) => comment.author_id), ...planTasks.flatMap((task) => [task.created_by, task.updated_by, task.assignment?.assigned_by, task.assignment?.assignee_type === "human" ? task.assignment.assignee_id : undefined]), ...histories.flatMap(([, changes]) => changes.map((change) => change.actor_id))].filter((id): id is string => Boolean(id)))];
       const people = await Promise.all(ids.map((id) => api<User>(`/users/${id}`, {}, token).catch(() => null)));
       if (!active()) return;
       setAuthors(Object.fromEntries(people.filter((person): person is User => Boolean(person)).map((person) => [person.id, person])));
