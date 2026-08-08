@@ -417,7 +417,9 @@ func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *
 			switch source.Kind {
 			case "log", "health_signal", "deployment":
 				if deploymentStore != nil {
-					resource, _ = deploymentStore.GetPromotion(source.RepositoryID, source.ResourceID)
+					if promotion, getErr := deploymentStore.GetPromotion(source.RepositoryID, source.ResourceID); getErr == nil {
+						resource = boundedPromotionContext(source, promotion)
+					}
 				}
 			case "release":
 				if releaseStore != nil {
@@ -496,6 +498,48 @@ func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *
 		}
 		writeJSON(w, 201, v)
 	})
+}
+
+// boundedPromotionContext projects only the operational material named by an
+// investigation evidence grant. Signal and log selections never inherit the
+// complete promotion merely because they share its durable resource ID.
+func boundedPromotionContext(source incidents.Evidence, promotion deployments.Promotion) any {
+	base := map[string]any{"deployment_id": promotion.ID, "repository_id": promotion.RepositoryID, "environment_id": promotion.EnvironmentID}
+	withinWindow := func(at time.Time) bool {
+		return source.WindowStart != nil && source.WindowEnd != nil && !at.Before(*source.WindowStart) && !at.After(*source.WindowEnd)
+	}
+	switch source.Kind {
+	case "health_signal":
+		stage, signal, ok := strings.Cut(source.Query, "/")
+		selected := make([]deployments.SignalEvidence, 0, 1)
+		events := []deployments.Event{}
+		for _, item := range promotion.Evidence {
+			if ok && item.Stage == stage && item.Signal == signal && withinWindow(item.CreatedAt) {
+				selected = append(selected, item)
+			}
+		}
+		prefix := stage + " / " + signal + ":"
+		for _, event := range promotion.Events {
+			if strings.HasPrefix(event.Kind, "rollout.signal_") && strings.HasPrefix(event.Message, prefix) && withinWindow(event.CreatedAt) {
+				events = append(events, event)
+			}
+		}
+		base["selector"], base["evidence"], base["events"] = source.Query, selected, events
+	case "log":
+		events := []deployments.Event{}
+		query := strings.ToLower(strings.TrimSpace(source.Query))
+		for _, event := range promotion.Events {
+			haystack := strings.ToLower(event.Kind + " " + event.State + " " + event.Message)
+			if withinWindow(event.CreatedAt) && (query == "" || strings.Contains(haystack, query)) {
+				events = append(events, event)
+			}
+		}
+		base["query"], base["events"] = source.Query, events
+	case "deployment":
+		base["release_id"], base["commit_id"], base["state"], base["current_stage"] = promotion.ReleaseID, promotion.CommitID, promotion.State, promotion.CurrentStage
+		base["evidence"], base["events"] = promotion.Evidence, promotion.Events
+	}
+	return base
 }
 
 func incidentEvidenceLabel(gitStore *storage.Store, incidentStore *incidents.Store, deploymentStore *deployments.Store, releaseStore *releases.Store, pullStore *pullrequests.Store, source incidents.Evidence) (string, bool) {

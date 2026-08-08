@@ -118,6 +118,37 @@ func TestIncidentOperatingPictureFromHealthSignal(t *testing.T) {
 	}
 }
 
+func TestInvestigationPromotionContextDoesNotEscapeEvidenceSelection(t *testing.T) {
+	now := time.Now().UTC()
+	start, end := now.Add(-time.Minute), now.Add(time.Minute)
+	selected := deployments.SignalEvidence{Stage: "canary", Signal: "selected", State: "failed", Message: "SELECTED", CreatedAt: now}
+	unrelated := deployments.SignalEvidence{Stage: "canary", Signal: "unrelated", State: "failed", Message: "UNRELATED_SIGNAL", CreatedAt: now}
+	promotion := deployments.Promotion{ID: strings.Repeat("1", 32), RepositoryID: strings.Repeat("2", 32), EnvironmentID: strings.Repeat("3", 32), Evidence: []deployments.SignalEvidence{selected, unrelated}, Events: []deployments.Event{
+		{Sequence: 1, Kind: "rollout.signal_failed", Message: "canary / selected: SELECTED", CreatedAt: now},
+		{Sequence: 2, Kind: "rollout.signal_failed", Message: "canary / unrelated: UNRELATED_SIGNAL", CreatedAt: now},
+		{Sequence: 3, Kind: "promotion.approved", Message: "UNRELATED_EVENT", CreatedAt: now},
+		{Sequence: 4, Kind: "rollout.signal_failed", Message: "canary / selected: OUTSIDE_WINDOW", CreatedAt: now.Add(-time.Hour)},
+	}}
+	projection := boundedPromotionContext(incidents.Evidence{Kind: "health_signal", Query: "canary/selected", WindowStart: &start, WindowEnd: &end}, promotion)
+	encoded, err := json.Marshal(projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	if !strings.Contains(text, "SELECTED") || strings.Contains(text, "UNRELATED_SIGNAL") || strings.Contains(text, "UNRELATED_EVENT") || strings.Contains(text, "OUTSIDE_WINDOW") {
+		t.Fatalf("projection escaped selection: %s", text)
+	}
+	logProjection := boundedPromotionContext(incidents.Evidence{Kind: "log", Query: "selected", WindowStart: &start, WindowEnd: &end}, promotion)
+	encoded, err = json.Marshal(logProjection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text = string(encoded)
+	if !strings.Contains(text, "SELECTED") || strings.Contains(text, "UNRELATED_SIGNAL") || strings.Contains(text, "UNRELATED_EVENT") || strings.Contains(text, "OUTSIDE_WINDOW") {
+		t.Fatalf("log projection escaped selection: %s", text)
+	}
+}
+
 func mustJSON(t *testing.T, value any) string {
 	t.Helper()
 	data, err := json.Marshal(value)
