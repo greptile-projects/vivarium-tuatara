@@ -242,6 +242,14 @@ are previewed with repository- and future-task-branch-scoped Git access.
 Assignment IDs act as compare-and-swap versions for reassignment and revocation,
 making concurrent outcomes explicit and retaining every decision in task
 history.
+An assigned agent task can now start directly from that boundary without a
+placeholder pull request. Start atomically names an isolated task branch at the
+frozen base, opens a durable task-scoped change session, launches the mandate
+with a one-time branch-bound Git credential, and snapshots proposal, dependency,
+discussion, and repository context. Task sessions reuse the public timeline,
+control, guidance, pause, resume, cancel, and reconnection protocol used by
+pull-request sessions; publishing their candidate into review remains a later
+explicit handoff.
 
 Pull requests connect that context to exact repository state. An owner or
 contributor opens one from an existing source branch, while a fork owner can

@@ -1,4 +1,4 @@
-// Package changesessions stores durable, pull-request-scoped agent collaboration workspaces.
+// Package changesessions stores durable agent collaboration workspaces.
 package changesessions
 
 import (
@@ -44,13 +44,43 @@ var workEventKinds = map[string]bool{
 type Session struct {
 	ID             string         `json:"id"`
 	RepositoryID   string         `json:"repository_id"`
-	PullRequestID  string         `json:"pull_request_id"`
+	PullRequestID  string         `json:"pull_request_id,omitempty"`
+	ProposalID     string         `json:"proposal_id,omitempty"`
+	TaskID         string         `json:"task_id,omitempty"`
+	TaskContext    *TaskContext   `json:"task_context,omitempty"`
 	InitiatorID    string         `json:"initiator_id"`
 	SourceCommitID string         `json:"source_commit_id"`
 	CheckEvidence  *CheckEvidence `json:"check_evidence,omitempty"`
 	State          string         `json:"state"`
 	CreatedAt      time.Time      `json:"created_at"`
 	UpdatedAt      time.Time      `json:"updated_at"`
+}
+
+// TaskContext freezes the shared intent supplied to an agent before a pull
+// request exists. It deliberately contains displayable snapshots as well as
+// stable IDs so later proposal edits cannot silently rewrite a run mandate.
+type TaskContext struct {
+	RepositoryName string           `json:"repository_name"`
+	ProposalTitle  string           `json:"proposal_title"`
+	ProposalBody   string           `json:"proposal_body"`
+	TaskTitle      string           `json:"task_title"`
+	TaskOutcome    string           `json:"task_outcome"`
+	Mandate        string           `json:"mandate"`
+	Dependencies   []TaskDependency `json:"dependencies"`
+	Discussion     []TaskDiscussion `json:"discussion"`
+}
+
+type TaskDependency struct {
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Outcome string `json:"outcome"`
+	Status  string `json:"status"`
+}
+
+type TaskDiscussion struct {
+	ID       string `json:"id"`
+	AuthorID string `json:"author_id"`
+	Body     string `json:"body"`
 }
 
 // CheckEvidence is an immutable snapshot of the automated failure that led to
@@ -224,6 +254,45 @@ func (s *Store) CreateWithEvidence(repositoryID, pullRequestID, initiatorID, sou
 	return session, nil
 }
 
+// CreateForTask opens a session keyed by its task while retaining the same
+// durable timeline/run boundary used by pull-request workspaces.
+func (s *Store) CreateForTask(repositoryID, proposalID, taskID, initiatorID, sourceCommitID string, context TaskContext) (Session, error) {
+	if !validID(repositoryID) || !validID(proposalID) || !validID(taskID) || !validID(initiatorID) || !validObjectID(sourceCommitID) || strings.TrimSpace(context.RepositoryName) == "" || strings.TrimSpace(context.ProposalTitle) == "" || strings.TrimSpace(context.TaskTitle) == "" || strings.TrimSpace(context.TaskOutcome) == "" || strings.TrimSpace(context.Mandate) == "" {
+		return Session{}, ErrInvalid
+	}
+	sessionID, err := newID()
+	if err != nil {
+		return Session{}, err
+	}
+	eventID, err := newID()
+	if err != nil {
+		return Session{}, err
+	}
+	now := s.now().Truncate(time.Microsecond)
+	context.Dependencies = append([]TaskDependency(nil), context.Dependencies...)
+	context.Discussion = append([]TaskDiscussion(nil), context.Discussion...)
+	session := Session{ID: sessionID, RepositoryID: repositoryID, ProposalID: proposalID, TaskID: taskID, InitiatorID: initiatorID, SourceCommitID: sourceCommitID, TaskContext: &context, State: Open, CreatedAt: now, UpdatedAt: now}
+	rec := record{Session: session, Events: []Event{{ID: eventID, SessionID: sessionID, Kind: "session.opened", ActorID: initiatorID, RevisionID: sourceCommitID, State: Open, CreatedAt: now}}}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Session{}, err
+	}
+	defer unlock()
+	if err := s.ensureDirectory(repositoryID, taskID); err != nil {
+		return Session{}, fmt.Errorf("create change session directory: %w", err)
+	}
+	committed, err := s.write(filepath.Join(s.root, repositoryID, taskID), rec)
+	if err != nil {
+		if committed {
+			return session, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+		}
+		return Session{}, err
+	}
+	return session, nil
+}
+
 func (s *Store) ensureDirectory(repositoryID, pullRequestID string) error {
 	repositoryDirectory := filepath.Join(s.root, repositoryID)
 	if err := mkdirAndSyncParent(repositoryDirectory, s.root); err != nil {
@@ -309,7 +378,17 @@ func (s *Store) ListEvents(repositoryID, pullRequestID, sessionID string) ([]Eve
 }
 
 func (s *Store) LaunchRun(repositoryID, pullRequestID, sessionID, initiatorID, instructions, sourceCommitID string, contextPaths []string, workingBranch, credentialID string, credentialExpiresAt time.Time) (Run, error) {
-	if !validID(initiatorID) || !validObjectID(sourceCommitID) || !validID(credentialID) || instructions == "" || workingBranch == "" || credentialExpiresAt.IsZero() {
+	agentID, err := newID()
+	if err != nil {
+		return Run{}, err
+	}
+	return s.LaunchRunForAgent(repositoryID, pullRequestID, sessionID, initiatorID, agentID, instructions, sourceCommitID, contextPaths, workingBranch, credentialID, credentialExpiresAt)
+}
+
+// LaunchRunForAgent preserves a generated planning identity across assignment
+// and execution. Pull-request runs continue to use LaunchRun's fresh identity.
+func (s *Store) LaunchRunForAgent(repositoryID, pullRequestID, sessionID, initiatorID, agentID, instructions, sourceCommitID string, contextPaths []string, workingBranch, credentialID string, credentialExpiresAt time.Time) (Run, error) {
+	if !validID(initiatorID) || !validID(agentID) || !validObjectID(sourceCommitID) || !validID(credentialID) || instructions == "" || workingBranch == "" || credentialExpiresAt.IsZero() {
 		return Run{}, ErrInvalid
 	}
 	runID, err := newID()
@@ -317,10 +396,6 @@ func (s *Store) LaunchRun(repositoryID, pullRequestID, sessionID, initiatorID, i
 		return Run{}, err
 	}
 	eventID, err := newID()
-	if err != nil {
-		return Run{}, err
-	}
-	agentID, err := newID()
 	if err != nil {
 		return Run{}, err
 	}
@@ -693,8 +768,14 @@ func (s *Store) read(repositoryID, pullRequestID, sessionID string) (record, err
 		return record{}, fmt.Errorf("read change session: %w", err)
 	}
 	var rec record
-	if json.Unmarshal(data, &rec) != nil || rec.Session.ID != sessionID || rec.Session.RepositoryID != repositoryID || rec.Session.PullRequestID != pullRequestID || !validID(rec.Session.InitiatorID) || !validObjectID(rec.Session.SourceCommitID) || rec.Session.State != Open || len(rec.Events) == 0 {
+	if json.Unmarshal(data, &rec) != nil || rec.Session.ID != sessionID || rec.Session.RepositoryID != repositoryID || !validID(rec.Session.InitiatorID) || !validObjectID(rec.Session.SourceCommitID) || rec.Session.State != Open || len(rec.Events) == 0 {
 		return record{}, errors.New("invalid durable change session record")
+	}
+	if rec.Session.PullRequestID != pullRequestID && rec.Session.TaskID != pullRequestID {
+		return record{}, errors.New("invalid durable change session scope")
+	}
+	if rec.Session.TaskID != "" && (!validID(rec.Session.ProposalID) || rec.Session.TaskContext == nil || strings.TrimSpace(rec.Session.TaskContext.Mandate) == "") {
+		return record{}, errors.New("invalid durable task session context")
 	}
 	if evidence := rec.Session.CheckEvidence; evidence != nil {
 		if !validID(evidence.RunID) || evidence.Definition.Name == "" || evidence.Definition.Command == "" {

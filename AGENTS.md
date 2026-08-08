@@ -84,6 +84,11 @@ whenever dependencies change or the web job fails before it starts.
   agent credentials to the repository and task branch. Human assignment holds
   the catalog mutation lock across participant revalidation and proposal write,
   excluding collaborator removal; closed proposals reject revocation.
+  Starting an agent assignment creates one task-scoped change session and an
+  isolated `agent/tasks/*` branch at its frozen base without creating a pull
+  request. The launched mandate snapshots proposal, task, dependency,
+  discussion, and repository context and reuses the public session timeline,
+  guidance, pause/resume/cancel, control, and bounded Git credential surfaces.
   Pull request discovery at `/pulls` aggregates reviewable work across the
   authenticated actor's repository catalog and opens candidate branches
   against distinct targets or owned-fork branches against their upstream,
