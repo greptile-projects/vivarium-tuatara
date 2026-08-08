@@ -63,6 +63,21 @@ func (e *Executor) Execute(repositoryID, id string) error {
 	if _, err = artifact.Seek(0, io.SeekStart); err != nil {
 		return e.fail(promotion, "immutable artifact cannot be prepared")
 	}
+	mount, err := os.CreateTemp("", "vivarium-deployment-artifact-*")
+	if err != nil {
+		return e.fail(promotion, "immutable artifact cannot be prepared")
+	}
+	mountName := mount.Name()
+	defer os.Remove(mountName)
+	if _, err = io.Copy(mount, artifact); err == nil {
+		err = mount.Chmod(0444)
+	}
+	if closeErr := mount.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return e.fail(promotion, "immutable artifact cannot be prepared")
+	}
 	envFile, err := os.CreateTemp("", "vivarium-deployment-env-*")
 	if err != nil {
 		return e.fail(promotion, "protected environment could not be prepared")
@@ -106,7 +121,7 @@ func (e *Executor) Execute(repositoryID, id string) error {
 	defer close(heartbeatDone)
 	go e.heartbeat(executionContext, cancel, promotion, time.Duration(environment.TimeoutSeconds)*time.Second+time.Minute, heartbeatDone)
 	commandContext, commandCancel := context.WithTimeout(executionContext, time.Duration(environment.TimeoutSeconds)*time.Second)
-	command := exec.CommandContext(commandContext, "docker", "run", "--rm", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m", "--env-file", envName, "--mount", "type=bind,src="+artifact.Name()+",dst=/vivarium/artifact,readonly", environment.Image, "sh", "-c", environment.Command)
+	command := exec.CommandContext(commandContext, "docker", "run", "--rm", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m", "--env-file", envName, "--mount", "type=bind,src="+mountName+",dst=/vivarium/artifact,readonly", environment.Image, "sh", "-c", environment.Command)
 	var output limitedBuffer
 	command.Stdout, command.Stderr = &output, &output
 	err = command.Run()
@@ -128,7 +143,7 @@ func (e *Executor) Execute(repositoryID, id string) error {
 			}
 			var signalOutput limitedBuffer
 			signalContext, signalCancel := context.WithTimeout(executionContext, time.Duration(environment.TimeoutSeconds)*time.Second)
-			signalCommand := exec.CommandContext(signalContext, "docker", "run", "--rm", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m", "--env-file", envName, "--mount", "type=bind,src="+artifact.Name()+",dst=/vivarium/artifact,readonly", environment.Image, "sh", "-c", signal.Command)
+			signalCommand := exec.CommandContext(signalContext, "docker", "run", "--rm", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m", "--env-file", envName, "--mount", "type=bind,src="+mountName+",dst=/vivarium/artifact,readonly", environment.Image, "sh", "-c", signal.Command)
 			signalCommand.Stdout, signalCommand.Stderr = &signalOutput, &signalOutput
 			runErr := signalCommand.Run()
 			signalCancel()

@@ -719,6 +719,16 @@ inside their cross-process locks. Concurrent requests for the same deployment
 therefore converge on the one deterministic source branch, pull request, and
 evidence-pinned session instead of splitting diagnosis across workspaces.
 
+The connected browser regression carries the earlier human/agent proposal plan
+across this complete delivery boundary. It freezes a known-good baseline, builds
+and promotes exact artifacts with independent approval, releases both merged
+contributions, retains a failed production health signal, restores the earlier
+artifact through the same governance, delegates an evidence-pinned repair, and
+requires fresh checks, review, merge, build, and approval before the corrected
+release succeeds. The executor keeps durable artifact files private: after
+SHA-256 verification it creates a short-lived read-only mount copy for the
+deployment and health containers, then removes that copy after execution.
+
 Each environment also defines an executor image, command, and timeout. The
 worker reopens the immutable build artifact, recomputes and matches its SHA-256,
 then mounts it read-only at `$VIVARIUM_ARTIFACT` in a capability-free,
