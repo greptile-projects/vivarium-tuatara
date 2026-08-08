@@ -1166,6 +1166,20 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 		}
 		return pull, true
 	}
+	workingRepository := func(pull pullrequests.PullRequest) string {
+		return pull.SourceRepositoryID
+	}
+	validateRunCredential := func(w http.ResponseWriter, credential auth.Credential, pull pullrequests.PullRequest) bool {
+		if credential.RepositoryID != workingRepository(pull) {
+			writeAPIError(w, 404, "agent_run_not_found", "agent run not found")
+			return false
+		}
+		if pull.SourceRepositoryID != pull.RepositoryID && !activeMaintainerCredential(pullRequestStore, repositoriesStore, pull.SourceRepositoryID+".git", credential) {
+			writeAPIError(w, 401, "invalid_credential", "credential is not active")
+			return false
+		}
+		return true
+	}
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/sessions", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
 		if !ok {
@@ -1319,10 +1333,6 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 		if !ok {
 			return
 		}
-		if credential.RepositoryID != r.PathValue("id") {
-			writeAPIError(w, 404, "agent_run_not_found", "agent run not found")
-			return
-		}
 		var input completionInput
 		if decodeJSON(r, &input) != nil {
 			writeAPIError(w, 400, "invalid_run_completion", "run completion is invalid")
@@ -1341,6 +1351,9 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 		if !ok {
 			return
 		}
+		if !validateRunCredential(w, credential, pull) {
+			return
+		}
 		if pull.Status != pullrequests.Open {
 			writeAPIError(w, 409, "pull_request_closed", "completed work requires an open pull request")
 			return
@@ -1349,7 +1362,7 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 			writeAPIError(w, 409, "run_revision_conflict", "pull request has advanced beyond this run")
 			return
 		}
-		repository, openErr := gitStore.Open(r.PathValue("id"))
+		repository, openErr := gitStore.Open(workingRepository(pull))
 		if openErr != nil {
 			writeAPIError(w, 500, "internal_error", "repository storage unavailable")
 			return
@@ -1383,7 +1396,7 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 			if !containsBase || len(commits) == 0 {
 				return changesessions.ErrInvalid
 			}
-			changes, changeErr := pullRequestStore.CompareCommits(r.PathValue("id"), run.SourceCommitID, input.CommitID)
+			changes, changeErr := pullRequestStore.CompareCommits(workingRepository(pull), run.SourceCommitID, input.CommitID)
 			if changeErr != nil {
 				return changeErr
 			}
@@ -1468,8 +1481,8 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 		if !ok {
 			return
 		}
-		if credential.RepositoryID != r.PathValue("id") {
-			writeAPIError(w, 404, "agent_run_not_found", "agent run not found")
+		pull, ok := loadPull(w, r)
+		if !ok || !validateRunCredential(w, credential, pull) {
 			return
 		}
 		var input workEventInput
@@ -1487,7 +1500,7 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 		var repository *storage.Repository
 		if input.Kind == "branch.updated" {
 			var openErr error
-			repository, openErr = gitStore.Open(r.PathValue("id"))
+			repository, openErr = gitStore.Open(workingRepository(pull))
 			if openErr != nil {
 				writeAPIError(w, 500, "internal_error", "repository storage unavailable")
 				return
@@ -1548,8 +1561,8 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 		if !ok {
 			return
 		}
-		if credential.RepositoryID != r.PathValue("id") {
-			writeAPIError(w, 404, "agent_run_not_found", "agent run not found")
+		pull, ok := loadPull(w, r)
+		if !ok || !validateRunCredential(w, credential, pull) {
 			return
 		}
 		run, interventions, err := store.GetRunControl(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("session_id"), r.PathValue("run_id"), credential.ID)
@@ -1571,8 +1584,8 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 		if !ok {
 			return
 		}
-		if credential.RepositoryID != r.PathValue("id") {
-			writeAPIError(w, 404, "agent_run_not_found", "agent run not found")
+		pull, ok := loadPull(w, r)
+		if !ok || !validateRunCredential(w, credential, pull) {
 			return
 		}
 		if _, _, err := store.GetRunControl(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("session_id"), r.PathValue("run_id"), credential.ID); writeChangeSessionError(w, err) {
@@ -1627,6 +1640,10 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 			writeAPIError(w, 409, "pull_request_closed", "agent runs require an open pull request")
 			return
 		}
+		if pull.SourceRepositoryID != pull.RepositoryID && !pull.MaintainerEditsAllowed {
+			writeAPIError(w, 409, "maintainer_edits_not_allowed", "the contribution owner has not allowed participant edits")
+			return
+		}
 		session, err := store.Get(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("session_id"))
 		if writeChangeSessionError(w, err) {
 			return
@@ -1645,7 +1662,7 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 			writeAPIError(w, 400, "invalid_agent_run", "instructions, revision, context, branch, or lifetime is invalid")
 			return
 		}
-		repo, openErr := gitStore.Open(r.PathValue("id"))
+		repo, openErr := gitStore.Open(workingRepository(pull))
 		if openErr != nil {
 			writeAPIError(w, 500, "internal_error", "repository storage unavailable")
 			return
@@ -1674,7 +1691,13 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 			seen[clean] = true
 			input.ContextPaths[i] = clean
 		}
-		issued, issueErr := authStore.IssueBound(actor.UserID, auth.Git, "Agent run in session "+session.ID, []string{"git:read", "git:write"}, time.Duration(input.ExpiresIn)*time.Second, r.PathValue("id"), "refs/heads/"+input.WorkingBranch)
+		var issued auth.IssuedCredential
+		var issueErr error
+		if pull.SourceRepositoryID != pull.RepositoryID {
+			issued, issueErr = authStore.IssuePullRequestBound(actor.UserID, "Agent run in session "+session.ID, []string{"git:read", "git:write"}, time.Duration(input.ExpiresIn)*time.Second, workingRepository(pull), "refs/heads/"+input.WorkingBranch, pull.ID)
+		} else {
+			issued, issueErr = authStore.IssueBound(actor.UserID, auth.Git, "Agent run in session "+session.ID, []string{"git:read", "git:write"}, time.Duration(input.ExpiresIn)*time.Second, workingRepository(pull), "refs/heads/"+input.WorkingBranch)
+		}
 		if issueErr != nil {
 			writeAPIError(w, 500, "internal_error", "agent access could not be issued")
 			return

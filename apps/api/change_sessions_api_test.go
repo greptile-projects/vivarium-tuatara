@@ -341,3 +341,90 @@ func TestCollaboratorOpensAndReconnectsToChangeSession(t *testing.T) {
 	retryCanceled.Body.Close()
 	authenticatedRequest(t, http.MethodGet, reconnectBase, "", outsider.Credential.Token, http.StatusNotFound).Body.Close()
 }
+
+func TestParticipantDelegatesForkContributionWithoutUpstreamWriteAccess(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	pulls, _ := pullrequests.New(t.TempDir(), gitStore)
+	changeSessions, _ := changesessions.New(t.TempDir())
+	checkStore, _ := checkruns.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, pulls, nil, changeSessions, checkStore))
+	defer server.Close()
+
+	maintainer := createTestAccount(t, server.URL, "fork-session-maintainer")
+	author := createTestAccount(t, server.URL, "fork-session-author")
+	created := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"agent-upstream"}`, maintainer.Credential.Token, http.StatusCreated)
+	var upstream repositories.Repository
+	decodeResponse(t, created, &upstream)
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+upstream.ID, `{"visibility":"public"}`, maintainer.Credential.Token, http.StatusOK).Body.Close()
+	upstreamGit, _ := gitStore.Open(upstream.ID)
+	baseBlob, _ := upstreamGit.WriteObject(storage.BlobObject, []byte("base\n"))
+	baseTree := writeTestTree(t, upstreamGit, testTreeEntry{mode: "100644", name: "README.md", id: baseBlob})
+	base := writeTestCommit(t, upstreamGit, baseTree, nil, 1700000200, "base")
+	if err := upstreamGit.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)}); err != nil {
+		t.Fatal(err)
+	}
+
+	forked := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+upstream.ID+"/forks", `{"name":"agent-fork"}`, author.Credential.Token, http.StatusCreated)
+	var fork repositories.Repository
+	decodeResponse(t, forked, &fork)
+	forkGit, _ := gitStore.Open(fork.ID)
+	feature := writeTestCommit(t, forkGit, baseTree, []storage.ObjectID{base}, 1700000201, "contribution")
+	if err := forkGit.CreateReference(storage.Reference{Name: "refs/heads/contribution", Target: string(feature)}); err != nil {
+		t.Fatal(err)
+	}
+	pullResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+upstream.ID+"/pulls", `{"title":"Agent-assisted fork","body":"Improve outside work safely.","source_repository_id":"`+fork.ID+`","source_branch":"contribution","target_branch":"main"}`, author.Credential.Token, http.StatusCreated)
+	var pull pullrequests.PullRequest
+	decodeResponse(t, pullResponse, &pull)
+	baseURL := server.URL + "/repositories/" + upstream.ID + "/pulls/" + pull.ID
+	sessionResponse := authenticatedRequest(t, http.MethodPost, baseURL+"/sessions", "", maintainer.Credential.Token, http.StatusCreated)
+	var session changesessions.Session
+	decodeResponse(t, sessionResponse, &session)
+	runBody := `{"instructions":"Improve the contribution.","source_commit_id":"` + pull.SourceCommitID + `","context_paths":["README.md"],"working_branch":"contribution"}`
+	authenticatedRequest(t, http.MethodPost, baseURL+"/sessions/"+session.ID+"/runs", runBody, maintainer.Credential.Token, http.StatusConflict).Body.Close()
+	authenticatedRequest(t, http.MethodPatch, baseURL, `{"maintainer_edits_allowed":true}`, author.Credential.Token, http.StatusOK).Body.Close()
+	runResponse := authenticatedRequest(t, http.MethodPost, baseURL+"/sessions/"+session.ID+"/runs", runBody, maintainer.Credential.Token, http.StatusCreated)
+	var launched struct {
+		Run        changesessions.Run    `json:"run"`
+		Credential auth.IssuedCredential `json:"credential"`
+	}
+	decodeResponse(t, runResponse, &launched)
+	if launched.Credential.RepositoryID != fork.ID || launched.Credential.PullRequestID != pull.ID || launched.Credential.GitWriteBranch != "refs/heads/contribution" {
+		t.Fatalf("fork agent credential = %+v", launched.Credential)
+	}
+	assertGitDiscoveryStatus(t, server.URL+fork.GitRemote+"/info/refs?service=git-receive-pack", launched.Credential.Token, http.StatusOK)
+	assertGitDiscoveryStatus(t, server.URL+upstream.GitRemote+"/info/refs?service=git-receive-pack", launched.Credential.Token, http.StatusNotFound)
+	authenticatedRequest(t, http.MethodPost, baseURL+"/reviews", `{"decision":"approved"}`, maintainer.Credential.Token, http.StatusOK).Body.Close()
+
+	updatedBlob, _ := forkGit.WriteObject(storage.BlobObject, []byte("agent improved\n"))
+	updatedTree := writeTestTree(t, forkGit, testTreeEntry{mode: "100644", name: "README.md", id: updatedBlob})
+	updated := writeTestCommit(t, forkGit, updatedTree, []storage.ObjectID{feature}, 1700000202, "agent improvement")
+	if err := forkGit.UpdateReference(storage.Reference{Name: "refs/heads/contribution", Target: string(updated)}); err != nil {
+		t.Fatal(err)
+	}
+	completion := authenticatedRequest(t, http.MethodPost, baseURL+"/sessions/"+session.ID+"/runs/"+launched.Run.ID+"/completion", `{"summary":"Improved the outside contribution.","commit_id":"`+string(updated)+`","checks":[],"unresolved_concerns":[]}`, launched.Credential.Token, http.StatusCreated)
+	var published struct {
+		PullRequest pullrequests.PullRequest `json:"pull_request"`
+	}
+	decodeResponse(t, completion, &published)
+	if published.PullRequest.SourceCommitID != string(updated) {
+		t.Fatalf("published revision = %s, want %s", published.PullRequest.SourceCommitID, updated)
+	}
+	if _, err := upstreamGit.ReadObject(updated); err != nil {
+		t.Fatalf("published fork revision was not imported for review: %v", err)
+	}
+	reviewResponse := authenticatedRequest(t, http.MethodGet, baseURL+"/reviews", "", maintainer.Credential.Token, http.StatusOK)
+	var reviewPage struct {
+		Reviews []pullrequests.Review `json:"reviews"`
+	}
+	decodeResponse(t, reviewResponse, &reviewPage)
+	if len(reviewPage.Reviews) != 1 || !reviewPage.Reviews[0].Stale {
+		t.Fatalf("fork reviews after agent publication = %+v", reviewPage.Reviews)
+	}
+	main, _ := upstreamGit.ReadReference("refs/heads/main")
+	if main.Target != string(base) {
+		t.Fatalf("agent changed upstream main to %s", main.Target)
+	}
+}
