@@ -816,8 +816,9 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 				return
 			}
 			found := false
+			expectedBranch := "agent/tasks/" + task.ID + "-" + task.Assignment.ID[:8]
 			for _, run := range runs {
-				if run.ID == input.RunID && run.State == changesessions.Completed && run.Outcome != nil && run.WorkingBranch == input.SourceBranch {
+				if run.ID == input.RunID && run.State == changesessions.Completed && run.Outcome != nil && run.WorkingBranch == input.SourceBranch && run.WorkingBranch == expectedBranch {
 					found = true
 					commits = append(commits, run.Outcome.Commits...)
 					expectedSourceCommit = run.Outcome.CommitID
@@ -2424,6 +2425,8 @@ func registerProposalRoutes(mux *http.ServeMux, gitStore *storage.Store, reposit
 		before, _ := store.ListTasks(r.PathValue("id"), r.PathValue("proposal_id"))
 		task, err := store.UpdateTask(r.PathValue("id"), r.PathValue("proposal_id"), r.PathValue("task_id"), actor.UserID, proposals.TaskPatch{Title: input.Title, Outcome: input.Outcome, Status: input.Status, Position: input.Position, DependencyIDs: input.DependencyIDs, DiscussionCommentIDs: input.DiscussionCommentIDs})
 		if errors.Is(err, proposals.ErrDurabilityUncertain) {
+			after, _ := store.ListTasks(r.PathValue("id"), r.PathValue("proposal_id"))
+			recordTaskTransitions(activityStore, repositoriesStore, actor.UserID, r.PathValue("id"), r.PathValue("proposal_id"), before, after)
 			writeUncertainMutation(w, task)
 			return
 		}
@@ -2556,6 +2559,8 @@ func registerProposalRoutes(mux *http.ServeMux, gitStore *storage.Store, reposit
 			return
 		}
 		if errors.Is(err, proposals.ErrDurabilityUncertain) {
+			after, _ := store.ListTasks(r.PathValue("id"), r.PathValue("proposal_id"))
+			recordTaskTransitions(activityStore, repositoriesStore, actor.UserID, r.PathValue("id"), r.PathValue("proposal_id"), before, after)
 			writeUncertainMutation(w, task)
 			return
 		}

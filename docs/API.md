@@ -252,12 +252,14 @@ An agent assignment can start before a pull request exists with `POST
 .../tasks/{task_id}/sessions`. The body supplies the current
 `expected_assignment_id`, optional `context_paths`, and an optional
 `expires_in` from five minutes to 24 hours. The proposal and task must remain
-open and ready, the context must be current, and the assignment must still target an agent. Success creates
-exactly one session for the task, an isolated
+open and ready, the context must be current, and the assignment must still
+target an agent. Success creates exactly one session for the current assignment,
+while sessions from earlier rebased assignments remain inspectable, plus an isolated
 `refs/heads/agent/tasks/<task-id>-<assignment-prefix>` branch at the frozen
 base revision, a launched run carrying the assignment mandate, and a one-time
-Git credential restricted to that repository and branch. A repeated start
-returns `409 task_session_exists`; an existing branch is never overwritten.
+Git credential restricted to that repository and branch. A repeated start for
+the same assignment returns `409 task_session_exists`; an existing branch is
+never overwritten.
 Start holds the proposal mutation lock from exact assignment revalidation
 through branch, credential, and session publication, so revocation, task edits,
 dependency changes, and proposal closure cannot commit midway. The session and

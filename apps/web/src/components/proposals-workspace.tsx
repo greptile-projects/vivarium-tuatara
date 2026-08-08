@@ -269,10 +269,15 @@ export function ProposalConversation({ repositoryID, proposalID }: { repositoryI
         setParticipant(participates);
         if (participates) {
           const existing = await Promise.all(plan.tasks.map(async (task) => {
-            const session = (await api<{ sessions: { id: string }[] }>(`/repositories/${repositoryID}/proposals/${proposalID}/tasks/${task.id}/sessions?limit=1`, {}, token)).sessions[0];
-            if (!session) return [task.id, undefined] as const;
-            const runs = (await api<{ runs: { id: string; working_branch: string; state: string }[] }>(`/repositories/${repositoryID}/proposals/${proposalID}/tasks/${task.id}/sessions/${session.id}/runs`, {}, token)).runs;
-            return [task.id, { session, run: runs.find((run) => run.state === "completed") ?? runs[0] }] as const;
+            if (task.assignment?.assignee_type !== "agent") return [task.id, undefined] as const;
+            const sessions = await allPages<{ id: string }>(`/repositories/${repositoryID}/proposals/${proposalID}/tasks/${task.id}/sessions`, "sessions", token);
+            const expectedBranch = `agent/tasks/${task.id}-${task.assignment.id.slice(0, 8)}`;
+            for (const session of sessions.toReversed()) {
+              const runs = (await api<{ runs: { id: string; working_branch: string; state: string }[] }>(`/repositories/${repositoryID}/proposals/${proposalID}/tasks/${task.id}/sessions/${session.id}/runs`, {}, token)).runs;
+              const matching = runs.filter((run) => run.working_branch === expectedBranch);
+              if (matching.length > 0) return [task.id, { session, run: matching.find((run) => run.state === "completed") ?? matching[0] }] as const;
+            }
+            return [task.id, undefined] as const;
           }));
           if (!active()) return;
           setStarted(Object.fromEntries(existing.filter((entry): entry is readonly [string, { session: { id: string }; run: { id: string; working_branch: string; state: string } }] => Boolean(entry[1]?.run))));

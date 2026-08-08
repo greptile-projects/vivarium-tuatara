@@ -192,6 +192,15 @@ func TestPlanRevisionObsoletesWorkAndRebaseCreatesFreshBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	unchangedTitle, unchangedOutcome := first.Title, first.Outcome
+	unchangedDependencies, unchangedDiscussion := cloneStrings(first.DependencyIDs), cloneStrings(first.DiscussionCommentIDs)
+	unchanged, err := store.UpdateTask(repositoryID, proposal.ID, first.ID, commenterID, TaskPatch{Title: &unchangedTitle, Outcome: &unchangedOutcome, DependencyIDs: &unchangedDependencies, DiscussionCommentIDs: &unchangedDiscussion})
+	if err != nil || unchanged.ContextRevision != 1 || unchanged.ContextState != "current" {
+		t.Fatalf("unchanged full edit = %#v, %v", unchanged, err)
+	}
+	if err := store.WithStartableAgentTask(repositoryID, proposal.ID, first.ID, assigned.Assignment.ID, func(Proposal, Task, []Task, []Comment) error { return nil }); err != nil {
+		t.Fatalf("unchanged edit blocked start = %v", err)
+	}
 	revisedOutcome := "Revised outcome"
 	revised, err := store.UpdateTask(repositoryID, proposal.ID, first.ID, commenterID, TaskPatch{Outcome: &revisedOutcome})
 	if err != nil || revised.ContextRevision != 2 || revised.ContextState != "changed" {
@@ -238,10 +247,39 @@ func TestPlanRevisionObsoletesWorkAndRebaseCreatesFreshBoundary(t *testing.T) {
 		t.Fatalf("replacement start = %v", err)
 	}
 	history, _ := store.ListTaskChanges(repositoryID, proposal.ID, first.ID)
-	if history[4].Action != "contribution_published" || history[len(history)-1].Task.ContextState != "obsolete" {
+	foundPublished := false
+	for _, change := range history {
+		foundPublished = foundPublished || change.Action == "contribution_published"
+	}
+	if !foundPublished || history[len(history)-1].Task.ContextState != "obsolete" {
 		t.Fatalf("history = %#v", history)
 	}
 	_ = second
+}
+
+func TestRebaseObsoleteReviewRestoresReplacementPublication(t *testing.T) {
+	store, _ := New(t.TempDir())
+	proposal, _ := store.Create(repositoryID, authorID, "Plan", "")
+	task, _ := store.CreateTask(repositoryID, proposal.ID, authorID, "Build", "First result", nil, nil)
+	assigned, _ := store.AssignTask(repositoryID, proposal.ID, task.ID, authorID, TaskAssignmentInput{AssigneeType: "human", AssigneeID: commenterID, Mandate: "Build", RepositoryID: repositoryID, BaseRevision: strings.Repeat("a", 40)})
+	first := TaskContribution{PullRequestID: authorID, SourceCommitID: strings.Repeat("b", 40), CommitIDs: []string{strings.Repeat("b", 40)}, Status: "review"}
+	if _, err := store.LinkTaskContribution(repositoryID, proposal.ID, task.ID, commenterID, first); err != nil {
+		t.Fatal(err)
+	}
+	outcome := "Replacement result"
+	obsolete, err := store.UpdateTask(repositoryID, proposal.ID, task.ID, authorID, TaskPatch{Outcome: &outcome})
+	if err != nil || obsolete.Status != TaskInProgress || obsolete.ContextState != "obsolete" {
+		t.Fatalf("obsolete review = %#v, %v", obsolete, err)
+	}
+	rebased, err := store.RebaseTaskAssignment(repositoryID, proposal.ID, task.ID, authorID, TaskRebaseInput{BaseRevision: strings.Repeat("c", 40), ExpectedAssignmentID: assigned.Assignment.ID})
+	if err != nil || rebased.Status != TaskTodo || rebased.Assignment.ContextRevision != rebased.ContextRevision {
+		t.Fatalf("rebased = %#v, %v", rebased, err)
+	}
+	replacement := TaskContribution{PullRequestID: commenterID, SourceCommitID: strings.Repeat("d", 40), CommitIDs: []string{strings.Repeat("d", 40)}, Status: "review"}
+	linked, err := store.LinkTaskContribution(repositoryID, proposal.ID, task.ID, commenterID, replacement)
+	if err != nil || linked.Contribution.PullRequestID != commenterID || linked.Contributions[0].Status != "superseded" {
+		t.Fatalf("replacement = %#v, %v", linked, err)
+	}
 }
 
 func TestClosedProposalRejectsAssignmentRevocation(t *testing.T) {

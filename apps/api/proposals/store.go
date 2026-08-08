@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -553,7 +554,7 @@ func (s *Store) UpdateTask(repositoryID, proposalID, taskID, actorID string, pat
 		return Task{}, ErrNotFound
 	}
 	task := r.Tasks[index]
-	definitionChanged := patch.Title != nil || patch.Outcome != nil || patch.DependencyIDs != nil || patch.DiscussionCommentIDs != nil
+	original := task
 	if patch.Title != nil {
 		task.Title, _, err = validateTaskContent(*patch.Title, task.Outcome)
 	}
@@ -578,6 +579,7 @@ func (s *Store) UpdateTask(repositoryID, proposalID, taskID, actorID string, pat
 	if err := validateTaskLinks(r, task.ID, task.DependencyIDs, task.DiscussionCommentIDs); err != nil {
 		return Task{}, err
 	}
+	definitionChanged := task.Title != original.Title || task.Outcome != original.Outcome || !slices.Equal(task.DependencyIDs, original.DependencyIDs) || !slices.Equal(task.DiscussionCommentIDs, original.DiscussionCommentIDs)
 	if definitionChanged {
 		task.ContextRevision = effectiveContextRevision(task.ContextRevision) + 1
 	}
@@ -776,6 +778,9 @@ func (s *Store) RebaseTaskAssignment(repositoryID, proposalID, taskID, actorID s
 		assignment.Access.BaseRevision = strings.ToLower(input.BaseRevision)
 		assignment.ContextRevision = effectiveContextRevision(task.ContextRevision)
 		task.Assignment, task.UpdatedBy, task.UpdatedAt = &assignment, actorID, now
+		if task.Status == TaskInProgress && task.Contribution != nil && effectiveContextRevision(task.Contribution.ContextRevision) != effectiveContextRevision(task.ContextRevision) {
+			task.Status = TaskTodo
+		}
 		r.Tasks[i] = task
 		deriveTasks(r.Tasks)
 		task = r.Tasks[i]

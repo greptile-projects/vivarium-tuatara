@@ -60,14 +60,16 @@ type Session struct {
 // request exists. It deliberately contains displayable snapshots as well as
 // stable IDs so later proposal edits cannot silently rewrite a run mandate.
 type TaskContext struct {
-	RepositoryName string           `json:"repository_name"`
-	ProposalTitle  string           `json:"proposal_title"`
-	ProposalBody   string           `json:"proposal_body"`
-	TaskTitle      string           `json:"task_title"`
-	TaskOutcome    string           `json:"task_outcome"`
-	Mandate        string           `json:"mandate"`
-	Dependencies   []TaskDependency `json:"dependencies"`
-	Discussion     []TaskDiscussion `json:"discussion"`
+	AssignmentID    string           `json:"assignment_id,omitempty"`
+	ContextRevision int              `json:"context_revision,omitempty"`
+	RepositoryName  string           `json:"repository_name"`
+	ProposalTitle   string           `json:"proposal_title"`
+	ProposalBody    string           `json:"proposal_body"`
+	TaskTitle       string           `json:"task_title"`
+	TaskOutcome     string           `json:"task_outcome"`
+	Mandate         string           `json:"mandate"`
+	Dependencies    []TaskDependency `json:"dependencies"`
+	Discussion      []TaskDiscussion `json:"discussion"`
 }
 
 type TaskDependency struct {

@@ -89,7 +89,7 @@ whenever dependencies change or the web job fails before it starts.
   agent credentials to the repository and task branch. Human assignment holds
   the catalog mutation lock across participant revalidation and proposal write,
   excluding collaborator removal; closed proposals reject revocation.
-  Starting an agent assignment creates one task-scoped change session and an
+  Starting an agent assignment creates one assignment-scoped change session and an
   isolated `agent/tasks/*` branch at its frozen base without creating a pull
   request. The launched mandate snapshots proposal, task, dependency,
   discussion, and repository context and reuses the public session timeline,
@@ -97,6 +97,9 @@ whenever dependencies change or the web job fails before it starts.
   Start holds the proposal mutation lock across exact assignment revalidation
   and publication; its session and initial run share one atomic durable record,
   preventing revoked launches and stranded session-only retries.
+  Rebasing preserves earlier task sessions as evidence while allowing the new
+  assignment ID to start one fresh session; only runs from that assignment's
+  branch can publish its replacement contribution.
   Assigned task work publishes as an ordinary pull request with stable
   proposal, task, optional session/run, exact commit, and check provenance in
   both directions. Publication means review, not completion: replacement
