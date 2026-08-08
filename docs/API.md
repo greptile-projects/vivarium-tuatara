@@ -303,7 +303,7 @@ For an independently owned source, only the pull author/source owner can
 `PATCH /repositories/{id}/pulls/{pull_id}` with
 `maintainer_edits_allowed`. When enabled, a current target owner or contributor
 can `POST .../maintainer-credential` to receive a one-hour Git credential bound
-to the source repository and exact contribution branch. Git advertisement and
+to the issuing pull request, source repository, and exact contribution branch. Git advertisement and
 push are restricted to that branch. Disabling the policy, closing the request,
 deleting the branch or source repository, or revoking target participation
 invalidates the grant on the next request; it never creates repository-wide

@@ -278,7 +278,7 @@ func activeMaintainerCredential(pulls *pullrequests.Store, catalog *repositories
 	if !ok || pulls == nil || catalog == nil {
 		return false
 	}
-	return pulls.AllowsMaintainerEdit(repositoryID, credential.GitWriteBranch, credential.UserID, func(targetID, userID string) bool {
+	return pulls.AllowsMaintainerEdit(repositoryID, credential.GitWriteBranch, credential.PullRequestID, credential.UserID, func(targetID, userID string) bool {
 		target, err := catalog.GetByID(targetID)
 		if err != nil {
 			return false
@@ -699,7 +699,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 			writeAPIError(w, 409, "source_repository_unavailable", "the contribution repository is unavailable")
 			return
 		}
-		issued, err := authStore.IssueBound(actor.UserID, auth.Git, "Pull request participant edit", []string{"git:read", "git:write"}, time.Hour, source.ID, "refs/heads/"+pull.SourceBranch)
+		issued, err := authStore.IssuePullRequestBound(actor.UserID, "Pull request participant edit", []string{"git:read", "git:write"}, time.Hour, source.ID, "refs/heads/"+pull.SourceBranch, pull.ID)
 		if err != nil {
 			writeAPIError(w, 500, "internal_error", "branch credential could not be issued")
 			return
@@ -2674,7 +2674,7 @@ func authorizeGitRepository(w http.ResponseWriter, r *http.Request, authStore *a
 		return auth.Credential{}, false, false
 	}
 	if !owner && !collaborator {
-		if actor.GitWriteBranch != "" && pulls != nil && pulls.AllowsMaintainerEdit(id, actor.GitWriteBranch, actor.UserID, func(targetID, userID string) bool {
+		if actor.GitWriteBranch != "" && actor.PullRequestID != "" && pulls != nil && pulls.AllowsMaintainerEdit(id, actor.GitWriteBranch, actor.PullRequestID, actor.UserID, func(targetID, userID string) bool {
 			target, targetErr := catalog.GetByID(targetID)
 			if targetErr != nil {
 				return false

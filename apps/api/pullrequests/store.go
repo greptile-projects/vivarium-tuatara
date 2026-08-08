@@ -491,7 +491,10 @@ func (s *Store) List(repositoryID string) ([]PullRequest, error) {
 // AllowsMaintainerEdit validates a branch-scoped cross-repository grant. The
 // callback deliberately rechecks current target participation on every Git
 // request, so revocation closes access without changing source ownership.
-func (s *Store) AllowsMaintainerEdit(sourceRepositoryID, branch, actorID string, participant func(string, string) bool) bool {
+func (s *Store) AllowsMaintainerEdit(sourceRepositoryID, branch, pullRequestID, actorID string, participant func(string, string) bool) bool {
+	if !validID(pullRequestID) {
+		return false
+	}
 	source, err := s.git.Open(sourceRepositoryID)
 	if err != nil {
 		return false
@@ -516,7 +519,7 @@ func (s *Store) AllowsMaintainerEdit(sourceRepositoryID, branch, actorID string,
 			continue
 		}
 		for _, p := range pulls {
-			if p.Status == Open && p.MaintainerEditsAllowed && p.SourceRepositoryID == sourceRepositoryID && "refs/heads/"+p.SourceBranch == branch && participant(p.RepositoryID, actorID) {
+			if p.ID == pullRequestID && p.Status == Open && p.MaintainerEditsAllowed && p.SourceRepositoryID == sourceRepositoryID && "refs/heads/"+p.SourceBranch == branch && participant(p.RepositoryID, actorID) {
 				return true
 			}
 		}

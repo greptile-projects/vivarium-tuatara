@@ -38,6 +38,7 @@ export type Credential = {
   revoked_at?: string;
   repository_id?: string;
   git_write_branch?: string;
+  pull_request_id?: string;
   token?: string;
 };
 export type Branch = { name: string; commit_id: string };

@@ -82,7 +82,7 @@ whenever dependencies change or the web job fails before it starts.
   source synchronization for authors, server-derived merge blockers, and
   owner-only merge controls. Completed requests retain their merge attribution.
   Fork pull authors can opt current target participants into short-lived Git
-  access restricted to the exact contribution branch; policy removal, closure,
+  access restricted to the issuing pull request and exact contribution branch; policy removal, closure,
   or target-access revocation invalidates that access on the next request.
   Pull authors and target owners can close open requests while retaining their
   snapshots and evidence; only target owners can merge.

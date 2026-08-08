@@ -327,7 +327,14 @@ func TestForkOwnerOpensAndSynchronizesUpstreamPullRequest(t *testing.T) {
 	credentialResponse := authenticatedRequest(t, http.MethodPost, credentialURL, "", maintainer.Credential.Token, http.StatusCreated)
 	var branchCredential auth.IssuedCredential
 	decodeResponse(t, credentialResponse, &branchCredential)
+	if branchCredential.PullRequestID != pull.ID {
+		t.Fatalf("credential pull binding = %q, want %q", branchCredential.PullRequestID, pull.ID)
+	}
 	assertGitDiscoveryStatus(t, server.URL+fork.GitRemote+"/info/refs?service=git-receive-pack", branchCredential.Token, http.StatusOK)
+	secondResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+upstream.ID+"/pulls", body, author.Credential.Token, http.StatusCreated)
+	var secondPull pullrequests.PullRequest
+	decodeResponse(t, secondResponse, &secondPull)
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+upstream.ID+"/pulls/"+secondPull.ID, `{"maintainer_edits_allowed":true}`, author.Credential.Token, http.StatusOK).Body.Close()
 	authenticatedRequest(t, http.MethodPatch, policyURL, `{"maintainer_edits_allowed":false}`, author.Credential.Token, http.StatusOK).Body.Close()
 	assertGitDiscoveryStatus(t, server.URL+fork.GitRemote+"/info/refs?service=git-receive-pack", branchCredential.Token, http.StatusNotFound)
 	commits := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+upstream.ID+"/pulls/"+pull.ID+"/commits", "", maintainer.Credential.Token, http.StatusOK)
