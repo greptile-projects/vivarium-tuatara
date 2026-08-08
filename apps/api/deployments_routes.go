@@ -3,15 +3,18 @@ package main
 import (
 	"errors"
 	"net/http"
+	"os/exec"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
-func registerDeploymentRoutes(mux *http.ServeMux, repositories *repositories.Store, releases *releases.Store, builds *checkruns.Store, store *deployments.Store, credentials *auth.Store) {
+func registerDeploymentRoutes(mux *http.ServeMux, gitStore *storage.Store, repositories *repositories.Store, releases *releases.Store, builds *checkruns.Store, store *deployments.Store, credentials *auth.Store, activityStore *activities.Store) {
 	executor := deployments.NewExecutor(store, builds)
 	read := func(w http.ResponseWriter, r *http.Request) bool {
 		_, _, ok := authorizeRepositoryRead(w, r, repositories, credentials, r.PathValue("id"))
@@ -115,7 +118,22 @@ func registerDeploymentRoutes(mux *http.ServeMux, repositories *repositories.Sto
 			writeAPIError(w, 422, "invalid_artifact", "artifact does not belong to the selected build")
 			return
 		}
-		value, err := store.CreatePromotion(deployments.Promotion{RepositoryID: r.PathValue("id"), EnvironmentID: input.EnvironmentID, ReleaseID: input.ReleaseID, BuildID: input.BuildID, ArtifactID: input.ArtifactID, ArtifactSHA256: artifact.SHA256, InitiatedBy: actor.UserID})
+		repository, openErr := gitStore.Open(r.PathValue("id"))
+		if openErr != nil {
+			writeAPIError(w, 422, "rollout_definition_unavailable", "release repository is unavailable")
+			return
+		}
+		body, definitionErr := exec.Command("git", "--git-dir="+repository.Path(), "show", candidate.CommitID+":"+deployments.ConfigPath).Output()
+		if definitionErr != nil {
+			writeAPIError(w, 422, "rollout_definition_missing", "the release commit must contain .vivarium/deployment.json")
+			return
+		}
+		rollout, definitionErr := deployments.ParseRolloutDefinition(body)
+		if definitionErr != nil {
+			writeAPIError(w, 422, "invalid_rollout_definition", "deployment rollout definition is invalid")
+			return
+		}
+		value, err := store.CreatePromotion(deployments.Promotion{RepositoryID: r.PathValue("id"), EnvironmentID: input.EnvironmentID, ReleaseID: input.ReleaseID, BuildID: input.BuildID, ArtifactID: input.ArtifactID, ArtifactSHA256: artifact.SHA256, CommitID: candidate.CommitID, Rollout: rollout, InitiatedBy: actor.UserID})
 		if errors.Is(err, deployments.ErrBlocked) {
 			writeAPIError(w, 409, "promotion_blocked", "the environment is busy or the exact artifact has not passed the preceding environment")
 			return
@@ -147,5 +165,36 @@ func registerDeploymentRoutes(mux *http.ServeMux, repositories *repositories.Sto
 		if value.State == "queued" {
 			go executor.Execute(value.RepositoryID, value.ID)
 		}
+	})
+	mux.HandleFunc("POST /repositories/{id}/deployments/{deployment_id}/controls", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositories, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var input struct {
+			Action        string `json:"action"`
+			ExpectedState string `json:"expected_state"`
+			Reason        string `json:"reason"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		value, err := store.Control(r.PathValue("id"), r.PathValue("deployment_id"), actor.UserID, input.Action, input.ExpectedState, input.Reason)
+		if errors.Is(err, deployments.ErrBlocked) {
+			writeAPIError(w, 409, "deployment_control_blocked", "deployment state changed or the requested control is unavailable")
+			return
+		}
+		if errors.Is(err, deployments.ErrNotFound) {
+			writeAPIError(w, 404, "deployment_not_found", "deployment not found")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 422, "invalid_deployment_control", "control action or reason is invalid")
+			return
+		}
+		target := value.InitiatedBy
+		recordActivity(activityStore, repositories, activities.Event{Kind: "deployment." + input.Action, ActorID: actor.UserID, RepositoryID: value.RepositoryID, ResourceType: "deployment", ResourceID: value.ID, ResourceTitle: "Deployment to environment " + value.EnvironmentID, TargetUserID: &target})
+		writeJSON(w, 200, value)
 	})
 }

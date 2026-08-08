@@ -116,7 +116,11 @@ export type Deployment = {
   build_id: string;
   artifact_id: string;
   artifact_sha256: string;
-  state: "pending_approval" | "queued" | "running" | "succeeded" | "failed";
+  commit_id: string;
+  state: "pending_approval" | "queued" | "running" | "paused" | "canceled" | "succeeded" | "failed";
+  rollout: { version: number; stages: { name: string; observation_seconds: number; signals: { name: string; command: string }[] }[] };
+  current_stage: number;
+  evidence: { stage: string; signal: string; state: "passed" | "failed"; message?: string; created_at: string }[];
   initiated_by: string;
   approvals: { actor_id: string; created_at: string }[];
   events: {
@@ -514,11 +518,15 @@ export type ActivityEvent = {
     | "review.withdrawn"
     | "mention.created"
     | "access.granted"
-    | "access.revoked";
+    | "access.revoked"
+    | "deployment.pause"
+    | "deployment.resume"
+    | "deployment.cancel"
+    | "deployment.mark_unsuccessful";
   actor_id: string;
   repository_id: string;
   repository_name: string;
-  resource_type: "proposal" | "pull_request" | "repository";
+  resource_type: "proposal" | "pull_request" | "repository" | "deployment";
   resource_id: string;
   resource_title: string;
   target_user_id: string | null;

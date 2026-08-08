@@ -116,8 +116,65 @@ func (e *Executor) Execute(repositoryID, id string) error {
 	if err != nil {
 		return e.fail(promotion, "deployment command failed\n"+log)
 	}
+	for stageIndex, stage := range promotion.Rollout.Stages {
+		if err := e.waitAvailable(ctx, promotion, time.Duration(stage.ObservationSeconds)*time.Second); err != nil {
+			return err
+		}
+		for _, signal := range stage.Signals {
+			if err := e.waitAvailable(ctx, promotion, 0); err != nil {
+				return err
+			}
+			var signalOutput limitedBuffer
+			signalCommand := exec.CommandContext(ctx, "docker", "run", "--rm", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m", "--env-file", envName, "--mount", "type=bind,src="+artifact.Name()+",dst=/vivarium/artifact,readonly", environment.Image, "sh", "-c", signal.Command)
+			signalCommand.Stdout, signalCommand.Stderr = &signalOutput, &signalOutput
+			runErr := signalCommand.Run()
+			message := redact(signalOutput.String(), environment.Credentials)
+			state := "passed"
+			if runErr != nil {
+				state = "failed"
+				if message == "" {
+					message = runErr.Error()
+				}
+			}
+			latest, recordErr := e.store.RecordStage(repositoryID, promotion.ID, e.owner, stageIndex, SignalEvidence{Stage: stage.Name, Signal: signal.Name, State: state, Message: message})
+			if recordErr != nil {
+				return recordErr
+			}
+			promotion = latest
+			if runErr != nil {
+				return e.fail(promotion, "health signal failed: "+stage.Name+" / "+signal.Name)
+			}
+		}
+	}
 	_, err = e.store.Complete(repositoryID, promotion.ID, e.owner, "succeeded", "Artifact SHA-256 verified; deployment command completed.\n"+log)
 	return err
+}
+
+func (e *Executor) waitAvailable(ctx context.Context, promotion Promotion, observe time.Duration) error {
+	deadline := e.now().Add(observe)
+	for {
+		current, err := e.store.GetPromotion(promotion.RepositoryID, promotion.ID)
+		if err != nil {
+			return err
+		}
+		switch current.State {
+		case "canceled", "failed":
+			return ErrBlocked
+		case "paused":
+			deadline = deadline.Add(250 * time.Millisecond)
+		case "running":
+			if !e.now().Before(deadline) {
+				return nil
+			}
+		default:
+			return ErrBlocked
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
 }
 
 func (e *Executor) heartbeat(ctx context.Context, cancel context.CancelFunc, promotion Promotion, leaseDuration time.Duration, done <-chan struct{}) {
@@ -130,6 +187,11 @@ func (e *Executor) heartbeat(ctx context.Context, cancel context.CancelFunc, pro
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			current, getErr := e.store.GetPromotion(promotion.RepositoryID, promotion.ID)
+			if getErr != nil || current.State == "canceled" || current.State == "failed" {
+				cancel()
+				return
+			}
 			if _, err := e.store.Renew(promotion.RepositoryID, promotion.ID, e.owner, e.now().UTC().Add(leaseDuration)); err != nil {
 				cancel()
 				return

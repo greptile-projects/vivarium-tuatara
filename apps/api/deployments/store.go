@@ -2,6 +2,7 @@
 package deployments
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -16,6 +17,18 @@ import (
 	"syscall"
 	"time"
 )
+
+const ConfigPath = ".vivarium/deployment.json"
+
+func ParseRolloutDefinition(body []byte) (RolloutDefinition, error) {
+	var value RolloutDefinition
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&value) != nil || !validRollout(value) {
+		return value, ErrInvalid
+	}
+	return value, nil
+}
 
 var (
 	ErrNotFound = errors.New("deployment resource not found")
@@ -42,6 +55,29 @@ type Environment struct {
 	Credentials       map[string]string `json:"-"`
 }
 
+// RolloutDefinition is frozen from .vivarium/deployment.json at the release
+// commit. It therefore remains reviewable even when the repository advances.
+type RolloutDefinition struct {
+	Version int            `json:"version"`
+	Stages  []RolloutStage `json:"stages"`
+}
+type RolloutStage struct {
+	Name               string         `json:"name"`
+	ObservationSeconds int            `json:"observation_seconds"`
+	Signals            []HealthSignal `json:"signals"`
+}
+type HealthSignal struct {
+	Name    string `json:"name"`
+	Command string `json:"command"`
+}
+type SignalEvidence struct {
+	Stage     string    `json:"stage"`
+	Signal    string    `json:"signal"`
+	State     string    `json:"state"`
+	Message   string    `json:"message,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type Approval struct {
 	ActorID   string    `json:"actor_id"`
 	CreatedAt time.Time `json:"created_at"`
@@ -55,22 +91,26 @@ type Event struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 type Promotion struct {
-	ID             string     `json:"id"`
-	RepositoryID   string     `json:"repository_id"`
-	EnvironmentID  string     `json:"environment_id"`
-	ReleaseID      string     `json:"release_id"`
-	BuildID        string     `json:"build_id"`
-	ArtifactID     string     `json:"artifact_id"`
-	ArtifactSHA256 string     `json:"artifact_sha256"`
-	State          string     `json:"state"`
-	InitiatedBy    string     `json:"initiated_by"`
-	Approvals      []Approval `json:"approvals"`
-	Events         []Event    `json:"events"`
-	CreatedAt      time.Time  `json:"created_at"`
-	StartedAt      *time.Time `json:"started_at,omitempty"`
-	CompletedAt    *time.Time `json:"completed_at,omitempty"`
-	ExecutionOwner string     `json:"execution_owner,omitempty"`
-	LeaseExpiresAt *time.Time `json:"lease_expires_at,omitempty"`
+	ID             string            `json:"id"`
+	RepositoryID   string            `json:"repository_id"`
+	EnvironmentID  string            `json:"environment_id"`
+	ReleaseID      string            `json:"release_id"`
+	BuildID        string            `json:"build_id"`
+	ArtifactID     string            `json:"artifact_id"`
+	ArtifactSHA256 string            `json:"artifact_sha256"`
+	CommitID       string            `json:"commit_id"`
+	Rollout        RolloutDefinition `json:"rollout"`
+	CurrentStage   int               `json:"current_stage"`
+	Evidence       []SignalEvidence  `json:"evidence"`
+	State          string            `json:"state"`
+	InitiatedBy    string            `json:"initiated_by"`
+	Approvals      []Approval        `json:"approvals"`
+	Events         []Event           `json:"events"`
+	CreatedAt      time.Time         `json:"created_at"`
+	StartedAt      *time.Time        `json:"started_at,omitempty"`
+	CompletedAt    *time.Time        `json:"completed_at,omitempty"`
+	ExecutionOwner string            `json:"execution_owner,omitempty"`
+	LeaseExpiresAt *time.Time        `json:"lease_expires_at,omitempty"`
 }
 
 type Store struct {
@@ -201,7 +241,8 @@ func (s *Store) listEnvironments(repo string) ([]Environment, error) {
 }
 
 func (s *Store) CreatePromotion(value Promotion) (Promotion, error) {
-	if !validID(value.RepositoryID) || !validID(value.EnvironmentID) || !validID(value.ReleaseID) || !validID(value.BuildID) || !validID(value.ArtifactID) || !validID(value.InitiatedBy) || len(value.ArtifactSHA256) != 64 {
+	legacyDefinition := value.CommitID == "" && value.Rollout.Version == 0 && len(value.Rollout.Stages) == 0
+	if !validID(value.RepositoryID) || !validID(value.EnvironmentID) || !validID(value.ReleaseID) || !validID(value.BuildID) || !validID(value.ArtifactID) || !validID(value.InitiatedBy) || len(value.ArtifactSHA256) != 64 || (!legacyDefinition && (len(value.CommitID) != 40 || !validRollout(value.Rollout))) {
 		return Promotion{}, ErrInvalid
 	}
 	s.mu.Lock()
@@ -255,6 +296,80 @@ func (s *Store) CreatePromotion(value Promotion) (Promotion, error) {
 		value.Events = append(value.Events, Event{Sequence: 2, Kind: "promotion.queued", ActorID: value.InitiatedBy, State: value.State, CreatedAt: value.CreatedAt})
 	}
 	return value, s.write(filepath.Join(s.root, value.RepositoryID, "promotions", value.ID+".json"), value)
+}
+
+// Control records a participant decision without discarding execution or
+// health evidence. expectedState gives callers compare-and-swap semantics.
+func (s *Store) Control(repo, id, actor, action, expectedState, reason string) (Promotion, error) {
+	if !validID(actor) || len(reason) > 1000 {
+		return Promotion{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Promotion{}, err
+	}
+	defer unlock()
+	p, err := s.getPromotion(repo, id)
+	if err != nil {
+		return p, err
+	}
+	if expectedState != "" && p.State != expectedState {
+		return p, ErrBlocked
+	}
+	next := ""
+	switch action {
+	case "pause":
+		if p.State == "running" {
+			next = "paused"
+		}
+	case "resume":
+		if p.State == "paused" {
+			next = "running"
+		}
+	case "cancel":
+		if p.State == "pending_approval" || p.State == "queued" || p.State == "running" || p.State == "paused" {
+			next = "canceled"
+		}
+	case "mark_unsuccessful":
+		if p.State == "running" || p.State == "paused" || p.State == "succeeded" {
+			next = "failed"
+		}
+	}
+	if next == "" {
+		return p, ErrBlocked
+	}
+	now := s.now()
+	p.State = next
+	if next == "failed" || next == "canceled" {
+		p.CompletedAt = &now
+		p.LeaseExpiresAt = nil
+	}
+	p.Events = append(p.Events, Event{Sequence: len(p.Events) + 1, Kind: "deployment." + action, ActorID: actor, State: next, Message: strings.TrimSpace(reason), CreatedAt: now})
+	return p, s.write(filepath.Join(s.root, repo, "promotions", id+".json"), p)
+}
+
+func (s *Store) RecordStage(repo, id, owner string, stage int, evidence SignalEvidence) (Promotion, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Promotion{}, err
+	}
+	defer unlock()
+	p, err := s.getPromotion(repo, id)
+	if err != nil {
+		return p, err
+	}
+	if p.State != "running" || p.ExecutionOwner != owner || stage < 0 || stage >= len(p.Rollout.Stages) {
+		return p, ErrBlocked
+	}
+	p.CurrentStage = stage
+	evidence.CreatedAt = s.now()
+	p.Evidence = append(p.Evidence, evidence)
+	p.Events = append(p.Events, Event{Sequence: len(p.Events) + 1, Kind: "rollout.signal_" + evidence.State, State: p.State, Message: evidence.Stage + " / " + evidence.Signal + ": " + evidence.Message, CreatedAt: evidence.CreatedAt})
+	return p, s.write(filepath.Join(s.root, repo, "promotions", id+".json"), p)
 }
 func (s *Store) Approve(repo, id, actor string) (Promotion, error) {
 	if !validID(actor) {
@@ -329,7 +444,7 @@ func (s *Store) Renew(repo, id, owner string, leaseExpires time.Time) (Promotion
 	if err != nil {
 		return p, err
 	}
-	if p.State != "running" || p.ExecutionOwner != owner {
+	if (p.State != "running" && p.State != "paused") || p.ExecutionOwner != owner {
 		return p, ErrBlocked
 	}
 	p.LeaseExpiresAt = &leaseExpires
@@ -590,6 +705,22 @@ func validImage(image string) bool {
 	for _, r := range image {
 		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("./:_-", r)) {
 			return false
+		}
+	}
+	return true
+}
+func validRollout(v RolloutDefinition) bool {
+	if v.Version != 1 || len(v.Stages) == 0 || len(v.Stages) > 20 {
+		return false
+	}
+	for _, stage := range v.Stages {
+		if strings.TrimSpace(stage.Name) == "" || len(stage.Name) > 100 || stage.ObservationSeconds < 0 || stage.ObservationSeconds > 3600 || len(stage.Signals) == 0 || len(stage.Signals) > 20 {
+			return false
+		}
+		for _, signal := range stage.Signals {
+			if strings.TrimSpace(signal.Name) == "" || len(signal.Name) > 100 || strings.TrimSpace(signal.Command) == "" || len(signal.Command) > 4000 {
+				return false
+			}
 		}
 	}
 	return true

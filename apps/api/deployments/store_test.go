@@ -3,7 +3,9 @@ package deployments
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestGovernedPromotionRetainsSecretAndExactArtifactHistory(t *testing.T) {
@@ -69,6 +71,57 @@ func TestPromotionAdmissionHonorsEnvironmentConcurrency(t *testing.T) {
 	}
 	if err = makePromotion('9', 'c', 'd', 'e'); err != ErrBlocked {
 		t.Fatalf("third promotion = %v", err)
+	}
+}
+
+func TestRolloutControlsRetainAttributedDecisionsAndHealthEvidence(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, envID, actor, other := id('1'), id('2'), id('3'), id('4')
+	_, err = store.PutEnvironment(Environment{RepositoryID: repo, Name: "production", Position: 1, Image: "alpine:3.22", Command: "true", TimeoutSeconds: 60, RequiredApprovals: 0, Concurrency: 1, UpdatedBy: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envs, _ := store.ListEnvironments(repo)
+	envID = envs[0].ID
+	definition, err := ParseRolloutDefinition([]byte(`{"version":1,"stages":[{"name":"canary","observation_seconds":0,"signals":[{"name":"errors","command":"test -f /vivarium/artifact"}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := store.CreatePromotion(Promotion{RepositoryID: repo, EnvironmentID: envID, ReleaseID: id('5'), BuildID: id('6'), ArtifactID: id('7'), ArtifactSHA256: strings.Repeat("a", 64), CommitID: strings.Repeat("b", 40), Rollout: definition, InitiatedBy: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err = store.Claim(repo, p.ID, id('8'), time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err = store.RecordStage(repo, p.ID, p.ExecutionOwner, 0, SignalEvidence{Stage: "canary", Signal: "errors", State: "passed", Message: "healthy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err = store.Control(repo, p.ID, other, "pause", "running", "investigating elevated latency")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.State != "paused" || len(p.Evidence) != 1 || p.Events[len(p.Events)-1].ActorID != other {
+		t.Fatalf("paused promotion = %#v", p)
+	}
+	p, err = store.Control(repo, p.ID, other, "resume", "paused", "signal recovered")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.State != "running" {
+		t.Fatalf("state = %s", p.State)
+	}
+	p, err = store.Control(repo, p.ID, actor, "mark_unsuccessful", "running", "customer impact")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.State != "failed" || p.CompletedAt == nil || p.Events[len(p.Events)-1].Message != "customer impact" {
+		t.Fatalf("failed promotion = %#v", p)
 	}
 }
 

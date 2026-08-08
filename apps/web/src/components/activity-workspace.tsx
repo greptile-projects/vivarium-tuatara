@@ -22,6 +22,10 @@ const descriptions: Record<ActivityEvent["kind"], string> = {
   "mention.created": "mentioned a collaborator",
   "access.granted": "granted contributor access",
   "access.revoked": "revoked contributor access",
+  "deployment.pause": "paused a deployment rollout",
+  "deployment.resume": "resumed a deployment rollout",
+  "deployment.cancel": "canceled a deployment rollout",
+  "deployment.mark_unsuccessful": "marked a deployment unsuccessful",
 };
 
 function initials(user?: User) {
