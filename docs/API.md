@@ -493,6 +493,18 @@ may update only that source branch, and expires at the recorded
 `credential_expires_at`. It cannot update another branch even when the
 initiator owns the repository.
 
+For a cross-repository pull request, delegation additionally requires the
+contribution owner's current `maintainer_edits_allowed` opt-in. The credential
+is bound to the independently owned source repository, contribution branch,
+and pull request rather than the target repository. The agent reads context
+and publishes commits in that fork; it receives no upstream repository access.
+Disabling the policy, closing the pull request, deleting the source branch or
+repository, or revoking the initiating participant's target access invalidates
+the credential on its next Git or run API request. Completion imports the new
+source snapshot into the target object database, adopts it through ordinary
+pull synchronization, starts exact-revision checks, and makes existing reviews
+stale without publishing an upstream branch.
+
 `GET .../sessions/{session_id}/runs` is participant-only and cursor-paginated.
 Run records retain the mandate, selected revision and paths, branch,
 initiator, a stable generated `agent_id`, credential ID and expiry, but never the token. Launch atomically

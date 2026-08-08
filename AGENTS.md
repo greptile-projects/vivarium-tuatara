@@ -84,6 +84,9 @@ whenever dependencies change or the web job fails before it starts.
   Fork pull authors can opt current target participants into short-lived Git
   access restricted to the issuing pull request and exact contribution branch; policy removal, closure,
   or target-access revocation invalidates that access on the next request.
+  Change-session agents use this same dynamic grant for cross-repository pulls:
+  their bounded credential targets the fork source branch, never the upstream,
+  and completion adopts the fork revision through ordinary pull synchronization.
   Cross-repository pull authors can participate in attributable discussion
   while a public upstream remains readable without receiving upstream
   membership; review, check control, and merge authority remain target-scoped.

@@ -476,6 +476,14 @@ canceling permanently closes the run and revokes its branch-bound credential.
 Every intervention retains its human actor, generated agent, run, and revision
 attribution in the common timeline.
 
+Fork-backed pull requests use the same workspace without flattening ownership.
+After the contribution owner enables maintainer edits, a target participant can
+delegate an agent whose credential is restricted to that pull request's exact
+source repository and branch. Policy removal and target-access revocation take
+effect on the next request. Completion imports and adopts the fork revision for
+ordinary checks and review replacement, while the agent never receives target
+repository write authority.
+
 Completed work crosses into the ordinary review flow through a credential-
 bound publication. After the agent commits and pushes its authorized branch,
 the API verifies the live tip under the Git reference lock, derives the exact
