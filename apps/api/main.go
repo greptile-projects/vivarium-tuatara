@@ -3093,8 +3093,11 @@ func registerReleaseRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 		if run.RequestedBy != "" {
 			actor = run.RequestedBy
 		}
-		if len(run.Attempts) > 0 && run.Attempts[0].ActorID != "" {
-			actor = run.Attempts[0].ActorID
+		for i := len(run.Attempts) - 1; i >= 0; i-- {
+			if run.Attempts[i].ActorID != "" {
+				actor = run.Attempts[i].ActorID
+				break
+			}
 		}
 		writeJSON(w, 200, map[string]any{"version": 1, "release_id": candidate.ID, "repository_id": candidate.RepositoryID, "source_commit": run.CommitID, "build_id": run.ID, "step": run.Definition.Name, "command": run.Definition.Command, "dependencies": []string{run.Definition.Image}, "actor_id": actor, "verification": map[string]any{"state": run.State, "exit_code": run.ExitCode, "failure": run.Failure, "attempts": run.Attempts}, "artifacts": run.Artifacts, "created_at": run.CreatedAt, "completed_at": run.CompletedAt})
 	})

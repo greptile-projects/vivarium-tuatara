@@ -88,4 +88,31 @@ func TestCollaboratorDefinesAndInspectsExactReleaseCandidate(t *testing.T) {
 	if aggregate.SourceCommit != string(commit) || aggregate.State == "unbuilt" || len(aggregate.Builds) != 1 {
 		t.Fatalf("release attestation = %#v", aggregate)
 	}
+	provenanceRuns, err := buildStore.CreateRequested(repository.ID, created.ID, string(commit), []checkruns.Definition{{Name: "provenance", Image: "alpine:3.22", Command: "true", WorkingDirectory: ".", TimeoutSeconds: 30}}, owner.User.ID)
+	if err != nil {
+		t.Fatalf("create provenance build = %#v, %v", provenanceRuns, err)
+	}
+	var provenance checkruns.Run
+	for _, run := range provenanceRuns {
+		if run.Definition.Name == "provenance" {
+			provenance = run
+		}
+	}
+	if provenance.ID == "" {
+		t.Fatalf("provenance build missing from %#v", provenanceRuns)
+	}
+	provenance.State = "succeeded"
+	provenance.RequestedBy = ""
+	provenance.Attempts = []checkruns.Attempt{{Number: 1, State: "failed", ActorID: owner.User.ID}, {Number: 2, State: "succeeded", ActorID: collaborator.User.ID}}
+	if err := buildStore.Update(provenance); err != nil {
+		t.Fatal(err)
+	}
+	latestResponse := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/releases/"+created.ID+"/builds/"+provenance.ID+"/attestation", "", owner.Credential.Token, http.StatusOK)
+	var latest struct {
+		ActorID string `json:"actor_id"`
+	}
+	decodeResponse(t, latestResponse, &latest)
+	if latest.ActorID != collaborator.User.ID {
+		t.Fatalf("rerun attestation actor = %q, want %q", latest.ActorID, collaborator.User.ID)
+	}
 }
