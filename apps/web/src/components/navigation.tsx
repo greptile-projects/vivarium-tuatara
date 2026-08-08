@@ -9,6 +9,7 @@ const navigation = [
   { label: "Repositories", href: "/repositories", icon: Icons.Code },
   { label: "Proposals", href: "/proposals", icon: Icons.Spark },
   { label: "Pull requests", href: "/pulls", icon: Icons.GitPull },
+  { label: "Incidents", href: "/incidents", icon: Icons.Activity },
   { label: "Inbox", href: "/inbox", icon: Icons.Bell },
   { label: "Activity", href: "/activity", icon: Icons.Activity },
 ];

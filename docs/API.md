@@ -952,3 +952,34 @@ Pull and session publication enforce deployment-recovery uniqueness under
 their cross-process store locks. Simultaneous identical repair commands may
 return the newly created or already connected resource, but all responses name
 the same pull request and change session.
+## Incidents
+
+Authenticated repository collaborators establish a durable shared operating
+picture through `GET /incidents`, `POST /incidents`, and
+`GET /incidents/{incident_id}`. An incident declares a title, impact summary,
+`sev1` through `sev4` severity, one or more affected repository scopes with
+optional environment IDs, and named response roles. The declaring actor must
+currently participate in every affected repository; role holders must
+participate in at least one affected repository. Reads are limited to current
+participants of an affected repository, so access revocation applies without
+copying repository membership into the incident record.
+
+Declarations may be manual or carry `source` with an affected
+`repository_id`, `deployment_id`, and optional `stage` and `signal`. A named
+signal must match durable evidence on that deployment. This retains exact
+operational provenance while leaving deployment execution state authoritative
+in the deployment store. `INCIDENT_STORAGE_ROOT` selects incident storage and
+defaults to `incidents`.
+
+`PATCH /incidents/{incident_id}` accepts `expected_version`, `severity`,
+`status`, `roles`, and an optional decision `message`. Status is one of
+`investigating`, `identified`, `monitoring`, or `resolved`; a stale version
+returns `409 incident_changed`. Every accepted change appends an immutable,
+actor-stamped timeline entry rather than replacing response history.
+
+`POST /incidents/{incident_id}/updates` accepts a `message` and an `audience`
+of `participants` or `public`. Audience is retained on the update so later
+status-page and external communication surfaces can safely select explicitly
+public copy. Current participants acknowledge any timeline entry with `POST
+/incidents/{incident_id}/timeline/{entry_id}/acknowledgements`; acknowledgers
+are retained by stable user ID and repeated acknowledgement is idempotent.

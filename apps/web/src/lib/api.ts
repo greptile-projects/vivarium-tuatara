@@ -138,6 +138,22 @@ export type Deployment = {
   recovery_kind?: "rollback";
   restores_deployment_id?: string;
 };
+export type Incident = {
+  id: string;
+  title: string;
+  summary: string;
+  severity: "sev1" | "sev2" | "sev3" | "sev4";
+  status: "investigating" | "identified" | "monitoring" | "resolved";
+  scopes: { repository_id: string; environment_ids: string[] }[];
+  roles: { name: string; user_id: string }[];
+  source?: { repository_id: string; deployment_id: string; stage?: string; signal?: string };
+  declared_by: string;
+  timeline: { id: string; kind: string; actor_id: string; message: string; audience: "participants" | "public"; created_at: string; acknowledged_by?: string[] }[];
+  version: number;
+  created_at: string;
+  updated_at: string;
+  resolved_at?: string;
+};
 export type ForkSynchronization = {
   branch: string;
   previous_commit_id?: string;
@@ -539,11 +555,12 @@ export type ActivityEvent = {
     | "deployment.pause"
     | "deployment.resume"
     | "deployment.cancel"
-    | "deployment.mark_unsuccessful";
+    | "deployment.mark_unsuccessful"
+    | "incident.declared";
   actor_id: string;
   repository_id: string;
   repository_name: string;
-  resource_type: "proposal" | "pull_request" | "repository" | "deployment";
+  resource_type: "proposal" | "pull_request" | "repository" | "deployment" | "incident";
   resource_id: string;
   resource_title: string;
   target_user_id: string | null;
