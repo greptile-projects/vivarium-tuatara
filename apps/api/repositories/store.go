@@ -218,6 +218,9 @@ func (s *Store) SynchronizeFork(ownerID, id, branch string) (ForkSynchronization
 	if err != nil {
 		return ForkSynchronization{}, err
 	}
+	if upstream.Visibility != Public && upstream.OwnerID != ownerID && !slices.Contains(collaboratorIDs(upstream), ownerID) {
+		return ForkSynchronization{}, ErrNotFound
+	}
 	upstreamGit, err := s.git.Open(upstream.ID)
 	if err != nil {
 		return ForkSynchronization{}, err

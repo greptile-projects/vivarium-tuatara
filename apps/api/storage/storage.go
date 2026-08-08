@@ -120,8 +120,9 @@ func (r *Repository) ListObjects() ([]Object, error) {
 
 // Store owns bare Git repositories below a filesystem directory.
 type Store struct {
-	root      string
-	removeAll func(string) error
+	root          string
+	removeAll     func(string) error
+	directorySync func(string) error
 }
 
 // Repository identifies an opened bare Git repository.
@@ -151,7 +152,7 @@ func New(root string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve storage root: %w", err)
 	}
-	return &Store{root: abs, removeAll: os.RemoveAll}, nil
+	return &Store{root: abs, removeAll: os.RemoveAll, directorySync: syncDirectory}, nil
 }
 
 // Create atomically initializes and opens an empty bare Git repository.
@@ -251,13 +252,23 @@ func (s *Store) Fork(sourceID, id string) (*Repository, error) {
 		}
 		return nil, fmt.Errorf("publish fork repository: %w", err)
 	}
-	if err := syncDirectory(path); err != nil {
-		return nil, fmt.Errorf("sync fork repository: %w", err)
+	if err := s.directorySync(path); err != nil {
+		return nil, s.cleanupFailedFork(path, fmt.Errorf("sync fork repository: %w", err))
 	}
-	if err := syncDirectory(s.root); err != nil {
-		return nil, fmt.Errorf("sync storage root: %w", err)
+	if err := s.directorySync(s.root); err != nil {
+		return nil, s.cleanupFailedFork(path, fmt.Errorf("sync storage root: %w", err))
 	}
 	return s.Open(id)
+}
+
+func (s *Store) cleanupFailedFork(path string, publicationErr error) error {
+	if err := s.removeAll(path); err != nil {
+		return errors.Join(publicationErr, fmt.Errorf("remove failed fork repository: %w", err))
+	}
+	if err := s.directorySync(s.root); err != nil {
+		return errors.Join(publicationErr, fmt.Errorf("sync failed fork cleanup: %w", err))
+	}
+	return publicationErr
 }
 
 // unpackCloneObjects restores the storage package's verified loose-object

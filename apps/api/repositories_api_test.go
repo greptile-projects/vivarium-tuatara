@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -262,6 +263,56 @@ func TestReadableRepositoryCanBeForkedAndSynchronizedWithoutSourceAuthority(t *t
 		t.Fatalf("fork after upstream deletion = %s, want %s", got, updated)
 	}
 	gitCommand(t, independentClone, "fsck", "--full")
+}
+
+func TestForkSynchronizationRechecksPrivateUpstreamAccess(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	server := httptest.NewServer(newAuthenticatedAppHandler(gitStore, identities, credentials, catalog))
+	defer server.Close()
+
+	maintainer := createTestAccount(t, server.URL, "private-upstream-owner")
+	reader := createTestAccount(t, server.URL, "private-upstream-reader")
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"private-upstream"}`, maintainer.Credential.Token, http.StatusCreated)
+	var upstream repositories.Repository
+	if err := json.NewDecoder(response.Body).Decode(&upstream); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+upstream.ID+"/collaborators", `{"user_id":"`+reader.User.ID+`"}`, maintainer.Credential.Token, http.StatusCreated).Body.Close()
+
+	upstreamGit, _ := gitStore.Open(upstream.ID)
+	tree, err := upstreamGit.WriteObject(storage.TreeObject, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := writeTestCommit(t, upstreamGit, tree, nil, 1700000000, "initial private history")
+	if err := upstreamGit.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(initial)}); err != nil {
+		t.Fatal(err)
+	}
+	forkResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+upstream.ID+"/forks", `{"name":"private-fork"}`, reader.Credential.Token, http.StatusCreated)
+	var fork repositories.Repository
+	if err := json.NewDecoder(forkResponse.Body).Decode(&fork); err != nil {
+		t.Fatal(err)
+	}
+	forkResponse.Body.Close()
+
+	authenticatedRequest(t, http.MethodDelete, server.URL+"/repositories/"+upstream.ID+"/collaborators/"+reader.User.ID, "", maintainer.Credential.Token, http.StatusNoContent).Body.Close()
+	later := writeTestCommit(t, upstreamGit, tree, []storage.ObjectID{initial}, 1700000100, "later private history")
+	if err := upstreamGit.UpdateReference(storage.Reference{Name: "refs/heads/main", Target: string(later)}); err != nil {
+		t.Fatal(err)
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+fork.ID+"/synchronizations", `{"branch":"main"}`, reader.Credential.Token, http.StatusNotFound).Body.Close()
+	forkGit, _ := gitStore.Open(fork.ID)
+	main, err := forkGit.ReadReference("refs/heads/main")
+	if err != nil || main.Target != string(initial) {
+		t.Fatalf("fork main after revoked synchronization = %#v, %v", main, err)
+	}
+	if _, err := forkGit.ReadObject(later); !errors.Is(err, storage.ErrObjectNotFound) {
+		t.Fatalf("private upstream object imported after revocation: %v", err)
+	}
 }
 
 func TestRepositoryAuthorizationIsConsistentAcrossAPIAndGit(t *testing.T) {
