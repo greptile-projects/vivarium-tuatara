@@ -1,8 +1,13 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -309,6 +314,259 @@ func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *
 		}
 		writeJSON(w, 200, v)
 	})
+	// Investigation credentials carry only this purpose-built scope. They can
+	// read their frozen packet and append diagnostic evidence, but cannot call
+	// repository mutation, deployment, credential, or secret-management APIs.
+	mux.HandleFunc("POST /incidents/{incident_id}/investigations", func(w http.ResponseWriter, r *http.Request) {
+		actor, current, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var input struct {
+			Mandate   string               `json:"mandate"`
+			Evidence  []incidents.Evidence `json:"evidence"`
+			Revisions []incidents.Revision `json:"revisions"`
+			ExpiresIn int64                `json:"expires_in"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if input.ExpiresIn == 0 {
+			input.ExpiresIn = 3600
+		}
+		if input.ExpiresIn < 300 || input.ExpiresIn > 86400 {
+			writeAPIError(w, 422, "invalid_investigation", "investigation expiry must be between 5 minutes and 24 hours")
+			return
+		}
+		inScope := func(id string) bool {
+			for _, x := range current.Scopes {
+				if x.RepositoryID == id {
+					return true
+				}
+			}
+			return false
+		}
+		for i := range input.Evidence {
+			if !inScope(input.Evidence[i].RepositoryID) {
+				writeAPIError(w, 422, "invalid_investigation_evidence", "selected evidence must belong to the incident")
+				return
+			}
+			label, valid := incidentEvidenceLabel(gitStore, store, deploymentStore, releaseStore, pullStore, input.Evidence[i])
+			if !valid {
+				writeAPIError(w, 422, "invalid_investigation_evidence", "selected evidence is unavailable")
+				return
+			}
+			input.Evidence[i].Label = label
+		}
+		for i := range input.Revisions {
+			revision := &input.Revisions[i]
+			if !inScope(revision.RepositoryID) {
+				writeAPIError(w, 422, "invalid_investigation_revision", "selected revision must belong to the incident")
+				return
+			}
+			repo, e := gitStore.Open(revision.RepositoryID)
+			if e != nil {
+				writeAPIError(w, 422, "invalid_investigation_revision", "selected revision is unavailable")
+				return
+			}
+			if _, e = repo.ReadCommit(storage.ObjectID(revision.CommitID)); e != nil {
+				writeAPIError(w, 422, "invalid_investigation_revision", "selected revision must be a verified commit")
+				return
+			}
+			revision.Label = "commit " + revision.CommitID[:12]
+		}
+		context, contextErr := snapshotInvestigationContext(gitStore, store, deploymentStore, releaseStore, pullStore, input.Evidence)
+		if contextErr != nil {
+			writeAPIError(w, 422, "invalid_investigation_evidence", "selected evidence could not be frozen")
+			return
+		}
+		bytes := make([]byte, 16)
+		if _, e := rand.Read(bytes); e != nil {
+			writeAPIError(w, 500, "investigation_start_failed", "investigation could not be started")
+			return
+		}
+		agentID := hex.EncodeToString(bytes)
+		issued, e := credentials.Issue(actor.UserID, auth.API, "Incident investigation", []string{"incidents:investigate"}, time.Duration(input.ExpiresIn)*time.Second)
+		if e != nil {
+			writeAPIError(w, 500, "investigation_start_failed", "read-only agent access could not be issued")
+			return
+		}
+		var v incidents.Incident
+		var investigation incidents.Investigation
+		e = mutate(current, actor.UserID, current.Roles, func() error {
+			var x error
+			v, investigation, x = store.StartInvestigation(current.ID, actor.UserID, agentID, issued.ID, input.Mandate, input.Evidence, input.Revisions, context)
+			return x
+		})
+		if e != nil {
+			_, _ = credentials.Revoke(actor.UserID, issued.ID)
+			writeIncidentError(w, e)
+			return
+		}
+		w.Header().Set("Location", r.URL.Path+"/"+investigation.ID)
+		writeJSON(w, 201, map[string]any{"incident": v, "investigation": investigation, "credential": issued})
+	})
+	mux.HandleFunc("GET /incidents/{incident_id}/investigations/{investigation_id}", func(w http.ResponseWriter, r *http.Request) {
+		credential, ok := authenticateRequest(w, r, credentials, "incidents:investigate", false)
+		if !ok {
+			return
+		}
+		_, x, e := store.Investigation(r.PathValue("incident_id"), r.PathValue("investigation_id"))
+		if e != nil || x.CredentialID != credential.ID || x.State == "cancelled" {
+			writeAPIError(w, 404, "investigation_not_found", "investigation not found")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"investigation": x, "operational_context": x.OperationalContext})
+	})
+	mux.HandleFunc("POST /incidents/{incident_id}/investigations/{investigation_id}/events", func(w http.ResponseWriter, r *http.Request) {
+		credential, ok := authenticateRequest(w, r, credentials, "incidents:investigate", false)
+		if !ok {
+			return
+		}
+		var input struct {
+			Kind    string `json:"kind"`
+			Message string `json:"message"`
+			Tool    string `json:"tool"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_agent_event", "agent event is invalid")
+			return
+		}
+		v, e := store.AddInvestigationEvent(r.PathValue("incident_id"), r.PathValue("investigation_id"), credential.ID, strings.TrimSpace(input.Kind), input.Message, input.Tool)
+		if errors.Is(e, incidents.ErrConflict) {
+			writeAPIError(w, 409, "investigation_inactive", "investigation is paused or cancelled")
+			return
+		}
+		if e != nil {
+			writeIncidentError(w, e)
+			return
+		}
+		writeJSON(w, 201, v)
+	})
+	mux.HandleFunc("POST /incidents/{incident_id}/investigations/{investigation_id}/controls", func(w http.ResponseWriter, r *http.Request) {
+		actor, current, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var input struct {
+			Action  string `json:"action"`
+			Message string `json:"message"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_investigation_control", "control is invalid")
+			return
+		}
+		var v incidents.Incident
+		var x incidents.Investigation
+		e := mutate(current, actor.UserID, current.Roles, func() error {
+			var z error
+			v, x, z = store.ControlInvestigation(current.ID, r.PathValue("investigation_id"), actor.UserID, strings.TrimSpace(input.Action), input.Message)
+			return z
+		})
+		if errors.Is(e, incidents.ErrConflict) {
+			writeAPIError(w, 409, "invalid_investigation_transition", "control is invalid for the current state")
+			return
+		}
+		if e != nil {
+			writeIncidentError(w, e)
+			return
+		}
+		if input.Action == "cancel" {
+			_, _ = credentials.Revoke(x.InitiatorID, x.CredentialID)
+		}
+		writeJSON(w, 201, v)
+	})
+}
+
+// boundedPromotionContext projects only the operational material named by an
+// investigation evidence grant. Signal and log selections never inherit the
+// complete promotion merely because they share its durable resource ID.
+func boundedPromotionContext(source incidents.Evidence, promotion deployments.Promotion) any {
+	base := map[string]any{"deployment_id": promotion.ID, "repository_id": promotion.RepositoryID, "environment_id": promotion.EnvironmentID}
+	withinWindow := func(at time.Time) bool {
+		return source.WindowStart != nil && source.WindowEnd != nil && !at.Before(*source.WindowStart) && !at.After(*source.WindowEnd)
+	}
+	switch source.Kind {
+	case "health_signal":
+		stage, signal, ok := strings.Cut(source.Query, "/")
+		selected := make([]deployments.SignalEvidence, 0, 1)
+		events := []deployments.Event{}
+		for _, item := range promotion.Evidence {
+			if ok && item.Stage == stage && item.Signal == signal && withinWindow(item.CreatedAt) {
+				selected = append(selected, item)
+			}
+		}
+		prefix := stage + " / " + signal + ":"
+		for _, event := range promotion.Events {
+			if strings.HasPrefix(event.Kind, "rollout.signal_") && strings.HasPrefix(event.Message, prefix) && withinWindow(event.CreatedAt) {
+				events = append(events, event)
+			}
+		}
+		base["selector"], base["evidence"], base["events"] = source.Query, selected, events
+	case "log":
+		events := []deployments.Event{}
+		query := strings.ToLower(strings.TrimSpace(source.Query))
+		for _, event := range promotion.Events {
+			haystack := strings.ToLower(event.Kind + " " + event.State + " " + event.Message)
+			if withinWindow(event.CreatedAt) && (query == "" || strings.Contains(haystack, query)) {
+				events = append(events, event)
+			}
+		}
+		base["query"], base["events"] = source.Query, events
+	case "deployment":
+		base["release_id"], base["commit_id"], base["state"], base["current_stage"] = promotion.ReleaseID, promotion.CommitID, promotion.State, promotion.CurrentStage
+		base["evidence"], base["events"] = promotion.Evidence, promotion.Events
+	}
+	return base
+}
+
+func snapshotInvestigationContext(gitStore *storage.Store, incidentStore *incidents.Store, deploymentStore *deployments.Store, releaseStore *releases.Store, pullStore *pullrequests.Store, evidence []incidents.Evidence) ([]incidents.EvidenceContext, error) {
+	context := make([]incidents.EvidenceContext, 0, len(evidence))
+	for _, source := range evidence {
+		var resource any
+		var err error
+		switch source.Kind {
+		case "log", "health_signal", "deployment":
+			if deploymentStore == nil {
+				return nil, incidents.ErrNotFound
+			}
+			var promotion deployments.Promotion
+			promotion, err = deploymentStore.GetPromotion(source.RepositoryID, source.ResourceID)
+			if err == nil {
+				resource = boundedPromotionContext(source, promotion)
+			}
+		case "release":
+			if releaseStore == nil {
+				return nil, incidents.ErrNotFound
+			}
+			resource, err = releaseStore.Get(source.RepositoryID, source.ResourceID)
+		case "pull_request":
+			if pullStore == nil {
+				return nil, incidents.ErrNotFound
+			}
+			resource, err = pullStore.Get(source.RepositoryID, source.ResourceID)
+		case "incident":
+			resource, err = incidentStore.Get(source.ResourceID)
+		case "commit":
+			var repository *storage.Repository
+			repository, err = gitStore.Open(source.RepositoryID)
+			if err == nil {
+				resource, err = repository.ReadCommit(storage.ObjectID(source.ResourceID))
+			}
+		default:
+			err = incidents.ErrInvalid
+		}
+		if err != nil {
+			return nil, err
+		}
+		encoded, marshalErr := json.Marshal(resource)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		context = append(context, incidents.EvidenceContext{Selection: source, Resource: encoded})
+	}
+	return context, nil
 }
 
 func incidentEvidenceLabel(gitStore *storage.Store, incidentStore *incidents.Store, deploymentStore *deployments.Store, releaseStore *releases.Store, pullStore *pullrequests.Store, source incidents.Evidence) (string, bool) {

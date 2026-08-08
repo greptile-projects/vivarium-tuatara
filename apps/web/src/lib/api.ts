@@ -117,10 +117,30 @@ export type Deployment = {
   artifact_id: string;
   artifact_sha256: string;
   commit_id: string;
-  state: "pending_approval" | "queued" | "running" | "paused" | "canceled" | "succeeded" | "failed";
-  rollout: { version: number; stages: { name: string; observation_seconds: number; signals: { name: string; command: string }[] }[] };
+  state:
+    | "pending_approval"
+    | "queued"
+    | "running"
+    | "paused"
+    | "canceled"
+    | "succeeded"
+    | "failed";
+  rollout: {
+    version: number;
+    stages: {
+      name: string;
+      observation_seconds: number;
+      signals: { name: string; command: string }[];
+    }[];
+  };
   current_stage: number;
-  evidence: { stage: string; signal: string; state: "passed" | "failed"; message?: string; created_at: string }[];
+  evidence: {
+    stage: string;
+    signal: string;
+    state: "passed" | "failed";
+    message?: string;
+    created_at: string;
+  }[];
   initiated_by: string;
   approvals: { actor_id: string; created_at: string }[];
   events: {
@@ -146,16 +166,51 @@ export type Incident = {
   status: "investigating" | "identified" | "monitoring" | "resolved";
   scopes: { repository_id: string; environment_ids: string[] }[];
   roles: { name: string; user_id: string }[];
-  source?: { repository_id: string; deployment_id: string; stage?: string; signal?: string };
+  source?: {
+    repository_id: string;
+    deployment_id: string;
+    stage?: string;
+    signal?: string;
+  };
   declared_by: string;
-  timeline: { id: string; kind: string; actor_id: string; message: string; audience: "participants" | "public"; created_at: string; acknowledged_by?: string[]; evidence?: IncidentEvidence[] }[];
+  timeline: {
+    id: string;
+    kind: string;
+    actor_id: string;
+    message: string;
+    audience: "participants" | "public";
+    created_at: string;
+    acknowledged_by?: string[];
+    evidence?: IncidentEvidence[];
+    investigation_id?: string;
+  }[];
+  investigations: IncidentInvestigation[];
   version: number;
   created_at: string;
   updated_at: string;
   resolved_at?: string;
 };
+export type IncidentInvestigation = {
+  id: string;
+  agent_id: string;
+  initiator_id: string;
+  mandate: string;
+  state: "running" | "paused" | "cancelled";
+  evidence: IncidentEvidence[];
+  revisions: { repository_id: string; commit_id: string; label: string }[];
+  access: string[];
+  created_at: string;
+  updated_at: string;
+};
 export type IncidentEvidence = {
-  kind: "log" | "health_signal" | "deployment" | "release" | "commit" | "pull_request" | "incident";
+  kind:
+    | "log"
+    | "health_signal"
+    | "deployment"
+    | "release"
+    | "commit"
+    | "pull_request"
+    | "incident";
   repository_id: string;
   resource_id: string;
   label: string;
@@ -477,8 +532,19 @@ export type ChangeSession = {
     release_version: string;
     release_notes: string;
     current_stage: number;
-    evidence: { stage: string; signal: string; state: string; message?: string }[];
-    events: { sequence: number; kind: string; actor_id?: string; state?: string; message?: string }[];
+    evidence: {
+      stage: string;
+      signal: string;
+      state: string;
+      message?: string;
+    }[];
+    events: {
+      sequence: number;
+      kind: string;
+      actor_id?: string;
+      state?: string;
+      message?: string;
+    }[];
   };
   state: "open";
   created_at: string;
@@ -570,7 +636,8 @@ export type ActivityEvent = {
   actor_id: string;
   repository_id: string;
   repository_name: string;
-  resource_type: "proposal" | "pull_request" | "repository" | "deployment" | "incident";
+  resource_type:
+    "proposal" | "pull_request" | "repository" | "deployment" | "incident";
   resource_id: string;
   resource_title: string;
   target_user_id: string | null;

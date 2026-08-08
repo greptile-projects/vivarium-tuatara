@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -71,6 +73,51 @@ func TestIncidentOperatingPictureFromHealthSignal(t *testing.T) {
 	if len(incident.Timeline) != 2 {
 		t.Fatalf("retry duplicated finding: %#v", incident.Timeline)
 	}
+	repo, err := gitStore.Open(repository.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit := writeCommit(t, repo, time.Now().Unix(), "diagnostic revision")
+	referenced, err := incidentStore.Create(incidents.Incident{Title: "Related degradation", Summary: "Initial context only.", Severity: "sev2", Status: "investigating", DeclaredBy: owner.User.ID, Scopes: []incidents.Scope{{RepositoryID: repository.ID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectedEvidence := append([]incidents.Evidence{}, attached.Evidence...)
+	selectedEvidence = append(selectedEvidence, incidents.Evidence{Kind: "incident", RepositoryID: repository.ID, ResourceID: referenced.ID})
+	delegationBody := `{"mandate":"Determine whether the canary failure is consistent with this revision; report uncertainty.","evidence":` + mustJSON(t, selectedEvidence) + `,"revisions":[{"repository_id":"` + repository.ID + `","commit_id":"` + string(commit) + `"}],"expires_in":3600}`
+	delegated := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/investigations", delegationBody, responder.Credential.Token, http.StatusCreated)
+	var launch struct {
+		Incident      incidents.Incident      `json:"incident"`
+		Investigation incidents.Investigation `json:"investigation"`
+		Credential    auth.IssuedCredential   `json:"credential"`
+	}
+	decodeResponse(t, delegated, &launch)
+	if launch.Credential.Scopes[0] != "incidents:investigate" || len(launch.Investigation.Access) != 3 || launch.Investigation.State != "running" {
+		t.Fatalf("launch = %#v", launch)
+	}
+	if _, err = incidentStore.AddUpdate(referenced.ID, strings.Repeat("7", 32), owner.User.ID, "POST_DELEGATION_SECRET", "participants"); err != nil {
+		t.Fatal(err)
+	}
+	contextResponse := authenticatedRequest(t, http.MethodGet, server.URL+"/incidents/"+incident.ID+"/investigations/"+launch.Investigation.ID, "", launch.Credential.Token, http.StatusOK)
+	contextBytes, err := io.ReadAll(contextResponse.Body)
+	contextResponse.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(contextBytes, []byte("POST_DELEGATION_SECRET")) || !bytes.Contains(contextBytes, []byte("Initial context only.")) {
+		t.Fatalf("investigation context was not frozen: %s", contextBytes)
+	}
+	// The purpose credential can inspect only its frozen packet and stream
+	// attributable diagnosis. It cannot exercise a responder mutation scope.
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/incidents/"+incident.ID, `{}`, launch.Credential.Token, http.StatusUnauthorized).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/investigations/"+launch.Investigation.ID+"/events", `{"kind":"tool_action","tool":"log.query","message":"Read the selected canary window; no mutation requested."}`, launch.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/investigations/"+launch.Investigation.ID+"/events", `{"kind":"uncertainty","message":"The signal correlates with the revision but does not prove causation."}`, launch.Credential.Token, http.StatusCreated).Body.Close()
+	paused := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/investigations/"+launch.Investigation.ID+"/controls", `{"action":"pause"}`, owner.Credential.Token, http.StatusCreated)
+	decodeResponse(t, paused, &incident)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/investigations/"+launch.Investigation.ID+"/events", `{"kind":"finding","message":"blocked"}`, launch.Credential.Token, http.StatusConflict).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/investigations/"+launch.Investigation.ID+"/controls", `{"action":"resume"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/investigations/"+launch.Investigation.ID+"/controls", `{"action":"cancel"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodGet, server.URL+"/incidents/"+incident.ID+"/investigations/"+launch.Investigation.ID, "", launch.Credential.Token, http.StatusUnauthorized).Body.Close()
 	update := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/updates", `{"operation_id":"`+strings.Repeat("9", 32)+`","message":"Mitigation is holding.","audience":"public"}`, owner.Credential.Token, http.StatusCreated)
 	decodeResponse(t, update, &incident)
 	entry := incident.Timeline[len(incident.Timeline)-1]
@@ -86,7 +133,47 @@ func TestIncidentOperatingPictureFromHealthSignal(t *testing.T) {
 	var page struct {
 		Incidents []incidents.Incident `json:"incidents"`
 	}
-	if json.NewDecoder(list.Body).Decode(&page) != nil || len(page.Incidents) != 1 {
+	if json.NewDecoder(list.Body).Decode(&page) != nil || len(page.Incidents) != 2 || page.Incidents[0].ID != incident.ID {
 		t.Fatalf("incident list = %#v", page)
 	}
+}
+
+func TestInvestigationPromotionContextDoesNotEscapeEvidenceSelection(t *testing.T) {
+	now := time.Now().UTC()
+	start, end := now.Add(-time.Minute), now.Add(time.Minute)
+	selected := deployments.SignalEvidence{Stage: "canary", Signal: "selected", State: "failed", Message: "SELECTED", CreatedAt: now}
+	unrelated := deployments.SignalEvidence{Stage: "canary", Signal: "unrelated", State: "failed", Message: "UNRELATED_SIGNAL", CreatedAt: now}
+	promotion := deployments.Promotion{ID: strings.Repeat("1", 32), RepositoryID: strings.Repeat("2", 32), EnvironmentID: strings.Repeat("3", 32), Evidence: []deployments.SignalEvidence{selected, unrelated}, Events: []deployments.Event{
+		{Sequence: 1, Kind: "rollout.signal_failed", Message: "canary / selected: SELECTED", CreatedAt: now},
+		{Sequence: 2, Kind: "rollout.signal_failed", Message: "canary / unrelated: UNRELATED_SIGNAL", CreatedAt: now},
+		{Sequence: 3, Kind: "promotion.approved", Message: "UNRELATED_EVENT", CreatedAt: now},
+		{Sequence: 4, Kind: "rollout.signal_failed", Message: "canary / selected: OUTSIDE_WINDOW", CreatedAt: now.Add(-time.Hour)},
+	}}
+	projection := boundedPromotionContext(incidents.Evidence{Kind: "health_signal", Query: "canary/selected", WindowStart: &start, WindowEnd: &end}, promotion)
+	encoded, err := json.Marshal(projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	if !strings.Contains(text, "SELECTED") || strings.Contains(text, "UNRELATED_SIGNAL") || strings.Contains(text, "UNRELATED_EVENT") || strings.Contains(text, "OUTSIDE_WINDOW") {
+		t.Fatalf("projection escaped selection: %s", text)
+	}
+	logProjection := boundedPromotionContext(incidents.Evidence{Kind: "log", Query: "selected", WindowStart: &start, WindowEnd: &end}, promotion)
+	encoded, err = json.Marshal(logProjection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text = string(encoded)
+	if !strings.Contains(text, "SELECTED") || strings.Contains(text, "UNRELATED_SIGNAL") || strings.Contains(text, "UNRELATED_EVENT") || strings.Contains(text, "OUTSIDE_WINDOW") {
+		t.Fatalf("log projection escaped selection: %s", text)
+	}
+}
+
+func mustJSON(t *testing.T, value any) string {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }

@@ -36,14 +36,38 @@ type Role struct {
 	UserID string `json:"user_id"`
 }
 type Entry struct {
-	ID             string     `json:"id"`
-	Kind           string     `json:"kind"`
-	ActorID        string     `json:"actor_id"`
-	Message        string     `json:"message"`
-	Audience       string     `json:"audience"`
-	CreatedAt      time.Time  `json:"created_at"`
-	AcknowledgedBy []string   `json:"acknowledged_by,omitempty"`
-	Evidence       []Evidence `json:"evidence,omitempty"`
+	ID              string     `json:"id"`
+	Kind            string     `json:"kind"`
+	ActorID         string     `json:"actor_id"`
+	Message         string     `json:"message"`
+	Audience        string     `json:"audience"`
+	CreatedAt       time.Time  `json:"created_at"`
+	AcknowledgedBy  []string   `json:"acknowledged_by,omitempty"`
+	Evidence        []Evidence `json:"evidence,omitempty"`
+	InvestigationID string     `json:"investigation_id,omitempty"`
+}
+type Revision struct {
+	RepositoryID string `json:"repository_id"`
+	CommitID     string `json:"commit_id"`
+	Label        string `json:"label"`
+}
+type EvidenceContext struct {
+	Selection Evidence        `json:"selection"`
+	Resource  json.RawMessage `json:"resource"`
+}
+type Investigation struct {
+	ID                 string            `json:"id"`
+	AgentID            string            `json:"agent_id"`
+	InitiatorID        string            `json:"initiator_id"`
+	CredentialID       string            `json:"credential_id,omitempty"`
+	Mandate            string            `json:"mandate"`
+	State              string            `json:"state"`
+	Evidence           []Evidence        `json:"evidence"`
+	Revisions          []Revision        `json:"revisions"`
+	OperationalContext []EvidenceContext `json:"operational_context"`
+	Access             []string          `json:"access"`
+	CreatedAt          time.Time         `json:"created_at"`
+	UpdatedAt          time.Time         `json:"updated_at"`
 }
 type Evidence struct {
 	Kind         string     `json:"kind"`
@@ -56,21 +80,168 @@ type Evidence struct {
 	CapturedAt   time.Time  `json:"captured_at"`
 }
 type Incident struct {
-	ID         string     `json:"id"`
-	Title      string     `json:"title"`
-	Summary    string     `json:"summary"`
-	Severity   string     `json:"severity"`
-	Status     string     `json:"status"`
-	Scopes     []Scope    `json:"scopes"`
-	Roles      []Role     `json:"roles"`
-	Source     *Source    `json:"source,omitempty"`
-	DeclaredBy string     `json:"declared_by"`
-	Timeline   []Entry    `json:"timeline"`
-	Version    int        `json:"version"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
-	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
+	ID             string          `json:"id"`
+	Title          string          `json:"title"`
+	Summary        string          `json:"summary"`
+	Severity       string          `json:"severity"`
+	Status         string          `json:"status"`
+	Scopes         []Scope         `json:"scopes"`
+	Roles          []Role          `json:"roles"`
+	Source         *Source         `json:"source,omitempty"`
+	DeclaredBy     string          `json:"declared_by"`
+	Timeline       []Entry         `json:"timeline"`
+	Investigations []Investigation `json:"investigations"`
+	Version        int             `json:"version"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+	ResolvedAt     *time.Time      `json:"resolved_at,omitempty"`
 }
+
+func (s *Store) StartInvestigation(id, actor, agent, credential, mandate string, evidence []Evidence, revisions []Revision, context []EvidenceContext) (Incident, Investigation, error) {
+	var v Incident
+	var investigation Investigation
+	e := s.mutate(func() error {
+		if e := s.read(id, &v); e != nil {
+			return e
+		}
+		mandate = strings.TrimSpace(mandate)
+		if !validID(actor) || !validID(agent) || !validID(credential) || mandate == "" || len(mandate) > 10000 || len(evidence) > 20 || len(revisions) == 0 || len(revisions) > 20 || len(context) != len(evidence) {
+			return ErrInvalid
+		}
+		for _, x := range evidence {
+			if !validEvidence(x) {
+				return ErrInvalid
+			}
+		}
+		for _, x := range revisions {
+			if !validID(x.RepositoryID) || len(x.CommitID) != 40 || strings.TrimSpace(x.Label) == "" {
+				return ErrInvalid
+			}
+		}
+		for i, x := range context {
+			if len(x.Resource) == 0 || !json.Valid(x.Resource) || !sameEvidence([]Evidence{x.Selection}, []Evidence{evidence[i]}) {
+				return ErrInvalid
+			}
+		}
+		now := s.now()
+		investigation = Investigation{ID: mustID(), AgentID: agent, InitiatorID: actor, CredentialID: credential, Mandate: mandate, State: "running", Evidence: evidence, Revisions: revisions, OperationalContext: context, Access: []string{"selected incident evidence", "selected repository revisions", "incident investigation timeline:write"}, CreatedAt: now, UpdatedAt: now}
+		v.Investigations = append(v.Investigations, investigation)
+		v.Version++
+		v.UpdatedAt = now
+		v.Timeline = append(v.Timeline, Entry{ID: mustID(), Kind: "investigation_delegated", ActorID: actor, Message: mandate, Audience: "participants", Evidence: evidence, InvestigationID: investigation.ID, CreatedAt: now})
+		return s.write(v)
+	})
+	return v, investigation, e
+}
+
+func (s *Store) Investigation(id, investigationID string) (Incident, Investigation, error) {
+	v, e := s.Get(id)
+	if e != nil {
+		return v, Investigation{}, e
+	}
+	for _, x := range v.Investigations {
+		if x.ID == investigationID {
+			return v, x, nil
+		}
+	}
+	return v, Investigation{}, ErrNotFound
+}
+
+func (s *Store) AddInvestigationEvent(id, investigationID, credentialID, kind, message, tool string) (Incident, error) {
+	var v Incident
+	e := s.mutate(func() error {
+		if e := s.read(id, &v); e != nil {
+			return e
+		}
+		var x *Investigation
+		for i := range v.Investigations {
+			if v.Investigations[i].ID == investigationID {
+				x = &v.Investigations[i]
+			}
+		}
+		message = strings.TrimSpace(message)
+		kind = strings.TrimSpace(kind)
+		tool = strings.TrimSpace(tool)
+		if x == nil {
+			return ErrNotFound
+		}
+		if x.CredentialID != credentialID || x.State != "running" {
+			return ErrConflict
+		}
+		if (kind != "finding" && kind != "tool_action" && kind != "question" && kind != "uncertainty") || message == "" || len(message) > 10000 || len(tool) > 200 {
+			return ErrInvalid
+		}
+		if kind == "tool_action" && tool == "" {
+			return ErrInvalid
+		}
+		now := s.now()
+		x.UpdatedAt = now
+		v.Version++
+		v.UpdatedAt = now
+		text := message
+		if tool != "" {
+			text = tool + ": " + message
+		}
+		v.Timeline = append(v.Timeline, Entry{ID: mustID(), Kind: "agent_" + kind, ActorID: x.AgentID, Message: text, Audience: "participants", InvestigationID: x.ID, CreatedAt: now})
+		return s.write(v)
+	})
+	return v, e
+}
+
+func (s *Store) ControlInvestigation(id, investigationID, actor, action, message string) (Incident, Investigation, error) {
+	var v Incident
+	var out Investigation
+	e := s.mutate(func() error {
+		if e := s.read(id, &v); e != nil {
+			return e
+		}
+		var x *Investigation
+		for i := range v.Investigations {
+			if v.Investigations[i].ID == investigationID {
+				x = &v.Investigations[i]
+			}
+		}
+		if x == nil {
+			return ErrNotFound
+		}
+		if !validID(actor) {
+			return ErrInvalid
+		}
+		switch action {
+		case "guide":
+			if strings.TrimSpace(message) == "" || (x.State != "running" && x.State != "paused") {
+				return ErrConflict
+			}
+		case "pause":
+			if x.State != "running" {
+				return ErrConflict
+			}
+			x.State = "paused"
+		case "resume":
+			if x.State != "paused" {
+				return ErrConflict
+			}
+			x.State = "running"
+		case "cancel":
+			if x.State == "cancelled" {
+				out = *x
+				return nil
+			}
+			x.State = "cancelled"
+		default:
+			return ErrInvalid
+		}
+		now := s.now()
+		x.UpdatedAt = now
+		v.Version++
+		v.UpdatedAt = now
+		v.Timeline = append(v.Timeline, Entry{ID: mustID(), Kind: "investigation_" + action, ActorID: actor, Message: strings.TrimSpace(message), Audience: "participants", InvestigationID: x.ID, CreatedAt: now})
+		out = *x
+		return s.write(v)
+	})
+	return v, out, e
+}
+
 type Store struct {
 	root          string
 	mu            sync.Mutex
@@ -314,6 +485,30 @@ func (s *Store) Acknowledge(id, entryID, actor string) (Incident, error) {
 func validIncident(v Incident) bool {
 	return strings.TrimSpace(v.Title) != "" && len(v.Title) <= 200 && strings.TrimSpace(v.Summary) != "" && len(v.Summary) <= 10000 && validID(v.DeclaredBy) && validSeverity(v.Severity) && validStatus(v.Status) && len(v.Scopes) > 0 && len(v.Scopes) <= 25 && validRoles(v.Roles) && validScopes(v.Scopes)
 }
+func validInvestigation(v Investigation) bool {
+	if !validID(v.ID) || !validID(v.AgentID) || !validID(v.InitiatorID) || !validID(v.CredentialID) || strings.TrimSpace(v.Mandate) == "" || (v.State != "running" && v.State != "paused" && v.State != "cancelled") || len(v.Revisions) == 0 || v.CreatedAt.IsZero() || v.UpdatedAt.IsZero() {
+		return false
+	}
+	for _, x := range v.Evidence {
+		if !validEvidence(x) {
+			return false
+		}
+	}
+	for _, x := range v.Revisions {
+		if !validID(x.RepositoryID) || len(x.CommitID) != 40 || strings.TrimSpace(x.Label) == "" {
+			return false
+		}
+	}
+	if len(v.OperationalContext) != len(v.Evidence) {
+		return false
+	}
+	for i, x := range v.OperationalContext {
+		if len(x.Resource) == 0 || !json.Valid(x.Resource) || !sameEvidence([]Evidence{x.Selection}, []Evidence{v.Evidence[i]}) {
+			return false
+		}
+	}
+	return true
+}
 func validScopes(v []Scope) bool {
 	seen := map[string]bool{}
 	for _, s := range v {
@@ -376,6 +571,11 @@ func (s *Store) read(id string, v *Incident) error {
 	}
 	if json.Unmarshal(b, v) != nil || v.ID != id {
 		return errors.New("corrupt incident")
+	}
+	for _, investigation := range v.Investigations {
+		if !validInvestigation(investigation) {
+			return errors.New("corrupt incident investigation")
+		}
 	}
 	return nil
 }
