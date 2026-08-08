@@ -262,7 +262,9 @@ whenever dependencies change or the web job fails before it starts.
   actor-stamped timeline. Updates preserve `participants` or `public` audience
   intent and stable-user acknowledgements; compare-and-swap versions protect state
   and role decisions. Timeline update callers retain a stable operation ID across
-  retries so post-publication durability uncertainty cannot duplicate an update.
+  retries, and the web keeps the pending exact-draft identity in incident-scoped
+  local storage across remounts, so lost responses and post-publication durability
+  uncertainty cannot duplicate an update.
   `$INCIDENT_STORAGE_ROOT` defaults to `incidents`; incident mutations hold the
   repository catalog lock across current participant and role revalidation plus
   publication, so collaborator revocation cannot commit mid-mutation.

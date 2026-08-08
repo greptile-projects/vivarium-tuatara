@@ -26,6 +26,10 @@ responders have consumed each decision. The `/incidents` workspace aggregates
 only incidents the signed-in actor can still reach through current repository
 membership; detail routes provide the live operating picture and response
 controls.
+The browser writes a pending incident update's operation identity and exact
+draft fingerprint to incident-scoped local storage before publication. A lost
+response can therefore be retried after reload with the same durable identity;
+confirmation clears it, while changed content intentionally replaces it.
 
 ## Web interface foundation
 
