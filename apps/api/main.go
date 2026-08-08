@@ -506,6 +506,25 @@ func startCheckRunsForCommit(gitStore *storage.Store, runStore *checkruns.Store,
 	}
 }
 
+func startBoundCheckRuns(gitStore *storage.Store, runStore *checkruns.Store, repositoryID, pullRequestID, commitID string, definitions []checkruns.Definition) {
+	if gitStore == nil || runStore == nil || len(definitions) == 0 {
+		return
+	}
+	repository, err := gitStore.Open(repositoryID)
+	if err != nil {
+		log.Printf("open repository for candidate checks: %v", err)
+		return
+	}
+	runs, err := runStore.Create(repositoryID, pullRequestID, commitID, definitions)
+	if err != nil {
+		log.Printf("create candidate check runs: %v", err)
+		return
+	}
+	for _, run := range runs {
+		go runStore.Execute(run, repository.Path())
+	}
+}
+
 func resumeCheckRuns(gitStore *storage.Store, runStore *checkruns.Store) {
 	runs, err := runStore.Nonterminal()
 	if err != nil {
@@ -1068,7 +1087,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
 			if len(queued.IntegrationCandidates) > 0 {
 				candidate := queued.IntegrationCandidates[len(queued.IntegrationCandidates)-1]
-				startCheckRunsForCommit(gitStore, checkRunStore, queued.RepositoryID, queued.ID, candidate.CommitID, candidate.RequiredChecks)
+				startBoundCheckRuns(gitStore, checkRunStore, queued.RepositoryID, queued.ID, candidate.CommitID, candidate.CheckDefinitions)
 			}
 			writeUncertainMutation(w, queued)
 			return
@@ -1078,7 +1097,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		}
 		if len(queued.IntegrationCandidates) > 0 {
 			candidate := queued.IntegrationCandidates[len(queued.IntegrationCandidates)-1]
-			startCheckRunsForCommit(gitStore, checkRunStore, queued.RepositoryID, queued.ID, candidate.CommitID, candidate.RequiredChecks)
+			startBoundCheckRuns(gitStore, checkRunStore, queued.RepositoryID, queued.ID, candidate.CommitID, candidate.CheckDefinitions)
 		}
 		writeJSON(w, http.StatusOK, queued)
 	})

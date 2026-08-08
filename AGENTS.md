@@ -88,7 +88,8 @@ whenever dependencies change or the web job fails before it starts.
   `queued_at` supplies durable FIFO order and clears when the source changes or
   the pull closes. Admission freezes an immutable synthetic two-parent
   candidate from the exact pull revision and latest eligible target, launches
-  checks on that prospective result, and exposes candidate identity, base,
+  target-base-bound required-check definitions on that prospective result,
+  and exposes candidate identity, base,
   lifecycle, logs, and artifacts; automatic advancement remains later work.
   Fork pull authors can opt current target participants into short-lived Git
   access restricted to the issuing pull request and exact contribution branch; policy removal, closure,

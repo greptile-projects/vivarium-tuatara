@@ -421,9 +421,13 @@ idempotent. Source synchronization or pull closure clears stale admission.
 Admission also creates an immutable synthetic two-parent commit: the first
 parent and `base_commit_id` are the latest eligible target tip, while the
 second parent and `source_commit_id` are the exact admitted pull revision.
+Required check definitions are resolved from that owner-controlled target
+base and frozen on the candidate; a pull's same-named configuration cannot
+replace their image, command, environment, working directory, or timeout.
 `GET /repositories/{id}/pulls/{pull_id}/candidates` returns these identities,
 creation time, derived `pending`, `verifying`, `passed`, or `failed` lifecycle,
-and candidate-scoped check runs. Those run IDs use the ordinary check detail,
+and candidate-scoped check runs. Those bound definitions execute against the
+prospective result snapshot. Run IDs use the ordinary check detail,
 events, logs, artifact, cancel, and rerun routes. Candidate checks execute the
 prospective result snapshot, so successful required-check evidence describes
 the repository state integration would create rather than either parent.

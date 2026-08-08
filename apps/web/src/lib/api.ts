@@ -185,6 +185,7 @@ export type IntegrationCandidate = {
   base_commit_id: string;
   commit_id: string;
   required_checks: string[];
+  check_definitions: CheckRun["definition"][];
   created_at: string;
   state: "pending" | "verifying" | "passed" | "failed";
   checks: CheckRun[];

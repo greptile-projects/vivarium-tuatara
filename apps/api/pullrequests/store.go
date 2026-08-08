@@ -72,12 +72,13 @@ type PullRequest struct {
 // synthetic two-parent commit whose first parent is BaseCommitID and whose
 // second parent is SourceCommitID. Its lifecycle is derived from check runs.
 type IntegrationCandidate struct {
-	ID             string    `json:"id"`
-	SourceCommitID string    `json:"source_commit_id"`
-	BaseCommitID   string    `json:"base_commit_id"`
-	CommitID       string    `json:"commit_id"`
-	RequiredChecks []string  `json:"required_checks"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID               string                 `json:"id"`
+	SourceCommitID   string                 `json:"source_commit_id"`
+	BaseCommitID     string                 `json:"base_commit_id"`
+	CommitID         string                 `json:"commit_id"`
+	RequiredChecks   []string               `json:"required_checks"`
+	CheckDefinitions []checkruns.Definition `json:"check_definitions"`
+	CreatedAt        time.Time              `json:"created_at"`
 }
 
 type IntegrationCandidateView struct {
@@ -1124,6 +1125,14 @@ func (s *Store) Enqueue(repositoryID, pullRequestID string) (PullRequest, error)
 		return PullRequest{}, err
 	}
 	now := s.now().Truncate(time.Microsecond)
+	requiredChecks := make([]string, len(report.RequiredChecks))
+	for i, requirement := range report.RequiredChecks {
+		requiredChecks[i] = requirement.Name
+	}
+	definitions, err := requiredDefinitions(repository, *report.Target.CurrentCommitID, requiredChecks)
+	if err != nil {
+		return PullRequest{}, ErrNotReady
+	}
 	tree, err := mergeTree(repository, *report.Target.CurrentCommitID, p.SourceCommitID)
 	if err != nil {
 		return PullRequest{}, ErrNotReady
@@ -1138,11 +1147,7 @@ func (s *Store) Enqueue(repositoryID, pullRequestID string) (PullRequest, error)
 	if err != nil {
 		return PullRequest{}, fmt.Errorf("write integration candidate: %w", err)
 	}
-	requiredChecks := make([]string, len(report.RequiredChecks))
-	for i, requirement := range report.RequiredChecks {
-		requiredChecks[i] = requirement.Name
-	}
-	p.IntegrationCandidates = append(p.IntegrationCandidates, IntegrationCandidate{ID: candidateID, SourceCommitID: p.SourceCommitID, BaseCommitID: *report.Target.CurrentCommitID, CommitID: string(commit), RequiredChecks: requiredChecks, CreatedAt: now})
+	p.IntegrationCandidates = append(p.IntegrationCandidates, IntegrationCandidate{ID: candidateID, SourceCommitID: p.SourceCommitID, BaseCommitID: *report.Target.CurrentCommitID, CommitID: string(commit), RequiredChecks: requiredChecks, CheckDefinitions: definitions, CreatedAt: now})
 	p.QueuedAt, p.UpdatedAt = &now, now
 	if committed, writeErr := s.write(p); writeErr != nil {
 		if committed {
@@ -1151,6 +1156,34 @@ func (s *Store) Enqueue(repositoryID, pullRequestID string) (PullRequest, error)
 		return PullRequest{}, writeErr
 	}
 	return p, nil
+}
+
+func requiredDefinitions(repository *storage.Repository, commitID string, required []string) ([]checkruns.Definition, error) {
+	if len(required) == 0 {
+		return []checkruns.Definition{}, nil
+	}
+	command := exec.Command("git", "--git-dir="+repository.Path(), "show", commitID+":"+checkruns.ConfigPath)
+	data, err := command.Output()
+	if err != nil {
+		return nil, err
+	}
+	config, err := checkruns.ParseConfig(data)
+	if err != nil {
+		return nil, err
+	}
+	byName := map[string]checkruns.Definition{}
+	for _, definition := range config.Checks {
+		byName[definition.Name] = definition
+	}
+	definitions := make([]checkruns.Definition, 0, len(required))
+	for _, name := range required {
+		definition, exists := byName[name]
+		if !exists {
+			return nil, ErrNotReady
+		}
+		definitions = append(definitions, definition)
+	}
+	return definitions, nil
 }
 
 // Candidates returns immutable candidate identity together with its derived
@@ -1689,8 +1722,13 @@ func (s *Store) read(repositoryID, id string) (PullRequest, error) {
 		return PullRequest{}, fmt.Errorf("corrupt pull request %s", id)
 	}
 	for _, candidate := range p.IntegrationCandidates {
-		if !validID(candidate.ID) || !validCommitID(candidate.SourceCommitID) || !validCommitID(candidate.BaseCommitID) || !validCommitID(candidate.CommitID) || candidate.RequiredChecks == nil || candidate.CreatedAt.IsZero() {
+		if !validID(candidate.ID) || !validCommitID(candidate.SourceCommitID) || !validCommitID(candidate.BaseCommitID) || !validCommitID(candidate.CommitID) || candidate.RequiredChecks == nil || candidate.CheckDefinitions == nil || len(candidate.RequiredChecks) != len(candidate.CheckDefinitions) || candidate.CreatedAt.IsZero() {
 			return PullRequest{}, fmt.Errorf("corrupt pull request %s", id)
+		}
+		for i, definition := range candidate.CheckDefinitions {
+			if definition.Name != candidate.RequiredChecks[i] {
+				return PullRequest{}, fmt.Errorf("corrupt pull request %s", id)
+			}
 		}
 	}
 	return p, nil
