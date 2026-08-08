@@ -74,6 +74,50 @@ func TestPromotionAdmissionHonorsEnvironmentConcurrency(t *testing.T) {
 	}
 }
 
+func TestRollbackTargetSelectsNewestEarlierSuccessfulArtifact(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, actor := id('1'), id('2')
+	environment, err := store.PutEnvironment(Environment{RepositoryID: repo, Name: "production", Position: 1, Image: "alpine:3.22", Command: "true", TimeoutSeconds: 30, RequiredApprovals: 0, Concurrency: 1, UpdatedBy: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := func(release byte) Promotion {
+		value, createErr := store.CreatePromotion(Promotion{RepositoryID: repo, EnvironmentID: environment.ID, ReleaseID: id(release), BuildID: id(release + 1), ArtifactID: id(release + 2), ArtifactSHA256: strings.Repeat(string(release), 64), InitiatedBy: actor})
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		return value
+	}
+	first := create('3')
+	if _, err = store.Transition(repo, first.ID, "running", "deploying"); err != nil {
+		t.Fatal(err)
+	}
+	if first, err = store.Transition(repo, first.ID, "succeeded", "healthy"); err != nil {
+		t.Fatal(err)
+	}
+	second := create('6')
+	if _, err = store.Transition(repo, second.ID, "running", "deploying"); err != nil {
+		t.Fatal(err)
+	}
+	if second, err = store.Transition(repo, second.ID, "failed", "unhealthy"); err != nil {
+		t.Fatal(err)
+	}
+	unhealthy, target, err := store.RollbackTarget(repo, second.ID)
+	if err != nil || unhealthy.ID != second.ID || target.ID != first.ID || target.ArtifactID != first.ArtifactID {
+		t.Fatalf("rollback target = %#v, %#v, %v", unhealthy, target, err)
+	}
+	if _, err := store.CreatePromotion(Promotion{RepositoryID: repo, EnvironmentID: target.EnvironmentID, ReleaseID: target.ReleaseID, BuildID: target.BuildID, ArtifactID: target.ArtifactID, ArtifactSHA256: target.ArtifactSHA256, InitiatedBy: actor, RecoveryOf: second.ID, RecoveryKind: "rollback", RestoresDeploymentID: first.ID}); err != ErrInvalid {
+		t.Fatalf("caller-supplied recovery provenance = %v", err)
+	}
+	rollback, restored, err := store.CreateRollback(repo, second.ID, actor)
+	if err != nil || restored.ID != first.ID || rollback.RecoveryOf != second.ID || rollback.ArtifactSHA256 != first.ArtifactSHA256 {
+		t.Fatalf("rollback = %#v, %v", rollback, err)
+	}
+}
+
 func TestRolloutControlsRetainAttributedDecisionsAndHealthEvidence(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {

@@ -900,3 +900,55 @@ Participants with `repositories:write` may `POST
 `expected_state` and an optional `reason`. State comparison prevents stale
 decisions. Every intervention retains its actor and reason in deployment
 history and creates recipient-specific inbox activity for the initiator.
+
+### Failed deployment recovery
+
+Current owners and contributors with `repositories:write` may `POST
+/repositories/{id}/deployments/{deployment_id}/recoveries` for a deployment in
+`failed` or `canceled` state. Include the observed state to reject stale
+decisions:
+
+```json
+{"action":"rollback","expected_state":"failed"}
+```
+
+`rollback` derives the newest earlier `succeeded` deployment to the same
+environment. It creates a new ordinary promotion for that exact release,
+build, artifact, checksum, commit, and rollout definition, returning `202`
+with `deployment` and `restores_deployment`. The new record carries
+`recovery_kind: "rollback"`, `recovery_of`, and `restores_deployment_id`.
+Environment concurrency, prior-environment provenance, independent approvals,
+artifact verification, and health observation still apply. `409
+rollback_unavailable` means no earlier known-good deployment exists;
+`rollback_blocked` means current delivery policy prevents admission.
+
+```json
+{"action":"repair","expected_state":"failed"}
+```
+
+`repair` returns `201` with `pull_request` and `session` and a `Location` for
+the session workspace. The server creates a deterministic, deployment-keyed
+`agent/recovery/*` branch at the current default-branch tip and an ordinary open
+pull against that default branch. This prevents intervening integrated work
+from appearing as repair deletions. `session.deployment_evidence` immutably snapshots release
+version and notes, deployment and environment IDs, source commit, artifact ID
+and SHA-256, terminal state, current rollout stage, health evidence, and
+ordered attributed deployment events/logs. Launching an agent uses the normal
+pull-session API and issues only repository/repair-branch Git access. Agent
+completion synchronizes the pull, starts exact-revision checks, and remains
+subject to review, integration policy, merge, new release build, and governed
+promotion; it grants no environment configuration, credential, approval, or
+execution authority.
+Retries locate the same branch and pull and publish or reconnect its one repair
+session after a definitive or uncertain session-storage failure. Rollback
+creation similarly derives the current known-good target, rechecks the
+unhealthy deployment, and writes the promotion within one deployment-store
+critical section.
+If publication stopped after creating only the deterministic Git ref, retry
+reconciles it to the latest default tip only by an ancestry check and
+compare-and-swap fast-forward. A divergent or concurrently changed ref returns
+`409 repair_branch_changed` and is never overwritten.
+Pull and session publication enforce deployment-recovery uniqueness under
+their cross-process store locks. Simultaneous identical repair commands may
+return the newly created or already connected resource, but all responses name
+the same pull request and change session.

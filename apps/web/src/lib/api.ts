@@ -134,6 +134,9 @@ export type Deployment = {
   created_at: string;
   started_at?: string;
   completed_at?: string;
+  recovery_of?: string;
+  recovery_kind?: "rollback";
+  restores_deployment_id?: string;
 };
 export type ForkSynchronization = {
   branch: string;
@@ -436,6 +439,20 @@ export type ChangeSession = {
       exit_code?: number;
     }[];
     artifacts: CheckArtifact[];
+  };
+  deployment_evidence?: {
+    deployment_id: string;
+    release_id: string;
+    environment_id: string;
+    artifact_id: string;
+    artifact_sha256: string;
+    commit_id: string;
+    state: string;
+    release_version: string;
+    release_notes: string;
+    current_stage: number;
+    evidence: { stage: string; signal: string; state: string; message?: string }[];
+    events: { sequence: number; kind: string; actor_id?: string; state?: string; message?: string }[];
   };
   state: "open";
   created_at: string;

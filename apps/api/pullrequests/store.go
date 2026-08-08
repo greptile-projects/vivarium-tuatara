@@ -368,16 +368,22 @@ func (s *Store) Create(repositoryID, authorID, title, body, sourceBranch, target
 // Its reachable objects are imported into the target without publishing a ref,
 // keeping every later review and merge operation pinned to the adopted commit.
 func (s *Store) CreateFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, proposalID *string) (PullRequest, error) {
-	return s.createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, "", nil, proposalID, nil, nil, nil)
+	return s.createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, "", nil, proposalID, nil, nil, nil, false)
+}
+
+// FindOrCreateRecovery enforces one review boundary for a deterministic
+// repository/source-branch pair under the cross-process pull-store lock.
+func (s *Store) FindOrCreateRecovery(repositoryID, authorID, title, body, sourceBranch, targetBranch string) (PullRequest, error) {
+	return s.createFrom(repositoryID, repositoryID, authorID, title, body, sourceBranch, targetBranch, "", nil, nil, nil, nil, nil, true)
 }
 
 // CreateTaskContribution publishes task-scoped work into ordinary review while
 // retaining stable links to the agreed intent and optional execution evidence.
 func (s *Store) CreateTaskContribution(repositoryID, authorID, title, body, sourceBranch, targetBranch, expectedSourceCommit string, commitIDs []string, proposalID, taskID *string, sessionID, runID *string) (PullRequest, error) {
-	return s.createFrom(repositoryID, repositoryID, authorID, title, body, sourceBranch, targetBranch, expectedSourceCommit, commitIDs, proposalID, taskID, sessionID, runID)
+	return s.createFrom(repositoryID, repositoryID, authorID, title, body, sourceBranch, targetBranch, expectedSourceCommit, commitIDs, proposalID, taskID, sessionID, runID, false)
 }
 
-func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, expectedSourceCommit string, commitIDs []string, proposalID, taskID, sessionID, runID *string) (PullRequest, error) {
+func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, expectedSourceCommit string, commitIDs []string, proposalID, taskID, sessionID, runID *string, uniqueSource bool) (PullRequest, error) {
 	if !validID(repositoryID) || !validID(sourceRepositoryID) || !validID(authorID) {
 		return PullRequest{}, ErrInvalid
 	}
@@ -443,6 +449,17 @@ func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, bo
 		return PullRequest{}, err
 	}
 	defer unlock()
+	if uniqueSource {
+		existing, listErr := s.List(repositoryID)
+		if listErr != nil {
+			return PullRequest{}, listErr
+		}
+		for _, candidate := range existing {
+			if candidate.SourceRepositoryID == sourceRepositoryID && candidate.SourceBranch == sourceBranch {
+				return candidate, nil
+			}
+		}
+	}
 	if err := s.ensureRepositoryDirectory(repositoryID); err != nil {
 		return PullRequest{}, err
 	}

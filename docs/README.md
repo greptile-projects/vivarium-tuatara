@@ -687,6 +687,38 @@ transition, provision/status message, and completion is retained with actor and
 time through the API and release-detail workspace. Records live beneath
 `DEPLOYMENT_STORAGE_ROOT` (default `deployments`).
 
+Terminal unhealthy delivery becomes an explicit recovery decision. A current
+participant can ask the server to derive the newest earlier successful
+deployment for the same environment and submit that exact release, build,
+artifact, and checksum as a new governed promotion. The rollback retains both
+the unhealthy deployment and the successful deployment it restores; it does
+not bypass environment approval, ordering, concurrency, artifact verification,
+or rollout observation.
+
+Alternatively, a participant can open a source repair directly from the
+unhealthy deployment. The server creates a deterministic isolated
+`agent/recovery/*` branch at the current default-branch tip, opens an ordinary
+pull request against that branch, and attaches a change session snapshot containing release version and
+notes, deployment state and logs, health evidence, artifact identity and
+checksum, and exact source revision. Agents launched from that workspace get
+only the existing pull-branch Git credential. Completion synchronizes the pull
+and therefore re-enters fresh required checks, review, protected integration,
+and a newly built release before any later promotion. No repair credential can
+read protected environment values or execute a deployment.
+The deterministic deployment-keyed branch also makes retries reconnect a pull
+or session published before a storage failure instead of duplicating repair
+work. Rollback selection and promotion publication share one cross-process
+store lock, so the failed deployment and known-good target cannot become stale
+between derivation and the durable recovery write.
+If failure leaves only the deterministic repair ref, retry fast-forwards it to
+the current default tip only when the old ref remains an ancestor. Divergence
+or a concurrent branch update is rejected instead of overwriting work or
+opening a stale repair pull.
+Pull and change-session persistence independently enforce recovery uniqueness
+inside their cross-process locks. Concurrent requests for the same deployment
+therefore converge on the one deterministic source branch, pull request, and
+evidence-pinned session instead of splitting diagnosis across workspaces.
+
 Each environment also defines an executor image, command, and timeout. The
 worker reopens the immutable build artifact, recomputes and matches its SHA-256,
 then mounts it read-only at `$VIVARIUM_ARTIFACT` in a capability-free,

@@ -53,6 +53,31 @@ func TestCreateReopenAndListTimeline(t *testing.T) {
 	}
 }
 
+func TestRecoverySessionFreezesDeploymentEvidence(t *testing.T) {
+	root := t.TempDir()
+	store, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repositoryID := "11111111111111111111111111111111"
+	pullID := "22222222222222222222222222222222"
+	actorID := "33333333333333333333333333333333"
+	revision := "4444444444444444444444444444444444444444"
+	evidence := &DeploymentEvidence{DeploymentID: "55555555555555555555555555555555", ReleaseID: "66666666666666666666666666666666", ReleaseVersion: "v1.2.3", ReleaseNotes: "Known regression context.", EnvironmentID: "77777777777777777777777777777777", ArtifactID: "88888888888888888888888888888888", ArtifactSHA256: strings.Repeat("a", 64), CommitID: revision, State: "failed", CurrentStage: 1, Evidence: []DeploymentSignal{{Stage: "canary", Signal: "errors", State: "failed", Message: "threshold exceeded"}}, Events: []DeploymentEvent{{Sequence: 4, Kind: "health.signal", State: "failed", Message: "threshold exceeded"}}}
+	created, err := store.CreateWithRecoveryEvidence(repositoryID, pullID, actorID, revision, nil, evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := reopened.Get(repositoryID, pullID, created.ID)
+	if err != nil || loaded.DeploymentEvidence == nil || loaded.DeploymentEvidence.DeploymentID != evidence.DeploymentID || loaded.DeploymentEvidence.Events[0].Message != "threshold exceeded" {
+		t.Fatalf("recovery evidence = %#v, %v", loaded.DeploymentEvidence, err)
+	}
+}
+
 func TestCreateWithEvidencePersistsFailureContext(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {

@@ -23,6 +23,7 @@ export function DeploymentWorkspace({
     [environments, setEnvironments] = useState<DeploymentEnvironment[]>([]),
     [deployments, setDeployments] = useState<Deployment[]>([]),
     [owner, setOwner] = useState(false),
+    [recoveryNotice, setRecoveryNotice] = useState(""),
     [error, setError] = useState("");
   const load = useCallback(async () => {
     try {
@@ -169,6 +170,29 @@ export function DeploymentWorkspace({
       setError(reason instanceof Error ? reason.message : "Rollout control could not be applied.");
     }
   }
+  async function recover(run: Deployment, action: "rollback" | "repair") {
+    if (!token) return;
+    setError("");
+    setRecoveryNotice("");
+    try {
+      const result = await api<{
+        deployment?: Deployment;
+        pull_request?: { id: string };
+        session?: { id: string };
+      }>(`/repositories/${repositoryID}/deployments/${run.id}/recoveries`, {
+        method: "POST",
+        body: JSON.stringify({ action, expected_state: run.state }),
+      }, token);
+      if (action === "repair" && result.pull_request && result.session) {
+        window.location.assign(`/pulls/${repositoryID}/${result.pull_request.id}/sessions/${result.session.id}`);
+        return;
+      }
+      setRecoveryNotice("Rollback requested with the last known-good artifact. Normal environment approvals still apply.");
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Recovery could not be started.");
+    }
+  }
   const exactArtifacts = builds.flatMap((build) =>
     build.state === "succeeded" ? build.artifacts : [],
   );
@@ -187,6 +211,7 @@ export function DeploymentWorkspace({
           {error}
         </p>
       )}
+      {recoveryNotice && <p role="status" className="mt-3 rounded-lg bg-[var(--brand-soft)] p-3 text-sm text-[var(--success)]">{recoveryNotice}</p>}
       {owner && (
         <details className="mt-4 rounded-lg border border-[var(--line)] p-4">
           <summary className="cursor-pointer font-semibold">
@@ -367,6 +392,16 @@ export function DeploymentWorkspace({
                         {run.state === "paused" && <Button variant="secondary" onClick={() => control(run, "resume")}>Resume</Button>}
                         {["pending_approval", "queued", "running", "paused"].includes(run.state) && <Button variant="secondary" onClick={() => control(run, "cancel")}>Cancel</Button>}
                         {["running", "paused", "succeeded"].includes(run.state) && <Button variant="secondary" onClick={() => control(run, "mark_unsuccessful")}>Mark unsuccessful</Button>}
+                      </div>
+                    )}
+                    {token && ["failed", "canceled"].includes(run.state) && (
+                      <div className="mt-3 rounded-lg border border-[var(--warning)] bg-[var(--warning-soft)] p-3">
+                        <p className="text-xs font-semibold">Safe recovery</p>
+                        <p className="mt-1 text-xs text-[var(--muted)]">Restore the newest earlier successful artifact through governed approvals, or diagnose in a source-only agent workspace that must return through review.</p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Button variant="secondary" onClick={() => void recover(run, "rollback")}>Restore last known-good</Button>
+                          <Button variant="secondary" onClick={() => void recover(run, "repair")}>Open repair session</Button>
+                        </div>
                       </div>
                     )}
                     {run.evidence.length > 0 && <ul className="mt-3 space-y-1" aria-label="Health evidence">
