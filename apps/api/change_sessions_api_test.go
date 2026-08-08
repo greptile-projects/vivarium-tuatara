@@ -14,6 +14,7 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
@@ -28,7 +29,8 @@ func TestCollaboratorOpensAndReconnectsToChangeSession(t *testing.T) {
 	pulls, _ := pullrequests.New(t.TempDir(), gitStore)
 	sessionRoot := t.TempDir()
 	changeSessions, _ := changesessions.New(sessionRoot)
-	server := httptest.NewServer(newPlatformHandler(gitStore, identities, credentials, catalog, nil, pulls, nil, changeSessions))
+	checkStore, _ := checkruns.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, pulls, nil, changeSessions, checkStore))
 	defer server.Close()
 
 	owner := createTestAccount(t, server.URL, "session-owner")
@@ -63,7 +65,24 @@ func TestCollaboratorOpensAndReconnectsToChangeSession(t *testing.T) {
 	}
 	pullResponse.Body.Close()
 
+	failedRuns, err := checkStore.Create(repository.ID, pull.ID, pull.SourceCommitID, []checkruns.Definition{{Name: "api", Image: "vivarium/go:1.26", Command: "go test ./...", WorkingDirectory: "apps/api"}})
+	if err != nil || len(failedRuns) != 1 {
+		t.Fatalf("create failed check = %+v, %v", failedRuns, err)
+	}
+	if err := checkStore.RecordFailure(failedRuns[0], "tests failed"); err != nil {
+		t.Fatal(err)
+	}
+
 	baseURL := server.URL + "/repositories/" + repository.ID + "/pulls/" + pull.ID + "/sessions"
+	repairResponse := authenticatedRequest(t, http.MethodPost, baseURL, `{"check_run_id":"`+failedRuns[0].ID+`"}`, contributor.Credential.Token, http.StatusCreated)
+	var repair changesessions.Session
+	if err := json.NewDecoder(repairResponse.Body).Decode(&repair); err != nil {
+		t.Fatal(err)
+	}
+	repairResponse.Body.Close()
+	if repair.CheckEvidence == nil || repair.CheckEvidence.RunID != failedRuns[0].ID || repair.CheckEvidence.Definition.Command != "go test ./..." || len(repair.CheckEvidence.Events) == 0 {
+		t.Fatalf("repair evidence = %#v", repair.CheckEvidence)
+	}
 	createdResponse := authenticatedRequest(t, http.MethodPost, baseURL, "", owner.Credential.Token, http.StatusCreated)
 	var session changesessions.Session
 	if err := json.NewDecoder(createdResponse.Body).Decode(&session); err != nil {

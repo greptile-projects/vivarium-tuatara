@@ -408,6 +408,16 @@ partitioned by repository and pull request. Run, guidance, intervention, and
 artifact events extend this public session and timeline boundary rather than
 exposing execution internals.
 
+An authorized participant can turn a concrete automated failure into that
+workspace by sending `{"check_run_id":"<id>"}` when creating the session. The
+run must be failed and belong to the pull request's currently adopted source
+revision; stale, active, successful, and canceled runs return `409
+check_not_repairable`. The session durably snapshots the exact revision,
+versioned check definition, execution events (including logs and command
+outcomes), and artifact identities and hashes. Ordinary session inspection
+therefore presents the same evidence after restart without following a later
+rerun or branch movement.
+
 Confirmed sessions accept bounded delegation at `POST
 .../sessions/{session_id}/runs`. A current participant with
 `repositories:write` supplies `instructions`, the session's exact
@@ -460,7 +470,8 @@ event to the shared timeline.
 
 The run credential reads its authoritative control state at `GET
 .../runs/{run_id}/control`. The response contains the `run` and its ordered
-collaborator `interventions`, without exposing the participant-only session
+collaborator `interventions`, plus the session's optional `check_evidence`,
+without exposing the participant-only session
 timeline. A paused run receives `409 agent_run_paused` if it attempts to
 publish more progress and must poll control state until resumed. Cancellation
 is terminal: it records `state: "canceled"`, appends `run.canceled`, and revokes
@@ -468,6 +479,11 @@ the bounded Git credential so later progress, control reads, fetches, and
 pushes fail authentication. Cancel retries tolerate an already-revoked
 credential. Intervention publication follows the shared uncertain-durability
 response contract.
+
+A repair run can download only the artifacts captured by its session through
+`GET .../runs/{run_id}/evidence/artifacts/{artifact_id}` using its bounded Git
+credential. The check evidence remains tied to the failed revision even if the
+original check is rerun later.
 
 After committing and pushing new descendant history, the active run credential
 publishes its review handoff at `POST .../runs/{run_id}/completion`. The body
@@ -482,8 +498,10 @@ Successful publication records the structured `outcome` on the run, appends an
 attributed `run.completed` event, marks the run terminal, revokes its Git
 credential, and synchronizes the pull request to the same commit. Existing reviews consequently become stale
 and merge readiness evaluates the new revision through the ordinary pull
-request rules. The response contains the run, event, and updated pull request;
-the shared `202` contract applies if either durable publication is visible but
+request rules. The response contains the run, event, and updated pull request.
+source synchronization also starts `.vivarium/checks.json` verification for
+the newly adopted commit, so repaired work immediately produces fresh
+exact-revision evidence. The shared `202` contract applies if either durable publication is visible but
 not confirmed. A moved branch tip, unrelated history, paused/canceled run, or
 pull request advanced by another workflow is rejected without presenting the
 candidate as this run's completed work.

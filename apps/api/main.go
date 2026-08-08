@@ -191,7 +191,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerPullRequestRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, authStore, activityStore, userStore, checkRunStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil && changeSessionStore != nil {
-		registerChangeSessionRoutes(mux, store, repositoryCatalog, pullRequestStore, changeSessionStore, authStore, activityStore)
+		registerChangeSessionRoutes(mux, store, repositoryCatalog, pullRequestStore, changeSessionStore, authStore, activityStore, checkRunStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && activityStore != nil {
 		registerActivityRoutes(mux, repositoryCatalog, activityStore, authStore)
@@ -469,6 +469,27 @@ func startCheckRunRecovery(gitStore *storage.Store, runStore *checkruns.Store) {
 			resumeCheckRuns(gitStore, runStore)
 		}
 	}()
+}
+
+func repairEvidence(run checkruns.Run, events []checkruns.Event) *changesessions.CheckEvidence {
+	evidence := &changesessions.CheckEvidence{
+		RunID:      run.ID,
+		Definition: changesessions.CheckDefinition{Name: run.Definition.Name, Image: run.Definition.Image, Command: run.Definition.Command, WorkingDirectory: run.Definition.WorkingDirectory, Environment: run.Definition.Environment, TimeoutSeconds: run.Definition.TimeoutSeconds},
+		Events:     make([]changesessions.CheckEvent, 0, len(events)),
+		Artifacts:  make([]changesessions.CheckArtifact, 0, len(run.Artifacts)),
+	}
+	for _, event := range events {
+		// Control projections describe collaborator actions, not the automated
+		// failure. Keep execution state, command outcomes, and complete logs.
+		if event.Kind == "control" {
+			continue
+		}
+		evidence.Events = append(evidence.Events, changesessions.CheckEvent{Sequence: event.Sequence, Attempt: event.Attempt, Kind: event.Kind, State: event.State, Stream: event.Stream, Message: event.Message, ExitCode: event.ExitCode})
+	}
+	for _, artifact := range run.Artifacts {
+		evidence.Artifacts = append(evidence.Artifacts, changesessions.CheckArtifact{ID: artifact.ID, Attempt: artifact.Attempt, Path: artifact.Path, Size: artifact.Size, SHA256: artifact.SHA256, ContentType: artifact.ContentType, CreatedAt: artifact.CreatedAt})
+	}
+	return evidence
 }
 
 func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoriesStore *repositories.Store, proposalStore *proposals.Store, store *pullrequests.Store, authStore *auth.Store, activityStore *activities.Store, userStore *users.Store, checkRunStore *checkruns.Store) {
@@ -928,11 +949,7 @@ func writePullRequestError(w http.ResponseWriter, err error) bool {
 	return true
 }
 
-func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoriesStore *repositories.Store, pullRequestStore *pullrequests.Store, store *changesessions.Store, authStore *auth.Store, activityStores ...*activities.Store) {
-	var activityStore *activities.Store
-	if len(activityStores) > 0 {
-		activityStore = activityStores[0]
-	}
+func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoriesStore *repositories.Store, pullRequestStore *pullrequests.Store, store *changesessions.Store, authStore *auth.Store, activityStore *activities.Store, checkRunStore *checkruns.Store) {
 	loadPull := func(w http.ResponseWriter, r *http.Request) (pullrequests.PullRequest, bool) {
 		pull, err := pullRequestStore.Get(r.PathValue("id"), r.PathValue("pull_id"))
 		if writePullRequestError(w, err) {
@@ -953,7 +970,40 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 			writeAPIError(w, http.StatusConflict, "pull_request_closed", "change sessions require an open pull request")
 			return
 		}
-		session, err := store.Create(pull.RepositoryID, pull.ID, actor.UserID, pull.SourceCommitID)
+		var input struct {
+			CheckRunID string `json:"check_run_id"`
+		}
+		if r.Body != nil && r.Body != http.NoBody && decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_change_session", "change session input is invalid")
+			return
+		}
+		var evidence *changesessions.CheckEvidence
+		if input.CheckRunID != "" {
+			if checkRunStore == nil {
+				writeAPIError(w, 404, "check_run_not_found", "check run not found")
+				return
+			}
+			run, runErr := checkRunStore.Get(pull.RepositoryID, pull.ID, input.CheckRunID)
+			if errors.Is(runErr, checkruns.ErrNotFound) {
+				writeAPIError(w, 404, "check_run_not_found", "check run not found")
+				return
+			}
+			if runErr != nil {
+				writeAPIError(w, 500, "internal_error", "check evidence unavailable")
+				return
+			}
+			if run.State != "failed" || run.CommitID != pull.SourceCommitID {
+				writeAPIError(w, 409, "check_not_repairable", "repair sessions require a failed check on the current pull request revision")
+				return
+			}
+			events, eventErr := checkRunStore.Events(pull.RepositoryID, pull.ID, run.ID, 0)
+			if eventErr != nil {
+				writeAPIError(w, 500, "internal_error", "check evidence unavailable")
+				return
+			}
+			evidence = repairEvidence(run, events)
+		}
+		session, err := store.CreateWithEvidence(pull.RepositoryID, pull.ID, actor.UserID, pull.SourceCommitID, evidence)
 		location := r.URL.Path + "/" + session.ID
 		if errors.Is(err, changesessions.ErrDurabilityUncertain) {
 			w.Header().Set("Location", location)
@@ -1285,7 +1335,52 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 		if writeChangeSessionError(w, err) {
 			return
 		}
-		writeJSON(w, 200, map[string]any{"run": run, "interventions": interventions})
+		session, sessionErr := store.Get(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("session_id"))
+		if writeChangeSessionError(w, sessionErr) {
+			return
+		}
+		writeJSON(w, 200, map[string]any{"run": run, "interventions": interventions, "check_evidence": session.CheckEvidence})
+	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/sessions/{session_id}/runs/{run_id}/evidence/artifacts/{artifact_id}", func(w http.ResponseWriter, r *http.Request) {
+		credential, ok := authenticateRequest(w, r, authStore, "git:read", false)
+		if !ok {
+			return
+		}
+		if credential.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "agent_run_not_found", "agent run not found")
+			return
+		}
+		if _, _, err := store.GetRunControl(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("session_id"), r.PathValue("run_id"), credential.ID); writeChangeSessionError(w, err) {
+			return
+		}
+		session, err := store.Get(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("session_id"))
+		if writeChangeSessionError(w, err) {
+			return
+		}
+		if session.CheckEvidence == nil || checkRunStore == nil {
+			writeAPIError(w, 404, "check_artifact_not_found", "check artifact not found")
+			return
+		}
+		allowed := false
+		for _, artifact := range session.CheckEvidence.Artifacts {
+			if artifact.ID == r.PathValue("artifact_id") {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			writeAPIError(w, 404, "check_artifact_not_found", "check artifact not found")
+			return
+		}
+		file, artifact, err := checkRunStore.OpenArtifact(r.PathValue("id"), r.PathValue("pull_id"), session.CheckEvidence.RunID, r.PathValue("artifact_id"))
+		if err != nil {
+			writeAPIError(w, 404, "check_artifact_not_found", "check artifact not found")
+			return
+		}
+		defer file.Close()
+		w.Header().Set("Content-Type", artifact.ContentType)
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", path.Base(artifact.Path)))
+		http.ServeContent(w, r, path.Base(artifact.Path), artifact.CreatedAt, file)
 	})
 	type runInput struct {
 		Instructions   string   `json:"instructions"`

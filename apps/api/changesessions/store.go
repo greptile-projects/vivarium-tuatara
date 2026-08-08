@@ -42,14 +42,55 @@ var workEventKinds = map[string]bool{
 }
 
 type Session struct {
-	ID             string    `json:"id"`
-	RepositoryID   string    `json:"repository_id"`
-	PullRequestID  string    `json:"pull_request_id"`
-	InitiatorID    string    `json:"initiator_id"`
-	SourceCommitID string    `json:"source_commit_id"`
-	State          string    `json:"state"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID             string         `json:"id"`
+	RepositoryID   string         `json:"repository_id"`
+	PullRequestID  string         `json:"pull_request_id"`
+	InitiatorID    string         `json:"initiator_id"`
+	SourceCommitID string         `json:"source_commit_id"`
+	CheckEvidence  *CheckEvidence `json:"check_evidence,omitempty"`
+	State          string         `json:"state"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+}
+
+// CheckEvidence is an immutable snapshot of the automated failure that led to
+// a repair session. Artifact bytes remain in the check store and are addressed
+// by their stable IDs; the session retains everything needed to understand and
+// retrieve that evidence later.
+type CheckEvidence struct {
+	RunID      string          `json:"run_id"`
+	Definition CheckDefinition `json:"definition"`
+	Events     []CheckEvent    `json:"events"`
+	Artifacts  []CheckArtifact `json:"artifacts"`
+}
+
+type CheckDefinition struct {
+	Name             string            `json:"name"`
+	Image            string            `json:"image"`
+	Command          string            `json:"command"`
+	WorkingDirectory string            `json:"working_directory,omitempty"`
+	Environment      map[string]string `json:"environment,omitempty"`
+	TimeoutSeconds   int               `json:"timeout_seconds,omitempty"`
+}
+
+type CheckEvent struct {
+	Sequence int64  `json:"sequence"`
+	Attempt  int    `json:"attempt"`
+	Kind     string `json:"kind"`
+	State    string `json:"state,omitempty"`
+	Stream   string `json:"stream,omitempty"`
+	Message  string `json:"message,omitempty"`
+	ExitCode *int   `json:"exit_code,omitempty"`
+}
+
+type CheckArtifact struct {
+	ID          string    `json:"id"`
+	Attempt     int       `json:"attempt"`
+	Path        string    `json:"path"`
+	Size        int64     `json:"size"`
+	SHA256      string    `json:"sha256"`
+	ContentType string    `json:"content_type"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type Event struct {
@@ -140,7 +181,14 @@ func New(root string) (*Store, error) {
 }
 
 func (s *Store) Create(repositoryID, pullRequestID, initiatorID, sourceCommitID string) (Session, error) {
+	return s.CreateWithEvidence(repositoryID, pullRequestID, initiatorID, sourceCommitID, nil)
+}
+
+func (s *Store) CreateWithEvidence(repositoryID, pullRequestID, initiatorID, sourceCommitID string, evidence *CheckEvidence) (Session, error) {
 	if !validID(repositoryID) || !validID(pullRequestID) || !validID(initiatorID) || !validObjectID(sourceCommitID) {
+		return Session{}, ErrInvalid
+	}
+	if evidence != nil && (!validID(evidence.RunID) || evidence.Definition.Name == "" || evidence.Definition.Command == "") {
 		return Session{}, ErrInvalid
 	}
 	sessionID, err := newID()
@@ -152,7 +200,7 @@ func (s *Store) Create(repositoryID, pullRequestID, initiatorID, sourceCommitID 
 		return Session{}, err
 	}
 	now := s.now().Truncate(time.Microsecond)
-	session := Session{ID: sessionID, RepositoryID: repositoryID, PullRequestID: pullRequestID, InitiatorID: initiatorID, SourceCommitID: sourceCommitID, State: Open, CreatedAt: now, UpdatedAt: now}
+	session := Session{ID: sessionID, RepositoryID: repositoryID, PullRequestID: pullRequestID, InitiatorID: initiatorID, SourceCommitID: sourceCommitID, CheckEvidence: evidence, State: Open, CreatedAt: now, UpdatedAt: now}
 	rec := record{Session: session, Events: []Event{{ID: eventID, SessionID: sessionID, Kind: "session.opened", ActorID: initiatorID, State: Open, CreatedAt: now}}}
 
 	s.mu.Lock()
@@ -647,6 +695,16 @@ func (s *Store) read(repositoryID, pullRequestID, sessionID string) (record, err
 	var rec record
 	if json.Unmarshal(data, &rec) != nil || rec.Session.ID != sessionID || rec.Session.RepositoryID != repositoryID || rec.Session.PullRequestID != pullRequestID || !validID(rec.Session.InitiatorID) || !validObjectID(rec.Session.SourceCommitID) || rec.Session.State != Open || len(rec.Events) == 0 {
 		return record{}, errors.New("invalid durable change session record")
+	}
+	if evidence := rec.Session.CheckEvidence; evidence != nil {
+		if !validID(evidence.RunID) || evidence.Definition.Name == "" || evidence.Definition.Command == "" {
+			return record{}, errors.New("invalid durable check evidence")
+		}
+		for _, artifact := range evidence.Artifacts {
+			if !validID(artifact.ID) || artifact.Path == "" || artifact.Size < 0 {
+				return record{}, errors.New("invalid durable check artifact evidence")
+			}
+		}
 	}
 	for _, event := range rec.Events {
 		if !validID(event.ID) || event.SessionID != sessionID || !validID(event.ActorID) || event.Kind == "" || event.State == "" || (event.Kind == "run.launched" && !validID(event.RunID)) || (workEventKinds[event.Kind] && (!validID(event.RunID) || !validID(event.InitiatorID) || !validID(event.AgentID) || !validObjectID(event.RevisionID))) {

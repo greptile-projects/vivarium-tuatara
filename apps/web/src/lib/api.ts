@@ -181,6 +181,12 @@ export type ChangeSession = {
   pull_request_id: string;
   initiator_id: string;
   source_commit_id: string;
+  check_evidence?: {
+    run_id: string;
+    definition: { name: string; image: string; command: string; working_directory?: string; environment?: Record<string, string>; timeout_seconds?: number };
+    events: { sequence: number; attempt: number; kind: string; state?: string; stream?: string; message?: string; exit_code?: number }[];
+    artifacts: CheckArtifact[];
+  };
   state: "open";
   created_at: string;
   updated_at: string;

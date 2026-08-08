@@ -3,6 +3,7 @@ package changesessions
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -49,6 +50,30 @@ func TestCreateReopenAndListTimeline(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].Kind != "session.opened" || events[0].ActorID != actorID || events[0].State != Open {
 		t.Fatalf("events = %+v", events)
+	}
+}
+
+func TestCreateWithEvidencePersistsFailureContext(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := &CheckEvidence{
+		RunID:      strings.Repeat("5", 32),
+		Definition: CheckDefinition{Name: "api", Image: "vivarium/go:1.26", Command: "go test ./...", WorkingDirectory: "apps/api"},
+		Events:     []CheckEvent{{Sequence: 4, Attempt: 1, Kind: "log", Stream: "stderr", Message: "FAIL\n"}},
+		Artifacts:  []CheckArtifact{{ID: strings.Repeat("6", 32), Attempt: 1, Path: "report.xml", Size: 12, SHA256: strings.Repeat("a", 64), ContentType: "application/xml"}},
+	}
+	session, err := store.CreateWithEvidence(strings.Repeat("1", 32), strings.Repeat("2", 32), strings.Repeat("3", 32), strings.Repeat("4", 40), evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Get(session.RepositoryID, session.PullRequestID, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.CheckEvidence == nil || reopened.CheckEvidence.RunID != evidence.RunID || reopened.CheckEvidence.Definition.Command != "go test ./..." || len(reopened.CheckEvidence.Events) != 1 || len(reopened.CheckEvidence.Artifacts) != 1 {
+		t.Fatalf("failure evidence was not preserved: %#v", reopened.CheckEvidence)
 	}
 }
 
