@@ -416,8 +416,10 @@ target, ordinary rules still determine `mergeable`, but `can_merge` is false
 and direct merge is rejected. An owner with an eligible request receives
 `can_enqueue: true` and uses `POST
 /repositories/{id}/pulls/{pull_id}/queue`. Admission persists `queued_at`; its
-timestamp establishes durable FIFO order, and retrying admission is
-idempotent. Source synchronization or pull closure clears stale admission.
+timestamp establishes initial FIFO order, while an exact rational `queue_rank`
+supports atomic single-entry reprioritization without finite timestamp gaps.
+Retrying admission is idempotent. Source synchronization or pull closure
+clears stale admission.
 Admission also creates an immutable synthetic two-parent commit: the first
 parent and `base_commit_id` are the latest eligible target tip, while the
 second parent and `source_commit_id` are the exact admitted pull revision.
@@ -451,6 +453,17 @@ duplicate activity.
 Source synchronization and closure remove an entry without deleting candidate
 history. Failed or cancelled head checks and candidate conflicts either leave
 the entry blocking for `pause`, or clear admission and continue for `remove`.
+
+`GET /repositories/{id}/branches/{branch}/queue` is the shared branch queue
+projection. It returns durable one-based order plus each pull request, its
+current candidate and retained attempt history, derived lifecycle, explicit
+blockers, and a plain-language `next_action`. Owners operate an admitted entry
+with `PATCH /repositories/{id}/pulls/{pull_id}/queue` and an `action` of
+`pause`, `resume`, `retry`, `remove`, or `reprioritize` (the latter also takes
+a one-based `position`). Retry supersedes rather than deletes failed candidate
+evidence. Every admission and intervention retains actor and time on the pull
+request, emits collaboration activity targeted to the pull author, and
+projects relevant outcomes into that user's actionable inbox.
 
 An open request is mergeable only while its source branch still identifies the
 snapshotted commit, its target exists, the source is not already reachable

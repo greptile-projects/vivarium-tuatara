@@ -85,8 +85,9 @@ whenever dependencies change or the web job fails before it starts.
   configure 1-10 concurrent candidates and `pause` or `remove` failure
   behavior, and inspect the existing approval and required-check admission
   rules. Protected ready pulls must be admitted instead of merged directly;
-  `queued_at` supplies durable FIFO order and clears when the source changes or
-  the pull closes. Admission freezes an immutable synthetic two-parent
+  `queued_at` supplies initial FIFO order; exact rational `queue_rank` values
+  allow reprioritization to atomically update only the moved entry. Both clear
+  when the source changes or the pull closes. Admission freezes an immutable synthetic two-parent
   candidate from the exact pull revision and latest eligible target, launches
   target-base-bound required-check definitions on that prospective result,
   and exposes candidate identity, base, lifecycle, logs, and artifacts. A
@@ -98,7 +99,11 @@ whenever dependencies change or the web job fails before it starts.
   merge or an external target update. Superseded evidence is retained but
   never lands; source changes and closure clear admission, while conflicts and
   failed or cancelled checks follow `pause` or `remove` without deleting pull
-  request history. Automatic completion closes a linked open proposal and
+  request history. The branch queue surface exposes durable order, current
+  candidate state, blockers, predicted next action, and retained attempts;
+  owners can pause, resume, retry, remove, or reprioritize entries, with
+  attributed history and author-targeted activity/inbox outcomes. Automatic
+  completion closes a linked open proposal and
   records the same attributable proposal and merge activity as direct merge.
   Pull metadata retains pending finalization until those cross-store effects
   succeed; recovery retries them with stable idempotent activity identities.

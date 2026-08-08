@@ -141,12 +141,24 @@ export type MergeReadiness = {
   required_approvals: number;
   approvals: number;
   evaluated_commit_id: string;
-  required_checks: { name: string; status: "missing" | "pending" | "failed" | "cancelled" | "stale" | "passed"; commit_id?: string; run_id?: string }[];
+  required_checks: {
+    name: string;
+    status: "missing" | "pending" | "failed" | "cancelled" | "stale" | "passed";
+    commit_id?: string;
+    run_id?: string;
+  }[];
   source: PullRequestBranchState;
   target: PullRequestBranchState;
   has_conflicts: boolean;
   blockers: { code: string; message: string }[];
-  integration_queue?: { branch: string; enabled: boolean; concurrency: number; failure_behavior: "pause" | "remove"; required_checks: string[]; required_approvals: number };
+  integration_queue?: {
+    branch: string;
+    enabled: boolean;
+    concurrency: number;
+    failure_behavior: "pause" | "remove";
+    required_checks: string[];
+    required_approvals: number;
+  };
   can_enqueue: boolean;
 };
 export type CheckAttempt = {
@@ -187,8 +199,20 @@ export type IntegrationCandidate = {
   required_checks: string[];
   check_definitions: CheckRun["definition"][];
   created_at: string;
-  state: "pending" | "verifying" | "passed" | "failed";
+  state: "pending" | "verifying" | "passed" | "failed" | "superseded";
   checks: CheckRun[];
+};
+export type IntegrationQueueEntry = {
+  position: number;
+  pull_request: PullRequest & {
+    queued_by?: string;
+    queue_paused?: boolean;
+    queue_actions?: { action: string; actor_id: string; created_at: string }[];
+  };
+  candidate?: IntegrationCandidate;
+  state: string;
+  blockers: { code: string; message: string }[];
+  next_action: string;
 };
 export type CheckEvent = {
   sequence: number;
@@ -209,8 +233,23 @@ export type ChangeSession = {
   source_commit_id: string;
   check_evidence?: {
     run_id: string;
-    definition: { name: string; image: string; command: string; working_directory?: string; environment?: Record<string, string>; timeout_seconds?: number };
-    events: { sequence: number; attempt: number; kind: string; state?: string; stream?: string; message?: string; exit_code?: number }[];
+    definition: {
+      name: string;
+      image: string;
+      command: string;
+      working_directory?: string;
+      environment?: Record<string, string>;
+      timeout_seconds?: number;
+    };
+    events: {
+      sequence: number;
+      attempt: number;
+      kind: string;
+      state?: string;
+      stream?: string;
+      message?: string;
+      exit_code?: number;
+    }[];
     artifacts: CheckArtifact[];
   };
   state: "open";
@@ -220,7 +259,22 @@ export type ChangeSession = {
 export type ChangeSessionEvent = {
   id: string;
   session_id: string;
-  kind: "session.opened" | "run.launched" | "run.status" | "agent.message" | "agent.question" | "tool.action" | "artifact.produced" | "run.failed" | "branch.updated" | "run.guidance" | "question.answered" | "run.paused" | "run.resumed" | "run.canceled" | "run.completed";
+  kind:
+    | "session.opened"
+    | "run.launched"
+    | "run.status"
+    | "agent.message"
+    | "agent.question"
+    | "tool.action"
+    | "artifact.produced"
+    | "run.failed"
+    | "branch.updated"
+    | "run.guidance"
+    | "question.answered"
+    | "run.paused"
+    | "run.resumed"
+    | "run.canceled"
+    | "run.completed";
   actor_id: string;
   state: string;
   run_id?: string;
@@ -252,7 +306,11 @@ export type AgentRun = {
     commit_id: string;
     commits: string[];
     changed_files: { path: string; status: "added" | "modified" | "deleted" }[];
-    checks: { name: string; status: "passed" | "failed" | "skipped"; details?: string }[];
+    checks: {
+      name: string;
+      status: "passed" | "failed" | "skipped";
+      details?: string;
+    }[];
     unresolved_concerns: string[];
     completed_at: string;
   };
@@ -261,7 +319,21 @@ export type AgentRun = {
 };
 export type ActivityEvent = {
   id: string;
-  kind: "proposal.created" | "proposal.updated" | "proposal.closed" | "proposal.commented" | "pull_request.created" | "pull_request.synchronized" | "pull_request.commented" | "pull_request.merged" | "review.approved" | "review.changes_requested" | "review.withdrawn" | "mention.created" | "access.granted" | "access.revoked";
+  kind:
+    | "proposal.created"
+    | "proposal.updated"
+    | "proposal.closed"
+    | "proposal.commented"
+    | "pull_request.created"
+    | "pull_request.synchronized"
+    | "pull_request.commented"
+    | "pull_request.merged"
+    | "review.approved"
+    | "review.changes_requested"
+    | "review.withdrawn"
+    | "mention.created"
+    | "access.granted"
+    | "access.revoked";
   actor_id: string;
   repository_id: string;
   repository_name: string;
@@ -315,9 +387,8 @@ export async function apiResponse<T>(
       body?.error?.code,
     );
   }
-  const data = response.status === 204
-    ? undefined as T
-    : await response.json() as T;
+  const data =
+    response.status === 204 ? (undefined as T) : ((await response.json()) as T);
   return { data, status: response.status, headers: response.headers };
 }
 

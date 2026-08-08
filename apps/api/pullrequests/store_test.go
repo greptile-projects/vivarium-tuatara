@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
@@ -449,8 +450,11 @@ func TestIntegrationQueueRebuildsConcurrentCandidateBeforeLanding(t *testing.T) 
 	})
 	first, _ := store.Create(repository.ID(), testID('a'), "First", "", "one", "main", nil)
 	second, _ := store.Create(repository.ID(), testID('b'), "Second", "", "two", "main", nil)
+	// Make ID order oppose the authoritative rank order while admission times
+	// collide, so automatic advancement must use the same comparator as views.
+	first.ID, second.ID = testID('e'), testID('d')
 	actor := testID('c')
-	firstTime, secondTime := time.Unix(1700000000, 0).UTC(), time.Unix(1700000001, 0).UTC()
+	firstTime, secondTime := time.Unix(1700000000, 0).UTC(), time.Unix(1700000000, 0).UTC()
 	firstCandidate, err := store.newIntegrationCandidate(repository, first, string(base), []string{})
 	if err != nil {
 		t.Fatal(err)
@@ -461,6 +465,8 @@ func TestIntegrationQueueRebuildsConcurrentCandidateBeforeLanding(t *testing.T) 
 	}
 	first.QueuedAt, first.QueuedBy, first.IntegrationCandidates = &firstTime, &actor, []IntegrationCandidate{firstCandidate}
 	second.QueuedAt, second.QueuedBy, second.IntegrationCandidates = &secondTime, &actor, []IntegrationCandidate{secondCandidate}
+	first.QueueRank, second.QueueRank = "1", "2"
+	second.QueuePaused = true
 	if _, err := store.write(first); err != nil {
 		t.Fatal(err)
 	}
@@ -480,7 +486,17 @@ func TestIntegrationQueueRebuildsConcurrentCandidateBeforeLanding(t *testing.T) 
 	}
 	first, _ = store.Get(repository.ID(), first.ID)
 	second, _ = store.Get(repository.ID(), second.ID)
-	if first.Status != Merged || second.Status != Merged || first.MergeCommitID == nil || second.MergeCommitID == nil {
+	if first.Status != Merged || second.Status != Open || first.MergeCommitID == nil || second.MergeCommitID != nil || len(second.IntegrationCandidates) != 1 || second.IntegrationCandidates[0].SupersededAt != nil {
+		t.Fatalf("paused queue results: first=%#v second=%#v", first, second)
+	}
+	if _, err := store.OperateQueue(repository.ID(), second.ID, actor, "resume", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AdvanceIntegrationQueues(); err == nil {
+		t.Fatal("queue scan did not retain the isolated corrupt repository error")
+	}
+	second, _ = store.Get(repository.ID(), second.ID)
+	if second.Status != Merged || second.MergeCommitID == nil {
 		t.Fatalf("queue results: first=%#v second=%#v", first, second)
 	}
 	if len(finalized) != 2 || finalized[0] != first.ID || finalized[1] != second.ID {
@@ -550,6 +566,86 @@ func TestCandidateLaunchRetriesAfterCheckStoreRecovers(t *testing.T) {
 			t.Fatalf("candidate checks were not created after recovery: %#v, %v", runs, err)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestIntegrationQueueProjectionAndAttributedOperations(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	repository, _ := gitStore.Create(testID('1'))
+	tree, _ := repository.WriteObject(storage.TreeObject, nil)
+	base := writeCommit(t, repository, tree, "base")
+	one := writeCommitWithParents(t, repository, tree, []storage.ObjectID{base}, "one")
+	two := writeCommitWithParents(t, repository, tree, []storage.ObjectID{base}, "two")
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)})
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/one", Target: string(one)})
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/two", Target: string(two)})
+	store, _ := New(t.TempDir(), gitStore)
+	store.ConfigureRequiredChecks(queueRequirements{repositories.IntegrationQueuePolicy{Branch: "main", Enabled: true, Concurrency: 2, FailureBehavior: repositories.QueueFailurePause, RequiredChecks: []string{}}}, nil)
+	first, _ := store.Create(repository.ID(), testID('a'), "First", "", "one", "main", nil)
+	second, _ := store.Create(repository.ID(), testID('b'), "Second", "", "two", "main", nil)
+	actor := testID('c')
+	firstTime, secondTime := time.Unix(1700000000, 0).UTC(), time.Unix(1700000001, 0).UTC()
+	firstCandidate, _ := store.newIntegrationCandidate(repository, first, string(base), []string{})
+	secondCandidate, _ := store.newIntegrationCandidate(repository, second, string(base), []string{})
+	first.QueuedAt, first.QueuedBy, first.IntegrationCandidates = &firstTime, &actor, []IntegrationCandidate{firstCandidate}
+	second.QueuedAt, second.QueuedBy, second.IntegrationCandidates = &secondTime, &actor, []IntegrationCandidate{secondCandidate}
+	first.QueueActions = []QueueAction{{Action: "enqueued", ActorID: actor, CreatedAt: firstTime}}
+	second.QueueActions = []QueueAction{{Action: "enqueued", ActorID: actor, CreatedAt: secondTime}}
+	_, _ = store.write(first)
+	_, _ = store.write(second)
+	store.now = func() time.Time { return time.Unix(1700000002, 0).UTC() }
+
+	view, err := store.IntegrationQueue(repository.ID(), "main")
+	if err != nil || len(view.Entries) != 2 || view.Entries[0].PullRequest.ID != first.ID || view.Entries[0].State != "passed" || view.Entries[0].NextAction == "" {
+		t.Fatalf("initial queue = %#v, %v", view, err)
+	}
+	second, err = store.OperateQueue(repository.ID(), second.ID, actor, "reprioritize", 1)
+	if err != nil || len(second.QueueActions) != 2 || second.QueueActions[1].Action != "reprioritize" || second.QueueActions[1].ActorID != actor {
+		t.Fatalf("reprioritized = %#v, %v", second, err)
+	}
+	firstAfterReorder, _ := store.Get(repository.ID(), first.ID)
+	if !firstAfterReorder.QueuedAt.Equal(firstTime) {
+		t.Fatalf("reprioritization rewrote unaffected entry: %s", firstAfterReorder.QueuedAt)
+	}
+	second, err = store.OperateQueue(repository.ID(), second.ID, actor, "pause", 0)
+	view, _ = store.IntegrationQueue(repository.ID(), "main")
+	if err != nil || !second.QueuePaused || view.Entries[0].PullRequest.ID != second.ID || view.Entries[0].State != "paused" || len(view.Entries[0].PullRequest.QueueActions) != 3 {
+		t.Fatalf("paused queue = %#v, %v", view, err)
+	}
+	second, err = store.OperateQueue(repository.ID(), second.ID, actor, "retry", 0)
+	if err != nil || second.QueuePaused || second.IntegrationCandidates[0].SupersededReason != "retried" {
+		t.Fatalf("retried = %#v, %v", second, err)
+	}
+	second, err = store.OperateQueue(repository.ID(), second.ID, actor, "remove", 0)
+	if err != nil || second.QueuedAt != nil || second.QueueActions[len(second.QueueActions)-1].Action != "remove" {
+		t.Fatalf("removed = %#v, %v", second, err)
+	}
+	template, _ := store.Get(repository.ID(), first.ID)
+	ids := make([]string, 40)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("%032x", i+100)
+		copy := template
+		copy.ID, copy.Title = ids[i], fmt.Sprintf("Queued %d", i)
+		queuedAt := firstTime.Add(time.Duration(i+1) * time.Second)
+		copy.QueuedAt, copy.QueueRank = &queuedAt, new(big.Int).SetInt64(queuedAt.UnixNano()).String()
+		copy.QueueActions = []QueueAction{{Action: "enqueued", ActorID: actor, CreatedAt: queuedAt}}
+		if _, err := store.write(copy); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := len(ids) - 1; i >= 0; i-- {
+		if _, err := store.OperateQueue(repository.ID(), ids[i], actor, "reprioritize", 2); err != nil {
+			t.Fatalf("exact rank exhausted after %d moves: %v", len(ids)-i, err)
+		}
+	}
+}
+
+func TestQueueRankOrdersEqualAdmissionTimestamps(t *testing.T) {
+	queuedAt := time.Unix(1700000000, 123456000).UTC()
+	lowerID := PullRequest{ID: testID('1'), QueuedAt: &queuedAt, QueueRank: "2"}
+	higherID := PullRequest{ID: testID('2'), QueuedAt: &queuedAt, QueueRank: "1"}
+	if !queueLess(higherID, lowerID) || queueLess(lowerID, higherID) {
+		t.Fatal("queue rank did not override ID order for equal admission timestamps")
 	}
 }
 

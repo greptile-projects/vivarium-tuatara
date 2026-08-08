@@ -796,6 +796,14 @@ export function PullRequestDetail({
           <code>{sourceRepository?.name ?? short(pull.source_repository_id)}:{pull.source_branch}</code>{" "}
           into <code>{repository.name}:{pull.target_branch}</code>
         </p>
+        {activelyQueued && (
+          <Link
+            href={`/repositories/${repositoryID}/queue/${encodeURIComponent(pull.target_branch)}`}
+            className="mt-3 inline-flex text-sm font-semibold text-[var(--brand)] hover:underline"
+          >
+            View queue order, blockers, and controls
+          </Link>
+        )}
       </header>
       {notice && (
         <p
