@@ -58,7 +58,7 @@ func TestIncidentOperatingPictureFromHealthSignal(t *testing.T) {
 	if incident.Source == nil || incident.Source.DeploymentID != promotion.ID || len(incident.Timeline) != 1 {
 		t.Fatalf("incident = %#v", incident)
 	}
-	update := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/updates", `{"message":"Mitigation is holding.","audience":"public"}`, owner.Credential.Token, http.StatusCreated)
+	update := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/updates", `{"operation_id":"`+strings.Repeat("9", 32)+`","message":"Mitigation is holding.","audience":"public"}`, owner.Credential.Token, http.StatusCreated)
 	decodeResponse(t, update, &incident)
 	entry := incident.Timeline[len(incident.Timeline)-1]
 	ack := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/timeline/"+entry.ID+"/acknowledgements", "{}", responder.Credential.Token, http.StatusOK)

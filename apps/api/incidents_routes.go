@@ -40,6 +40,17 @@ func registerIncidentRoutes(mux *http.ServeMux, repos *repositories.Store, store
 		}
 		return actor, v, true
 	}
+	mutate := func(current incidents.Incident, actorID string, roles []incidents.Role, fn func() error) error {
+		repositoryIDs := make([]string, 0, len(current.Scopes))
+		for _, scope := range current.Scopes {
+			repositoryIDs = append(repositoryIDs, scope.RepositoryID)
+		}
+		roleIDs := make([]string, 0, len(roles))
+		for _, role := range roles {
+			roleIDs = append(roleIDs, role.UserID)
+		}
+		return repos.WithIncidentAuthorization(actorID, repositoryIDs, roleIDs, fn)
+	}
 	mux.HandleFunc("GET /incidents", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
 		if !ok {
@@ -131,8 +142,24 @@ func registerIncidentRoutes(mux *http.ServeMux, repos *repositories.Store, store
 				return
 			}
 		}
-		v, e := store.Create(incidents.Incident{Title: input.Title, Summary: input.Summary, Severity: input.Severity, Status: "investigating", Scopes: input.Scopes, Roles: input.Roles, Source: input.Source, DeclaredBy: actor.UserID})
+		repositoryIDs, roleIDs := make([]string, 0, len(input.Scopes)), make([]string, 0, len(input.Roles))
+		for _, scope := range input.Scopes {
+			repositoryIDs = append(repositoryIDs, scope.RepositoryID)
+		}
+		for _, role := range input.Roles {
+			roleIDs = append(roleIDs, role.UserID)
+		}
+		var v incidents.Incident
+		e := repos.WithIncidentDeclarationAuthorization(actor.UserID, repositoryIDs, roleIDs, func() error {
+			var mutationErr error
+			v, mutationErr = store.Create(incidents.Incident{Title: input.Title, Summary: input.Summary, Severity: input.Severity, Status: "investigating", Scopes: input.Scopes, Roles: input.Roles, Source: input.Source, DeclaredBy: actor.UserID})
+			return mutationErr
+		})
 		if e != nil {
+			if errors.Is(e, repositories.ErrInvalidCollaborator) || errors.Is(e, repositories.ErrNotFound) {
+				writeAPIError(w, 404, "repository_not_found", "repository not found")
+				return
+			}
 			writeIncidentError(w, e)
 			return
 		}
@@ -164,14 +191,17 @@ func registerIncidentRoutes(mux *http.ServeMux, repos *repositories.Store, store
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
-		for _, role := range input.Roles {
-			if !participantInScopes(role.UserID, current.Scopes) {
-				writeAPIError(w, 422, "invalid_incident_role", "response roles must name an affected repository participant")
+		var v incidents.Incident
+		e := mutate(current, actor.UserID, input.Roles, func() error {
+			var mutationErr error
+			v, mutationErr = store.Update(current.ID, actor.UserID, input.ExpectedVersion, input.Severity, input.Status, input.Roles, input.Message)
+			return mutationErr
+		})
+		if e != nil {
+			if errors.Is(e, repositories.ErrInvalidCollaborator) || errors.Is(e, repositories.ErrNotFound) {
+				writeAPIError(w, 404, "incident_not_found", "incident not found")
 				return
 			}
-		}
-		v, e := store.Update(current.ID, actor.UserID, input.ExpectedVersion, input.Severity, input.Status, input.Roles, input.Message)
-		if e != nil {
 			writeIncidentError(w, e)
 			return
 		}
@@ -183,15 +213,25 @@ func registerIncidentRoutes(mux *http.ServeMux, repos *repositories.Store, store
 			return
 		}
 		var input struct {
-			Message  string `json:"message"`
-			Audience string `json:"audience"`
+			OperationID string `json:"operation_id"`
+			Message     string `json:"message"`
+			Audience    string `json:"audience"`
 		}
 		if decodeJSON(r, &input) != nil {
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
-		v, e := store.AddUpdate(current.ID, actor.UserID, input.Message, input.Audience)
+		var v incidents.Incident
+		e := mutate(current, actor.UserID, current.Roles, func() error {
+			var mutationErr error
+			v, mutationErr = store.AddUpdate(current.ID, input.OperationID, actor.UserID, input.Message, input.Audience)
+			return mutationErr
+		})
 		if e != nil {
+			if errors.Is(e, repositories.ErrInvalidCollaborator) || errors.Is(e, repositories.ErrNotFound) {
+				writeAPIError(w, 404, "incident_not_found", "incident not found")
+				return
+			}
 			writeIncidentError(w, e)
 			return
 		}
@@ -202,8 +242,17 @@ func registerIncidentRoutes(mux *http.ServeMux, repos *repositories.Store, store
 		if !ok {
 			return
 		}
-		v, e := store.Acknowledge(current.ID, r.PathValue("entry_id"), actor.UserID)
+		var v incidents.Incident
+		e := mutate(current, actor.UserID, current.Roles, func() error {
+			var mutationErr error
+			v, mutationErr = store.Acknowledge(current.ID, r.PathValue("entry_id"), actor.UserID)
+			return mutationErr
+		})
 		if e != nil {
+			if errors.Is(e, repositories.ErrInvalidCollaborator) || errors.Is(e, repositories.ErrNotFound) {
+				writeAPIError(w, 404, "incident_not_found", "incident not found")
+				return
+			}
 			writeIncidentError(w, e)
 			return
 		}

@@ -61,9 +61,10 @@ type Incident struct {
 	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
 }
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root          string
+	mu            sync.Mutex
+	now           func() time.Time
+	directorySync func(string) error
 }
 
 func New(root string) (*Store, error) {
@@ -77,7 +78,7 @@ func New(root string) (*Store, error) {
 	if e != nil {
 		return nil, e
 	}
-	return &Store{root: abs, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }}, nil
+	return &Store{root: abs, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }, directorySync: syncDirectory}, nil
 }
 
 func (s *Store) Create(v Incident) (Incident, error) {
@@ -168,7 +169,7 @@ func (s *Store) Update(id, actor string, expected int, severity, status string, 
 	})
 	return v, e
 }
-func (s *Store) AddUpdate(id, actor, message, audience string) (Incident, error) {
+func (s *Store) AddUpdate(id, operationID, actor, message, audience string) (Incident, error) {
 	var v Incident
 	e := s.mutate(func() error {
 		var x error
@@ -176,13 +177,21 @@ func (s *Store) AddUpdate(id, actor, message, audience string) (Incident, error)
 			return x
 		}
 		message = strings.TrimSpace(message)
-		if !validID(actor) || message == "" || len(message) > 10000 || (audience != "participants" && audience != "public") {
+		if !validID(operationID) || !validID(actor) || message == "" || len(message) > 10000 || (audience != "participants" && audience != "public") {
 			return ErrInvalid
+		}
+		for _, entry := range v.Timeline {
+			if entry.ID == operationID {
+				if entry.Kind != "update" || entry.ActorID != actor || entry.Message != message || entry.Audience != audience {
+					return ErrConflict
+				}
+				return nil
+			}
 		}
 		now := s.now()
 		v.Version++
 		v.UpdatedAt = now
-		v.Timeline = append(v.Timeline, Entry{ID: mustID(), Kind: "update", ActorID: actor, Message: message, Audience: audience, CreatedAt: now})
+		v.Timeline = append(v.Timeline, Entry{ID: operationID, Kind: "update", ActorID: actor, Message: message, Audience: audience, CreatedAt: now})
 		return s.write(v)
 	})
 	return v, e
@@ -312,14 +321,18 @@ func (s *Store) write(v Incident) error {
 		e = os.Rename(name, filepath.Join(s.root, v.ID+".json"))
 	}
 	if e == nil {
-		d, x := os.Open(s.root)
-		if x == nil {
-			x = d.Sync()
-			_ = d.Close()
-		}
-		e = x
+		e = s.directorySync(s.root)
 	}
 	return e
+}
+
+func syncDirectory(path string) error {
+	d, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }
 func (s *Store) mutate(fn func() error) error {
 	s.mu.Lock()

@@ -977,9 +977,14 @@ defaults to `incidents`.
 returns `409 incident_changed`. Every accepted change appends an immutable,
 actor-stamped timeline entry rather than replacing response history.
 
-`POST /incidents/{incident_id}/updates` accepts a `message` and an `audience`
+`POST /incidents/{incident_id}/updates` accepts a caller-generated opaque
+128-bit lowercase hexadecimal `operation_id`, a `message`, and an `audience`
 of `participants` or `public`. Audience is retained on the update so later
 status-page and external communication surfaces can safely select explicitly
 public copy. Current participants acknowledge any timeline entry with `POST
 /incidents/{incident_id}/timeline/{entry_id}/acknowledgements`; acknowledgers
 are retained by stable user ID and repeated acknowledgement is idempotent.
+Repeating an update with the same operation ID and exact content returns the
+original durable result without another timeline entry; reusing it for changed
+content returns `409 incident_changed`. Clients retain the operation ID across
+uncertain transport or durability failures before retrying.

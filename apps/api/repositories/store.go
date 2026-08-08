@@ -136,6 +136,71 @@ func (s *Store) WithCurrentParticipant(userID, repositoryID string, fn func() er
 	return fn()
 }
 
+// WithIncidentAuthorization holds the catalog mutation lock while proving the
+// actor and every named role holder still participate in at least one affected
+// repository. Access revocation therefore commits wholly before or after the
+// incident mutation performed by fn.
+func (s *Store) WithIncidentAuthorization(actorID string, repositoryIDs, roleUserIDs []string, fn func() error) error {
+	return s.withIncidentAuthorization(actorID, repositoryIDs, roleUserIDs, false, fn)
+}
+
+// WithIncidentDeclarationAuthorization additionally requires the declarer to
+// participate in every affected repository.
+func (s *Store) WithIncidentDeclarationAuthorization(actorID string, repositoryIDs, roleUserIDs []string, fn func() error) error {
+	return s.withIncidentAuthorization(actorID, repositoryIDs, roleUserIDs, true, fn)
+}
+
+func (s *Store) withIncidentAuthorization(actorID string, repositoryIDs, roleUserIDs []string, requireAll bool, fn func() error) error {
+	if !validID(actorID) || len(repositoryIDs) == 0 || fn == nil {
+		return ErrInvalidCollaborator
+	}
+	for _, id := range append(append([]string{}, repositoryIDs...), roleUserIDs...) {
+		if !validID(id) {
+			return ErrInvalidCollaborator
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	repositories := make([]Repository, 0, len(repositoryIDs))
+	for _, id := range repositoryIDs {
+		repository, readErr := s.read(id)
+		if readErr != nil {
+			return ErrNotFound
+		}
+		if _, openErr := s.git.Open(id); openErr != nil {
+			return ErrNotFound
+		}
+		repositories = append(repositories, repository)
+	}
+	participationCount := func(userID string) int {
+		count := 0
+		for _, repository := range repositories {
+			if repository.OwnerID == userID || slices.Contains(collaboratorIDs(repository), userID) {
+				count++
+			}
+		}
+		return count
+	}
+	actorCount := participationCount(actorID)
+	if actorCount == 0 || (requireAll && actorCount != len(repositories)) {
+		return ErrInvalidCollaborator
+	}
+	for _, userID := range roleUserIDs {
+		if participationCount(userID) == 0 {
+			return ErrInvalidCollaborator
+		}
+	}
+	if s.afterParticipantAuthorization != nil {
+		s.afterParticipantAuthorization()
+	}
+	return fn()
+}
+
 // WithContributionAuthorization runs fn while holding the catalog's
 // cross-process mutation lock after proving the actor may contribute from the
 // named source into the target. Collaborator revocation and visibility changes
