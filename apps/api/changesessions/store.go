@@ -254,6 +254,16 @@ func (s *Store) CreateWithEvidence(repositoryID, pullRequestID, initiatorID, sou
 }
 
 func (s *Store) CreateWithRecoveryEvidence(repositoryID, pullRequestID, initiatorID, sourceCommitID string, evidence *CheckEvidence, deployment *DeploymentEvidence) (Session, error) {
+	return s.createWithRecoveryEvidence(repositoryID, pullRequestID, initiatorID, sourceCommitID, evidence, deployment, false)
+}
+
+// FindOrCreateWithRecoveryEvidence enforces one deployment recovery workspace
+// beneath the winning pull request across API processes.
+func (s *Store) FindOrCreateWithRecoveryEvidence(repositoryID, pullRequestID, initiatorID, sourceCommitID string, deployment *DeploymentEvidence) (Session, error) {
+	return s.createWithRecoveryEvidence(repositoryID, pullRequestID, initiatorID, sourceCommitID, nil, deployment, true)
+}
+
+func (s *Store) createWithRecoveryEvidence(repositoryID, pullRequestID, initiatorID, sourceCommitID string, evidence *CheckEvidence, deployment *DeploymentEvidence, uniqueDeployment bool) (Session, error) {
 	if !validID(repositoryID) || !validID(pullRequestID) || !validID(initiatorID) || !validObjectID(sourceCommitID) {
 		return Session{}, ErrInvalid
 	}
@@ -285,6 +295,17 @@ func (s *Store) CreateWithRecoveryEvidence(repositoryID, pullRequestID, initiato
 	directory := filepath.Join(s.root, repositoryID, pullRequestID)
 	if err := s.ensureDirectory(repositoryID, pullRequestID); err != nil {
 		return Session{}, fmt.Errorf("create change session directory: %w", err)
+	}
+	if uniqueDeployment {
+		existing, listErr := s.List(repositoryID, pullRequestID)
+		if listErr != nil {
+			return Session{}, listErr
+		}
+		for _, candidate := range existing {
+			if candidate.DeploymentEvidence != nil && candidate.DeploymentEvidence.DeploymentID == deployment.DeploymentID {
+				return candidate, nil
+			}
+		}
 	}
 	committed, err := s.write(directory, rec)
 	if err != nil {

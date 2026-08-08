@@ -2,10 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -97,7 +99,37 @@ func TestUnhealthyDeploymentOpensEvidencePinnedRepairReview(t *testing.T) {
 	if err := os.Chmod(sessionRoot, 0700); err != nil {
 		t.Fatal(err)
 	}
-	repairResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/deployments/"+promotion.ID+"/recoveries", `{"action":"repair","expected_state":"failed"}`, owner.Credential.Token, http.StatusCreated)
+	recoveryURL := server.URL + "/repositories/" + repository.ID + "/deployments/" + promotion.ID + "/recoveries"
+	var wait sync.WaitGroup
+	concurrentErrors := make(chan error, 24)
+	for range 24 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			request, requestErr := http.NewRequest(http.MethodPost, recoveryURL, strings.NewReader(`{"action":"repair","expected_state":"failed"}`))
+			if requestErr != nil {
+				concurrentErrors <- requestErr
+				return
+			}
+			request.Header.Set("Authorization", "Bearer "+owner.Credential.Token)
+			request.Header.Set("Content-Type", "application/json")
+			response, requestErr := http.DefaultClient.Do(request)
+			if requestErr != nil {
+				concurrentErrors <- requestErr
+				return
+			}
+			response.Body.Close()
+			if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusCreated {
+				concurrentErrors <- fmt.Errorf("concurrent recovery status = %d", response.StatusCode)
+			}
+		}()
+	}
+	wait.Wait()
+	close(concurrentErrors)
+	for concurrentErr := range concurrentErrors {
+		t.Error(concurrentErr)
+	}
+	repairResponse := authenticatedRequest(t, http.MethodPost, recoveryURL, `{"action":"repair","expected_state":"failed"}`, owner.Credential.Token, http.StatusOK)
 	var repair struct {
 		PullRequest pullrequests.PullRequest `json:"pull_request"`
 		Session     changesessions.Session   `json:"session"`
@@ -119,6 +151,10 @@ func TestUnhealthyDeploymentOpensEvidencePinnedRepairReview(t *testing.T) {
 	allPulls, err := pulls.List(repository.ID)
 	if err != nil || len(allPulls) != 1 || allPulls[0].ID != repair.PullRequest.ID {
 		t.Fatalf("idempotent repair pulls = %#v, %v", allPulls, err)
+	}
+	allSessions, err := sessions.List(repository.ID, repair.PullRequest.ID)
+	if err != nil || len(allSessions) != 1 || allSessions[0].ID != repair.Session.ID {
+		t.Fatalf("idempotent repair sessions = %#v, %v", allSessions, err)
 	}
 	reconnectResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/deployments/"+promotion.ID+"/recoveries", `{"action":"repair","expected_state":"failed"}`, owner.Credential.Token, http.StatusOK)
 	var reconnected struct {

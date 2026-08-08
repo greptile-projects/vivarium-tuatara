@@ -714,6 +714,10 @@ If failure leaves only the deterministic repair ref, retry fast-forwards it to
 the current default tip only when the old ref remains an ancestor. Divergence
 or a concurrent branch update is rejected instead of overwriting work or
 opening a stale repair pull.
+Pull and change-session persistence independently enforce recovery uniqueness
+inside their cross-process locks. Concurrent requests for the same deployment
+therefore converge on the one deterministic source branch, pull request, and
+evidence-pinned session instead of splitting diagnosis across workspaces.
 
 Each environment also defines an executor image, command, and timeout. The
 worker reopens the immutable build artifact, recomputes and matches its SHA-256,

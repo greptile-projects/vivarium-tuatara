@@ -168,6 +168,9 @@ whenever dependencies change or the web job fails before it starts.
   fast-forwarded to the current default tip only when its prior tip remains an
   ancestor; divergence and concurrent changes fail closed. Rollback target derivation, unhealthy-state revalidation, and
   promotion publication occur under one deployment-store lock.
+  Pull and session stores also enforce recovery uniqueness under their
+  cross-process locks, so simultaneous commands converge on one deterministic
+  branch, pull request, and deployment-evidence session.
   Pull request discovery at `/pulls` aggregates reviewable work across the
   authenticated actor's repository catalog and opens candidate branches
   against distinct targets or owned-fork branches against their upstream,

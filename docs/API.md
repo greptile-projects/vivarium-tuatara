@@ -948,3 +948,7 @@ If publication stopped after creating only the deterministic Git ref, retry
 reconciles it to the latest default tip only by an ancestry check and
 compare-and-swap fast-forward. A divergent or concurrently changed ref returns
 `409 repair_branch_changed` and is never overwritten.
+Pull and session publication enforce deployment-recovery uniqueness under
+their cross-process store locks. Simultaneous identical repair commands may
+return the newly created or already connected resource, but all responses name
+the same pull request and change session.

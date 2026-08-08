@@ -321,7 +321,7 @@ func registerDeploymentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos
 				}
 			}
 			body := "Diagnose and repair unhealthy deployment " + failed.ID + ". The attached change session freezes release, deployment, log, health, artifact, and source evidence. This branch has no environment authority."
-			pull, err = pulls.Create(failed.RepositoryID, actor.UserID, "Repair deployment for release "+failed.ReleaseID, body, branch, repositoryRecord.DefaultBranch, nil)
+			pull, err = pulls.FindOrCreateRecovery(failed.RepositoryID, actor.UserID, "Repair deployment for release "+failed.ReleaseID, body, branch, repositoryRecord.DefaultBranch)
 			pullUncertain = errors.Is(err, pullrequests.ErrDurabilityUncertain)
 			if err != nil && !pullUncertain {
 				writeAPIError(w, 500, "repair_unavailable", "repair pull request could not be created")
@@ -350,7 +350,7 @@ func registerDeploymentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos
 			writeAPIError(w, 409, "repair_pull_closed", "the existing repair pull request is closed")
 			return
 		} else {
-			session, sessionErr = sessions.CreateWithRecoveryEvidence(failed.RepositoryID, pull.ID, actor.UserID, pull.SourceCommitID, nil, evidence)
+			session, sessionErr = sessions.FindOrCreateWithRecoveryEvidence(failed.RepositoryID, pull.ID, actor.UserID, pull.SourceCommitID, evidence)
 		}
 		if sessionErr != nil && !errors.Is(sessionErr, changesessions.ErrDurabilityUncertain) {
 			// The pull remains a valid, visible review boundary even if the
