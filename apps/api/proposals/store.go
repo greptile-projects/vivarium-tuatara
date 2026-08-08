@@ -53,21 +53,34 @@ type Comment struct {
 }
 
 type Task struct {
-	ID                   string          `json:"id"`
-	ProposalID           string          `json:"proposal_id"`
-	Title                string          `json:"title"`
-	Outcome              string          `json:"outcome"`
-	Status               string          `json:"status"`
-	Position             int             `json:"position"`
-	DependencyIDs        []string        `json:"dependency_ids"`
-	DiscussionCommentIDs []string        `json:"discussion_comment_ids"`
-	Ready                bool            `json:"ready"`
-	BlockedBy            []string        `json:"blocked_by"`
-	CreatedBy            string          `json:"created_by"`
-	UpdatedBy            string          `json:"updated_by"`
-	CreatedAt            time.Time       `json:"created_at"`
-	UpdatedAt            time.Time       `json:"updated_at"`
-	Assignment           *TaskAssignment `json:"assignment,omitempty"`
+	ID                   string             `json:"id"`
+	ProposalID           string             `json:"proposal_id"`
+	Title                string             `json:"title"`
+	Outcome              string             `json:"outcome"`
+	Status               string             `json:"status"`
+	Position             int                `json:"position"`
+	DependencyIDs        []string           `json:"dependency_ids"`
+	DiscussionCommentIDs []string           `json:"discussion_comment_ids"`
+	Ready                bool               `json:"ready"`
+	BlockedBy            []string           `json:"blocked_by"`
+	CreatedBy            string             `json:"created_by"`
+	UpdatedBy            string             `json:"updated_by"`
+	CreatedAt            time.Time          `json:"created_at"`
+	UpdatedAt            time.Time          `json:"updated_at"`
+	Assignment           *TaskAssignment    `json:"assignment,omitempty"`
+	Contribution         *TaskContribution  `json:"contribution,omitempty"`
+	Contributions        []TaskContribution `json:"contributions,omitempty"`
+}
+
+// TaskContribution is the bidirectional review handoff. Status follows the
+// candidate rather than declaring the planned outcome complete before merge.
+type TaskContribution struct {
+	PullRequestID  string   `json:"pull_request_id"`
+	SessionID      string   `json:"session_id,omitempty"`
+	RunID          string   `json:"run_id,omitempty"`
+	SourceCommitID string   `json:"source_commit_id"`
+	CommitIDs      []string `json:"commit_ids"`
+	Status         string   `json:"status"`
 }
 
 type TaskAccess struct {
@@ -406,6 +419,86 @@ func (s *Store) GetTask(repositoryID, proposalID, taskID string) (Task, error) {
 	}
 	for _, task := range tasks {
 		if task.ID == taskID {
+			return task, nil
+		}
+	}
+	return Task{}, ErrNotFound
+}
+
+// LinkTaskContribution records the exact review candidate on the task. A
+// subsequent candidate supersedes the previous attempt without completing it.
+func (s *Store) LinkTaskContribution(repositoryID, proposalID, taskID, actorID string, contribution TaskContribution) (Task, error) {
+	if !validID(actorID) || !validID(contribution.PullRequestID) || len(contribution.SourceCommitID) != 40 || contribution.Status != "review" || (contribution.SessionID != "" && !validID(contribution.SessionID)) || (contribution.RunID != "" && !validID(contribution.RunID)) || len(contribution.CommitIDs) == 0 {
+		return Task{}, ErrInvalid
+	}
+	return s.mutateContribution(repositoryID, proposalID, taskID, actorID, func(task *Task) error {
+		if task.Contribution != nil {
+			task.Contribution.Status = "superseded"
+			if len(task.Contributions) > 0 {
+				task.Contributions[len(task.Contributions)-1].Status = "superseded"
+			}
+		}
+		task.Contribution = &contribution
+		task.Contributions = append(task.Contributions, contribution)
+		task.Status = TaskInProgress
+		return nil
+	}, "contribution_published")
+}
+
+func (s *Store) UpdateTaskContribution(repositoryID, proposalID, taskID, actorID, pullRequestID, status string) (Task, error) {
+	if !validID(actorID) || !validID(pullRequestID) || (status != "merged" && status != "closed" && status != "superseded") {
+		return Task{}, ErrInvalid
+	}
+	return s.mutateContribution(repositoryID, proposalID, taskID, actorID, func(task *Task) error {
+		if task.Contribution == nil || task.Contribution.PullRequestID != pullRequestID {
+			return ErrNotFound
+		}
+		task.Contribution.Status = status
+		if len(task.Contributions) > 0 && task.Contributions[len(task.Contributions)-1].PullRequestID == pullRequestID {
+			task.Contributions[len(task.Contributions)-1].Status = status
+		}
+		if status == "merged" {
+			task.Status = TaskCompleted
+		} else {
+			task.Status = TaskTodo
+		}
+		return nil
+	}, "contribution_"+status)
+}
+
+func (s *Store) mutateContribution(repositoryID, proposalID, taskID, actorID string, mutate func(*Task) error, action string) (Task, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Task{}, err
+	}
+	defer unlock()
+	r, err := s.read(proposalID)
+	if err != nil || r.Proposal.RepositoryID != repositoryID {
+		return Task{}, ErrNotFound
+	}
+	for i := range r.Tasks {
+		if r.Tasks[i].ID == taskID {
+			task := r.Tasks[i]
+			if err := mutate(&task); err != nil {
+				return Task{}, err
+			}
+			now := s.now().Truncate(time.Microsecond)
+			task.UpdatedAt, task.UpdatedBy = now, actorID
+			r.Tasks[i] = task
+			deriveTasks(r.Tasks)
+			change, err := newTaskChange(task, actorID, action, now)
+			if err != nil {
+				return Task{}, err
+			}
+			r.TaskChanges = append(r.TaskChanges, change)
+			if committed, err := s.write(r); err != nil {
+				if committed {
+					return task, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+				}
+				return Task{}, err
+			}
 			return task, nil
 		}
 	}
@@ -843,7 +936,7 @@ func (s *Store) read(id string) (record, error) {
 	}
 	seenChanges := map[string]bool{}
 	for _, change := range r.TaskChanges {
-		if !validID(change.ID) || !seenTasks[change.TaskID] || !validID(change.ActorID) || seenChanges[change.ID] || (change.Action != "created" && change.Action != "updated" && change.Action != "status_changed" && change.Action != "reordered" && change.Action != "assigned" && change.Action != "reassigned" && change.Action != "assignment_revoked") || !validStoredTask(change.Task, id) || change.Task.ID != change.TaskID {
+		if !validID(change.ID) || !seenTasks[change.TaskID] || !validID(change.ActorID) || seenChanges[change.ID] || (change.Action != "created" && change.Action != "updated" && change.Action != "status_changed" && change.Action != "reordered" && change.Action != "assigned" && change.Action != "reassigned" && change.Action != "assignment_revoked" && change.Action != "contribution_published" && change.Action != "contribution_merged" && change.Action != "contribution_closed" && change.Action != "contribution_superseded") || !validStoredTask(change.Task, id) || change.Task.ID != change.TaskID {
 			return record{}, fmt.Errorf("corrupt proposal %s", id)
 		}
 		seenChanges[change.ID] = true
@@ -852,7 +945,7 @@ func (s *Store) read(id string) (record, error) {
 }
 
 func validStoredTask(task Task, proposalID string) bool {
-	if !validID(task.ID) || task.ProposalID != proposalID || !validID(task.CreatedBy) || !validID(task.UpdatedBy) || !validTaskStatus(task.Status) || task.CreatedAt.IsZero() || task.UpdatedAt.Before(task.CreatedAt) {
+	if !validID(task.ID) || task.ProposalID != proposalID || !validID(task.CreatedBy) || !validID(task.UpdatedBy) || !validTaskStatus(task.Status) || task.CreatedAt.IsZero() || task.UpdatedAt.Before(task.CreatedAt) || (task.Contribution != nil && (!validID(task.Contribution.PullRequestID) || len(task.Contribution.SourceCommitID) != 40 || len(task.Contribution.CommitIDs) == 0 || (task.Contribution.Status != "review" && task.Contribution.Status != "merged" && task.Contribution.Status != "closed" && task.Contribution.Status != "superseded"))) {
 		return false
 	}
 	if task.Assignment != nil {

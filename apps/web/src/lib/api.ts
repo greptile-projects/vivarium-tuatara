@@ -98,6 +98,7 @@ export type ProposalTask = {
 		assigned_by: string;
 		assigned_at: string;
 	};
+	contribution?: { pull_request_id: string; session_id?: string; run_id?: string; source_commit_id: string; commit_ids: string[]; status: "review" | "merged" | "closed" | "superseded" };
 };
 export type ProposalTaskChange = {
   id: string;
@@ -119,6 +120,9 @@ export type PullRequest = {
   source_commit_id: string;
   target_commit_id: string;
   proposal_id: string | null;
+	task_id?: string;
+	task_session_id?: string;
+	task_run_id?: string;
   status: "open" | "closed" | "merged";
   maintainer_edits_allowed: boolean;
   created_at: string;

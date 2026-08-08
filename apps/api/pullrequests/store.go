@@ -55,6 +55,9 @@ type PullRequest struct {
 	SourceCommitID           string                 `json:"source_commit_id"`
 	TargetCommitID           string                 `json:"target_commit_id"`
 	ProposalID               *string                `json:"proposal_id"`
+	TaskID                   *string                `json:"task_id,omitempty"`
+	TaskSessionID            *string                `json:"task_session_id,omitempty"`
+	TaskRunID                *string                `json:"task_run_id,omitempty"`
 	Status                   string                 `json:"status"`
 	MaintainerEditsAllowed   bool                   `json:"maintainer_edits_allowed"`
 	CreatedAt                time.Time              `json:"created_at"`
@@ -333,6 +336,16 @@ func (s *Store) Create(repositoryID, authorID, title, body, sourceBranch, target
 // Its reachable objects are imported into the target without publishing a ref,
 // keeping every later review and merge operation pinned to the adopted commit.
 func (s *Store) CreateFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, proposalID *string) (PullRequest, error) {
+	return s.createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, proposalID, nil, nil, nil)
+}
+
+// CreateTaskContribution publishes task-scoped work into ordinary review while
+// retaining stable links to the agreed intent and optional execution evidence.
+func (s *Store) CreateTaskContribution(repositoryID, authorID, title, body, sourceBranch, targetBranch string, proposalID, taskID *string, sessionID, runID *string) (PullRequest, error) {
+	return s.createFrom(repositoryID, repositoryID, authorID, title, body, sourceBranch, targetBranch, proposalID, taskID, sessionID, runID)
+}
+
+func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, proposalID, taskID, sessionID, runID *string) (PullRequest, error) {
 	if !validID(repositoryID) || !validID(sourceRepositoryID) || !validID(authorID) {
 		return PullRequest{}, ErrInvalid
 	}
@@ -345,6 +358,9 @@ func (s *Store) CreateFrom(repositoryID, sourceRepositoryID, authorID, title, bo
 		return PullRequest{}, ErrInvalid
 	}
 	if proposalID != nil && !validID(*proposalID) {
+		return PullRequest{}, ErrInvalid
+	}
+	if (taskID != nil && !validID(*taskID)) || (sessionID != nil && !validID(*sessionID)) || (runID != nil && !validID(*runID)) || (taskID == nil && (sessionID != nil || runID != nil)) {
 		return PullRequest{}, ErrInvalid
 	}
 	repository, err := s.git.Open(repositoryID)
@@ -373,7 +389,7 @@ func (s *Store) CreateFrom(repositoryID, sourceRepositoryID, authorID, title, bo
 			return PullRequest{}, fmt.Errorf("import source commit: %w", err)
 		}
 	}
-	p := PullRequest{ID: id, RepositoryID: repositoryID, SourceRepositoryID: sourceRepositoryID, AuthorID: authorID, Title: title, Body: body, SourceBranch: sourceBranch, TargetBranch: targetBranch, SourceCommitID: sourceCommit, TargetCommitID: targetCommit, ProposalID: proposalID, Status: Open, CreatedAt: now, UpdatedAt: now}
+	p := PullRequest{ID: id, RepositoryID: repositoryID, SourceRepositoryID: sourceRepositoryID, AuthorID: authorID, Title: title, Body: body, SourceBranch: sourceBranch, TargetBranch: targetBranch, SourceCommitID: sourceCommit, TargetCommitID: targetCommit, ProposalID: proposalID, TaskID: taskID, TaskSessionID: sessionID, TaskRunID: runID, Status: Open, CreatedAt: now, UpdatedAt: now}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	unlock, err := s.lock()
@@ -2250,7 +2266,7 @@ func (s *Store) read(repositoryID, id string) (PullRequest, error) {
 	_, validRank := new(big.Rat).SetString(p.QueueRank)
 	validQueue := (p.QueuedAt == nil && p.QueuedBy == nil && p.QueueRank == "") || (p.Status == Open && p.QueuedAt != nil && !p.QueuedAt.IsZero() && p.QueuedBy != nil && validID(*p.QueuedBy) && (p.QueueRank == "" || validRank))
 	validFinalization := (!p.QueueFinalizationPending || (p.Status == Merged && p.QueueFinalizedAt == nil)) && (p.QueueFinalizedAt == nil || (p.Status == Merged && !p.QueueFinalizationPending && !p.QueueFinalizedAt.IsZero()))
-	if p.ID != id || !validID(p.RepositoryID) || !validID(p.SourceRepositoryID) || !validID(p.AuthorID) || !validOutcome || !validIntent || !validQueue || !validFinalization || !validCommitID(p.SourceCommitID) || !validCommitID(p.TargetCommitID) || (p.SourceRepositoryID == p.RepositoryID && p.SourceBranch == p.TargetBranch) || p.SourceBranch == "" || p.TargetBranch == "" || strings.HasPrefix(p.SourceBranch, "refs/") || strings.HasPrefix(p.TargetBranch, "refs/") || p.CreatedAt.IsZero() || p.UpdatedAt.IsZero() || (p.ProposalID != nil && !validID(*p.ProposalID)) {
+	if p.ID != id || !validID(p.RepositoryID) || !validID(p.SourceRepositoryID) || !validID(p.AuthorID) || !validOutcome || !validIntent || !validQueue || !validFinalization || !validCommitID(p.SourceCommitID) || !validCommitID(p.TargetCommitID) || (p.SourceRepositoryID == p.RepositoryID && p.SourceBranch == p.TargetBranch) || p.SourceBranch == "" || p.TargetBranch == "" || strings.HasPrefix(p.SourceBranch, "refs/") || strings.HasPrefix(p.TargetBranch, "refs/") || p.CreatedAt.IsZero() || p.UpdatedAt.IsZero() || (p.ProposalID != nil && !validID(*p.ProposalID)) || (p.TaskID != nil && !validID(*p.TaskID)) || (p.TaskSessionID != nil && !validID(*p.TaskSessionID)) || (p.TaskRunID != nil && !validID(*p.TaskRunID)) || (p.TaskID == nil && (p.TaskSessionID != nil || p.TaskRunID != nil)) {
 		return PullRequest{}, fmt.Errorf("corrupt pull request %s", id)
 	}
 	if _, _, err := validatePurpose(p.Title, p.Body); err != nil {

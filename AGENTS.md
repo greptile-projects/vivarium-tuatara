@@ -92,6 +92,11 @@ whenever dependencies change or the web job fails before it starts.
   Start holds the proposal mutation lock across exact assignment revalidation
   and publication; its session and initial run share one atomic durable record,
   preventing revoked launches and stranded session-only retries.
+  Assigned task work publishes as an ordinary pull request with stable
+  proposal, task, optional session/run, exact commit, and check provenance in
+  both directions. Publication means review, not completion: replacement
+  attempts supersede earlier candidates, closure returns the task to todo, and
+  only merge completes it; task-linked merges do not close the whole proposal.
   Pull request discovery at `/pulls` aggregates reviewable work across the
   authenticated actor's repository catalog and opens candidate branches
   against distinct targets or owned-fork branches against their upstream,
