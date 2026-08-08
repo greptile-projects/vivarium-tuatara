@@ -43,30 +43,32 @@ const (
 )
 
 type PullRequest struct {
-	ID                     string                 `json:"id"`
-	RepositoryID           string                 `json:"repository_id"`
-	SourceRepositoryID     string                 `json:"source_repository_id"`
-	AuthorID               string                 `json:"author_id"`
-	Title                  string                 `json:"title"`
-	Body                   string                 `json:"body"`
-	SourceBranch           string                 `json:"source_branch"`
-	TargetBranch           string                 `json:"target_branch"`
-	SourceCommitID         string                 `json:"source_commit_id"`
-	TargetCommitID         string                 `json:"target_commit_id"`
-	ProposalID             *string                `json:"proposal_id"`
-	Status                 string                 `json:"status"`
-	MaintainerEditsAllowed bool                   `json:"maintainer_edits_allowed"`
-	CreatedAt              time.Time              `json:"created_at"`
-	UpdatedAt              time.Time              `json:"updated_at"`
-	ClosedAt               *time.Time             `json:"closed_at"`
-	ClosedBy               *string                `json:"closed_by"`
-	MergedAt               *time.Time             `json:"merged_at"`
-	MergedBy               *string                `json:"merged_by"`
-	MergeCommitID          *string                `json:"merge_commit_id"`
-	QueuedAt               *time.Time             `json:"queued_at,omitempty"`
-	QueuedBy               *string                `json:"queued_by,omitempty"`
-	IntegrationCandidates  []IntegrationCandidate `json:"integration_candidates,omitempty"`
-	mergeIntent            *mergeIntent
+	ID                       string                 `json:"id"`
+	RepositoryID             string                 `json:"repository_id"`
+	SourceRepositoryID       string                 `json:"source_repository_id"`
+	AuthorID                 string                 `json:"author_id"`
+	Title                    string                 `json:"title"`
+	Body                     string                 `json:"body"`
+	SourceBranch             string                 `json:"source_branch"`
+	TargetBranch             string                 `json:"target_branch"`
+	SourceCommitID           string                 `json:"source_commit_id"`
+	TargetCommitID           string                 `json:"target_commit_id"`
+	ProposalID               *string                `json:"proposal_id"`
+	Status                   string                 `json:"status"`
+	MaintainerEditsAllowed   bool                   `json:"maintainer_edits_allowed"`
+	CreatedAt                time.Time              `json:"created_at"`
+	UpdatedAt                time.Time              `json:"updated_at"`
+	ClosedAt                 *time.Time             `json:"closed_at"`
+	ClosedBy                 *string                `json:"closed_by"`
+	MergedAt                 *time.Time             `json:"merged_at"`
+	MergedBy                 *string                `json:"merged_by"`
+	MergeCommitID            *string                `json:"merge_commit_id"`
+	QueuedAt                 *time.Time             `json:"queued_at,omitempty"`
+	QueuedBy                 *string                `json:"queued_by,omitempty"`
+	QueueFinalizationPending bool                   `json:"queue_finalization_pending,omitempty"`
+	QueueFinalizedAt         *time.Time             `json:"queue_finalized_at,omitempty"`
+	IntegrationCandidates    []IntegrationCandidate `json:"integration_candidates,omitempty"`
+	mergeIntent              *mergeIntent
 }
 
 // IntegrationCandidate is an immutable prospective merge. CommitID names a
@@ -260,7 +262,7 @@ type Store struct {
 	directorySync  func(string) error
 	rootSync       func(string) error
 	checkRuns      *checkruns.Store
-	queueFinalizer func(PullRequest)
+	queueFinalizer func(PullRequest) error
 	requirements   interface {
 		RequiredChecks(string, string) ([]string, error)
 		LockRequiredChecks() (func(), error)
@@ -279,7 +281,7 @@ func (s *Store) ConfigureRequiredChecks(requirements interface {
 // ConfigureQueueFinalizer connects an automatically completed pull request to
 // application-level collaboration side effects without moving those stores
 // into the pull-request persistence package.
-func (s *Store) ConfigureQueueFinalizer(finalize func(PullRequest)) {
+func (s *Store) ConfigureQueueFinalizer(finalize func(PullRequest) error) {
 	s.queueFinalizer = finalize
 }
 
@@ -1254,6 +1256,13 @@ func (s *Store) AdvanceIntegrationQueues() error {
 			failures = append(failures, fmt.Errorf("scan integration queues for repository %s: %w", entry.Name(), listErr))
 			continue
 		}
+		for _, p := range pulls {
+			if p.Status == Merged && p.QueueFinalizationPending {
+				if err := s.finalizeQueueCompletion(p.RepositoryID, p.ID); err != nil {
+					failures = append(failures, fmt.Errorf("finalize queued merge %s/%s: %w", p.RepositoryID, p.ID, err))
+				}
+			}
+		}
 		branches := map[string]bool{}
 		for _, p := range pulls {
 			if p.Status == Open && p.QueuedAt != nil {
@@ -1270,6 +1279,7 @@ func (s *Store) AdvanceIntegrationQueues() error {
 }
 
 func (s *Store) advanceIntegrationQueue(repositoryID, branch string) error {
+	var finalizationFailures []error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	unlock, err := s.lock()
@@ -1318,8 +1328,8 @@ func (s *Store) advanceIntegrationQueue(repositoryID, branch string) error {
 					return reconcileErr
 				}
 				if found {
-					if s.queueFinalizer != nil {
-						s.queueFinalizer(reconciled)
+					if finalizeErr := s.finalizeQueueCompletionLocked(reconciled); finalizeErr != nil {
+						finalizationFailures = append(finalizationFailures, finalizeErr)
 					}
 					continue
 				}
@@ -1361,7 +1371,7 @@ func (s *Store) advanceIntegrationQueue(repositoryID, branch string) error {
 					if _, e := s.write(*p); e != nil {
 						return e
 					}
-					return nil
+					return errors.Join(finalizationFailures...)
 				}
 				p.QueuedAt, p.QueuedBy = nil, nil
 				p.UpdatedAt = s.now().Truncate(time.Microsecond)
@@ -1386,15 +1396,15 @@ func (s *Store) advanceIntegrationQueue(repositoryID, branch string) error {
 		head := &queued[0]
 		candidate := activeCandidate(*head)
 		if candidate == nil || candidate.BaseCommitID != target {
-			return nil
+			return errors.Join(finalizationFailures...)
 		}
 		state := s.integrationCandidateState(*head, *candidate)
 		if state == "pending" || state == "verifying" {
-			return nil
+			return errors.Join(finalizationFailures...)
 		}
 		if state == "failed" {
 			if policy.FailureBehavior == repositories.QueueFailurePause {
-				return nil
+				return errors.Join(finalizationFailures...)
 			}
 			head.QueuedAt, head.QueuedBy = nil, nil
 			head.UpdatedAt = s.now().Truncate(time.Microsecond)
@@ -1423,14 +1433,48 @@ func (s *Store) advanceIntegrationQueue(repositoryID, branch string) error {
 		}
 		commit, mergedBy := candidate.CommitID, merger
 		head.Status, head.UpdatedAt, head.MergedAt, head.MergedBy, head.MergeCommitID = Merged, now, &now, &mergedBy, &commit
+		head.QueueFinalizationPending = true
 		head.QueuedAt, head.QueuedBy, head.mergeIntent = nil, nil, nil
 		if _, err := s.write(*head); err != nil {
 			return err
 		}
-		if s.queueFinalizer != nil {
-			s.queueFinalizer(*head)
+		if finalizeErr := s.finalizeQueueCompletionLocked(*head); finalizeErr != nil {
+			finalizationFailures = append(finalizationFailures, finalizeErr)
 		}
 		queued = queued[1:]
+	}
+	return errors.Join(finalizationFailures...)
+}
+
+func (s *Store) finalizeQueueCompletion(repositoryID, pullRequestID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	p, err := s.read(repositoryID, pullRequestID)
+	if err != nil {
+		return err
+	}
+	return s.finalizeQueueCompletionLocked(p)
+}
+
+func (s *Store) finalizeQueueCompletionLocked(p PullRequest) error {
+	if !p.QueueFinalizationPending || p.Status != Merged || s.queueFinalizer == nil {
+		return nil
+	}
+	if err := s.queueFinalizer(p); err != nil {
+		return err
+	}
+	now := s.now().Truncate(time.Microsecond)
+	p.QueueFinalizationPending, p.QueueFinalizedAt, p.UpdatedAt = false, &now, now
+	if committed, err := s.write(p); err != nil {
+		if committed {
+			return fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+		}
+		return err
 	}
 	return nil
 }
@@ -1658,6 +1702,9 @@ func (s *Store) reconcileMerged(repository *storage.Repository, p PullRequest) (
 		merger, mergedAt := p.mergeIntent.MergerID, p.mergeIntent.MergedAt
 		commitID := string(commit.ID)
 		p.Status, p.UpdatedAt, p.MergedAt, p.MergedBy, p.MergeCommitID, p.mergeIntent = Merged, mergedAt, &mergedAt, &merger, &commitID, nil
+		if p.QueuedAt != nil {
+			p.QueuedAt, p.QueuedBy, p.QueueFinalizationPending = nil, nil, true
+		}
 		if committed, writeErr := s.write(p); writeErr != nil {
 			if committed {
 				return p, true, fmt.Errorf("%w: %v", ErrDurabilityUncertain, writeErr)
@@ -2010,7 +2057,8 @@ func (s *Store) read(repositoryID, id string) (PullRequest, error) {
 		(p.Status == Merged && p.ClosedAt == nil && p.ClosedBy == nil && p.MergedAt != nil && p.MergedBy != nil && validID(*p.MergedBy) && p.MergeCommitID != nil && validCommitID(*p.MergeCommitID))
 	validIntent := p.mergeIntent == nil || (p.Status == Open && validCommitID(p.mergeIntent.CommitID) && validID(p.mergeIntent.MergerID) && !p.mergeIntent.MergedAt.IsZero())
 	validQueue := (p.QueuedAt == nil && p.QueuedBy == nil) || (p.Status == Open && p.QueuedAt != nil && !p.QueuedAt.IsZero() && p.QueuedBy != nil && validID(*p.QueuedBy))
-	if p.ID != id || !validID(p.RepositoryID) || !validID(p.SourceRepositoryID) || !validID(p.AuthorID) || !validOutcome || !validIntent || !validQueue || !validCommitID(p.SourceCommitID) || !validCommitID(p.TargetCommitID) || (p.SourceRepositoryID == p.RepositoryID && p.SourceBranch == p.TargetBranch) || p.SourceBranch == "" || p.TargetBranch == "" || strings.HasPrefix(p.SourceBranch, "refs/") || strings.HasPrefix(p.TargetBranch, "refs/") || p.CreatedAt.IsZero() || p.UpdatedAt.IsZero() || (p.ProposalID != nil && !validID(*p.ProposalID)) {
+	validFinalization := (!p.QueueFinalizationPending || (p.Status == Merged && p.QueueFinalizedAt == nil)) && (p.QueueFinalizedAt == nil || (p.Status == Merged && !p.QueueFinalizationPending && !p.QueueFinalizedAt.IsZero()))
+	if p.ID != id || !validID(p.RepositoryID) || !validID(p.SourceRepositoryID) || !validID(p.AuthorID) || !validOutcome || !validIntent || !validQueue || !validFinalization || !validCommitID(p.SourceCommitID) || !validCommitID(p.TargetCommitID) || (p.SourceRepositoryID == p.RepositoryID && p.SourceBranch == p.TargetBranch) || p.SourceBranch == "" || p.TargetBranch == "" || strings.HasPrefix(p.SourceBranch, "refs/") || strings.HasPrefix(p.TargetBranch, "refs/") || p.CreatedAt.IsZero() || p.UpdatedAt.IsZero() || (p.ProposalID != nil && !validID(*p.ProposalID)) {
 		return PullRequest{}, fmt.Errorf("corrupt pull request %s", id)
 	}
 	if _, _, err := validatePurpose(p.Title, p.Body); err != nil {

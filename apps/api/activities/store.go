@@ -4,6 +4,7 @@ package activities
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -131,6 +132,24 @@ func (s *Store) Append(event Event) (Event, error) {
 		return Event{}, err
 	}
 	event.ID = hex.EncodeToString(b)
+	return s.append(event)
+}
+
+// AppendOnce uses a stable caller-owned key to make a collaboration side
+// effect idempotent across recovery after an uncertain completion boundary.
+func (s *Store) AppendOnce(key string, event Event) (Event, error) {
+	if strings.TrimSpace(key) == "" {
+		return Event{}, ErrInvalid
+	}
+	sum := sha256.Sum256([]byte(key))
+	event.ID = hex.EncodeToString(sum[:16])
+	return s.append(event)
+}
+
+func (s *Store) append(event Event) (Event, error) {
+	if !validID(event.ActorID) || !validID(event.RepositoryID) || !validID(event.ID) || event.Kind == "" || event.ResourceType == "" || event.ResourceID == "" || strings.TrimSpace(event.RepositoryName) == "" || strings.TrimSpace(event.ResourceTitle) == "" {
+		return Event{}, ErrInvalid
+	}
 	event.CreatedAt = s.now().Truncate(time.Microsecond)
 	data, err := json.Marshal(event)
 	if err != nil {
@@ -147,6 +166,16 @@ func (s *Store) Append(event Event) (Event, error) {
 		return Event{}, err
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	finalPath := filepath.Join(s.root, event.ID+".json")
+	if existing, readErr := os.ReadFile(finalPath); readErr == nil {
+		var stored Event
+		if json.Unmarshal(existing, &stored) != nil {
+			return Event{}, errors.New("invalid activity event record")
+		}
+		return stored, nil
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		return Event{}, readErr
+	}
 	tmp, err := os.CreateTemp(s.root, ".event-*")
 	if err != nil {
 		return Event{}, err
@@ -163,7 +192,7 @@ func (s *Store) Append(event Event) (Event, error) {
 		err = closeErr
 	}
 	if err == nil {
-		err = os.Rename(tmpName, filepath.Join(s.root, event.ID+".json"))
+		err = os.Rename(tmpName, finalPath)
 	}
 	if err == nil {
 		err = syncDirectory(s.root)

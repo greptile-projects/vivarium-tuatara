@@ -98,6 +98,8 @@ whenever dependencies change or the web job fails before it starts.
   failed or cancelled checks follow `pause` or `remove` without deleting pull
   request history. Automatic completion closes a linked open proposal and
   records the same attributable proposal and merge activity as direct merge.
+  Pull metadata retains pending finalization until those cross-store effects
+  succeed; recovery retries them with stable idempotent activity identities.
   Fork pull authors can opt current target participants into short-lived Git
   access restricted to the issuing pull request and exact contribution branch; policy removal, closure,
   or target-access revocation invalidates that access on the next request.

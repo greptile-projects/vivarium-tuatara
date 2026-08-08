@@ -443,7 +443,10 @@ func TestIntegrationQueueRebuildsConcurrentCandidateBeforeLanding(t *testing.T) 
 	store, _ := New(t.TempDir(), gitStore)
 	store.ConfigureRequiredChecks(queueRequirements{repositories.IntegrationQueuePolicy{Branch: "main", Enabled: true, Concurrency: 2, FailureBehavior: repositories.QueueFailurePause, RequiredChecks: []string{}}}, nil)
 	finalized := []string{}
-	store.ConfigureQueueFinalizer(func(p PullRequest) { finalized = append(finalized, p.ID) })
+	store.ConfigureQueueFinalizer(func(p PullRequest) error {
+		finalized = append(finalized, p.ID)
+		return nil
+	})
 	first, _ := store.Create(repository.ID(), testID('a'), "First", "", "one", "main", nil)
 	second, _ := store.Create(repository.ID(), testID('b'), "Second", "", "two", "main", nil)
 	actor := testID('c')
@@ -493,6 +496,28 @@ func TestIntegrationQueueRebuildsConcurrentCandidateBeforeLanding(t *testing.T) 
 	main, _ := repository.ReadReference("refs/heads/main")
 	if main.Target != *second.MergeCommitID {
 		t.Fatalf("main = %s", main.Target)
+	}
+	first.QueueFinalizationPending, first.QueueFinalizedAt = true, nil
+	if _, err := store.write(first); err != nil {
+		t.Fatal(err)
+	}
+	attempts := 0
+	store.ConfigureQueueFinalizer(func(PullRequest) error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("activity unavailable")
+		}
+		return nil
+	})
+	_ = store.AdvanceIntegrationQueues()
+	first, _ = store.Get(repository.ID(), first.ID)
+	if !first.QueueFinalizationPending || first.QueueFinalizedAt != nil {
+		t.Fatalf("failed finalization was acknowledged: %#v", first)
+	}
+	_ = store.AdvanceIntegrationQueues()
+	first, _ = store.Get(repository.ID(), first.ID)
+	if first.QueueFinalizationPending || first.QueueFinalizedAt == nil || attempts != 2 {
+		t.Fatalf("finalization did not recover: pull=%#v attempts=%d", first, attempts)
 	}
 }
 

@@ -442,6 +442,9 @@ evidence. Superseded runs remain inspectable but can never authorize a target
 update. A passing head becomes the pull request's durable merge result; its
 success closes a linked open proposal, records attributable collaboration
 activity, and immediately rebuilds later candidates against that merge.
+Finalization remains durably pending until every cross-store effect succeeds;
+recovery retries it with stable event identities so outages neither lose nor
+duplicate activity.
 Source synchronization and closure remove an entry without deleting candidate
 history. Failed or cancelled head checks and candidate conflicts either leave
 the entry blocking for `pause`, or clear admission and continue for `remove`.
