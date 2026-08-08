@@ -158,7 +158,10 @@ Fork creation transfers only published reachable content-addressed objects and
 publishes a distinct bare repository with independent references,
 ownership, visibility, collaborators, policy, and remote. Catalog metadata
 retains `upstream_repository_id`; creating the fork grants no authority over
-the source. The web repository surface exposes both lineage and fork creation.
+the source. Private-source authorization, clone transfer, and fork publication
+share the catalog mutation lock, so collaborator revocation commits wholly
+before or after creation. The web repository surface exposes both lineage and
+fork creation.
 
 Fork owners can synchronize a selected named branch against the same-named
 upstream branch. The server snapshots the upstream tip, imports its missing

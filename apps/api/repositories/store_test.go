@@ -182,6 +182,55 @@ func TestForkSynchronizationSerializesPrivateUpstreamRevocation(t *testing.T) {
 	}
 }
 
+func TestForkCreationSerializesPrivateSourceRevocation(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	metadataRoot := t.TempDir()
+	store, _ := New(metadataRoot, gitStore)
+	revoker, _ := New(metadataRoot, gitStore)
+	source, err := store.Create(testOwnerID, "private-fork-source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddCollaborator(testOwnerID, source.ID, testCollaboratorID); err != nil {
+		t.Fatal(err)
+	}
+
+	authorized, release := make(chan struct{}), make(chan struct{})
+	store.afterCreateForkAuthorization = func() {
+		close(authorized)
+		<-release
+	}
+	type forkResult struct {
+		repository Repository
+		err        error
+	}
+	forkDone := make(chan forkResult, 1)
+	go func() {
+		repository, err := store.CreateFork(testCollaboratorID, source.ID, "authorized-fork")
+		forkDone <- forkResult{repository: repository, err: err}
+	}()
+	<-authorized
+	revokeDone := make(chan error, 1)
+	go func() { revokeDone <- revoker.RemoveCollaborator(testOwnerID, source.ID, testCollaboratorID) }()
+	select {
+	case err := <-revokeDone:
+		t.Fatalf("revocation completed inside authorized fork creation: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	result := <-forkDone
+	if result.err != nil || result.repository.UpstreamRepositoryID != source.ID {
+		t.Fatalf("authorized fork = %#v, %v", result.repository, result.err)
+	}
+	if err := <-revokeDone; err != nil {
+		t.Fatalf("revocation after fork creation: %v", err)
+	}
+	store.afterCreateForkAuthorization = nil
+	if _, err := store.CreateFork(testCollaboratorID, source.ID, "revoked-fork"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("fork creation after revocation error = %v", err)
+	}
+}
+
 func TestCollaboratorRemovalReconcilesPostRenameSyncFailure(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	store, _ := New(t.TempDir(), gitStore)

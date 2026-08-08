@@ -85,6 +85,7 @@ type Store struct {
 	remove                        func(string) error
 	rename                        func(string, string) error
 	directorySync                 func(string) error
+	afterCreateForkAuthorization  func()
 	afterSynchronizeAuthorization func()
 }
 
@@ -161,6 +162,12 @@ func (s *Store) CreateFork(ownerID, sourceID, name string) (Repository, error) {
 	source, err := s.read(sourceID)
 	if err != nil {
 		return Repository{}, ErrNotFound
+	}
+	if source.Visibility != Public && source.OwnerID != ownerID && !slices.Contains(collaboratorIDs(source), ownerID) {
+		return Repository{}, ErrNotFound
+	}
+	if s.afterCreateForkAuthorization != nil {
+		s.afterCreateForkAuthorization()
 	}
 	if _, err := s.git.Open(source.ID); err != nil {
 		if errors.Is(err, storage.ErrRepositoryNotFound) {

@@ -214,7 +214,9 @@ whenever dependencies change or the web job fails before it starts.
   `/repositories/{id}/forks`; the private result is independently owned and
   retains immutable `upstream_repository_id` lineage without granting source
   authority. Fork storage transfers only published reachable Git objects and
-  keeps references independent. Fork owners synchronize one selected,
+  keeps references independent. Private-source authorization, cloning, and
+  fork metadata publication hold the catalog's cross-process lock so
+  collaborator revocation cannot commit mid-creation. Fork owners synchronize one selected,
   same-named upstream branch through `/repositories/{id}/synchronizations`;
   only fast-forwards are allowed, exact upstream objects are imported before a
   compare-and-swap reference update, and divergence or concurrent pushes are

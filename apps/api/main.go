@@ -2111,17 +2111,6 @@ func registerRepositoryRoutes(mux *http.ServeMux, gitStore *storage.Store, store
 			}
 			actor = readActor
 		}
-		if source.Visibility != repositories.Public && actor.UserID != source.OwnerID {
-			collaborator, accessErr := store.HasCollaborator(actor.UserID, source.ID)
-			if accessErr != nil {
-				writeRepositoryError(w, accessErr)
-				return
-			}
-			if !collaborator {
-				writeAPIError(w, http.StatusNotFound, "repository_not_found", "repository not found")
-				return
-			}
-		}
 		var input forkInput
 		if decodeJSON(r, &input) != nil || input.Name == nil {
 			writeAPIError(w, http.StatusBadRequest, "invalid_request", "name is required")
