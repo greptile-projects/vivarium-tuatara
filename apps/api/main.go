@@ -273,7 +273,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && activityStore != nil {
 		registerActivityRoutes(mux, repositoryCatalog, activityStore, authStore)
-		registerInboxRoutes(mux, repositoryCatalog, proposalStore, pullRequestStore, activityStore, authStore)
+		registerInboxRoutes(mux, repositoryCatalog, proposalStore, pullRequestStore, incidentStore, activityStore, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && releaseStore != nil {
 		registerReleaseRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, releaseStore, authStore, checkRunStore)
@@ -282,7 +282,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		}
 	}
 	if authStore != nil && repositoryCatalog != nil && incidentStore != nil {
-		registerIncidentRoutes(mux, store, repositoryCatalog, incidentStore, deploymentStore, releaseStore, pullRequestStore, authStore, activityStore)
+		registerIncidentRoutes(mux, store, repositoryCatalog, incidentStore, proposalStore, deploymentStore, releaseStore, pullRequestStore, checkRunStore, authStore, activityStore)
 	}
 	mux.HandleFunc("GET /git/{remote}/info/refs", func(w http.ResponseWriter, r *http.Request) {
 		service := r.URL.Query().Get("service")
@@ -2764,7 +2764,7 @@ type inboxItem struct {
 	Action   string `json:"action"`
 }
 
-func registerInboxRoutes(mux *http.ServeMux, repositoryStore *repositories.Store, proposalStore *proposals.Store, pullRequestStore *pullrequests.Store, activityStore *activities.Store, authStore *auth.Store) {
+func registerInboxRoutes(mux *http.ServeMux, repositoryStore *repositories.Store, proposalStore *proposals.Store, pullRequestStore *pullrequests.Store, incidentStore *incidents.Store, activityStore *activities.Store, authStore *auth.Store) {
 	mux.HandleFunc("GET /inbox", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, authStore, "repositories:read", false)
 		if !ok {
@@ -2775,7 +2775,7 @@ func registerInboxRoutes(mux *http.ServeMux, repositoryStore *repositories.Store
 			writeAPIError(w, 400, "invalid_inbox_category", "category must be review, response, or awareness")
 			return
 		}
-		items, err := buildInbox(actor.UserID, repositoryStore, proposalStore, pullRequestStore, activityStore, false)
+		items, err := buildInbox(actor.UserID, repositoryStore, proposalStore, pullRequestStore, incidentStore, activityStore, false)
 		if err != nil {
 			log.Printf("inbox storage: %v", err)
 			writeAPIError(w, 500, "internal_error", "inbox unavailable")
@@ -2803,7 +2803,7 @@ func registerInboxRoutes(mux *http.ServeMux, repositoryStore *repositories.Store
 		if !ok {
 			return
 		}
-		items, err := buildInbox(actor.UserID, repositoryStore, proposalStore, pullRequestStore, activityStore, true)
+		items, err := buildInbox(actor.UserID, repositoryStore, proposalStore, pullRequestStore, incidentStore, activityStore, true)
 		if err != nil {
 			log.Printf("inbox storage: %v", err)
 			writeAPIError(w, 500, "internal_error", "inbox unavailable")
@@ -2829,7 +2829,7 @@ func registerInboxRoutes(mux *http.ServeMux, repositoryStore *repositories.Store
 	})
 }
 
-func buildInbox(userID string, repositoryStore *repositories.Store, proposalStore *proposals.Store, pullRequestStore *pullrequests.Store, activityStore *activities.Store, includeCleared bool) ([]inboxItem, error) {
+func buildInbox(userID string, repositoryStore *repositories.Store, proposalStore *proposals.Store, pullRequestStore *pullrequests.Store, incidentStore *incidents.Store, activityStore *activities.Store, includeCleared bool) ([]inboxItem, error) {
 	events, err := activityStore.List()
 	if err != nil {
 		return nil, err
@@ -2851,7 +2851,7 @@ func buildInbox(userID string, repositoryStore *repositories.Store, proposalStor
 				continue
 			}
 		}
-		category, action, err := classifyInboxEvent(userID, repository.OwnerID, event, proposalStore, pullRequestStore)
+		category, action, err := classifyInboxEvent(userID, repository.OwnerID, event, proposalStore, pullRequestStore, incidentStore)
 		if err != nil {
 			return nil, err
 		}
@@ -2874,8 +2874,34 @@ func buildInbox(userID string, repositoryStore *repositories.Store, proposalStor
 	return items, nil
 }
 
-func classifyInboxEvent(userID, ownerID string, event activities.Event, proposalStore *proposals.Store, pullRequestStore *pullrequests.Store) (string, string, error) {
+func classifyInboxEvent(userID, ownerID string, event activities.Event, proposalStore *proposals.Store, pullRequestStore *pullrequests.Store, incidentStore *incidents.Store) (string, string, error) {
 	if event.ActorID == userID {
+		return "", "", nil
+	}
+	if event.Kind == "incident.commitment_assigned" && event.TargetUserID != nil && *event.TargetUserID == userID && incidentStore != nil {
+		incident, err := incidentStore.Get(event.ResourceID)
+		if errors.Is(err, incidents.ErrNotFound) {
+			return "", "", nil
+		}
+		if err != nil {
+			return "", "", err
+		}
+		for _, commitment := range incident.Commitments {
+			if commitment.RepositoryID != event.RepositoryID || commitment.AssigneeID != userID {
+				continue
+			}
+			task, err := proposalStore.GetTask(commitment.RepositoryID, commitment.ProposalID, commitment.TaskID)
+			if err != nil || task.Assignment == nil || task.Assignment.AssigneeID != userID || task.ContextState != "current" || task.Status == proposals.TaskCancelled {
+				return "response", "Repair invalidated incident commitment", nil
+			}
+			if task.Status == proposals.TaskCompleted {
+				return "", "", nil
+			}
+			if time.Now().After(commitment.DueAt) {
+				return "response", "Resolve overdue incident commitment", nil
+			}
+			return "response", "Complete incident corrective work", nil
+		}
 		return "", "", nil
 	}
 	if event.Kind == "mention.created" && event.TargetUserID != nil && *event.TargetUserID == userID {

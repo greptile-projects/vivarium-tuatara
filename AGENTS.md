@@ -291,6 +291,14 @@ whenever dependencies change or the web job fails before it starts.
   Pause events embed the action/reservation identity, and emergency-repair
   recovery proves the governed repair pull's merge commit is ancestral to the
   exact recovery deployment commit.
+  Resolving an incident publishes a versioned attributed review containing
+  impact, a review timeline, contributing factors, and conclusions. Resolved
+  incidents create corrective work as ordinary linked proposals with one
+  human-assigned executable task, exact base, and due date. Incident reads
+  derive pull, check, release, and deployment progress from authoritative
+  workflow stores; obsolete or revoked task context invalidates the commitment,
+  overdue and invalidated ownership remains actionable in inbox, and merge
+  completion clears it.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's

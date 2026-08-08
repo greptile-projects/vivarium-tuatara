@@ -97,3 +97,32 @@ func TestMitigationRequiresIndependentDecisionAndRetainsFailedAttempts(t *testin
 		t.Fatalf("attempt retry = %#v, %v", sameAction, err)
 	}
 }
+
+func TestResolutionRetainsReviewAndCorrectiveCommitment(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor, repository := strings.Repeat("a", 32), strings.Repeat("b", 32)
+	incident, err := store.Create(Incident{Title: "Database saturation", Summary: "Writes timed out", Severity: "sev2", Status: "monitoring", DeclaredBy: actor, Scopes: []Scope{{RepositoryID: repository}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := store.Resolve(incident.ID, actor, incident.Version, "Checkout writes failed for 18 minutes.", "12:01 alert\n12:19 recovered", []string{"Unbounded connection fan-out", "No saturation alert"}, "Bound concurrency and alert before exhaustion.")
+	if err != nil || resolved.Status != "resolved" || resolved.Review == nil || resolved.Review.PublishedBy != actor || resolved.Timeline[len(resolved.Timeline)-1].Kind != "incident_resolved" {
+		t.Fatalf("resolution = %#v, %v", resolved, err)
+	}
+	due := time.Now().UTC().Add(48 * time.Hour).Truncate(time.Second)
+	linked, commitment, err := store.LinkCommitment(incident.ID, strings.Repeat("c", 32), actor, repository, strings.Repeat("d", 32), strings.Repeat("e", 32), strings.Repeat("f", 32), due)
+	if err != nil || commitment.Progress.State != "committed" || len(linked.Commitments) != 1 || linked.Timeline[len(linked.Timeline)-1].Kind != "corrective_work_committed" {
+		t.Fatalf("commitment = %#v, %v", linked, err)
+	}
+	reopened, err := New(store.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retried, same, err := reopened.LinkCommitment(incident.ID, strings.Repeat("c", 32), actor, repository, strings.Repeat("d", 32), strings.Repeat("e", 32), strings.Repeat("f", 32), due)
+	if err != nil || same.ID != commitment.ID || len(retried.Commitments) != 1 {
+		t.Fatalf("retry = %#v %#v, %v", retried, same, err)
+	}
+}

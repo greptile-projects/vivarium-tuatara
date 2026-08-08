@@ -369,6 +369,8 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
       const ids = [
         ...new Set([
           value.declared_by,
+          ...(value.review ? [value.review.published_by] : []),
+          ...(value.commitments ?? []).flatMap((x) => [x.assignee_id, x.created_by]),
           ...value.roles.map((x) => x.user_id),
           ...value.timeline.map((x) => x.actor_id),
         ]),
@@ -460,6 +462,21 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
     } finally {
       setPending(false);
     }
+  }
+  async function resolve(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!incident || !token) return;
+    const form = event.currentTarget, data = new FormData(form);
+    setPending(true); setError("");
+    try {
+      setIncident(await api<Incident>(`/incidents/${incidentID}/resolution`, {method:"PUT", body:JSON.stringify({expected_version:incident.version, impact:data.get("impact"), timeline:data.get("timeline"), contributing_factors:String(data.get("factors") ?? "").split("\n").map((x)=>x.trim()).filter(Boolean), conclusions:data.get("conclusions")})}, token));
+    } catch (reason) { setError(errorMessage(reason)); }
+    finally { setPending(false); }
+  }
+  async function commitFollowUp(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget, data = new FormData(form);
+    if (await submit(`/incidents/${incidentID}/commitments`, {repository_id:data.get("repository_id"), proposal_title:data.get("proposal_title"), proposal_body:data.get("proposal_body"), task_title:data.get("task_title"), outcome:data.get("outcome"), assignee_id:data.get("assignee_id"), base_revision:data.get("base_revision"), due_at:new Date(String(data.get("due_at"))).toISOString()})) form.reset();
   }
   async function finding(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -641,6 +658,11 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
       )}
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <main className="space-y-5">
+          <Card className="p-5">
+            <h2 className="font-semibold">Post-incident review</h2>
+            {incident.review ? <div className="mt-3 space-y-4 text-sm"><div><b>Impact</b><p className="mt-1 whitespace-pre-wrap">{incident.review.impact}</p></div><div><b>Review timeline</b><p className="mt-1 whitespace-pre-wrap">{incident.review.timeline}</p></div><div><b>Contributing factors</b><ul className="mt-1 list-disc pl-5">{incident.review.contributing_factors.map((x)=><li key={x}>{x}</li>)}</ul></div><div><b>Conclusions</b><p className="mt-1 whitespace-pre-wrap">{incident.review.conclusions}</p></div><p className="text-xs text-[var(--muted)]">Published by {people[incident.review.published_by]?.display_name ?? incident.review.published_by} · {stamp(incident.review.published_at)}</p></div> : <form className="mt-4 grid gap-3" onSubmit={resolve}><textarea className={`${field} py-3`} name="impact" required rows={3} placeholder="Who or what was affected, how severely, and for how long?"/><textarea className={`${field} py-3`} name="timeline" required rows={4} placeholder="Reviewable sequence of detection, decisions, mitigation, and recovery"/><textarea className={`${field} py-3`} name="factors" required rows={3} placeholder="One contributing factor per line"/><textarea className={`${field} py-3`} name="conclusions" required rows={3} placeholder="What did the team learn, including uncertainty?"/><div><Button disabled={pending}>Resolve and publish review</Button></div></form>}
+          </Card>
+          {incident.review && <Card className="p-5"><h2 className="font-semibold">Corrective commitments</h2><p className="mt-1 text-xs text-[var(--muted)]">Create ordinary proposal work with one accountable owner and deadline. Review, checks, release, and deployment progress flows back here.</p><form className="mt-4 grid gap-3 sm:grid-cols-2" onSubmit={commitFollowUp}><select className={field} name="repository_id">{incident.scopes.map((x)=><option key={x.repository_id} value={x.repository_id}>{repos[x.repository_id]?.name ?? x.repository_id}</option>)}</select><input className={field} name="assignee_id" required placeholder="Collaborator ID"/><input className={field} name="proposal_title" required placeholder="Corrective proposal title"/><input className={field} name="task_title" required placeholder="Assigned task title"/><textarea className={`${field} py-3 sm:col-span-2`} name="proposal_body" required rows={3} placeholder="Why this work reduces recurrence"/><textarea className={`${field} py-3 sm:col-span-2`} name="outcome" required rows={3} placeholder="Verifiable expected outcome and mandate"/><input className={field} name="base_revision" required pattern="[0-9a-f]{40}" placeholder="Exact 40-character base commit"/><input className={field} name="due_at" type="datetime-local" required/><div><Button disabled={pending}>Create and assign follow-up</Button></div></form>{(incident.commitments ?? []).map((item)=><div className="mt-4 rounded-lg border border-[var(--line)] p-4" key={item.id}><div className="flex flex-wrap justify-between gap-2"><Link className="font-semibold text-[var(--brand)]" href={`/proposals/${item.repository_id}/${item.proposal_id}`}>Corrective proposal →</Link><Badge tone={item.progress.state === "completed" ? "success" : item.progress.state === "overdue" || item.progress.state === "invalidated" ? "danger" : "info"}>{item.progress.state}</Badge></div><p className="mt-2 text-xs text-[var(--muted)]">Owner {people[item.assignee_id]?.display_name ?? item.assignee_id} · due {stamp(item.due_at)}</p>{item.progress.pull_request_id && <Link className="mt-2 block text-xs font-semibold text-[var(--brand)]" href={`/pulls/${item.repository_id}/${item.progress.pull_request_id}`}>Review follow-up pull →</Link>}<p className="mt-2 text-xs text-[var(--muted)]">{item.progress.check_states?.join(" · ") || "No checks published"} · {item.progress.release_ids?.length ?? 0} release(s) · {item.progress.deployment_ids?.length ?? 0} deployment(s)</p></div>)}</Card>}
           <Card className="p-5">
             <h2 className="font-semibold">Mitigation decisions</h2>
             <p className="mt-1 text-xs text-[var(--muted)]">Proposals retain their evidence, independent authorization, governed execution attempts, and recovery criteria.</p>

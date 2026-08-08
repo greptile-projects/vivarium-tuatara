@@ -11,15 +11,17 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
-func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *repositories.Store, store *incidents.Store, deploymentStore *deployments.Store, releaseStore *releases.Store, pullStore *pullrequests.Store, credentials *auth.Store, activity *activities.Store) {
+func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *repositories.Store, store *incidents.Store, proposalStore *proposals.Store, deploymentStore *deployments.Store, releaseStore *releases.Store, pullStore *pullrequests.Store, checkStore *checkruns.Store, credentials *auth.Store, activity *activities.Store) {
 	participant := func(user string, incident incidents.Incident) bool {
 		for _, scope := range incident.Scopes {
 			repo, e := repos.GetByID(scope.RepositoryID)
@@ -47,6 +49,59 @@ func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *
 			return actor, v, false
 		}
 		return actor, v, true
+	}
+	hydrate := func(v incidents.Incident) incidents.Incident {
+		for i := range v.Commitments {
+			c := &v.Commitments[i]
+			c.Progress = incidents.CommitmentProgress{State: "committed"}
+			task, err := proposalStore.GetTask(c.RepositoryID, c.ProposalID, c.TaskID)
+			if err != nil || task.Assignment == nil || task.Assignment.AssigneeID != c.AssigneeID || task.ContextState != "current" || task.Status == proposals.TaskCancelled {
+				c.Progress.State = "invalidated"
+				continue
+			}
+			if task.Status == proposals.TaskCompleted {
+				c.Progress.State = "completed"
+			} else if time.Now().After(c.DueAt) {
+				c.Progress.State = "overdue"
+			} else if task.Assignment != nil {
+				c.Progress.State = "assigned"
+			}
+			if task.Contribution != nil {
+				c.Progress.PullRequestID = task.Contribution.PullRequestID
+				if c.Progress.State == "assigned" || c.Progress.State == "committed" {
+					c.Progress.State = "review"
+				}
+				if checkStore != nil {
+					if runs, err := checkStore.List(c.RepositoryID, task.Contribution.PullRequestID); err == nil {
+						for _, run := range runs {
+							c.Progress.CheckStates = append(c.Progress.CheckStates, run.Definition.Name+":"+run.State)
+						}
+					}
+				}
+			}
+			if releaseStore != nil {
+				if items, err := releaseStore.List(c.RepositoryID); err == nil {
+					for _, item := range items {
+						for _, taskID := range item.Inclusions.TaskIDs {
+							if taskID == c.TaskID {
+								c.Progress.ReleaseIDs = append(c.Progress.ReleaseIDs, item.ID)
+								if deploymentStore != nil {
+									if promotions, err := deploymentStore.ListPromotions(c.RepositoryID); err == nil {
+										for _, promotion := range promotions {
+											if promotion.ReleaseID == item.ID {
+												c.Progress.DeploymentIDs = append(c.Progress.DeploymentIDs, promotion.ID)
+											}
+										}
+									}
+								}
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+		return v
 	}
 	mutate := func(current incidents.Incident, actorID string, roles []incidents.Role, fn func() error) error {
 		repositoryIDs := make([]string, 0, len(current.Scopes))
@@ -79,6 +134,9 @@ func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *
 		if !valid {
 			writeAPIError(w, 400, "invalid_pagination", "limit or after is invalid")
 			return
+		}
+		for i := range page {
+			page[i] = hydrate(page[i])
 		}
 		writeJSON(w, 200, map[string]any{"incidents": page, "next_cursor": next})
 	})
@@ -180,7 +238,7 @@ func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *
 	mux.HandleFunc("GET /incidents/{incident_id}", func(w http.ResponseWriter, r *http.Request) {
 		_, v, ok := require(w, r, "repositories:read")
 		if ok {
-			writeJSON(w, 200, v)
+			writeJSON(w, 200, hydrate(v))
 		}
 	})
 	mux.HandleFunc("PATCH /incidents/{incident_id}", func(w http.ResponseWriter, r *http.Request) {
@@ -213,7 +271,7 @@ func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *
 			writeIncidentError(w, e)
 			return
 		}
-		writeJSON(w, 200, v)
+		writeJSON(w, 200, hydrate(v))
 	})
 	mux.HandleFunc("POST /incidents/{incident_id}/updates", func(w http.ResponseWriter, r *http.Request) {
 		actor, current, ok := require(w, r, "repositories:write")
@@ -313,6 +371,119 @@ func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *
 			return
 		}
 		writeJSON(w, 200, v)
+	})
+	mux.HandleFunc("PUT /incidents/{incident_id}/resolution", func(w http.ResponseWriter, r *http.Request) {
+		actor, current, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var input struct {
+			ExpectedVersion     int      `json:"expected_version"`
+			Impact              string   `json:"impact"`
+			Timeline            string   `json:"timeline"`
+			ContributingFactors []string `json:"contributing_factors"`
+			Conclusions         string   `json:"conclusions"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		var v incidents.Incident
+		err := mutate(current, actor.UserID, current.Roles, func() error {
+			var mutationErr error
+			v, mutationErr = store.Resolve(current.ID, actor.UserID, input.ExpectedVersion, input.Impact, input.Timeline, input.ContributingFactors, input.Conclusions)
+			return mutationErr
+		})
+		if err != nil {
+			writeIncidentError(w, err)
+			return
+		}
+		for _, scope := range v.Scopes {
+			recordActivity(activity, repos, activities.Event{Kind: "incident.resolved", ActorID: actor.UserID, RepositoryID: scope.RepositoryID, ResourceType: "incident", ResourceID: v.ID, ResourceTitle: v.Title})
+		}
+		writeJSON(w, 200, hydrate(v))
+	})
+	mux.HandleFunc("POST /incidents/{incident_id}/commitments", func(w http.ResponseWriter, r *http.Request) {
+		actor, current, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		if proposalStore == nil {
+			writeAPIError(w, 503, "corrective_work_unavailable", "proposal planning is unavailable")
+			return
+		}
+		var input struct {
+			OperationID   string    `json:"operation_id"`
+			RepositoryID  string    `json:"repository_id"`
+			ProposalTitle string    `json:"proposal_title"`
+			ProposalBody  string    `json:"proposal_body"`
+			TaskTitle     string    `json:"task_title"`
+			Outcome       string    `json:"outcome"`
+			AssigneeID    string    `json:"assignee_id"`
+			BaseRevision  string    `json:"base_revision"`
+			DueAt         time.Time `json:"due_at"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		inScope := false
+		for _, scope := range current.Scopes {
+			if scope.RepositoryID == input.RepositoryID {
+				inScope = true
+			}
+		}
+		if !inScope || current.Status != "resolved" || current.Review == nil {
+			writeAPIError(w, 409, "incident_not_resolved", "publish the incident review before assigning corrective work")
+			return
+		}
+		for _, existing := range current.Commitments {
+			if existing.OperationID == input.OperationID {
+				if existing.CreatedBy != actor.UserID || existing.RepositoryID != input.RepositoryID || existing.AssigneeID != input.AssigneeID || !existing.DueAt.Equal(input.DueAt) {
+					writeAPIError(w, 409, "incident_changed", "commitment operation was already used with different ownership")
+					return
+				}
+				writeJSON(w, 200, hydrate(current))
+				return
+			}
+		}
+		if _, err := repos.GetByID(input.RepositoryID); err != nil {
+			writeAPIError(w, 404, "repository_not_found", "repository not found")
+			return
+		}
+		assigneeAllowed, _ := repos.HasCollaborator(input.AssigneeID, input.RepositoryID)
+		repository, _ := repos.GetByID(input.RepositoryID)
+		if repository.OwnerID != input.AssigneeID && !assigneeAllowed {
+			writeAPIError(w, 422, "invalid_assignee", "assignee must currently participate in the repository")
+			return
+		}
+		proposal, err := proposalStore.Create(input.RepositoryID, actor.UserID, input.ProposalTitle, input.ProposalBody)
+		if err != nil && !errors.Is(err, proposals.ErrDurabilityUncertain) {
+			writeProposalError(w, err)
+			return
+		}
+		task, err := proposalStore.CreateTask(input.RepositoryID, proposal.ID, actor.UserID, input.TaskTitle, input.Outcome, nil, nil)
+		if err != nil && !errors.Is(err, proposals.ErrDurabilityUncertain) {
+			writeProposalError(w, err)
+			return
+		}
+		task, err = proposalStore.AssignTask(input.RepositoryID, proposal.ID, task.ID, actor.UserID, proposals.TaskAssignmentInput{AssigneeType: "human", AssigneeID: input.AssigneeID, Mandate: input.Outcome, RepositoryID: input.RepositoryID, BaseRevision: input.BaseRevision})
+		if err != nil {
+			writeProposalError(w, err)
+			return
+		}
+		var v incidents.Incident
+		err = mutate(current, actor.UserID, current.Roles, func() error {
+			var mutationErr error
+			v, _, mutationErr = store.LinkCommitment(current.ID, input.OperationID, actor.UserID, input.RepositoryID, proposal.ID, task.ID, input.AssigneeID, input.DueAt)
+			return mutationErr
+		})
+		if err != nil {
+			writeIncidentError(w, err)
+			return
+		}
+		recordActivity(activity, repos, activities.Event{Kind: "incident.commitment_assigned", ActorID: actor.UserID, RepositoryID: input.RepositoryID, ResourceType: "incident", ResourceID: v.ID, ResourceTitle: v.Title, TargetUserID: &input.AssigneeID})
+		writeJSON(w, 201, hydrate(v))
 	})
 	mux.HandleFunc("POST /incidents/{incident_id}/actions", func(w http.ResponseWriter, r *http.Request) {
 		actor, current, ok := require(w, r, "repositories:write")

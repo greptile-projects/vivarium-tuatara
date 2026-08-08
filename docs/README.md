@@ -782,3 +782,8 @@ from work abandoned by a prior process. Live work renews through the command
 and completes through an owner compare-and-swap; only an expired lease fails
 closed because its external result is unknown. Setup failures that occur before
 claiming execution reject the queued record into a terminal failed state.
+
+Incident response carries operational evidence through an attributed
+post-incident review and into proposal-owned corrective commitments. Those
+commitments remain visible from assignment through pull review, checks,
+release, and deployment instead of ending when the incident is marked resolved.

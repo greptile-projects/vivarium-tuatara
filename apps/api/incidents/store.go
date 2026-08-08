@@ -114,6 +114,33 @@ type Evidence struct {
 	WindowEnd    *time.Time `json:"window_end,omitempty"`
 	CapturedAt   time.Time  `json:"captured_at"`
 }
+type Review struct {
+	Impact              string    `json:"impact"`
+	Timeline            string    `json:"timeline"`
+	ContributingFactors []string  `json:"contributing_factors"`
+	Conclusions         string    `json:"conclusions"`
+	PublishedBy         string    `json:"published_by"`
+	PublishedAt         time.Time `json:"published_at"`
+}
+type CommitmentProgress struct {
+	State         string   `json:"state"`
+	PullRequestID string   `json:"pull_request_id,omitempty"`
+	CheckStates   []string `json:"check_states,omitempty"`
+	ReleaseIDs    []string `json:"release_ids,omitempty"`
+	DeploymentIDs []string `json:"deployment_ids,omitempty"`
+}
+type Commitment struct {
+	ID           string             `json:"id"`
+	OperationID  string             `json:"operation_id"`
+	RepositoryID string             `json:"repository_id"`
+	ProposalID   string             `json:"proposal_id"`
+	TaskID       string             `json:"task_id"`
+	AssigneeID   string             `json:"assignee_id"`
+	DueAt        time.Time          `json:"due_at"`
+	CreatedBy    string             `json:"created_by"`
+	CreatedAt    time.Time          `json:"created_at"`
+	Progress     CommitmentProgress `json:"progress"`
+}
 type Incident struct {
 	ID             string          `json:"id"`
 	Title          string          `json:"title"`
@@ -127,10 +154,72 @@ type Incident struct {
 	Timeline       []Entry         `json:"timeline"`
 	Investigations []Investigation `json:"investigations"`
 	Actions        []Action        `json:"actions"`
+	Review         *Review         `json:"review,omitempty"`
+	Commitments    []Commitment    `json:"commitments"`
 	Version        int             `json:"version"`
 	CreatedAt      time.Time       `json:"created_at"`
 	UpdatedAt      time.Time       `json:"updated_at"`
 	ResolvedAt     *time.Time      `json:"resolved_at,omitempty"`
+}
+
+func (s *Store) Resolve(id, actor string, expected int, impact, timeline string, factors []string, conclusions string) (Incident, error) {
+	var v Incident
+	err := s.mutate(func() error {
+		if err := s.read(id, &v); err != nil {
+			return err
+		}
+		impact, timeline, conclusions = strings.TrimSpace(impact), strings.TrimSpace(timeline), strings.TrimSpace(conclusions)
+		if v.Version != expected {
+			return ErrConflict
+		}
+		if !validID(actor) || impact == "" || timeline == "" || conclusions == "" || len(impact) > 10000 || len(timeline) > 20000 || len(conclusions) > 10000 || len(factors) == 0 || len(factors) > 20 {
+			return ErrInvalid
+		}
+		clean := make([]string, len(factors))
+		for i, factor := range factors {
+			clean[i] = strings.TrimSpace(factor)
+			if clean[i] == "" || len(clean[i]) > 1000 {
+				return ErrInvalid
+			}
+		}
+		now := s.now()
+		v.Review = &Review{Impact: impact, Timeline: timeline, ContributingFactors: clean, Conclusions: conclusions, PublishedBy: actor, PublishedAt: now}
+		v.Status, v.ResolvedAt, v.UpdatedAt = "resolved", &now, now
+		v.Version++
+		v.Timeline = append(v.Timeline, Entry{ID: mustID(), Kind: "incident_resolved", ActorID: actor, Message: conclusions, Audience: "participants", CreatedAt: now})
+		return s.write(v)
+	})
+	return v, err
+}
+
+func (s *Store) LinkCommitment(id, operationID, actor, repositoryID, proposalID, taskID, assigneeID string, dueAt time.Time) (Incident, Commitment, error) {
+	var v Incident
+	var out Commitment
+	err := s.mutate(func() error {
+		if err := s.read(id, &v); err != nil {
+			return err
+		}
+		if v.Status != "resolved" || v.Review == nil || !validID(operationID) || !validID(actor) || !validID(repositoryID) || !validID(proposalID) || !validID(taskID) || !validID(assigneeID) || dueAt.IsZero() {
+			return ErrInvalid
+		}
+		for _, existing := range v.Commitments {
+			if existing.OperationID == operationID {
+				if existing.CreatedBy != actor || existing.RepositoryID != repositoryID || existing.ProposalID != proposalID || existing.TaskID != taskID || existing.AssigneeID != assigneeID || !existing.DueAt.Equal(dueAt) {
+					return ErrConflict
+				}
+				out = existing
+				return nil
+			}
+		}
+		now := s.now()
+		out = Commitment{ID: mustID(), OperationID: operationID, RepositoryID: repositoryID, ProposalID: proposalID, TaskID: taskID, AssigneeID: assigneeID, DueAt: dueAt.UTC(), CreatedBy: actor, CreatedAt: now, Progress: CommitmentProgress{State: "committed"}}
+		v.Commitments = append(v.Commitments, out)
+		v.Version++
+		v.UpdatedAt = now
+		v.Timeline = append(v.Timeline, Entry{ID: mustID(), Kind: "corrective_work_committed", ActorID: actor, Message: "Corrective work assigned through proposal " + proposalID + " and task " + taskID + ".", Audience: "participants", CreatedAt: now})
+		return s.write(v)
+	})
+	return v, out, err
 }
 
 func (s *Store) ProposeAction(id, operationID, actor, kind, repositoryID, deploymentID, rationale string, evidence []Evidence, criteria []HealthCriterion) (Incident, Action, error) {
@@ -794,6 +883,14 @@ func (s *Store) read(id string, v *Incident) error {
 	for _, action := range v.Actions {
 		if !validAction(action) {
 			return errors.New("corrupt incident action")
+		}
+	}
+	if v.Review != nil && (!validID(v.Review.PublishedBy) || strings.TrimSpace(v.Review.Impact) == "" || strings.TrimSpace(v.Review.Timeline) == "" || len(v.Review.ContributingFactors) == 0 || strings.TrimSpace(v.Review.Conclusions) == "" || v.Review.PublishedAt.IsZero()) {
+		return errors.New("corrupt incident review")
+	}
+	for _, commitment := range v.Commitments {
+		if !validID(commitment.ID) || !validID(commitment.OperationID) || !validID(commitment.RepositoryID) || !validID(commitment.ProposalID) || !validID(commitment.TaskID) || !validID(commitment.AssigneeID) || !validID(commitment.CreatedBy) || commitment.DueAt.IsZero() || commitment.CreatedAt.IsZero() {
+			return errors.New("corrupt incident commitment")
 		}
 	}
 	return nil

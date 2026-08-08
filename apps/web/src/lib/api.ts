@@ -173,6 +173,31 @@ export type Incident = {
     signal?: string;
   };
   declared_by: string;
+  review?: {
+    impact: string;
+    timeline: string;
+    contributing_factors: string[];
+    conclusions: string;
+    published_by: string;
+    published_at: string;
+  };
+  commitments: {
+    id: string;
+    repository_id: string;
+    proposal_id: string;
+    task_id: string;
+    assignee_id: string;
+    due_at: string;
+    created_by: string;
+    created_at: string;
+    progress: {
+      state: "committed" | "assigned" | "review" | "completed" | "overdue" | "invalidated";
+      pull_request_id?: string;
+      check_states?: string[];
+      release_ids?: string[];
+      deployment_ids?: string[];
+    };
+  }[];
   timeline: {
     id: string;
     kind: string;
