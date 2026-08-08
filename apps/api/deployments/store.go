@@ -69,6 +69,8 @@ type Promotion struct {
 	CreatedAt      time.Time  `json:"created_at"`
 	StartedAt      *time.Time `json:"started_at,omitempty"`
 	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	ExecutionOwner string     `json:"execution_owner,omitempty"`
+	LeaseExpiresAt *time.Time `json:"lease_expires_at,omitempty"`
 }
 
 type Store struct {
@@ -294,6 +296,23 @@ func (s *Store) Approve(repo, id, actor string) (Promotion, error) {
 	return p, s.write(filepath.Join(s.root, repo, "promotions", id+".json"), p)
 }
 func (s *Store) Transition(repo, id, state, message string) (Promotion, error) {
+	return s.transition(repo, id, state, message, "", nil)
+}
+
+// Claim atomically owns queued work for one bounded execution generation.
+func (s *Store) Claim(repo, id, owner string, leaseExpires time.Time) (Promotion, error) {
+	if !validID(owner) || !leaseExpires.After(s.now()) {
+		return Promotion{}, ErrInvalid
+	}
+	return s.transition(repo, id, "running", "Execution claimed for exact artifact verification.", owner, &leaseExpires)
+}
+
+// Complete compare-and-swaps the terminal result against its execution owner.
+func (s *Store) Complete(repo, id, owner, state, message string) (Promotion, error) {
+	return s.transition(repo, id, state, message, owner, nil)
+}
+
+func (s *Store) transition(repo, id, state, message, owner string, lease *time.Time) (Promotion, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	unlock, err := s.lock()
@@ -307,6 +326,9 @@ func (s *Store) Transition(repo, id, state, message string) (Promotion, error) {
 	}
 	valid := p.State == "queued" && state == "running" || p.State == "running" && (state == "succeeded" || state == "failed")
 	if !valid {
+		return p, ErrBlocked
+	}
+	if p.State == "running" && owner != "" && p.ExecutionOwner != owner {
 		return p, ErrBlocked
 	}
 	env, _ := s.getEnvironment(repo, p.EnvironmentID)
@@ -326,8 +348,11 @@ func (s *Store) Transition(repo, id, state, message string) (Promotion, error) {
 	p.State = state
 	if state == "running" {
 		p.StartedAt = &now
+		p.ExecutionOwner = owner
+		p.LeaseExpiresAt = lease
 	} else {
 		p.CompletedAt = &now
+		p.LeaseExpiresAt = nil
 	}
 	p.Events = append(p.Events, Event{Sequence: len(p.Events) + 1, Kind: "deployment." + state, State: state, Message: message, CreatedAt: now})
 	return p, s.write(filepath.Join(s.root, repo, "promotions", id+".json"), p)

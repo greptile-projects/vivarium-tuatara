@@ -23,10 +23,16 @@ import (
 type Executor struct {
 	store  *Store
 	builds *checkruns.Store
+	owner  string
+	now    func() time.Time
 }
 
 func NewExecutor(store *Store, builds *checkruns.Store) *Executor {
-	return &Executor{store: store, builds: builds}
+	owner, err := newID()
+	if err != nil {
+		panic("deployment executor identity unavailable")
+	}
+	return &Executor{store: store, builds: builds, owner: owner, now: time.Now}
 }
 
 func (e *Executor) Execute(repositoryID, id string) error {
@@ -38,7 +44,8 @@ func (e *Executor) Execute(repositoryID, id string) error {
 	if err != nil {
 		return e.fail(promotion, "environment policy is unavailable")
 	}
-	promotion, err = e.store.Transition(repositoryID, id, "running", "Execution claimed for exact artifact verification.")
+	leaseExpires := e.now().UTC().Add(time.Duration(environment.TimeoutSeconds)*time.Second + time.Minute)
+	promotion, err = e.store.Claim(repositoryID, id, e.owner, leaseExpires)
 	if err != nil {
 		return err
 	}
@@ -104,7 +111,7 @@ func (e *Executor) Execute(repositoryID, id string) error {
 	if err != nil {
 		return e.fail(promotion, "deployment command failed\n"+log)
 	}
-	_, err = e.store.Transition(repositoryID, promotion.ID, "succeeded", "Artifact SHA-256 verified; deployment command completed.\n"+log)
+	_, err = e.store.Complete(repositoryID, promotion.ID, e.owner, "succeeded", "Artifact SHA-256 verified; deployment command completed.\n"+log)
 	return err
 }
 
@@ -115,7 +122,9 @@ func (e *Executor) Recover() error {
 	}
 	for _, item := range items {
 		if item.State == "running" {
-			_ = e.fail(item, "API restart interrupted deployment; external outcome is unknown")
+			if item.LeaseExpiresAt == nil || !item.LeaseExpiresAt.After(e.now().UTC()) {
+				_, _ = e.store.Complete(item.RepositoryID, item.ID, item.ExecutionOwner, "failed", "Execution lease expired; external outcome is unknown")
+			}
 		} else {
 			go e.Execute(item.RepositoryID, item.ID)
 		}
@@ -124,7 +133,7 @@ func (e *Executor) Recover() error {
 }
 
 func (e *Executor) fail(promotion Promotion, message string) error {
-	_, err := e.store.Transition(promotion.RepositoryID, promotion.ID, "failed", message)
+	_, err := e.store.Complete(promotion.RepositoryID, promotion.ID, e.owner, "failed", message)
 	return err
 }
 

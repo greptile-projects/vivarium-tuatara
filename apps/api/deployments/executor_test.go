@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 )
@@ -91,5 +92,43 @@ func TestRecoveryFailsInterruptedRunningPromotion(t *testing.T) {
 	}
 	if promotion.State != "failed" {
 		t.Fatalf("state = %q", promotion.State)
+	}
+}
+
+func TestRecoveryPreservesLiveLeasedPromotion(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, actor := id('b'), id('c')
+	environment, err := store.PutEnvironment(Environment{RepositoryID: repo, Name: "live", Position: 1, Image: "alpine:3.22", Command: "true", TimeoutSeconds: 30, RequiredApprovals: 0, Concurrency: 1, UpdatedBy: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	promotion, err := store.CreatePromotion(Promotion{RepositoryID: repo, EnvironmentID: environment.ID, ReleaseID: id('d'), BuildID: id('e'), ArtifactID: id('f'), ArtifactSHA256: string(make([]byte, 64)), InitiatedBy: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := id('a')
+	promotion, err = store.Claim(repo, promotion.ID, owner, time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	builds, err := checkruns.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = NewExecutor(store, builds).Recover(); err != nil {
+		t.Fatal(err)
+	}
+	promotion, err = store.GetPromotion(repo, promotion.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if promotion.State != "running" {
+		t.Fatalf("state = %q", promotion.State)
+	}
+	if _, err = store.Complete(repo, promotion.ID, owner, "succeeded", "done"); err != nil {
+		t.Fatalf("live completion = %v", err)
 	}
 }
