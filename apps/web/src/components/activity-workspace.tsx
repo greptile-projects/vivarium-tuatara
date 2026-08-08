@@ -26,6 +26,7 @@ const descriptions: Record<ActivityEvent["kind"], string> = {
   "deployment.resume": "resumed a deployment rollout",
   "deployment.cancel": "canceled a deployment rollout",
   "deployment.mark_unsuccessful": "marked a deployment unsuccessful",
+  "incident.declared": "declared an incident",
 };
 
 function initials(user?: User) {
@@ -35,6 +36,7 @@ function initials(user?: User) {
 function resourceHref(event: ActivityEvent) {
   if (event.resource_type === "proposal") return `/proposals/${event.repository_id}/${event.resource_id}`;
   if (event.resource_type === "pull_request") return `/pulls/${event.repository_id}/${event.resource_id}`;
+  if (event.resource_type === "incident") return `/incidents/${event.resource_id}`;
   return `/repositories/${event.repository_id}`;
 }
 

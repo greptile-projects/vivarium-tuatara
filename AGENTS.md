@@ -255,6 +255,19 @@ whenever dependencies change or the web job fails before it starts.
   links directly to the underlying collaboration, and persists per-user clears
   without deleting activity. Inbox reads recheck current repository access and
   resource state so revoked or completed work does not retain obsolete actions.
+  Incident response at `/incidents` provides a cross-repository shared operating
+  picture for current affected-repository participants. Incidents may be declared
+  manually or from verified retained deployment signal evidence, identify affected
+  environments, severity, status, and named response roles, and retain an immutable
+  actor-stamped timeline. Updates preserve `participants` or `public` audience
+  intent and stable-user acknowledgements; compare-and-swap versions protect state
+  and role decisions. Timeline update callers retain a stable operation ID across
+  retries, and the web keeps the pending exact-draft identity in incident-scoped
+  local storage across remounts, so lost responses and post-publication durability
+  uncertainty cannot duplicate an update.
+  `$INCIDENT_STORAGE_ROOT` defaults to `incidents`; incident mutations hold the
+  repository catalog lock across current participant and role revalidation plus
+  publication, so collaborator revocation cannot commit mid-mutation.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's

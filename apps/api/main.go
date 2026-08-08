@@ -20,6 +20,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
@@ -150,12 +151,20 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	incidentRoot := os.Getenv("INCIDENT_STORAGE_ROOT")
+	if incidentRoot == "" {
+		incidentRoot = "incidents"
+	}
+	incidentStore, err := incidents.New(incidentRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, releaseStore, deploymentStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, releaseStore, deploymentStore, incidentStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -225,12 +234,15 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, authStore *auth.Store, repositoryCatalog *repositories.Store, proposalStore *proposals.Store, pullRequestStore *pullrequests.Store, activityStore *activities.Store, changeSessionStore *changesessions.Store, checkRunStore *checkruns.Store, optionalStores ...any) http.Handler {
 	var releaseStore *releases.Store
 	var deploymentStore *deployments.Store
+	var incidentStore *incidents.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
 			releaseStore = value
 		case *deployments.Store:
 			deploymentStore = value
+		case *incidents.Store:
+			incidentStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -268,6 +280,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		if deploymentStore != nil {
 			registerDeploymentRoutes(mux, store, repositoryCatalog, releaseStore, checkRunStore, deploymentStore, authStore, activityStore, pullRequestStore, changeSessionStore)
 		}
+	}
+	if authStore != nil && repositoryCatalog != nil && incidentStore != nil {
+		registerIncidentRoutes(mux, repositoryCatalog, incidentStore, deploymentStore, authStore, activityStore)
 	}
 	mux.HandleFunc("GET /git/{remote}/info/refs", func(w http.ResponseWriter, r *http.Request) {
 		service := r.URL.Query().Get("service")
