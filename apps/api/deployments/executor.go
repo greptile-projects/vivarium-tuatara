@@ -213,7 +213,7 @@ func (e *Executor) Recover() error {
 		return err
 	}
 	for _, item := range items {
-		if item.State == "running" {
+		if item.State == "running" || item.State == "paused" {
 			if item.LeaseExpiresAt == nil || !item.LeaseExpiresAt.After(e.now().UTC()) {
 				_, _ = e.store.Complete(item.RepositoryID, item.ID, item.ExecutionOwner, "failed", "Execution lease expired; external outcome is unknown")
 			}

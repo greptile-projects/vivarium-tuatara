@@ -134,6 +134,48 @@ func TestRecoveryPreservesLiveLeasedPromotion(t *testing.T) {
 	}
 }
 
+func TestRecoveryFailsPausedPromotionWithExpiredOwner(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().UTC()
+	store.now = func() time.Time { return base }
+	repo, actor, controller := id('4'), id('5'), id('6')
+	environment, err := store.PutEnvironment(Environment{RepositoryID: repo, Name: "paused", Position: 1, Image: "alpine:3.22", Command: "true", TimeoutSeconds: 30, RequiredApprovals: 0, Concurrency: 1, UpdatedBy: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	promotion, err := store.CreatePromotion(Promotion{RepositoryID: repo, EnvironmentID: environment.ID, ReleaseID: id('7'), BuildID: id('8'), ArtifactID: id('9'), ArtifactSHA256: string(make([]byte, 64)), InitiatedBy: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	promotion, err = store.Claim(repo, promotion.ID, id('a'), base.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	promotion, err = store.Control(repo, promotion.ID, controller, "pause", "running", "hold rollout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := NewExecutor(store, nil)
+	executor.now = func() time.Time { return base.Add(2 * time.Minute) }
+	store.now = executor.now
+	if err = executor.Recover(); err != nil {
+		t.Fatal(err)
+	}
+	promotion, err = store.GetPromotion(repo, promotion.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if promotion.State != "failed" || promotion.CompletedAt == nil || promotion.Events[len(promotion.Events)-1].Message != "Execution lease expired; external outcome is unknown" {
+		t.Fatalf("recovered promotion = %#v", promotion)
+	}
+	if _, err = store.Control(repo, promotion.ID, controller, "resume", "failed", "too late"); err != ErrBlocked {
+		t.Fatalf("resume after failed recovery = %v", err)
+	}
+}
+
 func TestHeartbeatRenewsLiveExecutionLease(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {

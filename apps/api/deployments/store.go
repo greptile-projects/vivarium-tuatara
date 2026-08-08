@@ -468,11 +468,11 @@ func (s *Store) transition(repo, id, state, message, owner string, lease *time.T
 	if err != nil {
 		return p, err
 	}
-	valid := p.State == "queued" && (state == "running" || state == "failed") || p.State == "running" && (state == "succeeded" || state == "failed")
+	valid := p.State == "queued" && (state == "running" || state == "failed") || p.State == "running" && (state == "succeeded" || state == "failed") || p.State == "paused" && state == "failed"
 	if !valid {
 		return p, ErrBlocked
 	}
-	if p.State == "running" && owner != "" && p.ExecutionOwner != owner {
+	if (p.State == "running" || p.State == "paused") && owner != "" && p.ExecutionOwner != owner {
 		return p, ErrBlocked
 	}
 	env, _ := s.getEnvironment(repo, p.EnvironmentID)
@@ -538,7 +538,7 @@ func (s *Store) Nonterminal() ([]Promotion, error) {
 			return nil, err
 		}
 		for _, item := range items {
-			if item.State == "queued" || item.State == "running" {
+			if item.State == "queued" || item.State == "running" || item.State == "paused" {
 				result = append(result, item)
 			}
 		}

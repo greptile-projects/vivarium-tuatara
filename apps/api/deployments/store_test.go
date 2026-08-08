@@ -132,6 +132,47 @@ func TestRolloutControlsRetainAttributedDecisionsAndHealthEvidence(t *testing.T)
 	}
 }
 
+func TestOwnedFailedSignalTerminalizesPausedRollout(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, actor, controller, owner := id('a'), id('b'), id('c'), id('d')
+	environment, err := store.PutEnvironment(Environment{RepositoryID: repo, Name: "production", Position: 1, Image: "alpine:3.22", Command: "true", TimeoutSeconds: 60, RequiredApprovals: 0, Concurrency: 1, UpdatedBy: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition, err := ParseRolloutDefinition([]byte(`{"version":1,"stages":[{"name":"canary","observation_seconds":0,"signals":[{"name":"errors","command":"false"}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	promotion, err := store.CreatePromotion(Promotion{RepositoryID: repo, EnvironmentID: environment.ID, ReleaseID: id('1'), BuildID: id('2'), ArtifactID: id('3'), ArtifactSHA256: strings.Repeat("a", 64), CommitID: strings.Repeat("b", 40), Rollout: definition, InitiatedBy: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	promotion, err = store.Claim(repo, promotion.ID, owner, time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Control(repo, promotion.ID, controller, "pause", "running", "investigate"); err != nil {
+		t.Fatal(err)
+	}
+	promotion, err = store.RecordStage(repo, promotion.ID, owner, 0, SignalEvidence{Stage: "canary", Signal: "errors", State: "failed", Message: "threshold exceeded"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	promotion, err = store.Complete(repo, promotion.ID, owner, "failed", "health signal failed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if promotion.State != "failed" || promotion.CompletedAt == nil || len(promotion.Evidence) != 1 {
+		t.Fatalf("failed promotion = %#v", promotion)
+	}
+	if _, err = store.Complete(repo, promotion.ID, id('e'), "failed", "forged"); err != ErrBlocked {
+		t.Fatalf("replacement completion = %v", err)
+	}
+}
+
 func id(r byte) string {
 	b := make([]byte, 32)
 	for i := range b {
