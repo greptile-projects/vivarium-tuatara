@@ -99,7 +99,9 @@ whenever dependencies change or the web job fails before it starts.
   collaboration ID each user can copy from Settings. The Playwright journey in
   `apps/web/tests` is the connected-product regression and uses isolated
   temporary API storage plus the system Chromium and stock Git clients. It
-  carries delegated work through a bounded agent credential, public progress
+  begins with an unknown user discovering a public repository, forking and
+  synchronizing it without an upstream grant, then carries delegated work
+  through a pull-scoped bounded agent credential, public progress
   and completion APIs, a stock Git push, stale-review replacement, and merge;
   keep that full handoff intact when changing agent or review workflows.
   The same journey is the verify-repair-merge regression: it installs a required

@@ -57,7 +57,9 @@ durable access list attributable rather than presenting opaque IDs.
 Repository catalog entries link to `/repositories/[id]`, where public visitors
 and authorized collaborators can select branches, follow commit-pinned history,
 navigate snapshot directories, preview text files, identify binary files, and
-copy clone information. The selected `ref` and repository-relative `path` live
+copy clone information. Owners can change visibility on that same surface,
+making a repository publicly readable and forkable without first granting the
+newcomer membership. The selected `ref` and repository-relative `path` live
 in the URL, while every content response exposes its resolved commit, keeping
 navigation explicit when a branch moves. Branch selection is resolved once per
 load and subsequent content links use that immutable commit; history is
@@ -172,6 +174,10 @@ branches are not overwritten. The web lineage panel applies this operation to
 the currently selected named branch. For private upstreams, authorization,
 object import, and reference publication share the catalog mutation lock;
 collaborator revocation therefore commits wholly before or after a sync.
+The connected browser regression proves this boundary from the newcomer’s
+first public inspection through web fork creation and synchronization, stock
+Git publication to the fork, cross-repository review and agent repair, required
+checks, and an attributed upstream merge.
 
 `GET /repositories` lists only the authenticated actor's repositories in
 creation order using the shared cursor pagination contract. Repositories are
