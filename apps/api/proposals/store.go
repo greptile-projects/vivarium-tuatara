@@ -23,8 +23,12 @@ var (
 )
 
 const (
-	Open   = "open"
-	Closed = "closed"
+	Open           = "open"
+	Closed         = "closed"
+	TaskTodo       = "todo"
+	TaskInProgress = "in_progress"
+	TaskCompleted  = "completed"
+	TaskCancelled  = "cancelled"
 )
 
 type Proposal struct {
@@ -47,6 +51,41 @@ type Comment struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+type Task struct {
+	ID                   string    `json:"id"`
+	ProposalID           string    `json:"proposal_id"`
+	Title                string    `json:"title"`
+	Outcome              string    `json:"outcome"`
+	Status               string    `json:"status"`
+	Position             int       `json:"position"`
+	DependencyIDs        []string  `json:"dependency_ids"`
+	DiscussionCommentIDs []string  `json:"discussion_comment_ids"`
+	Ready                bool      `json:"ready"`
+	BlockedBy            []string  `json:"blocked_by"`
+	CreatedBy            string    `json:"created_by"`
+	UpdatedBy            string    `json:"updated_by"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
+}
+
+type TaskChange struct {
+	ID        string    `json:"id"`
+	TaskID    string    `json:"task_id"`
+	ActorID   string    `json:"actor_id"`
+	Action    string    `json:"action"`
+	Task      Task      `json:"task"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type TaskPatch struct {
+	Title                *string
+	Outcome              *string
+	Status               *string
+	Position             *int
+	DependencyIDs        *[]string
+	DiscussionCommentIDs *[]string
+}
+
 type Patch struct {
 	Title  *string
 	Body   *string
@@ -54,8 +93,10 @@ type Patch struct {
 }
 
 type record struct {
-	Proposal Proposal  `json:"proposal"`
-	Comments []Comment `json:"comments,omitempty"`
+	Proposal    Proposal     `json:"proposal"`
+	Comments    []Comment    `json:"comments,omitempty"`
+	Tasks       []Task       `json:"tasks,omitempty"`
+	TaskChanges []TaskChange `json:"task_changes,omitempty"`
 }
 
 type Store struct {
@@ -240,6 +281,316 @@ func (s *Store) ListComments(repositoryID, proposalID string) ([]Comment, error)
 	return append([]Comment(nil), r.Comments...), nil
 }
 
+func (s *Store) CreateTask(repositoryID, proposalID, actorID, title, outcome string, dependencyIDs, commentIDs []string) (Task, error) {
+	if !validID(actorID) {
+		return Task{}, ErrInvalid
+	}
+	title, outcome, err := validateTaskContent(title, outcome)
+	if err != nil {
+		return Task{}, err
+	}
+	id, err := newID()
+	if err != nil {
+		return Task{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Task{}, err
+	}
+	defer unlock()
+	r, err := s.read(proposalID)
+	if err != nil || r.Proposal.RepositoryID != repositoryID {
+		return Task{}, ErrNotFound
+	}
+	if r.Proposal.Status != Open {
+		return Task{}, ErrInvalid
+	}
+	if err := validateTaskLinks(r, id, dependencyIDs, commentIDs); err != nil {
+		return Task{}, err
+	}
+	now := s.now().Truncate(time.Microsecond)
+	task := Task{ID: id, ProposalID: proposalID, Title: title, Outcome: outcome, Status: TaskTodo, Position: len(r.Tasks), DependencyIDs: cloneStrings(dependencyIDs), DiscussionCommentIDs: cloneStrings(commentIDs), CreatedBy: actorID, UpdatedBy: actorID, CreatedAt: now, UpdatedAt: now}
+	r.Tasks = append(r.Tasks, task)
+	deriveTasks(r.Tasks)
+	task = r.Tasks[len(r.Tasks)-1]
+	change, err := newTaskChange(task, actorID, "created", now)
+	if err != nil {
+		return Task{}, err
+	}
+	r.TaskChanges = append(r.TaskChanges, change)
+	if committed, err := s.write(r); err != nil {
+		if committed {
+			return task, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+		}
+		return Task{}, err
+	}
+	return task, nil
+}
+
+func (s *Store) ListTasks(repositoryID, proposalID string) ([]Task, error) {
+	r, err := s.read(proposalID)
+	if err != nil || r.Proposal.RepositoryID != repositoryID {
+		return nil, ErrNotFound
+	}
+	tasks := append([]Task(nil), r.Tasks...)
+	deriveTasks(tasks)
+	sort.Slice(tasks, func(i, j int) bool { return tasks[i].Position < tasks[j].Position })
+	return tasks, nil
+}
+
+func (s *Store) GetTask(repositoryID, proposalID, taskID string) (Task, error) {
+	tasks, err := s.ListTasks(repositoryID, proposalID)
+	if err != nil {
+		return Task{}, err
+	}
+	for _, task := range tasks {
+		if task.ID == taskID {
+			return task, nil
+		}
+	}
+	return Task{}, ErrNotFound
+}
+
+func (s *Store) UpdateTask(repositoryID, proposalID, taskID, actorID string, patch TaskPatch) (Task, error) {
+	if !validID(actorID) || (patch.Title == nil && patch.Outcome == nil && patch.Status == nil && patch.Position == nil && patch.DependencyIDs == nil && patch.DiscussionCommentIDs == nil) {
+		return Task{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Task{}, err
+	}
+	defer unlock()
+	r, err := s.read(proposalID)
+	if err != nil || r.Proposal.RepositoryID != repositoryID {
+		return Task{}, ErrNotFound
+	}
+	if r.Proposal.Status != Open {
+		return Task{}, ErrInvalid
+	}
+	index := -1
+	for i := range r.Tasks {
+		if r.Tasks[i].ID == taskID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return Task{}, ErrNotFound
+	}
+	task := r.Tasks[index]
+	if patch.Title != nil {
+		task.Title, _, err = validateTaskContent(*patch.Title, task.Outcome)
+	}
+	if err == nil && patch.Outcome != nil {
+		_, task.Outcome, err = validateTaskContent(task.Title, *patch.Outcome)
+	}
+	if err != nil {
+		return Task{}, err
+	}
+	if patch.Status != nil {
+		if !validTaskStatus(*patch.Status) {
+			return Task{}, ErrInvalid
+		}
+		task.Status = *patch.Status
+	}
+	if patch.DependencyIDs != nil {
+		task.DependencyIDs = cloneStrings(*patch.DependencyIDs)
+	}
+	if patch.DiscussionCommentIDs != nil {
+		task.DiscussionCommentIDs = cloneStrings(*patch.DiscussionCommentIDs)
+	}
+	if err := validateTaskLinks(r, task.ID, task.DependencyIDs, task.DiscussionCommentIDs); err != nil {
+		return Task{}, err
+	}
+	oldPosition := index
+	newPosition := oldPosition
+	if patch.Position != nil {
+		newPosition = *patch.Position
+		if newPosition < 0 || newPosition >= len(r.Tasks) {
+			return Task{}, ErrInvalid
+		}
+	}
+	now := s.now().Truncate(time.Microsecond)
+	task.UpdatedAt, task.UpdatedBy = now, actorID
+	r.Tasks[index] = task
+	if newPosition != oldPosition {
+		moved := r.Tasks[index]
+		r.Tasks = append(r.Tasks[:index], r.Tasks[index+1:]...)
+		r.Tasks = append(r.Tasks, Task{})
+		copy(r.Tasks[newPosition+1:], r.Tasks[newPosition:])
+		r.Tasks[newPosition] = moved
+	}
+	for i := range r.Tasks {
+		r.Tasks[i].Position = i
+	}
+	if hasDependencyCycle(r.Tasks) {
+		return Task{}, ErrInvalid
+	}
+	deriveTasks(r.Tasks)
+	for i := range r.Tasks {
+		if r.Tasks[i].ID == taskID {
+			task = r.Tasks[i]
+			break
+		}
+	}
+	action := "updated"
+	if patch.Status != nil {
+		action = "status_changed"
+	}
+	if newPosition != oldPosition {
+		action = "reordered"
+	}
+	change, err := newTaskChange(task, actorID, action, now)
+	if err != nil {
+		return Task{}, err
+	}
+	r.TaskChanges = append(r.TaskChanges, change)
+	if committed, err := s.write(r); err != nil {
+		if committed {
+			return task, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+		}
+		return Task{}, err
+	}
+	return task, nil
+}
+
+func (s *Store) ListTaskChanges(repositoryID, proposalID, taskID string) ([]TaskChange, error) {
+	r, err := s.read(proposalID)
+	if err != nil || r.Proposal.RepositoryID != repositoryID {
+		return nil, ErrNotFound
+	}
+	found := false
+	for _, task := range r.Tasks {
+		if task.ID == taskID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, ErrNotFound
+	}
+	result := []TaskChange{}
+	for _, change := range r.TaskChanges {
+		if change.TaskID == taskID {
+			result = append(result, change)
+		}
+	}
+	return result, nil
+}
+
+func validateTaskContent(title, outcome string) (string, string, error) {
+	title, outcome = strings.TrimSpace(title), strings.TrimSpace(outcome)
+	if title == "" || outcome == "" || strings.ContainsAny(title, "\r\n") || len([]rune(title)) > 200 || len([]rune(outcome)) > 2000 {
+		return "", "", ErrInvalid
+	}
+	return title, outcome, nil
+}
+
+func validateTaskLinks(r record, taskID string, dependencies, comments []string) error {
+	seen := map[string]bool{}
+	for _, id := range dependencies {
+		if !validID(id) || id == taskID || seen[id] {
+			return ErrInvalid
+		}
+		seen[id] = true
+		found := false
+		for _, task := range r.Tasks {
+			if task.ID == id {
+				found = true
+			}
+		}
+		if !found {
+			return ErrInvalid
+		}
+	}
+	seen = map[string]bool{}
+	for _, id := range comments {
+		if !validID(id) || seen[id] {
+			return ErrInvalid
+		}
+		seen[id] = true
+		found := false
+		for _, comment := range r.Comments {
+			if comment.ID == id {
+				found = true
+			}
+		}
+		if !found {
+			return ErrInvalid
+		}
+	}
+	return nil
+}
+func validTaskStatus(status string) bool {
+	return status == TaskTodo || status == TaskInProgress || status == TaskCompleted || status == TaskCancelled
+}
+func cloneStrings(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return append([]string(nil), values...)
+}
+func deriveTasks(tasks []Task) {
+	statuses := map[string]string{}
+	for _, task := range tasks {
+		statuses[task.ID] = task.Status
+	}
+	for i := range tasks {
+		blocked := []string{}
+		for _, id := range tasks[i].DependencyIDs {
+			if statuses[id] != TaskCompleted {
+				blocked = append(blocked, id)
+			}
+		}
+		tasks[i].BlockedBy = blocked
+		tasks[i].Ready = tasks[i].Status == TaskTodo && len(blocked) == 0
+		tasks[i].DependencyIDs = cloneStrings(tasks[i].DependencyIDs)
+		tasks[i].DiscussionCommentIDs = cloneStrings(tasks[i].DiscussionCommentIDs)
+	}
+}
+func hasDependencyCycle(tasks []Task) bool {
+	edges := map[string][]string{}
+	for _, task := range tasks {
+		edges[task.ID] = task.DependencyIDs
+	}
+	visiting, done := map[string]bool{}, map[string]bool{}
+	var visit func(string) bool
+	visit = func(id string) bool {
+		if visiting[id] {
+			return true
+		}
+		if done[id] {
+			return false
+		}
+		visiting[id] = true
+		for _, next := range edges[id] {
+			if visit(next) {
+				return true
+			}
+		}
+		visiting[id] = false
+		done[id] = true
+		return false
+	}
+	for id := range edges {
+		if visit(id) {
+			return true
+		}
+	}
+	return false
+}
+func newTaskChange(task Task, actorID, action string, now time.Time) (TaskChange, error) {
+	id, err := newID()
+	if err != nil {
+		return TaskChange{}, err
+	}
+	return TaskChange{ID: id, TaskID: task.ID, ActorID: actorID, Action: action, Task: task, CreatedAt: now}, nil
+}
+
 func validateContent(title, body string) (string, string, error) {
 	title, body = strings.TrimSpace(title), strings.TrimSpace(body)
 	if title == "" || len([]rune(title)) > 200 || strings.ContainsAny(title, "\r\n") || len([]rune(body)) > 10000 {
@@ -288,7 +639,50 @@ func (s *Store) read(id string) (record, error) {
 		}
 		seen[c.ID] = true
 	}
+	positions := make([]bool, len(r.Tasks))
+	seenTasks := map[string]bool{}
+	for _, task := range r.Tasks {
+		if !validStoredTask(task, id) || seenTasks[task.ID] || task.Position < 0 || task.Position >= len(r.Tasks) || positions[task.Position] {
+			return record{}, fmt.Errorf("corrupt proposal %s", id)
+		}
+		seenTasks[task.ID], positions[task.Position] = true, true
+		if err := validateTaskLinks(r, task.ID, task.DependencyIDs, task.DiscussionCommentIDs); err != nil {
+			return record{}, fmt.Errorf("corrupt proposal %s", id)
+		}
+	}
+	if hasDependencyCycle(r.Tasks) {
+		return record{}, fmt.Errorf("corrupt proposal %s", id)
+	}
+	seenChanges := map[string]bool{}
+	for _, change := range r.TaskChanges {
+		if !validID(change.ID) || !seenTasks[change.TaskID] || !validID(change.ActorID) || seenChanges[change.ID] || (change.Action != "created" && change.Action != "updated" && change.Action != "status_changed" && change.Action != "reordered") || !validStoredTask(change.Task, id) || change.Task.ID != change.TaskID {
+			return record{}, fmt.Errorf("corrupt proposal %s", id)
+		}
+		seenChanges[change.ID] = true
+	}
 	return r, nil
+}
+
+func validStoredTask(task Task, proposalID string) bool {
+	if !validID(task.ID) || task.ProposalID != proposalID || !validID(task.CreatedBy) || !validID(task.UpdatedBy) || !validTaskStatus(task.Status) || task.CreatedAt.IsZero() || task.UpdatedAt.Before(task.CreatedAt) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, dependencyID := range task.DependencyIDs {
+		if !validID(dependencyID) || dependencyID == task.ID || seen[dependencyID] {
+			return false
+		}
+		seen[dependencyID] = true
+	}
+	seen = map[string]bool{}
+	for _, commentID := range task.DiscussionCommentIDs {
+		if !validID(commentID) || seen[commentID] {
+			return false
+		}
+		seen[commentID] = true
+	}
+	_, _, err := validateTaskContent(task.Title, task.Outcome)
+	return err == nil
 }
 
 // write reports whether the atomic rename made the requested state visible.

@@ -14,6 +14,8 @@ import {
   api,
   type Proposal,
   type ProposalComment,
+  type ProposalTask,
+  type ProposalTaskChange,
   type Repository,
   type User,
 } from "@/lib/api";
@@ -234,6 +236,8 @@ export function ProposalConversation({ repositoryID, proposalID }: { repositoryI
   const [repository, setRepository] = useState<Repository | null>(null);
   const [proposal, setProposal] = useState<Proposal | null>(null);
   const [comments, setComments] = useState<ProposalComment[]>([]);
+  const [tasks, setTasks] = useState<ProposalTask[]>([]);
+  const [taskHistory, setTaskHistory] = useState<Record<string, ProposalTaskChange[]>>({});
   const [authors, setAuthors] = useState<Record<string, User>>({});
   const [participant, setParticipant] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -249,13 +253,14 @@ export function ProposalConversation({ repositoryID, proposalID }: { repositoryI
     setLoading(true);
     setError("");
     try {
-      const [repo, item, discussion] = await Promise.all([
+      const [repo, item, discussion, plan] = await Promise.all([
         api<Repository>(`/repositories/${repositoryID}`, {}, token),
         api<Proposal>(`/repositories/${repositoryID}/proposals/${proposalID}`, {}, token),
         allPages<ProposalComment>(`/repositories/${repositoryID}/proposals/${proposalID}/comments`, "comments", token),
+        api<{ tasks: ProposalTask[] }>(`/repositories/${repositoryID}/proposals/${proposalID}/tasks`, {}, token),
       ]);
       if (!active()) return;
-      setRepository(repo); setProposal(item); setComments(discussion);
+      setRepository(repo); setProposal(item); setComments(discussion); setTasks(plan.tasks);
       if (token) {
         const available = await allPages<Repository>("/repositories", "repositories", token);
         if (!active()) return;
@@ -263,7 +268,10 @@ export function ProposalConversation({ repositoryID, proposalID }: { repositoryI
       } else {
         setParticipant(false);
       }
-      const ids = [...new Set([item.author_id, ...discussion.map((comment) => comment.author_id)])];
+      const histories = await Promise.all(plan.tasks.map(async (task) => [task.id, (await api<{ history: ProposalTaskChange[] }>(`/repositories/${repositoryID}/proposals/${proposalID}/tasks/${task.id}/history`, {}, token)).history] as const));
+      if (!active()) return;
+      setTaskHistory(Object.fromEntries(histories));
+      const ids = [...new Set([item.author_id, ...discussion.map((comment) => comment.author_id), ...plan.tasks.flatMap((task) => [task.created_by, task.updated_by]), ...histories.flatMap(([, changes]) => changes.map((change) => change.actor_id))])];
       const people = await Promise.all(ids.map((id) => api<User>(`/users/${id}`, {}, token).catch(() => null)));
       if (!active()) return;
       setAuthors(Object.fromEntries(people.filter((person): person is User => Boolean(person)).map((person) => [person.id, person])));
@@ -301,6 +309,28 @@ export function ProposalConversation({ repositoryID, proposalID }: { repositoryI
     finally { setPending(false); }
   }
 
+  async function createTask(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setPending(true); setError("");
+    const form = event.currentTarget; const data = new FormData(form);
+    try {
+      await api<ProposalTask>(`/repositories/${repositoryID}/proposals/${proposalID}/tasks`, { method: "POST", body: JSON.stringify({ title: data.get("title"), outcome: data.get("outcome"), dependency_ids: data.getAll("dependency_ids"), discussion_comment_ids: data.getAll("discussion_comment_ids") }) }, token);
+      form.reset(); await load();
+    } catch (reason) { setError(message(reason, "Task could not be added.")); }
+    finally { setPending(false); }
+  }
+
+  async function updateTask(taskID: string, payload: Record<string, unknown>) {
+    setPending(true); setError("");
+    try { await api<ProposalTask>(`/repositories/${repositoryID}/proposals/${proposalID}/tasks/${taskID}`, { method: "PATCH", body: JSON.stringify(payload) }, token); await load(); }
+    catch (reason) { setError(message(reason, "Task could not be updated.")); }
+    finally { setPending(false); }
+  }
+
+  async function editTask(event: FormEvent<HTMLFormElement>, taskID: string) {
+    event.preventDefault(); const data = new FormData(event.currentTarget);
+    await updateTask(taskID, { title: data.get("title"), outcome: data.get("outcome"), dependency_ids: data.getAll("dependency_ids"), discussion_comment_ids: data.getAll("discussion_comment_ids") });
+  }
+
   if (loading) return <Card className="p-8 text-sm text-[var(--muted)]">Opening the conversation…</Card>;
   if (error && (!proposal || !repository)) return <Card className="p-8"><h1 className="text-xl font-semibold">Proposal unavailable</h1><p role="alert" className="mt-2 text-sm text-[var(--danger)]">{error}</p><Link href="/proposals" className="mt-5 inline-flex text-sm font-semibold text-[var(--brand)]">Back to proposals</Link></Card>;
   if (!proposal || !repository) return null;
@@ -313,6 +343,19 @@ export function ProposalConversation({ repositoryID, proposalID }: { repositoryI
     <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_18rem]">
       <section className="space-y-5" aria-label="Proposal conversation">
         <Card className="overflow-hidden"><div className="flex items-center justify-between border-b border-[var(--line)] bg-[var(--surface)] px-5 py-3"><div className="flex items-center gap-2"><Avatar initials={initials(author)} label={author?.display_name ?? "Unknown author"} size="sm" /><span className="text-sm font-semibold">{author ? `@${author.handle}` : "Author"}</span></div>{canEdit && !editing && <Button variant="quiet" onClick={() => setEditing(true)}>Edit</Button>}</div>{editing ? <form onSubmit={save} className="space-y-4 p-5"><label className="block text-sm font-semibold">Title<input name="title" defaultValue={proposal.title} required maxLength={200} className="mt-2 min-h-11 w-full rounded-lg border border-[var(--line-strong)] px-3 font-normal" /></label><label className="block text-sm font-semibold">Context<textarea name="body" defaultValue={proposal.body} required maxLength={10000} rows={9} className="mt-2 w-full rounded-lg border border-[var(--line-strong)] p-3 font-normal leading-6" /></label><div className="flex gap-2"><Button type="submit" disabled={pending}>{pending ? "Saving…" : "Save changes"}</Button><Button type="button" variant="secondary" onClick={() => setEditing(false)}>Cancel</Button></div></form> : <div className="whitespace-pre-wrap p-5 text-sm leading-7 sm:p-6">{proposal.body}</div>}</Card>
+        <section aria-labelledby="plan-heading" className="space-y-3">
+          <div><p className="font-mono text-xs font-semibold uppercase tracking-[.14em] text-[var(--brand)]">Executable plan</p><h2 id="plan-heading" className="mt-1 text-xl font-semibold">What can start now</h2><p className="mt-1 text-sm text-[var(--muted)]">Tasks are ordered for delivery. Readiness follows completed dependencies.</p></div>
+          {!tasks.length ? <Card className="p-6 text-sm text-[var(--muted)]">No tasks yet. Break the agreed direction into its first concrete outcome.</Card> : tasks.map((task, index) => {
+            const blockerNames = task.blocked_by.map((id) => tasks.find((candidate) => candidate.id === id)?.title ?? id);
+            const linkedComments = task.discussion_comment_ids.map((id) => comments.findIndex((comment) => comment.id === id) + 1).filter(Boolean);
+            return <Card key={task.id} className="p-5"><div className="flex gap-4"><span className="grid size-8 shrink-0 place-items-center rounded-full bg-[var(--brand-soft)] font-mono text-sm font-semibold text-[var(--brand)]">{index + 1}</span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="font-semibold">{task.title}</h3><Badge tone={task.ready ? "success" : task.status === "cancelled" ? "neutral" : "warning"}>{task.ready ? "ready" : task.status.replace("_", " ")}</Badge></div><p className="mt-2 text-sm leading-6"><span className="font-semibold">Outcome:</span> {task.outcome}</p>{blockerNames.length > 0 && <p className="mt-2 text-xs text-[var(--muted)]">Blocked by {blockerNames.join(", ")}</p>}{linkedComments.length > 0 && <p className="mt-2 text-xs text-[var(--muted)]">Motivated by discussion {linkedComments.map((number) => `#${number}`).join(", ")}</p>}
+              {participant && proposal.status === "open" && <div className="mt-4 flex flex-wrap gap-2"><select aria-label={`Status for ${task.title}`} value={task.status} disabled={pending} onChange={(event) => void updateTask(task.id, { status: event.target.value })} className="min-h-9 rounded-lg border border-[var(--line-strong)] bg-white px-2 text-xs"><option value="todo">To do</option><option value="in_progress">In progress</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select><Button variant="quiet" disabled={pending || index === 0} onClick={() => void updateTask(task.id, { position: index - 1 })}>Move up</Button><Button variant="quiet" disabled={pending || index === tasks.length - 1} onClick={() => void updateTask(task.id, { position: index + 1 })}>Move down</Button></div>}
+              {participant && proposal.status === "open" && <details className="mt-3"><summary className="cursor-pointer text-xs font-semibold text-[var(--brand)]">Edit task definition</summary><form onSubmit={(event) => void editTask(event, task.id)} className="mt-3 grid gap-3 rounded-lg bg-[var(--surface)] p-4"><label className="text-xs font-semibold">Task<input name="title" required maxLength={200} defaultValue={task.title} className="mt-1 min-h-10 w-full rounded-lg border border-[var(--line-strong)] bg-white px-3 font-normal" /></label><label className="text-xs font-semibold">Expected outcome<textarea name="outcome" required maxLength={2000} rows={3} defaultValue={task.outcome} className="mt-1 w-full rounded-lg border border-[var(--line-strong)] bg-white p-3 font-normal" /></label>{tasks.length > 1 && <fieldset><legend className="text-xs font-semibold">Dependencies</legend><div className="mt-2 grid gap-2 sm:grid-cols-2">{tasks.filter((candidate) => candidate.id !== task.id).map((candidate) => <label key={candidate.id} className="flex items-center gap-2 text-xs"><input type="checkbox" name="dependency_ids" value={candidate.id} defaultChecked={task.dependency_ids.includes(candidate.id)} />{candidate.title}</label>)}</div></fieldset>}{comments.length > 0 && <fieldset><legend className="text-xs font-semibold">Motivating discussion</legend><div className="mt-2 grid gap-2">{comments.map((item, commentIndex) => <label key={item.id} className="flex items-start gap-2 text-xs"><input className="mt-0.5" type="checkbox" name="discussion_comment_ids" value={item.id} defaultChecked={task.discussion_comment_ids.includes(item.id)} /><span>#{commentIndex + 1} {item.body.slice(0, 100)}</span></label>)}</div></fieldset>}<div><Button type="submit" disabled={pending}>Save task</Button></div></form></details>}
+              <details className="mt-3 text-xs text-[var(--muted)]"><summary className="cursor-pointer font-semibold">Decision history ({taskHistory[task.id]?.length ?? 0})</summary><ol className="mt-2 space-y-1">{(taskHistory[task.id] ?? []).map((change) => <li key={change.id}>{authors[change.actor_id] ? `@${authors[change.actor_id].handle}` : "Unknown actor"} {change.action.replace("_", " ")} this task on {date(change.created_at)}</li>)}</ol></details>
+            </div></div></Card>;
+          })}
+          {participant && proposal.status === "open" && <Card className="p-5"><h3 className="font-semibold">Add an actionable task</h3><form onSubmit={createTask} className="mt-4 grid gap-4"><label className="text-sm font-semibold">Task<input name="title" required maxLength={200} placeholder="A concrete piece of work" className="mt-2 min-h-11 w-full rounded-lg border border-[var(--line-strong)] px-3 font-normal" /></label><label className="text-sm font-semibold">Expected outcome<textarea name="outcome" required maxLength={2000} rows={3} placeholder="What will be true when this task succeeds?" className="mt-2 w-full rounded-lg border border-[var(--line-strong)] p-3 font-normal" /></label>{tasks.length > 0 && <fieldset><legend className="text-sm font-semibold">Depends on</legend><div className="mt-2 grid gap-2 sm:grid-cols-2">{tasks.map((task) => <label key={task.id} className="flex items-center gap-2 text-sm"><input type="checkbox" name="dependency_ids" value={task.id} />{task.title}</label>)}</div></fieldset>}{comments.length > 0 && <fieldset><legend className="text-sm font-semibold">Motivating discussion</legend><div className="mt-2 grid gap-2">{comments.map((item, index) => <label key={item.id} className="flex items-start gap-2 text-sm"><input className="mt-1" type="checkbox" name="discussion_comment_ids" value={item.id} /><span>#{index + 1} {item.body.slice(0, 100)}</span></label>)}</div></fieldset>}<div><Button type="submit" disabled={pending}>{pending ? "Adding…" : "Add task"}</Button></div></form></Card>}
+        </section>
         <div className="flex items-center gap-3"><span className="h-px flex-1 bg-[var(--line)]" /><h2 className="text-sm font-semibold text-[var(--muted)]">{comments.length} {comments.length === 1 ? "comment" : "comments"}</h2><span className="h-px flex-1 bg-[var(--line)]" /></div>
         {comments.map((item) => { const person = authors[item.author_id]; return <Card key={item.id} className="overflow-hidden"><div className="flex items-center gap-2 border-b border-[var(--line)] bg-[var(--surface)] px-5 py-3"><Avatar initials={initials(person)} label={person?.display_name ?? "Unknown commenter"} size="sm" /><span className="text-sm font-semibold">{person ? `@${person.handle}` : "Unknown user"}</span><span className="text-xs text-[var(--muted)]">commented {date(item.created_at)}</span></div><p className="whitespace-pre-wrap p-5 text-sm leading-7">{item.body}</p></Card>; })}
         {participant ? <Card className="p-5"><form onSubmit={comment}><label className="text-sm font-semibold">Add to the conversation<textarea name="body" required maxLength={10000} rows={5} placeholder="Share feedback, constraints, or a useful connection…" className="mt-2 w-full rounded-lg border border-[var(--line-strong)] bg-white p-3 font-normal leading-6 outline-none focus:border-[var(--brand)]" /></label><Button type="submit" disabled={pending} className="mt-3">{pending ? "Publishing…" : "Comment"}</Button></form></Card> : <Card className="p-5 text-sm text-[var(--muted)]">{user ? "Only current repository participants can join this conversation." : <><Link href="/?access=signin" className="font-semibold text-[var(--brand)]">Sign in</Link> to participate if you collaborate on this repository.</>}</Card>}

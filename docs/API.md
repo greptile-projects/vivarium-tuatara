@@ -185,6 +185,32 @@ Proposal creates, edits, closes, and comments use the shared uncertain-
 durability response when their new state is visible but crash persistence
 cannot be confirmed, preserving attribution IDs without overstating storage.
 
+### Proposal plans
+
+Current repository participants turn an open proposal into executable work with
+`POST /repositories/{id}/proposals/{proposal_id}/tasks`. The request requires a
+single-line `title` (at most 200 characters) and an `outcome` (at most 2,000
+characters). Optional `dependency_ids` must identify other tasks in the same
+proposal, and optional `discussion_comment_ids` must identify comments in that
+proposal. Duplicate, missing, self, and cyclic links are rejected.
+
+`GET .../tasks` returns the complete plan in `position` order. Each task has one
+of `todo`, `in_progress`, `completed`, or `cancelled` status and includes
+immutable `created_by`/`created_at` plus current `updated_by`/`updated_at`
+attribution. `ready` is true only for a `todo` task whose dependencies are all
+completed; `blocked_by` names the unmet dependency IDs. These derived fields let
+clients answer what can start without independently interpreting the graph.
+
+Participants edit a task with `PATCH .../tasks/{task_id}`. Any supplied
+`title`, `outcome`, `status`, dependency links, or discussion links replaces
+that field. A zero-based `position` atomically moves the task and renumbers the
+ordered plan. `GET .../tasks/{task_id}` reads one current task, while `GET
+.../tasks/{task_id}/history` returns its append-only, chronological `history`.
+Every history entry records the stable actor, action, timestamp, and full task
+snapshot for creation, edits, status decisions, and reordering. Plan reads
+inherit proposal visibility; mutations require a current owner or contributor
+with `repositories:write` and use the proposal uncertain-durability contract.
+
 ## Automated checks
 
 Repository owners manage the quality gate for a target branch with `GET` and

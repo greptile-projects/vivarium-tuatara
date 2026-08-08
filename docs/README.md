@@ -226,6 +226,15 @@ without authentication when repository visibility permits, while creation,
 editing, commenting, and closure controls follow the API's participant and
 ownership rules.
 
+Each proposal also owns an ordered executable plan. Current repository
+participants define tasks with explicit expected outcomes, links to motivating
+comments, and an acyclic dependency graph; the platform derives which pending
+tasks are ready and which dependencies still block them. Collaborators can
+change task status and order from the proposal detail page, while immutable
+actor-stamped snapshots retain creation, edit, decision, and reorder history.
+Plan storage shares the proposal's atomic record and visibility boundary, so a
+public idea remains understandable without granting public mutation authority.
+
 Pull requests connect that context to exact repository state. An owner or
 contributor opens one from an existing source branch, while a fork owner can
 submit a branch from their independently owned direct fork to its readable

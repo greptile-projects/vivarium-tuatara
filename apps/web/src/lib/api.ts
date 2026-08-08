@@ -74,6 +74,30 @@ export type ProposalComment = {
   body: string;
   created_at: string;
 };
+export type ProposalTask = {
+  id: string;
+  proposal_id: string;
+  title: string;
+  outcome: string;
+  status: "todo" | "in_progress" | "completed" | "cancelled";
+  position: number;
+  dependency_ids: string[];
+  discussion_comment_ids: string[];
+  ready: boolean;
+  blocked_by: string[];
+  created_by: string;
+  updated_by: string;
+  created_at: string;
+  updated_at: string;
+};
+export type ProposalTaskChange = {
+  id: string;
+  task_id: string;
+  actor_id: string;
+  action: "created" | "updated" | "status_changed" | "reordered";
+  task: ProposalTask;
+  created_at: string;
+};
 export type PullRequest = {
   id: string;
   repository_id: string;

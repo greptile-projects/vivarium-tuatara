@@ -448,6 +448,22 @@ type commentInput struct {
 	Body *string `json:"body"`
 }
 
+type proposalTaskInput struct {
+	Title                *string  `json:"title"`
+	Outcome              *string  `json:"outcome"`
+	DependencyIDs        []string `json:"dependency_ids"`
+	DiscussionCommentIDs []string `json:"discussion_comment_ids"`
+}
+
+type proposalTaskPatch struct {
+	Title                *string   `json:"title"`
+	Outcome              *string   `json:"outcome"`
+	Status               *string   `json:"status"`
+	Position             *int      `json:"position"`
+	DependencyIDs        *[]string `json:"dependency_ids"`
+	DiscussionCommentIDs *[]string `json:"discussion_comment_ids"`
+}
+
 type pullRequestInput struct {
 	Title              *string `json:"title"`
 	Body               *string `json:"body"`
@@ -2160,6 +2176,79 @@ func registerProposalRoutes(mux *http.ServeMux, repositoriesStore *repositories.
 		}
 		w.Header().Set("Location", r.URL.Path+"/"+comment.ID)
 		writeJSON(w, 201, comment)
+	})
+	mux.HandleFunc("GET /repositories/{id}/proposals/{proposal_id}/tasks", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		tasks, err := store.ListTasks(r.PathValue("id"), r.PathValue("proposal_id"))
+		if writeProposalError(w, err) {
+			return
+		}
+		writeJSON(w, 200, map[string]any{"tasks": tasks})
+	})
+	mux.HandleFunc("POST /repositories/{id}/proposals/{proposal_id}/tasks", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var input proposalTaskInput
+		if decodeJSON(r, &input) != nil || input.Title == nil || input.Outcome == nil {
+			writeAPIError(w, 400, "invalid_task", "title and outcome are required")
+			return
+		}
+		task, err := store.CreateTask(r.PathValue("id"), r.PathValue("proposal_id"), actor.UserID, *input.Title, *input.Outcome, input.DependencyIDs, input.DiscussionCommentIDs)
+		location := r.URL.Path + "/" + task.ID
+		if errors.Is(err, proposals.ErrDurabilityUncertain) {
+			w.Header().Set("Location", location)
+			writeUncertainMutation(w, task)
+			return
+		}
+		if writeProposalError(w, err) {
+			return
+		}
+		w.Header().Set("Location", location)
+		writeJSON(w, 201, task)
+	})
+	mux.HandleFunc("GET /repositories/{id}/proposals/{proposal_id}/tasks/{task_id}", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		task, err := store.GetTask(r.PathValue("id"), r.PathValue("proposal_id"), r.PathValue("task_id"))
+		if writeProposalError(w, err) {
+			return
+		}
+		writeJSON(w, 200, task)
+	})
+	mux.HandleFunc("PATCH /repositories/{id}/proposals/{proposal_id}/tasks/{task_id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var input proposalTaskPatch
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_task", "task patch is invalid")
+			return
+		}
+		task, err := store.UpdateTask(r.PathValue("id"), r.PathValue("proposal_id"), r.PathValue("task_id"), actor.UserID, proposals.TaskPatch{Title: input.Title, Outcome: input.Outcome, Status: input.Status, Position: input.Position, DependencyIDs: input.DependencyIDs, DiscussionCommentIDs: input.DiscussionCommentIDs})
+		if errors.Is(err, proposals.ErrDurabilityUncertain) {
+			writeUncertainMutation(w, task)
+			return
+		}
+		if writeProposalError(w, err) {
+			return
+		}
+		writeJSON(w, 200, task)
+	})
+	mux.HandleFunc("GET /repositories/{id}/proposals/{proposal_id}/tasks/{task_id}/history", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		changes, err := store.ListTaskChanges(r.PathValue("id"), r.PathValue("proposal_id"), r.PathValue("task_id"))
+		if writeProposalError(w, err) {
+			return
+		}
+		writeJSON(w, 200, map[string]any{"history": changes})
 	})
 }
 
