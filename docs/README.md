@@ -646,3 +646,24 @@ merges first, the newly ready agent receives attributable guidance and
 publishes an exact completed outcome, and its connected pull verifies and
 merges before the team closes the proposal. Durable task history and the
 session timeline retain attribution across every handoff.
+
+## Release candidates
+
+Release definition is a durable, immutable boundary over repository history.
+An owner or contributor chooses a verified commit, a repository-unique version,
+release notes, and optionally an earlier release candidate. The API requires
+that earlier candidate's commit to be an ancestor, then snapshots every merged
+pull request whose merge commit is in the new ancestry range. Linked proposals
+and plan tasks are retained with the pull set, and contributor IDs are derived
+from pull authors and mergers plus linked planning attribution. This makes the
+declared source, rationale, work, and people inspectable before artifact builds
+or environment delivery begins.
+
+Candidate records live beneath `RELEASE_STORAGE_ROOT` (default `releases`) and
+stay in `candidate` lifecycle state; later delivery work adds evidence and
+promotion without rewriting this source definition. Public repositories expose
+candidate reads anonymously, private reads follow repository access, and only
+current owners or contributors with `repositories:write` can create them. The
+web release workspace is linked from repository detail and supports exact-state
+creation, prior-release selection, lifecycle inspection, and direct links back
+to included review and planning work.

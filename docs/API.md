@@ -772,3 +772,31 @@ credential can safely retry. Synchronization eligibility, including absence of
 a server merge intent, is checked under the pull-request lock before the
 completion callback runs, so a semantically blocked request cannot terminalize
 its agent run without adopting the handoff.
+
+## Release candidates
+
+`GET /repositories/{id}/releases` lists immutable release candidates in
+creation order as `{ "releases": [...] }`. `GET
+/repositories/{id}/releases/{release_id}` returns one candidate. Reads use the
+repository's normal public/private visibility policy.
+
+`POST /repositories/{id}/releases` requires an owner or contributor credential
+with `repositories:write` and accepts:
+
+```json
+{
+  "version": "v1.4.0",
+  "notes": "Release rationale and participant guidance.",
+  "commit_id": "0123456789abcdef0123456789abcdef01234567",
+  "previous_release_id": "0123456789abcdef0123456789abcdef"
+}
+```
+
+`previous_release_id` is optional. `commit_id` must be a verified commit in the
+repository, and a selected earlier release must belong to the same repository
+and be an ancestor of it. Versions are unique per repository, case
+insensitively. Creation returns `201` and a `Location` header. The immutable
+response has `status: "candidate"`, `created_by`, `created_at`, the exact prior
+commit boundary when selected, and `inclusions` arrays for `pull_request_ids`,
+`proposal_ids`, `task_ids`, and `contributor_ids`. Those inclusions are computed
+from merged history by the server and cannot be supplied by the caller.
