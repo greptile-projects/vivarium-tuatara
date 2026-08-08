@@ -417,6 +417,11 @@ versioned check definition, execution events (including logs and command
 outcomes), and artifact identities and hashes. Ordinary session inspection
 therefore presents the same evidence after restart without following a later
 rerun or branch movement.
+The final revision comparison and session publication hold the pull-request
+mutation lock, so concurrent source synchronization either waits for the
+session to become durable or wins first and causes creation to return `409
+source_branch_changed`; a successful repair session is never obsolete at
+publication.
 
 Confirmed sessions accept bounded delegation at `POST
 .../sessions/{session_id}/runs`. A current participant with

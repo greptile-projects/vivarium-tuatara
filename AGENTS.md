@@ -332,7 +332,10 @@ whenever dependencies change or the web job fails before it starts.
   command outcomes, and artifact identities. The bounded run control response
   carries that evidence and permits credential-scoped downloads of only those
   artifacts; completion uses ordinary pull synchronization so the repaired
-  revision starts its checks automatically.
+  revision starts its checks automatically. Repair-session publication holds
+  the pull-request mutation lock across its final source-revision comparison
+  and durable session write, preventing concurrent synchronization from
+  producing an obsolete workspace.
   Bounded receive-pack also checks durable run state, independently denying
   terminal credentials if auth revocation fails. Completion persists before
   pull synchronization so validation/storage failures cannot move the request;

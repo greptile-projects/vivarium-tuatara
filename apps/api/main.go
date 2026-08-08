@@ -1003,7 +1003,20 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 			}
 			evidence = repairEvidence(run, events)
 		}
-		session, err := store.CreateWithEvidence(pull.RepositoryID, pull.ID, actor.UserID, pull.SourceCommitID, evidence)
+		var session changesessions.Session
+		err := pullRequestStore.WithSourceRevision(pull.RepositoryID, pull.ID, pull.SourceCommitID, func(current pullrequests.PullRequest) error {
+			var createErr error
+			session, createErr = store.CreateWithEvidence(current.RepositoryID, current.ID, actor.UserID, current.SourceCommitID, evidence)
+			return createErr
+		})
+		if errors.Is(err, pullrequests.ErrSourceChanged) {
+			writeAPIError(w, http.StatusConflict, "source_branch_changed", "pull request advanced while the repair session was being created")
+			return
+		}
+		if errors.Is(err, pullrequests.ErrNotReady) {
+			writeAPIError(w, http.StatusConflict, "pull_request_closed", "change sessions require an open pull request")
+			return
+		}
 		location := r.URL.Path + "/" + session.ID
 		if errors.Is(err, changesessions.ErrDurabilityUncertain) {
 			w.Header().Set("Location", location)
