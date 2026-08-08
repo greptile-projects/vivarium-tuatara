@@ -242,6 +242,13 @@ are previewed with repository- and future-task-branch-scoped Git access.
 Assignment IDs act as compare-and-swap versions for reassignment and revocation,
 making concurrent outcomes explicit and retaining every decision in task
 history.
+Task definitions carry durable context revisions. Readiness requires dependency
+results that are both completed and current; revising a plan or replacing a
+linked contribution marks earlier assignment, session, and pull evidence as
+changed or obsolete without deleting it. Human assignees receive targeted
+ready, blocked, changed, and obsolete inbox events. An explicit compare-and-swap
+rebase moves the existing owner and mandate to a verified new base and current
+plan revision, creating a fresh assignment boundary for later work.
 An assigned agent task can now start directly from that boundary without a
 placeholder pull request. Start atomically names an isolated task branch at the
 frozen base, opens a durable task-scoped change session, launches the mandate

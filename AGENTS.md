@@ -77,6 +77,11 @@ whenever dependencies change or the web job fails before it starts.
   to motivating comments; readiness is derived from completed dependencies,
   while task edits, status decisions, and reordering retain actor-stamped
   immutable history through the public proposal task APIs.
+  Task definitions carry context revisions; only current merged dependency
+  contributions satisfy readiness. Definition or contribution changes surface
+  assigned work as changed or obsolete, notify human assignees, and require an
+  explicit compare-and-swap rebase to a verified commit before replacement work
+  can represent the current plan; earlier sessions and pulls remain traceable.
   Ready proposal tasks have at most one explicit human or generated-agent
   assignment. Each freezes a mandate, repository, and exact base commit;
   assignment IDs provide compare-and-swap claim, reassignment, and revocation

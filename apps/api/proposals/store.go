@@ -63,6 +63,8 @@ type Task struct {
 	DiscussionCommentIDs []string           `json:"discussion_comment_ids"`
 	Ready                bool               `json:"ready"`
 	BlockedBy            []string           `json:"blocked_by"`
+	ContextRevision      int                `json:"context_revision"`
+	ContextState         string             `json:"context_state"`
 	CreatedBy            string             `json:"created_by"`
 	UpdatedBy            string             `json:"updated_by"`
 	CreatedAt            time.Time          `json:"created_at"`
@@ -75,12 +77,13 @@ type Task struct {
 // TaskContribution is the bidirectional review handoff. Status follows the
 // candidate rather than declaring the planned outcome complete before merge.
 type TaskContribution struct {
-	PullRequestID  string   `json:"pull_request_id"`
-	SessionID      string   `json:"session_id,omitempty"`
-	RunID          string   `json:"run_id,omitempty"`
-	SourceCommitID string   `json:"source_commit_id"`
-	CommitIDs      []string `json:"commit_ids"`
-	Status         string   `json:"status"`
+	PullRequestID   string   `json:"pull_request_id"`
+	SessionID       string   `json:"session_id,omitempty"`
+	RunID           string   `json:"run_id,omitempty"`
+	SourceCommitID  string   `json:"source_commit_id"`
+	CommitIDs       []string `json:"commit_ids"`
+	Status          string   `json:"status"`
+	ContextRevision int      `json:"context_revision"`
 }
 
 type TaskAccess struct {
@@ -91,13 +94,14 @@ type TaskAccess struct {
 }
 
 type TaskAssignment struct {
-	ID           string     `json:"id"`
-	AssigneeType string     `json:"assignee_type"`
-	AssigneeID   string     `json:"assignee_id"`
-	Mandate      string     `json:"mandate"`
-	Access       TaskAccess `json:"access"`
-	AssignedBy   string     `json:"assigned_by"`
-	AssignedAt   time.Time  `json:"assigned_at"`
+	ID              string     `json:"id"`
+	AssigneeType    string     `json:"assignee_type"`
+	AssigneeID      string     `json:"assignee_id"`
+	Mandate         string     `json:"mandate"`
+	Access          TaskAccess `json:"access"`
+	AssignedBy      string     `json:"assigned_by"`
+	AssignedAt      time.Time  `json:"assigned_at"`
+	ContextRevision int        `json:"context_revision"`
 }
 
 type TaskChange struct {
@@ -127,6 +131,11 @@ type TaskAssignmentInput struct {
 	ExpectedAssignmentID string
 }
 
+type TaskRebaseInput struct {
+	BaseRevision         string
+	ExpectedAssignmentID string
+}
+
 // WithStartableAgentTask serializes task-session publication with proposal and
 // task mutations. The callback receives snapshots from the same locked record
 // that proved the exact assignment is still startable.
@@ -150,7 +159,7 @@ func (s *Store) WithStartableAgentTask(repositoryID, proposalID, taskID, assignm
 		if task.ID != taskID {
 			continue
 		}
-		if r.Proposal.Status != Open || task.Status != TaskTodo || !task.Ready || task.Assignment == nil || task.Assignment.AssigneeType != "agent" || task.Assignment.ID != assignmentID {
+		if r.Proposal.Status != Open || task.Status != TaskTodo || !task.Ready || task.Assignment == nil || task.Assignment.AssigneeType != "agent" || task.Assignment.ID != assignmentID || effectiveContextRevision(task.Assignment.ContextRevision) != effectiveContextRevision(task.ContextRevision) {
 			return ErrTaskAssignmentConflict
 		}
 		return fn(r.Proposal, task, append([]Task(nil), r.Tasks...), append([]Comment(nil), r.Comments...))
@@ -383,7 +392,7 @@ func (s *Store) CreateTask(repositoryID, proposalID, actorID, title, outcome str
 		return Task{}, err
 	}
 	now := s.now().Truncate(time.Microsecond)
-	task := Task{ID: id, ProposalID: proposalID, Title: title, Outcome: outcome, Status: TaskTodo, Position: len(r.Tasks), DependencyIDs: cloneStrings(dependencyIDs), DiscussionCommentIDs: cloneStrings(commentIDs), CreatedBy: actorID, UpdatedBy: actorID, CreatedAt: now, UpdatedAt: now}
+	task := Task{ID: id, ProposalID: proposalID, Title: title, Outcome: outcome, Status: TaskTodo, Position: len(r.Tasks), DependencyIDs: cloneStrings(dependencyIDs), DiscussionCommentIDs: cloneStrings(commentIDs), ContextRevision: 1, CreatedBy: actorID, UpdatedBy: actorID, CreatedAt: now, UpdatedAt: now}
 	r.Tasks = append(r.Tasks, task)
 	deriveTasks(r.Tasks)
 	task = r.Tasks[len(r.Tasks)-1]
@@ -444,6 +453,7 @@ func (s *Store) LinkTaskContribution(repositoryID, proposalID, taskID, actorID s
 				task.Contributions[len(task.Contributions)-1].Status = "superseded"
 			}
 		}
+		contribution.ContextRevision = effectiveContextRevision(task.ContextRevision)
 		task.Contribution = &contribution
 		task.Contributions = append(task.Contributions, contribution)
 		task.Status = TaskInProgress
@@ -543,6 +553,7 @@ func (s *Store) UpdateTask(repositoryID, proposalID, taskID, actorID string, pat
 		return Task{}, ErrNotFound
 	}
 	task := r.Tasks[index]
+	definitionChanged := patch.Title != nil || patch.Outcome != nil || patch.DependencyIDs != nil || patch.DiscussionCommentIDs != nil
 	if patch.Title != nil {
 		task.Title, _, err = validateTaskContent(*patch.Title, task.Outcome)
 	}
@@ -566,6 +577,9 @@ func (s *Store) UpdateTask(repositoryID, proposalID, taskID, actorID string, pat
 	}
 	if err := validateTaskLinks(r, task.ID, task.DependencyIDs, task.DiscussionCommentIDs); err != nil {
 		return Task{}, err
+	}
+	if definitionChanged {
+		task.ContextRevision = effectiveContextRevision(task.ContextRevision) + 1
 	}
 	oldPosition := index
 	newPosition := oldPosition
@@ -705,7 +719,7 @@ func (s *Store) AssignTask(repositoryID, proposalID, taskID, actorID string, inp
 		scopes, branch = []string{}, "no new access; existing collaborator authority only"
 	}
 	task.Assignment = &TaskAssignment{ID: id, AssigneeType: input.AssigneeType, AssigneeID: input.AssigneeID, Mandate: mandate,
-		Access: TaskAccess{RepositoryID: input.RepositoryID, BaseRevision: strings.ToLower(input.BaseRevision), Scopes: scopes, Branch: branch}, AssignedBy: actorID, AssignedAt: now}
+		Access: TaskAccess{RepositoryID: input.RepositoryID, BaseRevision: strings.ToLower(input.BaseRevision), Scopes: scopes, Branch: branch}, AssignedBy: actorID, AssignedAt: now, ContextRevision: effectiveContextRevision(task.ContextRevision)}
 	task.UpdatedBy, task.UpdatedAt = actorID, now
 	r.Tasks[index] = task
 	change, err := newTaskChange(task, actorID, map[bool]string{true: "reassigned", false: "assigned"}[input.ExpectedAssignmentID != ""], now)
@@ -720,6 +734,65 @@ func (s *Store) AssignTask(repositoryID, proposalID, taskID, actorID string, inp
 		return Task{}, err
 	}
 	return task, nil
+}
+
+// RebaseTaskAssignment deliberately replaces the starting boundary while
+// retaining the accountable owner and mandate. The new assignment ID is a CAS
+// boundary: sessions and pull requests created from the prior assignment stay
+// attributable, but can no longer be mistaken for work on the current plan.
+func (s *Store) RebaseTaskAssignment(repositoryID, proposalID, taskID, actorID string, input TaskRebaseInput) (Task, error) {
+	if !validID(actorID) || !validID(input.ExpectedAssignmentID) || len(input.BaseRevision) != 40 {
+		return Task{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Task{}, err
+	}
+	defer unlock()
+	r, err := s.read(proposalID)
+	if err != nil || r.Proposal.RepositoryID != repositoryID {
+		return Task{}, ErrNotFound
+	}
+	if r.Proposal.Status != Open {
+		return Task{}, ErrInvalid
+	}
+	for i := range r.Tasks {
+		if r.Tasks[i].ID != taskID {
+			continue
+		}
+		task := r.Tasks[i]
+		if task.Status == TaskCompleted || task.Status == TaskCancelled || task.Assignment == nil || task.Assignment.ID != input.ExpectedAssignmentID {
+			return Task{}, ErrTaskAssignmentConflict
+		}
+		id, err := newID()
+		if err != nil {
+			return Task{}, err
+		}
+		now := s.now().Truncate(time.Microsecond)
+		assignment := *task.Assignment
+		assignment.ID, assignment.AssignedBy, assignment.AssignedAt = id, actorID, now
+		assignment.Access.BaseRevision = strings.ToLower(input.BaseRevision)
+		assignment.ContextRevision = effectiveContextRevision(task.ContextRevision)
+		task.Assignment, task.UpdatedBy, task.UpdatedAt = &assignment, actorID, now
+		r.Tasks[i] = task
+		deriveTasks(r.Tasks)
+		task = r.Tasks[i]
+		change, err := newTaskChange(task, actorID, "rebased", now)
+		if err != nil {
+			return Task{}, err
+		}
+		r.TaskChanges = append(r.TaskChanges, change)
+		if committed, err := s.write(r); err != nil {
+			if committed {
+				return task, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+			}
+			return Task{}, err
+		}
+		return task, nil
+	}
+	return Task{}, ErrNotFound
 }
 
 func (s *Store) RevokeTaskAssignment(repositoryID, proposalID, taskID, actorID, expectedID string) (Task, error) {
@@ -825,22 +898,42 @@ func cloneStrings(values []string) []string {
 	return append([]string(nil), values...)
 }
 func deriveTasks(tasks []Task) {
-	statuses := map[string]string{}
+	satisfied := map[string]bool{}
 	for _, task := range tasks {
-		statuses[task.ID] = task.Status
+		currentContribution := task.Contribution == nil || (task.Contribution.Status == "merged" && effectiveContextRevision(task.Contribution.ContextRevision) == effectiveContextRevision(task.ContextRevision))
+		satisfied[task.ID] = task.Status == TaskCompleted && currentContribution
 	}
 	for i := range tasks {
 		blocked := []string{}
 		for _, id := range tasks[i].DependencyIDs {
-			if statuses[id] != TaskCompleted {
+			if !satisfied[id] {
 				blocked = append(blocked, id)
 			}
 		}
 		tasks[i].BlockedBy = blocked
 		tasks[i].Ready = tasks[i].Status == TaskTodo && len(blocked) == 0
+		tasks[i].ContextRevision = effectiveContextRevision(tasks[i].ContextRevision)
+		if tasks[i].Assignment != nil {
+			tasks[i].Assignment.ContextRevision = effectiveContextRevision(tasks[i].Assignment.ContextRevision)
+		}
+		if tasks[i].Contribution != nil {
+			tasks[i].Contribution.ContextRevision = effectiveContextRevision(tasks[i].Contribution.ContextRevision)
+		}
+		tasks[i].ContextState = "current"
+		if tasks[i].Contribution != nil && effectiveContextRevision(tasks[i].Contribution.ContextRevision) != tasks[i].ContextRevision {
+			tasks[i].ContextState = "obsolete"
+		} else if tasks[i].Assignment != nil && effectiveContextRevision(tasks[i].Assignment.ContextRevision) != tasks[i].ContextRevision {
+			tasks[i].ContextState = "changed"
+		}
 		tasks[i].DependencyIDs = cloneStrings(tasks[i].DependencyIDs)
 		tasks[i].DiscussionCommentIDs = cloneStrings(tasks[i].DiscussionCommentIDs)
 	}
+}
+func effectiveContextRevision(revision int) int {
+	if revision < 1 {
+		return 1
+	}
+	return revision
 }
 func hasDependencyCycle(tasks []Task) bool {
 	edges := map[string][]string{}
@@ -945,7 +1038,7 @@ func (s *Store) read(id string) (record, error) {
 	}
 	seenChanges := map[string]bool{}
 	for _, change := range r.TaskChanges {
-		if !validID(change.ID) || !seenTasks[change.TaskID] || !validID(change.ActorID) || seenChanges[change.ID] || (change.Action != "created" && change.Action != "updated" && change.Action != "status_changed" && change.Action != "reordered" && change.Action != "assigned" && change.Action != "reassigned" && change.Action != "assignment_revoked" && change.Action != "contribution_published" && change.Action != "contribution_merged" && change.Action != "contribution_closed" && change.Action != "contribution_superseded") || !validStoredTask(change.Task, id) || change.Task.ID != change.TaskID {
+		if !validID(change.ID) || !seenTasks[change.TaskID] || !validID(change.ActorID) || seenChanges[change.ID] || (change.Action != "created" && change.Action != "updated" && change.Action != "status_changed" && change.Action != "reordered" && change.Action != "assigned" && change.Action != "reassigned" && change.Action != "rebased" && change.Action != "assignment_revoked" && change.Action != "contribution_published" && change.Action != "contribution_merged" && change.Action != "contribution_closed" && change.Action != "contribution_superseded") || !validStoredTask(change.Task, id) || change.Task.ID != change.TaskID {
 			return record{}, fmt.Errorf("corrupt proposal %s", id)
 		}
 		seenChanges[change.ID] = true
