@@ -132,17 +132,34 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	startCheckRunRecovery(store, checkRunStore)
-
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore)
+	startCheckRunRecovery(store, checkRunStore)
+	startIntegrationQueueRecovery(pullRequestStore)
 	log.Printf("listening on http://localhost:%s", port)
-	if err := http.ListenAndServe(":"+port, newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore)); err != nil {
+	if err := http.ListenAndServe(":"+port, handler); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func startIntegrationQueueRecovery(store *pullrequests.Store) {
+	advance := func() {
+		if err := store.AdvanceIntegrationQueues(); err != nil {
+			log.Printf("advance integration queues: %v", err)
+		}
+	}
+	advance()
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			advance()
+		}
+	}()
 }
 
 func newHandler(store *storage.Store) http.Handler {
@@ -1075,7 +1092,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		writeJSON(w, http.StatusOK, merged)
 	})
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/queue", func(w http.ResponseWriter, r *http.Request) {
-		_, owner, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
+		actor, owner, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
 		if !ok {
 			return
 		}
@@ -1083,7 +1100,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 			writeAPIError(w, http.StatusNotFound, "repository_not_found", "repository not found")
 			return
 		}
-		queued, err := store.Enqueue(r.PathValue("id"), r.PathValue("pull_id"))
+		queued, err := store.Enqueue(r.PathValue("id"), r.PathValue("pull_id"), actor.UserID)
 		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
 			if len(queued.IntegrationCandidates) > 0 {
 				candidate := queued.IntegrationCandidates[len(queued.IntegrationCandidates)-1]

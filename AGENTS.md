@@ -89,8 +89,14 @@ whenever dependencies change or the web job fails before it starts.
   the pull closes. Admission freezes an immutable synthetic two-parent
   candidate from the exact pull revision and latest eligible target, launches
   target-base-bound required-check definitions on that prospective result,
-  and exposes candidate identity, base,
-  lifecycle, logs, and artifacts; automatic advancement remains later work.
+  and exposes candidate identity, base, lifecycle, logs, and artifacts. A
+  cross-process reconciler advances only a passing FIFO head by compare-and-
+  swapping its frozen base to that exact candidate, records it as the durable
+  pull merge, and rebuilds affected concurrent candidates after either that
+  merge or an external target update. Superseded evidence is retained but
+  never lands; source changes and closure clear admission, while conflicts and
+  failed or cancelled checks follow `pause` or `remove` without deleting pull
+  request history.
   Fork pull authors can opt current target participants into short-lived Git
   access restricted to the issuing pull request and exact contribution branch; policy removal, closure,
   or target-access revocation invalidates that access on the next request.
