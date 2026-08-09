@@ -69,8 +69,45 @@ type Evolution struct {
 	Acknowledgements     []EvolutionAcknowledgement `json:"acknowledgements"`
 	MigrationTasks       []EvolutionMigrationTask   `json:"migration_tasks"`
 	ContractCandidates   []ContractCandidate        `json:"contract_candidates"`
+	Rollout              *EvolutionRollout          `json:"rollout,omitempty"`
 	CreatedAt            time.Time                  `json:"created_at"`
 	UpdatedAt            time.Time                  `json:"updated_at"`
+}
+
+// EvolutionRollout coordinates existing repository-owned workflows. It stores
+// policy and approvals; merge, release, build, deployment, and recovery records
+// remain authoritative in their respective stores.
+type EvolutionRollout struct {
+	CandidateID  string                     `json:"candidate_id"`
+	Phases       []EvolutionRolloutPhase    `json:"phases"`
+	Approvals    []EvolutionRolloutApproval `json:"approvals"`
+	Outcomes     []EvolutionRolloutOutcome  `json:"outcomes"`
+	ConfiguredBy string                     `json:"configured_by"`
+	ConfiguredAt time.Time                  `json:"configured_at"`
+	State        string                     `json:"state,omitempty"`
+	NextAction   string                     `json:"next_action,omitempty"`
+}
+type EvolutionRolloutPhase struct {
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	RepositoryIDs  []string          `json:"repository_ids"`
+	EnvironmentIDs map[string]string `json:"environment_ids,omitempty"`
+	State          string            `json:"state,omitempty"`
+	NextAction     string            `json:"next_action,omitempty"`
+}
+type EvolutionRolloutApproval struct {
+	RepositoryID string    `json:"repository_id"`
+	ActorID      string    `json:"actor_id"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+type EvolutionRolloutOutcome struct {
+	PhaseID       string    `json:"phase_id"`
+	RepositoryID  string    `json:"repository_id"`
+	PullRequestID string    `json:"pull_request_id,omitempty"`
+	ReleaseID     string    `json:"release_id,omitempty"`
+	DeploymentID  string    `json:"deployment_id,omitempty"`
+	State         string    `json:"state"`
+	RecordedAt    time.Time `json:"recorded_at"`
 }
 
 // ContractCandidate freezes one intended provider/consumer pull combination.
@@ -364,6 +401,83 @@ func (s *Store) AcknowledgeEvolution(repo, id, actor, consumer, note string) (Ev
 			}
 		}
 		v.Acknowledgements = append(v.Acknowledgements, EvolutionAcknowledgement{ActorID: actor, RepositoryID: consumer, Note: strings.TrimSpace(note), CreatedAt: s.now()})
+		v.Version++
+		v.UpdatedAt = s.now()
+		return nil
+	})
+}
+
+func (s *Store) ConfigureEvolutionRollout(repo, id, actor, candidate string, phases []EvolutionRolloutPhase, version int) (Evolution, error) {
+	if !validID(actor) || !validID(candidate) || len(phases) == 0 || len(phases) > 20 {
+		return Evolution{}, ErrInvalid
+	}
+	return s.mutateEvolution(repo, id, func(v *Evolution) error {
+		if v.Version != version {
+			return ErrConflict
+		}
+		found := false
+		for _, c := range v.ContractCandidates {
+			found = found || (c.ID == candidate && c.SupersededAt == nil)
+		}
+		if !found {
+			return ErrInvalid
+		}
+		allowed, seen := map[string]bool{v.RepositoryID: true}, map[string]bool{}
+		for _, impact := range v.Impacts {
+			allowed[impact.RepositoryID] = true
+		}
+		for i := range phases {
+			p := &phases[i]
+			if strings.TrimSpace(p.Name) == "" || len(p.Name) > 100 || len(p.RepositoryIDs) == 0 || len(p.RepositoryIDs) > 51 {
+				return ErrInvalid
+			}
+			p.ID = mustID()
+			p.Name = strings.TrimSpace(p.Name)
+			local := map[string]bool{}
+			for _, repositoryID := range p.RepositoryIDs {
+				if !validID(repositoryID) || !allowed[repositoryID] || seen[repositoryID] || local[repositoryID] {
+					return ErrInvalid
+				}
+				local[repositoryID], seen[repositoryID] = true, true
+			}
+			for repositoryID, environmentID := range p.EnvironmentIDs {
+				if !local[repositoryID] || !validID(environmentID) {
+					return ErrInvalid
+				}
+			}
+		}
+		v.Rollout = &EvolutionRollout{CandidateID: candidate, Phases: phases, Approvals: []EvolutionRolloutApproval{}, Outcomes: []EvolutionRolloutOutcome{}, ConfiguredBy: actor, ConfiguredAt: s.now()}
+		v.Version++
+		v.UpdatedAt = s.now()
+		return nil
+	})
+}
+func (s *Store) ApproveEvolutionRollout(repo, id, actor, repositoryID string, version int) (Evolution, error) {
+	if !validID(actor) || !validID(repositoryID) {
+		return Evolution{}, ErrInvalid
+	}
+	return s.mutateEvolution(repo, id, func(v *Evolution) error {
+		if v.Version != version {
+			return ErrConflict
+		}
+		if v.Rollout == nil {
+			return ErrInvalid
+		}
+		participates := false
+		for _, p := range v.Rollout.Phases {
+			for _, x := range p.RepositoryIDs {
+				participates = participates || x == repositoryID
+			}
+		}
+		if !participates {
+			return ErrInvalid
+		}
+		for _, a := range v.Rollout.Approvals {
+			if a.RepositoryID == repositoryID {
+				return ErrConflict
+			}
+		}
+		v.Rollout.Approvals = append(v.Rollout.Approvals, EvolutionRolloutApproval{RepositoryID: repositoryID, ActorID: actor, CreatedAt: s.now()})
 		v.Version++
 		v.UpdatedAt = s.now()
 		return nil

@@ -61,6 +61,17 @@ accountable corrective proposal task that returns through ordinary checks,
 review, release, and governed production deployment; incident reads derive all
 follow-up progress from the authoritative workflow records.
 
+## Governed interface evolution
+
+An evolution rollout coordinates, but never replaces, repository and
+environment authority. Provider maintainers select retained exact contract
+evidence and order participating repositories into phases; each repository
+owner approves only their own participation. The relationship workspace then
+derives compatibility and progress from ordinary migration pulls, integration
+queues, ancestry-containing releases, and governed environment promotions.
+Failures pause the affected phase with links back to established rollback or
+agent-repair workflows, leaving already-safe repositories and evidence intact.
+
 ## Web interface foundation
 
 The web application uses a persistent workbench shell so account, repository,

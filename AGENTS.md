@@ -154,6 +154,13 @@ whenever dependencies change or the web job fails before it starts.
   Candidate creation holds the catalog mutation lock across its final all-source
   revalidation, check/candidate publication, and response, excluding concurrent
   collaborator removal or visibility changes from that publication boundary.
+  Governed evolution rollouts freeze one current contract candidate and ordered
+  repository/environment phases. Current repository owners approve only their
+  own participation; reads derive gate and phase readiness from exact contract
+  checks, ordinary merged task pulls, ancestry-containing releases, and governed
+  promotions. Closed pulls or failed/canceled promotions pause the affected
+  phase and retain prior outcomes while directing recovery through established
+  rollback or agent-repair controls.
   Ordered evolution migration tasks are repository-owned proposal tasks linked
   to the shared plan with target versions and cross-repository dependencies.
   Only current target participants create and assign them; humans gain no new

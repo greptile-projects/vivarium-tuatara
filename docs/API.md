@@ -933,6 +933,18 @@ The final access check, candidate/check publication, and creation response hold
 the repository catalog mutation lock, so private-source revocation or visibility
 changes linearize wholly before or after evidence publication.
 
+`PUT /repositories/{id}/evolutions/{evolution_id}/rollout` compare-and-swaps
+`version` to freeze one non-superseded contract candidate and ordered phases.
+Each phase names repositories once and may map them to existing environment IDs.
+`POST .../rollout/approvals` accepts approval only from the named repository's
+current owner; approval grants no cross-repository authority. Plan reads derive
+the gate from its exact check runs and each phase from the linked pull merge,
+an ancestry-containing release, and any named environment's promotion. The
+projection reports ownership, retained resource IDs, readiness, and the next
+ordinary queue/release/promotion action. Closed pulls and failed or canceled
+promotions pause the affected phase and direct participants to the deployment's
+existing rollback or repair controls; completed earlier phases are preserved.
+
 Unfinished cross-repository dependencies block an agent session from starting;
 the eventual credential remains limited to its isolated `agent/tasks/*` branch.
 Human work uses existing access and may publish its task contribution from the

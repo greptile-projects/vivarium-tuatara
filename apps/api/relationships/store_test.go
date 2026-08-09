@@ -99,3 +99,34 @@ func TestContractCandidatesSupersedeOnlyChangedCombinations(t *testing.T) {
 		t.Fatalf("candidates = %#v", plan.ContractCandidates)
 	}
 }
+
+func TestEvolutionRolloutFreezesPhasesAndRequiresRepositoryApprovals(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, consumer, actor := strings.Repeat("1", 32), strings.Repeat("2", 32), strings.Repeat("3", 32)
+	plan, err := store.CreateEvolution(Evolution{RepositoryID: provider, InterfaceName: "api", Predecessor: Interface{ID: strings.Repeat("4", 32)}, SourceKind: "proposal", SourceID: strings.Repeat("5", 32), CandidateDescription: "breaking candidate", Strategy: "expand then contract", Sequencing: "consumer before provider", Changes: []CompatibilityChange{{Kind: "schema", Summary: "remove field", Classification: "breaking"}}, Impacts: []ConsumerImpact{{RepositoryID: consumer}}, CreatedBy: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	revisions := []ContractCandidateRevision{{Role: "provider", RepositoryID: provider, PullRequestID: strings.Repeat("6", 32), SourceRepositoryID: provider, CommitID: strings.Repeat("a", 40)}, {Role: "consumer", RepositoryID: consumer, PullRequestID: strings.Repeat("7", 32), SourceRepositoryID: consumer, CommitID: strings.Repeat("b", 40)}}
+	plan, candidate, err := store.AddContractCandidate(provider, plan.ID, actor, strings.Repeat("c", 40), strings.Repeat("d", 64), revisions, []string{strings.Repeat("8", 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err = store.ConfigureEvolutionRollout(provider, plan.ID, actor, candidate.ID, []EvolutionRolloutPhase{{Name: "consumers", RepositoryIDs: []string{consumer}}, {Name: "provider", RepositoryIDs: []string{provider}}}, plan.Version)
+	if err != nil || plan.Rollout == nil || len(plan.Rollout.Phases) != 2 {
+		t.Fatalf("rollout = %#v, %v", plan.Rollout, err)
+	}
+	if _, err = store.ConfigureEvolutionRollout(provider, plan.ID, actor, candidate.ID, []EvolutionRolloutPhase{{Name: "duplicate", RepositoryIDs: []string{consumer, consumer}}}, plan.Version); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("duplicate repository = %v", err)
+	}
+	plan, err = store.ApproveEvolutionRollout(provider, plan.ID, consumer, consumer, plan.Version)
+	if err != nil || len(plan.Rollout.Approvals) != 1 || plan.Rollout.Approvals[0].RepositoryID != consumer {
+		t.Fatalf("approval = %#v, %v", plan.Rollout, err)
+	}
+	if _, err = store.ApproveEvolutionRollout(provider, plan.ID, consumer, consumer, plan.Version); !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate approval = %v", err)
+	}
+}

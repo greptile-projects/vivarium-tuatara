@@ -154,6 +154,23 @@ export type EvolutionPlan = {
     superseded_at?: string;
     superseded_by?: string;
   }[];
+  rollout?: {
+    candidate_id: string;
+    state?: "blocked" | "active" | "paused" | "completed";
+    next_action?: string;
+    configured_by: string;
+    configured_at: string;
+    approvals: { repository_id: string; actor_id: string; created_at: string }[];
+    phases: {
+      id: string;
+      name: string;
+      repository_ids: string[];
+      environment_ids?: Record<string, string>;
+      state?: "blocked" | "awaiting_approval" | "ready" | "paused" | "completed";
+      next_action?: string;
+    }[];
+    outcomes: { phase_id: string; repository_id: string; pull_request_id?: string; release_id?: string; deployment_id?: string; state: string }[];
+  };
 };
 export type ReleaseArtifact = {
   id: string;
