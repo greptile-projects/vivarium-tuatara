@@ -9,6 +9,20 @@ import { Badge, Button, Card } from "./ui";
 const field = "mt-2 min-h-11 w-full rounded-lg border border-[var(--line-strong)] bg-white px-3 outline-none focus:border-[var(--brand)]";
 const errorMessage = (reason: unknown) => reason instanceof Error ? reason.message : "The private security operation failed.";
 const stamp = (value: string) => new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+async function pages<T>(path: string, key: string, token: string) {
+  const items: T[] = [];
+  let after: string | null = null;
+  do {
+    const page = await api<Record<string, T[] | string | null>>(
+      `${path}?limit=100${after ? `&after=${encodeURIComponent(after)}` : ""}`,
+      {},
+      token,
+    );
+    items.push(...((page[key] as T[]) ?? []));
+    after = page.next_cursor as string | null;
+  } while (after);
+  return items;
+}
 
 export function SecurityAdvisoriesWorkspace({ advisoryId }: { advisoryId?: string }) {
   const { token, user, loading } = useAuth();
@@ -22,8 +36,8 @@ export function SecurityAdvisoriesWorkspace({ advisoryId }: { advisoryId?: strin
   const load = useCallback(async () => {
     if (!token) return;
     try {
-      const repos = await api<{ repositories: Repository[] }>("/repositories?limit=100", {}, token);
-      setRepositories(repos.repositories);
+      const repos = await pages<Repository>("/repositories", "repositories", token);
+      setRepositories(repos);
       if (advisoryId) {
         const found = await api<SecurityAdvisory>(`/security-advisories/${advisoryId}`, {}, token);
         setAdvisory(found);
@@ -31,17 +45,19 @@ export function SecurityAdvisoriesWorkspace({ advisoryId }: { advisoryId?: strin
         const users = await Promise.all(ids.map(async (id) => [id, await api<User>(`/users/${id}`, {}, token).catch(() => undefined)] as const));
         setPeople(Object.fromEntries(users.filter((x): x is readonly [string, User] => Boolean(x[1]))));
       } else {
-        const found = await api<{ security_advisories: SecurityAdvisory[] }>("/security-advisories?limit=100", {}, token);
-        setItems(found.security_advisories);
+        setItems(await pages<SecurityAdvisory>("/security-advisories", "security_advisories", token));
       }
     } catch (reason) { setError(errorMessage(reason)); }
   }, [advisoryId, token]);
   useEffect(() => { void Promise.resolve().then(load); }, [load]);
   const mutate = async (path: string, body: object, method = "POST") => {
-    if (!token) return;
+    if (!token) return false;
     setPending(true); setError("");
-    try { setAdvisory(await api<SecurityAdvisory>(path, { method, body: JSON.stringify(body) }, token)); }
-    catch (reason) { setError(errorMessage(reason)); }
+    try {
+      setAdvisory(await api<SecurityAdvisory>(path, { method, body: JSON.stringify(body) }, token));
+      return true;
+    }
+    catch (reason) { setError(errorMessage(reason)); return false; }
     finally { setPending(false); }
   };
   async function report(event: FormEvent<HTMLFormElement>) {
@@ -68,9 +84,9 @@ export function SecurityAdvisoriesWorkspace({ advisoryId }: { advisoryId?: strin
     {error && <p role="alert" className="rounded-lg bg-[var(--danger-soft)] p-3 text-sm text-[var(--danger)]">{error}</p>}
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">
       <div className="space-y-5"><Card className="p-5"><h2 className="font-semibold">Affected versions</h2>{advisory.affected_repositories.map((x) => <div key={x.repository_id} className="mt-3 rounded-lg bg-[var(--canvas)] p-3 text-sm"><span className="font-semibold">{repositoryName(x.repository_id)}</span><span className="ml-2 text-[var(--muted)]">{x.versions.join(", ")}</span></div>)}<h3 className="mt-5 font-semibold">Reporter evidence</h3>{advisory.evidence.map((x, index) => <div key={`${x.label}-${index}`} className="mt-3"><p className="text-sm font-semibold">{x.label}</p><p className="mt-1 whitespace-pre-wrap text-sm text-[var(--muted)]">{x.description}</p></div>)}</Card>
-      <Card className="p-5"><h2 className="font-semibold">Protected conversation</h2><div className="mt-4 space-y-3">{advisory.messages.length === 0 && <p className="text-sm text-[var(--muted)]">No messages yet.</p>}{advisory.messages.map((message) => <div key={message.id} className="rounded-lg bg-[var(--canvas)] p-3"><p className="text-xs font-semibold">{actorName(message.actor_id)} · {stamp(message.created_at)}</p><p className="mt-2 whitespace-pre-wrap text-sm">{message.body}</p></div>)}</div><form className="mt-4" onSubmit={(event) => { event.preventDefault(); const form = event.currentTarget; const body = new FormData(form).get("body"); void mutate(`/security-advisories/${advisory.id}/messages`, { body }).then(() => form.reset()); }}><textarea className={`${field} py-3`} name="body" rows={3} required maxLength={20000} aria-label="Message"/><Button className="mt-3" disabled={pending}>Send privately</Button></form></Card></div>
+      <Card className="p-5"><h2 className="font-semibold">Protected conversation</h2><div className="mt-4 space-y-3">{advisory.messages.length === 0 && <p className="text-sm text-[var(--muted)]">No messages yet.</p>}{advisory.messages.map((message) => <div key={message.id} className="rounded-lg bg-[var(--canvas)] p-3"><p className="text-xs font-semibold">{actorName(message.actor_id)} · {stamp(message.created_at)}</p><p className="mt-2 whitespace-pre-wrap text-sm">{message.body}</p></div>)}</div><form className="mt-4" onSubmit={(event) => { event.preventDefault(); const form = event.currentTarget; const body = new FormData(form).get("body"); void mutate(`/security-advisories/${advisory.id}/messages`, { body }).then((saved) => { if (saved) form.reset(); }); }}><textarea className={`${field} py-3`} name="body" rows={3} required maxLength={20000} aria-label="Message"/><Button className="mt-3" disabled={pending}>Send privately</Button></form></Card></div>
       <aside className="space-y-5"><Card className="p-5"><h2 className="font-semibold">Safe contact</h2><p className="mt-2 break-words text-sm text-[var(--muted)]">{advisory.contact}</p><p className="mt-4 text-xs text-[var(--muted)]">Reporter: {actorName(advisory.reporter_id)}</p></Card>
-      {isMaintainer && <Card className="p-5"><h2 className="font-semibold">Maintainer triage</h2><form className="mt-3 space-y-3" onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); void mutate(`/security-advisories/${advisory.id}`, { expected_version: advisory.version, severity: data.get("severity"), embargo_state: data.get("embargo_state") }, "PATCH"); }}><select className={field} name="severity" defaultValue={advisory.severity === "untriaged" ? "high" : advisory.severity}><option value="low">Low</option><option value="moderate">Moderate</option><option value="high">High</option><option value="critical">Critical</option></select><select className={field} name="embargo_state" defaultValue={advisory.embargo_state}><option value="reported">Reported</option><option value="triaging">Triaging</option><option value="embargoed">Embargoed</option><option value="coordinating">Coordinating</option></select><Button disabled={pending}>Update triage</Button></form><form className="mt-6" onSubmit={(event) => { event.preventDefault(); const form = event.currentTarget; const userId = new FormData(form).get("user_id"); void mutate(`/security-advisories/${advisory.id}/responders`, { user_id: userId }).then(() => form.reset()); }}><label className="text-sm font-semibold">Invite responder by collaboration ID<input className={field} name="user_id" required minLength={32} maxLength={32}/></label><Button className="mt-3" disabled={pending}>Invite to response team</Button></form></Card>}
+      {isMaintainer && <Card className="p-5"><h2 className="font-semibold">Maintainer triage</h2><form className="mt-3 space-y-3" onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); void mutate(`/security-advisories/${advisory.id}`, { expected_version: advisory.version, severity: data.get("severity"), embargo_state: data.get("embargo_state") }, "PATCH"); }}><select className={field} name="severity" defaultValue={advisory.severity === "untriaged" ? "high" : advisory.severity}><option value="low">Low</option><option value="moderate">Moderate</option><option value="high">High</option><option value="critical">Critical</option></select><select className={field} name="embargo_state" defaultValue={advisory.embargo_state}><option value="reported">Reported</option><option value="triaging">Triaging</option><option value="embargoed">Embargoed</option><option value="coordinating">Coordinating</option></select><Button disabled={pending}>Update triage</Button></form><form className="mt-6" onSubmit={(event) => { event.preventDefault(); const form = event.currentTarget; const userId = new FormData(form).get("user_id"); void mutate(`/security-advisories/${advisory.id}/responders`, { user_id: userId }).then((saved) => { if (saved) form.reset(); }); }}><label className="text-sm font-semibold">Invite responder by collaboration ID<input className={field} name="user_id" required minLength={32} maxLength={32}/></label><Button className="mt-3" disabled={pending}>Invite to response team</Button></form></Card>}
       <Card className="p-5"><h2 className="font-semibold">Access audit</h2><div className="mt-3 max-h-80 space-y-2 overflow-auto">{[...advisory.access_log].reverse().map((event) => <p key={event.id} className="text-xs text-[var(--muted)]"><span className="font-semibold text-[var(--ink)]">{actorName(event.actor_id)}</span> {event.action.replaceAll("_", " ")} · {stamp(event.created_at)}</p>)}</div></Card></aside>
     </div></div>;
   return <div className="space-y-7"><header className="flex flex-wrap items-end justify-between gap-4"><div><p className="font-mono text-xs font-semibold uppercase tracking-[.16em] text-[var(--danger)]">Protected collaboration</p><h1 className="mt-2 text-3xl font-semibold">Private security reports</h1><p className="mt-2 max-w-2xl text-sm text-[var(--muted)]">Share suspected vulnerabilities and coordinate an embargoed response without publishing repository activity or notifications.</p></div><Button onClick={() => setShowReport((x) => !x)}>{showReport ? "Cancel" : "Report vulnerability"}</Button></header>
