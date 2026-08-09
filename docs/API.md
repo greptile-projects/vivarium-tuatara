@@ -840,6 +840,48 @@ release-build routes inherit repository visibility:
 - `POST .../builds/{build_id}/rerun` appends a same-source attempt; earlier
   attempts, logs, failures, and artifacts remain unchanged.
 
+### Attested package publication
+
+Only the repository owner can publish a package from a release. `POST
+/repositories/{id}/releases/{release_id}/packages` requires
+`repositories:write` and accepts one artifact from the current successful build
+attempt:
+
+```json
+{
+  "name": "project-sdk",
+  "version": "1.4.0",
+  "build_id": "0123456789abcdef0123456789abcdef",
+  "artifact_id": "fedcba9876543210fedcba9876543210",
+  "platform": {"os": "linux", "architecture": "amd64", "runtime": "go1.24"},
+  "dependencies": [{"name": "core-kit", "constraint": "^2.0.0"}],
+  "visibility": "public"
+}
+```
+
+Names are lowercase package identities and bind globally to the repository that
+first publishes them. Versions are immutable and unique within that identity.
+The server derives the release, source commit, build attestation, artifact path,
+size, media type, checksum, and publisher. It holds the selected build's
+execution boundary while streaming and re-hashing the artifact and atomically
+exposing metadata and bytes, so a concurrent rerun cannot supersede the
+attested attempt. A stale or failed build, checksum mismatch, conflict, or
+interrupted copy cannot expose a partial version. Parent-directory open, sync,
+or close failure after rename is returned rather than acknowledged; the
+complete version may already be visible, but its durability is uncertain. That
+case returns `202`, `Vivarium-Durability: uncertain`, `Location`, and the full
+package record including its ID. An exact retry returns `200` with the same
+record and ID; a different publication at that name/version returns `409`.
+New-identity failures before rename do not reserve the name.
+
+`GET /repositories/{id}/packages` lists versions originating in a readable
+repository. `GET /packages/{name}/versions/{version}` returns immutable
+provenance and lifecycle metadata, and `GET
+/packages/{name}/versions/{version}/artifact` returns the bytes with
+`X-Checksum-Sha256`. Public versions allow anonymous reads; private versions
+continuously inherit the source repository's current read policy. Package
+records live beneath `$PACKAGE_STORAGE_ROOT` (default `packages`).
+
 ### Versioned interface relationships
 
 Repository participants publish a named interface from immutable release

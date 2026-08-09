@@ -8,6 +8,7 @@ import {
   type ReleaseAttestation,
   type ReleaseBuild,
   type ReleaseCandidate,
+  type PackageVersion,
   type Repository,
   type User,
 } from "@/lib/api";
@@ -230,8 +231,10 @@ export function ReleaseDetail({
   repositoryID: string;
   releaseID: string;
 }) {
-  const { token, loading } = useAuth();
+  const { token, user, loading } = useAuth();
   const [release, setRelease] = useState<ReleaseCandidate | null>(null);
+  const [repository, setRepository] = useState<Repository | null>(null);
+  const [packages, setPackages] = useState<PackageVersion[]>([]);
   const [builds, setBuilds] = useState<ReleaseBuild[]>([]);
   const [attestations, setAttestations] = useState<
     Record<string, ReleaseAttestation>
@@ -240,6 +243,7 @@ export function ReleaseDetail({
   const [error, setError] = useState("");
   const [identityWarning, setIdentityWarning] = useState("");
   const [building, setBuilding] = useState(false);
+  const [publishing, setPublishing] = useState(false);
   useEffect(() => {
     if (loading) return;
     let active = true;
@@ -252,12 +256,15 @@ export function ReleaseDetail({
         if (!active) return;
         setRelease(item);
         setError("");
-        const buildSet = await api<{ builds: ReleaseBuild[] }>(
-          `/repositories/${repositoryID}/releases/${releaseID}/builds`,
-          {},
-          token,
-        );
+        const [buildSet, repo, packageSet] = await Promise.all([
+          api<{ builds: ReleaseBuild[] }>(
+            `/repositories/${repositoryID}/releases/${releaseID}/builds`, {}, token),
+          api<Repository>(`/repositories/${repositoryID}`, {}, token),
+          api<{ packages: PackageVersion[] }>(`/repositories/${repositoryID}/packages`, {}, token),
+        ]);
         if (!active) return;
+        setRepository(repo);
+        setPackages(packageSet.packages.filter((value) => value.release_id === releaseID));
         setBuilds(buildSet.builds);
         const evidence = await Promise.all(
           buildSet.builds.map((build) =>
@@ -273,7 +280,7 @@ export function ReleaseDetail({
           Object.fromEntries(evidence.map((item) => [item.build_id, item])),
         );
         const identityIDs = [
-          ...new Set([item.created_by, ...item.inclusions.contributor_ids]),
+          ...new Set([item.created_by, ...item.inclusions.contributor_ids, ...packageSet.packages.map((value) => value.publisher_id)]),
         ];
         const results = await Promise.allSettled(
           identityIDs.map((id) => api<User>(`/users/${id}`)),
@@ -373,6 +380,36 @@ export function ReleaseDetail({
           : "Release build could not be rerun.",
       );
     }
+  }
+  async function publish(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!token) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const [buildID, artifactID] = String(data.get("artifact")).split(":");
+    const dependencies = String(data.get("dependencies") || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [name, ...constraint] = line.split(/\s+/);
+        return { name: name.toLowerCase(), constraint: constraint.join(" ") };
+      });
+    setPublishing(true);
+    setError("");
+    try {
+      const created = await api<PackageVersion>(
+        `/repositories/${repositoryID}/releases/${releaseID}/packages`,
+        { method: "POST", body: JSON.stringify({
+          name: data.get("name"), version: data.get("version"), build_id: buildID,
+          artifact_id: artifactID, visibility: data.get("visibility"), dependencies,
+          platform: { os: data.get("os"), architecture: data.get("architecture"), runtime: data.get("runtime") },
+        }) }, token);
+      setPackages((current) => [...current, created]);
+      form.reset();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Package could not be published.");
+    } finally { setPublishing(false); }
   }
   if (error)
     return (
@@ -546,6 +583,48 @@ export function ReleaseDetail({
         releaseID={releaseID}
         builds={builds}
       />
+      <Card className="p-5">
+        <h2 className="text-lg font-semibold">Published packages</h2>
+        <p className="mt-1 text-sm text-[var(--muted)]">
+          Immutable package bytes retain the exact release, build attestation,
+          publisher, platform, dependencies, and checksum that produced them.
+        </p>
+        {packages.length === 0 ? (
+          <p className="mt-4 text-sm text-[var(--muted)]">No package version has been published from this release.</p>
+        ) : (
+          <div className="mt-4 space-y-3">
+            {packages.map((item) => (
+              <div key={item.id} className="rounded-lg border border-[var(--line)] p-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="font-semibold">{item.name}@{item.version}</h3>
+                  <Badge tone="success">{item.lifecycle}</Badge>
+                  <Badge>{item.visibility}</Badge>
+                </div>
+                <p className="mt-2 text-xs text-[var(--muted)]">
+                  Published by <Identity id={item.publisher_id} people={people} /> · {item.platform.os || "any OS"} / {item.platform.architecture || "any architecture"} {item.platform.runtime ? `· ${item.platform.runtime}` : ""}
+                </p>
+                <code className="mt-2 block break-all text-xs">sha256:{item.sha256}</code>
+                <p className="mt-2 text-xs text-[var(--muted)]">Attested by {item.build_attestation.step} attempt {item.build_attestation.attempt} in {item.build_attestation.image}</p>
+                <a className="mt-2 inline-block text-sm font-semibold text-[var(--brand)] hover:underline" href={`/api/packages/${item.name}/versions/${encodeURIComponent(item.version)}/artifact`}>Download verified artifact</a>
+                {item.dependencies.length > 0 && <p className="mt-2 text-xs text-[var(--muted)]">Dependencies: {item.dependencies.map((dependency) => `${dependency.name} ${dependency.constraint}`).join(", ")}</p>}
+              </div>
+            ))}
+          </div>
+        )}
+        {user?.id === repository?.owner_id && builds.some((build) => build.state === "succeeded" && build.artifacts.length > 0) && (
+          <form onSubmit={publish} className="mt-6 grid gap-4 border-t border-[var(--line)] pt-5 md:grid-cols-2">
+            <label className="text-xs font-semibold">Package identity<input name="name" required pattern="[a-z0-9][a-z0-9._-]*" maxLength={100} placeholder="project-sdk" className="mt-2 min-h-10 w-full rounded-lg border border-[var(--line-strong)] px-3 font-mono text-sm font-normal" /></label>
+            <label className="text-xs font-semibold">Version<input name="version" required maxLength={100} defaultValue={release.version.replace(/^v/, "")} className="mt-2 min-h-10 w-full rounded-lg border border-[var(--line-strong)] px-3 font-mono text-sm font-normal" /></label>
+            <label className="text-xs font-semibold md:col-span-2">Verified artifact<select name="artifact" required className="mt-2 min-h-10 w-full rounded-lg border border-[var(--line-strong)] bg-white px-3 text-sm font-normal">{builds.filter((build) => build.state === "succeeded").flatMap((build) => build.artifacts.filter((artifact) => artifact.attempt === Math.max(...build.attempts.map((attempt) => attempt.number))).map((artifact) => <option key={artifact.id} value={`${build.id}:${artifact.id}`}>{build.definition.name} · {artifact.path} · sha256:{artifact.sha256.slice(0, 12)}…</option>))}</select></label>
+            <label className="text-xs font-semibold">OS<input name="os" maxLength={50} placeholder="linux" className="mt-2 min-h-10 w-full rounded-lg border border-[var(--line-strong)] px-3 text-sm font-normal" /></label>
+            <label className="text-xs font-semibold">Architecture<input name="architecture" maxLength={50} placeholder="amd64" className="mt-2 min-h-10 w-full rounded-lg border border-[var(--line-strong)] px-3 text-sm font-normal" /></label>
+            <label className="text-xs font-semibold">Runtime<input name="runtime" maxLength={100} placeholder="go1.24 or bun 1.x" className="mt-2 min-h-10 w-full rounded-lg border border-[var(--line-strong)] px-3 text-sm font-normal" /></label>
+            <label className="text-xs font-semibold">Visibility<select name="visibility" className="mt-2 min-h-10 w-full rounded-lg border border-[var(--line-strong)] bg-white px-3 text-sm font-normal"><option value="public">Public</option><option value="private">Repository participants</option></select></label>
+            <label className="text-xs font-semibold md:col-span-2">Dependencies <span className="font-normal text-[var(--muted)]">(one name and constraint per line)</span><textarea name="dependencies" rows={3} placeholder={"core-utils ^2.0.0\nlogging-kit >=1.4"} className="mt-2 w-full rounded-lg border border-[var(--line-strong)] p-3 font-mono text-sm font-normal" /></label>
+            <div><Button type="submit" disabled={publishing}>{publishing ? "Publishing…" : "Publish immutable package"}</Button></div>
+          </form>
+        )}
+      </Card>
       <Card className="p-5">
         <h2 className="text-lg font-semibold">Release notes</h2>
         <p className="mt-3 whitespace-pre-wrap text-sm leading-6">

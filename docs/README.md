@@ -781,6 +781,24 @@ creation, prior-release selection, lifecycle inspection, build controls,
 machine-readable attestations and checksums, and direct links back to included
 review and planning work.
 
+An owner can turn one current successful build artifact into an immutable
+package version from that same release workspace. Package publication freezes
+the globally repository-bound identity and version, source commit, release and
+build IDs, artifact identity and SHA-256, publisher, platform selectors,
+dependency constraints, public or private visibility, and active lifecycle.
+Publication holds the build execution boundary across selection, hashing, and
+the atomic version rename, preventing a concurrent rerun from replacing the
+attested attempt. The package store hashes output into a staging directory, so
+pre-rename verification or storage failures leave no readable version or
+first-publisher name reservation. Post-rename parent-directory failures return
+`202` durability uncertainty together with the complete package identity; an
+exact retry recovers the same stable record, while different content still
+conflicts. Public package
+metadata and bytes are anonymous; private packages continuously reuse the
+source repository's access boundary. Durable records and copied artifacts live
+beneath `PACKAGE_STORAGE_ROOT` (default `packages`), independent of later build
+retention or repository visibility changes.
+
 Release delivery is an explicit repository collaboration. Owners define a
 strictly ordered set of environments with visible scoped configuration,
 required independent approvals, and concurrency limits. Protected credential

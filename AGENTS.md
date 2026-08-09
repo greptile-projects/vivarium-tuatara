@@ -126,6 +126,20 @@ whenever dependencies change or the web job fails before it starts.
   check executor, retain immutable attempts, logs, and checksummed artifacts,
   and expose source/command/dependency/actor/result attestations. Reruns append
   evidence for the same frozen candidate.
+  Repository owners publish a successful current-attempt release artifact as an
+  immutable package through `POST /repositories/{id}/releases/{release-id}/packages`.
+  Package identities are globally bound to their first source repository;
+  versions atomically retain the exact release, commit, build, artifact checksum,
+  publisher, platform, dependencies, visibility, and active lifecycle beneath
+  `$PACKAGE_STORAGE_ROOT`. Publication holds the selected check run's execution
+  boundary through artifact verification and the package rename, so a rerun
+  cannot supersede its attested attempt mid-publication. Public package metadata and bytes live at
+  `/packages/{name}/versions/{version}`, while private versions inherit current
+  source-repository read access. Pre-rename failures expose no package version
+  and do not reserve a new identity; post-rename parent-directory failures are
+  returned as `202` durability uncertainty with the complete package identity.
+  An exact retry returns that same record, while different content at an existing
+  name/version remains a conflict.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version

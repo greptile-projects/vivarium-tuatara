@@ -120,6 +120,44 @@ type Store struct {
 	syncDirectory func(*os.File) error
 }
 
+// WithCurrentArtifact holds the run's execution boundary while callback
+// inspects the latest durable run and its selected artifact. Reruns, executor
+// completion, and direct in-process updates cannot advance the attempt until
+// callback returns.
+func (s *Store) WithCurrentArtifact(repositoryID, pullRequestID, runID, artifactID string, callback func(Run, Artifact, *os.File) error) error {
+	lockPath := filepath.Join(s.root, repositoryID, pullRequestID, runID+".execution.lock")
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run, err := s.Get(repositoryID, pullRequestID, runID)
+	if err != nil {
+		return err
+	}
+	for _, artifact := range run.Artifacts {
+		if artifact.ID != artifactID {
+			continue
+		}
+		file, err := os.Open(filepath.Join(s.root, repositoryID, pullRequestID, "artifacts", runID, artifactID))
+		if errors.Is(err, os.ErrNotExist) {
+			return errors.New("check artifact missing")
+		}
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		return callback(run, artifact, file)
+	}
+	return ErrNotFound
+}
+
 func New(root string) (*Store, error) {
 	if root == "" {
 		return nil, errors.New("check run storage root is required")

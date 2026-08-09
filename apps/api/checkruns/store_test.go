@@ -568,6 +568,61 @@ exit 0
 	}
 }
 
+func TestWithCurrentArtifactSerializesAttemptUpdates(t *testing.T) {
+	root := t.TempDir()
+	store, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.CreateRequested("0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789", "0123456789abcdef0123456789abcdef01234567", []Definition{{Name: "package", Image: "alpine:3.22", Command: "true", WorkingDirectory: ".", TimeoutSeconds: 30}}, "11111111111111111111111111111111")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := runs[0]
+	artifact := Artifact{ID: "22222222222222222222222222222222", Attempt: 1, Path: "package.tgz", Size: 5, SHA256: strings.Repeat("a", 64), ContentType: "application/gzip"}
+	run.State = "succeeded"
+	run.Attempts = []Attempt{{Number: 1, State: "succeeded"}}
+	run.Artifacts = []Artifact{artifact}
+	if err = store.Update(run); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, run.RepositoryID, run.PullRequestID, "artifacts", run.ID)
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, artifact.ID), []byte("bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	entered, release, callbackDone := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		callbackDone <- store.WithCurrentArtifact(run.RepositoryID, run.PullRequestID, run.ID, artifact.ID, func(current Run, selected Artifact, _ *os.File) error {
+			close(entered)
+			<-release
+			if current.Attempts[0].Number != selected.Attempt {
+				return errors.New("inconsistent attempt")
+			}
+			return nil
+		})
+	}()
+	<-entered
+	updated := run
+	updated.Attempts = append(updated.Attempts, Attempt{Number: 2, State: "succeeded"})
+	updateDone := make(chan error, 1)
+	go func() { updateDone <- store.Update(updated) }()
+	select {
+	case err := <-updateDone:
+		t.Fatalf("attempt advanced inside artifact boundary: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if err = <-callbackDone; err != nil {
+		t.Fatal(err)
+	}
+	if err = <-updateDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func runGit(t *testing.T, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
