@@ -132,6 +132,14 @@ whenever dependencies change or the web job fails before it starts.
   constraints. Reads revalidate visible release and successful-deployment
   evidence and explicitly classify edges as resolved, stale, or unresolved;
   durable records live beneath `$RELATIONSHIP_STORAGE_ROOT`.
+  Interface evolution plans in that workspace bind an open provider proposal
+  or pull to an exact published predecessor, classified compatibility changes,
+  and a frozen visibility-filtered consumer/owner impact snapshot. Collaborators
+  retain compare-and-swap strategy, sequencing, and exceptions; current
+  consumer participants acknowledge their own impacts. Short-lived
+  `evolutions:analyze` credentials expose only selected readable repositories
+  from that snapshot and can append attributable findings and uncertainty,
+  never repository or Git mutation authority.
   Owners define ordered delivery environments with scoped visible configuration,
   encrypted write-only credentials, independent approval thresholds, and
   concurrency limits beneath `$DEPLOYMENT_STORAGE_ROOT`. Participants promote

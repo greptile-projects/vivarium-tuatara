@@ -882,6 +882,23 @@ Private repository identities and edges are omitted unless the caller still
 has repository access. Records live beneath `RELATIONSHIP_STORAGE_ROOT`, which
 defaults to `relationships`.
 
+An interface evolution turns that evidence into a shared pre-merge decision.
+`POST /repositories/{id}/evolutions` requires provider participation and an
+open proposal or pull request, one exact published predecessor, a candidate
+description, classified `compatible`, `conditional`, `breaking`, or `unknown`
+changes, and migration strategy/sequencing. Creation freezes every consumer
+declaration and owner currently readable to the author. Collection and detail
+reads continue to filter private consumer impacts under current access, while
+`PATCH` compare-and-swaps `version` for contract edits.
+
+Current participants in a frozen affected consumer use nested `POST
+/acknowledgements` without gaining provider write access. Nested `POST
+/analyses` delegates selected readable repositories from the frozen radius for
+300-86400 seconds. Its `evolutions:analyze` credential can read that packet and
+append attributable findings plus explicit uncertainty citing only the
+selection; it has no repository, Git, proposal, pull, credential, or deployment
+write scope.
+
 ### Governed release environments
 
 `GET /repositories/{id}/environments` returns ordered environment policy.
