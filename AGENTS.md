@@ -85,8 +85,16 @@ whenever dependencies change or the web job fails before it starts.
   requests, decisions, derived credential IDs, and revocation audit. Approved
   agent operators can mint only exact repository-bound Git credentials whose
   lifetime cannot outlast the live grant; grant revocation immediately revokes
-  those credentials without touching unrelated credentials. Public directory
-  reads omit organization-only structure, private-repository responsibility,
+  those credentials without touching unrelated credentials. Organization
+  owners define versioned draft policies across visibility, reviews, checks,
+  integration, release provenance, dependency use, promotion,
+  and agent authority, targeted to the organization, a team, or a repository.
+  Repository previews merge the strictest matching rules before activation;
+  activation governs new decisions without rewriting active work. Responsible
+  team maintainers request attributable expiring exceptions, whose approved
+  projection retains both the baseline and adjusted effective value. Public
+  directory reads omit organization-only structure, private-repository
+  responsibility,
   hidden parent links, and audit events; pending invitees receive only their
   invitation. Responsibility publication holds the repository catalog boundary
   through its organization write, and directory reads revalidate current

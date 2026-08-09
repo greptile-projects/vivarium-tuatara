@@ -3,6 +3,7 @@ package organizations
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestRemoveMemberCleanupFailurePreventsMembershipCommit(t *testing.T) {
@@ -39,5 +40,64 @@ func TestRemoveMemberCleanupFailurePreventsMembershipCommit(t *testing.T) {
 		if event.Action == "member.removed" {
 			t.Fatal("cleanup failure published removal audit")
 		}
+	}
+}
+
+func TestPolicyPreviewActivationAndExpiringException(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := "0123456789abcdef0123456789abcdef"
+	maintainer := "abcdef0123456789abcdef0123456789"
+	repository := "11111111111111111111111111111111"
+	v, err := store.Create("Runtime", "runtime", "", owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, _ = store.Invite(v.ID, owner, maintainer)
+	v, _ = store.AcceptInvitation(v.ID, v.Invitations[0].ID, maintainer)
+	v, err = store.CreateTeam(v.ID, owner, "Runtime", "runtime-team", "", "", "organization")
+	if err != nil {
+		t.Fatal(err)
+	}
+	teamID := v.Teams[0].ID
+	v, err = store.AddTeamMember(v.ID, teamID, owner, maintainer, "maintainer", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = store.AddResponsibility(v.ID, teamID, owner, repository, "runtime", "", 2, func(write func() error) error { return write() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = store.CreatePolicy(v.ID, owner, "Shared bar", "", []PolicyTarget{{Kind: "organization"}}, PolicyRules{MinimumReviews: 2, RequiredChecks: []string{"test"}, Integration: "queue", ReleaseProvenance: "attested", DependencyUse: "active-only", PromotionApprovals: 1, AgentAuthority: "explicit-grants"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := v.Policies[0]
+	preview := EffectivePolicies(v, repository, []string{teamID}, true, time.Now())
+	if len(preview.Policies) != 1 || preview.Rules.MinimumReviews != 2 || preview.Rules.Integration != "queue" {
+		t.Fatalf("unexpected preview: %#v", preview)
+	}
+	v, err = store.ActivatePolicy(v.ID, policy.ID, owner, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Policies[0].Version != 2 || !v.Policies[0].AppliesToNewWork {
+		t.Fatalf("activation did not retain version/new-work boundary: %#v", v.Policies[0])
+	}
+	expires := time.Now().Add(time.Hour)
+	v, err = store.RequestPolicyException(v.ID, maintainer, policy.ID, repository, "minimum_reviews", "1", "legacy integration", expires)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exceptionID := v.PolicyExceptions[0].ID
+	v, err = store.DecidePolicyException(v.ID, exceptionID, owner, "approve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	effective := EffectivePolicies(v, repository, []string{teamID}, false, time.Now())
+	if effective.BaselineRules.MinimumReviews != 2 || effective.Rules.MinimumReviews != 1 || len(effective.Exceptions) != 1 || effective.Exceptions[0].Status != "approved" {
+		t.Fatalf("exception silently weakened baseline or was not explained: %#v", effective)
 	}
 }

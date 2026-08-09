@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -141,6 +142,56 @@ type AccessRequest struct {
 	GrantID       string            `json:"grant_id,omitempty"`
 }
 
+// PolicyRules is intentionally explicit: clients can explain every supported
+// organization baseline without interpreting an open-ended policy language.
+type PolicyRules struct {
+	RepositoryVisibility string   `json:"repository_visibility,omitempty"`
+	MinimumReviews       int      `json:"minimum_reviews,omitempty"`
+	RequiredChecks       []string `json:"required_checks,omitempty"`
+	Integration          string   `json:"integration,omitempty"`
+	ReleaseProvenance    string   `json:"release_provenance,omitempty"`
+	DependencyUse        string   `json:"dependency_use,omitempty"`
+	PromotionApprovals   int      `json:"promotion_approvals,omitempty"`
+	AgentAuthority       string   `json:"agent_authority,omitempty"`
+}
+
+type PolicyTarget struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id,omitempty"`
+}
+
+type Policy struct {
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Version     int            `json:"version"`
+	Status      string         `json:"status"`
+	Targets     []PolicyTarget `json:"targets"`
+	Rules       PolicyRules    `json:"rules"`
+	CreatedBy   string         `json:"created_by"`
+	CreatedAt   time.Time      `json:"created_at"`
+	ActivatedBy string         `json:"activated_by,omitempty"`
+	ActivatedAt *time.Time     `json:"activated_at,omitempty"`
+	// Activation governs new decisions; existing pulls, releases, deployments,
+	// and credentials retain the exact policy evidence they began with.
+	AppliesToNewWork bool `json:"applies_to_new_work"`
+}
+
+type PolicyException struct {
+	ID             string     `json:"id"`
+	PolicyID       string     `json:"policy_id"`
+	RepositoryID   string     `json:"repository_id"`
+	Rule           string     `json:"rule"`
+	RequestedValue string     `json:"requested_value"`
+	Reason         string     `json:"reason"`
+	RequesterID    string     `json:"requester_id"`
+	ExpiresAt      time.Time  `json:"expires_at"`
+	Status         string     `json:"status"`
+	CreatedAt      time.Time  `json:"created_at"`
+	DecidedBy      string     `json:"decided_by,omitempty"`
+	DecidedAt      *time.Time `json:"decided_at,omitempty"`
+}
+
 type Event struct {
 	ID        string         `json:"id"`
 	Action    string         `json:"action"`
@@ -151,20 +202,22 @@ type Event struct {
 }
 
 type Organization struct {
-	ID             string          `json:"id"`
-	Name           string          `json:"name"`
-	Slug           string          `json:"slug"`
-	Description    string          `json:"description,omitempty"`
-	CreatedBy      string          `json:"created_by"`
-	CreatedAt      time.Time       `json:"created_at"`
-	Members        []Member        `json:"members"`
-	Invitations    []Invitation    `json:"invitations"`
-	Transfers      []Transfer      `json:"transfers"`
-	Teams          []Team          `json:"teams"`
-	Agents         []Agent         `json:"agents"`
-	AccessGrants   []AccessGrant   `json:"access_grants"`
-	AccessRequests []AccessRequest `json:"access_requests"`
-	Events         []Event         `json:"events"`
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	Slug             string            `json:"slug"`
+	Description      string            `json:"description,omitempty"`
+	CreatedBy        string            `json:"created_by"`
+	CreatedAt        time.Time         `json:"created_at"`
+	Members          []Member          `json:"members"`
+	Invitations      []Invitation      `json:"invitations"`
+	Transfers        []Transfer        `json:"transfers"`
+	Teams            []Team            `json:"teams"`
+	Agents           []Agent           `json:"agents"`
+	AccessGrants     []AccessGrant     `json:"access_grants"`
+	AccessRequests   []AccessRequest   `json:"access_requests"`
+	Policies         []Policy          `json:"policies"`
+	PolicyExceptions []PolicyException `json:"policy_exceptions"`
+	Events           []Event           `json:"events"`
 }
 
 type Store struct {
@@ -251,7 +304,7 @@ func (s *Store) Create(name, slug, description, actor string) (Organization, err
 			return err
 		}
 		now := s.now().Truncate(time.Microsecond)
-		created = Organization{ID: id, Name: name, Slug: slug, Description: strings.TrimSpace(description), CreatedBy: actor, CreatedAt: now, Members: []Member{{UserID: actor, Role: "owner", JoinedAt: now}}, Invitations: []Invitation{}, Transfers: []Transfer{}, Teams: []Team{}, Agents: []Agent{}, AccessGrants: []AccessGrant{}, AccessRequests: []AccessRequest{}, Events: []Event{}}
+		created = Organization{ID: id, Name: name, Slug: slug, Description: strings.TrimSpace(description), CreatedBy: actor, CreatedAt: now, Members: []Member{{UserID: actor, Role: "owner", JoinedAt: now}}, Invitations: []Invitation{}, Transfers: []Transfer{}, Teams: []Team{}, Agents: []Agent{}, AccessGrants: []AccessGrant{}, AccessRequests: []AccessRequest{}, Policies: []Policy{}, PolicyExceptions: []PolicyException{}, Events: []Event{}}
 		if err := s.event(&created, "organization.created", actor, id, nil); err != nil {
 			return err
 		}
@@ -283,6 +336,12 @@ func (s *Store) Get(id string) (Organization, error) {
 	}
 	if v.AccessRequests == nil {
 		v.AccessRequests = []AccessRequest{}
+	}
+	if v.Policies == nil {
+		v.Policies = []Policy{}
+	}
+	if v.PolicyExceptions == nil {
+		v.PolicyExceptions = []PolicyException{}
 	}
 	if v.Events == nil {
 		v.Events = []Event{}
@@ -778,6 +837,313 @@ func validRole(role string) bool {
 }
 func validResourceKind(kind string) bool {
 	return kind == "repository" || kind == "package" || kind == "environment" || kind == "collaboration"
+}
+
+var policyRuleNames = map[string]bool{
+	"repository_visibility": true, "minimum_reviews": true, "required_checks": true,
+	"integration": true, "release_provenance": true, "dependency_use": true,
+	"promotion_approvals": true, "agent_authority": true,
+}
+
+func validPolicyRules(r PolicyRules) bool {
+	if r.RepositoryVisibility != "" && r.RepositoryVisibility != "public" && r.RepositoryVisibility != "private" {
+		return false
+	}
+	if r.MinimumReviews < 0 || r.MinimumReviews > 20 || r.PromotionApprovals < 0 || r.PromotionApprovals > 20 {
+		return false
+	}
+	if r.Integration != "" && r.Integration != "direct" && r.Integration != "queue" {
+		return false
+	}
+	if r.ReleaseProvenance != "" && r.ReleaseProvenance != "attested" {
+		return false
+	}
+	if r.DependencyUse != "" && r.DependencyUse != "active-only" && r.DependencyUse != "approved-only" {
+		return false
+	}
+	if r.AgentAuthority != "" && r.AgentAuthority != "explicit-grants" && r.AgentAuthority != "disabled" {
+		return false
+	}
+	checks, ok := normalizeList(r.RequiredChecks, func(v string) bool { _, valid := clean(v, 100); return valid })
+	return ok && len(checks) == len(r.RequiredChecks) && (r.RepositoryVisibility != "" || r.MinimumReviews > 0 || len(r.RequiredChecks) > 0 || r.Integration != "" || r.ReleaseProvenance != "" || r.DependencyUse != "" || r.PromotionApprovals > 0 || r.AgentAuthority != "")
+}
+
+func validPolicyTargets(v *Organization, targets []PolicyTarget) bool {
+	if len(targets) == 0 || len(targets) > 100 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, target := range targets {
+		if target.Kind == "organization" {
+			if target.ID != "" {
+				return false
+			}
+		} else if target.Kind == "team" {
+			if teamIndex(v, target.ID) < 0 {
+				return false
+			}
+		} else if target.Kind == "repository" {
+			if !validID(target.ID) {
+				return false
+			}
+		} else {
+			return false
+		}
+		key := target.Kind + ":" + target.ID
+		if seen[key] {
+			return false
+		}
+		seen[key] = true
+	}
+	return true
+}
+
+func (s *Store) CreatePolicy(id, actor, name, description string, targets []PolicyTarget, rules PolicyRules) (Organization, error) {
+	name, ok := clean(name, 100)
+	if !ok || len(description) > 1000 || !validPolicyRules(rules) {
+		return Organization{}, ErrInvalid
+	}
+	return s.mutate(id, func(v *Organization) error {
+		if !HasRole(*v, actor, "owner") {
+			return ErrNotFound
+		}
+		if !validPolicyTargets(v, targets) {
+			return ErrInvalid
+		}
+		pid, err := newID()
+		if err != nil {
+			return err
+		}
+		now := s.now().Truncate(time.Microsecond)
+		v.Policies = append(v.Policies, Policy{ID: pid, Name: name, Description: strings.TrimSpace(description), Version: 1, Status: "draft", Targets: targets, Rules: rules, CreatedBy: actor, CreatedAt: now, AppliesToNewWork: true})
+		return s.event(v, "policy.drafted", actor, pid, nil)
+	})
+}
+
+func (s *Store) ActivatePolicy(id, policyID, actor string, expected int) (Organization, error) {
+	return s.mutate(id, func(v *Organization) error {
+		if !HasRole(*v, actor, "owner") {
+			return ErrNotFound
+		}
+		for i := range v.Policies {
+			p := &v.Policies[i]
+			if p.ID != policyID {
+				continue
+			}
+			if p.Status != "draft" || p.Version != expected {
+				return ErrConflict
+			}
+			now := s.now().Truncate(time.Microsecond)
+			p.Status, p.ActivatedBy, p.ActivatedAt = "active", actor, &now
+			p.Version++
+			return s.event(v, "policy.activated", actor, p.ID, map[string]any{"applies_to_new_work": true})
+		}
+		return ErrNotFound
+	})
+}
+
+func IsRepositoryMaintainer(v Organization, user, repositoryID string) bool {
+	if HasRole(v, user, "owner") {
+		return true
+	}
+	for _, team := range v.Teams {
+		responsible := false
+		for _, r := range team.Responsibilities {
+			if r.RepositoryID == repositoryID {
+				responsible = true
+			}
+		}
+		if !responsible {
+			continue
+		}
+		for _, m := range team.Members {
+			if m.UserID == user && m.Role == "maintainer" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *Store) RequestPolicyException(id, actor, policyID, repositoryID, rule, value, reason string, expires time.Time) (Organization, error) {
+	return s.mutate(id, func(v *Organization) error {
+		if !IsRepositoryMaintainer(*v, actor, repositoryID) || !policyRuleNames[rule] || !validID(repositoryID) || !expires.After(s.now()) {
+			return ErrInvalid
+		}
+		if _, ok := clean(value, 200); !ok || !validPolicyExceptionValue(rule, value) {
+			return ErrInvalid
+		}
+		if _, ok := clean(reason, 1000); !ok {
+			return ErrInvalid
+		}
+		found := false
+		for _, p := range v.Policies {
+			if p.ID == policyID && p.Status == "active" {
+				found = true
+			}
+		}
+		if !found {
+			return ErrNotFound
+		}
+		eid, err := newID()
+		if err != nil {
+			return err
+		}
+		now := s.now().Truncate(time.Microsecond)
+		v.PolicyExceptions = append(v.PolicyExceptions, PolicyException{ID: eid, PolicyID: policyID, RepositoryID: repositoryID, Rule: rule, RequestedValue: strings.TrimSpace(value), Reason: strings.TrimSpace(reason), RequesterID: actor, ExpiresAt: expires.UTC(), Status: "pending", CreatedAt: now})
+		return s.event(v, "policy.exception.requested", actor, eid, map[string]any{"policy_id": policyID, "repository_id": repositoryID, "rule": rule})
+	})
+}
+func validPolicyExceptionValue(rule, value string) bool {
+	test := PolicyRules{}
+	applyPolicyException(&test, PolicyException{Rule: rule, RequestedValue: value})
+	switch rule {
+	case "repository_visibility":
+		return test.RepositoryVisibility == "public" || test.RepositoryVisibility == "private"
+	case "minimum_reviews":
+		var n int
+		count, err := fmt.Sscanf(value, "%d", &n)
+		return count == 1 && err == nil && n >= 0 && n <= 20
+	case "required_checks":
+		return len(test.RequiredChecks) <= 100
+	case "integration":
+		return test.Integration == "direct" || test.Integration == "queue"
+	case "release_provenance":
+		return test.ReleaseProvenance == "" || test.ReleaseProvenance == "attested"
+	case "dependency_use":
+		return test.DependencyUse == "active-only" || test.DependencyUse == "approved-only"
+	case "promotion_approvals":
+		var n int
+		count, err := fmt.Sscanf(value, "%d", &n)
+		return count == 1 && err == nil && n >= 0 && n <= 20
+	case "agent_authority":
+		return test.AgentAuthority == "explicit-grants" || test.AgentAuthority == "disabled"
+	}
+	return false
+}
+
+func (s *Store) DecidePolicyException(id, exceptionID, actor, decision string) (Organization, error) {
+	return s.mutate(id, func(v *Organization) error {
+		if !HasRole(*v, actor, "owner") || (decision != "approve" && decision != "deny") {
+			return ErrNotFound
+		}
+		for i := range v.PolicyExceptions {
+			x := &v.PolicyExceptions[i]
+			if x.ID != exceptionID {
+				continue
+			}
+			if x.Status != "pending" || !x.ExpiresAt.After(s.now()) {
+				return ErrConflict
+			}
+			now := s.now().Truncate(time.Microsecond)
+			x.Status = decision + "d"
+			if decision == "deny" {
+				x.Status = "denied"
+			}
+			x.DecidedBy = actor
+			x.DecidedAt = &now
+			return s.event(v, "policy.exception."+x.Status, actor, x.ID, nil)
+		}
+		return ErrNotFound
+	})
+}
+
+type EffectivePolicy struct {
+	RepositoryID  string            `json:"repository_id"`
+	Policies      []Policy          `json:"policies"`
+	Exceptions    []PolicyException `json:"exceptions"`
+	BaselineRules PolicyRules       `json:"baseline_rules"`
+	Rules         PolicyRules       `json:"rules"`
+}
+
+func EffectivePolicies(v Organization, repositoryID string, teamIDs []string, includeDraft bool, now time.Time) EffectivePolicy {
+	teamSet := map[string]bool{}
+	for _, id := range teamIDs {
+		teamSet[id] = true
+	}
+	out := EffectivePolicy{RepositoryID: repositoryID, Policies: []Policy{}, Exceptions: []PolicyException{}}
+	for _, p := range v.Policies {
+		if p.Status != "active" && !(includeDraft && p.Status == "draft") {
+			continue
+		}
+		applies := false
+		for _, t := range p.Targets {
+			if t.Kind == "organization" || (t.Kind == "repository" && t.ID == repositoryID) || (t.Kind == "team" && teamSet[t.ID]) {
+				applies = true
+			}
+		}
+		if !applies {
+			continue
+		}
+		out.Policies = append(out.Policies, p)
+		mergePolicyRules(&out.Rules, p.Rules)
+	}
+	for _, x := range v.PolicyExceptions {
+		if x.RepositoryID == repositoryID && x.Status == "approved" && x.ExpiresAt.After(now) {
+			out.Exceptions = append(out.Exceptions, x)
+			applyPolicyException(&out.Rules, x)
+		}
+	}
+	out.BaselineRules = PolicyRules{}
+	for _, p := range out.Policies {
+		mergePolicyRules(&out.BaselineRules, p.Rules)
+	}
+	return out
+}
+func applyPolicyException(r *PolicyRules, x PolicyException) {
+	switch x.Rule {
+	case "repository_visibility":
+		r.RepositoryVisibility = x.RequestedValue
+	case "minimum_reviews":
+		fmt.Sscanf(x.RequestedValue, "%d", &r.MinimumReviews)
+	case "required_checks":
+		r.RequiredChecks = []string{}
+		for _, v := range strings.Split(x.RequestedValue, ",") {
+			if v = strings.TrimSpace(v); v != "" {
+				r.RequiredChecks = append(r.RequiredChecks, v)
+			}
+		}
+	case "integration":
+		r.Integration = x.RequestedValue
+	case "release_provenance":
+		r.ReleaseProvenance = x.RequestedValue
+	case "dependency_use":
+		r.DependencyUse = x.RequestedValue
+	case "promotion_approvals":
+		fmt.Sscanf(x.RequestedValue, "%d", &r.PromotionApprovals)
+	case "agent_authority":
+		r.AgentAuthority = x.RequestedValue
+	}
+}
+func mergePolicyRules(dst *PolicyRules, src PolicyRules) {
+	if src.RepositoryVisibility == "private" {
+		dst.RepositoryVisibility = "private"
+	} else if dst.RepositoryVisibility == "" {
+		dst.RepositoryVisibility = src.RepositoryVisibility
+	}
+	if src.MinimumReviews > dst.MinimumReviews {
+		dst.MinimumReviews = src.MinimumReviews
+	}
+	dst.RequiredChecks, _ = normalizeList(append(dst.RequiredChecks, src.RequiredChecks...), func(v string) bool { return v != "" })
+	if src.Integration == "queue" {
+		dst.Integration = "queue"
+	} else if dst.Integration == "" {
+		dst.Integration = src.Integration
+	}
+	if src.ReleaseProvenance != "" {
+		dst.ReleaseProvenance = src.ReleaseProvenance
+	}
+	if src.DependencyUse == "approved-only" || dst.DependencyUse == "" {
+		dst.DependencyUse = src.DependencyUse
+	}
+	if src.PromotionApprovals > dst.PromotionApprovals {
+		dst.PromotionApprovals = src.PromotionApprovals
+	}
+	if src.AgentAuthority == "disabled" {
+		dst.AgentAuthority = "disabled"
+	} else if dst.AgentAuthority == "" {
+		dst.AgentAuthority = src.AgentAuthority
+	}
 }
 func validateAccess(role, reason string, resources []ResourceScope, exceptions []AccessException, expires *time.Time, now time.Time) bool {
 	if !validRole(role) || len(resources) == 0 || len(resources) > 100 || len(exceptions) > 100 || len(reason) > 1000 || (expires != nil && !expires.After(now)) {

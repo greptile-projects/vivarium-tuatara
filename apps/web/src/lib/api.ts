@@ -30,8 +30,13 @@ export type Organization = {
   agents: OrganizationAgent[];
   access_grants: OrganizationAccessGrant[];
   access_requests: OrganizationAccessRequest[];
+  policies: OrganizationPolicy[];
+  policy_exceptions: OrganizationPolicyException[];
   events: OrganizationEvent[];
 };
+export type OrganizationPolicyRules = {repository_visibility?:"public"|"private";minimum_reviews?:number;required_checks?:string[];integration?:"direct"|"queue";release_provenance?:"attested";dependency_use?:"active-only"|"approved-only";promotion_approvals?:number;agent_authority?:"explicit-grants"|"disabled"};
+export type OrganizationPolicy = {id:string;name:string;description?:string;version:number;status:"draft"|"active"|"superseded";targets:{kind:"organization"|"team"|"repository";id?:string}[];rules:OrganizationPolicyRules;created_by:string;created_at:string;activated_by?:string;activated_at?:string;applies_to_new_work:boolean};
+export type OrganizationPolicyException = {id:string;policy_id:string;repository_id:string;rule:string;requested_value:string;reason:string;requester_id:string;expires_at:string;status:"pending"|"approved"|"denied";created_at:string;decided_by?:string;decided_at?:string};
 export type OrganizationResourceScope = {kind:"repository"|"package"|"environment"|"collaboration";id:string};
 export type OrganizationAccessGrant = {id:string;principal_type:"team"|"agent";principal_id:string;role:"viewer"|"contributor"|"maintainer"|"operator";resources:OrganizationResourceScope[];exceptions:{resource:OrganizationResourceScope;reason:string}[];reason:string;expires_at?:string;version:number;granted_by:string;granted_at:string;revoked_by?:string;revoked_at?:string;derived_credentials:{id:string;operator_id:string;created_at:string}[]};
 export type OrganizationAccessRequest = {id:string;requester_id:string;principal_type:"team"|"agent";principal_id:string;role:string;resources:OrganizationResourceScope[];exceptions:{resource:OrganizationResourceScope;reason:string}[];reason:string;expires_at?:string;status:"pending"|"approved"|"denied";created_at:string;decided_by?:string;decided_at?:string;grant_id?:string};
