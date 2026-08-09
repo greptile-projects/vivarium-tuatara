@@ -17,6 +17,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
@@ -69,6 +70,116 @@ func TestVersionMatchingPreservesPrereleaseBoundaries(t *testing.T) {
 	}
 	if !versionMatches("1.2.3-rc.1", "=1.2.3-rc.1") || compareVersion("1.2.3-rc.1", "1.2.3") >= 0 || compareVersion("1.2.3-rc.2", "1.2.3-rc.1") <= 0 {
 		t.Fatal("prerelease ordering or explicit matching is incorrect")
+	}
+}
+
+func TestPackageUpdateScanOpensAttributableOrdinaryWork(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	proposalStore, _ := proposals.New(t.TempDir())
+	buildStore, _ := checkruns.New(t.TempDir())
+	releaseStore, _ := releases.New(t.TempDir())
+	packageStore, _ := packages.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, proposalStore, nil, nil, nil, buildStore, releaseStore, packageStore))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "update-owner")
+	var consumer, publisher repositories.Repository
+	decodeResponse(t, authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"consumer"}`, owner.Credential.Token, http.StatusCreated), &consumer)
+	decodeResponse(t, authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"publisher"}`, owner.Credential.Token, http.StatusCreated), &publisher)
+	repo, _ := gitStore.Open(consumer.ID)
+	manifest, _ := repo.WriteObject(storage.BlobObject, []byte(`{"version":1,"dependencies":[{"name":"core-kit","constraint":"^1.0.0"}],"lock":[{"name":"core-kit","version":"1.0.0"}]}`))
+	configTree := writeTestTree(t, repo, testTreeEntry{mode: "100644", name: "packages.json", id: manifest})
+	root := writeTestTree(t, repo, testTreeEntry{mode: "40000", name: ".vivarium", id: configTree})
+	commit := writeTestCommit(t, repo, root, nil, 1700000000, "locked dependency")
+	if err := repo.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(commit)}); err != nil {
+		t.Fatal(err)
+	}
+	for versionIndex, version := range []string{"1.0.0", "1.2.0", "2.0.0"} {
+		marker := string(rune('1' + versionIndex))
+		release, err := releaseStore.Create(releases.Candidate{RepositoryID: publisher.ID, Version: "v" + version, Notes: "Notes for " + version, CommitID: strings.Repeat(marker, 40), CreatedBy: owner.User.ID, Inclusions: releases.Inclusion{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := []byte(version)
+		sum := sha256.Sum256(body)
+		_, err = packageStore.Publish(packages.Version{Name: "core-kit", Version: version, RepositoryID: publisher.ID, ReleaseID: release.ID, SourceCommit: release.CommitID, BuildID: strings.Repeat(marker, 32), BuildAttestation: packages.BuildAttestation{Step: "compatibility", Image: "alpine:3.22", Command: "go test ./...", Attempt: 1, State: "succeeded"}, ArtifactID: strings.Repeat(string(rune('5'+versionIndex)), 32), ArtifactPath: "core.tgz", Size: int64(len(body)), SHA256: hex.EncodeToString(sum[:]), PublisherID: owner.User.ID, Visibility: "public"}, bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+consumer.ID+"/dependency-inventories", `{"commit_id":"`+string(commit)+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPut, server.URL+"/repositories/"+consumer.ID+"/package-update-policies/core-kit", `{"strategy":"minor","action":"proposal"}`, owner.Credential.Token, http.StatusOK).Body.Close()
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+consumer.ID+"/package-updates/scan", `{}`, owner.Credential.Token, http.StatusOK)
+	var result struct {
+		Updates []packages.Update `json:"updates"`
+	}
+	decodeResponse(t, response, &result)
+	if len(result.Updates) != 1 || result.Updates[0].FromVersion != "1.0.0" || result.Updates[0].ToVersion != "1.2.0" || result.Updates[0].Manifest.Lock[0].Version != "1.2.0" || result.Updates[0].CreatedBy != owner.User.ID {
+		t.Fatalf("updates = %#v", result.Updates)
+	}
+	proposal, err := proposalStore.Get(consumer.ID, result.Updates[0].ProposalID)
+	if err != nil || !strings.Contains(proposal.Body, "Affected dependency paths") {
+		t.Fatalf("proposal = %#v, err = %v", proposal, err)
+	}
+	tasks, _ := proposalStore.ListTasks(consumer.ID, proposal.ID)
+	if len(tasks) != 1 || tasks[0].ID != result.Updates[0].TaskID {
+		t.Fatalf("tasks = %#v", tasks)
+	}
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+consumer.ID+"/package-updates/scan", `{}`, owner.Credential.Token, http.StatusOK)
+	decodeResponse(t, response, &result)
+	if len(result.Updates) != 1 {
+		t.Fatalf("retry updates = %#v", result.Updates)
+	}
+}
+
+func TestPackageUpdateListingRechecksPrivatePackageVisibility(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	buildStore, _ := checkruns.New(t.TempDir())
+	releaseStore, _ := releases.New(t.TempDir())
+	packageStore, _ := packages.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, buildStore, releaseStore, packageStore))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "private-update-owner")
+	reader := createTestAccount(t, server.URL, "private-update-reader")
+	var consumer, publisher repositories.Repository
+	decodeResponse(t, authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"private-consumer"}`, owner.Credential.Token, http.StatusCreated), &consumer)
+	decodeResponse(t, authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"private-publisher"}`, owner.Credential.Token, http.StatusCreated), &publisher)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+consumer.ID+"/collaborators", `{"user_id":"`+reader.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	body := []byte("private")
+	sum := sha256.Sum256(body)
+	published, err := packageStore.Publish(packages.Version{Name: "private-kit", Version: "1.1.0", RepositoryID: publisher.ID, ReleaseID: strings.Repeat("1", 32), SourceCommit: strings.Repeat("2", 40), BuildID: strings.Repeat("3", 32), BuildAttestation: packages.BuildAttestation{Step: "secret-check", Image: "private-image", Command: "verify", Attempt: 1, State: "succeeded"}, ArtifactID: strings.Repeat("4", 32), ArtifactPath: "private.tgz", Size: int64(len(body)), SHA256: hex.EncodeToString(sum[:]), PublisherID: owner.User.ID, Visibility: "private"}, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = packageStore.RecordUpdate(packages.Update{RepositoryID: consumer.ID, PackageName: published.Name, FromVersion: "1.0.0", ToVersion: published.Version, BaseCommit: strings.Repeat("5", 40), ProposalID: strings.Repeat("6", 32), TaskID: strings.Repeat("7", 32), ReleaseNotes: "private notes", Compatibility: published.BuildAttestation, CreatedBy: owner.User.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ownerView, readerView struct {
+		Updates []packages.Update `json:"updates"`
+	}
+	decodeResponse(t, authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+consumer.ID+"/package-updates", "", owner.Credential.Token, http.StatusOK), &ownerView)
+	decodeResponse(t, authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+consumer.ID+"/package-updates", "", reader.Credential.Token, http.StatusOK), &readerView)
+	if len(ownerView.Updates) != 1 || len(readerView.Updates) != 0 {
+		t.Fatalf("owner = %#v, reader = %#v", ownerView.Updates, readerView.Updates)
+	}
+}
+
+func TestPrivatePackageUpdateProposalRedactsPublisherEvidence(t *testing.T) {
+	version := packages.Version{Name: "secret-kit", Version: "1.1.0", ReleaseID: strings.Repeat("a", 32), Visibility: "private", BuildAttestation: packages.BuildAttestation{Step: "private-step", Image: "private-image", Attempt: 2}}
+	body := packageUpdateProposalBody(version, packages.InventoryEntry{Version: "1.0.0", Paths: []string{"app > secret-kit"}}, "private release notes")
+	for _, secret := range []string{"private release notes", "private-step", "private-image", version.ReleaseID} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("proposal leaked %q: %s", secret, body)
+		}
+	}
+	if !strings.Contains(body, "app > secret-kit") || !strings.Contains(body, "package-authorized update record") {
+		t.Fatalf("proposal lost safe adoption context: %s", body)
 	}
 }
 

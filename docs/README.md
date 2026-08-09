@@ -830,6 +830,28 @@ superseded successes remain labeled historical. Repository surfaces
 show every authorized revision inventory; exact package versions show only
 consumer repositories the viewer can currently read.
 
+Package adoption begins from that reviewed inventory rather than an untrusted
+publisher callback. A consumer owner can define a patch, minor, or major policy
+for each direct package and scan the current default-branch lock for eligible,
+visible, active releases. The scan preserves the exact base and proposed
+`.vivarium/packages.json`, attaches immutable publisher release notes and the
+successful package-build attestation, derives every affected dependency path,
+and opens an attributable proposal with one executable adoption task. Exact
+base/from/to retries reuse the same durable update through a cross-process
+reservation persisted before proposal creation; incomplete proposal/task
+publication is compensated, while failed compensation leaves a hidden recovery
+marker that blocks duplicate exact retries. Reads also
+revalidate current access to the target package before returning its retained
+notes or attestation. Ordinary proposals redact private-package notes, release
+identity, and build details because proposal authorization follows only the
+consumer repository; authorized users inspect that evidence on the update
+record instead. Humans or scoped task agents
+can investigate and revise it through ordinary change sessions and pull
+requests, so required checks, reviews, protected integration queues, later
+release builds, and deployments stay consumer-controlled; the package publisher
+gains no Git, repository, review, or package-publishing authority in the
+consumer repository.
+
 Release delivery is an explicit repository collaboration. Owners define a
 strictly ordered set of environments with visible scoped configuration,
 required independent approvals, and concurrency limits. Protected credential

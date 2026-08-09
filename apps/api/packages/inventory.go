@@ -16,6 +16,7 @@ import (
 const InventoryConfigPath = ".vivarium/packages.json"
 
 var ErrInventoryInvalid = errors.New("invalid package dependency inventory")
+var ErrUpdatePending = errors.New("package update publication requires recovery")
 
 type ManifestDependency struct {
 	Name       string `json:"name"`
@@ -53,6 +54,226 @@ type Inventory struct {
 	RecordedBy   string           `json:"recorded_by"`
 	RecordedAt   time.Time        `json:"recorded_at"`
 	Entries      []InventoryEntry `json:"entries"`
+}
+
+type UpdatePolicy struct {
+	RepositoryID string    `json:"repository_id"`
+	PackageName  string    `json:"package_name"`
+	Strategy     string    `json:"strategy"`
+	Action       string    `json:"action"`
+	UpdatedBy    string    `json:"updated_by"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+type Update struct {
+	ID            string           `json:"id"`
+	RepositoryID  string           `json:"repository_id"`
+	PackageName   string           `json:"package_name"`
+	FromVersion   string           `json:"from_version"`
+	ToVersion     string           `json:"to_version"`
+	BaseCommit    string           `json:"base_commit"`
+	ProposalID    string           `json:"proposal_id"`
+	TaskID        string           `json:"task_id"`
+	Manifest      InventoryConfig  `json:"manifest"`
+	ReleaseNotes  string           `json:"release_notes"`
+	Compatibility BuildAttestation `json:"compatibility_evidence"`
+	AffectedPaths []string         `json:"affected_dependency_paths"`
+	CreatedBy     string           `json:"created_by"`
+	CreatedAt     time.Time        `json:"created_at"`
+	State         string           `json:"state,omitempty"`
+}
+
+func (s *Store) PutUpdatePolicy(value UpdatePolicy) (UpdatePolicy, error) {
+	value.PackageName, value.Strategy, value.Action = strings.ToLower(strings.TrimSpace(value.PackageName)), strings.ToLower(strings.TrimSpace(value.Strategy)), strings.ToLower(strings.TrimSpace(value.Action))
+	if len(value.RepositoryID) != 32 || len(value.UpdatedBy) != 32 || !identityPattern.MatchString(value.PackageName) || (value.Strategy != "patch" && value.Strategy != "minor" && value.Strategy != "major") || value.Action != "proposal" {
+		return UpdatePolicy{}, ErrInventoryInvalid
+	}
+	value.UpdatedAt = s.now().UTC().Truncate(time.Microsecond)
+	body, _ := json.Marshal(value)
+	dir := filepath.Join(s.root, "update-policies", value.RepositoryID)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return UpdatePolicy{}, err
+	}
+	if err := atomicFile(filepath.Join(dir, value.PackageName+".json"), body); err != nil {
+		return UpdatePolicy{}, err
+	}
+	return value, nil
+}
+
+func (s *Store) ListUpdatePolicies(repositoryID string) ([]UpdatePolicy, error) {
+	dir := filepath.Join(s.root, "update-policies", repositoryID)
+	files, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return []UpdatePolicy{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	result := []UpdatePolicy{}
+	for _, file := range files {
+		if file.IsDir() || !strings.HasSuffix(file.Name(), ".json") {
+			continue
+		}
+		body, readErr := os.ReadFile(filepath.Join(dir, file.Name()))
+		if readErr != nil {
+			return nil, readErr
+		}
+		var value UpdatePolicy
+		if json.Unmarshal(body, &value) != nil {
+			return nil, ErrInventoryInvalid
+		}
+		result = append(result, value)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].PackageName < result[j].PackageName })
+	return result, nil
+}
+
+func (s *Store) RecordUpdate(value Update) (Update, error) {
+	if len(value.RepositoryID) != 32 || len(value.ProposalID) != 32 || len(value.TaskID) != 32 || len(value.BaseCommit) != 40 {
+		return Update{}, ErrInventoryInvalid
+	}
+	items, err := s.ListUpdates(value.RepositoryID)
+	if err != nil {
+		return Update{}, err
+	}
+	for _, item := range items {
+		if item.PackageName == value.PackageName && item.FromVersion == value.FromVersion && item.ToVersion == value.ToVersion && item.BaseCommit == value.BaseCommit {
+			return item, nil
+		}
+	}
+	id := make([]byte, 16)
+	if _, err = rand.Read(id); err != nil {
+		return Update{}, err
+	}
+	value.ID, value.CreatedAt = hex.EncodeToString(id), s.now().UTC().Truncate(time.Microsecond)
+	body, _ := json.Marshal(value)
+	dir := filepath.Join(s.root, "updates", value.RepositoryID)
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		return Update{}, err
+	}
+	if err = atomicFile(filepath.Join(dir, value.ID+".json"), body); err != nil {
+		return Update{}, err
+	}
+	return value, nil
+}
+
+// PublishUpdate serializes the cross-store collaboration callback with the
+// exact base/from/to reservation. The returned value includes callback IDs on
+// a later persistence failure so the caller can compensate only its own work.
+func (s *Store) PublishUpdate(value Update, publish func() (string, string, error)) (Update, bool, error) {
+	if len(value.RepositoryID) != 32 || len(value.BaseCommit) != 40 || !identityPattern.MatchString(value.PackageName) || !versionPattern.MatchString(value.FromVersion) || !versionPattern.MatchString(value.ToVersion) || publish == nil {
+		return Update{}, false, ErrInventoryInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lock, err := os.OpenFile(filepath.Join(s.root, ".update-lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return Update{}, false, err
+	}
+	defer lock.Close()
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return Update{}, false, err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	items, err := s.ListUpdates(value.RepositoryID)
+	if err != nil {
+		return Update{}, false, err
+	}
+	for _, item := range items {
+		if item.PackageName == value.PackageName && item.FromVersion == value.FromVersion && item.ToVersion == value.ToVersion && item.BaseCommit == value.BaseCommit {
+			if item.State == "" || item.State == "complete" {
+				return item, false, nil
+			}
+			return item, false, ErrUpdatePending
+		}
+	}
+	id := make([]byte, 16)
+	if _, err = rand.Read(id); err != nil {
+		return value, false, err
+	}
+	value.ID, value.CreatedAt, value.State = hex.EncodeToString(id), s.now().UTC().Truncate(time.Microsecond), "pending"
+	dir := filepath.Join(s.root, "updates", value.RepositoryID)
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		return value, false, err
+	}
+	name := filepath.Join(dir, value.ID+".json")
+	body, err := json.Marshal(value)
+	if err != nil {
+		return value, false, err
+	}
+	if err = atomicFile(name, body); err != nil {
+		return value, false, err
+	}
+	value.ProposalID, value.TaskID, err = publish()
+	if err != nil {
+		return value, true, err
+	}
+	value.State = "complete"
+	body, err = json.Marshal(value)
+	if err != nil {
+		value.State = "pending"
+		return value, true, err
+	}
+	if err = atomicFile(name, body); err != nil {
+		value.State = "pending"
+		return value, true, err
+	}
+	return value, true, nil
+}
+
+func (s *Store) ResolveUpdateFailure(value Update, cleaned bool) error {
+	if len(value.RepositoryID) != 32 || len(value.ID) != 32 {
+		return ErrInventoryInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lock, err := os.OpenFile(filepath.Join(s.root, ".update-lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	name := filepath.Join(s.root, "updates", value.RepositoryID, value.ID+".json")
+	if cleaned {
+		return os.Remove(name)
+	}
+	value.State = "cleanup_pending"
+	body, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return atomicFile(name, body)
+}
+
+func (s *Store) ListUpdates(repositoryID string) ([]Update, error) {
+	dir := filepath.Join(s.root, "updates", repositoryID)
+	files, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return []Update{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	result := []Update{}
+	for _, file := range files {
+		if file.IsDir() || !strings.HasSuffix(file.Name(), ".json") {
+			continue
+		}
+		body, readErr := os.ReadFile(filepath.Join(dir, file.Name()))
+		if readErr != nil {
+			return nil, readErr
+		}
+		var value Update
+		if json.Unmarshal(body, &value) != nil {
+			return nil, ErrInventoryInvalid
+		}
+		result = append(result, value)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.After(result[j].CreatedAt) })
+	return result, nil
 }
 
 func (s *Store) RecordInventory(value Inventory) (Inventory, error) {

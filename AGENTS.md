@@ -157,6 +157,20 @@ whenever dependencies change or the web job fails before it starts.
   while superseded successes remain historical evidence. Repository and exact-version consumer reads retain stale,
   unresolved, license, support, and provenance gaps while filtering every
   package and consumer repository through current visibility.
+  Consumer owners define per-package patch, minor, or major update policies on
+  the dependency workspace. Scans use the current recorded default-branch lock,
+  select only visible active releases, and open attributable ordinary proposals
+  with one executable task plus the proposed manifest/lock, release notes,
+  successful build attestation, and affected dependency paths. Update records
+  recheck target-package visibility on every read and serialize proposal/task
+  publication under a durable exact base/from/to reservation created before any
+  collaboration work. Failed cleanup retains a recovery-pending reservation so
+  exact retries cannot duplicate orphaned proposals or tasks. Subsequent human or agent work
+  publishes through existing task sessions, pulls, checks, review, queues,
+  releases, and deployments without granting consumer authority to publishers.
+  Private-package notes and build details remain only on update records whose
+  reads revalidate package access; ordinary consumer proposals contain redacted
+  adoption context so consumer membership cannot disclose publisher evidence.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version
