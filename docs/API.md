@@ -924,7 +924,9 @@ gaps. An exact retry returns the existing immutable snapshot.
 
 `GET /repositories/{id}/dependency-inventories` inherits repository read access
 and projects whether each source revision is current plus matching releases,
-builds, artifacts, and deployments. `GET
+builds, artifacts, and deployments. Each deployment record includes `current`,
+which is true only for the newest successful promotion in that environment;
+superseded successes remain explicit historical evidence. `GET
 /packages/{name}/versions/{version}/consumers` returns direct and transitive
 exact-version consumers, filtering every consuming repository through the
 caller's current access. Package publication accepts an optional `support`

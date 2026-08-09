@@ -153,7 +153,8 @@ whenever dependencies change or the web job fails before it starts.
   declared direct constraints and a resolved lock. Attributable immutable
   dependency inventories derive transitive paths from published package
   metadata and project exact source into release builds, artifacts, and
-  deployments. Repository and exact-version consumer reads retain stale,
+  deployments; only the newest successful promotion per environment is current,
+  while superseded successes remain historical evidence. Repository and exact-version consumer reads retain stale,
   unresolved, license, support, and provenance gaps while filtering every
   package and consumer repository through current visibility.
   Repository relationship graphs at `/repositories/{id}/relationships` join

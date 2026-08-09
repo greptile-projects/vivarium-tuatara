@@ -67,7 +67,7 @@ export type DependencyInventory = {
   current: boolean;
   releases: ReleaseCandidate[];
   builds: { id: string; state: string; artifact_id?: string }[];
-  deployments: { id: string; environment_id: string; release_id: string; artifact_id: string; state: string }[];
+  deployments: { id: string; environment_id: string; release_id: string; artifact_id: string; state: string; current: boolean }[];
 };
 export type InterfacePublication = {
   id: string;

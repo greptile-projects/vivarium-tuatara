@@ -824,7 +824,9 @@ inventory for a verified commit derives transitive paths from immutable package
 metadata, attributes the snapshot to its caller, and retains unresolved or
 constraint-stale entries plus missing license, support, or package provenance.
 Inventory reads project exact-commit release builds, artifacts, and governed
-deployments without rewriting the historical lock snapshot. Repository surfaces
+deployments without rewriting the historical lock snapshot. A deployment is
+current only when it is the newest successful promotion in its environment;
+superseded successes remain labeled historical. Repository surfaces
 show every authorized revision inventory; exact package versions show only
 consumer repositories the viewer can currently read.
 

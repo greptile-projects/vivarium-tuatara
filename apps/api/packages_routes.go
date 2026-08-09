@@ -26,6 +26,32 @@ var (
 	errPackageArtifactStale   = errors.New("package artifact is not from the current attempt")
 )
 
+type packageDeploymentEvidence struct {
+	deployments.Promotion
+	Current bool `json:"current"`
+}
+
+func projectPackageDeployments(promotions []deployments.Promotion, releaseIDs map[string]bool) []packageDeploymentEvidence {
+	latestSuccessful := map[string]deployments.Promotion{}
+	for _, promotion := range promotions {
+		if promotion.State != "succeeded" {
+			continue
+		}
+		latest, found := latestSuccessful[promotion.EnvironmentID]
+		if !found || promotion.CreationSequence > latest.CreationSequence || (promotion.CreationSequence == latest.CreationSequence && (promotion.CreatedAt.After(latest.CreatedAt) || (promotion.CreatedAt.Equal(latest.CreatedAt) && promotion.ID > latest.ID))) {
+			latestSuccessful[promotion.EnvironmentID] = promotion
+		}
+	}
+	result := []packageDeploymentEvidence{}
+	for _, promotion := range promotions {
+		if !releaseIDs[promotion.ReleaseID] {
+			continue
+		}
+		result = append(result, packageDeploymentEvidence{Promotion: promotion, Current: promotion.State == "succeeded" && latestSuccessful[promotion.EnvironmentID].ID == promotion.ID})
+	}
+	return result
+}
+
 func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoryStore *repositories.Store, releaseStore *releases.Store, buildStore *checkruns.Store, deploymentStore *deployments.Store, packageStore *packages.Store, authStore *auth.Store) {
 	mux.HandleFunc("POST /repositories/{id}/releases/{release_id}/packages", func(w http.ResponseWriter, r *http.Request) {
 		actor, owner, ok := authorizeRepositoryParticipant(w, r, repositoryStore, authStore, r.PathValue("id"), "repositories:write")
@@ -158,7 +184,7 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 		return actor, true, true
 	}
 	projectInventory := func(inventory packages.Inventory) map[string]any {
-		result := map[string]any{"inventory": inventory, "current": false, "releases": []releases.Candidate{}, "builds": []checkruns.Run{}, "deployments": []deployments.Promotion{}}
+		result := map[string]any{"inventory": inventory, "current": false, "releases": []releases.Candidate{}, "builds": []checkruns.Run{}, "deployments": []packageDeploymentEvidence{}}
 		repository, err := repositoryStore.GetByID(inventory.RepositoryID)
 		if err == nil {
 			if repo, openErr := gitStore.Open(repository.ID); openErr == nil {
@@ -170,22 +196,20 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 		releaseItems, _ := releaseStore.List(inventory.RepositoryID)
 		matchingReleases := []releases.Candidate{}
 		matchingBuilds := []checkruns.Run{}
-		matchingDeployments := []deployments.Promotion{}
+		releaseIDs := map[string]bool{}
 		for _, release := range releaseItems {
 			if release.CommitID != inventory.CommitID {
 				continue
 			}
 			matchingReleases = append(matchingReleases, release)
+			releaseIDs[release.ID] = true
 			runs, _ := buildStore.List(inventory.RepositoryID, release.ID)
 			matchingBuilds = append(matchingBuilds, runs...)
-			if deploymentStore != nil {
-				promotions, _ := deploymentStore.ListPromotions(inventory.RepositoryID)
-				for _, promotion := range promotions {
-					if promotion.ReleaseID == release.ID {
-						matchingDeployments = append(matchingDeployments, promotion)
-					}
-				}
-			}
+		}
+		matchingDeployments := []packageDeploymentEvidence{}
+		if deploymentStore != nil {
+			promotions, _ := deploymentStore.ListPromotions(inventory.RepositoryID)
+			matchingDeployments = projectPackageDeployments(promotions, releaseIDs)
 		}
 		result["releases"], result["builds"], result["deployments"] = matchingReleases, matchingBuilds, matchingDeployments
 		return result
@@ -268,7 +292,9 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 				return
 			}
 			value.PackageID, value.License, value.Support = published.ID, published.License, published.Support
-			value.State = "resolved"
+			if value.State != "stale" {
+				value.State = "resolved"
+			}
 			if !versionMatches(version, constraint) {
 				value.State = "stale"
 				value.ProvenanceGaps = append(value.ProvenanceGaps, "locked version does not satisfy the declared constraint")
