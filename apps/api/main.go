@@ -293,7 +293,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerChangeSessionRoutes(mux, store, repositoryCatalog, pullRequestStore, changeSessionStore, authStore, activityStore, checkRunStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && proposalStore != nil && changeSessionStore != nil {
-		registerTaskChangeSessionRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, changeSessionStore, authStore)
+		registerTaskChangeSessionRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, changeSessionStore, authStore, relationshipStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && activityStore != nil {
 		registerActivityRoutes(mux, repositoryCatalog, activityStore, authStore)
@@ -307,7 +307,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && releaseStore != nil && deploymentStore != nil && relationshipStore != nil {
 		registerRelationshipRoutes(mux, store, repositoryCatalog, releaseStore, deploymentStore, relationshipStore, authStore)
-		registerEvolutionRoutes(mux, repositoryCatalog, proposalStore, pullRequestStore, releaseStore, deploymentStore, relationshipStore, authStore)
+		registerEvolutionRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, releaseStore, deploymentStore, relationshipStore, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && incidentStore != nil {
 		registerIncidentRoutes(mux, store, repositoryCatalog, incidentStore, proposalStore, deploymentStore, releaseStore, pullRequestStore, checkRunStore, authStore, activityStore)
@@ -872,12 +872,13 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 			return
 		}
 		var input struct {
-			Title        string `json:"title"`
-			Body         string `json:"body"`
-			SourceBranch string `json:"source_branch"`
-			TargetBranch string `json:"target_branch"`
-			SessionID    string `json:"session_id"`
-			RunID        string `json:"run_id"`
+			Title              string `json:"title"`
+			Body               string `json:"body"`
+			SourceBranch       string `json:"source_branch"`
+			TargetBranch       string `json:"target_branch"`
+			SessionID          string `json:"session_id"`
+			RunID              string `json:"run_id"`
+			SourceRepositoryID string `json:"source_repository_id"`
 		}
 		if decodeJSON(r, &input) != nil || strings.TrimSpace(input.Title) == "" || strings.TrimSpace(input.SourceBranch) == "" || strings.TrimSpace(input.TargetBranch) == "" {
 			writeAPIError(w, 400, "invalid_task_contribution", "title, body, source_branch, and target_branch are required")
@@ -930,7 +931,16 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 			sessionID, runID = &input.SessionID, &input.RunID
 		}
 		proposalID, taskID := r.PathValue("proposal_id"), r.PathValue("task_id")
-		created, err := store.CreateTaskContribution(r.PathValue("id"), actor.UserID, input.Title, input.Body, input.SourceBranch, input.TargetBranch, expectedSourceCommit, commits, &proposalID, &taskID, sessionID, runID)
+		sourceRepositoryID := r.PathValue("id")
+		if input.SourceRepositoryID != "" {
+			source, sourceErr := repositoriesStore.GetByID(input.SourceRepositoryID)
+			if sourceErr != nil || source.OwnerID != actor.UserID || source.UpstreamRepositoryID != r.PathValue("id") || task.Assignment.AssigneeType != "human" {
+				writeAPIError(w, 404, "repository_not_found", "source repository not found")
+				return
+			}
+			sourceRepositoryID = source.ID
+		}
+		created, err := store.CreateTaskContributionFrom(r.PathValue("id"), sourceRepositoryID, actor.UserID, input.Title, input.Body, input.SourceBranch, input.TargetBranch, expectedSourceCommit, commits, &proposalID, &taskID, sessionID, runID)
 		if errors.Is(err, pullrequests.ErrSourceChanged) {
 			writeAPIError(w, 409, "task_not_publishable", "the source branch no longer matches the completed task work")
 			return

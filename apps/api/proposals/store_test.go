@@ -422,4 +422,36 @@ func TestMutationsReconcilePostRenameDirectorySyncFailure(t *testing.T) {
 	}
 }
 
+func TestDeleteMigrationWorkCompensatesExactPublicationStages(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposalOnly, err := store.Create(repositoryID, authorID, "Pending migration", "Context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.DeleteMigrationWork(repositoryID, proposalOnly.ID, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Get(repositoryID, proposalOnly.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("proposal-only compensation = %v", err)
+	}
+
+	withTask, err := store.Create(repositoryID, authorID, "Pending migration task", "Context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(repositoryID, withTask.ID, authorID, "Migrate", "Tests pass", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.DeleteMigrationWork(repositoryID, withTask.ID, task.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Get(repositoryID, withTask.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unassigned-task compensation = %v", err)
+	}
+}
+
 func pointer(value string) *string { return &value }

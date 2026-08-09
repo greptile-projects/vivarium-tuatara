@@ -10,13 +10,18 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/relationships"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
 // registerTaskChangeSessionRoutes connects proposal planning to the existing
 // durable session protocol without manufacturing a placeholder pull request.
-func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, sessionStore *changesessions.Store, authStore *auth.Store) {
+func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, sessionStore *changesessions.Store, authStore *auth.Store, relationStores ...*relationships.Store) {
+	var relationStore *relationships.Store
+	if len(relationStores) > 0 {
+		relationStore = relationStores[0]
+	}
 	key := func(r *http.Request) (string, string, string) {
 		return r.PathValue("id"), r.PathValue("proposal_id"), r.PathValue("task_id")
 	}
@@ -58,6 +63,27 @@ func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store
 		if input.ExpiresIn < 300 || input.ExpiresIn > 86400 {
 			writeAPIError(w, 409, "task_not_startable", "task must be ready, open, and carry the expected agent assignment")
 			return
+		}
+		if relationStore != nil {
+			plan, link, findErr := relationStore.FindEvolutionMigrationTask(r.PathValue("id"), r.PathValue("task_id"))
+			if findErr != nil && !errors.Is(findErr, relationships.ErrNotFound) {
+				writeAPIError(w, 503, "migration_plan_unavailable", "migration dependencies could not be verified")
+				return
+			}
+			if findErr == nil {
+				completed := map[string]bool{}
+				for _, candidate := range plan.MigrationTasks {
+					if task, taskErr := proposalStore.GetTask(candidate.RepositoryID, candidate.ProposalID, candidate.TaskID); taskErr == nil {
+						completed[candidate.ID] = task.Status == proposals.TaskCompleted && task.Contribution != nil && task.Contribution.Status == "merged" && task.Contribution.ContextRevision == task.ContextRevision
+					}
+				}
+				for _, dependency := range link.DependencyIDs {
+					if !completed[dependency] {
+						writeAPIError(w, 409, "migration_dependencies_incomplete", "earlier migration tasks must merge before this agent session can start")
+						return
+					}
+				}
+			}
 		}
 		repositoryRecord, err := catalog.GetByID(r.PathValue("id"))
 		if err != nil {

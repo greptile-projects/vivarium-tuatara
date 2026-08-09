@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
@@ -162,5 +163,87 @@ func TestEvolutionAcknowledgementResponseFiltersOtherPrivateConsumers(t *testing
 	decodeResponse(t, response, &updated)
 	if updated.Strategy != "dual publish with deprecation" || len(updated.Impacts) != 0 || len(updated.Acknowledgements) != 0 || len(updated.Findings) != 0 || len(updated.Analyses) != 0 {
 		t.Fatalf("provider collaborator update leaked private consumers: %#v", updated)
+	}
+}
+
+func TestEvolutionMigrationTaskRequiresTargetAuthorityAndLinksRepositoryWork(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	proposalStore, _ := proposals.New(t.TempDir())
+	pullStore, _ := pullrequests.New(t.TempDir(), gitStore)
+	releaseStore, _ := releases.New(t.TempDir())
+	deploymentStore, _ := deployments.New(t.TempDir())
+	relationStore, _ := relationships.New(t.TempDir())
+	sessionStore, _ := changesessions.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, proposalStore, pullStore, nil, sessionStore, nil, releaseStore, deploymentStore, relationStore))
+	defer server.Close()
+	providerOwner := createTestAccount(t, server.URL, "migration-provider-owner")
+	consumerOwner := createTestAccount(t, server.URL, "migration-consumer-owner")
+	createRepo := func(name, token string) (repositories.Repository, storage.ObjectID) {
+		response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"`+name+`"}`, token, http.StatusCreated)
+		var repo repositories.Repository
+		decodeResponse(t, response, &repo)
+		gitRepo, _ := gitStore.Open(repo.ID)
+		blob, _ := gitRepo.WriteObject(storage.BlobObject, []byte(name))
+		tree := writeTestTree(t, gitRepo, testTreeEntry{mode: "100644", name: "README.md", id: blob})
+		commit := writeTestCommit(t, gitRepo, tree, nil, 1700000000, name)
+		return repo, commit
+	}
+	provider, providerCommit := createRepo("migration-provider", providerOwner.Credential.Token)
+	consumer, consumerCommit := createRepo("migration-consumer", consumerOwner.Credential.Token)
+	if _, err := catalog.SetVisibility(providerOwner.User.ID, provider.ID, repositories.Public); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := relationStore.CreateEvolution(relationships.Evolution{RepositoryID: provider.ID, InterfaceName: "events", Predecessor: relationships.Interface{ID: strings.Repeat("1", 32), RepositoryID: provider.ID, Name: "events", Version: "v1.0.0", ReleaseID: strings.Repeat("2", 32), CommitID: strings.Repeat("a", 40), PublishedBy: providerOwner.User.ID}, SourceKind: "proposal", SourceID: strings.Repeat("3", 32), CandidateDescription: "events v2", Changes: []relationships.CompatibilityChange{{Kind: "field", Summary: "rename field", Classification: "breaking"}}, Impacts: []relationships.ConsumerImpact{{RepositoryID: consumer.ID, OwnerID: consumerOwner.User.ID, DependencyID: strings.Repeat("4", 32), CommitID: string(consumerCommit), Constraint: "<v2.0.0", State: "affected"}}, Strategy: "dual publish", Sequencing: "consumer first", CreatedBy: providerOwner.User.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"version":%d,"repository_id":"%s","title":"Adopt events v2","completion_criteria":"Client uses events v2 and tests pass","target_version":"v2.0.0","assignee_type":"human","assignee_id":"%s","mandate":"Migrate the consumer without changing provider code","base_revision":"%s"}`, plan.Version, consumer.ID, consumerOwner.User.ID, consumerCommit)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+provider.ID+"/evolutions/"+plan.ID+"/migration-tasks", body, providerOwner.Credential.Token, http.StatusForbidden).Body.Close()
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+provider.ID+"/evolutions/"+plan.ID+"/migration-tasks", body, consumerOwner.Credential.Token, http.StatusCreated)
+	var result struct {
+		Evolution relationships.Evolution `json:"evolution"`
+		Task      proposals.Task          `json:"task"`
+	}
+	decodeResponse(t, response, &result)
+	if len(result.Evolution.MigrationTasks) != 1 || result.Task.Assignment == nil || result.Task.Assignment.AssigneeID != consumerOwner.User.ID || len(result.Task.Assignment.Access.Scopes) != 0 {
+		t.Fatalf("migration task = %#v / %#v", result.Evolution.MigrationTasks, result.Task)
+	}
+	link := result.Evolution.MigrationTasks[0]
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+provider.ID+"/evolutions/"+plan.ID+"/migration-tasks", body, consumerOwner.Credential.Token, http.StatusConflict).Body.Close()
+	consumerProposals, err := proposalStore.List(consumer.ID)
+	if err != nil || len(consumerProposals) != 1 {
+		t.Fatalf("stale evolution request published unlinked work: proposals=%d err=%v", len(consumerProposals), err)
+	}
+	stored, err := proposalStore.GetTask(consumer.ID, link.ProposalID, link.TaskID)
+	if err != nil || stored.Outcome != "Client uses events v2 and tests pass" {
+		t.Fatalf("linked repository task = %#v, %v", stored, err)
+	}
+	providerBody := fmt.Sprintf(`{"version":%d,"repository_id":"%s","title":"Remove events v1","completion_criteria":"Provider exposes only events v2","target_version":"v2.0.0","dependency_ids":["%s"],"assignee_type":"agent","mandate":"Remove v1 only after consumer migration merges","base_revision":"%s"}`, result.Evolution.Version, provider.ID, link.ID, providerCommit)
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+provider.ID+"/evolutions/"+plan.ID+"/migration-tasks", providerBody, providerOwner.Credential.Token, http.StatusCreated)
+	decodeResponse(t, response, &result)
+	if len(result.Evolution.MigrationTasks) != 1 || result.Evolution.MigrationTasks[0].RepositoryID != provider.ID {
+		t.Fatalf("provider projection leaked private consumer work: %#v", result.Evolution.MigrationTasks)
+	}
+	providerLink := result.Evolution.MigrationTasks[0]
+	providerTask, err := proposalStore.GetTask(provider.ID, providerLink.ProposalID, providerLink.TaskID)
+	if err != nil || providerTask.Assignment == nil {
+		t.Fatalf("provider migration task = %#v, %v", providerTask, err)
+	}
+	startBody := `{"expected_assignment_id":"` + providerTask.Assignment.ID + `"}`
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+provider.ID+"/proposals/"+providerLink.ProposalID+"/tasks/"+providerLink.TaskID+"/sessions", startBody, providerOwner.Credential.Token, http.StatusConflict).Body.Close()
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+consumer.ID+"/proposals/"+link.ProposalID+"/tasks/"+link.TaskID, `{"status":"completed"}`, consumerOwner.Credential.Token, http.StatusOK).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+provider.ID+"/proposals/"+providerLink.ProposalID+"/tasks/"+providerLink.TaskID+"/sessions", startBody, providerOwner.Credential.Token, http.StatusConflict).Body.Close()
+	beforeFailure, err := proposalStore.List(provider.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidAssignment := fmt.Sprintf(`{"version":%d,"repository_id":"%s","title":"Invalid assignment","completion_criteria":"Must never persist","target_version":"v2.0.1","assignee_type":"agent","assignee_id":"invalid","mandate":"Force assignment validation failure","base_revision":"%s"}`, result.Evolution.Version, provider.ID, providerCommit)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+provider.ID+"/evolutions/"+plan.ID+"/migration-tasks", invalidAssignment, providerOwner.Credential.Token, http.StatusInternalServerError).Body.Close()
+	afterFailure, err := proposalStore.List(provider.ID)
+	if err != nil || len(afterFailure) != len(beforeFailure) {
+		t.Fatalf("failed assignment left unlinked proposal work: before=%d after=%d err=%v", len(beforeFailure), len(afterFailure), err)
 	}
 }

@@ -63,6 +63,7 @@ export type EvolutionPlan = {
   findings: { id: string; actor_id: string; repository_ids: string[]; finding: string; uncertainty?: string; created_at: string }[];
   acknowledgements: { actor_id: string; repository_id: string; note?: string; created_at: string }[];
   analyses: { id: string; agent_id: string; initiator_id: string; mandate: string; repository_ids: string[]; created_at: string }[];
+  migration_tasks: { id: string; repository_id: string; proposal_id: string; task_id: string; target_version: string; dependency_ids: string[]; created_by: string; created_at: string; status?: ProposalTask["status"] | "unavailable"; ready: boolean; assignment_id?: string; assignee_type?: "human" | "agent"; assignee_id?: string; base_revision?: string; branch?: string; pull_request_id?: string; contribution_status?: "review" | "merged" | "closed" | "superseded" }[];
 };
 export type ReleaseArtifact = {
   id: string;

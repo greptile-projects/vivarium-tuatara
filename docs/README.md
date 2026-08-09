@@ -712,6 +712,15 @@ compatible publication is `unresolved` with a reason. Repository visibility is
 rechecked while assembling the graph, so private provider edges and dependency
 metadata never become a cross-repository discovery side channel.
 
+Evolution decisions turn that graph into repository-owned migration work.
+Current participants claim provider or affected-consumer tasks with a target
+version, ordered cross-repository dependencies, completion criteria, an exact
+base, and a human or agent mandate. Each link creates an ordinary local proposal
+task rather than giving the provider team authority elsewhere. Its discussion,
+assignment, branch, pull request, and merge status project back into the shared
+plan. Humans retain existing repository or owned-fork access; agents start only
+after earlier linked work merges and receive the existing task-branch credential.
+
 ## Release candidates
 
 Release definition is a durable, immutable boundary over repository history.

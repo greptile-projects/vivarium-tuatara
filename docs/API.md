@@ -899,6 +899,20 @@ append attributable findings plus explicit uncertainty citing only the
 selection; it has no repository, Git, proposal, pull, credential, or deployment
 write scope.
 
+`POST /repositories/{id}/evolutions/{evolution_id}/migration-tasks` adds the
+next ordered unit of work using the plan's compare-and-swap `version`. The body
+names a provider or frozen consumer repository, target version, earlier task
+dependencies, completion criteria, exact base, mandate, and human or agent
+assignee. The caller and any human assignee must already participate in the
+target repository. It creates an ordinary proposal task there, whose discussion,
+assignment, session, branch, pull, and merge state are projected into plan reads.
+Plan authors receive no consumer permission as a side effect.
+
+Unfinished cross-repository dependencies block an agent session from starting;
+the eventual credential remains limited to its isolated `agent/tasks/*` branch.
+Human work uses existing access and may publish its task contribution from the
+target repository or an owned fork by supplying `source_repository_id`.
+
 ### Governed release environments
 
 `GET /repositories/{id}/environments` returns ordered environment policy.
