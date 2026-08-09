@@ -3,9 +3,46 @@ package securityadvisories
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 )
+
+func TestDisclosureRequiresEveryAttestedLineAndPublishesOnlyRedactedPacket(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor := "0123456789abcdef0123456789abcdef"
+	repository := "abcdef0123456789abcdef0123456789"
+	v, err := store.Create(Advisory{Title: "Private root cause", Description: "restricted exploit detail", Contact: "secret@example.test", ReporterID: actor, AffectedRepositories: []AffectedRepository{{RepositoryID: repository, Versions: []string{"1.x"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.PrepareDisclosure(v.ID, actor, v.Version, Disclosure{PublicTitle: "Parser security update", RedactedSummary: "Safe summary", UpgradeGuidance: "Upgrade to 1.2.3."}); err != ErrInvalid {
+		t.Fatalf("unattested disclosure = %v", err)
+	}
+	v, err = store.update(v.ID, func(item *Advisory) error {
+		item.ReleaseAttestations = append(item.ReleaseAttestations, ReleaseAttestation{ID: "11111111111111111111111111111111", RepositoryID: repository, VersionLine: "1.x", ReleaseID: "22222222222222222222222222222222", ReleaseCommitID: strings.Repeat("a", 40), ArtifactIDs: []string{"33333333333333333333333333333333"}, ArtifactSHA256: []string{strings.Repeat("b", 64)}})
+		item.Version++
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduled := time.Now().UTC().Add(time.Hour)
+	v, err = store.PrepareDisclosure(v.ID, actor, v.Version, Disclosure{PublicTitle: "Parser security update", RedactedSummary: "Safe summary", UpgradeGuidance: "Upgrade to 1.2.3.", Credits: []string{"Researcher"}, ScheduledAt: &scheduled})
+	if err != nil || v.Disclosure.State != "scheduled" || len(v.Disclosure.FixedVersions) != 1 {
+		t.Fatalf("disclosure = %#v, %v", v.Disclosure, err)
+	}
+	v, err = store.SetDisclosureState(v.ID, actor, "published", "", []string{})
+	if err != nil || v.EmbargoState != "disclosed" || v.Disclosure.PublishedAt == nil {
+		t.Fatalf("published = %#v, %v", v.Disclosure, err)
+	}
+	if strings.Contains(v.Disclosure.RedactedSummary, v.Description) || strings.Contains(v.Disclosure.UpgradeGuidance, v.Contact) {
+		t.Fatal("protected fields leaked into disclosure")
+	}
+}
 
 func TestDiagnosticEvidenceImpactAndBoundedInvestigation(t *testing.T) {
 	store, err := New(t.TempDir())

@@ -191,7 +191,13 @@ export type Incident = {
     created_by: string;
     created_at: string;
     progress: {
-      state: "committed" | "assigned" | "review" | "completed" | "overdue" | "invalidated";
+      state:
+        | "committed"
+        | "assigned"
+        | "review"
+        | "completed"
+        | "overdue"
+        | "invalidated";
       pull_request_id?: string;
       check_states?: string[];
       release_ids?: string[];
@@ -221,22 +227,173 @@ export type SecurityAdvisory = {
   title: string;
   description: string;
   affected_repositories: { repository_id: string; versions: string[] }[];
-  evidence: { id?: string; kind?: "commit" | "dependency" | "build" | "artifact" | "release" | "deployment"; repository_id?: string; commit_id?: string; release_id?: string; build_id?: string; artifact_id?: string; deployment_id?: string; dependency?: string; label: string; description: string; captured_at?: string }[];
+  evidence: {
+    id?: string;
+    kind?:
+      "commit" | "dependency" | "build" | "artifact" | "release" | "deployment";
+    repository_id?: string;
+    commit_id?: string;
+    release_id?: string;
+    build_id?: string;
+    artifact_id?: string;
+    deployment_id?: string;
+    dependency?: string;
+    label: string;
+    description: string;
+    captured_at?: string;
+  }[];
   contact: string;
   reporter_id: string;
   response_team: string[];
   severity: "untriaged" | "low" | "moderate" | "high" | "critical";
-  embargo_state: "reported" | "triaging" | "embargoed" | "coordinating";
-  messages: { id: string; actor_id: string; body: string; created_at: string }[];
-  access_log: { id: string; actor_id: string; action: string; detail?: string; created_at: string }[];
-  findings: { id: string; kind: "hypothesis" | "conclusion" | "uncertainty"; actor_id: string; statement: string; evidence_ids: string[]; investigation_id?: string; created_at: string }[];
-  impact_matrix: { repository_id: string; version_line: string; environment: string; state: "confirmed" | "suspected" | "unaffected" | "fixed"; evidence_ids: string[]; rationale: string; actor_id: string; updated_at: string }[];
-  investigations: { id: string; agent_id: string; initiator_id: string; mandate: string; state: string; evidence: SecurityAdvisory["evidence"]; created_at: string; updated_at: string }[];
-  repair_tasks: { id: string; repository_id: string; version_line: string; title: string; mandate: string; base_commit_id: string; assignee_id: string; assignee_kind: "human" | "agent"; dependency_task_ids: string[]; status: "open" | "review"; created_by: string; created_at: string }[];
-  repair_sessions: { id: string; task_id: string; repository_id: string; initiator_id: string; worker_id: string; branch: string; base_commit_id: string; commit_id?: string; state: "active" | "completed" | "revoked"; comments: { id: string; actor_id: string; body: string; created_at: string }[]; reviews: { id: string; actor_id: string; decision: "approve" | "request_changes"; body: string; commit_id: string; created_at: string }[]; created_at: string; updated_at: string }[];
-  security_reproductions: { id: string; repository_id: string; version_line: string; definition: { name: string; image: string; command: string; working_directory?: string; timeout_seconds?: number }; created_by: string; created_at: string }[];
-  repair_verifications: { id: string; task_id: string; session_id: string; repository_id: string; version_line: string; candidate_commit_id: string; required_run_ids: string[]; reproduction_run_ids: string[]; requested_by: string; approvals: { id: string; actor_id: string; created_at: string }[]; created_at: string }[];
-  release_attestations: { id: string; verification_id: string; repository_id: string; version_line: string; release_id: string; release_commit_id: string; artifact_ids: string[]; artifact_sha256: string[]; actor_id: string; created_at: string }[];
+  embargo_state:
+    "reported" | "triaging" | "embargoed" | "coordinating" | "disclosed";
+  messages: {
+    id: string;
+    actor_id: string;
+    body: string;
+    created_at: string;
+  }[];
+  access_log: {
+    id: string;
+    actor_id: string;
+    action: string;
+    detail?: string;
+    created_at: string;
+  }[];
+  findings: {
+    id: string;
+    kind: "hypothesis" | "conclusion" | "uncertainty";
+    actor_id: string;
+    statement: string;
+    evidence_ids: string[];
+    investigation_id?: string;
+    created_at: string;
+  }[];
+  impact_matrix: {
+    repository_id: string;
+    version_line: string;
+    environment: string;
+    state: "confirmed" | "suspected" | "unaffected" | "fixed";
+    evidence_ids: string[];
+    rationale: string;
+    actor_id: string;
+    updated_at: string;
+  }[];
+  investigations: {
+    id: string;
+    agent_id: string;
+    initiator_id: string;
+    mandate: string;
+    state: string;
+    evidence: SecurityAdvisory["evidence"];
+    created_at: string;
+    updated_at: string;
+  }[];
+  repair_tasks: {
+    id: string;
+    repository_id: string;
+    version_line: string;
+    title: string;
+    mandate: string;
+    base_commit_id: string;
+    assignee_id: string;
+    assignee_kind: "human" | "agent";
+    dependency_task_ids: string[];
+    status: "open" | "review";
+    created_by: string;
+    created_at: string;
+  }[];
+  repair_sessions: {
+    id: string;
+    task_id: string;
+    repository_id: string;
+    initiator_id: string;
+    worker_id: string;
+    branch: string;
+    base_commit_id: string;
+    commit_id?: string;
+    state: "active" | "completed" | "revoked";
+    comments: {
+      id: string;
+      actor_id: string;
+      body: string;
+      created_at: string;
+    }[];
+    reviews: {
+      id: string;
+      actor_id: string;
+      decision: "approve" | "request_changes";
+      body: string;
+      commit_id: string;
+      created_at: string;
+    }[];
+    created_at: string;
+    updated_at: string;
+  }[];
+  security_reproductions: {
+    id: string;
+    repository_id: string;
+    version_line: string;
+    definition: {
+      name: string;
+      image: string;
+      command: string;
+      working_directory?: string;
+      timeout_seconds?: number;
+    };
+    created_by: string;
+    created_at: string;
+  }[];
+  repair_verifications: {
+    id: string;
+    task_id: string;
+    session_id: string;
+    repository_id: string;
+    version_line: string;
+    candidate_commit_id: string;
+    required_run_ids: string[];
+    reproduction_run_ids: string[];
+    requested_by: string;
+    approvals: { id: string; actor_id: string; created_at: string }[];
+    created_at: string;
+  }[];
+  release_attestations: {
+    id: string;
+    verification_id: string;
+    repository_id: string;
+    version_line: string;
+    release_id: string;
+    release_commit_id: string;
+    artifact_ids: string[];
+    artifact_sha256: string[];
+    actor_id: string;
+    created_at: string;
+  }[];
+  disclosure?: {
+    id: string;
+    state: "ready" | "scheduled" | "publishing" | "paused" | "published";
+    public_title: string;
+    redacted_summary: string;
+    upgrade_guidance: string;
+    credits: string[];
+    affected_versions: { repository_id: string; versions: string[] }[];
+    fixed_versions: {
+      repository_id: string;
+      version_line: string;
+      release_id: string;
+      commit_id: string;
+      branch: string;
+      artifact_ids: string[];
+      artifact_sha256: string[];
+    }[];
+    scheduled_at?: string;
+    remaining: string[];
+    failure?: string;
+    created_by: string;
+    created_at: string;
+    published_at?: string;
+  };
   version: number;
   created_at: string;
   updated_at: string;
@@ -248,12 +405,26 @@ export type IncidentAction = {
   repository_id: string;
   deployment_id: string;
   rationale: string;
-  status: "proposed" | "approved" | "rejected" | "executing" | "failed" | "recovered";
+  status:
+    "proposed" | "approved" | "rejected" | "executing" | "failed" | "recovered";
   proposed_by: string;
   evidence: IncidentEvidence[];
   health_criteria: { stage: string; signal: string }[];
-  decisions: { actor_id: string; decision: "approve" | "reject"; message: string; override?: boolean; created_at: string }[];
-  attempts: { id: string; actor_id: string; outcome: "pending" | "started" | "failed" | "recovered"; resource_id?: string; message: string; created_at: string }[];
+  decisions: {
+    actor_id: string;
+    decision: "approve" | "reject";
+    message: string;
+    override?: boolean;
+    created_at: string;
+  }[];
+  attempts: {
+    id: string;
+    actor_id: string;
+    outcome: "pending" | "started" | "failed" | "recovered";
+    resource_id?: string;
+    message: string;
+    created_at: string;
+  }[];
   created_at: string;
   updated_at: string;
 };

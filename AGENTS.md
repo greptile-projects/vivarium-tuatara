@@ -347,6 +347,15 @@ whenever dependencies change or the web job fails before it starts.
   release attestations then prove the release ancestry contains that candidate
   and every exact release build succeeded with checksummed artifacts, allowing
   the advisory to derive coverage and remaining gaps across every claimed line.
+  Maintainers prepare a redacted disclosure only after every affected version
+  line has an attested release. Publication exposes deterministic repaired
+  branches, exact releases and checksums, affected/fixed versions, credits, and
+  upgrade guidance together; anonymous public advisory reads never include the
+  protected report, evidence, messages, contact, commands, or logs. Durable
+  publication steps are retry-safe, pause on branch or notification failure,
+  and retain an exact remaining-work list. Affected repository owners and prior
+  repository collaborators, and prior deployment initiators receive targeted
+  activity/inbox notifications only after the public packet is ready.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's

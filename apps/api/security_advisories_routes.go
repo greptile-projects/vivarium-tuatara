@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
@@ -70,7 +71,7 @@ func commitInReferenceAncestry(repository *storage.Repository, referenceName, co
 	return false
 }
 
-func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *repositories.Store, identities *users.Store, store *securityadvisories.Store, releasesStore *releases.Store, builds *checkruns.Store, deploymentsStore *deployments.Store, credentials *auth.Store) {
+func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *repositories.Store, identities *users.Store, store *securityadvisories.Store, releasesStore *releases.Store, builds *checkruns.Store, deploymentsStore *deployments.Store, credentials *auth.Store, activityStore *activities.Store) {
 	maintainer := func(userID string, v securityadvisories.Advisory) bool {
 		for _, affected := range v.AffectedRepositories {
 			repo, err := repos.GetByID(affected.RepositoryID)
@@ -118,6 +119,35 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 			writeAPIError(w, 500, "security_advisory_write_failed", "security advisory could not be saved")
 		}
 	}
+	// Public reads contain only the disclosure packet assembled by maintainers;
+	// protected evidence and even unpublished advisory existence stay hidden.
+	mux.HandleFunc("GET /security-advisories/public", func(w http.ResponseWriter, r *http.Request) {
+		all, err := store.List()
+		if err != nil {
+			writeAPIError(w, 500, "security_advisory_read_failed", "security advisories could not be read")
+			return
+		}
+		items := []securityadvisories.Advisory{}
+		for _, v := range all {
+			if v.Disclosure != nil && v.Disclosure.State == "published" {
+				items = append(items, securityadvisories.Advisory{ID: v.ID, Title: v.Disclosure.PublicTitle, Severity: v.Severity, EmbargoState: v.EmbargoState, Disclosure: v.Disclosure, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt})
+			}
+		}
+		page, next, valid := paginate(r, items, func(v securityadvisories.Advisory) string { return v.ID })
+		if !valid {
+			writeAPIError(w, 400, "invalid_pagination", "limit or after is invalid")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"security_advisories": page, "next_cursor": next})
+	})
+	mux.HandleFunc("GET /security-advisories/public/{advisory_id}", func(w http.ResponseWriter, r *http.Request) {
+		v, err := store.Get(r.PathValue("advisory_id"))
+		if err != nil || v.Disclosure == nil || v.Disclosure.State != "published" {
+			writeAPIError(w, 404, "security_advisory_not_found", "security advisory not found")
+			return
+		}
+		writeJSON(w, 200, securityadvisories.Advisory{ID: v.ID, Title: v.Disclosure.PublicTitle, Severity: v.Severity, EmbargoState: v.EmbargoState, Disclosure: v.Disclosure, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt})
+	})
 
 	mux.HandleFunc("GET /security-advisories", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
@@ -913,6 +943,119 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 			return
 		}
 		writeJSON(w, 201, map[string]any{"security_advisory": v, "release_attestation": attestation})
+	})
+
+	mux.HandleFunc("POST /security-advisories/{advisory_id}/disclosure", func(w http.ResponseWriter, r *http.Request) {
+		actor, current, ok := require(w, r)
+		if !ok {
+			return
+		}
+		if !maintainer(actor.UserID, current) {
+			writeAPIError(w, 403, "maintainer_required", "an affected repository owner must prepare disclosure")
+			return
+		}
+		var input struct {
+			ExpectedVersion int        `json:"expected_version"`
+			PublicTitle     string     `json:"public_title"`
+			RedactedSummary string     `json:"redacted_summary"`
+			UpgradeGuidance string     `json:"upgrade_guidance"`
+			Credits         []string   `json:"credits"`
+			ScheduledAt     *time.Time `json:"scheduled_at"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		v, err := store.PrepareDisclosure(current.ID, actor.UserID, input.ExpectedVersion, securityadvisories.Disclosure{PublicTitle: input.PublicTitle, RedactedSummary: input.RedactedSummary, UpgradeGuidance: input.UpgradeGuidance, Credits: input.Credits, ScheduledAt: input.ScheduledAt})
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, 201, v)
+	})
+
+	mux.HandleFunc("POST /security-advisories/{advisory_id}/disclosure/publish", func(w http.ResponseWriter, r *http.Request) {
+		actor, current, ok := require(w, r)
+		if !ok {
+			return
+		}
+		if !maintainer(actor.UserID, current) {
+			writeAPIError(w, 403, "maintainer_required", "an affected repository owner must publish disclosure")
+			return
+		}
+		if current.Disclosure == nil {
+			writeAPIError(w, 422, "invalid_security_advisory", "prepare disclosure first")
+			return
+		}
+		if current.Disclosure.ScheduledAt != nil && current.Disclosure.ScheduledAt.After(time.Now().UTC()) {
+			writeAPIError(w, 409, "disclosure_not_due", "scheduled disclosure is not due")
+			return
+		}
+		current, err := store.SetDisclosureState(current.ID, actor.UserID, "publishing", "", current.Disclosure.Remaining)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		remaining := []string{"publish_repaired_branches", "publish_releases", "publish_advisory", "notify_affected_users"}
+		for _, fix := range current.Disclosure.FixedVersions {
+			repository, openErr := gitStore.Open(fix.RepositoryID)
+			if openErr != nil {
+				_, _ = store.SetDisclosureState(current.ID, actor.UserID, "paused", "repaired repository unavailable", remaining)
+				writeAPIError(w, 503, "disclosure_paused", "publication paused; repaired repository unavailable")
+				return
+			}
+			name := "refs/heads/" + fix.Branch
+			refErr := repository.CreateReference(storage.Reference{Name: name, Target: fix.CommitID})
+			if refErr != nil {
+				existing, readErr := repository.ReadReference(name)
+				if readErr != nil || existing.Target != fix.CommitID {
+					_, _ = store.SetDisclosureState(current.ID, actor.UserID, "paused", "repaired branch could not be published", remaining)
+					writeAPIError(w, 503, "disclosure_paused", "publication paused; repaired branch could not be published")
+					return
+				}
+			}
+		}
+		remaining = remaining[1:]
+		remaining = remaining[1:]
+		remaining = remaining[1:]
+		if activityStore != nil {
+			recipients := map[string]bool{}
+			for _, scope := range current.AffectedRepositories {
+				repo, e := repos.GetByID(scope.RepositoryID)
+				if e == nil {
+					recipients[repo.OwnerID] = true
+					if subscribers, listErr := repos.ListCollaborators(repo.OwnerID, repo.ID); listErr == nil {
+						for _, subscriber := range subscribers {
+							recipients[subscriber.UserID] = true
+						}
+					}
+				}
+				if deploymentsStore != nil {
+					if promotions, e := deploymentsStore.ListPromotions(scope.RepositoryID); e == nil {
+						for _, p := range promotions {
+							recipients[p.InitiatedBy] = true
+						}
+					}
+				}
+			}
+			for recipient := range recipients {
+				target := recipient
+				fix := current.Disclosure.FixedVersions[0]
+				repo, _ := repos.GetByID(fix.RepositoryID)
+				_, e := activityStore.AppendOnce("security-disclosure:"+current.ID+":"+recipient, activities.Event{Kind: "security_advisory_published", ActorID: actor.UserID, RepositoryID: fix.RepositoryID, RepositoryName: repo.Name, ResourceType: "security_advisory", ResourceID: current.ID, ResourceTitle: current.Disclosure.PublicTitle, TargetUserID: &target})
+				if e != nil {
+					_, _ = store.SetDisclosureState(current.ID, actor.UserID, "paused", "notifications remain unpublished", remaining)
+					writeAPIError(w, 503, "disclosure_paused", "publication paused; notifications remain unpublished")
+					return
+				}
+			}
+		}
+		published, err := store.SetDisclosureState(current.ID, actor.UserID, "published", "", []string{})
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, 200, published)
 	})
 	mux.HandleFunc("GET /security-advisories/{advisory_id}/investigations/{investigation_id}", func(w http.ResponseWriter, r *http.Request) {
 		credential, ok := authenticateRequest(w, r, credentials, "security:investigate", false)
