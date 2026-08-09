@@ -159,6 +159,44 @@ func TestPrivateSecurityReportTriageAndBoundedAccess(t *testing.T) {
 	}
 }
 
+func TestDisclosureRollbackRemovesOnlyRefsCreatedByAttempt(t *testing.T) {
+	gitStore, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, err := gitStore.Create("abcdef0123456789abcdef0123456789")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit := writeCommit(t, repository, 1, "security repair")
+	preexisting := "refs/heads/security/fix-preexisting"
+	created := "refs/heads/security/fix-created"
+	for _, name := range []string{preexisting, created} {
+		if err := repository.CreateReference(storage.Reference{Name: name, Target: string(commit)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rollbackDisclosureRefs("test-advisory", []createdDisclosureRef{{repository: repository, name: created}})
+	if _, err := repository.ReadReference(created); !errors.Is(err, storage.ErrReferenceNotFound) {
+		t.Fatalf("attempt-created ref remains: %v", err)
+	}
+	if ref, err := repository.ReadReference(preexisting); err != nil || ref.Target != string(commit) {
+		t.Fatalf("pre-existing matching ref changed: %#v, %v", ref, err)
+	}
+	// A cleanup failure is fail-closed because pre-publication disclosure refs
+	// are staged beneath the transport-hidden repair namespace.
+	staged := "refs/heads/vivarium-security/disclosures/test/fix-created"
+	if err := repository.CreateReference(storage.Reference{Name: staged, Target: string(commit)}); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/git/test.git/info/refs?service=git-upload-pack", nil)
+	recorder := httptest.NewRecorder()
+	runGitService(recorder, request, repository, uploadPackService, true, false, "")
+	if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), staged) {
+		t.Fatalf("staged disclosure ref advertised after failed cleanup: status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestRepairSessionAuthorizationIsRepositorySpecific(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	identities, _ := users.New(t.TempDir())

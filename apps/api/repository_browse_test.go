@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -46,6 +47,10 @@ func TestRepositoryBrowsingPreservesBranchAndCommitRevision(t *testing.T) {
 	if err := repo.CreateReference(storage.Reference{Name: "refs/heads/feature", Target: string(commit)}); err != nil {
 		t.Fatal(err)
 	}
+	hiddenBranch := "vivarium-security/disclosures/advisory/fix-staged"
+	if err := repo.CreateReference(storage.Reference{Name: "refs/heads/" + hiddenBranch, Target: string(commit)}); err != nil {
+		t.Fatal(err)
+	}
 	if output, err := exec.Command("git", "--git-dir", repo.Path(), "pack-refs", "--all", "--prune").CombinedOutput(); err != nil {
 		t.Fatalf("pack refs: %v\n%s", err, output)
 	}
@@ -73,6 +78,22 @@ func TestRepositoryBrowsingPreservesBranchAndCommitRevision(t *testing.T) {
 			t.Fatalf("%s revision = %#v", endpoint, body["revision"])
 		}
 	}
+	branchesResponse := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/branches", "", account.Credential.Token, http.StatusOK)
+	var branchesBody struct {
+		Branches []struct {
+			Name string `json:"name"`
+		} `json:"branches"`
+	}
+	if err := json.NewDecoder(branchesResponse.Body).Decode(&branchesBody); err != nil {
+		t.Fatal(err)
+	}
+	branchesResponse.Body.Close()
+	for _, branch := range branchesBody.Branches {
+		if strings.HasPrefix(branch.Name, "vivarium-security/") {
+			t.Fatalf("embargoed branch listed: %#v", branchesBody.Branches)
+		}
+	}
+	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/commits?ref="+hiddenBranch, "", account.Credential.Token, http.StatusNotFound).Body.Close()
 
 	missing := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/tree?ref=missing", "", account.Credential.Token, http.StatusNotFound)
 	missing.Body.Close()

@@ -165,6 +165,36 @@ type ReleaseAttestation struct {
 	CreatedAt       time.Time `json:"created_at"`
 }
 
+// Disclosure is the durable, retryable boundary between protected remediation
+// and public vulnerability knowledge. Sensitive evidence is deliberately not
+// copied into this packet.
+type Disclosure struct {
+	ID               string               `json:"id"`
+	State            string               `json:"state"`
+	PublicTitle      string               `json:"public_title"`
+	RedactedSummary  string               `json:"redacted_summary"`
+	UpgradeGuidance  string               `json:"upgrade_guidance"`
+	Credits          []string             `json:"credits"`
+	AffectedVersions []AffectedRepository `json:"affected_versions"`
+	FixedVersions    []DisclosureFix      `json:"fixed_versions"`
+	ScheduledAt      *time.Time           `json:"scheduled_at,omitempty"`
+	Remaining        []string             `json:"remaining"`
+	Failure          string               `json:"failure,omitempty"`
+	CreatedBy        string               `json:"created_by"`
+	CreatedAt        time.Time            `json:"created_at"`
+	PublishedAt      *time.Time           `json:"published_at,omitempty"`
+}
+
+type DisclosureFix struct {
+	RepositoryID string   `json:"repository_id"`
+	VersionLine  string   `json:"version_line"`
+	ReleaseID    string   `json:"release_id"`
+	CommitID     string   `json:"commit_id"`
+	Branch       string   `json:"branch"`
+	ArtifactIDs  []string `json:"artifact_ids"`
+	SHA256       []string `json:"artifact_sha256"`
+}
+
 type Message struct {
 	ID        string    `json:"id"`
 	ActorID   string    `json:"actor_id"`
@@ -201,9 +231,77 @@ type Advisory struct {
 	SecurityReproductions []SecurityReproduction `json:"security_reproductions"`
 	RepairVerifications   []RepairVerification   `json:"repair_verifications"`
 	ReleaseAttestations   []ReleaseAttestation   `json:"release_attestations"`
+	Disclosure            *Disclosure            `json:"disclosure,omitempty"`
 	Version               int                    `json:"version"`
 	CreatedAt             time.Time              `json:"created_at"`
 	UpdatedAt             time.Time              `json:"updated_at"`
+}
+
+func (s *Store) PrepareDisclosure(id, actor string, expected int, disclosure Disclosure) (Advisory, error) {
+	return s.update(id, func(v *Advisory) error {
+		if v.Version != expected {
+			return ErrConflict
+		}
+		disclosure.PublicTitle = strings.TrimSpace(disclosure.PublicTitle)
+		disclosure.RedactedSummary = strings.TrimSpace(disclosure.RedactedSummary)
+		disclosure.UpgradeGuidance = strings.TrimSpace(disclosure.UpgradeGuidance)
+		if !validID(actor) || disclosure.PublicTitle == "" || len(disclosure.PublicTitle) > 200 || disclosure.RedactedSummary == "" || len(disclosure.RedactedSummary) > 20000 || disclosure.UpgradeGuidance == "" || len(disclosure.UpgradeGuidance) > 20000 || len(disclosure.Credits) > 50 {
+			return ErrInvalid
+		}
+		if v.Disclosure != nil && v.Disclosure.State == "published" {
+			return ErrConflict
+		}
+		fixes := make([]DisclosureFix, 0, len(v.ReleaseAttestations))
+		for _, scope := range v.AffectedRepositories {
+			for _, line := range scope.Versions {
+				var found *ReleaseAttestation
+				for i := range v.ReleaseAttestations {
+					if v.ReleaseAttestations[i].RepositoryID == scope.RepositoryID && v.ReleaseAttestations[i].VersionLine == line {
+						found = &v.ReleaseAttestations[i]
+						break
+					}
+				}
+				if found == nil {
+					return ErrInvalid
+				}
+				fixes = append(fixes, DisclosureFix{RepositoryID: found.RepositoryID, VersionLine: line, ReleaseID: found.ReleaseID, CommitID: found.ReleaseCommitID, Branch: "security/fix-" + found.ID[:12], ArtifactIDs: append([]string{}, found.ArtifactIDs...), SHA256: append([]string{}, found.ArtifactSHA256...)})
+			}
+		}
+		now := s.now()
+		disclosure.ID, disclosure.State, disclosure.CreatedBy, disclosure.CreatedAt = mustID(), "ready", actor, now
+		disclosure.AffectedVersions = append([]AffectedRepository{}, v.AffectedRepositories...)
+		disclosure.FixedVersions = fixes
+		disclosure.Remaining = []string{"publish_repaired_branches", "publish_releases", "publish_advisory", "notify_affected_users"}
+		if disclosure.ScheduledAt != nil {
+			t := disclosure.ScheduledAt.UTC()
+			disclosure.ScheduledAt = &t
+			disclosure.State = "scheduled"
+		}
+		v.Disclosure = &disclosure
+		v.Version++
+		v.AccessLog = append(v.AccessLog, AccessEvent{ID: mustID(), ActorID: actor, Action: "disclosure_prepared", Detail: disclosure.ID, CreatedAt: now})
+		return nil
+	})
+}
+
+func (s *Store) SetDisclosureState(id, actor, state, failure string, remaining []string) (Advisory, error) {
+	return s.update(id, func(v *Advisory) error {
+		if v.Disclosure == nil || !validID(actor) || !oneOf(state, "publishing", "paused", "published") {
+			return ErrInvalid
+		}
+		if v.Disclosure.State == "published" && state != "published" {
+			return nil
+		}
+		now := s.now()
+		v.Disclosure.State, v.Disclosure.Failure, v.Disclosure.Remaining = state, strings.TrimSpace(failure), append([]string{}, remaining...)
+		if state == "published" && v.Disclosure.PublishedAt == nil {
+			v.Disclosure.PublishedAt = &now
+			v.EmbargoState = "disclosed"
+		}
+		v.Version++
+		v.AccessLog = append(v.AccessLog, AccessEvent{ID: mustID(), ActorID: actor, Action: "disclosure_" + state, Detail: failure, CreatedAt: now})
+		return nil
+	})
 }
 
 type Store struct {
@@ -807,6 +905,9 @@ func (s *Store) read(id string, out *Advisory) error {
 	}
 	if out.ReleaseAttestations == nil {
 		out.ReleaseAttestations = []ReleaseAttestation{}
+	}
+	if out.Disclosure != nil && out.Disclosure.Remaining == nil {
+		out.Disclosure.Remaining = []string{}
 	}
 	return nil
 }

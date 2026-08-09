@@ -849,3 +849,20 @@ connects that artifact and release ancestry back to the affected version line.
 The security workspace summarizes missing tasks, reproductions, approvals, and
 release artifacts for every claimed line so disclosure cannot accidentally
 present an unsupported line as fixed.
+
+An affected-repository owner can then prepare one redacted disclosure packet.
+Preparation is rejected until every affected repository/version line maps to an
+approved, checksummed release attestation. The packet freezes public credits,
+upgrade guidance, affected and fixed versions, exact release commits, artifact
+checksums, and deterministic repaired branch names. Publishing is a durable,
+retry-safe sequence: exact commits are staged beneath a transport-hidden repair
+namespace that is also excluded from branch and named-revision browser APIs,
+the advisory is made durably and anonymously readable, and only then
+are public repaired refs and targeted notification records emitted for
+affected repository owners, current collaborators subscribed through repository
+access, and users who initiated deployments of those repositories. Any failure
+retains the workflow with its remaining steps visible inside the protected
+workspace. Public advisory reads remain not-found until the durable disclosure
+transition, then stay available while downstream delivery retries; they never
+serialize protected evidence, findings, messages, contact details, commands, or
+logs.

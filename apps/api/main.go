@@ -297,7 +297,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerIncidentRoutes(mux, store, repositoryCatalog, incidentStore, proposalStore, deploymentStore, releaseStore, pullRequestStore, checkRunStore, authStore, activityStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && userStore != nil && securityAdvisoryStore != nil {
-		registerSecurityAdvisoryRoutes(mux, store, repositoryCatalog, userStore, securityAdvisoryStore, releaseStore, checkRunStore, deploymentStore, authStore)
+		registerSecurityAdvisoryRoutes(mux, store, repositoryCatalog, userStore, securityAdvisoryStore, releaseStore, checkRunStore, deploymentStore, authStore, activityStore)
 	}
 	mux.HandleFunc("GET /git/{remote}/info/refs", func(w http.ResponseWriter, r *http.Request) {
 		service := r.URL.Query().Get("service")
@@ -2924,6 +2924,9 @@ func classifyInboxEvent(userID, ownerID string, event activities.Event, proposal
 	}
 	if strings.HasPrefix(event.Kind, "access.") && event.TargetUserID != nil && *event.TargetUserID == userID {
 		return "awareness", "Review repository access", nil
+	}
+	if event.Kind == "security_advisory_published" && event.TargetUserID != nil && *event.TargetUserID == userID {
+		return "awareness", "Upgrade affected software", nil
 	}
 	if event.ResourceType == "deployment" && event.TargetUserID != nil && *event.TargetUserID == userID {
 		switch event.Kind {

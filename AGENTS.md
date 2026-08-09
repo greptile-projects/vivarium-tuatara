@@ -347,6 +347,22 @@ whenever dependencies change or the web job fails before it starts.
   release attestations then prove the release ancestry contains that candidate
   and every exact release build succeeded with checksummed artifacts, allowing
   the advisory to derive coverage and remaining gaps across every claimed line.
+  Maintainers prepare a redacted disclosure only after every affected version
+  line has an attested release. Publication exposes deterministic repaired
+  branches, exact releases and checksums, affected/fixed versions, credits, and
+  upgrade guidance together; anonymous public advisory reads never include the
+  protected report, evidence, messages, contact, commands, or logs. Durable
+  publication steps are retry-safe and retain an exact remaining-work list.
+  Affected repository owners, repository collaborators, and prior deployment
+  initiators receive targeted
+  activity/inbox notifications only after the public packet is ready.
+  Before that durable transition, repair refs are staged only beneath the
+  transport-hidden `vivarium-security/disclosures/*` namespace, so failed
+  cleanup cannot reveal remediation. Repository branch collection and direct
+  named-revision browser routes exclude the entire `vivarium-security/*`
+  namespace as well. Public refs and idempotent notifications
+  follow the public transition; their failures retain explicit public
+  remaining work rather than falsely restoring the embargo.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's

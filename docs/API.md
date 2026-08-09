@@ -1156,6 +1156,27 @@ documents. All routes require an authenticated credential with
   exact release build steps succeeded, and they produced checksummed artifacts.
   The retained attestation maps those artifacts back to the supported version
   line, allowing clients to show unproved or unshipped coverage gaps.
+- `POST /security-advisories/{advisory_id}/disclosure` compare-and-swaps the
+  advisory version and accepts a redacted summary, actionable upgrade guidance,
+  public credits, and an optional `scheduled_at`. It fails unless every claimed
+  repository/version line has an exact release attestation, then freezes the
+  affected/fixed matrix, release commits, artifact IDs and SHA-256 checksums,
+  and deterministic repaired branch names.
+- `POST /security-advisories/{advisory_id}/disclosure/publish` publishes or
+  resumes a due packet. Exact commits are first staged beneath the
+  transport-hidden `vivarium-security/disclosures/*` namespace. After the
+  anonymous advisory is durably public, repaired branches and targeted
+  owner/deployment-initiator notifications are idempotently emitted. A
+  pre-publication failure returns `disclosure_paused`; a later failure returns
+  `disclosure_incomplete` while retaining public availability and exact
+  `remaining` work for responders.
+  Repository branch listing and named-revision browse routes never expose the
+  `vivarium-security/*` staging namespace, including after failed cleanup.
+- `GET /security-advisories/public` and `GET
+  /security-advisories/public/{advisory_id}` are anonymous and return only fully
+  published disclosure projections. Private evidence, findings, messages,
+  reporter contact, investigation data, reproduction definitions, and logs are
+  never present.
 
 A report is discoverable only by its reporter, current owners of affected
 repositories, and its explicitly invited response team. Unauthorized detail
