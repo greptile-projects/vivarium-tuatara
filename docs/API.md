@@ -908,6 +908,28 @@ lifetime. It works with catalog, version, resolution, and artifact reads but
 cannot enumerate or download unrelated private identities and carries no
 publisher or repository mutation authority.
 
+### Exact dependency inventories
+
+Repository commits may define `.vivarium/packages.json`:
+
+```json
+{"version":1,"dependencies":[{"name":"project-sdk","constraint":"^1.4.0"}],"lock":[{"name":"project-sdk","version":"1.4.2"},{"name":"core-kit","version":"2.3.0"}]}
+```
+
+`POST /repositories/{id}/dependency-inventories` with `{"commit_id":"..."}`
+requires repository write participation and reads that file from the verified
+commit. It records the caller, direct and package-derived transitive paths,
+exact versions, license and support claims, resolution state, and provenance
+gaps. An exact retry returns the existing immutable snapshot.
+
+`GET /repositories/{id}/dependency-inventories` inherits repository read access
+and projects whether each source revision is current plus matching releases,
+builds, artifacts, and deployments. `GET
+/packages/{name}/versions/{version}/consumers` returns direct and transitive
+exact-version consumers, filtering every consuming repository through the
+caller's current access. Package publication accepts an optional `support`
+contact alongside `license`.
+
 ### Versioned interface relationships
 
 Repository participants publish a named interface from immutable release

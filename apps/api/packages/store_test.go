@@ -7,10 +7,31 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"testing"
 )
 
 var errForcedDirectory = errors.New("forced directory failure")
+
+func TestDependencyInventoriesRetainExactAttributionAndConsumerPaths(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := Inventory{RepositoryID: strings.Repeat("a", 32), CommitID: strings.Repeat("b", 40), RecordedBy: strings.Repeat("c", 32), Entries: []InventoryEntry{{Name: "core-kit", Version: "2.1.0", Constraint: "^2.0.0", Paths: []string{"app-kit > core-kit"}, State: "resolved", License: "MIT", Support: "https://support.example.test"}}}
+	created, err := store.RecordInventory(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retried, err := store.RecordInventory(value)
+	if err != nil || retried.ID != created.ID {
+		t.Fatalf("retry = %#v, %v", retried, err)
+	}
+	consumers, err := store.ListConsumers("core-kit", "2.1.0")
+	if err != nil || len(consumers) != 1 || consumers[0].Entries[0].Paths[0] != "app-kit > core-kit" {
+		t.Fatalf("consumers = %#v, %v", consumers, err)
+	}
+}
 
 func TestPublishRetainsImmutableProvenanceAndArtifact(t *testing.T) {
 	store, err := New(t.TempDir())

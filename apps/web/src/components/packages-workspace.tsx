@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useAuth } from "./auth";
 import { Badge, Button, Card } from "./ui";
-import { api, APIError, type PackageVersion } from "@/lib/api";
+import { api, APIError, type DependencyInventory, type PackageVersion } from "@/lib/api";
 import { PackageArtifactDownload } from "./package-artifact-download";
 
 type Catalog = { packages: PackageVersion[] };
@@ -17,6 +17,7 @@ export function PackagesWorkspace() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [issued, setIssued] = useState<IssuedCredential | null>(null);
+  const [consumers, setConsumers] = useState<Record<string, DependencyInventory[]>>({});
 
   useEffect(() => {
     let active = true;
@@ -39,6 +40,12 @@ export function PackagesWorkspace() {
     } catch (reason) { setError(reason instanceof APIError ? reason.message : "Credential could not be created."); }
   }
 
+  async function loadConsumers(item: PackageVersion) {
+    const key = `${item.name}@${item.version}`;
+    try { const result = await api<{ consumers: DependencyInventory[] }>(`/packages/${item.name}/versions/${encodeURIComponent(item.version)}/consumers`, {}, token); setConsumers((current) => ({ ...current, [key]: result.consumers })); }
+    catch (reason) { setError(reason instanceof APIError ? reason.message : "Consumers could not be loaded."); }
+  }
+
   return <div className="space-y-6">
     <header className="max-w-3xl"><p className="text-xs font-bold uppercase tracking-[0.16em] text-[var(--brand)]">Package registry</p><h1 className="mt-2 text-3xl font-bold tracking-tight">Choose dependencies from inspectable evidence</h1><p className="mt-3 text-sm leading-6 text-[var(--muted)]">Search public packages and private packages you can currently read. Every version connects its documentation and compatibility claims to exact source, build, artifact, and checksum provenance.</p></header>
     <Card className="p-4"><label className="text-sm font-semibold">Search packages<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, purpose, or documentation" className="mt-2 min-h-11 w-full rounded-lg border border-[var(--line-strong)] bg-white px-3 font-normal" /></label></Card>
@@ -47,9 +54,10 @@ export function PackagesWorkspace() {
     {loading ? <p className="text-sm text-[var(--muted)]">Loading package evidence…</p> : filtered.length === 0 ? <Card className="p-8 text-center text-sm text-[var(--muted)]">No authorized package versions match this search.</Card> : <div className="grid gap-4">{filtered.map((item) => <Card key={item.id} className="p-5">
       <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">{item.name} <span className="font-mono text-sm text-[var(--muted)]">{item.version}</span></h2><Badge tone={item.lifecycle === "active" ? "success" : item.lifecycle === "yanked" ? "danger" : "warning"}>{item.lifecycle}</Badge><Badge>{item.visibility}</Badge></div><p className="mt-1 text-sm text-[var(--muted)]">{item.summary || "No summary supplied."}</p></div><PackageArtifactDownload name={item.name} version={item.version} /></div>
       {item.lifecycle_warning && <p className="mt-4 rounded-lg bg-[var(--warning-soft)] p-3 text-sm text-[var(--warning)]"><strong>Lifecycle warning:</strong> {item.lifecycle_warning}</p>}
-      <div className="mt-4 grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4"><div><span className="font-semibold">Platform</span><p className="mt-1 text-[var(--muted)]">{[item.platform.os, item.platform.architecture, item.platform.runtime].filter(Boolean).join(" / ") || "portable"}</p></div><div><span className="font-semibold">License</span><p className="mt-1 text-[var(--muted)]">{item.license || "not declared"}</p></div><div><span className="font-semibold">Compatibility</span><p className="mt-1 text-[var(--muted)]">{item.dependencies.length ? item.dependencies.map((value) => `${value.name} ${value.constraint}`).join(", ") : "no dependencies"}</p></div><div><span className="font-semibold">Published</span><p className="mt-1 text-[var(--muted)]">{new Date(item.published_at).toLocaleString()}</p></div></div>
+      <div className="mt-4 grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-5"><div><span className="font-semibold">Platform</span><p className="mt-1 text-[var(--muted)]">{[item.platform.os, item.platform.architecture, item.platform.runtime].filter(Boolean).join(" / ") || "portable"}</p></div><div><span className="font-semibold">License</span><p className="mt-1 text-[var(--muted)]">{item.license || "not declared"}</p></div><div><span className="font-semibold">Support</span><p className="mt-1 text-[var(--muted)]">{item.support || "not declared"}</p></div><div><span className="font-semibold">Compatibility</span><p className="mt-1 text-[var(--muted)]">{item.dependencies.length ? item.dependencies.map((value) => `${value.name} ${value.constraint}`).join(", ") : "no dependencies"}</p></div><div><span className="font-semibold">Published</span><p className="mt-1 text-[var(--muted)]">{new Date(item.published_at).toLocaleString()}</p></div></div>
       <details className="mt-4 rounded-lg border border-[var(--line)] p-4"><summary className="cursor-pointer text-sm font-semibold">Documentation and provenance</summary><div className="mt-3 space-y-3 text-sm"><p className="whitespace-pre-wrap leading-6 text-[var(--muted)]">{item.documentation || "The publisher did not supply version documentation."}</p><dl className="grid gap-2 font-mono text-xs"><div><dt className="inline font-semibold">SHA-256: </dt><dd className="inline break-all">{item.sha256}</dd></div><div><dt className="inline font-semibold">Source: </dt><dd className="inline"><Link className="text-[var(--brand)] hover:underline" href={`/repositories/${item.repository_id}/commits/${item.source_commit}`}>{item.source_commit}</Link></dd></div><div><dt className="inline font-semibold">Build: </dt><dd className="inline">{item.build_attestation.image} · {item.build_attestation.step} · attempt {item.build_attestation.attempt}</dd></div></dl></div></details>
       {token && <details className="mt-3"><summary className="cursor-pointer text-xs font-semibold text-[var(--brand)]">Create isolated install credential</summary><form onSubmit={(event) => void createCredential(event, item.name)} className="mt-3 flex flex-wrap items-end gap-3"><label className="text-xs font-semibold">Consuming repository ID<input name="repository_id" required minLength={32} maxLength={32} className="mt-1 min-h-9 rounded-lg border border-[var(--line-strong)] px-3 font-mono font-normal" /></label><Button type="submit" variant="secondary">Create one-hour token</Button></form></details>}
+      <div className="mt-3"><Button variant="secondary" onClick={() => void loadConsumers(item)}>Show authorized consumers</Button>{consumers[`${item.name}@${item.version}`] && <div className="mt-3 text-xs text-[var(--muted)]">{consumers[`${item.name}@${item.version}`].length ? consumers[`${item.name}@${item.version}`].map((consumer) => <Link key={consumer.inventory.id} className="mr-3 text-[var(--brand)] hover:underline" href={`/repositories/${consumer.inventory.repository_id}/dependencies`}>{consumer.inventory.repository_id.slice(0, 8)} · {consumer.current ? "current" : "stale revision"} · {consumer.deployments.filter((value) => value.state === "succeeded").length} running</Link>) : "No visible consumers use this exact version."}</div>}</div>
     </Card>)}</div>}
   </div>;
 }

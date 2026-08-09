@@ -817,6 +817,17 @@ package identities that the issuer can currently read. Registry metadata,
 resolution, and artifact endpoints honor that allowlist, so the token has no
 Git, repository mutation, publisher, or unrelated-private-package authority.
 
+Repositories make actual package use reviewable with a versioned
+`.vivarium/packages.json`. Its `dependencies` array declares direct semantic
+constraints and its `lock` array names exact package versions. Recording an
+inventory for a verified commit derives transitive paths from immutable package
+metadata, attributes the snapshot to its caller, and retains unresolved or
+constraint-stale entries plus missing license, support, or package provenance.
+Inventory reads project exact-commit release builds, artifacts, and governed
+deployments without rewriting the historical lock snapshot. Repository surfaces
+show every authorized revision inventory; exact package versions show only
+consumer repositories the viewer can currently read.
+
 Release delivery is an explicit repository collaboration. Owners define a
 strictly ordered set of environments with visible scoped configuration,
 required independent approvals, and concurrency limits. Protected credential

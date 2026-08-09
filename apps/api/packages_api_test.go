@@ -70,6 +70,54 @@ func TestVersionMatchingPreservesPrereleaseBoundaries(t *testing.T) {
 	}
 }
 
+func TestRecordedDependencyInventoryDerivesExactVisibleConsumer(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	buildStore, _ := checkruns.New(t.TempDir())
+	releaseStore, _ := releases.New(t.TempDir())
+	packageStore, _ := packages.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, buildStore, releaseStore, packageStore))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "inventory-owner")
+	var consumer, publisher repositories.Repository
+	decodeResponse(t, authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"consumer"}`, owner.Credential.Token, http.StatusCreated), &consumer)
+	decodeResponse(t, authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"publisher"}`, owner.Credential.Token, http.StatusCreated), &publisher)
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+consumer.ID, `{"visibility":"public"}`, owner.Credential.Token, http.StatusOK).Body.Close()
+	body := []byte("package")
+	sum := sha256.Sum256(body)
+	published, err := packageStore.Publish(packages.Version{Name: "core-kit", Version: "2.1.0", RepositoryID: publisher.ID, ReleaseID: strings.Repeat("1", 32), SourceCommit: strings.Repeat("2", 40), BuildID: strings.Repeat("3", 32), BuildAttestation: packages.BuildAttestation{Step: "package", Image: "alpine:3.22", Command: "make", Attempt: 1, State: "succeeded"}, ArtifactID: strings.Repeat("4", 32), ArtifactPath: "core.tgz", Size: int64(len(body)), SHA256: hex.EncodeToString(sum[:]), License: "MIT", Support: "https://support.example.test", PublisherID: owner.User.ID, Visibility: "public"}, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, _ := gitStore.Open(consumer.ID)
+	manifest, _ := repo.WriteObject(storage.BlobObject, []byte(`{"version":1,"dependencies":[{"name":"core-kit","constraint":"^2.0.0"}],"lock":[{"name":"core-kit","version":"2.1.0"}]}`))
+	configTree := writeTestTree(t, repo, testTreeEntry{mode: "100644", name: "packages.json", id: manifest})
+	root := writeTestTree(t, repo, testTreeEntry{mode: "40000", name: ".vivarium", id: configTree})
+	commit := writeTestCommit(t, repo, root, nil, 1700000000, "locked dependencies")
+	if err = repo.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(commit)}); err != nil {
+		t.Fatal(err)
+	}
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+consumer.ID+"/dependency-inventories", `{"commit_id":"`+string(commit)+`"}`, owner.Credential.Token, http.StatusCreated)
+	var projection struct {
+		Inventory packages.Inventory `json:"inventory"`
+		Current   bool               `json:"current"`
+	}
+	decodeResponse(t, response, &projection)
+	if !projection.Current || len(projection.Inventory.Entries) != 1 || projection.Inventory.Entries[0].PackageID != published.ID || projection.Inventory.Entries[0].State != "resolved" {
+		t.Fatalf("projection = %#v", projection)
+	}
+	consumerResponse := authenticatedRequest(t, http.MethodGet, server.URL+"/packages/core-kit/versions/2.1.0/consumers", "", "", http.StatusOK)
+	var consumers struct {
+		Consumers []json.RawMessage `json:"consumers"`
+	}
+	decodeResponse(t, consumerResponse, &consumers)
+	if len(consumers.Consumers) != 1 {
+		t.Fatalf("consumers = %#v", consumers)
+	}
+}
+
 func TestOwnerPublishesVerifiedPackageAndContributorCannot(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	identities, _ := users.New(t.TempDir())
