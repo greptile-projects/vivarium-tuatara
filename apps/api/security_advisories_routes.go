@@ -223,6 +223,7 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 			return
 		}
 		valid := false
+		unavailable := false
 		switch in.Kind {
 		case "commit":
 			if repo, e := gitStore.Open(in.RepositoryID); e == nil {
@@ -230,12 +231,24 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 				valid = e == nil
 			}
 		case "release":
-			_, e := releasesStore.Get(in.RepositoryID, in.ReleaseID)
-			valid = e == nil
+			if releasesStore == nil {
+				unavailable = true
+			} else {
+				_, e := releasesStore.Get(in.RepositoryID, in.ReleaseID)
+				valid = e == nil
+			}
 		case "build":
-			_, e := builds.Get(in.RepositoryID, in.ReleaseID, in.BuildID)
-			valid = e == nil
+			if builds == nil {
+				unavailable = true
+			} else {
+				_, e := builds.Get(in.RepositoryID, in.ReleaseID, in.BuildID)
+				valid = e == nil
+			}
 		case "artifact":
+			if builds == nil {
+				unavailable = true
+				break
+			}
 			if run, e := builds.Get(in.RepositoryID, in.ReleaseID, in.BuildID); e == nil {
 				for _, a := range run.Artifacts {
 					if a.ID == in.ArtifactID {
@@ -244,10 +257,24 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 				}
 			}
 		case "deployment":
-			_, e := deploymentsStore.GetPromotion(in.RepositoryID, in.DeploymentID)
-			valid = e == nil
+			if deploymentsStore == nil {
+				unavailable = true
+			} else {
+				_, e := deploymentsStore.GetPromotion(in.RepositoryID, in.DeploymentID)
+				valid = e == nil
+			}
 		case "dependency":
-			valid = strings.TrimSpace(in.Dependency) != ""
+			if builds == nil {
+				unavailable = true
+				break
+			}
+			if run, e := builds.Get(in.RepositoryID, in.ReleaseID, in.BuildID); e == nil {
+				valid = strings.TrimSpace(in.Dependency) == run.Definition.Image
+			}
+		}
+		if unavailable {
+			writeAPIError(w, http.StatusServiceUnavailable, "advisory_evidence_unavailable", "evidence verification is temporarily unavailable")
+			return
 		}
 		if !valid {
 			writeAPIError(w, 422, "invalid_advisory_evidence", "evidence could not be verified")

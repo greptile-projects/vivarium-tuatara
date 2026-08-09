@@ -813,6 +813,8 @@ contract and explains that privacy boundary before submission.
 
 Participants build a protected evidence graph from verified commits,
 dependency resolutions, releases, builds, release artifacts, and deployments.
+Dependency links are resolved against an exact release build's frozen image
+definition rather than accepting a caller-supplied package claim.
 Attributable hypotheses, conclusions, and uncertainty explain what those links
 mean, while a compare-and-swap version-line by environment matrix records
 `confirmed`, `suspected`, `unaffected`, or `fixed` impact. Responders can freeze

@@ -10,6 +10,7 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/securityadvisories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
@@ -23,7 +24,8 @@ func TestPrivateSecurityReportTriageAndBoundedAccess(t *testing.T) {
 	catalog, _ := repositories.New(t.TempDir(), gitStore)
 	activity, _ := activities.New(t.TempDir())
 	advisories, _ := securityadvisories.New(t.TempDir())
-	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, activity, nil, nil, advisories))
+	checks, _ := checkruns.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, activity, nil, checks, advisories))
 	defer server.Close()
 	owner := createTestAccount(t, server.URL, "security-owner")
 	reporter := createTestAccount(t, server.URL, "security-reporter")
@@ -65,6 +67,16 @@ func TestPrivateSecurityReportTriageAndBoundedAccess(t *testing.T) {
 	if len(advisory.AccessLog) < 5 || advisory.AccessLog[len(advisory.AccessLog)-1].Action != "viewed" {
 		t.Fatalf("access log = %#v", advisory.AccessLog)
 	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/evidence", `{"kind":"release","repository_id":"`+repository.ID+`","release_id":"`+strings.Repeat("9", 32)+`","label":"Unavailable release","description":"Must fail without panicking."}`, responder.Credential.Token, http.StatusServiceUnavailable).Body.Close()
+	releaseKey := strings.Repeat("8", 32)
+	runs, err := checks.CreateRequested(repository.ID, releaseKey, strings.Repeat("a", 40), []checkruns.Definition{{Name: "package", Image: "alpine:3.22", Command: "true"}}, owner.User.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dependencyPrefix := `{"kind":"dependency","repository_id":"` + repository.ID + `","release_id":"` + releaseKey + `","build_id":"` + runs[0].ID + `","label":"Build image","description":"Frozen build dependency.","dependency":`
+	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/evidence", dependencyPrefix+`"attacker.invalid/fake:999"}`, responder.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/evidence", dependencyPrefix+`"alpine:3.22"}`, responder.Credential.Token, http.StatusCreated)
+	decodeResponse(t, response, &advisory)
 	evidenceID := advisory.Evidence[0].ID
 	response = authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/findings", `{"kind":"hypothesis","statement":"The parser is reachable from the public API.","evidence_ids":["`+evidenceID+`"]}`, responder.Credential.Token, http.StatusCreated)
 	decodeResponse(t, response, &advisory)

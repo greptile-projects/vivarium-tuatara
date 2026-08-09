@@ -1105,7 +1105,9 @@ documents. All routes require an authenticated credential with
   from any authorized participant.
 - `POST /security-advisories/{advisory_id}/evidence` connects a verified
   `commit`, `dependency`, `release`, `build`, `artifact`, or `deployment` from
-  an affected repository, with a bounded label and description.
+  an affected repository, with a bounded label and description. Dependency
+  evidence must name an exact release build and match its immutable container
+  image dependency; free-form dependency claims are rejected.
 - `POST /security-advisories/{advisory_id}/findings` records an attributable
   `hypothesis`, `conclusion`, or `uncertainty`. `PUT
   /security-advisories/{advisory_id}/impact` compare-and-swaps one

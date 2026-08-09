@@ -323,7 +323,8 @@ whenever dependencies change or the web job fails before it starts.
   Participants connect verified commits, dependencies, releases, builds,
   artifacts, and deployments; record attributed hypotheses, conclusions, and
   uncertainty; and compare-and-swap a version-line by environment impact
-  matrix. Short-lived `security:investigate` credentials expose only selected
+  matrix. Dependency evidence must match an exact release build's frozen image
+  definition. Short-lived `security:investigate` credentials expose only selected
   frozen evidence and can publish findings only inside the embargoed report.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
