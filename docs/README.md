@@ -1079,3 +1079,16 @@ the member organization and portfolio projections, revoke with an expected
 version at `/access-grants/{grant-id}`, and issue agent credentials beneath
 `/access-grants/{grant-id}/credentials`. Expired, revoked, and explicitly
 excepted resources never authorize credential issuance.
+
+Organization policies provide a versioned governance baseline across repository
+visibility, review count, named checks, queued integration, attested release
+provenance, dependency eligibility, promotion approvals, and agent authority.
+Owners save policies as drafts targeted to the whole organization, a team, or a
+repository and preview the merged repository impact at
+`/organizations/{id}/policies/preview` before activation. Active policy reads
+omit drafts and retain both the strict baseline and any effective local value.
+Activation applies to new workflow decisions, so existing pulls, releases,
+deployments, and credentials keep their frozen evidence rather than being
+retroactively invalidated. Responsible team maintainers can request a named,
+reasoned, expiring exception; owners decide it, and projections keep the
+requester, decision, expiry, original baseline, and adjusted value visible.

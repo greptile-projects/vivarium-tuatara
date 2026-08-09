@@ -237,6 +237,18 @@ func TestOrganizationScopedAgentAccessRequestCredentialAndRevocation(t *testing.
 	if issued.OrganizationID != group.ID || issued.AccessGrantID != grant.ID || issued.RepositoryID != repo.ID {
 		t.Fatalf("credential bounds = %#v", issued)
 	}
+	policyResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/policies", `{"name":"No agents","targets":[{"kind":"organization"}],"rules":{"agent_authority":"disabled"}}`, owner.Credential.Token, http.StatusCreated)
+	var policy organizations.Policy
+	json.NewDecoder(policyResponse.Body).Decode(&policy)
+	policyResponse.Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/policies/"+policy.ID+"/activate", `{"expected_version":1}`, owner.Credential.Token, http.StatusOK).Body.Close()
+	// Activation governs new authority without invalidating the already-issued credential.
+	authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/access-grants/"+grant.ID+"/credentials", `{"agent_id":"`+agentID+`","repository_id":"`+repo.ID+`","expires_in":600}`, owner.Credential.Token, http.StatusConflict).Body.Close()
+	blockedRequest := authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/access-requests", `{"principal_type":"agent","principal_id":"`+agentID+`","role":"viewer","resources":[{"kind":"repository","id":"`+repo.ID+`"}],"exceptions":[],"reason":"request after policy activation"}`, owner.Credential.Token, http.StatusCreated)
+	json.NewDecoder(blockedRequest.Body).Decode(&group)
+	blockedRequest.Body.Close()
+	blockedRequestID := group.AccessRequests[len(group.AccessRequests)-1].ID
+	authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/access-requests/"+blockedRequestID+"/decision", `{"decision":"approve"}`, owner.Credential.Token, http.StatusConflict).Body.Close()
 	authenticatedRequest(t, http.MethodDelete, server.URL+"/organizations/"+group.ID+"/members/"+owner.User.ID, "", member.Credential.Token, http.StatusNotFound).Body.Close()
 	if _, err := credentials.Authenticate(issued.Token, "git:read"); err != nil {
 		t.Fatalf("rejected removal revoked derived credential: %v", err)

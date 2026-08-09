@@ -64,6 +64,26 @@ type organizationAccessInput struct {
 	Reason        string                          `json:"reason"`
 	ExpiresAt     *time.Time                      `json:"expires_at"`
 }
+type organizationPolicyInput struct {
+	Name        string                       `json:"name"`
+	Description string                       `json:"description"`
+	Targets     []organizations.PolicyTarget `json:"targets"`
+	Rules       organizations.PolicyRules    `json:"rules"`
+}
+type organizationPolicyActivationInput struct {
+	ExpectedVersion int `json:"expected_version"`
+}
+type organizationPolicyExceptionInput struct {
+	PolicyID       string    `json:"policy_id"`
+	RepositoryID   string    `json:"repository_id"`
+	Rule           string    `json:"rule"`
+	RequestedValue string    `json:"requested_value"`
+	Reason         string    `json:"reason"`
+	ExpiresAt      time.Time `json:"expires_at"`
+}
+type organizationPolicyDecisionInput struct {
+	Decision string `json:"decision"`
+}
 
 func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, repos *repositories.Store, usersStore *users.Store, credentials *auth.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, packageStore *packages.Store, incidentStore *incidents.Store) {
 	project := func(v organizations.Organization, actor string) organizations.Organization {
@@ -81,6 +101,8 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 			v.Agents = []organizations.Agent{}
 			v.AccessGrants = []organizations.AccessGrant{}
 			v.AccessRequests = []organizations.AccessRequest{}
+			v.Policies = []organizations.Policy{}
+			v.PolicyExceptions = []organizations.PolicyException{}
 			v.Events = []organizations.Event{}
 			return v
 		}
@@ -324,6 +346,136 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 		}
 		writeJSON(w, 201, project(v, actor.UserID))
 	})
+	mux.HandleFunc("POST /organizations/{id}/policies", func(w http.ResponseWriter, r *http.Request) {
+		actor, organization, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in organizationPolicyInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_policy", "policy content is required")
+			return
+		}
+		portfolio, err := repos.ListOrganization(organization.ID)
+		if err != nil {
+			writeRepositoryError(w, err)
+			return
+		}
+		owned := map[string]bool{}
+		for _, repo := range portfolio {
+			owned[repo.ID] = true
+		}
+		for _, target := range in.Targets {
+			if target.Kind == "repository" && !owned[target.ID] {
+				writeAPIError(w, 400, "invalid_policy", "repository targets must belong to the organization")
+				return
+			}
+		}
+		v, err := orgs.CreatePolicy(organization.ID, actor.UserID, in.Name, in.Description, in.Targets, in.Rules)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		p := v.Policies[len(v.Policies)-1]
+		w.Header().Set("Location", "/organizations/"+v.ID+"/policies/"+p.ID)
+		writeJSON(w, 201, p)
+	})
+	mux.HandleFunc("GET /organizations/{id}/policies/preview", func(w http.ResponseWriter, r *http.Request) {
+		_, organization, ok := require(w, r, "repositories:read")
+		if !ok {
+			return
+		}
+		repositoryID := r.URL.Query().Get("repository_id")
+		repo, err := repos.GetByID(repositoryID)
+		if err != nil || repo.OrganizationID != organization.ID {
+			writeAPIError(w, 404, "repository_not_found", "organization repository not found")
+			return
+		}
+		teams := []string{}
+		for _, team := range organization.Teams {
+			for _, responsibility := range team.Responsibilities {
+				if responsibility.RepositoryID == repositoryID {
+					teams = append(teams, team.ID)
+				}
+			}
+		}
+		writeJSON(w, 200, organizations.EffectivePolicies(organization, repositoryID, teams, true, time.Now().UTC()))
+	})
+	mux.HandleFunc("GET /organizations/{id}/policies/effective", func(w http.ResponseWriter, r *http.Request) {
+		_, organization, ok := require(w, r, "repositories:read")
+		if !ok {
+			return
+		}
+		repositoryID := r.URL.Query().Get("repository_id")
+		repo, err := repos.GetByID(repositoryID)
+		if err != nil || repo.OrganizationID != organization.ID {
+			writeAPIError(w, 404, "repository_not_found", "organization repository not found")
+			return
+		}
+		teams := []string{}
+		for _, team := range organization.Teams {
+			for _, responsibility := range team.Responsibilities {
+				if responsibility.RepositoryID == repositoryID {
+					teams = append(teams, team.ID)
+				}
+			}
+		}
+		writeJSON(w, 200, organizations.EffectivePolicies(organization, repositoryID, teams, false, time.Now().UTC()))
+	})
+	mux.HandleFunc("POST /organizations/{id}/policies/{policy_id}/activate", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in organizationPolicyActivationInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_policy", "expected_version is required")
+			return
+		}
+		v, err := orgs.ActivatePolicy(r.PathValue("id"), r.PathValue("policy_id"), actor.UserID, in.ExpectedVersion)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		writeJSON(w, 200, project(v, actor.UserID))
+	})
+	mux.HandleFunc("POST /organizations/{id}/policy-exceptions", func(w http.ResponseWriter, r *http.Request) {
+		actor, organization, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in organizationPolicyExceptionInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_policy_exception", "exception content is required")
+			return
+		}
+		repo, err := repos.GetByID(in.RepositoryID)
+		if err != nil || repo.OrganizationID != organization.ID {
+			writeAPIError(w, 404, "repository_not_found", "organization repository not found")
+			return
+		}
+		v, err := orgs.RequestPolicyException(organization.ID, actor.UserID, in.PolicyID, in.RepositoryID, in.Rule, in.RequestedValue, in.Reason, in.ExpiresAt)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		x := v.PolicyExceptions[len(v.PolicyExceptions)-1]
+		w.Header().Set("Location", "/organizations/"+v.ID+"/policy-exceptions/"+x.ID)
+		writeJSON(w, 201, x)
+	})
+	mux.HandleFunc("POST /organizations/{id}/policy-exceptions/{exception_id}/decision", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in organizationPolicyDecisionInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_policy_exception", "decision is required")
+			return
+		}
+		v, err := orgs.DecidePolicyException(r.PathValue("id"), r.PathValue("exception_id"), actor.UserID, in.Decision)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		writeJSON(w, 200, project(v, actor.UserID))
+	})
 	mux.HandleFunc("POST /organizations/{id}/access-requests/{request_id}/decision", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := require(w, r, "repositories:write")
 		if !ok {
@@ -337,12 +489,19 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 			return
 		}
 		v, err := orgs.DecideAccessRequest(r.PathValue("id"), r.PathValue("request_id"), actor.UserID, in.Decision, func(request organizations.AccessRequest) error {
+			current, currentErr := orgs.Get(r.PathValue("id"))
+			if currentErr != nil {
+				return organizations.ErrConflict
+			}
 			for _, resource := range request.Resources {
 				if resource.Kind != "repository" {
 					continue
 				}
 				repository, repositoryErr := repos.GetByID(resource.ID)
 				if repositoryErr != nil || repository.OrganizationID != r.PathValue("id") {
+					return organizations.ErrConflict
+				}
+				if request.PrincipalType == "agent" && organizations.EffectivePolicies(current, resource.ID, organizations.ResponsibleTeamIDs(current, resource.ID), false, time.Now().UTC()).Rules.AgentAuthority == "disabled" {
 					return organizations.ErrConflict
 				}
 			}
@@ -404,6 +563,10 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 		}
 		if grant == nil || grant.PrincipalType != "agent" || grant.PrincipalID != in.AgentID {
 			writeAPIError(w, 404, "access_grant_not_found", "live agent grant not found")
+			return
+		}
+		if organizations.EffectivePolicies(v, in.RepositoryID, organizations.ResponsibleTeamIDs(v, in.RepositoryID), false, time.Now().UTC()).Rules.AgentAuthority == "disabled" {
+			writeAPIError(w, 409, "organization_conflict", "organization policy disables new agent authority for this repository")
 			return
 		}
 		lifetime := time.Duration(in.ExpiresIn) * time.Second
