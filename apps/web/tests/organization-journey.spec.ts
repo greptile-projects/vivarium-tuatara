@@ -49,8 +49,10 @@ test("an organization governs a human-agent portfolio without losing published w
     const packageName = `organization-runtime-${suffix}`;
     const ownerPage = await (await browser.newContext()).newPage();
     const developerPage = await (await browser.newContext()).newPage();
+    const approverPage = await (await browser.newContext()).newPage();
     const owner = await account(ownerPage, "Organization Owner", `org-owner-${suffix}`);
     const developer = await account(developerPage, "Portfolio Developer", `org-developer-${suffix}`);
+    const approver = await account(approverPage, "Delivery Approver", `org-approver-${suffix}`);
 
     await ownerPage.goto("/organizations");
     await ownerPage.getByLabel("Name", { exact: true }).fill(`Acme Systems ${suffix}`);
@@ -67,6 +69,10 @@ test("an organization governs a human-agent portfolio without losing published w
     await developerPage.goto("/organizations");
     await developerPage.getByRole("button", { name: "Accept invitation" }).click();
     await expect(developerPage.getByRole("link", { name: "Open portfolio →" })).toBeVisible();
+    await json(ownerPage, "post", `/organizations/${organization.id}/invitations`, owner.headers, { user_id: approver.user.id });
+    const approverOrganizations = await json(approverPage, "get", "/organizations", approver.headers) as any;
+    const approverInvitation = approverOrganizations.organizations.find((item: any) => item.id === organization.id).invitations[0];
+    await json(approverPage, "post", `/organizations/${organization.id}/invitations/${approverInvitation.id}/accept`, approver.headers);
 
     await ownerPage.reload();
     for (const name of [`service-${suffix}`, `console-${suffix}`]) {
@@ -142,12 +148,14 @@ test("an organization governs a human-agent portfolio without losing published w
       await mkdir(join(copy, ".vivarium"));
       await writeFile(join(copy, ".vivarium", "release.json"), JSON.stringify({ version: 1, steps: [{ name: "package", image: "alpine:3.22", command: "cp artifact.txt \"$VIVARIUM_OUTPUT/app.txt\"" }] }));
       if (repository.id === consoleRepository.id) {
+        await writeFile(join(copy, ".vivarium", "checks.json"), JSON.stringify({ version: 1, checks: [{ name: "portfolio verification", image: "alpine:3.22", command: "sleep 2; test -r console.txt" }] }));
         await writeFile(join(copy, ".vivarium", "packages.json"), JSON.stringify({ version: 1, dependencies: [{ name: packageName, constraint: "^1.0.0" }], lock: [{ name: packageName, version: "1.0.0" }] }));
         await writeFile(join(copy, ".vivarium", "deployment.json"), JSON.stringify({ version: 1, stages: [{ name: "portfolio health", signals: [{ name: "console artifact is readable", command: "test -r \"$VIVARIUM_ARTIFACT\"" }] }] }));
       }
       await writeFile(join(copy, "artifact.txt"), `${repository.name} baseline\n`);
       await git(copy, "add", "."); await git(copy, "commit", "-m", "Establish governed baseline"); await git(copy, "push", "origin", "main");
     }
+    await json(ownerPage, "put", `/repositories/${consoleRepository.id}/branches/main/required-checks`, owner.headers, { checks: ["portfolio verification"] });
 
     const proposal = await json(developerPage, "post", `/repositories/${service.id}/proposals`, developer.headers, { title: "Ship coordinated portfolio update", body: "Human service work precedes the bounded agent console change." }) as any;
     const serviceWorkID = crypto.randomUUID().replaceAll("-", "");
@@ -174,12 +182,22 @@ test("an organization governs a human-agent portfolio without losing published w
     expect(retainedHuman.author_id).toBe(developer.user.id);
     expect(retainedAgent.body).toContain(agent.id);
 
-    async function approveAndMerge(repositoryID: string, pullID: string) {
+    async function approveAndMerge(repositoryID: string, pullID: string, verifyPolicy = false) {
+      if (verifyPolicy) {
+        const blocked = await ownerPage.request.post(`/api/repositories/${repositoryID}/pulls/${pullID}/merge`, { headers: owner.headers, data: {} });
+        expect(blocked.status()).toBe(409);
+        const readiness = await json(ownerPage, "get", `/repositories/${repositoryID}/pulls/${pullID}/merge-readiness`, owner.headers) as any;
+        expect(readiness.blockers).toEqual(expect.arrayContaining([
+          expect.objectContaining({ code: "approval_required" }),
+          expect.objectContaining({ code: "required_check_pending", message: expect.stringContaining("portfolio verification") }),
+        ]));
+        await eventually(() => json(ownerPage, "get", `/repositories/${repositoryID}/pulls/${pullID}/checks`, owner.headers) as Promise<any>, (value) => value.check_runs?.some((check: any) => check.definition.name === "portfolio verification" && check.state === "succeeded"), "portfolio verification passes");
+      }
       await json(ownerPage, "post", `/repositories/${repositoryID}/pulls/${pullID}/reviews`, owner.headers, { decision: "approved" });
       return json(ownerPage, "post", `/repositories/${repositoryID}/pulls/${pullID}/merge`, owner.headers, {}) as Promise<any>;
     }
     const humanMerge = await approveAndMerge(service.id, humanPull.id);
-    const agentMerge = await approveAndMerge(consoleRepository.id, agentPull.id);
+    const agentMerge = await approveAndMerge(consoleRepository.id, agentPull.id, true);
     const serviceRelease = await json(ownerPage, "post", `/repositories/${service.id}/releases`, owner.headers, { version: "v1.0.0", notes: "Runtime dependency for the coordinated console delivery.", commit_id: humanMerge.merge_commit_id }) as any;
     await json(ownerPage, "post", `/repositories/${service.id}/releases/${serviceRelease.id}/builds`, owner.headers, {});
     const serviceBuilds = await eventually(() => json(ownerPage, "get", `/repositories/${service.id}/releases/${serviceRelease.id}/builds`, owner.headers) as Promise<any>, (value) => value.builds?.some((build: any) => build.state === "succeeded"), "organization runtime builds");
@@ -191,11 +209,18 @@ test("an organization governs a human-agent portfolio without losing published w
     expect(initiative.policy_exceptions).toEqual(expect.arrayContaining([expect.objectContaining({ id: policyException.id, status: "approved" })]));
 
     const release = await json(ownerPage, "post", `/repositories/${consoleRepository.id}/releases`, owner.headers, { version: "v1.0.0", notes: "Governed human-agent portfolio delivery.", commit_id: agentMerge.merge_commit_id }) as any;
+    const environment = await json(ownerPage, "post", `/repositories/${consoleRepository.id}/environments`, owner.headers, { name: "production", position: 1, image: "alpine:3.22", command: "test -r \"$VIVARIUM_ARTIFACT\"", timeout_seconds: 30, configuration: {}, credentials: {}, required_approvals: 1, concurrency: 1 }) as any;
+    const unattested = await ownerPage.request.post(`/api/repositories/${consoleRepository.id}/deployments`, { headers: owner.headers, data: { environment_id: environment.id, release_id: release.id, build_id: "0".repeat(32), artifact_id: "1".repeat(32) } });
+    expect(unattested.status()).toBe(422);
+    expect(await unattested.json()).toMatchObject({ error: { code: "unverified_build" } });
     await json(ownerPage, "post", `/repositories/${consoleRepository.id}/releases/${release.id}/builds`, owner.headers, {});
     const builds = await eventually(() => json(ownerPage, "get", `/repositories/${consoleRepository.id}/releases/${release.id}/builds`, owner.headers) as Promise<any>, (value) => value.builds?.some((build: any) => build.state === "succeeded"), "organization release builds");
     const build = builds.builds.find((item: any) => item.state === "succeeded");
-    const environment = await json(ownerPage, "post", `/repositories/${consoleRepository.id}/environments`, owner.headers, { name: "production", position: 1, image: "alpine:3.22", command: "test -r \"$VIVARIUM_ARTIFACT\"", timeout_seconds: 30, configuration: {}, credentials: {}, required_approvals: 0, concurrency: 1 }) as any;
     const deployment = await json(ownerPage, "post", `/repositories/${consoleRepository.id}/deployments`, owner.headers, { environment_id: environment.id, release_id: release.id, build_id: build.id, artifact_id: build.artifacts[0].id }) as any;
+    expect(deployment.state).toBe("pending_approval");
+    const selfApproval = await ownerPage.request.post(`/api/repositories/${consoleRepository.id}/deployments/${deployment.id}/approvals`, { headers: owner.headers, data: {} });
+    expect(selfApproval.status()).toBe(409);
+    await json(approverPage, "post", `/repositories/${consoleRepository.id}/deployments/${deployment.id}/approvals`, approver.headers, {});
     await eventually(() => json(ownerPage, "get", `/repositories/${consoleRepository.id}/deployments`, owner.headers) as Promise<any>, (value) => value.deployments?.some((item: any) => item.id === deployment.id && item.state === "succeeded"), "organization change deploys");
 
     await ownerPage.goto(`/organizations/${organization.id}`);
