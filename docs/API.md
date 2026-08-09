@@ -41,8 +41,10 @@ must contain `.vivarium/workspace.json` version 1 with `image`, `tools`,
 `dependencies`, `setup`, and `resources` (`cpus`, `memory_mb`, `storage_mb`, and
 `setup_seconds`). Invalid context or definitions return `422` without launching.
 
-Creation uses a size-limited tmpfs at `/workspace`; declared storage therefore
-bounds collaborator-controlled writes without exposing a writable host bind.
+Creation partitions the declared storage budget between a size-limited
+`/workspace` tmpfs and 16 MiB of bounded `/tmp` scratch space; the remaining
+container root is read-only. Declared storage therefore bounds
+collaborator-controlled writes without exposing a writable host bind or layer.
 The named container is force-removed after setup failure or timeout. Creation
 returns the durable workspace after bounded setup, including its
 state, creator, exact commit, complete definition and SHA-256, source, effective

@@ -250,7 +250,12 @@ func validateWorkspaceSource(source workspaces.Source, commit string, ps *propos
 }
 func provisionWorkspace(gitPath, runtime, id, commit string, d workspaces.Definition) ([]workspaces.SetupStep, bool) {
 	container := "vivarium-workspace-" + id
-	createArgs := []string{"create", "--name", container, "--network=none", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=256", "--cpus", strconv.FormatFloat(d.Resources.CPUs, 'f', -1, 64), "--memory", fmt.Sprintf("%dm", d.Resources.MemoryMB), "--tmpfs", fmt.Sprintf("/workspace:rw,nosuid,nodev,size=%dm", d.Resources.StorageMB), "--workdir", "/workspace", d.Image, "sh", "-lc", "while :; do sleep 3600; done"}
+	// StorageMB is one total budget. Reserve bounded scratch space for tools
+	// that require /tmp and make every other image path read-only, so setup
+	// cannot escape the declared budget through the container writable layer.
+	const scratchMB = 16
+	workspaceMB := d.Resources.StorageMB - scratchMB
+	createArgs := []string{"create", "--name", container, "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=256", "--cpus", strconv.FormatFloat(d.Resources.CPUs, 'f', -1, 64), "--memory", fmt.Sprintf("%dm", d.Resources.MemoryMB), "--tmpfs", fmt.Sprintf("/workspace:rw,nosuid,nodev,size=%dm", workspaceMB), "--tmpfs", fmt.Sprintf("/tmp:rw,nosuid,nodev,noexec,size=%dm", scratchMB), "--env", "HOME=/workspace/.home", "--env", "TMPDIR=/tmp", "--workdir", "/workspace", d.Image, "sh", "-lc", "while :; do sleep 3600; done"}
 	if out, err := exec.Command("docker", createArgs...).CombinedOutput(); err != nil {
 		return []workspaces.SetupStep{failedSetupStep("create bounded workspace", out, err)}, true
 	}
@@ -260,7 +265,7 @@ func provisionWorkspace(gitPath, runtime, id, commit string, d workspaces.Defini
 		return []workspaces.SetupStep{failedSetupStep("start bounded workspace", out, err)}, true
 	}
 	archive := exec.Command("git", "--git-dir="+gitPath, "archive", commit)
-	copyIntoContainer := exec.Command("docker", "cp", "-", container+":/workspace")
+	copyIntoContainer := exec.Command("docker", "exec", "-i", container, "tar", "-x", "-C", "/workspace")
 	pipe, err := archive.StdoutPipe()
 	if err != nil {
 		cleanup()

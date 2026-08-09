@@ -25,7 +25,8 @@ declared tools and dependencies, setup commands, and bounded CPU, memory,
 storage, and setup duration.
 
 The API snapshots the definition and its SHA-256, materializes only the named
-Git commit into a size-limited tmpfs, and runs setup in that named,
+Git commit into a size-limited tmpfs, reserves a bounded share of the same
+storage budget for `/tmp`, and runs setup in that named, read-only-root,
 network-disabled, capability-dropped container without platform credentials.
 Setup failure or timeout force-removes the workload instead of only terminating
 its Docker client. The workspace record retains source context,

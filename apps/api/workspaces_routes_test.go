@@ -45,11 +45,13 @@ func TestProvisionWorkspaceEnforcesStorageAndRemovesFailedContainer(t *testing.T
 	}{
 		{"storage quota", "0123456789abcdef0123456789abcdef", "dd if=/dev/zero of=too-large bs=1M count=129", 20},
 		{"setup timeout", "abcdef0123456789abcdef0123456789", "sleep 5", 1},
+		{"scratch quota", "11111111111111111111111111111111", "dd if=/dev/zero of=/tmp/too-large bs=1M count=17", 20},
+		{"read only root", "22222222222222222222222222222222", "touch /root/escape", 20},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			steps, failed := provisionWorkspace(filepath.Join(repository, ".git"), t.TempDir(), test.id, strings.TrimSpace(string(commitBody)), workspaces.Definition{Image: "alpine:3.22", Setup: []string{test.command}, Resources: workspaces.Resources{CPUs: 1, MemoryMB: 256, StorageMB: 128, SetupSeconds: test.timeout}})
-			if !failed || len(steps) != 1 || steps[0].State != "failed" {
+			if !failed || len(steps) != 1 || steps[0].State != "failed" || steps[0].Command != test.command {
 				t.Fatalf("provision = %#v, failed %v", steps, failed)
 			}
 			deadline := time.Now().Add(3 * time.Second)
