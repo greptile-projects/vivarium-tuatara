@@ -167,6 +167,13 @@ whenever dependencies change or the web job fails before it starts.
   when timestamps collide; historical failures remain evidence without
   overriding later success, and unavailable contract-check storage fails
   rollout configuration closed.
+  A dedicated connected browser journey proves the full evolution loop across
+  independently owned public provider and consumer repositories: browser
+  publication/discovery, bounded agent analysis, a human-owned fork pull, a
+  task-scoped agent pull, exact contract evidence, owner-scoped approvals, and
+  ordered merge, release, build, and production deployment all project into one
+  completed rollout. Playwright isolates these records beneath
+  `$RELATIONSHIP_STORAGE_ROOT` with its other temporary API stores.
   Ordered evolution migration tasks are repository-owned proposal tasks linked
   to the shared plan with target versions and cross-repository dependencies.
   Only current target participants create and assign them; humans gain no new
