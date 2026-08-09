@@ -8,10 +8,59 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
 var errForcedDirectory = errors.New("forced directory failure")
+
+func TestPublishUpdateSerializesExactReservation(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := Update{RepositoryID: strings.Repeat("a", 32), PackageName: "core-kit", FromVersion: "1.0.0", ToVersion: "1.1.0", BaseCommit: strings.Repeat("b", 40), CreatedBy: strings.Repeat("c", 32)}
+	var calls atomic.Int32
+	var wait sync.WaitGroup
+	results := make(chan Update, 24)
+	failures := make(chan error, 24)
+	for range 24 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			update, _, publishErr := store.PublishUpdate(value, func() (string, string, error) {
+				calls.Add(1)
+				return strings.Repeat("d", 32), strings.Repeat("e", 32), nil
+			})
+			if publishErr != nil {
+				failures <- publishErr
+				return
+			}
+			results <- update
+		}()
+	}
+	wait.Wait()
+	close(results)
+	close(failures)
+	for failure := range failures {
+		t.Fatal(failure)
+	}
+	var id string
+	count := 0
+	for update := range results {
+		count++
+		if id == "" {
+			id = update.ID
+		}
+		if update.ID != id {
+			t.Fatalf("different updates: %s and %s", id, update.ID)
+		}
+	}
+	if count != 24 || calls.Load() != 1 {
+		t.Fatalf("results = %d, callbacks = %d", count, calls.Load())
+	}
+}
 
 func TestDependencyInventoriesRetainExactAttributionAndConsumerPaths(t *testing.T) {
 	store, err := New(t.TempDir())

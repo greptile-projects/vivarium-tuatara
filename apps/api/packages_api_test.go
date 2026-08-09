@@ -134,6 +134,42 @@ func TestPackageUpdateScanOpensAttributableOrdinaryWork(t *testing.T) {
 	}
 }
 
+func TestPackageUpdateListingRechecksPrivatePackageVisibility(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	buildStore, _ := checkruns.New(t.TempDir())
+	releaseStore, _ := releases.New(t.TempDir())
+	packageStore, _ := packages.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, buildStore, releaseStore, packageStore))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "private-update-owner")
+	reader := createTestAccount(t, server.URL, "private-update-reader")
+	var consumer, publisher repositories.Repository
+	decodeResponse(t, authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"private-consumer"}`, owner.Credential.Token, http.StatusCreated), &consumer)
+	decodeResponse(t, authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"private-publisher"}`, owner.Credential.Token, http.StatusCreated), &publisher)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+consumer.ID+"/collaborators", `{"user_id":"`+reader.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	body := []byte("private")
+	sum := sha256.Sum256(body)
+	published, err := packageStore.Publish(packages.Version{Name: "private-kit", Version: "1.1.0", RepositoryID: publisher.ID, ReleaseID: strings.Repeat("1", 32), SourceCommit: strings.Repeat("2", 40), BuildID: strings.Repeat("3", 32), BuildAttestation: packages.BuildAttestation{Step: "secret-check", Image: "private-image", Command: "verify", Attempt: 1, State: "succeeded"}, ArtifactID: strings.Repeat("4", 32), ArtifactPath: "private.tgz", Size: int64(len(body)), SHA256: hex.EncodeToString(sum[:]), PublisherID: owner.User.ID, Visibility: "private"}, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = packageStore.RecordUpdate(packages.Update{RepositoryID: consumer.ID, PackageName: published.Name, FromVersion: "1.0.0", ToVersion: published.Version, BaseCommit: strings.Repeat("5", 40), ProposalID: strings.Repeat("6", 32), TaskID: strings.Repeat("7", 32), ReleaseNotes: "private notes", Compatibility: published.BuildAttestation, CreatedBy: owner.User.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ownerView, readerView struct {
+		Updates []packages.Update `json:"updates"`
+	}
+	decodeResponse(t, authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+consumer.ID+"/package-updates", "", owner.Credential.Token, http.StatusOK), &ownerView)
+	decodeResponse(t, authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+consumer.ID+"/package-updates", "", reader.Credential.Token, http.StatusOK), &readerView)
+	if len(ownerView.Updates) != 1 || len(readerView.Updates) != 0 {
+		t.Fatalf("owner = %#v, reader = %#v", ownerView.Updates, readerView.Updates)
+	}
+}
+
 func TestRecordedDependencyInventoryDerivesExactVisibleConsumer(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	identities, _ := users.New(t.TempDir())

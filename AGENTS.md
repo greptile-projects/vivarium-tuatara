@@ -162,7 +162,9 @@ whenever dependencies change or the web job fails before it starts.
   select only visible active releases, and open attributable ordinary proposals
   with one executable task plus the proposed manifest/lock, release notes,
   successful build attestation, and affected dependency paths. Update records
-  are idempotent for the exact base/from/to tuple; subsequent human or agent work
+  recheck target-package visibility on every read and serialize proposal/task
+  publication under an exact base/from/to reservation, compensating incomplete
+  cross-store work. Subsequent human or agent work
   publishes through existing task sessions, pulls, checks, review, queues,
   releases, and deployments without granting consumer authority to publishers.
   Repository relationship graphs at `/repositories/{id}/relationships` join

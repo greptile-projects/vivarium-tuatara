@@ -155,6 +155,56 @@ func (s *Store) RecordUpdate(value Update) (Update, error) {
 	return value, nil
 }
 
+// PublishUpdate serializes the cross-store collaboration callback with the
+// exact base/from/to reservation. The returned value includes callback IDs on
+// a later persistence failure so the caller can compensate only its own work.
+func (s *Store) PublishUpdate(value Update, publish func() (string, string, error)) (Update, bool, error) {
+	if len(value.RepositoryID) != 32 || len(value.BaseCommit) != 40 || !identityPattern.MatchString(value.PackageName) || !versionPattern.MatchString(value.FromVersion) || !versionPattern.MatchString(value.ToVersion) || publish == nil {
+		return Update{}, false, ErrInventoryInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lock, err := os.OpenFile(filepath.Join(s.root, ".update-lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return Update{}, false, err
+	}
+	defer lock.Close()
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return Update{}, false, err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	items, err := s.ListUpdates(value.RepositoryID)
+	if err != nil {
+		return Update{}, false, err
+	}
+	for _, item := range items {
+		if item.PackageName == value.PackageName && item.FromVersion == value.FromVersion && item.ToVersion == value.ToVersion && item.BaseCommit == value.BaseCommit {
+			return item, false, nil
+		}
+	}
+	value.ProposalID, value.TaskID, err = publish()
+	if err != nil {
+		return value, true, err
+	}
+	id := make([]byte, 16)
+	if _, err = rand.Read(id); err != nil {
+		return value, true, err
+	}
+	value.ID, value.CreatedAt = hex.EncodeToString(id), s.now().UTC().Truncate(time.Microsecond)
+	body, err := json.Marshal(value)
+	if err != nil {
+		return value, true, err
+	}
+	dir := filepath.Join(s.root, "updates", value.RepositoryID)
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		return value, true, err
+	}
+	if err = atomicFile(filepath.Join(dir, value.ID+".json"), body); err != nil {
+		return value, true, err
+	}
+	return value, true, nil
+}
+
 func (s *Store) ListUpdates(repositoryID string) ([]Update, error) {
 	dir := filepath.Join(s.root, "updates", repositoryID)
 	files, err := os.ReadDir(dir)

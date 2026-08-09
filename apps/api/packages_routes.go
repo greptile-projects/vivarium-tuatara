@@ -552,7 +552,8 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 		writeJSON(w, 200, created)
 	})
 	mux.HandleFunc("GET /repositories/{id}/package-updates", func(w http.ResponseWriter, r *http.Request) {
-		if _, _, ok := authorizeRepositoryRead(w, r, repositoryStore, authStore, r.PathValue("id")); !ok {
+		actor, authenticated, ok := authorizeRepositoryRead(w, r, repositoryStore, authStore, r.PathValue("id"))
+		if !ok {
 			return
 		}
 		policies, err := packageStore.ListUpdatePolicies(r.PathValue("id"))
@@ -565,7 +566,14 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 			writeAPIError(w, 500, "package_update_read_failed", "updates could not be read")
 			return
 		}
-		writeJSON(w, 200, map[string]any{"policies": policies, "updates": updates})
+		visible := []packages.Update{}
+		for _, update := range updates {
+			version, getErr := packageStore.Get(update.PackageName, update.ToVersion)
+			if getErr == nil && canRead(version, actor, authenticated) {
+				visible = append(visible, update)
+			}
+		}
+		writeJSON(w, 200, map[string]any{"policies": policies, "updates": visible})
 	})
 	mux.HandleFunc("POST /repositories/{id}/package-updates/scan", func(w http.ResponseWriter, r *http.Request) {
 		actor, owner, ok := authorizeRepositoryParticipant(w, r, repositoryStore, authStore, r.PathValue("id"), "repositories:write")
@@ -618,7 +626,6 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 			writeAPIError(w, 503, "package_update_failed", "package evidence is unavailable")
 			return
 		}
-		existing, _ := packageStore.ListUpdates(catalog.ID)
 		created := []packages.Update{}
 		for _, policy := range policies {
 			var current packages.InventoryEntry
@@ -644,17 +651,6 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 			if best.Version == "" {
 				continue
 			}
-			duplicate := false
-			for _, value := range existing {
-				if value.PackageName == policy.PackageName && value.FromVersion == current.Version && value.ToVersion == best.Version && value.BaseCommit == ref.Target {
-					duplicate = true
-					created = append(created, value)
-					break
-				}
-			}
-			if duplicate {
-				continue
-			}
 			manifest := config
 			for index := range manifest.Dependencies {
 				if manifest.Dependencies[index].Name == policy.PackageName {
@@ -672,18 +668,22 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 				notes = best.Documentation
 			}
 			body := fmt.Sprintf("Adopt %s %s → %s from verified release `%s`.\n\nRelease notes:\n%s\n\nCompatibility evidence: successful `%s` build, image `%s`, attempt %d.\n\nAffected dependency paths:\n- %s\n\nThe proposed `.vivarium/packages.json` manifest and lock are attached to the package update record. Required checks, review, and integration policy remain authoritative.", best.Name, current.Version, best.Version, best.ReleaseID, notes, best.BuildAttestation.Step, best.BuildAttestation.Image, best.BuildAttestation.Attempt, strings.Join(current.Paths, "\n- "))
-			proposal, createErr := proposalStore.Create(catalog.ID, actor.UserID, "Update "+best.Name+" to "+best.Version, body)
+			update, published, createErr := packageStore.PublishUpdate(packages.Update{RepositoryID: catalog.ID, PackageName: best.Name, FromVersion: current.Version, ToVersion: best.Version, BaseCommit: ref.Target, Manifest: manifest, ReleaseNotes: notes, Compatibility: best.BuildAttestation, AffectedPaths: current.Paths, CreatedBy: actor.UserID}, func() (string, string, error) {
+				proposal, proposalErr := proposalStore.Create(catalog.ID, actor.UserID, "Update "+best.Name+" to "+best.Version, body)
+				if proposalErr != nil {
+					return "", "", proposalErr
+				}
+				task, taskErr := proposalStore.CreateTask(catalog.ID, proposal.ID, actor.UserID, "Apply "+best.Name+" "+best.Version, "Update the manifest and lock exactly as proposed, investigate compatibility failures, and publish the result through ordinary review.", nil, nil)
+				if taskErr != nil {
+					_ = proposalStore.DeleteMigrationWork(catalog.ID, proposal.ID, "", "")
+					return "", "", taskErr
+				}
+				return proposal.ID, task.ID, nil
+			})
 			if createErr != nil {
-				writeAPIError(w, 500, "package_update_failed", "adoption proposal could not be created")
-				return
-			}
-			task, createErr := proposalStore.CreateTask(catalog.ID, proposal.ID, actor.UserID, "Apply "+best.Name+" "+best.Version, "Update the manifest and lock exactly as proposed, investigate compatibility failures, and publish the result through ordinary review.", nil, nil)
-			if createErr != nil {
-				writeAPIError(w, 500, "package_update_failed", "adoption task could not be created")
-				return
-			}
-			update, createErr := packageStore.RecordUpdate(packages.Update{RepositoryID: catalog.ID, PackageName: best.Name, FromVersion: current.Version, ToVersion: best.Version, BaseCommit: ref.Target, ProposalID: proposal.ID, TaskID: task.ID, Manifest: manifest, ReleaseNotes: notes, Compatibility: best.BuildAttestation, AffectedPaths: current.Paths, CreatedBy: actor.UserID})
-			if createErr != nil {
+				if published && update.ProposalID != "" {
+					_ = proposalStore.DeleteMigrationWork(catalog.ID, update.ProposalID, update.TaskID, "")
+				}
 				writeAPIError(w, 500, "package_update_failed", "adoption evidence could not be recorded")
 				return
 			}

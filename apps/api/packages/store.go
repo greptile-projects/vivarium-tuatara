@@ -295,7 +295,7 @@ func (s *Store) List() ([]Version, error) {
 	}
 	result := []Version{}
 	for _, identity := range entries {
-		if !identity.IsDir() || strings.HasPrefix(identity.Name(), ".") {
+		if !identity.IsDir() || strings.HasPrefix(identity.Name(), ".") || identity.Name() == "inventories" || identity.Name() == "update-policies" || identity.Name() == "updates" {
 			continue
 		}
 		versions, err := os.ReadDir(filepath.Join(s.root, identity.Name()))
