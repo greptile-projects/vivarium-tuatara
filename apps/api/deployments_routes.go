@@ -107,11 +107,9 @@ func registerDeploymentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos
 			writeAPIError(w, 422, "invalid_release", "release candidate not found")
 			return
 		}
-		if packageStore != nil {
-			if policyErr := verifyPromotionDependencies(packageStore, r.PathValue("id"), candidate.CommitID); policyErr != nil {
-				writeAPIError(w, 409, "promotion_dependency_policy_failed", policyErr.Error())
-				return
-			}
+		if policyErr := verifyPromotionDependencies(packageStore, r.PathValue("id"), candidate.CommitID); policyErr != nil {
+			writeAPIError(w, 409, "promotion_dependency_policy_failed", policyErr.Error())
+			return
 		}
 		run, err := builds.Get(r.PathValue("id"), input.ReleaseID, input.BuildID)
 		if err != nil || run.CommitID != candidate.CommitID || run.State != "succeeded" {
@@ -384,6 +382,9 @@ func registerDeploymentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos
 }
 
 func verifyPromotionDependencies(packageStore *packages.Store, repositoryID, commitID string) error {
+	if packageStore == nil {
+		return fmt.Errorf("promotion dependency policy is unavailable")
+	}
 	inventory, err := packageStore.GetInventory(repositoryID, commitID)
 	if err != nil {
 		return fmt.Errorf("promotion requires a readable exact dependency inventory")

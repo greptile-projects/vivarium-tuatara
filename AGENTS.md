@@ -171,8 +171,13 @@ whenever dependencies change or the web job fails before it starts.
   retain a reason, warning, actor, time, and optional active safe replacement;
   exact consumer owners receive targeted activity and inbox notification.
   Fresh resolution and repository-scoped installs select only active versions,
-  while promotions reject recorded non-active dependencies and retain existing
-  deployment exposure. Consumer owners open urgent human- or scoped-agent-owned
+  while promotions fail closed unless the package store, exact inventory, and
+  active metadata for every dependency are readable, retaining existing
+  deployment exposure. Lifecycle notification delivery is a required
+  post-commit outcome: failures return `202` with
+  `Vivarium-Recovery-Notifications: pending`, and an exact retry reuses the
+  durable decision ID to complete idempotent owner notification. Consumer
+  owners open urgent human- or scoped-agent-owned
   replacement proposals at their exact default-branch revision, without
   granting the publisher any consumer authority. Subsequent human or agent work
   publishes through existing task sessions, pulls, checks, review, queues,

@@ -531,21 +531,44 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 			writeAPIError(w, 422, "invalid_package_lifecycle", "deprecated, quarantined, and yanked versions require a reason and warning; a replacement must be an active published version")
 			return
 		}
-		if item.Lifecycle != "active" && activityStore != nil {
+		if item.Lifecycle != "active" {
 			decisionID := "legacy"
 			if count := len(item.LifecycleHistory); count > 0 && item.LifecycleHistory[count-1].ID != "" {
 				decisionID = item.LifecycleHistory[count-1].ID
 			}
-			consumers, _ := packageStore.ListConsumers(item.Name, item.Version)
+			consumers, consumersErr := packageStore.ListConsumers(item.Name, item.Version)
+			if consumersErr != nil {
+				w.Header().Set("Location", "/packages/"+item.Name+"/versions/"+item.Version+"/lifecycle")
+				w.Header().Set("Vivarium-Recovery-Notifications", "pending")
+				writeJSON(w, http.StatusAccepted, item)
+				return
+			}
 			seen := map[string]bool{}
+			notificationPending := false
 			for _, inventory := range consumers {
 				repository, getErr := repositoryStore.GetByID(inventory.RepositoryID)
-				if getErr != nil || seen[repository.OwnerID] {
+				if getErr != nil {
+					notificationPending = true
+					continue
+				}
+				if seen[repository.OwnerID] {
 					continue
 				}
 				seen[repository.OwnerID] = true
 				target := repository.OwnerID
-				_ = recordActivityOnce(activityStore, repositoryStore, "package-recovery:"+decisionID+":"+target, activities.Event{Kind: "package.recovery_required", ActorID: actor.UserID, RepositoryID: repository.ID, ResourceType: "package", ResourceID: item.ID, ResourceTitle: item.Name + " " + item.Version + " is " + item.Lifecycle, TargetUserID: &target})
+				if activityStore == nil {
+					notificationPending = true
+					continue
+				}
+				if activityErr := recordActivityOnce(activityStore, repositoryStore, "package-recovery:"+decisionID+":"+target, activities.Event{Kind: "package.recovery_required", ActorID: actor.UserID, RepositoryID: repository.ID, ResourceType: "package", ResourceID: item.ID, ResourceTitle: item.Name + " " + item.Version + " is " + item.Lifecycle, TargetUserID: &target}); activityErr != nil {
+					notificationPending = true
+				}
+			}
+			if notificationPending {
+				w.Header().Set("Location", "/packages/"+item.Name+"/versions/"+item.Version+"/lifecycle")
+				w.Header().Set("Vivarium-Recovery-Notifications", "pending")
+				writeJSON(w, http.StatusAccepted, item)
+				return
 			}
 		}
 		writeJSON(w, 200, item)

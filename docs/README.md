@@ -22,7 +22,11 @@ yank an exact version with a reason, warning, and active safe replacement. The
 catalog keeps checksum, source, build, consumer inventories, and historical
 deployments visible while notifying every currently exposed repository owner.
 Fresh package resolution, repository-bound downloads, and new promotions reject
-non-active versions. A consumer owner can open an urgent ordinary proposal and
+non-active versions; promotion also fails closed when the exact inventory or
+package evidence store is unavailable. Lifecycle changes return `202` plus a
+pending-notifications header if the durable decision committed but exposed-owner
+activity did not, allowing an exact idempotent retry to finish delivery. A
+consumer owner can open an urgent ordinary proposal and
 task for the replacement, assigning it to a current human participant or a
 task-scoped agent at the consumer's exact default-branch revision; checks,
 review, integration, release, and deployment authority remain consumer-owned.

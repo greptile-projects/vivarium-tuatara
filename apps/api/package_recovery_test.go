@@ -8,6 +8,9 @@ import (
 )
 
 func TestPromotionDependencyPolicyFailsClosed(t *testing.T) {
+	if err := verifyPromotionDependencies(nil, strings.Repeat("a", 32), strings.Repeat("b", 40)); err == nil {
+		t.Fatal("missing package store passed promotion policy")
+	}
 	store, err := packages.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
