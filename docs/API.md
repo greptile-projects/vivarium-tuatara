@@ -1023,6 +1023,32 @@ recovery deployment commit's ancestry.
 returns `409 incident_changed`. Every accepted change appends an immutable,
 actor-stamped timeline entry rather than replacing response history.
 
+Resolution is a review publication, not only a status toggle. `PUT
+/incidents/{incident_id}/resolution` compare-and-swaps `expected_version` and
+requires an impact statement, review timeline, one to 20 contributing factors,
+and conclusions. The server retains the publishing actor and time, marks the
+incident resolved, and appends an immutable `incident_resolved` timeline entry.
+
+After the review exists, `POST /incidents/{incident_id}/commitments` creates a
+normal proposal and human-assigned executable task in an affected repository,
+then links their stable IDs, accountable assignee, exact base revision, and due
+time back to the incident. The request carries a stable `operation_id`; one
+proposal-store transaction publishes the proposal, task, and assignment under
+that identity, and the incident link reuses it after a partial cross-store
+failure. Exact retries therefore converge without orphaning duplicate work.
+The target repository's catalog lock holds current actor and assignee access
+through proposal publication and incident linking. Repository participation,
+branch-base verification, and later task context rules remain authoritative in
+the proposal APIs rather than being copied into the incident.
+
+Incident reads derive each commitment's current progress from that authoritative
+work. They report invalidated assignments or obsolete context, overdue open
+work, a published pull and its exact check states, completion by merge, and any
+release candidates and deployments whose server-derived inclusions contain the
+task. The assignee receives a response inbox item while the commitment remains
+open; its action changes to overdue or invalidated repair when those conditions
+arise and disappears after merge completion.
+
 `POST /incidents/{incident_id}/updates` accepts a caller-generated opaque
 128-bit lowercase hexadecimal `operation_id`, a `message`, and an `audience`
 of `participants` or `public`. Audience is retained on the update so later
