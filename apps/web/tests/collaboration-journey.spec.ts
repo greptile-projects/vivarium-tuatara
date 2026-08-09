@@ -516,8 +516,8 @@ test("a protected queue lands parallel human and agent changes without stale evi
   await contributorContext.close();
 });
 
-test("a proposal plan coordinates dependent human and agent work through verified merges", async ({ browser }) => {
-	test.setTimeout(240_000);
+test("a proposal plan and incident response preserve collaboration through verified delivery", async ({ browser }) => {
+	test.setTimeout(360_000);
 	await run("docker", ["image", "inspect", "alpine:3.22"]).catch(() =>
 		run("docker", ["pull", "alpine:3.22"]),
 	);
@@ -780,17 +780,99 @@ test("a proposal plan coordinates dependent human and agent work through verifie
 		expect.objectContaining({ kind: "deployment.failed" }),
 	]));
 
+	// Declare the retained failed signal through the browser, then use only the
+	// public incident and deployment APIs for the agent and governed response.
+	await contributor.goto("/incidents");
+	await contributor.getByRole("button", { name: "Declare incident" }).click();
+	await contributor.getByLabel("Title").fill("Production service health regression");
+	await contributor.getByLabel("Current impact").fill("The newly promoted service artifact fails its production health contract.");
+	await contributor.getByLabel("Severity").selectOption("sev1");
+	await contributor.getByLabel("Deployment health signal").selectOption(`${repositoryID}:${failed.id}`);
+	await contributor.getByRole("button", { name: "Declare and take command" }).click();
+	await expect(contributor).toHaveURL(/\/incidents\/[a-f0-9]{32}$/);
+	const incidentID = new URL(contributor.url()).pathname.split("/").pop()!;
+	await expect(contributor.getByText(`Declared from verified signal production health/service responds`)).toBeVisible();
+
+	type IncidentEvidence = { kind: string; repository_id: string; resource_id: string; label: string; query?: string; window_start?: string; window_end?: string; captured_at: string };
+	type Incident = {
+		id: string; version: number; status: string;
+		timeline: Array<{ id: string; kind: string; actor_id: string; message: string; audience: string; acknowledged_by?: string[]; evidence?: IncidentEvidence[] }>;
+		investigations: Array<{ id: string; agent_id: string; state: string }>;
+		actions: Array<{ id: string; status: string; attempts: Array<{ outcome: string; resource_id?: string }> }>;
+		commitments: Array<{ proposal_id: string; task_id: string; progress: { state: string; pull_request_id?: string; release_ids?: string[]; deployment_ids?: string[] } }>;
+	};
+	const windowStart = new Date(Date.now() - 10 * 60_000).toISOString();
+	const windowEnd = new Date(Date.now() + 60_000).toISOString();
+	let incident = await postJSON(contributor, `/incidents/${incidentID}/findings`, contributorHeaders, {
+		operation_id: crypto.randomUUID().replaceAll("-", ""), kind: "hypothesis",
+		message: "The failed production signal begins with the unhealthy artifact revision.", audience: "participants",
+		evidence: [{ kind: "health_signal", repository_id: repositoryID, resource_id: failed.id, query: "production health/service responds", window_start: windowStart, window_end: windowEnd }],
+	}) as Incident;
+	const diagnosticEntry = incident.timeline.at(-1)!;
+	expect(diagnosticEntry.evidence).toEqual([expect.objectContaining({ kind: "health_signal", resource_id: failed.id })]);
+
+	const investigationLaunch = await postJSON(contributor, `/incidents/${incidentID}/investigations`, contributorHeaders, {
+		mandate: "Determine whether the failed signal is consistent with the promoted revision and report uncertainty.",
+		evidence: diagnosticEntry.evidence, revisions: [{ repository_id: repositoryID, commit_id: deliveredCommit }], expires_in: 3600,
+	}) as { incident: Incident; investigation: { id: string; agent_id: string; access: string[] }; credential: { token: string; scopes: string[] } };
+	expect(investigationLaunch.credential.scopes).toEqual(["incidents:investigate"]);
+	expect(investigationLaunch.investigation.access).toEqual([
+		"selected incident evidence", "selected repository revisions", "incident investigation timeline:write",
+	]);
+	const investigationHeaders = { Authorization: `Bearer ${investigationLaunch.credential.token}` };
+	const forbiddenProduction = await contributor.request.post(`/api/repositories/${repositoryID}/deployments/${failed.id}/recoveries`, {
+		headers: investigationHeaders, data: { action: "rollback" },
+	});
+	expect(forbiddenProduction.status()).toBe(401);
+	await postJSON(contributor, `/incidents/${incidentID}/investigations/${investigationLaunch.investigation.id}/events`, investigationHeaders, {
+		kind: "tool_action", tool: "health_signal.inspect", message: "Compared the frozen signal window with the exact promoted revision.",
+	});
+	incident = await postJSON(contributor, `/incidents/${incidentID}/investigations/${investigationLaunch.investigation.id}/events`, investigationHeaders, {
+		kind: "finding", message: "The unhealthy artifact deterministically fails the declared service response contract.",
+	}) as Incident;
+	expect(incident.timeline).toEqual(expect.arrayContaining([
+		expect.objectContaining({ kind: "agent_finding", actor_id: investigationLaunch.investigation.agent_id }),
+	]));
+
+	incident = await postJSON(contributor, `/incidents/${incidentID}/actions`, contributorHeaders, {
+		operation_id: crypto.randomUUID().replaceAll("-", ""), kind: "restore_release", repository_id: repositoryID,
+		deployment_id: failed.id, rationale: "Restore the last attested healthy artifact while corrective work is reviewed.",
+		evidence: diagnosticEntry.evidence, health_criteria: [{ stage: "production health", signal: "service responds" }],
+	}) as Incident;
+	const mitigation = incident.actions.at(-1)!;
+	incident = await postJSON(maintainer, `/incidents/${incidentID}/actions/${mitigation.id}/decisions`, maintainerHeaders, {
+		decision: "approve", message: "The exact failed signal and known-good artifact support a bounded rollback.",
+	}) as Incident;
+	expect(incident.actions.at(-1)!.status).toBe("approved");
+	const mitigationOperation = crypto.randomUUID().replaceAll("-", "");
+	await postJSON(contributor, `/incidents/${incidentID}/actions/${mitigation.id}/attempts`, contributorHeaders, {
+		operation_id: mitigationOperation, outcome: "pending", message: "Governed rollback reserved before environment mutation.",
+	});
+	const rollbackResult = await postJSON(contributor, `/repositories/${repositoryID}/deployments/${failed.id}/recoveries`, contributorHeaders, { action: "rollback" }) as { deployment: Deployment };
+	await postJSON(contributor, `/incidents/${incidentID}/actions/${mitigation.id}/attempts`, contributorHeaders, {
+		operation_id: mitigationOperation, outcome: "started", resource_id: rollbackResult.deployment.id, message: "Approval-gated rollback requested.",
+	});
+
 	await contributor.goto(`/repositories/${repositoryID}/releases/${unhealthyRelease.id}`);
 	await expect(contributor.getByRole("heading", { name: `v1.1.0-${suffix}` })).toBeVisible();
 	await expect(contributor.getByLabel("Health evidence").getByText("failed", { exact: true })).toBeVisible();
-	await contributor.getByRole("button", { name: "Restore last known-good" }).click();
-	await expect(contributor.getByText("Rollback requested with the last known-good artifact.")).toBeVisible();
 	const rollbackSet = await listDeployments(contributor, contributorHeaders);
 	const rollback = rollbackSet.deployments.find((deployment) => deployment.recovery_of === failed.id)!;
 	expect(rollback).toMatchObject({ recovery_kind: "rollback", restores_deployment_id: knownGood.id, state: "pending_approval" });
 	await postJSON(maintainer, `/repositories/${repositoryID}/deployments/${rollback.id}/approvals`, maintainerHeaders, {});
 	const restored = await waitForDeployment(contributor, contributorHeaders, rollback.id, "succeeded");
 	expect(restored.artifact_sha256).toBe(knownGood.artifact_sha256);
+	incident = await postJSON(contributor, `/incidents/${incidentID}/actions/${mitigation.id}/attempts`, contributorHeaders, {
+		operation_id: crypto.randomUUID().replaceAll("-", ""), outcome: "recovered", resource_id: restored.id,
+		message: "The restored deployment passed the incident's declared production health criterion.",
+	}) as Incident;
+	expect(incident.actions.at(-1)!.status).toBe("recovered");
+	incident = await postJSON(contributor, `/incidents/${incidentID}/updates`, contributorHeaders, {
+		operation_id: crypto.randomUUID().replaceAll("-", ""), message: "Service health is restored; corrective work will proceed through normal review.", audience: "public",
+	}) as Incident;
+	const recoveryUpdate = incident.timeline.at(-1)!;
+	incident = await postJSON(maintainer, `/incidents/${incidentID}/timeline/${recoveryUpdate.id}/acknowledgements`, maintainerHeaders, {}) as Incident;
+	expect(incident.timeline.at(-1)!.acknowledged_by).toContain(maintainerUser.id);
 
 	await contributor.reload();
 	const repairResponsePromise = contributor.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith(`/deployments/${failed.id}/recoveries`));
@@ -855,6 +937,69 @@ test("a proposal plan coordinates dependent human and agent work through verifie
 	await maintainer.goto(`/repositories/${repositoryID}/releases/${correctedRelease.id}`);
 	await expect(maintainer.getByRole("heading", { name: `v1.1.1-${suffix}` })).toBeVisible();
 	await expect(maintainer.getByLabel("Health evidence").getByText("passed", { exact: true })).toBeVisible();
+
+	// Publish the review in the incident workspace, then carry one accountable
+	// corrective task through the ordinary proposal, pull, release, and
+	// production paths. Incident reads must derive every later projection.
+	await contributor.goto(`/incidents/${incidentID}`);
+	await contributor.getByPlaceholder("Who or what was affected, how severely, and for how long?").fill("The unhealthy release failed its production health signal; rollback restored service within the response window.");
+	await contributor.getByPlaceholder("Reviewable sequence of detection, decisions, mitigation, and recovery").fill("Signal failed; incident declared; bounded agent investigation confirmed the contract failure; independent approval authorized rollback; health recovered.");
+	await contributor.getByPlaceholder("One contributing factor per line").fill("The release check did not exercise the packaged health state\nThe production signal was the first end-to-end contract check");
+	await contributor.getByPlaceholder("What did the team learn, including uncertainty?").fill("Verify the packaged rollout state before promotion while retaining production health as the authoritative recovery criterion.");
+	await contributor.getByRole("button", { name: "Resolve and publish review" }).click();
+	await expect(contributor.getByText("The unhealthy release failed its production health signal; rollback restored service within the response window.")).toBeVisible();
+
+	await git(maintainerCopy, "pull", "--ff-only");
+	const correctiveBase = await git(maintainerCopy, "rev-parse", "HEAD");
+	incident = await getJSON(contributor, `/incidents/${incidentID}`, contributorHeaders) as Incident;
+	expect(incident.status).toBe("resolved");
+	const commitmentResult = await postJSON(contributor, `/incidents/${incidentID}/commitments`, contributorHeaders, {
+		operation_id: crypto.randomUUID().replaceAll("-", ""), repository_id: repositoryID,
+		proposal_title: "Prevent unhealthy artifact promotion", proposal_body: "Carry the incident's health-contract learning into a reviewed pre-promotion guard.",
+		task_title: "Add packaged health regression coverage", outcome: "Repository verification documents and checks the packaged health invariant.",
+		assignee_id: contributorUser.id, base_revision: correctiveBase, due_at: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+	}) as Incident;
+	const commitment = commitmentResult.commitments.at(-1)!;
+	expect(commitment.progress.state).toBe("assigned");
+	await contributor.reload();
+	await expect(contributor.getByRole("link", { name: "Corrective proposal →" })).toBeVisible();
+	await expect(contributor.getByText("assigned", { exact: true })).toBeVisible();
+
+	await git(contributorCopy, "fetch", "origin", "main");
+	await git(contributorCopy, "switch", "-C", "incident-health-regression", "origin/main");
+	await writeFile(join(contributorCopy, "incident-regression.md"), "Release packages must preserve the healthy rollout-state contract before promotion.\n");
+	await git(contributorCopy, "add", "incident-regression.md");
+	await git(contributorCopy, "commit", "-m", "Document incident health regression");
+	await git(contributorCopy, "push", "origin", "incident-health-regression");
+	const correctivePull = await postJSON(contributor, `/repositories/${repositoryID}/proposals/${commitment.proposal_id}/tasks/${commitment.task_id}/contributions`, contributorHeaders, {
+		title: "Add packaged health regression coverage", body: "Implements the incident review's corrective commitment.", source_branch: "incident-health-regression", target_branch: "main",
+	}) as { id: string };
+	await maintainer.goto(`/pulls/${repositoryID}/${correctivePull.id}`);
+	await expect(maintainer.locator("#checks").getByText("succeeded", { exact: true }).last()).toBeVisible({ timeout: 60_000 });
+	await maintainer.getByRole("button", { name: "Approve" }).click();
+	await expect(maintainer.getByRole("button", { name: "Merge into main" })).toBeEnabled();
+	await maintainer.getByRole("button", { name: "Merge into main" }).click();
+	await expect(maintainer.getByText("Merged", { exact: true })).toBeVisible();
+	const correctivePullResult = await getJSON(maintainer, `/repositories/${repositoryID}/pulls/${correctivePull.id}`, maintainerHeaders) as { merge_commit_id: string };
+
+	const followUpRelease = await createRelease(contributor, contributorHeaders, `v1.1.2-${suffix}`, "Deliver the incident-linked preventive improvement.", correctivePullResult.merge_commit_id, correctedRelease.id);
+	const followUpBuild = await buildRelease(contributor, contributorHeaders, followUpRelease);
+	const followUpRequest = await postJSON(contributor, `/repositories/${repositoryID}/deployments`, contributorHeaders, {
+		environment_id: environment.id, release_id: followUpRelease.id, build_id: followUpBuild.id, artifact_id: followUpBuild.artifacts[0].id,
+	}) as Deployment;
+	await postJSON(maintainer, `/repositories/${repositoryID}/deployments/${followUpRequest.id}/approvals`, maintainerHeaders, {});
+	await waitForDeployment(contributor, contributorHeaders, followUpRequest.id, "succeeded");
+	incident = await getJSON(maintainer, `/incidents/${incidentID}`, maintainerHeaders) as Incident;
+	const completed = incident.commitments.find((item) => item.task_id === commitment.task_id)!;
+	expect(completed.progress).toMatchObject({ state: "completed", pull_request_id: correctivePull.id });
+	expect(completed.progress.release_ids).toContain(followUpRelease.id);
+	expect(completed.progress.deployment_ids).toContain(followUpRequest.id);
+	expect(incident.timeline).toEqual(expect.arrayContaining([
+		expect.objectContaining({ kind: "declared", actor_id: contributorUser.id }),
+		expect.objectContaining({ kind: "agent_finding", actor_id: investigationLaunch.investigation.agent_id }),
+		expect.objectContaining({ kind: "mitigation_recovered", actor_id: contributorUser.id }),
+		expect.objectContaining({ kind: "incident_resolved", actor_id: contributorUser.id }),
+	]));
 
   await maintainerContext.close();
   await contributorContext.close();

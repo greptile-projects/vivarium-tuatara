@@ -52,6 +52,14 @@ signals. Independent approvals (or visible self-approval overrides), governed
 deployment/recovery execution, failed attempts, and resulting resource IDs stay
 on the incident. Recovery is recorded only after the named signals pass on a
 retained recovery deployment.
+The connected two-user browser journey exercises this as one continuous
+signal-to-learning loop: a retained failed production signal becomes a browser-
+declared incident, selected evidence and an exact revision are frozen for a
+read-only agent, an independent responder approves an attested rollback, and a
+public recovery update is acknowledged. The published review then creates an
+accountable corrective proposal task that returns through ordinary checks,
+review, release, and governed production deployment; incident reads derive all
+follow-up progress from the authoritative workflow records.
 
 ## Web interface foundation
 
