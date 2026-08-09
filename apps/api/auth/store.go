@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -58,6 +59,9 @@ type Credential struct {
 	GitWriteBranch string     `json:"git_write_branch,omitempty"`
 	PullRequestID  string     `json:"pull_request_id,omitempty"`
 	PackageNames   []string   `json:"package_names,omitempty"`
+	OrganizationID string     `json:"organization_id,omitempty"`
+	AccessGrantID  string     `json:"access_grant_id,omitempty"`
+	AgentID        string     `json:"agent_id,omitempty"`
 	Hash           string     `json:"-"`
 }
 
@@ -72,6 +76,8 @@ type Store struct {
 	now        func() time.Time
 	afterWrite func() error
 }
+
+const batchRevocationsFile = "batch-revocations.json"
 
 func New(root string) (*Store, error) {
 	if root == "" {
@@ -104,6 +110,30 @@ func (s *Store) IssuePullRequestBound(userID string, name string, scopes []strin
 // authority is frozen to an explicit set of package identities.
 func (s *Store) IssuePackageBound(userID, name, repositoryID string, packageNames []string, lifetime time.Duration) (IssuedCredential, error) {
 	return s.issueBound(userID, API, name, []string{"packages:read"}, lifetime, repositoryID, "", "", packageNames)
+}
+
+// IssueOrganizationAgent creates an auditable, repository-bound credential
+// derived from one live organization access grant.
+func (s *Store) IssueOrganizationAgent(userID, name, organizationID, grantID, agentID, repositoryID string, scopes []string, lifetime time.Duration) (IssuedCredential, error) {
+	issued, err := s.issueBound(userID, Git, name, scopes, lifetime, repositoryID, "", "", nil)
+	if err != nil {
+		return issued, err
+	}
+	credential, err := s.read(issued.ID)
+	if err != nil {
+		return IssuedCredential{}, err
+	}
+	if !validID(organizationID) || !validID(grantID) || !validID(agentID) {
+		_, _ = s.Revoke(userID, issued.ID)
+		return IssuedCredential{}, ErrInvalid
+	}
+	credential.OrganizationID, credential.AccessGrantID, credential.AgentID = organizationID, grantID, agentID
+	if err = s.write(credential); err != nil {
+		_, _ = s.Revoke(userID, issued.ID)
+		return IssuedCredential{}, err
+	}
+	issued.Credential = credential
+	return issued, nil
 }
 
 func (s *Store) issueBound(userID string, kind Kind, name string, scopes []string, lifetime time.Duration, repositoryID, gitWriteBranch, pullRequestID string, packageNames []string) (IssuedCredential, error) {
@@ -203,6 +233,13 @@ func (s *Store) Authenticate(token string, required string) (Credential, error) 
 	}
 	hash := sha256.Sum256([]byte(token))
 	storedHash, decodeErr := hex.DecodeString(credential.Hash)
+	batch, batchErr := s.readBatchRevocations()
+	if batchErr != nil {
+		return Credential{}, batchErr
+	}
+	if revokedAt, revoked := batch[id]; revoked {
+		credential.RevokedAt = &revokedAt
+	}
 	if decodeErr != nil || subtle.ConstantTimeCompare(storedHash, hash[:]) != 1 || credential.RevokedAt != nil || !s.now().Before(credential.ExpiresAt) || (required != "" && !hasScope(credential.Scopes, required)) {
 		return Credential{}, ErrNotFound
 	}
@@ -222,6 +259,10 @@ func (s *Store) List(userID string) ([]Credential, error) {
 		return nil, err
 	}
 	result := []Credential{}
+	batch, err := s.readBatchRevocations()
+	if err != nil {
+		return nil, err
+	}
 	for _, entry := range entries {
 		id, ok := strings.CutSuffix(entry.Name(), ".json")
 		if !ok || !validID(id) {
@@ -232,6 +273,9 @@ func (s *Store) List(userID string) ([]Credential, error) {
 			return nil, err
 		}
 		if credential.UserID == userID {
+			if revokedAt, revoked := batch[credential.ID]; revoked {
+				credential.RevokedAt = &revokedAt
+			}
 			result = append(result, credential)
 		}
 	}
@@ -242,6 +286,47 @@ func (s *Store) List(userID string) ([]Credential, error) {
 		return result[i].CreatedAt.Before(result[j].CreatedAt)
 	})
 	return result, nil
+}
+
+// RevokeBatch publishes one all-or-nothing revocation decision for an exact
+// credential set. It is used where a related durable mutation must not observe
+// a partially revoked set.
+func (s *Store) RevokeBatch(userID string, ids []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		credential, readErr := s.read(id)
+		if readErr != nil || credential.UserID != userID {
+			return ErrNotFound
+		}
+	}
+	batch, err := s.readBatchRevocations()
+	if err != nil {
+		return err
+	}
+	now := s.now().Truncate(time.Microsecond)
+	for id := range seen {
+		if _, exists := batch[id]; !exists {
+			batch[id] = now
+		}
+	}
+	if err = s.writeBatchRevocations(batch); err != nil {
+		if persisted, readErr := s.readBatchRevocations(); readErr == nil && maps.Equal(persisted, batch) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *Store) Revoke(userID, id string) (Credential, error) {
@@ -278,7 +363,7 @@ func hasScope(scopes []string, required string) bool {
 func sameCredential(left, right Credential) bool {
 	return left.ID == right.ID && left.UserID == right.UserID && left.Kind == right.Kind && left.Name == right.Name &&
 		left.CreatedAt.Equal(right.CreatedAt) && left.ExpiresAt.Equal(right.ExpiresAt) && left.Hash == right.Hash &&
-		slices.Equal(left.Scopes, right.Scopes) && left.RepositoryID == right.RepositoryID && left.GitWriteBranch == right.GitWriteBranch && left.PullRequestID == right.PullRequestID && slices.Equal(left.PackageNames, right.PackageNames) && left.LastUsedAt == nil && left.RevokedAt == nil
+		slices.Equal(left.Scopes, right.Scopes) && left.RepositoryID == right.RepositoryID && left.GitWriteBranch == right.GitWriteBranch && left.PullRequestID == right.PullRequestID && slices.Equal(left.PackageNames, right.PackageNames) && left.OrganizationID == right.OrganizationID && left.AccessGrantID == right.AccessGrantID && left.AgentID == right.AgentID && left.LastUsedAt == nil && left.RevokedAt == nil
 }
 func validID(id string) bool {
 	if len(id) != 32 || id != strings.ToLower(id) {
@@ -313,6 +398,60 @@ func (s *Store) read(id string) (Credential, error) {
 	}
 	record.Credential.Hash = record.Hash
 	return record.Credential, nil
+}
+
+func (s *Store) readBatchRevocations() (map[string]time.Time, error) {
+	data, err := os.ReadFile(filepath.Join(s.root, batchRevocationsFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]time.Time{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]time.Time{}
+	if json.Unmarshal(data, &result) != nil {
+		return nil, errors.New("corrupt batch revocations")
+	}
+	return result, nil
+}
+
+func (s *Store) writeBatchRevocations(value map[string]time.Time) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(s.root, ".batch-revocations-*.tmp")
+	if err != nil {
+		return err
+	}
+	name := temp.Name()
+	defer os.Remove(name)
+	if err = temp.Chmod(0o600); err == nil {
+		_, err = temp.Write(append(data, '\n'))
+	}
+	if err == nil {
+		err = temp.Sync()
+	}
+	if closeErr := temp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err = os.Rename(name, filepath.Join(s.root, batchRevocationsFile)); err != nil {
+		return err
+	}
+	if s.afterWrite != nil {
+		if err = s.afterWrite(); err != nil {
+			return err
+		}
+	}
+	dir, err := os.Open(s.root)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 
 func (s *Store) write(credential Credential) error {

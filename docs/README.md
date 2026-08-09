@@ -1059,6 +1059,23 @@ mutation uses its visible version as a compare-and-swap guard and appends an
 actor-stamped event. Effective membership explains whether participation is
 direct or inherited from a visible child team. Agent approval publishes
 capabilities, current member operators, and team associations but grants no
-credential or repository access. Public directory reads show only public teams
+credential or repository access by itself. Accepted members can request an
+explicit role for a team they belong to or an approved agent they operate,
+targeting named repositories, packages, environments, or collaboration
+records. Owners approve or deny those requests; every request, decision,
+grant, derived credential, and revocation is actor-stamped in organization
+history. Grants retain their reason, optional expiry, and resource-specific
+deny exceptions so effective authority explains both its source and its
+limits. Agent operators can derive a short-lived Git credential only for an
+exact repository named by a live grant, and its lifetime is capped by the
+grant. Revocation walks only that grant's recorded credentials and invalidates
+them immediately, preserving unrelated sessions and work. Public directory reads show only public teams
 and agents and public-repository responsibility; accepted members see the full
 organization-visible structure and attribution timeline.
+
+The access API is rooted at `/organizations/{id}/access-requests`. Decisions
+are posted to `/access-requests/{request-id}/decision`; live grants appear on
+the member organization and portfolio projections, revoke with an expected
+version at `/access-grants/{grant-id}`, and issue agent credentials beneath
+`/access-grants/{grant-id}/credentials`. Expired, revoked, and explicitly
+excepted resources never authorize credential issuance.
