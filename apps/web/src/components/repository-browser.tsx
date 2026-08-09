@@ -227,7 +227,10 @@ export function RepositoryBrowser({ id }: { id: string }) {
             Created {new Date(repository.created_at).toLocaleDateString()} ·
             default branch <code>{repository.default_branch}</code>
           </p>
-          <Link href={`/repositories/${id}/releases`} className="mt-3 inline-flex text-sm font-semibold text-[var(--brand)] hover:underline">View release candidates</Link>
+          <div className="mt-3 flex flex-wrap gap-4">
+            <Link href={`/repositories/${id}/releases`} className="text-sm font-semibold text-[var(--brand)] hover:underline">View release candidates</Link>
+            <Link href={`/repositories/${id}/relationships`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Interface dependency graph</Link>
+          </div>
           {repository.upstream_repository_id && (
             <p className="mt-2 text-sm text-[var(--muted)]">
               Forked from <Link href={`/repositories/${repository.upstream_repository_id}`} className="font-mono font-semibold text-[var(--brand)] hover:underline">upstream repository</Link>

@@ -23,6 +23,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/relationships"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/securityadvisories"
@@ -152,6 +153,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	relationshipRoot := os.Getenv("RELATIONSHIP_STORAGE_ROOT")
+	if relationshipRoot == "" {
+		relationshipRoot = "relationships"
+	}
+	relationshipStore, err := relationships.New(relationshipRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	incidentRoot := os.Getenv("INCIDENT_STORAGE_ROOT")
 	if incidentRoot == "" {
 		incidentRoot = "incidents"
@@ -173,7 +182,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -245,6 +254,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var deploymentStore *deployments.Store
 	var incidentStore *incidents.Store
 	var securityAdvisoryStore *securityadvisories.Store
+	var relationshipStore *relationships.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -255,6 +265,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			incidentStore = value
 		case *securityadvisories.Store:
 			securityAdvisoryStore = value
+		case *relationships.Store:
+			relationshipStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -292,6 +304,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		if deploymentStore != nil {
 			registerDeploymentRoutes(mux, store, repositoryCatalog, releaseStore, checkRunStore, deploymentStore, authStore, activityStore, pullRequestStore, changeSessionStore)
 		}
+	}
+	if authStore != nil && repositoryCatalog != nil && releaseStore != nil && deploymentStore != nil && relationshipStore != nil {
+		registerRelationshipRoutes(mux, store, repositoryCatalog, releaseStore, deploymentStore, relationshipStore, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && incidentStore != nil {
 		registerIncidentRoutes(mux, store, repositoryCatalog, incidentStore, proposalStore, deploymentStore, releaseStore, pullRequestStore, checkRunStore, authStore, activityStore)

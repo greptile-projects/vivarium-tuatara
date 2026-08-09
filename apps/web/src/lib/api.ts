@@ -33,6 +33,25 @@ export type ReleaseCandidate = {
     contributor_ids: string[];
   };
 };
+export type InterfacePublication = {
+  id: string; repository_id: string; name: string; version: string;
+  release_id: string; commit_id: string; published_by: string;
+  published_at: string; stale: boolean; stale_reason?: string;
+};
+export type DependencyRelationship = {
+  id: string; repository_id: string; commit_id: string; release_id?: string;
+  environment_id?: string; provider_repository_id: string;
+  interface_name: string; constraint: string; declared_by: string;
+  declared_at: string; resolved_interface_id?: string;
+  resolved_version?: string; state: "resolved" | "stale" | "unresolved";
+  reason?: string;
+};
+export type RelationshipGraph = {
+  root_repository_id: string;
+  repositories: Pick<Repository, "id" | "name" | "owner_id" | "visibility">[];
+  interfaces: InterfacePublication[];
+  dependencies: DependencyRelationship[];
+};
 export type ReleaseArtifact = {
   id: string;
   attempt: number;

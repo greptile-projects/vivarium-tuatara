@@ -840,6 +840,46 @@ release-build routes inherit repository visibility:
 - `POST .../builds/{build_id}/rerun` appends a same-source attempt; earlier
   attempts, logs, failures, and artifacts remain unchanged.
 
+### Versioned interface relationships
+
+Repository participants publish a named interface from immutable release
+evidence with `POST /repositories/{id}/interfaces`:
+
+```json
+{"name":"events","release_id":"0123456789abcdef0123456789abcdef"}
+```
+
+The server derives `version` and `commit_id` from that repository's release;
+callers cannot substitute either value. Semantic versions use the exact
+`vMAJOR.MINOR.PATCH` form. A consumer records an immutable claim with `POST
+/repositories/{id}/dependencies`:
+
+```json
+{
+  "commit_id":"0123456789abcdef0123456789abcdef01234567",
+  "release_id":"0123456789abcdef0123456789abcdef",
+  "environment_id":"fedcba9876543210fedcba9876543210",
+  "provider_repository_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "interface_name":"events",
+  "constraint":">=v1.0.0 <v2.0.0"
+}
+```
+
+The consumer commit must be verified. Optional release evidence must resolve
+to that exact commit, and optional environment evidence must belong to the
+consumer repository. Constraints support `*` or space-separated `=`, `<`,
+`<=`, `>`, and `>=` comparisons.
+
+`GET /repositories/{id}/relationships` returns `repositories`, `interfaces`,
+and `dependencies` visible to the caller. It derives every dependency's
+`resolved`, `stale`, or `unresolved` state on read. Resolution names the newest
+visible non-stale interface satisfying the constraint. Missing or mismatched
+release records, removed environments, and environments without a successful
+deployment of the declared exact revision are reported with explicit reasons.
+Private repository identities and edges are omitted unless the caller still
+has repository access. Records live beneath `RELATIONSHIP_STORAGE_ROOT`, which
+defaults to `relationships`.
+
 ### Governed release environments
 
 `GET /repositories/{id}/environments` returns ordered environment policy.
