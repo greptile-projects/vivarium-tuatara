@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -113,6 +114,7 @@ func TestEvolutionAcknowledgementResponseFiltersOtherPrivateConsumers(t *testing
 	defer server.Close()
 	providerOwner := createTestAccount(t, server.URL, "evolution-provider-owner")
 	consumerAOwner := createTestAccount(t, server.URL, "evolution-consumer-a-owner")
+	providerCollaborator := createTestAccount(t, server.URL, "evolution-provider-collaborator")
 	createRepo := func(name, token string) repositories.Repository {
 		response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"`+name+`"}`, token, http.StatusCreated)
 		var repo repositories.Repository
@@ -123,6 +125,9 @@ func TestEvolutionAcknowledgementResponseFiltersOtherPrivateConsumers(t *testing
 	consumerA := createRepo("ack-consumer-a", consumerAOwner.Credential.Token)
 	consumerB := createRepo("ack-consumer-b", providerOwner.Credential.Token)
 	if _, err := catalog.SetVisibility(providerOwner.User.ID, provider.ID, repositories.Public); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.AddCollaborator(providerOwner.User.ID, provider.ID, providerCollaborator.User.ID); err != nil {
 		t.Fatal(err)
 	}
 	predecessor := relationships.Interface{ID: "11111111111111111111111111111111", RepositoryID: provider.ID, Name: "events", Version: "v1.0.0", ReleaseID: "22222222222222222222222222222222", CommitID: strings.Repeat("a", 40), PublishedBy: providerOwner.User.ID}
@@ -150,5 +155,12 @@ func TestEvolutionAcknowledgementResponseFiltersOtherPrivateConsumers(t *testing
 	decodeResponse(t, response, &visible)
 	if len(visible.Impacts) != 1 || visible.Impacts[0].RepositoryID != consumerA.ID || len(visible.Acknowledgements) != 1 || visible.Acknowledgements[0].RepositoryID != consumerA.ID || len(visible.Findings) != 0 || len(visible.Analyses) != 0 {
 		t.Fatalf("acknowledgement response leaked another consumer: %#v", visible)
+	}
+	patchBody := `{"version":` + fmt.Sprint(visible.Version) + `,"strategy":"dual publish with deprecation","sequencing":"consumers first","exceptions":"none"}`
+	response = authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+provider.ID+"/evolutions/"+plan.ID, patchBody, providerCollaborator.Credential.Token, http.StatusOK)
+	var updated relationships.Evolution
+	decodeResponse(t, response, &updated)
+	if updated.Strategy != "dual publish with deprecation" || len(updated.Impacts) != 0 || len(updated.Acknowledgements) != 0 || len(updated.Findings) != 0 || len(updated.Analyses) != 0 {
+		t.Fatalf("provider collaborator update leaked private consumers: %#v", updated)
 	}
 }

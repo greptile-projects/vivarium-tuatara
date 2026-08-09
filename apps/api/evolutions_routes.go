@@ -245,7 +245,8 @@ func registerEvolutionRoutes(mux *http.ServeMux, repos *repositories.Store, prop
 		writeJSON(w, 201, visible(v, actor.UserID))
 	})
 	mux.HandleFunc("PATCH /repositories/{id}/evolutions/{evolution_id}", func(w http.ResponseWriter, r *http.Request) {
-		if _, _, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write"); !ok {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
 			return
 		}
 		var in struct {
@@ -267,7 +268,7 @@ func registerEvolutionRoutes(mux *http.ServeMux, repos *repositories.Store, prop
 			writeAPIError(w, 422, "invalid_evolution", "migration contract is invalid")
 			return
 		}
-		writeJSON(w, 200, v)
+		writeJSON(w, 200, visible(v, actor.UserID))
 	})
 	mux.HandleFunc("POST /repositories/{id}/evolutions/{evolution_id}/acknowledgements", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := readActor(w, r)
