@@ -231,6 +231,33 @@ export type ReleaseAttestation = {
   created_at: string;
   completed_at?: string;
 };
+export type PackageVersion = {
+  id: string;
+  name: string;
+  version: string;
+  repository_id: string;
+  release_id: string;
+  source_commit: string;
+  build_id: string;
+  build_attestation: {
+    step: string;
+    image: string;
+    command: string;
+    attempt: number;
+    state: "succeeded";
+  };
+  artifact_id: string;
+  artifact_path: string;
+  content_type: string;
+  size: number;
+  sha256: string;
+  platform: { os?: string; architecture?: string; runtime?: string };
+  dependencies: { name: string; constraint: string }[];
+  publisher_id: string;
+  visibility: "public" | "private";
+  lifecycle: "active";
+  published_at: string;
+};
 export type DeploymentEnvironment = {
   id: string;
   repository_id: string;
