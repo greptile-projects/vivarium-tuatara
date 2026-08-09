@@ -97,6 +97,7 @@ func TestPrivateSecurityReportTriageAndBoundedAccess(t *testing.T) {
 	if strings.Contains(string(ordinaryData), repairLaunch.RepairSession.Branch) {
 		t.Fatalf("embargoed branch leaked in ordinary advertisement")
 	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-sessions/"+repairLaunch.RepairSession.ID+"/comments", `{"body":"Task creator review context."}`, owner.Credential.Token, http.StatusOK).Body.Close()
 	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-sessions/"+repairLaunch.RepairSession.ID+"/comments", `{"body":"Unauthorized reporter mutation."}`, reporter.Credential.Token, http.StatusForbidden).Body.Close()
 	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-sessions/"+repairLaunch.RepairSession.ID+"/revoke", `{}`, responder.Credential.Token, http.StatusOK).Body.Close()
 	if _, err = bare.ReadReference(repairLaunch.RepairSession.Branch); !errors.Is(err, storage.ErrReferenceNotFound) {
@@ -198,5 +199,10 @@ func TestRepairSessionAuthorizationIsRepositorySpecific(t *testing.T) {
 	}
 	decodeResponse(t, response, &task)
 	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-tasks/"+task.RepairTask.ID+"/sessions", `{"expires_in":300}`, ownerA.Credential.Token, http.StatusForbidden).Body.Close()
-	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-tasks/"+task.RepairTask.ID+"/sessions", `{"expires_in":300}`, assignee.Credential.Token, http.StatusCreated).Body.Close()
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-tasks/"+task.RepairTask.ID+"/sessions", `{"expires_in":300}`, assignee.Credential.Token, http.StatusCreated)
+	var launch struct {
+		RepairSession securityadvisories.RepairSession `json:"repair_session"`
+	}
+	decodeResponse(t, response, &launch)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-sessions/"+launch.RepairSession.ID+"/comments", `{"body":"Unrelated collaborator mutation."}`, reporter.Credential.Token, http.StatusForbidden).Body.Close()
 }

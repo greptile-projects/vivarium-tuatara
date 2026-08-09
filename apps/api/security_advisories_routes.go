@@ -496,8 +496,16 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 				writeAPIError(w, 404, "repair_session_not_found", "repair session not found")
 				return
 			}
-			if actor.UserID != existing.WorkerID && actor.UserID != existing.InitiatorID && !repositoryParticipant(actor.UserID, existing.RepositoryID) {
-				writeAPIError(w, 403, "repair_session_access_denied", "only the worker, initiator, or a participant in the repair repository may update this session")
+			var taskCreator string
+			for _, task := range current.RepairTasks {
+				if task.ID == existing.TaskID {
+					taskCreator = task.CreatedBy
+					break
+				}
+			}
+			creatorAuthorized := actor.UserID == taskCreator && repositoryParticipant(actor.UserID, existing.RepositoryID)
+			if actor.UserID != existing.WorkerID && actor.UserID != existing.InitiatorID && !creatorAuthorized {
+				writeAPIError(w, 403, "repair_session_access_denied", "only the worker, initiator, or authorized task creator may update this session")
 				return
 			}
 			if action == "complete" {

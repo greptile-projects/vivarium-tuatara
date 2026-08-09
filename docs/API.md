@@ -1127,8 +1127,9 @@ documents. All routes require an authenticated credential with
   the advisory; completion verifies the live tip descends from the frozen base.
   Assignment and launch require current participation in the task repository;
   response-team membership alone grants no Git access. Mutation authority is
-  checked against the task repository or exact worker/initiator, never ownership
-  of a different affected repository.
+  limited to the exact worker, session initiator, or explicit task creator while
+  that creator remains a task-repository participant; unrelated collaborators
+  cannot alter session history or lifecycle.
   Revocation removes the isolated ref so an open task can start a fresh session.
 
 A report is discoverable only by its reporter, current owners of affected
