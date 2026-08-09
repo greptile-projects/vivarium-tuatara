@@ -1101,3 +1101,15 @@ deployments, and credentials keep their frozen evidence rather than being
 retroactively invalidated. Responsible team maintainers can request a named,
 reasoned, expiring exception; owners decide it, and projections keep the
 requester, decision, expiry, original baseline, and adjusted value visible.
+
+The connected organization browser journey treats those records as one product
+workflow. An owner creates a two-team, two-repository portfolio, onboards a
+developer and approved agent, activates a shared review and delivery baseline,
+approves a maintainer-requested exception, and issues an exact repository-bound
+agent Git credential. Human and agent commits enter ordinary pull review before
+the developer is removed; removal revokes the derived credential immediately
+but preserves both pull requests, their authorship, the initiative map, and the
+policy decision. The owner then merges the retained work and carries its exact
+package inventory through an attested release and governed deployment. The
+Playwright server isolates organization records beneath
+`$ORGANIZATION_STORAGE_ROOT` with every other temporary journey store.
