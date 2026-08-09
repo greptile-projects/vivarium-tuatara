@@ -298,7 +298,10 @@ whenever dependencies change or the web job fails before it starts.
   derive pull, check, release, and deployment progress from authoritative
   workflow stores; obsolete or revoked task context invalidates the commitment,
   overdue and invalidated ownership remains actionable in inbox, and merge
-  completion clears it.
+  completion clears it. Commitment publication holds the target repository
+  catalog lock across actor/assignee revalidation, atomically creates the
+  proposal/task/assignment under the incident operation ID, and reuses those
+  records if incident linking must be retried.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's

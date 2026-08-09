@@ -1032,10 +1032,14 @@ incident resolved, and appends an immutable `incident_resolved` timeline entry.
 After the review exists, `POST /incidents/{incident_id}/commitments` creates a
 normal proposal and human-assigned executable task in an affected repository,
 then links their stable IDs, accountable assignee, exact base revision, and due
-time back to the incident. The request carries a stable `operation_id`; the
-incident link deduplicates exact publication retries. Repository participation,
-task assignment, branch-base verification, and later task context rules remain
-authoritative in the proposal APIs rather than being copied into the incident.
+time back to the incident. The request carries a stable `operation_id`; one
+proposal-store transaction publishes the proposal, task, and assignment under
+that identity, and the incident link reuses it after a partial cross-store
+failure. Exact retries therefore converge without orphaning duplicate work.
+The target repository's catalog lock holds current actor and assignee access
+through proposal publication and incident linking. Repository participation,
+branch-base verification, and later task context rules remain authoritative in
+the proposal APIs rather than being copied into the incident.
 
 Incident reads derive each commitment's current progress from that authoritative
 work. They report invalidated assignments or obsolete context, overdue open

@@ -15,10 +15,54 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
+
+func TestIncidentCommitmentRequiresTargetRepositoryAccess(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	activity, _ := activities.New(t.TempDir())
+	incidentStore, _ := incidents.New(t.TempDir())
+	proposalStore, _ := proposals.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, proposalStore, nil, activity, nil, nil, incidentStore))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "commitment-owner")
+	responder := createTestAccount(t, server.URL, "commitment-responder")
+	createRepository := func(name string) repositories.Repository {
+		response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"`+name+`"}`, owner.Credential.Token, http.StatusCreated)
+		var repository repositories.Repository
+		decodeResponse(t, response, &repository)
+		return repository
+	}
+	first, second := createRepository("incident-a"), createRepository("incident-b")
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+first.ID+"/collaborators", `{"user_id":"`+responder.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	gitRepository, _ := gitStore.Open(second.ID)
+	base := writeCommit(t, gitRepository, time.Now().Unix(), "base")
+	declare := authenticatedRequest(t, http.MethodPost, server.URL+"/incidents", `{"title":"Shared outage","summary":"Two services affected.","severity":"sev2","scopes":[{"repository_id":"`+first.ID+`"},{"repository_id":"`+second.ID+`"}],"roles":[]}`, owner.Credential.Token, http.StatusCreated)
+	var incident incidents.Incident
+	decodeResponse(t, declare, &incident)
+	resolve := authenticatedRequest(t, http.MethodPut, server.URL+"/incidents/"+incident.ID+"/resolution", `{"expected_version":`+strconv.Itoa(incident.Version)+`,"impact":"Requests failed.","timeline":"Detected then recovered.","contributing_factors":["Missing isolation"],"conclusions":"Isolate service capacity."}`, owner.Credential.Token, http.StatusOK)
+	decodeResponse(t, resolve, &incident)
+	due := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	body := `{"operation_id":"` + strings.Repeat("9", 32) + `","repository_id":"` + second.ID + `","proposal_title":"Isolate capacity","proposal_body":"Prevent recurrence.","task_title":"Add isolation","outcome":"Load proves isolation.","assignee_id":"` + owner.User.ID + `","base_revision":"` + string(base) + `","due_at":"` + due + `"}`
+	authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/commitments", body, responder.Credential.Token, http.StatusNotFound).Body.Close()
+	items, err := proposalStore.List(second.ID)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("unauthorized proposals = %#v, %v", items, err)
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+second.ID+"/collaborators", `{"user_id":"`+responder.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/commitments", body, responder.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/commitments", body, responder.Credential.Token, http.StatusOK).Body.Close()
+	items, err = proposalStore.List(second.ID)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("deduplicated proposals = %#v, %v", items, err)
+	}
+}
 
 func TestIncidentOperatingPictureFromHealthSignal(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())

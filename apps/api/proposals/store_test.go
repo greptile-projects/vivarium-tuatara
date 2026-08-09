@@ -49,6 +49,29 @@ func TestProposalAndConversationPersistWithAttribution(t *testing.T) {
 	}
 }
 
+func TestCorrectiveWorkPublishesAtomicallyAndDeduplicatesRetry(t *testing.T) {
+	root := t.TempDir()
+	store, _ := New(root)
+	input := CorrectiveWorkInput{IncidentID: strings.Repeat("2", 32), OperationID: strings.Repeat("3", 32), RepositoryID: repositoryID, ActorID: authorID, ProposalTitle: "Prevent recurrence", ProposalBody: "Bound the failure mode.", TaskTitle: "Add saturation guard", Outcome: "Load tests prove bounded concurrency.", AssigneeID: commenterID, BaseRevision: strings.Repeat("4", 40), DueAt: time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)}
+	proposal, task, err := store.CreateCorrectiveWork(input)
+	if err != nil || task.Assignment == nil || task.Assignment.AssigneeID != commenterID {
+		t.Fatalf("created = %#v %#v, %v", proposal, task, err)
+	}
+	reopened, _ := New(root)
+	retryProposal, retryTask, err := reopened.CreateCorrectiveWork(input)
+	if err != nil || retryProposal.ID != proposal.ID || retryTask.ID != task.ID {
+		t.Fatalf("retry = %#v %#v, %v", retryProposal, retryTask, err)
+	}
+	items, err := reopened.List(repositoryID)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("proposals = %#v, %v", items, err)
+	}
+	input.Outcome = "Changed operation content"
+	if _, _, err := reopened.CreateCorrectiveWork(input); !errors.Is(err, ErrCorrectiveConflict) {
+		t.Fatalf("changed retry = %v", err)
+	}
+}
+
 func TestConcurrentCommentsAreNotLostAcrossStores(t *testing.T) {
 	root := t.TempDir()
 	first, _ := New(root)

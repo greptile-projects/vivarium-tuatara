@@ -22,6 +22,7 @@ var (
 	ErrInvalid                = errors.New("invalid proposal")
 	ErrDurabilityUncertain    = errors.New("proposal mutation is visible but durability is uncertain")
 	ErrTaskAssignmentConflict = errors.New("task assignment changed")
+	ErrCorrectiveConflict     = errors.New("corrective work operation changed")
 )
 
 const (
@@ -137,6 +138,29 @@ type TaskRebaseInput struct {
 	ExpectedAssignmentID string
 }
 
+type CorrectiveWorkInput struct {
+	IncidentID    string
+	OperationID   string
+	RepositoryID  string
+	ActorID       string
+	ProposalTitle string
+	ProposalBody  string
+	TaskTitle     string
+	Outcome       string
+	AssigneeID    string
+	BaseRevision  string
+	DueAt         time.Time
+}
+
+type CorrectiveOrigin struct {
+	IncidentID   string    `json:"incident_id"`
+	OperationID  string    `json:"operation_id"`
+	ActorID      string    `json:"actor_id"`
+	AssigneeID   string    `json:"assignee_id"`
+	BaseRevision string    `json:"base_revision"`
+	DueAt        time.Time `json:"due_at"`
+}
+
 // WithStartableAgentTask serializes task-session publication with proposal and
 // task mutations. The callback receives snapshots from the same locked record
 // that proved the exact assignment is still startable.
@@ -175,10 +199,90 @@ type Patch struct {
 }
 
 type record struct {
-	Proposal    Proposal     `json:"proposal"`
-	Comments    []Comment    `json:"comments,omitempty"`
-	Tasks       []Task       `json:"tasks,omitempty"`
-	TaskChanges []TaskChange `json:"task_changes,omitempty"`
+	Proposal    Proposal          `json:"proposal"`
+	Comments    []Comment         `json:"comments,omitempty"`
+	Tasks       []Task            `json:"tasks,omitempty"`
+	TaskChanges []TaskChange      `json:"task_changes,omitempty"`
+	Corrective  *CorrectiveOrigin `json:"corrective_origin,omitempty"`
+}
+
+// CreateCorrectiveWork atomically publishes a proposal, its first task, and
+// human assignment. Incident/operation identity makes a retry return the same
+// resources even when a later incident-store link could not be acknowledged.
+func (s *Store) CreateCorrectiveWork(input CorrectiveWorkInput) (Proposal, Task, error) {
+	title, body, err := validateContent(input.ProposalTitle, input.ProposalBody)
+	if err != nil {
+		return Proposal{}, Task{}, err
+	}
+	taskTitle, outcome, err := validateTaskContent(input.TaskTitle, input.Outcome)
+	if err != nil {
+		return Proposal{}, Task{}, err
+	}
+	input.BaseRevision = strings.ToLower(strings.TrimSpace(input.BaseRevision))
+	if !validID(input.IncidentID) || !validID(input.OperationID) || !validID(input.RepositoryID) || !validID(input.ActorID) || !validID(input.AssigneeID) || len(input.BaseRevision) != 40 || input.DueAt.IsZero() {
+		return Proposal{}, Task{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Proposal{}, Task{}, err
+	}
+	defer unlock()
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return Proposal{}, Task{}, err
+	}
+	for _, entry := range entries {
+		id, ok := strings.CutSuffix(entry.Name(), ".json")
+		if entry.IsDir() || !ok || !validID(id) {
+			continue
+		}
+		r, readErr := s.read(id)
+		if readErr != nil {
+			return Proposal{}, Task{}, readErr
+		}
+		if r.Corrective == nil || r.Corrective.IncidentID != input.IncidentID || r.Corrective.OperationID != input.OperationID {
+			continue
+		}
+		origin := r.Corrective
+		if r.Proposal.RepositoryID != input.RepositoryID || r.Proposal.AuthorID != input.ActorID || r.Proposal.Title != title || r.Proposal.Body != body || len(r.Tasks) != 1 || r.Tasks[0].Title != taskTitle || r.Tasks[0].Outcome != outcome || origin.ActorID != input.ActorID || origin.AssigneeID != input.AssigneeID || origin.BaseRevision != input.BaseRevision || !origin.DueAt.Equal(input.DueAt) {
+			return Proposal{}, Task{}, ErrCorrectiveConflict
+		}
+		return r.Proposal, r.Tasks[0], nil
+	}
+	proposalID, err := newID()
+	if err != nil {
+		return Proposal{}, Task{}, err
+	}
+	taskID, err := newID()
+	if err != nil {
+		return Proposal{}, Task{}, err
+	}
+	assignmentID, err := newID()
+	if err != nil {
+		return Proposal{}, Task{}, err
+	}
+	now := s.now().Truncate(time.Microsecond)
+	p := Proposal{ID: proposalID, RepositoryID: input.RepositoryID, AuthorID: input.ActorID, Title: title, Body: body, Status: Open, CreatedAt: now, UpdatedAt: now}
+	task := Task{ID: taskID, ProposalID: proposalID, Title: taskTitle, Outcome: outcome, Status: TaskTodo, Position: 0, ContextRevision: 1, ContextState: "current", Ready: true, CreatedBy: input.ActorID, UpdatedBy: input.ActorID, CreatedAt: now, UpdatedAt: now}
+	task.Assignment = &TaskAssignment{ID: assignmentID, AssigneeType: "human", AssigneeID: input.AssigneeID, Mandate: outcome, Access: TaskAccess{RepositoryID: input.RepositoryID, BaseRevision: input.BaseRevision, Scopes: []string{}, Branch: "no new access; existing collaborator authority only"}, AssignedBy: input.ActorID, AssignedAt: now, ContextRevision: 1}
+	created, err := newTaskChange(Task{ID: task.ID, ProposalID: task.ProposalID, Title: task.Title, Outcome: task.Outcome, Status: task.Status, Position: task.Position, ContextRevision: 1, ContextState: "current", Ready: true, CreatedBy: task.CreatedBy, UpdatedBy: task.UpdatedBy, CreatedAt: now, UpdatedAt: now}, input.ActorID, "created", now)
+	if err != nil {
+		return Proposal{}, Task{}, err
+	}
+	assigned, err := newTaskChange(task, input.ActorID, "assigned", now)
+	if err != nil {
+		return Proposal{}, Task{}, err
+	}
+	r := record{Proposal: p, Tasks: []Task{task}, TaskChanges: []TaskChange{created, assigned}, Corrective: &CorrectiveOrigin{IncidentID: input.IncidentID, OperationID: input.OperationID, ActorID: input.ActorID, AssigneeID: input.AssigneeID, BaseRevision: input.BaseRevision, DueAt: input.DueAt}}
+	if committed, writeErr := s.write(r); writeErr != nil {
+		if committed {
+			return p, task, fmt.Errorf("%w: %v", ErrDurabilityUncertain, writeErr)
+		}
+		return Proposal{}, Task{}, writeErr
+	}
+	return p, task, nil
 }
 
 type Store struct {
@@ -1018,6 +1122,9 @@ func (s *Store) read(id string) (record, error) {
 		return record{}, fmt.Errorf("corrupt proposal %s", id)
 	}
 	if _, _, err := validateContent(r.Proposal.Title, r.Proposal.Body); err != nil {
+		return record{}, fmt.Errorf("corrupt proposal %s", id)
+	}
+	if r.Corrective != nil && (!validID(r.Corrective.IncidentID) || !validID(r.Corrective.OperationID) || !validID(r.Corrective.ActorID) || !validID(r.Corrective.AssigneeID) || len(r.Corrective.BaseRevision) != 40 || r.Corrective.DueAt.IsZero()) {
 		return record{}, fmt.Errorf("corrupt proposal %s", id)
 	}
 	seen := map[string]bool{}

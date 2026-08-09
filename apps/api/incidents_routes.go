@@ -447,38 +447,44 @@ func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *
 				return
 			}
 		}
-		if _, err := repos.GetByID(input.RepositoryID); err != nil {
-			writeAPIError(w, 404, "repository_not_found", "repository not found")
-			return
-		}
-		assigneeAllowed, _ := repos.HasCollaborator(input.AssigneeID, input.RepositoryID)
-		repository, _ := repos.GetByID(input.RepositoryID)
-		if repository.OwnerID != input.AssigneeID && !assigneeAllowed {
-			writeAPIError(w, 422, "invalid_assignee", "assignee must currently participate in the repository")
-			return
-		}
-		proposal, err := proposalStore.Create(input.RepositoryID, actor.UserID, input.ProposalTitle, input.ProposalBody)
-		if err != nil && !errors.Is(err, proposals.ErrDurabilityUncertain) {
-			writeProposalError(w, err)
-			return
-		}
-		task, err := proposalStore.CreateTask(input.RepositoryID, proposal.ID, actor.UserID, input.TaskTitle, input.Outcome, nil, nil)
-		if err != nil && !errors.Is(err, proposals.ErrDurabilityUncertain) {
-			writeProposalError(w, err)
-			return
-		}
-		task, err = proposalStore.AssignTask(input.RepositoryID, proposal.ID, task.ID, actor.UserID, proposals.TaskAssignmentInput{AssigneeType: "human", AssigneeID: input.AssigneeID, Mandate: input.Outcome, RepositoryID: input.RepositoryID, BaseRevision: input.BaseRevision})
-		if err != nil {
-			writeProposalError(w, err)
-			return
-		}
 		var v incidents.Incident
-		err = mutate(current, actor.UserID, current.Roles, func() error {
-			var mutationErr error
-			v, _, mutationErr = store.LinkCommitment(current.ID, input.OperationID, actor.UserID, input.RepositoryID, proposal.ID, task.ID, input.AssigneeID, input.DueAt)
-			return mutationErr
+		err := repos.WithIncidentDeclarationAuthorization(actor.UserID, []string{input.RepositoryID}, []string{input.AssigneeID}, func() error {
+			gitRepository, openErr := gitStore.Open(input.RepositoryID)
+			if openErr != nil {
+				return repositories.ErrNotFound
+			}
+			if _, readErr := gitRepository.ReadCommit(storage.ObjectID(strings.ToLower(input.BaseRevision))); readErr != nil {
+				return readErr
+			}
+			proposal, task, createErr := proposalStore.CreateCorrectiveWork(proposals.CorrectiveWorkInput{IncidentID: current.ID, OperationID: input.OperationID, RepositoryID: input.RepositoryID, ActorID: actor.UserID, ProposalTitle: input.ProposalTitle, ProposalBody: input.ProposalBody, TaskTitle: input.TaskTitle, Outcome: input.Outcome, AssigneeID: input.AssigneeID, BaseRevision: input.BaseRevision, DueAt: input.DueAt})
+			if createErr != nil && !errors.Is(createErr, proposals.ErrDurabilityUncertain) {
+				return createErr
+			}
+			var linkErr error
+			v, _, linkErr = store.LinkCommitment(current.ID, input.OperationID, actor.UserID, input.RepositoryID, proposal.ID, task.ID, input.AssigneeID, input.DueAt)
+			return linkErr
 		})
 		if err != nil {
+			if errors.Is(err, repositories.ErrInvalidCollaborator) {
+				writeAPIError(w, 404, "repository_not_found", "repository not found")
+				return
+			}
+			if errors.Is(err, repositories.ErrNotFound) {
+				writeAPIError(w, 404, "repository_not_found", "repository not found")
+				return
+			}
+			if errors.Is(err, storage.ErrObjectNotFound) || errors.Is(err, storage.ErrInvalidObject) || errors.Is(err, storage.ErrCorruptObject) {
+				writeAPIError(w, 400, "invalid_base_revision", "base revision must be an existing commit")
+				return
+			}
+			if errors.Is(err, proposals.ErrCorrectiveConflict) {
+				writeAPIError(w, 409, "incident_changed", "commitment operation was already used with different content")
+				return
+			}
+			if errors.Is(err, proposals.ErrInvalid) {
+				writeProposalError(w, err)
+				return
+			}
 			writeIncidentError(w, err)
 			return
 		}
