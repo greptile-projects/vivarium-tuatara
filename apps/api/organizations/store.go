@@ -506,16 +506,21 @@ func (s *Store) RemoveTeamMember(id, teamID, actor, user string, expected int) (
 	})
 }
 
-func (s *Store) AddResponsibility(id, teamID, actor, repositoryID, area, description string, expected int) (Organization, error) {
+func (s *Store) AddResponsibility(id, teamID, actor, repositoryID, area, description string, expected int, coordinate func(func() error) error) (Organization, error) {
 	area, ok := clean(area, 100)
 	if !ok || !validID(repositoryID) || len(description) > 1000 {
 		return Organization{}, ErrInvalid
 	}
-	return s.mutate(id, func(v *Organization) error {
-		if !HasRole(*v, actor, "owner") {
+	var out Organization
+	err := s.locked(func() error {
+		v, err := s.Get(id)
+		if err != nil {
+			return err
+		}
+		if !HasRole(v, actor, "owner") {
 			return ErrNotFound
 		}
-		i := teamIndex(v, teamID)
+		i := teamIndex(&v, teamID)
 		if i < 0 {
 			return ErrNotFound
 		}
@@ -523,14 +528,27 @@ func (s *Store) AddResponsibility(id, teamID, actor, repositoryID, area, descrip
 		if t.Version != expected {
 			return ErrConflict
 		}
-		rid, e := newID()
-		if e != nil {
-			return e
+		if coordinate == nil {
+			return ErrInvalid
 		}
-		t.Responsibilities = append(t.Responsibilities, Responsibility{ID: rid, RepositoryID: repositoryID, Area: area, Description: strings.TrimSpace(description), AddedBy: actor, AddedAt: s.now().Truncate(time.Microsecond)})
-		t.Version++
-		return s.event(v, "team.responsibility.added", actor, rid, map[string]any{"team_id": teamID, "repository_id": repositoryID, "area": area})
+		return coordinate(func() error {
+			rid, e := newID()
+			if e != nil {
+				return e
+			}
+			t.Responsibilities = append(t.Responsibilities, Responsibility{ID: rid, RepositoryID: repositoryID, Area: area, Description: strings.TrimSpace(description), AddedBy: actor, AddedAt: s.now().Truncate(time.Microsecond)})
+			t.Version++
+			if e = s.event(&v, "team.responsibility.added", actor, rid, map[string]any{"team_id": teamID, "repository_id": repositoryID, "area": area}); e != nil {
+				return e
+			}
+			if e = s.write(v); e != nil {
+				return e
+			}
+			out = v
+			return nil
+		})
 	})
+	return out, err
 }
 
 func normalizeList(values []string, validate func(string) bool) ([]string, bool) {
@@ -618,7 +636,18 @@ func ProjectDirectory(v Organization, member bool, publicRepositories map[string
 			continue
 		}
 		copy := t
+		if !member && !visible[copy.ParentID] {
+			copy.ParentID = ""
+		}
 		if !member {
+			rs := []Responsibility{}
+			for _, r := range copy.Responsibilities {
+				if publicRepositories[r.RepositoryID] {
+					rs = append(rs, r)
+				}
+			}
+			copy.Responsibilities = rs
+		} else {
 			rs := []Responsibility{}
 			for _, r := range copy.Responsibilities {
 				if publicRepositories[r.RepositoryID] {

@@ -1445,3 +1445,9 @@ nested effective membership, public-repository responsibility, and public
 agents. Members additionally receive organization-visible records and the
 immutable actor-stamped event history. Private repository responsibility and
 organization-only nesting are omitted from public projection.
+Pending invitees receive only organization identity and their own invitation,
+not membership, teams, agents, transfers, responsibility, or events. A public
+child also omits its `parent_id` when that parent is not public. Responsibility
+publication holds the repository catalog boundary across a final current-group
+check and organization write; directory reads independently discard links to
+repositories no longer in the current portfolio.

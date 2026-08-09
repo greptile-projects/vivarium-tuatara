@@ -57,6 +57,21 @@ type organizationAgentInput struct {
 
 func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, repos *repositories.Store, usersStore *users.Store, credentials *auth.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, packageStore *packages.Store, incidentStore *incidents.Store) {
 	project := func(v organizations.Organization, actor string) organizations.Organization {
+		if !organizations.HasRole(v, actor, "") {
+			kept := []organizations.Invitation{}
+			for _, x := range v.Invitations {
+				if x.UserID == actor {
+					kept = append(kept, x)
+				}
+			}
+			v.Members = []organizations.Member{}
+			v.Invitations = kept
+			v.Transfers = []organizations.Transfer{}
+			v.Teams = []organizations.Team{}
+			v.Agents = []organizations.Agent{}
+			v.Events = []organizations.Event{}
+			return v
+		}
 		if !organizations.HasRole(v, actor, "owner") {
 			kept := []organizations.Invitation{}
 			for _, x := range v.Invitations {
@@ -129,18 +144,18 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 			return
 		}
 		member := present && organizations.HasRole(v, actor.UserID, "")
-		publicRepos := map[string]bool{}
+		visibleRepos := map[string]bool{}
 		items, listErr := repos.ListOrganization(v.ID)
 		if listErr != nil {
 			writeRepositoryError(w, listErr)
 			return
 		}
 		for _, repo := range items {
-			if repo.Visibility == repositories.Public {
-				publicRepos[repo.ID] = true
+			if member || repo.Visibility == repositories.Public {
+				visibleRepos[repo.ID] = true
 			}
 		}
-		writeJSON(w, 200, organizations.ProjectDirectory(v, member, publicRepos))
+		writeJSON(w, 200, organizations.ProjectDirectory(v, member, visibleRepos))
 	})
 	mux.HandleFunc("POST /organizations/{id}/teams", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := require(w, r, "repositories:write")
@@ -227,7 +242,13 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 			writeAPIError(w, 400, "invalid_responsibility", "repository must belong to the organization")
 			return
 		}
-		changed, err := orgs.AddResponsibility(v.ID, r.PathValue("team_id"), actor.UserID, in.RepositoryID, in.Area, in.Description, in.ExpectedVersion)
+		changed, err := orgs.AddResponsibility(v.ID, r.PathValue("team_id"), actor.UserID, in.RepositoryID, in.Area, in.Description, in.ExpectedVersion, func(publish func() error) error {
+			return repos.WithOrganization(in.RepositoryID, v.ID, publish)
+		})
+		if errors.Is(err, repositories.ErrNotFound) {
+			writeAPIError(w, 409, "organization_conflict", "repository stewardship changed before responsibility publication")
+			return
+		}
 		if writeOrganizationError(w, err) {
 			return
 		}

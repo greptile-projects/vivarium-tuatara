@@ -80,7 +80,10 @@ whenever dependencies change or the web job fails before it starts.
   agent identities expose capabilities, current member operators, visibility,
   and team associations but grant no repository authority. Public directory
   reads omit organization-only structure, private-repository responsibility,
-  and audit events; members receive the attributable event history. Proposal discovery
+  hidden parent links, and audit events; pending invitees receive only their
+  invitation. Responsibility publication holds the repository catalog boundary
+  through its organization write, and directory reads revalidate current
+  portfolio membership. Members receive the attributable event history. Proposal discovery
   at `/proposals` aggregates the authenticated
   actor's repository catalog and provides repository, status, and text filters;
   durable conversations use `/proposals/{repository-id}/{proposal-id}` for

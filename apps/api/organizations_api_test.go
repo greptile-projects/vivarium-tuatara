@@ -128,6 +128,7 @@ func TestOrganizationTeamDirectoryExplainsEffectivePeopleAgentsAndResponsibility
 	defer server.Close()
 	owner := createTestAccount(t, server.URL, "directory-owner")
 	member := createTestAccount(t, server.URL, "directory-member")
+	pending := createTestAccount(t, server.URL, "directory-pending")
 	created := authenticatedRequest(t, http.MethodPost, server.URL+"/organizations", `{"name":"Platform","slug":"platform"}`, owner.Credential.Token, http.StatusCreated)
 	var group organizations.Organization
 	json.NewDecoder(created.Body).Decode(&group)
@@ -156,13 +157,27 @@ func TestOrganizationTeamDirectoryExplainsEffectivePeopleAgentsAndResponsibility
 	authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/teams/"+child.ID+"/responsibilities", `{"repository_id":"`+repo.ID+`","area":"release runtime","description":"Owns runtime release health.","expected_version":2}`, owner.Credential.Token, http.StatusCreated).Body.Close()
 	authenticatedRequest(t, http.MethodPut, server.URL+"/organizations/"+group.ID+"/teams/"+child.ID+"/members", `{"user_id":"`+member.User.ID+`","role":"member","expected_version":1}`, owner.Credential.Token, http.StatusConflict).Body.Close()
 	authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/agents", `{"name":"Release Scout","slug":"release-scout","visibility":"public","capabilities":["inspect checks","summarize failures"],"operator_ids":["`+owner.User.ID+`"],"team_ids":["`+child.ID+`"]}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	hiddenResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/teams", `{"name":"Internal","slug":"internal","visibility":"organization"}`, owner.Credential.Token, http.StatusCreated)
+	json.NewDecoder(hiddenResponse.Body).Decode(&group)
+	hiddenResponse.Body.Close()
+	hidden := group.Teams[2]
+	authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/teams", `{"name":"Community","slug":"community","parent_id":"`+hidden.ID+`","visibility":"public"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	pendingResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/invitations", `{"user_id":"`+pending.User.ID+`"}`, owner.Credential.Token, http.StatusCreated)
+	pendingResponse.Body.Close()
+	pendingDetail := authenticatedRequest(t, http.MethodGet, server.URL+"/organizations/"+group.ID, "", pending.Credential.Token, http.StatusOK)
+	var pendingGroup organizations.Organization
+	json.NewDecoder(pendingDetail.Body).Decode(&pendingGroup)
+	pendingDetail.Body.Close()
+	if len(pendingGroup.Teams) != 0 || len(pendingGroup.Agents) != 0 || len(pendingGroup.Events) != 0 || len(pendingGroup.Members) != 0 || len(pendingGroup.Invitations) != 1 {
+		t.Fatalf("pending invitation exposed organization data: %#v", pendingGroup)
+	}
 	public := authenticatedRequest(t, http.MethodGet, server.URL+"/organizations/"+group.ID+"/directory", "", "", http.StatusOK)
 	var directory organizations.Directory
 	if err := json.NewDecoder(public.Body).Decode(&directory); err != nil {
 		t.Fatal(err)
 	}
 	public.Body.Close()
-	if len(directory.Teams) != 2 || len(directory.Agents) != 1 || len(directory.Teams[0].EffectiveMembers) != 1 || directory.Teams[0].EffectiveMembers[0].Reason != "nested team Runtime" || len(directory.Teams[1].Team.Responsibilities) != 1 {
+	if len(directory.Teams) != 3 || len(directory.Agents) != 1 || len(directory.Teams[0].EffectiveMembers) != 1 || directory.Teams[0].EffectiveMembers[0].Reason != "nested team Runtime" || len(directory.Teams[1].Team.Responsibilities) != 1 || directory.Teams[2].Team.ParentID != "" {
 		t.Fatalf("directory did not explain effective responsibility: %#v", directory)
 	}
 	if len(directory.Events) != 0 || directory.Agents[0].OperatorIDs[0] != owner.User.ID {
