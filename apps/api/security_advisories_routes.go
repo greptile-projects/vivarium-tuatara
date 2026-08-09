@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os/exec"
 	"slices"
@@ -18,6 +19,19 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
+
+type createdDisclosureRef struct {
+	repository *storage.Repository
+	name       string
+}
+
+func rollbackDisclosureRefs(advisoryID string, refs []createdDisclosureRef) {
+	for i := len(refs) - 1; i >= 0; i-- {
+		if err := refs[i].repository.DeleteReference(refs[i].name); err != nil && !errors.Is(err, storage.ErrReferenceNotFound) {
+			log.Printf("roll back disclosure ref %s for advisory %s: %v", refs[i].name, advisoryID, err)
+		}
+	}
+}
 
 // trustedRepairCheckDefinitions freezes executable required-check properties
 // from the task base. Repair commits are only the snapshot under test; they do
@@ -997,18 +1011,24 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 			return
 		}
 		remaining := []string{"publish_repaired_branches", "publish_releases", "publish_advisory", "notify_affected_users"}
+		createdRefs := []createdDisclosureRef{}
+		rollbackRefs := func() { rollbackDisclosureRefs(current.ID, createdRefs) }
 		for _, fix := range current.Disclosure.FixedVersions {
 			repository, openErr := gitStore.Open(fix.RepositoryID)
 			if openErr != nil {
+				rollbackRefs()
 				_, _ = store.SetDisclosureState(current.ID, actor.UserID, "paused", "repaired repository unavailable", remaining)
 				writeAPIError(w, 503, "disclosure_paused", "publication paused; repaired repository unavailable")
 				return
 			}
 			name := "refs/heads/" + fix.Branch
 			refErr := repository.CreateReference(storage.Reference{Name: name, Target: fix.CommitID})
-			if refErr != nil {
+			if refErr == nil {
+				createdRefs = append(createdRefs, createdDisclosureRef{repository: repository, name: name})
+			} else {
 				existing, readErr := repository.ReadReference(name)
 				if readErr != nil || existing.Target != fix.CommitID {
+					rollbackRefs()
 					_, _ = store.SetDisclosureState(current.ID, actor.UserID, "paused", "repaired branch could not be published", remaining)
 					writeAPIError(w, 503, "disclosure_paused", "publication paused; repaired branch could not be published")
 					return
@@ -1044,6 +1064,7 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 				repo, _ := repos.GetByID(fix.RepositoryID)
 				_, e := activityStore.AppendOnce("security-disclosure:"+current.ID+":"+recipient, activities.Event{Kind: "security_advisory_published", ActorID: actor.UserID, RepositoryID: fix.RepositoryID, RepositoryName: repo.Name, ResourceType: "security_advisory", ResourceID: current.ID, ResourceTitle: current.Disclosure.PublicTitle, TargetUserID: &target})
 				if e != nil {
+					rollbackRefs()
 					_, _ = store.SetDisclosureState(current.ID, actor.UserID, "paused", "notifications remain unpublished", remaining)
 					writeAPIError(w, 503, "disclosure_paused", "publication paused; notifications remain unpublished")
 					return
@@ -1052,6 +1073,8 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 		}
 		published, err := store.SetDisclosureState(current.ID, actor.UserID, "published", "", []string{})
 		if err != nil {
+			rollbackRefs()
+			_, _ = store.SetDisclosureState(current.ID, actor.UserID, "paused", "public advisory state could not be saved", remaining)
 			writeStoreError(w, err)
 			return
 		}
