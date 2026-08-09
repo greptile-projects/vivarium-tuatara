@@ -965,6 +965,54 @@ func IsRepositoryMaintainer(v Organization, user, repositoryID string) bool {
 	return false
 }
 
+func ResponsibleTeamIDs(v Organization, repositoryID string) []string {
+	ids := []string{}
+	for _, team := range v.Teams {
+		for _, responsibility := range team.Responsibilities {
+			if responsibility.RepositoryID == repositoryID {
+				ids = append(ids, team.ID)
+				break
+			}
+		}
+	}
+	return ids
+}
+
+func policyApplies(p Policy, repositoryID string, teamIDs []string) bool {
+	teams := map[string]bool{}
+	for _, id := range teamIDs {
+		teams[id] = true
+	}
+	for _, target := range p.Targets {
+		if target.Kind == "organization" || (target.Kind == "repository" && target.ID == repositoryID) || (target.Kind == "team" && teams[target.ID]) {
+			return true
+		}
+	}
+	return false
+}
+
+func policyDefinesRule(p Policy, rule string) bool {
+	switch rule {
+	case "repository_visibility":
+		return p.Rules.RepositoryVisibility != ""
+	case "minimum_reviews":
+		return p.Rules.MinimumReviews > 0
+	case "required_checks":
+		return len(p.Rules.RequiredChecks) > 0
+	case "integration":
+		return p.Rules.Integration != ""
+	case "release_provenance":
+		return p.Rules.ReleaseProvenance != ""
+	case "dependency_use":
+		return p.Rules.DependencyUse != ""
+	case "promotion_approvals":
+		return p.Rules.PromotionApprovals > 0
+	case "agent_authority":
+		return p.Rules.AgentAuthority != ""
+	}
+	return false
+}
+
 func (s *Store) RequestPolicyException(id, actor, policyID, repositoryID, rule, value, reason string, expires time.Time) (Organization, error) {
 	return s.mutate(id, func(v *Organization) error {
 		if !IsRepositoryMaintainer(*v, actor, repositoryID) || !policyRuleNames[rule] || !validID(repositoryID) || !expires.After(s.now()) {
@@ -977,8 +1025,9 @@ func (s *Store) RequestPolicyException(id, actor, policyID, repositoryID, rule, 
 			return ErrInvalid
 		}
 		found := false
+		teamIDs := ResponsibleTeamIDs(*v, repositoryID)
 		for _, p := range v.Policies {
-			if p.ID == policyID && p.Status == "active" {
+			if p.ID == policyID && p.Status == "active" && policyApplies(p, repositoryID, teamIDs) && policyDefinesRule(p, rule) {
 				found = true
 			}
 		}
@@ -1057,29 +1106,24 @@ type EffectivePolicy struct {
 }
 
 func EffectivePolicies(v Organization, repositoryID string, teamIDs []string, includeDraft bool, now time.Time) EffectivePolicy {
-	teamSet := map[string]bool{}
-	for _, id := range teamIDs {
-		teamSet[id] = true
-	}
 	out := EffectivePolicy{RepositoryID: repositoryID, Policies: []Policy{}, Exceptions: []PolicyException{}}
 	for _, p := range v.Policies {
 		if p.Status != "active" && !(includeDraft && p.Status == "draft") {
 			continue
 		}
-		applies := false
-		for _, t := range p.Targets {
-			if t.Kind == "organization" || (t.Kind == "repository" && t.ID == repositoryID) || (t.Kind == "team" && teamSet[t.ID]) {
-				applies = true
-			}
-		}
-		if !applies {
+		if !policyApplies(p, repositoryID, teamIDs) {
 			continue
 		}
 		out.Policies = append(out.Policies, p)
 		mergePolicyRules(&out.Rules, p.Rules)
 	}
+	selected := map[string]Policy{}
+	for _, p := range out.Policies {
+		selected[p.ID] = p
+	}
 	for _, x := range v.PolicyExceptions {
-		if x.RepositoryID == repositoryID && x.Status == "approved" && x.ExpiresAt.After(now) {
+		policy, validPolicy := selected[x.PolicyID]
+		if x.RepositoryID == repositoryID && x.Status == "approved" && x.ExpiresAt.After(now) && validPolicy && policyDefinesRule(policy, x.Rule) {
 			out.Exceptions = append(out.Exceptions, x)
 			applyPolicyException(&out.Rules, x)
 		}
@@ -1312,6 +1356,9 @@ func (s *Store) RecordDerivedCredential(id, grantID, agentID, operatorID, creden
 			ai := agentIndex(v, agentID)
 			if ai < 0 || !slices.Contains(v.Agents[ai].OperatorIDs, operatorID) {
 				return ErrNotFound
+			}
+			if resource.Kind == "repository" && EffectivePolicies(*v, resource.ID, ResponsibleTeamIDs(*v, resource.ID), false, now).Rules.AgentAuthority == "disabled" {
+				return ErrConflict
 			}
 			g.DerivedCredentials = append(g.DerivedCredentials, DerivedCredential{ID: credentialID, OperatorID: operatorID, CreatedAt: now.Truncate(time.Microsecond)})
 			return s.event(v, "access.credential.issued", operatorID, credentialID, map[string]any{"grant_id": grantID, "resource_kind": resource.Kind, "resource_id": resource.ID})

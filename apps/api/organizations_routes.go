@@ -489,12 +489,19 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 			return
 		}
 		v, err := orgs.DecideAccessRequest(r.PathValue("id"), r.PathValue("request_id"), actor.UserID, in.Decision, func(request organizations.AccessRequest) error {
+			current, currentErr := orgs.Get(r.PathValue("id"))
+			if currentErr != nil {
+				return organizations.ErrConflict
+			}
 			for _, resource := range request.Resources {
 				if resource.Kind != "repository" {
 					continue
 				}
 				repository, repositoryErr := repos.GetByID(resource.ID)
 				if repositoryErr != nil || repository.OrganizationID != r.PathValue("id") {
+					return organizations.ErrConflict
+				}
+				if request.PrincipalType == "agent" && organizations.EffectivePolicies(current, resource.ID, organizations.ResponsibleTeamIDs(current, resource.ID), false, time.Now().UTC()).Rules.AgentAuthority == "disabled" {
 					return organizations.ErrConflict
 				}
 			}
@@ -556,6 +563,10 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 		}
 		if grant == nil || grant.PrincipalType != "agent" || grant.PrincipalID != in.AgentID {
 			writeAPIError(w, 404, "access_grant_not_found", "live agent grant not found")
+			return
+		}
+		if organizations.EffectivePolicies(v, in.RepositoryID, organizations.ResponsibleTeamIDs(v, in.RepositoryID), false, time.Now().UTC()).Rules.AgentAuthority == "disabled" {
+			writeAPIError(w, 409, "organization_conflict", "organization policy disables new agent authority for this repository")
 			return
 		}
 		lifetime := time.Duration(in.ExpiresIn) * time.Second

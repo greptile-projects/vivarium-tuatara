@@ -75,6 +75,15 @@ func TestPolicyPreviewActivationAndExpiringException(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy := v.Policies[0]
+	otherRepository := "22222222222222222222222222222222"
+	v, err = store.CreatePolicy(v.ID, owner, "Other repository", "", []PolicyTarget{{Kind: "repository", ID: otherRepository}}, PolicyRules{Integration: "queue"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = store.ActivatePolicy(v.ID, v.Policies[1].ID, owner, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
 	preview := EffectivePolicies(v, repository, []string{teamID}, true, time.Now())
 	if len(preview.Policies) != 1 || preview.Rules.MinimumReviews != 2 || preview.Rules.Integration != "queue" {
 		t.Fatalf("unexpected preview: %#v", preview)
@@ -87,6 +96,12 @@ func TestPolicyPreviewActivationAndExpiringException(t *testing.T) {
 		t.Fatalf("activation did not retain version/new-work boundary: %#v", v.Policies[0])
 	}
 	expires := time.Now().Add(time.Hour)
+	if _, err = store.RequestPolicyException(v.ID, maintainer, v.Policies[1].ID, repository, "minimum_reviews", "0", "unrelated", expires); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unrelated policy exception error = %v", err)
+	}
+	if _, err = store.RequestPolicyException(v.ID, maintainer, policy.ID, repository, "repository_visibility", "public", "missing rule", expires); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing-rule exception error = %v", err)
+	}
 	v, err = store.RequestPolicyException(v.ID, maintainer, policy.ID, repository, "minimum_reviews", "1", "legacy integration", expires)
 	if err != nil {
 		t.Fatal(err)
