@@ -116,3 +116,45 @@ func TestPolicyPreviewActivationAndExpiringException(t *testing.T) {
 		t.Fatalf("exception silently weakened baseline or was not explained: %#v", effective)
 	}
 }
+
+func TestPolicyExceptionCannotWeakenStricterSiblingPolicy(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := "0123456789abcdef0123456789abcdef"
+	repository := "11111111111111111111111111111111"
+	v, err := store.Create("Runtime", "runtime", "", owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = store.CreatePolicy(v.ID, owner, "Local baseline", "", []PolicyTarget{{Kind: "organization"}}, PolicyRules{MinimumReviews: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	localID := v.Policies[0].ID
+	v, err = store.ActivatePolicy(v.ID, localID, owner, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = store.CreatePolicy(v.ID, owner, "Security baseline", "", []PolicyTarget{{Kind: "repository", ID: repository}}, PolicyRules{MinimumReviews: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = store.ActivatePolicy(v.ID, v.Policies[1].ID, owner, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = store.RequestPolicyException(v.ID, owner, localID, repository, "minimum_reviews", "0", "temporary local constraint", time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = store.DecidePolicyException(v.ID, v.PolicyExceptions[0].ID, owner, "approve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	effective := EffectivePolicies(v, repository, nil, false, time.Now())
+	if effective.BaselineRules.MinimumReviews != 3 || effective.Rules.MinimumReviews != 3 || len(effective.Exceptions) != 1 {
+		t.Fatalf("sibling policy was weakened: %#v", effective)
+	}
+}

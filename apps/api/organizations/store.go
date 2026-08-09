@@ -1115,22 +1115,26 @@ func EffectivePolicies(v Organization, repositoryID string, teamIDs []string, in
 			continue
 		}
 		out.Policies = append(out.Policies, p)
-		mergePolicyRules(&out.Rules, p.Rules)
+		mergePolicyRules(&out.BaselineRules, p.Rules)
 	}
 	selected := map[string]Policy{}
 	for _, p := range out.Policies {
 		selected[p.ID] = p
 	}
+	exceptionsByPolicy := map[string][]PolicyException{}
 	for _, x := range v.PolicyExceptions {
 		policy, validPolicy := selected[x.PolicyID]
 		if x.RepositoryID == repositoryID && x.Status == "approved" && x.ExpiresAt.After(now) && validPolicy && policyDefinesRule(policy, x.Rule) {
 			out.Exceptions = append(out.Exceptions, x)
-			applyPolicyException(&out.Rules, x)
+			exceptionsByPolicy[x.PolicyID] = append(exceptionsByPolicy[x.PolicyID], x)
 		}
 	}
-	out.BaselineRules = PolicyRules{}
 	for _, p := range out.Policies {
-		mergePolicyRules(&out.BaselineRules, p.Rules)
+		contribution := p.Rules
+		for _, x := range exceptionsByPolicy[p.ID] {
+			applyPolicyException(&contribution, x)
+		}
+		mergePolicyRules(&out.Rules, contribution)
 	}
 	return out
 }
