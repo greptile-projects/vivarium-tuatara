@@ -58,6 +58,8 @@ func TestIncidentCommitmentRequiresTargetRepositoryAccess(t *testing.T) {
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+second.ID+"/collaborators", `{"user_id":"`+responder.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
 	authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/commitments", body, responder.Credential.Token, http.StatusCreated).Body.Close()
 	authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/commitments", body, responder.Credential.Token, http.StatusOK).Body.Close()
+	changed := strings.Replace(body, "Load proves isolation.", "Changed retry outcome.", 1)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/incidents/"+incident.ID+"/commitments", changed, responder.Credential.Token, http.StatusConflict).Body.Close()
 	items, err = proposalStore.List(second.ID)
 	if err != nil || len(items) != 1 {
 		t.Fatalf("deduplicated proposals = %#v, %v", items, err)

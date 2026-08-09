@@ -437,14 +437,14 @@ func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *
 			writeAPIError(w, 409, "incident_not_resolved", "publish the incident review before assigning corrective work")
 			return
 		}
+		retry := false
 		for _, existing := range current.Commitments {
 			if existing.OperationID == input.OperationID {
 				if existing.CreatedBy != actor.UserID || existing.RepositoryID != input.RepositoryID || existing.AssigneeID != input.AssigneeID || !existing.DueAt.Equal(input.DueAt) {
 					writeAPIError(w, 409, "incident_changed", "commitment operation was already used with different ownership")
 					return
 				}
-				writeJSON(w, 200, hydrate(current))
-				return
+				retry = true
 			}
 		}
 		var v incidents.Incident
@@ -489,7 +489,11 @@ func registerIncidentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *
 			return
 		}
 		recordActivity(activity, repos, activities.Event{Kind: "incident.commitment_assigned", ActorID: actor.UserID, RepositoryID: input.RepositoryID, ResourceType: "incident", ResourceID: v.ID, ResourceTitle: v.Title, TargetUserID: &input.AssigneeID})
-		writeJSON(w, 201, hydrate(v))
+		status := http.StatusCreated
+		if retry {
+			status = http.StatusOK
+		}
+		writeJSON(w, status, hydrate(v))
 	})
 	mux.HandleFunc("POST /incidents/{incident_id}/actions", func(w http.ResponseWriter, r *http.Request) {
 		actor, current, ok := require(w, r, "repositories:write")
