@@ -336,7 +336,18 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 			writeAPIError(w, 400, "invalid_access_decision", "decision is required")
 			return
 		}
-		v, err := orgs.DecideAccessRequest(r.PathValue("id"), r.PathValue("request_id"), actor.UserID, in.Decision)
+		v, err := orgs.DecideAccessRequest(r.PathValue("id"), r.PathValue("request_id"), actor.UserID, in.Decision, func(request organizations.AccessRequest) error {
+			for _, resource := range request.Resources {
+				if resource.Kind != "repository" {
+					continue
+				}
+				repository, repositoryErr := repos.GetByID(resource.ID)
+				if repositoryErr != nil || repository.OrganizationID != r.PathValue("id") {
+					return organizations.ErrConflict
+				}
+			}
+			return nil
+		})
 		if writeOrganizationError(w, err) {
 			return
 		}
@@ -468,6 +479,10 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 			return
 		}
 		target := r.PathValue("user_id")
+		v, err := orgs.RemoveMember(r.PathValue("id"), actor.UserID, target)
+		if writeOrganizationError(w, err) {
+			return
+		}
 		for _, grant := range current.AccessGrants {
 			if grant.RevokedAt != nil {
 				continue
@@ -480,10 +495,6 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 					}
 				}
 			}
-		}
-		v, err := orgs.RemoveMember(r.PathValue("id"), actor.UserID, target)
-		if writeOrganizationError(w, err) {
-			return
 		}
 		repoItems, listErr := repos.ListOrganization(v.ID)
 		if writeRepositoryError(w, listErr) {

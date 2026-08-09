@@ -832,7 +832,7 @@ func (s *Store) CreateAccessRequest(id, actor, principalType, principalID, role,
 	})
 }
 
-func (s *Store) DecideAccessRequest(id, requestID, actor, decision string) (Organization, error) {
+func (s *Store) DecideAccessRequest(id, requestID, actor, decision string, validate func(AccessRequest) error) (Organization, error) {
 	return s.mutate(id, func(v *Organization) error {
 		if !HasRole(*v, actor, "owner") || (decision != "approve" && decision != "deny") {
 			return ErrNotFound
@@ -853,6 +853,15 @@ func (s *Store) DecideAccessRequest(id, requestID, actor, decision string) (Orga
 			}
 			if r.ExpiresAt != nil && !r.ExpiresAt.After(now) {
 				return ErrConflict
+			}
+			if !validPrincipal(v, r.PrincipalType, r.PrincipalID) {
+				return ErrConflict
+			}
+			if validate == nil {
+				return ErrInvalid
+			}
+			if err := validate(*r); err != nil {
+				return err
 			}
 			gid, err := newID()
 			if err != nil {
