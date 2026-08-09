@@ -139,7 +139,9 @@ whenever dependencies change or the web job fails before it starts.
   consumer participants acknowledge their own impacts. Short-lived
   `evolutions:analyze` credentials expose only selected readable repositories
   from that snapshot and can append attributable findings and uncertainty,
-  never repository or Git mutation authority.
+  never repository or Git mutation authority. Their read and finding responses
+  retain contract candidates only when every frozen pull target and source is
+  selected and remains readable by the initiator.
   Exact open provider and affected-consumer pull revisions can be assembled as
   immutable evolution contract candidates. Provider-owned
   `.vivarium/contracts.json` checks run against `provider/` and

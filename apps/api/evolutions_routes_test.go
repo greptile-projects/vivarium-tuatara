@@ -71,6 +71,7 @@ func TestEvolutionPlanFreezesImpactAndScopesAgentFindings(t *testing.T) {
 	}
 	provider, providerCommit := createRepo("evolution-provider")
 	consumer, consumerCommit := createRepo("evolution-consumer")
+	privateSource, privateSourceCommit := createRepo("evolution-private-source")
 	release, _ := releaseStore.Create(releases.Candidate{RepositoryID: provider.ID, Version: "v1.0.0", Notes: "contract", CommitID: string(providerCommit), CreatedBy: owner.User.ID})
 	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+provider.ID+"/interfaces", `{"name":"events","release_id":"`+release.ID+`"}`, owner.Credential.Token, http.StatusCreated)
 	var predecessor relationships.Interface
@@ -88,6 +89,13 @@ func TestEvolutionPlanFreezesImpactAndScopesAgentFindings(t *testing.T) {
 	if len(plan.Impacts) != 1 || plan.Impacts[0].OwnerID != owner.User.ID {
 		t.Fatalf("impact = %#v", plan.Impacts)
 	}
+	plan, _, err = relationStore.AddContractCandidate(provider.ID, plan.ID, owner.User.ID, strings.Repeat("7", 40), strings.Repeat("8", 64), []relationships.ContractCandidateRevision{
+		{Role: "provider", RepositoryID: provider.ID, PullRequestID: strings.Repeat("1", 32), SourceRepositoryID: provider.ID, CommitID: string(providerCommit)},
+		{Role: "consumer", RepositoryID: consumer.ID, PullRequestID: strings.Repeat("2", 32), SourceRepositoryID: privateSource.ID, CommitID: string(privateSourceCommit)},
+	}, []string{strings.Repeat("3", 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
 	plan, err = relationStore.AcknowledgeEvolution(provider.ID, plan.ID, owner.User.ID, consumer.ID, "consumer migration accepted")
 	if err != nil {
 		t.Fatal(err)
@@ -99,8 +107,21 @@ func TestEvolutionPlanFreezesImpactAndScopesAgentFindings(t *testing.T) {
 		Credential auth.IssuedCredential           `json:"credential"`
 	}
 	decodeResponse(t, response, &delegated)
+	response = authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+provider.ID+"/evolutions/"+plan.ID+"/analyses/"+delegated.Analysis.ID, "", delegated.Credential.Token, http.StatusOK)
+	var packet struct {
+		Plan relationships.Evolution `json:"plan"`
+	}
+	decodeResponse(t, response, &packet)
+	if len(packet.Plan.ContractCandidates) != 0 {
+		t.Fatalf("analysis GET leaked out-of-scope source candidate: %#v", packet.Plan.ContractCandidates)
+	}
 	findingBody := `{"repository_ids":["` + consumer.ID + `"],"finding":"two callers require a staged migration","uncertainty":"generated clients were not inspected"}`
-	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+provider.ID+"/evolutions/"+plan.ID+"/analyses/"+delegated.Analysis.ID+"/findings", findingBody, delegated.Credential.Token, http.StatusCreated).Body.Close()
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+provider.ID+"/evolutions/"+plan.ID+"/analyses/"+delegated.Analysis.ID+"/findings", findingBody, delegated.Credential.Token, http.StatusCreated)
+	var findingPacket relationships.Evolution
+	decodeResponse(t, response, &findingPacket)
+	if len(findingPacket.ContractCandidates) != 0 {
+		t.Fatalf("analysis finding response leaked out-of-scope source candidate: %#v", findingPacket.ContractCandidates)
+	}
 	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+provider.ID, `{"name":"forbidden"}`, delegated.Credential.Token, http.StatusUnauthorized).Body.Close()
 	response = authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+provider.ID+"/evolutions/"+plan.ID, "", owner.Credential.Token, http.StatusOK)
 	decodeResponse(t, response, &plan)

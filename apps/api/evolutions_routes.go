@@ -173,6 +173,17 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 			}
 		}
 		v.MigrationTasks = tasks
+		candidates := v.ContractCandidates[:0]
+		for _, candidate := range v.ContractCandidates {
+			inScope := true
+			for _, revision := range candidate.Revisions {
+				inScope = inScope && selected[revision.RepositoryID] && selected[revision.SourceRepositoryID]
+			}
+			if inScope && canReadContractCandidate(a.InitiatorID, candidate) {
+				candidates = append(candidates, candidate)
+			}
+		}
+		v.ContractCandidates = candidates
 		v.Analyses = []relationships.EvolutionAnalysis{a}
 		v.Analyses[0].StoredCredentialID = ""
 		return v

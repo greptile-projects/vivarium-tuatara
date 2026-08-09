@@ -897,7 +897,10 @@ Current participants in a frozen affected consumer use nested `POST
 300-86400 seconds. Its `evolutions:analyze` credential can read that packet and
 append attributable findings plus explicit uncertainty citing only the
 selection; it has no repository, Git, proposal, pull, credential, or deployment
-write scope.
+write scope. Analysis packets include contract candidates only when every
+frozen pull target and source is both explicitly selected and still readable by
+the initiator; this filtering applies equally to analysis reads and finding
+publication responses.
 
 `POST /repositories/{id}/evolutions/{evolution_id}/migration-tasks` adds the
 next ordered unit of work using the plan's compare-and-swap `version`. The body
