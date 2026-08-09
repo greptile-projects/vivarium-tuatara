@@ -228,6 +228,15 @@ whenever dependencies change or the web job fails before it starts.
   updates, exact inventories, releases, deployments, quarantine enforcement,
   and a reviewed safe replacement. Playwright isolates package records beneath
   `$PACKAGE_STORAGE_ROOT` with its other temporary API stores.
+  The connected organization browser journey assembles a two-team portfolio,
+  onboards a developer and approved agent, grants exact repository-bound agent
+  Git access, activates shared policy plus an expiring exception, and carries
+  human- and agent-authored pulls through review, release, package inventory,
+  and deployment. It deliberately removes the developer after publication to
+  prove authority and derived credentials are revoked while pulls, attribution,
+  initiative accountability, policy evidence, and delivery remain intact.
+  Playwright isolates organization records beneath
+  `$ORGANIZATION_STORAGE_ROOT` with its other temporary API stores.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version
