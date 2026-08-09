@@ -90,6 +90,19 @@ func TestPublishUpdateFailureRetainsReservationBeforeCollaboration(t *testing.T)
 	}
 }
 
+func TestPublishUpdateRetainsDurablyUncertainCollaborationIDs(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := Update{RepositoryID: strings.Repeat("a", 32), PackageName: "core-kit", FromVersion: "1.0.0", ToVersion: "1.1.0", BaseCommit: strings.Repeat("b", 40), CreatedBy: strings.Repeat("c", 32)}
+	uncertain := errors.New("durability uncertain")
+	created, published, err := store.PublishUpdate(value, func() (string, string, error) { return strings.Repeat("d", 32), strings.Repeat("e", 32), uncertain })
+	if !errors.Is(err, uncertain) || !published || created.ProposalID != strings.Repeat("d", 32) || created.TaskID != strings.Repeat("e", 32) {
+		t.Fatalf("created = %#v, published %v, err %v", created, published, err)
+	}
+}
+
 func TestDependencyInventoriesRetainExactAttributionAndConsumerPaths(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {

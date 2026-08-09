@@ -170,6 +170,19 @@ func TestPackageUpdateListingRechecksPrivatePackageVisibility(t *testing.T) {
 	}
 }
 
+func TestPrivatePackageUpdateProposalRedactsPublisherEvidence(t *testing.T) {
+	version := packages.Version{Name: "secret-kit", Version: "1.1.0", ReleaseID: strings.Repeat("a", 32), Visibility: "private", BuildAttestation: packages.BuildAttestation{Step: "private-step", Image: "private-image", Attempt: 2}}
+	body := packageUpdateProposalBody(version, packages.InventoryEntry{Version: "1.0.0", Paths: []string{"app > secret-kit"}}, "private release notes")
+	for _, secret := range []string{"private release notes", "private-step", "private-image", version.ReleaseID} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("proposal leaked %q: %s", secret, body)
+		}
+	}
+	if !strings.Contains(body, "app > secret-kit") || !strings.Contains(body, "package-authorized update record") {
+		t.Fatalf("proposal lost safe adoption context: %s", body)
+	}
+}
+
 func TestRecordedDependencyInventoryDerivesExactVisibleConsumer(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	identities, _ := users.New(t.TempDir())

@@ -670,7 +670,7 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 			if strings.TrimSpace(notes) == "" {
 				notes = best.Documentation
 			}
-			body := fmt.Sprintf("Adopt %s %s → %s from verified release `%s`.\n\nRelease notes:\n%s\n\nCompatibility evidence: successful `%s` build, image `%s`, attempt %d.\n\nAffected dependency paths:\n- %s\n\nThe proposed `.vivarium/packages.json` manifest and lock are attached to the package update record. Required checks, review, and integration policy remain authoritative.", best.Name, current.Version, best.Version, best.ReleaseID, notes, best.BuildAttestation.Step, best.BuildAttestation.Image, best.BuildAttestation.Attempt, strings.Join(current.Paths, "\n- "))
+			body := packageUpdateProposalBody(best, current, notes)
 			update, published, createErr := packageStore.PublishUpdate(packages.Update{RepositoryID: catalog.ID, PackageName: best.Name, FromVersion: current.Version, ToVersion: best.Version, BaseCommit: ref.Target, Manifest: manifest, ReleaseNotes: notes, Compatibility: best.BuildAttestation, AffectedPaths: current.Paths, CreatedBy: actor.UserID}, func() (string, string, error) {
 				proposal, proposalErr := proposalStore.Create(catalog.ID, actor.UserID, "Update "+best.Name+" to "+best.Version, body)
 				if proposalErr != nil {
@@ -678,7 +678,7 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 				}
 				task, taskErr := proposalStore.CreateTask(catalog.ID, proposal.ID, actor.UserID, "Apply "+best.Name+" "+best.Version, "Update the manifest and lock exactly as proposed, investigate compatibility failures, and publish the result through ordinary review.", nil, nil)
 				if taskErr != nil {
-					return proposal.ID, "", taskErr
+					return proposal.ID, task.ID, taskErr
 				}
 				return proposal.ID, task.ID, nil
 			})
@@ -743,6 +743,14 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 		w.Header().Set("X-Checksum-Sha256", item.SHA256)
 		http.ServeContent(w, r, path.Base(item.ArtifactPath), item.PublishedAt, file)
 	})
+}
+
+func packageUpdateProposalBody(version packages.Version, current packages.InventoryEntry, notes string) string {
+	paths := strings.Join(current.Paths, "\n- ")
+	if version.Visibility == "private" {
+		return fmt.Sprintf("Adopt %s %s → %s from a verified private package release.\n\nAffected dependency paths:\n- %s\n\nPublisher release notes and compatibility attestation remain available only through the package-authorized update record. The proposed `.vivarium/packages.json` manifest and lock are attached there. Required checks, review, and integration policy remain authoritative.", version.Name, current.Version, version.Version, paths)
+	}
+	return fmt.Sprintf("Adopt %s %s → %s from verified release `%s`.\n\nRelease notes:\n%s\n\nCompatibility evidence: successful `%s` build, image `%s`, attempt %d.\n\nAffected dependency paths:\n- %s\n\nThe proposed `.vivarium/packages.json` manifest and lock are attached to the package update record. Required checks, review, and integration policy remain authoritative.", version.Name, current.Version, version.Version, version.ReleaseID, notes, version.BuildAttestation.Step, version.BuildAttestation.Image, version.BuildAttestation.Attempt, paths)
 }
 
 func updateStrategyAllows(from, to, strategy string) bool {

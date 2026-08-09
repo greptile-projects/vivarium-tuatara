@@ -842,7 +842,10 @@ reservation persisted before proposal creation; incomplete proposal/task
 publication is compensated, while failed compensation leaves a hidden recovery
 marker that blocks duplicate exact retries. Reads also
 revalidate current access to the target package before returning its retained
-notes or attestation. Humans or scoped task agents
+notes or attestation. Ordinary proposals redact private-package notes, release
+identity, and build details because proposal authorization follows only the
+consumer repository; authorized users inspect that evidence on the update
+record instead. Humans or scoped task agents
 can investigate and revise it through ordinary change sessions and pull
 requests, so required checks, reviews, protected integration queues, later
 release builds, and deployments stay consumer-controlled; the package publisher

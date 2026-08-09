@@ -168,6 +168,9 @@ whenever dependencies change or the web job fails before it starts.
   exact retries cannot duplicate orphaned proposals or tasks. Subsequent human or agent work
   publishes through existing task sessions, pulls, checks, review, queues,
   releases, and deployments without granting consumer authority to publishers.
+  Private-package notes and build details remain only on update records whose
+  reads revalidate package access; ordinary consumer proposals contain redacted
+  adoption context so consumer membership cannot disclose publisher evidence.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version
