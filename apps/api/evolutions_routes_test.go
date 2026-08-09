@@ -100,3 +100,55 @@ func TestEvolutionPlanFreezesImpactAndScopesAgentFindings(t *testing.T) {
 		t.Fatalf("authenticated public-provider view = %#v", plan)
 	}
 }
+
+func TestEvolutionAcknowledgementResponseFiltersOtherPrivateConsumers(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	releaseStore, _ := releases.New(t.TempDir())
+	deploymentStore, _ := deployments.New(t.TempDir())
+	relationStore, _ := relationships.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, nil, releaseStore, deploymentStore, relationStore))
+	defer server.Close()
+	providerOwner := createTestAccount(t, server.URL, "evolution-provider-owner")
+	consumerAOwner := createTestAccount(t, server.URL, "evolution-consumer-a-owner")
+	createRepo := func(name, token string) repositories.Repository {
+		response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"`+name+`"}`, token, http.StatusCreated)
+		var repo repositories.Repository
+		decodeResponse(t, response, &repo)
+		return repo
+	}
+	provider := createRepo("ack-provider", providerOwner.Credential.Token)
+	consumerA := createRepo("ack-consumer-a", consumerAOwner.Credential.Token)
+	consumerB := createRepo("ack-consumer-b", providerOwner.Credential.Token)
+	if _, err := catalog.SetVisibility(providerOwner.User.ID, provider.ID, repositories.Public); err != nil {
+		t.Fatal(err)
+	}
+	predecessor := relationships.Interface{ID: "11111111111111111111111111111111", RepositoryID: provider.ID, Name: "events", Version: "v1.0.0", ReleaseID: "22222222222222222222222222222222", CommitID: strings.Repeat("a", 40), PublishedBy: providerOwner.User.ID}
+	plan, err := relationStore.CreateEvolution(relationships.Evolution{
+		RepositoryID: provider.ID, InterfaceName: "events", Predecessor: predecessor,
+		SourceKind: "proposal", SourceID: "33333333333333333333333333333333", CandidateDescription: "replace legacy events",
+		Changes: []relationships.CompatibilityChange{{Kind: "replacement", Summary: "consumers must migrate", Classification: "breaking"}},
+		Impacts: []relationships.ConsumerImpact{
+			{RepositoryID: consumerA.ID, OwnerID: consumerAOwner.User.ID, DependencyID: "44444444444444444444444444444444", CommitID: strings.Repeat("b", 40), Constraint: "<v2.0.0", State: "affected"},
+			{RepositoryID: consumerB.ID, OwnerID: providerOwner.User.ID, DependencyID: "55555555555555555555555555555555", CommitID: strings.Repeat("c", 40), Constraint: "<v2.0.0", State: "affected"},
+		},
+		Strategy: "dual publish", Sequencing: "consumers first", CreatedBy: providerOwner.User.ID,
+		Findings: []relationships.EvolutionFinding{{ID: "66666666666666666666666666666666", ActorID: "77777777777777777777777777777777", RepositoryIDs: []string{consumerB.ID}, Finding: "consumer-b-only finding", Uncertainty: "consumer-b-only uncertainty"}},
+		Analyses: []relationships.EvolutionAnalysis{{ID: "88888888888888888888888888888888", AgentID: "99999999999999999999999999999999", InitiatorID: providerOwner.User.ID, StoredCredentialID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Mandate: "consumer-b-only mandate", RepositoryIDs: []string{consumerB.ID}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err = relationStore.AcknowledgeEvolution(provider.ID, plan.ID, providerOwner.User.ID, consumerB.ID, "consumer-b-only acknowledgement")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+provider.ID+"/evolutions/"+plan.ID+"/acknowledgements", `{"repository_id":"`+consumerA.ID+`","note":"consumer A accepts"}`, consumerAOwner.Credential.Token, http.StatusCreated)
+	var visible relationships.Evolution
+	decodeResponse(t, response, &visible)
+	if len(visible.Impacts) != 1 || visible.Impacts[0].RepositoryID != consumerA.ID || len(visible.Acknowledgements) != 1 || visible.Acknowledgements[0].RepositoryID != consumerA.ID || len(visible.Findings) != 0 || len(visible.Analyses) != 0 {
+		t.Fatalf("acknowledgement response leaked another consumer: %#v", visible)
+	}
+}

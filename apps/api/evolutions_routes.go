@@ -242,7 +242,7 @@ func registerEvolutionRoutes(mux *http.ServeMux, repos *repositories.Store, prop
 			return
 		}
 		w.Header().Set("Location", r.URL.Path+"/"+v.ID)
-		writeJSON(w, 201, v)
+		writeJSON(w, 201, visible(v, actor.UserID))
 	})
 	mux.HandleFunc("PATCH /repositories/{id}/evolutions/{evolution_id}", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write"); !ok {
@@ -302,7 +302,7 @@ func registerEvolutionRoutes(mux *http.ServeMux, repos *repositories.Store, prop
 			writeAPIError(w, 409, "acknowledgement_exists", "this participant already acknowledged the consumer impact")
 			return
 		}
-		writeJSON(w, 201, v)
+		writeJSON(w, 201, visible(v, actor.UserID))
 	})
 	mux.HandleFunc("POST /repositories/{id}/evolutions/{evolution_id}/analyses", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")
