@@ -320,6 +320,12 @@ whenever dependencies change or the web job fails before it starts.
   reads return not-found, no advisory operation publishes activity or inbox
   notifications, and `$SECURITY_ADVISORY_STORAGE_ROOT` defaults to
   `security-advisories` with owner-only filesystem permissions.
+  Participants connect verified commits, dependencies, releases, builds,
+  artifacts, and deployments; record attributed hypotheses, conclusions, and
+  uncertainty; and compare-and-swap a version-line by environment impact
+  matrix. Dependency evidence must match an exact release build's frozen image
+  definition. Short-lived `security:investigate` credentials expose only selected
+  frozen evidence and can publish findings only inside the embargoed report.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's

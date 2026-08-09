@@ -1103,6 +1103,21 @@ documents. All routes require an authenticated credential with
   `user_id`. An affected repository owner may invite at most 20 responders.
 - `POST /security-advisories/{advisory_id}/messages` accepts a bounded `body`
   from any authorized participant.
+- `POST /security-advisories/{advisory_id}/evidence` connects a verified
+  `commit`, `dependency`, `release`, `build`, `artifact`, or `deployment` from
+  an affected repository, with a bounded label and description. Dependency
+  evidence must name an exact release build and match its immutable container
+  image dependency; free-form dependency claims are rejected.
+- `POST /security-advisories/{advisory_id}/findings` records an attributable
+  `hypothesis`, `conclusion`, or `uncertainty`. `PUT
+  /security-advisories/{advisory_id}/impact` compare-and-swaps one
+  repository/version-line/environment cell to `confirmed`, `suspected`,
+  `unaffected`, or `fixed` with rationale and supporting evidence.
+- `POST /security-advisories/{advisory_id}/investigations` accepts a mandate,
+  selected `evidence_ids`, and a 300-86400 second expiry, returning a
+  `security:investigate`-only credential. The nested investigation `GET`
+  returns only its frozen selection; nested `POST /findings` can cite only
+  delegated evidence and publishes solely into the embargoed advisory.
 
 A report is discoverable only by its reporter, current owners of affected
 repositories, and its explicitly invited response team. Unauthorized detail

@@ -4,14 +4,19 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/securityadvisories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
 
-func registerSecurityAdvisoryRoutes(mux *http.ServeMux, repos *repositories.Store, identities *users.Store, store *securityadvisories.Store, credentials *auth.Store) {
+func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *repositories.Store, identities *users.Store, store *securityadvisories.Store, releasesStore *releases.Store, builds *checkruns.Store, deploymentsStore *deployments.Store, credentials *auth.Store) {
 	maintainer := func(userID string, v securityadvisories.Advisory) bool {
 		for _, affected := range v.AffectedRepositories {
 			repo, err := repos.GetByID(affected.RepositoryID)
@@ -192,5 +197,226 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, repos *repositories.Stor
 			return
 		}
 		writeJSON(w, http.StatusCreated, v)
+	})
+
+	// Evidence links are verified against the authoritative workflow stores before
+	// their immutable identity is copied into the embargoed record.
+	mux.HandleFunc("POST /security-advisories/{advisory_id}/evidence", func(w http.ResponseWriter, r *http.Request) {
+		actor, current, ok := require(w, r)
+		if !ok {
+			return
+		}
+		var in securityadvisories.Evidence
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		affected := false
+		for _, x := range current.AffectedRepositories {
+			if x.RepositoryID == in.RepositoryID {
+				affected = true
+			}
+		}
+		if !affected {
+			writeAPIError(w, 422, "invalid_advisory_evidence", "evidence must belong to an affected repository")
+			return
+		}
+		valid := false
+		unavailable := false
+		switch in.Kind {
+		case "commit":
+			if repo, e := gitStore.Open(in.RepositoryID); e == nil {
+				_, e = repo.ReadCommit(storage.ObjectID(in.CommitID))
+				valid = e == nil
+			}
+		case "release":
+			if releasesStore == nil {
+				unavailable = true
+			} else {
+				_, e := releasesStore.Get(in.RepositoryID, in.ReleaseID)
+				valid = e == nil
+			}
+		case "build":
+			if builds == nil {
+				unavailable = true
+			} else {
+				_, e := builds.Get(in.RepositoryID, in.ReleaseID, in.BuildID)
+				valid = e == nil
+			}
+		case "artifact":
+			if builds == nil {
+				unavailable = true
+				break
+			}
+			if run, e := builds.Get(in.RepositoryID, in.ReleaseID, in.BuildID); e == nil {
+				for _, a := range run.Artifacts {
+					if a.ID == in.ArtifactID {
+						valid = true
+					}
+				}
+			}
+		case "deployment":
+			if deploymentsStore == nil {
+				unavailable = true
+			} else {
+				_, e := deploymentsStore.GetPromotion(in.RepositoryID, in.DeploymentID)
+				valid = e == nil
+			}
+		case "dependency":
+			if builds == nil {
+				unavailable = true
+				break
+			}
+			if run, e := builds.Get(in.RepositoryID, in.ReleaseID, in.BuildID); e == nil {
+				valid = in.Dependency == run.Definition.Image
+			}
+		}
+		if unavailable {
+			writeAPIError(w, http.StatusServiceUnavailable, "advisory_evidence_unavailable", "evidence verification is temporarily unavailable")
+			return
+		}
+		if !valid {
+			writeAPIError(w, 422, "invalid_advisory_evidence", "evidence could not be verified")
+			return
+		}
+		v, e := store.AddEvidence(current.ID, actor.UserID, in)
+		if e != nil {
+			writeStoreError(w, e)
+			return
+		}
+		writeJSON(w, 201, v)
+	})
+	mux.HandleFunc("POST /security-advisories/{advisory_id}/findings", func(w http.ResponseWriter, r *http.Request) {
+		actor, current, ok := require(w, r)
+		if !ok {
+			return
+		}
+		var in struct {
+			Kind        string   `json:"kind"`
+			Statement   string   `json:"statement"`
+			EvidenceIDs []string `json:"evidence_ids"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		v, e := store.AddFinding(current.ID, actor.UserID, in.Kind, in.Statement, "", in.EvidenceIDs)
+		if e != nil {
+			writeStoreError(w, e)
+			return
+		}
+		writeJSON(w, 201, v)
+	})
+	mux.HandleFunc("PUT /security-advisories/{advisory_id}/impact", func(w http.ResponseWriter, r *http.Request) {
+		actor, current, ok := require(w, r)
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int `json:"expected_version"`
+			securityadvisories.Impact
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		affected := false
+		for _, x := range current.AffectedRepositories {
+			if x.RepositoryID == in.RepositoryID {
+				affected = true
+			}
+		}
+		if !affected {
+			writeAPIError(w, 422, "invalid_security_advisory", "impact must name an affected repository")
+			return
+		}
+		v, e := store.SetImpact(current.ID, actor.UserID, in.ExpectedVersion, in.Impact)
+		if e != nil {
+			writeStoreError(w, e)
+			return
+		}
+		writeJSON(w, 200, v)
+	})
+	mux.HandleFunc("POST /security-advisories/{advisory_id}/investigations", func(w http.ResponseWriter, r *http.Request) {
+		actor, current, ok := require(w, r)
+		if !ok {
+			return
+		}
+		var in struct {
+			Mandate     string   `json:"mandate"`
+			EvidenceIDs []string `json:"evidence_ids"`
+			ExpiresIn   int      `json:"expires_in"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if in.ExpiresIn < 300 || in.ExpiresIn > 86400 {
+			writeAPIError(w, 422, "invalid_investigation", "expiry must be between 5 minutes and 24 hours")
+			return
+		}
+		issued, e := credentials.Issue(actor.UserID, auth.API, "Security advisory investigation", []string{"security:investigate"}, time.Duration(in.ExpiresIn)*time.Second)
+		if e != nil {
+			writeAPIError(w, 500, "investigation_start_failed", "read-only access could not be issued")
+			return
+		}
+		v, x, e := store.StartInvestigation(current.ID, actor.UserID, issued.ID, issued.ID, in.Mandate, in.EvidenceIDs)
+		if e != nil {
+			_, _ = credentials.Revoke(actor.UserID, issued.ID)
+			writeStoreError(w, e)
+			return
+		}
+		writeJSON(w, 201, map[string]any{"security_advisory": v, "investigation": x, "credential": issued})
+	})
+	mux.HandleFunc("GET /security-advisories/{advisory_id}/investigations/{investigation_id}", func(w http.ResponseWriter, r *http.Request) {
+		credential, ok := authenticateRequest(w, r, credentials, "security:investigate", false)
+		if !ok {
+			return
+		}
+		_, x, e := store.Investigation(r.PathValue("advisory_id"), r.PathValue("investigation_id"), credential.ID)
+		if e != nil {
+			writeAPIError(w, 404, "investigation_not_found", "investigation not found")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"investigation": x, "evidence": x.Evidence})
+	})
+	mux.HandleFunc("POST /security-advisories/{advisory_id}/investigations/{investigation_id}/findings", func(w http.ResponseWriter, r *http.Request) {
+		credential, ok := authenticateRequest(w, r, credentials, "security:investigate", false)
+		if !ok {
+			return
+		}
+		_, x, e := store.Investigation(r.PathValue("advisory_id"), r.PathValue("investigation_id"), credential.ID)
+		if e != nil {
+			writeAPIError(w, 404, "investigation_not_found", "investigation not found")
+			return
+		}
+		var in struct {
+			Kind        string   `json:"kind"`
+			Statement   string   `json:"statement"`
+			EvidenceIDs []string `json:"evidence_ids"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		for _, id := range in.EvidenceIDs {
+			selected := false
+			for _, evidence := range x.Evidence {
+				if evidence.ID == id {
+					selected = true
+					break
+				}
+			}
+			if !selected {
+				writeAPIError(w, 422, "invalid_security_advisory", "finding evidence was not delegated")
+				return
+			}
+		}
+		v, e := store.AddFinding(r.PathValue("advisory_id"), x.AgentID, in.Kind, in.Statement, x.ID, in.EvidenceIDs)
+		if e != nil {
+			writeStoreError(w, e)
+			return
+		}
+		writeJSON(w, 201, map[string]any{"finding": v.Findings[len(v.Findings)-1]})
 	})
 }

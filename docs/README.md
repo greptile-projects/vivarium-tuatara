@@ -810,3 +810,13 @@ stores. Protected titles, evidence, messages, membership, and even report
 existence therefore do not enter ordinary repository collaboration feeds. The
 web surface at `/security` uses only the dedicated `/security-advisories`
 contract and explains that privacy boundary before submission.
+
+Participants build a protected evidence graph from verified commits,
+dependency resolutions, releases, builds, release artifacts, and deployments.
+Dependency links are resolved against an exact release build's frozen image
+definition rather than accepting a caller-supplied package claim.
+Attributable hypotheses, conclusions, and uncertainty explain what those links
+mean, while a compare-and-swap version-line by environment matrix records
+`confirmed`, `suspected`, `unaffected`, or `fixed` impact. Responders can freeze
+selected evidence behind a short-lived `security:investigate`-only credential;
+agent findings remain inside the same embargoed record.

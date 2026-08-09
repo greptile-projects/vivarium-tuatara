@@ -221,7 +221,7 @@ export type SecurityAdvisory = {
   title: string;
   description: string;
   affected_repositories: { repository_id: string; versions: string[] }[];
-  evidence: { label: string; description: string }[];
+  evidence: { id?: string; kind?: "commit" | "dependency" | "build" | "artifact" | "release" | "deployment"; repository_id?: string; commit_id?: string; release_id?: string; build_id?: string; artifact_id?: string; deployment_id?: string; dependency?: string; label: string; description: string; captured_at?: string }[];
   contact: string;
   reporter_id: string;
   response_team: string[];
@@ -229,6 +229,9 @@ export type SecurityAdvisory = {
   embargo_state: "reported" | "triaging" | "embargoed" | "coordinating";
   messages: { id: string; actor_id: string; body: string; created_at: string }[];
   access_log: { id: string; actor_id: string; action: string; detail?: string; created_at: string }[];
+  findings: { id: string; kind: "hypothesis" | "conclusion" | "uncertainty"; actor_id: string; statement: string; evidence_ids: string[]; investigation_id?: string; created_at: string }[];
+  impact_matrix: { repository_id: string; version_line: string; environment: string; state: "confirmed" | "suspected" | "unaffected" | "fixed"; evidence_ids: string[]; rationale: string; actor_id: string; updated_at: string }[];
+  investigations: { id: string; agent_id: string; initiator_id: string; mandate: string; state: string; evidence: SecurityAdvisory["evidence"]; created_at: string; updated_at: string }[];
   version: number;
   created_at: string;
   updated_at: string;
