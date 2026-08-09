@@ -205,3 +205,33 @@ func TestInitiativeRetainsOrderedCrossRepositoryOwnershipAndCASUpdates(t *testin
 		t.Fatalf("stale initiative update error = %v", err)
 	}
 }
+
+func TestInitiativeRejectsDependencyCycles(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := "0123456789abcdef0123456789abcdef"
+	repository := "11111111111111111111111111111111"
+	sourceID := "22222222222222222222222222222222"
+	firstID := "33333333333333333333333333333333"
+	secondID := "44444444444444444444444444444444"
+	v, err := store.Create("Runtime", "runtime", "", owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := []InitiativeWorkItem{
+		{ID: firstID, Title: "Provider", RepositoryID: repository, Owner: InitiativeOwner{Type: "human", ID: owner}, DependencyIDs: []string{secondID}, Status: "todo"},
+		{ID: secondID, Title: "Consumer", RepositoryID: repository, Owner: InitiativeOwner{Type: "human", ID: owner}, DependencyIDs: []string{firstID}, Status: "todo"},
+	}
+	if _, _, err = store.CreateInitiative(v.ID, owner, "Cyclic rollout", "", InitiativeSource{Kind: "proposal", RepositoryID: repository, ID: sourceID}, items, nil); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("cyclic initiative error = %v", err)
+	}
+	stored, err := store.Get(v.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Initiatives) != 0 {
+		t.Fatalf("cyclic initiative persisted: %#v", stored.Initiatives)
+	}
+}

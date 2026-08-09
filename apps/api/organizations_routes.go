@@ -963,17 +963,19 @@ func initiativeSourceExists(source organizations.InitiativeSource, actor string,
 		for _, responder := range advisory.ResponseTeam {
 			authorized = authorized || responder == actor
 		}
+		matched := false
 		for _, affected := range advisory.AffectedRepositories {
 			if source.RepositoryID != "" && affected.RepositoryID != source.RepositoryID {
 				continue
 			}
+			matched = true
 			for _, repository := range portfolio {
 				if repository.ID == affected.RepositoryID && repository.OwnerID == actor {
 					authorized = true
 				}
 			}
-			return authorized
 		}
+		return matched && authorized
 	}
 	return false
 }

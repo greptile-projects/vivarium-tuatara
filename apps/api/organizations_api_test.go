@@ -12,6 +12,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/securityadvisories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
@@ -187,6 +188,32 @@ func TestOrganizationInitiativeProjectsDependenciesAndRejectsUnknownSources(t *t
 	portfolioResponse.Body.Close()
 	if len(portfolio.Initiatives) != 1 || portfolio.Initiatives[0].ID != initiative.ID || !portfolio.Initiatives[0].WorkItems[1].Blocked || len(portfolio.Initiatives[0].WorkItems[1].BlockerIDs) != 1 || portfolio.Initiatives[0].WorkItems[0].OwnershipState != "accountable" {
 		t.Fatalf("initiative projection = %#v", portfolio.Initiatives)
+	}
+}
+
+func TestSecurityInitiativeAuthorizationChecksEveryAffectedRepository(t *testing.T) {
+	securityStore, err := securityadvisories.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reporter := "0123456789abcdef0123456789abcdef"
+	firstOwner := "11111111111111111111111111111111"
+	secondOwner := "22222222222222222222222222222222"
+	firstRepository := "33333333333333333333333333333333"
+	secondRepository := "44444444444444444444444444444444"
+	advisory, err := securityStore.Create(securityadvisories.Advisory{
+		Title: "Shared runtime issue", Description: "Affects both services.", Contact: "security@example.test", ReporterID: reporter,
+		AffectedRepositories: []securityadvisories.AffectedRepository{{RepositoryID: firstRepository, Versions: []string{"1.x"}}, {RepositoryID: secondRepository, Versions: []string{"2.x"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	portfolio := []repositories.Repository{{ID: firstRepository, OwnerID: firstOwner}, {ID: secondRepository, OwnerID: secondOwner}}
+	if !initiativeSourceExists(organizations.InitiativeSource{Kind: "security", ID: advisory.ID}, secondOwner, portfolio, nil, nil, nil, securityStore) {
+		t.Fatal("owner of the later affected repository was denied")
+	}
+	if initiativeSourceExists(organizations.InitiativeSource{Kind: "security", RepositoryID: firstRepository, ID: advisory.ID}, secondOwner, portfolio, nil, nil, nil, securityStore) {
+		t.Fatal("repository-filtered source authorized an unrelated affected owner")
 	}
 }
 

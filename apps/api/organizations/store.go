@@ -1504,6 +1504,33 @@ func (s *Store) CreateInitiative(id, actor, title, description string, source In
 			}
 		}
 	}
+	dependencies := map[string][]string{}
+	for _, item := range items {
+		dependencies[item.ID] = item.DependencyIDs
+	}
+	state := map[string]uint8{}
+	var cyclic func(string) bool
+	cyclic = func(id string) bool {
+		if state[id] == 1 {
+			return true
+		}
+		if state[id] == 2 {
+			return false
+		}
+		state[id] = 1
+		for _, dependencyID := range dependencies[id] {
+			if cyclic(dependencyID) {
+				return true
+			}
+		}
+		state[id] = 2
+		return false
+	}
+	for id := range dependencies {
+		if cyclic(id) {
+			return Organization{}, Initiative{}, ErrInvalid
+		}
+	}
 	var created Initiative
 	v, err := s.mutate(id, func(v *Organization) error {
 		if !HasRole(*v, actor, "") {
