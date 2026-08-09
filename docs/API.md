@@ -933,6 +933,28 @@ The final access check, candidate/check publication, and creation response hold
 the repository catalog mutation lock, so private-source revocation or visibility
 changes linearize wholly before or after evidence publication.
 
+`PUT /repositories/{id}/evolutions/{evolution_id}/rollout` compare-and-swaps
+`version` to freeze one non-superseded contract candidate and ordered phases.
+Every candidate check must already be durably readable and successful. Each
+phase names repositories once, explicitly maps each repository to the one
+migration task whose contribution advances it, and may map repositories to
+existing environment IDs.
+`POST .../rollout/approvals` accepts approval only from the named repository's
+current owner; approval grants no cross-repository authority. Plan reads derive
+the gate from its exact check runs and each phase from the linked pull merge,
+an ancestry-containing release, and any named environment's promotion. The
+projection reports ownership, retained resource IDs, readiness, and the next
+ordinary queue/release/promotion action. Closed pulls and failed or canceled
+promotions pause the affected phase and direct participants to the deployment's
+existing rollback or repair controls; completed earlier phases are preserved.
+For retries, only the newest matching release/environment promotion is
+authoritative, using its store-assigned durable creation sequence even when
+wall-clock timestamps collide; retained earlier failures remain evidence but
+do not pause a later successful attempt. An unavailable check store fails
+rollout creation closed with `422 invalid_rollout`.
+Private participant filtering happens before aggregate phase and rollout state
+is derived, so hidden workflow status cannot influence a reader's projection.
+
 Unfinished cross-repository dependencies block an agent session from starting;
 the eventual credential remains limited to its isolated `agent/tasks/*` branch.
 Human work uses existing access and may publish its task contribution from the

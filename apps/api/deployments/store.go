@@ -93,6 +93,7 @@ type Event struct {
 }
 type Promotion struct {
 	ID                   string            `json:"id"`
+	CreationSequence     int64             `json:"creation_sequence"`
 	RepositoryID         string            `json:"repository_id"`
 	EnvironmentID        string            `json:"environment_id"`
 	ReleaseID            string            `json:"release_id"`
@@ -267,6 +268,15 @@ func (s *Store) createPromotionLocked(value Promotion) (Promotion, error) {
 	promotions, err := s.listPromotions(value.RepositoryID)
 	if err != nil {
 		return Promotion{}, err
+	}
+	value.CreationSequence = 0
+	for _, promotion := range promotions {
+		if promotion.CreationSequence >= value.CreationSequence {
+			value.CreationSequence = promotion.CreationSequence + 1
+		}
+	}
+	if value.CreationSequence == 0 {
+		value.CreationSequence = 1
 	}
 	active := 0
 	for _, p := range promotions {
@@ -612,7 +622,15 @@ func (s *Store) listPromotions(repo string) ([]Promotion, error) {
 		return nil, ErrNotFound
 	}
 	err := s.list(filepath.Join(s.root, repo, "promotions"), &p)
-	sort.Slice(p, func(i, j int) bool { return p[i].CreatedAt.Before(p[j].CreatedAt) })
+	sort.Slice(p, func(i, j int) bool {
+		if p[i].CreationSequence != p[j].CreationSequence {
+			return p[i].CreationSequence < p[j].CreationSequence
+		}
+		if !p[i].CreatedAt.Equal(p[j].CreatedAt) {
+			return p[i].CreatedAt.Before(p[j].CreatedAt)
+		}
+		return p[i].ID < p[j].ID
+	})
 	return p, err
 }
 

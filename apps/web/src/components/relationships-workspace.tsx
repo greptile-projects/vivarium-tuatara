@@ -320,6 +320,20 @@ export function RelationshipsWorkspace({
       setPending(false);
     }
   }
+  async function configureRollout(event: FormEvent<HTMLFormElement>, plan: EvolutionPlan) {
+    event.preventDefault(); if (!token) return; setPending(true);
+    const form=event.currentTarget, data=new FormData(form);
+    try {
+      const phases=String(data.get("phases") ?? "").split(/\n/).filter(Boolean).map((line) => {
+        const [name, repositories, tasks="", environments=""] = line.split("|").map((x)=>x.trim());
+        return { name, repository_ids: repositories.split(",").map((x)=>x.trim()).filter(Boolean), migration_task_ids: Object.fromEntries(tasks.split(",").filter(Boolean).map((x)=>x.split("=").map((v)=>v.trim()))), environment_ids: Object.fromEntries(environments.split(",").filter(Boolean).map((x)=>x.split("=").map((v)=>v.trim()))) };
+      });
+      await api(`/repositories/${repositoryID}/evolutions/${plan.id}/rollout`, {method:"PUT", body:JSON.stringify({version:plan.version,candidate_id:data.get("candidate_id"),phases})}, token); form.reset(); await load();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Rollout could not be configured."); } finally { setPending(false); }
+  }
+  async function approveRollout(plan: EvolutionPlan, targetRepositoryID: string) {
+    if (!token) return; setPending(true); try { await api(`/repositories/${repositoryID}/evolutions/${plan.id}/rollout/approvals`, {method:"POST",body:JSON.stringify({version:plan.version,repository_id:targetRepositoryID})},token); await load(); } catch(reason) { setError(reason instanceof Error ? reason.message : "Rollout approval could not be recorded."); } finally { setPending(false); }
+  }
   const names = Object.fromEntries(
     (graph?.repositories ?? []).map((repository) => [
       repository.id,
@@ -870,6 +884,32 @@ export function RelationshipsWorkspace({
                     ))
                   )}
                 </div>
+                <h3 className="mt-5 text-sm font-semibold">Governed rollout</h3>
+                {plan.rollout ? (
+                  <div className="mt-2 grid gap-3">
+                    <div className="rounded-lg border border-[var(--line)] p-3 text-sm">
+                      <Badge tone={plan.rollout.state === "completed" ? "success" : plan.rollout.state === "paused" ? "danger" : "warning"}>{plan.rollout.state ?? "configured"}</Badge>
+                      <p className="mt-2 font-semibold">Next: {plan.rollout.next_action}</p>
+                      <p className="mt-1 text-xs text-[var(--muted)]">Compatibility gate <code>{plan.rollout.candidate_id}</code></p>
+                    </div>
+                    {plan.rollout.phases.map((phase, index) => (
+                      <div key={phase.id} className="rounded-lg border border-[var(--line)] p-3 text-sm">
+                        <div className="flex flex-wrap items-center gap-2"><strong>{index + 1}. {phase.name}</strong><Badge tone={phase.state === "completed" ? "success" : phase.state === "paused" ? "danger" : phase.state === "ready" ? "info" : "warning"}>{phase.state ?? "blocked"}</Badge></div>
+                        <p className="mt-2">{phase.next_action}</p>
+                        <div className="mt-2 grid gap-2">{phase.repository_ids.map((id) => { const outcome=plan.rollout?.outcomes.find((x)=>x.phase_id===phase.id && x.repository_id===id); const approved=plan.rollout?.approvals.some((x)=>x.repository_id===id); return <div key={id} className="flex flex-wrap items-center justify-between gap-2 rounded bg-[var(--surface-subtle)] p-2"><span><Link href={`/repositories/${id}`} className="font-semibold text-[var(--brand)] hover:underline">{names[id] ?? id}</Link> · {approved ? "owner approved" : "owner approval required"} · {outcome?.state ?? "awaiting work"}</span>{token && !approved && <Button type="button" disabled={pending} onClick={()=>void approveRollout(plan,id)}>Approve my repository</Button>}</div>; })}</div>
+                        {phase.state === "paused" && <p className="mt-2 text-xs text-[var(--danger)]">Use the failed deployment’s governed rollback or repair action. Safe repositories and completed phases remain unchanged.</p>}
+                      </div>
+                    ))}
+                  </div>
+                ) : token ? (
+                  <form onSubmit={(event)=>configureRollout(event,plan)} className="mt-2 grid gap-3 rounded-lg bg-[var(--surface-subtle)] p-4">
+                    <strong className="text-sm">Define compatibility gate and rollout phases</strong>
+                    <select name="candidate_id" required className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3 text-sm"><option value="">Passing contract candidate</option>{plan.contract_candidates.filter((x)=>!x.superseded_at).map((x)=><option key={x.id} value={x.id}>{x.combination_hash.slice(0,12)}</option>)}</select>
+                    <textarea name="phases" required placeholder={"Consumers | repository-id | repository-id=migration-task-id | repository-id=environment-id\nProvider | repository-id | repository-id=migration-task-id"} className="min-h-24 rounded-lg border border-[var(--line-strong)] p-3 font-mono text-sm" />
+                    <p className="text-xs text-[var(--muted)]">One phase per line: name | repository IDs | repository=migration-task selections | optional repository=environment targets. Every repository appears once; owners approve independently.</p>
+                    <Button type="submit" disabled={pending}>Configure governed rollout</Button>
+                  </form>
+                ) : <p className="mt-2 text-sm text-[var(--muted)]">No rollout has been configured.</p>}
                 {token && (
                   <form
                     onSubmit={(event) => createMigrationTask(event, plan)}
