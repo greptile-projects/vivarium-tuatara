@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -59,6 +60,33 @@ func TestPublishUpdateSerializesExactReservation(t *testing.T) {
 	}
 	if count != 24 || calls.Load() != 1 {
 		t.Fatalf("results = %d, callbacks = %d", count, calls.Load())
+	}
+}
+
+func TestPublishUpdateFailureRetainsReservationBeforeCollaboration(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := Update{RepositoryID: strings.Repeat("a", 32), PackageName: "core-kit", FromVersion: "1.0.0", ToVersion: "1.1.0", BaseCommit: strings.Repeat("b", 40), CreatedBy: strings.Repeat("c", 32)}
+	var calls int
+	created, published, err := store.PublishUpdate(value, func() (string, string, error) {
+		calls++
+		directory := filepath.Join(store.root, "updates", value.RepositoryID)
+		if chmodErr := os.Chmod(directory, 0500); chmodErr != nil {
+			t.Fatal(chmodErr)
+		}
+		return strings.Repeat("d", 32), strings.Repeat("e", 32), nil
+	})
+	if err == nil || !published || created.ID == "" || calls != 1 {
+		t.Fatalf("first = %#v, published %v, calls %d, err %v", created, published, calls, err)
+	}
+	if chmodErr := os.Chmod(filepath.Join(store.root, "updates", value.RepositoryID), 0700); chmodErr != nil {
+		t.Fatal(chmodErr)
+	}
+	pending, published, err := store.PublishUpdate(value, func() (string, string, error) { calls++; return "", "", nil })
+	if !errors.Is(err, ErrUpdatePending) || published || pending.ID != created.ID || calls != 1 {
+		t.Fatalf("retry = %#v, published %v, calls %d, err %v", pending, published, calls, err)
 	}
 }
 

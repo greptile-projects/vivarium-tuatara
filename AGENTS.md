@@ -163,8 +163,9 @@ whenever dependencies change or the web job fails before it starts.
   with one executable task plus the proposed manifest/lock, release notes,
   successful build attestation, and affected dependency paths. Update records
   recheck target-package visibility on every read and serialize proposal/task
-  publication under an exact base/from/to reservation, compensating incomplete
-  cross-store work. Subsequent human or agent work
+  publication under a durable exact base/from/to reservation created before any
+  collaboration work. Failed cleanup retains a recovery-pending reservation so
+  exact retries cannot duplicate orphaned proposals or tasks. Subsequent human or agent work
   publishes through existing task sessions, pulls, checks, review, queues,
   releases, and deployments without granting consumer authority to publishers.
   Repository relationship graphs at `/repositories/{id}/relationships` join

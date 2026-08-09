@@ -568,6 +568,9 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 		}
 		visible := []packages.Update{}
 		for _, update := range updates {
+			if update.State != "" && update.State != "complete" {
+				continue
+			}
 			version, getErr := packageStore.Get(update.PackageName, update.ToVersion)
 			if getErr == nil && canRead(version, actor, authenticated) {
 				visible = append(visible, update)
@@ -675,14 +678,21 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 				}
 				task, taskErr := proposalStore.CreateTask(catalog.ID, proposal.ID, actor.UserID, "Apply "+best.Name+" "+best.Version, "Update the manifest and lock exactly as proposed, investigate compatibility failures, and publish the result through ordinary review.", nil, nil)
 				if taskErr != nil {
-					_ = proposalStore.DeleteMigrationWork(catalog.ID, proposal.ID, "", "")
-					return "", "", taskErr
+					return proposal.ID, "", taskErr
 				}
 				return proposal.ID, task.ID, nil
 			})
 			if createErr != nil {
-				if published && update.ProposalID != "" {
-					_ = proposalStore.DeleteMigrationWork(catalog.ID, update.ProposalID, update.TaskID, "")
+				if errors.Is(createErr, packages.ErrUpdatePending) {
+					writeAPIError(w, 409, "package_update_recovery_pending", "an earlier adoption publication requires recovery before retry")
+					return
+				}
+				if published {
+					cleaned := update.ProposalID == ""
+					if update.ProposalID != "" {
+						cleaned = proposalStore.DeleteMigrationWork(catalog.ID, update.ProposalID, update.TaskID, "") == nil
+					}
+					_ = packageStore.ResolveUpdateFailure(update, cleaned)
 				}
 				writeAPIError(w, 500, "package_update_failed", "adoption evidence could not be recorded")
 				return

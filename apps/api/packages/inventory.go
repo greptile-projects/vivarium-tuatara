@@ -16,6 +16,7 @@ import (
 const InventoryConfigPath = ".vivarium/packages.json"
 
 var ErrInventoryInvalid = errors.New("invalid package dependency inventory")
+var ErrUpdatePending = errors.New("package update publication requires recovery")
 
 type ManifestDependency struct {
 	Name       string `json:"name"`
@@ -79,6 +80,7 @@ type Update struct {
 	AffectedPaths []string         `json:"affected_dependency_paths"`
 	CreatedBy     string           `json:"created_by"`
 	CreatedAt     time.Time        `json:"created_at"`
+	State         string           `json:"state,omitempty"`
 }
 
 func (s *Store) PutUpdatePolicy(value UpdatePolicy) (UpdatePolicy, error) {
@@ -179,30 +181,71 @@ func (s *Store) PublishUpdate(value Update, publish func() (string, string, erro
 	}
 	for _, item := range items {
 		if item.PackageName == value.PackageName && item.FromVersion == value.FromVersion && item.ToVersion == value.ToVersion && item.BaseCommit == value.BaseCommit {
-			return item, false, nil
+			if item.State == "" || item.State == "complete" {
+				return item, false, nil
+			}
+			return item, false, ErrUpdatePending
 		}
+	}
+	id := make([]byte, 16)
+	if _, err = rand.Read(id); err != nil {
+		return value, false, err
+	}
+	value.ID, value.CreatedAt, value.State = hex.EncodeToString(id), s.now().UTC().Truncate(time.Microsecond), "pending"
+	dir := filepath.Join(s.root, "updates", value.RepositoryID)
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		return value, false, err
+	}
+	name := filepath.Join(dir, value.ID+".json")
+	body, err := json.Marshal(value)
+	if err != nil {
+		return value, false, err
+	}
+	if err = atomicFile(name, body); err != nil {
+		return value, false, err
 	}
 	value.ProposalID, value.TaskID, err = publish()
 	if err != nil {
 		return value, true, err
 	}
-	id := make([]byte, 16)
-	if _, err = rand.Read(id); err != nil {
-		return value, true, err
-	}
-	value.ID, value.CreatedAt = hex.EncodeToString(id), s.now().UTC().Truncate(time.Microsecond)
-	body, err := json.Marshal(value)
+	value.State = "complete"
+	body, err = json.Marshal(value)
 	if err != nil {
+		value.State = "pending"
 		return value, true, err
 	}
-	dir := filepath.Join(s.root, "updates", value.RepositoryID)
-	if err = os.MkdirAll(dir, 0700); err != nil {
-		return value, true, err
-	}
-	if err = atomicFile(filepath.Join(dir, value.ID+".json"), body); err != nil {
+	if err = atomicFile(name, body); err != nil {
+		value.State = "pending"
 		return value, true, err
 	}
 	return value, true, nil
+}
+
+func (s *Store) ResolveUpdateFailure(value Update, cleaned bool) error {
+	if len(value.RepositoryID) != 32 || len(value.ID) != 32 {
+		return ErrInventoryInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lock, err := os.OpenFile(filepath.Join(s.root, ".update-lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	name := filepath.Join(s.root, "updates", value.RepositoryID, value.ID+".json")
+	if cleaned {
+		return os.Remove(name)
+	}
+	value.State = "cleanup_pending"
+	body, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return atomicFile(name, body)
 }
 
 func (s *Store) ListUpdates(repositoryID string) ([]Update, error) {

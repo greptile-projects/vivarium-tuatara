@@ -838,7 +838,9 @@ visible, active releases. The scan preserves the exact base and proposed
 successful package-build attestation, derives every affected dependency path,
 and opens an attributable proposal with one executable adoption task. Exact
 base/from/to retries reuse the same durable update through a cross-process
-reservation; incomplete proposal/task publication is compensated. Reads also
+reservation persisted before proposal creation; incomplete proposal/task
+publication is compensated, while failed compensation leaves a hidden recovery
+marker that blocks duplicate exact retries. Reads also
 revalidate current access to the target package before returning its retained
 notes or attestation. Humans or scoped task agents
 can investigate and revise it through ordinary change sessions and pull
