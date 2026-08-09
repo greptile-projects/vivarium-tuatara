@@ -143,13 +143,11 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 					}
 					if environmentID := phase.EnvironmentIDs[repositoryID]; repositoryComplete && environmentID != "" {
 						promotions, _ := deploymentStore.ListPromotions(repositoryID)
-						deployed := false
-						for _, promotion := range promotions {
-							if promotion.ReleaseID == outcome.ReleaseID && promotion.EnvironmentID == environmentID {
-								outcome.DeploymentID, outcome.State = promotion.ID, promotion.State
-								deployed = promotion.State == "succeeded"
-								failed = failed || promotion.State == "failed" || promotion.State == "canceled"
-							}
+						promotion := latestEvolutionPromotion(promotions, outcome.ReleaseID, environmentID)
+						deployed := promotion != nil && promotion.State == "succeeded"
+						if promotion != nil {
+							outcome.DeploymentID, outcome.State = promotion.ID, promotion.State
+							failed = promotion.State == "failed" || promotion.State == "canceled"
 						}
 						repositoryComplete = repositoryComplete && deployed
 					}
@@ -553,16 +551,7 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 			return
 		}
 		v, err := relationStore.ConfigureEvolutionRollout(r.PathValue("id"), r.PathValue("evolution_id"), actor.UserID, in.CandidateID, in.Phases, in.Version, func(candidate relationships.ContractCandidate) bool {
-			if len(candidate.CheckRunIDs) == 0 {
-				return false
-			}
-			for _, runID := range candidate.CheckRunIDs {
-				run, runErr := builds.Get(r.PathValue("id"), candidate.CombinationHash[:32], runID)
-				if runErr != nil || run.State != "succeeded" {
-					return false
-				}
-			}
-			return true
+			return evolutionCandidatePassing(builds, r.PathValue("id"), candidate)
 		})
 		if errors.Is(err, relationships.ErrConflict) {
 			writeAPIError(w, 409, "evolution_changed", "evolution plan changed; reload before configuring rollout")
@@ -1050,6 +1039,33 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 		}
 		writeJSON(w, 201, analysisPacket(v, a))
 	})
+}
+
+func evolutionCandidatePassing(builds *checkruns.Store, repositoryID string, candidate relationships.ContractCandidate) bool {
+	if builds == nil || len(candidate.CheckRunIDs) == 0 {
+		return false
+	}
+	for _, runID := range candidate.CheckRunIDs {
+		run, err := builds.Get(repositoryID, candidate.CombinationHash[:32], runID)
+		if err != nil || run.State != "succeeded" {
+			return false
+		}
+	}
+	return true
+}
+
+func latestEvolutionPromotion(values []deployments.Promotion, releaseID, environmentID string) *deployments.Promotion {
+	var selected *deployments.Promotion
+	for i := range values {
+		candidate := &values[i]
+		if candidate.ReleaseID != releaseID || candidate.EnvironmentID != environmentID {
+			continue
+		}
+		if selected == nil || candidate.CreatedAt.After(selected.CreatedAt) || (candidate.CreatedAt.Equal(selected.CreatedAt) && candidate.ID > selected.ID) {
+			selected = candidate
+		}
+	}
+	return selected
 }
 
 func assembleContractCandidate(gitStore *storage.Store, providerRepositoryID string, revisions []relationships.ContractCandidateRevision) (string, error) {

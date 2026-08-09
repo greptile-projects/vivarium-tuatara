@@ -162,7 +162,10 @@ whenever dependencies change or the web job fails before it starts.
   checks, ordinary merged task pulls, ancestry-containing releases, and governed
   promotions. Closed pulls or failed/canceled promotions pause the affected
   phase and retain prior outcomes while directing recovery through established
-  rollback or agent-repair controls.
+  rollback or agent-repair controls. The newest matching promotion is the
+  authoritative retry outcome; historical failures remain evidence without
+  overriding later success, and unavailable contract-check storage fails
+  rollout configuration closed.
   Ordered evolution migration tasks are repository-owned proposal tasks linked
   to the shared plan with target versions and cross-repository dependencies.
   Only current target participants create and assign them; humans gain no new

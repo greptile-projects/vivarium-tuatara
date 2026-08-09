@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
@@ -44,6 +45,22 @@ func TestAssembleContractCandidateFreezesRepositorySnapshots(t *testing.T) {
 		if showErr != nil || string(body) != want {
 			t.Fatalf("%s = %q, %v", path, body, showErr)
 		}
+	}
+}
+
+func TestEvolutionRolloutRejectsUnavailableChecksAndUsesLatestPromotion(t *testing.T) {
+	candidate := relationships.ContractCandidate{CombinationHash: strings.Repeat("a", 64), CheckRunIDs: []string{strings.Repeat("b", 32)}}
+	if evolutionCandidatePassing(nil, strings.Repeat("c", 32), candidate) {
+		t.Fatal("candidate passed without a check store")
+	}
+	now := time.Now().UTC()
+	values := []deployments.Promotion{
+		{ID: strings.Repeat("1", 32), ReleaseID: strings.Repeat("2", 32), EnvironmentID: strings.Repeat("3", 32), State: "canceled", CreatedAt: now},
+		{ID: strings.Repeat("4", 32), ReleaseID: strings.Repeat("2", 32), EnvironmentID: strings.Repeat("3", 32), State: "succeeded", CreatedAt: now.Add(time.Second)},
+	}
+	selected := latestEvolutionPromotion(values, strings.Repeat("2", 32), strings.Repeat("3", 32))
+	if selected == nil || selected.ID != strings.Repeat("4", 32) || selected.State != "succeeded" {
+		t.Fatalf("selected promotion = %#v", selected)
 	}
 }
 
