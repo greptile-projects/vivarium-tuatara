@@ -29,6 +29,17 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 	visible := func(userID string, v securityadvisories.Advisory) bool {
 		return userID == v.ReporterID || slices.Contains(v.ResponseTeam, userID) || maintainer(userID, v)
 	}
+	repositoryParticipant := func(userID, repositoryID string) bool {
+		repository, err := repos.GetByID(repositoryID)
+		if err != nil {
+			return false
+		}
+		if repository.OwnerID == userID {
+			return true
+		}
+		allowed, err := repos.HasCollaborator(userID, repositoryID)
+		return err == nil && allowed
+	}
 	require := func(w http.ResponseWriter, r *http.Request) (auth.Credential, securityadvisories.Advisory, bool) {
 		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
 		if !ok {
@@ -413,8 +424,8 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 			writeAPIError(w, 404, "repair_task_not_found", "repair task not found")
 			return
 		}
-		if actor.UserID != task.AssigneeID && !maintainer(actor.UserID, current) {
-			writeAPIError(w, 403, "repair_assignee_required", "only the assignee or an affected repository owner may start work")
+		if actor.UserID != task.AssigneeID && !repositoryParticipant(actor.UserID, task.RepositoryID) {
+			writeAPIError(w, 403, "repair_assignee_required", "only the assignee or a participant in the repair repository may start work")
 			return
 		}
 		var in struct {
@@ -481,6 +492,10 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 				writeAPIError(w, 404, "repair_session_not_found", "repair session not found")
 				return
 			}
+			if actor.UserID != existing.WorkerID && actor.UserID != existing.InitiatorID && !repositoryParticipant(actor.UserID, existing.RepositoryID) {
+				writeAPIError(w, 403, "repair_session_access_denied", "only the worker, initiator, or a participant in the repair repository may update this session")
+				return
+			}
 			if action == "complete" {
 				repository, e := gitStore.Open(existing.RepositoryID)
 				if e != nil {
@@ -507,12 +522,30 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 					return
 				}
 			}
+			if action == "revoke" {
+				// Revoke access before removing the ref so a partial failure cannot
+				// leave a usable credential for repository work the advisory treats
+				// as revoked. A retry completes any remaining cleanup.
+				if _, e := credentials.Revoke(existing.InitiatorID, existing.CredentialID); e != nil && !errors.Is(e, auth.ErrNotFound) {
+					writeAPIError(w, 500, "repair_revocation_failed", "repair access could not be revoked")
+					return
+				}
+				repository, e := gitStore.Open(existing.RepositoryID)
+				if e != nil {
+					writeAPIError(w, 500, "repair_revocation_failed", "repair repository is unavailable")
+					return
+				}
+				if e = repository.DeleteReference(existing.Branch); e != nil && !errors.Is(e, storage.ErrReferenceNotFound) {
+					writeAPIError(w, 500, "repair_revocation_failed", "repair branch could not be removed")
+					return
+				}
+			}
 			v, session, e := store.UpdateRepairSession(current.ID, actor.UserID, existing.ID, action, in.Body, in.Decision, in.CommitID)
 			if e != nil {
 				writeStoreError(w, e)
 				return
 			}
-			if action == "complete" || action == "revoke" {
+			if action == "complete" {
 				_, _ = credentials.Revoke(existing.InitiatorID, existing.CredentialID)
 			}
 			writeJSON(w, 200, map[string]any{"security_advisory": v, "repair_session": session})
