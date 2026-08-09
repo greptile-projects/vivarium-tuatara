@@ -26,7 +26,14 @@ export type Organization = {
   members: { user_id: string; role: "owner" | "member"; joined_at: string }[];
   invitations: { id: string; user_id: string; invited_by: string; created_at: string }[];
   transfers: { id: string; repository_id: string; from_owner_id: string; requested_by: string; status: "pending" | "accepted"; requested_at: string; accepted_by?: string; accepted_at?: string }[];
+  teams: OrganizationTeam[];
+  agents: OrganizationAgent[];
+  events: OrganizationEvent[];
 };
+export type OrganizationTeam = { id:string; name:string; slug:string; description?:string; parent_id?:string; visibility:"public"|"organization"; version:number; created_by:string; created_at:string; members:{user_id:string;role:"member"|"maintainer";added_by:string;added_at:string}[]; responsibilities:{id:string;repository_id:string;area:string;description?:string;added_by:string;added_at:string}[] };
+export type OrganizationAgent = { id:string; name:string; slug:string; description?:string; visibility:"public"|"organization"; capabilities:string[]; operator_ids:string[]; team_ids:string[]; version:number; registered_by:string; registered_at:string };
+export type OrganizationEvent = { id:string; action:string; actor_id:string; target_id?:string; created_at:string; details?:Record<string,unknown> };
+export type OrganizationDirectory = { organization_id:string; name:string; slug:string; teams:{team:OrganizationTeam;effective_members:{user_id:string;role:string;reason:string;source_team_id:string}[]}[]; agents:OrganizationAgent[]; events?:OrganizationEvent[] };
 export type OrganizationPortfolio = {
   organization: Organization;
   repositories: Repository[];

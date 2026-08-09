@@ -46,6 +46,59 @@ type Transfer struct {
 	AcceptedAt   *time.Time `json:"accepted_at,omitempty"`
 }
 
+type TeamMember struct {
+	UserID  string    `json:"user_id"`
+	Role    string    `json:"role"`
+	AddedBy string    `json:"added_by"`
+	AddedAt time.Time `json:"added_at"`
+}
+
+type Responsibility struct {
+	ID           string    `json:"id"`
+	RepositoryID string    `json:"repository_id"`
+	Area         string    `json:"area"`
+	Description  string    `json:"description,omitempty"`
+	AddedBy      string    `json:"added_by"`
+	AddedAt      time.Time `json:"added_at"`
+}
+
+type Team struct {
+	ID               string           `json:"id"`
+	Name             string           `json:"name"`
+	Slug             string           `json:"slug"`
+	Description      string           `json:"description,omitempty"`
+	ParentID         string           `json:"parent_id,omitempty"`
+	Visibility       string           `json:"visibility"`
+	Version          int              `json:"version"`
+	CreatedBy        string           `json:"created_by"`
+	CreatedAt        time.Time        `json:"created_at"`
+	Members          []TeamMember     `json:"members"`
+	Responsibilities []Responsibility `json:"responsibilities"`
+}
+
+type Agent struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Slug         string    `json:"slug"`
+	Description  string    `json:"description,omitempty"`
+	Visibility   string    `json:"visibility"`
+	Capabilities []string  `json:"capabilities"`
+	OperatorIDs  []string  `json:"operator_ids"`
+	TeamIDs      []string  `json:"team_ids"`
+	Version      int       `json:"version"`
+	RegisteredBy string    `json:"registered_by"`
+	RegisteredAt time.Time `json:"registered_at"`
+}
+
+type Event struct {
+	ID        string         `json:"id"`
+	Action    string         `json:"action"`
+	ActorID   string         `json:"actor_id"`
+	TargetID  string         `json:"target_id,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
+	Details   map[string]any `json:"details,omitempty"`
+}
+
 type Organization struct {
 	ID          string       `json:"id"`
 	Name        string       `json:"name"`
@@ -56,6 +109,9 @@ type Organization struct {
 	Members     []Member     `json:"members"`
 	Invitations []Invitation `json:"invitations"`
 	Transfers   []Transfer   `json:"transfers"`
+	Teams       []Team       `json:"teams"`
+	Agents      []Agent      `json:"agents"`
+	Events      []Event      `json:"events"`
 }
 
 type Store struct {
@@ -142,7 +198,10 @@ func (s *Store) Create(name, slug, description, actor string) (Organization, err
 			return err
 		}
 		now := s.now().Truncate(time.Microsecond)
-		created = Organization{ID: id, Name: name, Slug: slug, Description: strings.TrimSpace(description), CreatedBy: actor, CreatedAt: now, Members: []Member{{UserID: actor, Role: "owner", JoinedAt: now}}, Invitations: []Invitation{}, Transfers: []Transfer{}}
+		created = Organization{ID: id, Name: name, Slug: slug, Description: strings.TrimSpace(description), CreatedBy: actor, CreatedAt: now, Members: []Member{{UserID: actor, Role: "owner", JoinedAt: now}}, Invitations: []Invitation{}, Transfers: []Transfer{}, Teams: []Team{}, Agents: []Agent{}, Events: []Event{}}
+		if err := s.event(&created, "organization.created", actor, id, nil); err != nil {
+			return err
+		}
 		return s.write(created)
 	})
 	return created, err
@@ -159,6 +218,15 @@ func (s *Store) Get(id string) (Organization, error) {
 	}
 	if err != nil || json.Unmarshal(data, &v) != nil || v.ID != id {
 		return v, ErrNotFound
+	}
+	if v.Teams == nil {
+		v.Teams = []Team{}
+	}
+	if v.Agents == nil {
+		v.Agents = []Agent{}
+	}
+	if v.Events == nil {
+		v.Events = []Event{}
 	}
 	return v, nil
 }
@@ -249,7 +317,7 @@ func (s *Store) Invite(id, actor, user string) (Organization, error) {
 			return e
 		}
 		v.Invitations = append(v.Invitations, Invitation{ID: iid, UserID: user, InvitedBy: actor, CreatedAt: s.now().Truncate(time.Microsecond)})
-		return nil
+		return s.event(v, "member.invited", actor, user, nil)
 	})
 }
 func (s *Store) AcceptInvitation(id, invitationID, actor string) (Organization, error) {
@@ -261,7 +329,7 @@ func (s *Store) AcceptInvitation(id, invitationID, actor string) (Organization, 
 			if x.ID == invitationID && x.UserID == actor {
 				v.Invitations = append(v.Invitations[:i], v.Invitations[i+1:]...)
 				v.Members = append(v.Members, Member{UserID: actor, Role: "member", JoinedAt: s.now().Truncate(time.Microsecond)})
-				return nil
+				return s.event(v, "member.joined", actor, actor, nil)
 			}
 		}
 		return ErrNotFound
@@ -278,11 +346,357 @@ func (s *Store) RemoveMember(id, actor, user string) (Organization, error) {
 					return ErrConflict
 				}
 				v.Members = append(v.Members[:i], v.Members[i+1:]...)
-				return nil
+				for ti := range v.Teams {
+					kept := v.Teams[ti].Members[:0]
+					for _, membership := range v.Teams[ti].Members {
+						if membership.UserID != user {
+							kept = append(kept, membership)
+						}
+					}
+					if len(kept) != len(v.Teams[ti].Members) {
+						v.Teams[ti].Members = kept
+						v.Teams[ti].Version++
+					}
+				}
+				agents := v.Agents[:0]
+				for _, agent := range v.Agents {
+					priorOperators := len(agent.OperatorIDs)
+					operators := agent.OperatorIDs[:0]
+					for _, operator := range agent.OperatorIDs {
+						if operator != user {
+							operators = append(operators, operator)
+						}
+					}
+					agent.OperatorIDs = operators
+					if len(operators) > 0 {
+						if len(operators) != priorOperators {
+							agent.Version++
+						}
+						agents = append(agents, agent)
+					}
+				}
+				v.Agents = agents
+				return s.event(v, "member.removed", actor, user, nil)
 			}
 		}
 		return nil
 	})
+}
+
+func validSlug(v string) bool {
+	v = strings.TrimSpace(strings.ToLower(v))
+	if v == "" || len(v) > 60 {
+		return false
+	}
+	for _, r := range v {
+		if !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') && r != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func validVisibility(v string) bool { return v == "public" || v == "organization" }
+
+func (s *Store) event(v *Organization, action, actor, target string, details map[string]any) error {
+	id, err := newID()
+	if err != nil {
+		return err
+	}
+	v.Events = append(v.Events, Event{ID: id, Action: action, ActorID: actor, TargetID: target, CreatedAt: s.now().Truncate(time.Microsecond), Details: details})
+	return nil
+}
+
+func teamIndex(v *Organization, id string) int {
+	for i := range v.Teams {
+		if v.Teams[i].ID == id {
+			return i
+		}
+	}
+	return -1
+}
+func agentIndex(v *Organization, id string) int {
+	for i := range v.Agents {
+		if v.Agents[i].ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func (s *Store) CreateTeam(id, actor, name, slug, description, parentID, visibility string) (Organization, error) {
+	name, ok := clean(name, 100)
+	if !ok || !validSlug(slug) || !validVisibility(visibility) || len(description) > 1000 {
+		return Organization{}, ErrInvalid
+	}
+	return s.mutate(id, func(v *Organization) error {
+		if !HasRole(*v, actor, "owner") {
+			return ErrNotFound
+		}
+		for _, t := range v.Teams {
+			if t.Slug == strings.ToLower(strings.TrimSpace(slug)) {
+				return ErrConflict
+			}
+		}
+		if parentID != "" && teamIndex(v, parentID) < 0 {
+			return ErrInvalid
+		}
+		tid, err := newID()
+		if err != nil {
+			return err
+		}
+		now := s.now().Truncate(time.Microsecond)
+		v.Teams = append(v.Teams, Team{ID: tid, Name: name, Slug: strings.ToLower(strings.TrimSpace(slug)), Description: strings.TrimSpace(description), ParentID: parentID, Visibility: visibility, Version: 1, CreatedBy: actor, CreatedAt: now, Members: []TeamMember{}, Responsibilities: []Responsibility{}})
+		return s.event(v, "team.created", actor, tid, map[string]any{"parent_id": parentID})
+	})
+}
+
+func (s *Store) AddTeamMember(id, teamID, actor, user, role string, expected int) (Organization, error) {
+	if !validID(user) || (role != "member" && role != "maintainer") {
+		return Organization{}, ErrInvalid
+	}
+	return s.mutate(id, func(v *Organization) error {
+		if !HasRole(*v, actor, "owner") || !HasRole(*v, user, "") {
+			return ErrNotFound
+		}
+		i := teamIndex(v, teamID)
+		if i < 0 {
+			return ErrNotFound
+		}
+		t := &v.Teams[i]
+		if t.Version != expected {
+			return ErrConflict
+		}
+		for j := range t.Members {
+			if t.Members[j].UserID == user {
+				t.Members[j].Role = role
+				t.Members[j].AddedBy = actor
+				t.Members[j].AddedAt = s.now().Truncate(time.Microsecond)
+				t.Version++
+				return s.event(v, "team.member.updated", actor, user, map[string]any{"team_id": teamID, "role": role})
+			}
+		}
+		t.Members = append(t.Members, TeamMember{UserID: user, Role: role, AddedBy: actor, AddedAt: s.now().Truncate(time.Microsecond)})
+		t.Version++
+		return s.event(v, "team.member.added", actor, user, map[string]any{"team_id": teamID, "role": role})
+	})
+}
+
+func (s *Store) RemoveTeamMember(id, teamID, actor, user string, expected int) (Organization, error) {
+	return s.mutate(id, func(v *Organization) error {
+		if !HasRole(*v, actor, "owner") {
+			return ErrNotFound
+		}
+		i := teamIndex(v, teamID)
+		if i < 0 {
+			return ErrNotFound
+		}
+		t := &v.Teams[i]
+		if t.Version != expected {
+			return ErrConflict
+		}
+		for j, m := range t.Members {
+			if m.UserID == user {
+				t.Members = append(t.Members[:j], t.Members[j+1:]...)
+				t.Version++
+				return s.event(v, "team.member.removed", actor, user, map[string]any{"team_id": teamID})
+			}
+		}
+		return nil
+	})
+}
+
+func (s *Store) AddResponsibility(id, teamID, actor, repositoryID, area, description string, expected int, coordinate func(func() error) error) (Organization, error) {
+	area, ok := clean(area, 100)
+	if !ok || !validID(repositoryID) || len(description) > 1000 {
+		return Organization{}, ErrInvalid
+	}
+	var out Organization
+	err := s.locked(func() error {
+		v, err := s.Get(id)
+		if err != nil {
+			return err
+		}
+		if !HasRole(v, actor, "owner") {
+			return ErrNotFound
+		}
+		i := teamIndex(&v, teamID)
+		if i < 0 {
+			return ErrNotFound
+		}
+		t := &v.Teams[i]
+		if t.Version != expected {
+			return ErrConflict
+		}
+		if coordinate == nil {
+			return ErrInvalid
+		}
+		return coordinate(func() error {
+			rid, e := newID()
+			if e != nil {
+				return e
+			}
+			t.Responsibilities = append(t.Responsibilities, Responsibility{ID: rid, RepositoryID: repositoryID, Area: area, Description: strings.TrimSpace(description), AddedBy: actor, AddedAt: s.now().Truncate(time.Microsecond)})
+			t.Version++
+			if e = s.event(&v, "team.responsibility.added", actor, rid, map[string]any{"team_id": teamID, "repository_id": repositoryID, "area": area}); e != nil {
+				return e
+			}
+			if e = s.write(v); e != nil {
+				return e
+			}
+			out = v
+			return nil
+		})
+	})
+	return out, err
+}
+
+func normalizeList(values []string, validate func(string) bool) ([]string, bool) {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, x := range values {
+		x = strings.TrimSpace(x)
+		if !validate(x) {
+			return nil, false
+		}
+		if !seen[x] {
+			seen[x] = true
+			out = append(out, x)
+		}
+	}
+	sort.Strings(out)
+	return out, true
+}
+
+func (s *Store) RegisterAgent(id, actor, name, slug, description, visibility string, capabilities, operators, teamIDs []string) (Organization, error) {
+	name, ok := clean(name, 100)
+	caps, cok := normalizeList(capabilities, func(x string) bool { _, yes := clean(x, 100); return yes })
+	ops, ook := normalizeList(operators, validID)
+	teams, tok := normalizeList(teamIDs, validID)
+	if !ok || !cok || !ook || !tok || len(caps) == 0 || len(ops) == 0 || !validSlug(slug) || !validVisibility(visibility) || len(description) > 1000 {
+		return Organization{}, ErrInvalid
+	}
+	return s.mutate(id, func(v *Organization) error {
+		if !HasRole(*v, actor, "owner") {
+			return ErrNotFound
+		}
+		for _, a := range v.Agents {
+			if a.Slug == strings.ToLower(strings.TrimSpace(slug)) {
+				return ErrConflict
+			}
+		}
+		for _, op := range ops {
+			if !HasRole(*v, op, "") {
+				return ErrInvalid
+			}
+		}
+		for _, tid := range teams {
+			if teamIndex(v, tid) < 0 {
+				return ErrInvalid
+			}
+		}
+		aid, e := newID()
+		if e != nil {
+			return e
+		}
+		v.Agents = append(v.Agents, Agent{ID: aid, Name: name, Slug: strings.ToLower(strings.TrimSpace(slug)), Description: strings.TrimSpace(description), Visibility: visibility, Capabilities: caps, OperatorIDs: ops, TeamIDs: teams, Version: 1, RegisteredBy: actor, RegisteredAt: s.now().Truncate(time.Microsecond)})
+		return s.event(v, "agent.registered", actor, aid, map[string]any{"operators": ops, "capabilities": caps})
+	})
+}
+
+type EffectiveMember struct {
+	UserID       string `json:"user_id"`
+	Role         string `json:"role"`
+	Reason       string `json:"reason"`
+	SourceTeamID string `json:"source_team_id"`
+}
+type TeamDirectory struct {
+	Team             Team              `json:"team"`
+	EffectiveMembers []EffectiveMember `json:"effective_members"`
+}
+type Directory struct {
+	OrganizationID string          `json:"organization_id"`
+	Name           string          `json:"name"`
+	Slug           string          `json:"slug"`
+	Teams          []TeamDirectory `json:"teams"`
+	Agents         []Agent         `json:"agents"`
+	Events         []Event         `json:"events,omitempty"`
+}
+
+func ProjectDirectory(v Organization, member bool, publicRepositories map[string]bool) Directory {
+	visible := map[string]bool{}
+	for _, t := range v.Teams {
+		if member || t.Visibility == "public" {
+			visible[t.ID] = true
+		}
+	}
+	out := Directory{OrganizationID: v.ID, Name: v.Name, Slug: v.Slug, Teams: []TeamDirectory{}, Agents: []Agent{}}
+	for _, t := range v.Teams {
+		if !visible[t.ID] {
+			continue
+		}
+		copy := t
+		if !member && !visible[copy.ParentID] {
+			copy.ParentID = ""
+		}
+		if !member {
+			rs := []Responsibility{}
+			for _, r := range copy.Responsibilities {
+				if publicRepositories[r.RepositoryID] {
+					rs = append(rs, r)
+				}
+			}
+			copy.Responsibilities = rs
+		} else {
+			rs := []Responsibility{}
+			for _, r := range copy.Responsibilities {
+				if publicRepositories[r.RepositoryID] {
+					rs = append(rs, r)
+				}
+			}
+			copy.Responsibilities = rs
+		}
+		effective := []EffectiveMember{}
+		seen := map[string]bool{}
+		var add func(string, string)
+		add = func(id, reason string) {
+			for _, candidate := range v.Teams {
+				if candidate.ID == id {
+					for _, m := range candidate.Members {
+						if !seen[m.UserID] {
+							seen[m.UserID] = true
+							effective = append(effective, EffectiveMember{UserID: m.UserID, Role: m.Role, Reason: reason, SourceTeamID: candidate.ID})
+						}
+					}
+				}
+			}
+			for _, child := range v.Teams {
+				if child.ParentID == id && (member || child.Visibility == "public") {
+					add(child.ID, "nested team "+child.Name)
+				}
+			}
+		}
+		add(t.ID, "direct membership")
+		out.Teams = append(out.Teams, TeamDirectory{Team: copy, EffectiveMembers: effective})
+	}
+	for _, a := range v.Agents {
+		if member || a.Visibility == "public" {
+			if !member {
+				filtered := []string{}
+				for _, id := range a.TeamIDs {
+					if visible[id] {
+						filtered = append(filtered, id)
+					}
+				}
+				a.TeamIDs = filtered
+			}
+			out.Agents = append(out.Agents, a)
+		}
+	}
+	if member {
+		out.Events = v.Events
+	}
+	return out
 }
 func (s *Store) RequestTransfer(id, repositoryID, owner string) (Organization, error) {
 	if !validID(repositoryID) {

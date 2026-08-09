@@ -74,7 +74,16 @@ whenever dependencies change or the web job fails before it starts.
   while `organization_id` associates it with the group portfolio; organization
   membership is projected as distinguishable collaborator access so removing a
   member does not erase an independent grant that predates the transfer.
-  `$ORGANIZATION_STORAGE_ROOT` defaults to `organizations`. Proposal discovery
+  `$ORGANIZATION_STORAGE_ROOT` defaults to `organizations`. Nested teams retain
+  version-guarded member/maintainer roles and repository responsibility, while
+  effective membership explains direct or visible-child inheritance. Approved
+  agent identities expose capabilities, current member operators, visibility,
+  and team associations but grant no repository authority. Public directory
+  reads omit organization-only structure, private-repository responsibility,
+  hidden parent links, and audit events; pending invitees receive only their
+  invitation. Responsibility publication holds the repository catalog boundary
+  through its organization write, and directory reads revalidate current
+  portfolio membership. Members receive the attributable event history. Proposal discovery
   at `/proposals` aggregates the authenticated
   actor's repository catalog and provides repository, status, and text filters;
   durable conversations use `/proposals/{repository-id}/{proposal-id}` for

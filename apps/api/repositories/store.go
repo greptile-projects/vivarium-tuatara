@@ -134,6 +134,25 @@ func (s *Store) ListOrganization(organizationID string) ([]Repository, error) {
 	return result, nil
 }
 
+// WithOrganization holds the catalog mutation boundary while verifying that
+// an exact repository still belongs to an organization and publishing a
+// coordinated record in another store. Callers must acquire their own store
+// lock first, matching organization-transfer lock ordering.
+func (s *Store) WithOrganization(id, organizationID string, publish func() error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	repository, err := s.read(id)
+	if err != nil || repository.OrganizationID != organizationID {
+		return ErrNotFound
+	}
+	return publish()
+}
+
 type BranchCheckRequirements struct {
 	Branch string   `json:"branch"`
 	Checks []string `json:"checks"`

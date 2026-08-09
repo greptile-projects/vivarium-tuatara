@@ -1052,3 +1052,13 @@ to packages, active proposals and pull requests, releases, and unresolved
 incidents without copying those authoritative records. Durable group,
 invitation, and transfer state defaults to `$ORGANIZATION_STORAGE_ROOT`
 (`organizations`).
+
+Organizations also retain nested teams, direct member and maintainer roles,
+repository areas of responsibility, and approved agent identities. Every team
+mutation uses its visible version as a compare-and-swap guard and appends an
+actor-stamped event. Effective membership explains whether participation is
+direct or inherited from a visible child team. Agent approval publishes
+capabilities, current member operators, and team associations but grants no
+credential or repository access. Public directory reads show only public teams
+and agents and public-repository responsibility; accepted members see the full
+organization-visible structure and attribution timeline.
