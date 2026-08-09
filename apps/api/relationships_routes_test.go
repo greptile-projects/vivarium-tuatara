@@ -93,7 +93,7 @@ func TestAnonymousGraphDoesNotExposePrivateProviderRelationship(t *testing.T) {
 	}
 }
 
-func TestRelationshipGraphUsesLatestEnvironmentDeployment(t *testing.T) {
+func TestRelationshipGraphUsesLatestSuccessfulEnvironmentDeployment(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	identities, _ := users.New(t.TempDir())
 	credentials, _ := auth.New(t.TempDir())
@@ -128,7 +128,7 @@ func TestRelationshipGraphUsesLatestEnvironmentDeployment(t *testing.T) {
 		t.Fatal(err)
 	}
 	definition := deployments.RolloutDefinition{Version: 1, Stages: []deployments.RolloutStage{{Name: "all", Signals: []deployments.HealthSignal{{Name: "health", Command: "true"}}}}}
-	deploy := func(release releases.Candidate, commit storage.ObjectID, marker string) {
+	deploy := func(release releases.Candidate, commit storage.ObjectID, marker, state string) {
 		promotion, createErr := deploymentStore.CreatePromotion(deployments.Promotion{RepositoryID: consumer.ID, EnvironmentID: environment.ID, ReleaseID: release.ID, BuildID: strings.Repeat(marker, 32), ArtifactID: strings.Repeat(marker, 32), ArtifactSHA256: strings.Repeat(marker, 64), CommitID: string(commit), Rollout: definition, InitiatedBy: owner.User.ID})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -137,20 +137,26 @@ func TestRelationshipGraphUsesLatestEnvironmentDeployment(t *testing.T) {
 		if claimErr != nil {
 			t.Fatal(claimErr)
 		}
-		if _, completeErr := deploymentStore.Complete(consumer.ID, claimed.ID, owner.User.ID, "succeeded", "done"); completeErr != nil {
+		if _, completeErr := deploymentStore.Complete(consumer.ID, claimed.ID, owner.User.ID, state, "done"); completeErr != nil {
 			t.Fatal(completeErr)
 		}
 	}
-	deploy(consumerReleaseA, commitA, "a")
+	deploy(consumerReleaseA, commitA, "a", "succeeded")
 	_, err = relationshipStore.CreateDependency(relationships.Dependency{RepositoryID: consumer.ID, CommitID: string(commitA), ReleaseID: consumerReleaseA.ID, EnvironmentID: environment.ID, ProviderRepositoryID: provider.ID, InterfaceName: "events", Constraint: "*", DeclaredBy: owner.User.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	deploy(consumerReleaseB, commitB, "b")
+	deploy(consumerReleaseB, commitB, "b", "failed")
 	response := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+consumer.ID+"/relationships", "", owner.Credential.Token, http.StatusOK)
 	var graph struct {
 		Dependencies []dependencyEdge `json:"dependencies"`
 	}
+	decodeResponse(t, response, &graph)
+	if len(graph.Dependencies) != 1 || graph.Dependencies[0].State != "resolved" {
+		t.Fatalf("failed replacement changed active deployment graph = %#v", graph)
+	}
+	deploy(consumerReleaseB, commitB, "c", "succeeded")
+	response = authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+consumer.ID+"/relationships", "", owner.Credential.Token, http.StatusOK)
 	decodeResponse(t, response, &graph)
 	if len(graph.Dependencies) != 1 || graph.Dependencies[0].State != "stale" {
 		t.Fatalf("superseded deployment graph = %#v", graph)

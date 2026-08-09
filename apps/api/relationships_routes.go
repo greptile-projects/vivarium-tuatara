@@ -274,12 +274,12 @@ func dependencyStaleReason(value relationships.Dependency, releaseStore *release
 		}
 		var latest *deployments.Promotion
 		for _, p := range promotions {
-			if p.EnvironmentID == value.EnvironmentID {
+			if p.EnvironmentID == value.EnvironmentID && p.State == "succeeded" {
 				candidate := p
 				latest = &candidate
 			}
 		}
-		if latest == nil || latest.State != "succeeded" || latest.CommitID != value.CommitID || (value.ReleaseID != "" && latest.ReleaseID != value.ReleaseID) {
+		if latest == nil || latest.CommitID != value.CommitID || (value.ReleaseID != "" && latest.ReleaseID != value.ReleaseID) {
 			return "the environment is not currently running the declared revision"
 		}
 	}

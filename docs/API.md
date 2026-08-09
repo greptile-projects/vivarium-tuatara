@@ -875,8 +875,9 @@ and `dependencies` visible to the caller. It derives every dependency's
 `resolved`, `stale`, or `unresolved` state on read. Resolution names the newest
 visible non-stale interface satisfying the constraint. Missing or mismatched
 release records, removed environments, and environments without a successful
-latest deployment of the declared exact revision are reported with explicit
-reasons.
+active deployment of the declared exact revision are reported with explicit
+reasons. Failed, canceled, or superseded attempts do not replace the newest
+successful deployment as the environment's active evidence.
 Private repository identities and edges are omitted unless the caller still
 has repository access. Records live beneath `RELATIONSHIP_STORAGE_ROOT`, which
 defaults to `relationships`.
