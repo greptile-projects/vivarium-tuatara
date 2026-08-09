@@ -30,6 +30,14 @@ consumer owner can open an urgent ordinary proposal and
 task for the replacement, assigning it to a current human participant or a
 task-scoped agent at the consumer's exact default-branch revision; checks,
 review, integration, release, and deployment authority remain consumer-owned.
+The connected package browser journey exercises the whole boundary: a publisher
+creates checksum-attested releases, an independent consumer installs through a
+repository-scoped bearer token using `curl`, and branch-bound agent updates pass
+independent review before exact-inventory releases reach production. When the
+adopted version is quarantined, new scoped downloads fail while the retained
+deployment remains visible; urgent agent repair then returns through ordinary
+review, release, and deployment with remediation projected on the unsafe
+version's consumer evidence.
 
 ## Incident response
 
