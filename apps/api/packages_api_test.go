@@ -59,6 +59,17 @@ func TestRepositoryPackageCredentialCannotReadUnrelatedPrivatePackage(t *testing
 	}
 }
 
+func TestVersionMatchingPreservesPrereleaseBoundaries(t *testing.T) {
+	for _, constraint := range []string{"1.2.3", "=1.2.3", "^1.2.0", "~1.2.3", ">=1.2.3", "*"} {
+		if versionMatches("1.2.3-rc.1", constraint) {
+			t.Fatalf("prerelease matched stable constraint %q", constraint)
+		}
+	}
+	if !versionMatches("1.2.3-rc.1", "=1.2.3-rc.1") || compareVersion("1.2.3-rc.1", "1.2.3") >= 0 || compareVersion("1.2.3-rc.2", "1.2.3-rc.1") <= 0 {
+		t.Fatal("prerelease ordering or explicit matching is incorrect")
+	}
+}
+
 func TestOwnerPublishesVerifiedPackageAndContributorCannot(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	identities, _ := users.New(t.TempDir())

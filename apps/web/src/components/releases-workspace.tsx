@@ -15,6 +15,7 @@ import {
 import { useAuth } from "./auth";
 import { Badge, Button, Card } from "./ui";
 import { DeploymentWorkspace } from "./deployment-workspace";
+import { PackageArtifactDownload } from "./package-artifact-download";
 
 export function ReleasesWorkspace({ repositoryID }: { repositoryID: string }) {
   const { token, user, loading: authLoading } = useAuth();
@@ -606,7 +607,7 @@ export function ReleaseDetail({
                 </p>
                 <code className="mt-2 block break-all text-xs">sha256:{item.sha256}</code>
                 <p className="mt-2 text-xs text-[var(--muted)]">Attested by {item.build_attestation.step} attempt {item.build_attestation.attempt} in {item.build_attestation.image}</p>
-                <a className="mt-2 inline-block text-sm font-semibold text-[var(--brand)] hover:underline" href={`/api/packages/${item.name}/versions/${encodeURIComponent(item.version)}/artifact`}>Download verified artifact</a>
+                <div className="mt-2"><PackageArtifactDownload name={item.name} version={item.version} /></div>
                 {item.dependencies.length > 0 && <p className="mt-2 text-xs text-[var(--muted)]">Dependencies: {item.dependencies.map((dependency) => `${dependency.name} ${dependency.constraint}`).join(", ")}</p>}
               </div>
             ))}

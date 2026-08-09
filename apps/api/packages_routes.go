@@ -359,7 +359,7 @@ func compatiblePlatform(platform packages.Platform, osName, architecture, runtim
 func versionParts(version string) ([3]int, bool) {
 	var result [3]int
 	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
-	version = strings.SplitN(version, "-", 2)[0]
+	version = strings.SplitN(strings.SplitN(version, "+", 2)[0], "-", 2)[0]
 	parts := strings.Split(version, ".")
 	if len(parts) == 0 || len(parts) > 3 {
 		return result, false
@@ -372,6 +372,16 @@ func versionParts(version string) ([3]int, bool) {
 		result[index] = value
 	}
 	return result, true
+}
+
+func prereleaseParts(version string) []string {
+	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
+	version = strings.SplitN(version, "+", 2)[0]
+	_, prerelease, found := strings.Cut(version, "-")
+	if !found || prerelease == "" {
+		return nil
+	}
+	return strings.Split(prerelease, ".")
 }
 
 func compareVersion(left, right string) int {
@@ -388,6 +398,36 @@ func compareVersion(left, right string) int {
 			return 1
 		}
 	}
+	lPre, rPre := prereleaseParts(left), prereleaseParts(right)
+	if len(lPre) == 0 && len(rPre) > 0 {
+		return 1
+	}
+	if len(lPre) > 0 && len(rPre) == 0 {
+		return -1
+	}
+	for index := 0; index < len(lPre) && index < len(rPre); index++ {
+		lNumber, lErr := strconv.Atoi(lPre[index])
+		rNumber, rErr := strconv.Atoi(rPre[index])
+		switch {
+		case lErr == nil && rErr == nil && lNumber != rNumber:
+			if lNumber < rNumber {
+				return -1
+			}
+			return 1
+		case lErr == nil && rErr != nil:
+			return -1
+		case lErr != nil && rErr == nil:
+			return 1
+		case lPre[index] != rPre[index]:
+			return strings.Compare(lPre[index], rPre[index])
+		}
+	}
+	if len(lPre) < len(rPre) {
+		return -1
+	}
+	if len(lPre) > len(rPre) {
+		return 1
+	}
 	return 0
 }
 
@@ -396,11 +436,16 @@ func compareVersion(left, right string) int {
 func versionMatches(version, constraint string) bool {
 	constraint = strings.TrimSpace(constraint)
 	if constraint == "" || constraint == "*" {
-		return true
+		return len(prereleaseParts(version)) == 0
 	}
 	actual, ok := versionParts(version)
 	if !ok {
 		return version == constraint
+	}
+	// Stable constraints never opt into prerelease artifacts. A prerelease is
+	// eligible only when the caller names a prerelease in the constraint.
+	if len(prereleaseParts(version)) > 0 && len(prereleaseParts(strings.TrimLeft(constraint, "^~<>= "))) == 0 {
+		return false
 	}
 	if strings.HasPrefix(constraint, "^") || strings.HasPrefix(constraint, "~") {
 		kind := constraint[0]
