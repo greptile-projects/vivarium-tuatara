@@ -1125,8 +1125,10 @@ documents. All routes require an authenticated credential with
   `vivarium-security/*` branch and returns a revocable, exact-branch Git
   credential. Session comments, reviews, completion, and revocation stay inside
   the advisory; completion verifies the live tip descends from the frozen base.
-  Launch and mutation authority is checked against the task repository (or the
-  exact assignee/initiator), never ownership of a different affected repository.
+  Assignment and launch require current participation in the task repository;
+  response-team membership alone grants no Git access. Mutation authority is
+  checked against the task repository or exact worker/initiator, never ownership
+  of a different affected repository.
   Revocation removes the isolated ref so an open task can start a fresh session.
 
 A report is discoverable only by its reporter, current owners of affected

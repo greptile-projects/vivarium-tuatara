@@ -393,6 +393,10 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 			writeAPIError(w, 422, "invalid_repair_task", "assignee must be on the response team")
 			return
 		}
+		if !repositoryParticipant(in.AssigneeID, in.RepositoryID) {
+			writeAPIError(w, 422, "invalid_repair_task", "assignee must currently participate in the repair repository")
+			return
+		}
 		repository, e := gitStore.Open(in.RepositoryID)
 		if e != nil {
 			writeAPIError(w, 422, "invalid_repair_task", "repair repository is unavailable")
@@ -424,8 +428,8 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 			writeAPIError(w, 404, "repair_task_not_found", "repair task not found")
 			return
 		}
-		if actor.UserID != task.AssigneeID && !repositoryParticipant(actor.UserID, task.RepositoryID) {
-			writeAPIError(w, 403, "repair_assignee_required", "only the assignee or a participant in the repair repository may start work")
+		if !repositoryParticipant(actor.UserID, task.RepositoryID) {
+			writeAPIError(w, 403, "repair_assignee_required", "repair access requires current participation in the task repository")
 			return
 		}
 		var in struct {

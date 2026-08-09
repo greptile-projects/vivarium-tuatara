@@ -59,6 +59,7 @@ func TestPrivateSecurityReportTriageAndBoundedAccess(t *testing.T) {
 	response = authenticatedRequest(t, http.MethodPatch, server.URL+"/security-advisories/"+advisory.ID, `{"expected_version":1,"severity":"critical","embargo_state":"embargoed"}`, owner.Credential.Token, http.StatusOK)
 	decodeResponse(t, response, &advisory)
 	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/responders", `{"user_id":"`+responder.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/collaborators", `{"user_id":"`+responder.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
 	bare, err := gitStore.Open(repository.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -189,10 +190,13 @@ func TestRepairSessionAuthorizationIsRepositorySpecific(t *testing.T) {
 	decodeResponse(t, response, &advisory)
 	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/responders", `{"user_id":"`+assignee.User.ID+`"}`, ownerA.Credential.Token, http.StatusCreated).Body.Close()
 	taskBody := `{"repository_id":"` + repositoryB.ID + `","version_line":"2.x","title":"Repair private B","mandate":"Fix B.","base_commit_id":"` + string(baseB) + `","assignee_id":"` + assignee.User.ID + `","assignee_kind":"human","dependency_task_ids":[]}`
+	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-tasks", taskBody, ownerA.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repositoryB.ID+"/collaborators", `{"user_id":"`+assignee.User.ID+`"}`, ownerB.Credential.Token, http.StatusCreated).Body.Close()
 	response = authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-tasks", taskBody, ownerA.Credential.Token, http.StatusCreated)
 	var task struct {
 		RepairTask securityadvisories.RepairTask `json:"repair_task"`
 	}
 	decodeResponse(t, response, &task)
 	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-tasks/"+task.RepairTask.ID+"/sessions", `{"expires_in":300}`, ownerA.Credential.Token, http.StatusForbidden).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-tasks/"+task.RepairTask.ID+"/sessions", `{"expires_in":300}`, assignee.Credential.Token, http.StatusCreated).Body.Close()
 }

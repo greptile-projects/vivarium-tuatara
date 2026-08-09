@@ -329,8 +329,9 @@ whenever dependencies change or the web job fails before it starts.
   Response-team repair tasks freeze affected version lines, verified bases,
   human or agent assignees, and same-advisory cross-repository dependencies.
   Sessions use hidden `vivarium-security/*` refs and exact-branch revocable Git
-  access; only the assignee or a participant in that task's repository may
-  launch or control one. Revocation removes the branch before the open task can
+  access; assignment and launch both require current participation in that
+  task's repository, while session control remains worker/initiator/repository-
+  participant scoped. Revocation removes the branch before the open task can
   restart. Protected commits, comments, and reviews remain advisory-only.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
