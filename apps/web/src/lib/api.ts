@@ -69,6 +69,13 @@ export type DependencyInventory = {
   builds: { id: string; state: string; artifact_id?: string }[];
   deployments: { id: string; environment_id: string; release_id: string; artifact_id: string; state: string; current: boolean }[];
 };
+export type PackageUpdate = {
+  id: string; repository_id: string; package_name: string; from_version: string; to_version: string; base_commit: string; proposal_id: string; task_id: string;
+  manifest: { version: number; dependencies: { name: string; constraint: string }[]; lock: { name: string; version: string }[] };
+  release_notes: string; compatibility_evidence: { step: string; image: string; command: string; attempt: number; state: string };
+  affected_dependency_paths: string[]; created_by: string; created_at: string;
+};
+export type PackageUpdatePolicy = { repository_id: string; package_name: string; strategy: "patch" | "minor" | "major"; action: "proposal"; updated_by: string; updated_at: string };
 export type InterfacePublication = {
   id: string;
   repository_id: string;

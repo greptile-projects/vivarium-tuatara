@@ -17,6 +17,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
@@ -69,6 +70,67 @@ func TestVersionMatchingPreservesPrereleaseBoundaries(t *testing.T) {
 	}
 	if !versionMatches("1.2.3-rc.1", "=1.2.3-rc.1") || compareVersion("1.2.3-rc.1", "1.2.3") >= 0 || compareVersion("1.2.3-rc.2", "1.2.3-rc.1") <= 0 {
 		t.Fatal("prerelease ordering or explicit matching is incorrect")
+	}
+}
+
+func TestPackageUpdateScanOpensAttributableOrdinaryWork(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	proposalStore, _ := proposals.New(t.TempDir())
+	buildStore, _ := checkruns.New(t.TempDir())
+	releaseStore, _ := releases.New(t.TempDir())
+	packageStore, _ := packages.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, proposalStore, nil, nil, nil, buildStore, releaseStore, packageStore))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "update-owner")
+	var consumer, publisher repositories.Repository
+	decodeResponse(t, authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"consumer"}`, owner.Credential.Token, http.StatusCreated), &consumer)
+	decodeResponse(t, authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"publisher"}`, owner.Credential.Token, http.StatusCreated), &publisher)
+	repo, _ := gitStore.Open(consumer.ID)
+	manifest, _ := repo.WriteObject(storage.BlobObject, []byte(`{"version":1,"dependencies":[{"name":"core-kit","constraint":"^1.0.0"}],"lock":[{"name":"core-kit","version":"1.0.0"}]}`))
+	configTree := writeTestTree(t, repo, testTreeEntry{mode: "100644", name: "packages.json", id: manifest})
+	root := writeTestTree(t, repo, testTreeEntry{mode: "40000", name: ".vivarium", id: configTree})
+	commit := writeTestCommit(t, repo, root, nil, 1700000000, "locked dependency")
+	if err := repo.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(commit)}); err != nil {
+		t.Fatal(err)
+	}
+	for versionIndex, version := range []string{"1.0.0", "1.2.0", "2.0.0"} {
+		marker := string(rune('1' + versionIndex))
+		release, err := releaseStore.Create(releases.Candidate{RepositoryID: publisher.ID, Version: "v" + version, Notes: "Notes for " + version, CommitID: strings.Repeat(marker, 40), CreatedBy: owner.User.ID, Inclusions: releases.Inclusion{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := []byte(version)
+		sum := sha256.Sum256(body)
+		_, err = packageStore.Publish(packages.Version{Name: "core-kit", Version: version, RepositoryID: publisher.ID, ReleaseID: release.ID, SourceCommit: release.CommitID, BuildID: strings.Repeat(marker, 32), BuildAttestation: packages.BuildAttestation{Step: "compatibility", Image: "alpine:3.22", Command: "go test ./...", Attempt: 1, State: "succeeded"}, ArtifactID: strings.Repeat(string(rune('5'+versionIndex)), 32), ArtifactPath: "core.tgz", Size: int64(len(body)), SHA256: hex.EncodeToString(sum[:]), PublisherID: owner.User.ID, Visibility: "public"}, bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+consumer.ID+"/dependency-inventories", `{"commit_id":"`+string(commit)+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPut, server.URL+"/repositories/"+consumer.ID+"/package-update-policies/core-kit", `{"strategy":"minor","action":"proposal"}`, owner.Credential.Token, http.StatusOK).Body.Close()
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+consumer.ID+"/package-updates/scan", `{}`, owner.Credential.Token, http.StatusOK)
+	var result struct {
+		Updates []packages.Update `json:"updates"`
+	}
+	decodeResponse(t, response, &result)
+	if len(result.Updates) != 1 || result.Updates[0].FromVersion != "1.0.0" || result.Updates[0].ToVersion != "1.2.0" || result.Updates[0].Manifest.Lock[0].Version != "1.2.0" || result.Updates[0].CreatedBy != owner.User.ID {
+		t.Fatalf("updates = %#v", result.Updates)
+	}
+	proposal, err := proposalStore.Get(consumer.ID, result.Updates[0].ProposalID)
+	if err != nil || !strings.Contains(proposal.Body, "Affected dependency paths") {
+		t.Fatalf("proposal = %#v, err = %v", proposal, err)
+	}
+	tasks, _ := proposalStore.ListTasks(consumer.ID, proposal.ID)
+	if len(tasks) != 1 || tasks[0].ID != result.Updates[0].TaskID {
+		t.Fatalf("tasks = %#v", tasks)
+	}
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+consumer.ID+"/package-updates/scan", `{}`, owner.Credential.Token, http.StatusOK)
+	decodeResponse(t, response, &result)
+	if len(result.Updates) != 1 {
+		t.Fatalf("retry updates = %#v", result.Updates)
 	}
 }
 

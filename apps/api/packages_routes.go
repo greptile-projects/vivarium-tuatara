@@ -16,6 +16,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
@@ -52,7 +53,7 @@ func projectPackageDeployments(promotions []deployments.Promotion, releaseIDs ma
 	return result
 }
 
-func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoryStore *repositories.Store, releaseStore *releases.Store, buildStore *checkruns.Store, deploymentStore *deployments.Store, packageStore *packages.Store, authStore *auth.Store) {
+func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoryStore *repositories.Store, proposalStore *proposals.Store, releaseStore *releases.Store, buildStore *checkruns.Store, deploymentStore *deployments.Store, packageStore *packages.Store, authStore *auth.Store) {
 	mux.HandleFunc("POST /repositories/{id}/releases/{release_id}/packages", func(w http.ResponseWriter, r *http.Request) {
 		actor, owner, ok := authorizeRepositoryParticipant(w, r, repositoryStore, authStore, r.PathValue("id"), "repositories:write")
 		if !ok {
@@ -526,6 +527,170 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 		}
 		writeJSON(w, 200, map[string]any{"packages": items})
 	})
+	mux.HandleFunc("PUT /repositories/{id}/package-update-policies/{name}", func(w http.ResponseWriter, r *http.Request) {
+		actor, owner, ok := authorizeRepositoryParticipant(w, r, repositoryStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if !owner {
+			writeAPIError(w, 403, "package_update_policy_forbidden", "only the repository owner can define package update policy")
+			return
+		}
+		var input struct {
+			Strategy string `json:"strategy"`
+			Action   string `json:"action"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		created, err := packageStore.PutUpdatePolicy(packages.UpdatePolicy{RepositoryID: r.PathValue("id"), PackageName: r.PathValue("name"), Strategy: input.Strategy, Action: input.Action, UpdatedBy: actor.UserID})
+		if err != nil {
+			writeAPIError(w, 422, "invalid_package_update_policy", "strategy must be patch, minor, or major and action must be proposal")
+			return
+		}
+		writeJSON(w, 200, created)
+	})
+	mux.HandleFunc("GET /repositories/{id}/package-updates", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoryStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		policies, err := packageStore.ListUpdatePolicies(r.PathValue("id"))
+		if err != nil {
+			writeAPIError(w, 500, "package_update_read_failed", "update policies could not be read")
+			return
+		}
+		updates, err := packageStore.ListUpdates(r.PathValue("id"))
+		if err != nil {
+			writeAPIError(w, 500, "package_update_read_failed", "updates could not be read")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"policies": policies, "updates": updates})
+	})
+	mux.HandleFunc("POST /repositories/{id}/package-updates/scan", func(w http.ResponseWriter, r *http.Request) {
+		actor, owner, ok := authorizeRepositoryParticipant(w, r, repositoryStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if !owner {
+			writeAPIError(w, 403, "package_update_forbidden", "only the repository owner can open automated adoption work")
+			return
+		}
+		if proposalStore == nil {
+			writeAPIError(w, 503, "package_update_unavailable", "proposal collaboration is unavailable")
+			return
+		}
+		catalog, err := repositoryStore.GetByID(r.PathValue("id"))
+		if err != nil {
+			writeAPIError(w, 404, "repository_not_found", "repository not found")
+			return
+		}
+		repo, err := gitStore.Open(catalog.ID)
+		if err != nil {
+			writeAPIError(w, 500, "package_update_failed", "repository storage is unavailable")
+			return
+		}
+		ref, err := repo.ReadReference("refs/heads/" + catalog.DefaultBranch)
+		if err != nil {
+			writeAPIError(w, 409, "package_update_failed", "default branch has no verified dependency manifest")
+			return
+		}
+		inventory, err := packageStore.GetInventory(catalog.ID, ref.Target)
+		if err != nil {
+			writeAPIError(w, 409, "package_update_failed", "record the current dependency inventory before scanning")
+			return
+		}
+		commit, _ := repo.ReadCommit(storage.ObjectID(ref.Target))
+		entry, err := resolvePath(repo, commit.Tree, packages.InventoryConfigPath)
+		if err != nil {
+			writeAPIError(w, 409, "package_update_failed", "current dependency manifest is unavailable")
+			return
+		}
+		object, err := repo.ReadObject(entry.ID)
+		var config packages.InventoryConfig
+		if err != nil || json.Unmarshal(object.Content, &config) != nil {
+			writeAPIError(w, 409, "package_update_failed", "current dependency manifest is invalid")
+			return
+		}
+		policies, _ := packageStore.ListUpdatePolicies(catalog.ID)
+		versions, err := packageStore.List()
+		if err != nil {
+			writeAPIError(w, 503, "package_update_failed", "package evidence is unavailable")
+			return
+		}
+		existing, _ := packageStore.ListUpdates(catalog.ID)
+		created := []packages.Update{}
+		for _, policy := range policies {
+			var current packages.InventoryEntry
+			found := false
+			for _, value := range inventory.Entries {
+				if value.Name == policy.PackageName && value.Direct && value.Version != "" {
+					current, found = value, true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+			best := packages.Version{}
+			for _, candidate := range versions {
+				if candidate.Name != policy.PackageName || candidate.Lifecycle != "active" || !canRead(candidate, actor, true) || compareVersion(candidate.Version, current.Version) <= 0 || !updateStrategyAllows(current.Version, candidate.Version, policy.Strategy) {
+					continue
+				}
+				if best.Version == "" || compareVersion(candidate.Version, best.Version) > 0 {
+					best = candidate
+				}
+			}
+			if best.Version == "" {
+				continue
+			}
+			duplicate := false
+			for _, value := range existing {
+				if value.PackageName == policy.PackageName && value.FromVersion == current.Version && value.ToVersion == best.Version && value.BaseCommit == ref.Target {
+					duplicate = true
+					created = append(created, value)
+					break
+				}
+			}
+			if duplicate {
+				continue
+			}
+			manifest := config
+			for index := range manifest.Dependencies {
+				if manifest.Dependencies[index].Name == policy.PackageName {
+					manifest.Dependencies[index].Constraint = "^" + best.Version
+				}
+			}
+			for index := range manifest.Lock {
+				if manifest.Lock[index].Name == policy.PackageName {
+					manifest.Lock[index].Version = best.Version
+				}
+			}
+			release, _ := releaseStore.Get(best.RepositoryID, best.ReleaseID)
+			notes := release.Notes
+			if strings.TrimSpace(notes) == "" {
+				notes = best.Documentation
+			}
+			body := fmt.Sprintf("Adopt %s %s → %s from verified release `%s`.\n\nRelease notes:\n%s\n\nCompatibility evidence: successful `%s` build, image `%s`, attempt %d.\n\nAffected dependency paths:\n- %s\n\nThe proposed `.vivarium/packages.json` manifest and lock are attached to the package update record. Required checks, review, and integration policy remain authoritative.", best.Name, current.Version, best.Version, best.ReleaseID, notes, best.BuildAttestation.Step, best.BuildAttestation.Image, best.BuildAttestation.Attempt, strings.Join(current.Paths, "\n- "))
+			proposal, createErr := proposalStore.Create(catalog.ID, actor.UserID, "Update "+best.Name+" to "+best.Version, body)
+			if createErr != nil {
+				writeAPIError(w, 500, "package_update_failed", "adoption proposal could not be created")
+				return
+			}
+			task, createErr := proposalStore.CreateTask(catalog.ID, proposal.ID, actor.UserID, "Apply "+best.Name+" "+best.Version, "Update the manifest and lock exactly as proposed, investigate compatibility failures, and publish the result through ordinary review.", nil, nil)
+			if createErr != nil {
+				writeAPIError(w, 500, "package_update_failed", "adoption task could not be created")
+				return
+			}
+			update, createErr := packageStore.RecordUpdate(packages.Update{RepositoryID: catalog.ID, PackageName: best.Name, FromVersion: current.Version, ToVersion: best.Version, BaseCommit: ref.Target, ProposalID: proposal.ID, TaskID: task.ID, Manifest: manifest, ReleaseNotes: notes, Compatibility: best.BuildAttestation, AffectedPaths: current.Paths, CreatedBy: actor.UserID})
+			if createErr != nil {
+				writeAPIError(w, 500, "package_update_failed", "adoption evidence could not be recorded")
+				return
+			}
+			created = append(created, update)
+		}
+		writeJSON(w, 200, map[string]any{"updates": created})
+	})
 	read := func(w http.ResponseWriter, r *http.Request) (packages.Version, bool) {
 		item, err := packageStore.Get(r.PathValue("name"), r.PathValue("version"))
 		if errors.Is(err, packages.ErrNotFound) {
@@ -568,6 +733,21 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 		w.Header().Set("X-Checksum-Sha256", item.SHA256)
 		http.ServeContent(w, r, path.Base(item.ArtifactPath), item.PublishedAt, file)
 	})
+}
+
+func updateStrategyAllows(from, to, strategy string) bool {
+	left, lok := versionParts(from)
+	right, rok := versionParts(to)
+	if !lok || !rok {
+		return false
+	}
+	if right[0] != left[0] {
+		return strategy == "major"
+	}
+	if right[1] != left[1] {
+		return strategy == "minor" || strategy == "major"
+	}
+	return strategy == "patch" || strategy == "minor" || strategy == "major"
 }
 
 func containsString(values []string, target string) bool {
