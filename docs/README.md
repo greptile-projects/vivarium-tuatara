@@ -706,11 +706,11 @@ their owners, exact commits, releases, environments, constraints, and resolved
 version.
 
 Relationship state is derived on each read. A compatible current publication
-is `resolved`; missing or mismatched source, release, deployment, or environment
-evidence is `stale`; and a visible provider with no compatible publication (or
-an unavailable provider) is `unresolved` with a reason. Repository visibility
-is rechecked while assembling the graph, so private dependency metadata never
-becomes a cross-repository discovery side channel.
+is `resolved`; missing or mismatched source, release, latest environment
+deployment, or environment evidence is `stale`; and a visible provider with no
+compatible publication is `unresolved` with a reason. Repository visibility is
+rechecked while assembling the graph, so private provider edges and dependency
+metadata never become a cross-repository discovery side channel.
 
 ## Release candidates
 

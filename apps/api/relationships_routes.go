@@ -113,8 +113,6 @@ func registerRelationshipRoutes(mux *http.ServeMux, git *storage.Store, repos *r
 			for _, value := range values {
 				edge := dependencyEdge{Dependency: value, State: "unresolved"}
 				if _, allowed := repositoryMap[value.ProviderRepositoryID]; !allowed {
-					edge.Reason = "provider repository is unavailable"
-					dependencies = append(dependencies, edge)
 					continue
 				}
 				var match *interfaceNode
@@ -274,14 +272,15 @@ func dependencyStaleReason(value relationships.Dependency, releaseStore *release
 		if err != nil {
 			return "consumer deployment evidence is unavailable"
 		}
-		current := false
+		var latest *deployments.Promotion
 		for _, p := range promotions {
-			if p.EnvironmentID == value.EnvironmentID && p.CommitID == value.CommitID && p.State == "succeeded" && (value.ReleaseID == "" || p.ReleaseID == value.ReleaseID) {
-				current = true
+			if p.EnvironmentID == value.EnvironmentID {
+				candidate := p
+				latest = &candidate
 			}
 		}
-		if !current {
-			return "the environment has no successful deployment of the declared revision"
+		if latest == nil || latest.State != "succeeded" || latest.CommitID != value.CommitID || (value.ReleaseID != "" && latest.ReleaseID != value.ReleaseID) {
+			return "the environment is not currently running the declared revision"
 		}
 	}
 	return ""
