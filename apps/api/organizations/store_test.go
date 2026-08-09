@@ -158,3 +158,80 @@ func TestPolicyExceptionCannotWeakenStricterSiblingPolicy(t *testing.T) {
 		t.Fatalf("sibling policy was weakened: %#v", effective)
 	}
 }
+
+func TestInitiativeRetainsOrderedCrossRepositoryOwnershipAndCASUpdates(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := "0123456789abcdef0123456789abcdef"
+	member := "11111111111111111111111111111111"
+	repositoryA := "22222222222222222222222222222222"
+	repositoryB := "33333333333333333333333333333333"
+	sourceID := "44444444444444444444444444444444"
+	firstID := "55555555555555555555555555555555"
+	secondID := "66666666666666666666666666666666"
+	v, err := store.Create("Runtime", "runtime", "", owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = store.Invite(v.ID, owner, member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = store.AcceptInvitation(v.ID, v.Invitations[0].ID, member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := []InitiativeWorkItem{
+		{ID: firstID, Title: "Publish provider", RepositoryID: repositoryA, Owner: InitiativeOwner{Type: "human", ID: owner}, Status: "in_progress"},
+		{ID: secondID, Title: "Adopt consumer", RepositoryID: repositoryB, Owner: InitiativeOwner{Type: "human", ID: member}, DependencyIDs: []string{firstID}, Status: "todo", Contribution: &InitiativeSource{Kind: "proposal", RepositoryID: repositoryB, ID: sourceID}},
+	}
+	v, initiative, err := store.CreateInitiative(v.ID, owner, "Runtime v2", "Coordinate the rollout", InitiativeSource{Kind: "evolution", RepositoryID: repositoryA, ID: sourceID}, items, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initiative.Version != 1 || len(initiative.WorkItems) != 2 || initiative.WorkItems[1].Position != 2 || initiative.WorkItems[1].DependencyIDs[0] != firstID {
+		t.Fatalf("initiative graph was not retained: %#v", initiative)
+	}
+	v, err = store.UpdateInitiativeItem(v.ID, initiative.ID, firstID, member, InitiativeOwner{Type: "human", ID: member}, "completed", 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Initiatives[0].Version != 2 || v.Initiatives[0].WorkItems[0].Status != "completed" || v.Events[len(v.Events)-1].Action != "initiative.item.updated" {
+		t.Fatalf("initiative update was not attributable: %#v", v.Initiatives[0])
+	}
+	if _, err = store.UpdateInitiativeItem(v.ID, initiative.ID, firstID, owner, InitiativeOwner{Type: "human", ID: owner}, "todo", 1, nil); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale initiative update error = %v", err)
+	}
+}
+
+func TestInitiativeRejectsDependencyCycles(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := "0123456789abcdef0123456789abcdef"
+	repository := "11111111111111111111111111111111"
+	sourceID := "22222222222222222222222222222222"
+	firstID := "33333333333333333333333333333333"
+	secondID := "44444444444444444444444444444444"
+	v, err := store.Create("Runtime", "runtime", "", owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := []InitiativeWorkItem{
+		{ID: firstID, Title: "Provider", RepositoryID: repository, Owner: InitiativeOwner{Type: "human", ID: owner}, DependencyIDs: []string{secondID}, Status: "todo"},
+		{ID: secondID, Title: "Consumer", RepositoryID: repository, Owner: InitiativeOwner{Type: "human", ID: owner}, DependencyIDs: []string{firstID}, Status: "todo"},
+	}
+	if _, _, err = store.CreateInitiative(v.ID, owner, "Cyclic rollout", "", InitiativeSource{Kind: "proposal", RepositoryID: repository, ID: sourceID}, items, nil); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("cyclic initiative error = %v", err)
+	}
+	stored, err := store.Get(v.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Initiatives) != 0 {
+		t.Fatalf("cyclic initiative persisted: %#v", stored.Initiatives)
+	}
+}

@@ -32,6 +32,7 @@ export type Organization = {
   access_requests: OrganizationAccessRequest[];
   policies: OrganizationPolicy[];
   policy_exceptions: OrganizationPolicyException[];
+  initiatives: OrganizationInitiative[];
   events: OrganizationEvent[];
 };
 export type OrganizationPolicyRules = {repository_visibility?:"public"|"private";minimum_reviews?:number;required_checks?:string[];integration?:"direct"|"queue";release_provenance?:"attested";dependency_use?:"active-only"|"approved-only";promotion_approvals?:number;agent_authority?:"explicit-grants"|"disabled"};
@@ -43,6 +44,10 @@ export type OrganizationAccessRequest = {id:string;requester_id:string;principal
 export type OrganizationTeam = { id:string; name:string; slug:string; description?:string; parent_id?:string; visibility:"public"|"organization"; version:number; created_by:string; created_at:string; members:{user_id:string;role:"member"|"maintainer";added_by:string;added_at:string}[]; responsibilities:{id:string;repository_id:string;area:string;description?:string;added_by:string;added_at:string}[] };
 export type OrganizationAgent = { id:string; name:string; slug:string; description?:string; visibility:"public"|"organization"; capabilities:string[]; operator_ids:string[]; team_ids:string[]; version:number; registered_by:string; registered_at:string };
 export type OrganizationEvent = { id:string; action:string; actor_id:string; target_id?:string; created_at:string; details?:Record<string,unknown> };
+export type OrganizationInitiativeSource = {kind:"proposal"|"evolution"|"incident"|"security";repository_id?:string;id:string};
+export type OrganizationInitiativeOwner = {type:"human"|"team"|"agent";id:string};
+export type OrganizationInitiativeItem = {id:string;title:string;repository_id:string;contribution?:OrganizationInitiativeSource;owner:OrganizationInitiativeOwner;dependency_ids:string[];status:"todo"|"in_progress"|"completed";position:number;blocked?:boolean;blocker_ids?:string[];ownership_state?:"accountable"|"reassignment_required";reassignment_note?:string};
+export type OrganizationInitiative = {id:string;title:string;description?:string;source:OrganizationInitiativeSource;status:"active"|"completed";version:number;work_items:OrganizationInitiativeItem[];policy_exceptions?:OrganizationPolicyException[];upcoming_releases?:ReleaseCandidate[];created_by:string;created_at:string;updated_at:string};
 export type OrganizationDirectory = { organization_id:string; name:string; slug:string; teams:{team:OrganizationTeam;effective_members:{user_id:string;role:string;reason:string;source_team_id:string}[]}[]; agents:OrganizationAgent[]; events?:OrganizationEvent[] };
 export type OrganizationPortfolio = {
   organization: Organization;
@@ -52,6 +57,7 @@ export type OrganizationPortfolio = {
   active_pulls: PullRequest[];
   releases: ReleaseCandidate[];
   active_incidents: Incident[];
+  initiatives: OrganizationInitiative[];
 };
 export type ReleaseCandidate = {
   id: string;

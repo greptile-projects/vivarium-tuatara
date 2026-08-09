@@ -192,6 +192,43 @@ type PolicyException struct {
 	DecidedAt      *time.Time `json:"decided_at,omitempty"`
 }
 
+type InitiativeSource struct {
+	Kind         string `json:"kind"`
+	RepositoryID string `json:"repository_id,omitempty"`
+	ID           string `json:"id"`
+}
+
+type InitiativeOwner struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
+type InitiativeWorkItem struct {
+	ID            string            `json:"id"`
+	Title         string            `json:"title"`
+	RepositoryID  string            `json:"repository_id"`
+	Contribution  *InitiativeSource `json:"contribution,omitempty"`
+	Owner         InitiativeOwner   `json:"owner"`
+	DependencyIDs []string          `json:"dependency_ids"`
+	Status        string            `json:"status"`
+	Position      int               `json:"position"`
+	CreatedBy     string            `json:"created_by"`
+	CreatedAt     time.Time         `json:"created_at"`
+}
+
+type Initiative struct {
+	ID          string               `json:"id"`
+	Title       string               `json:"title"`
+	Description string               `json:"description,omitempty"`
+	Source      InitiativeSource     `json:"source"`
+	Status      string               `json:"status"`
+	Version     int                  `json:"version"`
+	WorkItems   []InitiativeWorkItem `json:"work_items"`
+	CreatedBy   string               `json:"created_by"`
+	CreatedAt   time.Time            `json:"created_at"`
+	UpdatedAt   time.Time            `json:"updated_at"`
+}
+
 type Event struct {
 	ID        string         `json:"id"`
 	Action    string         `json:"action"`
@@ -217,6 +254,7 @@ type Organization struct {
 	AccessRequests   []AccessRequest   `json:"access_requests"`
 	Policies         []Policy          `json:"policies"`
 	PolicyExceptions []PolicyException `json:"policy_exceptions"`
+	Initiatives      []Initiative      `json:"initiatives"`
 	Events           []Event           `json:"events"`
 }
 
@@ -304,7 +342,7 @@ func (s *Store) Create(name, slug, description, actor string) (Organization, err
 			return err
 		}
 		now := s.now().Truncate(time.Microsecond)
-		created = Organization{ID: id, Name: name, Slug: slug, Description: strings.TrimSpace(description), CreatedBy: actor, CreatedAt: now, Members: []Member{{UserID: actor, Role: "owner", JoinedAt: now}}, Invitations: []Invitation{}, Transfers: []Transfer{}, Teams: []Team{}, Agents: []Agent{}, AccessGrants: []AccessGrant{}, AccessRequests: []AccessRequest{}, Policies: []Policy{}, PolicyExceptions: []PolicyException{}, Events: []Event{}}
+		created = Organization{ID: id, Name: name, Slug: slug, Description: strings.TrimSpace(description), CreatedBy: actor, CreatedAt: now, Members: []Member{{UserID: actor, Role: "owner", JoinedAt: now}}, Invitations: []Invitation{}, Transfers: []Transfer{}, Teams: []Team{}, Agents: []Agent{}, AccessGrants: []AccessGrant{}, AccessRequests: []AccessRequest{}, Policies: []Policy{}, PolicyExceptions: []PolicyException{}, Initiatives: []Initiative{}, Events: []Event{}}
 		if err := s.event(&created, "organization.created", actor, id, nil); err != nil {
 			return err
 		}
@@ -342,6 +380,9 @@ func (s *Store) Get(id string) (Organization, error) {
 	}
 	if v.PolicyExceptions == nil {
 		v.PolicyExceptions = []PolicyException{}
+	}
+	if v.Initiatives == nil {
+		v.Initiatives = []Initiative{}
 	}
 	if v.Events == nil {
 		v.Events = []Event{}
@@ -1413,6 +1454,142 @@ func (s *Store) AcceptTransfer(id, transferID, actor string, apply func(Transfer
 				t.AcceptedAt = &now
 				return nil
 			}
+		}
+		return ErrNotFound
+	})
+}
+
+func validInitiativeSource(source InitiativeSource) bool {
+	if !validID(source.ID) || (source.RepositoryID != "" && !validID(source.RepositoryID)) {
+		return false
+	}
+	return slices.Contains([]string{"proposal", "evolution", "incident", "security"}, source.Kind)
+}
+
+// CreateInitiative publishes the planning map only after the caller has
+// revalidated every referenced repository and source through authoritative
+// workflow stores. Source records remain authoritative for their own state.
+func (s *Store) CreateInitiative(id, actor, title, description string, source InitiativeSource, items []InitiativeWorkItem, validate func(Organization, InitiativeSource, []InitiativeWorkItem) error) (Organization, Initiative, error) {
+	title, ok := clean(title, 200)
+	if !ok || len(description) > 2000 || !validInitiativeSource(source) || len(items) == 0 || len(items) > 100 {
+		return Organization{}, Initiative{}, ErrInvalid
+	}
+	seen := map[string]bool{}
+	for i := range items {
+		itemTitle, valid := clean(items[i].Title, 200)
+		if !valid || !validID(items[i].RepositoryID) || !slices.Contains([]string{"human", "team", "agent"}, items[i].Owner.Type) || !validID(items[i].Owner.ID) || !slices.Contains([]string{"todo", "in_progress", "completed"}, items[i].Status) {
+			return Organization{}, Initiative{}, ErrInvalid
+		}
+		items[i].Title = itemTitle
+		if items[i].ID == "" {
+			generated, err := newID()
+			if err != nil {
+				return Organization{}, Initiative{}, err
+			}
+			items[i].ID = generated
+		}
+		if !validID(items[i].ID) || seen[items[i].ID] || (items[i].Contribution != nil && !validInitiativeSource(*items[i].Contribution)) {
+			return Organization{}, Initiative{}, ErrInvalid
+		}
+		seen[items[i].ID] = true
+		items[i].Position = i + 1
+		if items[i].DependencyIDs == nil {
+			items[i].DependencyIDs = []string{}
+		}
+	}
+	for _, item := range items {
+		for _, dependencyID := range item.DependencyIDs {
+			if !seen[dependencyID] || dependencyID == item.ID {
+				return Organization{}, Initiative{}, ErrInvalid
+			}
+		}
+	}
+	dependencies := map[string][]string{}
+	for _, item := range items {
+		dependencies[item.ID] = item.DependencyIDs
+	}
+	state := map[string]uint8{}
+	var cyclic func(string) bool
+	cyclic = func(id string) bool {
+		if state[id] == 1 {
+			return true
+		}
+		if state[id] == 2 {
+			return false
+		}
+		state[id] = 1
+		for _, dependencyID := range dependencies[id] {
+			if cyclic(dependencyID) {
+				return true
+			}
+		}
+		state[id] = 2
+		return false
+	}
+	for id := range dependencies {
+		if cyclic(id) {
+			return Organization{}, Initiative{}, ErrInvalid
+		}
+	}
+	var created Initiative
+	v, err := s.mutate(id, func(v *Organization) error {
+		if !HasRole(*v, actor, "") {
+			return ErrNotFound
+		}
+		if validate != nil {
+			if err := validate(*v, source, items); err != nil {
+				return err
+			}
+		}
+		now := s.now().Truncate(time.Microsecond)
+		iid, err := newID()
+		if err != nil {
+			return err
+		}
+		for i := range items {
+			items[i].CreatedBy, items[i].CreatedAt = actor, now
+		}
+		created = Initiative{ID: iid, Title: title, Description: strings.TrimSpace(description), Source: source, Status: "active", Version: 1, WorkItems: items, CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
+		v.Initiatives = append(v.Initiatives, created)
+		return s.event(v, "initiative.created", actor, iid, map[string]any{"source_kind": source.Kind, "source_id": source.ID})
+	})
+	return v, created, err
+}
+
+func (s *Store) UpdateInitiativeItem(id, initiativeID, itemID, actor string, owner InitiativeOwner, status string, expected int, validate func(Organization, InitiativeWorkItem) error) (Organization, error) {
+	if !validID(initiativeID) || !validID(itemID) || !validID(owner.ID) || !slices.Contains([]string{"human", "team", "agent"}, owner.Type) || !slices.Contains([]string{"todo", "in_progress", "completed"}, status) {
+		return Organization{}, ErrInvalid
+	}
+	return s.mutate(id, func(v *Organization) error {
+		if !HasRole(*v, actor, "") {
+			return ErrNotFound
+		}
+		for i := range v.Initiatives {
+			initiative := &v.Initiatives[i]
+			if initiative.ID != initiativeID {
+				continue
+			}
+			if initiative.Version != expected {
+				return ErrConflict
+			}
+			for j := range initiative.WorkItems {
+				item := &initiative.WorkItems[j]
+				if item.ID != itemID {
+					continue
+				}
+				candidate := *item
+				candidate.Owner, candidate.Status = owner, status
+				if validate != nil {
+					if err := validate(*v, candidate); err != nil {
+						return err
+					}
+				}
+				item.Owner, item.Status = owner, status
+				initiative.Version++
+				initiative.UpdatedAt = s.now().Truncate(time.Microsecond)
+				return s.event(v, "initiative.item.updated", actor, itemID, map[string]any{"initiative_id": initiativeID, "owner_type": owner.Type, "owner_id": owner.ID, "status": status})
+			}
+			return ErrNotFound
 		}
 		return ErrNotFound
 	})

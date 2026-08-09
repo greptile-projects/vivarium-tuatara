@@ -74,7 +74,13 @@ whenever dependencies change or the web job fails before it starts.
   while `organization_id` associates it with the group portfolio; organization
   membership is projected as distinguishable collaborator access so removing a
   member does not erase an independent grant that predates the transfer.
-  `$ORGANIZATION_STORAGE_ROOT` defaults to `organizations`. Nested teams retain
+  `$ORGANIZATION_STORAGE_ROOT` defaults to `organizations`.
+  Portfolio initiatives retain an existing proposal, evolution, incident, or
+  authorized security source plus ordered cross-repository contributions,
+  dependencies, and accountable team/human/approved-agent ownership. Portfolio
+  reads derive blockers, policy exceptions, release candidates, and actionable
+  reassignment when live membership, agent operation, or stewardship changes.
+  Nested teams retain
   version-guarded member/maintainer roles and repository responsibility, while
   effective membership explains direct or visible-child inheritance. Approved
   agent identities expose capabilities, current member operators, visibility,

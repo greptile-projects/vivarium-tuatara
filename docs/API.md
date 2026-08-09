@@ -1424,7 +1424,25 @@ read-scoped credentials can only inspect authorized organization resources.
 
 `GET /organizations/{id}/portfolio` returns the group's repositories,
 published packages, open proposals and pulls, releases, and unresolved
-incidents. Only accepted members can read the portfolio. Records live beneath
+incidents. It also projects durable portfolio initiatives created with `POST
+/organizations/{id}/initiatives`. Each initiative names an existing proposal,
+evolution plan, incident, or authorized security advisory and retains ordered
+repository work items, optional contribution links, dependencies, and an
+accountable organization human, team, or approved agent. Creation rejects
+sources outside their authoritative store and repositories outside the current
+portfolio. Proposal and evolution sources and contribution links revalidate
+current owner/collaborator access on creation and every projection. Incident
+sources additionally require an exact affected repository;
+creation and every read revalidate that the actor remains its owner or
+collaborator, so an organization record cannot disclose a private incident.
+`PATCH
+/organizations/{id}/initiatives/{initiative-id}/items/{item-id}` compare-and-swaps
+the initiative version when changing owner or status. Portfolio reads derive
+incomplete dependency blockers, current ownership health, matching active or
+pending policy exceptions, and release candidates. Removed members/operators,
+deleted teams/agents, and transferred repositories remain on the record as
+`reassignment_required` work instead of being silently dropped. Only accepted
+members can read the portfolio. Records live beneath
 `$ORGANIZATION_STORAGE_ROOT`, which defaults to `organizations`.
 
 Owners create nested responsibility groups with `POST

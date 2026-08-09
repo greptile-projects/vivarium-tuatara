@@ -12,8 +12,10 @@ import (
 	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/relationships"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/securityadvisories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
 
@@ -84,9 +86,23 @@ type organizationPolicyExceptionInput struct {
 type organizationPolicyDecisionInput struct {
 	Decision string `json:"decision"`
 }
+type organizationInitiativeInput struct {
+	Title       string                             `json:"title"`
+	Description string                             `json:"description"`
+	Source      organizations.InitiativeSource     `json:"source"`
+	WorkItems   []organizations.InitiativeWorkItem `json:"work_items"`
+}
+type organizationInitiativeItemInput struct {
+	Owner           organizations.InitiativeOwner `json:"owner"`
+	Status          string                        `json:"status"`
+	ExpectedVersion int                           `json:"expected_version"`
+}
 
-func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, repos *repositories.Store, usersStore *users.Store, credentials *auth.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, packageStore *packages.Store, incidentStore *incidents.Store) {
+func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, repos *repositories.Store, usersStore *users.Store, credentials *auth.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, packageStore *packages.Store, incidentStore *incidents.Store, relationshipStore *relationships.Store, securityStore *securityadvisories.Store) {
 	project := func(v organizations.Organization, actor string) organizations.Organization {
+		// Initiatives are returned only through the portfolio projection, where
+		// private source authorization and live ownership can be revalidated.
+		v.Initiatives = []organizations.Initiative{}
 		if !organizations.HasRole(v, actor, "") {
 			kept := []organizations.Invitation{}
 			for _, x := range v.Invitations {
@@ -103,6 +119,7 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 			v.AccessRequests = []organizations.AccessRequest{}
 			v.Policies = []organizations.Policy{}
 			v.PolicyExceptions = []organizations.PolicyException{}
+			v.Initiatives = []organizations.Initiative{}
 			v.Events = []organizations.Event{}
 			return v
 		}
@@ -833,8 +850,252 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 				}
 			}
 		}
-		writeJSON(w, 200, map[string]any{"organization": project(v, actor.UserID), "repositories": repoItems, "packages": packageItems, "active_proposals": proposalItems, "active_pulls": pullItems, "releases": releaseItems, "active_incidents": incidentItems})
+		writeJSON(w, 200, map[string]any{"organization": project(v, actor.UserID), "repositories": repoItems, "packages": packageItems, "active_proposals": proposalItems, "active_pulls": pullItems, "releases": releaseItems, "active_incidents": incidentItems, "initiatives": projectInitiatives(v, actor.UserID, repoItems, releaseItems, repos, proposalStore, relationshipStore, incidentStore, securityStore)})
 	})
+	mux.HandleFunc("POST /organizations/{id}/initiatives", func(w http.ResponseWriter, r *http.Request) {
+		actor, group, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in organizationInitiativeInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_initiative", "initiative content is required")
+			return
+		}
+		portfolio, err := repos.ListOrganization(group.ID)
+		if writeRepositoryError(w, err) {
+			return
+		}
+		_, created, err := orgs.CreateInitiative(group.ID, actor.UserID, in.Title, in.Description, in.Source, in.WorkItems, func(current organizations.Organization, source organizations.InitiativeSource, items []organizations.InitiativeWorkItem) error {
+			validate := initiativeValidator(current, portfolio)
+			if source.RepositoryID != "" && !repositoryInOrganization(portfolio, source.RepositoryID) {
+				return organizations.ErrInvalid
+			}
+			if !initiativeSourceExists(source, actor.UserID, portfolio, repos, proposalStore, relationshipStore, incidentStore, securityStore) {
+				return organizations.ErrInvalid
+			}
+			for _, item := range items {
+				if err := validate(item); err != nil {
+					return err
+				}
+				if item.Contribution != nil && !initiativeSourceExists(*item.Contribution, actor.UserID, portfolio, repos, proposalStore, relationshipStore, incidentStore, securityStore) {
+					return organizations.ErrInvalid
+				}
+			}
+			return nil
+		})
+		if writeOrganizationError(w, err) {
+			return
+		}
+		w.Header().Set("Location", "/organizations/"+group.ID+"/initiatives/"+created.ID)
+		writeJSON(w, 201, created)
+	})
+	mux.HandleFunc("PATCH /organizations/{id}/initiatives/{initiative_id}/items/{item_id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, group, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in organizationInitiativeItemInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_initiative", "owner, status, and expected_version are required")
+			return
+		}
+		portfolio, err := repos.ListOrganization(group.ID)
+		if writeRepositoryError(w, err) {
+			return
+		}
+		v, err := orgs.UpdateInitiativeItem(group.ID, r.PathValue("initiative_id"), r.PathValue("item_id"), actor.UserID, in.Owner, in.Status, in.ExpectedVersion, func(current organizations.Organization, item organizations.InitiativeWorkItem) error {
+			return initiativeValidator(current, portfolio)(item)
+		})
+		if writeOrganizationError(w, err) {
+			return
+		}
+		writeJSON(w, 200, project(v, actor.UserID))
+	})
+}
+
+func repositoryInOrganization(items []repositories.Repository, id string) bool {
+	for _, item := range items {
+		if item.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func initiativeSourceExists(source organizations.InitiativeSource, actor string, portfolio []repositories.Repository, repositoryStore *repositories.Store, proposalStore *proposals.Store, relationshipStore *relationships.Store, incidentStore *incidents.Store, securityStore *securityadvisories.Store) bool {
+	repositoryAuthorized := func(repositoryID string) bool {
+		if repositoryStore == nil || repositoryID == "" || !repositoryInOrganization(portfolio, repositoryID) {
+			return false
+		}
+		repository, err := repositoryStore.GetByID(repositoryID)
+		if err == nil && repository.OwnerID == actor {
+			return true
+		}
+		collaborator, err := repositoryStore.HasCollaborator(actor, repositoryID)
+		return err == nil && collaborator
+	}
+	switch source.Kind {
+	case "proposal":
+		if proposalStore == nil || !repositoryAuthorized(source.RepositoryID) {
+			return false
+		}
+		_, err := proposalStore.Get(source.RepositoryID, source.ID)
+		return err == nil
+	case "evolution":
+		if relationshipStore == nil || !repositoryAuthorized(source.RepositoryID) {
+			return false
+		}
+		_, err := relationshipStore.GetEvolution(source.RepositoryID, source.ID)
+		return err == nil
+	case "incident":
+		if incidentStore == nil || !repositoryAuthorized(source.RepositoryID) {
+			return false
+		}
+		incident, err := incidentStore.Get(source.ID)
+		if err != nil {
+			return false
+		}
+		inScope := false
+		for _, scope := range incident.Scopes {
+			if scope.RepositoryID == source.RepositoryID {
+				inScope = true
+				break
+			}
+		}
+		if !inScope {
+			return false
+		}
+		return true
+	case "security":
+		if securityStore == nil {
+			return false
+		}
+		advisory, err := securityStore.Get(source.ID)
+		if err != nil {
+			return false
+		}
+		authorized := advisory.ReporterID == actor
+		for _, responder := range advisory.ResponseTeam {
+			authorized = authorized || responder == actor
+		}
+		matched := false
+		for _, affected := range advisory.AffectedRepositories {
+			if source.RepositoryID != "" && affected.RepositoryID != source.RepositoryID {
+				continue
+			}
+			matched = true
+			for _, repository := range portfolio {
+				if repository.ID == affected.RepositoryID && repository.OwnerID == actor {
+					authorized = true
+				}
+			}
+		}
+		return matched && authorized
+	}
+	return false
+}
+
+func initiativeValidator(group organizations.Organization, portfolio []repositories.Repository) func(organizations.InitiativeWorkItem) error {
+	return func(item organizations.InitiativeWorkItem) error {
+		if !repositoryInOrganization(portfolio, item.RepositoryID) {
+			return organizations.ErrInvalid
+		}
+		switch item.Owner.Type {
+		case "human":
+			if !organizations.HasRole(group, item.Owner.ID, "") {
+				return organizations.ErrInvalid
+			}
+			return nil
+		case "team":
+			for _, team := range group.Teams {
+				if team.ID == item.Owner.ID {
+					return nil
+				}
+			}
+			return organizations.ErrInvalid
+		case "agent":
+			for _, agent := range group.Agents {
+				if agent.ID == item.Owner.ID {
+					for _, operator := range agent.OperatorIDs {
+						if organizations.HasRole(group, operator, "") {
+							return nil
+						}
+					}
+				}
+			}
+			return organizations.ErrInvalid
+		}
+		return organizations.ErrInvalid
+	}
+}
+
+type initiativeItemProjection struct {
+	organizations.InitiativeWorkItem
+	Blocked          bool     `json:"blocked"`
+	BlockerIDs       []string `json:"blocker_ids"`
+	OwnershipState   string   `json:"ownership_state"`
+	ReassignmentNote string   `json:"reassignment_note,omitempty"`
+}
+type initiativeProjection struct {
+	organizations.Initiative
+	Items            []initiativeItemProjection      `json:"work_items"`
+	PolicyExceptions []organizations.PolicyException `json:"policy_exceptions"`
+	UpcomingReleases []releases.Candidate            `json:"upcoming_releases"`
+}
+
+func projectInitiatives(group organizations.Organization, actor string, portfolio []repositories.Repository, releaseItems []releases.Candidate, repositoryStore *repositories.Store, proposalStore *proposals.Store, relationshipStore *relationships.Store, incidentStore *incidents.Store, securityStore *securityadvisories.Store) []initiativeProjection {
+	out := []initiativeProjection{}
+	validOwner := initiativeValidator(group, portfolio)
+	for _, initiative := range group.Initiatives {
+		if !initiativeSourceExists(initiative.Source, actor, portfolio, repositoryStore, proposalStore, relationshipStore, incidentStore, securityStore) {
+			continue
+		}
+		readable := true
+		for _, item := range initiative.WorkItems {
+			if item.Contribution != nil && !initiativeSourceExists(*item.Contribution, actor, portfolio, repositoryStore, proposalStore, relationshipStore, incidentStore, securityStore) {
+				readable = false
+				break
+			}
+		}
+		if !readable {
+			continue
+		}
+		projection := initiativeProjection{Initiative: initiative, Items: []initiativeItemProjection{}, PolicyExceptions: []organizations.PolicyException{}, UpcomingReleases: []releases.Candidate{}}
+		projection.Initiative.WorkItems = nil
+		states := map[string]string{}
+		for _, item := range initiative.WorkItems {
+			states[item.ID] = item.Status
+		}
+		repositoriesUsed := map[string]bool{}
+		for _, item := range initiative.WorkItems {
+			repositoriesUsed[item.RepositoryID] = true
+			view := initiativeItemProjection{InitiativeWorkItem: item, BlockerIDs: []string{}, OwnershipState: "accountable"}
+			for _, dependencyID := range item.DependencyIDs {
+				if states[dependencyID] != "completed" {
+					view.BlockerIDs = append(view.BlockerIDs, dependencyID)
+				}
+			}
+			view.Blocked = len(view.BlockerIDs) > 0
+			if validOwner(item) != nil {
+				view.OwnershipState = "reassignment_required"
+				view.ReassignmentNote = "The accountable principal or repository is no longer in the organization portfolio. Assign a current team, member, or approved agent."
+			}
+			projection.Items = append(projection.Items, view)
+		}
+		for _, exception := range group.PolicyExceptions {
+			if repositoriesUsed[exception.RepositoryID] && (exception.Status == "pending" || exception.Status == "approved") {
+				projection.PolicyExceptions = append(projection.PolicyExceptions, exception)
+			}
+		}
+		for _, release := range releaseItems {
+			if repositoriesUsed[release.RepositoryID] {
+				projection.UpcomingReleases = append(projection.UpcomingReleases, release)
+			}
+		}
+		out = append(out, projection)
+	}
+	return out
 }
 
 func hasInvite(v organizations.Organization, user string) bool {
