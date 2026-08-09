@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/http"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -269,7 +268,7 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 				break
 			}
 			if run, e := builds.Get(in.RepositoryID, in.ReleaseID, in.BuildID); e == nil {
-				valid = strings.TrimSpace(in.Dependency) == run.Definition.Image
+				valid = in.Dependency == run.Definition.Image
 			}
 		}
 		if unavailable {

@@ -75,6 +75,7 @@ func TestPrivateSecurityReportTriageAndBoundedAccess(t *testing.T) {
 	}
 	dependencyPrefix := `{"kind":"dependency","repository_id":"` + repository.ID + `","release_id":"` + releaseKey + `","build_id":"` + runs[0].ID + `","label":"Build image","description":"Frozen build dependency.","dependency":`
 	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/evidence", dependencyPrefix+`"attacker.invalid/fake:999"}`, responder.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/evidence", dependencyPrefix+`" alpine:3.22 "}`, responder.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
 	response = authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/evidence", dependencyPrefix+`"alpine:3.22"}`, responder.Credential.Token, http.StatusCreated)
 	decodeResponse(t, response, &advisory)
 	evidenceID := advisory.Evidence[0].ID
