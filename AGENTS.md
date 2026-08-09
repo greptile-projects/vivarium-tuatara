@@ -302,6 +302,12 @@ whenever dependencies change or the web job fails before it starts.
   catalog lock across actor/assignee revalidation, atomically creates the
   proposal/task/assignment under the incident operation ID, and reuses those
   records if incident linking must be retried.
+  The connected orchestration browser journey proves the complete incident loop
+  from a failed production release signal through browser declaration, frozen
+  evidence, bounded agent diagnosis, independently approved attested rollback,
+  public recovery communication, review publication, and an incident-linked
+  corrective task whose pull, checks, release, and successful follow-up
+  deployment project back into the same permission-aware record.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's
