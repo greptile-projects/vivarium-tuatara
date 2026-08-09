@@ -926,6 +926,9 @@ attempt, failure, artifact, and combination attestation projections. Add
 revalidates access to every pull target and source repository in that matrix
 row, so target access cannot disclose private-fork metadata or evidence. Execution mounts the
 assembled source read-only with no network and no API or Git credential.
+The final access check, candidate/check publication, and creation response hold
+the repository catalog mutation lock, so private-source revocation or visibility
+changes linearize wholly before or after evidence publication.
 
 Unfinished cross-repository dependencies block an agent session from starting;
 the eventual credential remains limited to its isolated `agent/tasks/*` branch.

@@ -104,6 +104,45 @@ type Store struct {
 	afterSynchronizeAuthorization  func()
 	afterContributionAuthorization func()
 	afterParticipantAuthorization  func()
+	afterReadAuthorization         func()
+}
+
+// WithCurrentReadAccess runs fn while holding the catalog mutation lock after
+// proving that actorID can still read every named repository. Visibility and
+// collaborator changes therefore commit wholly before or after publication of
+// evidence derived from those repositories.
+func (s *Store) WithCurrentReadAccess(actorID string, repositoryIDs []string, fn func() error) error {
+	if !validID(actorID) || len(repositoryIDs) == 0 || fn == nil {
+		return ErrNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	seen := map[string]bool{}
+	for _, id := range repositoryIDs {
+		if !validID(id) || seen[id] {
+			continue
+		}
+		seen[id] = true
+		repository, readErr := s.read(id)
+		if readErr != nil {
+			return ErrNotFound
+		}
+		if _, openErr := s.git.Open(id); openErr != nil {
+			return ErrNotFound
+		}
+		if repository.Visibility != Public && repository.OwnerID != actorID && !slices.Contains(collaboratorIDs(repository), actorID) {
+			return ErrNotFound
+		}
+	}
+	if s.afterReadAuthorization != nil {
+		s.afterReadAuthorization()
+	}
+	return fn()
 }
 
 // WithCurrentParticipant runs fn while holding the catalog mutation lock after

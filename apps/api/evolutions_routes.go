@@ -629,29 +629,44 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 			}
 		}
 		candidateID := combination[:32]
-		runs, err := builds.CreateRequested(plan.RepositoryID, candidateID, synthetic, config.Checks, actor.UserID)
+		repositoryIDs := make([]string, 0, len(revisions)*2)
+		for _, revision := range revisions {
+			repositoryIDs = append(repositoryIDs, revision.RepositoryID, revision.SourceRepositoryID)
+		}
+		var publicationErr error
+		err = repos.WithCurrentReadAccess(actor.UserID, repositoryIDs, func() error {
+			runs, createErr := builds.CreateRequested(plan.RepositoryID, candidateID, synthetic, config.Checks, actor.UserID)
+			if createErr != nil {
+				publicationErr = createErr
+				return nil
+			}
+			runIDs := make([]string, len(runs))
+			for i := range runs {
+				runIDs[i] = runs[i].ID
+			}
+			published, candidate, publishErr := relationStore.AddContractCandidate(plan.RepositoryID, plan.ID, actor.UserID, synthetic, combination, revisions, runIDs)
+			if publishErr != nil {
+				publicationErr = publishErr
+				return nil
+			}
+			target, _ := gitStore.Open(published.RepositoryID)
+			for _, run := range runs {
+				go builds.Execute(run, target.Path())
+			}
+			writeJSON(w, 201, map[string]any{"evolution": visible(project(published), actor.UserID), "candidate": candidate, "check_runs": runs})
+			return nil
+		})
 		if err != nil {
-			writeAPIError(w, 500, "contract_candidate_failed", "contract checks could not be reserved")
+			writeAPIError(w, 404, "contract_candidate_not_found", "contract candidate repositories are no longer readable")
 			return
 		}
-		runIDs := make([]string, len(runs))
-		for i := range runs {
-			runIDs[i] = runs[i].ID
-		}
-		plan, candidate, err := relationStore.AddContractCandidate(plan.RepositoryID, plan.ID, actor.UserID, synthetic, combination, revisions, runIDs)
-		if errors.Is(err, relationships.ErrConflict) {
+		if errors.Is(publicationErr, relationships.ErrConflict) {
 			writeAPIError(w, 409, "combination_already_tested", "this exact pull revision combination already has evidence")
 			return
 		}
-		if err != nil {
-			writeAPIError(w, 500, "contract_candidate_failed", "contract candidate could not be published")
-			return
+		if publicationErr != nil {
+			writeAPIError(w, 500, "contract_candidate_failed", "contract candidate and checks could not be published")
 		}
-		target, _ := gitStore.Open(plan.RepositoryID)
-		for _, run := range runs {
-			go builds.Execute(run, target.Path())
-		}
-		writeJSON(w, 201, map[string]any{"evolution": visible(project(plan), actor.UserID), "candidate": candidate, "check_runs": runs})
 	})
 	mux.HandleFunc("GET /repositories/{id}/evolutions/{evolution_id}/contract-candidates/{candidate_id}/checks", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := readActor(w, r)
