@@ -786,6 +786,8 @@ package version from that same release workspace. Package publication freezes
 the globally repository-bound identity and version, source commit, release and
 build IDs, artifact identity and SHA-256, publisher, platform selectors,
 dependency constraints, public or private visibility, and active lifecycle.
+Publishers also attach a bounded summary, version documentation, and license;
+these claims remain adjacent to the derived evidence rather than replacing it.
 Publication holds the build execution boundary across selection, hashing, and
 the atomic version rename, preventing a concurrent rerun from replacing the
 attested attempt. The package store hashes output into a staging directory, so
@@ -798,6 +800,22 @@ metadata and bytes are anonymous; private packages continuously reuse the
 source repository's access boundary. Durable records and copied artifacts live
 beneath `PACKAGE_STORAGE_ROOT` (default `packages`), independent of later build
 retention or repository visibility changes.
+
+The `/packages` workspace and catalog API search names, summaries, and version
+documentation across public packages plus private versions the current actor
+can read. Identity version lists and resolution select the newest non-yanked
+version satisfying an exact, caret, tilde, or ordered semantic-version
+constraint and optional OS, architecture, and runtime selectors. Owners may
+mark a version deprecated or yanked with a required warning; artifact bytes,
+checksum, release, source, and build provenance remain unchanged, and yanked
+versions are excluded from new resolution while staying inspectable.
+
+For ordinary dependency clients and isolated builds, a current participant in
+a consuming repository can mint a short-lived `packages:read` credential. The
+credential freezes the consuming repository ID and an explicit allowlist of
+package identities that the issuer can currently read. Registry metadata,
+resolution, and artifact endpoints honor that allowlist, so the token has no
+Git, repository mutation, publisher, or unrelated-private-package authority.
 
 Release delivery is an explicit repository collaboration. Owners define a
 strictly ordered set of environments with visible scoped configuration,

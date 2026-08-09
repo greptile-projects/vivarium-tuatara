@@ -34,7 +34,7 @@ const (
 
 var allowedScopes = map[Kind]map[string]bool{
 	Session: {"profile:write": true, "credentials:write": true, "repositories:read": true, "repositories:write": true},
-	API:     {"profile:write": true, "repositories:read": true, "repositories:write": true, "incidents:investigate": true, "security:investigate": true, "evolutions:analyze": true},
+	API:     {"profile:write": true, "repositories:read": true, "repositories:write": true, "packages:read": true, "incidents:investigate": true, "security:investigate": true, "evolutions:analyze": true},
 	Git:     {"git:read": true, "git:write": true},
 }
 
@@ -57,6 +57,7 @@ type Credential struct {
 	RepositoryID   string     `json:"repository_id,omitempty"`
 	GitWriteBranch string     `json:"git_write_branch,omitempty"`
 	PullRequestID  string     `json:"pull_request_id,omitempty"`
+	PackageNames   []string   `json:"package_names,omitempty"`
 	Hash           string     `json:"-"`
 }
 
@@ -90,16 +91,22 @@ func (s *Store) Issue(userID string, kind Kind, name string, scopes []string, li
 // optionally, one writable Git branch. Empty bounds retain the ordinary
 // account credential behavior used by existing clients.
 func (s *Store) IssueBound(userID string, kind Kind, name string, scopes []string, lifetime time.Duration, repositoryID, gitWriteBranch string) (IssuedCredential, error) {
-	return s.issueBound(userID, kind, name, scopes, lifetime, repositoryID, gitWriteBranch, "")
+	return s.issueBound(userID, kind, name, scopes, lifetime, repositoryID, gitWriteBranch, "", nil)
 }
 
 // IssuePullRequestBound additionally pins a branch credential to the exact
 // pull request whose source owner granted it.
 func (s *Store) IssuePullRequestBound(userID string, name string, scopes []string, lifetime time.Duration, repositoryID, gitWriteBranch, pullRequestID string) (IssuedCredential, error) {
-	return s.issueBound(userID, Git, name, scopes, lifetime, repositoryID, gitWriteBranch, pullRequestID)
+	return s.issueBound(userID, Git, name, scopes, lifetime, repositoryID, gitWriteBranch, pullRequestID, nil)
 }
 
-func (s *Store) issueBound(userID string, kind Kind, name string, scopes []string, lifetime time.Duration, repositoryID, gitWriteBranch, pullRequestID string) (IssuedCredential, error) {
+// IssuePackageBound creates a repository-owned registry credential whose
+// authority is frozen to an explicit set of package identities.
+func (s *Store) IssuePackageBound(userID, name, repositoryID string, packageNames []string, lifetime time.Duration) (IssuedCredential, error) {
+	return s.issueBound(userID, API, name, []string{"packages:read"}, lifetime, repositoryID, "", "", packageNames)
+}
+
+func (s *Store) issueBound(userID string, kind Kind, name string, scopes []string, lifetime time.Duration, repositoryID, gitWriteBranch, pullRequestID string, packageNames []string) (IssuedCredential, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !validID(userID) || allowedScopes[kind] == nil {
@@ -125,6 +132,17 @@ func (s *Store) issueBound(userID string, kind Kind, name string, scopes []strin
 	if (repositoryID != "" && !validID(repositoryID)) || (gitWriteBranch != "" && (kind != Git || repositoryID == "" || !validBoundBranch(gitWriteBranch))) || (pullRequestID != "" && (kind != Git || gitWriteBranch == "" || !validID(pullRequestID))) {
 		return IssuedCredential{}, ErrInvalid
 	}
+	if len(packageNames) > 100 || (len(packageNames) > 0 && (kind != API || repositoryID == "" || !seen["packages:read"])) {
+		return IssuedCredential{}, ErrInvalid
+	}
+	packageSeen := map[string]bool{}
+	for _, packageName := range packageNames {
+		if packageName == "" || len(packageName) > 100 || packageName != strings.ToLower(strings.TrimSpace(packageName)) || packageSeen[packageName] {
+			return IssuedCredential{}, ErrInvalid
+		}
+		packageSeen[packageName] = true
+	}
+	sort.Strings(packageNames)
 	sort.Strings(scopes)
 	idBytes, secretBytes := make([]byte, 16), make([]byte, 32)
 	if _, err := rand.Read(idBytes); err != nil {
@@ -137,7 +155,7 @@ func (s *Store) issueBound(userID string, kind Kind, name string, scopes []strin
 	token := "vvr_" + id + "_" + hex.EncodeToString(secretBytes)
 	hash := sha256.Sum256([]byte(token))
 	now := s.now().Truncate(time.Microsecond)
-	credential := Credential{ID: id, UserID: userID, Kind: kind, Name: name, Scopes: append([]string(nil), scopes...), CreatedAt: now, ExpiresAt: now.Add(lifetime), RepositoryID: repositoryID, GitWriteBranch: gitWriteBranch, PullRequestID: pullRequestID, Hash: hex.EncodeToString(hash[:])}
+	credential := Credential{ID: id, UserID: userID, Kind: kind, Name: name, Scopes: append([]string(nil), scopes...), CreatedAt: now, ExpiresAt: now.Add(lifetime), RepositoryID: repositoryID, GitWriteBranch: gitWriteBranch, PullRequestID: pullRequestID, PackageNames: append([]string(nil), packageNames...), Hash: hex.EncodeToString(hash[:])}
 	if err := s.write(credential); err != nil {
 		// Reconcile errors after rename so Issue never reports failure while
 		// leaving the exact usable credential durably visible.
@@ -260,7 +278,7 @@ func hasScope(scopes []string, required string) bool {
 func sameCredential(left, right Credential) bool {
 	return left.ID == right.ID && left.UserID == right.UserID && left.Kind == right.Kind && left.Name == right.Name &&
 		left.CreatedAt.Equal(right.CreatedAt) && left.ExpiresAt.Equal(right.ExpiresAt) && left.Hash == right.Hash &&
-		slices.Equal(left.Scopes, right.Scopes) && left.RepositoryID == right.RepositoryID && left.GitWriteBranch == right.GitWriteBranch && left.PullRequestID == right.PullRequestID && left.LastUsedAt == nil && left.RevokedAt == nil
+		slices.Equal(left.Scopes, right.Scopes) && left.RepositoryID == right.RepositoryID && left.GitWriteBranch == right.GitWriteBranch && left.PullRequestID == right.PullRequestID && slices.Equal(left.PackageNames, right.PackageNames) && left.LastUsedAt == nil && left.RevokedAt == nil
 }
 func validID(id string) bool {
 	if len(id) != 32 || id != strings.ToLower(id) {
