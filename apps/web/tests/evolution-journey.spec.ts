@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -41,6 +41,13 @@ async function eventually<T>(read: () => Promise<T>, ready: (value: T) => boolea
 
 test("an independently owned ecosystem evolves one contract through agent and human delivery", async ({ browser }) => {
   test.setTimeout(300_000);
+  const temporaryCopies: string[] = [];
+  const temporaryCopy = async (prefix: string) => {
+    const path = await mkdtemp(join(tmpdir(), prefix));
+    temporaryCopies.push(path);
+    return path;
+  };
+  try {
   await run("docker", ["image", "inspect", "alpine:3.22"]).catch(() => run("docker", ["pull", "alpine:3.22"]));
   const suffix = Date.now().toString(36);
   const providerPage = await (await browser.newContext()).newPage();
@@ -61,8 +68,8 @@ test("an independently owned ecosystem evolves one contract through agent and hu
     json(page, "post", "/auth/credentials", headers, { kind: "git", name, scopes: ["git:read", "git:write"], expires_in: 3600 }) as Promise<{ token: string }>;
   const providerGit = await gitCredential(providerPage, providerActor.headers, "provider git");
   const consumerGit = await gitCredential(consumerPage, consumerActor.headers, "consumer git");
-  const providerCopy = await mkdtemp(join(tmpdir(), "vivarium-evolution-provider-"));
-  const consumerCopy = await mkdtemp(join(tmpdir(), "vivarium-evolution-consumer-"));
+  const providerCopy = await temporaryCopy("vivarium-evolution-provider-");
+  const consumerCopy = await temporaryCopy("vivarium-evolution-consumer-");
   await git(tmpdir(), "clone", `http://git:${providerGit.token}@localhost:3000/git/${provider.id}.git`, providerCopy);
   await git(tmpdir(), "clone", `http://git:${consumerGit.token}@localhost:3000/git/${consumer.id}.git`, consumerCopy);
   for (const [copy, name] of [[providerCopy, "Evolution Provider"], [consumerCopy, "Evolution Consumer"]]) {
@@ -130,7 +137,7 @@ test("an independently owned ecosystem evolves one contract through agent and hu
   const assignment = providerTaskResult.task.assignment;
 
   const fork = await json(consumerPage, "post", `/repositories/${consumer.id}/forks`, consumerActor.headers, { name: `calendar-migration-${suffix}` }) as { id: string };
-  const forkCopy = await mkdtemp(join(tmpdir(), "vivarium-evolution-fork-"));
+  const forkCopy = await temporaryCopy("vivarium-evolution-fork-");
   await git(tmpdir(), "clone", `http://git:${consumerGit.token}@localhost:3000/git/${fork.id}.git`, forkCopy);
   await git(forkCopy, "config", "user.name", "Evolution Consumer"); await git(forkCopy, "config", "user.email", "consumer@example.com");
   await git(forkCopy, "switch", "-c", "events-v2"); await writeFile(join(forkCopy, "consumer.txt"), "events=v2\n");
@@ -139,7 +146,7 @@ test("an independently owned ecosystem evolves one contract through agent and hu
   const consumerPull = await json(consumerPage, "post", `/repositories/${consumer.id}/proposals/${consumerTask.proposal_id}/tasks/${consumerTask.task_id}/contributions`, consumerActor.headers, { title: "Adopt events v2", body: "Human migration from an independently owned fork.", source_repository_id: fork.id, source_branch: "events-v2", target_branch: "main" }) as { id: string };
 
   const launched = await json(providerPage, "post", `/repositories/${provider.id}/proposals/${providerTask.proposal_id}/tasks/${providerTask.task_id}/sessions`, providerActor.headers, { expected_assignment_id: assignment.id, context_paths: ["interface.txt"], expires_in: 3600 }) as any;
-  const agentCopy = await mkdtemp(join(tmpdir(), "vivarium-evolution-agent-"));
+  const agentCopy = await temporaryCopy("vivarium-evolution-agent-");
   await git(tmpdir(), "clone", `http://git:${launched.credential.token}@localhost:3000/git/${provider.id}.git`, agentCopy);
   await git(agentCopy, "config", "user.name", "Vivarium Evolution Agent"); await git(agentCopy, "config", "user.email", "agent@users.vivarium");
   await git(agentCopy, "switch", "-c", "agent-evolution", `origin/${launched.run.working_branch}`);
@@ -202,4 +209,7 @@ test("an independently owned ecosystem evolves one contract through agent and hu
   await expect(providerPage.getByText("completed", { exact: true }).first()).toBeVisible();
   await expect(providerPage.getByText("calendar reads the v1 event marker and must migrate first")).toBeVisible();
   await expect(providerPage.getByText("owner approved", { exact: false }).first()).toBeVisible();
+  } finally {
+    await Promise.all(temporaryCopies.map((path) => rm(path, { recursive: true, force: true })));
+  }
 });
