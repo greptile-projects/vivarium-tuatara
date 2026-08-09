@@ -394,7 +394,7 @@ func (s *Store) AcceptInvitation(id, invitationID, actor string) (Organization, 
 		return ErrNotFound
 	})
 }
-func (s *Store) RemoveMember(id, actor, user string) (Organization, error) {
+func (s *Store) RemoveMember(id, actor, user string, beforeCommit func(Organization) error) (Organization, error) {
 	return s.mutate(id, func(v *Organization) error {
 		if !HasRole(*v, actor, "owner") {
 			return ErrNotFound
@@ -403,6 +403,12 @@ func (s *Store) RemoveMember(id, actor, user string) (Organization, error) {
 			if m.UserID == user {
 				if m.Role == "owner" {
 					return ErrConflict
+				}
+				if beforeCommit == nil {
+					return ErrInvalid
+				}
+				if err := beforeCommit(*v); err != nil {
+					return err
 				}
 				v.Members = append(v.Members[:i], v.Members[i+1:]...)
 				for ti := range v.Teams {

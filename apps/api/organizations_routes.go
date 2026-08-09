@@ -474,27 +474,28 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 		writeJSON(w, 200, project(v, actor.UserID))
 	})
 	mux.HandleFunc("DELETE /organizations/{id}/members/{user_id}", func(w http.ResponseWriter, r *http.Request) {
-		actor, current, ok := require(w, r, "repositories:write")
+		actor, _, ok := require(w, r, "repositories:write")
 		if !ok {
 			return
 		}
 		target := r.PathValue("user_id")
-		v, err := orgs.RemoveMember(r.PathValue("id"), actor.UserID, target)
-		if writeOrganizationError(w, err) {
-			return
-		}
-		for _, grant := range current.AccessGrants {
-			if grant.RevokedAt != nil {
-				continue
-			}
-			for _, derived := range grant.DerivedCredentials {
-				if derived.OperatorID == target {
-					if _, revokeErr := credentials.Revoke(target, derived.ID); revokeErr != nil && !errors.Is(revokeErr, auth.ErrNotFound) {
-						writeAPIError(w, 500, "organization_unavailable", "derived access could not be revoked")
-						return
+		v, err := orgs.RemoveMember(r.PathValue("id"), actor.UserID, target, func(current organizations.Organization) error {
+			for _, grant := range current.AccessGrants {
+				if grant.RevokedAt != nil {
+					continue
+				}
+				for _, derived := range grant.DerivedCredentials {
+					if derived.OperatorID == target {
+						if _, revokeErr := credentials.Revoke(target, derived.ID); revokeErr != nil && !errors.Is(revokeErr, auth.ErrNotFound) {
+							return revokeErr
+						}
 					}
 				}
 			}
+			return nil
+		})
+		if writeOrganizationError(w, err) {
+			return
 		}
 		repoItems, listErr := repos.ListOrganization(v.ID)
 		if writeRepositoryError(w, listErr) {
