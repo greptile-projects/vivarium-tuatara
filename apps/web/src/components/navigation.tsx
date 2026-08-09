@@ -10,6 +10,7 @@ const navigation = [
   { label: "Proposals", href: "/proposals", icon: Icons.Spark },
   { label: "Pull requests", href: "/pulls", icon: Icons.GitPull },
   { label: "Incidents", href: "/incidents", icon: Icons.Activity },
+  { label: "Security", href: "/security", icon: Icons.Code },
   { label: "Inbox", href: "/inbox", icon: Icons.Bell },
   { label: "Activity", href: "/activity", icon: Icons.Activity },
 ];

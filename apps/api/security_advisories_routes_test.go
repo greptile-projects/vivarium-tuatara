@@ -1,0 +1,67 @@
+package main
+
+import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/securityadvisories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
+)
+
+func TestPrivateSecurityReportTriageAndBoundedAccess(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	activity, _ := activities.New(t.TempDir())
+	advisories, _ := securityadvisories.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, activity, nil, nil, advisories))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "security-owner")
+	reporter := createTestAccount(t, server.URL, "security-reporter")
+	responder := createTestAccount(t, server.URL, "security-responder")
+	outsider := createTestAccount(t, server.URL, "security-outsider")
+	created := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"public-library"}`, owner.Credential.Token, http.StatusCreated)
+	var repository repositories.Repository
+	decodeResponse(t, created, &repository)
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+repository.ID, `{"visibility":"public"}`, owner.Credential.Token, http.StatusOK).Body.Close()
+
+	body := `{"title":"Parser boundary bypass","description":"A crafted document may escape validation.","affected_repositories":[{"repository_id":"` + repository.ID + `","versions":["1.x","2.0.0"]}],"evidence":[{"label":"Minimal reproduction","description":"A bounded reproduction is available in this protected record."}],"contact":"security-reporter@example.test"}`
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories", body, reporter.Credential.Token, http.StatusCreated)
+	var advisory securityadvisories.Advisory
+	decodeResponse(t, response, &advisory)
+	if advisory.ReporterID != reporter.User.ID || advisory.Severity != "untriaged" || advisory.EmbargoState != "reported" {
+		t.Fatalf("created advisory = %#v", advisory)
+	}
+	authenticatedRequest(t, http.MethodGet, server.URL+"/security-advisories/"+advisory.ID, "", outsider.Credential.Token, http.StatusNotFound).Body.Close()
+	list := authenticatedRequest(t, http.MethodGet, server.URL+"/security-advisories", "", outsider.Credential.Token, http.StatusOK)
+	data, err := io.ReadAll(list.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list.Body.Close()
+	if text := string(data); strings.Contains(text, advisory.ID) || strings.Contains(text, "Parser boundary") {
+		t.Fatalf("private report leaked in collection: %s", text)
+	}
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/security-advisories/"+advisory.ID, `{"expected_version":1,"severity":"critical","embargo_state":"embargoed"}`, reporter.Credential.Token, http.StatusForbidden).Body.Close()
+	response = authenticatedRequest(t, http.MethodPatch, server.URL+"/security-advisories/"+advisory.ID, `{"expected_version":1,"severity":"critical","embargo_state":"embargoed"}`, owner.Credential.Token, http.StatusOK)
+	decodeResponse(t, response, &advisory)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/responders", `{"user_id":"`+responder.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/messages", `{"body":"I can reproduce this against the affected versions."}`, responder.Credential.Token, http.StatusCreated)
+	decodeResponse(t, response, &advisory)
+	if len(advisory.Messages) != 1 || advisory.Messages[0].ActorID != responder.User.ID {
+		t.Fatalf("messages = %#v", advisory.Messages)
+	}
+	response = authenticatedRequest(t, http.MethodGet, server.URL+"/security-advisories/"+advisory.ID, "", reporter.Credential.Token, http.StatusOK)
+	decodeResponse(t, response, &advisory)
+	if len(advisory.AccessLog) < 5 || advisory.AccessLog[len(advisory.AccessLog)-1].Action != "viewed" {
+		t.Fatalf("access log = %#v", advisory.AccessLog)
+	}
+}

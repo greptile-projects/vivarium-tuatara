@@ -24,7 +24,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: "bash -lc 'root=$(mktemp -d); GIT_STORAGE_ROOT=$root/git USER_STORAGE_ROOT=$root/users AUTH_STORAGE_ROOT=$root/auth REPOSITORY_STORAGE_ROOT=$root/repositories PROPOSAL_STORAGE_ROOT=$root/proposals PULL_REQUEST_STORAGE_ROOT=$root/pulls ACTIVITY_STORAGE_ROOT=$root/activity CHANGE_SESSION_STORAGE_ROOT=$root/sessions CHECK_RUN_STORAGE_ROOT=$root/checks RELEASE_STORAGE_ROOT=$root/releases DEPLOYMENT_STORAGE_ROOT=$root/deployments INCIDENT_STORAGE_ROOT=$root/incidents go run .'",
+      command: "bash -lc 'root=$(mktemp -d); GIT_STORAGE_ROOT=$root/git USER_STORAGE_ROOT=$root/users AUTH_STORAGE_ROOT=$root/auth REPOSITORY_STORAGE_ROOT=$root/repositories PROPOSAL_STORAGE_ROOT=$root/proposals PULL_REQUEST_STORAGE_ROOT=$root/pulls ACTIVITY_STORAGE_ROOT=$root/activity CHANGE_SESSION_STORAGE_ROOT=$root/sessions CHECK_RUN_STORAGE_ROOT=$root/checks RELEASE_STORAGE_ROOT=$root/releases DEPLOYMENT_STORAGE_ROOT=$root/deployments INCIDENT_STORAGE_ROOT=$root/incidents SECURITY_ADVISORY_STORAGE_ROOT=$root/security-advisories go run .'",
       cwd: "../api",
       url: "http://127.0.0.1:8080/health",
       timeout: 120_000,

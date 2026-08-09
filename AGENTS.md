@@ -308,6 +308,18 @@ whenever dependencies change or the web job fails before it starts.
   public recovery communication, review publication, and an incident-linked
   corrective task whose pull, checks, release, and successful follow-up
   deployment project back into the same permission-aware record.
+  Private vulnerability coordination at `/security` is isolated from ordinary
+  repository activity, inbox, incident, proposal, and search flows. An
+  authenticated reporter can file against repositories they can currently
+  read with affected versions, bounded evidence, and a safe contact channel.
+  Only the reporter, current owners of affected repositories, and an explicitly
+  invited response team (at most 20 users) can discover the report. Owners set
+  severity and embargo state with compare-and-swap versions and invite
+  responders; all participants can communicate privately. The report retains
+  its own immutable attributed mutation and detail-read audit. Unauthorized
+  reads return not-found, no advisory operation publishes activity or inbox
+  notifications, and `$SECURITY_ADVISORY_STORAGE_ROOT` defaults to
+  `security-advisories` with owner-only filesystem permissions.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's
