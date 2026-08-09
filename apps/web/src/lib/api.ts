@@ -55,8 +55,12 @@ export type PackageVersion = {
   support?: string;
   publisher_id: string;
   visibility: "public" | "private";
-  lifecycle: "active" | "deprecated" | "yanked";
+  lifecycle: "active" | "deprecated" | "quarantined" | "yanked";
   lifecycle_warning?: string;
+  lifecycle_reason?: string;
+  replacement?: { name: string; version: string };
+  lifecycle_changed_by?: string;
+  lifecycle_changed_at?: string;
   published_at: string;
 };
 export type DependencyInventory = {
@@ -68,6 +72,7 @@ export type DependencyInventory = {
   releases: ReleaseCandidate[];
   builds: { id: string; state: string; artifact_id?: string }[];
   deployments: { id: string; environment_id: string; release_id: string; artifact_id: string; state: string; current: boolean }[];
+  remediation?: { status: string; proposal_id: string; task_id: string; replacement_version: string };
 };
 export type PackageUpdate = {
   id: string; repository_id: string; package_name: string; from_version: string; to_version: string; base_commit: string; proposal_id: string; task_id: string;

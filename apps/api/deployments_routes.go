@@ -10,13 +10,14 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
+	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
-func registerDeploymentRoutes(mux *http.ServeMux, gitStore *storage.Store, repositories *repositories.Store, releases *releases.Store, builds *checkruns.Store, store *deployments.Store, credentials *auth.Store, activityStore *activities.Store, pulls *pullrequests.Store, sessions *changesessions.Store) {
+func registerDeploymentRoutes(mux *http.ServeMux, gitStore *storage.Store, repositories *repositories.Store, releases *releases.Store, builds *checkruns.Store, store *deployments.Store, credentials *auth.Store, activityStore *activities.Store, pulls *pullrequests.Store, sessions *changesessions.Store, packageStore *packages.Store) {
 	executor := deployments.NewExecutor(store, builds)
 	read := func(w http.ResponseWriter, r *http.Request) bool {
 		_, _, ok := authorizeRepositoryRead(w, r, repositories, credentials, r.PathValue("id"))
@@ -104,6 +105,18 @@ func registerDeploymentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos
 		if err != nil {
 			writeAPIError(w, 422, "invalid_release", "release candidate not found")
 			return
+		}
+		if packageStore != nil {
+			inventory, inventoryErr := packageStore.GetInventory(r.PathValue("id"), candidate.CommitID)
+			if inventoryErr == nil {
+				for _, dependency := range inventory.Entries {
+					version, getErr := packageStore.Get(dependency.Name, dependency.Version)
+					if getErr == nil && version.Lifecycle != "active" {
+						writeAPIError(w, 409, "promotion_unsafe_dependency", "promotion policy rejects a release containing a deprecated, quarantined, or yanked package version; existing deployments remain retained as exposure evidence")
+						return
+					}
+				}
+			}
 		}
 		run, err := builds.Get(r.PathValue("id"), input.ReleaseID, input.BuildID)
 		if err != nil || run.CommitID != candidate.CommitID || run.State != "succeeded" {

@@ -14,6 +14,19 @@ The supported consumer contract, including authentication, stable error
 shapes, validation, and collection pagination, is documented in [API.md](API.md).
 Consumers should use that HTTP boundary rather than reading storage roots.
 
+## Unsafe package recovery
+
+Package lifecycle decisions are attributable append-only coordination records,
+not edits to published bytes. A publisher owner may deprecate, quarantine, or
+yank an exact version with a reason, warning, and active safe replacement. The
+catalog keeps checksum, source, build, consumer inventories, and historical
+deployments visible while notifying every currently exposed repository owner.
+Fresh package resolution, repository-bound downloads, and new promotions reject
+non-active versions. A consumer owner can open an urgent ordinary proposal and
+task for the replacement, assigning it to a current human participant or a
+task-scoped agent at the consumer's exact default-branch revision; checks,
+review, integration, release, and deployment authority remain consumer-owned.
+
 ## Incident response
 
 Incidents are first-class cross-repository collaboration records rather than

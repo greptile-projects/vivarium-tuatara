@@ -53,30 +53,51 @@ type BuildAttestation struct {
 }
 
 type Version struct {
-	ID               string           `json:"id"`
-	Name             string           `json:"name"`
-	Version          string           `json:"version"`
-	RepositoryID     string           `json:"repository_id"`
-	ReleaseID        string           `json:"release_id"`
-	SourceCommit     string           `json:"source_commit"`
-	BuildID          string           `json:"build_id"`
-	BuildAttestation BuildAttestation `json:"build_attestation"`
-	ArtifactID       string           `json:"artifact_id"`
-	ArtifactPath     string           `json:"artifact_path"`
-	ContentType      string           `json:"content_type"`
-	Size             int64            `json:"size"`
-	SHA256           string           `json:"sha256"`
-	Platform         Platform         `json:"platform"`
-	Dependencies     []Dependency     `json:"dependencies"`
-	Summary          string           `json:"summary,omitempty"`
-	Documentation    string           `json:"documentation,omitempty"`
-	License          string           `json:"license,omitempty"`
-	Support          string           `json:"support,omitempty"`
-	PublisherID      string           `json:"publisher_id"`
-	Visibility       string           `json:"visibility"`
-	Lifecycle        string           `json:"lifecycle"`
-	LifecycleWarning string           `json:"lifecycle_warning,omitempty"`
-	PublishedAt      time.Time        `json:"published_at"`
+	ID                 string            `json:"id"`
+	Name               string            `json:"name"`
+	Version            string            `json:"version"`
+	RepositoryID       string            `json:"repository_id"`
+	ReleaseID          string            `json:"release_id"`
+	SourceCommit       string            `json:"source_commit"`
+	BuildID            string            `json:"build_id"`
+	BuildAttestation   BuildAttestation  `json:"build_attestation"`
+	ArtifactID         string            `json:"artifact_id"`
+	ArtifactPath       string            `json:"artifact_path"`
+	ContentType        string            `json:"content_type"`
+	Size               int64             `json:"size"`
+	SHA256             string            `json:"sha256"`
+	Platform           Platform          `json:"platform"`
+	Dependencies       []Dependency      `json:"dependencies"`
+	Summary            string            `json:"summary,omitempty"`
+	Documentation      string            `json:"documentation,omitempty"`
+	License            string            `json:"license,omitempty"`
+	Support            string            `json:"support,omitempty"`
+	PublisherID        string            `json:"publisher_id"`
+	Visibility         string            `json:"visibility"`
+	Lifecycle          string            `json:"lifecycle"`
+	LifecycleWarning   string            `json:"lifecycle_warning,omitempty"`
+	LifecycleReason    string            `json:"lifecycle_reason,omitempty"`
+	Replacement        *Replacement      `json:"replacement,omitempty"`
+	LifecycleChangedBy string            `json:"lifecycle_changed_by,omitempty"`
+	LifecycleChangedAt *time.Time        `json:"lifecycle_changed_at,omitempty"`
+	LifecycleHistory   []LifecycleChange `json:"lifecycle_history,omitempty"`
+	PublishedAt        time.Time         `json:"published_at"`
+}
+
+// Replacement names an independently published safe version. It is guidance,
+// not authority over any consuming repository.
+type Replacement struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+type LifecycleChange struct {
+	Lifecycle   string       `json:"lifecycle"`
+	Warning     string       `json:"warning,omitempty"`
+	Reason      string       `json:"reason,omitempty"`
+	Replacement *Replacement `json:"replacement,omitempty"`
+	ActorID     string       `json:"actor_id"`
+	CreatedAt   time.Time    `json:"created_at"`
 }
 
 type Store struct {
@@ -235,6 +256,11 @@ func matchingPublication(existing, requested Version) bool {
 	requested.ID = existing.ID
 	requested.Lifecycle = existing.Lifecycle
 	requested.LifecycleWarning = existing.LifecycleWarning
+	requested.LifecycleReason = existing.LifecycleReason
+	requested.Replacement = existing.Replacement
+	requested.LifecycleChangedBy = existing.LifecycleChangedBy
+	requested.LifecycleChangedAt = existing.LifecycleChangedAt
+	requested.LifecycleHistory = existing.LifecycleHistory
 	requested.PublishedAt = existing.PublishedAt
 	sort.Slice(requested.Dependencies, func(i, j int) bool { return requested.Dependencies[i].Name < requested.Dependencies[j].Name })
 	return reflect.DeepEqual(existing, requested)
@@ -317,7 +343,7 @@ func (s *Store) List() ([]Version, error) {
 	return result, nil
 }
 
-func (s *Store) SetLifecycle(name, version, lifecycle, warning string) (Version, error) {
+func (s *Store) SetLifecycle(name, version, lifecycle, warning, reason string, replacement *Replacement, actorID string) (Version, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	lock, err := os.OpenFile(filepath.Join(s.root, ".lock"), os.O_CREATE|os.O_RDWR, 0600)
@@ -329,23 +355,45 @@ func (s *Store) SetLifecycle(name, version, lifecycle, warning string) (Version,
 		return Version{}, err
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-	lifecycle, warning = strings.TrimSpace(strings.ToLower(lifecycle)), strings.TrimSpace(warning)
-	if lifecycle != "active" && lifecycle != "deprecated" && lifecycle != "yanked" {
+	lifecycle, warning, reason = strings.TrimSpace(strings.ToLower(lifecycle)), strings.TrimSpace(warning), strings.TrimSpace(reason)
+	if lifecycle != "active" && lifecycle != "deprecated" && lifecycle != "quarantined" && lifecycle != "yanked" {
 		return Version{}, ErrInvalid
 	}
-	if (lifecycle == "active" && warning != "") || (lifecycle != "active" && (warning == "" || len(warning) > 1000)) {
+	if (lifecycle == "active" && (warning != "" || reason != "" || replacement != nil)) || (lifecycle != "active" && (warning == "" || reason == "" || len(warning) > 1000 || len(reason) > 4000)) || len(actorID) != 32 {
 		return Version{}, ErrInvalid
+	}
+	if replacement != nil {
+		replacement.Name = strings.ToLower(strings.TrimSpace(replacement.Name))
+		replacement.Version = strings.TrimSpace(replacement.Version)
+		if !identityPattern.MatchString(replacement.Name) || !versionPattern.MatchString(replacement.Version) || (replacement.Name == strings.ToLower(strings.TrimSpace(name)) && replacement.Version == strings.TrimSpace(version)) {
+			return Version{}, ErrInvalid
+		}
+		candidate, getErr := s.Get(replacement.Name, replacement.Version)
+		if getErr != nil || candidate.Lifecycle != "active" {
+			return Version{}, ErrInvalid
+		}
 	}
 	item, err := s.Get(name, version)
 	if err != nil {
 		return Version{}, err
 	}
-	item.Lifecycle, item.LifecycleWarning = lifecycle, warning
+	now := s.now().UTC().Truncate(time.Microsecond)
+	item.Lifecycle, item.LifecycleWarning, item.LifecycleReason, item.Replacement = lifecycle, warning, reason, replacement
+	item.LifecycleChangedBy, item.LifecycleChangedAt = actorID, &now
+	item.LifecycleHistory = append(item.LifecycleHistory, LifecycleChange{Lifecycle: lifecycle, Warning: warning, Reason: reason, Replacement: replacement, ActorID: actorID, CreatedAt: now})
 	body, _ := json.Marshal(item)
 	if err = atomicFile(filepath.Join(s.root, item.Name, item.Version, "metadata.json"), body); err != nil {
 		return Version{}, err
 	}
 	return item, nil
+}
+
+func (s *Store) LifecycleHistory(name, version string) ([]LifecycleChange, error) {
+	item, err := s.Get(name, version)
+	if err != nil {
+		return nil, err
+	}
+	return append([]LifecycleChange{}, item.LifecycleHistory...), nil
 }
 
 func valid(v Version) bool {

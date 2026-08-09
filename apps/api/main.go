@@ -314,10 +314,10 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	if authStore != nil && repositoryCatalog != nil && releaseStore != nil {
 		registerReleaseRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, releaseStore, authStore, checkRunStore)
 		if packageStore != nil && checkRunStore != nil {
-			registerPackageRoutes(mux, store, repositoryCatalog, proposalStore, releaseStore, checkRunStore, deploymentStore, packageStore, authStore)
+			registerPackageRoutes(mux, store, repositoryCatalog, proposalStore, releaseStore, checkRunStore, deploymentStore, packageStore, authStore, activityStore)
 		}
 		if deploymentStore != nil {
-			registerDeploymentRoutes(mux, store, repositoryCatalog, releaseStore, checkRunStore, deploymentStore, authStore, activityStore, pullRequestStore, changeSessionStore)
+			registerDeploymentRoutes(mux, store, repositoryCatalog, releaseStore, checkRunStore, deploymentStore, authStore, activityStore, pullRequestStore, changeSessionStore, packageStore)
 		}
 	}
 	if authStore != nil && repositoryCatalog != nil && releaseStore != nil && deploymentStore != nil && relationshipStore != nil {
@@ -2968,6 +2968,9 @@ func classifyInboxEvent(userID, ownerID string, event activities.Event, proposal
 	}
 	if event.Kind == "security_advisory_published" && event.TargetUserID != nil && *event.TargetUserID == userID {
 		return "awareness", "Upgrade affected software", nil
+	}
+	if event.Kind == "package.recovery_required" && event.TargetUserID != nil && *event.TargetUserID == userID {
+		return "response", "Contain unsafe dependency exposure", nil
 	}
 	if event.ResourceType == "deployment" && event.TargetUserID != nil && *event.TargetUserID == userID {
 		switch event.Kind {
