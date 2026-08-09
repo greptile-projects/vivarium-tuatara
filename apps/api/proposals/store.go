@@ -338,11 +338,12 @@ func (s *Store) Create(repositoryID, authorID, title, body string) (Proposal, er
 	return p, nil
 }
 
-// DeleteMigrationWork compensates a failed cross-store evolution link. It
-// removes only the exact freshly-created single-task proposal and refuses once
-// any additional discussion or work could be lost.
+// DeleteMigrationWork compensates a failed cross-store evolution publication.
+// Empty task/assignment IDs describe the exact earlier publication stages. It
+// refuses once any additional discussion, task, assignment, or contribution
+// could be lost.
 func (s *Store) DeleteMigrationWork(repositoryID, proposalID, taskID, assignmentID string) error {
-	if !validID(repositoryID) || !validID(proposalID) || !validID(taskID) || !validID(assignmentID) {
+	if !validID(repositoryID) || !validID(proposalID) || (taskID != "" && !validID(taskID)) || (assignmentID != "" && !validID(assignmentID)) || (taskID == "" && assignmentID != "") {
 		return ErrInvalid
 	}
 	s.mu.Lock()
@@ -356,8 +357,24 @@ func (s *Store) DeleteMigrationWork(repositoryID, proposalID, taskID, assignment
 	if err != nil {
 		return err
 	}
-	if r.Proposal.RepositoryID != repositoryID || len(r.Tasks) != 1 || len(r.Comments) != 0 || r.Tasks[0].ID != taskID || r.Tasks[0].Assignment == nil || r.Tasks[0].Assignment.ID != assignmentID || r.Tasks[0].Contribution != nil {
+	if r.Proposal.RepositoryID != repositoryID || len(r.Comments) != 0 {
 		return ErrInvalid
+	}
+	if taskID == "" {
+		if len(r.Tasks) != 0 || len(r.TaskChanges) != 0 {
+			return ErrInvalid
+		}
+	} else {
+		if len(r.Tasks) != 1 || r.Tasks[0].ID != taskID || r.Tasks[0].Contribution != nil || len(r.TaskChanges) == 0 || r.TaskChanges[0].Action != "created" {
+			return ErrInvalid
+		}
+		if assignmentID == "" {
+			if r.Tasks[0].Assignment != nil || len(r.TaskChanges) != 1 {
+				return ErrInvalid
+			}
+		} else if r.Tasks[0].Assignment == nil || r.Tasks[0].Assignment.ID != assignmentID || len(r.TaskChanges) != 2 || r.TaskChanges[1].Action != "assigned" {
+			return ErrInvalid
+		}
 	}
 	if err = os.Remove(s.path(proposalID)); err != nil {
 		return err

@@ -236,4 +236,14 @@ func TestEvolutionMigrationTaskRequiresTargetAuthorityAndLinksRepositoryWork(t *
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+provider.ID+"/proposals/"+providerLink.ProposalID+"/tasks/"+providerLink.TaskID+"/sessions", startBody, providerOwner.Credential.Token, http.StatusConflict).Body.Close()
 	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+consumer.ID+"/proposals/"+link.ProposalID+"/tasks/"+link.TaskID, `{"status":"completed"}`, consumerOwner.Credential.Token, http.StatusOK).Body.Close()
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+provider.ID+"/proposals/"+providerLink.ProposalID+"/tasks/"+providerLink.TaskID+"/sessions", startBody, providerOwner.Credential.Token, http.StatusConflict).Body.Close()
+	beforeFailure, err := proposalStore.List(provider.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidAssignment := fmt.Sprintf(`{"version":%d,"repository_id":"%s","title":"Invalid assignment","completion_criteria":"Must never persist","target_version":"v2.0.1","assignee_type":"agent","assignee_id":"invalid","mandate":"Force assignment validation failure","base_revision":"%s"}`, result.Evolution.Version, provider.ID, providerCommit)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+provider.ID+"/evolutions/"+plan.ID+"/migration-tasks", invalidAssignment, providerOwner.Credential.Token, http.StatusInternalServerError).Body.Close()
+	afterFailure, err := proposalStore.List(provider.ID)
+	if err != nil || len(afterFailure) != len(beforeFailure) {
+		t.Fatalf("failed assignment left unlinked proposal work: before=%d after=%d err=%v", len(beforeFailure), len(afterFailure), err)
+	}
 }

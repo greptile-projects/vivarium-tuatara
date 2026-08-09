@@ -437,19 +437,27 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 		var proposal proposals.Proposal
 		var assigned proposals.Task
 		plan, link, err := relationStore.CreateEvolutionMigrationTask(plan.RepositoryID, plan.ID, actor.UserID, in.RepositoryID, in.TargetVersion, in.DependencyIDs, in.Version, func() (string, string, error) {
+			compensate := func(taskID, assignmentID string) {
+				if proposal.ID != "" {
+					_ = proposalStore.DeleteMigrationWork(in.RepositoryID, proposal.ID, taskID, assignmentID)
+				}
+			}
 			body := "Migration work for interface evolution " + plan.ID + ".\n\nTarget version: " + strings.TrimSpace(in.TargetVersion) + "\n\nPlan strategy:\n" + plan.Strategy + "\n\nSequencing:\n" + plan.Sequencing
 			var publishErr error
 			proposal, publishErr = proposalStore.Create(in.RepositoryID, actor.UserID, in.Title, body)
 			if publishErr != nil && !errors.Is(publishErr, proposals.ErrDurabilityUncertain) {
+				compensate("", "")
 				return "", "", publishErr
 			}
 			var task proposals.Task
 			task, publishErr = proposalStore.CreateTask(in.RepositoryID, proposal.ID, actor.UserID, in.Title, in.CompletionCriteria, nil, nil)
 			if publishErr != nil && !errors.Is(publishErr, proposals.ErrDurabilityUncertain) {
+				compensate("", "")
 				return "", "", publishErr
 			}
 			assigned, publishErr = proposalStore.AssignTask(in.RepositoryID, proposal.ID, task.ID, actor.UserID, proposals.TaskAssignmentInput{AssigneeType: in.AssigneeType, AssigneeID: in.AssigneeID, Mandate: in.Mandate, RepositoryID: in.RepositoryID, BaseRevision: in.BaseRevision})
 			if publishErr != nil && !errors.Is(publishErr, proposals.ErrDurabilityUncertain) {
+				compensate(task.ID, "")
 				return "", "", publishErr
 			}
 			return proposal.ID, task.ID, nil
