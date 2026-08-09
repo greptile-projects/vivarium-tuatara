@@ -86,5 +86,10 @@ func TestOwnerPublishesVerifiedPackageAndContributorCannot(t *testing.T) {
 	if artifact.Header.Get("X-Checksum-Sha256") != published.SHA256 {
 		t.Fatalf("checksum header = %q", artifact.Header.Get("X-Checksum-Sha256"))
 	}
-	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/releases/"+release.ID+"/packages", payload, owner.Credential.Token, http.StatusConflict).Body.Close()
+	retryResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/releases/"+release.ID+"/packages", payload, owner.Credential.Token, http.StatusOK)
+	var retried packages.Version
+	decodeResponse(t, retryResponse, &retried)
+	if retried.ID != published.ID {
+		t.Fatalf("retry = %#v", retried)
+	}
 }

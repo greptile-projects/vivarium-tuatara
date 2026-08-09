@@ -137,7 +137,9 @@ whenever dependencies change or the web job fails before it starts.
   `/packages/{name}/versions/{version}`, while private versions inherit current
   source-repository read access. Pre-rename failures expose no package version
   and do not reserve a new identity; post-rename parent-directory failures are
-  returned as durability uncertainty even though the complete version may be visible.
+  returned as `202` durability uncertainty with the complete package identity.
+  An exact retry returns that same record, while different content at an existing
+  name/version remains a conflict.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version

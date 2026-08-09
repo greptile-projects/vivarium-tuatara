@@ -35,8 +35,13 @@ func TestPublishRetainsImmutableProvenanceAndArtifact(t *testing.T) {
 	if !bytes.Equal(actual, body) || reopened.SHA256 != item.SHA256 {
 		t.Fatalf("artifact = %q, metadata = %#v", actual, reopened)
 	}
-	if _, err := store.Publish(item, bytes.NewReader(body)); !errors.Is(err, ErrVersionExists) {
-		t.Fatalf("duplicate error = %v", err)
+	retried, err := store.Publish(item, bytes.NewReader(body))
+	if !errors.Is(err, ErrAlreadyPublished) || retried.ID != created.ID {
+		t.Fatalf("retry = %#v, %v", retried, err)
+	}
+	item.Visibility = "private"
+	if _, err = store.Publish(item, bytes.NewReader(body)); !errors.Is(err, ErrVersionExists) {
+		t.Fatalf("conflicting retry error = %v", err)
 	}
 }
 
@@ -98,13 +103,21 @@ func TestPublishReportsPostRenameDirectoryFailures(t *testing.T) {
 			test.force(store)
 			body := []byte("durable package")
 			item := validVersion(body)
-			if _, err = store.Publish(item, bytes.NewReader(body)); !errors.Is(err, errForcedDirectory) {
-				t.Fatalf("publish error = %v", err)
+			created, err := store.Publish(item, bytes.NewReader(body))
+			if !errors.Is(err, ErrDurabilityUncertain) || !errors.Is(err, errForcedDirectory) || created.ID == "" {
+				t.Fatalf("publish = %#v, %v", created, err)
 			}
 			// Rename happens before the injected failure, so the complete version
 			// may be visible even though publication was not acknowledged.
 			if visible, getErr := store.Get(item.Name, item.Version); getErr != nil || visible.Name != item.Name {
 				t.Fatalf("visible version = %#v, %v", visible, getErr)
+			}
+			store.openDirectory = os.Open
+			store.syncDirectory = func(directory *os.File) error { return directory.Sync() }
+			store.closeDirectory = func(directory *os.File) error { return directory.Close() }
+			retried, retryErr := store.Publish(item, bytes.NewReader(body))
+			if !errors.Is(retryErr, ErrAlreadyPublished) || retried.ID != created.ID {
+				t.Fatalf("retry = %#v, %v", retried, retryErr)
 			}
 		})
 	}

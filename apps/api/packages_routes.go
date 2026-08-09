@@ -93,6 +93,13 @@ func registerPackageRoutes(mux *http.ServeMux, repositoryStore *repositories.Sto
 			writeAPIError(w, 422, "invalid_package", "package identity, version, platform, dependencies, or visibility is invalid")
 		case errors.Is(err, packages.ErrChecksum):
 			writeAPIError(w, 409, "package_artifact_changed", "artifact bytes no longer match their build checksum")
+		case errors.Is(err, packages.ErrAlreadyPublished):
+			w.Header().Set("Location", "/packages/"+created.Name+"/versions/"+created.Version)
+			writeJSON(w, http.StatusOK, created)
+		case errors.Is(err, packages.ErrDurabilityUncertain):
+			w.Header().Set("Location", "/packages/"+created.Name+"/versions/"+created.Version)
+			w.Header().Set("Vivarium-Durability", "uncertain")
+			writeJSON(w, http.StatusAccepted, created)
 		case err != nil:
 			writeAPIError(w, 500, "package_publish_failed", "the package could not be published atomically")
 		default:

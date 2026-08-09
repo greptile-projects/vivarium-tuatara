@@ -7,9 +7,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -19,11 +21,13 @@ import (
 )
 
 var (
-	ErrNotFound         = errors.New("package version not found")
-	ErrInvalid          = errors.New("invalid package version")
-	ErrVersionExists    = errors.New("package version already exists")
-	ErrIdentityConflict = errors.New("package identity belongs to another repository")
-	ErrChecksum         = errors.New("package artifact checksum mismatch")
+	ErrNotFound            = errors.New("package version not found")
+	ErrInvalid             = errors.New("invalid package version")
+	ErrVersionExists       = errors.New("package version already exists")
+	ErrIdentityConflict    = errors.New("package identity belongs to another repository")
+	ErrChecksum            = errors.New("package artifact checksum mismatch")
+	ErrAlreadyPublished    = errors.New("matching package version is already published")
+	ErrDurabilityUncertain = errors.New("package version is visible but durability is uncertain")
 )
 
 var identityPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$`)
@@ -133,6 +137,13 @@ func (s *Store) Publish(version Version, artifact io.Reader) (Version, error) {
 	}
 	final := filepath.Join(identityDir, version.Version)
 	if _, err = os.Stat(final); err == nil {
+		existing, getErr := s.Get(version.Name, version.Version)
+		if getErr != nil {
+			return Version{}, getErr
+		}
+		if matchingPublication(existing, version) {
+			return existing, ErrAlreadyPublished
+		}
 		return Version{}, ErrVersionExists
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return Version{}, err
@@ -200,7 +211,7 @@ func (s *Store) Publish(version Version, artifact io.Reader) (Version, error) {
 	}
 	dir, err = s.openDirectory(identityDir)
 	if err != nil {
-		return Version{}, err
+		return version, fmt.Errorf("%w: %w", ErrDurabilityUncertain, err)
 	}
 	err = s.syncDirectory(dir)
 	closeErr = s.closeDirectory(dir)
@@ -210,9 +221,17 @@ func (s *Store) Publish(version Version, artifact io.Reader) (Version, error) {
 	if err != nil {
 		// Rename has made a complete version visible, but its parent-directory
 		// entry was not durably acknowledged. Report uncertainty to the caller.
-		return Version{}, err
+		return version, fmt.Errorf("%w: %w", ErrDurabilityUncertain, err)
 	}
 	return version, nil
+}
+
+func matchingPublication(existing, requested Version) bool {
+	requested.ID = existing.ID
+	requested.Lifecycle = existing.Lifecycle
+	requested.PublishedAt = existing.PublishedAt
+	sort.Slice(requested.Dependencies, func(i, j int) bool { return requested.Dependencies[i].Name < requested.Dependencies[j].Name })
+	return reflect.DeepEqual(existing, requested)
 }
 
 func (s *Store) Get(name, version string) (Version, error) {

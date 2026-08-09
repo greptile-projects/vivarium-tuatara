@@ -868,7 +868,10 @@ exposing metadata and bytes, so a concurrent rerun cannot supersede the
 attested attempt. A stale or failed build, checksum mismatch, conflict, or
 interrupted copy cannot expose a partial version. Parent-directory open, sync,
 or close failure after rename is returned rather than acknowledged; the
-complete version may already be visible, but its durability is uncertain.
+complete version may already be visible, but its durability is uncertain. That
+case returns `202`, `Vivarium-Durability: uncertain`, `Location`, and the full
+package record including its ID. An exact retry returns `200` with the same
+record and ID; a different publication at that name/version returns `409`.
 New-identity failures before rename do not reserve the name.
 
 `GET /repositories/{id}/packages` lists versions originating in a readable
