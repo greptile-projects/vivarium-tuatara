@@ -307,7 +307,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && releaseStore != nil && deploymentStore != nil && relationshipStore != nil {
 		registerRelationshipRoutes(mux, store, repositoryCatalog, releaseStore, deploymentStore, relationshipStore, authStore)
-		registerEvolutionRoutes(mux, repositoryCatalog, proposalStore, pullRequestStore, relationshipStore, authStore)
+		registerEvolutionRoutes(mux, repositoryCatalog, proposalStore, pullRequestStore, releaseStore, deploymentStore, relationshipStore, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && incidentStore != nil {
 		registerIncidentRoutes(mux, store, repositoryCatalog, incidentStore, proposalStore, deploymentStore, releaseStore, pullRequestStore, checkRunStore, authStore, activityStore)

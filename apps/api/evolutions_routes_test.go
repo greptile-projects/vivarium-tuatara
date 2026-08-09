@@ -46,6 +46,7 @@ func TestEvolutionPlanFreezesImpactAndScopesAgentFindings(t *testing.T) {
 	var predecessor relationships.Interface
 	decodeResponse(t, response, &predecessor)
 	_, _ = relationStore.CreateDependency(relationships.Dependency{RepositoryID: consumer.ID, CommitID: string(consumerCommit), ProviderRepositoryID: provider.ID, InterfaceName: "events", Constraint: "<v2.0.0", DeclaredBy: owner.User.ID})
+	_, _ = relationStore.CreateDependency(relationships.Dependency{RepositoryID: consumer.ID, CommitID: string(consumerCommit), ReleaseID: "99999999999999999999999999999999", ProviderRepositoryID: provider.ID, InterfaceName: "events", Constraint: "<v2.0.0", DeclaredBy: owner.User.ID})
 	proposal, err := proposalStore.Create(provider.ID, owner.User.ID, "Events v2", "Remove legacy field")
 	if err != nil {
 		t.Fatal(err)
@@ -56,6 +57,10 @@ func TestEvolutionPlanFreezesImpactAndScopesAgentFindings(t *testing.T) {
 	decodeResponse(t, response, &plan)
 	if len(plan.Impacts) != 1 || plan.Impacts[0].OwnerID != owner.User.ID {
 		t.Fatalf("impact = %#v", plan.Impacts)
+	}
+	plan, err = relationStore.AcknowledgeEvolution(provider.ID, plan.ID, owner.User.ID, consumer.ID, "consumer migration accepted")
+	if err != nil {
+		t.Fatal(err)
 	}
 	analysisBody := `{"mandate":"inspect consumer call sites","repository_ids":["` + consumer.ID + `"]}`
 	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+provider.ID+"/evolutions/"+plan.ID+"/analyses", analysisBody, owner.Credential.Token, http.StatusCreated)
@@ -78,12 +83,20 @@ func TestEvolutionPlanFreezesImpactAndScopesAgentFindings(t *testing.T) {
 	response = authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+provider.ID+"/evolutions/"+plan.ID, "", "", http.StatusOK)
 	var anonymous relationships.Evolution
 	decodeResponse(t, response, &anonymous)
-	if len(anonymous.Impacts) != 0 || len(anonymous.Findings) != 0 {
+	if len(anonymous.Impacts) != 0 || len(anonymous.Findings) != 0 || len(anonymous.Acknowledgements) != 0 {
 		t.Fatalf("anonymous plan leaked private evidence: %#v", anonymous)
+	}
+	response = authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+provider.ID+"/evolutions", "", "", http.StatusOK)
+	var anonymousCollection struct {
+		Evolutions []relationships.Evolution `json:"evolutions"`
+	}
+	decodeResponse(t, response, &anonymousCollection)
+	if len(anonymousCollection.Evolutions) != 1 || len(anonymousCollection.Evolutions[0].Acknowledgements) != 0 {
+		t.Fatalf("anonymous collection leaked private acknowledgements: %#v", anonymousCollection)
 	}
 	response = authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+provider.ID+"/evolutions/"+plan.ID, "", owner.Credential.Token, http.StatusOK)
 	decodeResponse(t, response, &plan)
-	if len(plan.Impacts) != 1 || len(plan.Findings) != 1 {
+	if len(plan.Impacts) != 1 || len(plan.Findings) != 1 || len(plan.Acknowledgements) != 1 {
 		t.Fatalf("authenticated public-provider view = %#v", plan)
 	}
 }

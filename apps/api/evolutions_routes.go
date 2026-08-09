@@ -7,13 +7,15 @@ import (
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/relationships"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 )
 
-func registerEvolutionRoutes(mux *http.ServeMux, repos *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, relationStore *relationships.Store, credentials *auth.Store) {
+func registerEvolutionRoutes(mux *http.ServeMux, repos *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, relationStore *relationships.Store, credentials *auth.Store) {
 	canRead := func(actorID, id string) bool {
 		repo, e := repos.GetByID(id)
 		if e != nil {
@@ -48,6 +50,13 @@ func registerEvolutionRoutes(mux *http.ServeMux, repos *repositories.Store, prop
 			}
 		}
 		v.Findings = findings
+		acknowledgements := v.Acknowledgements[:0]
+		for _, acknowledgement := range v.Acknowledgements {
+			if allowed[acknowledgement.RepositoryID] {
+				acknowledgements = append(acknowledgements, acknowledgement)
+			}
+		}
+		v.Acknowledgements = acknowledgements
 		analyses := v.Analyses[:0]
 		for _, analysis := range v.Analyses {
 			keep := true
@@ -85,6 +94,13 @@ func registerEvolutionRoutes(mux *http.ServeMux, repos *repositories.Store, prop
 			}
 		}
 		v.Findings = findings
+		acknowledgements := v.Acknowledgements[:0]
+		for _, acknowledgement := range v.Acknowledgements {
+			if selected[acknowledgement.RepositoryID] {
+				acknowledgements = append(acknowledgements, acknowledgement)
+			}
+		}
+		v.Acknowledgements = acknowledgements
 		v.Analyses = []relationships.EvolutionAnalysis{a}
 		v.Analyses[0].StoredCredentialID = ""
 		return v
@@ -213,6 +229,9 @@ func registerEvolutionRoutes(mux *http.ServeMux, repos *repositories.Store, prop
 			repo, _ := repos.GetByID(id)
 			for _, d := range ds {
 				if d.ProviderRepositoryID == r.PathValue("id") && d.InterfaceName == predecessor.Name {
+					if dependencyStaleReason(d, releaseStore, deploymentStore) != "" {
+						continue
+					}
 					impacts = append(impacts, relationships.ConsumerImpact{RepositoryID: id, OwnerID: repo.OwnerID, DependencyID: d.ID, CommitID: d.CommitID, Constraint: d.Constraint, State: "affected"})
 				}
 			}
