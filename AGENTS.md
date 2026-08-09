@@ -185,6 +185,12 @@ whenever dependencies change or the web job fails before it starts.
   Private-package notes and build details remain only on update records whose
   reads revalidate package access; ordinary consumer proposals contain redacted
   adoption context so consumer membership cannot disclose publisher evidence.
+  The connected package browser journey proves independently owned publisher
+  and consumer repositories can move from web publication and a repository-
+  scoped standard-client install through agent-authored, independently reviewed
+  updates, exact inventories, releases, deployments, quarantine enforcement,
+  and a reviewed safe replacement. Playwright isolates package records beneath
+  `$PACKAGE_STORAGE_ROOT` with its other temporary API stores.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version
