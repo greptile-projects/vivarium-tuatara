@@ -295,3 +295,18 @@ func TestRepairVerificationFreezesRequiredDefinitionFromTaskBase(t *testing.T) {
 		t.Fatalf("trusted definitions = %#v", definitions)
 	}
 }
+
+func TestOrderedVerificationRunsRecoversTerminalReservation(t *testing.T) {
+	required := checkruns.Definition{Name: "trusted", Image: "alpine:3.22", Command: "true", TimeoutSeconds: 30}
+	reproduction := checkruns.Definition{Name: "private reproduction", Image: "alpine:3.22", Command: "true", TimeoutSeconds: 30}
+	commit := strings.Repeat("a", 40)
+	runs := []checkruns.Run{
+		{ID: strings.Repeat("2", 32), CommitID: commit, Definition: reproduction, State: "succeeded"},
+		{ID: strings.Repeat("1", 32), CommitID: commit, Definition: required, State: "failed"},
+	}
+
+	ordered, ok := orderedVerificationRuns(runs, []checkruns.Definition{required, reproduction}, commit)
+	if !ok || len(ordered) != 2 || ordered[0].ID != strings.Repeat("1", 32) || ordered[1].ID != strings.Repeat("2", 32) {
+		t.Fatalf("terminal reservation was not recovered in definition order: %#v, %v", ordered, ok)
+	}
+}

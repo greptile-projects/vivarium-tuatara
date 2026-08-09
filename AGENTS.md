@@ -312,6 +312,8 @@ whenever dependencies change or the web job fails before it starts.
   repository activity, inbox, incident, proposal, and search flows. An
   authenticated reporter can file against repositories they can currently
   read with affected versions, bounded evidence, and a safe contact channel.
+  The web form accepts a catalog repository or the stable ID from a public
+  repository URL, so an external reporter does not need a collaborator grant.
   Only the reporter, current owners of affected repositories, and an explicitly
   invited response team (at most 20 users) can discover the report. Owners set
   severity and embargo state with compare-and-swap versions and invite
@@ -343,10 +345,12 @@ whenever dependencies change or the web job fails before it starts.
   and unmerged collaborator history. Sanitized status
   and artifact metadata remain response-visible while commands
   and logs never enter ordinary pull/check surfaces. Passing evidence requires
-  independent repository-owner approval before it is integration-ready. Fixed
-  release attestations then prove the release ancestry contains that candidate
-  and every exact release build succeeded with checksummed artifacts, allowing
-  the advisory to derive coverage and remaining gaps across every claimed line.
+  independent repository-owner approval before it is integration-ready.
+  Required checks and private reproductions reserve one exact run set, whose
+  safe projection remains pending until every reserved run is readable.
+  Fixed release attestations then prove the release ancestry contains that
+  candidate and every exact release build succeeded with checksummed artifacts,
+  allowing the advisory to derive coverage and remaining gaps across every claimed line.
   Maintainers prepare a redacted disclosure only after every affected version
   line has an attested release. Publication exposes deterministic repaired
   branches, exact releases and checksums, affected/fixed versions, credits, and

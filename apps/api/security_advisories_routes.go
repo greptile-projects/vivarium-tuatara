@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os/exec"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -24,6 +25,26 @@ import (
 type createdDisclosureRef struct {
 	repository *storage.Repository
 	name       string
+}
+
+func orderedVerificationRuns(runs []checkruns.Run, definitions []checkruns.Definition, commitID string) ([]checkruns.Run, bool) {
+	ordered := make([]checkruns.Run, len(definitions))
+	used := map[string]bool{}
+	for i, definition := range definitions {
+		found := false
+		for _, run := range runs {
+			if !used[run.ID] && run.CommitID == commitID && reflect.DeepEqual(run.Definition, definition) {
+				ordered[i] = run
+				used[run.ID] = true
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, false
+		}
+	}
+	return ordered, true
 }
 
 func rollbackDisclosureRefs(advisoryID string, refs []createdDisclosureRef) {
@@ -755,30 +776,36 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 			writeAPIError(w, 422, "security_reproduction_missing", "the affected version line requires a private security reproduction")
 			return
 		}
-		requiredRuns, err := builds.CreateRequested(task.RepositoryID, session.ID, session.CommitID, requiredDefinitions, actor.UserID)
+		definitions := append(append([]checkruns.Definition{}, requiredDefinitions...), reproductionDefinitions...)
+		executableRuns, err := builds.CreateRequested(task.RepositoryID, session.ID, session.CommitID, definitions, actor.UserID)
 		if err != nil {
-			writeAPIError(w, 500, "repair_verification_failed", "required checks could not be reserved")
+			writeAPIError(w, 500, "repair_verification_failed", "verification evidence could not be reserved")
 			return
 		}
-		reproductionRuns, err := builds.CreateRequested(task.RepositoryID, session.ID, session.CommitID, reproductionDefinitions, actor.UserID)
+		persistedRuns, err := builds.List(task.RepositoryID, session.ID)
 		if err != nil {
-			writeAPIError(w, 500, "repair_verification_failed", "private reproductions could not be reserved")
+			writeAPIError(w, 500, "repair_verification_failed", "verification evidence could not be reopened")
 			return
 		}
-		requiredIDs := make([]string, len(requiredRuns))
-		for i := range requiredRuns {
-			requiredIDs[i] = requiredRuns[i].ID
+		runs, complete := orderedVerificationRuns(persistedRuns, definitions, session.CommitID)
+		if !complete {
+			writeAPIError(w, 500, "repair_verification_failed", "verification evidence reservation is incomplete")
+			return
 		}
-		reproductionIDs := make([]string, len(reproductionRuns))
-		for i := range reproductionRuns {
-			reproductionIDs[i] = reproductionRuns[i].ID
+		requiredIDs := make([]string, len(requiredDefinitions))
+		for i := range requiredDefinitions {
+			requiredIDs[i] = runs[i].ID
+		}
+		reproductionIDs := make([]string, len(reproductionDefinitions))
+		for i := range reproductionDefinitions {
+			reproductionIDs[i] = runs[len(requiredDefinitions)+i].ID
 		}
 		v, verification, err := store.StartRepairVerification(current.ID, actor.UserID, task.ID, session.ID, requiredIDs, reproductionIDs)
 		if err != nil {
 			writeStoreError(w, err)
 			return
 		}
-		for _, run := range append(requiredRuns, reproductionRuns...) {
+		for _, run := range executableRuns {
 			go builds.Execute(run, repository.Path())
 		}
 		writeJSON(w, http.StatusAccepted, map[string]any{"security_advisory": v, "verification": verification})
@@ -824,6 +851,9 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 		}
 		projected := make([]safeRun, 0, len(runs))
 		state := "passed"
+		if len(runs) != len(verification.RequiredRunIDs)+len(verification.ReproductionRunIDs) {
+			state = "pending"
+		}
 		for _, run := range runs {
 			kind := "required_check"
 			if reproduction[run.ID] {
