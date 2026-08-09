@@ -52,6 +52,18 @@ export type RelationshipGraph = {
   interfaces: InterfacePublication[];
   dependencies: DependencyRelationship[];
 };
+export type EvolutionPlan = {
+  id: string; repository_id: string; interface_name: string;
+  predecessor: InterfacePublication; source_kind: "proposal" | "pull_request";
+  source_id: string; candidate_commit_id?: string; candidate_description: string;
+  changes: { kind: string; summary: string; classification: "compatible" | "conditional" | "breaking" | "unknown" }[];
+  impacts: { repository_id: string; owner_id: string; dependency_id: string; commit_id: string; constraint: string; state: string }[];
+  strategy: string; sequencing: string; exceptions?: string; created_by: string;
+  version: number; created_at: string; updated_at: string;
+  findings: { id: string; actor_id: string; repository_ids: string[]; finding: string; uncertainty?: string; created_at: string }[];
+  acknowledgements: { actor_id: string; repository_id: string; note?: string; created_at: string }[];
+  analyses: { id: string; agent_id: string; initiator_id: string; mandate: string; repository_ids: string[]; created_at: string }[];
+};
 export type ReleaseArtifact = {
   id: string;
   attempt: number;

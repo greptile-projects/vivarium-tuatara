@@ -18,6 +18,7 @@ import (
 var (
 	ErrNotFound = errors.New("relationship not found")
 	ErrInvalid  = errors.New("invalid relationship")
+	ErrConflict = errors.New("relationship conflict")
 )
 
 type Interface struct {
@@ -42,6 +43,69 @@ type Dependency struct {
 	Constraint           string    `json:"constraint"`
 	DeclaredBy           string    `json:"declared_by"`
 	DeclaredAt           time.Time `json:"declared_at"`
+}
+
+// Evolution is the shared, mutable decision record for changing one published
+// interface. Repository evidence is frozen when the plan is created; later
+// findings and acknowledgements are attributable append-only records.
+type Evolution struct {
+	ID                   string                     `json:"id"`
+	RepositoryID         string                     `json:"repository_id"`
+	InterfaceName        string                     `json:"interface_name"`
+	Predecessor          Interface                  `json:"predecessor"`
+	SourceKind           string                     `json:"source_kind"`
+	SourceID             string                     `json:"source_id"`
+	CandidateCommitID    string                     `json:"candidate_commit_id,omitempty"`
+	CandidateDescription string                     `json:"candidate_description"`
+	Changes              []CompatibilityChange      `json:"changes"`
+	Impacts              []ConsumerImpact           `json:"impacts"`
+	Strategy             string                     `json:"strategy"`
+	Sequencing           string                     `json:"sequencing"`
+	Exceptions           string                     `json:"exceptions,omitempty"`
+	CreatedBy            string                     `json:"created_by"`
+	Version              int                        `json:"version"`
+	Findings             []EvolutionFinding         `json:"findings"`
+	Analyses             []EvolutionAnalysis        `json:"analyses"`
+	Acknowledgements     []EvolutionAcknowledgement `json:"acknowledgements"`
+	CreatedAt            time.Time                  `json:"created_at"`
+	UpdatedAt            time.Time                  `json:"updated_at"`
+}
+type CompatibilityChange struct {
+	Kind           string `json:"kind"`
+	Summary        string `json:"summary"`
+	Classification string `json:"classification"`
+}
+type ConsumerImpact struct {
+	RepositoryID string `json:"repository_id"`
+	OwnerID      string `json:"owner_id"`
+	DependencyID string `json:"dependency_id"`
+	CommitID     string `json:"commit_id"`
+	Constraint   string `json:"constraint"`
+	State        string `json:"state"`
+}
+type EvolutionFinding struct {
+	ID            string    `json:"id"`
+	ActorID       string    `json:"actor_id"`
+	RepositoryIDs []string  `json:"repository_ids"`
+	Finding       string    `json:"finding"`
+	Uncertainty   string    `json:"uncertainty,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+type EvolutionAnalysis struct {
+	ID                 string    `json:"id"`
+	AgentID            string    `json:"agent_id"`
+	InitiatorID        string    `json:"initiator_id"`
+	CredentialID       string    `json:"-"`
+	StoredCredentialID string    `json:"credential_id,omitempty"`
+	Mandate            string    `json:"mandate"`
+	RepositoryIDs      []string  `json:"repository_ids"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+type EvolutionAcknowledgement struct {
+	ActorID      string    `json:"actor_id"`
+	RepositoryID string    `json:"repository_id"`
+	Note         string    `json:"note,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 type Store struct {
@@ -166,6 +230,202 @@ func (s *Store) ListRepositoryIDs() ([]string, error) {
 	}
 	sort.Strings(ids)
 	return ids, nil
+}
+
+func (s *Store) CreateEvolution(v Evolution) (Evolution, error) {
+	if !validID(v.RepositoryID) || !validID(v.CreatedBy) || !validID(v.Predecessor.ID) || !validName(v.InterfaceName) || (v.SourceKind != "proposal" && v.SourceKind != "pull_request") || !validID(v.SourceID) || (v.CandidateCommitID != "" && !validCommit(v.CandidateCommitID)) || !validEvolutionText(v.CandidateDescription) || !validEvolutionText(v.Strategy) || !validEvolutionText(v.Sequencing) || len(v.Changes) == 0 || len(v.Changes) > 100 {
+		return v, ErrInvalid
+	}
+	for _, c := range v.Changes {
+		if !validChange(c) {
+			return v, ErrInvalid
+		}
+	}
+	v.ID = mustID()
+	v.Version = 1
+	v.CreatedAt = s.now()
+	v.UpdatedAt = v.CreatedAt
+	return v, s.writeEvolution(v, true)
+}
+func (s *Store) ListEvolutions(repo string) ([]Evolution, error) {
+	var v []Evolution
+	if err := s.list(repo, "evolutions", &v); err != nil {
+		return nil, err
+	}
+	sort.Slice(v, func(i, j int) bool { return v[i].CreatedAt.Before(v[j].CreatedAt) })
+	return v, nil
+}
+func (s *Store) GetEvolution(repo, id string) (Evolution, error) {
+	var v Evolution
+	if !validID(repo) || !validID(id) {
+		return v, ErrNotFound
+	}
+	b, e := os.ReadFile(filepath.Join(s.root, repo, "evolutions", id+".json"))
+	if errors.Is(e, os.ErrNotExist) {
+		return v, ErrNotFound
+	}
+	if e == nil {
+		e = json.Unmarshal(b, &v)
+	}
+	return v, e
+}
+func (s *Store) UpdateEvolution(repo, id, actor string, version int, strategy, sequencing, exceptions string) (Evolution, error) {
+	return s.mutateEvolution(repo, id, func(v *Evolution) error {
+		if version != v.Version {
+			return ErrConflict
+		}
+		if !validEvolutionText(strategy) || !validEvolutionText(sequencing) || len(exceptions) > 10000 {
+			return ErrInvalid
+		}
+		v.Strategy = strings.TrimSpace(strategy)
+		v.Sequencing = strings.TrimSpace(sequencing)
+		v.Exceptions = strings.TrimSpace(exceptions)
+		v.Version++
+		v.UpdatedAt = s.now()
+		return nil
+	})
+}
+func (s *Store) AcknowledgeEvolution(repo, id, actor, consumer, note string) (Evolution, error) {
+	if !validID(actor) || !validID(consumer) || len(note) > 2000 {
+		return Evolution{}, ErrInvalid
+	}
+	return s.mutateEvolution(repo, id, func(v *Evolution) error {
+		for _, a := range v.Acknowledgements {
+			if a.ActorID == actor && a.RepositoryID == consumer {
+				return ErrConflict
+			}
+		}
+		v.Acknowledgements = append(v.Acknowledgements, EvolutionAcknowledgement{ActorID: actor, RepositoryID: consumer, Note: strings.TrimSpace(note), CreatedAt: s.now()})
+		v.Version++
+		v.UpdatedAt = s.now()
+		return nil
+	})
+}
+func (s *Store) AddEvolutionFinding(repo, id, actor string, repositories []string, finding, uncertainty string) (Evolution, error) {
+	if !validID(actor) || !validEvolutionText(finding) || len(uncertainty) > 5000 || len(repositories) == 0 || len(repositories) > 50 {
+		return Evolution{}, ErrInvalid
+	}
+	for _, x := range repositories {
+		if !validID(x) {
+			return Evolution{}, ErrInvalid
+		}
+	}
+	return s.mutateEvolution(repo, id, func(v *Evolution) error {
+		v.Findings = append(v.Findings, EvolutionFinding{ID: mustID(), ActorID: actor, RepositoryIDs: repositories, Finding: strings.TrimSpace(finding), Uncertainty: strings.TrimSpace(uncertainty), CreatedAt: s.now()})
+		v.Version++
+		v.UpdatedAt = s.now()
+		return nil
+	})
+}
+func (s *Store) StartEvolutionAnalysis(repo, id, initiator, credential, mandate string, repositories []string) (Evolution, EvolutionAnalysis, error) {
+	if !validID(initiator) || !validID(credential) || !validEvolutionText(mandate) || len(repositories) == 0 || len(repositories) > 50 {
+		return Evolution{}, EvolutionAnalysis{}, ErrInvalid
+	}
+	for _, x := range repositories {
+		if !validID(x) {
+			return Evolution{}, EvolutionAnalysis{}, ErrInvalid
+		}
+	}
+	var a EvolutionAnalysis
+	v, e := s.mutateEvolution(repo, id, func(v *Evolution) error {
+		a = EvolutionAnalysis{ID: mustID(), AgentID: mustID(), InitiatorID: initiator, CredentialID: credential, StoredCredentialID: credential, Mandate: strings.TrimSpace(mandate), RepositoryIDs: repositories, CreatedAt: s.now()}
+		v.Analyses = append(v.Analyses, a)
+		v.Version++
+		v.UpdatedAt = s.now()
+		return nil
+	})
+	return v, a, e
+}
+func (s *Store) EvolutionAnalysis(repo, id, analysis, credential string) (Evolution, EvolutionAnalysis, error) {
+	v, e := s.GetEvolution(repo, id)
+	if e != nil {
+		return v, EvolutionAnalysis{}, e
+	}
+	for _, a := range v.Analyses {
+		if a.ID == analysis && a.StoredCredentialID == credential {
+			a.CredentialID = credential
+			return v, a, nil
+		}
+	}
+	return v, EvolutionAnalysis{}, ErrNotFound
+}
+func (s *Store) mutateEvolution(repo, id string, fn func(*Evolution) error) (Evolution, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lock, e := os.OpenFile(filepath.Join(s.root, ".lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if e != nil {
+		return Evolution{}, e
+	}
+	defer lock.Close()
+	if e = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); e != nil {
+		return Evolution{}, e
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	v, e := s.GetEvolution(repo, id)
+	if e != nil {
+		return v, e
+	}
+	if e = fn(&v); e != nil {
+		return v, e
+	}
+	return v, s.writeEvolutionUnlocked(v, false)
+}
+func (s *Store) writeEvolution(v Evolution, exclusive bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.writeEvolutionUnlocked(v, exclusive)
+}
+func (s *Store) writeEvolutionUnlocked(v Evolution, exclusive bool) error {
+	dir := filepath.Join(s.root, v.RepositoryID, "evolutions")
+	if e := os.MkdirAll(dir, 0700); e != nil {
+		return e
+	}
+	body, e := json.Marshal(v)
+	if e != nil {
+		return e
+	}
+	target := filepath.Join(dir, v.ID+".json")
+	if exclusive {
+		if _, e = os.Stat(target); e == nil {
+			return ErrConflict
+		}
+	}
+	tmp, e := os.CreateTemp(dir, ".evolution-*")
+	if e != nil {
+		return e
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	_ = tmp.Chmod(0600)
+	if _, e = tmp.Write(body); e == nil {
+		e = tmp.Sync()
+	}
+	ce := tmp.Close()
+	if e == nil {
+		e = ce
+	}
+	if e == nil {
+		e = os.Rename(name, target)
+	}
+	return e
+}
+func mustID() string {
+	b := make([]byte, 16)
+	if _, e := rand.Read(b); e != nil {
+		panic(e)
+	}
+	return hex.EncodeToString(b)
+}
+func validEvolutionText(v string) bool { v = strings.TrimSpace(v); return v != "" && len(v) <= 10000 }
+func validChange(v CompatibilityChange) bool {
+	if !validName(v.Kind) || !validEvolutionText(v.Summary) {
+		return false
+	}
+	switch v.Classification {
+	case "compatible", "conditional", "breaking", "unknown":
+		return true
+	}
+	return false
 }
 func (s *Store) list(repo, kind string, target any) error {
 	if !validID(repo) {
