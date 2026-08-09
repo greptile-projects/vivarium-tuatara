@@ -1430,7 +1430,10 @@ evolution plan, incident, or authorized security advisory and retains ordered
 repository work items, optional contribution links, dependencies, and an
 accountable organization human, team, or approved agent. Creation rejects
 sources outside their authoritative store and repositories outside the current
-portfolio. `PATCH
+portfolio. Incident sources additionally require an exact affected repository;
+creation and every read revalidate that the actor remains its owner or
+collaborator, so an organization record cannot disclose a private incident.
+`PATCH
 /organizations/{id}/initiatives/{initiative-id}/items/{item-id}` compare-and-swaps
 the initiative version when changing owner or status. Portfolio reads derive
 incomplete dependency blockers, current ownership health, matching active or

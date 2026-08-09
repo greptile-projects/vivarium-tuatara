@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
@@ -156,7 +157,7 @@ func TestOrganizationInitiativeProjectsDependenciesAndRejectsUnknownSources(t *t
 		t.Fatalf("organization portfolio unavailable: %#v %v", items, err)
 	}
 	portfolioItems, _ := catalog.ListOrganization(group.ID)
-	if !initiativeSourceExists(organizations.InitiativeSource{Kind: "proposal", RepositoryID: repository.ID, ID: proposal.ID}, owner.User.ID, portfolioItems, proposalStore, nil, nil, nil) {
+	if !initiativeSourceExists(organizations.InitiativeSource{Kind: "proposal", RepositoryID: repository.ID, ID: proposal.ID}, owner.User.ID, portfolioItems, catalog, proposalStore, nil, nil, nil) {
 		t.Fatal("initiative source validation failed")
 	}
 	if err := initiativeValidator(group, portfolioItems)(organizations.InitiativeWorkItem{RepositoryID: repository.ID, Owner: organizations.InitiativeOwner{Type: "human", ID: owner.User.ID}}); err != nil {
@@ -209,11 +210,45 @@ func TestSecurityInitiativeAuthorizationChecksEveryAffectedRepository(t *testing
 		t.Fatal(err)
 	}
 	portfolio := []repositories.Repository{{ID: firstRepository, OwnerID: firstOwner}, {ID: secondRepository, OwnerID: secondOwner}}
-	if !initiativeSourceExists(organizations.InitiativeSource{Kind: "security", ID: advisory.ID}, secondOwner, portfolio, nil, nil, nil, securityStore) {
+	if !initiativeSourceExists(organizations.InitiativeSource{Kind: "security", ID: advisory.ID}, secondOwner, portfolio, nil, nil, nil, nil, securityStore) {
 		t.Fatal("owner of the later affected repository was denied")
 	}
-	if initiativeSourceExists(organizations.InitiativeSource{Kind: "security", RepositoryID: firstRepository, ID: advisory.ID}, secondOwner, portfolio, nil, nil, nil, securityStore) {
+	if initiativeSourceExists(organizations.InitiativeSource{Kind: "security", RepositoryID: firstRepository, ID: advisory.ID}, secondOwner, portfolio, nil, nil, nil, nil, securityStore) {
 		t.Fatal("repository-filtered source authorized an unrelated affected owner")
+	}
+}
+
+func TestIncidentInitiativeRequiresExactAuthorizedPortfolioRepository(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	incidentStore, _ := incidents.New(t.TempDir())
+	owner := "0123456789abcdef0123456789abcdef"
+	actor := "11111111111111111111111111111111"
+	portfolioRepository, err := catalog.Create(owner, "portfolio")
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateRepository, err := catalog.Create(owner, "private-incident")
+	if err != nil {
+		t.Fatal(err)
+	}
+	incident, err := incidentStore.Create(incidents.Incident{Title: "Private outage", Summary: "Restricted response.", Severity: "sev2", Status: "investigating", Scopes: []incidents.Scope{{RepositoryID: privateRepository.ID, EnvironmentIDs: []string{}}}, Roles: []incidents.Role{}, DeclaredBy: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	portfolio := []repositories.Repository{portfolioRepository}
+	if initiativeSourceExists(organizations.InitiativeSource{Kind: "incident", ID: incident.ID}, actor, portfolio, catalog, nil, nil, incidentStore, nil) {
+		t.Fatal("unscoped private incident reference was authorized")
+	}
+	if initiativeSourceExists(organizations.InitiativeSource{Kind: "incident", RepositoryID: privateRepository.ID, ID: incident.ID}, actor, portfolio, catalog, nil, nil, incidentStore, nil) {
+		t.Fatal("incident outside the organization portfolio was authorized")
+	}
+	if _, err := catalog.AddCollaborator(owner, privateRepository.ID, actor); err != nil {
+		t.Fatal(err)
+	}
+	portfolio = append(portfolio, privateRepository)
+	if !initiativeSourceExists(organizations.InitiativeSource{Kind: "incident", RepositoryID: privateRepository.ID, ID: incident.ID}, actor, portfolio, catalog, nil, nil, incidentStore, nil) {
+		t.Fatal("exact incident scope denied a current repository collaborator")
 	}
 }
 
