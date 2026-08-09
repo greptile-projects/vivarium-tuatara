@@ -51,7 +51,7 @@ func registerRepositoryBrowseRoutes(mux *http.ServeMux, gitStore *storage.Store,
 		branches := make([]map[string]string, 0)
 		for _, ref := range refs {
 			name, found := strings.CutPrefix(ref.Name, "refs/heads/")
-			if !found || ref.Symbolic {
+			if !found || ref.Symbolic || strings.HasPrefix(name, "vivarium-security/") {
 				continue
 			}
 			if _, err := repo.ReadCommit(storage.ObjectID(ref.Target)); err != nil {
@@ -161,6 +161,11 @@ func registerRepositoryBrowseRoutes(mux *http.ServeMux, gitStore *storage.Store,
 func resolveRevision(repo *storage.Repository, ref string) (storage.ObjectID, error) {
 	if ref == "" {
 		return "", storage.ErrInvalidReference
+	}
+	// Hidden security refs are never browser revisions. The branch collection
+	// and direct browse routes must preserve the same embargo as Git transport.
+	if strings.HasPrefix(ref, "vivarium-security/") {
+		return "", storage.ErrReferenceNotFound
 	}
 	if len(ref) == 40 && strings.IndexFunc(ref, func(r rune) bool { return !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') }) == -1 {
 		id := storage.ObjectID(ref)

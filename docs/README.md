@@ -856,7 +856,8 @@ approved, checksummed release attestation. The packet freezes public credits,
 upgrade guidance, affected and fixed versions, exact release commits, artifact
 checksums, and deterministic repaired branch names. Publishing is a durable,
 retry-safe sequence: exact commits are staged beneath a transport-hidden repair
-namespace, the advisory is made durably and anonymously readable, and only then
+namespace that is also excluded from branch and named-revision browser APIs,
+the advisory is made durably and anonymously readable, and only then
 are public repaired refs and targeted notification records emitted for
 affected repository owners, current collaborators subscribed through repository
 access, and users who initiated deployments of those repositories. Any failure

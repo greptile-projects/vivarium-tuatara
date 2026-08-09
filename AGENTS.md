@@ -358,7 +358,9 @@ whenever dependencies change or the web job fails before it starts.
   activity/inbox notifications only after the public packet is ready.
   Before that durable transition, repair refs are staged only beneath the
   transport-hidden `vivarium-security/disclosures/*` namespace, so failed
-  cleanup cannot reveal remediation. Public refs and idempotent notifications
+  cleanup cannot reveal remediation. Repository branch collection and direct
+  named-revision browser routes exclude the entire `vivarium-security/*`
+  namespace as well. Public refs and idempotent notifications
   follow the public transition; their failures retain explicit public
   remaining work rather than falsely restoring the embargo.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with

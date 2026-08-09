@@ -1170,6 +1170,8 @@ documents. All routes require an authenticated credential with
   pre-publication failure returns `disclosure_paused`; a later failure returns
   `disclosure_incomplete` while retaining public availability and exact
   `remaining` work for responders.
+  Repository branch listing and named-revision browse routes never expose the
+  `vivarium-security/*` staging namespace, including after failed cleanup.
 - `GET /security-advisories/public` and `GET
   /security-advisories/public/{advisory_id}` are anonymous and return only fully
   published disclosure projections. Private evidence, findings, messages,
