@@ -18,12 +18,19 @@ func TestSuspendResumePreservesFrozenFoundation(t *testing.T) {
 	if err != nil || running.State != "running" {
 		t.Fatalf("complete = %#v, %v", running, err)
 	}
-	suspended, err := store.Transition(created.ID, created.CreatorID, created.DefinitionSHA256, "suspended")
+	collaborator := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	suspended, err := store.Transition(created.ID, collaborator, created.DefinitionSHA256, "suspended")
 	if err != nil || suspended.CommitID != created.CommitID {
 		t.Fatalf("suspend = %#v, %v", suspended, err)
 	}
+	if actor := suspended.Events[len(suspended.Events)-1].ActorID; actor != collaborator {
+		t.Fatalf("suspend actor = %q, want collaborator", actor)
+	}
 	if _, err = store.Transition(created.ID, created.CreatorID, "different", "running"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("changed foundation error = %v", err)
+	}
+	if _, err = store.Transition(created.ID, created.CreatorID, "", "running"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("missing foundation error = %v", err)
 	}
 	resumed, err := store.Transition(created.ID, created.CreatorID, created.DefinitionSHA256, "running")
 	if err != nil || resumed.DefinitionSHA256 != created.DefinitionSHA256 || resumed.CommitID != created.CommitID {

@@ -244,8 +244,10 @@ whenever dependencies change or the web job fails before it starts.
   and setup time. Repository, proposal-task, pull-request, and incident-repair
   sources remain attached to the durable workspace with creator, effective
   access, setup evidence, and lifecycle events beneath `$WORKSPACE_STORAGE_ROOT`
-  (default `workspaces`). Setup runs without network or credentials in a
-  capability-dropped container. Suspend/resume uses the definition SHA-256 as a
+  (default `workspaces`). Exact source and setup live in one named,
+  capability-dropped container without network or credentials; `/workspace` is
+  a size-limited tmpfs instead of an unbounded host bind, and setup failure or
+  timeout force-removes that workload. Suspend/resume uses the definition SHA-256 as a
   compare-and-swap foundation and never resolves a moving branch or reruns setup.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,

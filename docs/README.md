@@ -25,8 +25,10 @@ declared tools and dependencies, setup commands, and bounded CPU, memory,
 storage, and setup duration.
 
 The API snapshots the definition and its SHA-256, materializes only the named
-Git commit, and runs setup in a network-disabled, capability-dropped container
-without platform credentials. The workspace record retains source context,
+Git commit into a size-limited tmpfs, and runs setup in that named,
+network-disabled, capability-dropped container without platform credentials.
+Setup failure or timeout force-removes the workload instead of only terminating
+its Docker client. The workspace record retains source context,
 creator, launch-time effective access, commands, bounded output, exit status,
 timestamps, and lifecycle history beneath `$WORKSPACE_STORAGE_ROOT` (default
 `workspaces`). Current repository access is revalidated on reads and lifecycle

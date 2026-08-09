@@ -174,7 +174,7 @@ func (s *Store) Transition(id, actor, expectedFoundation, target string) (Worksp
 	if e != nil {
 		return Workspace{}, e
 	}
-	if expectedFoundation != "" && expectedFoundation != w.DefinitionSHA256 {
+	if expectedFoundation == "" || expectedFoundation != w.DefinitionSHA256 {
 		return Workspace{}, ErrConflict
 	}
 	now := s.now()

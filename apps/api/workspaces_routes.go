@@ -103,13 +103,13 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 		writeJSON(w, 200, map[string]any{"items": items})
 	})
 	mux.HandleFunc("GET /workspaces/{workspace_id}", func(w http.ResponseWriter, r *http.Request) {
-		workspace, ok := authorizeWorkspace(w, r, store, catalog, authStore, "repositories:read")
+		workspace, _, ok := authorizeWorkspace(w, r, store, catalog, authStore, "repositories:read")
 		if ok {
 			writeJSON(w, 200, workspace)
 		}
 	})
 	mux.HandleFunc("POST /workspaces/{workspace_id}/suspend", func(w http.ResponseWriter, r *http.Request) {
-		workspace, ok := authorizeWorkspace(w, r, store, catalog, authStore, "repositories:write")
+		workspace, actor, ok := authorizeWorkspace(w, r, store, catalog, authStore, "repositories:write")
 		if !ok {
 			return
 		}
@@ -120,11 +120,11 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
-		updated, err := store.Transition(workspace.ID, workspace.CreatorID, input.Foundation, "suspended")
+		updated, err := store.Transition(workspace.ID, actor.UserID, input.Foundation, "suspended")
 		writeWorkspaceTransition(w, updated, err)
 	})
 	mux.HandleFunc("POST /workspaces/{workspace_id}/resume", func(w http.ResponseWriter, r *http.Request) {
-		workspace, ok := authorizeWorkspace(w, r, store, catalog, authStore, "repositories:write")
+		workspace, actor, ok := authorizeWorkspace(w, r, store, catalog, authStore, "repositories:write")
 		if !ok {
 			return
 		}
@@ -135,28 +135,28 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
-		updated, err := store.Transition(workspace.ID, workspace.CreatorID, input.Foundation, "running")
+		updated, err := store.Transition(workspace.ID, actor.UserID, input.Foundation, "running")
 		writeWorkspaceTransition(w, updated, err)
 	})
 }
 
-func authorizeWorkspace(w http.ResponseWriter, r *http.Request, store *workspaces.Store, catalog *repositories.Store, authStore *auth.Store, scope string) (workspaces.Workspace, bool) {
+func authorizeWorkspace(w http.ResponseWriter, r *http.Request, store *workspaces.Store, catalog *repositories.Store, authStore *auth.Store, scope string) (workspaces.Workspace, auth.Credential, bool) {
 	actor, ok := authenticateRequest(w, r, authStore, scope, false)
 	if !ok {
-		return workspaces.Workspace{}, false
+		return workspaces.Workspace{}, auth.Credential{}, false
 	}
 	item, err := store.Get(r.PathValue("workspace_id"))
 	if err != nil {
 		writeAPIError(w, 404, "workspace_not_found", "workspace not found")
-		return item, false
+		return item, auth.Credential{}, false
 	}
 	meta, err := catalog.GetByID(item.RepositoryID)
 	collaborator, _ := catalog.HasCollaborator(actor.UserID, item.RepositoryID)
 	if err != nil || (actor.UserID != meta.OwnerID && !collaborator) {
 		writeAPIError(w, 404, "workspace_not_found", "workspace not found")
-		return item, false
+		return item, auth.Credential{}, false
 	}
-	return item, true
+	return item, actor, true
 }
 func writeWorkspaceTransition(w http.ResponseWriter, item workspaces.Workspace, err error) {
 	if errors.Is(err, workspaces.ErrConflict) {
@@ -249,27 +249,42 @@ func validateWorkspaceSource(source workspaces.Source, commit string, ps *propos
 	}
 }
 func provisionWorkspace(gitPath, runtime, id, commit string, d workspaces.Definition) ([]workspaces.SetupStep, bool) {
+	container := "vivarium-workspace-" + id
+	createArgs := []string{"create", "--name", container, "--network=none", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=256", "--cpus", strconv.FormatFloat(d.Resources.CPUs, 'f', -1, 64), "--memory", fmt.Sprintf("%dm", d.Resources.MemoryMB), "--tmpfs", fmt.Sprintf("/workspace:rw,nosuid,nodev,size=%dm", d.Resources.StorageMB), "--workdir", "/workspace", d.Image, "sh", "-lc", "while :; do sleep 3600; done"}
+	if out, err := exec.Command("docker", createArgs...).CombinedOutput(); err != nil {
+		return []workspaces.SetupStep{failedSetupStep("create bounded workspace", out, err)}, true
+	}
+	cleanup := func() { _ = exec.Command("docker", "rm", "-f", container).Run() }
+	if out, err := exec.Command("docker", "start", container).CombinedOutput(); err != nil {
+		cleanup()
+		return []workspaces.SetupStep{failedSetupStep("start bounded workspace", out, err)}, true
+	}
 	archive := exec.Command("git", "--git-dir="+gitPath, "archive", commit)
-	extract := exec.Command("tar", "-x", "-C", runtime)
-	pipe, e := archive.StdoutPipe()
-	if e != nil {
-		return []workspaces.SetupStep{{Command: "materialize exact revision", State: "failed", ExitCode: -1, Output: e.Error(), StartedAt: time.Now().UTC(), CompletedAt: time.Now().UTC()}}, true
+	copyIntoContainer := exec.Command("docker", "cp", "-", container+":/workspace")
+	pipe, err := archive.StdoutPipe()
+	if err != nil {
+		cleanup()
+		return []workspaces.SetupStep{failedSetupStep("materialize exact revision", nil, err)}, true
 	}
-	extract.Stdin = pipe
-	if e = archive.Start(); e == nil {
-		e = extract.Run()
-		_ = archive.Wait()
+	copyIntoContainer.Stdin = pipe
+	if err = archive.Start(); err == nil {
+		err = copyIntoContainer.Run()
+		if archiveErr := archive.Wait(); err == nil {
+			err = archiveErr
+		}
 	}
-	if e != nil {
-		return []workspaces.SetupStep{{Command: "materialize exact revision", State: "failed", ExitCode: -1, Output: e.Error(), StartedAt: time.Now().UTC(), CompletedAt: time.Now().UTC()}}, true
+	if err != nil {
+		cleanup()
+		return []workspaces.SetupStep{failedSetupStep("materialize exact revision", nil, err)}, true
 	}
 	steps := []workspaces.SetupStep{}
 	failed := false
 	for _, command := range d.Setup {
 		start := time.Now().UTC()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(d.Resources.SetupSeconds)*time.Second)
-		args := []string{"run", "--rm", "--name", "vivarium-workspace-" + id, "--network=none", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=256", "--cpus", strconv.FormatFloat(d.Resources.CPUs, 'f', -1, 64), "--memory", fmt.Sprintf("%dm", d.Resources.MemoryMB), "--mount", "type=bind,src=" + runtime + ",dst=/workspace", "--workdir", "/workspace", d.Image, "sh", "-lc", command}
+		args := []string{"exec", "--workdir", "/workspace", container, "sh", "-lc", command}
 		out, e := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+		timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
 		cancel()
 		code := 0
 		state := "passed"
@@ -286,8 +301,28 @@ func provisionWorkspace(gitPath, runtime, id, commit string, d workspaces.Defini
 		}
 		steps = append(steps, workspaces.SetupStep{Command: command, State: state, ExitCode: code, Output: string(out), StartedAt: start, CompletedAt: time.Now().UTC()})
 		if failed {
+			// Killing the Docker client does not guarantee that the named workload
+			// stopped. Force removal is the terminal cleanup boundary for every
+			// failed command, and especially for a client-side timeout.
+			cleanup()
+			if timedOut {
+				steps[len(steps)-1].Output += "\nsetup timed out; bounded container force-removed"
+			}
 			break
 		}
 	}
+	_ = runtime // the durable directory is a presence marker; source lives in the quota-bound container.
 	return steps, failed
+}
+
+func failedSetupStep(command string, output []byte, err error) workspaces.SetupStep {
+	now := time.Now().UTC()
+	message := strings.TrimSpace(string(output))
+	if message == "" {
+		message = err.Error()
+	}
+	if len(message) > 65536 {
+		message = message[:65536]
+	}
+	return workspaces.SetupStep{Command: command, State: "failed", ExitCode: -1, Output: message, StartedAt: now, CompletedAt: now}
 }
