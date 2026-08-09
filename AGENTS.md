@@ -338,7 +338,9 @@ whenever dependencies change or the web job fails before it starts.
   line inside the advisory. Completed repair candidates run required-check
   definitions frozen from the trusted task base plus those embargoed
   reproductions against one exact commit; repair commits cannot substitute the
-  executable check properties while retaining a required name. Sanitized status
+  executable check properties while retaining a required name. Task bases must
+  be commits in the owner-controlled default-branch ancestry, excluding orphan
+  and unmerged collaborator history. Sanitized status
   and artifact metadata remain response-visible while commands
   and logs never enter ordinary pull/check surfaces. Passing evidence requires
   independent repository-owner approval before it is integration-ready. Fixed

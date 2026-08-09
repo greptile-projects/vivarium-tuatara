@@ -1130,6 +1130,9 @@ documents. All routes require an authenticated credential with
   limited to the exact worker, session initiator, or explicit task creator while
   that creator remains a task-repository participant; unrelated collaborators
   cannot alter session history or lifecycle.
+  A base is valid only when it belongs to the repository's owner-controlled
+  default-branch ancestry; orphan objects and unmerged feature commits are
+  rejected before they can supply trusted verification definitions.
   Revocation removes the isolated ref so an open task can start a fresh session.
 - `POST /security-advisories/{advisory_id}/reproductions` lets the affected
   repository owner define an embargoed container reproduction for one exact

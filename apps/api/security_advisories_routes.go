@@ -50,6 +50,26 @@ func trustedRepairCheckDefinitions(repository *storage.Repository, baseCommitID 
 	return definitions, nil
 }
 
+func commitInReferenceAncestry(repository *storage.Repository, referenceName, commitID string) bool {
+	reference, err := repository.ReadReference(referenceName)
+	if err != nil {
+		return false
+	}
+	if reference.Target == commitID {
+		return true
+	}
+	ancestry, err := repository.ListCommitAncestry(storage.ObjectID(reference.Target))
+	if err != nil {
+		return false
+	}
+	for _, commit := range ancestry {
+		if string(commit.ID) == commitID {
+			return true
+		}
+	}
+	return false
+}
+
 func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *repositories.Store, identities *users.Store, store *securityadvisories.Store, releasesStore *releases.Store, builds *checkruns.Store, deploymentsStore *deployments.Store, credentials *auth.Store) {
 	maintainer := func(userID string, v securityadvisories.Advisory) bool {
 		for _, affected := range v.AffectedRepositories {
@@ -436,8 +456,9 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 			writeAPIError(w, 422, "invalid_repair_task", "repair repository is unavailable")
 			return
 		}
-		if _, e = repository.ReadCommit(storage.ObjectID(in.BaseCommitID)); e != nil {
-			writeAPIError(w, 422, "invalid_repair_task", "base commit could not be verified")
+		repositoryRecord, e := repos.GetByID(in.RepositoryID)
+		if e != nil || !commitInReferenceAncestry(repository, "refs/heads/"+repositoryRecord.DefaultBranch, in.BaseCommitID) {
+			writeAPIError(w, 422, "invalid_repair_task", "base commit must belong to the owner-controlled default-branch history")
 			return
 		}
 		v, task, e := store.AddRepairTask(current.ID, actor.UserID, in)

@@ -834,6 +834,8 @@ the required-check names in current branch policy with executable definitions
 frozen from the task's trusted base. It executes those definitions and the
 private reproductions against the exact completed commit, so repair-controlled
 configuration cannot weaken a gate while retaining its required name. The
+task base must be the current default-branch tip or one of its ancestors; orphan
+objects and unmerged feature commits cannot become trusted definition sources.
 ordinary check API cannot discover this session-keyed evidence; advisory status
 projects only names, states, candidate identity, and checksummed artifacts, not
 commands or logs. A repository owner other than the repair worker must approve

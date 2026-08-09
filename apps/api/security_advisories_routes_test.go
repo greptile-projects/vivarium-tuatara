@@ -197,6 +197,20 @@ func TestRepairSessionAuthorizationIsRepositorySpecific(t *testing.T) {
 	taskBody := `{"repository_id":"` + repositoryB.ID + `","version_line":"2.x","title":"Repair private B","mandate":"Fix B.","base_commit_id":"` + string(baseB) + `","assignee_id":"` + assignee.User.ID + `","assignee_kind":"human","dependency_task_ids":[]}`
 	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-tasks", taskBody, ownerA.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repositoryB.ID+"/collaborators", `{"user_id":"`+assignee.User.ID+`"}`, ownerB.Credential.Token, http.StatusCreated).Body.Close()
+	repairRepository, err := gitStore.Open(repositoryB.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orphan := writeCommit(t, repairRepository, 1700000010, "collaborator orphan base")
+	baseCommit, err := repairRepository.ReadCommit(baseB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	feature := writeTestCommit(t, repairRepository, baseCommit.Tree, []storage.ObjectID{baseB}, 1700000011, "unmerged feature base")
+	for _, untrusted := range []storage.ObjectID{orphan, feature} {
+		untrustedBody := strings.Replace(taskBody, string(baseB), string(untrusted), 1)
+		authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-tasks", untrustedBody, ownerA.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
+	}
 	response = authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-tasks", taskBody, ownerA.Credential.Token, http.StatusCreated)
 	var task struct {
 		RepairTask securityadvisories.RepairTask `json:"repair_task"`
