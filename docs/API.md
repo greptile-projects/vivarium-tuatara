@@ -1078,3 +1078,37 @@ historical diagnostic context and stable identifiers for inspecting the live,
 authoritative source. Findings inherit incident participation checks, retain
 their explicit participant/public audience, and use the same idempotent
 operation-ID conflict contract as updates.
+## Private security advisories
+
+Security reports are a deliberately separate collaboration boundary. They are
+not repository proposals, incidents, activity events, inbox items, or search
+documents. All routes require an authenticated credential with
+`repositories:read`.
+
+- `POST /security-advisories` accepts `title`, `description`, a required safe
+  `contact`, one or more `affected_repositories` containing a
+  `repository_id` and non-empty `versions`, and bounded `evidence` entries with
+  `label` and `description`. The reporter must currently be able to read every
+  named repository; this permits an outside researcher to report against a
+  public repository without becoming a collaborator.
+- `GET /security-advisories` returns only reports available to the caller under
+  the shared `limit`/`after` cursor contract. `GET
+  /security-advisories/{advisory_id}` also records a durable `viewed` access
+  event.
+- `PATCH /security-advisories/{advisory_id}` accepts `expected_version`,
+  `severity` (`low`, `moderate`, `high`, or `critical`), and `embargo_state`
+  (`reported`, `triaging`, `embargoed`, or `coordinating`). Only a current owner
+  of an affected repository may make this compare-and-swap triage decision.
+- `POST /security-advisories/{advisory_id}/responders` accepts a stable
+  `user_id`. An affected repository owner may invite at most 20 responders.
+- `POST /security-advisories/{advisory_id}/messages` accepts a bounded `body`
+  from any authorized participant.
+
+A report is discoverable only by its reporter, current owners of affected
+repositories, and its explicitly invited response team. Unauthorized detail
+reads return not-found. The record retains immutable attributed report,
+triage, invitation, message, and detail-access events in `access_log`; it also
+retains the reporter contact channel and all protected messages. No advisory
+operation emits ordinary repository activity or inbox notifications. Durable
+records live beneath `$SECURITY_ADVISORY_STORAGE_ROOT`, which defaults to
+`security-advisories`, with owner-only directory and record permissions.

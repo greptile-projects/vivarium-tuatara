@@ -795,3 +795,18 @@ Incident response carries operational evidence through an attributed
 post-incident review and into proposal-owned corrective commitments. Those
 commitments remain visible from assignment through pull review, checks,
 release, and deployment instead of ending when the incident is marked resolved.
+## Protected vulnerability coordination
+
+`securityadvisories.Store` is an isolated durable boundary for suspected
+vulnerabilities. An authenticated researcher can name readable public or
+private repositories, affected version expressions, bounded evidence, and a
+safe return channel. Discovery is restricted to the reporter, current owners
+of affected repositories, and a maintainer-invited response team capped at 20
+people. Owners make versioned severity and embargo decisions; every detail
+read and mutation is retained in the report's own access audit.
+
+This subsystem intentionally has no dependency on the activity or inbox
+stores. Protected titles, evidence, messages, membership, and even report
+existence therefore do not enter ordinary repository collaboration feeds. The
+web surface at `/security` uses only the dedicated `/security-advisories`
+contract and explains that privacy boundary before submission.

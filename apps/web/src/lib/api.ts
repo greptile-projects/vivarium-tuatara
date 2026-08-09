@@ -216,6 +216,23 @@ export type Incident = {
   updated_at: string;
   resolved_at?: string;
 };
+export type SecurityAdvisory = {
+  id: string;
+  title: string;
+  description: string;
+  affected_repositories: { repository_id: string; versions: string[] }[];
+  evidence: { label: string; description: string }[];
+  contact: string;
+  reporter_id: string;
+  response_team: string[];
+  severity: "untriaged" | "low" | "moderate" | "high" | "critical";
+  embargo_state: "reported" | "triaging" | "embargoed" | "coordinating";
+  messages: { id: string; actor_id: string; body: string; created_at: string }[];
+  access_log: { id: string; actor_id: string; action: string; detail?: string; created_at: string }[];
+  version: number;
+  created_at: string;
+  updated_at: string;
+};
 export type IncidentAction = {
   id: string;
   operation_id: string;
