@@ -787,6 +787,10 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 			writeAPIError(w, 403, "package_recovery_forbidden", "only the consuming repository owner can prioritize recovery work")
 			return
 		}
+		if proposalStore == nil {
+			writeAPIError(w, http.StatusServiceUnavailable, "package_recovery_unavailable", "proposal collaboration is unavailable")
+			return
+		}
 		var input struct {
 			PackageName  string `json:"package_name"`
 			Version      string `json:"version"`

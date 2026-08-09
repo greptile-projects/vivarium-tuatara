@@ -1,11 +1,36 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
+
+func TestPackageRecoveryRejectsUnavailableProposalCollaboration(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	releaseStore, _ := releases.New(t.TempDir())
+	buildStore, _ := checkruns.New(t.TempDir())
+	packageStore, _ := packages.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, buildStore, releaseStore, packageStore))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "recovery-owner")
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"consumer"}`, owner.Credential.Token, http.StatusCreated)
+	var repository repositories.Repository
+	decodeResponse(t, response, &repository)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/package-recoveries", `{}`, owner.Credential.Token, http.StatusServiceUnavailable).Body.Close()
+}
 
 func TestPromotionDependencyPolicyFailsClosed(t *testing.T) {
 	if err := verifyPromotionDependencies(nil, strings.Repeat("a", 32), strings.Repeat("b", 40)); err == nil {
