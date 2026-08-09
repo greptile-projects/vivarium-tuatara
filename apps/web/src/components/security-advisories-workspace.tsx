@@ -212,7 +212,13 @@ export function SecurityAdvisoriesWorkspace({
     event.preventDefault();
     if (!token) return;
     const data = new FormData(event.currentTarget);
-    const repositoryId = String(data.get("repository_id"));
+    const repositoryId =
+      String(data.get("public_repository_id")).trim() ||
+      String(data.get("repository_id"));
+    if (!repositoryId) {
+      setError("Choose a repository or enter its public repository ID.");
+      return;
+    }
     setPending(true);
     setError("");
     try {
@@ -1054,7 +1060,9 @@ export function SecurityAdvisoriesWorkspace({
                               .map((x) => x.trim())
                               .filter(Boolean),
                             scheduled_at: data.get("scheduled_at")
-                              ? new Date(String(data.get("scheduled_at"))).toISOString()
+                              ? new Date(
+                                  String(data.get("scheduled_at")),
+                                ).toISOString()
                               : null,
                           },
                           "POST",
@@ -1241,7 +1249,7 @@ export function SecurityAdvisoriesWorkspace({
             </label>
             <label className="text-sm font-semibold">
               Affected repository
-              <select className={field} name="repository_id" required>
+              <select className={field} name="repository_id">
                 <option value="">Select a repository</option>
                 {repositories.map((repo) => (
                   <option key={repo.id} value={repo.id}>
@@ -1249,6 +1257,20 @@ export function SecurityAdvisoriesWorkspace({
                   </option>
                 ))}
               </select>
+            </label>
+            <label className="text-sm font-semibold">
+              Or public repository ID
+              <input
+                className={field}
+                name="public_repository_id"
+                pattern="[a-f0-9]{32}"
+                maxLength={32}
+                placeholder="For a public project outside your catalog"
+              />
+              <span className="mt-1 block text-xs font-normal text-[var(--muted)]">
+                External reporters can copy the stable ID from a public
+                repository URL without requesting collaborator access.
+              </span>
             </label>
             <label className="text-sm font-semibold">
               Affected versions

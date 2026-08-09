@@ -810,6 +810,9 @@ stores. Protected titles, evidence, messages, membership, and even report
 existence therefore do not enter ordinary repository collaboration feeds. The
 web surface at `/security` uses only the dedicated `/security-advisories`
 contract and explains that privacy boundary before submission.
+The report form accepts either a repository from the actor's catalog or the
+stable ID copied from a public repository URL, so an outside researcher does
+not need a collaborator grant merely to file through the web application.
 
 Participants build a protected evidence graph from verified commits,
 dependency resolutions, releases, builds, release artifacts, and deployments.
@@ -841,6 +844,9 @@ projects only names, states, candidate identity, and checksummed artifacts, not
 commands or logs. A repository owner other than the repair worker must approve
 a wholly passing proof before the change is marked ready for protected
 integration.
+Required checks and private reproductions are reserved as one exact run set;
+the safe read projection remains pending until every reserved run is present,
+so partial publication cannot appear approval-ready.
 
 After integration, an owner can attach a release candidate only when its commit
 contains the approved repair candidate, all exact release build steps succeeded,
@@ -866,3 +872,8 @@ workspace. Public advisory reads remain not-found until the durable disclosure
 transition, then stay available while downstream delivery retries; they never
 serialize protected evidence, findings, messages, contact details, commands, or
 logs.
+The connected browser regression carries an external report through frozen
+agent diagnosis, isolated Git repair, private reproduction and required-check
+proof, independent approval, release build attestation, browser disclosure,
+anonymous redaction checks, repaired branch publication, and targeted upgrade
+notification as one permission-aware journey.
