@@ -1401,3 +1401,28 @@ records live beneath `$SECURITY_ADVISORY_STORAGE_ROOT`, which defaults to
 The Git transport hides `refs/heads/vivarium-security/` from ordinary clone,
 fetch, and push discovery, including owner credentials. Repair credentials
 advertise only their exact branch and grant no repository membership.
+
+## Organizations
+
+Authenticated users create durable groups with `POST /organizations` and list
+their memberships or pending invitations with `GET /organizations`. An owner
+invites a stable user ID through `POST /organizations/{id}/invitations`; only
+that user accepts at `POST .../invitations/{invitation_id}/accept`. Owners may
+remove non-owner members with `DELETE /organizations/{id}/members/{user_id}`.
+
+Members create a repository directly in the group with `POST
+/organizations/{id}/repositories`. An existing individual repository moves
+through an explicit handshake: its current custodian requests `POST
+/organizations/{id}/repository-transfers`, then a group owner accepts `POST
+.../repository-transfers/{transfer_id}/accept`. Acceptance sets the
+repository's `organization_id` without changing its `id`, `owner_id`, Git
+remote, refs, creation time, or any repository-scoped evidence. Group access is
+tracked separately from independent collaborator grants. The request endpoint
+returns only the pending transfer record, never the target organization's
+membership roster. Every organization mutation requires `repositories:write`;
+read-scoped credentials can only inspect authorized organization resources.
+
+`GET /organizations/{id}/portfolio` returns the group's repositories,
+published packages, open proposals and pulls, releases, and unresolved
+incidents. Only accepted members can read the portfolio. Records live beneath
+`$ORGANIZATION_STORAGE_ROOT`, which defaults to `organizations`.

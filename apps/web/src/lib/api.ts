@@ -8,12 +8,33 @@ export type User = {
 export type Repository = {
   id: string;
   owner_id: string;
+  organization_id?: string;
   name: string;
   visibility: "private" | "public";
   default_branch: string;
   git_remote: string;
   created_at: string;
   upstream_repository_id?: string;
+};
+export type Organization = {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  created_by: string;
+  created_at: string;
+  members: { user_id: string; role: "owner" | "member"; joined_at: string }[];
+  invitations: { id: string; user_id: string; invited_by: string; created_at: string }[];
+  transfers: { id: string; repository_id: string; from_owner_id: string; requested_by: string; status: "pending" | "accepted"; requested_at: string; accepted_by?: string; accepted_at?: string }[];
+};
+export type OrganizationPortfolio = {
+  organization: Organization;
+  repositories: Repository[];
+  packages: PackageVersion[];
+  active_proposals: Proposal[];
+  active_pulls: PullRequest[];
+  releases: ReleaseCandidate[];
+  active_incidents: Incident[];
 };
 export type ReleaseCandidate = {
   id: string;

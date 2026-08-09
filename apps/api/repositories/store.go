@@ -36,17 +36,102 @@ const (
 )
 
 type Repository struct {
-	ID                   string    `json:"id"`
-	OwnerID              string    `json:"owner_id"`
-	Name                 string    `json:"name"`
-	Visibility           string    `json:"visibility"`
-	DefaultBranch        string    `json:"default_branch"`
-	GitRemote            string    `json:"git_remote"`
-	CreatedAt            time.Time `json:"created_at"`
-	UpstreamRepositoryID string    `json:"upstream_repository_id,omitempty"`
-	collaboratorIDs      string
-	requiredChecks       string
-	integrationPolicies  string
+	ID                    string    `json:"id"`
+	OwnerID               string    `json:"owner_id"`
+	OrganizationID        string    `json:"organization_id,omitempty"`
+	Name                  string    `json:"name"`
+	Visibility            string    `json:"visibility"`
+	DefaultBranch         string    `json:"default_branch"`
+	GitRemote             string    `json:"git_remote"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpstreamRepositoryID  string    `json:"upstream_repository_id,omitempty"`
+	collaboratorIDs       string
+	organizationMemberIDs string
+	requiredChecks        string
+	integrationPolicies   string
+}
+
+// SetOrganization associates an existing repository with an accountable group
+// without replacing its catalog or Git identity. The current user custodian is
+// retained for compatibility with owner-governed workflows.
+func (s *Store) SetOrganization(ownerID, id, organizationID string, memberIDs []string) (Repository, error) {
+	if !validID(organizationID) {
+		return Repository{}, ErrInvalidName
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return Repository{}, err
+	}
+	defer unlock()
+	repository, err := s.read(id)
+	if err != nil || repository.OwnerID != ownerID {
+		return Repository{}, ErrNotFound
+	}
+	if repository.OrganizationID != "" && repository.OrganizationID != organizationID {
+		return Repository{}, ErrNameTaken
+	}
+	repository.OrganizationID = organizationID
+	ids := collaboratorIDs(repository)
+	projected := organizationCollaboratorIDs(repository)
+	for _, memberID := range memberIDs {
+		if !validID(memberID) || memberID == ownerID {
+			continue
+		}
+		if slices.Contains(ids, memberID) {
+			continue
+		}
+		ids = append(ids, memberID)
+		projected = append(projected, memberID)
+	}
+	sort.Strings(ids)
+	sort.Strings(projected)
+	repository.collaboratorIDs = strings.Join(ids, ",")
+	repository.organizationMemberIDs = strings.Join(projected, ",")
+	if err := s.write(repository); err != nil {
+		return Repository{}, err
+	}
+	return repository, nil
+}
+
+// RemoveOrganizationMember revokes only access projected from organization
+// membership. A collaborator grant that predated the transfer remains intact.
+func (s *Store) RemoveOrganizationMember(ownerID, id, userID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	repository, err := s.read(id)
+	if err != nil || repository.OwnerID != ownerID {
+		return ErrNotFound
+	}
+	projected := organizationCollaboratorIDs(repository)
+	if !slices.Contains(projected, userID) {
+		return nil
+	}
+	projected = slices.DeleteFunc(projected, func(v string) bool { return v == userID })
+	ids := slices.DeleteFunc(collaboratorIDs(repository), func(v string) bool { return v == userID })
+	repository.organizationMemberIDs, repository.collaboratorIDs = strings.Join(projected, ","), strings.Join(ids, ",")
+	return s.write(repository)
+}
+
+func (s *Store) ListOrganization(organizationID string) ([]Repository, error) {
+	all, err := s.loadActive()
+	if err != nil {
+		return nil, err
+	}
+	result := []Repository{}
+	for _, repository := range all {
+		if repository.OrganizationID == organizationID {
+			result = append(result, repository)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.Before(result[j].CreatedAt) })
+	return result, nil
 }
 
 type BranchCheckRequirements struct {
@@ -725,6 +810,13 @@ func (s *Store) AddCollaborator(ownerID, id, userID string) (Collaborator, error
 	ids := collaboratorIDs(repository)
 	for _, existing := range ids {
 		if existing == userID {
+			projected := organizationCollaboratorIDs(repository)
+			if slices.Contains(projected, userID) {
+				repository.organizationMemberIDs = strings.Join(slices.DeleteFunc(projected, func(v string) bool { return v == userID }), ",")
+				if err := s.write(repository); err != nil {
+					return Collaborator{}, err
+				}
+			}
 			return Collaborator{UserID: userID, Role: Contributor}, nil
 		}
 	}
@@ -901,17 +993,19 @@ func (s *Store) read(id string) (Repository, error) {
 	}
 	var repository Repository
 	var record struct {
-		ID                   string                    `json:"id"`
-		OwnerID              string                    `json:"owner_id"`
-		Name                 string                    `json:"name"`
-		Visibility           string                    `json:"visibility"`
-		DefaultBranch        string                    `json:"default_branch"`
-		GitRemote            string                    `json:"git_remote"`
-		CreatedAt            time.Time                 `json:"created_at"`
-		UpstreamRepositoryID string                    `json:"upstream_repository_id,omitempty"`
-		CollaboratorIDs      []string                  `json:"collaborator_ids,omitempty"`
-		RequiredChecks       []BranchCheckRequirements `json:"required_checks,omitempty"`
-		IntegrationQueues    []IntegrationQueuePolicy  `json:"integration_queues,omitempty"`
+		ID                    string                    `json:"id"`
+		OwnerID               string                    `json:"owner_id"`
+		OrganizationID        string                    `json:"organization_id,omitempty"`
+		Name                  string                    `json:"name"`
+		Visibility            string                    `json:"visibility"`
+		DefaultBranch         string                    `json:"default_branch"`
+		GitRemote             string                    `json:"git_remote"`
+		CreatedAt             time.Time                 `json:"created_at"`
+		UpstreamRepositoryID  string                    `json:"upstream_repository_id,omitempty"`
+		CollaboratorIDs       []string                  `json:"collaborator_ids,omitempty"`
+		OrganizationMemberIDs []string                  `json:"organization_member_ids,omitempty"`
+		RequiredChecks        []BranchCheckRequirements `json:"required_checks,omitempty"`
+		IntegrationQueues     []IntegrationQueuePolicy  `json:"integration_queues,omitempty"`
 	}
 	if json.Unmarshal(data, &record) != nil {
 		return Repository{}, fmt.Errorf("corrupt repository metadata %s", id)
@@ -938,11 +1032,14 @@ func (s *Store) read(id string) (Repository, error) {
 		seenQueues[policy.Branch] = true
 	}
 	integrationPolicies, _ := json.Marshal(record.IntegrationQueues)
-	repository = Repository{ID: record.ID, OwnerID: record.OwnerID, Name: record.Name, Visibility: record.Visibility, DefaultBranch: record.DefaultBranch, GitRemote: record.GitRemote, CreatedAt: record.CreatedAt, UpstreamRepositoryID: record.UpstreamRepositoryID, collaboratorIDs: strings.Join(record.CollaboratorIDs, ","), requiredChecks: string(requirements), integrationPolicies: string(integrationPolicies)}
+	repository = Repository{ID: record.ID, OwnerID: record.OwnerID, OrganizationID: record.OrganizationID, Name: record.Name, Visibility: record.Visibility, DefaultBranch: record.DefaultBranch, GitRemote: record.GitRemote, CreatedAt: record.CreatedAt, UpstreamRepositoryID: record.UpstreamRepositoryID, collaboratorIDs: strings.Join(record.CollaboratorIDs, ","), organizationMemberIDs: strings.Join(record.OrganizationMemberIDs, ","), requiredChecks: string(requirements), integrationPolicies: string(integrationPolicies)}
 	if repository.ID != id || !validID(repository.OwnerID) || repository.GitRemote != "/git/"+id+".git" || repository.DefaultBranch != "main" {
 		return Repository{}, fmt.Errorf("corrupt repository metadata %s", id)
 	}
 	if repository.UpstreamRepositoryID != "" && (!validID(repository.UpstreamRepositoryID) || repository.UpstreamRepositoryID == repository.ID) {
+		return Repository{}, fmt.Errorf("corrupt repository metadata %s", id)
+	}
+	if repository.OrganizationID != "" && !validID(repository.OrganizationID) {
 		return Repository{}, fmt.Errorf("corrupt repository metadata %s", id)
 	}
 	seen := map[string]bool{}
@@ -951,6 +1048,11 @@ func (s *Store) read(id string) (Repository, error) {
 			return Repository{}, fmt.Errorf("corrupt repository metadata %s", id)
 		}
 		seen[collaboratorID] = true
+	}
+	for _, memberID := range organizationCollaboratorIDs(repository) {
+		if !seen[memberID] {
+			return Repository{}, fmt.Errorf("corrupt repository metadata %s", id)
+		}
 	}
 	// Records created before visibility existed are private by default.
 	if repository.Visibility == "" {
@@ -1006,18 +1108,20 @@ func (s *Store) loadActive() ([]Repository, error) {
 
 func (s *Store) write(repository Repository) error {
 	record := struct {
-		ID                   string                    `json:"id"`
-		OwnerID              string                    `json:"owner_id"`
-		Name                 string                    `json:"name"`
-		Visibility           string                    `json:"visibility"`
-		DefaultBranch        string                    `json:"default_branch"`
-		GitRemote            string                    `json:"git_remote"`
-		CreatedAt            time.Time                 `json:"created_at"`
-		UpstreamRepositoryID string                    `json:"upstream_repository_id,omitempty"`
-		CollaboratorIDs      []string                  `json:"collaborator_ids,omitempty"`
-		RequiredChecks       []BranchCheckRequirements `json:"required_checks,omitempty"`
-		IntegrationQueues    []IntegrationQueuePolicy  `json:"integration_queues,omitempty"`
-	}{repository.ID, repository.OwnerID, repository.Name, repository.Visibility, repository.DefaultBranch, repository.GitRemote, repository.CreatedAt, repository.UpstreamRepositoryID, collaboratorIDs(repository), decodeRequirements(repository.requiredChecks), decodeIntegrationPolicies(repository.integrationPolicies)}
+		ID                    string                    `json:"id"`
+		OwnerID               string                    `json:"owner_id"`
+		OrganizationID        string                    `json:"organization_id,omitempty"`
+		Name                  string                    `json:"name"`
+		Visibility            string                    `json:"visibility"`
+		DefaultBranch         string                    `json:"default_branch"`
+		GitRemote             string                    `json:"git_remote"`
+		CreatedAt             time.Time                 `json:"created_at"`
+		UpstreamRepositoryID  string                    `json:"upstream_repository_id,omitempty"`
+		CollaboratorIDs       []string                  `json:"collaborator_ids,omitempty"`
+		OrganizationMemberIDs []string                  `json:"organization_member_ids,omitempty"`
+		RequiredChecks        []BranchCheckRequirements `json:"required_checks,omitempty"`
+		IntegrationQueues     []IntegrationQueuePolicy  `json:"integration_queues,omitempty"`
+	}{repository.ID, repository.OwnerID, repository.OrganizationID, repository.Name, repository.Visibility, repository.DefaultBranch, repository.GitRemote, repository.CreatedAt, repository.UpstreamRepositoryID, collaboratorIDs(repository), organizationCollaboratorIDs(repository), decodeRequirements(repository.requiredChecks), decodeIntegrationPolicies(repository.integrationPolicies)}
 	data, err := json.Marshal(record)
 	if err != nil {
 		return err
@@ -1051,6 +1155,13 @@ func collaboratorIDs(repository Repository) []string {
 		return nil
 	}
 	return strings.Split(repository.collaboratorIDs, ",")
+}
+
+func organizationCollaboratorIDs(repository Repository) []string {
+	if repository.organizationMemberIDs == "" {
+		return []string{}
+	}
+	return strings.Split(repository.organizationMemberIDs, ",")
 }
 
 func (s *Store) lockRoot() (func(), error) {
