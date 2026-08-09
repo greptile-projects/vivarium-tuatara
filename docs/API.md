@@ -1426,3 +1426,22 @@ read-scoped credentials can only inspect authorized organization resources.
 published packages, open proposals and pulls, releases, and unresolved
 incidents. Only accepted members can read the portfolio. Records live beneath
 `$ORGANIZATION_STORAGE_ROOT`, which defaults to `organizations`.
+
+Owners create nested responsibility groups with `POST
+/organizations/{id}/teams`. A team has a unique slug, optional `parent_id`, and
+`public` or `organization` visibility. `PUT .../teams/{team_id}/members` adds or
+updates an accepted organization member as a `member` or `maintainer`, while
+`DELETE .../members/{user_id}` removes direct membership. Both take
+`expected_version`; stale concurrent commands return `409`. `POST
+.../teams/{team_id}/responsibilities` associates an organization repository
+and named area at the same compare-and-swap boundary. These associations
+describe stewardship and do not grant repository authority.
+
+`POST /organizations/{id}/agents` registers an approved identity with a name,
+unique slug, visibility, non-empty capabilities, current member operators, and
+optional teams. Approval creates no credential or access. Unauthenticated `GET
+/organizations/{id}/directory` returns public teams, explained direct and
+nested effective membership, public-repository responsibility, and public
+agents. Members additionally receive organization-visible records and the
+immutable actor-stamped event history. Private repository responsibility and
+organization-only nesting are omitted from public projection.

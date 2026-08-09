@@ -27,6 +27,33 @@ type organizationInviteInput struct {
 type organizationRepositoryInput struct {
 	Name string `json:"name"`
 }
+type organizationTeamInput struct {
+	Name        string `json:"name"`
+	Slug        string `json:"slug"`
+	Description string `json:"description"`
+	ParentID    string `json:"parent_id"`
+	Visibility  string `json:"visibility"`
+}
+type organizationTeamMemberInput struct {
+	UserID          string `json:"user_id"`
+	Role            string `json:"role"`
+	ExpectedVersion int    `json:"expected_version"`
+}
+type organizationResponsibilityInput struct {
+	RepositoryID    string `json:"repository_id"`
+	Area            string `json:"area"`
+	Description     string `json:"description"`
+	ExpectedVersion int    `json:"expected_version"`
+}
+type organizationAgentInput struct {
+	Name         string   `json:"name"`
+	Slug         string   `json:"slug"`
+	Description  string   `json:"description"`
+	Visibility   string   `json:"visibility"`
+	Capabilities []string `json:"capabilities"`
+	OperatorIDs  []string `json:"operator_ids"`
+	TeamIDs      []string `json:"team_ids"`
+}
 
 func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, repos *repositories.Store, usersStore *users.Store, credentials *auth.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, packageStore *packages.Store, incidentStore *incidents.Store) {
 	project := func(v organizations.Organization, actor string) organizations.Organization {
@@ -90,6 +117,141 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 			return
 		}
 		writeJSON(w, 200, project(v, actor.UserID))
+	})
+	mux.HandleFunc("GET /organizations/{id}/directory", func(w http.ResponseWriter, r *http.Request) {
+		v, err := orgs.Get(r.PathValue("id"))
+		if err != nil {
+			writeAPIError(w, 404, "organization_not_found", "organization not found")
+			return
+		}
+		actor, present, authOK := authenticateOptionalRequest(w, r, credentials, "repositories:read", false)
+		if !authOK {
+			return
+		}
+		member := present && organizations.HasRole(v, actor.UserID, "")
+		publicRepos := map[string]bool{}
+		items, listErr := repos.ListOrganization(v.ID)
+		if listErr != nil {
+			writeRepositoryError(w, listErr)
+			return
+		}
+		for _, repo := range items {
+			if repo.Visibility == repositories.Public {
+				publicRepos[repo.ID] = true
+			}
+		}
+		writeJSON(w, 200, organizations.ProjectDirectory(v, member, publicRepos))
+	})
+	mux.HandleFunc("POST /organizations/{id}/teams", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in organizationTeamInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_team", "team content is required")
+			return
+		}
+		if in.Visibility == "" {
+			in.Visibility = "organization"
+		}
+		v, err := orgs.CreateTeam(r.PathValue("id"), actor.UserID, in.Name, in.Slug, in.Description, in.ParentID, in.Visibility)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		w.Header().Set("Location", "/organizations/"+v.ID+"/teams/"+v.Teams[len(v.Teams)-1].ID)
+		writeJSON(w, 201, project(v, actor.UserID))
+	})
+	mux.HandleFunc("PUT /organizations/{id}/teams/{team_id}/members", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in organizationTeamMemberInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_team_member", "user_id, role, and expected_version are required")
+			return
+		}
+		if _, err := usersStore.Get(in.UserID); err != nil {
+			writeAPIError(w, 400, "invalid_team_member", "user_id must identify an existing user")
+			return
+		}
+		v, err := orgs.AddTeamMember(r.PathValue("id"), r.PathValue("team_id"), actor.UserID, in.UserID, in.Role, in.ExpectedVersion)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		writeJSON(w, 200, project(v, actor.UserID))
+	})
+	mux.HandleFunc("DELETE /organizations/{id}/teams/{team_id}/members/{user_id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int `json:"expected_version"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_team_member", "expected_version is required")
+			return
+		}
+		_, err := orgs.RemoveTeamMember(r.PathValue("id"), r.PathValue("team_id"), actor.UserID, r.PathValue("user_id"), in.ExpectedVersion)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		w.WriteHeader(204)
+	})
+	mux.HandleFunc("POST /organizations/{id}/teams/{team_id}/responsibilities", func(w http.ResponseWriter, r *http.Request) {
+		actor, v, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in organizationResponsibilityInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_responsibility", "repository_id, area, and expected_version are required")
+			return
+		}
+		found := false
+		items, err := repos.ListOrganization(v.ID)
+		if err == nil {
+			for _, repo := range items {
+				if repo.ID == in.RepositoryID {
+					found = true
+				}
+			}
+		}
+		if err != nil {
+			writeRepositoryError(w, err)
+			return
+		}
+		if !found {
+			writeAPIError(w, 400, "invalid_responsibility", "repository must belong to the organization")
+			return
+		}
+		changed, err := orgs.AddResponsibility(v.ID, r.PathValue("team_id"), actor.UserID, in.RepositoryID, in.Area, in.Description, in.ExpectedVersion)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		writeJSON(w, 201, project(changed, actor.UserID))
+	})
+	mux.HandleFunc("POST /organizations/{id}/agents", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in organizationAgentInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_agent", "agent identity is required")
+			return
+		}
+		if in.Visibility == "" {
+			in.Visibility = "organization"
+		}
+		v, err := orgs.RegisterAgent(r.PathValue("id"), actor.UserID, in.Name, in.Slug, in.Description, in.Visibility, in.Capabilities, in.OperatorIDs, in.TeamIDs)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		w.Header().Set("Location", "/organizations/"+v.ID+"/agents/"+v.Agents[len(v.Agents)-1].ID)
+		writeJSON(w, 201, project(v, actor.UserID))
 	})
 	mux.HandleFunc("POST /organizations/{id}/invitations", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := require(w, r, "repositories:write")
