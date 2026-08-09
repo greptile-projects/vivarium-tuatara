@@ -183,6 +183,18 @@ func TestDisclosureRollbackRemovesOnlyRefsCreatedByAttempt(t *testing.T) {
 	if ref, err := repository.ReadReference(preexisting); err != nil || ref.Target != string(commit) {
 		t.Fatalf("pre-existing matching ref changed: %#v, %v", ref, err)
 	}
+	// A cleanup failure is fail-closed because pre-publication disclosure refs
+	// are staged beneath the transport-hidden repair namespace.
+	staged := "refs/heads/vivarium-security/disclosures/test/fix-created"
+	if err := repository.CreateReference(storage.Reference{Name: staged, Target: string(commit)}); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/git/test.git/info/refs?service=git-upload-pack", nil)
+	recorder := httptest.NewRecorder()
+	runGitService(recorder, request, repository, uploadPackService, true, false, "")
+	if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), staged) {
+		t.Fatalf("staged disclosure ref advertised after failed cleanup: status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
 }
 
 func TestRepairSessionAuthorizationIsRepositorySpecific(t *testing.T) {

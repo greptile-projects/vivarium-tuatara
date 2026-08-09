@@ -289,12 +289,12 @@ func (s *Store) SetDisclosureState(id, actor, state, failure string, remaining [
 		if v.Disclosure == nil || !validID(actor) || !oneOf(state, "publishing", "paused", "published") {
 			return ErrInvalid
 		}
-		if v.Disclosure.State == "published" {
+		if v.Disclosure.State == "published" && state != "published" {
 			return nil
 		}
 		now := s.now()
 		v.Disclosure.State, v.Disclosure.Failure, v.Disclosure.Remaining = state, strings.TrimSpace(failure), append([]string{}, remaining...)
-		if state == "published" {
+		if state == "published" && v.Disclosure.PublishedAt == nil {
 			v.Disclosure.PublishedAt = &now
 			v.EmbargoState = "disclosed"
 		}

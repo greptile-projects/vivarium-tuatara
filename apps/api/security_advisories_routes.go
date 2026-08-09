@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os/exec"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
@@ -1010,9 +1011,11 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 			writeStoreError(w, err)
 			return
 		}
-		remaining := []string{"publish_repaired_branches", "publish_releases", "publish_advisory", "notify_affected_users"}
+		remaining := []string{"publish_repaired_branches", "publish_advisory", "notify_affected_users"}
 		createdRefs := []createdDisclosureRef{}
 		rollbackRefs := func() { rollbackDisclosureRefs(current.ID, createdRefs) }
+		// Stage only transport-hidden refs before disclosure. Even if cleanup is
+		// impossible, ordinary Git readers cannot discover this namespace.
 		for _, fix := range current.Disclosure.FixedVersions {
 			repository, openErr := gitStore.Open(fix.RepositoryID)
 			if openErr != nil {
@@ -1021,7 +1024,7 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 				writeAPIError(w, 503, "disclosure_paused", "publication paused; repaired repository unavailable")
 				return
 			}
-			name := "refs/heads/" + fix.Branch
+			name := "refs/heads/vivarium-security/disclosures/" + current.ID + "/" + strings.TrimPrefix(fix.Branch, "security/")
 			refErr := repository.CreateReference(storage.Reference{Name: name, Target: fix.CommitID})
 			if refErr == nil {
 				createdRefs = append(createdRefs, createdDisclosureRef{repository: repository, name: name})
@@ -1036,8 +1039,35 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 			}
 		}
 		remaining = remaining[1:]
+		published, err := store.SetDisclosureState(current.ID, actor.UserID, "published", "", remaining)
+		if err != nil {
+			rollbackRefs()
+			_, _ = store.SetDisclosureState(current.ID, actor.UserID, "paused", "public advisory state could not be saved", remaining)
+			writeStoreError(w, err)
+			return
+		}
 		remaining = remaining[1:]
-		remaining = remaining[1:]
+		// The advisory is durably public before any public ref or recipient event.
+		// From here onward failures retain public availability and retryable work;
+		// an embargo can no longer truthfully be restored.
+		for _, fix := range current.Disclosure.FixedVersions {
+			repository, openErr := gitStore.Open(fix.RepositoryID)
+			if openErr != nil {
+				published, _ = store.SetDisclosureState(current.ID, actor.UserID, "published", "public repaired branch remains unpublished", []string{"publish_repaired_branches", "notify_affected_users"})
+				writeAPIError(w, 503, "disclosure_incomplete", "advisory is public; repaired branch publication remains")
+				return
+			}
+			name := "refs/heads/" + fix.Branch
+			if refErr := repository.CreateReference(storage.Reference{Name: name, Target: fix.CommitID}); refErr != nil {
+				existing, readErr := repository.ReadReference(name)
+				if readErr != nil || existing.Target != fix.CommitID {
+					published, _ = store.SetDisclosureState(current.ID, actor.UserID, "published", "public repaired branch remains unpublished", []string{"publish_repaired_branches", "notify_affected_users"})
+					writeAPIError(w, 503, "disclosure_incomplete", "advisory is public; repaired branch publication remains")
+					return
+				}
+			}
+		}
+		rollbackRefs()
 		if activityStore != nil {
 			recipients := map[string]bool{}
 			for _, scope := range current.AffectedRepositories {
@@ -1064,17 +1094,14 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 				repo, _ := repos.GetByID(fix.RepositoryID)
 				_, e := activityStore.AppendOnce("security-disclosure:"+current.ID+":"+recipient, activities.Event{Kind: "security_advisory_published", ActorID: actor.UserID, RepositoryID: fix.RepositoryID, RepositoryName: repo.Name, ResourceType: "security_advisory", ResourceID: current.ID, ResourceTitle: current.Disclosure.PublicTitle, TargetUserID: &target})
 				if e != nil {
-					rollbackRefs()
-					_, _ = store.SetDisclosureState(current.ID, actor.UserID, "paused", "notifications remain unpublished", remaining)
-					writeAPIError(w, 503, "disclosure_paused", "publication paused; notifications remain unpublished")
+					published, _ = store.SetDisclosureState(current.ID, actor.UserID, "published", "notifications remain unpublished", []string{"notify_affected_users"})
+					writeAPIError(w, 503, "disclosure_incomplete", "advisory is public; notifications remain unpublished")
 					return
 				}
 			}
 		}
-		published, err := store.SetDisclosureState(current.ID, actor.UserID, "published", "", []string{})
+		published, err = store.SetDisclosureState(current.ID, actor.UserID, "published", "", []string{})
 		if err != nil {
-			rollbackRefs()
-			_, _ = store.SetDisclosureState(current.ID, actor.UserID, "paused", "public advisory state could not be saved", remaining)
 			writeStoreError(w, err)
 			return
 		}

@@ -42,6 +42,10 @@ func TestDisclosureRequiresEveryAttestedLineAndPublishesOnlyRedactedPacket(t *te
 	if strings.Contains(v.Disclosure.RedactedSummary, v.Description) || strings.Contains(v.Disclosure.UpgradeGuidance, v.Contact) {
 		t.Fatal("protected fields leaked into disclosure")
 	}
+	v, err = store.SetDisclosureState(v.ID, actor, "published", "notifications remain unpublished", []string{"notify_affected_users"})
+	if err != nil || v.EmbargoState != "disclosed" || v.Disclosure.State != "published" || len(v.Disclosure.Remaining) != 1 {
+		t.Fatalf("published recovery state = %#v, %v", v.Disclosure, err)
+	}
 }
 
 func TestDiagnosticEvidenceImpactAndBoundedInvestigation(t *testing.T) {

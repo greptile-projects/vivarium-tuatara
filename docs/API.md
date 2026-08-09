@@ -1163,10 +1163,13 @@ documents. All routes require an authenticated credential with
   affected/fixed matrix, release commits, artifact IDs and SHA-256 checksums,
   and deterministic repaired branch names.
 - `POST /security-advisories/{advisory_id}/disclosure/publish` publishes or
-  resumes a due packet. Exact repaired branches are idempotently exposed before
-  the anonymous advisory and targeted owner/deployment-initiator notifications.
-  A partial failure returns `disclosure_paused`, preserves the protected report,
-  and records the failure plus `remaining` steps for responders.
+  resumes a due packet. Exact commits are first staged beneath the
+  transport-hidden `vivarium-security/disclosures/*` namespace. After the
+  anonymous advisory is durably public, repaired branches and targeted
+  owner/deployment-initiator notifications are idempotently emitted. A
+  pre-publication failure returns `disclosure_paused`; a later failure returns
+  `disclosure_incomplete` while retaining public availability and exact
+  `remaining` work for responders.
 - `GET /security-advisories/public` and `GET
   /security-advisories/public/{advisory_id}` are anonymous and return only fully
   published disclosure projections. Private evidence, findings, messages,
