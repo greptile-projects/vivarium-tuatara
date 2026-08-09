@@ -897,7 +897,10 @@ Current participants in a frozen affected consumer use nested `POST
 300-86400 seconds. Its `evolutions:analyze` credential can read that packet and
 append attributable findings plus explicit uncertainty citing only the
 selection; it has no repository, Git, proposal, pull, credential, or deployment
-write scope.
+write scope. Analysis packets include contract candidates only when every
+frozen pull target and source is both explicitly selected and still readable by
+the initiator; this filtering applies equally to analysis reads and finding
+publication responses.
 
 `POST /repositories/{id}/evolutions/{evolution_id}/migration-tasks` adds the
 next ordered unit of work using the plan's compare-and-swap `version`. The body
@@ -907,6 +910,28 @@ assignee. The caller and any human assignee must already participate in the
 target repository. It creates an ordinary proposal task there, whose discussion,
 assignment, session, branch, pull, and merge state are projected into plan reads.
 Plan authors receive no consumer permission as a side effect.
+
+`POST /repositories/{id}/evolutions/{evolution_id}/contract-candidates`
+accepts `provider_pull_request_id` and a `consumer_pull_request_ids` object keyed
+by frozen affected repository ID. Every value must name an open pull and the
+caller must be a provider participant who can still read every selected
+consumer. The provider pull supplies `.vivarium/contracts.json` using the same
+bounded definition schema as `.vivarium/checks.json`. The response freezes the
+exact source repositories and commits, deterministic synthetic commit,
+combination SHA-256, requester, and check IDs. Exact duplicate combinations
+return `409`; a changed provider or consumer revision supersedes only earlier
+rows containing that changed repository.
+
+Nested `GET .../contract-candidates/{candidate_id}/checks` returns current run,
+attempt, failure, artifact, and combination attestation projections. Add
+`/{check_id}/events` for immutable bounded logs or
+`/{check_id}/artifacts/{artifact_id}` for checksummed output. Every read
+revalidates access to every pull target and source repository in that matrix
+row, so target access cannot disclose private-fork metadata or evidence. Execution mounts the
+assembled source read-only with no network and no API or Git credential.
+The final access check, candidate/check publication, and creation response hold
+the repository catalog mutation lock, so private-source revocation or visibility
+changes linearize wholly before or after evidence publication.
 
 Unfinished cross-repository dependencies block an agent session from starting;
 the eventual credential remains limited to its isolated `agent/tasks/*` branch.

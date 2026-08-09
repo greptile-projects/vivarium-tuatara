@@ -77,3 +77,25 @@ func TestStoreRetainsImmutableEvidence(t *testing.T) {
 		t.Fatalf("created/listed = %#v / %#v", created, values)
 	}
 }
+
+func TestContractCandidatesSupersedeOnlyChangedCombinations(t *testing.T) {
+	store, _ := New(t.TempDir())
+	provider, consumer, actor := "11111111111111111111111111111111", "22222222222222222222222222222222", "33333333333333333333333333333333"
+	plan, err := store.CreateEvolution(Evolution{RepositoryID: provider, InterfaceName: "events", Predecessor: Interface{ID: "44444444444444444444444444444444", RepositoryID: provider, Name: "events", Version: "v1.0.0", ReleaseID: "55555555555555555555555555555555", CommitID: strings.Repeat("a", 40), PublishedBy: actor}, SourceKind: "pull_request", SourceID: "66666666666666666666666666666666", CandidateCommitID: strings.Repeat("b", 40), CandidateDescription: "events v2", Changes: []CompatibilityChange{{Kind: "field", Summary: "rename", Classification: "breaking"}}, Strategy: "test together", Sequencing: "consumer first", CreatedBy: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	revisions := []ContractCandidateRevision{{Role: "provider", RepositoryID: provider, PullRequestID: "77777777777777777777777777777777", SourceRepositoryID: provider, CommitID: strings.Repeat("b", 40)}, {Role: "consumer", RepositoryID: consumer, PullRequestID: "88888888888888888888888888888888", SourceRepositoryID: consumer, CommitID: strings.Repeat("c", 40)}}
+	plan, first, err := store.AddContractCandidate(provider, plan.ID, actor, strings.Repeat("d", 40), strings.Repeat("1", 64), revisions, []string{"99999999999999999999999999999999"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	revisions[1].CommitID = strings.Repeat("e", 40)
+	plan, second, err := store.AddContractCandidate(provider, plan.ID, actor, strings.Repeat("f", 40), strings.Repeat("2", 64), revisions, []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.ContractCandidates[0].SupersededBy != second.ID || plan.ContractCandidates[0].SupersededAt == nil || plan.ContractCandidates[1].SupersededAt != nil || first.ID == second.ID {
+		t.Fatalf("candidates = %#v", plan.ContractCandidates)
+	}
+}

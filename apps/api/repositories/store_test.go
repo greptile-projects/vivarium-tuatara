@@ -290,6 +290,42 @@ func TestCurrentParticipantBoundarySerializesCollaboratorRevocation(t *testing.T
 	}
 }
 
+func TestCurrentReadAccessSerializesPrivateSourceRevocation(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	root := t.TempDir()
+	reader, _ := New(root, gitStore)
+	revoker, _ := New(root, gitStore)
+	source, _ := reader.Create(testOwnerID, "contract-private-source")
+	if _, err := reader.AddCollaborator(testOwnerID, source.ID, testCollaboratorID); err != nil {
+		t.Fatal(err)
+	}
+	authorized, release := make(chan struct{}), make(chan struct{})
+	reader.afterReadAuthorization = func() { close(authorized); <-release }
+	publicationDone := make(chan error, 1)
+	go func() {
+		publicationDone <- reader.WithCurrentReadAccess(testCollaboratorID, []string{source.ID}, func() error { return nil })
+	}()
+	<-authorized
+	revocationDone := make(chan error, 1)
+	go func() { revocationDone <- revoker.RemoveCollaborator(testOwnerID, source.ID, testCollaboratorID) }()
+	select {
+	case err := <-revocationDone:
+		t.Fatalf("revocation completed inside readable publication: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	if err := <-publicationDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-revocationDone; err != nil {
+		t.Fatal(err)
+	}
+	reader.afterReadAuthorization = nil
+	if err := reader.WithCurrentReadAccess(testCollaboratorID, []string{source.ID}, func() error { return nil }); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("read boundary after revocation = %v", err)
+	}
+}
+
 func TestIncidentAuthorizationSerializesCollaboratorRevocation(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	root := t.TempDir()

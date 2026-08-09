@@ -721,6 +721,17 @@ assignment, branch, pull request, and merge status project back into the shared
 plan. Humans retain existing repository or owned-fork access; agents start only
 after earlier linked work merges and receive the existing task-branch credential.
 
+Before release, provider participants can select the provider pull and one or
+more affected-consumer pulls as an exact compatibility matrix row. The platform
+archives those immutable source revisions beneath `provider/` and
+`consumers/<repository-id>/`, imports a deterministic synthetic commit into the
+provider object database without publishing a ref, and executes the provider's
+`.vivarium/contracts.json` definitions. Contract checks reuse the read-only,
+network-disabled check runner and receive no platform credential. Plan evidence
+retains every exact combination, initiating actor, bounded logs, checksummed
+artifacts, and a revision-hash attestation; a changed revision supersedes only
+rows containing that repository while unrelated combinations remain current.
+
 ## Release candidates
 
 Release definition is a durable, immutable boundary over repository history.

@@ -68,8 +68,32 @@ type Evolution struct {
 	Analyses             []EvolutionAnalysis        `json:"analyses"`
 	Acknowledgements     []EvolutionAcknowledgement `json:"acknowledgements"`
 	MigrationTasks       []EvolutionMigrationTask   `json:"migration_tasks"`
+	ContractCandidates   []ContractCandidate        `json:"contract_candidates"`
 	CreatedAt            time.Time                  `json:"created_at"`
 	UpdatedAt            time.Time                  `json:"updated_at"`
+}
+
+// ContractCandidate freezes one intended provider/consumer pull combination.
+// Check execution is stored separately; run IDs keep the plan record immutable
+// while public reads can project current logs, artifacts, and terminal state.
+type ContractCandidate struct {
+	ID              string                      `json:"id"`
+	CombinationHash string                      `json:"combination_hash"`
+	SyntheticCommit string                      `json:"synthetic_commit"`
+	Revisions       []ContractCandidateRevision `json:"revisions"`
+	CheckRunIDs     []string                    `json:"check_run_ids"`
+	RequestedBy     string                      `json:"requested_by"`
+	CreatedAt       time.Time                   `json:"created_at"`
+	SupersededAt    *time.Time                  `json:"superseded_at,omitempty"`
+	SupersededBy    string                      `json:"superseded_by,omitempty"`
+}
+
+type ContractCandidateRevision struct {
+	Role               string `json:"role"`
+	RepositoryID       string `json:"repository_id"`
+	PullRequestID      string `json:"pull_request_id"`
+	SourceRepositoryID string `json:"source_repository_id"`
+	CommitID           string `json:"commit_id"`
 }
 
 // EvolutionMigrationTask links the cross-repository sequence to a repository-
@@ -439,6 +463,55 @@ func (s *Store) StartEvolutionAnalysis(repo, id, initiator, credential, mandate 
 		return nil
 	})
 	return v, a, e
+}
+
+func (s *Store) AddContractCandidate(repo, id, actor, synthetic, combination string, revisions []ContractCandidateRevision, runIDs []string) (Evolution, ContractCandidate, error) {
+	if !validID(actor) || !validCommit(synthetic) || len(combination) != 64 || len(revisions) < 2 || len(revisions) > 51 || len(runIDs) == 0 || len(runIDs) > 20 {
+		return Evolution{}, ContractCandidate{}, ErrInvalid
+	}
+	seen := map[string]bool{}
+	for i, revision := range revisions {
+		if (i == 0 && revision.Role != "provider") || (i > 0 && revision.Role != "consumer") || !validID(revision.RepositoryID) || !validID(revision.PullRequestID) || !validID(revision.SourceRepositoryID) || !validCommit(revision.CommitID) || seen[revision.RepositoryID] {
+			return Evolution{}, ContractCandidate{}, ErrInvalid
+		}
+		seen[revision.RepositoryID] = true
+	}
+	for _, runID := range runIDs {
+		if !validID(runID) {
+			return Evolution{}, ContractCandidate{}, ErrInvalid
+		}
+	}
+	var candidate ContractCandidate
+	v, err := s.mutateEvolution(repo, id, func(v *Evolution) error {
+		for _, existing := range v.ContractCandidates {
+			if existing.CombinationHash == combination {
+				return ErrConflict
+			}
+		}
+		candidate = ContractCandidate{ID: mustID(), CombinationHash: combination, SyntheticCommit: synthetic, Revisions: append([]ContractCandidateRevision(nil), revisions...), CheckRunIDs: append([]string(nil), runIDs...), RequestedBy: actor, CreatedAt: s.now()}
+		now := candidate.CreatedAt
+		for i := range v.ContractCandidates {
+			if v.ContractCandidates[i].SupersededAt != nil {
+				continue
+			}
+			changed := false
+			for _, old := range v.ContractCandidates[i].Revisions {
+				for _, next := range revisions {
+					if old.RepositoryID == next.RepositoryID && old.CommitID != next.CommitID {
+						changed = true
+					}
+				}
+			}
+			if changed {
+				v.ContractCandidates[i].SupersededAt, v.ContractCandidates[i].SupersededBy = &now, candidate.ID
+			}
+		}
+		v.ContractCandidates = append(v.ContractCandidates, candidate)
+		v.Version++
+		v.UpdatedAt = now
+		return nil
+	})
+	return v, candidate, err
 }
 func (s *Store) EvolutionAnalysis(repo, id, analysis, credential string) (Evolution, EvolutionAnalysis, error) {
 	v, e := s.GetEvolution(repo, id)

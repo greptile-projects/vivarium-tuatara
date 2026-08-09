@@ -1,12 +1,20 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
@@ -16,7 +24,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
-func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, relationStore *relationships.Store, credentials *auth.Store) {
+func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, relationStore *relationships.Store, credentials *auth.Store, builds *checkruns.Store) {
 	canRead := func(actorID, id string) bool {
 		repo, e := repos.GetByID(id)
 		if e != nil {
@@ -27,6 +35,14 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 		}
 		ok, _ := repos.HasCollaborator(actorID, id)
 		return repo.OwnerID == actorID || ok
+	}
+	canReadContractCandidate := func(actorID string, candidate relationships.ContractCandidate) bool {
+		for _, revision := range candidate.Revisions {
+			if !canRead(actorID, revision.RepositoryID) || !canRead(actorID, revision.SourceRepositoryID) {
+				return false
+			}
+		}
+		return true
 	}
 	project := func(v relationships.Evolution) relationships.Evolution {
 		completed := map[string]bool{}
@@ -111,6 +127,13 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 			}
 		}
 		v.MigrationTasks = tasks
+		candidates := v.ContractCandidates[:0]
+		for _, candidate := range v.ContractCandidates {
+			if canReadContractCandidate(actorID, candidate) {
+				candidates = append(candidates, candidate)
+			}
+		}
+		v.ContractCandidates = candidates
 		return v
 	}
 	analysisPacket := func(v relationships.Evolution, a relationships.EvolutionAnalysis) relationships.Evolution {
@@ -150,6 +173,17 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 			}
 		}
 		v.MigrationTasks = tasks
+		candidates := v.ContractCandidates[:0]
+		for _, candidate := range v.ContractCandidates {
+			inScope := true
+			for _, revision := range candidate.Revisions {
+				inScope = inScope && selected[revision.RepositoryID] && selected[revision.SourceRepositoryID]
+			}
+			if inScope && canReadContractCandidate(a.InitiatorID, candidate) {
+				candidates = append(candidates, candidate)
+			}
+		}
+		v.ContractCandidates = candidates
 		v.Analyses = []relationships.EvolutionAnalysis{a}
 		v.Analyses[0].StoredCredentialID = ""
 		return v
@@ -525,6 +559,224 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 		a.StoredCredentialID = ""
 		writeJSON(w, 201, map[string]any{"evolution": visible(v, actor.UserID), "analysis": a, "credential": issued})
 	})
+	mux.HandleFunc("POST /repositories/{id}/evolutions/{evolution_id}/contract-candidates", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if pullStore == nil || builds == nil {
+			writeAPIError(w, 503, "contract_verification_unavailable", "contract verification storage is unavailable")
+			return
+		}
+		var in struct {
+			ProviderPullRequestID  string            `json:"provider_pull_request_id"`
+			ConsumerPullRequestIDs map[string]string `json:"consumer_pull_request_ids"`
+		}
+		if decodeJSON(r, &in) != nil || len(in.ConsumerPullRequestIDs) == 0 || len(in.ConsumerPullRequestIDs) > 50 {
+			writeAPIError(w, 400, "invalid_contract_candidate", "one provider pull and at least one consumer pull are required")
+			return
+		}
+		plan, err := relationStore.GetEvolution(r.PathValue("id"), r.PathValue("evolution_id"))
+		if err != nil {
+			writeAPIError(w, 404, "evolution_not_found", "evolution plan not found")
+			return
+		}
+		allowed := map[string]bool{}
+		for _, impact := range plan.Impacts {
+			allowed[impact.RepositoryID] = true
+		}
+		provider, err := pullStore.Get(plan.RepositoryID, in.ProviderPullRequestID)
+		if err != nil || provider.Status != pullrequests.Open || !canRead(actor.UserID, provider.SourceRepositoryID) {
+			writeAPIError(w, 422, "invalid_provider_revision", "provider pull must be open and belong to the evolution repository")
+			return
+		}
+		revisions := []relationships.ContractCandidateRevision{{Role: "provider", RepositoryID: plan.RepositoryID, PullRequestID: provider.ID, SourceRepositoryID: provider.SourceRepositoryID, CommitID: provider.SourceCommitID}}
+		ids := make([]string, 0, len(in.ConsumerPullRequestIDs))
+		for id := range in.ConsumerPullRequestIDs {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			if !allowed[id] || !canRead(actor.UserID, id) {
+				writeAPIError(w, 422, "invalid_consumer_revision", "consumer pulls must belong to readable repositories in the frozen impact snapshot")
+				return
+			}
+			pull, getErr := pullStore.Get(id, in.ConsumerPullRequestIDs[id])
+			if getErr != nil || pull.Status != pullrequests.Open || !canRead(actor.UserID, pull.SourceRepositoryID) {
+				writeAPIError(w, 422, "invalid_consumer_revision", "each consumer revision must name an open pull request")
+				return
+			}
+			revisions = append(revisions, relationships.ContractCandidateRevision{Role: "consumer", RepositoryID: id, PullRequestID: pull.ID, SourceRepositoryID: pull.SourceRepositoryID, CommitID: pull.SourceCommitID})
+		}
+		providerRepo, err := gitStore.Open(provider.SourceRepositoryID)
+		if err != nil {
+			writeAPIError(w, 422, "provider_revision_unavailable", "provider source revision is unavailable")
+			return
+		}
+		configBody, err := exec.Command("git", "--git-dir="+providerRepo.Path(), "show", provider.SourceCommitID+":.vivarium/contracts.json").Output()
+		if err != nil {
+			writeAPIError(w, 422, "contract_definition_missing", "provider revision must contain .vivarium/contracts.json")
+			return
+		}
+		config, err := checkruns.ParseConfig(configBody)
+		if err != nil {
+			writeAPIError(w, 422, "invalid_contract_definition", "provider contract checks are invalid")
+			return
+		}
+		synthetic, err := assembleContractCandidate(gitStore, plan.RepositoryID, revisions)
+		if err != nil {
+			writeAPIError(w, 500, "contract_candidate_failed", "exact repository snapshots could not be assembled")
+			return
+		}
+		hasher := sha256.New()
+		for _, revision := range revisions {
+			fmt.Fprintf(hasher, "%s\x00%s\x00%s\x00", revision.RepositoryID, revision.PullRequestID, revision.CommitID)
+		}
+		combination := hex.EncodeToString(hasher.Sum(nil))
+		for _, existing := range plan.ContractCandidates {
+			if existing.CombinationHash == combination {
+				writeAPIError(w, 409, "combination_already_tested", "this exact pull revision combination already has evidence")
+				return
+			}
+		}
+		candidateID := combination[:32]
+		repositoryIDs := make([]string, 0, len(revisions)*2)
+		for _, revision := range revisions {
+			repositoryIDs = append(repositoryIDs, revision.RepositoryID, revision.SourceRepositoryID)
+		}
+		var publicationErr error
+		err = repos.WithCurrentReadAccess(actor.UserID, repositoryIDs, func() error {
+			runs, createErr := builds.CreateRequested(plan.RepositoryID, candidateID, synthetic, config.Checks, actor.UserID)
+			if createErr != nil {
+				publicationErr = createErr
+				return nil
+			}
+			runIDs := make([]string, len(runs))
+			for i := range runs {
+				runIDs[i] = runs[i].ID
+			}
+			published, candidate, publishErr := relationStore.AddContractCandidate(plan.RepositoryID, plan.ID, actor.UserID, synthetic, combination, revisions, runIDs)
+			if publishErr != nil {
+				publicationErr = publishErr
+				return nil
+			}
+			target, _ := gitStore.Open(published.RepositoryID)
+			for _, run := range runs {
+				go builds.Execute(run, target.Path())
+			}
+			writeJSON(w, 201, map[string]any{"evolution": visible(project(published), actor.UserID), "candidate": candidate, "check_runs": runs})
+			return nil
+		})
+		if err != nil {
+			writeAPIError(w, 404, "contract_candidate_not_found", "contract candidate repositories are no longer readable")
+			return
+		}
+		if errors.Is(publicationErr, relationships.ErrConflict) {
+			writeAPIError(w, 409, "combination_already_tested", "this exact pull revision combination already has evidence")
+			return
+		}
+		if publicationErr != nil {
+			writeAPIError(w, 500, "contract_candidate_failed", "contract candidate and checks could not be published")
+		}
+	})
+	mux.HandleFunc("GET /repositories/{id}/evolutions/{evolution_id}/contract-candidates/{candidate_id}/checks", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := readActor(w, r)
+		if !ok {
+			return
+		}
+		plan, err := relationStore.GetEvolution(r.PathValue("id"), r.PathValue("evolution_id"))
+		if err != nil {
+			writeAPIError(w, 404, "evolution_not_found", "evolution plan not found")
+			return
+		}
+		var candidate *relationships.ContractCandidate
+		for i := range plan.ContractCandidates {
+			if plan.ContractCandidates[i].ID == r.PathValue("candidate_id") {
+				candidate = &plan.ContractCandidates[i]
+			}
+		}
+		if candidate == nil {
+			writeAPIError(w, 404, "contract_candidate_not_found", "contract candidate not found")
+			return
+		}
+		if !canReadContractCandidate(actor.UserID, *candidate) {
+			writeAPIError(w, 404, "contract_candidate_not_found", "contract candidate not found")
+			return
+		}
+		runs, err := builds.List(plan.RepositoryID, candidate.CombinationHash[:32])
+		if err != nil {
+			writeAPIError(w, 500, "contract_evidence_failed", "contract evidence could not be read")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"candidate": candidate, "check_runs": runs, "attestation": map[string]any{"combination_hash": candidate.CombinationHash, "synthetic_commit": candidate.SyntheticCommit, "revisions": candidate.Revisions, "bounded_execution": map[string]any{"network": "none", "workspace": "read-only", "credentials": "none"}}})
+	})
+	mux.HandleFunc("GET /repositories/{id}/evolutions/{evolution_id}/contract-candidates/{candidate_id}/checks/{check_id}/events", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := readActor(w, r)
+		if !ok {
+			return
+		}
+		plan, err := relationStore.GetEvolution(r.PathValue("id"), r.PathValue("evolution_id"))
+		if err != nil {
+			writeAPIError(w, 404, "contract_candidate_not_found", "contract candidate not found")
+			return
+		}
+		var candidate *relationships.ContractCandidate
+		for i := range plan.ContractCandidates {
+			if plan.ContractCandidates[i].ID == r.PathValue("candidate_id") {
+				candidate = &plan.ContractCandidates[i]
+			}
+		}
+		allowed := candidate != nil && canReadContractCandidate(actor.UserID, *candidate)
+		if !allowed {
+			writeAPIError(w, 404, "contract_candidate_not_found", "contract candidate not found")
+			return
+		}
+		known := false
+		for _, id := range candidate.CheckRunIDs {
+			known = known || id == r.PathValue("check_id")
+		}
+		if !known {
+			writeAPIError(w, 404, "contract_check_not_found", "contract check not found")
+			return
+		}
+		events, err := builds.Events(plan.RepositoryID, candidate.CombinationHash[:32], r.PathValue("check_id"), 0)
+		if err != nil {
+			writeAPIError(w, 500, "contract_evidence_failed", "contract logs could not be read")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"events": events})
+	})
+	mux.HandleFunc("GET /repositories/{id}/evolutions/{evolution_id}/contract-candidates/{candidate_id}/checks/{check_id}/artifacts/{artifact_id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := readActor(w, r)
+		if !ok {
+			return
+		}
+		plan, err := relationStore.GetEvolution(r.PathValue("id"), r.PathValue("evolution_id"))
+		if err != nil {
+			writeAPIError(w, 404, "contract_candidate_not_found", "contract candidate not found")
+			return
+		}
+		var candidate *relationships.ContractCandidate
+		for i := range plan.ContractCandidates {
+			if plan.ContractCandidates[i].ID == r.PathValue("candidate_id") {
+				candidate = &plan.ContractCandidates[i]
+			}
+		}
+		allowed := candidate != nil && canReadContractCandidate(actor.UserID, *candidate)
+		if !allowed {
+			writeAPIError(w, 404, "contract_candidate_not_found", "contract candidate not found")
+			return
+		}
+		file, artifact, err := builds.OpenArtifact(plan.RepositoryID, candidate.CombinationHash[:32], r.PathValue("check_id"), r.PathValue("artifact_id"))
+		if err != nil {
+			writeAPIError(w, 404, "contract_artifact_not_found", "contract artifact not found")
+			return
+		}
+		defer file.Close()
+		w.Header().Set("Content-Type", artifact.ContentType)
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(artifact.Path)))
+		http.ServeContent(w, r, artifact.Path, artifact.CreatedAt, file)
+	})
 	mux.HandleFunc("GET /repositories/{id}/evolutions/{evolution_id}/analyses/{analysis_id}", func(w http.ResponseWriter, r *http.Request) {
 		credential, ok := authenticateRequest(w, r, credentials, "evolutions:analyze", false)
 		if !ok {
@@ -575,4 +827,68 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 		}
 		writeJSON(w, 201, analysisPacket(v, a))
 	})
+}
+
+func assembleContractCandidate(gitStore *storage.Store, providerRepositoryID string, revisions []relationships.ContractCandidateRevision) (string, error) {
+	workspace, err := os.MkdirTemp("", "vivarium-contract-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(workspace)
+	if err = exec.Command("git", "init", "-q", workspace).Run(); err != nil {
+		return "", err
+	}
+	for i, revision := range revisions {
+		repository, openErr := gitStore.Open(revision.SourceRepositoryID)
+		if openErr != nil {
+			return "", openErr
+		}
+		destination := filepath.Join(workspace, "provider")
+		if i > 0 {
+			destination = filepath.Join(workspace, "consumers", revision.RepositoryID)
+		}
+		if err = os.MkdirAll(destination, 0700); err != nil {
+			return "", err
+		}
+		archive := exec.Command("git", "--git-dir="+repository.Path(), "archive", revision.CommitID)
+		extract := exec.Command("tar", "-x", "-C", destination)
+		pipe, pipeErr := extract.StdinPipe()
+		if pipeErr != nil {
+			return "", pipeErr
+		}
+		if err = extract.Start(); err != nil {
+			return "", err
+		}
+		archive.Stdout = pipe
+		if err = archive.Run(); err != nil {
+			_ = pipe.Close()
+			return "", err
+		}
+		_ = pipe.Close()
+		if err = extract.Wait(); err != nil {
+			return "", err
+		}
+	}
+	command := exec.Command("git", "-C", workspace, "add", "--all")
+	if output, runErr := command.CombinedOutput(); runErr != nil {
+		return "", fmt.Errorf("stage candidate: %s", output)
+	}
+	command = exec.Command("git", "-C", workspace, "-c", "user.name=Vivarium Contract", "-c", "user.email=contract@vivarium", "commit", "-q", "-m", "Immutable cross-repository contract candidate")
+	command.Env = append(os.Environ(), "GIT_AUTHOR_DATE=2000-01-01T00:00:00Z", "GIT_COMMITTER_DATE=2000-01-01T00:00:00Z")
+	if output, runErr := command.CombinedOutput(); runErr != nil {
+		return "", fmt.Errorf("commit candidate: %s", output)
+	}
+	commitBody, err := exec.Command("git", "-C", workspace, "rev-parse", "HEAD").Output()
+	if err != nil {
+		return "", err
+	}
+	commit := strings.TrimSpace(string(commitBody))
+	provider, err := gitStore.Open(providerRepositoryID)
+	if err != nil {
+		return "", err
+	}
+	if output, fetchErr := exec.Command("git", "--git-dir="+provider.Path(), "fetch", "-q", workspace, commit).CombinedOutput(); fetchErr != nil {
+		return "", fmt.Errorf("import candidate: %s", output)
+	}
+	return commit, nil
 }
