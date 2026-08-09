@@ -146,7 +146,9 @@ whenever dependencies change or the web job fails before it starts.
   `consumers/<repository-id>/` in the network-disabled, read-only executor with
   no platform credential. Plans retain combination hashes, attempts, logs,
   artifacts, attestations, failures, and supersession; revision changes
-  supersede only matrix rows containing that repository.
+  supersede only matrix rows containing that repository. Candidate projection
+  and evidence reads require current access to every frozen pull target and
+  source repository, preventing target access from exposing private-fork work.
   Ordered evolution migration tasks are repository-owned proposal tasks linked
   to the shared plan with target versions and cross-repository dependencies.
   Only current target participants create and assign them; humans gain no new

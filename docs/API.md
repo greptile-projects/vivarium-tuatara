@@ -923,7 +923,8 @@ Nested `GET .../contract-candidates/{candidate_id}/checks` returns current run,
 attempt, failure, artifact, and combination attestation projections. Add
 `/{check_id}/events` for immutable bounded logs or
 `/{check_id}/artifacts/{artifact_id}` for checksummed output. Every read
-revalidates access to all repositories in that matrix row. Execution mounts the
+revalidates access to every pull target and source repository in that matrix
+row, so target access cannot disclose private-fork metadata or evidence. Execution mounts the
 assembled source read-only with no network and no API or Git credential.
 
 Unfinished cross-repository dependencies block an agent session from starting;

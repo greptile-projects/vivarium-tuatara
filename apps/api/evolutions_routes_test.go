@@ -179,10 +179,17 @@ func TestEvolutionAcknowledgementResponseFiltersOtherPrivateConsumers(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	plan, _, err = relationStore.AddContractCandidate(provider.ID, plan.ID, providerOwner.User.ID, strings.Repeat("d", 40), strings.Repeat("e", 64), []relationships.ContractCandidateRevision{
+		{Role: "provider", RepositoryID: provider.ID, PullRequestID: strings.Repeat("1", 32), SourceRepositoryID: provider.ID, CommitID: strings.Repeat("f", 40)},
+		{Role: "consumer", RepositoryID: consumerA.ID, PullRequestID: strings.Repeat("2", 32), SourceRepositoryID: consumerB.ID, CommitID: strings.Repeat("0", 40)},
+	}, []string{strings.Repeat("3", 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
 	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+provider.ID+"/evolutions/"+plan.ID+"/acknowledgements", `{"repository_id":"`+consumerA.ID+`","note":"consumer A accepts"}`, consumerAOwner.Credential.Token, http.StatusCreated)
 	var visible relationships.Evolution
 	decodeResponse(t, response, &visible)
-	if len(visible.Impacts) != 1 || visible.Impacts[0].RepositoryID != consumerA.ID || len(visible.Acknowledgements) != 1 || visible.Acknowledgements[0].RepositoryID != consumerA.ID || len(visible.Findings) != 0 || len(visible.Analyses) != 0 {
+	if len(visible.Impacts) != 1 || visible.Impacts[0].RepositoryID != consumerA.ID || len(visible.Acknowledgements) != 1 || visible.Acknowledgements[0].RepositoryID != consumerA.ID || len(visible.Findings) != 0 || len(visible.Analyses) != 0 || len(visible.ContractCandidates) != 0 {
 		t.Fatalf("acknowledgement response leaked another consumer: %#v", visible)
 	}
 	patchBody := `{"version":` + fmt.Sprint(visible.Version) + `,"strategy":"dual publish with deprecation","sequencing":"consumers first","exceptions":"none"}`

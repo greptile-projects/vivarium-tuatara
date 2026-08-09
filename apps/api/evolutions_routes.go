@@ -36,6 +36,14 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 		ok, _ := repos.HasCollaborator(actorID, id)
 		return repo.OwnerID == actorID || ok
 	}
+	canReadContractCandidate := func(actorID string, candidate relationships.ContractCandidate) bool {
+		for _, revision := range candidate.Revisions {
+			if !canRead(actorID, revision.RepositoryID) || !canRead(actorID, revision.SourceRepositoryID) {
+				return false
+			}
+		}
+		return true
+	}
 	project := func(v relationships.Evolution) relationships.Evolution {
 		completed := map[string]bool{}
 		for i := range v.MigrationTasks {
@@ -121,11 +129,7 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 		v.MigrationTasks = tasks
 		candidates := v.ContractCandidates[:0]
 		for _, candidate := range v.ContractCandidates {
-			keep := true
-			for _, revision := range candidate.Revisions {
-				keep = keep && canRead(actorID, revision.RepositoryID)
-			}
-			if keep {
+			if canReadContractCandidate(actorID, candidate) {
 				candidates = append(candidates, candidate)
 			}
 		}
@@ -571,7 +575,7 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 			allowed[impact.RepositoryID] = true
 		}
 		provider, err := pullStore.Get(plan.RepositoryID, in.ProviderPullRequestID)
-		if err != nil || provider.Status != pullrequests.Open {
+		if err != nil || provider.Status != pullrequests.Open || !canRead(actor.UserID, provider.SourceRepositoryID) {
 			writeAPIError(w, 422, "invalid_provider_revision", "provider pull must be open and belong to the evolution repository")
 			return
 		}
@@ -587,7 +591,7 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 				return
 			}
 			pull, getErr := pullStore.Get(id, in.ConsumerPullRequestIDs[id])
-			if getErr != nil || pull.Status != pullrequests.Open {
+			if getErr != nil || pull.Status != pullrequests.Open || !canRead(actor.UserID, pull.SourceRepositoryID) {
 				writeAPIError(w, 422, "invalid_consumer_revision", "each consumer revision must name an open pull request")
 				return
 			}
@@ -669,11 +673,9 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 			writeAPIError(w, 404, "contract_candidate_not_found", "contract candidate not found")
 			return
 		}
-		for _, revision := range candidate.Revisions {
-			if !canRead(actor.UserID, revision.RepositoryID) {
-				writeAPIError(w, 404, "contract_candidate_not_found", "contract candidate not found")
-				return
-			}
+		if !canReadContractCandidate(actor.UserID, *candidate) {
+			writeAPIError(w, 404, "contract_candidate_not_found", "contract candidate not found")
+			return
 		}
 		runs, err := builds.List(plan.RepositoryID, candidate.CombinationHash[:32])
 		if err != nil {
@@ -698,12 +700,7 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 				candidate = &plan.ContractCandidates[i]
 			}
 		}
-		allowed := candidate != nil
-		if candidate != nil {
-			for _, revision := range candidate.Revisions {
-				allowed = allowed && canRead(actor.UserID, revision.RepositoryID)
-			}
-		}
+		allowed := candidate != nil && canReadContractCandidate(actor.UserID, *candidate)
 		if !allowed {
 			writeAPIError(w, 404, "contract_candidate_not_found", "contract candidate not found")
 			return
@@ -739,12 +736,7 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 				candidate = &plan.ContractCandidates[i]
 			}
 		}
-		allowed := candidate != nil
-		if candidate != nil {
-			for _, revision := range candidate.Revisions {
-				allowed = allowed && canRead(actor.UserID, revision.RepositoryID)
-			}
-		}
+		allowed := candidate != nil && canReadContractCandidate(actor.UserID, *candidate)
 		if !allowed {
 			writeAPIError(w, 404, "contract_candidate_not_found", "contract candidate not found")
 			return
