@@ -126,6 +126,12 @@ whenever dependencies change or the web job fails before it starts.
   check executor, retain immutable attempts, logs, and checksummed artifacts,
   and expose source/command/dependency/actor/result attestations. Reruns append
   evidence for the same frozen candidate.
+  Repository relationship graphs at `/repositories/{id}/relationships` join
+  immutable versioned interface publications to exact consumer revisions,
+  optional releases and environments, repository owners, and semantic-version
+  constraints. Reads revalidate visible release and successful-deployment
+  evidence and explicitly classify edges as resolved, stale, or unresolved;
+  durable records live beneath `$RELATIONSHIP_STORAGE_ROOT`.
   Owners define ordered delivery environments with scoped visible configuration,
   encrypted write-only credentials, independent approval thresholds, and
   concurrency limits beneath `$DEPLOYMENT_STORAGE_ROOT`. Participants promote

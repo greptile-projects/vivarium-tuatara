@@ -694,6 +694,24 @@ publishes an exact completed outcome, and its connected pull verifies and
 merges before the team closes the proposal. Durable task history and the
 session timeline retain attribution across every handoff.
 
+## Cross-repository interface evidence
+
+Repositories can publish named semantic-version interfaces from immutable
+release candidates and declare consumer constraints at exact verified source
+revisions. A declaration may additionally pin its consumer release and
+environment, allowing the platform to connect code ownership to released and
+deployed evidence rather than an external inventory. The repository
+relationship workspace shows every currently visible provider and consumer,
+their owners, exact commits, releases, environments, constraints, and resolved
+version.
+
+Relationship state is derived on each read. A compatible current publication
+is `resolved`; missing or mismatched source, release, active successful
+environment deployment, or environment evidence is `stale`; and a visible provider with no
+compatible publication is `unresolved` with a reason. Repository visibility is
+rechecked while assembling the graph, so private provider edges and dependency
+metadata never become a cross-repository discovery side channel.
+
 ## Release candidates
 
 Release definition is a durable, immutable boundary over repository history.
