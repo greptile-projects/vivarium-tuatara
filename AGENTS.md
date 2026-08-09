@@ -140,6 +140,15 @@ whenever dependencies change or the web job fails before it starts.
   returned as `202` durability uncertainty with the complete package identity.
   An exact retry returns that same record, while different content at an existing
   name/version remains a conflict.
+  The `/packages` catalog searches visible names, summaries, and documentation;
+  identity histories and compatibility resolution expose platform selectors,
+  semantic constraints, exact provenance, and retained deprecated or yanked
+  warnings. Yanked versions remain inspectable but are excluded from new
+  resolution. Current consuming-repository participants mint short-lived
+  `packages:read` credentials frozen to that repository and an explicit set of
+  currently authorized package names, allowing standard bearer-token clients
+  and isolated builds to fetch only those dependencies without Git, mutation,
+  publisher, or unrelated-private-package access.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version

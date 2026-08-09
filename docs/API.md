@@ -855,6 +855,9 @@ attempt:
   "artifact_id": "fedcba9876543210fedcba9876543210",
   "platform": {"os": "linux", "architecture": "amd64", "runtime": "go1.24"},
   "dependencies": [{"name": "core-kit", "constraint": "^2.0.0"}],
+  "summary": "Typed client for the project API",
+  "documentation": "Install project-sdk and verify the registry checksum.",
+  "license": "MIT",
   "visibility": "public"
 }
 ```
@@ -881,6 +884,29 @@ provenance and lifecycle metadata, and `GET
 `X-Checksum-Sha256`. Public versions allow anonymous reads; private versions
 continuously inherit the source repository's current read policy. Package
 records live beneath `$PACKAGE_STORAGE_ROOT` (default `packages`).
+
+`GET /packages?q={text}` searches package names, summaries, and documentation,
+returning only public versions and private versions currently readable by the
+caller. `GET /packages/{name}/versions` lists the visible version history.
+`GET /packages/{name}/resolve?constraint=^1.2.0&os=linux&architecture=amd64`
+returns the newest authorized, non-yanked compatible version. Resolution
+supports exact, `^`, `~`, `>`, `>=`, `<`, and `<=` constraints; omitted
+platform selectors and blank published selectors act as portable values.
+
+Owners set known lifecycle risk with `PATCH
+/repositories/{id}/packages/{name}/versions/{version}` and
+`{"lifecycle":"deprecated","warning":"Move to 2.x"}` (or `yanked`). Returning
+to `active` requires an empty warning. This changes discovery guidance only;
+the immutable bytes and provenance remain available for verification.
+
+`POST /repositories/{id}/package-credentials` requires current participation
+and accepts `{"name":"CI install","package_names":["project-sdk"],
+"expires_in":3600}`. Every name must have an authorized published version at
+issuance. The returned bearer token has only `packages:read`, the consuming
+repository ID, the exact sorted package allowlist, and a 60-second to 24-hour
+lifetime. It works with catalog, version, resolution, and artifact reads but
+cannot enumerate or download unrelated private identities and carries no
+publisher or repository mutation authority.
 
 ### Versioned interface relationships
 

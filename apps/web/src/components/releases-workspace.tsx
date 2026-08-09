@@ -403,6 +403,7 @@ export function ReleaseDetail({
         { method: "POST", body: JSON.stringify({
           name: data.get("name"), version: data.get("version"), build_id: buildID,
           artifact_id: artifactID, visibility: data.get("visibility"), dependencies,
+          summary: data.get("summary"), documentation: data.get("documentation"), license: data.get("license"),
           platform: { os: data.get("os"), architecture: data.get("architecture"), runtime: data.get("runtime") },
         }) }, token);
       setPackages((current) => [...current, created]);
@@ -615,6 +616,9 @@ export function ReleaseDetail({
           <form onSubmit={publish} className="mt-6 grid gap-4 border-t border-[var(--line)] pt-5 md:grid-cols-2">
             <label className="text-xs font-semibold">Package identity<input name="name" required pattern="[a-z0-9][a-z0-9._-]*" maxLength={100} placeholder="project-sdk" className="mt-2 min-h-10 w-full rounded-lg border border-[var(--line-strong)] px-3 font-mono text-sm font-normal" /></label>
             <label className="text-xs font-semibold">Version<input name="version" required maxLength={100} defaultValue={release.version.replace(/^v/, "")} className="mt-2 min-h-10 w-full rounded-lg border border-[var(--line-strong)] px-3 font-mono text-sm font-normal" /></label>
+            <label className="text-xs font-semibold md:col-span-2">Summary<input name="summary" maxLength={500} placeholder="What this package lets a collaborator build" className="mt-2 min-h-10 w-full rounded-lg border border-[var(--line-strong)] px-3 text-sm font-normal" /></label>
+            <label className="text-xs font-semibold md:col-span-2">Version documentation<textarea name="documentation" rows={5} maxLength={20000} placeholder="Installation, supported APIs, migration notes, and verification guidance" className="mt-2 w-full rounded-lg border border-[var(--line-strong)] p-3 text-sm font-normal" /></label>
+            <label className="text-xs font-semibold">License<input name="license" maxLength={100} placeholder="MIT" className="mt-2 min-h-10 w-full rounded-lg border border-[var(--line-strong)] px-3 text-sm font-normal" /></label>
             <label className="text-xs font-semibold md:col-span-2">Verified artifact<select name="artifact" required className="mt-2 min-h-10 w-full rounded-lg border border-[var(--line-strong)] bg-white px-3 text-sm font-normal">{builds.filter((build) => build.state === "succeeded").flatMap((build) => build.artifacts.filter((artifact) => artifact.attempt === Math.max(...build.attempts.map((attempt) => attempt.number))).map((artifact) => <option key={artifact.id} value={`${build.id}:${artifact.id}`}>{build.definition.name} · {artifact.path} · sha256:{artifact.sha256.slice(0, 12)}…</option>))}</select></label>
             <label className="text-xs font-semibold">OS<input name="os" maxLength={50} placeholder="linux" className="mt-2 min-h-10 w-full rounded-lg border border-[var(--line-strong)] px-3 text-sm font-normal" /></label>
             <label className="text-xs font-semibold">Architecture<input name="architecture" maxLength={50} placeholder="amd64" className="mt-2 min-h-10 w-full rounded-lg border border-[var(--line-strong)] px-3 text-sm font-normal" /></label>

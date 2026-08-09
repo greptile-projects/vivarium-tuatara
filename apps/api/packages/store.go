@@ -68,9 +68,13 @@ type Version struct {
 	SHA256           string           `json:"sha256"`
 	Platform         Platform         `json:"platform"`
 	Dependencies     []Dependency     `json:"dependencies"`
+	Summary          string           `json:"summary,omitempty"`
+	Documentation    string           `json:"documentation,omitempty"`
+	License          string           `json:"license,omitempty"`
 	PublisherID      string           `json:"publisher_id"`
 	Visibility       string           `json:"visibility"`
 	Lifecycle        string           `json:"lifecycle"`
+	LifecycleWarning string           `json:"lifecycle_warning,omitempty"`
 	PublishedAt      time.Time        `json:"published_at"`
 }
 
@@ -229,6 +233,7 @@ func (s *Store) Publish(version Version, artifact io.Reader) (Version, error) {
 func matchingPublication(existing, requested Version) bool {
 	requested.ID = existing.ID
 	requested.Lifecycle = existing.Lifecycle
+	requested.LifecycleWarning = existing.LifecycleWarning
 	requested.PublishedAt = existing.PublishedAt
 	sort.Slice(requested.Dependencies, func(i, j int) bool { return requested.Dependencies[i].Name < requested.Dependencies[j].Name })
 	return reflect.DeepEqual(existing, requested)
@@ -267,6 +272,22 @@ func (s *Store) OpenArtifact(name, version string) (*os.File, Version, error) {
 }
 
 func (s *Store) ListRepository(repositoryID string) ([]Version, error) {
+	items, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	result := []Version{}
+	for _, item := range items {
+		if item.RepositoryID == repositoryID {
+			result = append(result, item)
+		}
+	}
+	return result, nil
+}
+
+// List returns every package version; callers remain responsible for applying
+// current repository visibility before projecting the catalog.
+func (s *Store) List() ([]Version, error) {
 	entries, err := os.ReadDir(s.root)
 	if err != nil {
 		return nil, err
@@ -288,13 +309,42 @@ func (s *Store) ListRepository(repositoryID string) ([]Version, error) {
 			if err != nil {
 				return nil, err
 			}
-			if item.RepositoryID == repositoryID {
-				result = append(result, item)
-			}
+			result = append(result, item)
 		}
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].PublishedAt.Before(result[j].PublishedAt) })
 	return result, nil
+}
+
+func (s *Store) SetLifecycle(name, version, lifecycle, warning string) (Version, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lock, err := os.OpenFile(filepath.Join(s.root, ".lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return Version{}, err
+	}
+	defer lock.Close()
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return Version{}, err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	lifecycle, warning = strings.TrimSpace(strings.ToLower(lifecycle)), strings.TrimSpace(warning)
+	if lifecycle != "active" && lifecycle != "deprecated" && lifecycle != "yanked" {
+		return Version{}, ErrInvalid
+	}
+	if (lifecycle == "active" && warning != "") || (lifecycle != "active" && (warning == "" || len(warning) > 1000)) {
+		return Version{}, ErrInvalid
+	}
+	item, err := s.Get(name, version)
+	if err != nil {
+		return Version{}, err
+	}
+	item.Lifecycle, item.LifecycleWarning = lifecycle, warning
+	body, _ := json.Marshal(item)
+	if err = atomicFile(filepath.Join(s.root, item.Name, item.Version, "metadata.json"), body); err != nil {
+		return Version{}, err
+	}
+	return item, nil
 }
 
 func valid(v Version) bool {
@@ -304,7 +354,7 @@ func valid(v Version) bool {
 	if strings.TrimSpace(v.BuildAttestation.Step) == "" || strings.TrimSpace(v.BuildAttestation.Image) == "" || strings.TrimSpace(v.BuildAttestation.Command) == "" || v.BuildAttestation.Attempt < 1 || v.BuildAttestation.State != "succeeded" {
 		return false
 	}
-	if len(v.Platform.OS) > 50 || len(v.Platform.Architecture) > 50 || len(v.Platform.Runtime) > 100 || len(v.Dependencies) > 100 {
+	if len(v.Platform.OS) > 50 || len(v.Platform.Architecture) > 50 || len(v.Platform.Runtime) > 100 || len(v.Dependencies) > 100 || len(v.Summary) > 500 || len(v.Documentation) > 20000 || len(v.License) > 100 {
 		return false
 	}
 	seen := map[string]bool{}
