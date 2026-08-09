@@ -1118,6 +1118,19 @@ documents. All routes require an authenticated credential with
   `security:investigate`-only credential. The nested investigation `GET`
   returns only its frozen selection; nested `POST /findings` can cite only
   delegated evidence and publishes solely into the embargoed advisory.
+- `POST /security-advisories/{advisory_id}/repair-tasks` creates a human or agent
+  repair for an exact affected repository, version line, verified base commit,
+  response-team assignee, and optional same-advisory dependency tasks. `POST
+  .../repair-tasks/{task_id}/sessions` creates one isolated
+  `vivarium-security/*` branch and returns a revocable, exact-branch Git
+  credential. Session comments, reviews, completion, and revocation stay inside
+  the advisory; completion verifies the live tip descends from the frozen base.
+  Assignment and launch require current participation in the task repository;
+  response-team membership alone grants no Git access. Mutation authority is
+  limited to the exact worker, session initiator, or explicit task creator while
+  that creator remains a task-repository participant; unrelated collaborators
+  cannot alter session history or lifecycle.
+  Revocation removes the isolated ref so an open task can start a fresh session.
 
 A report is discoverable only by its reporter, current owners of affected
 repositories, and its explicitly invited response team. Unauthorized detail
@@ -1127,3 +1140,6 @@ retains the reporter contact channel and all protected messages. No advisory
 operation emits ordinary repository activity or inbox notifications. Durable
 records live beneath `$SECURITY_ADVISORY_STORAGE_ROOT`, which defaults to
 `security-advisories`, with owner-only directory and record permissions.
+The Git transport hides `refs/heads/vivarium-security/` from ordinary clone,
+fetch, and push discovery, including owner credentials. Repair credentials
+advertise only their exact branch and grant no repository membership.

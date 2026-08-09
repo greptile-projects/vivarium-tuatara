@@ -72,6 +72,52 @@ type Investigation struct {
 	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
+type RepairTask struct {
+	ID                string    `json:"id"`
+	RepositoryID      string    `json:"repository_id"`
+	VersionLine       string    `json:"version_line"`
+	Title             string    `json:"title"`
+	Mandate           string    `json:"mandate"`
+	BaseCommitID      string    `json:"base_commit_id"`
+	AssigneeID        string    `json:"assignee_id"`
+	AssigneeKind      string    `json:"assignee_kind"`
+	DependencyTaskIDs []string  `json:"dependency_task_ids"`
+	Status            string    `json:"status"`
+	CreatedBy         string    `json:"created_by"`
+	CreatedAt         time.Time `json:"created_at"`
+}
+
+type RepairComment struct {
+	ID        string    `json:"id"`
+	ActorID   string    `json:"actor_id"`
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"created_at"`
+}
+type RepairReview struct {
+	ID        string    `json:"id"`
+	ActorID   string    `json:"actor_id"`
+	Decision  string    `json:"decision"`
+	Body      string    `json:"body"`
+	CommitID  string    `json:"commit_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+type RepairSession struct {
+	ID           string          `json:"id"`
+	TaskID       string          `json:"task_id"`
+	RepositoryID string          `json:"repository_id"`
+	InitiatorID  string          `json:"initiator_id"`
+	WorkerID     string          `json:"worker_id"`
+	CredentialID string          `json:"credential_id,omitempty"`
+	Branch       string          `json:"branch"`
+	BaseCommitID string          `json:"base_commit_id"`
+	CommitID     string          `json:"commit_id,omitempty"`
+	State        string          `json:"state"`
+	Comments     []RepairComment `json:"comments"`
+	Reviews      []RepairReview  `json:"reviews"`
+	CreatedAt    time.Time       `json:"created_at"`
+	UpdatedAt    time.Time       `json:"updated_at"`
+}
+
 type Message struct {
 	ID        string    `json:"id"`
 	ActorID   string    `json:"actor_id"`
@@ -103,6 +149,8 @@ type Advisory struct {
 	Findings             []Finding            `json:"findings"`
 	ImpactMatrix         []Impact             `json:"impact_matrix"`
 	Investigations       []Investigation      `json:"investigations"`
+	RepairTasks          []RepairTask         `json:"repair_tasks"`
+	RepairSessions       []RepairSession      `json:"repair_sessions"`
 	Version              int                  `json:"version"`
 	CreatedAt            time.Time            `json:"created_at"`
 	UpdatedAt            time.Time            `json:"updated_at"`
@@ -142,12 +190,139 @@ func (s *Store) Create(v Advisory) (Advisory, error) {
 	v.CreatedAt, v.UpdatedAt = now, now
 	v.ResponseTeam, v.Messages = []string{}, []Message{}
 	v.Findings, v.ImpactMatrix, v.Investigations = []Finding{}, []Impact{}, []Investigation{}
+	v.RepairTasks, v.RepairSessions = []RepairTask{}, []RepairSession{}
 	for i := range v.Evidence {
 		v.Evidence[i].ID, v.Evidence[i].CapturedAt = mustID(), now
 	}
 	v.AccessLog = []AccessEvent{{ID: mustID(), ActorID: v.ReporterID, Action: "reported", CreatedAt: now}}
 	err := s.mutate(func() error { return s.write(v) })
 	return v, err
+}
+
+func (s *Store) AddRepairTask(id, actor string, task RepairTask) (Advisory, RepairTask, error) {
+	var out RepairTask
+	v, err := s.update(id, func(v *Advisory) error {
+		task.Title, task.Mandate, task.VersionLine = strings.TrimSpace(task.Title), strings.TrimSpace(task.Mandate), strings.TrimSpace(task.VersionLine)
+		if !validID(actor) || !validID(task.RepositoryID) || !validID(task.AssigneeID) || len(task.BaseCommitID) != 40 || task.Title == "" || len(task.Title) > 200 || task.Mandate == "" || len(task.Mandate) > 10000 || task.VersionLine == "" || len(task.VersionLine) > 200 || !oneOf(task.AssigneeKind, "human", "agent") || len(task.DependencyTaskIDs) > 20 {
+			return ErrInvalid
+		}
+		affected := false
+		for _, x := range v.AffectedRepositories {
+			if x.RepositoryID == task.RepositoryID {
+				for _, line := range x.Versions {
+					if line == task.VersionLine {
+						affected = true
+					}
+				}
+			}
+		}
+		if !affected {
+			return ErrInvalid
+		}
+		seen := map[string]bool{}
+		for _, dependency := range task.DependencyTaskIDs {
+			if seen[dependency] {
+				return ErrInvalid
+			}
+			seen[dependency] = true
+			found := false
+			for _, existing := range v.RepairTasks {
+				if existing.ID == dependency {
+					found = true
+				}
+			}
+			if !found {
+				return ErrInvalid
+			}
+		}
+		now := s.now()
+		task.ID, task.Status, task.CreatedBy, task.CreatedAt = mustID(), "open", actor, now
+		out = task
+		v.RepairTasks = append(v.RepairTasks, task)
+		v.Version++
+		v.AccessLog = append(v.AccessLog, AccessEvent{ID: mustID(), ActorID: actor, Action: "repair_task_created", Detail: task.ID, CreatedAt: now})
+		return nil
+	})
+	return v, out, err
+}
+
+func (s *Store) StartRepairSession(id, actor, taskID, credentialID, branch string) (Advisory, RepairSession, error) {
+	var out RepairSession
+	v, err := s.update(id, func(v *Advisory) error {
+		var task *RepairTask
+		for i := range v.RepairTasks {
+			if v.RepairTasks[i].ID == taskID {
+				task = &v.RepairTasks[i]
+			}
+		}
+		if task == nil || task.Status != "open" || !validID(actor) || !validID(credentialID) || branch == "" {
+			return ErrInvalid
+		}
+		for _, x := range v.RepairSessions {
+			if x.TaskID == taskID && x.State == "active" {
+				return ErrConflict
+			}
+		}
+		now := s.now()
+		out = RepairSession{ID: mustID(), TaskID: taskID, RepositoryID: task.RepositoryID, InitiatorID: actor, WorkerID: task.AssigneeID, CredentialID: credentialID, Branch: branch, BaseCommitID: task.BaseCommitID, State: "active", Comments: []RepairComment{}, Reviews: []RepairReview{}, CreatedAt: now, UpdatedAt: now}
+		v.RepairSessions = append(v.RepairSessions, out)
+		v.Version++
+		v.AccessLog = append(v.AccessLog, AccessEvent{ID: mustID(), ActorID: actor, Action: "repair_session_started", Detail: out.ID, CreatedAt: now})
+		return nil
+	})
+	return v, out, err
+}
+
+func (s *Store) UpdateRepairSession(id, actor, sessionID, action, body, decision, commitID string) (Advisory, RepairSession, error) {
+	var out RepairSession
+	v, err := s.update(id, func(v *Advisory) error {
+		var session *RepairSession
+		for i := range v.RepairSessions {
+			if v.RepairSessions[i].ID == sessionID {
+				session = &v.RepairSessions[i]
+			}
+		}
+		if session == nil || !validID(actor) {
+			return ErrNotFound
+		}
+		now := s.now()
+		body = strings.TrimSpace(body)
+		switch action {
+		case "comment":
+			if body == "" || len(body) > 20000 {
+				return ErrInvalid
+			}
+			session.Comments = append(session.Comments, RepairComment{ID: mustID(), ActorID: actor, Body: body, CreatedAt: now})
+		case "review":
+			if !oneOf(decision, "approve", "request_changes") || len(commitID) != 40 || len(body) > 10000 {
+				return ErrInvalid
+			}
+			session.Reviews = append(session.Reviews, RepairReview{ID: mustID(), ActorID: actor, Decision: decision, Body: body, CommitID: commitID, CreatedAt: now})
+		case "complete":
+			if session.State != "active" || len(commitID) != 40 {
+				return ErrInvalid
+			}
+			session.State, session.CommitID = "completed", commitID
+			for i := range v.RepairTasks {
+				if v.RepairTasks[i].ID == session.TaskID {
+					v.RepairTasks[i].Status = "review"
+				}
+			}
+		case "revoke":
+			if session.State != "active" {
+				return ErrInvalid
+			}
+			session.State = "revoked"
+		default:
+			return ErrInvalid
+		}
+		session.UpdatedAt = now
+		out = *session
+		v.Version++
+		v.AccessLog = append(v.AccessLog, AccessEvent{ID: mustID(), ActorID: actor, Action: "repair_" + action, Detail: sessionID, CreatedAt: now})
+		return nil
+	})
+	return v, out, err
 }
 
 func (s *Store) AddEvidence(id, actor string, evidence Evidence) (Advisory, error) {

@@ -1,12 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -57,6 +59,58 @@ func TestPrivateSecurityReportTriageAndBoundedAccess(t *testing.T) {
 	response = authenticatedRequest(t, http.MethodPatch, server.URL+"/security-advisories/"+advisory.ID, `{"expected_version":1,"severity":"critical","embargo_state":"embargoed"}`, owner.Credential.Token, http.StatusOK)
 	decodeResponse(t, response, &advisory)
 	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/responders", `{"user_id":"`+responder.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/collaborators", `{"user_id":"`+responder.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	bare, err := gitStore.Open(repository.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := writeCommit(t, bare, 1, "published base")
+	if err = bare.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)}); err != nil {
+		t.Fatal(err)
+	}
+	repairBody := `{"repository_id":"` + repository.ID + `","version_line":"1.x","title":"Repair parser boundary","mandate":"Remove the boundary bypass without exposing details.","base_commit_id":"` + string(base) + `","assignee_id":"` + responder.User.ID + `","assignee_kind":"human","dependency_task_ids":[]}`
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-tasks", repairBody, owner.Credential.Token, http.StatusCreated)
+	var repairTask struct {
+		RepairTask securityadvisories.RepairTask `json:"repair_task"`
+	}
+	decodeResponse(t, response, &repairTask)
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-tasks/"+repairTask.RepairTask.ID+"/sessions", `{"expires_in":300}`, responder.Credential.Token, http.StatusCreated)
+	var repairLaunch struct {
+		RepairSession securityadvisories.RepairSession `json:"repair_session"`
+		Credential    auth.IssuedCredential            `json:"credential"`
+	}
+	decodeResponse(t, response, &repairLaunch)
+	if repairLaunch.Credential.GitWriteBranch != repairLaunch.RepairSession.Branch || !strings.HasPrefix(repairLaunch.RepairSession.Branch, "refs/heads/vivarium-security/") {
+		t.Fatalf("repair launch = %#v", repairLaunch)
+	}
+	assertGitDiscoveryStatus(t, server.URL+repository.GitRemote+"/info/refs?service=git-receive-pack", repairLaunch.Credential.Token, http.StatusOK)
+	repairRefs := authenticatedRequest(t, http.MethodGet, server.URL+repository.GitRemote+"/info/refs?service=git-upload-pack", "", repairLaunch.Credential.Token, http.StatusOK)
+	repairData, _ := io.ReadAll(repairRefs.Body)
+	repairRefs.Body.Close()
+	if !strings.Contains(string(repairData), repairLaunch.RepairSession.Branch) || strings.Contains(string(repairData), " refs/heads/main") {
+		t.Fatalf("repair credential advertisement was not exact-branch scoped: %q", repairData)
+	}
+	ordinary, _ := credentials.Issue(owner.User.ID, auth.Git, "ordinary owner", []string{"git:read"}, time.Hour)
+	ordinaryRefs := authenticatedRequest(t, http.MethodGet, server.URL+repository.GitRemote+"/info/refs?service=git-upload-pack", "", ordinary.Token, http.StatusOK)
+	ordinaryData, _ := io.ReadAll(ordinaryRefs.Body)
+	ordinaryRefs.Body.Close()
+	if strings.Contains(string(ordinaryData), repairLaunch.RepairSession.Branch) {
+		t.Fatalf("embargoed branch leaked in ordinary advertisement")
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-sessions/"+repairLaunch.RepairSession.ID+"/comments", `{"body":"Task creator review context."}`, owner.Credential.Token, http.StatusOK).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-sessions/"+repairLaunch.RepairSession.ID+"/comments", `{"body":"Unauthorized reporter mutation."}`, reporter.Credential.Token, http.StatusForbidden).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-sessions/"+repairLaunch.RepairSession.ID+"/revoke", `{}`, responder.Credential.Token, http.StatusOK).Body.Close()
+	if _, err = bare.ReadReference(repairLaunch.RepairSession.Branch); !errors.Is(err, storage.ErrReferenceNotFound) {
+		t.Fatalf("revoked repair branch remains: %v", err)
+	}
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-tasks/"+repairTask.RepairTask.ID+"/sessions", `{"expires_in":300}`, responder.Credential.Token, http.StatusCreated)
+	var restarted struct {
+		RepairSession securityadvisories.RepairSession `json:"repair_session"`
+	}
+	decodeResponse(t, response, &restarted)
+	if restarted.RepairSession.ID == repairLaunch.RepairSession.ID {
+		t.Fatal("restart reused revoked repair session")
+	}
 	response = authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/messages", `{"body":"I can reproduce this against the affected versions."}`, responder.Credential.Token, http.StatusCreated)
 	decodeResponse(t, response, &advisory)
 	if len(advisory.Messages) != 1 || advisory.Messages[0].ActorID != responder.User.ID {
@@ -99,4 +153,56 @@ func TestPrivateSecurityReportTriageAndBoundedAccess(t *testing.T) {
 	if len(advisory.Findings) != 2 || len(advisory.ImpactMatrix) != 1 || advisory.Findings[1].InvestigationID != launch.Investigation.ID {
 		t.Fatalf("diagnostic workflow = %#v", advisory)
 	}
+}
+
+func TestRepairSessionAuthorizationIsRepositorySpecific(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	advisories, _ := securityadvisories.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, nil, advisories))
+	defer server.Close()
+	ownerA := createTestAccount(t, server.URL, "repair-owner-a")
+	ownerB := createTestAccount(t, server.URL, "repair-owner-b")
+	reporter := createTestAccount(t, server.URL, "repair-reporter")
+	assignee := createTestAccount(t, server.URL, "repair-assignee")
+	createRepository := func(owner accountResponse, name string) (repositories.Repository, storage.ObjectID) {
+		response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"`+name+`"}`, owner.Credential.Token, http.StatusCreated)
+		var record repositories.Repository
+		decodeResponse(t, response, &record)
+		repository, err := gitStore.Open(record.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		base := writeCommit(t, repository, 1, name+" base")
+		if err = repository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)}); err != nil {
+			t.Fatal(err)
+		}
+		return record, base
+	}
+	repositoryA, _ := createRepository(ownerA, "private-a")
+	repositoryB, baseB := createRepository(ownerB, "private-b")
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repositoryA.ID+"/collaborators", `{"user_id":"`+reporter.User.ID+`"}`, ownerA.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repositoryB.ID+"/collaborators", `{"user_id":"`+reporter.User.ID+`"}`, ownerB.Credential.Token, http.StatusCreated).Body.Close()
+	body := `{"title":"Coordinated repair","description":"Two private version lines are affected.","affected_repositories":[{"repository_id":"` + repositoryA.ID + `","versions":["1.x"]},{"repository_id":"` + repositoryB.ID + `","versions":["2.x"]}],"evidence":[],"contact":"security@example.test"}`
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories", body, reporter.Credential.Token, http.StatusCreated)
+	var advisory securityadvisories.Advisory
+	decodeResponse(t, response, &advisory)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/responders", `{"user_id":"`+assignee.User.ID+`"}`, ownerA.Credential.Token, http.StatusCreated).Body.Close()
+	taskBody := `{"repository_id":"` + repositoryB.ID + `","version_line":"2.x","title":"Repair private B","mandate":"Fix B.","base_commit_id":"` + string(baseB) + `","assignee_id":"` + assignee.User.ID + `","assignee_kind":"human","dependency_task_ids":[]}`
+	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-tasks", taskBody, ownerA.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repositoryB.ID+"/collaborators", `{"user_id":"`+assignee.User.ID+`"}`, ownerB.Credential.Token, http.StatusCreated).Body.Close()
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-tasks", taskBody, ownerA.Credential.Token, http.StatusCreated)
+	var task struct {
+		RepairTask securityadvisories.RepairTask `json:"repair_task"`
+	}
+	decodeResponse(t, response, &task)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-tasks/"+task.RepairTask.ID+"/sessions", `{"expires_in":300}`, ownerA.Credential.Token, http.StatusForbidden).Body.Close()
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-tasks/"+task.RepairTask.ID+"/sessions", `{"expires_in":300}`, assignee.Credential.Token, http.StatusCreated)
+	var launch struct {
+		RepairSession securityadvisories.RepairSession `json:"repair_session"`
+	}
+	decodeResponse(t, response, &launch)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-sessions/"+launch.RepairSession.ID+"/comments", `{"body":"Unrelated collaborator mutation."}`, reporter.Credential.Token, http.StatusForbidden).Body.Close()
 }

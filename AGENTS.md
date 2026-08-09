@@ -326,6 +326,14 @@ whenever dependencies change or the web job fails before it starts.
   matrix. Dependency evidence must match an exact release build's frozen image
   definition. Short-lived `security:investigate` credentials expose only selected
   frozen evidence and can publish findings only inside the embargoed report.
+  Response-team repair tasks freeze affected version lines, verified bases,
+  human or agent assignees, and same-advisory cross-repository dependencies.
+  Sessions use hidden `vivarium-security/*` refs and exact-branch revocable Git
+  access; assignment and launch both require current participation in that
+  task's repository, while session control is limited to its worker, initiator,
+  or explicit task creator while that creator retains repository access.
+  Revocation removes the branch before the open task can
+  restart. Protected commits, comments, and reviews remain advisory-only.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's
