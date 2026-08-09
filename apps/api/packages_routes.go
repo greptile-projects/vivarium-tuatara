@@ -532,6 +532,10 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 			return
 		}
 		if item.Lifecycle != "active" && activityStore != nil {
+			decisionID := "legacy"
+			if count := len(item.LifecycleHistory); count > 0 && item.LifecycleHistory[count-1].ID != "" {
+				decisionID = item.LifecycleHistory[count-1].ID
+			}
 			consumers, _ := packageStore.ListConsumers(item.Name, item.Version)
 			seen := map[string]bool{}
 			for _, inventory := range consumers {
@@ -541,7 +545,7 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 				}
 				seen[repository.OwnerID] = true
 				target := repository.OwnerID
-				_ = recordActivityOnce(activityStore, repositoryStore, "package-recovery:"+item.ID+":"+item.Lifecycle+":"+target, activities.Event{Kind: "package.recovery_required", ActorID: actor.UserID, RepositoryID: repository.ID, ResourceType: "package", ResourceID: item.ID, ResourceTitle: item.Name + " " + item.Version + " is " + item.Lifecycle, TargetUserID: &target})
+				_ = recordActivityOnce(activityStore, repositoryStore, "package-recovery:"+decisionID+":"+target, activities.Event{Kind: "package.recovery_required", ActorID: actor.UserID, RepositoryID: repository.ID, ResourceType: "package", ResourceID: item.ID, ResourceTitle: item.Name + " " + item.Version + " is " + item.Lifecycle, TargetUserID: &target})
 			}
 		}
 		writeJSON(w, 200, item)
@@ -815,18 +819,7 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 			writeAPIError(w, 409, "package_recovery_failed", "the current dependency manifest is unavailable")
 			return
 		}
-		for index := range manifest.Lock {
-			if manifest.Lock[index].Name == unsafe.Name {
-				manifest.Lock[index].Version = replacement.Version
-			}
-		}
-		if unsafe.Name == replacement.Name {
-			for index := range manifest.Dependencies {
-				if manifest.Dependencies[index].Name == unsafe.Name {
-					manifest.Dependencies[index].Constraint = "^" + replacement.Version
-				}
-			}
-		}
+		manifest = replacePackageInManifest(manifest, unsafe.Name, replacement.Name, replacement.Version)
 		if input.AssigneeType != "human" && input.AssigneeType != "agent" {
 			writeAPIError(w, 422, "invalid_package_recovery", "assignee_type must be human or agent")
 			return
@@ -909,6 +902,35 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 		w.Header().Set("X-Checksum-Sha256", item.SHA256)
 		http.ServeContent(w, r, path.Base(item.ArtifactPath), item.PublishedAt, file)
 	})
+}
+
+func replacePackageInManifest(manifest packages.InventoryConfig, unsafeName, replacementName, replacementVersion string) packages.InventoryConfig {
+	dependencies := make([]packages.ManifestDependency, 0, len(manifest.Dependencies))
+	foundDependency := false
+	for _, dependency := range manifest.Dependencies {
+		if dependency.Name == unsafeName || dependency.Name == replacementName {
+			if !foundDependency {
+				dependencies = append(dependencies, packages.ManifestDependency{Name: replacementName, Constraint: "^" + replacementVersion})
+				foundDependency = true
+			}
+			continue
+		}
+		dependencies = append(dependencies, dependency)
+	}
+	locks := make([]packages.LockEntry, 0, len(manifest.Lock))
+	foundLock := false
+	for _, lock := range manifest.Lock {
+		if lock.Name == unsafeName || lock.Name == replacementName {
+			if !foundLock {
+				locks = append(locks, packages.LockEntry{Name: replacementName, Version: replacementVersion})
+				foundLock = true
+			}
+			continue
+		}
+		locks = append(locks, lock)
+	}
+	manifest.Dependencies, manifest.Lock = dependencies, locks
+	return manifest
 }
 
 func packageUpdateProposalBody(version packages.Version, current packages.InventoryEntry, notes string) string {

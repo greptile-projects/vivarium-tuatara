@@ -92,6 +92,7 @@ type Replacement struct {
 }
 
 type LifecycleChange struct {
+	ID          string       `json:"id"`
 	Lifecycle   string       `json:"lifecycle"`
 	Warning     string       `json:"warning,omitempty"`
 	Reason      string       `json:"reason,omitempty"`
@@ -377,10 +378,17 @@ func (s *Store) SetLifecycle(name, version, lifecycle, warning, reason string, r
 	if err != nil {
 		return Version{}, err
 	}
+	if item.Lifecycle == lifecycle && item.LifecycleWarning == warning && item.LifecycleReason == reason && reflect.DeepEqual(item.Replacement, replacement) {
+		return item, nil
+	}
+	decisionID := make([]byte, 16)
+	if _, err = rand.Read(decisionID); err != nil {
+		return Version{}, err
+	}
 	now := s.now().UTC().Truncate(time.Microsecond)
 	item.Lifecycle, item.LifecycleWarning, item.LifecycleReason, item.Replacement = lifecycle, warning, reason, replacement
 	item.LifecycleChangedBy, item.LifecycleChangedAt = actorID, &now
-	item.LifecycleHistory = append(item.LifecycleHistory, LifecycleChange{Lifecycle: lifecycle, Warning: warning, Reason: reason, Replacement: replacement, ActorID: actorID, CreatedAt: now})
+	item.LifecycleHistory = append(item.LifecycleHistory, LifecycleChange{ID: hex.EncodeToString(decisionID), Lifecycle: lifecycle, Warning: warning, Reason: reason, Replacement: replacement, ActorID: actorID, CreatedAt: now})
 	body, _ := json.Marshal(item)
 	if err = atomicFile(filepath.Join(s.root, item.Name, item.Version, "metadata.json"), body); err != nil {
 		return Version{}, err

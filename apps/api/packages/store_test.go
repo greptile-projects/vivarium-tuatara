@@ -182,8 +182,12 @@ func TestLifecycleRecoveryRetainsEvidenceAndAppendOnlyDecisions(t *testing.T) {
 		t.Fatalf("changed = %#v", changed)
 	}
 	history, err := store.LifecycleHistory(created.Name, created.Version)
-	if err != nil || len(history) != 1 || history[0].ActorID != actor || history[0].Reason == "" {
+	if err != nil || len(history) != 1 || history[0].ID == "" || history[0].ActorID != actor || history[0].Reason == "" {
 		t.Fatalf("history = %#v, %v", history, err)
+	}
+	retried, err := store.SetLifecycle(created.Name, created.Version, "quarantined", "Do not install this version.", "The parser accepts an unsafe payload.", &Replacement{Name: replacement.Name, Version: replacement.Version}, actor)
+	if err != nil || len(retried.LifecycleHistory) != 1 || retried.LifecycleHistory[0].ID != history[0].ID {
+		t.Fatalf("retry = %#v, %v", retried, err)
 	}
 	if _, err = store.SetLifecycle(created.Name, created.Version, "active", "still warning", "", nil, actor); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("invalid restoration = %v", err)

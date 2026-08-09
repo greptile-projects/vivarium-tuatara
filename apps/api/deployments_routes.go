@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"os/exec"
 
@@ -107,15 +108,9 @@ func registerDeploymentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos
 			return
 		}
 		if packageStore != nil {
-			inventory, inventoryErr := packageStore.GetInventory(r.PathValue("id"), candidate.CommitID)
-			if inventoryErr == nil {
-				for _, dependency := range inventory.Entries {
-					version, getErr := packageStore.Get(dependency.Name, dependency.Version)
-					if getErr == nil && version.Lifecycle != "active" {
-						writeAPIError(w, 409, "promotion_unsafe_dependency", "promotion policy rejects a release containing a deprecated, quarantined, or yanked package version; existing deployments remain retained as exposure evidence")
-						return
-					}
-				}
+			if policyErr := verifyPromotionDependencies(packageStore, r.PathValue("id"), candidate.CommitID); policyErr != nil {
+				writeAPIError(w, 409, "promotion_dependency_policy_failed", policyErr.Error())
+				return
 			}
 		}
 		run, err := builds.Get(r.PathValue("id"), input.ReleaseID, input.BuildID)
@@ -386,4 +381,21 @@ func registerDeploymentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos
 			writeJSON(w, 200, response)
 		}
 	})
+}
+
+func verifyPromotionDependencies(packageStore *packages.Store, repositoryID, commitID string) error {
+	inventory, err := packageStore.GetInventory(repositoryID, commitID)
+	if err != nil {
+		return fmt.Errorf("promotion requires a readable exact dependency inventory")
+	}
+	for _, dependency := range inventory.Entries {
+		version, getErr := packageStore.Get(dependency.Name, dependency.Version)
+		if getErr != nil {
+			return fmt.Errorf("promotion dependency %s %s cannot be verified", dependency.Name, dependency.Version)
+		}
+		if version.Lifecycle != "active" {
+			return fmt.Errorf("promotion dependency %s %s is %s; existing deployments remain retained as exposure evidence", dependency.Name, dependency.Version, version.Lifecycle)
+		}
+	}
+	return nil
 }
