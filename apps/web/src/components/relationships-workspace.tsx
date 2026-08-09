@@ -60,12 +60,16 @@ export function RelationshipsWorkspace({
           ),
         ]);
       setGraph(nextGraph);
-      setReleases(releaseSet.releases);
-      setBranches(branchSet.branches);
-      setEnvironments(environmentSet.environments);
+      setReleases(releaseSet.releases ?? []);
+      setBranches(branchSet.branches ?? []);
+      setEnvironments(environmentSet.environments ?? []);
       setEvolutions(
-        evolutionSet.evolutions.map((plan) => ({
+        (evolutionSet.evolutions ?? []).map((plan) => ({
           ...plan,
+          impacts: plan.impacts ?? [],
+          findings: plan.findings ?? [],
+          acknowledgements: plan.acknowledgements ?? [],
+          analyses: plan.analyses ?? [],
           migration_tasks: plan.migration_tasks ?? [],
           contract_candidates: plan.contract_candidates ?? [],
         })),

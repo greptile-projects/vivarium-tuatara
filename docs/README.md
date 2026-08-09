@@ -73,6 +73,16 @@ queues, ancestry-containing releases, and governed environment promotions.
 Failures pause the affected phase with links back to established rollback or
 agent-repair workflows, leaving already-safe repositories and evidence intact.
 
+The connected evolution browser journey treats this as one collaboration
+capability rather than isolated endpoints. An independently owned consumer is
+discovered from its exact declaration, a read-only agent records scoped impact
+evidence, human migration work arrives from an owned fork, and provider work
+arrives from a task-bound agent branch. The exact open pull combination must
+pass the provider contract check before each owner approves their own rollout
+participation; ordinary merges, releases, checksummed builds, and production
+deployments then advance consumer-first and leave the completed evidence and
+attribution visible in the relationship workspace.
+
 ## Web interface foundation
 
 The web application uses a persistent workbench shell so account, repository,
