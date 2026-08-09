@@ -334,6 +334,15 @@ whenever dependencies change or the web job fails before it starts.
   or explicit task creator while that creator retains repository access.
   Revocation removes the branch before the open task can
   restart. Protected commits, comments, and reviews remain advisory-only.
+  Affected-repository owners define private reproductions per supported version
+  line inside the advisory. Completed repair candidates run the target branch's
+  required checks and those embargoed reproductions against one exact commit;
+  sanitized status and artifact metadata remain response-visible while commands
+  and logs never enter ordinary pull/check surfaces. Passing evidence requires
+  independent repository-owner approval before it is integration-ready. Fixed
+  release attestations then prove the release ancestry contains that candidate
+  and every exact release build succeeded with checksummed artifacts, allowing
+  the advisory to derive coverage and remaining gaps across every claimed line.
 - **API** — a single `main.go` registering handlers on a `net/http` mux with
   Go 1.22+ method-and-path patterns (`"GET /health"`). It has no third-party
   dependencies and no `go.sum`; adding a dependency means the api workflow's

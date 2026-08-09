@@ -1,6 +1,11 @@
 package securityadvisories
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+)
 
 func TestDiagnosticEvidenceImpactAndBoundedInvestigation(t *testing.T) {
 	store, err := New(t.TempDir())
@@ -36,5 +41,60 @@ func TestDiagnosticEvidenceImpactAndBoundedInvestigation(t *testing.T) {
 	}
 	if _, _, err = store.Investigation(v.ID, investigation.ID, actor); err != ErrNotFound {
 		t.Fatalf("unbound credential accessed investigation: %v", err)
+	}
+}
+
+func TestRepairProofCoversExactVersionAndRequiresIndependentApproval(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	creator := "0123456789abcdef0123456789abcdef"
+	approver := "11111111111111111111111111111111"
+	repository := "abcdef0123456789abcdef0123456789"
+	assignee := "22222222222222222222222222222222"
+	v, err := store.Create(Advisory{Title: "Supported-line repair", Description: "Prove the fixed line.", Contact: "security@example.test", ReporterID: creator, AffectedRepositories: []AffectedRepository{{RepositoryID: repository, Versions: []string{"1.x", "2.x"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, reproduction, err := store.AddSecurityReproduction(v.ID, creator, SecurityReproduction{RepositoryID: repository, VersionLine: "1.x", Definition: checkruns.Definition{Name: "CVE reproduction", Image: "alpine:3.22", Command: "test fixed", TimeoutSeconds: 30}})
+	if err != nil || reproduction.Definition.WorkingDirectory != "." {
+		t.Fatalf("reproduction = %#v, %v", reproduction, err)
+	}
+	if _, _, err = store.AddSecurityReproduction(v.ID, creator, SecurityReproduction{RepositoryID: repository, VersionLine: "unsupported", Definition: checkruns.Definition{Name: "bad", Image: "alpine:3.22", Command: "true"}}); err != ErrInvalid {
+		t.Fatalf("unsupported reproduction = %v", err)
+	}
+	v, task, err := store.AddRepairTask(v.ID, creator, RepairTask{RepositoryID: repository, VersionLine: "1.x", Title: "Repair 1.x", Mandate: "Remove the vulnerability.", BaseCommitID: strings.Repeat("a", 40), AssigneeID: assignee, AssigneeKind: "human"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential := "33333333333333333333333333333333"
+	v, session, err := store.StartRepairSession(v.ID, assignee, task.ID, credential, "refs/heads/vivarium-security/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := strings.Repeat("b", 40)
+	v, session, err = store.UpdateRepairSession(v.ID, assignee, session.ID, "complete", "", "", candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, session, err = store.UpdateRepairSession(v.ID, approver, session.ID, "review", "Reviewed exact repair.", "approve", candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, verification, err := store.StartRepairVerification(v.ID, assignee, task.ID, session.ID, []string{"44444444444444444444444444444444"}, []string{"55555555555555555555555555555555"})
+	if err != nil || verification.CandidateCommitID != candidate {
+		t.Fatalf("verification = %#v, %v", verification, err)
+	}
+	if _, _, err = store.ApproveRepairVerification(v.ID, assignee, verification.ID); err != ErrInvalid {
+		t.Fatalf("self approval = %v", err)
+	}
+	v, verification, err = store.ApproveRepairVerification(v.ID, approver, verification.ID)
+	if err != nil || len(verification.Approvals) != 1 {
+		t.Fatalf("approval = %#v, %v", verification, err)
+	}
+	v, attestation, err := store.AddReleaseAttestation(v.ID, approver, ReleaseAttestation{VerificationID: verification.ID, RepositoryID: repository, VersionLine: "1.x", ReleaseID: "66666666666666666666666666666666", ReleaseCommitID: strings.Repeat("c", 40), ArtifactIDs: []string{"77777777777777777777777777777777"}, ArtifactSHA256: []string{strings.Repeat("d", 64)}})
+	if err != nil || len(v.ReleaseAttestations) != 1 || attestation.VersionLine != "1.x" {
+		t.Fatalf("attestation = %#v, %v", attestation, err)
 	}
 }

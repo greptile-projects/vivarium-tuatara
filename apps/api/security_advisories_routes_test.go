@@ -83,6 +83,10 @@ func TestPrivateSecurityReportTriageAndBoundedAccess(t *testing.T) {
 	if repairLaunch.Credential.GitWriteBranch != repairLaunch.RepairSession.Branch || !strings.HasPrefix(repairLaunch.RepairSession.Branch, "refs/heads/vivarium-security/") {
 		t.Fatalf("repair launch = %#v", repairLaunch)
 	}
+	reproductionBody := `{"repository_id":"` + repository.ID + `","version_line":"1.x","definition":{"name":"private parser reproduction","image":"alpine:3.22","command":"test ! -e vulnerable","timeout_seconds":30}}`
+	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/reproductions", reproductionBody, responder.Credential.Token, http.StatusForbidden).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/reproductions", reproductionBody, owner.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-sessions/"+repairLaunch.RepairSession.ID+"/verifications", `{}`, responder.Credential.Token, http.StatusConflict).Body.Close()
 	assertGitDiscoveryStatus(t, server.URL+repository.GitRemote+"/info/refs?service=git-receive-pack", repairLaunch.Credential.Token, http.StatusOK)
 	repairRefs := authenticatedRequest(t, http.MethodGet, server.URL+repository.GitRemote+"/info/refs?service=git-upload-pack", "", repairLaunch.Credential.Token, http.StatusOK)
 	repairData, _ := io.ReadAll(repairRefs.Body)

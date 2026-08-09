@@ -1131,6 +1131,27 @@ documents. All routes require an authenticated credential with
   that creator remains a task-repository participant; unrelated collaborators
   cannot alter session history or lifecycle.
   Revocation removes the isolated ref so an open task can start a fresh session.
+- `POST /security-advisories/{advisory_id}/reproductions` lets the affected
+  repository owner define an embargoed container reproduction for one exact
+  affected version line. Definitions use the same bounded image, command,
+  working-directory, environment, and timeout validation as repository checks,
+  but remain inside the advisory authorization boundary.
+- `POST .../repair-sessions/{session_id}/verifications` reserves the target
+  branch's required checks plus every private reproduction for the task's line
+  against the completed session's exact commit after a non-worker has approved
+  that same commit in protected review. `GET
+  .../verifications/{verification_id}` exposes response-team-safe names, states,
+  commit identity, and artifact checksums without commands or logs. An exact
+  candidate has one proof set.
+- `POST .../verifications/{verification_id}/approvals` requires every reserved
+  run to have succeeded at the exact candidate and requires an affected
+  repository owner other than the repair worker. An approved proof is ready
+  for the repository's protected integration policy.
+- `POST .../verifications/{verification_id}/release-attestations` accepts a
+  release ID only when the release commit contains the verified candidate, all
+  exact release build steps succeeded, and they produced checksummed artifacts.
+  The retained attestation maps those artifacts back to the supported version
+  line, allowing clients to show unproved or unshipped coverage gaps.
 
 A report is discoverable only by its reporter, current owners of affected
 repositories, and its explicitly invited response team. Unauthorized detail

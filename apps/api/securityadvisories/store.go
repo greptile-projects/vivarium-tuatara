@@ -13,6 +13,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 )
 
 var (
@@ -118,6 +120,51 @@ type RepairSession struct {
 	UpdatedAt    time.Time       `json:"updated_at"`
 }
 
+// SecurityReproduction is an embargoed, repository-owner-defined check. The
+// command never enters ordinary pull/check APIs and is returned only through
+// advisory-authorized reads.
+type SecurityReproduction struct {
+	ID           string               `json:"id"`
+	RepositoryID string               `json:"repository_id"`
+	VersionLine  string               `json:"version_line"`
+	Definition   checkruns.Definition `json:"definition"`
+	CreatedBy    string               `json:"created_by"`
+	CreatedAt    time.Time            `json:"created_at"`
+}
+
+type RepairVerification struct {
+	ID                 string           `json:"id"`
+	TaskID             string           `json:"task_id"`
+	SessionID          string           `json:"session_id"`
+	RepositoryID       string           `json:"repository_id"`
+	VersionLine        string           `json:"version_line"`
+	CandidateCommitID  string           `json:"candidate_commit_id"`
+	RequiredRunIDs     []string         `json:"required_run_ids"`
+	ReproductionRunIDs []string         `json:"reproduction_run_ids"`
+	RequestedBy        string           `json:"requested_by"`
+	Approvals          []RepairApproval `json:"approvals"`
+	CreatedAt          time.Time        `json:"created_at"`
+}
+
+type RepairApproval struct {
+	ID        string    `json:"id"`
+	ActorID   string    `json:"actor_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type ReleaseAttestation struct {
+	ID              string    `json:"id"`
+	VerificationID  string    `json:"verification_id"`
+	RepositoryID    string    `json:"repository_id"`
+	VersionLine     string    `json:"version_line"`
+	ReleaseID       string    `json:"release_id"`
+	ReleaseCommitID string    `json:"release_commit_id"`
+	ArtifactIDs     []string  `json:"artifact_ids"`
+	ArtifactSHA256  []string  `json:"artifact_sha256"`
+	ActorID         string    `json:"actor_id"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
 type Message struct {
 	ID        string    `json:"id"`
 	ActorID   string    `json:"actor_id"`
@@ -134,26 +181,29 @@ type AccessEvent struct {
 }
 
 type Advisory struct {
-	ID                   string               `json:"id"`
-	Title                string               `json:"title"`
-	Description          string               `json:"description"`
-	AffectedRepositories []AffectedRepository `json:"affected_repositories"`
-	Evidence             []Evidence           `json:"evidence"`
-	Contact              string               `json:"contact"`
-	ReporterID           string               `json:"reporter_id"`
-	ResponseTeam         []string             `json:"response_team"`
-	Severity             string               `json:"severity"`
-	EmbargoState         string               `json:"embargo_state"`
-	Messages             []Message            `json:"messages"`
-	AccessLog            []AccessEvent        `json:"access_log"`
-	Findings             []Finding            `json:"findings"`
-	ImpactMatrix         []Impact             `json:"impact_matrix"`
-	Investigations       []Investigation      `json:"investigations"`
-	RepairTasks          []RepairTask         `json:"repair_tasks"`
-	RepairSessions       []RepairSession      `json:"repair_sessions"`
-	Version              int                  `json:"version"`
-	CreatedAt            time.Time            `json:"created_at"`
-	UpdatedAt            time.Time            `json:"updated_at"`
+	ID                    string                 `json:"id"`
+	Title                 string                 `json:"title"`
+	Description           string                 `json:"description"`
+	AffectedRepositories  []AffectedRepository   `json:"affected_repositories"`
+	Evidence              []Evidence             `json:"evidence"`
+	Contact               string                 `json:"contact"`
+	ReporterID            string                 `json:"reporter_id"`
+	ResponseTeam          []string               `json:"response_team"`
+	Severity              string                 `json:"severity"`
+	EmbargoState          string                 `json:"embargo_state"`
+	Messages              []Message              `json:"messages"`
+	AccessLog             []AccessEvent          `json:"access_log"`
+	Findings              []Finding              `json:"findings"`
+	ImpactMatrix          []Impact               `json:"impact_matrix"`
+	Investigations        []Investigation        `json:"investigations"`
+	RepairTasks           []RepairTask           `json:"repair_tasks"`
+	RepairSessions        []RepairSession        `json:"repair_sessions"`
+	SecurityReproductions []SecurityReproduction `json:"security_reproductions"`
+	RepairVerifications   []RepairVerification   `json:"repair_verifications"`
+	ReleaseAttestations   []ReleaseAttestation   `json:"release_attestations"`
+	Version               int                    `json:"version"`
+	CreatedAt             time.Time              `json:"created_at"`
+	UpdatedAt             time.Time              `json:"updated_at"`
 }
 
 type Store struct {
@@ -191,12 +241,163 @@ func (s *Store) Create(v Advisory) (Advisory, error) {
 	v.ResponseTeam, v.Messages = []string{}, []Message{}
 	v.Findings, v.ImpactMatrix, v.Investigations = []Finding{}, []Impact{}, []Investigation{}
 	v.RepairTasks, v.RepairSessions = []RepairTask{}, []RepairSession{}
+	v.SecurityReproductions, v.RepairVerifications, v.ReleaseAttestations = []SecurityReproduction{}, []RepairVerification{}, []ReleaseAttestation{}
 	for i := range v.Evidence {
 		v.Evidence[i].ID, v.Evidence[i].CapturedAt = mustID(), now
 	}
 	v.AccessLog = []AccessEvent{{ID: mustID(), ActorID: v.ReporterID, Action: "reported", CreatedAt: now}}
 	err := s.mutate(func() error { return s.write(v) })
 	return v, err
+}
+
+func (s *Store) AddSecurityReproduction(id, actor string, reproduction SecurityReproduction) (Advisory, SecurityReproduction, error) {
+	var out SecurityReproduction
+	v, err := s.update(id, func(v *Advisory) error {
+		reproduction.VersionLine = strings.TrimSpace(reproduction.VersionLine)
+		definition := reproduction.Definition
+		body, marshalErr := json.Marshal(checkruns.Config{Version: 1, Checks: []checkruns.Definition{definition}})
+		validated, parseErr := checkruns.ParseConfig(body)
+		if marshalErr != nil || parseErr != nil || !validID(actor) || !validID(reproduction.RepositoryID) || !affectedVersion(v, reproduction.RepositoryID, reproduction.VersionLine) {
+			return ErrInvalid
+		}
+		for _, existing := range v.SecurityReproductions {
+			if existing.RepositoryID == reproduction.RepositoryID && existing.VersionLine == reproduction.VersionLine && existing.Definition.Name == validated.Checks[0].Name {
+				return ErrConflict
+			}
+		}
+		now := s.now()
+		reproduction.ID, reproduction.Definition, reproduction.CreatedBy, reproduction.CreatedAt = mustID(), validated.Checks[0], actor, now
+		out = reproduction
+		v.SecurityReproductions = append(v.SecurityReproductions, reproduction)
+		v.Version++
+		v.AccessLog = append(v.AccessLog, AccessEvent{ID: mustID(), ActorID: actor, Action: "security_reproduction_defined", Detail: reproduction.ID, CreatedAt: now})
+		return nil
+	})
+	return v, out, err
+}
+
+func affectedVersion(v *Advisory, repositoryID, versionLine string) bool {
+	for _, affected := range v.AffectedRepositories {
+		if affected.RepositoryID == repositoryID && slicesContains(affected.Versions, versionLine) {
+			return true
+		}
+	}
+	return false
+}
+
+func slicesContains(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Store) StartRepairVerification(id, actor, taskID, sessionID string, requiredRunIDs, reproductionRunIDs []string) (Advisory, RepairVerification, error) {
+	var out RepairVerification
+	v, err := s.update(id, func(v *Advisory) error {
+		var task *RepairTask
+		var session *RepairSession
+		for i := range v.RepairTasks {
+			if v.RepairTasks[i].ID == taskID {
+				task = &v.RepairTasks[i]
+			}
+		}
+		for i := range v.RepairSessions {
+			if v.RepairSessions[i].ID == sessionID {
+				session = &v.RepairSessions[i]
+			}
+		}
+		if task == nil || session == nil || session.TaskID != task.ID || session.State != "completed" || session.CommitID == "" || len(requiredRunIDs)+len(reproductionRunIDs) == 0 || !validID(actor) {
+			return ErrInvalid
+		}
+		reviewed := false
+		for _, review := range session.Reviews {
+			if review.Decision == "approve" && review.CommitID == session.CommitID && review.ActorID != session.WorkerID {
+				reviewed = true
+			}
+		}
+		if !reviewed {
+			return ErrInvalid
+		}
+		for _, existing := range v.RepairVerifications {
+			if existing.SessionID == sessionID && existing.CandidateCommitID == session.CommitID {
+				return ErrConflict
+			}
+		}
+		now := s.now()
+		out = RepairVerification{ID: mustID(), TaskID: task.ID, SessionID: session.ID, RepositoryID: task.RepositoryID, VersionLine: task.VersionLine, CandidateCommitID: session.CommitID, RequiredRunIDs: append([]string{}, requiredRunIDs...), ReproductionRunIDs: append([]string{}, reproductionRunIDs...), RequestedBy: actor, Approvals: []RepairApproval{}, CreatedAt: now}
+		v.RepairVerifications = append(v.RepairVerifications, out)
+		v.Version++
+		v.AccessLog = append(v.AccessLog, AccessEvent{ID: mustID(), ActorID: actor, Action: "repair_verification_started", Detail: out.ID, CreatedAt: now})
+		return nil
+	})
+	return v, out, err
+}
+
+func (s *Store) ApproveRepairVerification(id, actor, verificationID string) (Advisory, RepairVerification, error) {
+	var out RepairVerification
+	v, err := s.update(id, func(v *Advisory) error {
+		for i := range v.RepairVerifications {
+			x := &v.RepairVerifications[i]
+			if x.ID != verificationID {
+				continue
+			}
+			workerID := ""
+			for _, session := range v.RepairSessions {
+				if session.ID == x.SessionID {
+					workerID = session.WorkerID
+				}
+			}
+			if !validID(actor) || actor == workerID {
+				return ErrInvalid
+			}
+			for _, approval := range x.Approvals {
+				if approval.ActorID == actor {
+					out = *x
+					return nil
+				}
+			}
+			now := s.now()
+			x.Approvals = append(x.Approvals, RepairApproval{ID: mustID(), ActorID: actor, CreatedAt: now})
+			out = *x
+			v.Version++
+			v.AccessLog = append(v.AccessLog, AccessEvent{ID: mustID(), ActorID: actor, Action: "repair_verification_approved", Detail: x.ID, CreatedAt: now})
+			return nil
+		}
+		return ErrNotFound
+	})
+	return v, out, err
+}
+
+func (s *Store) AddReleaseAttestation(id, actor string, attestation ReleaseAttestation) (Advisory, ReleaseAttestation, error) {
+	var out ReleaseAttestation
+	v, err := s.update(id, func(v *Advisory) error {
+		found := false
+		for _, verification := range v.RepairVerifications {
+			if verification.ID == attestation.VerificationID && verification.RepositoryID == attestation.RepositoryID && verification.VersionLine == attestation.VersionLine && len(verification.Approvals) > 0 {
+				found = true
+			}
+		}
+		if !found || !validID(actor) || !validID(attestation.ReleaseID) || len(attestation.ReleaseCommitID) != 40 || len(attestation.ArtifactIDs) == 0 || len(attestation.ArtifactIDs) != len(attestation.ArtifactSHA256) {
+			return ErrInvalid
+		}
+		for _, existing := range v.ReleaseAttestations {
+			if existing.VerificationID == attestation.VerificationID && existing.ReleaseID == attestation.ReleaseID {
+				out = existing
+				return nil
+			}
+		}
+		now := s.now()
+		attestation.ID, attestation.ActorID, attestation.CreatedAt = mustID(), actor, now
+		out = attestation
+		v.ReleaseAttestations = append(v.ReleaseAttestations, attestation)
+		v.Version++
+		v.AccessLog = append(v.AccessLog, AccessEvent{ID: mustID(), ActorID: actor, Action: "fixed_release_attested", Detail: attestation.ID, CreatedAt: now})
+		return nil
+	})
+	return v, out, err
 }
 
 func (s *Store) AddRepairTask(id, actor string, task RepairTask) (Advisory, RepairTask, error) {
@@ -595,7 +796,19 @@ func (s *Store) read(id string, out *Advisory) error {
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(data, out)
+	if err := json.Unmarshal(data, out); err != nil {
+		return err
+	}
+	if out.SecurityReproductions == nil {
+		out.SecurityReproductions = []SecurityReproduction{}
+	}
+	if out.RepairVerifications == nil {
+		out.RepairVerifications = []RepairVerification{}
+	}
+	if out.ReleaseAttestations == nil {
+		out.ReleaseAttestations = []ReleaseAttestation{}
+	}
+	return nil
 }
 func (s *Store) write(v Advisory) error {
 	data, err := json.MarshalIndent(v, "", "  ")

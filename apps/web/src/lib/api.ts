@@ -234,6 +234,9 @@ export type SecurityAdvisory = {
   investigations: { id: string; agent_id: string; initiator_id: string; mandate: string; state: string; evidence: SecurityAdvisory["evidence"]; created_at: string; updated_at: string }[];
   repair_tasks: { id: string; repository_id: string; version_line: string; title: string; mandate: string; base_commit_id: string; assignee_id: string; assignee_kind: "human" | "agent"; dependency_task_ids: string[]; status: "open" | "review"; created_by: string; created_at: string }[];
   repair_sessions: { id: string; task_id: string; repository_id: string; initiator_id: string; worker_id: string; branch: string; base_commit_id: string; commit_id?: string; state: "active" | "completed" | "revoked"; comments: { id: string; actor_id: string; body: string; created_at: string }[]; reviews: { id: string; actor_id: string; decision: "approve" | "request_changes"; body: string; commit_id: string; created_at: string }[]; created_at: string; updated_at: string }[];
+  security_reproductions: { id: string; repository_id: string; version_line: string; definition: { name: string; image: string; command: string; working_directory?: string; timeout_seconds?: number }; created_by: string; created_at: string }[];
+  repair_verifications: { id: string; task_id: string; session_id: string; repository_id: string; version_line: string; candidate_commit_id: string; required_run_ids: string[]; reproduction_run_ids: string[]; requested_by: string; approvals: { id: string; actor_id: string; created_at: string }[]; created_at: string }[];
+  release_attestations: { id: string; verification_id: string; repository_id: string; version_line: string; release_id: string; release_commit_id: string; artifact_ids: string[]; artifact_sha256: string[]; actor_id: string; created_at: string }[];
   version: number;
   created_at: string;
   updated_at: string;
