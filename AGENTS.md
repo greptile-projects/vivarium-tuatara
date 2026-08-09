@@ -68,7 +68,14 @@ whenever dependencies change or the web job fails before it starts.
   `$API_ORIGIN` (default `http://127.0.0.1:8080`). `AuthProvider` retains the API-issued bearer token
   in browser local storage, validates it through `GET /user` at startup, and
   is the shared identity boundary for interactive account and repository
-  workflows. Proposal discovery at `/proposals` aggregates the authenticated
+  workflows. Organizations at `/organizations` retain owner/member identity,
+  explicit invitations, and acceptance-gated repository stewardship. A
+  repository keeps its user control custodian and stable catalog/Git identity
+  while `organization_id` associates it with the group portfolio; organization
+  membership is projected as distinguishable collaborator access so removing a
+  member does not erase an independent grant that predates the transfer.
+  `$ORGANIZATION_STORAGE_ROOT` defaults to `organizations`. Proposal discovery
+  at `/proposals` aggregates the authenticated
   actor's repository catalog and provides repository, status, and text filters;
   durable conversations use `/proposals/{repository-id}/{proposal-id}` for
   attributable comments, author edits, and participant closure controls.

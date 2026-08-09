@@ -1,0 +1,341 @@
+package main
+
+import (
+	"errors"
+	"net/http"
+	"strings"
+
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
+	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
+)
+
+type organizationInput struct {
+	Name        string `json:"name"`
+	Slug        string `json:"slug"`
+	Description string `json:"description"`
+}
+type organizationInviteInput struct {
+	UserID string `json:"user_id"`
+}
+type organizationRepositoryInput struct {
+	Name string `json:"name"`
+}
+
+func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, repos *repositories.Store, usersStore *users.Store, credentials *auth.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, packageStore *packages.Store, incidentStore *incidents.Store) {
+	project := func(v organizations.Organization, actor string) organizations.Organization {
+		if !organizations.HasRole(v, actor, "owner") {
+			kept := []organizations.Invitation{}
+			for _, x := range v.Invitations {
+				if x.UserID == actor {
+					kept = append(kept, x)
+				}
+			}
+			v.Invitations = kept
+		}
+		return v
+	}
+	require := func(w http.ResponseWriter, r *http.Request) (auth.Credential, organizations.Organization, bool) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+		if !ok {
+			return actor, organizations.Organization{}, false
+		}
+		v, err := orgs.Get(r.PathValue("id"))
+		if err != nil || (!organizations.HasRole(v, actor.UserID, "") && !hasInvite(v, actor.UserID)) {
+			writeAPIError(w, 404, "organization_not_found", "organization not found")
+			return actor, v, false
+		}
+		return actor, v, true
+	}
+	mux.HandleFunc("POST /organizations", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:write", false)
+		if !ok {
+			return
+		}
+		var in organizationInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_organization", "name, slug, and optional description are required")
+			return
+		}
+		v, err := orgs.Create(in.Name, in.Slug, in.Description, actor.UserID)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		w.Header().Set("Location", "/organizations/"+v.ID)
+		writeJSON(w, 201, v)
+	})
+	mux.HandleFunc("GET /organizations", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+		if !ok {
+			return
+		}
+		items, err := orgs.ListFor(actor.UserID)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		for i := range items {
+			items[i] = project(items[i], actor.UserID)
+		}
+		writeJSON(w, 200, map[string]any{"organizations": items})
+	})
+	mux.HandleFunc("GET /organizations/{id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, v, ok := require(w, r)
+		if !ok {
+			return
+		}
+		writeJSON(w, 200, project(v, actor.UserID))
+	})
+	mux.HandleFunc("POST /organizations/{id}/invitations", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := require(w, r)
+		if !ok {
+			return
+		}
+		var in organizationInviteInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_invitation", "user_id is required")
+			return
+		}
+		if _, err := usersStore.Get(in.UserID); err != nil {
+			writeAPIError(w, 400, "invalid_invitation", "user_id must identify an existing user")
+			return
+		}
+		v, err := orgs.Invite(r.PathValue("id"), actor.UserID, in.UserID)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		writeJSON(w, 201, project(v, actor.UserID))
+	})
+	mux.HandleFunc("POST /organizations/{id}/invitations/{invitation_id}/accept", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := require(w, r)
+		if !ok {
+			return
+		}
+		v, err := orgs.AcceptInvitation(r.PathValue("id"), r.PathValue("invitation_id"), actor.UserID)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		memberIDs := []string{}
+		for _, member := range v.Members {
+			memberIDs = append(memberIDs, member.UserID)
+		}
+		repoItems, listErr := repos.ListOrganization(v.ID)
+		if writeRepositoryError(w, listErr) {
+			return
+		}
+		for _, repo := range repoItems {
+			if _, err = repos.SetOrganization(repo.OwnerID, repo.ID, v.ID, memberIDs); err != nil {
+				writeRepositoryError(w, err)
+				return
+			}
+		}
+		writeJSON(w, 200, project(v, actor.UserID))
+	})
+	mux.HandleFunc("DELETE /organizations/{id}/members/{user_id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := require(w, r)
+		if !ok {
+			return
+		}
+		target := r.PathValue("user_id")
+		v, err := orgs.RemoveMember(r.PathValue("id"), actor.UserID, target)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		repoItems, listErr := repos.ListOrganization(v.ID)
+		if writeRepositoryError(w, listErr) {
+			return
+		}
+		for _, repo := range repoItems {
+			if err = repos.RemoveOrganizationMember(repo.OwnerID, repo.ID, target); err != nil {
+				writeRepositoryError(w, err)
+				return
+			}
+		}
+		w.WriteHeader(204)
+	})
+	mux.HandleFunc("POST /organizations/{id}/repositories", func(w http.ResponseWriter, r *http.Request) {
+		actor, v, ok := require(w, r)
+		if !ok {
+			return
+		}
+		if !organizations.HasRole(v, actor.UserID, "") {
+			writeAPIError(w, 403, "forbidden", "accept the organization invitation before creating repositories")
+			return
+		}
+		var in organizationRepositoryInput
+		if decodeJSON(r, &in) != nil || strings.TrimSpace(in.Name) == "" {
+			writeAPIError(w, 400, "invalid_repository", "name is required")
+			return
+		}
+		repo, err := repos.Create(actor.UserID, in.Name)
+		if writeRepositoryError(w, err) {
+			return
+		}
+		members := []string{}
+		for _, m := range v.Members {
+			members = append(members, m.UserID)
+		}
+		repo, err = repos.SetOrganization(actor.UserID, repo.ID, v.ID, members)
+		if err != nil {
+			_ = repos.Delete(actor.UserID, repo.ID)
+			writeRepositoryError(w, err)
+			return
+		}
+		w.Header().Set("Location", "/repositories/"+repo.ID)
+		writeJSON(w, 201, repo)
+	})
+	mux.HandleFunc("POST /organizations/{id}/repository-transfers", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:write", false)
+		if !ok {
+			return
+		}
+		if _, err := orgs.Get(r.PathValue("id")); err != nil {
+			writeAPIError(w, 404, "organization_not_found", "organization not found")
+			return
+		}
+		var in struct {
+			RepositoryID string `json:"repository_id"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_transfer", "repository_id is required")
+			return
+		}
+		repo, err := repos.Get(actor.UserID, in.RepositoryID)
+		if err != nil || repo.OrganizationID != "" {
+			writeAPIError(w, 404, "repository_not_found", "an individually owned repository is required")
+			return
+		}
+		v, err := orgs.RequestTransfer(r.PathValue("id"), repo.ID, actor.UserID)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		writeJSON(w, 202, project(v, actor.UserID))
+	})
+	mux.HandleFunc("POST /organizations/{id}/repository-transfers/{transfer_id}/accept", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := require(w, r)
+		if !ok {
+			return
+		}
+		v, err := orgs.AcceptTransfer(r.PathValue("id"), r.PathValue("transfer_id"), actor.UserID, func(t organizations.Transfer, v organizations.Organization) error {
+			members := []string{}
+			for _, m := range v.Members {
+				members = append(members, m.UserID)
+			}
+			_, e := repos.SetOrganization(t.FromOwnerID, t.RepositoryID, v.ID, members)
+			return e
+		})
+		if writeOrganizationError(w, err) {
+			return
+		}
+		writeJSON(w, 200, project(v, actor.UserID))
+	})
+	mux.HandleFunc("GET /organizations/{id}/portfolio", func(w http.ResponseWriter, r *http.Request) {
+		actor, v, ok := require(w, r)
+		if !ok {
+			return
+		}
+		if !organizations.HasRole(v, actor.UserID, "") {
+			writeAPIError(w, 403, "forbidden", "accept the organization invitation to inspect its portfolio")
+			return
+		}
+		repoItems, err := repos.ListOrganization(v.ID)
+		if writeRepositoryError(w, err) {
+			return
+		}
+		proposalItems := []proposals.Proposal{}
+		pullItems := []pullrequests.PullRequest{}
+		releaseItems := []releases.Candidate{}
+		packageItems := []packages.Version{}
+		ids := map[string]bool{}
+		for _, repo := range repoItems {
+			ids[repo.ID] = true
+			if proposalStore != nil {
+				xs, readErr := proposalStore.List(repo.ID)
+				if readErr != nil {
+					writeAPIError(w, 500, "portfolio_unavailable", "proposal portfolio unavailable")
+					return
+				}
+				for _, x := range xs {
+					if x.Status == proposals.Open {
+						proposalItems = append(proposalItems, x)
+					}
+				}
+			}
+			if pullStore != nil {
+				xs, readErr := pullStore.List(repo.ID)
+				if readErr != nil {
+					writeAPIError(w, 500, "portfolio_unavailable", "pull request portfolio unavailable")
+					return
+				}
+				for _, x := range xs {
+					if x.Status == pullrequests.Open {
+						pullItems = append(pullItems, x)
+					}
+				}
+			}
+			if releaseStore != nil {
+				xs, readErr := releaseStore.List(repo.ID)
+				if readErr != nil {
+					writeAPIError(w, 500, "portfolio_unavailable", "release portfolio unavailable")
+					return
+				}
+				releaseItems = append(releaseItems, xs...)
+			}
+			if packageStore != nil {
+				xs, readErr := packageStore.ListRepository(repo.ID)
+				if readErr != nil {
+					writeAPIError(w, 500, "portfolio_unavailable", "package portfolio unavailable")
+					return
+				}
+				packageItems = append(packageItems, xs...)
+			}
+		}
+		incidentItems := []incidents.Incident{}
+		if incidentStore != nil {
+			xs, readErr := incidentStore.List()
+			if readErr != nil {
+				writeAPIError(w, 500, "portfolio_unavailable", "incident portfolio unavailable")
+				return
+			}
+			for _, x := range xs {
+				for _, scope := range x.Scopes {
+					if ids[scope.RepositoryID] && x.Status != "resolved" {
+						incidentItems = append(incidentItems, x)
+						break
+					}
+				}
+			}
+		}
+		writeJSON(w, 200, map[string]any{"organization": project(v, actor.UserID), "repositories": repoItems, "packages": packageItems, "active_proposals": proposalItems, "active_pulls": pullItems, "releases": releaseItems, "active_incidents": incidentItems})
+	})
+}
+
+func hasInvite(v organizations.Organization, user string) bool {
+	for _, x := range v.Invitations {
+		if x.UserID == user {
+			return true
+		}
+	}
+	return false
+}
+func writeOrganizationError(w http.ResponseWriter, err error) bool {
+	if err == nil {
+		return false
+	}
+	switch {
+	case errors.Is(err, organizations.ErrNotFound):
+		writeAPIError(w, 404, "organization_not_found", "organization not found")
+	case errors.Is(err, organizations.ErrInvalid):
+		writeAPIError(w, 400, "invalid_organization", "organization content is invalid")
+	case errors.Is(err, organizations.ErrConflict):
+		writeAPIError(w, 409, "organization_conflict", "organization state conflicts with this request")
+	default:
+		writeAPIError(w, 500, "organization_unavailable", "organization storage unavailable")
+	}
+	return true
+}

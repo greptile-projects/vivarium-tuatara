@@ -1033,3 +1033,22 @@ agent diagnosis, isolated Git repair, private reproduction and required-check
 proof, independent approval, release build attestation, browser disclosure,
 anonymous redaction checks, repaired branch publication, and targeted upgrade
 notification as one permission-aware journey.
+
+## Accountable organizations
+
+Organizations provide a durable group identity over existing repository-scoped
+work. Membership begins with an owner invitation and explicit acceptance. New
+repositories can start inside the group; an individually stewarded repository
+joins only after its current custodian requests transfer and an organization
+owner accepts it. The association preserves repository and Git identity, every
+historical link, and actor attribution. Existing user-owner checks continue to
+name the control custodian, while accepted members receive separately tracked
+collaboration access that can be removed without revoking older independent
+grants.
+
+The `/organizations` workspace exposes creation, invitations, membership,
+repository creation and transfer acceptance. Its portfolio joins repositories
+to packages, active proposals and pull requests, releases, and unresolved
+incidents without copying those authoritative records. Durable group,
+invitation, and transfer state defaults to `$ORGANIZATION_STORAGE_ROOT`
+(`organizations`).
