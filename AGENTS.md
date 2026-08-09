@@ -140,6 +140,13 @@ whenever dependencies change or the web job fails before it starts.
   `evolutions:analyze` credentials expose only selected readable repositories
   from that snapshot and can append attributable findings and uncertainty,
   never repository or Git mutation authority.
+  Exact open provider and affected-consumer pull revisions can be assembled as
+  immutable evolution contract candidates. Provider-owned
+  `.vivarium/contracts.json` checks run against `provider/` and
+  `consumers/<repository-id>/` in the network-disabled, read-only executor with
+  no platform credential. Plans retain combination hashes, attempts, logs,
+  artifacts, attestations, failures, and supersession; revision changes
+  supersede only matrix rows containing that repository.
   Ordered evolution migration tasks are repository-owned proposal tasks linked
   to the shared plan with target versions and cross-repository dependencies.
   Only current target participants create and assign them; humans gain no new

@@ -34,16 +34,31 @@ export type ReleaseCandidate = {
   };
 };
 export type InterfacePublication = {
-  id: string; repository_id: string; name: string; version: string;
-  release_id: string; commit_id: string; published_by: string;
-  published_at: string; stale: boolean; stale_reason?: string;
+  id: string;
+  repository_id: string;
+  name: string;
+  version: string;
+  release_id: string;
+  commit_id: string;
+  published_by: string;
+  published_at: string;
+  stale: boolean;
+  stale_reason?: string;
 };
 export type DependencyRelationship = {
-  id: string; repository_id: string; commit_id: string; release_id?: string;
-  environment_id?: string; provider_repository_id: string;
-  interface_name: string; constraint: string; declared_by: string;
-  declared_at: string; resolved_interface_id?: string;
-  resolved_version?: string; state: "resolved" | "stale" | "unresolved";
+  id: string;
+  repository_id: string;
+  commit_id: string;
+  release_id?: string;
+  environment_id?: string;
+  provider_repository_id: string;
+  interface_name: string;
+  constraint: string;
+  declared_by: string;
+  declared_at: string;
+  resolved_interface_id?: string;
+  resolved_version?: string;
+  state: "resolved" | "stale" | "unresolved";
   reason?: string;
 };
 export type RelationshipGraph = {
@@ -53,17 +68,92 @@ export type RelationshipGraph = {
   dependencies: DependencyRelationship[];
 };
 export type EvolutionPlan = {
-  id: string; repository_id: string; interface_name: string;
-  predecessor: InterfacePublication; source_kind: "proposal" | "pull_request";
-  source_id: string; candidate_commit_id?: string; candidate_description: string;
-  changes: { kind: string; summary: string; classification: "compatible" | "conditional" | "breaking" | "unknown" }[];
-  impacts: { repository_id: string; owner_id: string; dependency_id: string; commit_id: string; constraint: string; state: string }[];
-  strategy: string; sequencing: string; exceptions?: string; created_by: string;
-  version: number; created_at: string; updated_at: string;
-  findings: { id: string; actor_id: string; repository_ids: string[]; finding: string; uncertainty?: string; created_at: string }[];
-  acknowledgements: { actor_id: string; repository_id: string; note?: string; created_at: string }[];
-  analyses: { id: string; agent_id: string; initiator_id: string; mandate: string; repository_ids: string[]; created_at: string }[];
-  migration_tasks: { id: string; repository_id: string; proposal_id: string; task_id: string; target_version: string; dependency_ids: string[]; created_by: string; created_at: string; status?: ProposalTask["status"] | "unavailable"; ready: boolean; assignment_id?: string; assignee_type?: "human" | "agent"; assignee_id?: string; base_revision?: string; branch?: string; pull_request_id?: string; contribution_status?: "review" | "merged" | "closed" | "superseded" }[];
+  id: string;
+  repository_id: string;
+  interface_name: string;
+  predecessor: InterfacePublication;
+  source_kind: "proposal" | "pull_request";
+  source_id: string;
+  candidate_commit_id?: string;
+  candidate_description: string;
+  changes: {
+    kind: string;
+    summary: string;
+    classification: "compatible" | "conditional" | "breaking" | "unknown";
+  }[];
+  impacts: {
+    repository_id: string;
+    owner_id: string;
+    dependency_id: string;
+    commit_id: string;
+    constraint: string;
+    state: string;
+  }[];
+  strategy: string;
+  sequencing: string;
+  exceptions?: string;
+  created_by: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  findings: {
+    id: string;
+    actor_id: string;
+    repository_ids: string[];
+    finding: string;
+    uncertainty?: string;
+    created_at: string;
+  }[];
+  acknowledgements: {
+    actor_id: string;
+    repository_id: string;
+    note?: string;
+    created_at: string;
+  }[];
+  analyses: {
+    id: string;
+    agent_id: string;
+    initiator_id: string;
+    mandate: string;
+    repository_ids: string[];
+    created_at: string;
+  }[];
+  migration_tasks: {
+    id: string;
+    repository_id: string;
+    proposal_id: string;
+    task_id: string;
+    target_version: string;
+    dependency_ids: string[];
+    created_by: string;
+    created_at: string;
+    status?: ProposalTask["status"] | "unavailable";
+    ready: boolean;
+    assignment_id?: string;
+    assignee_type?: "human" | "agent";
+    assignee_id?: string;
+    base_revision?: string;
+    branch?: string;
+    pull_request_id?: string;
+    contribution_status?: "review" | "merged" | "closed" | "superseded";
+  }[];
+  contract_candidates: {
+    id: string;
+    combination_hash: string;
+    synthetic_commit: string;
+    revisions: {
+      role: "provider" | "consumer";
+      repository_id: string;
+      pull_request_id: string;
+      source_repository_id: string;
+      commit_id: string;
+    }[];
+    check_run_ids: string[];
+    requested_by: string;
+    created_at: string;
+    superseded_at?: string;
+    superseded_by?: string;
+  }[];
 };
 export type ReleaseArtifact = {
   id: string;

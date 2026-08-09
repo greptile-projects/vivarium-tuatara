@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -18,6 +19,33 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
+
+func TestAssembleContractCandidateFreezesRepositorySnapshots(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	makeRevision := func(id, name, value string) storage.ObjectID {
+		repository, err := gitStore.Create(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		blob, _ := repository.WriteObject(storage.BlobObject, []byte(value))
+		tree := writeTestTree(t, repository, testTreeEntry{mode: "100644", name: name, id: blob})
+		return writeTestCommit(t, repository, tree, nil, 1700000000, value)
+	}
+	provider, consumer := strings.Repeat("1", 32), strings.Repeat("2", 32)
+	providerCommit := makeRevision(provider, "provider.txt", "provider")
+	consumerCommit := makeRevision(consumer, "consumer.txt", "consumer")
+	commit, err := assembleContractCandidate(gitStore, provider, []relationships.ContractCandidateRevision{{Role: "provider", RepositoryID: provider, SourceRepositoryID: provider, PullRequestID: strings.Repeat("3", 32), CommitID: string(providerCommit)}, {Role: "consumer", RepositoryID: consumer, SourceRepositoryID: consumer, PullRequestID: strings.Repeat("4", 32), CommitID: string(consumerCommit)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, _ := gitStore.Open(provider)
+	for path, want := range map[string]string{"provider/provider.txt": "provider", "consumers/" + consumer + "/consumer.txt": "consumer"} {
+		body, showErr := exec.Command("git", "--git-dir="+repository.Path(), "show", commit+":"+path).Output()
+		if showErr != nil || string(body) != want {
+			t.Fatalf("%s = %q, %v", path, body, showErr)
+		}
+	}
+}
 
 func TestEvolutionPlanFreezesImpactAndScopesAgentFindings(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
