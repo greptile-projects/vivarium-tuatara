@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
@@ -53,7 +54,7 @@ func projectPackageDeployments(promotions []deployments.Promotion, releaseIDs ma
 	return result
 }
 
-func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoryStore *repositories.Store, proposalStore *proposals.Store, releaseStore *releases.Store, buildStore *checkruns.Store, deploymentStore *deployments.Store, packageStore *packages.Store, authStore *auth.Store) {
+func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoryStore *repositories.Store, proposalStore *proposals.Store, releaseStore *releases.Store, buildStore *checkruns.Store, deploymentStore *deployments.Store, packageStore *packages.Store, authStore *auth.Store, activityStore *activities.Store) {
 	mux.HandleFunc("POST /repositories/{id}/releases/{release_id}/packages", func(w http.ResponseWriter, r *http.Request) {
 		actor, owner, ok := authorizeRepositoryParticipant(w, r, repositoryStore, authStore, r.PathValue("id"), "repositories:write")
 		if !ok {
@@ -378,7 +379,21 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 				allowed = allowed || repository.OwnerID == actor.UserID || collaborator
 			}
 			if allowed {
-				visible = append(visible, projectInventory(inventory))
+				projected := projectInventory(inventory)
+				updates, _ := packageStore.ListUpdates(inventory.RepositoryID)
+				for _, update := range updates {
+					if update.PackageName == item.Name && update.FromVersion == item.Version && (update.State == "" || update.State == "complete") {
+						status := "repair_open"
+						if proposalStore != nil {
+							if task, taskErr := proposalStore.GetTask(inventory.RepositoryID, update.ProposalID, update.TaskID); taskErr == nil {
+								status = string(task.Status)
+							}
+						}
+						projected["remediation"] = map[string]any{"status": status, "proposal_id": update.ProposalID, "task_id": update.TaskID, "replacement_version": update.ToVersion}
+						break
+					}
+				}
+				visible = append(visible, projected)
 			}
 		}
 		writeJSON(w, 200, map[string]any{"consumers": visible})
@@ -433,7 +448,7 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 		constraint := strings.TrimSpace(r.URL.Query().Get("constraint"))
 		candidates := []packages.Version{}
 		for _, item := range items {
-			if item.Name == strings.ToLower(r.PathValue("name")) && item.Lifecycle != "yanked" && canRead(item, actor, authenticated) && compatiblePlatform(item.Platform, r.URL.Query().Get("os"), r.URL.Query().Get("architecture"), r.URL.Query().Get("runtime")) && versionMatches(item.Version, constraint) {
+			if item.Name == strings.ToLower(r.PathValue("name")) && item.Lifecycle == "active" && canRead(item, actor, authenticated) && compatiblePlatform(item.Platform, r.URL.Query().Get("os"), r.URL.Query().Get("architecture"), r.URL.Query().Get("runtime")) && versionMatches(item.Version, constraint) {
 				candidates = append(candidates, item)
 			}
 		}
@@ -488,7 +503,7 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 		writeJSON(w, 201, issued)
 	})
 	mux.HandleFunc("PATCH /repositories/{id}/packages/{name}/versions/{version}", func(w http.ResponseWriter, r *http.Request) {
-		_, owner, ok := authorizeRepositoryParticipant(w, r, repositoryStore, authStore, r.PathValue("id"), "repositories:write")
+		actor, owner, ok := authorizeRepositoryParticipant(w, r, repositoryStore, authStore, r.PathValue("id"), "repositories:write")
 		if !ok {
 			return
 		}
@@ -502,19 +517,81 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 			return
 		}
 		var input struct {
-			Lifecycle string `json:"lifecycle"`
-			Warning   string `json:"warning"`
+			Lifecycle   string                `json:"lifecycle"`
+			Warning     string                `json:"warning"`
+			Reason      string                `json:"reason"`
+			Replacement *packages.Replacement `json:"replacement"`
 		}
 		if decodeJSON(r, &input) != nil {
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
-		item, err = packageStore.SetLifecycle(item.Name, item.Version, input.Lifecycle, input.Warning)
+		item, err = packageStore.SetLifecycle(item.Name, item.Version, input.Lifecycle, input.Warning, input.Reason, input.Replacement, actor.UserID)
 		if err != nil {
-			writeAPIError(w, 422, "invalid_package_lifecycle", "deprecated and yanked versions require a warning; active versions cannot retain one")
+			writeAPIError(w, 422, "invalid_package_lifecycle", "deprecated, quarantined, and yanked versions require a reason and warning; a replacement must be an active published version")
 			return
 		}
+		if item.Lifecycle != "active" {
+			decisionID := "legacy"
+			if count := len(item.LifecycleHistory); count > 0 && item.LifecycleHistory[count-1].ID != "" {
+				decisionID = item.LifecycleHistory[count-1].ID
+			}
+			consumers, consumersErr := packageStore.ListConsumers(item.Name, item.Version)
+			if consumersErr != nil {
+				w.Header().Set("Location", "/packages/"+item.Name+"/versions/"+item.Version+"/lifecycle")
+				w.Header().Set("Vivarium-Recovery-Notifications", "pending")
+				writeJSON(w, http.StatusAccepted, item)
+				return
+			}
+			seen := map[string]bool{}
+			notificationPending := false
+			for _, inventory := range consumers {
+				repository, getErr := repositoryStore.GetByID(inventory.RepositoryID)
+				if getErr != nil {
+					notificationPending = true
+					continue
+				}
+				if seen[repository.OwnerID] {
+					continue
+				}
+				seen[repository.OwnerID] = true
+				target := repository.OwnerID
+				if activityStore == nil {
+					notificationPending = true
+					continue
+				}
+				if activityErr := recordActivityOnce(activityStore, repositoryStore, "package-recovery:"+decisionID+":"+target, activities.Event{Kind: "package.recovery_required", ActorID: actor.UserID, RepositoryID: repository.ID, ResourceType: "package", ResourceID: item.ID, ResourceTitle: item.Name + " " + item.Version + " is " + item.Lifecycle, TargetUserID: &target}); activityErr != nil {
+					notificationPending = true
+				}
+			}
+			if notificationPending {
+				w.Header().Set("Location", "/packages/"+item.Name+"/versions/"+item.Version+"/lifecycle")
+				w.Header().Set("Vivarium-Recovery-Notifications", "pending")
+				writeJSON(w, http.StatusAccepted, item)
+				return
+			}
+		}
 		writeJSON(w, 200, item)
+	})
+	mux.HandleFunc("GET /packages/{name}/versions/{version}/lifecycle", func(w http.ResponseWriter, r *http.Request) {
+		item, err := packageStore.Get(r.PathValue("name"), r.PathValue("version"))
+		if err != nil {
+			writeAPIError(w, 404, "package_not_found", "package version not found")
+			return
+		}
+		actor, authenticated, ok := optionalPackageActor(w, r)
+		if !ok || !canRead(item, actor, authenticated) {
+			if ok {
+				writeAPIError(w, 404, "package_not_found", "package version not found")
+			}
+			return
+		}
+		history, err := packageStore.LifecycleHistory(item.Name, item.Version)
+		if err != nil {
+			writeAPIError(w, 500, "package_read_failed", "package lifecycle history could not be read")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"package": item, "history": history})
 	})
 	mux.HandleFunc("GET /repositories/{id}/packages", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoryStore, authStore, r.PathValue("id")); !ok {
@@ -701,6 +778,106 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 		}
 		writeJSON(w, 200, map[string]any{"updates": created})
 	})
+	mux.HandleFunc("POST /repositories/{id}/package-recoveries", func(w http.ResponseWriter, r *http.Request) {
+		actor, owner, ok := authorizeRepositoryParticipant(w, r, repositoryStore, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if !owner {
+			writeAPIError(w, 403, "package_recovery_forbidden", "only the consuming repository owner can prioritize recovery work")
+			return
+		}
+		if proposalStore == nil {
+			writeAPIError(w, http.StatusServiceUnavailable, "package_recovery_unavailable", "proposal collaboration is unavailable")
+			return
+		}
+		var input struct {
+			PackageName  string `json:"package_name"`
+			Version      string `json:"version"`
+			AssigneeType string `json:"assignee_type"`
+			AssigneeID   string `json:"assignee_id"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		unsafe, err := packageStore.Get(input.PackageName, input.Version)
+		if err != nil || unsafe.Lifecycle == "active" || unsafe.Replacement == nil {
+			writeAPIError(w, 422, "package_recovery_unavailable", "the exact unsafe version must name an active safe replacement")
+			return
+		}
+		replacement, err := packageStore.Get(unsafe.Replacement.Name, unsafe.Replacement.Version)
+		if err != nil || replacement.Lifecycle != "active" || !canRead(replacement, actor, true) {
+			writeAPIError(w, 422, "package_recovery_unavailable", "the safe replacement is not currently installable by this repository")
+			return
+		}
+		catalog, _ := repositoryStore.GetByID(r.PathValue("id"))
+		repo, err := gitStore.Open(catalog.ID)
+		if err != nil {
+			writeAPIError(w, 500, "package_recovery_failed", "repository storage is unavailable")
+			return
+		}
+		ref, err := repo.ReadReference("refs/heads/" + catalog.DefaultBranch)
+		if err != nil {
+			writeAPIError(w, 409, "package_recovery_failed", "the default branch has no dependency inventory")
+			return
+		}
+		inventory, err := packageStore.GetInventory(catalog.ID, ref.Target)
+		if err != nil {
+			writeAPIError(w, 409, "package_recovery_failed", "record the current dependency inventory before opening recovery work")
+			return
+		}
+		var exposed *packages.InventoryEntry
+		for index := range inventory.Entries {
+			if inventory.Entries[index].Name == unsafe.Name && inventory.Entries[index].Version == unsafe.Version {
+				exposed = &inventory.Entries[index]
+				break
+			}
+		}
+		if exposed == nil {
+			writeAPIError(w, 409, "package_not_exposed", "the current recorded dependency inventory does not use this version")
+			return
+		}
+		commit, _ := repo.ReadCommit(storage.ObjectID(ref.Target))
+		entry, pathErr := resolvePath(repo, commit.Tree, packages.InventoryConfigPath)
+		object, readErr := repo.ReadObject(entry.ID)
+		var manifest packages.InventoryConfig
+		if pathErr != nil || readErr != nil || json.Unmarshal(object.Content, &manifest) != nil {
+			writeAPIError(w, 409, "package_recovery_failed", "the current dependency manifest is unavailable")
+			return
+		}
+		manifest = replacePackageInManifest(manifest, unsafe.Name, replacement.Name, replacement.Version)
+		if input.AssigneeType != "human" && input.AssigneeType != "agent" {
+			writeAPIError(w, 422, "invalid_package_recovery", "assignee_type must be human or agent")
+			return
+		}
+		if input.AssigneeType == "human" {
+			allowed, _ := repositoryStore.HasCollaborator(input.AssigneeID, catalog.ID)
+			if input.AssigneeID != catalog.OwnerID && !allowed {
+				writeAPIError(w, 422, "invalid_package_recovery", "human assignee must be a current repository participant")
+				return
+			}
+		}
+		body := fmt.Sprintf("Priority: urgent dependency containment.\n\nReplace `%s %s` with `%s %s`.\n\nPublisher reason: %s\n\nWarning: %s\n\nAffected paths:\n- %s\n\nThe publisher receives no authority here; normal checks, review, integration, release, and deployment policy remain authoritative.", unsafe.Name, unsafe.Version, replacement.Name, replacement.Version, unsafe.LifecycleReason, unsafe.LifecycleWarning, strings.Join(exposed.Paths, "\n- "))
+		update, _, err := packageStore.PublishUpdate(packages.Update{RepositoryID: catalog.ID, PackageName: unsafe.Name, FromVersion: unsafe.Version, ToVersion: replacement.Version, BaseCommit: ref.Target, Manifest: manifest, ReleaseNotes: replacement.Documentation, Compatibility: replacement.BuildAttestation, AffectedPaths: exposed.Paths, CreatedBy: actor.UserID}, func() (string, string, error) {
+			proposal, createErr := proposalStore.Create(catalog.ID, actor.UserID, "Urgent: replace "+unsafe.Name+" "+unsafe.Version, body)
+			if createErr != nil {
+				return "", "", createErr
+			}
+			task, createErr := proposalStore.CreateTask(catalog.ID, proposal.ID, actor.UserID, "Contain "+unsafe.Name+" exposure", "Replace the unsafe exact version, verify compatibility, and deliver through ordinary review with no new publisher authority.", nil, nil)
+			if createErr != nil {
+				return proposal.ID, task.ID, createErr
+			}
+			assigned, assignErr := proposalStore.AssignTask(catalog.ID, proposal.ID, task.ID, actor.UserID, proposals.TaskAssignmentInput{AssigneeType: input.AssigneeType, AssigneeID: input.AssigneeID, Mandate: "Prioritize containment and verified replacement of " + unsafe.Name + " " + unsafe.Version, RepositoryID: catalog.ID, BaseRevision: ref.Target})
+			_ = assigned
+			return proposal.ID, task.ID, assignErr
+		})
+		if err != nil {
+			writeAPIError(w, 500, "package_recovery_failed", "recovery work could not be published atomically")
+			return
+		}
+		writeJSON(w, 201, update)
+	})
 	read := func(w http.ResponseWriter, r *http.Request) (packages.Version, bool) {
 		item, err := packageStore.Get(r.PathValue("name"), r.PathValue("version"))
 		if errors.Is(err, packages.ErrNotFound) {
@@ -732,6 +909,15 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 		if !ok {
 			return
 		}
+		if item.Lifecycle != "active" {
+			header := strings.TrimSpace(r.Header.Get("Authorization"))
+			if token, found := strings.CutPrefix(header, "Bearer "); found {
+				if installActor, authErr := authStore.Authenticate(token, "packages:read"); authErr == nil && installActor.RepositoryID != "" && len(installActor.PackageNames) > 0 {
+					writeAPIError(w, 409, "package_install_blocked", "repository-scoped installs reject deprecated, quarantined, and yanked versions; inspect lifecycle evidence and use the safe replacement")
+					return
+				}
+			}
+		}
 		file, _, err := packageStore.OpenArtifact(item.Name, item.Version)
 		if err != nil {
 			writeAPIError(w, 500, "package_artifact_unavailable", "package artifact could not be read")
@@ -743,6 +929,35 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 		w.Header().Set("X-Checksum-Sha256", item.SHA256)
 		http.ServeContent(w, r, path.Base(item.ArtifactPath), item.PublishedAt, file)
 	})
+}
+
+func replacePackageInManifest(manifest packages.InventoryConfig, unsafeName, replacementName, replacementVersion string) packages.InventoryConfig {
+	dependencies := make([]packages.ManifestDependency, 0, len(manifest.Dependencies))
+	foundDependency := false
+	for _, dependency := range manifest.Dependencies {
+		if dependency.Name == unsafeName || dependency.Name == replacementName {
+			if !foundDependency {
+				dependencies = append(dependencies, packages.ManifestDependency{Name: replacementName, Constraint: "^" + replacementVersion})
+				foundDependency = true
+			}
+			continue
+		}
+		dependencies = append(dependencies, dependency)
+	}
+	locks := make([]packages.LockEntry, 0, len(manifest.Lock))
+	foundLock := false
+	for _, lock := range manifest.Lock {
+		if lock.Name == unsafeName || lock.Name == replacementName {
+			if !foundLock {
+				locks = append(locks, packages.LockEntry{Name: replacementName, Version: replacementVersion})
+				foundLock = true
+			}
+			continue
+		}
+		locks = append(locks, lock)
+	}
+	manifest.Dependencies, manifest.Lock = dependencies, locks
+	return manifest
 }
 
 func packageUpdateProposalBody(version packages.Version, current packages.InventoryEntry, notes string) string {

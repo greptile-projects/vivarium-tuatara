@@ -156,6 +156,44 @@ func TestPublishRetainsImmutableProvenanceAndArtifact(t *testing.T) {
 	}
 }
 
+func TestLifecycleRecoveryRetainsEvidenceAndAppendOnlyDecisions(t *testing.T) {
+	store, _ := New(t.TempDir())
+	body := []byte("reviewed package bytes")
+	unsafe := validVersion(body)
+	created, err := store.Publish(unsafe, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := validVersion(body)
+	replacement.Version = "1.2.4"
+	replacement.ReleaseID = strings.Repeat("8", 32)
+	replacement.BuildID = strings.Repeat("9", 32)
+	replacement.ArtifactID = strings.Repeat("a", 32)
+	replacement.SHA256 = created.SHA256
+	if _, err = store.Publish(replacement, bytes.NewReader(body)); err != nil {
+		t.Fatal(err)
+	}
+	actor := strings.Repeat("f", 32)
+	changed, err := store.SetLifecycle(created.Name, created.Version, "quarantined", "Do not install this version.", "The parser accepts an unsafe payload.", &Replacement{Name: replacement.Name, Version: replacement.Version}, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.ID != created.ID || changed.SHA256 != created.SHA256 || changed.SourceCommit != created.SourceCommit || changed.Lifecycle != "quarantined" || changed.Replacement.Version != "1.2.4" {
+		t.Fatalf("changed = %#v", changed)
+	}
+	history, err := store.LifecycleHistory(created.Name, created.Version)
+	if err != nil || len(history) != 1 || history[0].ID == "" || history[0].ActorID != actor || history[0].Reason == "" {
+		t.Fatalf("history = %#v, %v", history, err)
+	}
+	retried, err := store.SetLifecycle(created.Name, created.Version, "quarantined", "Do not install this version.", "The parser accepts an unsafe payload.", &Replacement{Name: replacement.Name, Version: replacement.Version}, actor)
+	if err != nil || len(retried.LifecycleHistory) != 1 || retried.LifecycleHistory[0].ID != history[0].ID {
+		t.Fatalf("retry = %#v, %v", retried, err)
+	}
+	if _, err = store.SetLifecycle(created.Name, created.Version, "active", "still warning", "", nil, actor); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid restoration = %v", err)
+	}
+}
+
 func TestFailedArtifactDoesNotExposeOrReservePackage(t *testing.T) {
 	root := t.TempDir()
 	store, err := New(root)

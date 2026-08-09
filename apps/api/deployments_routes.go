@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"os/exec"
 
@@ -10,13 +11,14 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
+	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
-func registerDeploymentRoutes(mux *http.ServeMux, gitStore *storage.Store, repositories *repositories.Store, releases *releases.Store, builds *checkruns.Store, store *deployments.Store, credentials *auth.Store, activityStore *activities.Store, pulls *pullrequests.Store, sessions *changesessions.Store) {
+func registerDeploymentRoutes(mux *http.ServeMux, gitStore *storage.Store, repositories *repositories.Store, releases *releases.Store, builds *checkruns.Store, store *deployments.Store, credentials *auth.Store, activityStore *activities.Store, pulls *pullrequests.Store, sessions *changesessions.Store, packageStore *packages.Store) {
 	executor := deployments.NewExecutor(store, builds)
 	read := func(w http.ResponseWriter, r *http.Request) bool {
 		_, _, ok := authorizeRepositoryRead(w, r, repositories, credentials, r.PathValue("id"))
@@ -103,6 +105,10 @@ func registerDeploymentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos
 		candidate, err := releases.Get(r.PathValue("id"), input.ReleaseID)
 		if err != nil {
 			writeAPIError(w, 422, "invalid_release", "release candidate not found")
+			return
+		}
+		if policyErr := verifyPromotionDependencies(packageStore, r.PathValue("id"), candidate.CommitID); policyErr != nil {
+			writeAPIError(w, 409, "promotion_dependency_policy_failed", policyErr.Error())
 			return
 		}
 		run, err := builds.Get(r.PathValue("id"), input.ReleaseID, input.BuildID)
@@ -373,4 +379,24 @@ func registerDeploymentRoutes(mux *http.ServeMux, gitStore *storage.Store, repos
 			writeJSON(w, 200, response)
 		}
 	})
+}
+
+func verifyPromotionDependencies(packageStore *packages.Store, repositoryID, commitID string) error {
+	if packageStore == nil {
+		return fmt.Errorf("promotion dependency policy is unavailable")
+	}
+	inventory, err := packageStore.GetInventory(repositoryID, commitID)
+	if err != nil {
+		return fmt.Errorf("promotion requires a readable exact dependency inventory")
+	}
+	for _, dependency := range inventory.Entries {
+		version, getErr := packageStore.Get(dependency.Name, dependency.Version)
+		if getErr != nil {
+			return fmt.Errorf("promotion dependency %s %s cannot be verified", dependency.Name, dependency.Version)
+		}
+		if version.Lifecycle != "active" {
+			return fmt.Errorf("promotion dependency %s %s is %s; existing deployments remain retained as exposure evidence", dependency.Name, dependency.Version, version.Lifecycle)
+		}
+	}
+	return nil
 }

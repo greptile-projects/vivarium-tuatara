@@ -165,7 +165,21 @@ whenever dependencies change or the web job fails before it starts.
   recheck target-package visibility on every read and serialize proposal/task
   publication under a durable exact base/from/to reservation created before any
   collaboration work. Failed cleanup retains a recovery-pending reservation so
-  exact retries cannot duplicate orphaned proposals or tasks. Subsequent human or agent work
+  exact retries cannot duplicate orphaned proposals or tasks. Published package
+  recovery is append-only: owners can deprecate, quarantine, yank, or restore a
+  version without replacing its artifact or provenance. Non-active decisions
+  retain a reason, warning, actor, time, and optional active safe replacement;
+  exact consumer owners receive targeted activity and inbox notification.
+  Fresh resolution and repository-scoped installs select only active versions,
+  while promotions fail closed unless the package store, exact inventory, and
+  active metadata for every dependency are readable, retaining existing
+  deployment exposure. Lifecycle notification delivery is a required
+  post-commit outcome: failures return `202` with
+  `Vivarium-Recovery-Notifications: pending`, and an exact retry reuses the
+  durable decision ID to complete idempotent owner notification. Consumer
+  owners open urgent human- or scoped-agent-owned
+  replacement proposals at their exact default-branch revision, without
+  granting the publisher any consumer authority. Subsequent human or agent work
   publishes through existing task sessions, pulls, checks, review, queues,
   releases, and deployments without granting consumer authority to publishers.
   Private-package notes and build details remain only on update records whose

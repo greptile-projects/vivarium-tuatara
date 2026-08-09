@@ -348,7 +348,7 @@ func TestOwnerPublishesVerifiedPackageAndContributorCannot(t *testing.T) {
 	if len(catalogResult.Packages) != 1 || catalogResult.Packages[0].ID != published.ID {
 		t.Fatalf("catalog = %#v", catalogResult)
 	}
-	lifecycle := authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+repository.ID+"/packages/library-kit/versions/1.2.3", `{"lifecycle":"deprecated","warning":"Use library-kit 2.x before the next release."}`, owner.Credential.Token, http.StatusOK)
+	lifecycle := authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+repository.ID+"/packages/library-kit/versions/1.2.3", `{"lifecycle":"deprecated","warning":"Use library-kit 2.x before the next release.","reason":"This line no longer receives security fixes."}`, owner.Credential.Token, http.StatusOK)
 	decodeResponse(t, lifecycle, &selected)
 	if selected.Lifecycle != "deprecated" || selected.LifecycleWarning == "" {
 		t.Fatalf("lifecycle = %#v", selected)
@@ -359,5 +359,6 @@ func TestOwnerPublishesVerifiedPackageAndContributorCannot(t *testing.T) {
 	if registryCredential.RepositoryID != repository.ID || len(registryCredential.PackageNames) != 1 || registryCredential.PackageNames[0] != "library-kit" {
 		t.Fatalf("registry credential = %#v", registryCredential)
 	}
-	authenticatedRequest(t, http.MethodGet, server.URL+"/packages/library-kit/versions/1.2.3/artifact", "", registryCredential.Token, http.StatusOK).Body.Close()
+	authenticatedRequest(t, http.MethodGet, server.URL+"/packages/library-kit/versions/1.2.3/artifact", "", registryCredential.Token, http.StatusConflict).Body.Close()
+	authenticatedRequest(t, http.MethodGet, server.URL+"/packages/library-kit/resolve?constraint=%5E1.0.0&os=linux&architecture=amd64", "", "", http.StatusNotFound).Body.Close()
 }
