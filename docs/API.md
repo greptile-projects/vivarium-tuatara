@@ -1136,8 +1136,9 @@ documents. All routes require an authenticated credential with
   affected version line. Definitions use the same bounded image, command,
   working-directory, environment, and timeout validation as repository checks,
   but remain inside the advisory authorization boundary.
-- `POST .../repair-sessions/{session_id}/verifications` reserves the target
-  branch's required checks plus every private reproduction for the task's line
+- `POST .../repair-sessions/{session_id}/verifications` resolves the target
+  branch's required names to executable definitions frozen at the task base,
+  then reserves those checks plus every private reproduction for the task's line
   against the completed session's exact commit after a non-worker has approved
   that same commit in protected review. `GET
   .../verifications/{verification_id}` exposes response-team-safe names, states,

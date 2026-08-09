@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"os/exec"
 	"slices"
@@ -16,6 +17,38 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
+
+// trustedRepairCheckDefinitions freezes executable required-check properties
+// from the task base. Repair commits are only the snapshot under test; they do
+// not get to redefine the checks that attest to them.
+func trustedRepairCheckDefinitions(repository *storage.Repository, baseCommitID string, requiredNames []string) ([]checkruns.Definition, error) {
+	if len(requiredNames) == 0 {
+		return []checkruns.Definition{}, nil
+	}
+	body, err := exec.Command("git", "--git-dir="+repository.Path(), "show", baseCommitID+":"+checkruns.ConfigPath).Output()
+	if err != nil {
+		return nil, fmt.Errorf("read trusted required checks: %w", err)
+	}
+	config, err := checkruns.ParseConfig(body)
+	if err != nil {
+		return nil, fmt.Errorf("parse trusted required checks: %w", err)
+	}
+	wanted := map[string]bool{}
+	for _, name := range requiredNames {
+		wanted[name] = true
+	}
+	definitions := make([]checkruns.Definition, 0, len(requiredNames))
+	for _, definition := range config.Checks {
+		if wanted[definition.Name] {
+			definitions = append(definitions, definition)
+			delete(wanted, definition.Name)
+		}
+	}
+	if len(wanted) != 0 {
+		return nil, errors.New("trusted base is missing a required-check definition")
+	}
+	return definitions, nil
+}
 
 func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *repositories.Store, identities *users.Store, store *securityadvisories.Store, releasesStore *releases.Store, builds *checkruns.Store, deploymentsStore *deployments.Store, credentials *auth.Store) {
 	maintainer := func(userID string, v securityadvisories.Advisory) bool {
@@ -641,28 +674,10 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 			writeAPIError(w, 503, "repair_verification_unavailable", "required-check policy is unavailable")
 			return
 		}
-		requiredDefinitions := []checkruns.Definition{}
-		if len(requiredNames) > 0 {
-			body, readErr := exec.Command("git", "--git-dir="+repository.Path(), "show", session.CommitID+":"+checkruns.ConfigPath).Output()
-			config, parseErr := checkruns.ParseConfig(body)
-			if readErr != nil || parseErr != nil {
-				writeAPIError(w, 422, "required_checks_unavailable", "the exact candidate does not provide a valid required-check definition")
-				return
-			}
-			wanted := map[string]bool{}
-			for _, name := range requiredNames {
-				wanted[name] = true
-			}
-			for _, definition := range config.Checks {
-				if wanted[definition.Name] {
-					requiredDefinitions = append(requiredDefinitions, definition)
-					delete(wanted, definition.Name)
-				}
-			}
-			if len(wanted) != 0 {
-				writeAPIError(w, 422, "required_checks_unavailable", "the exact candidate is missing a required-check definition")
-				return
-			}
+		requiredDefinitions, err := trustedRepairCheckDefinitions(repository, task.BaseCommitID, requiredNames)
+		if err != nil {
+			writeAPIError(w, 422, "required_checks_unavailable", "the frozen repair base does not provide every trusted required-check definition")
+			return
 		}
 		reproductionDefinitions := []checkruns.Definition{}
 		for _, reproduction := range current.SecurityReproductions {

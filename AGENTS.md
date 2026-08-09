@@ -335,9 +335,11 @@ whenever dependencies change or the web job fails before it starts.
   Revocation removes the branch before the open task can
   restart. Protected commits, comments, and reviews remain advisory-only.
   Affected-repository owners define private reproductions per supported version
-  line inside the advisory. Completed repair candidates run the target branch's
-  required checks and those embargoed reproductions against one exact commit;
-  sanitized status and artifact metadata remain response-visible while commands
+  line inside the advisory. Completed repair candidates run required-check
+  definitions frozen from the trusted task base plus those embargoed
+  reproductions against one exact commit; repair commits cannot substitute the
+  executable check properties while retaining a required name. Sanitized status
+  and artifact metadata remain response-visible while commands
   and logs never enter ordinary pull/check surfaces. Passing evidence requires
   independent repository-owner approval before it is integration-ready. Fixed
   release attestations then prove the release ancestry contains that candidate

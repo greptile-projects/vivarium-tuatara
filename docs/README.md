@@ -830,12 +830,15 @@ than ordinary pull, activity, inbox, or search stores while embargoed.
 
 Repository owners also define embargoed security reproductions for each affected
 version line. A completed repair session can reserve one proof set that combines
-the target branch's current required-check definitions with those private
-reproductions and executes all of them against the exact completed commit. The
+the required-check names in current branch policy with executable definitions
+frozen from the task's trusted base. It executes those definitions and the
+private reproductions against the exact completed commit, so repair-controlled
+configuration cannot weaken a gate while retaining its required name. The
 ordinary check API cannot discover this session-keyed evidence; advisory status
 projects only names, states, candidate identity, and checksummed artifacts, not
-commands or logs. A different repository owner must approve a wholly passing
-proof before the change is marked ready for protected integration.
+commands or logs. A repository owner other than the repair worker must approve
+a wholly passing proof before the change is marked ready for protected
+integration.
 
 After integration, an owner can attach a release candidate only when its commit
 contains the approved repair candidate, all exact release build steps succeeded,

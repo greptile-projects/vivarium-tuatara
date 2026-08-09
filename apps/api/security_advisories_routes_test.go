@@ -210,3 +210,36 @@ func TestRepairSessionAuthorizationIsRepositorySpecific(t *testing.T) {
 	decodeResponse(t, response, &launch)
 	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-sessions/"+launch.RepairSession.ID+"/comments", `{"body":"Unrelated collaborator mutation."}`, reporter.Credential.Token, http.StatusForbidden).Body.Close()
 }
+
+func TestRepairVerificationFreezesRequiredDefinitionFromTaskBase(t *testing.T) {
+	gitStore, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, err := gitStore.Create("99999999999999999999999999999999")
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustedConfig, err := repository.WriteObject(storage.BlobObject, []byte(`{"version":1,"checks":[{"name":"quality-gate","image":"alpine:3.22","command":"test -f SECURITY-GATE","working_directory":".","timeout_seconds":30}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustedVivarium := writeTestTree(t, repository, testTreeEntry{mode: "100644", name: "checks.json", id: trustedConfig})
+	trustedTree := writeTestTree(t, repository, testTreeEntry{mode: "40000", name: ".vivarium", id: trustedVivarium})
+	base := writeTestCommit(t, repository, trustedTree, nil, 1700000000, "trusted repair base")
+	replacementConfig, err := repository.WriteObject(storage.BlobObject, []byte(`{"version":1,"checks":[{"name":"quality-gate","image":"alpine:3.22","command":"true","working_directory":".","timeout_seconds":30}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacementVivarium := writeTestTree(t, repository, testTreeEntry{mode: "100644", name: "checks.json", id: replacementConfig})
+	replacementTree := writeTestTree(t, repository, testTreeEntry{mode: "40000", name: ".vivarium", id: replacementVivarium})
+	_ = writeTestCommit(t, repository, replacementTree, []storage.ObjectID{base}, 1700000001, "candidate substitutes command")
+
+	definitions, err := trustedRepairCheckDefinitions(repository, string(base), []string{"quality-gate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(definitions) != 1 || definitions[0].Command != "test -f SECURITY-GATE" {
+		t.Fatalf("trusted definitions = %#v", definitions)
+	}
+}
