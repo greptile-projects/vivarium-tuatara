@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -57,6 +58,43 @@ func TestPrivateSecurityReportTriageAndBoundedAccess(t *testing.T) {
 	response = authenticatedRequest(t, http.MethodPatch, server.URL+"/security-advisories/"+advisory.ID, `{"expected_version":1,"severity":"critical","embargo_state":"embargoed"}`, owner.Credential.Token, http.StatusOK)
 	decodeResponse(t, response, &advisory)
 	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/responders", `{"user_id":"`+responder.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	bare, err := gitStore.Open(repository.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := writeCommit(t, bare, 1, "published base")
+	if err = bare.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)}); err != nil {
+		t.Fatal(err)
+	}
+	repairBody := `{"repository_id":"` + repository.ID + `","version_line":"1.x","title":"Repair parser boundary","mandate":"Remove the boundary bypass without exposing details.","base_commit_id":"` + string(base) + `","assignee_id":"` + responder.User.ID + `","assignee_kind":"human","dependency_task_ids":[]}`
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-tasks", repairBody, owner.Credential.Token, http.StatusCreated)
+	var repairTask struct {
+		RepairTask securityadvisories.RepairTask `json:"repair_task"`
+	}
+	decodeResponse(t, response, &repairTask)
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-tasks/"+repairTask.RepairTask.ID+"/sessions", `{"expires_in":300}`, responder.Credential.Token, http.StatusCreated)
+	var repairLaunch struct {
+		RepairSession securityadvisories.RepairSession `json:"repair_session"`
+		Credential    auth.IssuedCredential            `json:"credential"`
+	}
+	decodeResponse(t, response, &repairLaunch)
+	if repairLaunch.Credential.GitWriteBranch != repairLaunch.RepairSession.Branch || !strings.HasPrefix(repairLaunch.RepairSession.Branch, "refs/heads/vivarium-security/") {
+		t.Fatalf("repair launch = %#v", repairLaunch)
+	}
+	assertGitDiscoveryStatus(t, server.URL+repository.GitRemote+"/info/refs?service=git-receive-pack", repairLaunch.Credential.Token, http.StatusOK)
+	repairRefs := authenticatedRequest(t, http.MethodGet, server.URL+repository.GitRemote+"/info/refs?service=git-upload-pack", "", repairLaunch.Credential.Token, http.StatusOK)
+	repairData, _ := io.ReadAll(repairRefs.Body)
+	repairRefs.Body.Close()
+	if !strings.Contains(string(repairData), repairLaunch.RepairSession.Branch) || strings.Contains(string(repairData), " refs/heads/main") {
+		t.Fatalf("repair credential advertisement was not exact-branch scoped: %q", repairData)
+	}
+	ordinary, _ := credentials.Issue(owner.User.ID, auth.Git, "ordinary owner", []string{"git:read"}, time.Hour)
+	ordinaryRefs := authenticatedRequest(t, http.MethodGet, server.URL+repository.GitRemote+"/info/refs?service=git-upload-pack", "", ordinary.Token, http.StatusOK)
+	ordinaryData, _ := io.ReadAll(ordinaryRefs.Body)
+	ordinaryRefs.Body.Close()
+	if strings.Contains(string(ordinaryData), repairLaunch.RepairSession.Branch) {
+		t.Fatalf("embargoed branch leaked in ordinary advertisement")
+	}
 	response = authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/messages", `{"body":"I can reproduce this against the affected versions."}`, responder.Credential.Token, http.StatusCreated)
 	decodeResponse(t, response, &advisory)
 	if len(advisory.Messages) != 1 || advisory.Messages[0].ActorID != responder.User.ID {

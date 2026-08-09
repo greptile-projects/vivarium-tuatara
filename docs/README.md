@@ -820,3 +820,10 @@ mean, while a compare-and-swap version-line by environment matrix records
 `confirmed`, `suspected`, `unaffected`, or `fixed` impact. Responders can freeze
 selected evidence behind a short-lived `security:investigate`-only credential;
 agent findings remain inside the same embargoed record.
+
+Responders can split fixes into protected human or agent repair tasks for each
+affected version line, including dependencies in another affected repository.
+Each task freezes its base and mandate. Starting work creates a transport-hidden
+branch and a short-lived, revocable credential that advertises only that exact
+branch. Commits, discussion, reviews, and authorship stay in the advisory rather
+than ordinary pull, activity, inbox, or search stores while embargoed.

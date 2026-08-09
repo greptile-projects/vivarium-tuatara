@@ -316,7 +316,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 				return
 			}
 			onlyBranch = credential.GitWriteBranch
-			if service == receivePackService && credential.GitWriteBranch != "" && !activeRunCredential(changeSessionStore, r.PathValue("remote"), credential.ID) && !activeMaintainerCredential(pullRequestStore, repositoryCatalog, r.PathValue("remote"), credential) {
+			if service == receivePackService && credential.GitWriteBranch != "" && !strings.HasPrefix(credential.GitWriteBranch, "refs/heads/vivarium-security/") && !activeRunCredential(changeSessionStore, r.PathValue("remote"), credential.ID) && !activeMaintainerCredential(pullRequestStore, repositoryCatalog, r.PathValue("remote"), credential) {
 				writeAPIError(w, 401, "invalid_credential", "credential is not active")
 				return
 			}
@@ -359,7 +359,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			}
 			contributor = !owner
 			onlyBranch = credential.GitWriteBranch
-			if onlyBranch != "" && !activeRunCredential(changeSessionStore, r.PathValue("remote"), credential.ID) && !activeMaintainerCredential(pullRequestStore, repositoryCatalog, r.PathValue("remote"), credential) {
+			if onlyBranch != "" && !strings.HasPrefix(onlyBranch, "refs/heads/vivarium-security/") && !activeRunCredential(changeSessionStore, r.PathValue("remote"), credential.ID) && !activeMaintainerCredential(pullRequestStore, repositoryCatalog, r.PathValue("remote"), credential) {
 				writeAPIError(w, 401, "invalid_credential", "credential is not active")
 				return
 			}
@@ -3831,7 +3831,7 @@ func authorizeGitRepository(w http.ResponseWriter, r *http.Request, authStore *a
 		}
 		return auth.Credential{}, false, false
 	}
-	if scope == "git:read" && repository.Visibility == repositories.Public {
+	if scope == "git:read" && repository.Visibility == repositories.Public && r.Header.Get("Authorization") == "" {
 		return auth.Credential{}, false, true
 	}
 	actor, authenticated, valid := authenticateOptionalRequest(w, r, authStore, scope, true)
@@ -3853,6 +3853,12 @@ func authorizeGitRepository(w http.ResponseWriter, r *http.Request, authStore *a
 		return auth.Credential{}, false, false
 	}
 	if !owner && !collaborator {
+		// Purpose-issued credentials may grant one exact, hidden branch without
+		// changing repository membership. Revocation removes that access on the
+		// next request; the transport hides every other repository ref.
+		if actor.RepositoryID == id && strings.HasPrefix(actor.GitWriteBranch, "refs/heads/vivarium-security/") {
+			return actor, false, true
+		}
 		if actor.GitWriteBranch != "" && actor.PullRequestID != "" && pulls != nil && pulls.AllowsMaintainerEdit(id, actor.GitWriteBranch, actor.PullRequestID, actor.UserID, func(targetID, userID string) bool {
 			target, targetErr := catalog.GetByID(targetID)
 			if targetErr != nil {
@@ -3997,6 +4003,10 @@ func runGitService(w http.ResponseWriter, r *http.Request, repo *storage.Reposit
 		// A pull-request grant exposes only its contribution branch, never the
 		// rest of an independently owned private fork.
 		args = append([]string{"-c", "transfer.hideRefs=refs", "-c", "transfer.hideRefs=!" + onlyBranch}, args...)
+	} else {
+		// Embargoed repair refs never appear through ordinary clone, fetch, or
+		// push discovery, including to repository owners.
+		args = append([]string{"-c", "transfer.hideRefs=refs/heads/vivarium-security/"}, args...)
 	}
 	var removeHooks func()
 	if service == receivePackService {

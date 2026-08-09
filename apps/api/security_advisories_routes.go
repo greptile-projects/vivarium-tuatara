@@ -368,6 +368,160 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 		}
 		writeJSON(w, 201, map[string]any{"security_advisory": v, "investigation": x, "credential": issued})
 	})
+	mux.HandleFunc("POST /security-advisories/{advisory_id}/repair-tasks", func(w http.ResponseWriter, r *http.Request) {
+		actor, current, ok := require(w, r)
+		if !ok {
+			return
+		}
+		var in securityadvisories.RepairTask
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if !visible(in.AssigneeID, current) {
+			writeAPIError(w, 422, "invalid_repair_task", "assignee must be on the response team")
+			return
+		}
+		repository, e := gitStore.Open(in.RepositoryID)
+		if e != nil {
+			writeAPIError(w, 422, "invalid_repair_task", "repair repository is unavailable")
+			return
+		}
+		if _, e = repository.ReadCommit(storage.ObjectID(in.BaseCommitID)); e != nil {
+			writeAPIError(w, 422, "invalid_repair_task", "base commit could not be verified")
+			return
+		}
+		v, task, e := store.AddRepairTask(current.ID, actor.UserID, in)
+		if e != nil {
+			writeStoreError(w, e)
+			return
+		}
+		writeJSON(w, 201, map[string]any{"security_advisory": v, "repair_task": task})
+	})
+	mux.HandleFunc("POST /security-advisories/{advisory_id}/repair-tasks/{task_id}/sessions", func(w http.ResponseWriter, r *http.Request) {
+		actor, current, ok := require(w, r)
+		if !ok {
+			return
+		}
+		var task *securityadvisories.RepairTask
+		for i := range current.RepairTasks {
+			if current.RepairTasks[i].ID == r.PathValue("task_id") {
+				task = &current.RepairTasks[i]
+			}
+		}
+		if task == nil {
+			writeAPIError(w, 404, "repair_task_not_found", "repair task not found")
+			return
+		}
+		if actor.UserID != task.AssigneeID && !maintainer(actor.UserID, current) {
+			writeAPIError(w, 403, "repair_assignee_required", "only the assignee or an affected repository owner may start work")
+			return
+		}
+		var in struct {
+			ExpiresIn int `json:"expires_in"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if in.ExpiresIn == 0 {
+			in.ExpiresIn = 3600
+		}
+		if in.ExpiresIn < 300 || in.ExpiresIn > 86400 {
+			writeAPIError(w, 422, "invalid_repair_session", "expiry must be between 5 minutes and 24 hours")
+			return
+		}
+		branch := "refs/heads/vivarium-security/" + current.ID + "/" + task.ID
+		repository, e := gitStore.Open(task.RepositoryID)
+		if e != nil {
+			writeAPIError(w, 500, "repair_session_failed", "repository is unavailable")
+			return
+		}
+		if e = repository.CreateReference(storage.Reference{Name: branch, Target: task.BaseCommitID}); e != nil {
+			writeAPIError(w, 409, "repair_session_exists", "an isolated repair branch already exists")
+			return
+		}
+		issued, e := credentials.IssueBound(actor.UserID, auth.Git, "Embargoed repair", []string{"git:read", "git:write"}, time.Duration(in.ExpiresIn)*time.Second, task.RepositoryID, branch)
+		if e != nil {
+			_ = repository.DeleteReference(branch)
+			writeAPIError(w, 500, "repair_session_failed", "scoped Git access could not be issued")
+			return
+		}
+		v, session, e := store.StartRepairSession(current.ID, actor.UserID, task.ID, issued.ID, branch)
+		if e != nil {
+			_, _ = credentials.Revoke(actor.UserID, issued.ID)
+			_ = repository.DeleteReference(branch)
+			writeStoreError(w, e)
+			return
+		}
+		writeJSON(w, 201, map[string]any{"security_advisory": v, "repair_session": session, "credential": issued})
+	})
+	mutateRepair := func(action string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			actor, current, ok := require(w, r)
+			if !ok {
+				return
+			}
+			var in struct {
+				Body     string `json:"body"`
+				Decision string `json:"decision"`
+				CommitID string `json:"commit_id"`
+			}
+			if decodeJSON(r, &in) != nil {
+				writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+				return
+			}
+			var existing *securityadvisories.RepairSession
+			for i := range current.RepairSessions {
+				if current.RepairSessions[i].ID == r.PathValue("session_id") {
+					existing = &current.RepairSessions[i]
+				}
+			}
+			if existing == nil {
+				writeAPIError(w, 404, "repair_session_not_found", "repair session not found")
+				return
+			}
+			if action == "complete" {
+				repository, e := gitStore.Open(existing.RepositoryID)
+				if e != nil {
+					writeAPIError(w, 500, "repair_session_failed", "repository is unavailable")
+					return
+				}
+				ref, e := repository.ReadReference(existing.Branch)
+				if e != nil || ref.Target != in.CommitID {
+					writeAPIError(w, 409, "repair_commit_changed", "completion must name the exact live repair branch commit")
+					return
+				}
+				ancestry, e := repository.ListCommitAncestry(storage.ObjectID(in.CommitID))
+				descendant := e == nil
+				if in.CommitID != existing.BaseCommitID {
+					descendant = false
+					for _, c := range ancestry {
+						if string(c.ID) == existing.BaseCommitID {
+							descendant = true
+						}
+					}
+				}
+				if !descendant || in.CommitID == existing.BaseCommitID {
+					writeAPIError(w, 422, "invalid_repair_commit", "repair commit must descend from the frozen base")
+					return
+				}
+			}
+			v, session, e := store.UpdateRepairSession(current.ID, actor.UserID, existing.ID, action, in.Body, in.Decision, in.CommitID)
+			if e != nil {
+				writeStoreError(w, e)
+				return
+			}
+			if action == "complete" || action == "revoke" {
+				_, _ = credentials.Revoke(existing.InitiatorID, existing.CredentialID)
+			}
+			writeJSON(w, 200, map[string]any{"security_advisory": v, "repair_session": session})
+		}
+	}
+	mux.HandleFunc("POST /security-advisories/{advisory_id}/repair-sessions/{session_id}/comments", mutateRepair("comment"))
+	mux.HandleFunc("POST /security-advisories/{advisory_id}/repair-sessions/{session_id}/reviews", mutateRepair("review"))
+	mux.HandleFunc("POST /security-advisories/{advisory_id}/repair-sessions/{session_id}/complete", mutateRepair("complete"))
+	mux.HandleFunc("POST /security-advisories/{advisory_id}/repair-sessions/{session_id}/revoke", mutateRepair("revoke"))
 	mux.HandleFunc("GET /security-advisories/{advisory_id}/investigations/{investigation_id}", func(w http.ResponseWriter, r *http.Request) {
 		credential, ok := authenticateRequest(w, r, credentials, "security:investigate", false)
 		if !ok {

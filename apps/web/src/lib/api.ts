@@ -232,6 +232,8 @@ export type SecurityAdvisory = {
   findings: { id: string; kind: "hypothesis" | "conclusion" | "uncertainty"; actor_id: string; statement: string; evidence_ids: string[]; investigation_id?: string; created_at: string }[];
   impact_matrix: { repository_id: string; version_line: string; environment: string; state: "confirmed" | "suspected" | "unaffected" | "fixed"; evidence_ids: string[]; rationale: string; actor_id: string; updated_at: string }[];
   investigations: { id: string; agent_id: string; initiator_id: string; mandate: string; state: string; evidence: SecurityAdvisory["evidence"]; created_at: string; updated_at: string }[];
+  repair_tasks: { id: string; repository_id: string; version_line: string; title: string; mandate: string; base_commit_id: string; assignee_id: string; assignee_kind: "human" | "agent"; dependency_task_ids: string[]; status: "open" | "review"; created_by: string; created_at: string }[];
+  repair_sessions: { id: string; task_id: string; repository_id: string; initiator_id: string; worker_id: string; branch: string; base_commit_id: string; commit_id?: string; state: "active" | "completed" | "revoked"; comments: { id: string; actor_id: string; body: string; created_at: string }[]; reviews: { id: string; actor_id: string; decision: "approve" | "request_changes"; body: string; commit_id: string; created_at: string }[]; created_at: string; updated_at: string }[];
   version: number;
   created_at: string;
   updated_at: string;
