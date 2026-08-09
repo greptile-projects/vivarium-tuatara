@@ -67,8 +67,32 @@ type Evolution struct {
 	Findings             []EvolutionFinding         `json:"findings"`
 	Analyses             []EvolutionAnalysis        `json:"analyses"`
 	Acknowledgements     []EvolutionAcknowledgement `json:"acknowledgements"`
+	MigrationTasks       []EvolutionMigrationTask   `json:"migration_tasks"`
 	CreatedAt            time.Time                  `json:"created_at"`
 	UpdatedAt            time.Time                  `json:"updated_at"`
+}
+
+// EvolutionMigrationTask links the cross-repository sequence to a repository-
+// owned proposal task. The proposal remains the authority for assignment,
+// discussion, branch state, review, and completion.
+type EvolutionMigrationTask struct {
+	ID                 string    `json:"id"`
+	RepositoryID       string    `json:"repository_id"`
+	ProposalID         string    `json:"proposal_id"`
+	TaskID             string    `json:"task_id"`
+	TargetVersion      string    `json:"target_version"`
+	DependencyIDs      []string  `json:"dependency_ids"`
+	CreatedBy          string    `json:"created_by"`
+	CreatedAt          time.Time `json:"created_at"`
+	Status             string    `json:"status,omitempty"`
+	Ready              bool      `json:"ready"`
+	AssignmentID       string    `json:"assignment_id,omitempty"`
+	AssigneeType       string    `json:"assignee_type,omitempty"`
+	AssigneeID         string    `json:"assignee_id,omitempty"`
+	BaseRevision       string    `json:"base_revision,omitempty"`
+	Branch             string    `json:"branch,omitempty"`
+	PullRequestID      string    `json:"pull_request_id,omitempty"`
+	ContributionStatus string    `json:"contribution_status,omitempty"`
 }
 type CompatibilityChange struct {
 	Kind           string `json:"kind"`
@@ -269,6 +293,26 @@ func (s *Store) GetEvolution(repo, id string) (Evolution, error) {
 	}
 	return v, e
 }
+func (s *Store) FindEvolutionMigrationTask(repositoryID, taskID string) (Evolution, EvolutionMigrationTask, error) {
+	ids, err := s.ListRepositoryIDs()
+	if err != nil {
+		return Evolution{}, EvolutionMigrationTask{}, err
+	}
+	for _, id := range ids {
+		plans, listErr := s.ListEvolutions(id)
+		if listErr != nil {
+			return Evolution{}, EvolutionMigrationTask{}, listErr
+		}
+		for _, plan := range plans {
+			for _, task := range plan.MigrationTasks {
+				if task.RepositoryID == repositoryID && task.TaskID == taskID {
+					return plan, task, nil
+				}
+			}
+		}
+	}
+	return Evolution{}, EvolutionMigrationTask{}, ErrNotFound
+}
 func (s *Store) UpdateEvolution(repo, id, actor string, version int, strategy, sequencing, exceptions string) (Evolution, error) {
 	return s.mutateEvolution(repo, id, func(v *Evolution) error {
 		if version != v.Version {
@@ -300,6 +344,45 @@ func (s *Store) AcknowledgeEvolution(repo, id, actor, consumer, note string) (Ev
 		v.UpdatedAt = s.now()
 		return nil
 	})
+}
+
+func (s *Store) AddEvolutionMigrationTask(repo, id, actor, targetRepo, proposalID, taskID, targetVersion string, dependencies []string, version int) (Evolution, EvolutionMigrationTask, error) {
+	if !validID(actor) || !validID(targetRepo) || !validID(proposalID) || !validID(taskID) || !validVersion(targetVersion) || len(dependencies) > 50 {
+		return Evolution{}, EvolutionMigrationTask{}, ErrInvalid
+	}
+	var task EvolutionMigrationTask
+	v, err := s.mutateEvolution(repo, id, func(v *Evolution) error {
+		if version != v.Version {
+			return ErrConflict
+		}
+		allowed := targetRepo == v.RepositoryID
+		for _, impact := range v.Impacts {
+			allowed = allowed || impact.RepositoryID == targetRepo
+		}
+		if !allowed {
+			return ErrInvalid
+		}
+		seen := map[string]bool{}
+		for _, dependency := range dependencies {
+			if !validID(dependency) || seen[dependency] {
+				return ErrInvalid
+			}
+			found := false
+			for _, existing := range v.MigrationTasks {
+				found = found || existing.ID == dependency
+			}
+			if !found {
+				return ErrInvalid
+			}
+			seen[dependency] = true
+		}
+		task = EvolutionMigrationTask{ID: mustID(), RepositoryID: targetRepo, ProposalID: proposalID, TaskID: taskID, TargetVersion: strings.TrimSpace(targetVersion), DependencyIDs: append([]string(nil), dependencies...), CreatedBy: actor, CreatedAt: s.now()}
+		v.MigrationTasks = append(v.MigrationTasks, task)
+		v.Version++
+		v.UpdatedAt = s.now()
+		return nil
+	})
+	return v, task, err
 }
 func (s *Store) AddEvolutionFinding(repo, id, actor string, repositories []string, finding, uncertainty string) (Evolution, error) {
 	if !validID(actor) || !validEvolutionText(finding) || len(uncertainty) > 5000 || len(repositories) == 0 || len(repositories) > 50 {
@@ -465,6 +548,8 @@ func validVersion(v string) bool {
 	_, ok := parseVersion(v)
 	return ok
 }
+
+func ValidVersion(v string) bool { return validVersion(v) }
 func validConstraint(v string) bool {
 	v = strings.TrimSpace(v)
 	if v == "*" {

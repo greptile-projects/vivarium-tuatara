@@ -140,6 +140,11 @@ whenever dependencies change or the web job fails before it starts.
   `evolutions:analyze` credentials expose only selected readable repositories
   from that snapshot and can append attributable findings and uncertainty,
   never repository or Git mutation authority.
+  Ordered evolution migration tasks are repository-owned proposal tasks linked
+  to the shared plan with target versions and cross-repository dependencies.
+  Only current target participants create and assign them; humans gain no new
+  access, agents reuse isolated task sessions after dependencies merge, and
+  local discussion, branch, pull, fork, and completion state stays authoritative.
   Owners define ordered delivery environments with scoped visible configuration,
   encrypted write-only credentials, independent approval thresholds, and
   concurrency limits beneath `$DEPLOYMENT_STORAGE_ROOT`. Participants promote

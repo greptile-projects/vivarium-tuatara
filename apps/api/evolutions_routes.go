@@ -13,9 +13,10 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/relationships"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
-func registerEvolutionRoutes(mux *http.ServeMux, repos *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, relationStore *relationships.Store, credentials *auth.Store) {
+func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, relationStore *relationships.Store, credentials *auth.Store) {
 	canRead := func(actorID, id string) bool {
 		repo, e := repos.GetByID(id)
 		if e != nil {
@@ -26,6 +27,40 @@ func registerEvolutionRoutes(mux *http.ServeMux, repos *repositories.Store, prop
 		}
 		ok, _ := repos.HasCollaborator(actorID, id)
 		return repo.OwnerID == actorID || ok
+	}
+	project := func(v relationships.Evolution) relationships.Evolution {
+		completed := map[string]bool{}
+		for i := range v.MigrationTasks {
+			link := &v.MigrationTasks[i]
+			task, err := proposalStore.GetTask(link.RepositoryID, link.ProposalID, link.TaskID)
+			if err != nil {
+				link.Status = "unavailable"
+				continue
+			}
+			link.Status = task.Status
+			completed[link.ID] = task.Status == proposals.TaskCompleted
+			if task.Assignment != nil {
+				link.AssignmentID, link.AssigneeType, link.AssigneeID = task.Assignment.ID, task.Assignment.AssigneeType, task.Assignment.AssigneeID
+				link.BaseRevision = task.Assignment.Access.BaseRevision
+				if task.Assignment.AssigneeType == "agent" {
+					link.Branch = "agent/tasks/" + task.ID + "-" + task.Assignment.ID[:8]
+				}
+			}
+			if task.Contribution != nil {
+				link.PullRequestID, link.ContributionStatus = task.Contribution.PullRequestID, task.Contribution.Status
+				if pull, e := pullStore.Get(link.RepositoryID, task.Contribution.PullRequestID); e == nil {
+					link.Branch = pull.SourceBranch
+				}
+			}
+		}
+		for i := range v.MigrationTasks {
+			ready := v.MigrationTasks[i].Status == proposals.TaskTodo
+			for _, dependency := range v.MigrationTasks[i].DependencyIDs {
+				ready = ready && completed[dependency]
+			}
+			v.MigrationTasks[i].Ready = ready
+		}
+		return v
 	}
 	visible := func(v relationships.Evolution, actorID string) relationships.Evolution {
 		impacts := v.Impacts[:0]
@@ -69,6 +104,13 @@ func registerEvolutionRoutes(mux *http.ServeMux, repos *repositories.Store, prop
 			}
 		}
 		v.Analyses = analyses
+		tasks := v.MigrationTasks[:0]
+		for _, task := range v.MigrationTasks {
+			if canRead(actorID, task.RepositoryID) {
+				tasks = append(tasks, task)
+			}
+		}
+		v.MigrationTasks = tasks
 		return v
 	}
 	analysisPacket := func(v relationships.Evolution, a relationships.EvolutionAnalysis) relationships.Evolution {
@@ -101,6 +143,13 @@ func registerEvolutionRoutes(mux *http.ServeMux, repos *repositories.Store, prop
 			}
 		}
 		v.Acknowledgements = acknowledgements
+		tasks := v.MigrationTasks[:0]
+		for _, task := range v.MigrationTasks {
+			if selected[task.RepositoryID] {
+				tasks = append(tasks, task)
+			}
+		}
+		v.MigrationTasks = tasks
 		v.Analyses = []relationships.EvolutionAnalysis{a}
 		v.Analyses[0].StoredCredentialID = ""
 		return v
@@ -132,7 +181,7 @@ func registerEvolutionRoutes(mux *http.ServeMux, repos *repositories.Store, prop
 			return
 		}
 		for i := range items {
-			items[i] = visible(items[i], actor.UserID)
+			items[i] = visible(project(items[i]), actor.UserID)
 		}
 		writeJSON(w, 200, map[string]any{"evolutions": items})
 	})
@@ -146,7 +195,7 @@ func registerEvolutionRoutes(mux *http.ServeMux, repos *repositories.Store, prop
 			writeAPIError(w, 404, "evolution_not_found", "evolution plan not found")
 			return
 		}
-		writeJSON(w, 200, visible(v, actor.UserID))
+		writeJSON(w, 200, visible(project(v), actor.UserID))
 	})
 	mux.HandleFunc("POST /repositories/{id}/evolutions", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")
@@ -304,6 +353,113 @@ func registerEvolutionRoutes(mux *http.ServeMux, repos *repositories.Store, prop
 			return
 		}
 		writeJSON(w, 201, visible(v, actor.UserID))
+	})
+	mux.HandleFunc("POST /repositories/{id}/evolutions/{evolution_id}/migration-tasks", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := readActor(w, r)
+		if !ok {
+			return
+		}
+		var in struct {
+			Version            int      `json:"version"`
+			RepositoryID       string   `json:"repository_id"`
+			Title              string   `json:"title"`
+			CompletionCriteria string   `json:"completion_criteria"`
+			TargetVersion      string   `json:"target_version"`
+			DependencyIDs      []string `json:"dependency_ids"`
+			AssigneeType       string   `json:"assignee_type"`
+			AssigneeID         string   `json:"assignee_id"`
+			Mandate            string   `json:"mandate"`
+			BaseRevision       string   `json:"base_revision"`
+		}
+		if decodeJSON(r, &in) != nil || (in.AssigneeType != "human" && in.AssigneeType != "agent") {
+			writeAPIError(w, 400, "invalid_migration_task", "repository, task, target version, assignment, and exact base are required")
+			return
+		}
+		if strings.TrimSpace(in.Title) == "" || strings.ContainsAny(in.Title, "\r\n") || len([]rune(in.Title)) > 200 || strings.TrimSpace(in.CompletionCriteria) == "" || len([]rune(in.CompletionCriteria)) > 2000 || strings.TrimSpace(in.Mandate) == "" || len([]rune(in.Mandate)) > 4000 {
+			writeAPIError(w, 422, "invalid_migration_task", "task title, completion criteria, and mandate are required and bounded")
+			return
+		}
+		target, err := repos.GetByID(in.RepositoryID)
+		collaborator, _ := repos.HasCollaborator(actor.UserID, in.RepositoryID)
+		if err != nil || (target.OwnerID != actor.UserID && !collaborator) {
+			writeAPIError(w, 403, "migration_task_forbidden", "a current target-repository participant must create migration work")
+			return
+		}
+		plan, err := relationStore.GetEvolution(r.PathValue("id"), r.PathValue("evolution_id"))
+		allowed := in.RepositoryID == plan.RepositoryID
+		known := map[string]bool{}
+		for _, impact := range plan.Impacts {
+			allowed = allowed || impact.RepositoryID == in.RepositoryID
+		}
+		for _, task := range plan.MigrationTasks {
+			known[task.ID] = true
+		}
+		if err != nil {
+			writeAPIError(w, 404, "evolution_not_found", "evolution plan not found")
+			return
+		}
+		if in.Version != plan.Version {
+			writeAPIError(w, 409, "evolution_changed", "evolution plan changed; reload before adding work")
+			return
+		}
+		if !relationships.ValidVersion(in.TargetVersion) {
+			writeAPIError(w, 422, "invalid_target_version", "target version must be semantic, for example v2.0.0")
+			return
+		}
+		if !allowed {
+			writeAPIError(w, 422, "invalid_migration_repository", "migration work must target the provider or a frozen affected consumer")
+			return
+		}
+		seenDependencies := map[string]bool{}
+		for _, dependency := range in.DependencyIDs {
+			if !known[dependency] || seenDependencies[dependency] {
+				writeAPIError(w, 422, "invalid_migration_dependency", "dependencies must name earlier migration tasks")
+				return
+			}
+			seenDependencies[dependency] = true
+		}
+		repository, openErr := gitStore.Open(in.RepositoryID)
+		if openErr != nil {
+			writeAPIError(w, 500, "migration_task_failed", "target repository storage is unavailable")
+			return
+		}
+		if _, readErr := repository.ReadCommit(storage.ObjectID(strings.ToLower(in.BaseRevision))); readErr != nil {
+			writeAPIError(w, 422, "invalid_base_revision", "base revision must be an existing target-repository commit")
+			return
+		}
+		if in.AssigneeType == "human" {
+			participant, _ := repos.HasCollaborator(in.AssigneeID, in.RepositoryID)
+			if in.AssigneeID != target.OwnerID && !participant {
+				writeAPIError(w, 422, "invalid_task_assignee", "human assignee must already participate in the target repository")
+				return
+			}
+		}
+		body := "Migration work for interface evolution " + plan.ID + ".\n\nTarget version: " + strings.TrimSpace(in.TargetVersion) + "\n\nPlan strategy:\n" + plan.Strategy + "\n\nSequencing:\n" + plan.Sequencing
+		proposal, err := proposalStore.Create(in.RepositoryID, actor.UserID, in.Title, body)
+		if err != nil && !errors.Is(err, proposals.ErrDurabilityUncertain) {
+			writeAPIError(w, 422, "invalid_migration_task", "task title and migration contract are invalid")
+			return
+		}
+		task, err := proposalStore.CreateTask(in.RepositoryID, proposal.ID, actor.UserID, in.Title, in.CompletionCriteria, nil, nil)
+		if err != nil && !errors.Is(err, proposals.ErrDurabilityUncertain) {
+			writeAPIError(w, 500, "migration_task_failed", "repository task could not be created")
+			return
+		}
+		assigned, err := proposalStore.AssignTask(in.RepositoryID, proposal.ID, task.ID, actor.UserID, proposals.TaskAssignmentInput{AssigneeType: in.AssigneeType, AssigneeID: in.AssigneeID, Mandate: in.Mandate, RepositoryID: in.RepositoryID, BaseRevision: in.BaseRevision})
+		if err != nil && !errors.Is(err, proposals.ErrDurabilityUncertain) {
+			writeAPIError(w, 422, "invalid_migration_assignment", "migration task could not be assigned")
+			return
+		}
+		plan, link, err := relationStore.AddEvolutionMigrationTask(plan.RepositoryID, plan.ID, actor.UserID, in.RepositoryID, proposal.ID, task.ID, in.TargetVersion, in.DependencyIDs, in.Version)
+		if errors.Is(err, relationships.ErrConflict) {
+			writeAPIError(w, 409, "evolution_changed", "evolution plan changed; reload before adding work")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 500, "migration_task_failed", "migration task link could not be published")
+			return
+		}
+		writeJSON(w, 201, map[string]any{"evolution": visible(project(plan), actor.UserID), "migration_task": link, "task": assigned})
 	})
 	mux.HandleFunc("POST /repositories/{id}/evolutions/{evolution_id}/analyses", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")

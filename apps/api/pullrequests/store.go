@@ -380,7 +380,11 @@ func (s *Store) FindOrCreateRecovery(repositoryID, authorID, title, body, source
 // CreateTaskContribution publishes task-scoped work into ordinary review while
 // retaining stable links to the agreed intent and optional execution evidence.
 func (s *Store) CreateTaskContribution(repositoryID, authorID, title, body, sourceBranch, targetBranch, expectedSourceCommit string, commitIDs []string, proposalID, taskID *string, sessionID, runID *string) (PullRequest, error) {
-	return s.createFrom(repositoryID, repositoryID, authorID, title, body, sourceBranch, targetBranch, expectedSourceCommit, commitIDs, proposalID, taskID, sessionID, runID, false)
+	return s.CreateTaskContributionFrom(repositoryID, repositoryID, authorID, title, body, sourceBranch, targetBranch, expectedSourceCommit, commitIDs, proposalID, taskID, sessionID, runID)
+}
+
+func (s *Store) CreateTaskContributionFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, expectedSourceCommit string, commitIDs []string, proposalID, taskID *string, sessionID, runID *string) (PullRequest, error) {
+	return s.createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, expectedSourceCommit, commitIDs, proposalID, taskID, sessionID, runID, false)
 }
 
 func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, expectedSourceCommit string, commitIDs []string, proposalID, taskID, sessionID, runID *string, uniqueSource bool) (PullRequest, error) {
