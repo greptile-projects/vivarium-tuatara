@@ -83,6 +83,10 @@ func TestPrivateSecurityReportTriageAndBoundedAccess(t *testing.T) {
 	if repairLaunch.Credential.GitWriteBranch != repairLaunch.RepairSession.Branch || !strings.HasPrefix(repairLaunch.RepairSession.Branch, "refs/heads/vivarium-security/") {
 		t.Fatalf("repair launch = %#v", repairLaunch)
 	}
+	reproductionBody := `{"repository_id":"` + repository.ID + `","version_line":"1.x","definition":{"name":"private parser reproduction","image":"alpine:3.22","command":"test ! -e vulnerable","timeout_seconds":30}}`
+	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/reproductions", reproductionBody, responder.Credential.Token, http.StatusForbidden).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/reproductions", reproductionBody, owner.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-sessions/"+repairLaunch.RepairSession.ID+"/verifications", `{}`, responder.Credential.Token, http.StatusConflict).Body.Close()
 	assertGitDiscoveryStatus(t, server.URL+repository.GitRemote+"/info/refs?service=git-receive-pack", repairLaunch.Credential.Token, http.StatusOK)
 	repairRefs := authenticatedRequest(t, http.MethodGet, server.URL+repository.GitRemote+"/info/refs?service=git-upload-pack", "", repairLaunch.Credential.Token, http.StatusOK)
 	repairData, _ := io.ReadAll(repairRefs.Body)
@@ -193,6 +197,20 @@ func TestRepairSessionAuthorizationIsRepositorySpecific(t *testing.T) {
 	taskBody := `{"repository_id":"` + repositoryB.ID + `","version_line":"2.x","title":"Repair private B","mandate":"Fix B.","base_commit_id":"` + string(baseB) + `","assignee_id":"` + assignee.User.ID + `","assignee_kind":"human","dependency_task_ids":[]}`
 	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-tasks", taskBody, ownerA.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repositoryB.ID+"/collaborators", `{"user_id":"`+assignee.User.ID+`"}`, ownerB.Credential.Token, http.StatusCreated).Body.Close()
+	repairRepository, err := gitStore.Open(repositoryB.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orphan := writeCommit(t, repairRepository, 1700000010, "collaborator orphan base")
+	baseCommit, err := repairRepository.ReadCommit(baseB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	feature := writeTestCommit(t, repairRepository, baseCommit.Tree, []storage.ObjectID{baseB}, 1700000011, "unmerged feature base")
+	for _, untrusted := range []storage.ObjectID{orphan, feature} {
+		untrustedBody := strings.Replace(taskBody, string(baseB), string(untrusted), 1)
+		authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-tasks", untrustedBody, ownerA.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
+	}
 	response = authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-tasks", taskBody, ownerA.Credential.Token, http.StatusCreated)
 	var task struct {
 		RepairTask securityadvisories.RepairTask `json:"repair_task"`
@@ -205,4 +223,37 @@ func TestRepairSessionAuthorizationIsRepositorySpecific(t *testing.T) {
 	}
 	decodeResponse(t, response, &launch)
 	authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/repair-sessions/"+launch.RepairSession.ID+"/comments", `{"body":"Unrelated collaborator mutation."}`, reporter.Credential.Token, http.StatusForbidden).Body.Close()
+}
+
+func TestRepairVerificationFreezesRequiredDefinitionFromTaskBase(t *testing.T) {
+	gitStore, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, err := gitStore.Create("99999999999999999999999999999999")
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustedConfig, err := repository.WriteObject(storage.BlobObject, []byte(`{"version":1,"checks":[{"name":"quality-gate","image":"alpine:3.22","command":"test -f SECURITY-GATE","working_directory":".","timeout_seconds":30}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustedVivarium := writeTestTree(t, repository, testTreeEntry{mode: "100644", name: "checks.json", id: trustedConfig})
+	trustedTree := writeTestTree(t, repository, testTreeEntry{mode: "40000", name: ".vivarium", id: trustedVivarium})
+	base := writeTestCommit(t, repository, trustedTree, nil, 1700000000, "trusted repair base")
+	replacementConfig, err := repository.WriteObject(storage.BlobObject, []byte(`{"version":1,"checks":[{"name":"quality-gate","image":"alpine:3.22","command":"true","working_directory":".","timeout_seconds":30}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacementVivarium := writeTestTree(t, repository, testTreeEntry{mode: "100644", name: "checks.json", id: replacementConfig})
+	replacementTree := writeTestTree(t, repository, testTreeEntry{mode: "40000", name: ".vivarium", id: replacementVivarium})
+	_ = writeTestCommit(t, repository, replacementTree, []storage.ObjectID{base}, 1700000001, "candidate substitutes command")
+
+	definitions, err := trustedRepairCheckDefinitions(repository, string(base), []string{"quality-gate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(definitions) != 1 || definitions[0].Command != "test -f SECURITY-GATE" {
+		t.Fatalf("trusted definitions = %#v", definitions)
+	}
 }

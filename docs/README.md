@@ -827,3 +827,25 @@ Each task freezes its base and mandate. Starting work creates a transport-hidden
 branch and a short-lived, revocable credential that advertises only that exact
 branch. Commits, discussion, reviews, and authorship stay in the advisory rather
 than ordinary pull, activity, inbox, or search stores while embargoed.
+
+Repository owners also define embargoed security reproductions for each affected
+version line. A completed repair session can reserve one proof set that combines
+the required-check names in current branch policy with executable definitions
+frozen from the task's trusted base. It executes those definitions and the
+private reproductions against the exact completed commit, so repair-controlled
+configuration cannot weaken a gate while retaining its required name. The
+task base must be the current default-branch tip or one of its ancestors; orphan
+objects and unmerged feature commits cannot become trusted definition sources.
+ordinary check API cannot discover this session-keyed evidence; advisory status
+projects only names, states, candidate identity, and checksummed artifacts, not
+commands or logs. A repository owner other than the repair worker must approve
+a wholly passing proof before the change is marked ready for protected
+integration.
+
+After integration, an owner can attach a release candidate only when its commit
+contains the approved repair candidate, all exact release build steps succeeded,
+and at least one checksummed artifact was produced. The immutable attestation
+connects that artifact and release ancestry back to the affected version line.
+The security workspace summarizes missing tasks, reproductions, approvals, and
+release artifacts for every claimed line so disclosure cannot accidentally
+present an unsupported line as fixed.
