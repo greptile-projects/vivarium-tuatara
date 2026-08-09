@@ -75,10 +75,18 @@ func TestAnonymousGraphDoesNotExposePrivateProviderRelationship(t *testing.T) {
 	}
 	consumer := create("public-consumer", consumerOwner.Credential.Token)
 	provider := create("private-provider", providerOwner.Credential.Token)
+	publicProvider := create("public-provider", providerOwner.Credential.Token)
 	if _, err := catalog.SetVisibility(consumerOwner.User.ID, consumer.ID, repositories.Public); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := catalog.SetVisibility(providerOwner.User.ID, publicProvider.ID, repositories.Public); err != nil {
+		t.Fatal(err)
+	}
 	_, err := relationshipStore.CreateDependency(relationships.Dependency{RepositoryID: consumer.ID, CommitID: strings.Repeat("a", 40), ProviderRepositoryID: provider.ID, InterfaceName: "private-contract", Constraint: "*", DeclaredBy: consumerOwner.User.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = relationshipStore.CreateDependency(relationships.Dependency{RepositoryID: consumer.ID, CommitID: strings.Repeat("a", 40), ProviderRepositoryID: publicProvider.ID, InterfaceName: "missing-contract", Constraint: "*", DeclaredBy: consumerOwner.User.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,8 +96,8 @@ func TestAnonymousGraphDoesNotExposePrivateProviderRelationship(t *testing.T) {
 		Repositories []relationshipRepository `json:"repositories"`
 	}
 	decodeResponse(t, response, &graph)
-	if len(graph.Dependencies) != 0 || len(graph.Repositories) != 1 || graph.Repositories[0].ID != consumer.ID {
-		t.Fatalf("private relationship escaped authorization: %#v", graph)
+	if len(graph.Dependencies) != 1 || graph.Dependencies[0].ProviderRepositoryID != publicProvider.ID || graph.Dependencies[0].State != "unresolved" || len(graph.Repositories) != 2 {
+		t.Fatalf("relationship visibility graph = %#v", graph)
 	}
 }
 

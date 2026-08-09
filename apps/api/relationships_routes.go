@@ -73,6 +73,23 @@ func registerRelationshipRoutes(mux *http.ServeMux, git *storage.Store, repos *r
 		if !foundRoot {
 			ids = append(ids, r.PathValue("id"))
 		}
+		candidateIDs := make(map[string]bool, len(ids))
+		for _, id := range ids {
+			candidateIDs[id] = true
+		}
+		for _, id := range ids {
+			values, readErr := relationStore.ListDependencies(id)
+			if readErr != nil {
+				writeAPIError(w, 500, "relationship_read_failed", "relationship graph could not be read")
+				return
+			}
+			for _, value := range values {
+				if !candidateIDs[value.ProviderRepositoryID] {
+					candidateIDs[value.ProviderRepositoryID] = true
+					ids = append(ids, value.ProviderRepositoryID)
+				}
+			}
+		}
 		repositoryMap := map[string]relationshipRepository{}
 		interfaces := []interfaceNode{}
 		dependencies := []dependencyEdge{}
