@@ -131,10 +131,13 @@ whenever dependencies change or the web job fails before it starts.
   Package identities are globally bound to their first source repository;
   versions atomically retain the exact release, commit, build, artifact checksum,
   publisher, platform, dependencies, visibility, and active lifecycle beneath
-  `$PACKAGE_STORAGE_ROOT`. Public package metadata and bytes live at
+  `$PACKAGE_STORAGE_ROOT`. Publication holds the selected check run's execution
+  boundary through artifact verification and the package rename, so a rerun
+  cannot supersede its attested attempt mid-publication. Public package metadata and bytes live at
   `/packages/{name}/versions/{version}`, while private versions inherit current
-  source-repository read access. Artifact verification or durability failure
-  exposes no package version and does not reserve a new identity.
+  source-repository read access. Pre-rename failures expose no package version
+  and do not reserve a new identity; post-rename parent-directory failures are
+  returned as durability uncertainty even though the complete version may be visible.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version

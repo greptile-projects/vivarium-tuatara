@@ -10,6 +10,8 @@ import (
 	"testing"
 )
 
+var errForcedDirectory = errors.New("forced directory failure")
+
 func TestPublishRetainsImmutableProvenanceAndArtifact(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {
@@ -72,6 +74,39 @@ func TestPackageIdentityCannotMoveRepositories(t *testing.T) {
 	item.RepositoryID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	if _, err := store.Publish(item, bytes.NewReader(body)); !errors.Is(err, ErrIdentityConflict) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestPublishReportsPostRenameDirectoryFailures(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		force func(*Store)
+	}{
+		{name: "open", force: func(store *Store) {
+			store.openDirectory = func(string) (*os.File, error) { return nil, errForcedDirectory }
+		}},
+		{name: "sync", force: func(store *Store) { store.syncDirectory = func(*os.File) error { return errForcedDirectory } }},
+		{name: "close", force: func(store *Store) {
+			store.closeDirectory = func(file *os.File) error { _ = file.Close(); return errForcedDirectory }
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, err := New(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.force(store)
+			body := []byte("durable package")
+			item := validVersion(body)
+			if _, err = store.Publish(item, bytes.NewReader(body)); !errors.Is(err, errForcedDirectory) {
+				t.Fatalf("publish error = %v", err)
+			}
+			// Rename happens before the injected failure, so the complete version
+			// may be visible even though publication was not acknowledged.
+			if visible, getErr := store.Get(item.Name, item.Version); getErr != nil || visible.Name != item.Name {
+				t.Fatalf("visible version = %#v, %v", visible, getErr)
+			}
+		})
 	}
 }
 

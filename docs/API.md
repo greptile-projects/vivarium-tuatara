@@ -862,10 +862,14 @@ attempt:
 Names are lowercase package identities and bind globally to the repository that
 first publishes them. Versions are immutable and unique within that identity.
 The server derives the release, source commit, build attestation, artifact path,
-size, media type, checksum, and publisher; it streams and re-hashes the artifact
-before atomically exposing metadata and bytes. A stale or failed build, checksum
-mismatch, conflict, interrupted copy, or durability error cannot expose a
-partial version. New-identity failures do not reserve the name.
+size, media type, checksum, and publisher. It holds the selected build's
+execution boundary while streaming and re-hashing the artifact and atomically
+exposing metadata and bytes, so a concurrent rerun cannot supersede the
+attested attempt. A stale or failed build, checksum mismatch, conflict, or
+interrupted copy cannot expose a partial version. Parent-directory open, sync,
+or close failure after rename is returned rather than acknowledged; the
+complete version may already be visible, but its durability is uncertain.
+New-identity failures before rename do not reserve the name.
 
 `GET /repositories/{id}/packages` lists versions originating in a readable
 repository. `GET /packages/{name}/versions/{version}` returns immutable

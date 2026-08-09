@@ -786,9 +786,12 @@ package version from that same release workspace. Package publication freezes
 the globally repository-bound identity and version, source commit, release and
 build IDs, artifact identity and SHA-256, publisher, platform selectors,
 dependency constraints, public or private visibility, and active lifecycle.
-The package store reopens and hashes the complete build output into a staging
-directory before one atomic publication, so failed verification or storage
-leaves no readable version or first-publisher name reservation. Public package
+Publication holds the build execution boundary across selection, hashing, and
+the atomic version rename, preventing a concurrent rerun from replacing the
+attested attempt. The package store hashes output into a staging directory, so
+pre-rename verification or storage failures leave no readable version or
+first-publisher name reservation. Post-rename parent-directory failures return
+durability uncertainty even though a complete version may already be visible. Public package
 metadata and bytes are anonymous; private packages continuously reuse the
 source repository's access boundary. Durable records and copied artifacts live
 beneath `PACKAGE_STORAGE_ROOT` (default `packages`), independent of later build

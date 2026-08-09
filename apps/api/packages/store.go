@@ -71,9 +71,12 @@ type Version struct {
 }
 
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root           string
+	mu             sync.Mutex
+	now            func() time.Time
+	openDirectory  func(string) (*os.File, error)
+	syncDirectory  func(*os.File) error
+	closeDirectory func(*os.File) error
 }
 
 func New(root string) (*Store, error) {
@@ -87,7 +90,7 @@ func New(root string) (*Store, error) {
 	if err = os.MkdirAll(abs, 0700); err != nil {
 		return nil, err
 	}
-	return &Store{root: abs, now: time.Now}, nil
+	return &Store{root: abs, now: time.Now, openDirectory: os.Open, syncDirectory: func(directory *os.File) error { return directory.Sync() }, closeDirectory: func(directory *os.File) error { return directory.Close() }}, nil
 }
 
 // Publish copies and verifies the complete artifact before atomically exposing
@@ -195,16 +198,20 @@ func (s *Store) Publish(version Version, artifact io.Reader) (Version, error) {
 		}
 		return Version{}, err
 	}
-	dir, err = os.Open(identityDir)
+	dir, err = s.openDirectory(identityDir)
 	if err != nil {
-		// The complete version is already visible. Return that committed record
-		// rather than inviting a retry that can only conflict.
-		return version, nil
+		return Version{}, err
 	}
-	err = dir.Sync()
-	closeErr = dir.Close()
-	_ = err
-	_ = closeErr
+	err = s.syncDirectory(dir)
+	closeErr = s.closeDirectory(dir)
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		// Rename has made a complete version visible, but its parent-directory
+		// entry was not durably acknowledged. Report uncertainty to the caller.
+		return Version{}, err
+	}
 	return version, nil
 }
 

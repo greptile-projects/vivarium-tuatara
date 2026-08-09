@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -11,6 +12,11 @@ import (
 	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+)
+
+var (
+	errPackageBuildUnverified = errors.New("package build is not currently verified")
+	errPackageArtifactStale   = errors.New("package artifact is not from the current attempt")
 )
 
 func registerPackageRoutes(mux *http.ServeMux, repositoryStore *repositories.Store, releaseStore *releases.Store, buildStore *checkruns.Store, packageStore *packages.Store, authStore *auth.Store) {
@@ -54,32 +60,31 @@ func registerPackageRoutes(mux *http.ServeMux, repositoryStore *repositories.Sto
 			writeAPIError(w, 500, "package_publish_failed", "build evidence could not be read")
 			return
 		}
-		if build.CommitID != release.CommitID || build.State != "succeeded" {
-			writeAPIError(w, 409, "package_build_unverified", "the selected build must have succeeded for the exact release commit")
-			return
-		}
-		artifactFile, artifact, err := buildStore.OpenArtifact(release.RepositoryID, release.ID, build.ID, input.ArtifactID)
-		if errors.Is(err, checkruns.ErrNotFound) {
-			writeAPIError(w, 422, "invalid_package_artifact", "artifact_id must name output from the selected build")
-			return
-		}
-		if err != nil {
-			writeAPIError(w, 500, "package_publish_failed", "artifact bytes could not be read")
-			return
-		}
-		defer artifactFile.Close()
-		latestAttempt := 0
-		for _, attempt := range build.Attempts {
-			if attempt.Number > latestAttempt {
-				latestAttempt = attempt.Number
+		var created packages.Version
+		err = buildStore.WithCurrentArtifact(release.RepositoryID, release.ID, build.ID, input.ArtifactID, func(current checkruns.Run, artifact checkruns.Artifact, artifactFile *os.File) error {
+			if current.CommitID != release.CommitID || current.State != "succeeded" {
+				return errPackageBuildUnverified
 			}
-		}
-		if artifact.Attempt != latestAttempt {
-			writeAPIError(w, 409, "package_artifact_stale", "the selected artifact must come from the successful current build attempt")
-			return
-		}
-		created, err := packageStore.Publish(packages.Version{Name: input.Name, Version: input.Version, RepositoryID: release.RepositoryID, ReleaseID: release.ID, SourceCommit: release.CommitID, BuildID: build.ID, BuildAttestation: packages.BuildAttestation{Step: build.Definition.Name, Image: build.Definition.Image, Command: build.Definition.Command, Attempt: latestAttempt, State: build.State}, ArtifactID: artifact.ID, ArtifactPath: artifact.Path, ContentType: artifact.ContentType, Size: artifact.Size, SHA256: artifact.SHA256, Platform: input.Platform, Dependencies: input.Dependencies, PublisherID: actor.UserID, Visibility: input.Visibility}, artifactFile)
+			latestAttempt := 0
+			for _, attempt := range current.Attempts {
+				if attempt.Number > latestAttempt {
+					latestAttempt = attempt.Number
+				}
+			}
+			if artifact.Attempt != latestAttempt {
+				return errPackageArtifactStale
+			}
+			var publishErr error
+			created, publishErr = packageStore.Publish(packages.Version{Name: input.Name, Version: input.Version, RepositoryID: release.RepositoryID, ReleaseID: release.ID, SourceCommit: release.CommitID, BuildID: current.ID, BuildAttestation: packages.BuildAttestation{Step: current.Definition.Name, Image: current.Definition.Image, Command: current.Definition.Command, Attempt: latestAttempt, State: current.State}, ArtifactID: artifact.ID, ArtifactPath: artifact.Path, ContentType: artifact.ContentType, Size: artifact.Size, SHA256: artifact.SHA256, Platform: input.Platform, Dependencies: input.Dependencies, PublisherID: actor.UserID, Visibility: input.Visibility}, artifactFile)
+			return publishErr
+		})
 		switch {
+		case errors.Is(err, checkruns.ErrNotFound):
+			writeAPIError(w, 422, "invalid_package_artifact", "artifact_id must name output from the selected build")
+		case errors.Is(err, errPackageBuildUnverified):
+			writeAPIError(w, 409, "package_build_unverified", "the selected build must have succeeded for the exact release commit")
+		case errors.Is(err, errPackageArtifactStale):
+			writeAPIError(w, 409, "package_artifact_stale", "the selected artifact must come from the successful current build attempt")
 		case errors.Is(err, packages.ErrVersionExists):
 			writeAPIError(w, 409, "package_version_exists", "this package version already exists")
 		case errors.Is(err, packages.ErrIdentityConflict):
