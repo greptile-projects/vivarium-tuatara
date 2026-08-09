@@ -948,9 +948,10 @@ ordinary queue/release/promotion action. Closed pulls and failed or canceled
 promotions pause the affected phase and direct participants to the deployment's
 existing rollback or repair controls; completed earlier phases are preserved.
 For retries, only the newest matching release/environment promotion is
-authoritative; retained earlier failures remain evidence but do not pause a
-later successful attempt. An unavailable check store fails rollout creation
-closed with `422 invalid_rollout`.
+authoritative, using its store-assigned durable creation sequence even when
+wall-clock timestamps collide; retained earlier failures remain evidence but
+do not pause a later successful attempt. An unavailable check store fails
+rollout creation closed with `422 invalid_rollout`.
 Private participant filtering happens before aggregate phase and rollout state
 is derived, so hidden workflow status cannot influence a reader's projection.
 

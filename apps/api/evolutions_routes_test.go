@@ -55,11 +55,11 @@ func TestEvolutionRolloutRejectsUnavailableChecksAndUsesLatestPromotion(t *testi
 	}
 	now := time.Now().UTC()
 	values := []deployments.Promotion{
-		{ID: strings.Repeat("1", 32), ReleaseID: strings.Repeat("2", 32), EnvironmentID: strings.Repeat("3", 32), State: "canceled", CreatedAt: now},
-		{ID: strings.Repeat("4", 32), ReleaseID: strings.Repeat("2", 32), EnvironmentID: strings.Repeat("3", 32), State: "succeeded", CreatedAt: now.Add(time.Second)},
+		{ID: strings.Repeat("f", 32), CreationSequence: 1, ReleaseID: strings.Repeat("2", 32), EnvironmentID: strings.Repeat("3", 32), State: "canceled", CreatedAt: now},
+		{ID: strings.Repeat("1", 32), CreationSequence: 2, ReleaseID: strings.Repeat("2", 32), EnvironmentID: strings.Repeat("3", 32), State: "succeeded", CreatedAt: now},
 	}
 	selected := latestEvolutionPromotion(values, strings.Repeat("2", 32), strings.Repeat("3", 32))
-	if selected == nil || selected.ID != strings.Repeat("4", 32) || selected.State != "succeeded" {
+	if selected == nil || selected.ID != strings.Repeat("1", 32) || selected.State != "succeeded" {
 		t.Fatalf("selected promotion = %#v", selected)
 	}
 }

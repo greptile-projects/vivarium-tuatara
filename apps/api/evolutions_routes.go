@@ -1061,7 +1061,7 @@ func latestEvolutionPromotion(values []deployments.Promotion, releaseID, environ
 		if candidate.ReleaseID != releaseID || candidate.EnvironmentID != environmentID {
 			continue
 		}
-		if selected == nil || candidate.CreatedAt.After(selected.CreatedAt) || (candidate.CreatedAt.Equal(selected.CreatedAt) && candidate.ID > selected.ID) {
+		if selected == nil || candidate.CreationSequence > selected.CreationSequence || (candidate.CreationSequence == selected.CreationSequence && candidate.CreatedAt.After(selected.CreatedAt)) {
 			selected = candidate
 		}
 	}
