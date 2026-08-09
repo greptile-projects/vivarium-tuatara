@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os/exec"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -24,6 +25,26 @@ import (
 type createdDisclosureRef struct {
 	repository *storage.Repository
 	name       string
+}
+
+func orderedVerificationRuns(runs []checkruns.Run, definitions []checkruns.Definition, commitID string) ([]checkruns.Run, bool) {
+	ordered := make([]checkruns.Run, len(definitions))
+	used := map[string]bool{}
+	for i, definition := range definitions {
+		found := false
+		for _, run := range runs {
+			if !used[run.ID] && run.CommitID == commitID && reflect.DeepEqual(run.Definition, definition) {
+				ordered[i] = run
+				used[run.ID] = true
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, false
+		}
+	}
+	return ordered, true
 }
 
 func rollbackDisclosureRefs(advisoryID string, refs []createdDisclosureRef) {
@@ -756,12 +777,18 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 			return
 		}
 		definitions := append(append([]checkruns.Definition{}, requiredDefinitions...), reproductionDefinitions...)
-		runs, err := builds.CreateRequested(task.RepositoryID, session.ID, session.CommitID, definitions, actor.UserID)
+		executableRuns, err := builds.CreateRequested(task.RepositoryID, session.ID, session.CommitID, definitions, actor.UserID)
 		if err != nil {
 			writeAPIError(w, 500, "repair_verification_failed", "verification evidence could not be reserved")
 			return
 		}
-		if len(runs) != len(definitions) {
+		persistedRuns, err := builds.List(task.RepositoryID, session.ID)
+		if err != nil {
+			writeAPIError(w, 500, "repair_verification_failed", "verification evidence could not be reopened")
+			return
+		}
+		runs, complete := orderedVerificationRuns(persistedRuns, definitions, session.CommitID)
+		if !complete {
 			writeAPIError(w, 500, "repair_verification_failed", "verification evidence reservation is incomplete")
 			return
 		}
@@ -778,7 +805,7 @@ func registerSecurityAdvisoryRoutes(mux *http.ServeMux, gitStore *storage.Store,
 			writeStoreError(w, err)
 			return
 		}
-		for _, run := range runs {
+		for _, run := range executableRuns {
 			go builds.Execute(run, repository.Path())
 		}
 		writeJSON(w, http.StatusAccepted, map[string]any{"security_advisory": v, "verification": verification})
