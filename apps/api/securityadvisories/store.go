@@ -27,8 +27,49 @@ type AffectedRepository struct {
 }
 
 type Evidence struct {
-	Label       string `json:"label"`
-	Description string `json:"description"`
+	ID           string    `json:"id,omitempty"`
+	Kind         string    `json:"kind,omitempty"`
+	RepositoryID string    `json:"repository_id,omitempty"`
+	CommitID     string    `json:"commit_id,omitempty"`
+	ReleaseID    string    `json:"release_id,omitempty"`
+	BuildID      string    `json:"build_id,omitempty"`
+	ArtifactID   string    `json:"artifact_id,omitempty"`
+	DeploymentID string    `json:"deployment_id,omitempty"`
+	Dependency   string    `json:"dependency,omitempty"`
+	Label        string    `json:"label"`
+	Description  string    `json:"description"`
+	CapturedAt   time.Time `json:"captured_at,omitempty"`
+}
+
+type Finding struct {
+	ID              string    `json:"id"`
+	Kind            string    `json:"kind"`
+	ActorID         string    `json:"actor_id"`
+	Statement       string    `json:"statement"`
+	EvidenceIDs     []string  `json:"evidence_ids"`
+	InvestigationID string    `json:"investigation_id,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+type Impact struct {
+	RepositoryID string    `json:"repository_id"`
+	VersionLine  string    `json:"version_line"`
+	Environment  string    `json:"environment"`
+	State        string    `json:"state"`
+	EvidenceIDs  []string  `json:"evidence_ids"`
+	Rationale    string    `json:"rationale"`
+	ActorID      string    `json:"actor_id"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+type Investigation struct {
+	ID           string     `json:"id"`
+	AgentID      string     `json:"agent_id"`
+	InitiatorID  string     `json:"initiator_id"`
+	CredentialID string     `json:"credential_id,omitempty"`
+	Mandate      string     `json:"mandate"`
+	State        string     `json:"state"`
+	Evidence     []Evidence `json:"evidence"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 type Message struct {
@@ -59,6 +100,9 @@ type Advisory struct {
 	EmbargoState         string               `json:"embargo_state"`
 	Messages             []Message            `json:"messages"`
 	AccessLog            []AccessEvent        `json:"access_log"`
+	Findings             []Finding            `json:"findings"`
+	ImpactMatrix         []Impact             `json:"impact_matrix"`
+	Investigations       []Investigation      `json:"investigations"`
 	Version              int                  `json:"version"`
 	CreatedAt            time.Time            `json:"created_at"`
 	UpdatedAt            time.Time            `json:"updated_at"`
@@ -97,9 +141,118 @@ func (s *Store) Create(v Advisory) (Advisory, error) {
 	v.ID, v.Severity, v.EmbargoState, v.Version = mustID(), "untriaged", "reported", 1
 	v.CreatedAt, v.UpdatedAt = now, now
 	v.ResponseTeam, v.Messages = []string{}, []Message{}
+	v.Findings, v.ImpactMatrix, v.Investigations = []Finding{}, []Impact{}, []Investigation{}
+	for i := range v.Evidence {
+		v.Evidence[i].ID, v.Evidence[i].CapturedAt = mustID(), now
+	}
 	v.AccessLog = []AccessEvent{{ID: mustID(), ActorID: v.ReporterID, Action: "reported", CreatedAt: now}}
 	err := s.mutate(func() error { return s.write(v) })
 	return v, err
+}
+
+func (s *Store) AddEvidence(id, actor string, evidence Evidence) (Advisory, error) {
+	return s.update(id, func(v *Advisory) error {
+		evidence.Label, evidence.Description, evidence.Dependency = strings.TrimSpace(evidence.Label), strings.TrimSpace(evidence.Description), strings.TrimSpace(evidence.Dependency)
+		if !validID(actor) || !oneOf(evidence.Kind, "commit", "dependency", "build", "artifact", "release", "deployment") || evidence.Label == "" || len(evidence.Label) > 200 || len(evidence.Description) > 10000 {
+			return ErrInvalid
+		}
+		evidence.ID, evidence.CapturedAt = mustID(), s.now()
+		v.Evidence = append(v.Evidence, evidence)
+		v.Version++
+		v.AccessLog = append(v.AccessLog, AccessEvent{ID: mustID(), ActorID: actor, Action: "evidence_connected", Detail: evidence.Kind + " / " + evidence.Label, CreatedAt: evidence.CapturedAt})
+		return nil
+	})
+}
+
+func evidenceSelected(v *Advisory, ids []string) bool {
+	for _, id := range ids {
+		found := false
+		for _, e := range v.Evidence {
+			if e.ID == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+func (s *Store) AddFinding(id, actor, kind, statement, investigationID string, evidenceIDs []string) (Advisory, error) {
+	return s.update(id, func(v *Advisory) error {
+		statement = strings.TrimSpace(statement)
+		if !validID(actor) || !oneOf(kind, "hypothesis", "conclusion", "uncertainty") || statement == "" || len(statement) > 10000 || len(evidenceIDs) > 50 || !evidenceSelected(v, evidenceIDs) {
+			return ErrInvalid
+		}
+		now := s.now()
+		v.Findings = append(v.Findings, Finding{ID: mustID(), Kind: kind, ActorID: actor, Statement: statement, EvidenceIDs: evidenceIDs, InvestigationID: investigationID, CreatedAt: now})
+		v.Version++
+		v.AccessLog = append(v.AccessLog, AccessEvent{ID: mustID(), ActorID: actor, Action: kind + "_recorded", CreatedAt: now})
+		return nil
+	})
+}
+func (s *Store) SetImpact(id, actor string, expected int, impact Impact) (Advisory, error) {
+	return s.update(id, func(v *Advisory) error {
+		impact.VersionLine, impact.Environment, impact.Rationale = strings.TrimSpace(impact.VersionLine), strings.TrimSpace(impact.Environment), strings.TrimSpace(impact.Rationale)
+		if v.Version != expected {
+			return ErrConflict
+		}
+		if !validID(actor) || !validID(impact.RepositoryID) || impact.VersionLine == "" || impact.Environment == "" || len(impact.VersionLine) > 200 || len(impact.Environment) > 200 || len(impact.Rationale) > 10000 || !oneOf(impact.State, "confirmed", "suspected", "unaffected", "fixed") || !evidenceSelected(v, impact.EvidenceIDs) {
+			return ErrInvalid
+		}
+		now := s.now()
+		impact.ActorID, impact.UpdatedAt = actor, now
+		replaced := false
+		for i := range v.ImpactMatrix {
+			if v.ImpactMatrix[i].RepositoryID == impact.RepositoryID && v.ImpactMatrix[i].VersionLine == impact.VersionLine && v.ImpactMatrix[i].Environment == impact.Environment {
+				v.ImpactMatrix[i] = impact
+				replaced = true
+			}
+		}
+		if !replaced {
+			v.ImpactMatrix = append(v.ImpactMatrix, impact)
+		}
+		v.Version++
+		v.AccessLog = append(v.AccessLog, AccessEvent{ID: mustID(), ActorID: actor, Action: "impact_updated", Detail: impact.VersionLine + " / " + impact.Environment + " / " + impact.State, CreatedAt: now})
+		return nil
+	})
+}
+func (s *Store) StartInvestigation(id, actor, agent, credential, mandate string, evidenceIDs []string) (Advisory, Investigation, error) {
+	var out Investigation
+	v, e := s.update(id, func(v *Advisory) error {
+		mandate = strings.TrimSpace(mandate)
+		if !validID(actor) || !validID(agent) || !validID(credential) || mandate == "" || len(mandate) > 10000 || len(evidenceIDs) == 0 || !evidenceSelected(v, evidenceIDs) {
+			return ErrInvalid
+		}
+		selected := []Evidence{}
+		for _, eid := range evidenceIDs {
+			for _, x := range v.Evidence {
+				if x.ID == eid {
+					selected = append(selected, x)
+				}
+			}
+		}
+		now := s.now()
+		out = Investigation{ID: mustID(), AgentID: agent, InitiatorID: actor, CredentialID: credential, Mandate: mandate, State: "running", Evidence: selected, CreatedAt: now, UpdatedAt: now}
+		v.Investigations = append(v.Investigations, out)
+		v.Version++
+		v.AccessLog = append(v.AccessLog, AccessEvent{ID: mustID(), ActorID: actor, Action: "investigation_delegated", Detail: out.ID, CreatedAt: now})
+		return nil
+	})
+	return v, out, e
+}
+func (s *Store) Investigation(id, investigationID, credentialID string) (Advisory, Investigation, error) {
+	v, e := s.Get(id)
+	if e != nil {
+		return v, Investigation{}, e
+	}
+	for _, x := range v.Investigations {
+		if x.ID == investigationID && x.CredentialID == credentialID && x.State == "running" {
+			return v, x, nil
+		}
+	}
+	return v, Investigation{}, ErrNotFound
 }
 
 func (s *Store) Get(id string) (Advisory, error) {

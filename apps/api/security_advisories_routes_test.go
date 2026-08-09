@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -63,5 +64,26 @@ func TestPrivateSecurityReportTriageAndBoundedAccess(t *testing.T) {
 	decodeResponse(t, response, &advisory)
 	if len(advisory.AccessLog) < 5 || advisory.AccessLog[len(advisory.AccessLog)-1].Action != "viewed" {
 		t.Fatalf("access log = %#v", advisory.AccessLog)
+	}
+	evidenceID := advisory.Evidence[0].ID
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/findings", `{"kind":"hypothesis","statement":"The parser is reachable from the public API.","evidence_ids":["`+evidenceID+`"]}`, responder.Credential.Token, http.StatusCreated)
+	decodeResponse(t, response, &advisory)
+	impact := `{"expected_version":` + fmt.Sprint(advisory.Version) + `,"repository_id":"` + repository.ID + `","version_line":"1.x","environment":"production","state":"suspected","rationale":"Awaiting artifact confirmation.","evidence_ids":["` + evidenceID + `"]}`
+	response = authenticatedRequest(t, http.MethodPut, server.URL+"/security-advisories/"+advisory.ID+"/impact", impact, responder.Credential.Token, http.StatusOK)
+	decodeResponse(t, response, &advisory)
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/investigations", `{"mandate":"Determine whether the selected reproduction establishes exploitability.","evidence_ids":["`+evidenceID+`"],"expires_in":300}`, responder.Credential.Token, http.StatusCreated)
+	var launch struct {
+		Investigation securityadvisories.Investigation `json:"investigation"`
+		Credential    auth.IssuedCredential            `json:"credential"`
+	}
+	decodeResponse(t, response, &launch)
+	agentHeaders := launch.Credential.Token
+	authenticatedRequest(t, http.MethodGet, server.URL+"/security-advisories/"+advisory.ID+"/investigations/"+launch.Investigation.ID, "", agentHeaders, http.StatusOK).Body.Close()
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/security-advisories/"+advisory.ID+"/investigations/"+launch.Investigation.ID+"/findings", `{"kind":"uncertainty","statement":"The reproduction does not identify every shipped artifact.","evidence_ids":["`+evidenceID+`"]}`, agentHeaders, http.StatusCreated)
+	response.Body.Close()
+	response = authenticatedRequest(t, http.MethodGet, server.URL+"/security-advisories/"+advisory.ID, "", responder.Credential.Token, http.StatusOK)
+	decodeResponse(t, response, &advisory)
+	if len(advisory.Findings) != 2 || len(advisory.ImpactMatrix) != 1 || advisory.Findings[1].InvestigationID != launch.Investigation.ID {
+		t.Fatalf("diagnostic workflow = %#v", advisory)
 	}
 }
