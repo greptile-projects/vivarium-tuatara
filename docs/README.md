@@ -1053,6 +1053,15 @@ incidents without copying those authoritative records. Durable group,
 invitation, and transfer state defaults to `$ORGANIZATION_STORAGE_ROOT`
 (`organizations`).
 
+Portfolio initiatives turn existing proposals, interface evolution plans,
+incidents, and authorized private security work into an organization-level
+outcome map without copying their workflow state. Ordered work items connect
+repository contributions and dependencies to accountable humans, teams, or
+approved agents. The portfolio derives blockers, relevant policy exceptions,
+and upcoming release candidates from live records. If membership, agent
+operation, team identity, or repository stewardship changes, the original work
+and attribution remain visible with an explicit reassignment action.
+
 Organizations also retain nested teams, direct member and maintainer roles,
 repository areas of responsibility, and approved agent identities. Every team
 mutation uses its visible version as a compare-and-swap guard and appends an

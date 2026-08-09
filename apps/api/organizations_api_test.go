@@ -10,6 +10,7 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
@@ -116,6 +117,76 @@ func TestOrganizationMembershipAndAcceptedRepositoryStewardship(t *testing.T) {
 	authenticatedRequest(t, http.MethodDelete, server.URL+"/organizations/"+group.ID+"/members/"+veteran.User.ID, "", owner.Credential.Token, http.StatusNoContent).Body.Close()
 	if collaborator, _ := catalog.HasCollaborator(veteran.User.ID, after.ID); !collaborator {
 		t.Fatal("removal erased a collaborator grant that predated organization stewardship")
+	}
+}
+
+func TestOrganizationInitiativeProjectsDependenciesAndRejectsUnknownSources(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	groups, _ := organizations.New(t.TempDir())
+	proposalStore, _ := proposals.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, proposalStore, nil, nil, nil, nil, groups))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "initiative-owner")
+	created := authenticatedRequest(t, http.MethodPost, server.URL+"/organizations", `{"name":"Delivery","slug":"delivery"}`, owner.Credential.Token, http.StatusCreated)
+	var group organizations.Organization
+	if err := json.NewDecoder(created.Body).Decode(&group); err != nil {
+		t.Fatal(err)
+	}
+	created.Body.Close()
+	repositoryResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/repositories", `{"name":"provider"}`, owner.Credential.Token, http.StatusCreated)
+	var repository repositories.Repository
+	if err := json.NewDecoder(repositoryResponse.Body).Decode(&repository); err != nil {
+		t.Fatal(err)
+	}
+	repositoryResponse.Body.Close()
+	proposalResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/proposals", `{"title":"Ship runtime","body":"Coordinate delivery."}`, owner.Credential.Token, http.StatusCreated)
+	var proposal proposals.Proposal
+	if err := json.NewDecoder(proposalResponse.Body).Decode(&proposal); err != nil {
+		t.Fatal(err)
+	}
+	proposalResponse.Body.Close()
+	if _, err := proposalStore.Get(repository.ID, proposal.ID); err != nil {
+		t.Fatalf("proposal source unavailable: %v", err)
+	}
+	if items, err := catalog.ListOrganization(group.ID); err != nil || len(items) != 1 {
+		t.Fatalf("organization portfolio unavailable: %#v %v", items, err)
+	}
+	portfolioItems, _ := catalog.ListOrganization(group.ID)
+	if !initiativeSourceExists(organizations.InitiativeSource{Kind: "proposal", RepositoryID: repository.ID, ID: proposal.ID}, owner.User.ID, portfolioItems, proposalStore, nil, nil, nil) {
+		t.Fatal("initiative source validation failed")
+	}
+	if err := initiativeValidator(group, portfolioItems)(organizations.InitiativeWorkItem{RepositoryID: repository.ID, Owner: organizations.InitiativeOwner{Type: "human", ID: owner.User.ID}}); err != nil {
+		t.Fatalf("initiative owner validation failed: %v", err)
+	}
+	unknown := `{"title":"Unknown","source":{"kind":"proposal","repository_id":"` + repository.ID + `","id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"work_items":[{"id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","title":"Work","repository_id":"` + repository.ID + `","owner":{"type":"human","id":"` + owner.User.ID + `"},"dependency_ids":[],"status":"todo"}]}`
+	authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/initiatives", unknown, owner.Credential.Token, http.StatusBadRequest).Body.Close()
+	body := `{"title":"Runtime rollout","source":{"kind":"proposal","repository_id":"` + repository.ID + `","id":"` + proposal.ID + `"},"work_items":[{"id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","title":"Publish provider","repository_id":"` + repository.ID + `","owner":{"type":"human","id":"` + owner.User.ID + `"},"dependency_ids":[],"status":"in_progress"},{"id":"cccccccccccccccccccccccccccccccc","title":"Verify adoption","repository_id":"` + repository.ID + `","owner":{"type":"human","id":"` + owner.User.ID + `"},"dependency_ids":["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],"status":"todo"}]}`
+	initiativeResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/initiatives", body, owner.Credential.Token, http.StatusCreated)
+	var initiative organizations.Initiative
+	if err := json.NewDecoder(initiativeResponse.Body).Decode(&initiative); err != nil {
+		t.Fatal(err)
+	}
+	initiativeResponse.Body.Close()
+	portfolioResponse := authenticatedRequest(t, http.MethodGet, server.URL+"/organizations/"+group.ID+"/portfolio", "", owner.Credential.Token, http.StatusOK)
+	var portfolio struct {
+		Initiatives []struct {
+			ID        string `json:"id"`
+			WorkItems []struct {
+				Blocked        bool     `json:"blocked"`
+				BlockerIDs     []string `json:"blocker_ids"`
+				OwnershipState string   `json:"ownership_state"`
+			} `json:"work_items"`
+		} `json:"initiatives"`
+	}
+	if err := json.NewDecoder(portfolioResponse.Body).Decode(&portfolio); err != nil {
+		t.Fatal(err)
+	}
+	portfolioResponse.Body.Close()
+	if len(portfolio.Initiatives) != 1 || portfolio.Initiatives[0].ID != initiative.ID || !portfolio.Initiatives[0].WorkItems[1].Blocked || len(portfolio.Initiatives[0].WorkItems[1].BlockerIDs) != 1 || portfolio.Initiatives[0].WorkItems[0].OwnershipState != "accountable" {
+		t.Fatalf("initiative projection = %#v", portfolio.Initiatives)
 	}
 }
 
