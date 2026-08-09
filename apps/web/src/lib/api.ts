@@ -28,8 +28,13 @@ export type Organization = {
   transfers: { id: string; repository_id: string; from_owner_id: string; requested_by: string; status: "pending" | "accepted"; requested_at: string; accepted_by?: string; accepted_at?: string }[];
   teams: OrganizationTeam[];
   agents: OrganizationAgent[];
+  access_grants: OrganizationAccessGrant[];
+  access_requests: OrganizationAccessRequest[];
   events: OrganizationEvent[];
 };
+export type OrganizationResourceScope = {kind:"repository"|"package"|"environment"|"collaboration";id:string};
+export type OrganizationAccessGrant = {id:string;principal_type:"team"|"agent";principal_id:string;role:"viewer"|"contributor"|"maintainer"|"operator";resources:OrganizationResourceScope[];exceptions:{resource:OrganizationResourceScope;reason:string}[];reason:string;expires_at?:string;version:number;granted_by:string;granted_at:string;revoked_by?:string;revoked_at?:string;derived_credentials:{id:string;operator_id:string;created_at:string}[]};
+export type OrganizationAccessRequest = {id:string;requester_id:string;principal_type:"team"|"agent";principal_id:string;role:string;resources:OrganizationResourceScope[];exceptions:{resource:OrganizationResourceScope;reason:string}[];reason:string;expires_at?:string;status:"pending"|"approved"|"denied";created_at:string;decided_by?:string;decided_at?:string;grant_id?:string};
 export type OrganizationTeam = { id:string; name:string; slug:string; description?:string; parent_id?:string; visibility:"public"|"organization"; version:number; created_by:string; created_at:string; members:{user_id:string;role:"member"|"maintainer";added_by:string;added_at:string}[]; responsibilities:{id:string;repository_id:string;area:string;description?:string;added_by:string;added_at:string}[] };
 export type OrganizationAgent = { id:string; name:string; slug:string; description?:string; visibility:"public"|"organization"; capabilities:string[]; operator_ids:string[]; team_ids:string[]; version:number; registered_by:string; registered_at:string };
 export type OrganizationEvent = { id:string; action:string; actor_id:string; target_id?:string; created_at:string; details?:Record<string,unknown> };

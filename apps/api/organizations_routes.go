@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
@@ -54,6 +55,15 @@ type organizationAgentInput struct {
 	OperatorIDs  []string `json:"operator_ids"`
 	TeamIDs      []string `json:"team_ids"`
 }
+type organizationAccessInput struct {
+	PrincipalType string                          `json:"principal_type"`
+	PrincipalID   string                          `json:"principal_id"`
+	Role          string                          `json:"role"`
+	Resources     []organizations.ResourceScope   `json:"resources"`
+	Exceptions    []organizations.AccessException `json:"exceptions"`
+	Reason        string                          `json:"reason"`
+	ExpiresAt     *time.Time                      `json:"expires_at"`
+}
 
 func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, repos *repositories.Store, usersStore *users.Store, credentials *auth.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, packageStore *packages.Store, incidentStore *incidents.Store) {
 	project := func(v organizations.Organization, actor string) organizations.Organization {
@@ -69,6 +79,8 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 			v.Transfers = []organizations.Transfer{}
 			v.Teams = []organizations.Team{}
 			v.Agents = []organizations.Agent{}
+			v.AccessGrants = []organizations.AccessGrant{}
+			v.AccessRequests = []organizations.AccessRequest{}
 			v.Events = []organizations.Event{}
 			return v
 		}
@@ -80,6 +92,13 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 				}
 			}
 			v.Invitations = kept
+			requests := []organizations.AccessRequest{}
+			for _, x := range v.AccessRequests {
+				if x.RequesterID == actor {
+					requests = append(requests, x)
+				}
+			}
+			v.AccessRequests = requests
 		}
 		return v
 	}
@@ -274,6 +293,130 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 		w.Header().Set("Location", "/organizations/"+v.ID+"/agents/"+v.Agents[len(v.Agents)-1].ID)
 		writeJSON(w, 201, project(v, actor.UserID))
 	})
+	mux.HandleFunc("POST /organizations/{id}/access-requests", func(w http.ResponseWriter, r *http.Request) {
+		actor, organization, ok := require(w, r, "repositories:read")
+		if !ok {
+			return
+		}
+		var in organizationAccessInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_access_request", "principal, role, resources, reason, and optional expiry are required")
+			return
+		}
+		portfolioRepositories, err := repos.ListOrganization(organization.ID)
+		if err != nil {
+			writeRepositoryError(w, err)
+			return
+		}
+		portfolio := map[string]bool{}
+		for _, repository := range portfolioRepositories {
+			portfolio[repository.ID] = true
+		}
+		for _, resource := range in.Resources {
+			if resource.Kind == "repository" && !portfolio[resource.ID] {
+				writeAPIError(w, 400, "invalid_access_request", "repository resources must belong to the organization")
+				return
+			}
+		}
+		v, err := orgs.CreateAccessRequest(r.PathValue("id"), actor.UserID, in.PrincipalType, in.PrincipalID, in.Role, in.Reason, in.Resources, in.Exceptions, in.ExpiresAt)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		writeJSON(w, 201, project(v, actor.UserID))
+	})
+	mux.HandleFunc("POST /organizations/{id}/access-requests/{request_id}/decision", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			Decision string `json:"decision"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_access_decision", "decision is required")
+			return
+		}
+		v, err := orgs.DecideAccessRequest(r.PathValue("id"), r.PathValue("request_id"), actor.UserID, in.Decision)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		writeJSON(w, 200, project(v, actor.UserID))
+	})
+	mux.HandleFunc("DELETE /organizations/{id}/access-grants/{grant_id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int `json:"expected_version"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_access_grant", "expected_version is required")
+			return
+		}
+		_, err := orgs.RevokeAccessGrant(r.PathValue("id"), r.PathValue("grant_id"), actor.UserID, in.ExpectedVersion, func(c organizations.DerivedCredential) error {
+			_, e := credentials.Revoke(c.OperatorID, c.ID)
+			if errors.Is(e, auth.ErrNotFound) {
+				return nil
+			}
+			return e
+		})
+		if writeOrganizationError(w, err) {
+			return
+		}
+		w.WriteHeader(204)
+	})
+	mux.HandleFunc("POST /organizations/{id}/access-grants/{grant_id}/credentials", func(w http.ResponseWriter, r *http.Request) {
+		actor, v, ok := require(w, r, "repositories:read")
+		if !ok {
+			return
+		}
+		var in struct {
+			AgentID      string `json:"agent_id"`
+			RepositoryID string `json:"repository_id"`
+			ExpiresIn    int    `json:"expires_in"`
+		}
+		if decodeJSON(r, &in) != nil || in.ExpiresIn < 60 {
+			writeAPIError(w, 400, "invalid_access_credential", "agent_id, repository_id, and expires_in of at least 60 seconds are required")
+			return
+		}
+		repo, err := repos.GetByID(in.RepositoryID)
+		if err != nil || repo.OrganizationID != v.ID {
+			writeAPIError(w, 404, "repository_not_found", "organization repository not found")
+			return
+		}
+		var grant *organizations.AccessGrant
+		for i := range v.AccessGrants {
+			if v.AccessGrants[i].ID == r.PathValue("grant_id") {
+				grant = &v.AccessGrants[i]
+			}
+		}
+		if grant == nil || grant.PrincipalType != "agent" || grant.PrincipalID != in.AgentID {
+			writeAPIError(w, 404, "access_grant_not_found", "live agent grant not found")
+			return
+		}
+		lifetime := time.Duration(in.ExpiresIn) * time.Second
+		if grant.ExpiresAt != nil && time.Now().Add(lifetime).After(*grant.ExpiresAt) {
+			lifetime = time.Until(*grant.ExpiresAt)
+		}
+		scopes := []string{"git:read"}
+		if grant.Role != "viewer" {
+			scopes = append(scopes, "git:write")
+		}
+		issued, err := credentials.IssueOrganizationAgent(actor.UserID, "Organization agent "+in.AgentID, v.ID, grant.ID, in.AgentID, in.RepositoryID, scopes, lifetime)
+		if err != nil {
+			writeAPIError(w, 400, "invalid_access_credential", "grant cannot issue the requested credential")
+			return
+		}
+		_, err = orgs.RecordDerivedCredential(v.ID, grant.ID, in.AgentID, actor.UserID, issued.ID, organizations.ResourceScope{Kind: "repository", ID: in.RepositoryID})
+		if err != nil {
+			_, _ = credentials.Revoke(actor.UserID, issued.ID)
+			if writeOrganizationError(w, err) {
+				return
+			}
+		}
+		writeJSON(w, 201, issued)
+	})
 	mux.HandleFunc("POST /organizations/{id}/invitations", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := require(w, r, "repositories:write")
 		if !ok {
@@ -320,11 +463,24 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 		writeJSON(w, 200, project(v, actor.UserID))
 	})
 	mux.HandleFunc("DELETE /organizations/{id}/members/{user_id}", func(w http.ResponseWriter, r *http.Request) {
-		actor, _, ok := require(w, r, "repositories:write")
+		actor, current, ok := require(w, r, "repositories:write")
 		if !ok {
 			return
 		}
 		target := r.PathValue("user_id")
+		for _, grant := range current.AccessGrants {
+			if grant.RevokedAt != nil {
+				continue
+			}
+			for _, derived := range grant.DerivedCredentials {
+				if derived.OperatorID == target {
+					if _, revokeErr := credentials.Revoke(target, derived.ID); revokeErr != nil && !errors.Is(revokeErr, auth.ErrNotFound) {
+						writeAPIError(w, 500, "organization_unavailable", "derived access could not be revoked")
+						return
+					}
+				}
+			}
+		}
 		v, err := orgs.RemoveMember(r.PathValue("id"), actor.UserID, target)
 		if writeOrganizationError(w, err) {
 			return

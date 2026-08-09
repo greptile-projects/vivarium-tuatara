@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -90,6 +91,56 @@ type Agent struct {
 	RegisteredAt time.Time `json:"registered_at"`
 }
 
+type ResourceScope struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+}
+
+type AccessException struct {
+	Resource ResourceScope `json:"resource"`
+	Reason   string        `json:"reason"`
+}
+
+type DerivedCredential struct {
+	ID         string    `json:"id"`
+	OperatorID string    `json:"operator_id"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+type AccessGrant struct {
+	ID                 string              `json:"id"`
+	PrincipalType      string              `json:"principal_type"`
+	PrincipalID        string              `json:"principal_id"`
+	Role               string              `json:"role"`
+	Resources          []ResourceScope     `json:"resources"`
+	Exceptions         []AccessException   `json:"exceptions"`
+	Reason             string              `json:"reason"`
+	ExpiresAt          *time.Time          `json:"expires_at,omitempty"`
+	Version            int                 `json:"version"`
+	GrantedBy          string              `json:"granted_by"`
+	GrantedAt          time.Time           `json:"granted_at"`
+	RevokedBy          string              `json:"revoked_by,omitempty"`
+	RevokedAt          *time.Time          `json:"revoked_at,omitempty"`
+	DerivedCredentials []DerivedCredential `json:"derived_credentials"`
+}
+
+type AccessRequest struct {
+	ID            string            `json:"id"`
+	RequesterID   string            `json:"requester_id"`
+	PrincipalType string            `json:"principal_type"`
+	PrincipalID   string            `json:"principal_id"`
+	Role          string            `json:"role"`
+	Resources     []ResourceScope   `json:"resources"`
+	Exceptions    []AccessException `json:"exceptions"`
+	Reason        string            `json:"reason"`
+	ExpiresAt     *time.Time        `json:"expires_at,omitempty"`
+	Status        string            `json:"status"`
+	CreatedAt     time.Time         `json:"created_at"`
+	DecidedBy     string            `json:"decided_by,omitempty"`
+	DecidedAt     *time.Time        `json:"decided_at,omitempty"`
+	GrantID       string            `json:"grant_id,omitempty"`
+}
+
 type Event struct {
 	ID        string         `json:"id"`
 	Action    string         `json:"action"`
@@ -100,18 +151,20 @@ type Event struct {
 }
 
 type Organization struct {
-	ID          string       `json:"id"`
-	Name        string       `json:"name"`
-	Slug        string       `json:"slug"`
-	Description string       `json:"description,omitempty"`
-	CreatedBy   string       `json:"created_by"`
-	CreatedAt   time.Time    `json:"created_at"`
-	Members     []Member     `json:"members"`
-	Invitations []Invitation `json:"invitations"`
-	Transfers   []Transfer   `json:"transfers"`
-	Teams       []Team       `json:"teams"`
-	Agents      []Agent      `json:"agents"`
-	Events      []Event      `json:"events"`
+	ID             string          `json:"id"`
+	Name           string          `json:"name"`
+	Slug           string          `json:"slug"`
+	Description    string          `json:"description,omitempty"`
+	CreatedBy      string          `json:"created_by"`
+	CreatedAt      time.Time       `json:"created_at"`
+	Members        []Member        `json:"members"`
+	Invitations    []Invitation    `json:"invitations"`
+	Transfers      []Transfer      `json:"transfers"`
+	Teams          []Team          `json:"teams"`
+	Agents         []Agent         `json:"agents"`
+	AccessGrants   []AccessGrant   `json:"access_grants"`
+	AccessRequests []AccessRequest `json:"access_requests"`
+	Events         []Event         `json:"events"`
 }
 
 type Store struct {
@@ -198,7 +251,7 @@ func (s *Store) Create(name, slug, description, actor string) (Organization, err
 			return err
 		}
 		now := s.now().Truncate(time.Microsecond)
-		created = Organization{ID: id, Name: name, Slug: slug, Description: strings.TrimSpace(description), CreatedBy: actor, CreatedAt: now, Members: []Member{{UserID: actor, Role: "owner", JoinedAt: now}}, Invitations: []Invitation{}, Transfers: []Transfer{}, Teams: []Team{}, Agents: []Agent{}, Events: []Event{}}
+		created = Organization{ID: id, Name: name, Slug: slug, Description: strings.TrimSpace(description), CreatedBy: actor, CreatedAt: now, Members: []Member{{UserID: actor, Role: "owner", JoinedAt: now}}, Invitations: []Invitation{}, Transfers: []Transfer{}, Teams: []Team{}, Agents: []Agent{}, AccessGrants: []AccessGrant{}, AccessRequests: []AccessRequest{}, Events: []Event{}}
 		if err := s.event(&created, "organization.created", actor, id, nil); err != nil {
 			return err
 		}
@@ -224,6 +277,12 @@ func (s *Store) Get(id string) (Organization, error) {
 	}
 	if v.Agents == nil {
 		v.Agents = []Agent{}
+	}
+	if v.AccessGrants == nil {
+		v.AccessGrants = []AccessGrant{}
+	}
+	if v.AccessRequests == nil {
+		v.AccessRequests = []AccessRequest{}
 	}
 	if v.Events == nil {
 		v.Events = []Event{}
@@ -697,6 +756,187 @@ func ProjectDirectory(v Organization, member bool, publicRepositories map[string
 		out.Events = v.Events
 	}
 	return out
+}
+
+func validPrincipal(v *Organization, kind, id string) bool {
+	if kind == "team" {
+		return teamIndex(v, id) >= 0
+	}
+	if kind == "agent" {
+		return agentIndex(v, id) >= 0
+	}
+	return false
+}
+func validRole(role string) bool {
+	return role == "viewer" || role == "contributor" || role == "maintainer" || role == "operator"
+}
+func validResourceKind(kind string) bool {
+	return kind == "repository" || kind == "package" || kind == "environment" || kind == "collaboration"
+}
+func validateAccess(role, reason string, resources []ResourceScope, exceptions []AccessException, expires *time.Time, now time.Time) bool {
+	if !validRole(role) || len(resources) == 0 || len(resources) > 100 || len(exceptions) > 100 || len(reason) > 1000 || (expires != nil && !expires.After(now)) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, r := range resources {
+		if !validResourceKind(r.Kind) || !validID(r.ID) || seen[r.Kind+":"+r.ID] {
+			return false
+		}
+		seen[r.Kind+":"+r.ID] = true
+	}
+	for _, x := range exceptions {
+		if !validResourceKind(x.Resource.Kind) || !validID(x.Resource.ID) || !seen[x.Resource.Kind+":"+x.Resource.ID] {
+			return false
+		}
+		if _, ok := clean(x.Reason, 500); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Store) CreateAccessRequest(id, actor, principalType, principalID, role, reason string, resources []ResourceScope, exceptions []AccessException, expires *time.Time) (Organization, error) {
+	return s.mutate(id, func(v *Organization) error {
+		if !HasRole(*v, actor, "") || !validPrincipal(v, principalType, principalID) || !validateAccess(role, reason, resources, exceptions, expires, s.now()) {
+			return ErrInvalid
+		}
+		if principalType == "team" {
+			found := false
+			for _, m := range v.Teams[teamIndex(v, principalID)].Members {
+				if m.UserID == actor {
+					found = true
+				}
+			}
+			if !found && !HasRole(*v, actor, "owner") {
+				return ErrNotFound
+			}
+		}
+		if principalType == "agent" {
+			found := false
+			for _, op := range v.Agents[agentIndex(v, principalID)].OperatorIDs {
+				if op == actor {
+					found = true
+				}
+			}
+			if !found && !HasRole(*v, actor, "owner") {
+				return ErrNotFound
+			}
+		}
+		rid, err := newID()
+		if err != nil {
+			return err
+		}
+		now := s.now().Truncate(time.Microsecond)
+		v.AccessRequests = append(v.AccessRequests, AccessRequest{ID: rid, RequesterID: actor, PrincipalType: principalType, PrincipalID: principalID, Role: role, Resources: resources, Exceptions: exceptions, Reason: strings.TrimSpace(reason), ExpiresAt: expires, Status: "pending", CreatedAt: now})
+		return s.event(v, "access.requested", actor, rid, map[string]any{"principal_type": principalType, "principal_id": principalID, "role": role})
+	})
+}
+
+func (s *Store) DecideAccessRequest(id, requestID, actor, decision string) (Organization, error) {
+	return s.mutate(id, func(v *Organization) error {
+		if !HasRole(*v, actor, "owner") || (decision != "approve" && decision != "deny") {
+			return ErrNotFound
+		}
+		for i := range v.AccessRequests {
+			r := &v.AccessRequests[i]
+			if r.ID != requestID {
+				continue
+			}
+			if r.Status != "pending" {
+				return ErrConflict
+			}
+			now := s.now().Truncate(time.Microsecond)
+			r.DecidedBy, r.DecidedAt = actor, &now
+			if decision == "deny" {
+				r.Status = "denied"
+				return s.event(v, "access.request.denied", actor, r.ID, nil)
+			}
+			if r.ExpiresAt != nil && !r.ExpiresAt.After(now) {
+				return ErrConflict
+			}
+			gid, err := newID()
+			if err != nil {
+				return err
+			}
+			r.Status, r.GrantID = "approved", gid
+			v.AccessGrants = append(v.AccessGrants, AccessGrant{ID: gid, PrincipalType: r.PrincipalType, PrincipalID: r.PrincipalID, Role: r.Role, Resources: r.Resources, Exceptions: r.Exceptions, Reason: r.Reason, ExpiresAt: r.ExpiresAt, Version: 1, GrantedBy: actor, GrantedAt: now, DerivedCredentials: []DerivedCredential{}})
+			return s.event(v, "access.granted", actor, gid, map[string]any{"request_id": r.ID, "role": r.Role})
+		}
+		return ErrNotFound
+	})
+}
+
+func (s *Store) RevokeAccessGrant(id, grantID, actor string, expected int, revoke func(DerivedCredential) error) (Organization, error) {
+	return s.mutate(id, func(v *Organization) error {
+		if !HasRole(*v, actor, "owner") {
+			return ErrNotFound
+		}
+		for i := range v.AccessGrants {
+			g := &v.AccessGrants[i]
+			if g.ID != grantID {
+				continue
+			}
+			if g.Version != expected {
+				return ErrConflict
+			}
+			if g.RevokedAt != nil {
+				return nil
+			}
+			for _, credential := range g.DerivedCredentials {
+				if revoke != nil {
+					if err := revoke(credential); err != nil {
+						return err
+					}
+				}
+			}
+			now := s.now().Truncate(time.Microsecond)
+			g.RevokedAt, g.RevokedBy, g.Version = &now, actor, g.Version+1
+			return s.event(v, "access.revoked", actor, grantID, nil)
+		}
+		return ErrNotFound
+	})
+}
+
+func resourceDenied(g AccessGrant, resource ResourceScope) bool {
+	for _, x := range g.Exceptions {
+		if x.Resource == resource {
+			return true
+		}
+	}
+	return false
+}
+func (s *Store) RecordDerivedCredential(id, grantID, agentID, operatorID, credentialID string, resource ResourceScope) (Organization, error) {
+	return s.mutate(id, func(v *Organization) error {
+		if !validID(credentialID) {
+			return ErrInvalid
+		}
+		for i := range v.AccessGrants {
+			g := &v.AccessGrants[i]
+			if g.ID != grantID {
+				continue
+			}
+			now := s.now()
+			if g.PrincipalType != "agent" || g.PrincipalID != agentID || g.RevokedAt != nil || (g.ExpiresAt != nil && !g.ExpiresAt.After(now)) || resourceDenied(*g, resource) {
+				return ErrNotFound
+			}
+			allowed := false
+			for _, x := range g.Resources {
+				if x == resource {
+					allowed = true
+				}
+			}
+			if !allowed {
+				return ErrNotFound
+			}
+			ai := agentIndex(v, agentID)
+			if ai < 0 || !slices.Contains(v.Agents[ai].OperatorIDs, operatorID) {
+				return ErrNotFound
+			}
+			g.DerivedCredentials = append(g.DerivedCredentials, DerivedCredential{ID: credentialID, OperatorID: operatorID, CreatedAt: now.Truncate(time.Microsecond)})
+			return s.event(v, "access.credential.issued", operatorID, credentialID, map[string]any{"grant_id": grantID, "resource_kind": resource.Kind, "resource_id": resource.ID})
+		}
+		return ErrNotFound
+	})
 }
 func (s *Store) RequestTransfer(id, repositoryID, owner string) (Organization, error) {
 	if !validID(repositoryID) {

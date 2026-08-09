@@ -78,7 +78,14 @@ whenever dependencies change or the web job fails before it starts.
   version-guarded member/maintainer roles and repository responsibility, while
   effective membership explains direct or visible-child inheritance. Approved
   agent identities expose capabilities, current member operators, visibility,
-  and team associations but grant no repository authority. Public directory
+  and team associations but grant no authority by themselves. Owners approve
+  explicit team/agent portfolio grants with viewer, contributor, maintainer, or
+  operator roles across named repository, package, environment, and
+  collaboration resources. Grants retain reasons, expiry, deny exceptions,
+  requests, decisions, derived credential IDs, and revocation audit. Approved
+  agent operators can mint only exact repository-bound Git credentials whose
+  lifetime cannot outlast the live grant; grant revocation immediately revokes
+  those credentials without touching unrelated credentials. Public directory
   reads omit organization-only structure, private-repository responsibility,
   hidden parent links, and audit events; pending invitees receive only their
   invitation. Responsibility publication holds the repository catalog boundary

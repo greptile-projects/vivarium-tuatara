@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -188,5 +189,58 @@ func TestOrganizationTeamDirectoryExplainsEffectivePeopleAgentsAndResponsibility
 	internal.Body.Close()
 	if len(directory.Events) < 7 {
 		t.Fatalf("attribution events missing: %#v", directory.Events)
+	}
+}
+
+func TestOrganizationScopedAgentAccessRequestCredentialAndRevocation(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	groups, _ := organizations.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, nil, groups))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "access-owner")
+	created := authenticatedRequest(t, http.MethodPost, server.URL+"/organizations", `{"name":"Access Guild","slug":"access-guild"}`, owner.Credential.Token, http.StatusCreated)
+	var group organizations.Organization
+	json.NewDecoder(created.Body).Decode(&group)
+	created.Body.Close()
+	repoResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/repositories", `{"name":"runtime"}`, owner.Credential.Token, http.StatusCreated)
+	var repo repositories.Repository
+	json.NewDecoder(repoResponse.Body).Decode(&repo)
+	repoResponse.Body.Close()
+	agentResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/agents", `{"name":"Release Agent","slug":"release-agent","capabilities":["prepare changes"],"operator_ids":["`+owner.User.ID+`"],"team_ids":[]}`, owner.Credential.Token, http.StatusCreated)
+	json.NewDecoder(agentResponse.Body).Decode(&group)
+	agentResponse.Body.Close()
+	agentID := group.Agents[0].ID
+	expires := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	requestResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/access-requests", `{"principal_type":"agent","principal_id":"`+agentID+`","role":"contributor","resources":[{"kind":"repository","id":"`+repo.ID+`"}],"exceptions":[],"reason":"prepare coordinated runtime changes","expires_at":"`+expires+`"}`, owner.Credential.Token, http.StatusCreated)
+	json.NewDecoder(requestResponse.Body).Decode(&group)
+	requestResponse.Body.Close()
+	requestID := group.AccessRequests[0].ID
+	decision := authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/access-requests/"+requestID+"/decision", `{"decision":"approve"}`, owner.Credential.Token, http.StatusOK)
+	json.NewDecoder(decision.Body).Decode(&group)
+	decision.Body.Close()
+	if len(group.AccessGrants) != 1 || group.AccessGrants[0].GrantedBy != owner.User.ID || group.AccessGrants[0].Role != "contributor" {
+		t.Fatalf("grant = %#v", group.AccessGrants)
+	}
+	grant := group.AccessGrants[0]
+	issuedResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/access-grants/"+grant.ID+"/credentials", `{"agent_id":"`+agentID+`","repository_id":"`+repo.ID+`","expires_in":600}`, owner.Credential.Token, http.StatusCreated)
+	var issued auth.IssuedCredential
+	json.NewDecoder(issuedResponse.Body).Decode(&issued)
+	issuedResponse.Body.Close()
+	if issued.OrganizationID != group.ID || issued.AccessGrantID != grant.ID || issued.RepositoryID != repo.ID {
+		t.Fatalf("credential bounds = %#v", issued)
+	}
+	unrelated, err := credentials.Issue(owner.User.ID, auth.API, "unrelated", []string{"repositories:read"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticatedRequest(t, http.MethodDelete, server.URL+"/organizations/"+group.ID+"/access-grants/"+grant.ID, `{"expected_version":1}`, owner.Credential.Token, http.StatusNoContent).Body.Close()
+	if _, err := credentials.Authenticate(issued.Token, "git:read"); !errors.Is(err, auth.ErrNotFound) {
+		t.Fatalf("derived credential remained active: %v", err)
+	}
+	if _, err := credentials.Authenticate(unrelated.Token, "repositories:read"); err != nil {
+		t.Fatalf("unrelated credential was disturbed: %v", err)
 	}
 }

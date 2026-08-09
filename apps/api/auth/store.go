@@ -58,6 +58,9 @@ type Credential struct {
 	GitWriteBranch string     `json:"git_write_branch,omitempty"`
 	PullRequestID  string     `json:"pull_request_id,omitempty"`
 	PackageNames   []string   `json:"package_names,omitempty"`
+	OrganizationID string     `json:"organization_id,omitempty"`
+	AccessGrantID  string     `json:"access_grant_id,omitempty"`
+	AgentID        string     `json:"agent_id,omitempty"`
 	Hash           string     `json:"-"`
 }
 
@@ -104,6 +107,30 @@ func (s *Store) IssuePullRequestBound(userID string, name string, scopes []strin
 // authority is frozen to an explicit set of package identities.
 func (s *Store) IssuePackageBound(userID, name, repositoryID string, packageNames []string, lifetime time.Duration) (IssuedCredential, error) {
 	return s.issueBound(userID, API, name, []string{"packages:read"}, lifetime, repositoryID, "", "", packageNames)
+}
+
+// IssueOrganizationAgent creates an auditable, repository-bound credential
+// derived from one live organization access grant.
+func (s *Store) IssueOrganizationAgent(userID, name, organizationID, grantID, agentID, repositoryID string, scopes []string, lifetime time.Duration) (IssuedCredential, error) {
+	issued, err := s.issueBound(userID, Git, name, scopes, lifetime, repositoryID, "", "", nil)
+	if err != nil {
+		return issued, err
+	}
+	credential, err := s.read(issued.ID)
+	if err != nil {
+		return IssuedCredential{}, err
+	}
+	if !validID(organizationID) || !validID(grantID) || !validID(agentID) {
+		_, _ = s.Revoke(userID, issued.ID)
+		return IssuedCredential{}, ErrInvalid
+	}
+	credential.OrganizationID, credential.AccessGrantID, credential.AgentID = organizationID, grantID, agentID
+	if err = s.write(credential); err != nil {
+		_, _ = s.Revoke(userID, issued.ID)
+		return IssuedCredential{}, err
+	}
+	issued.Credential = credential
+	return issued, nil
 }
 
 func (s *Store) issueBound(userID string, kind Kind, name string, scopes []string, lifetime time.Duration, repositoryID, gitWriteBranch, pullRequestID string, packageNames []string) (IssuedCredential, error) {
@@ -278,7 +305,7 @@ func hasScope(scopes []string, required string) bool {
 func sameCredential(left, right Credential) bool {
 	return left.ID == right.ID && left.UserID == right.UserID && left.Kind == right.Kind && left.Name == right.Name &&
 		left.CreatedAt.Equal(right.CreatedAt) && left.ExpiresAt.Equal(right.ExpiresAt) && left.Hash == right.Hash &&
-		slices.Equal(left.Scopes, right.Scopes) && left.RepositoryID == right.RepositoryID && left.GitWriteBranch == right.GitWriteBranch && left.PullRequestID == right.PullRequestID && slices.Equal(left.PackageNames, right.PackageNames) && left.LastUsedAt == nil && left.RevokedAt == nil
+		slices.Equal(left.Scopes, right.Scopes) && left.RepositoryID == right.RepositoryID && left.GitWriteBranch == right.GitWriteBranch && left.PullRequestID == right.PullRequestID && slices.Equal(left.PackageNames, right.PackageNames) && left.OrganizationID == right.OrganizationID && left.AccessGrantID == right.AccessGrantID && left.AgentID == right.AgentID && left.LastUsedAt == nil && left.RevokedAt == nil
 }
 func validID(id string) bool {
 	if len(id) != 32 || id != strings.ToLower(id) {

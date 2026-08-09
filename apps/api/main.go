@@ -3449,6 +3449,9 @@ func authorizeRepositoryParticipant(w http.ResponseWriter, r *http.Request, stor
 		return auth.Credential{}, false, false
 	}
 	if !owner && !collaborator {
+		if actor.OrganizationID != "" && actor.OrganizationID == repository.OrganizationID && actor.AccessGrantID != "" && actor.AgentID != "" && actor.RepositoryID == id {
+			return actor, false, true
+		}
 		writeAPIError(w, 404, "repository_not_found", "repository not found")
 		return auth.Credential{}, false, false
 	}
