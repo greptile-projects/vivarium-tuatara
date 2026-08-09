@@ -41,8 +41,8 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 		}
 		return v
 	}
-	require := func(w http.ResponseWriter, r *http.Request) (auth.Credential, organizations.Organization, bool) {
-		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+	require := func(w http.ResponseWriter, r *http.Request, scope string) (auth.Credential, organizations.Organization, bool) {
+		actor, ok := authenticateRequest(w, r, credentials, scope, false)
 		if !ok {
 			return actor, organizations.Organization{}, false
 		}
@@ -85,14 +85,14 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 		writeJSON(w, 200, map[string]any{"organizations": items})
 	})
 	mux.HandleFunc("GET /organizations/{id}", func(w http.ResponseWriter, r *http.Request) {
-		actor, v, ok := require(w, r)
+		actor, v, ok := require(w, r, "repositories:read")
 		if !ok {
 			return
 		}
 		writeJSON(w, 200, project(v, actor.UserID))
 	})
 	mux.HandleFunc("POST /organizations/{id}/invitations", func(w http.ResponseWriter, r *http.Request) {
-		actor, _, ok := require(w, r)
+		actor, _, ok := require(w, r, "repositories:write")
 		if !ok {
 			return
 		}
@@ -112,7 +112,7 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 		writeJSON(w, 201, project(v, actor.UserID))
 	})
 	mux.HandleFunc("POST /organizations/{id}/invitations/{invitation_id}/accept", func(w http.ResponseWriter, r *http.Request) {
-		actor, _, ok := require(w, r)
+		actor, _, ok := require(w, r, "repositories:write")
 		if !ok {
 			return
 		}
@@ -137,7 +137,7 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 		writeJSON(w, 200, project(v, actor.UserID))
 	})
 	mux.HandleFunc("DELETE /organizations/{id}/members/{user_id}", func(w http.ResponseWriter, r *http.Request) {
-		actor, _, ok := require(w, r)
+		actor, _, ok := require(w, r, "repositories:write")
 		if !ok {
 			return
 		}
@@ -159,7 +159,7 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 		w.WriteHeader(204)
 	})
 	mux.HandleFunc("POST /organizations/{id}/repositories", func(w http.ResponseWriter, r *http.Request) {
-		actor, v, ok := require(w, r)
+		actor, v, ok := require(w, r, "repositories:write")
 		if !ok {
 			return
 		}
@@ -214,10 +214,16 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 		if writeOrganizationError(w, err) {
 			return
 		}
-		writeJSON(w, 202, project(v, actor.UserID))
+		var transfer organizations.Transfer
+		for _, candidate := range v.Transfers {
+			if candidate.RepositoryID == repo.ID && candidate.FromOwnerID == actor.UserID && candidate.Status == "pending" {
+				transfer = candidate
+			}
+		}
+		writeJSON(w, 202, transfer)
 	})
 	mux.HandleFunc("POST /organizations/{id}/repository-transfers/{transfer_id}/accept", func(w http.ResponseWriter, r *http.Request) {
-		actor, _, ok := require(w, r)
+		actor, _, ok := require(w, r, "repositories:write")
 		if !ok {
 			return
 		}
@@ -235,7 +241,7 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 		writeJSON(w, 200, project(v, actor.UserID))
 	})
 	mux.HandleFunc("GET /organizations/{id}/portfolio", func(w http.ResponseWriter, r *http.Request) {
-		actor, v, ok := require(w, r)
+		actor, v, ok := require(w, r, "repositories:read")
 		if !ok {
 			return
 		}

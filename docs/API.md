@@ -1417,7 +1417,10 @@ through an explicit handshake: its current custodian requests `POST
 .../repository-transfers/{transfer_id}/accept`. Acceptance sets the
 repository's `organization_id` without changing its `id`, `owner_id`, Git
 remote, refs, creation time, or any repository-scoped evidence. Group access is
-tracked separately from independent collaborator grants.
+tracked separately from independent collaborator grants. The request endpoint
+returns only the pending transfer record, never the target organization's
+membership roster. Every organization mutation requires `repositories:write`;
+read-scoped credentials can only inspect authorized organization resources.
 
 `GET /organizations/{id}/portfolio` returns the group's repositories,
 published packages, open proposals and pulls, releases, and unresolved

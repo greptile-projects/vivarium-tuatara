@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
@@ -33,6 +34,14 @@ func TestOrganizationMembershipAndAcceptedRepositoryStewardship(t *testing.T) {
 		t.Fatal(err)
 	}
 	created.Body.Close()
+	readOnly, err := credentials.Issue(owner.User.ID, auth.API, "organization reader", []string{"repositories:read"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/repositories", `{"name":"scope-bypass"}`, readOnly.Token, http.StatusUnauthorized).Body.Close()
+	if items, err := catalog.ListOrganization(group.ID); err != nil || len(items) != 0 {
+		t.Fatalf("read-only mutation persisted repositories: items=%#v err=%v", items, err)
+	}
 
 	invited := authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/invitations", `{"user_id":"`+member.User.ID+`"}`, owner.Credential.Token, http.StatusCreated)
 	if err := json.NewDecoder(invited.Body).Decode(&group); err != nil {
@@ -62,19 +71,23 @@ func TestOrganizationMembershipAndAcceptedRepositoryStewardship(t *testing.T) {
 	}
 
 	requested := authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/repository-transfers", `{"repository_id":"`+repository.ID+`"}`, individual.Credential.Token, http.StatusAccepted)
-	if err := json.NewDecoder(requested.Body).Decode(&group); err != nil {
+	var transferResponse struct {
+		organizations.Transfer
+		Members json.RawMessage `json:"members"`
+	}
+	if err := json.NewDecoder(requested.Body).Decode(&transferResponse); err != nil {
 		t.Fatal(err)
 	}
 	requested.Body.Close()
-	if len(group.Transfers) != 1 || group.Transfers[0].Status != "pending" {
-		t.Fatalf("transfers = %#v", group.Transfers)
+	if transferResponse.ID == "" || transferResponse.Status != "pending" || transferResponse.Members != nil {
+		t.Fatalf("transfer response exposed organization data or omitted transfer = %#v", transferResponse)
 	}
 	preAcceptance, _ := catalog.GetByID(repository.ID)
 	if preAcceptance.OrganizationID != "" {
 		t.Fatal("request changed stewardship before acceptance")
 	}
 
-	authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/repository-transfers/"+group.Transfers[0].ID+"/accept", "", owner.Credential.Token, http.StatusOK).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/repository-transfers/"+transferResponse.ID+"/accept", "", owner.Credential.Token, http.StatusOK).Body.Close()
 	after, _ := catalog.GetByID(repository.ID)
 	if after.ID != beforeID || after.GitRemote != beforeRemote || !after.CreatedAt.Equal(beforeCreated) || after.OwnerID != individual.User.ID || after.OrganizationID != group.ID {
 		t.Fatalf("repository identity changed across stewardship: before=%#v after=%#v", repository, after)
