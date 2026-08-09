@@ -924,21 +924,32 @@ func repositoryInOrganization(items []repositories.Repository, id string) bool {
 }
 
 func initiativeSourceExists(source organizations.InitiativeSource, actor string, portfolio []repositories.Repository, repositoryStore *repositories.Store, proposalStore *proposals.Store, relationshipStore *relationships.Store, incidentStore *incidents.Store, securityStore *securityadvisories.Store) bool {
+	repositoryAuthorized := func(repositoryID string) bool {
+		if repositoryStore == nil || repositoryID == "" || !repositoryInOrganization(portfolio, repositoryID) {
+			return false
+		}
+		repository, err := repositoryStore.GetByID(repositoryID)
+		if err == nil && repository.OwnerID == actor {
+			return true
+		}
+		collaborator, err := repositoryStore.HasCollaborator(actor, repositoryID)
+		return err == nil && collaborator
+	}
 	switch source.Kind {
 	case "proposal":
-		if proposalStore == nil || source.RepositoryID == "" {
+		if proposalStore == nil || !repositoryAuthorized(source.RepositoryID) {
 			return false
 		}
 		_, err := proposalStore.Get(source.RepositoryID, source.ID)
 		return err == nil
 	case "evolution":
-		if relationshipStore == nil || source.RepositoryID == "" {
+		if relationshipStore == nil || !repositoryAuthorized(source.RepositoryID) {
 			return false
 		}
 		_, err := relationshipStore.GetEvolution(source.RepositoryID, source.ID)
 		return err == nil
 	case "incident":
-		if incidentStore == nil || repositoryStore == nil || source.RepositoryID == "" || !repositoryInOrganization(portfolio, source.RepositoryID) {
+		if incidentStore == nil || !repositoryAuthorized(source.RepositoryID) {
 			return false
 		}
 		incident, err := incidentStore.Get(source.ID)
@@ -955,12 +966,7 @@ func initiativeSourceExists(source organizations.InitiativeSource, actor string,
 		if !inScope {
 			return false
 		}
-		repository, err := repositoryStore.GetByID(source.RepositoryID)
-		if err == nil && repository.OwnerID == actor {
-			return true
-		}
-		collaborator, err := repositoryStore.HasCollaborator(actor, source.RepositoryID)
-		return err == nil && collaborator
+		return true
 	case "security":
 		if securityStore == nil {
 			return false

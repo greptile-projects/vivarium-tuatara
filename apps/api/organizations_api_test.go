@@ -165,6 +165,20 @@ func TestOrganizationInitiativeProjectsDependenciesAndRejectsUnknownSources(t *t
 	}
 	unknown := `{"title":"Unknown","source":{"kind":"proposal","repository_id":"` + repository.ID + `","id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"work_items":[{"id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","title":"Work","repository_id":"` + repository.ID + `","owner":{"type":"human","id":"` + owner.User.ID + `"},"dependency_ids":[],"status":"todo"}]}`
 	authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/initiatives", unknown, owner.Credential.Token, http.StatusBadRequest).Body.Close()
+	externalRepositoryResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"private-external"}`, owner.Credential.Token, http.StatusCreated)
+	var externalRepository repositories.Repository
+	if err := json.NewDecoder(externalRepositoryResponse.Body).Decode(&externalRepository); err != nil {
+		t.Fatal(err)
+	}
+	externalRepositoryResponse.Body.Close()
+	externalProposalResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+externalRepository.ID+"/proposals", `{"title":"Private plan","body":"Outside the organization portfolio."}`, owner.Credential.Token, http.StatusCreated)
+	var externalProposal proposals.Proposal
+	if err := json.NewDecoder(externalProposalResponse.Body).Decode(&externalProposal); err != nil {
+		t.Fatal(err)
+	}
+	externalProposalResponse.Body.Close()
+	externalContribution := `{"title":"Leaky contribution","source":{"kind":"proposal","repository_id":"` + repository.ID + `","id":"` + proposal.ID + `"},"work_items":[{"id":"dddddddddddddddddddddddddddddddd","title":"Private dependency","repository_id":"` + repository.ID + `","contribution":{"kind":"proposal","repository_id":"` + externalRepository.ID + `","id":"` + externalProposal.ID + `"},"owner":{"type":"human","id":"` + owner.User.ID + `"},"dependency_ids":[],"status":"todo"}]}`
+	authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/initiatives", externalContribution, owner.Credential.Token, http.StatusBadRequest).Body.Close()
 	body := `{"title":"Runtime rollout","source":{"kind":"proposal","repository_id":"` + repository.ID + `","id":"` + proposal.ID + `"},"work_items":[{"id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","title":"Publish provider","repository_id":"` + repository.ID + `","owner":{"type":"human","id":"` + owner.User.ID + `"},"dependency_ids":[],"status":"in_progress"},{"id":"cccccccccccccccccccccccccccccccc","title":"Verify adoption","repository_id":"` + repository.ID + `","owner":{"type":"human","id":"` + owner.User.ID + `"},"dependency_ids":["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],"status":"todo"}]}`
 	initiativeResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/initiatives", body, owner.Credential.Token, http.StatusCreated)
 	var initiative organizations.Initiative

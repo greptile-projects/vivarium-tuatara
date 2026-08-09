@@ -1430,7 +1430,9 @@ evolution plan, incident, or authorized security advisory and retains ordered
 repository work items, optional contribution links, dependencies, and an
 accountable organization human, team, or approved agent. Creation rejects
 sources outside their authoritative store and repositories outside the current
-portfolio. Incident sources additionally require an exact affected repository;
+portfolio. Proposal and evolution sources and contribution links revalidate
+current owner/collaborator access on creation and every projection. Incident
+sources additionally require an exact affected repository;
 creation and every read revalidate that the actor remains its owner or
 collaborator, so an organization record cannot disclose a private incident.
 `PATCH
