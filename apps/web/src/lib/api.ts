@@ -52,11 +52,22 @@ export type PackageVersion = {
   summary?: string;
   documentation?: string;
   license?: string;
+  support?: string;
   publisher_id: string;
   visibility: "public" | "private";
   lifecycle: "active" | "deprecated" | "yanked";
   lifecycle_warning?: string;
   published_at: string;
+};
+export type DependencyInventory = {
+  inventory: {
+    id: string; repository_id: string; commit_id: string; recorded_by: string; recorded_at: string;
+    entries: { name: string; version: string; constraint?: string; direct: boolean; paths: string[]; package_id?: string; license?: string; support?: string; state: "resolved" | "stale" | "unresolved"; provenance_gaps?: string[] }[];
+  };
+  current: boolean;
+  releases: ReleaseCandidate[];
+  builds: { id: string; state: string; artifact_id?: string }[];
+  deployments: { id: string; environment_id: string; release_id: string; artifact_id: string; state: string; current: boolean }[];
 };
 export type InterfacePublication = {
   id: string;

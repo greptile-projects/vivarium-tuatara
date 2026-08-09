@@ -11,9 +11,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
@@ -67,6 +69,84 @@ func TestVersionMatchingPreservesPrereleaseBoundaries(t *testing.T) {
 	}
 	if !versionMatches("1.2.3-rc.1", "=1.2.3-rc.1") || compareVersion("1.2.3-rc.1", "1.2.3") >= 0 || compareVersion("1.2.3-rc.2", "1.2.3-rc.1") <= 0 {
 		t.Fatal("prerelease ordering or explicit matching is incorrect")
+	}
+}
+
+func TestRecordedDependencyInventoryDerivesExactVisibleConsumer(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	buildStore, _ := checkruns.New(t.TempDir())
+	releaseStore, _ := releases.New(t.TempDir())
+	packageStore, _ := packages.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, buildStore, releaseStore, packageStore))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "inventory-owner")
+	var consumer, publisher repositories.Repository
+	decodeResponse(t, authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"consumer"}`, owner.Credential.Token, http.StatusCreated), &consumer)
+	decodeResponse(t, authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"publisher"}`, owner.Credential.Token, http.StatusCreated), &publisher)
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+consumer.ID, `{"visibility":"public"}`, owner.Credential.Token, http.StatusOK).Body.Close()
+	body := []byte("package")
+	sum := sha256.Sum256(body)
+	published, err := packageStore.Publish(packages.Version{Name: "core-kit", Version: "2.1.0", RepositoryID: publisher.ID, ReleaseID: strings.Repeat("1", 32), SourceCommit: strings.Repeat("2", 40), BuildID: strings.Repeat("3", 32), BuildAttestation: packages.BuildAttestation{Step: "package", Image: "alpine:3.22", Command: "make", Attempt: 1, State: "succeeded"}, ArtifactID: strings.Repeat("4", 32), ArtifactPath: "core.tgz", Size: int64(len(body)), SHA256: hex.EncodeToString(sum[:]), License: "MIT", Support: "https://support.example.test", PublisherID: owner.User.ID, Visibility: "public"}, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishParent := func(name, constraint, marker string) {
+		content := []byte(name)
+		digest := sha256.Sum256(content)
+		_, publishErr := packageStore.Publish(packages.Version{Name: name, Version: "1.0.0", RepositoryID: publisher.ID, ReleaseID: strings.Repeat(marker, 32), SourceCommit: strings.Repeat(marker, 40), BuildID: strings.Repeat(marker, 32), BuildAttestation: packages.BuildAttestation{Step: "package", Image: "alpine:3.22", Command: "make", Attempt: 1, State: "succeeded"}, ArtifactID: strings.Repeat(marker, 32), ArtifactPath: name + ".tgz", Size: int64(len(content)), SHA256: hex.EncodeToString(digest[:]), Dependencies: []packages.Dependency{{Name: "core-kit", Constraint: constraint}}, PublisherID: owner.User.ID, Visibility: "public"}, bytes.NewReader(content))
+		if publishErr != nil {
+			t.Fatal(publishErr)
+		}
+	}
+	publishParent("legacy-app", "^3.0.0", "5")
+	publishParent("current-app", "^2.0.0", "6")
+	repo, _ := gitStore.Open(consumer.ID)
+	manifest, _ := repo.WriteObject(storage.BlobObject, []byte(`{"version":1,"dependencies":[{"name":"legacy-app","constraint":"^1.0.0"},{"name":"current-app","constraint":"^1.0.0"}],"lock":[{"name":"legacy-app","version":"1.0.0"},{"name":"current-app","version":"1.0.0"},{"name":"core-kit","version":"2.1.0"}]}`))
+	configTree := writeTestTree(t, repo, testTreeEntry{mode: "100644", name: "packages.json", id: manifest})
+	root := writeTestTree(t, repo, testTreeEntry{mode: "40000", name: ".vivarium", id: configTree})
+	commit := writeTestCommit(t, repo, root, nil, 1700000000, "locked dependencies")
+	if err = repo.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(commit)}); err != nil {
+		t.Fatal(err)
+	}
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+consumer.ID+"/dependency-inventories", `{"commit_id":"`+string(commit)+`"}`, owner.Credential.Token, http.StatusCreated)
+	var projection struct {
+		Inventory packages.Inventory `json:"inventory"`
+		Current   bool               `json:"current"`
+	}
+	decodeResponse(t, response, &projection)
+	var core packages.InventoryEntry
+	for _, entry := range projection.Inventory.Entries {
+		if entry.Name == "core-kit" {
+			core = entry
+		}
+	}
+	if !projection.Current || len(projection.Inventory.Entries) != 3 || core.PackageID != published.ID || core.State != "stale" || len(core.Paths) != 2 {
+		t.Fatalf("projection = %#v", projection)
+	}
+	consumerResponse := authenticatedRequest(t, http.MethodGet, server.URL+"/packages/core-kit/versions/2.1.0/consumers", "", "", http.StatusOK)
+	var consumers struct {
+		Consumers []json.RawMessage `json:"consumers"`
+	}
+	decodeResponse(t, consumerResponse, &consumers)
+	if len(consumers.Consumers) != 1 {
+		t.Fatalf("consumers = %#v", consumers)
+	}
+}
+
+func TestPackageDeploymentProjectionMarksOnlyLatestSuccessfulEnvironmentCurrent(t *testing.T) {
+	now := time.Unix(1700000000, 0).UTC()
+	promotions := []deployments.Promotion{
+		{ID: strings.Repeat("a", 32), ReleaseID: strings.Repeat("1", 32), EnvironmentID: strings.Repeat("e", 32), State: "succeeded", CreationSequence: 1, CreatedAt: now},
+		{ID: strings.Repeat("b", 32), ReleaseID: strings.Repeat("2", 32), EnvironmentID: strings.Repeat("e", 32), State: "failed", CreationSequence: 2, CreatedAt: now.Add(time.Minute)},
+		{ID: strings.Repeat("c", 32), ReleaseID: strings.Repeat("2", 32), EnvironmentID: strings.Repeat("e", 32), State: "succeeded", CreationSequence: 3, CreatedAt: now.Add(2 * time.Minute)},
+	}
+	old := projectPackageDeployments(promotions, map[string]bool{strings.Repeat("1", 32): true})
+	latest := projectPackageDeployments(promotions, map[string]bool{strings.Repeat("2", 32): true})
+	if len(old) != 1 || old[0].Current || len(latest) != 2 || latest[0].Current || !latest[1].Current {
+		t.Fatalf("old = %#v, latest = %#v", old, latest)
 	}
 }
 

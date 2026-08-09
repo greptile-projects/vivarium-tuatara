@@ -71,6 +71,7 @@ type Version struct {
 	Summary          string           `json:"summary,omitempty"`
 	Documentation    string           `json:"documentation,omitempty"`
 	License          string           `json:"license,omitempty"`
+	Support          string           `json:"support,omitempty"`
 	PublisherID      string           `json:"publisher_id"`
 	Visibility       string           `json:"visibility"`
 	Lifecycle        string           `json:"lifecycle"`
@@ -354,7 +355,7 @@ func valid(v Version) bool {
 	if strings.TrimSpace(v.BuildAttestation.Step) == "" || strings.TrimSpace(v.BuildAttestation.Image) == "" || strings.TrimSpace(v.BuildAttestation.Command) == "" || v.BuildAttestation.Attempt < 1 || v.BuildAttestation.State != "succeeded" {
 		return false
 	}
-	if len(v.Platform.OS) > 50 || len(v.Platform.Architecture) > 50 || len(v.Platform.Runtime) > 100 || len(v.Dependencies) > 100 || len(v.Summary) > 500 || len(v.Documentation) > 20000 || len(v.License) > 100 {
+	if len(v.Platform.OS) > 50 || len(v.Platform.Architecture) > 50 || len(v.Platform.Runtime) > 100 || len(v.Dependencies) > 100 || len(v.Summary) > 500 || len(v.Documentation) > 20000 || len(v.License) > 100 || len(v.Support) > 500 {
 		return false
 	}
 	seen := map[string]bool{}

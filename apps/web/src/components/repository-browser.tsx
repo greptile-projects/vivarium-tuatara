@@ -230,6 +230,7 @@ export function RepositoryBrowser({ id }: { id: string }) {
           <div className="mt-3 flex flex-wrap gap-4">
             <Link href={`/repositories/${id}/releases`} className="text-sm font-semibold text-[var(--brand)] hover:underline">View release candidates</Link>
             <Link href={`/repositories/${id}/relationships`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Interface dependency graph</Link>
+            <Link href={`/repositories/${id}/dependencies`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Package dependency inventory</Link>
           </div>
           {repository.upstream_repository_id && (
             <p className="mt-2 text-sm text-[var(--muted)]">

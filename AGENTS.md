@@ -149,6 +149,14 @@ whenever dependencies change or the web job fails before it starts.
   currently authorized package names, allowing standard bearer-token clients
   and isolated builds to fetch only those dependencies without Git, mutation,
   publisher, or unrelated-private-package access.
+  Verified commits define exact package use in `.vivarium/packages.json` through
+  declared direct constraints and a resolved lock. Attributable immutable
+  dependency inventories derive transitive paths from published package
+  metadata and project exact source into release builds, artifacts, and
+  deployments; only the newest successful promotion per environment is current,
+  while superseded successes remain historical evidence. Repository and exact-version consumer reads retain stale,
+  unresolved, license, support, and provenance gaps while filtering every
+  package and consumer repository through current visibility.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version
