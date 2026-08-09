@@ -237,6 +237,16 @@ whenever dependencies change or the web job fails before it starts.
   initiative accountability, policy evidence, and delivery remain intact.
   Playwright isolates organization records beneath
   `$ORGANIZATION_STORAGE_ROOT` with its other temporary API stores.
+  Reproducible development workspaces at `/workspaces` launch only for current
+  repository participants and freeze an exact commit plus the versioned
+  `.vivarium/workspace.json` definition. The definition declares the container
+  image, tools, dependencies, setup commands, and bounded CPU, memory, storage,
+  and setup time. Repository, proposal-task, pull-request, and incident-repair
+  sources remain attached to the durable workspace with creator, effective
+  access, setup evidence, and lifecycle events beneath `$WORKSPACE_STORAGE_ROOT`
+  (default `workspaces`). Setup runs without network or credentials in a
+  capability-dropped container. Suspend/resume uses the definition SHA-256 as a
+  compare-and-swap foundation and never resolves a moving branch or reruns setup.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version

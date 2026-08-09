@@ -28,6 +28,27 @@ by repository resources.
   storage is `500`.
 
 Collection endpoints accept `limit` (default 30, range 1–100) and `after`.
+
+## Development workspaces
+
+`POST /workspaces` requires `repositories:write` and a current owner or
+collaborator. It accepts `repository_id`, an exact 40-character `commit_id`, and
+a `source` whose `kind` is `repository`, `proposal_task`, `pull_request`, or
+`incident_repair` with the corresponding IDs. Task launches enforce an assigned
+base when present; pull launches accept only a recorded source or target
+revision; incident launches require a named emergency-repair action. The commit
+must contain `.vivarium/workspace.json` version 1 with `image`, `tools`,
+`dependencies`, `setup`, and `resources` (`cpus`, `memory_mb`, `storage_mb`, and
+`setup_seconds`). Invalid context or definitions return `422` without launching.
+
+Creation returns the durable workspace after bounded setup, including its
+state, creator, exact commit, complete definition and SHA-256, source, effective
+access, setup evidence, and lifecycle events. `GET /workspaces` lists the
+actor's launches; `GET /workspaces/{id}` is available to current repository
+participants. `POST /workspaces/{id}/suspend` and `/resume` accept
+`{"foundation":"<definition_sha256>"}`. A stale hash, invalid state, or missing
+materialized runtime returns `409 workspace_foundation_changed`; resume never
+resolves a branch, changes the commit or definition, or reruns setup.
 Responses contain the resource array and `next_cursor`, which is `null` on the
 last page. Pass a non-null `next_cursor` unchanged as the next request's
 `after`; cursors outside the authenticated collection return
