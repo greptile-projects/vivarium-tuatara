@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"os"
 	"testing"
 	"time"
 )
@@ -38,6 +39,53 @@ func TestIssueAuthenticateInspectAndRevoke(t *testing.T) {
 	}
 	if _, err := store.Authenticate(issued.Token, "profile:write"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("authenticate revoked error = %v", err)
+	}
+}
+
+func TestBatchRevocationPublishesAllOrNothingAndReconciles(t *testing.T) {
+	root := t.TempDir()
+	store, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userID := "0123456789abcdef0123456789abcdef"
+	first, err := store.Issue(userID, Git, "first", []string{"git:read"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Issue(userID, Git, "second", []string{"git:read"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chmod(root, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.RevokeBatch(userID, []string{first.ID, second.ID}); err == nil {
+		t.Fatal("read-only root allowed batch publication")
+	}
+	if err = os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Authenticate(first.Token, "git:read"); err != nil {
+		t.Fatalf("failed batch revoked first credential: %v", err)
+	}
+	if _, err = store.Authenticate(second.Token, "git:read"); err != nil {
+		t.Fatalf("failed batch revoked second credential: %v", err)
+	}
+	store.afterWrite = func() error { return errors.New("post-rename uncertainty") }
+	if err = store.RevokeBatch(userID, []string{first.ID, second.ID}); err != nil {
+		t.Fatalf("committed batch was not reconciled: %v", err)
+	}
+	store.afterWrite = nil
+	if _, err = store.Authenticate(first.Token, "git:read"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("first credential remained active: %v", err)
+	}
+	if _, err = store.Authenticate(second.Token, "git:read"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second credential remained active: %v", err)
+	}
+	listed, err := store.List(userID)
+	if err != nil || len(listed) != 2 || listed[0].RevokedAt == nil || listed[1].RevokedAt == nil {
+		t.Fatalf("batch metadata = %#v, %v", listed, err)
 	}
 }
 

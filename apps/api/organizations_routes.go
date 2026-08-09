@@ -480,17 +480,19 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 		}
 		target := r.PathValue("user_id")
 		v, err := orgs.RemoveMember(r.PathValue("id"), actor.UserID, target, func(current organizations.Organization) error {
+			ids := []string{}
 			for _, grant := range current.AccessGrants {
 				if grant.RevokedAt != nil {
 					continue
 				}
 				for _, derived := range grant.DerivedCredentials {
 					if derived.OperatorID == target {
-						if _, revokeErr := credentials.Revoke(target, derived.ID); revokeErr != nil && !errors.Is(revokeErr, auth.ErrNotFound) {
-							return revokeErr
-						}
+						ids = append(ids, derived.ID)
 					}
 				}
+			}
+			if len(ids) > 0 {
+				return credentials.RevokeBatch(target, ids)
 			}
 			return nil
 		})

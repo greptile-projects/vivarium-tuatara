@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -75,6 +76,8 @@ type Store struct {
 	now        func() time.Time
 	afterWrite func() error
 }
+
+const batchRevocationsFile = "batch-revocations.json"
 
 func New(root string) (*Store, error) {
 	if root == "" {
@@ -230,6 +233,13 @@ func (s *Store) Authenticate(token string, required string) (Credential, error) 
 	}
 	hash := sha256.Sum256([]byte(token))
 	storedHash, decodeErr := hex.DecodeString(credential.Hash)
+	batch, batchErr := s.readBatchRevocations()
+	if batchErr != nil {
+		return Credential{}, batchErr
+	}
+	if revokedAt, revoked := batch[id]; revoked {
+		credential.RevokedAt = &revokedAt
+	}
 	if decodeErr != nil || subtle.ConstantTimeCompare(storedHash, hash[:]) != 1 || credential.RevokedAt != nil || !s.now().Before(credential.ExpiresAt) || (required != "" && !hasScope(credential.Scopes, required)) {
 		return Credential{}, ErrNotFound
 	}
@@ -249,6 +259,10 @@ func (s *Store) List(userID string) ([]Credential, error) {
 		return nil, err
 	}
 	result := []Credential{}
+	batch, err := s.readBatchRevocations()
+	if err != nil {
+		return nil, err
+	}
 	for _, entry := range entries {
 		id, ok := strings.CutSuffix(entry.Name(), ".json")
 		if !ok || !validID(id) {
@@ -259,6 +273,9 @@ func (s *Store) List(userID string) ([]Credential, error) {
 			return nil, err
 		}
 		if credential.UserID == userID {
+			if revokedAt, revoked := batch[credential.ID]; revoked {
+				credential.RevokedAt = &revokedAt
+			}
 			result = append(result, credential)
 		}
 	}
@@ -269,6 +286,47 @@ func (s *Store) List(userID string) ([]Credential, error) {
 		return result[i].CreatedAt.Before(result[j].CreatedAt)
 	})
 	return result, nil
+}
+
+// RevokeBatch publishes one all-or-nothing revocation decision for an exact
+// credential set. It is used where a related durable mutation must not observe
+// a partially revoked set.
+func (s *Store) RevokeBatch(userID string, ids []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		credential, readErr := s.read(id)
+		if readErr != nil || credential.UserID != userID {
+			return ErrNotFound
+		}
+	}
+	batch, err := s.readBatchRevocations()
+	if err != nil {
+		return err
+	}
+	now := s.now().Truncate(time.Microsecond)
+	for id := range seen {
+		if _, exists := batch[id]; !exists {
+			batch[id] = now
+		}
+	}
+	if err = s.writeBatchRevocations(batch); err != nil {
+		if persisted, readErr := s.readBatchRevocations(); readErr == nil && maps.Equal(persisted, batch) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *Store) Revoke(userID, id string) (Credential, error) {
@@ -340,6 +398,60 @@ func (s *Store) read(id string) (Credential, error) {
 	}
 	record.Credential.Hash = record.Hash
 	return record.Credential, nil
+}
+
+func (s *Store) readBatchRevocations() (map[string]time.Time, error) {
+	data, err := os.ReadFile(filepath.Join(s.root, batchRevocationsFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]time.Time{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]time.Time{}
+	if json.Unmarshal(data, &result) != nil {
+		return nil, errors.New("corrupt batch revocations")
+	}
+	return result, nil
+}
+
+func (s *Store) writeBatchRevocations(value map[string]time.Time) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(s.root, ".batch-revocations-*.tmp")
+	if err != nil {
+		return err
+	}
+	name := temp.Name()
+	defer os.Remove(name)
+	if err = temp.Chmod(0o600); err == nil {
+		_, err = temp.Write(append(data, '\n'))
+	}
+	if err == nil {
+		err = temp.Sync()
+	}
+	if closeErr := temp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err = os.Rename(name, filepath.Join(s.root, batchRevocationsFile)); err != nil {
+		return err
+	}
+	if s.afterWrite != nil {
+		if err = s.afterWrite(); err != nil {
+			return err
+		}
+	}
+	dir, err := os.Open(s.root)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 
 func (s *Store) write(credential Credential) error {
