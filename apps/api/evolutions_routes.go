@@ -105,8 +105,9 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 					outcome := relationships.EvolutionRolloutOutcome{PhaseID: phase.ID, RepositoryID: repositoryID, State: "awaiting_merge"}
 					repositoryComplete := false
 					var task *relationships.EvolutionMigrationTask
+					selectedTaskID := phase.MigrationTaskIDs[repositoryID]
 					for j := range v.MigrationTasks {
-						if v.MigrationTasks[j].RepositoryID == repositoryID {
+						if v.MigrationTasks[j].RepositoryID == repositoryID && v.MigrationTasks[j].ID == selectedTaskID {
 							task = &v.MigrationTasks[j]
 						}
 					}
@@ -252,16 +253,18 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 			for _, phase := range v.Rollout.Phases {
 				ids := phase.RepositoryIDs[:0]
 				environments := map[string]string{}
+				tasks := map[string]string{}
 				for _, id := range phase.RepositoryIDs {
 					if canRead(actorID, id) {
 						ids = append(ids, id)
 						if x := phase.EnvironmentIDs[id]; x != "" {
 							environments[id] = x
 						}
+						tasks[id] = phase.MigrationTaskIDs[id]
 					}
 				}
 				if len(ids) > 0 {
-					phase.RepositoryIDs, phase.EnvironmentIDs = ids, environments
+					phase.RepositoryIDs, phase.EnvironmentIDs, phase.MigrationTaskIDs = ids, environments, tasks
 					phases = append(phases, phase)
 				}
 			}
@@ -362,7 +365,7 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 			return
 		}
 		for i := range items {
-			items[i] = visible(project(items[i]), actor.UserID)
+			items[i] = project(visible(items[i], actor.UserID))
 		}
 		writeJSON(w, 200, map[string]any{"evolutions": items})
 	})
@@ -376,7 +379,7 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 			writeAPIError(w, 404, "evolution_not_found", "evolution plan not found")
 			return
 		}
-		writeJSON(w, 200, visible(project(v), actor.UserID))
+		writeJSON(w, 200, project(visible(v, actor.UserID)))
 	})
 	mux.HandleFunc("POST /repositories/{id}/evolutions", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")
@@ -549,7 +552,18 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 			writeAPIError(w, 400, "invalid_rollout", "version, candidate_id, and phases are required")
 			return
 		}
-		v, err := relationStore.ConfigureEvolutionRollout(r.PathValue("id"), r.PathValue("evolution_id"), actor.UserID, in.CandidateID, in.Phases, in.Version)
+		v, err := relationStore.ConfigureEvolutionRollout(r.PathValue("id"), r.PathValue("evolution_id"), actor.UserID, in.CandidateID, in.Phases, in.Version, func(candidate relationships.ContractCandidate) bool {
+			if len(candidate.CheckRunIDs) == 0 {
+				return false
+			}
+			for _, runID := range candidate.CheckRunIDs {
+				run, runErr := builds.Get(r.PathValue("id"), candidate.CombinationHash[:32], runID)
+				if runErr != nil || run.State != "succeeded" {
+					return false
+				}
+			}
+			return true
+		})
 		if errors.Is(err, relationships.ErrConflict) {
 			writeAPIError(w, 409, "evolution_changed", "evolution plan changed; reload before configuring rollout")
 			return
@@ -562,7 +576,7 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 			writeAPIError(w, 500, "rollout_write_failed", "rollout could not be configured")
 			return
 		}
-		writeJSON(w, 200, visible(project(v), actor.UserID))
+		writeJSON(w, 200, project(visible(v, actor.UserID)))
 	})
 	mux.HandleFunc("POST /repositories/{id}/evolutions/{evolution_id}/rollout/approvals", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, credentials, "repositories:write", false)
@@ -595,7 +609,7 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 			writeAPIError(w, 500, "rollout_write_failed", "approval could not be recorded")
 			return
 		}
-		writeJSON(w, 201, visible(project(v), actor.UserID))
+		writeJSON(w, 201, project(visible(v, actor.UserID)))
 	})
 	mux.HandleFunc("POST /repositories/{id}/evolutions/{evolution_id}/migration-tasks", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := readActor(w, r)
@@ -716,7 +730,7 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 			writeAPIError(w, 500, "migration_task_failed", "migration task could not be published")
 			return
 		}
-		writeJSON(w, 201, map[string]any{"evolution": visible(project(plan), actor.UserID), "migration_task": link, "task": assigned})
+		writeJSON(w, 201, map[string]any{"evolution": project(visible(plan, actor.UserID)), "migration_task": link, "task": assigned})
 	})
 	mux.HandleFunc("POST /repositories/{id}/evolutions/{evolution_id}/analyses", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")
@@ -873,7 +887,7 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 			for _, run := range runs {
 				go builds.Execute(run, target.Path())
 			}
-			writeJSON(w, 201, map[string]any{"evolution": visible(project(published), actor.UserID), "candidate": candidate, "check_runs": runs})
+			writeJSON(w, 201, map[string]any{"evolution": project(visible(published, actor.UserID)), "candidate": candidate, "check_runs": runs})
 			return nil
 		})
 		if err != nil {

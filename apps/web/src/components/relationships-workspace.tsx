@@ -325,8 +325,8 @@ export function RelationshipsWorkspace({
     const form=event.currentTarget, data=new FormData(form);
     try {
       const phases=String(data.get("phases") ?? "").split(/\n/).filter(Boolean).map((line) => {
-        const [name, repositories, environments=""] = line.split("|").map((x)=>x.trim());
-        return { name, repository_ids: repositories.split(",").map((x)=>x.trim()).filter(Boolean), environment_ids: Object.fromEntries(environments.split(",").filter(Boolean).map((x)=>x.split("=").map((v)=>v.trim()))) };
+        const [name, repositories, tasks="", environments=""] = line.split("|").map((x)=>x.trim());
+        return { name, repository_ids: repositories.split(",").map((x)=>x.trim()).filter(Boolean), migration_task_ids: Object.fromEntries(tasks.split(",").filter(Boolean).map((x)=>x.split("=").map((v)=>v.trim()))), environment_ids: Object.fromEntries(environments.split(",").filter(Boolean).map((x)=>x.split("=").map((v)=>v.trim()))) };
       });
       await api(`/repositories/${repositoryID}/evolutions/${plan.id}/rollout`, {method:"PUT", body:JSON.stringify({version:plan.version,candidate_id:data.get("candidate_id"),phases})}, token); form.reset(); await load();
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Rollout could not be configured."); } finally { setPending(false); }
@@ -905,8 +905,8 @@ export function RelationshipsWorkspace({
                   <form onSubmit={(event)=>configureRollout(event,plan)} className="mt-2 grid gap-3 rounded-lg bg-[var(--surface-subtle)] p-4">
                     <strong className="text-sm">Define compatibility gate and rollout phases</strong>
                     <select name="candidate_id" required className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3 text-sm"><option value="">Passing contract candidate</option>{plan.contract_candidates.filter((x)=>!x.superseded_at).map((x)=><option key={x.id} value={x.id}>{x.combination_hash.slice(0,12)}</option>)}</select>
-                    <textarea name="phases" required placeholder={"Consumers | repository-id,repository-id | repository-id=environment-id\nProvider | repository-id"} className="min-h-24 rounded-lg border border-[var(--line-strong)] p-3 font-mono text-sm" />
-                    <p className="text-xs text-[var(--muted)]">One phase per line: name | repository IDs | optional repository=environment targets. Every repository appears once; owners approve independently.</p>
+                    <textarea name="phases" required placeholder={"Consumers | repository-id | repository-id=migration-task-id | repository-id=environment-id\nProvider | repository-id | repository-id=migration-task-id"} className="min-h-24 rounded-lg border border-[var(--line-strong)] p-3 font-mono text-sm" />
+                    <p className="text-xs text-[var(--muted)]">One phase per line: name | repository IDs | repository=migration-task selections | optional repository=environment targets. Every repository appears once; owners approve independently.</p>
                     <Button type="submit" disabled={pending}>Configure governed rollout</Button>
                   </form>
                 ) : <p className="mt-2 text-sm text-[var(--muted)]">No rollout has been configured.</p>}

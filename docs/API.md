@@ -935,7 +935,10 @@ changes linearize wholly before or after evidence publication.
 
 `PUT /repositories/{id}/evolutions/{evolution_id}/rollout` compare-and-swaps
 `version` to freeze one non-superseded contract candidate and ordered phases.
-Each phase names repositories once and may map them to existing environment IDs.
+Every candidate check must already be durably readable and successful. Each
+phase names repositories once, explicitly maps each repository to the one
+migration task whose contribution advances it, and may map repositories to
+existing environment IDs.
 `POST .../rollout/approvals` accepts approval only from the named repository's
 current owner; approval grants no cross-repository authority. Plan reads derive
 the gate from its exact check runs and each phase from the linked pull merge,
@@ -944,6 +947,8 @@ projection reports ownership, retained resource IDs, readiness, and the next
 ordinary queue/release/promotion action. Closed pulls and failed or canceled
 promotions pause the affected phase and direct participants to the deployment's
 existing rollback or repair controls; completed earlier phases are preserved.
+Private participant filtering happens before aggregate phase and rollout state
+is derived, so hidden workflow status cannot influence a reader's projection.
 
 Unfinished cross-repository dependencies block an agent session from starting;
 the eventual credential remains limited to its isolated `agent/tasks/*` branch.

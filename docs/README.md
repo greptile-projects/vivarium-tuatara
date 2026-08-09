@@ -64,9 +64,10 @@ follow-up progress from the authoritative workflow records.
 ## Governed interface evolution
 
 An evolution rollout coordinates, but never replaces, repository and
-environment authority. Provider maintainers select retained exact contract
-evidence and order participating repositories into phases; each repository
-owner approves only their own participation. The relationship workspace then
+environment authority. Provider maintainers select passing retained exact
+contract evidence, choose the relevant migration task for each repository, and
+order participating repositories into phases; each repository owner approves
+only their own participation. The relationship workspace then
 derives compatibility and progress from ordinary migration pulls, integration
 queues, ancestry-containing releases, and governed environment promotions.
 Failures pause the affected phase with links back to established rollback or

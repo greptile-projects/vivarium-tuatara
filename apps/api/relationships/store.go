@@ -88,12 +88,13 @@ type EvolutionRollout struct {
 	NextAction   string                     `json:"next_action,omitempty"`
 }
 type EvolutionRolloutPhase struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	RepositoryIDs  []string          `json:"repository_ids"`
-	EnvironmentIDs map[string]string `json:"environment_ids,omitempty"`
-	State          string            `json:"state,omitempty"`
-	NextAction     string            `json:"next_action,omitempty"`
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	RepositoryIDs    []string          `json:"repository_ids"`
+	MigrationTaskIDs map[string]string `json:"migration_task_ids"`
+	EnvironmentIDs   map[string]string `json:"environment_ids,omitempty"`
+	State            string            `json:"state,omitempty"`
+	NextAction       string            `json:"next_action,omitempty"`
 }
 type EvolutionRolloutApproval struct {
 	RepositoryID string    `json:"repository_id"`
@@ -407,8 +408,8 @@ func (s *Store) AcknowledgeEvolution(repo, id, actor, consumer, note string) (Ev
 	})
 }
 
-func (s *Store) ConfigureEvolutionRollout(repo, id, actor, candidate string, phases []EvolutionRolloutPhase, version int) (Evolution, error) {
-	if !validID(actor) || !validID(candidate) || len(phases) == 0 || len(phases) > 20 {
+func (s *Store) ConfigureEvolutionRollout(repo, id, actor, candidate string, phases []EvolutionRolloutPhase, version int, candidatePassing func(ContractCandidate) bool) (Evolution, error) {
+	if !validID(actor) || !validID(candidate) || len(phases) == 0 || len(phases) > 20 || candidatePassing == nil {
 		return Evolution{}, ErrInvalid
 	}
 	return s.mutateEvolution(repo, id, func(v *Evolution) error {
@@ -417,7 +418,7 @@ func (s *Store) ConfigureEvolutionRollout(repo, id, actor, candidate string, pha
 		}
 		found := false
 		for _, c := range v.ContractCandidates {
-			found = found || (c.ID == candidate && c.SupersededAt == nil)
+			found = found || (c.ID == candidate && c.SupersededAt == nil && candidatePassing(c))
 		}
 		if !found {
 			return ErrInvalid
@@ -436,6 +437,14 @@ func (s *Store) ConfigureEvolutionRollout(repo, id, actor, candidate string, pha
 			local := map[string]bool{}
 			for _, repositoryID := range p.RepositoryIDs {
 				if !validID(repositoryID) || !allowed[repositoryID] || seen[repositoryID] || local[repositoryID] {
+					return ErrInvalid
+				}
+				taskID := p.MigrationTaskIDs[repositoryID]
+				taskFound := false
+				for _, task := range v.MigrationTasks {
+					taskFound = taskFound || (task.ID == taskID && task.RepositoryID == repositoryID)
+				}
+				if !validID(taskID) || !taskFound {
 					return ErrInvalid
 				}
 				local[repositoryID], seen[repositoryID] = true, true

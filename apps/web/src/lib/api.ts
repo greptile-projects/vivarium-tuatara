@@ -165,6 +165,7 @@ export type EvolutionPlan = {
       id: string;
       name: string;
       repository_ids: string[];
+      migration_task_ids: Record<string, string>;
       environment_ids?: Record<string, string>;
       state?: "blocked" | "awaiting_approval" | "ready" | "paused" | "completed";
       next_action?: string;
