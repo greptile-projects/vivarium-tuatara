@@ -338,6 +338,33 @@ func (s *Store) Create(repositoryID, authorID, title, body string) (Proposal, er
 	return p, nil
 }
 
+// DeleteMigrationWork compensates a failed cross-store evolution link. It
+// removes only the exact freshly-created single-task proposal and refuses once
+// any additional discussion or work could be lost.
+func (s *Store) DeleteMigrationWork(repositoryID, proposalID, taskID, assignmentID string) error {
+	if !validID(repositoryID) || !validID(proposalID) || !validID(taskID) || !validID(assignmentID) {
+		return ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	r, err := s.read(proposalID)
+	if err != nil {
+		return err
+	}
+	if r.Proposal.RepositoryID != repositoryID || len(r.Tasks) != 1 || len(r.Comments) != 0 || r.Tasks[0].ID != taskID || r.Tasks[0].Assignment == nil || r.Tasks[0].Assignment.ID != assignmentID || r.Tasks[0].Contribution != nil {
+		return ErrInvalid
+	}
+	if err = os.Remove(s.path(proposalID)); err != nil {
+		return err
+	}
+	return s.directorySync(s.root)
+}
+
 func (s *Store) Get(repositoryID, id string) (Proposal, error) {
 	r, err := s.read(id)
 	if err != nil {

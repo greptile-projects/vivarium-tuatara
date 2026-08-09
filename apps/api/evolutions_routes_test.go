@@ -212,6 +212,11 @@ func TestEvolutionMigrationTaskRequiresTargetAuthorityAndLinksRepositoryWork(t *
 		t.Fatalf("migration task = %#v / %#v", result.Evolution.MigrationTasks, result.Task)
 	}
 	link := result.Evolution.MigrationTasks[0]
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+provider.ID+"/evolutions/"+plan.ID+"/migration-tasks", body, consumerOwner.Credential.Token, http.StatusConflict).Body.Close()
+	consumerProposals, err := proposalStore.List(consumer.ID)
+	if err != nil || len(consumerProposals) != 1 {
+		t.Fatalf("stale evolution request published unlinked work: proposals=%d err=%v", len(consumerProposals), err)
+	}
 	stored, err := proposalStore.GetTask(consumer.ID, link.ProposalID, link.TaskID)
 	if err != nil || stored.Outcome != "Client uses events v2 and tests pass" {
 		t.Fatalf("linked repository task = %#v, %v", stored, err)
@@ -228,5 +233,7 @@ func TestEvolutionMigrationTaskRequiresTargetAuthorityAndLinksRepositoryWork(t *
 		t.Fatalf("provider migration task = %#v, %v", providerTask, err)
 	}
 	startBody := `{"expected_assignment_id":"` + providerTask.Assignment.ID + `"}`
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+provider.ID+"/proposals/"+providerLink.ProposalID+"/tasks/"+providerLink.TaskID+"/sessions", startBody, providerOwner.Credential.Token, http.StatusConflict).Body.Close()
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+consumer.ID+"/proposals/"+link.ProposalID+"/tasks/"+link.TaskID, `{"status":"completed"}`, consumerOwner.Credential.Token, http.StatusOK).Body.Close()
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+provider.ID+"/proposals/"+providerLink.ProposalID+"/tasks/"+providerLink.TaskID+"/sessions", startBody, providerOwner.Credential.Token, http.StatusConflict).Body.Close()
 }

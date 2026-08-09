@@ -74,7 +74,7 @@ func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store
 				completed := map[string]bool{}
 				for _, candidate := range plan.MigrationTasks {
 					if task, taskErr := proposalStore.GetTask(candidate.RepositoryID, candidate.ProposalID, candidate.TaskID); taskErr == nil {
-						completed[candidate.ID] = task.Status == proposals.TaskCompleted
+						completed[candidate.ID] = task.Status == proposals.TaskCompleted && task.Contribution != nil && task.Contribution.Status == "merged" && task.Contribution.ContextRevision == task.ContextRevision
 					}
 				}
 				for _, dependency := range link.DependencyIDs {

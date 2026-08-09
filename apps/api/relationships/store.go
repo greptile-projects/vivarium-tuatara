@@ -346,43 +346,64 @@ func (s *Store) AcknowledgeEvolution(repo, id, actor, consumer, note string) (Ev
 	})
 }
 
-func (s *Store) AddEvolutionMigrationTask(repo, id, actor, targetRepo, proposalID, taskID, targetVersion string, dependencies []string, version int) (Evolution, EvolutionMigrationTask, error) {
-	if !validID(actor) || !validID(targetRepo) || !validID(proposalID) || !validID(taskID) || !validVersion(targetVersion) || len(dependencies) > 50 {
+// CreateEvolutionMigrationTask holds the evolution CAS lock while repository
+// work is published. A stale request is rejected before publish runs, so a
+// losing concurrent request cannot leave an unlinked proposal behind.
+func (s *Store) CreateEvolutionMigrationTask(repo, id, actor, targetRepo, targetVersion string, dependencies []string, version int, publish func() (string, string, error)) (Evolution, EvolutionMigrationTask, error) {
+	if !validID(actor) || !validID(targetRepo) || !validVersion(targetVersion) || len(dependencies) > 50 || publish == nil {
 		return Evolution{}, EvolutionMigrationTask{}, ErrInvalid
 	}
-	var task EvolutionMigrationTask
-	v, err := s.mutateEvolution(repo, id, func(v *Evolution) error {
-		if version != v.Version {
-			return ErrConflict
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lock, err := os.OpenFile(filepath.Join(s.root, ".lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return Evolution{}, EvolutionMigrationTask{}, err
+	}
+	defer lock.Close()
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return Evolution{}, EvolutionMigrationTask{}, err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	v, err := s.GetEvolution(repo, id)
+	if err != nil {
+		return v, EvolutionMigrationTask{}, err
+	}
+	if version != v.Version {
+		return v, EvolutionMigrationTask{}, ErrConflict
+	}
+	allowed := targetRepo == v.RepositoryID
+	for _, impact := range v.Impacts {
+		allowed = allowed || impact.RepositoryID == targetRepo
+	}
+	if !allowed {
+		return v, EvolutionMigrationTask{}, ErrInvalid
+	}
+	seen := map[string]bool{}
+	for _, dependency := range dependencies {
+		if !validID(dependency) || seen[dependency] {
+			return v, EvolutionMigrationTask{}, ErrInvalid
 		}
-		allowed := targetRepo == v.RepositoryID
-		for _, impact := range v.Impacts {
-			allowed = allowed || impact.RepositoryID == targetRepo
+		found := false
+		for _, existing := range v.MigrationTasks {
+			found = found || existing.ID == dependency
 		}
-		if !allowed {
-			return ErrInvalid
+		if !found {
+			return v, EvolutionMigrationTask{}, ErrInvalid
 		}
-		seen := map[string]bool{}
-		for _, dependency := range dependencies {
-			if !validID(dependency) || seen[dependency] {
-				return ErrInvalid
-			}
-			found := false
-			for _, existing := range v.MigrationTasks {
-				found = found || existing.ID == dependency
-			}
-			if !found {
-				return ErrInvalid
-			}
-			seen[dependency] = true
-		}
-		task = EvolutionMigrationTask{ID: mustID(), RepositoryID: targetRepo, ProposalID: proposalID, TaskID: taskID, TargetVersion: strings.TrimSpace(targetVersion), DependencyIDs: append([]string(nil), dependencies...), CreatedBy: actor, CreatedAt: s.now()}
-		v.MigrationTasks = append(v.MigrationTasks, task)
-		v.Version++
-		v.UpdatedAt = s.now()
-		return nil
-	})
-	return v, task, err
+		seen[dependency] = true
+	}
+	proposalID, taskID, err := publish()
+	if err != nil {
+		return v, EvolutionMigrationTask{}, err
+	}
+	if !validID(proposalID) || !validID(taskID) {
+		return v, EvolutionMigrationTask{}, ErrInvalid
+	}
+	task := EvolutionMigrationTask{ID: mustID(), RepositoryID: targetRepo, ProposalID: proposalID, TaskID: taskID, TargetVersion: strings.TrimSpace(targetVersion), DependencyIDs: append([]string(nil), dependencies...), CreatedBy: actor, CreatedAt: s.now()}
+	v.MigrationTasks = append(v.MigrationTasks, task)
+	v.Version++
+	v.UpdatedAt = s.now()
+	return v, task, s.writeEvolutionUnlocked(v, false)
 }
 func (s *Store) AddEvolutionFinding(repo, id, actor string, repositories []string, finding, uncertainty string) (Evolution, error) {
 	if !validID(actor) || !validEvolutionText(finding) || len(uncertainty) > 5000 || len(repositories) == 0 || len(repositories) > 50 {

@@ -434,29 +434,35 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 				return
 			}
 		}
-		body := "Migration work for interface evolution " + plan.ID + ".\n\nTarget version: " + strings.TrimSpace(in.TargetVersion) + "\n\nPlan strategy:\n" + plan.Strategy + "\n\nSequencing:\n" + plan.Sequencing
-		proposal, err := proposalStore.Create(in.RepositoryID, actor.UserID, in.Title, body)
-		if err != nil && !errors.Is(err, proposals.ErrDurabilityUncertain) {
-			writeAPIError(w, 422, "invalid_migration_task", "task title and migration contract are invalid")
-			return
-		}
-		task, err := proposalStore.CreateTask(in.RepositoryID, proposal.ID, actor.UserID, in.Title, in.CompletionCriteria, nil, nil)
-		if err != nil && !errors.Is(err, proposals.ErrDurabilityUncertain) {
-			writeAPIError(w, 500, "migration_task_failed", "repository task could not be created")
-			return
-		}
-		assigned, err := proposalStore.AssignTask(in.RepositoryID, proposal.ID, task.ID, actor.UserID, proposals.TaskAssignmentInput{AssigneeType: in.AssigneeType, AssigneeID: in.AssigneeID, Mandate: in.Mandate, RepositoryID: in.RepositoryID, BaseRevision: in.BaseRevision})
-		if err != nil && !errors.Is(err, proposals.ErrDurabilityUncertain) {
-			writeAPIError(w, 422, "invalid_migration_assignment", "migration task could not be assigned")
-			return
-		}
-		plan, link, err := relationStore.AddEvolutionMigrationTask(plan.RepositoryID, plan.ID, actor.UserID, in.RepositoryID, proposal.ID, task.ID, in.TargetVersion, in.DependencyIDs, in.Version)
+		var proposal proposals.Proposal
+		var assigned proposals.Task
+		plan, link, err := relationStore.CreateEvolutionMigrationTask(plan.RepositoryID, plan.ID, actor.UserID, in.RepositoryID, in.TargetVersion, in.DependencyIDs, in.Version, func() (string, string, error) {
+			body := "Migration work for interface evolution " + plan.ID + ".\n\nTarget version: " + strings.TrimSpace(in.TargetVersion) + "\n\nPlan strategy:\n" + plan.Strategy + "\n\nSequencing:\n" + plan.Sequencing
+			var publishErr error
+			proposal, publishErr = proposalStore.Create(in.RepositoryID, actor.UserID, in.Title, body)
+			if publishErr != nil && !errors.Is(publishErr, proposals.ErrDurabilityUncertain) {
+				return "", "", publishErr
+			}
+			var task proposals.Task
+			task, publishErr = proposalStore.CreateTask(in.RepositoryID, proposal.ID, actor.UserID, in.Title, in.CompletionCriteria, nil, nil)
+			if publishErr != nil && !errors.Is(publishErr, proposals.ErrDurabilityUncertain) {
+				return "", "", publishErr
+			}
+			assigned, publishErr = proposalStore.AssignTask(in.RepositoryID, proposal.ID, task.ID, actor.UserID, proposals.TaskAssignmentInput{AssigneeType: in.AssigneeType, AssigneeID: in.AssigneeID, Mandate: in.Mandate, RepositoryID: in.RepositoryID, BaseRevision: in.BaseRevision})
+			if publishErr != nil && !errors.Is(publishErr, proposals.ErrDurabilityUncertain) {
+				return "", "", publishErr
+			}
+			return proposal.ID, task.ID, nil
+		})
 		if errors.Is(err, relationships.ErrConflict) {
 			writeAPIError(w, 409, "evolution_changed", "evolution plan changed; reload before adding work")
 			return
 		}
 		if err != nil {
-			writeAPIError(w, 500, "migration_task_failed", "migration task link could not be published")
+			if proposal.ID != "" && assigned.Assignment != nil {
+				_ = proposalStore.DeleteMigrationWork(in.RepositoryID, proposal.ID, assigned.ID, assigned.Assignment.ID)
+			}
+			writeAPIError(w, 500, "migration_task_failed", "migration task could not be published")
 			return
 		}
 		writeJSON(w, 201, map[string]any{"evolution": visible(project(plan), actor.UserID), "migration_task": link, "task": assigned})
