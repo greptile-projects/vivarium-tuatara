@@ -1370,3 +1370,15 @@ carries `decisions:research` plus repository-bound read access: an agent can
 inspect the selected context and append cited support, opposition, or neutral
 findings and explicit uncertainty, but cannot mutate the repository. Findings may supersede earlier claims without
 deleting the dissent or evidence that informed them.
+
+An alternative can be tried in a bounded shared development workspace at one
+exact commit. The repository owns the permitted experiment entry points as
+named `experiments` in `.vivarium/workspace.json`; the ordinary workspace
+resource, network, sharing, agent-control, and lifetime policy still applies.
+The decision links the resulting attributed command logs and checkpoints plus
+measurements, checksummed artifact metadata, diffs, and server-derived CPU,
+memory, and storage use. Participants can reopen the same permitted workspace
+to reproduce the run. The comparison flags evidence when the default branch,
+workspace definition, or effective workspace policy has changed. Attaching an
+experiment never publishes its checkpoint, opens a pull request, or merges
+code; those remain explicit, separate governed workspace actions.

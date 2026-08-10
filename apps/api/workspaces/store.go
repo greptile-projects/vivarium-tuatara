@@ -34,12 +34,17 @@ type Tool struct {
 	Version string `json:"version"`
 }
 type Definition struct {
-	Version      int       `json:"version"`
-	Image        string    `json:"image"`
-	Tools        []Tool    `json:"tools"`
-	Dependencies []string  `json:"dependencies"`
-	Setup        []string  `json:"setup"`
-	Resources    Resources `json:"resources"`
+	Version      int                 `json:"version"`
+	Image        string              `json:"image"`
+	Tools        []Tool              `json:"tools"`
+	Dependencies []string            `json:"dependencies"`
+	Setup        []string            `json:"setup"`
+	Experiments  []ExperimentCommand `json:"experiments,omitempty"`
+	Resources    Resources           `json:"resources"`
+}
+type ExperimentCommand struct {
+	Name    string `json:"name"`
+	Command string `json:"command"`
 }
 type Source struct {
 	Kind          string `json:"kind"`
@@ -49,6 +54,8 @@ type Source struct {
 	PullRequestID string `json:"pull_request_id,omitempty"`
 	IncidentID    string `json:"incident_id,omitempty"`
 	RepairID      string `json:"repair_id,omitempty"`
+	DecisionID    string `json:"decision_id,omitempty"`
+	AlternativeID string `json:"alternative_id,omitempty"`
 }
 type Access struct {
 	Role   string   `json:"role"`

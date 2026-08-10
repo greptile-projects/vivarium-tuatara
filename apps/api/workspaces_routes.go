@@ -233,6 +233,17 @@ func parseWorkspaceDefinition(body []byte) (workspaces.Definition, error) {
 	if len(d.Tools) > 50 || len(d.Dependencies) > 100 {
 		return d, errors.New("tools and dependencies must be bounded")
 	}
+	if len(d.Experiments) > 20 {
+		return d, errors.New("at most 20 experiment commands are allowed")
+	}
+	seenExperiments := map[string]bool{}
+	for _, experiment := range d.Experiments {
+		name, command := strings.TrimSpace(experiment.Name), strings.TrimSpace(experiment.Command)
+		if name == "" || command == "" || len(name) > 100 || len(command) > 2000 || seenExperiments[name] {
+			return d, errors.New("experiment commands require unique bounded names and commands")
+		}
+		seenExperiments[name] = true
+	}
 	for _, tool := range d.Tools {
 		if strings.TrimSpace(tool.Name) == "" || strings.TrimSpace(tool.Version) == "" || len(tool.Name) > 100 || len(tool.Version) > 100 {
 			return d, errors.New("tools require bounded names and versions")
@@ -256,6 +267,11 @@ func parseWorkspaceDefinition(body []byte) (workspaces.Definition, error) {
 func validateWorkspaceSource(source workspaces.Source, commit string, ps *proposals.Store, prs *pullrequests.Store, is *incidents.Store) error {
 	switch source.Kind {
 	case "repository":
+		return nil
+	case "decision_experiment":
+		if strings.TrimSpace(source.DecisionID) == "" || strings.TrimSpace(source.AlternativeID) == "" {
+			return errors.New("decision experiments require a decision and alternative")
+		}
 		return nil
 	case "proposal_task":
 		if ps == nil {
@@ -296,7 +312,7 @@ func validateWorkspaceSource(source workspaces.Source, commit string, ps *propos
 		}
 		return errors.New("incident repair not found")
 	default:
-		return errors.New("source kind must be repository, proposal_task, pull_request, or incident_repair")
+		return errors.New("source kind must be repository, proposal_task, pull_request, incident_repair, or decision_experiment")
 	}
 }
 func provisionWorkspace(gitPath, runtime, id, commit string, d workspaces.Definition) ([]workspaces.SetupStep, bool) {

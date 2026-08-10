@@ -1,8 +1,11 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -15,7 +18,9 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/relationships"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
 type decisionCreateInput struct {
@@ -38,8 +43,16 @@ type decisionResearchCredentialInput struct {
 	ExpiresIn     int    `json:"expires_in"`
 	AlternativeID string `json:"alternative_id"`
 }
+type decisionExperimentInput struct {
+	AlternativeID string `json:"alternative_id"`
+	WorkspaceID   string `json:"workspace_id"`
+}
+type decisionExperimentEvidenceInput struct {
+	ExpectedVersion int                          `json:"expected_version"`
+	Evidence        decisions.ExperimentEvidence `json:"evidence"`
+}
 
-func registerDecisionRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, identities *users.Store, store *decisions.Store, activity *activities.Store, proposalStore *proposals.Store, explanationStore *explanations.Store, incidentStore *incidents.Store, relationshipStore *relationships.Store, organizationStore *organizations.Store) {
+func registerDecisionRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, identities *users.Store, store *decisions.Store, activity *activities.Store, proposalStore *proposals.Store, explanationStore *explanations.Store, incidentStore *incidents.Store, relationshipStore *relationships.Store, organizationStore *organizations.Store, workspaceStore *workspaces.Store) {
 	mux.HandleFunc("POST /repositories/{id}/decisions", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
 		if !ok {
@@ -93,6 +106,9 @@ func registerDecisionRoutes(mux *http.ServeMux, catalog *repositories.Store, cre
 				out = append(out, x)
 			}
 		}
+		for i := range out {
+			out[i] = projectDecisionExperiments(out[i], git, catalog, workspaceStore)
+		}
 		writeJSON(w, 200, map[string]any{"decisions": out})
 	})
 	mux.HandleFunc("GET /decisions/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -101,7 +117,7 @@ func registerDecisionRoutes(mux *http.ServeMux, catalog *repositories.Store, cre
 			return
 		}
 		_ = actor
-		writeJSON(w, 200, v)
+		writeJSON(w, 200, projectDecisionExperiments(v, git, catalog, workspaceStore))
 	})
 	mux.HandleFunc("PUT /decisions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		_, actor, ok := authorizeDecision(w, r, catalog, credentials, store, "repositories:write")
@@ -211,6 +227,134 @@ func registerDecisionRoutes(mux *http.ServeMux, catalog *repositories.Store, cre
 		}
 		writeJSON(w, 201, v)
 	})
+	mux.HandleFunc("POST /decisions/{id}/experiments", func(w http.ResponseWriter, r *http.Request) {
+		v, actor, ok := authorizeDecision(w, r, catalog, credentials, store, "repositories:write")
+		if !ok {
+			return
+		}
+		var in decisionExperimentInput
+		if decodeJSON(r, &in) != nil || workspaceStore == nil {
+			writeAPIError(w, 400, "invalid_request", "alternative_id and workspace_id are required")
+			return
+		}
+		workspace, err := workspaceStore.Get(strings.TrimSpace(in.WorkspaceID))
+		if err != nil || workspace.State != "running" || workspace.RepositoryID != v.RepositoryID || workspace.Source.Kind != "decision_experiment" || workspace.Source.DecisionID != v.ID || workspace.Source.AlternativeID != in.AlternativeID {
+			writeAPIError(w, 422, "experiment_workspace_invalid", "workspace must be an exact decision-experiment workspace for this alternative")
+			return
+		}
+		commands := []string{}
+		for _, command := range workspace.Definition.Experiments {
+			commands = append(commands, command.Command)
+		}
+		v, err = store.LaunchExperiment(v.ID, actor.UserID, in.AlternativeID, workspace.ID, workspace.CommitID, workspace.DefinitionSHA256, commands)
+		if writeDecisionError(w, err) {
+			return
+		}
+		recordActivity(activity, catalog, activities.Event{Kind: "decision.experiment_launched", ActorID: actor.UserID, RepositoryID: v.RepositoryID, ResourceType: "decision", ResourceID: v.ID, ResourceTitle: v.Scope.Question})
+		writeJSON(w, 201, projectDecisionExperiments(v, git, catalog, workspaceStore))
+	})
+	mux.HandleFunc("POST /decisions/{id}/experiments/{experiment_id}/evidence", func(w http.ResponseWriter, r *http.Request) {
+		v, actor, ok := authorizeDecision(w, r, catalog, credentials, store, "repositories:write")
+		if !ok {
+			return
+		}
+		var in decisionExperimentEvidenceInput
+		if decodeJSON(r, &in) != nil || workspaceStore == nil {
+			writeAPIError(w, 400, "invalid_request", "expected_version and evidence are required")
+			return
+		}
+		var experiment *decisions.Experiment
+		for i := range v.Experiments {
+			if v.Experiments[i].ID == r.PathValue("experiment_id") {
+				experiment = &v.Experiments[i]
+			}
+		}
+		if experiment == nil {
+			writeAPIError(w, 404, "experiment_not_found", "experiment not found")
+			return
+		}
+		workspace, err := workspaceStore.Get(experiment.WorkspaceID)
+		if err != nil {
+			writeAPIError(w, 503, "experiment_workspace_unavailable", "experiment workspace is unavailable")
+			return
+		}
+		commandIDs := map[string]bool{}
+		allowedCommands := map[string]bool{}
+		for _, declared := range workspace.Definition.Experiments {
+			digest := sha256.Sum256([]byte(declared.Command))
+			allowedCommands[hex.EncodeToString(digest[:])] = true
+		}
+		for _, command := range workspace.Commands {
+			commandIDs[command.ID] = allowedCommands[command.CommandSHA256]
+		}
+		for _, id := range in.Evidence.CommandIDs {
+			if !commandIDs[id] {
+				writeAPIError(w, 422, "experiment_evidence_invalid", "every command must belong to the experiment workspace")
+				return
+			}
+		}
+		for _, id := range in.Evidence.CheckpointIDs {
+			checkpoint, checkpointErr := workspaceStore.GetCheckpoint(workspace.ID, id)
+			if checkpointErr != nil || checkpoint.WorkspaceID != workspace.ID {
+				writeAPIError(w, 422, "experiment_evidence_invalid", "every checkpoint must belong to the experiment workspace")
+				return
+			}
+		}
+		usage := workspaces.Usage(workspace, time.Now().UTC())
+		in.Evidence.CPUSeconds, in.Evidence.MemoryMBHours, in.Evidence.StorageMBHours = usage.CPUSeconds, usage.MemoryMBHours, usage.StorageMBHours
+		v, err = store.AttachExperimentEvidence(v.ID, experiment.ID, actor.UserID, in.ExpectedVersion, in.Evidence)
+		if writeDecisionError(w, err) {
+			return
+		}
+		writeJSON(w, 201, projectDecisionExperiments(v, git, catalog, workspaceStore))
+	})
+}
+
+func projectDecisionExperiments(v decisions.Decision, git *storage.Store, catalog *repositories.Store, workspaceStore *workspaces.Store) decisions.Decision {
+	if git == nil || catalog == nil || workspaceStore == nil {
+		return v
+	}
+	meta, metaErr := catalog.GetByID(v.RepositoryID)
+	repo, repoErr := git.Open(v.RepositoryID)
+	current := ""
+	if metaErr == nil && repoErr == nil {
+		if ref, err := repo.ReadReference("refs/heads/" + meta.DefaultBranch); err == nil {
+			current = ref.Target
+		}
+	}
+	for i := range v.Experiments {
+		experiment := &v.Experiments[i]
+		reasons := []string{}
+		if current == "" {
+			reasons = append(reasons, "current code revision is unavailable")
+		} else if current != experiment.Revision {
+			reasons = append(reasons, "default-branch code changed after the experiment")
+		}
+		if repoErr == nil && current != "" {
+			definition, err := exec.Command("git", "--git-dir="+repo.Path(), "show", current+":"+workspaces.DefinitionPath).Output()
+			if err != nil {
+				reasons = append(reasons, "current workspace environment definition is unavailable")
+			} else {
+				digest := sha256.Sum256(definition)
+				if hex.EncodeToString(digest[:]) != experiment.DefinitionSHA256 {
+					reasons = append(reasons, "workspace dependencies or environment changed after the experiment")
+				}
+			}
+		}
+		workspace, err := workspaceStore.Get(experiment.WorkspaceID)
+		if err != nil {
+			reasons = append(reasons, "workspace environment is unavailable")
+		} else {
+			if workspace.DefinitionSHA256 != experiment.DefinitionSHA256 {
+				reasons = append(reasons, "workspace environment definition changed")
+			}
+			if workspace.RebuildRequired {
+				reasons = append(reasons, workspace.RebuildReasons...)
+			}
+		}
+		experiment.Invalidated, experiment.InvalidationReasons = len(reasons) > 0, reasons
+	}
+	return v
 }
 
 func validateDecisionUsers(w http.ResponseWriter, identities *users.Store, scope decisions.Scope) bool {

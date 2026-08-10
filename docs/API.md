@@ -1877,3 +1877,22 @@ plus the selected alternative, body, `support`, `oppose`, or `neutral`
 position, explicit uncertainty, exact citations, and optional
 `supersedes_id`. Supersession marks but retains the earlier same-alternative
 finding, preserving dissent and its historical evidence.
+
+The exact revision may define up to 20 uniquely named experiment commands in
+`.vivarium/workspace.json` as `experiments: [{"name":"benchmark","command":"..."}]`.
+Create an ordinary workspace with source kind `decision_experiment` and its
+`decision_id` and `alternative_id`, then `POST /decisions/{id}/experiments`
+with that `alternative_id` and the running `workspace_id`. The workspace must
+belong to the same repository and exact decision alternative; its isolation,
+resource limits, sharing, control lease, and lifecycle remain authoritative.
+
+`POST /decisions/{id}/experiments/{experiment_id}/evidence` compare-and-swaps
+`expected_version` and accepts `evidence` containing workspace checkpoint IDs,
+workspace command-outcome IDs, `{name,value,unit}` measurements, checksummed
+`{label,path,sha256,size}` artifact metadata, and notes. The server rejects
+foreign checkpoint or command identities and derives CPU seconds, memory MB
+hours, and storage MB hours from the workspace rather than trusting the
+caller. Decision reads report invalidation when the repository default branch
+moves, the workspace definition differs, or workspace policy marks the
+environment rebuild-required. Experiment attachment has no publication or
+merge effect; checkpoint publication remains a separate governed endpoint.
