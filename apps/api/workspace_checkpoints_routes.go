@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
@@ -39,7 +40,7 @@ type checkpointAnalysis struct {
 	Reasons             []string `json:"reasons"`
 }
 
-func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, pulls *pullrequests.Store, store *workspaces.Store, authStore *auth.Store, checks *checkruns.Store) {
+func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, pulls *pullrequests.Store, store *workspaces.Store, authStore *auth.Store, checks *checkruns.Store, sessions *changesessions.Store) {
 	mux.HandleFunc("GET /workspaces/{workspace_id}/checkpoints", func(w http.ResponseWriter, r *http.Request) {
 		item, _, ok := authorizeWorkspace(w, r, store, catalog, authStore, "repositories:read")
 		if !ok {
@@ -147,6 +148,14 @@ func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, c
 				writeAPIError(w, 422, "checkpoint_publication_invalid", "session_id must identify this proposal-task publication")
 				return
 			}
+			if sessions == nil {
+				writeAPIError(w, 503, "checkpoint_publication_unavailable", "task session provenance is unavailable")
+				return
+			}
+			if validateCheckpointSession(sessions, item, input.SessionID) != nil {
+				writeAPIError(w, 422, "checkpoint_publication_invalid", "session_id does not belong to the workspace proposal task")
+				return
+			}
 		}
 		repository, err := git.Open(item.RepositoryID)
 		if err != nil {
@@ -163,6 +172,16 @@ func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, c
 				return
 			}
 		}
+		checkpoint, releasePublication, claimErr := store.ClaimCheckpointPublication(item.ID, checkpoint.ID)
+		if errors.Is(claimErr, workspaces.ErrCheckpointConflict) {
+			writeJSON(w, 200, checkpoint.Public())
+			return
+		}
+		if claimErr != nil {
+			writeAPIError(w, 500, "checkpoint_publication_unavailable", "checkpoint publication could not be reserved")
+			return
+		}
+		defer releasePublication()
 		refName := "refs/heads/" + input.Branch
 		current, refErr := repository.ReadReference(refName)
 		if refErr == nil {
@@ -170,7 +189,7 @@ func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, c
 				writeAPIError(w, 409, "workspace_branch_changed", "the working branch no longer names the checkpoint base")
 				return
 			}
-		} else if !errors.Is(refErr, storage.ErrReferenceNotFound) || input.ExpectedCommit != "" {
+		} else if !errors.Is(refErr, storage.ErrReferenceNotFound) || (input.ExpectedCommit != "" && input.ExpectedCommit != checkpoint.BaseCommitID) {
 			writeAPIError(w, 409, "workspace_branch_changed", "the branch expectation does not match repository state")
 			return
 		}
@@ -189,7 +208,7 @@ func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, c
 			writeAPIError(w, 409, "workspace_branch_changed", "the branch changed while publishing")
 			return
 		}
-		contributors, commandIDs := workspacePublicationEvidence(item, checkpoint)
+		contributors, commandIDs := workspacePublicationEvidence(checkpoint)
 		var pull *pullrequests.PullRequest
 		if input.CreatePull {
 			title := strings.TrimSpace(input.Title)
@@ -209,6 +228,11 @@ func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, c
 				created, err = pulls.Create(item.RepositoryID, actor.UserID, title, body, input.Branch, input.TargetBranch, nil)
 			}
 			if err != nil {
+				if refErr == nil {
+					_ = repository.UpdateReferenceIfTarget(storage.Reference{Name: refName, Target: current.Target}, commitID)
+				} else {
+					_ = repository.DeleteReferenceIfTarget(refName, commitID)
+				}
 				writeAPIError(w, 409, "checkpoint_pull_failed", "branch was published but pull request creation failed")
 				return
 			}
@@ -300,6 +324,20 @@ func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, c
 		}
 		writeJSON(w, 200, map[string]any{"workspace": updated, "analysis": a})
 	})
+}
+
+func validateCheckpointSession(store *changesessions.Store, workspace workspaces.Workspace, sessionID string) error {
+	if store == nil || workspace.Source.Kind != "proposal_task" {
+		return errors.New("task session provenance unavailable")
+	}
+	session, err := store.Get(workspace.RepositoryID, workspace.Source.TaskID, sessionID)
+	if err != nil {
+		return err
+	}
+	if session.RepositoryID != workspace.RepositoryID || session.ProposalID != workspace.Source.ProposalID || session.TaskID != workspace.Source.TaskID {
+		return errors.New("task session does not match workspace source")
+	}
+	return nil
 }
 
 func captureWorkspaceCheckpoint(git *storage.Store, w workspaces.Workspace) ([]workspaces.CheckpointFile, error) {
@@ -704,31 +742,13 @@ func commitCheckpoint(gitPath string, checkpoint workspaces.Checkpoint, actor st
 	return strings.TrimSpace(string(out)), nil
 }
 
-func workspacePublicationEvidence(workspace workspaces.Workspace, checkpoint workspaces.Checkpoint) ([]string, []string) {
-	contributors := map[string]bool{checkpoint.CreatedBy: true}
-	paths := map[string]bool{}
-	for _, file := range checkpoint.Files {
-		paths[file.Path] = true
+func workspacePublicationEvidence(checkpoint workspaces.Checkpoint) ([]string, []string) {
+	contributors := append([]string(nil), checkpoint.ContributorIDs...)
+	commands := make([]string, 0, len(checkpoint.Commands))
+	for _, command := range checkpoint.Commands {
+		commands = append(commands, command.ID)
 	}
-	for _, change := range workspace.Changes {
-		if paths[change.Path] {
-			contributors[change.ActorID] = true
-		}
-	}
-	commandIDs := make([]string, 0, len(workspace.Commands))
-	for _, command := range workspace.Commands {
-		contributors[command.ActorID] = true
-		commandIDs = append(commandIDs, command.ID)
-	}
-	ids := make([]string, 0, len(contributors))
-	for id := range contributors {
-		if id != "" {
-			ids = append(ids, id)
-		}
-	}
-	sort.Strings(ids)
-	sort.Strings(commandIDs)
-	return ids, commandIDs
+	return contributors, commands
 }
 
 func workspacePullBody(workspace workspaces.Workspace, checkpoint workspaces.Checkpoint, contributors, commands []string) string {
@@ -739,8 +759,8 @@ func workspacePullBody(workspace workspaces.Workspace, checkpoint workspaces.Che
 	commandLines := []string{"- No recorded commands."}
 	if len(commands) > 0 {
 		commandLines = commandLines[:0]
-		for _, command := range workspace.Commands {
-			commandLines = append(commandLines, "- `"+command.ID+"` digest `"+command.CommandSHA256+"`, exit "+strconv.Itoa(command.ExitCode)+", by `"+command.ActorID+"`")
+		for _, command := range checkpoint.Commands {
+			commandLines = append(commandLines, "- `"+command.ID+"` digest `"+command.SHA256+"`, exit "+strconv.Itoa(command.ExitCode)+", by `"+command.ActorID+"`")
 		}
 	}
 	body := checkpoint.Description + "\n\n## Workspace provenance\n\nWorkspace `" + workspace.ID + "`; checkpoint `" + checkpoint.ID + "`; exact base `" + checkpoint.BaseCommitID + "`. Contributors: `" + strings.Join(contributors, "`, `") + "`.\n\n## Changes\n\n" + strings.Join(changes, "\n") + "\n\n## Commands performed\n\n" + strings.Join(commandLines, "\n") + "\n\nOnly the checkpoint's inspected repository-file manifest was committed; workspace activity, outputs, and credentials were not exported."

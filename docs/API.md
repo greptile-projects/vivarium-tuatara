@@ -133,11 +133,18 @@ checkpoint head, making the next checkpoint a retained lineage branch.
 `expected_commit_id`, `target_branch`, `title`, `session_id`, and
 `create_pull_request`. A new branch starts at the checkpoint's exact base; an
 existing branch advances only when its current tip equals both the supplied
-expectation and that base. The server constructs one Git commit exclusively
+expectation and that base (clients may send the base for either branch state).
+Publication claims serialize the unpublished check through Git and pull
+effects, and failed pull creation compare-and-swap restores or removes the
+branch without overwriting a concurrent push. The server constructs one Git commit exclusively
 from the checkpoint manifest and stored bytes. With pull creation enabled, it
 opens an ordinary pull (preserving proposal-task context when applicable),
 starts repository-defined checks, and records bidirectional workspace,
-checkpoint, task/session, contributor, and command-digest links. The generated
+checkpoint, task/session, contributor, and command-digest links. Task session
+IDs are accepted only after loading the session beneath the same repository,
+proposal, and task. Contributor and command evidence is frozen during
+checkpoint capture rather than reconstructed from later bounded workspace
+history. The generated
 pull body lists inspected file hashes and attributed command IDs/digests, never
 terminal input, command output, credentials, presence, messages, or other
 runtime state. Existing stale-review, check, review, merge, and queue rules

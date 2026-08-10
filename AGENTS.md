@@ -284,8 +284,10 @@ whenever dependencies change or the web job fails before it starts.
   Authorized checkpoint publication creates one commit solely from the stored
   inspected manifest, compare-and-swap advances an existing base-matching
   branch or creates a new one, and can open an ordinary governed pull. Pulls
-  and checkpoints retain bidirectional workspace, task/session, contributor,
-  file-hash, and command-digest provenance; normal checks, stale-review,
+  and checkpoints retain bidirectional workspace, validated task/session,
+  contributor, file-hash, and command-digest provenance frozen at checkpoint
+  capture. A cross-process claim excludes duplicate publication effects and
+  failed pull creation compensates its ref only by compare-and-swap; normal checks, stale-review,
   protection, and queue rules apply while terminal input, outputs, credentials,
   discussion, and unpublished runtime files stay out of Git and review text.
   Repository relationship graphs at `/repositories/{id}/relationships` join

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
@@ -54,6 +55,30 @@ func TestCompareCheckpointTreesCapturesDiffWithoutCredentials(t *testing.T) {
 	os.WriteFile(filepath.Join(runtime, "registry.txt"), []byte("//registry.npmjs.org/:_authToken=npm_secret"), 0600)
 	if _, err = compareCheckpointTrees(base, runtime); err == nil {
 		t.Fatal("disguised npm auth directive was captured")
+	}
+}
+
+func TestCheckpointSessionMustBelongToWorkspaceTask(t *testing.T) {
+	store, err := changesessions.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, proposalA, taskA, proposalB, taskB, user := strings.Repeat("1", 32), strings.Repeat("2", 32), strings.Repeat("3", 32), strings.Repeat("4", 32), strings.Repeat("5", 32), strings.Repeat("6", 32)
+	context := changesessions.TaskContext{RepositoryName: "repo", ProposalTitle: "proposal", TaskTitle: "task", TaskOutcome: "outcome", Mandate: "mandate"}
+	sessionA, err := store.CreateForTask(repository, proposalA, taskA, user, strings.Repeat("a", 40), context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionB, err := store.CreateForTask(repository, proposalB, taskB, user, strings.Repeat("a", 40), context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := workspaces.Workspace{RepositoryID: repository, Source: workspaces.Source{Kind: "proposal_task", RepositoryID: repository, ProposalID: proposalA, TaskID: taskA}}
+	if err = validateCheckpointSession(store, workspace, sessionA.ID); err != nil {
+		t.Fatalf("matching session: %v", err)
+	}
+	if err = validateCheckpointSession(store, workspace, sessionB.ID); err == nil {
+		t.Fatal("cross-task session accepted")
 	}
 }
 

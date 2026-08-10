@@ -78,6 +78,79 @@ func TestCheckpointPublicationIsBidirectionalAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestCheckpointFreezesContributorAndCommandEvidenceAtCapture(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.Create(Workspace{RepositoryID: strings.Repeat("0", 32), CommitID: strings.Repeat("a", 40), CreatorID: "creator"}, []byte(`{"version":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RecordChange(w.ID, Change{Path: "work.txt", ActorID: "author"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RecordCommand(w.ID, CommandOutcome{CommandSHA256: "before", ActorID: "runner", ExitCode: 0}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.CaptureAndCreateCheckpoint(w.ID, "creator", "", "frozen", "", Reproducibility{}, func(Workspace) ([]CheckpointFile, error) {
+		return []CheckpointFile{{Path: "work.txt", Operation: "add"}}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RecordCommand(w.ID, CommandOutcome{CommandSHA256: "after", ActorID: "later", ExitCode: 1}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := s.GetCheckpoint(w.ID, c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Commands) != 1 || stored.Commands[0].SHA256 != "before" || strings.Join(stored.ContributorIDs, ",") != "author,creator,runner" {
+		t.Fatalf("evidence = %#v, %#v", stored.ContributorIDs, stored.Commands)
+	}
+}
+
+func TestCheckpointPublicationClaimRejectsConcurrentSideEffects(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.Create(Workspace{RepositoryID: strings.Repeat("0", 32), CommitID: strings.Repeat("a", 40), CreatorID: "user"}, []byte(`{"version":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.CreateCheckpoint(w.ID, "user", "", "review", "", Reproducibility{}, []CheckpointFile{{Path: "work.txt", Operation: "add"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, release, err := s.ClaimCheckpointPublication(w.ID, c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, secondRelease, claimErr := s.ClaimCheckpointPublication(w.ID, c.ID)
+		if secondRelease != nil {
+			secondRelease()
+		}
+		result <- claimErr
+	}()
+	select {
+	case claimErr := <-result:
+		t.Fatalf("claim did not wait: %v", claimErr)
+	case <-time.After(30 * time.Millisecond):
+	}
+	publication := Publication{Branch: "one", CommitID: strings.Repeat("b", 40), PublishedBy: "user", PublishedAt: time.Now().UTC()}
+	if _, err = s.RecordCheckpointPublication(w.ID, c.ID, publication); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if err = <-result; err != ErrCheckpointConflict {
+		t.Fatalf("second claim = %v", err)
+	}
+}
+
 func TestCheckpointCreationCannotInterleaveWithRestoreLineage(t *testing.T) {
 	s, err := New(t.TempDir())
 	if err != nil {
