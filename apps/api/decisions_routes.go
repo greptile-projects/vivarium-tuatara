@@ -23,6 +23,57 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
+func organizationOwner(v organizations.Organization, id string) bool {
+	for _, member := range v.Members {
+		if member.UserID == id && member.Role == "owner" {
+			return true
+		}
+	}
+	return false
+}
+func activeDecisionPolicy(v organizations.Organization, policyID, rule, repositoryID string) bool {
+	for _, p := range v.Policies {
+		if p.ID != policyID || p.Status != "active" {
+			continue
+		}
+		applies := false
+		for _, target := range p.Targets {
+			applies = applies || target.Kind == "organization" || (target.Kind == "repository" && target.ID == repositoryID)
+			if target.Kind == "team" {
+				for _, team := range v.Teams {
+					if team.ID == target.ID {
+						for _, responsibility := range team.Responsibilities {
+							applies = applies || responsibility.RepositoryID == repositoryID
+						}
+					}
+				}
+			}
+		}
+		if !applies {
+			continue
+		}
+		switch rule {
+		case "minimum_reviews":
+			return p.Rules.MinimumReviews > 0
+		case "required_checks":
+			return len(p.Rules.RequiredChecks) > 0
+		case "promotion_approvals":
+			return p.Rules.PromotionApprovals > 0
+		case "integration":
+			return p.Rules.Integration != ""
+		case "release_provenance":
+			return p.Rules.ReleaseProvenance != ""
+		case "dependency_use":
+			return p.Rules.DependencyUse != ""
+		case "agent_authority":
+			return p.Rules.AgentAuthority != ""
+		case "repository_visibility":
+			return p.Rules.RepositoryVisibility != ""
+		}
+	}
+	return false
+}
+
 type decisionCreateInput struct {
 	Source decisions.Source `json:"source"`
 	Scope  decisions.Scope  `json:"scope"`
@@ -50,6 +101,18 @@ type decisionExperimentInput struct {
 type decisionExperimentEvidenceInput struct {
 	ExpectedVersion int                          `json:"expected_version"`
 	Evidence        decisions.ExperimentEvidence `json:"evidence"`
+}
+type decisionApprovalInput struct {
+	ExpectedVersion int                       `json:"expected_version"`
+	Request         decisions.ApprovalRequest `json:"request"`
+}
+type decisionApprovalResponseInput struct {
+	Decision string `json:"decision"`
+	Note     string `json:"note"`
+}
+type decisionPublishInput struct {
+	ExpectedVersion int                  `json:"expected_version"`
+	Commitment      decisions.Commitment `json:"commitment"`
 }
 
 func registerDecisionRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, identities *users.Store, store *decisions.Store, activity *activities.Store, proposalStore *proposals.Store, explanationStore *explanations.Store, incidentStore *incidents.Store, relationshipStore *relationships.Store, organizationStore *organizations.Store, workspaceStore *workspaces.Store) {
@@ -172,6 +235,84 @@ func registerDecisionRoutes(mux *http.ServeMux, git *storage.Store, catalog *rep
 		}
 		recordActivity(activity, catalog, activities.Event{Kind: "decision.alternative_proposed", ActorID: actor.UserID, RepositoryID: v.RepositoryID, ResourceType: "decision", ResourceID: v.ID, ResourceTitle: v.Scope.Question})
 		writeJSON(w, 201, v)
+	})
+	mux.HandleFunc("POST /decisions/{id}/approval-requests", func(w http.ResponseWriter, r *http.Request) {
+		v, actor, ok := authorizeDecision(w, r, catalog, credentials, store, "repositories:write")
+		if !ok {
+			return
+		}
+		var in decisionApprovalInput
+		if decodeJSON(r, &in) != nil || actor.UserID != v.Scope.OwnerID {
+			writeAPIError(w, 403, "decision_owner_required", "only the accountable decision owner can request approval")
+			return
+		}
+		request := in.Request
+		if request.Kind == "affected_owner" {
+			affected := false
+			for _, resource := range v.Scope.AffectedResources {
+				affected = affected || resource.RepositoryID == request.RepositoryID
+			}
+			repo, err := catalog.GetByID(request.RepositoryID)
+			if err != nil || !affected || repo.OwnerID != request.ApproverID {
+				writeAPIError(w, 422, "invalid_affected_owner", "approval must name the current owner of an affected repository")
+				return
+			}
+		} else if request.Kind == "policy" {
+			repo, err := catalog.GetByID(v.RepositoryID)
+			if err != nil || repo.OrganizationID == "" || organizationStore == nil {
+				writeAPIError(w, 422, "invalid_policy_approval", "decision repository has no organization policy")
+				return
+			}
+			org, err := organizationStore.Get(repo.OrganizationID)
+			if err != nil || !activeDecisionPolicy(org, request.PolicyID, request.PolicyRule, v.RepositoryID) || !organizationOwner(org, request.ApproverID) {
+				writeAPIError(w, 422, "invalid_policy_approval", "approval must cite an applicable active policy and current organization owner")
+				return
+			}
+		}
+		updated, err := store.RequestApproval(v.ID, actor.UserID, in.ExpectedVersion, request)
+		if writeDecisionError(w, err) {
+			return
+		}
+		recordActivity(activity, catalog, activities.Event{Kind: "decision.approval_requested", ActorID: actor.UserID, RepositoryID: v.RepositoryID, ResourceType: "decision", ResourceID: v.ID, ResourceTitle: v.Scope.Question})
+		writeJSON(w, 201, updated)
+	})
+	mux.HandleFunc("POST /decisions/{id}/approval-requests/{request_id}/response", func(w http.ResponseWriter, r *http.Request) {
+		v, actor, ok := authorizeDecision(w, r, catalog, credentials, store, "repositories:write")
+		if !ok {
+			return
+		}
+		var in decisionApprovalResponseInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "decision is required")
+			return
+		}
+		updated, err := store.RespondApproval(v.ID, r.PathValue("request_id"), actor.UserID, in.Decision, in.Note)
+		if writeDecisionError(w, err) {
+			return
+		}
+		recordActivity(activity, catalog, activities.Event{Kind: "decision.approval_" + in.Decision, ActorID: actor.UserID, RepositoryID: v.RepositoryID, ResourceType: "decision", ResourceID: v.ID, ResourceTitle: v.Scope.Question})
+		writeJSON(w, 200, updated)
+	})
+	mux.HandleFunc("POST /decisions/{id}/publish", func(w http.ResponseWriter, r *http.Request) {
+		v, actor, ok := authorizeDecision(w, r, catalog, credentials, store, "repositories:write")
+		if !ok {
+			return
+		}
+		if actor.UserID != v.Scope.OwnerID {
+			writeAPIError(w, 403, "decision_owner_required", "only the accountable decision owner can publish")
+			return
+		}
+		var in decisionPublishInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "expected_version and commitment are required")
+			return
+		}
+		updated, err := store.Publish(v.ID, actor.UserID, in.ExpectedVersion, in.Commitment)
+		if writeDecisionError(w, err) {
+			return
+		}
+		recordActivity(activity, catalog, activities.Event{Kind: "decision.published", ActorID: actor.UserID, RepositoryID: v.RepositoryID, ResourceType: "decision", ResourceID: v.ID, ResourceTitle: v.Scope.Question})
+		writeJSON(w, 201, updated)
 	})
 	mux.HandleFunc("POST /decisions/{id}/research-credentials", func(w http.ResponseWriter, r *http.Request) {
 		v, actor, ok := authorizeDecision(w, r, catalog, credentials, store, "repositories:write")

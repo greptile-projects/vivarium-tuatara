@@ -151,3 +151,50 @@ func TestAlternativesCompareCommonCriteriaAndPreserveSupersededDissent(t *testin
 		t.Fatalf("findings = %#v, %v", v.Findings, err)
 	}
 }
+
+func TestGovernedCommitmentRetainsApprovalsExceptionsAndReopens(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 10, 20, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	deadline := now.Add(24 * time.Hour)
+	v, err := s.Create("repo", Source{Kind: "repository", ResourceID: "repo"}, Scope{Question: "Which queue?", Constraints: []string{"No downtime"}, SuccessMeasures: []string{"Stable latency"}, Deadline: &deadline, AffectedResources: []Resource{{Kind: "repository", RepositoryID: "affected", Label: "consumer"}}, Participants: []Participant{{UserID: "owner"}, {UserID: "approver"}}, OwnerID: "owner"}, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := []Evidence{{Kind: "usage", ResourceID: "latency", Revision: "window", Label: "p95"}}
+	alt := func(title string) Alternative {
+		return Alternative{Title: title, Summary: title, Assumptions: []string{"bursty"}, Tradeoffs: []string{"reject overload"}, Risks: []string{"retries"}, CompatibilityImpact: "none", Cost: "two days", ExpectedOutcomes: []string{"stable"}, Evidence: evidence, Criteria: []CriterionAssessment{{Criterion: "Stable latency", Outcome: "82ms", Evidence: evidence}}}
+	}
+	v, _ = s.AddAlternative(v.ID, "owner", v.Version, alt("FIFO"))
+	v, _ = s.AddAlternative(v.ID, "owner", v.Version, alt("LIFO"))
+	v, err = s.RequestApproval(v.ID, "owner", v.Version, ApprovalRequest{Kind: "policy", PolicyID: "policy", PolicyRule: "minimum_reviews", ApproverID: "approver", Reason: "Policy requires accountable review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Publish(v.ID, "owner", v.Version, Commitment{}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid publication = %v", err)
+	}
+	v, err = s.RespondApproval(v.ID, v.ApprovalRequests[0].ID, "approver", "approve", "bounded exception accepted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := v.Alternatives[0]
+	v, err = s.Publish(v.ID, "owner", v.Version, Commitment{SelectedAlternativeID: selected.ID, RejectedAlternativeIDs: []string{v.Alternatives[1].ID}, Rationale: "Best observed latency under the retained evidence.", AcceptedTradeoffs: []string{"Reject overload"}, Conditions: []string{"Monitor retries"}, ReviewDate: now.Add(30 * 24 * time.Hour), Evidence: selected.Evidence, Exceptions: []Exception{{ApprovalRequestID: v.ApprovalRequests[0].ID, PolicyID: "policy", PolicyRule: "minimum_reviews", Reason: "Migration window", ExpiresAt: now.Add(7 * 24 * time.Hour)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Status != "published" || len(v.Commitments) != 1 || v.Commitments[0].Approvals[0].Status != "approved" || len(v.Commitments[0].Exceptions) != 1 {
+		t.Fatalf("published = %#v", v)
+	}
+	v, err = s.Discuss(v.ID, "owner", "Non-material clarification")
+	if err != nil || v.Status != "published" {
+		t.Fatalf("discussion reopened = %s, %v", v.Status, err)
+	}
+	v, err = s.AddFinding(v.ID, "owner", Finding{AlternativeID: selected.ID, Body: "A new trace exposes retries.", Position: "oppose", Uncertainty: "one region", Citations: evidence})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Status != "pending" || v.Commitments[0].Status != "reopened" || v.Commitments[0].ReopenedAt == nil || v.ApprovalRequests[0].Status != "superseded" {
+		t.Fatalf("reopened = %#v", v)
+	}
+}

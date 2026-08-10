@@ -1904,3 +1904,24 @@ same actor, decision, alternative, and commit hold a cross-process claim through
 provisioning and return the existing running workspace on retry; registering
 that same workspace again returns its existing experiment without duplicating
 history or activity.
+
+`POST /decisions/{id}/approval-requests` is owner-only and compare-and-swaps
+`expected_version`. An `affected_owner` request must name an affected repository
+and its current owner. A `policy` request must cite an applicable active
+organization policy rule and a current organization owner. The named approver
+responds with `approve` or `reject` at
+`POST /decisions/{id}/approval-requests/{request_id}/response`; pending and
+rejected requests are publication conflicts and remain visible on list/detail
+surfaces.
+
+`POST /decisions/{id}/publish` is owner-only and compare-and-swaps the live
+decision version. It requires one current selected alternative, explicit
+rejection of every other current alternative, rationale, accepted tradeoffs,
+conditions, a future review date, retained dissent finding IDs, and exact
+evidence already cited by the decision. Every request must be approved.
+Exceptions must reference an approved policy request, match its policy/rule,
+give a reason, and expire in the future. Publication appends an immutable
+numbered commitment with its approval snapshot. Later material scope,
+alternative, finding, experiment, or experiment-evidence changes set the live
+record back to `pending`, supersede current requests, and mark the prior
+commitment `reopened`; discussion does not reopen it.
