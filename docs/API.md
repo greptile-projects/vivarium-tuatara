@@ -1794,6 +1794,10 @@ mandate and stewardship identities, cited reasoning, server-derived commits
 and files, command/check claims, residual concerns, and criterion status. This
 evidence grants no check, review, queue, fork, acknowledgement, or merge
 exception.
+An exact completion retry returns the retained outcome; a same-commit retry
+whose normalized summary, commits, files, checks, commands, criteria, or
+residual concerns differ returns the existing terminal-run conflict instead of
+silently discarding corrected evidence.
 
 Pending invitees receive only organization identity and their own invitation,
 not membership, teams, agents, transfers, responsibility, or events. A public

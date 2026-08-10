@@ -713,7 +713,8 @@ func (s *Store) CompleteRunWithEvidence(repositoryID, pullRequestID, sessionID, 
 		return Run{}, Event{}, ErrRunPaused
 	}
 	if run.State == Completed {
-		if run.Outcome != nil && run.Outcome.CommitID == commitID {
+		exactRetry := run.Outcome != nil && run.Outcome.Summary == summary && run.Outcome.CommitID == commitID && slices.Equal(run.Outcome.Commits, commits) && slices.Equal(run.Outcome.ChangedFiles, files) && slices.Equal(run.Outcome.Checks, checks) && slices.Equal(run.Outcome.Commands, commands) && slices.Equal(run.Outcome.Criteria, criteria) && slices.Equal(run.Outcome.Concerns, concerns)
+		if exactRetry {
 			for _, event := range rec.Events {
 				if event.RunID == runID && event.Kind == "run.completed" {
 					return *run, event, nil

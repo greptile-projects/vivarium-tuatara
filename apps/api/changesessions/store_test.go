@@ -199,6 +199,13 @@ func TestCompletedRunCredentialIsDeniedByDurableState(t *testing.T) {
 	if len(completed.Outcome.Commands) != 1 || completed.Outcome.Commands[0].Command != "go test ./..." || len(completed.Outcome.Criteria) != 1 || completed.Outcome.Criteria[0].Status != "met" {
 		t.Fatalf("review evidence = %#v", completed.Outcome)
 	}
+	if _, _, err = store.CompleteRunWithEvidence(repositoryID, pullID, session.ID, run.ID, credentialID, "Corrected summary.", head, []string{head}, nil, []Check{{Name: "go test ./...", Status: "failed"}}, []string{"new risk"}, []Command{{Command: "go test ./...", ExitCode: 1, Summary: "corrected result"}}, []Criterion{{Criterion: "tests pass", Status: "not_met", Evidence: "corrected failure"}}); !errors.Is(err, ErrRunCompleted) {
+		t.Fatalf("changed same-commit evidence error = %v, want ErrRunCompleted", err)
+	}
+	runs, err := store.ListRuns(repositoryID, pullID, session.ID)
+	if err != nil || len(runs) != 1 || runs[0].Outcome.Summary != "Published reviewable work." || runs[0].Outcome.Commands[0].ExitCode != 0 || runs[0].Outcome.Criteria[0].Status != "met" {
+		t.Fatalf("changed retry replaced durable evidence = %#v, %v", runs, err)
+	}
 	allowed, err = store.AllowsGitWrite(repositoryID, credentialID)
 	if err != nil || allowed {
 		t.Fatalf("completed run allowed = %v, %v", allowed, err)
