@@ -170,3 +170,52 @@ func TestPublicRepositoryBrowsingIsAnonymousAndPrivateBrowsingIsHidden(t *testin
 	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+repository.ID, `{"visibility":"public"}`, owner.Credential.Token, http.StatusOK).Body.Close()
 	requestStatus(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/branches", "", http.StatusOK).Body.Close()
 }
+
+func TestCodeNavigationPinsEvidenceAndClassifiesSource(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	server := httptest.NewServer(newAuthenticatedAppHandler(gitStore, identities, credentials, catalog))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "navigator")
+	created := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"map"}`, owner.Credential.Token, http.StatusCreated)
+	var repository repositories.Repository
+	json.NewDecoder(created.Body).Decode(&repository)
+	created.Body.Close()
+	repo, _ := gitStore.Open(repository.ID)
+	source, _ := repo.WriteObject(storage.BlobObject, []byte("package map\n\nfunc Locate() {}\nfunc Use() { Locate() }\n"))
+	testSource, _ := repo.WriteObject(storage.BlobObject, []byte("package map\n\nfunc TestLocate() { Locate() }\n"))
+	tree := writeTestTree(t, repo, testTreeEntry{"100644", "map.go", source}, testTreeEntry{"100644", "map_test.go", testSource})
+	commit := writeTestCommit(t, repo, tree, nil, 1700000000, "introduce locator")
+	if err := repo.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(commit)}); err != nil {
+		t.Fatal(err)
+	}
+
+	response := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/code-navigation?ref="+string(commit)+"&q=Locate", "", owner.Credential.Token, http.StatusOK)
+	var result struct {
+		Revision string         `json:"revision"`
+		Results  []codeLocation `json:"results"`
+		Analysis struct {
+			Status string `json:"status"`
+		} `json:"analysis"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if result.Revision != string(commit) || result.Analysis.Status != "complete" || len(result.Results) != 3 {
+		t.Fatalf("navigation = %#v", result)
+	}
+	kinds := map[string]bool{}
+	for _, item := range result.Results {
+		kinds[item.Kind] = true
+		if item.CommitID != string(commit) {
+			t.Fatalf("blame commit = %q", item.CommitID)
+		}
+	}
+	if !kinds["definition"] || !kinds["caller"] || !kinds["test"] {
+		t.Fatalf("result kinds = %#v", kinds)
+	}
+	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/code-navigation?ref=main&q=", "", owner.Credential.Token, http.StatusBadRequest).Body.Close()
+}

@@ -314,6 +314,13 @@ whenever dependencies change or the web job fails before it starts.
   runtime automation must remain compatible with declared minimal images (the
   journey uses Alpine); capture reads the live tmpfs from inside the container,
   not the image layer exposed by `docker cp`.
+  Exact-revision code navigation at `/repositories/{id}/code` and
+  `GET /repositories/{id}/code-navigation` performs bounded lexical search
+  across supported source files, classifies definitions, references, callers,
+  and tests, and attaches per-line commit evidence. Responses resolve a branch
+  to one immutable commit, expose incomplete-analysis limits, project catalog
+  ownership, and include only readable dependency declarations recorded for
+  that revision.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version

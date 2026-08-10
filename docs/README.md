@@ -14,6 +14,16 @@ The supported consumer contract, including authentication, stable error
 shapes, validation, and collection pagination, is documented in [API.md](API.md).
 Consumers should use that HTTP boundary rather than reading storage roots.
 
+## Exact-revision code navigation
+
+The repository code workspace searches one immutable commit for symbols and
+text, then groups lexical definitions, references, call sites, and tests with
+file/line links and last-change commit evidence. The API reports its file,
+byte, and result bounds rather than presenting partial coverage as complete.
+Ownership comes from the current repository catalog; declared interface
+dependencies appear only when recorded for the selected commit and the
+requester can currently read the provider.
+
 ## Reproducible development workspaces
 
 Development environments are shared, revision-pinned collaboration records.

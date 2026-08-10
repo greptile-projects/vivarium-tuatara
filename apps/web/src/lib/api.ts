@@ -16,6 +16,13 @@ export type Repository = {
   created_at: string;
   upstream_repository_id?: string;
 };
+export type CodeNavigationResult = {
+  repository_id:string; revision:string; query:string;
+  results:{kind:"definition"|"reference"|"caller"|"test";path:string;line:number;preview:string;commit_id?:string;commit_summary?:string}[];
+  ownership:{kind:"repository_owner"|"collaborator";id:string}[];
+  dependencies:{id:string;provider_repository_id:string;interface_name:string;constraint:string;commit_id:string}[];
+  analysis:{status:"complete"|"incomplete";reason:string;files_scanned:number;bytes_scanned:number;result_limit:number;method:string};
+};
 export type DevelopmentWorkspace = {
   id: string;
   repository_id: string;
