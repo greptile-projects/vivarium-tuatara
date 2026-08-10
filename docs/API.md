@@ -1750,6 +1750,35 @@ Accepted members inspect the rank-ordered queue at `GET
 `.../opportunities/{opportunity_id}`. Decisions and discussions retain actor,
 reason, version, and time; stale concurrent decisions return `409`.
 
+Mandate revisions may additionally define one `opportunity_policies` rule per
+evidence class. A rule selects a minimum severity, `approval_required` or
+`auto_start`, and a per-opportunity agent-minute ceiling; unlisted classes fail
+safe to maintainer approval. Owners compare-and-swap `approve` or `reject`
+through the same decision endpoint. Approval authorizes promotion only: it does
+not start compute, create a branch, or grant repository authority.
+
+`POST .../opportunities/{opportunity_id}/promotion` freezes the current default
+branch SHA and atomically reserves the opportunity before creating one ordinary
+proposal with one to twenty ordered, explicitly human- or approved-agent-owned
+tasks. Every task carries observable completion criteria, risk, and a
+verification plan; the proposal reasoning retains the organization, mandate,
+opportunity, evidence, and exact base revision. Active incidents, embargoed
+security evidence, same-title open work, exhausted action/agent-minute budgets,
+a moved base, changed mandate policy or acceptance, and missing approval return
+named blockers. Incident and proposal conflict storage must both be readable
+before reservation; unavailable state returns `503` without changing the
+opportunity. Reevaluation clears any earlier approval and advances a separate
+evaluation version, which the approval must exactly match at reservation.
+An unlinked reservation retry recomputes external blockers and revalidates the
+current mandate, acceptance, policy, approval, operator, and already-consumed
+budgets without charging them twice. Final linking repeats the organization
+governance checks, so pausing or revising a mandate cannot authorize completion
+through a stale same-actor retry.
+Reservation and opportunity versions make concurrent approval
+or promotion a conflict, while exact retries reconcile the same proposal and
+task identities. Accepted work is linked from the opportunity and task
+assignment/promotion activity feeds the established activity and inbox views.
+
 Pending invitees receive only organization identity and their own invitation,
 not membership, teams, agents, transfers, responsibility, or events. A public
 child also omits its `parent_id` when that parent is not public. Responsibility

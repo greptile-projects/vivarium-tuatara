@@ -106,6 +106,20 @@ whenever dependencies change or the web job fails before it starts.
   revisions, scope rationale, and citations; newer evidence retains superseded
   citations as stale. Current collaborators discuss, rank, dismiss, snooze,
   reopen, or mark findings incorrect through compare-and-swap public surfaces.
+  Mandate revisions classify opportunity evidence as maintainer-approval
+  required or bounded auto-start eligible, with unlisted classes failing safe
+  to approval. Promotion freezes the current default-branch revision and
+  creates an ordinary linked proposal with ordered human- or approved-agent
+  tasks carrying completion criteria, risk, and verification plans; it does not
+  itself start compute or create a branch. Active incidents, embargoed evidence,
+  conflicting work, exhausted budgets, moved bases, changed mandate policy, and
+  concurrent decisions remain explicit attributed blockers or conflicts, while
+  promoted assignments use the existing activity and inbox projections.
+  Reevaluation invalidates prior approval through a distinct evaluation
+  version, and promotion requires readable incident and proposal conflict
+  stores before its durable reservation. Unlinked retries revalidate current
+  external blockers and organization governance without double-charging their
+  reservation, and final linking rejects a paused or changed mandate.
   Organization
   owners define versioned draft policies across visibility, reviews, checks,
   integration, release provenance, dependency use, promotion,

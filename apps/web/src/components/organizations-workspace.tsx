@@ -2,74 +2,2672 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { api, type Organization, type OrganizationDirectory, type OrganizationPolicyRules, type OrganizationPortfolio, type OrganizationStewardshipMandate, type OrganizationStewardshipMandateRevision, type OrganizationStewardshipOpportunity, type OrganizationStewardshipPreview, type Repository } from "@/lib/api";
+import {
+  api,
+  type Organization,
+  type OrganizationDirectory,
+  type OrganizationPolicyRules,
+  type OrganizationPortfolio,
+  type OrganizationStewardshipMandate,
+  type OrganizationStewardshipMandateRevision,
+  type OrganizationStewardshipOpportunity,
+  type OrganizationStewardshipPreview,
+  type Repository,
+} from "@/lib/api";
 import { useAuth } from "./auth";
 import { Badge, Button, Card } from "./ui";
 
-function message(reason: unknown) { return reason instanceof Error ? reason.message : "The organization could not be updated."; }
+function message(reason: unknown) {
+  return reason instanceof Error
+    ? reason.message
+    : "The organization could not be updated.";
+}
 
 export function OrganizationsWorkspace() {
   const { token, user } = useAuth();
-  const [items,setItems]=useState<Organization[]>([]),[repositories,setRepositories]=useState<Repository[]>([]),[error,setError]=useState("");
-  const load=useCallback(async()=>{if(!token)return;try{const [groups,repos]=await Promise.all([api<{organizations:Organization[]}>("/organizations",{},token),api<{repositories:Repository[]}>("/repositories?limit=100",{},token)]);setItems(groups.organizations??[]);setRepositories(repos.repositories??[])}catch(e){setError(message(e))}},[token]);
-  useEffect(()=>{void Promise.resolve().then(load)},[load]);
-  async function create(event:FormEvent<HTMLFormElement>){event.preventDefault();const form=event.currentTarget,data=new FormData(form);try{const created=await api<Organization>("/organizations",{method:"POST",body:JSON.stringify({name:data.get("name"),slug:data.get("slug"),description:data.get("description")})},token);setItems(x=>[...x,created]);form.reset()}catch(e){setError(message(e))}}
-  async function accept(group:Organization,invitation:string){try{const changed=await api<Organization>(`/organizations/${group.id}/invitations/${invitation}/accept`,{method:"POST"},token);setItems(x=>x.map(v=>v.id===changed.id?changed:v))}catch(e){setError(message(e))}}
-  async function transfer(event:FormEvent<HTMLFormElement>,group:Organization){event.preventDefault();const form=event.currentTarget,data=new FormData(form);try{await api(`/organizations/${group.id}/repository-transfers`,{method:"POST",body:JSON.stringify({repository_id:data.get("repository_id")})},token);await load();form.reset()}catch(e){setError(message(e))}}
-  return <div className="space-y-7"><header className="max-w-3xl"><p className="text-xs font-bold uppercase tracking-[.16em] text-[var(--brand)]">Accountable groups</p><h1 className="mt-2 text-3xl font-bold tracking-tight">Organizations</h1><p className="mt-3 text-sm leading-6 text-[var(--muted)]">Give collaborators a durable group identity without disconnecting repositories from the work and evidence already attached to them.</p></header>
-    {error&&<p role="alert" className="rounded-lg bg-[var(--danger-soft)] p-3 text-sm text-[var(--danger)]">{error}</p>}
-    <Card className="p-6"><h2 className="text-lg font-semibold">Create an organization</h2><form onSubmit={create} className="mt-4 grid gap-3 sm:grid-cols-2"><label className="text-sm font-semibold">Name<input name="name" required maxLength={100} className="mt-1 min-h-11 w-full rounded-lg border border-[var(--line-strong)] px-3 font-normal"/></label><label className="text-sm font-semibold">URL slug<input name="slug" required pattern="[a-z0-9-]+" maxLength={60} className="mt-1 min-h-11 w-full rounded-lg border border-[var(--line-strong)] px-3 font-mono font-normal"/></label><label className="text-sm font-semibold sm:col-span-2">Purpose<textarea name="description" maxLength={1000} className="mt-1 min-h-24 w-full rounded-lg border border-[var(--line-strong)] p-3 font-normal"/></label><div><Button type="submit">Create organization</Button></div></form></Card>
-    <section className="grid gap-4">{items.length===0?<Card className="p-8 text-center text-sm text-[var(--muted)]">No organizations or invitations yet.</Card>:items.map(group=>{const invitation=group.invitations.find(x=>x.user_id===user?.id);const owned=repositories.filter(x=>x.owner_id===user?.id&&!x.organization_id);return <Card key={group.id} className="p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><h2 className="text-lg font-semibold">{group.name}</h2><Badge>{group.slug}</Badge></div><p className="mt-1 text-sm text-[var(--muted)]">{group.description||"Shared stewardship and portfolio evidence."}</p></div>{invitation?<Button onClick={()=>void accept(group,invitation.id)}>Accept invitation</Button>:<Link href={`/organizations/${group.id}`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Open portfolio →</Link>}</div>{!invitation&&owned.length>0&&<form onSubmit={e=>void transfer(e,group)} className="mt-5 flex flex-wrap items-end gap-3 border-t border-[var(--line)] pt-4"><label className="grow text-xs font-semibold">Transfer an individually owned repository<select name="repository_id" required className="mt-1 min-h-10 w-full rounded-lg border border-[var(--line-strong)] bg-white px-3 font-normal">{owned.map(repo=><option key={repo.id} value={repo.id}>{repo.name}</option>)}</select></label><Button type="submit" variant="quiet">Request transfer</Button><p className="w-full text-xs text-[var(--muted)]">An organization owner must explicitly accept before the repository joins the portfolio.</p></form>}</Card>})}</section>
-  </div>
+  const [items, setItems] = useState<Organization[]>([]),
+    [repositories, setRepositories] = useState<Repository[]>([]),
+    [error, setError] = useState("");
+  const load = useCallback(async () => {
+    if (!token) return;
+    try {
+      const [groups, repos] = await Promise.all([
+        api<{ organizations: Organization[] }>("/organizations", {}, token),
+        api<{ repositories: Repository[] }>(
+          "/repositories?limit=100",
+          {},
+          token,
+        ),
+      ]);
+      setItems(groups.organizations ?? []);
+      setRepositories(repos.repositories ?? []);
+    } catch (e) {
+      setError(message(e));
+    }
+  }, [token]);
+  useEffect(() => {
+    void Promise.resolve().then(load);
+  }, [load]);
+  async function create(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget,
+      data = new FormData(form);
+    try {
+      const created = await api<Organization>(
+        "/organizations",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            name: data.get("name"),
+            slug: data.get("slug"),
+            description: data.get("description"),
+          }),
+        },
+        token,
+      );
+      setItems((x) => [...x, created]);
+      form.reset();
+    } catch (e) {
+      setError(message(e));
+    }
+  }
+  async function accept(group: Organization, invitation: string) {
+    try {
+      const changed = await api<Organization>(
+        `/organizations/${group.id}/invitations/${invitation}/accept`,
+        { method: "POST" },
+        token,
+      );
+      setItems((x) => x.map((v) => (v.id === changed.id ? changed : v)));
+    } catch (e) {
+      setError(message(e));
+    }
+  }
+  async function transfer(
+    event: FormEvent<HTMLFormElement>,
+    group: Organization,
+  ) {
+    event.preventDefault();
+    const form = event.currentTarget,
+      data = new FormData(form);
+    try {
+      await api(
+        `/organizations/${group.id}/repository-transfers`,
+        {
+          method: "POST",
+          body: JSON.stringify({ repository_id: data.get("repository_id") }),
+        },
+        token,
+      );
+      await load();
+      form.reset();
+    } catch (e) {
+      setError(message(e));
+    }
+  }
+  return (
+    <div className="space-y-7">
+      <header className="max-w-3xl">
+        <p className="text-xs font-bold uppercase tracking-[.16em] text-[var(--brand)]">
+          Accountable groups
+        </p>
+        <h1 className="mt-2 text-3xl font-bold tracking-tight">
+          Organizations
+        </h1>
+        <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
+          Give collaborators a durable group identity without disconnecting
+          repositories from the work and evidence already attached to them.
+        </p>
+      </header>
+      {error && (
+        <p
+          role="alert"
+          className="rounded-lg bg-[var(--danger-soft)] p-3 text-sm text-[var(--danger)]"
+        >
+          {error}
+        </p>
+      )}
+      <Card className="p-6">
+        <h2 className="text-lg font-semibold">Create an organization</h2>
+        <form onSubmit={create} className="mt-4 grid gap-3 sm:grid-cols-2">
+          <label className="text-sm font-semibold">
+            Name
+            <input
+              name="name"
+              required
+              maxLength={100}
+              className="mt-1 min-h-11 w-full rounded-lg border border-[var(--line-strong)] px-3 font-normal"
+            />
+          </label>
+          <label className="text-sm font-semibold">
+            URL slug
+            <input
+              name="slug"
+              required
+              pattern="[a-z0-9-]+"
+              maxLength={60}
+              className="mt-1 min-h-11 w-full rounded-lg border border-[var(--line-strong)] px-3 font-mono font-normal"
+            />
+          </label>
+          <label className="text-sm font-semibold sm:col-span-2">
+            Purpose
+            <textarea
+              name="description"
+              maxLength={1000}
+              className="mt-1 min-h-24 w-full rounded-lg border border-[var(--line-strong)] p-3 font-normal"
+            />
+          </label>
+          <div>
+            <Button type="submit">Create organization</Button>
+          </div>
+        </form>
+      </Card>
+      <section className="grid gap-4">
+        {items.length === 0 ? (
+          <Card className="p-8 text-center text-sm text-[var(--muted)]">
+            No organizations or invitations yet.
+          </Card>
+        ) : (
+          items.map((group) => {
+            const invitation = group.invitations.find(
+              (x) => x.user_id === user?.id,
+            );
+            const owned = repositories.filter(
+              (x) => x.owner_id === user?.id && !x.organization_id,
+            );
+            return (
+              <Card key={group.id} className="p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-lg font-semibold">{group.name}</h2>
+                      <Badge>{group.slug}</Badge>
+                    </div>
+                    <p className="mt-1 text-sm text-[var(--muted)]">
+                      {group.description ||
+                        "Shared stewardship and portfolio evidence."}
+                    </p>
+                  </div>
+                  {invitation ? (
+                    <Button onClick={() => void accept(group, invitation.id)}>
+                      Accept invitation
+                    </Button>
+                  ) : (
+                    <Link
+                      href={`/organizations/${group.id}`}
+                      className="text-sm font-semibold text-[var(--brand)] hover:underline"
+                    >
+                      Open portfolio →
+                    </Link>
+                  )}
+                </div>
+                {!invitation && owned.length > 0 && (
+                  <form
+                    onSubmit={(e) => void transfer(e, group)}
+                    className="mt-5 flex flex-wrap items-end gap-3 border-t border-[var(--line)] pt-4"
+                  >
+                    <label className="grow text-xs font-semibold">
+                      Transfer an individually owned repository
+                      <select
+                        name="repository_id"
+                        required
+                        className="mt-1 min-h-10 w-full rounded-lg border border-[var(--line-strong)] bg-white px-3 font-normal"
+                      >
+                        {owned.map((repo) => (
+                          <option key={repo.id} value={repo.id}>
+                            {repo.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <Button type="submit" variant="quiet">
+                      Request transfer
+                    </Button>
+                    <p className="w-full text-xs text-[var(--muted)]">
+                      An organization owner must explicitly accept before the
+                      repository joins the portfolio.
+                    </p>
+                  </form>
+                )}
+              </Card>
+            );
+          })
+        )}
+      </section>
+    </div>
+  );
 }
 
-export function OrganizationDetail({organizationID}:{organizationID:string}) {
-  const {token,user}=useAuth();const [portfolio,setPortfolio]=useState<OrganizationPortfolio|null>(null),[directory,setDirectory]=useState<OrganizationDirectory|null>(null),[error,setError]=useState("");
-  const load=useCallback(async()=>{try{const [nextDirectory,nextPortfolio]=await Promise.all([api<OrganizationDirectory>(`/organizations/${organizationID}/directory`,{},token),token?api<OrganizationPortfolio>(`/organizations/${organizationID}/portfolio`,{},token).catch(()=>null):Promise.resolve(null)]);setDirectory(nextDirectory);setPortfolio(nextPortfolio);setError("")}catch(e){setError(message(e))}},[organizationID,token]);useEffect(()=>{void Promise.resolve().then(load)},[load]);
-  async function submit(path:string,options:RequestInit){try{await api(path,options,token);await load()}catch(e){setError(message(e))}}
-  if(!directory)return <p className="text-sm text-[var(--muted)]">{error||"Loading organization…"}</p>;if(!portfolio)return <PublicDirectory directory={directory}/>;const {organization:group}=portfolio;const owner=group.members.some(x=>x.user_id===user?.id&&x.role==="owner");
-  return <div className="space-y-7"><header><p className="text-xs font-bold uppercase tracking-[.16em] text-[var(--brand)]">Organization portfolio</p><h1 className="mt-2 text-3xl font-bold">{group.name}</h1><p className="mt-2 text-sm text-[var(--muted)]">{group.description}</p></header>{error&&<p role="alert" className="rounded-lg bg-[var(--danger-soft)] p-3 text-sm text-[var(--danger)]">{error}</p>}
-    <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">{[["Repositories",portfolio.repositories.length],["Packages",portfolio.packages.length],["Active proposals",portfolio.active_proposals.length],["Open pulls",portfolio.active_pulls.length],["Releases",portfolio.releases.length],["Incidents",portfolio.active_incidents.length]].map(([label,value])=><Card key={label} className="p-4"><p className="text-2xl font-bold">{value}</p><p className="mt-1 text-xs text-[var(--muted)]">{label}</p></Card>)}</div>
-    <InitiativeWorkspace group={group} portfolio={portfolio} submit={submit}/>
-    <PolicyWorkspace group={group} repositories={portfolio.repositories} owner={owner} submit={submit}/>
-    <StewardshipWorkspace group={group} repositories={portfolio.repositories} owner={owner} userID={user?.id ?? ""} token={token} submit={submit}/>
-    <div className="grid gap-6 xl:grid-cols-2"><Card className="p-5"><h2 className="text-lg font-semibold">Repository portfolio</h2>{portfolio.repositories.map(repo=><div key={repo.id} className="mt-3 flex justify-between border-t border-[var(--line)] pt-3 text-sm"><Link className="font-mono font-semibold text-[var(--brand)] hover:underline" href={`/repositories/${repo.id}`}>{repo.name}</Link><span>{repo.visibility}</span></div>)}{portfolio.repositories.length===0&&<p className="mt-3 text-sm text-[var(--muted)]">No repositories yet.</p>}{owner&&<form onSubmit={e=>{e.preventDefault();const f=e.currentTarget,d=new FormData(f);void submit(`/organizations/${group.id}/repositories`,{method:"POST",body:JSON.stringify({name:d.get("name")})}).then(()=>f.reset())}} className="mt-5 flex gap-2"><input name="name" required pattern="[A-Za-z0-9._-]+" placeholder="new-repository" className="min-h-10 grow rounded-lg border border-[var(--line-strong)] px-3"/><Button type="submit">Create here</Button></form>}</Card>
-      <Card className="p-5"><h2 className="text-lg font-semibold">Members</h2>{group.members.map(member=><div key={member.user_id} className="mt-3 flex items-center justify-between border-t border-[var(--line)] pt-3 text-sm"><span className="font-mono">{member.user_id}</span><div className="flex items-center gap-2"><Badge>{member.role}</Badge>{owner&&member.role!=="owner"&&<Button variant="quiet" onClick={()=>void submit(`/organizations/${group.id}/members/${member.user_id}`,{method:"DELETE"})}>Remove</Button>}</div></div>)}{owner&&<form onSubmit={e=>{e.preventDefault();const f=e.currentTarget,d=new FormData(f);void submit(`/organizations/${group.id}/invitations`,{method:"POST",body:JSON.stringify({user_id:d.get("user_id")})}).then(()=>f.reset())}} className="mt-5 flex gap-2"><input name="user_id" required minLength={32} maxLength={32} placeholder="collaboration ID" className="min-h-10 grow rounded-lg border border-[var(--line-strong)] px-3 font-mono text-xs"/><Button type="submit">Invite</Button></form>}</Card></div>
-    <Card className="p-5"><h2 className="text-lg font-semibold">Effective portfolio access</h2><p className="mt-1 text-sm text-[var(--muted)]">Each role names its source and selected resources. Expired, revoked, and explicitly excepted authority does not apply.</p>{group.access_grants.filter(x=>!x.revoked_at).map(grant=><div key={grant.id} className="mt-4 border-t border-[var(--line)] pt-3 text-sm"><div className="flex flex-wrap items-center gap-2"><Badge>{grant.role}</Badge><strong>{grant.principal_type} {grant.principal_id}</strong>{grant.expires_at&&<span className="text-xs text-[var(--muted)]">until {new Date(grant.expires_at).toLocaleString()}</span>}</div><p className="mt-1">{grant.resources.map(x=>`${x.kind}:${x.id}`).join(", ")}</p><p className="mt-1 text-xs text-[var(--muted)]">Why: {grant.reason}{grant.exceptions.length>0&&` · ${grant.exceptions.length} explicit exception(s)`}</p>{owner&&<Button className="mt-2" variant="quiet" onClick={()=>void submit(`/organizations/${group.id}/access-grants/${grant.id}`,{method:"DELETE",body:JSON.stringify({expected_version:grant.version})})}>Revoke grant</Button>}</div>)}{group.access_grants.filter(x=>!x.revoked_at).length===0&&<p className="mt-3 text-sm text-[var(--muted)]">No active portfolio grants.</p>}{group.access_requests.filter(x=>x.status==="pending").map(request=><div key={request.id} className="mt-4 border-t border-[var(--line)] pt-3 text-sm"><strong>Pending: {request.role}</strong> for {request.principal_type} <code>{request.principal_id}</code><p className="text-xs text-[var(--muted)]">{request.reason}</p>{owner&&<div className="mt-2 flex gap-2"><Button onClick={()=>void submit(`/organizations/${group.id}/access-requests/${request.id}/decision`,{method:"POST",body:JSON.stringify({decision:"approve"})})}>Approve</Button><Button variant="quiet" onClick={()=>void submit(`/organizations/${group.id}/access-requests/${request.id}/decision`,{method:"POST",body:JSON.stringify({decision:"deny"})})}>Deny</Button></div>}</div>)}</Card>
-    {(group.teams.length>0||group.agents.length>0)&&<Card className="p-5"><h2 className="text-lg font-semibold">Request scoped access</h2><form onSubmit={e=>{e.preventDefault();const f=e.currentTarget,d=new FormData(f),principal=String(d.get("principal")).split(":");void submit(`/organizations/${group.id}/access-requests`,{method:"POST",body:JSON.stringify({principal_type:principal[0],principal_id:principal[1],role:d.get("role"),resources:[{kind:d.get("resource_kind"),id:d.get("resource_id")}],exceptions:d.get("exception_id")?[{resource:{kind:d.get("resource_kind"),id:d.get("exception_id")},reason:d.get("exception_reason")}]:[],reason:d.get("reason"),expires_at:d.get("expires_at")?new Date(String(d.get("expires_at"))).toISOString():null})}).then(()=>f.reset())}} className="mt-4 grid gap-3 sm:grid-cols-2"><select name="principal" required className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"><option value="">Select team or agent</option>{group.teams.map(x=><option key={x.id} value={`team:${x.id}`}>Team · {x.name}</option>)}{group.agents.map(x=><option key={x.id} value={`agent:${x.id}`}>Agent · {x.name}</option>)}</select><select name="role" className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"><option value="viewer">Viewer</option><option value="contributor">Contributor</option><option value="maintainer">Maintainer</option><option value="operator">Operator</option></select><select name="resource_kind" className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"><option value="repository">Repository</option><option value="package">Package</option><option value="environment">Environment</option><option value="collaboration">Collaboration resource</option></select><input name="resource_id" required minLength={32} maxLength={32} placeholder="Selected resource ID" className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3 font-mono text-xs"/><input name="expires_at" type="datetime-local" className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"/><input name="exception_id" minLength={32} maxLength={32} placeholder="Optional excluded resource ID" className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3 font-mono text-xs"/><input name="exception_reason" placeholder="Why this resource is excluded" className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3 sm:col-span-2"/><textarea name="reason" required placeholder="Why this authority is needed" className="min-h-20 rounded-lg border border-[var(--line-strong)] p-3 sm:col-span-2"/><div><Button type="submit">Submit access request</Button></div></form></Card>}
-    <PublicDirectory directory={directory} repositories={portfolio.repositories}/>
-    {directory.events&&directory.events.length>0&&<Card className="p-5"><h2 className="text-lg font-semibold">Organization changes</h2>{directory.events.slice().reverse().slice(0,20).map(event=><p key={event.id} className="mt-3 border-t border-[var(--line)] pt-3 text-sm"><strong>{event.action.replaceAll("."," ")}</strong> · <code>{event.actor_id}</code><br/><span className="text-xs text-[var(--muted)]">{new Date(event.created_at).toLocaleString()} {event.target_id&&`· target ${event.target_id}`}</span></p>)}</Card>}
-    {owner&&<div className="grid gap-6 xl:grid-cols-2"><Card className="p-5"><h2 className="text-lg font-semibold">Create a team</h2><form onSubmit={e=>{e.preventDefault();const f=e.currentTarget,d=new FormData(f);void submit(`/organizations/${group.id}/teams`,{method:"POST",body:JSON.stringify({name:d.get("name"),slug:d.get("slug"),parent_id:d.get("parent_id"),visibility:d.get("visibility")})}).then(()=>f.reset())}} className="mt-4 grid gap-3"><input name="name" required placeholder="Team name" className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"/><input name="slug" required pattern="[a-z0-9-]+" placeholder="team-slug" className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3 font-mono"/><select name="parent_id" className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"><option value="">No parent team</option>{group.teams.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select><select name="visibility" className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"><option value="organization">Organization only</option><option value="public">Public</option></select><Button type="submit">Create team</Button></form></Card><Card className="p-5"><h2 className="text-lg font-semibold">Approve an agent</h2><form onSubmit={e=>{e.preventDefault();const f=e.currentTarget,d=new FormData(f);void submit(`/organizations/${group.id}/agents`,{method:"POST",body:JSON.stringify({name:d.get("name"),slug:d.get("slug"),visibility:d.get("visibility"),capabilities:String(d.get("capabilities")).split(",").map(x=>x.trim()).filter(Boolean),operator_ids:[d.get("operator_id")],team_ids:d.get("team_id")?[d.get("team_id")]:[]})}).then(()=>f.reset())}} className="mt-4 grid gap-3"><input name="name" required placeholder="Agent name" className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"/><input name="slug" required pattern="[a-z0-9-]+" placeholder="agent-slug" className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3 font-mono"/><input name="capabilities" required placeholder="inspect checks, summarize failures" className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"/><input name="operator_id" required minLength={32} maxLength={32} placeholder="Operator collaboration ID" className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3 font-mono text-xs"/><select name="team_id" className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"><option value="">No team</option>{group.teams.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select><select name="visibility" className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"><option value="organization">Organization only</option><option value="public">Public</option></select><Button type="submit">Register approved agent</Button></form></Card>{group.teams.length>0&&<Card className="p-5"><h2 className="text-lg font-semibold">Team membership</h2><form onSubmit={e=>{e.preventDefault();const f=e.currentTarget,d=new FormData(f),team=group.teams.find(x=>x.id===d.get("team_id"));if(team)void submit(`/organizations/${group.id}/teams/${team.id}/members`,{method:"PUT",body:JSON.stringify({user_id:d.get("user_id"),role:d.get("role"),expected_version:team.version})}).then(()=>f.reset())}} className="mt-4 grid gap-3"><select name="team_id" required className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3">{group.teams.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select><input name="user_id" required minLength={32} maxLength={32} placeholder="Member collaboration ID" className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3 font-mono text-xs"/><select name="role" className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"><option value="member">Member</option><option value="maintainer">Maintainer</option></select><Button type="submit">Add or update member</Button></form></Card>} {group.teams.length>0&&portfolio.repositories.length>0&&<Card className="p-5"><h2 className="text-lg font-semibold">Area of responsibility</h2><form onSubmit={e=>{e.preventDefault();const f=e.currentTarget,d=new FormData(f),team=group.teams.find(x=>x.id===d.get("team_id"));if(team)void submit(`/organizations/${group.id}/teams/${team.id}/responsibilities`,{method:"POST",body:JSON.stringify({repository_id:d.get("repository_id"),area:d.get("area"),description:d.get("description"),expected_version:team.version})}).then(()=>f.reset())}} className="mt-4 grid gap-3"><select name="team_id" required className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3">{group.teams.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select><select name="repository_id" required className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3">{portfolio.repositories.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select><input name="area" required placeholder="Area, service, or path" className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"/><textarea name="description" placeholder="What this team owns" className="min-h-20 rounded-lg border border-[var(--line-strong)] p-3"/><Button type="submit">Assign responsibility</Button></form></Card>}</div>}
-    {owner&&group.transfers.some(x=>x.status==="pending")&&<Card className="p-5"><h2 className="text-lg font-semibold">Transfers awaiting acceptance</h2>{group.transfers.filter(x=>x.status==="pending").map(x=><div key={x.id} className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] pt-3"><p className="text-sm"><code>{x.repository_id}</code><br/><span className="text-xs text-[var(--muted)]">Requested by {x.requested_by||x.from_owner_id}</span></p><Button onClick={()=>void submit(`/organizations/${group.id}/repository-transfers/${x.id}/accept`,{method:"POST"})}>Accept stewardship</Button></div>)}</Card>}
-    <div className="grid gap-6 lg:grid-cols-2"><Evidence title="Active work" items={[...portfolio.active_proposals.map(x=>({id:x.id,label:x.title,href:`/proposals/${x.repository_id}/${x.id}`})),...portfolio.active_pulls.map(x=>({id:x.id,label:x.title,href:`/pulls/${x.repository_id}/${x.id}`}))]}/><Evidence title="Releases and incidents" items={[...portfolio.releases.map(x=>({id:x.id,label:`${x.version} · ${x.notes}`,href:`/repositories/${x.repository_id}/releases/${x.id}`})),...portfolio.active_incidents.map(x=>({id:x.id,label:x.title,href:`/incidents/${x.id}`}))]}/></div>
-  </div>
+export function OrganizationDetail({
+  organizationID,
+}: {
+  organizationID: string;
+}) {
+  const { token, user } = useAuth();
+  const [portfolio, setPortfolio] = useState<OrganizationPortfolio | null>(
+      null,
+    ),
+    [directory, setDirectory] = useState<OrganizationDirectory | null>(null),
+    [error, setError] = useState("");
+  const load = useCallback(async () => {
+    try {
+      const [nextDirectory, nextPortfolio] = await Promise.all([
+        api<OrganizationDirectory>(
+          `/organizations/${organizationID}/directory`,
+          {},
+          token,
+        ),
+        token
+          ? api<OrganizationPortfolio>(
+              `/organizations/${organizationID}/portfolio`,
+              {},
+              token,
+            ).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+      setDirectory(nextDirectory);
+      setPortfolio(nextPortfolio);
+      setError("");
+    } catch (e) {
+      setError(message(e));
+    }
+  }, [organizationID, token]);
+  useEffect(() => {
+    void Promise.resolve().then(load);
+  }, [load]);
+  async function submit(path: string, options: RequestInit) {
+    try {
+      await api(path, options, token);
+      await load();
+    } catch (e) {
+      setError(message(e));
+    }
+  }
+  if (!directory)
+    return (
+      <p className="text-sm text-[var(--muted)]">
+        {error || "Loading organization…"}
+      </p>
+    );
+  if (!portfolio) return <PublicDirectory directory={directory} />;
+  const { organization: group } = portfolio;
+  const owner = group.members.some(
+    (x) => x.user_id === user?.id && x.role === "owner",
+  );
+  return (
+    <div className="space-y-7">
+      <header>
+        <p className="text-xs font-bold uppercase tracking-[.16em] text-[var(--brand)]">
+          Organization portfolio
+        </p>
+        <h1 className="mt-2 text-3xl font-bold">{group.name}</h1>
+        <p className="mt-2 text-sm text-[var(--muted)]">{group.description}</p>
+      </header>
+      {error && (
+        <p
+          role="alert"
+          className="rounded-lg bg-[var(--danger-soft)] p-3 text-sm text-[var(--danger)]"
+        >
+          {error}
+        </p>
+      )}
+      <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        {[
+          ["Repositories", portfolio.repositories.length],
+          ["Packages", portfolio.packages.length],
+          ["Active proposals", portfolio.active_proposals.length],
+          ["Open pulls", portfolio.active_pulls.length],
+          ["Releases", portfolio.releases.length],
+          ["Incidents", portfolio.active_incidents.length],
+        ].map(([label, value]) => (
+          <Card key={label} className="p-4">
+            <p className="text-2xl font-bold">{value}</p>
+            <p className="mt-1 text-xs text-[var(--muted)]">{label}</p>
+          </Card>
+        ))}
+      </div>
+      <InitiativeWorkspace
+        group={group}
+        portfolio={portfolio}
+        submit={submit}
+      />
+      <PolicyWorkspace
+        group={group}
+        repositories={portfolio.repositories}
+        owner={owner}
+        submit={submit}
+      />
+      <StewardshipWorkspace
+        group={group}
+        repositories={portfolio.repositories}
+        owner={owner}
+        userID={user?.id ?? ""}
+        token={token}
+        submit={submit}
+      />
+      <div className="grid gap-6 xl:grid-cols-2">
+        <Card className="p-5">
+          <h2 className="text-lg font-semibold">Repository portfolio</h2>
+          {portfolio.repositories.map((repo) => (
+            <div
+              key={repo.id}
+              className="mt-3 flex justify-between border-t border-[var(--line)] pt-3 text-sm"
+            >
+              <Link
+                className="font-mono font-semibold text-[var(--brand)] hover:underline"
+                href={`/repositories/${repo.id}`}
+              >
+                {repo.name}
+              </Link>
+              <span>{repo.visibility}</span>
+            </div>
+          ))}
+          {portfolio.repositories.length === 0 && (
+            <p className="mt-3 text-sm text-[var(--muted)]">
+              No repositories yet.
+            </p>
+          )}
+          {owner && (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const f = e.currentTarget,
+                  d = new FormData(f);
+                void submit(`/organizations/${group.id}/repositories`, {
+                  method: "POST",
+                  body: JSON.stringify({ name: d.get("name") }),
+                }).then(() => f.reset());
+              }}
+              className="mt-5 flex gap-2"
+            >
+              <input
+                name="name"
+                required
+                pattern="[A-Za-z0-9._-]+"
+                placeholder="new-repository"
+                className="min-h-10 grow rounded-lg border border-[var(--line-strong)] px-3"
+              />
+              <Button type="submit">Create here</Button>
+            </form>
+          )}
+        </Card>
+        <Card className="p-5">
+          <h2 className="text-lg font-semibold">Members</h2>
+          {group.members.map((member) => (
+            <div
+              key={member.user_id}
+              className="mt-3 flex items-center justify-between border-t border-[var(--line)] pt-3 text-sm"
+            >
+              <span className="font-mono">{member.user_id}</span>
+              <div className="flex items-center gap-2">
+                <Badge>{member.role}</Badge>
+                {owner && member.role !== "owner" && (
+                  <Button
+                    variant="quiet"
+                    onClick={() =>
+                      void submit(
+                        `/organizations/${group.id}/members/${member.user_id}`,
+                        { method: "DELETE" },
+                      )
+                    }
+                  >
+                    Remove
+                  </Button>
+                )}
+              </div>
+            </div>
+          ))}
+          {owner && (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const f = e.currentTarget,
+                  d = new FormData(f);
+                void submit(`/organizations/${group.id}/invitations`, {
+                  method: "POST",
+                  body: JSON.stringify({ user_id: d.get("user_id") }),
+                }).then(() => f.reset());
+              }}
+              className="mt-5 flex gap-2"
+            >
+              <input
+                name="user_id"
+                required
+                minLength={32}
+                maxLength={32}
+                placeholder="collaboration ID"
+                className="min-h-10 grow rounded-lg border border-[var(--line-strong)] px-3 font-mono text-xs"
+              />
+              <Button type="submit">Invite</Button>
+            </form>
+          )}
+        </Card>
+      </div>
+      <Card className="p-5">
+        <h2 className="text-lg font-semibold">Effective portfolio access</h2>
+        <p className="mt-1 text-sm text-[var(--muted)]">
+          Each role names its source and selected resources. Expired, revoked,
+          and explicitly excepted authority does not apply.
+        </p>
+        {group.access_grants
+          .filter((x) => !x.revoked_at)
+          .map((grant) => (
+            <div
+              key={grant.id}
+              className="mt-4 border-t border-[var(--line)] pt-3 text-sm"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge>{grant.role}</Badge>
+                <strong>
+                  {grant.principal_type} {grant.principal_id}
+                </strong>
+                {grant.expires_at && (
+                  <span className="text-xs text-[var(--muted)]">
+                    until {new Date(grant.expires_at).toLocaleString()}
+                  </span>
+                )}
+              </div>
+              <p className="mt-1">
+                {grant.resources.map((x) => `${x.kind}:${x.id}`).join(", ")}
+              </p>
+              <p className="mt-1 text-xs text-[var(--muted)]">
+                Why: {grant.reason}
+                {grant.exceptions.length > 0 &&
+                  ` · ${grant.exceptions.length} explicit exception(s)`}
+              </p>
+              {owner && (
+                <Button
+                  className="mt-2"
+                  variant="quiet"
+                  onClick={() =>
+                    void submit(
+                      `/organizations/${group.id}/access-grants/${grant.id}`,
+                      {
+                        method: "DELETE",
+                        body: JSON.stringify({
+                          expected_version: grant.version,
+                        }),
+                      },
+                    )
+                  }
+                >
+                  Revoke grant
+                </Button>
+              )}
+            </div>
+          ))}
+        {group.access_grants.filter((x) => !x.revoked_at).length === 0 && (
+          <p className="mt-3 text-sm text-[var(--muted)]">
+            No active portfolio grants.
+          </p>
+        )}
+        {group.access_requests
+          .filter((x) => x.status === "pending")
+          .map((request) => (
+            <div
+              key={request.id}
+              className="mt-4 border-t border-[var(--line)] pt-3 text-sm"
+            >
+              <strong>Pending: {request.role}</strong> for{" "}
+              {request.principal_type} <code>{request.principal_id}</code>
+              <p className="text-xs text-[var(--muted)]">{request.reason}</p>
+              {owner && (
+                <div className="mt-2 flex gap-2">
+                  <Button
+                    onClick={() =>
+                      void submit(
+                        `/organizations/${group.id}/access-requests/${request.id}/decision`,
+                        {
+                          method: "POST",
+                          body: JSON.stringify({ decision: "approve" }),
+                        },
+                      )
+                    }
+                  >
+                    Approve
+                  </Button>
+                  <Button
+                    variant="quiet"
+                    onClick={() =>
+                      void submit(
+                        `/organizations/${group.id}/access-requests/${request.id}/decision`,
+                        {
+                          method: "POST",
+                          body: JSON.stringify({ decision: "deny" }),
+                        },
+                      )
+                    }
+                  >
+                    Deny
+                  </Button>
+                </div>
+              )}
+            </div>
+          ))}
+      </Card>
+      {(group.teams.length > 0 || group.agents.length > 0) && (
+        <Card className="p-5">
+          <h2 className="text-lg font-semibold">Request scoped access</h2>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const f = e.currentTarget,
+                d = new FormData(f),
+                principal = String(d.get("principal")).split(":");
+              void submit(`/organizations/${group.id}/access-requests`, {
+                method: "POST",
+                body: JSON.stringify({
+                  principal_type: principal[0],
+                  principal_id: principal[1],
+                  role: d.get("role"),
+                  resources: [
+                    { kind: d.get("resource_kind"), id: d.get("resource_id") },
+                  ],
+                  exceptions: d.get("exception_id")
+                    ? [
+                        {
+                          resource: {
+                            kind: d.get("resource_kind"),
+                            id: d.get("exception_id"),
+                          },
+                          reason: d.get("exception_reason"),
+                        },
+                      ]
+                    : [],
+                  reason: d.get("reason"),
+                  expires_at: d.get("expires_at")
+                    ? new Date(String(d.get("expires_at"))).toISOString()
+                    : null,
+                }),
+              }).then(() => f.reset());
+            }}
+            className="mt-4 grid gap-3 sm:grid-cols-2"
+          >
+            <select
+              name="principal"
+              required
+              className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"
+            >
+              <option value="">Select team or agent</option>
+              {group.teams.map((x) => (
+                <option key={x.id} value={`team:${x.id}`}>
+                  Team · {x.name}
+                </option>
+              ))}
+              {group.agents.map((x) => (
+                <option key={x.id} value={`agent:${x.id}`}>
+                  Agent · {x.name}
+                </option>
+              ))}
+            </select>
+            <select
+              name="role"
+              className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"
+            >
+              <option value="viewer">Viewer</option>
+              <option value="contributor">Contributor</option>
+              <option value="maintainer">Maintainer</option>
+              <option value="operator">Operator</option>
+            </select>
+            <select
+              name="resource_kind"
+              className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"
+            >
+              <option value="repository">Repository</option>
+              <option value="package">Package</option>
+              <option value="environment">Environment</option>
+              <option value="collaboration">Collaboration resource</option>
+            </select>
+            <input
+              name="resource_id"
+              required
+              minLength={32}
+              maxLength={32}
+              placeholder="Selected resource ID"
+              className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3 font-mono text-xs"
+            />
+            <input
+              name="expires_at"
+              type="datetime-local"
+              className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"
+            />
+            <input
+              name="exception_id"
+              minLength={32}
+              maxLength={32}
+              placeholder="Optional excluded resource ID"
+              className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3 font-mono text-xs"
+            />
+            <input
+              name="exception_reason"
+              placeholder="Why this resource is excluded"
+              className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3 sm:col-span-2"
+            />
+            <textarea
+              name="reason"
+              required
+              placeholder="Why this authority is needed"
+              className="min-h-20 rounded-lg border border-[var(--line-strong)] p-3 sm:col-span-2"
+            />
+            <div>
+              <Button type="submit">Submit access request</Button>
+            </div>
+          </form>
+        </Card>
+      )}
+      <PublicDirectory
+        directory={directory}
+        repositories={portfolio.repositories}
+      />
+      {directory.events && directory.events.length > 0 && (
+        <Card className="p-5">
+          <h2 className="text-lg font-semibold">Organization changes</h2>
+          {directory.events
+            .slice()
+            .reverse()
+            .slice(0, 20)
+            .map((event) => (
+              <p
+                key={event.id}
+                className="mt-3 border-t border-[var(--line)] pt-3 text-sm"
+              >
+                <strong>{event.action.replaceAll(".", " ")}</strong> ·{" "}
+                <code>{event.actor_id}</code>
+                <br />
+                <span className="text-xs text-[var(--muted)]">
+                  {new Date(event.created_at).toLocaleString()}{" "}
+                  {event.target_id && `· target ${event.target_id}`}
+                </span>
+              </p>
+            ))}
+        </Card>
+      )}
+      {owner && (
+        <div className="grid gap-6 xl:grid-cols-2">
+          <Card className="p-5">
+            <h2 className="text-lg font-semibold">Create a team</h2>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const f = e.currentTarget,
+                  d = new FormData(f);
+                void submit(`/organizations/${group.id}/teams`, {
+                  method: "POST",
+                  body: JSON.stringify({
+                    name: d.get("name"),
+                    slug: d.get("slug"),
+                    parent_id: d.get("parent_id"),
+                    visibility: d.get("visibility"),
+                  }),
+                }).then(() => f.reset());
+              }}
+              className="mt-4 grid gap-3"
+            >
+              <input
+                name="name"
+                required
+                placeholder="Team name"
+                className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"
+              />
+              <input
+                name="slug"
+                required
+                pattern="[a-z0-9-]+"
+                placeholder="team-slug"
+                className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3 font-mono"
+              />
+              <select
+                name="parent_id"
+                className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"
+              >
+                <option value="">No parent team</option>
+                {group.teams.map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                name="visibility"
+                className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"
+              >
+                <option value="organization">Organization only</option>
+                <option value="public">Public</option>
+              </select>
+              <Button type="submit">Create team</Button>
+            </form>
+          </Card>
+          <Card className="p-5">
+            <h2 className="text-lg font-semibold">Approve an agent</h2>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const f = e.currentTarget,
+                  d = new FormData(f);
+                void submit(`/organizations/${group.id}/agents`, {
+                  method: "POST",
+                  body: JSON.stringify({
+                    name: d.get("name"),
+                    slug: d.get("slug"),
+                    visibility: d.get("visibility"),
+                    capabilities: String(d.get("capabilities"))
+                      .split(",")
+                      .map((x) => x.trim())
+                      .filter(Boolean),
+                    operator_ids: [d.get("operator_id")],
+                    team_ids: d.get("team_id") ? [d.get("team_id")] : [],
+                  }),
+                }).then(() => f.reset());
+              }}
+              className="mt-4 grid gap-3"
+            >
+              <input
+                name="name"
+                required
+                placeholder="Agent name"
+                className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"
+              />
+              <input
+                name="slug"
+                required
+                pattern="[a-z0-9-]+"
+                placeholder="agent-slug"
+                className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3 font-mono"
+              />
+              <input
+                name="capabilities"
+                required
+                placeholder="inspect checks, summarize failures"
+                className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"
+              />
+              <input
+                name="operator_id"
+                required
+                minLength={32}
+                maxLength={32}
+                placeholder="Operator collaboration ID"
+                className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3 font-mono text-xs"
+              />
+              <select
+                name="team_id"
+                className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"
+              >
+                <option value="">No team</option>
+                {group.teams.map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                name="visibility"
+                className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"
+              >
+                <option value="organization">Organization only</option>
+                <option value="public">Public</option>
+              </select>
+              <Button type="submit">Register approved agent</Button>
+            </form>
+          </Card>
+          {group.teams.length > 0 && (
+            <Card className="p-5">
+              <h2 className="text-lg font-semibold">Team membership</h2>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const f = e.currentTarget,
+                    d = new FormData(f),
+                    team = group.teams.find((x) => x.id === d.get("team_id"));
+                  if (team)
+                    void submit(
+                      `/organizations/${group.id}/teams/${team.id}/members`,
+                      {
+                        method: "PUT",
+                        body: JSON.stringify({
+                          user_id: d.get("user_id"),
+                          role: d.get("role"),
+                          expected_version: team.version,
+                        }),
+                      },
+                    ).then(() => f.reset());
+                }}
+                className="mt-4 grid gap-3"
+              >
+                <select
+                  name="team_id"
+                  required
+                  className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"
+                >
+                  {group.teams.map((x) => (
+                    <option key={x.id} value={x.id}>
+                      {x.name}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  name="user_id"
+                  required
+                  minLength={32}
+                  maxLength={32}
+                  placeholder="Member collaboration ID"
+                  className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3 font-mono text-xs"
+                />
+                <select
+                  name="role"
+                  className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"
+                >
+                  <option value="member">Member</option>
+                  <option value="maintainer">Maintainer</option>
+                </select>
+                <Button type="submit">Add or update member</Button>
+              </form>
+            </Card>
+          )}{" "}
+          {group.teams.length > 0 && portfolio.repositories.length > 0 && (
+            <Card className="p-5">
+              <h2 className="text-lg font-semibold">Area of responsibility</h2>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const f = e.currentTarget,
+                    d = new FormData(f),
+                    team = group.teams.find((x) => x.id === d.get("team_id"));
+                  if (team)
+                    void submit(
+                      `/organizations/${group.id}/teams/${team.id}/responsibilities`,
+                      {
+                        method: "POST",
+                        body: JSON.stringify({
+                          repository_id: d.get("repository_id"),
+                          area: d.get("area"),
+                          description: d.get("description"),
+                          expected_version: team.version,
+                        }),
+                      },
+                    ).then(() => f.reset());
+                }}
+                className="mt-4 grid gap-3"
+              >
+                <select
+                  name="team_id"
+                  required
+                  className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"
+                >
+                  {group.teams.map((x) => (
+                    <option key={x.id} value={x.id}>
+                      {x.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  name="repository_id"
+                  required
+                  className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"
+                >
+                  {portfolio.repositories.map((x) => (
+                    <option key={x.id} value={x.id}>
+                      {x.name}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  name="area"
+                  required
+                  placeholder="Area, service, or path"
+                  className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"
+                />
+                <textarea
+                  name="description"
+                  placeholder="What this team owns"
+                  className="min-h-20 rounded-lg border border-[var(--line-strong)] p-3"
+                />
+                <Button type="submit">Assign responsibility</Button>
+              </form>
+            </Card>
+          )}
+        </div>
+      )}
+      {owner && group.transfers.some((x) => x.status === "pending") && (
+        <Card className="p-5">
+          <h2 className="text-lg font-semibold">
+            Transfers awaiting acceptance
+          </h2>
+          {group.transfers
+            .filter((x) => x.status === "pending")
+            .map((x) => (
+              <div
+                key={x.id}
+                className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] pt-3"
+              >
+                <p className="text-sm">
+                  <code>{x.repository_id}</code>
+                  <br />
+                  <span className="text-xs text-[var(--muted)]">
+                    Requested by {x.requested_by || x.from_owner_id}
+                  </span>
+                </p>
+                <Button
+                  onClick={() =>
+                    void submit(
+                      `/organizations/${group.id}/repository-transfers/${x.id}/accept`,
+                      { method: "POST" },
+                    )
+                  }
+                >
+                  Accept stewardship
+                </Button>
+              </div>
+            ))}
+        </Card>
+      )}
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Evidence
+          title="Active work"
+          items={[
+            ...portfolio.active_proposals.map((x) => ({
+              id: x.id,
+              label: x.title,
+              href: `/proposals/${x.repository_id}/${x.id}`,
+            })),
+            ...portfolio.active_pulls.map((x) => ({
+              id: x.id,
+              label: x.title,
+              href: `/pulls/${x.repository_id}/${x.id}`,
+            })),
+          ]}
+        />
+        <Evidence
+          title="Releases and incidents"
+          items={[
+            ...portfolio.releases.map((x) => ({
+              id: x.id,
+              label: `${x.version} · ${x.notes}`,
+              href: `/repositories/${x.repository_id}/releases/${x.id}`,
+            })),
+            ...portfolio.active_incidents.map((x) => ({
+              id: x.id,
+              label: x.title,
+              href: `/incidents/${x.id}`,
+            })),
+          ]}
+        />
+      </div>
+    </div>
+  );
 }
 
-function comma(value:FormDataEntryValue|null){return String(value??"").split(",").map(x=>x.trim()).filter(Boolean)}
-function mandateScopes(value:FormDataEntryValue|null){return String(value??"").split("\n").map(x=>x.trim()).filter(Boolean).map(line=>{const [repository_id,...rest]=line.split(/\s+/);return {repository_id,branches:comma(rest.join(" "))}})}
-function localDate(value:string){const date=new Date(value),offset=date.getTimezoneOffset()*60_000;return new Date(date.getTime()-offset).toISOString().slice(0,16)}
-function OpportunityQueue({group,mandate,submit}:{group:Organization;mandate:OrganizationStewardshipMandate;submit:(path:string,options:RequestInit)=>Promise<void>}){
-  const act=(item:OrganizationStewardshipOpportunity,action:string,extra:Record<string,unknown>={})=>submit(`/organizations/${group.id}/stewardship-mandates/${mandate.id}/opportunities/${item.id}`,{method:"POST",body:JSON.stringify({expected_version:item.version,action,...extra})});
-  const items=[...mandate.opportunities].sort((a,b)=>a.rank-b.rank||b.updated_at.localeCompare(a.updated_at));
-  return <details className="mt-4 border-t border-[var(--line)] pt-3" open={items.some(x=>x.status==="open")}><summary className="cursor-pointer text-sm font-semibold text-[var(--brand)]">Stewardship backlog · {items.filter(x=>x.status==="open").length} open</summary><p className="mt-2 text-xs text-[var(--muted)]">Recommendations are shared evidence, not instructions. Rank or challenge them without granting the steward authority.</p>{items.length===0&&<p className="mt-3 rounded-lg bg-[var(--surface)] p-3 text-xs text-[var(--muted)]">No permitted evidence has produced an opportunity.</p>}{items.map(item=><article key={item.id} className="mt-3 rounded-lg border border-[var(--line)] bg-[var(--surface)] p-4"><div className="flex flex-wrap items-center gap-2"><Badge>{item.severity}</Badge><Badge>{item.status}</Badge><strong>#{item.rank} {item.title}</strong><span className="text-xs text-[var(--muted)]">{Math.round(item.confidence*100)}% confidence</span></div><p className="mt-2">{item.summary}</p><p className="mt-2 text-xs"><strong>Expected value:</strong> {item.expected_value}</p><p className="mt-1 text-xs"><strong>Why in scope:</strong> {item.in_scope_reason}</p><p className="mt-1 break-all text-xs text-[var(--muted)]">{item.evidence_type} {item.evidence_id} @ {item.evidence_revision} · affected revisions {item.affected_revisions.join(", ")} · owners {item.affected_owner_ids.join(", ")}</p><ul className="mt-2 space-y-1 text-xs">{item.citations.map((citation,index)=><li key={`${citation.resource_id}-${citation.revision}-${index}`} className={citation.stale?"text-[var(--warning)]":""}>{citation.stale&&"Stale evidence · "}{citation.url?<a className="underline" href={citation.url}>{citation.label}</a>:citation.label} · {citation.revision}</li>)}</ul>{item.decision_reason&&<p className="mt-2 rounded bg-white p-2 text-xs"><strong>Challenge:</strong> {item.decision_reason}</p>}{item.comments.map(comment=><p key={comment.id} className="mt-2 border-l-2 border-[var(--line-strong)] pl-2 text-xs">{comment.body}<br/><span className="text-[var(--muted)]">{comment.actor_id} · {new Date(comment.created_at).toLocaleString()}</span></p>)}<div className="mt-3 flex flex-wrap gap-2">{item.status!=="open"?<Button variant="quiet" onClick={()=>void act(item,"reopen")}>Reopen</Button>:<><Button variant="quiet" onClick={()=>void act(item,"dismiss",{reason:"Not a current priority"})}>Dismiss</Button><Button variant="quiet" onClick={()=>void act(item,"incorrect",{reason:"The evidence or conclusion is incorrect"})}>Mark incorrect</Button></>}<form className="flex gap-1" onSubmit={e=>{e.preventDefault();const d=new FormData(e.currentTarget);void act(item,"rank",{rank:Number(d.get("rank"))})}}><input name="rank" type="number" min="1" max="100000" defaultValue={item.rank} aria-label={`Rank ${item.title}`} className="w-16 rounded border border-[var(--line-strong)] px-2"/><Button variant="quiet">Rank</Button></form><form className="flex gap-1" onSubmit={e=>{e.preventDefault();const d=new FormData(e.currentTarget);void act(item,"snooze",{until:new Date(String(d.get("until"))).toISOString(),reason:"Revisit at the selected time"})}}><input name="until" type="datetime-local" required aria-label={`Snooze ${item.title} until`} className="rounded border border-[var(--line-strong)] px-2"/><Button variant="quiet">Snooze</Button></form></div><form className="mt-2 flex gap-2" onSubmit={e=>{e.preventDefault();const f=e.currentTarget,d=new FormData(f);void act(item,"comment",{comment:d.get("comment")}).then(()=>f.reset())}}><input name="comment" required maxLength={4000} placeholder="Discuss or challenge this finding" className="min-h-9 grow rounded border border-[var(--line-strong)] px-2"/><Button variant="quiet">Comment</Button></form></article>)}</details>
+function comma(value: FormDataEntryValue | null) {
+  return String(value ?? "")
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
 }
-function RevisionFields({revision,group}:{revision:OrganizationStewardshipMandateRevision;group:Organization}){const input="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3";return <><textarea className={`${input} py-3 sm:col-span-2`} name="outcomes" required defaultValue={revision.desired_outcomes.join(", ")} aria-label="Desired outcomes"/><textarea className={`${input} py-3 sm:col-span-2`} name="repository_scopes" required defaultValue={revision.repositories.map(x=>`${x.repository_id} ${x.branches.join(", ")}`).join("\n")} aria-label="Repository and branch scopes"/><p className="text-xs text-[var(--muted)] sm:col-span-2">One repository per line: repository ID, a space, then comma-separated branches.</p><textarea className={`${input} py-3 sm:col-span-2`} name="signals" required defaultValue={revision.trusted_signals.join(", ")} aria-label="Trusted signals"/><textarea className={`${input} py-3 sm:col-span-2`} name="exclusions" required defaultValue={revision.exclusions.join(", ")} aria-label="Exclusions"/><input className={input} name="minutes" type="number" min="1" max="525600" required defaultValue={revision.budget.max_agent_minutes} aria-label="Agent-minute budget"/><input className={input} name="actions" type="number" min="1" max="100000" required defaultValue={revision.budget.max_actions} aria-label="Action budget"/><label className="text-xs font-semibold">Starts<input className={`mt-1 w-full ${input}`} name="starts_at" type="datetime-local" required defaultValue={localDate(revision.starts_at)}/></label><label className="text-xs font-semibold">Expires<input className={`mt-1 w-full ${input}`} name="expires_at" type="datetime-local" required defaultValue={localDate(revision.expires_at)}/></label><select className={input} name="agent_id" required defaultValue={revision.agent_id}>{group.agents.map(a=><option value={a.id} key={a.id}>{a.name}</option>)}</select><textarea className={`${input} py-3 sm:col-span-2`} name="allowed_actions" required defaultValue={revision.allowed_actions.join(", ")} aria-label="Allowed actions"/><textarea className={`${input} py-3 sm:col-span-2`} name="decisions" required defaultValue={revision.required_human_decisions.join(", ")} aria-label="Required human decisions"/><textarea className={`${input} py-3 sm:col-span-2`} name="reason" required placeholder="Reason for this revision"/></>}
-function StewardshipWorkspace({group,repositories,owner,userID,token,submit}:{group:Organization;repositories:Repository[];owner:boolean;userID:string;token:string|null;submit:(path:string,options:RequestInit)=>Promise<void>}) {
-  const [previews,setPreviews]=useState<Record<string,OrganizationStewardshipPreview>>({});
-  async function preview(id:string){const value=await api<OrganizationStewardshipPreview>(`/organizations/${group.id}/stewardship-mandates/${id}/preview`,{},token);setPreviews(x=>({...x,[id]:value}))}
-  function payload(data:FormData,expected?:number){return {title:data.get("title"),desired_outcomes:comma(data.get("outcomes")),repositories:[{repository_id:data.get("repository_id"),branches:comma(data.get("branches"))}],trusted_signals:comma(data.get("signals")),exclusions:comma(data.get("exclusions")),budget:{max_agent_minutes:Number(data.get("minutes")),max_actions:Number(data.get("actions"))},starts_at:new Date(String(data.get("starts_at"))).toISOString(),expires_at:new Date(String(data.get("expires_at"))).toISOString(),agent_id:data.get("agent_id"),allowed_actions:comma(data.get("allowed_actions")),required_human_decisions:comma(data.get("decisions")),reason:data.get("reason"),expected_version:expected}}
-  const input="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3";
-  return <Card className="p-5"><h2 className="text-lg font-semibold">Proactive stewardship mandates</h2><p className="mt-1 text-sm text-[var(--muted)]">Define ongoing outcomes and stop boundaries. A mandate never grants write, credential, review, deployment, or merge authority.</p>
-    {group.stewardship_mandates.map(m=>{const r=m.revisions[m.revisions.length-1],operator=group.agents.find(a=>a.id===r.agent_id)?.operator_ids.includes(userID);return <div key={m.id} className="mt-4 rounded-lg border border-[var(--line)] p-4 text-sm"><div className="flex flex-wrap items-center justify-between gap-2"><div><strong>{m.title}</strong> <Badge>{m.status}</Badge> <span className="text-xs text-[var(--muted)]">v{m.version}</span></div><div className="flex flex-wrap gap-2"><Button variant="quiet" onClick={()=>void preview(m.id)}>Preview authority</Button>{operator&&m.status==="pending_acceptance"&&<Button onClick={()=>void submit(`/organizations/${group.id}/stewardship-mandates/${m.id}/accept`,{method:"POST",body:JSON.stringify({expected_version:m.version})})}>Accept as operator</Button>}{owner&&m.status==="active"&&<Button variant="quiet" onClick={()=>void submit(`/organizations/${group.id}/stewardship-mandates/${m.id}/pause`,{method:"POST",body:JSON.stringify({expected_version:m.version})})}>Pause</Button>}{owner&&m.status==="paused"&&<Button variant="quiet" onClick={()=>void submit(`/organizations/${group.id}/stewardship-mandates/${m.id}/resume`,{method:"POST",body:JSON.stringify({expected_version:m.version})})}>Resume</Button>}{owner&&m.status!=="revoked"&&<Button variant="quiet" onClick={()=>void submit(`/organizations/${group.id}/stewardship-mandates/${m.id}/revoke`,{method:"POST",body:JSON.stringify({expected_version:m.version})})}>Revoke</Button>}</div></div><p className="mt-2">{r.desired_outcomes.join(" · ")}</p><p className="mt-2 text-xs text-[var(--muted)]">Agent {r.agent_id} · {r.repositories.map(x=>`${repositories.find(repo=>repo.id===x.repository_id)?.name??x.repository_id} [${x.branches.join(", ")}]`).join(" · ")} · {r.budget.max_agent_minutes} minutes / {r.budget.max_actions} actions · expires {new Date(r.expires_at).toLocaleString()}</p><p className="mt-2 text-xs"><strong>Must stop for:</strong> {r.required_human_decisions.join("; ")} · <strong>Excluded:</strong> {r.exclusions.join("; ")}</p>{previews[m.id]&&<div className="mt-3 rounded bg-[var(--surface)] p-3 text-xs"><strong>Effective authority preview</strong><p className="mt-1">{previews[m.id].notice}</p><p className="mt-1">Separate live grants: {previews[m.id].access_grants.length}; implicit authority: none. Policy: {Object.values(previews[m.id].effective_policies).map(x=>x.rules.agent_authority||"unspecified").join(", ")}</p></div>}<OpportunityQueue group={group} mandate={m} submit={submit}/>{owner&&m.status!=="revoked"&&<details className="mt-3"><summary className="cursor-pointer text-xs font-semibold text-[var(--brand)]">Revise mandate (operator must accept again)</summary><form className="mt-3 grid gap-3 sm:grid-cols-2" onSubmit={e=>{e.preventDefault();const d=new FormData(e.currentTarget);void submit(`/organizations/${group.id}/stewardship-mandates/${m.id}`,{method:"PUT",body:JSON.stringify({title:m.title,desired_outcomes:comma(d.get("outcomes")),repositories:mandateScopes(d.get("repository_scopes")),trusted_signals:comma(d.get("signals")),exclusions:comma(d.get("exclusions")),budget:{max_agent_minutes:Number(d.get("minutes")),max_actions:Number(d.get("actions"))},starts_at:new Date(String(d.get("starts_at"))).toISOString(),expires_at:new Date(String(d.get("expires_at"))).toISOString(),agent_id:d.get("agent_id"),allowed_actions:comma(d.get("allowed_actions")),required_human_decisions:comma(d.get("decisions")),reason:d.get("reason"),expected_version:m.version})})}}><RevisionFields revision={r} group={group}/><div><Button>Publish revision</Button></div></form></details>}</div>})}
-    {owner&&repositories.length>0&&group.agents.length>0&&<details className="mt-5"><summary className="cursor-pointer font-semibold text-[var(--brand)]">Create a versioned mandate</summary><form className="mt-4 grid gap-3 sm:grid-cols-2" onSubmit={e=>{e.preventDefault();const f=e.currentTarget,d=new FormData(f);void submit(`/organizations/${group.id}/stewardship-mandates`,{method:"POST",body:JSON.stringify(payload(d))}).then(()=>f.reset())}}><input className={input} name="title" required maxLength={200} placeholder="Mandate title"/><select className={input} name="agent_id" required>{group.agents.map(a=><option value={a.id} key={a.id}>{a.name}</option>)}</select><select className={input} name="repository_id" required>{repositories.map(r=><option value={r.id} key={r.id}>{r.name}</option>)}</select><input className={input} name="branches" required placeholder="Branches, comma separated"/><textarea className={`${input} py-3 sm:col-span-2`} name="outcomes" required placeholder="Desired outcomes, comma separated"/><textarea className={`${input} py-3 sm:col-span-2`} name="signals" required placeholder="Trusted signals, comma separated"/><textarea className={`${input} py-3 sm:col-span-2`} name="exclusions" required placeholder="Explicit exclusions, comma separated"/><input className={input} name="minutes" type="number" min="1" max="525600" required placeholder="Agent-minute budget"/><input className={input} name="actions" type="number" min="1" max="100000" required placeholder="Action budget"/><label className="text-xs font-semibold">Starts<input className={`mt-1 w-full ${input}`} name="starts_at" type="datetime-local" required/></label><label className="text-xs font-semibold">Expires<input className={`mt-1 w-full ${input}`} name="expires_at" type="datetime-local" required/></label><textarea className={`${input} py-3 sm:col-span-2`} name="allowed_actions" required placeholder="Allowed actions, comma separated"/><textarea className={`${input} py-3 sm:col-span-2`} name="decisions" required placeholder="Human decisions required, comma separated (for example: merge, release, spend increase)"/><textarea className={`${input} py-3 sm:col-span-2`} name="reason" placeholder="Why this mandate exists"/><div><Button>Create mandate</Button></div></form></details>}
-  </Card>
+function mandateScopes(value: FormDataEntryValue | null) {
+  return String(value ?? "")
+    .split("\n")
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [repository_id, ...rest] = line.split(/\s+/);
+      return { repository_id, branches: comma(rest.join(" ")) };
+    });
 }
-function InitiativeWorkspace({group,portfolio,submit}:{group:Organization;portfolio:OrganizationPortfolio;submit:(path:string,options:RequestInit)=>Promise<void>}){const sources=[...portfolio.active_proposals.map(x=>({key:`proposal|${x.repository_id}|${x.id}`,label:`Proposal · ${x.title}`})),...portfolio.active_incidents.flatMap(x=>x.scopes.map(scope=>({key:`incident|${scope.repository_id}|${x.id}`,label:`Incident · ${x.title} · ${scope.repository_id}`})))];const principals=[...group.members.map(x=>({key:`human|${x.user_id}`,label:`Human · ${x.user_id}`})),...group.teams.map(x=>({key:`team|${x.id}`,label:`Team · ${x.name}`})),...group.agents.map(x=>({key:`agent|${x.id}`,label:`Agent · ${x.name}`}))];return <section className="space-y-4"><header><p className="text-xs font-bold uppercase tracking-[.16em] text-[var(--brand)]">Outcome coordination</p><h2 className="mt-1 text-2xl font-bold">Portfolio initiatives</h2><p className="mt-2 text-sm text-[var(--muted)]">One live map for cross-repository ownership, dependency decisions, policy exceptions, and release evidence.</p></header>{portfolio.initiatives.map(initiative=><Card key={initiative.id} className="p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-semibold">{initiative.title}</h3><p className="mt-1 text-xs text-[var(--muted)]">From {initiative.source.kind} <code>{initiative.source.id}</code> · v{initiative.version}</p></div><Badge>{initiative.status}</Badge></div>{initiative.work_items.sort((a,b)=>a.position-b.position).map(item=><div key={item.id} className="mt-4 border-t border-[var(--line)] pt-3"><div className="flex flex-wrap items-center gap-2 text-sm"><Badge>{item.status.replaceAll("_"," ")}</Badge><strong>{item.position}. {item.title}</strong>{item.blocked&&<Badge>blocked</Badge>}{item.ownership_state==="reassignment_required"&&<Badge>reassign</Badge>}</div><p className="mt-1 text-xs text-[var(--muted)]">{item.owner.type} <code>{item.owner.id}</code> · repository <Link className="text-[var(--brand)] hover:underline" href={`/repositories/${item.repository_id}`}>{item.repository_id}</Link>{item.blocker_ids&&item.blocker_ids.length>0&&` · waiting on ${item.blocker_ids.join(", ")}`}</p>{item.reassignment_note&&<p className="mt-2 rounded-lg bg-[var(--warning-soft)] p-2 text-xs">{item.reassignment_note}</p>}<form onSubmit={e=>{e.preventDefault();const f=e.currentTarget,d=new FormData(f),owner=String(d.get("owner")).split("|");void submit(`/organizations/${group.id}/initiatives/${initiative.id}/items/${item.id}`,{method:"PATCH",body:JSON.stringify({owner:{type:owner[0],id:owner[1]},status:d.get("status"),expected_version:initiative.version})})}} className="mt-2 flex flex-wrap gap-2"><select name="owner" defaultValue={`${item.owner.type}|${item.owner.id}`} aria-label={`Owner for ${item.title}`} className="min-h-9 rounded-lg border border-[var(--line-strong)] bg-white px-2 text-xs">{principals.map(x=><option key={x.key} value={x.key}>{x.label}</option>)}</select><select name="status" defaultValue={item.status} aria-label={`Status for ${item.title}`} className="min-h-9 rounded-lg border border-[var(--line-strong)] bg-white px-2 text-xs"><option value="todo">To do</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select><Button type="submit" variant="quiet">Update accountability</Button></form></div>)}{(initiative.policy_exceptions?.length??0)>0&&<p className="mt-4 text-xs text-[var(--muted)]">Decision needed: {initiative.policy_exceptions!.length} active or pending policy exception(s).</p>}{(initiative.upcoming_releases?.length??0)>0&&<p className="mt-1 text-xs text-[var(--muted)]">Upcoming evidence: {initiative.upcoming_releases!.map(x=>x.version).join(", ")}.</p>}</Card>)}{portfolio.initiatives.length===0&&<Card className="p-5 text-sm text-[var(--muted)]">No coordinated outcomes yet.</Card>}<details><summary className="cursor-pointer text-sm font-semibold text-[var(--brand)]">Create an initiative from existing work</summary><form onSubmit={e=>{e.preventDefault();const f=e.currentTarget,d=new FormData(f),selected=String(d.get("known_source")||"").split("|"),kind=selected[0]||String(d.get("source_kind")),sourceRepo=selected[1]||String(d.get("source_repository_id")),sourceID=selected[2]||String(d.get("source_id")),owner=String(d.get("owner")).split("|");void submit(`/organizations/${group.id}/initiatives`,{method:"POST",body:JSON.stringify({title:d.get("title"),description:d.get("description"),source:{kind,repository_id:sourceRepo||undefined,id:sourceID},work_items:[{id:crypto.randomUUID().replaceAll("-",""),title:d.get("task_title"),repository_id:d.get("task_repository_id"),owner:{type:owner[0],id:owner[1]},dependency_ids:[],status:"todo"}]})}).then(()=>f.reset())}} className="mt-4 grid gap-3 sm:grid-cols-2"><input name="title" required maxLength={200} placeholder="Initiative outcome" className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"/><input name="description" maxLength={2000} placeholder="Shared outcome and constraints" className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"/><select name="known_source" aria-label="Known portfolio source" className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"><option value="">Enter an evolution or security source below</option>{sources.map(x=><option key={x.key} value={x.key}>{x.label}</option>)}</select><div className="grid grid-cols-3 gap-2"><select name="source_kind" aria-label="Source kind" className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-2"><option value="evolution">Evolution</option><option value="security">Security</option><option value="proposal">Proposal</option><option value="incident">Incident</option></select><input name="source_repository_id" minLength={32} maxLength={32} placeholder="Source repository ID" className="col-span-2 min-h-10 rounded-lg border border-[var(--line-strong)] px-2 font-mono text-xs"/></div><input name="source_id" minLength={32} maxLength={32} placeholder="Evolution/security work ID" className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3 font-mono text-xs"/><input name="task_title" required maxLength={200} placeholder="First accountable contribution" className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"/><select name="task_repository_id" required className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3">{portfolio.repositories.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select><select name="owner" required className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3">{principals.map(x=><option key={x.key} value={x.key}>{x.label}</option>)}</select><Button type="submit">Create initiative</Button></form></details></section>}
-function PolicyWorkspace({group,repositories,owner,submit}:{group:Organization;repositories:Repository[];owner:boolean;submit:(path:string,options:RequestInit)=>Promise<void>}){const {token}=useAuth();const [preview,setPreview]=useState<{repository_id:string;rules:OrganizationPolicyRules;policies:{id:string;name:string;status:string}[];exceptions:{id:string;rule:string;requested_value:string;expires_at:string}[]}|null>(null);async function inspect(repositoryID:string){if(!repositoryID){setPreview(null);return}setPreview(await api(`/organizations/${group.id}/policies/preview?repository_id=${repositoryID}`,{},token))}return <Card className="p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-semibold">Portfolio policy baseline</h2><p className="mt-1 text-sm text-[var(--muted)]">Draft and preview shared requirements before activation. Activation applies to new decisions and preserves evidence for work already underway.</p></div><select aria-label="Preview repository policy" onChange={e=>void inspect(e.target.value)} className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3 text-sm"><option value="">Preview a repository…</option>{repositories.map(repo=><option key={repo.id} value={repo.id}>{repo.name}</option>)}</select></div>
-  {preview&&<div className="mt-4 rounded-lg border border-[var(--line)] bg-[var(--surface-subtle)] p-4 text-sm"><strong>Effective preview</strong><p className="mt-2 break-words font-mono text-xs">{Object.entries(preview.rules).map(([key,value])=>`${key}: ${Array.isArray(value)?value.join(", "):value}`).join(" · ")||"No matching rules"}</p><p className="mt-2 text-xs text-[var(--muted)]">Sources: {preview.policies.map(x=>`${x.name} (${x.status})`).join(", ")||"none"}{preview.exceptions.length>0&&` · ${preview.exceptions.length} approved, expiring exception(s) shown separately`}</p></div>}
-  {group.policies.map(policy=><div key={policy.id} className="mt-4 border-t border-[var(--line)] pt-3 text-sm"><div className="flex flex-wrap items-center gap-2"><Badge>{policy.status}</Badge><strong>{policy.name}</strong><span className="text-xs text-[var(--muted)]">v{policy.version} · {policy.targets.map(x=>x.kind+(x.id?`:${x.id}`:"")).join(", ")}</span></div><p className="mt-1 text-xs font-mono">{Object.entries(policy.rules).map(([key,value])=>`${key}=${Array.isArray(value)?value.join("+"):value}`).join(" · ")}</p>{owner&&policy.status==="draft"&&<Button className="mt-2" onClick={()=>void submit(`/organizations/${group.id}/policies/${policy.id}/activate`,{method:"POST",body:JSON.stringify({expected_version:policy.version})})}>Activate baseline</Button>}</div>)}
-  {group.policy_exceptions.map(exception=><div key={exception.id} className="mt-4 border-t border-[var(--line)] pt-3 text-sm"><Badge>{exception.status}</Badge> <strong>{exception.rule}</strong> → {exception.requested_value}<p className="mt-1 text-xs text-[var(--muted)]">{exception.reason} · requested by {exception.requester_id} · expires {new Date(exception.expires_at).toLocaleString()}</p>{owner&&exception.status==="pending"&&<div className="mt-2 flex gap-2"><Button onClick={()=>void submit(`/organizations/${group.id}/policy-exceptions/${exception.id}/decision`,{method:"POST",body:JSON.stringify({decision:"approve"})})}>Approve exception</Button><Button variant="quiet" onClick={()=>void submit(`/organizations/${group.id}/policy-exceptions/${exception.id}/decision`,{method:"POST",body:JSON.stringify({decision:"deny"})})}>Deny</Button></div>}</div>)}
-  {owner&&<details className="mt-5 border-t border-[var(--line)] pt-4"><summary className="cursor-pointer text-sm font-semibold">Draft a versioned policy</summary><form onSubmit={e=>{e.preventDefault();const f=e.currentTarget,d=new FormData(f),target=String(d.get("target")).split(":");void submit(`/organizations/${group.id}/policies`,{method:"POST",body:JSON.stringify({name:d.get("name"),description:d.get("description"),targets:[{kind:target[0],id:target[1]||undefined}],rules:{repository_visibility:d.get("repository_visibility")||undefined,minimum_reviews:Number(d.get("minimum_reviews")),required_checks:String(d.get("required_checks")).split(",").map(x=>x.trim()).filter(Boolean),integration:d.get("integration")||undefined,release_provenance:d.get("release_provenance")||undefined,dependency_use:d.get("dependency_use")||undefined,promotion_approvals:Number(d.get("promotion_approvals")),agent_authority:d.get("agent_authority")||undefined}})}).then(()=>f.reset())}} className="mt-4 grid gap-3 sm:grid-cols-2"><input name="name" required placeholder="Policy name" className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"/><select name="target" className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"><option value="organization:">Whole organization</option>{group.teams.map(x=><option key={x.id} value={`team:${x.id}`}>Team · {x.name}</option>)}{repositories.map(x=><option key={x.id} value={`repository:${x.id}`}>Repository · {x.name}</option>)}</select><textarea name="description" placeholder="Why this baseline exists" className="min-h-20 rounded-lg border border-[var(--line-strong)] p-3 sm:col-span-2"/><select name="repository_visibility" className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"><option value="">Any visibility</option><option value="private">Require private</option><option value="public">Require public</option></select><input name="minimum_reviews" type="number" min="0" max="20" defaultValue="1" aria-label="Minimum reviews" className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"/><input name="required_checks" placeholder="Required checks, comma separated" className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3 sm:col-span-2"/><select name="integration" className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"><option value="">Any integration</option><option value="queue">Integration queue</option><option value="direct">Direct merge</option></select><select name="release_provenance" className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"><option value="">Any release provenance</option><option value="attested">Attested releases</option></select><select name="dependency_use" className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"><option value="">Any dependencies</option><option value="active-only">Active versions only</option><option value="approved-only">Approved versions only</option></select><input name="promotion_approvals" type="number" min="0" max="20" defaultValue="1" aria-label="Promotion approvals" className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"/><select name="agent_authority" className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3 sm:col-span-2"><option value="">Any agent authority</option><option value="explicit-grants">Explicit grants only</option><option value="disabled">Agents disabled</option></select><Button type="submit">Save draft</Button></form></details>}
-  {group.policies.some(x=>x.status==="active")&&repositories.length>0&&<details className="mt-5 border-t border-[var(--line)] pt-4"><summary className="cursor-pointer text-sm font-semibold">Request an expiring exception</summary><form onSubmit={e=>{e.preventDefault();const f=e.currentTarget,d=new FormData(f);void submit(`/organizations/${group.id}/policy-exceptions`,{method:"POST",body:JSON.stringify({policy_id:d.get("policy_id"),repository_id:d.get("repository_id"),rule:d.get("rule"),requested_value:d.get("requested_value"),reason:d.get("reason"),expires_at:new Date(String(d.get("expires_at"))).toISOString()})}).then(()=>f.reset())}} className="mt-4 grid gap-3 sm:grid-cols-2"><select name="policy_id" required className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3">{group.policies.filter(x=>x.status==="active").map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select><select name="repository_id" required className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3">{repositories.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select><select name="rule" className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3">{["repository_visibility","minimum_reviews","required_checks","integration","release_provenance","dependency_use","promotion_approvals","agent_authority"].map(x=><option key={x}>{x.replaceAll("_"," ")}</option>)}</select><input name="requested_value" required placeholder="Requested local value" className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"/><input name="expires_at" required type="datetime-local" className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"/><textarea name="reason" required placeholder="Local constraint and resolution plan" className="min-h-20 rounded-lg border border-[var(--line-strong)] p-3 sm:col-span-2"/><Button type="submit">Request exception</Button></form></details>}</Card>}
-function PublicDirectory({directory,repositories=[]}:{directory:OrganizationDirectory;repositories?:Repository[]}){const repoNames=new Map(repositories.map(x=>[x.id,x.name]));return <section className="space-y-4"><header><p className="text-xs font-bold uppercase tracking-[.16em] text-[var(--brand)]">Responsibility directory</p><h2 className="mt-1 text-2xl font-bold">Teams and approved agents</h2></header><div className="grid gap-4 lg:grid-cols-2">{directory.teams.map(({team,effective_members})=><Card key={team.id} className="p-5"><div className="flex items-center gap-2"><h3 className="font-semibold">{team.name}</h3><Badge>{team.visibility}</Badge></div>{team.parent_id&&<p className="mt-1 text-xs text-[var(--muted)]">Nested beneath another team</p>}<h4 className="mt-4 text-xs font-bold uppercase tracking-wide text-[var(--muted)]">Effective members</h4>{effective_members.map(x=><p key={x.user_id} className="mt-2 text-sm"><code>{x.user_id}</code> · {x.role}<br/><span className="text-xs text-[var(--muted)]">Why: {x.reason}</span></p>)}{effective_members.length===0&&<p className="mt-2 text-sm text-[var(--muted)]">No effective members.</p>}{team.responsibilities.map(x=><p key={x.id} className="mt-4 border-t border-[var(--line)] pt-3 text-sm"><strong>{x.area}</strong> · {repoNames.get(x.repository_id)||x.repository_id}<br/><span className="text-[var(--muted)]">{x.description}</span></p>)}</Card>)}{directory.agents.map(agent=><Card key={agent.id} className="p-5"><div className="flex items-center gap-2"><h3 className="font-semibold">{agent.name}</h3><Badge>approved agent</Badge></div><p className="mt-3 text-sm"><strong>Capabilities:</strong> {agent.capabilities.join(", ")}</p><p className="mt-2 break-all text-xs text-[var(--muted)]">Operated by {agent.operator_ids.join(", ")}</p></Card>)}</div>{directory.teams.length===0&&directory.agents.length===0&&<Card className="p-6 text-sm text-[var(--muted)]">No visible teams or approved agents.</Card>}</section>}
-function Evidence({title,items}:{title:string;items:{id:string;label:string;href:string}[]}){return <Card className="p-5"><h2 className="text-lg font-semibold">{title}</h2>{items.length===0?<p className="mt-3 text-sm text-[var(--muted)]">Nothing active.</p>:items.map(x=><Link key={x.id} href={x.href} className="mt-3 block border-t border-[var(--line)] pt-3 text-sm font-semibold text-[var(--brand)] hover:underline">{x.label}</Link>)}</Card>}
+function opportunityPolicies(value: FormDataEntryValue | null) {
+  return String(value ?? "")
+    .split("\n")
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [
+        evidence_type,
+        mode = "approval_required",
+        minimum_severity = "low",
+        minutes = "0",
+      ] = line.split(":");
+      return {
+        evidence_type,
+        mode,
+        minimum_severity,
+        max_agent_minutes: Number(minutes),
+      };
+    });
+}
+function localDate(value: string) {
+  const date = new Date(value),
+    offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+function OpportunityQueue({
+  group,
+  mandate,
+  submit,
+}: {
+  group: Organization;
+  mandate: OrganizationStewardshipMandate;
+  submit: (path: string, options: RequestInit) => Promise<void>;
+}) {
+  const { user } = useAuth();
+  const owner = group.members.some(
+    (x) => x.user_id === user?.id && x.role === "owner",
+  );
+  const act = (
+    item: OrganizationStewardshipOpportunity,
+    action: string,
+    extra: Record<string, unknown> = {},
+  ) =>
+    submit(
+      `/organizations/${group.id}/stewardship-mandates/${mandate.id}/opportunities/${item.id}`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          expected_version: item.version,
+          action,
+          ...extra,
+        }),
+      },
+    );
+  const items = [...mandate.opportunities].sort(
+    (a, b) => a.rank - b.rank || b.updated_at.localeCompare(a.updated_at),
+  );
+  return (
+    <details
+      className="mt-4 border-t border-[var(--line)] pt-3"
+      open={items.some((x) => x.status === "open")}
+    >
+      <summary className="cursor-pointer text-sm font-semibold text-[var(--brand)]">
+        Stewardship backlog · {items.filter((x) => x.status === "open").length}{" "}
+        open
+      </summary>
+      <p className="mt-2 text-xs text-[var(--muted)]">
+        Admission distinguishes work that needs a human decision from bounded
+        auto-start. Promotion creates ordinary proposal tasks; it does not start
+        compute or create a branch.
+      </p>
+      {items.length === 0 && (
+        <p className="mt-3 rounded-lg bg-[var(--surface)] p-3 text-xs text-[var(--muted)]">
+          No permitted evidence has produced an opportunity.
+        </p>
+      )}
+      {items.map((item) => (
+        <article
+          key={item.id}
+          className="mt-3 rounded-lg border border-[var(--line)] bg-[var(--surface)] p-4"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge>{item.severity}</Badge>
+            <Badge>{item.status}</Badge>
+            <Badge>
+              {(item.admission || "approval_required").replaceAll("_", " ")}
+            </Badge>
+            <span className="text-xs text-[var(--muted)]">
+              up to {item.max_agent_minutes ?? 0} agent minutes
+            </span>
+            <strong>
+              #{item.rank} {item.title}
+            </strong>
+            <span className="text-xs text-[var(--muted)]">
+              {Math.round(item.confidence * 100)}% confidence
+            </span>
+          </div>
+          {item.blockers?.length > 0 && (
+            <p className="mt-2 rounded bg-[var(--warning-soft)] p-2 text-xs">
+              <strong>Blocked:</strong> {item.blockers.join(" · ")}
+            </p>
+          )}
+          {item.work && (
+            <p className="mt-2 text-xs">
+              <Link
+                className="font-semibold text-[var(--brand)] hover:underline"
+                href={`/proposals/${item.repository_id}/${item.work.proposal_id}`}
+              >
+                Open promoted proposal
+              </Link>{" "}
+              · {item.work.task_ids.length} ordered task(s) · base{" "}
+              <code>{item.work.base_revision.slice(0, 12)}</code>
+            </p>
+          )}
+          <p className="mt-2">{item.summary}</p>
+          <p className="mt-2 text-xs">
+            <strong>Expected value:</strong> {item.expected_value}
+          </p>
+          <p className="mt-1 text-xs">
+            <strong>Why in scope:</strong> {item.in_scope_reason}
+          </p>
+          <p className="mt-1 break-all text-xs text-[var(--muted)]">
+            {item.evidence_type} {item.evidence_id} @ {item.evidence_revision} ·
+            affected revisions {item.affected_revisions.join(", ")} · owners{" "}
+            {item.affected_owner_ids.join(", ")}
+          </p>
+          <ul className="mt-2 space-y-1 text-xs">
+            {item.citations.map((citation, index) => (
+              <li
+                key={`${citation.resource_id}-${citation.revision}-${index}`}
+                className={citation.stale ? "text-[var(--warning)]" : ""}
+              >
+                {citation.stale && "Stale evidence · "}
+                {citation.url ? (
+                  <a className="underline" href={citation.url}>
+                    {citation.label}
+                  </a>
+                ) : (
+                  citation.label
+                )}{" "}
+                · {citation.revision}
+              </li>
+            ))}
+          </ul>
+          {item.decision_reason && (
+            <p className="mt-2 rounded bg-white p-2 text-xs">
+              <strong>Challenge:</strong> {item.decision_reason}
+            </p>
+          )}
+          {item.comments.map((comment) => (
+            <p
+              key={comment.id}
+              className="mt-2 border-l-2 border-[var(--line-strong)] pl-2 text-xs"
+            >
+              {comment.body}
+              <br />
+              <span className="text-[var(--muted)]">
+                {comment.actor_id} ·{" "}
+                {new Date(comment.created_at).toLocaleString()}
+              </span>
+            </p>
+          ))}
+          <div className="mt-3 flex flex-wrap gap-2">
+            {["dismissed", "snoozed", "incorrect"].includes(item.status) ? (
+              <Button variant="quiet" onClick={() => void act(item, "reopen")}>
+                Reopen
+              </Button>
+            ) : item.status === "open" ? (
+              <>
+                <Button
+                  variant="quiet"
+                  onClick={() =>
+                    void act(item, "dismiss", {
+                      reason: "Not a current priority",
+                    })
+                  }
+                >
+                  Dismiss
+                </Button>
+                <Button
+                  variant="quiet"
+                  onClick={() =>
+                    void act(item, "incorrect", {
+                      reason: "The evidence or conclusion is incorrect",
+                    })
+                  }
+                >
+                  Mark incorrect
+                </Button>
+                {owner &&
+                  item.admission === "approval_required" &&
+                  !item.approval && (
+                    <Button
+                      onClick={() =>
+                        void act(item, "approve", {
+                          reason: "Maintainer accepted this priority and scope",
+                        })
+                      }
+                    >
+                      Approve follow-up
+                    </Button>
+                  )}
+              </>
+            ) : null}
+            <form
+              className="flex gap-1"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const d = new FormData(e.currentTarget);
+                void act(item, "rank", { rank: Number(d.get("rank")) });
+              }}
+            >
+              <input
+                name="rank"
+                type="number"
+                min="1"
+                max="100000"
+                defaultValue={item.rank}
+                aria-label={`Rank ${item.title}`}
+                className="w-16 rounded border border-[var(--line-strong)] px-2"
+              />
+              <Button variant="quiet">Rank</Button>
+            </form>
+            <form
+              className="flex gap-1"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const d = new FormData(e.currentTarget);
+                void act(item, "snooze", {
+                  until: new Date(String(d.get("until"))).toISOString(),
+                  reason: "Revisit at the selected time",
+                });
+              }}
+            >
+              <input
+                name="until"
+                type="datetime-local"
+                required
+                aria-label={`Snooze ${item.title} until`}
+                className="rounded border border-[var(--line-strong)] px-2"
+              />
+              <Button variant="quiet">Snooze</Button>
+            </form>
+          </div>
+          <form
+            className="mt-2 flex gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const f = e.currentTarget,
+                d = new FormData(f);
+              void act(item, "comment", { comment: d.get("comment") }).then(
+                () => f.reset(),
+              );
+            }}
+          >
+            <input
+              name="comment"
+              required
+              maxLength={4000}
+              placeholder="Discuss or challenge this finding"
+              className="min-h-9 grow rounded border border-[var(--line-strong)] px-2"
+            />
+            <Button variant="quiet">Comment</Button>
+          </form>
+          {item.status === "open" &&
+            (item.admission === "auto_start_eligible" ||
+              item.approval?.decision === "approve") && (
+              <details className="mt-3 border-t border-[var(--line)] pt-3">
+                <summary className="cursor-pointer text-xs font-semibold text-[var(--brand)]">
+                  Promote into accountable work
+                </summary>
+                <form
+                  className="mt-3 grid gap-2 sm:grid-cols-2"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const form = e.currentTarget,
+                      data = new FormData(form);
+                    void submit(
+                      `/organizations/${group.id}/stewardship-mandates/${mandate.id}/opportunities/${item.id}/promotion`,
+                      {
+                        method: "POST",
+                        body: JSON.stringify({
+                          expected_version: item.version,
+                          title: data.get("title"),
+                          body: data.get("body"),
+                          base_revision: data.get("base_revision"),
+                          agent_minutes: Number(data.get("agent_minutes")),
+                          tasks: [
+                            {
+                              title: data.get("task_title"),
+                              owner_type: data.get("owner_type"),
+                              owner_id: data.get("owner_id"),
+                              completion_criteria: data.get("criteria"),
+                              risk: data.get("risk"),
+                              verification_plan: data.get("verification"),
+                              depends_on_previous: false,
+                            },
+                          ],
+                        }),
+                      },
+                    );
+                  }}
+                >
+                  <input
+                    name="title"
+                    required
+                    defaultValue={item.title}
+                    className="min-h-10 rounded border px-3"
+                  />
+                  <input
+                    name="base_revision"
+                    required
+                    minLength={40}
+                    maxLength={40}
+                    placeholder="Current default-branch commit"
+                    className="min-h-10 rounded border px-3 font-mono"
+                  />
+                  <textarea
+                    name="body"
+                    required
+                    defaultValue={item.summary}
+                    className="rounded border p-3 sm:col-span-2"
+                  />
+                  <input
+                    name="task_title"
+                    required
+                    placeholder="First ordered task"
+                    className="min-h-10 rounded border px-3"
+                  />
+                  <select
+                    name="owner_type"
+                    className="min-h-10 rounded border bg-white px-3"
+                  >
+                    <option value="human">Human owner</option>
+                    <option value="agent">Agent owner</option>
+                  </select>
+                  <input
+                    name="owner_id"
+                    required
+                    minLength={32}
+                    maxLength={32}
+                    placeholder="Owner or approved agent ID"
+                    className="min-h-10 rounded border px-3 font-mono"
+                  />
+                  <input
+                    name="agent_minutes"
+                    type="number"
+                    min="0"
+                    max={item.max_agent_minutes ?? 0}
+                    defaultValue="0"
+                    aria-label="Reserved agent minutes"
+                    className="min-h-10 rounded border px-3"
+                  />
+                  <textarea
+                    name="criteria"
+                    required
+                    placeholder="Observable completion criteria"
+                    className="rounded border p-3"
+                  />
+                  <textarea
+                    name="risk"
+                    required
+                    placeholder="Risk if this work proceeds"
+                    className="rounded border p-3"
+                  />
+                  <textarea
+                    name="verification"
+                    required
+                    placeholder="Verification plan"
+                    className="rounded border p-3"
+                  />
+                  <Button>Promote at exact base</Button>
+                </form>
+              </details>
+            )}
+        </article>
+      ))}
+    </details>
+  );
+}
+function RevisionFields({
+  revision,
+  group,
+}: {
+  revision: OrganizationStewardshipMandateRevision;
+  group: Organization;
+}) {
+  const input =
+    "min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3";
+  return (
+    <>
+      <textarea
+        className={`${input} py-3 sm:col-span-2`}
+        name="outcomes"
+        required
+        defaultValue={revision.desired_outcomes.join(", ")}
+        aria-label="Desired outcomes"
+      />
+      <textarea
+        className={`${input} py-3 sm:col-span-2`}
+        name="repository_scopes"
+        required
+        defaultValue={revision.repositories
+          .map((x) => `${x.repository_id} ${x.branches.join(", ")}`)
+          .join("\n")}
+        aria-label="Repository and branch scopes"
+      />
+      <p className="text-xs text-[var(--muted)] sm:col-span-2">
+        One repository per line: repository ID, a space, then comma-separated
+        branches.
+      </p>
+      <textarea
+        className={`${input} py-3 sm:col-span-2`}
+        name="signals"
+        required
+        defaultValue={revision.trusted_signals.join(", ")}
+        aria-label="Trusted signals"
+      />
+      <textarea
+        className={`${input} py-3 sm:col-span-2`}
+        name="exclusions"
+        required
+        defaultValue={revision.exclusions.join(", ")}
+        aria-label="Exclusions"
+      />
+      <input
+        className={input}
+        name="minutes"
+        type="number"
+        min="1"
+        max="525600"
+        required
+        defaultValue={revision.budget.max_agent_minutes}
+        aria-label="Agent-minute budget"
+      />
+      <input
+        className={input}
+        name="actions"
+        type="number"
+        min="1"
+        max="100000"
+        required
+        defaultValue={revision.budget.max_actions}
+        aria-label="Action budget"
+      />
+      <label className="text-xs font-semibold">
+        Starts
+        <input
+          className={`mt-1 w-full ${input}`}
+          name="starts_at"
+          type="datetime-local"
+          required
+          defaultValue={localDate(revision.starts_at)}
+        />
+      </label>
+      <label className="text-xs font-semibold">
+        Expires
+        <input
+          className={`mt-1 w-full ${input}`}
+          name="expires_at"
+          type="datetime-local"
+          required
+          defaultValue={localDate(revision.expires_at)}
+        />
+      </label>
+      <select
+        className={input}
+        name="agent_id"
+        required
+        defaultValue={revision.agent_id}
+      >
+        {group.agents.map((a) => (
+          <option value={a.id} key={a.id}>
+            {a.name}
+          </option>
+        ))}
+      </select>
+      <textarea
+        className={`${input} py-3 sm:col-span-2`}
+        name="allowed_actions"
+        required
+        defaultValue={revision.allowed_actions.join(", ")}
+        aria-label="Allowed actions"
+      />
+      <textarea
+        className={`${input} py-3 sm:col-span-2`}
+        name="decisions"
+        required
+        defaultValue={revision.required_human_decisions.join(", ")}
+        aria-label="Required human decisions"
+      />
+      <textarea
+        className={`${input} py-3 sm:col-span-2`}
+        name="opportunity_policies"
+        defaultValue={(revision.opportunity_policies ?? [])
+          .map(
+            (x) =>
+              `${x.evidence_type}:${x.mode}:${x.minimum_severity}:${x.max_agent_minutes}`,
+          )
+          .join("\n")}
+        placeholder="Opportunity policy per line: check:auto_start:high:15"
+        aria-label="Opportunity admission policies"
+      />
+      <textarea
+        className={`${input} py-3 sm:col-span-2`}
+        name="reason"
+        required
+        placeholder="Reason for this revision"
+      />
+    </>
+  );
+}
+function StewardshipWorkspace({
+  group,
+  repositories,
+  owner,
+  userID,
+  token,
+  submit,
+}: {
+  group: Organization;
+  repositories: Repository[];
+  owner: boolean;
+  userID: string;
+  token: string | null;
+  submit: (path: string, options: RequestInit) => Promise<void>;
+}) {
+  const [previews, setPreviews] = useState<
+    Record<string, OrganizationStewardshipPreview>
+  >({});
+  async function preview(id: string) {
+    const value = await api<OrganizationStewardshipPreview>(
+      `/organizations/${group.id}/stewardship-mandates/${id}/preview`,
+      {},
+      token,
+    );
+    setPreviews((x) => ({ ...x, [id]: value }));
+  }
+  function payload(data: FormData, expected?: number) {
+    return {
+      title: data.get("title"),
+      desired_outcomes: comma(data.get("outcomes")),
+      repositories: [
+        {
+          repository_id: data.get("repository_id"),
+          branches: comma(data.get("branches")),
+        },
+      ],
+      trusted_signals: comma(data.get("signals")),
+      exclusions: comma(data.get("exclusions")),
+      budget: {
+        max_agent_minutes: Number(data.get("minutes")),
+        max_actions: Number(data.get("actions")),
+      },
+      starts_at: new Date(String(data.get("starts_at"))).toISOString(),
+      expires_at: new Date(String(data.get("expires_at"))).toISOString(),
+      agent_id: data.get("agent_id"),
+      allowed_actions: comma(data.get("allowed_actions")),
+      required_human_decisions: comma(data.get("decisions")),
+      opportunity_policies: opportunityPolicies(
+        data.get("opportunity_policies"),
+      ),
+      reason: data.get("reason"),
+      expected_version: expected,
+    };
+  }
+  const input =
+    "min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3";
+  return (
+    <Card className="p-5">
+      <h2 className="text-lg font-semibold">Proactive stewardship mandates</h2>
+      <p className="mt-1 text-sm text-[var(--muted)]">
+        Define ongoing outcomes and stop boundaries. A mandate never grants
+        write, credential, review, deployment, or merge authority.
+      </p>
+      {group.stewardship_mandates.map((m) => {
+        const r = m.revisions[m.revisions.length - 1],
+          operator = group.agents
+            .find((a) => a.id === r.agent_id)
+            ?.operator_ids.includes(userID);
+        return (
+          <div
+            key={m.id}
+            className="mt-4 rounded-lg border border-[var(--line)] p-4 text-sm"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <strong>{m.title}</strong> <Badge>{m.status}</Badge>{" "}
+                <span className="text-xs text-[var(--muted)]">
+                  v{m.version}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="quiet" onClick={() => void preview(m.id)}>
+                  Preview authority
+                </Button>
+                {operator && m.status === "pending_acceptance" && (
+                  <Button
+                    onClick={() =>
+                      void submit(
+                        `/organizations/${group.id}/stewardship-mandates/${m.id}/accept`,
+                        {
+                          method: "POST",
+                          body: JSON.stringify({ expected_version: m.version }),
+                        },
+                      )
+                    }
+                  >
+                    Accept as operator
+                  </Button>
+                )}
+                {owner && m.status === "active" && (
+                  <Button
+                    variant="quiet"
+                    onClick={() =>
+                      void submit(
+                        `/organizations/${group.id}/stewardship-mandates/${m.id}/pause`,
+                        {
+                          method: "POST",
+                          body: JSON.stringify({ expected_version: m.version }),
+                        },
+                      )
+                    }
+                  >
+                    Pause
+                  </Button>
+                )}
+                {owner && m.status === "paused" && (
+                  <Button
+                    variant="quiet"
+                    onClick={() =>
+                      void submit(
+                        `/organizations/${group.id}/stewardship-mandates/${m.id}/resume`,
+                        {
+                          method: "POST",
+                          body: JSON.stringify({ expected_version: m.version }),
+                        },
+                      )
+                    }
+                  >
+                    Resume
+                  </Button>
+                )}
+                {owner && m.status !== "revoked" && (
+                  <Button
+                    variant="quiet"
+                    onClick={() =>
+                      void submit(
+                        `/organizations/${group.id}/stewardship-mandates/${m.id}/revoke`,
+                        {
+                          method: "POST",
+                          body: JSON.stringify({ expected_version: m.version }),
+                        },
+                      )
+                    }
+                  >
+                    Revoke
+                  </Button>
+                )}
+              </div>
+            </div>
+            <p className="mt-2">{r.desired_outcomes.join(" · ")}</p>
+            <p className="mt-2 text-xs text-[var(--muted)]">
+              Agent {r.agent_id} ·{" "}
+              {r.repositories
+                .map(
+                  (x) =>
+                    `${repositories.find((repo) => repo.id === x.repository_id)?.name ?? x.repository_id} [${x.branches.join(", ")}]`,
+                )
+                .join(" · ")}{" "}
+              · {r.budget.max_agent_minutes} minutes / {r.budget.max_actions}{" "}
+              actions · expires {new Date(r.expires_at).toLocaleString()}
+            </p>
+            <p className="mt-2 text-xs">
+              <strong>Must stop for:</strong>{" "}
+              {r.required_human_decisions.join("; ")} ·{" "}
+              <strong>Excluded:</strong> {r.exclusions.join("; ")}
+            </p>
+            {previews[m.id] && (
+              <div className="mt-3 rounded bg-[var(--surface)] p-3 text-xs">
+                <strong>Effective authority preview</strong>
+                <p className="mt-1">{previews[m.id].notice}</p>
+                <p className="mt-1">
+                  Separate live grants: {previews[m.id].access_grants.length};
+                  implicit authority: none. Policy:{" "}
+                  {Object.values(previews[m.id].effective_policies)
+                    .map((x) => x.rules.agent_authority || "unspecified")
+                    .join(", ")}
+                </p>
+              </div>
+            )}
+            <OpportunityQueue group={group} mandate={m} submit={submit} />
+            {owner && m.status !== "revoked" && (
+              <details className="mt-3">
+                <summary className="cursor-pointer text-xs font-semibold text-[var(--brand)]">
+                  Revise mandate (operator must accept again)
+                </summary>
+                <form
+                  className="mt-3 grid gap-3 sm:grid-cols-2"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const d = new FormData(e.currentTarget);
+                    void submit(
+                      `/organizations/${group.id}/stewardship-mandates/${m.id}`,
+                      {
+                        method: "PUT",
+                        body: JSON.stringify({
+                          title: m.title,
+                          desired_outcomes: comma(d.get("outcomes")),
+                          repositories: mandateScopes(
+                            d.get("repository_scopes"),
+                          ),
+                          trusted_signals: comma(d.get("signals")),
+                          exclusions: comma(d.get("exclusions")),
+                          budget: {
+                            max_agent_minutes: Number(d.get("minutes")),
+                            max_actions: Number(d.get("actions")),
+                          },
+                          starts_at: new Date(
+                            String(d.get("starts_at")),
+                          ).toISOString(),
+                          expires_at: new Date(
+                            String(d.get("expires_at")),
+                          ).toISOString(),
+                          agent_id: d.get("agent_id"),
+                          allowed_actions: comma(d.get("allowed_actions")),
+                          required_human_decisions: comma(d.get("decisions")),
+                          opportunity_policies: opportunityPolicies(
+                            d.get("opportunity_policies"),
+                          ),
+                          reason: d.get("reason"),
+                          expected_version: m.version,
+                        }),
+                      },
+                    );
+                  }}
+                >
+                  <RevisionFields revision={r} group={group} />
+                  <div>
+                    <Button>Publish revision</Button>
+                  </div>
+                </form>
+              </details>
+            )}
+          </div>
+        );
+      })}
+      {owner && repositories.length > 0 && group.agents.length > 0 && (
+        <details className="mt-5">
+          <summary className="cursor-pointer font-semibold text-[var(--brand)]">
+            Create a versioned mandate
+          </summary>
+          <form
+            className="mt-4 grid gap-3 sm:grid-cols-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const f = e.currentTarget,
+                d = new FormData(f);
+              void submit(`/organizations/${group.id}/stewardship-mandates`, {
+                method: "POST",
+                body: JSON.stringify(payload(d)),
+              }).then(() => f.reset());
+            }}
+          >
+            <input
+              className={input}
+              name="title"
+              required
+              maxLength={200}
+              placeholder="Mandate title"
+            />
+            <select className={input} name="agent_id" required>
+              {group.agents.map((a) => (
+                <option value={a.id} key={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+            <select className={input} name="repository_id" required>
+              {repositories.map((r) => (
+                <option value={r.id} key={r.id}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+            <input
+              className={input}
+              name="branches"
+              required
+              placeholder="Branches, comma separated"
+            />
+            <textarea
+              className={`${input} py-3 sm:col-span-2`}
+              name="outcomes"
+              required
+              placeholder="Desired outcomes, comma separated"
+            />
+            <textarea
+              className={`${input} py-3 sm:col-span-2`}
+              name="signals"
+              required
+              placeholder="Trusted signals, comma separated"
+            />
+            <textarea
+              className={`${input} py-3 sm:col-span-2`}
+              name="exclusions"
+              required
+              placeholder="Explicit exclusions, comma separated"
+            />
+            <input
+              className={input}
+              name="minutes"
+              type="number"
+              min="1"
+              max="525600"
+              required
+              placeholder="Agent-minute budget"
+            />
+            <input
+              className={input}
+              name="actions"
+              type="number"
+              min="1"
+              max="100000"
+              required
+              placeholder="Action budget"
+            />
+            <label className="text-xs font-semibold">
+              Starts
+              <input
+                className={`mt-1 w-full ${input}`}
+                name="starts_at"
+                type="datetime-local"
+                required
+              />
+            </label>
+            <label className="text-xs font-semibold">
+              Expires
+              <input
+                className={`mt-1 w-full ${input}`}
+                name="expires_at"
+                type="datetime-local"
+                required
+              />
+            </label>
+            <textarea
+              className={`${input} py-3 sm:col-span-2`}
+              name="allowed_actions"
+              required
+              placeholder="Allowed actions, comma separated"
+            />
+            <textarea
+              className={`${input} py-3 sm:col-span-2`}
+              name="decisions"
+              required
+              placeholder="Human decisions required, comma separated (for example: merge, release, spend increase)"
+            />
+            <textarea
+              className={`${input} py-3 sm:col-span-2`}
+              name="opportunity_policies"
+              placeholder="Per line: check:auto_start:high:15 (unlisted classes require approval)"
+            />
+            <textarea
+              className={`${input} py-3 sm:col-span-2`}
+              name="reason"
+              placeholder="Why this mandate exists"
+            />
+            <div>
+              <Button>Create mandate</Button>
+            </div>
+          </form>
+        </details>
+      )}
+    </Card>
+  );
+}
+function InitiativeWorkspace({
+  group,
+  portfolio,
+  submit,
+}: {
+  group: Organization;
+  portfolio: OrganizationPortfolio;
+  submit: (path: string, options: RequestInit) => Promise<void>;
+}) {
+  const sources = [
+    ...portfolio.active_proposals.map((x) => ({
+      key: `proposal|${x.repository_id}|${x.id}`,
+      label: `Proposal · ${x.title}`,
+    })),
+    ...portfolio.active_incidents.flatMap((x) =>
+      x.scopes.map((scope) => ({
+        key: `incident|${scope.repository_id}|${x.id}`,
+        label: `Incident · ${x.title} · ${scope.repository_id}`,
+      })),
+    ),
+  ];
+  const principals = [
+    ...group.members.map((x) => ({
+      key: `human|${x.user_id}`,
+      label: `Human · ${x.user_id}`,
+    })),
+    ...group.teams.map((x) => ({
+      key: `team|${x.id}`,
+      label: `Team · ${x.name}`,
+    })),
+    ...group.agents.map((x) => ({
+      key: `agent|${x.id}`,
+      label: `Agent · ${x.name}`,
+    })),
+  ];
+  return (
+    <section className="space-y-4">
+      <header>
+        <p className="text-xs font-bold uppercase tracking-[.16em] text-[var(--brand)]">
+          Outcome coordination
+        </p>
+        <h2 className="mt-1 text-2xl font-bold">Portfolio initiatives</h2>
+        <p className="mt-2 text-sm text-[var(--muted)]">
+          One live map for cross-repository ownership, dependency decisions,
+          policy exceptions, and release evidence.
+        </p>
+      </header>
+      {portfolio.initiatives.map((initiative) => (
+        <Card key={initiative.id} className="p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="font-semibold">{initiative.title}</h3>
+              <p className="mt-1 text-xs text-[var(--muted)]">
+                From {initiative.source.kind}{" "}
+                <code>{initiative.source.id}</code> · v{initiative.version}
+              </p>
+            </div>
+            <Badge>{initiative.status}</Badge>
+          </div>
+          {initiative.work_items
+            .sort((a, b) => a.position - b.position)
+            .map((item) => (
+              <div
+                key={item.id}
+                className="mt-4 border-t border-[var(--line)] pt-3"
+              >
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <Badge>{item.status.replaceAll("_", " ")}</Badge>
+                  <strong>
+                    {item.position}. {item.title}
+                  </strong>
+                  {item.blocked && <Badge>blocked</Badge>}
+                  {item.ownership_state === "reassignment_required" && (
+                    <Badge>reassign</Badge>
+                  )}
+                </div>
+                <p className="mt-1 text-xs text-[var(--muted)]">
+                  {item.owner.type} <code>{item.owner.id}</code> · repository{" "}
+                  <Link
+                    className="text-[var(--brand)] hover:underline"
+                    href={`/repositories/${item.repository_id}`}
+                  >
+                    {item.repository_id}
+                  </Link>
+                  {item.blocker_ids &&
+                    item.blocker_ids.length > 0 &&
+                    ` · waiting on ${item.blocker_ids.join(", ")}`}
+                </p>
+                {item.reassignment_note && (
+                  <p className="mt-2 rounded-lg bg-[var(--warning-soft)] p-2 text-xs">
+                    {item.reassignment_note}
+                  </p>
+                )}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const f = e.currentTarget,
+                      d = new FormData(f),
+                      owner = String(d.get("owner")).split("|");
+                    void submit(
+                      `/organizations/${group.id}/initiatives/${initiative.id}/items/${item.id}`,
+                      {
+                        method: "PATCH",
+                        body: JSON.stringify({
+                          owner: { type: owner[0], id: owner[1] },
+                          status: d.get("status"),
+                          expected_version: initiative.version,
+                        }),
+                      },
+                    );
+                  }}
+                  className="mt-2 flex flex-wrap gap-2"
+                >
+                  <select
+                    name="owner"
+                    defaultValue={`${item.owner.type}|${item.owner.id}`}
+                    aria-label={`Owner for ${item.title}`}
+                    className="min-h-9 rounded-lg border border-[var(--line-strong)] bg-white px-2 text-xs"
+                  >
+                    {principals.map((x) => (
+                      <option key={x.key} value={x.key}>
+                        {x.label}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    name="status"
+                    defaultValue={item.status}
+                    aria-label={`Status for ${item.title}`}
+                    className="min-h-9 rounded-lg border border-[var(--line-strong)] bg-white px-2 text-xs"
+                  >
+                    <option value="todo">To do</option>
+                    <option value="in_progress">In progress</option>
+                    <option value="completed">Completed</option>
+                  </select>
+                  <Button type="submit" variant="quiet">
+                    Update accountability
+                  </Button>
+                </form>
+              </div>
+            ))}
+          {(initiative.policy_exceptions?.length ?? 0) > 0 && (
+            <p className="mt-4 text-xs text-[var(--muted)]">
+              Decision needed: {initiative.policy_exceptions!.length} active or
+              pending policy exception(s).
+            </p>
+          )}
+          {(initiative.upcoming_releases?.length ?? 0) > 0 && (
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              Upcoming evidence:{" "}
+              {initiative.upcoming_releases!.map((x) => x.version).join(", ")}.
+            </p>
+          )}
+        </Card>
+      ))}
+      {portfolio.initiatives.length === 0 && (
+        <Card className="p-5 text-sm text-[var(--muted)]">
+          No coordinated outcomes yet.
+        </Card>
+      )}
+      <details>
+        <summary className="cursor-pointer text-sm font-semibold text-[var(--brand)]">
+          Create an initiative from existing work
+        </summary>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const f = e.currentTarget,
+              d = new FormData(f),
+              selected = String(d.get("known_source") || "").split("|"),
+              kind = selected[0] || String(d.get("source_kind")),
+              sourceRepo = selected[1] || String(d.get("source_repository_id")),
+              sourceID = selected[2] || String(d.get("source_id")),
+              owner = String(d.get("owner")).split("|");
+            void submit(`/organizations/${group.id}/initiatives`, {
+              method: "POST",
+              body: JSON.stringify({
+                title: d.get("title"),
+                description: d.get("description"),
+                source: {
+                  kind,
+                  repository_id: sourceRepo || undefined,
+                  id: sourceID,
+                },
+                work_items: [
+                  {
+                    id: crypto.randomUUID().replaceAll("-", ""),
+                    title: d.get("task_title"),
+                    repository_id: d.get("task_repository_id"),
+                    owner: { type: owner[0], id: owner[1] },
+                    dependency_ids: [],
+                    status: "todo",
+                  },
+                ],
+              }),
+            }).then(() => f.reset());
+          }}
+          className="mt-4 grid gap-3 sm:grid-cols-2"
+        >
+          <input
+            name="title"
+            required
+            maxLength={200}
+            placeholder="Initiative outcome"
+            className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"
+          />
+          <input
+            name="description"
+            maxLength={2000}
+            placeholder="Shared outcome and constraints"
+            className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"
+          />
+          <select
+            name="known_source"
+            aria-label="Known portfolio source"
+            className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"
+          >
+            <option value="">
+              Enter an evolution or security source below
+            </option>
+            {sources.map((x) => (
+              <option key={x.key} value={x.key}>
+                {x.label}
+              </option>
+            ))}
+          </select>
+          <div className="grid grid-cols-3 gap-2">
+            <select
+              name="source_kind"
+              aria-label="Source kind"
+              className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-2"
+            >
+              <option value="evolution">Evolution</option>
+              <option value="security">Security</option>
+              <option value="proposal">Proposal</option>
+              <option value="incident">Incident</option>
+            </select>
+            <input
+              name="source_repository_id"
+              minLength={32}
+              maxLength={32}
+              placeholder="Source repository ID"
+              className="col-span-2 min-h-10 rounded-lg border border-[var(--line-strong)] px-2 font-mono text-xs"
+            />
+          </div>
+          <input
+            name="source_id"
+            minLength={32}
+            maxLength={32}
+            placeholder="Evolution/security work ID"
+            className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3 font-mono text-xs"
+          />
+          <input
+            name="task_title"
+            required
+            maxLength={200}
+            placeholder="First accountable contribution"
+            className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"
+          />
+          <select
+            name="task_repository_id"
+            required
+            className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"
+          >
+            {portfolio.repositories.map((x) => (
+              <option key={x.id} value={x.id}>
+                {x.name}
+              </option>
+            ))}
+          </select>
+          <select
+            name="owner"
+            required
+            className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"
+          >
+            {principals.map((x) => (
+              <option key={x.key} value={x.key}>
+                {x.label}
+              </option>
+            ))}
+          </select>
+          <Button type="submit">Create initiative</Button>
+        </form>
+      </details>
+    </section>
+  );
+}
+function PolicyWorkspace({
+  group,
+  repositories,
+  owner,
+  submit,
+}: {
+  group: Organization;
+  repositories: Repository[];
+  owner: boolean;
+  submit: (path: string, options: RequestInit) => Promise<void>;
+}) {
+  const { token } = useAuth();
+  const [preview, setPreview] = useState<{
+    repository_id: string;
+    rules: OrganizationPolicyRules;
+    policies: { id: string; name: string; status: string }[];
+    exceptions: {
+      id: string;
+      rule: string;
+      requested_value: string;
+      expires_at: string;
+    }[];
+  } | null>(null);
+  async function inspect(repositoryID: string) {
+    if (!repositoryID) {
+      setPreview(null);
+      return;
+    }
+    setPreview(
+      await api(
+        `/organizations/${group.id}/policies/preview?repository_id=${repositoryID}`,
+        {},
+        token,
+      ),
+    );
+  }
+  return (
+    <Card className="p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">Portfolio policy baseline</h2>
+          <p className="mt-1 text-sm text-[var(--muted)]">
+            Draft and preview shared requirements before activation. Activation
+            applies to new decisions and preserves evidence for work already
+            underway.
+          </p>
+        </div>
+        <select
+          aria-label="Preview repository policy"
+          onChange={(e) => void inspect(e.target.value)}
+          className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3 text-sm"
+        >
+          <option value="">Preview a repository…</option>
+          {repositories.map((repo) => (
+            <option key={repo.id} value={repo.id}>
+              {repo.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      {preview && (
+        <div className="mt-4 rounded-lg border border-[var(--line)] bg-[var(--surface-subtle)] p-4 text-sm">
+          <strong>Effective preview</strong>
+          <p className="mt-2 break-words font-mono text-xs">
+            {Object.entries(preview.rules)
+              .map(
+                ([key, value]) =>
+                  `${key}: ${Array.isArray(value) ? value.join(", ") : value}`,
+              )
+              .join(" · ") || "No matching rules"}
+          </p>
+          <p className="mt-2 text-xs text-[var(--muted)]">
+            Sources:{" "}
+            {preview.policies
+              .map((x) => `${x.name} (${x.status})`)
+              .join(", ") || "none"}
+            {preview.exceptions.length > 0 &&
+              ` · ${preview.exceptions.length} approved, expiring exception(s) shown separately`}
+          </p>
+        </div>
+      )}
+      {group.policies.map((policy) => (
+        <div
+          key={policy.id}
+          className="mt-4 border-t border-[var(--line)] pt-3 text-sm"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge>{policy.status}</Badge>
+            <strong>{policy.name}</strong>
+            <span className="text-xs text-[var(--muted)]">
+              v{policy.version} ·{" "}
+              {policy.targets
+                .map((x) => x.kind + (x.id ? `:${x.id}` : ""))
+                .join(", ")}
+            </span>
+          </div>
+          <p className="mt-1 text-xs font-mono">
+            {Object.entries(policy.rules)
+              .map(
+                ([key, value]) =>
+                  `${key}=${Array.isArray(value) ? value.join("+") : value}`,
+              )
+              .join(" · ")}
+          </p>
+          {owner && policy.status === "draft" && (
+            <Button
+              className="mt-2"
+              onClick={() =>
+                void submit(
+                  `/organizations/${group.id}/policies/${policy.id}/activate`,
+                  {
+                    method: "POST",
+                    body: JSON.stringify({ expected_version: policy.version }),
+                  },
+                )
+              }
+            >
+              Activate baseline
+            </Button>
+          )}
+        </div>
+      ))}
+      {group.policy_exceptions.map((exception) => (
+        <div
+          key={exception.id}
+          className="mt-4 border-t border-[var(--line)] pt-3 text-sm"
+        >
+          <Badge>{exception.status}</Badge> <strong>{exception.rule}</strong> →{" "}
+          {exception.requested_value}
+          <p className="mt-1 text-xs text-[var(--muted)]">
+            {exception.reason} · requested by {exception.requester_id} · expires{" "}
+            {new Date(exception.expires_at).toLocaleString()}
+          </p>
+          {owner && exception.status === "pending" && (
+            <div className="mt-2 flex gap-2">
+              <Button
+                onClick={() =>
+                  void submit(
+                    `/organizations/${group.id}/policy-exceptions/${exception.id}/decision`,
+                    {
+                      method: "POST",
+                      body: JSON.stringify({ decision: "approve" }),
+                    },
+                  )
+                }
+              >
+                Approve exception
+              </Button>
+              <Button
+                variant="quiet"
+                onClick={() =>
+                  void submit(
+                    `/organizations/${group.id}/policy-exceptions/${exception.id}/decision`,
+                    {
+                      method: "POST",
+                      body: JSON.stringify({ decision: "deny" }),
+                    },
+                  )
+                }
+              >
+                Deny
+              </Button>
+            </div>
+          )}
+        </div>
+      ))}
+      {owner && (
+        <details className="mt-5 border-t border-[var(--line)] pt-4">
+          <summary className="cursor-pointer text-sm font-semibold">
+            Draft a versioned policy
+          </summary>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const f = e.currentTarget,
+                d = new FormData(f),
+                target = String(d.get("target")).split(":");
+              void submit(`/organizations/${group.id}/policies`, {
+                method: "POST",
+                body: JSON.stringify({
+                  name: d.get("name"),
+                  description: d.get("description"),
+                  targets: [{ kind: target[0], id: target[1] || undefined }],
+                  rules: {
+                    repository_visibility:
+                      d.get("repository_visibility") || undefined,
+                    minimum_reviews: Number(d.get("minimum_reviews")),
+                    required_checks: String(d.get("required_checks"))
+                      .split(",")
+                      .map((x) => x.trim())
+                      .filter(Boolean),
+                    integration: d.get("integration") || undefined,
+                    release_provenance:
+                      d.get("release_provenance") || undefined,
+                    dependency_use: d.get("dependency_use") || undefined,
+                    promotion_approvals: Number(d.get("promotion_approvals")),
+                    agent_authority: d.get("agent_authority") || undefined,
+                  },
+                }),
+              }).then(() => f.reset());
+            }}
+            className="mt-4 grid gap-3 sm:grid-cols-2"
+          >
+            <input
+              name="name"
+              required
+              placeholder="Policy name"
+              className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"
+            />
+            <select
+              name="target"
+              className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"
+            >
+              <option value="organization:">Whole organization</option>
+              {group.teams.map((x) => (
+                <option key={x.id} value={`team:${x.id}`}>
+                  Team · {x.name}
+                </option>
+              ))}
+              {repositories.map((x) => (
+                <option key={x.id} value={`repository:${x.id}`}>
+                  Repository · {x.name}
+                </option>
+              ))}
+            </select>
+            <textarea
+              name="description"
+              placeholder="Why this baseline exists"
+              className="min-h-20 rounded-lg border border-[var(--line-strong)] p-3 sm:col-span-2"
+            />
+            <select
+              name="repository_visibility"
+              className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"
+            >
+              <option value="">Any visibility</option>
+              <option value="private">Require private</option>
+              <option value="public">Require public</option>
+            </select>
+            <input
+              name="minimum_reviews"
+              type="number"
+              min="0"
+              max="20"
+              defaultValue="1"
+              aria-label="Minimum reviews"
+              className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"
+            />
+            <input
+              name="required_checks"
+              placeholder="Required checks, comma separated"
+              className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3 sm:col-span-2"
+            />
+            <select
+              name="integration"
+              className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"
+            >
+              <option value="">Any integration</option>
+              <option value="queue">Integration queue</option>
+              <option value="direct">Direct merge</option>
+            </select>
+            <select
+              name="release_provenance"
+              className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"
+            >
+              <option value="">Any release provenance</option>
+              <option value="attested">Attested releases</option>
+            </select>
+            <select
+              name="dependency_use"
+              className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"
+            >
+              <option value="">Any dependencies</option>
+              <option value="active-only">Active versions only</option>
+              <option value="approved-only">Approved versions only</option>
+            </select>
+            <input
+              name="promotion_approvals"
+              type="number"
+              min="0"
+              max="20"
+              defaultValue="1"
+              aria-label="Promotion approvals"
+              className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"
+            />
+            <select
+              name="agent_authority"
+              className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3 sm:col-span-2"
+            >
+              <option value="">Any agent authority</option>
+              <option value="explicit-grants">Explicit grants only</option>
+              <option value="disabled">Agents disabled</option>
+            </select>
+            <Button type="submit">Save draft</Button>
+          </form>
+        </details>
+      )}
+      {group.policies.some((x) => x.status === "active") &&
+        repositories.length > 0 && (
+          <details className="mt-5 border-t border-[var(--line)] pt-4">
+            <summary className="cursor-pointer text-sm font-semibold">
+              Request an expiring exception
+            </summary>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const f = e.currentTarget,
+                  d = new FormData(f);
+                void submit(`/organizations/${group.id}/policy-exceptions`, {
+                  method: "POST",
+                  body: JSON.stringify({
+                    policy_id: d.get("policy_id"),
+                    repository_id: d.get("repository_id"),
+                    rule: d.get("rule"),
+                    requested_value: d.get("requested_value"),
+                    reason: d.get("reason"),
+                    expires_at: new Date(
+                      String(d.get("expires_at")),
+                    ).toISOString(),
+                  }),
+                }).then(() => f.reset());
+              }}
+              className="mt-4 grid gap-3 sm:grid-cols-2"
+            >
+              <select
+                name="policy_id"
+                required
+                className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"
+              >
+                {group.policies
+                  .filter((x) => x.status === "active")
+                  .map((x) => (
+                    <option key={x.id} value={x.id}>
+                      {x.name}
+                    </option>
+                  ))}
+              </select>
+              <select
+                name="repository_id"
+                required
+                className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"
+              >
+                {repositories.map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                name="rule"
+                className="min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3"
+              >
+                {[
+                  "repository_visibility",
+                  "minimum_reviews",
+                  "required_checks",
+                  "integration",
+                  "release_provenance",
+                  "dependency_use",
+                  "promotion_approvals",
+                  "agent_authority",
+                ].map((x) => (
+                  <option key={x}>{x.replaceAll("_", " ")}</option>
+                ))}
+              </select>
+              <input
+                name="requested_value"
+                required
+                placeholder="Requested local value"
+                className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"
+              />
+              <input
+                name="expires_at"
+                required
+                type="datetime-local"
+                className="min-h-10 rounded-lg border border-[var(--line-strong)] px-3"
+              />
+              <textarea
+                name="reason"
+                required
+                placeholder="Local constraint and resolution plan"
+                className="min-h-20 rounded-lg border border-[var(--line-strong)] p-3 sm:col-span-2"
+              />
+              <Button type="submit">Request exception</Button>
+            </form>
+          </details>
+        )}
+    </Card>
+  );
+}
+function PublicDirectory({
+  directory,
+  repositories = [],
+}: {
+  directory: OrganizationDirectory;
+  repositories?: Repository[];
+}) {
+  const repoNames = new Map(repositories.map((x) => [x.id, x.name]));
+  return (
+    <section className="space-y-4">
+      <header>
+        <p className="text-xs font-bold uppercase tracking-[.16em] text-[var(--brand)]">
+          Responsibility directory
+        </p>
+        <h2 className="mt-1 text-2xl font-bold">Teams and approved agents</h2>
+      </header>
+      <div className="grid gap-4 lg:grid-cols-2">
+        {directory.teams.map(({ team, effective_members }) => (
+          <Card key={team.id} className="p-5">
+            <div className="flex items-center gap-2">
+              <h3 className="font-semibold">{team.name}</h3>
+              <Badge>{team.visibility}</Badge>
+            </div>
+            {team.parent_id && (
+              <p className="mt-1 text-xs text-[var(--muted)]">
+                Nested beneath another team
+              </p>
+            )}
+            <h4 className="mt-4 text-xs font-bold uppercase tracking-wide text-[var(--muted)]">
+              Effective members
+            </h4>
+            {effective_members.map((x) => (
+              <p key={x.user_id} className="mt-2 text-sm">
+                <code>{x.user_id}</code> · {x.role}
+                <br />
+                <span className="text-xs text-[var(--muted)]">
+                  Why: {x.reason}
+                </span>
+              </p>
+            ))}
+            {effective_members.length === 0 && (
+              <p className="mt-2 text-sm text-[var(--muted)]">
+                No effective members.
+              </p>
+            )}
+            {team.responsibilities.map((x) => (
+              <p
+                key={x.id}
+                className="mt-4 border-t border-[var(--line)] pt-3 text-sm"
+              >
+                <strong>{x.area}</strong> ·{" "}
+                {repoNames.get(x.repository_id) || x.repository_id}
+                <br />
+                <span className="text-[var(--muted)]">{x.description}</span>
+              </p>
+            ))}
+          </Card>
+        ))}
+        {directory.agents.map((agent) => (
+          <Card key={agent.id} className="p-5">
+            <div className="flex items-center gap-2">
+              <h3 className="font-semibold">{agent.name}</h3>
+              <Badge>approved agent</Badge>
+            </div>
+            <p className="mt-3 text-sm">
+              <strong>Capabilities:</strong> {agent.capabilities.join(", ")}
+            </p>
+            <p className="mt-2 break-all text-xs text-[var(--muted)]">
+              Operated by {agent.operator_ids.join(", ")}
+            </p>
+          </Card>
+        ))}
+      </div>
+      {directory.teams.length === 0 && directory.agents.length === 0 && (
+        <Card className="p-6 text-sm text-[var(--muted)]">
+          No visible teams or approved agents.
+        </Card>
+      )}
+    </section>
+  );
+}
+function Evidence({
+  title,
+  items,
+}: {
+  title: string;
+  items: { id: string; label: string; href: string }[];
+}) {
+  return (
+    <Card className="p-5">
+      <h2 className="text-lg font-semibold">{title}</h2>
+      {items.length === 0 ? (
+        <p className="mt-3 text-sm text-[var(--muted)]">Nothing active.</p>
+      ) : (
+        items.map((x) => (
+          <Link
+            key={x.id}
+            href={x.href}
+            className="mt-3 block border-t border-[var(--line)] pt-3 text-sm font-semibold text-[var(--brand)] hover:underline"
+          >
+            {x.label}
+          </Link>
+        ))
+      )}
+    </Card>
+  );
+}
