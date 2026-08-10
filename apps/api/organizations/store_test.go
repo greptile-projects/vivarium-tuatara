@@ -2,6 +2,7 @@ package organizations
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 )
@@ -96,7 +97,7 @@ func TestStewardshipOpportunitiesDeduplicateRetainStaleEvidenceAndAcceptChalleng
 	v, mandate, _ := store.CreateStewardshipMandate(v.ID, owner, "Runtime health", revision)
 	v, mandate, _ = store.AcceptStewardshipMandate(v.ID, mandate.ID, operator, 1)
 	store.now = func() time.Time { return base.Add(2 * time.Minute) }
-	finding := OpportunityFinding{RepositoryID: repository, Signal: "required checks", EvidenceType: "check", EvidenceID: "required-ci", EvidenceRevision: "run-1", Title: "Required checks are failing", Summary: "The default branch cannot ship.", Severity: "high", ExpectedValue: "Restore the release path.", Confidence: .9, AffectedOwnerIDs: []string{owner}, AffectedRevisions: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, InScopeReason: "The mandate requires green checks.", Citations: []OpportunityCitation{{Kind: "check", ResourceID: "required-ci", Revision: "run-1", Label: "Failed run"}}}
+	finding := OpportunityFinding{RepositoryID: repository, Signal: "required checks", EvidenceType: "check", EvidenceID: "required-ci", EvidenceRevision: "run-1", DedupeKey: "required-check-regression", Title: "Required checks are failing", Summary: "The default branch cannot ship.", Severity: "high", ExpectedValue: "Restore the release path.", Confidence: .9, AffectedOwnerIDs: []string{owner}, AffectedRevisions: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, InScopeReason: "The mandate requires green checks.", Citations: []OpportunityCitation{{Kind: "check", ResourceID: "required-ci", Revision: "run-1", Label: "Failed run"}}}
 	v, items, err := store.PublishStewardshipOpportunities(v.ID, mandate.ID, operator, []OpportunityFinding{finding, finding})
 	if err != nil || len(items) != 1 || len(v.StewardshipMandates[0].Opportunities) != 1 || items[0].Version != 1 || len(items[0].Citations) != 1 {
 		t.Fatalf("publish = %#v, %v", items, err)
@@ -120,13 +121,24 @@ func TestStewardshipOpportunitiesDeduplicateRetainStaleEvidenceAndAcceptChalleng
 	if _, _, err = store.DecideStewardshipOpportunity(v.ID, mandate.ID, items[0].ID, owner, OpportunityDecision{ExpectedVersion: items[0].Version, Action: "approve", Reason: "racing decision"}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("concurrent approval = %v", err)
 	}
-	items[0] = approved
+	finding.EvidenceRevision, finding.Title = "run-3", "A different failure needs triage"
+	finding.Citations = []OpportunityCitation{{Kind: "check", ResourceID: "required-ci", Revision: "run-3", Label: "Different failed run"}}
+	v, reevaluated, err := store.PublishStewardshipOpportunities(v.ID, mandate.ID, operator, []OpportunityFinding{finding})
+	if err != nil || reevaluated[0].Approval != nil || reevaluated[0].EvaluationVersion != approved.EvaluationVersion+1 {
+		t.Fatalf("reevaluation retained stale approval: %#v, %v", reevaluated, err)
+	}
+	blocked, err := store.ReserveStewardshipOpportunity(v.ID, mandate.ID, reevaluated[0].ID, operator, reevaluated[0].Version, 0, nil)
+	if err != nil || !slices.Contains(blocked.Blockers, "human_approval_required") || blocked.Status != "open" {
+		t.Fatalf("reevaluated opportunity bypassed approval: %#v, %v", blocked, err)
+	}
+	items[0] = blocked
 	_, item, err := store.DecideStewardshipOpportunity(v.ID, mandate.ID, items[0].ID, owner, OpportunityDecision{ExpectedVersion: items[0].Version, Action: "incorrect", Reason: "The run belongs to an obsolete branch."})
 	if err != nil || item.Status != "incorrect" || item.DecisionReason == "" {
 		t.Fatalf("challenge = %#v, %v", item, err)
 	}
 	second := finding
 	second.EvidenceID, second.EvidenceRevision, second.Title = "dependency-audit", "scan-1", "Dependency support is ending"
+	second.DedupeKey = "dependency-support-ending"
 	second.Citations = []OpportunityCitation{{Kind: "dependency", ResourceID: "dependency-audit", Revision: "scan-1", Label: "Support policy"}}
 	_, added, err := store.PublishStewardshipOpportunities(v.ID, mandate.ID, operator, []OpportunityFinding{second})
 	if err != nil || added[0].Rank != 2 {

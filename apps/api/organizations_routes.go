@@ -485,6 +485,14 @@ func registerOrganizationRoutes(mux *http.ServeMux, gitStore *storage.Store, org
 			writeAPIError(w, 404, "stewardship_opportunity_not_found", "opportunity not found")
 			return
 		}
+		if proposalStore == nil {
+			writeAPIError(w, 503, "proposal_state_unavailable", "proposal conflict state is unavailable")
+			return
+		}
+		if incidentStore == nil {
+			writeAPIError(w, 503, "incident_state_unavailable", "incident blocker state is unavailable")
+			return
+		}
 		if opportunity.Work != nil {
 			created, proposalErr := proposalStore.Get(opportunity.RepositoryID, opportunity.Work.ProposalID)
 			createdTasks, tasksErr := proposalStore.ListTasks(opportunity.RepositoryID, opportunity.Work.ProposalID)
@@ -523,17 +531,18 @@ func registerOrganizationRoutes(mux *http.ServeMux, gitStore *storage.Store, org
 		if ref.Target != strings.ToLower(in.BaseRevision) {
 			blockers = append(blockers, "base_revision_changed")
 		}
-		if incidentStore != nil {
-			if list, listErr := incidentStore.List(); listErr == nil {
-				for _, incident := range list {
-					if incident.Status == "resolved" {
-						continue
-					}
-					for _, scope := range incident.Scopes {
-						if scope.RepositoryID == repository.ID {
-							blockers = append(blockers, "active_incident:"+incident.ID)
-						}
-					}
+		incidentList, listErr := incidentStore.List()
+		if listErr != nil {
+			writeAPIError(w, 503, "incident_state_unavailable", "incident blocker state is unavailable")
+			return
+		}
+		for _, incident := range incidentList {
+			if incident.Status == "resolved" {
+				continue
+			}
+			for _, scope := range incident.Scopes {
+				if scope.RepositoryID == repository.ID {
+					blockers = append(blockers, "active_incident:"+incident.ID)
 				}
 			}
 		}
@@ -546,11 +555,14 @@ func registerOrganizationRoutes(mux *http.ServeMux, gitStore *storage.Store, org
 		} else if opportunity.EvidenceType == "security" {
 			blockers = append(blockers, "security_embargo_state_unavailable")
 		}
-		if existing, listErr := proposalStore.List(repository.ID); listErr == nil {
-			for _, proposal := range existing {
-				if proposal.Status == proposals.Open && strings.EqualFold(strings.TrimSpace(proposal.Title), strings.TrimSpace(in.Title)) {
-					blockers = append(blockers, "conflicting_work:"+proposal.ID)
-				}
+		existing, listErr := proposalStore.List(repository.ID)
+		if listErr != nil {
+			writeAPIError(w, 503, "proposal_state_unavailable", "proposal conflict state is unavailable")
+			return
+		}
+		for _, proposal := range existing {
+			if proposal.Status == proposals.Open && strings.EqualFold(strings.TrimSpace(proposal.Title), strings.TrimSpace(in.Title)) {
+				blockers = append(blockers, "conflicting_work:"+proposal.ID)
 			}
 		}
 		reserved, err := orgs.ReserveStewardshipOpportunity(organization.ID, r.PathValue("mandate_id"), opportunity.ID, actor.UserID, in.ExpectedVersion, in.AgentMinutes, blockers)

@@ -198,7 +198,7 @@ func (s *Store) PublishStewardshipOpportunities(id, mandateID, actor string, fin
 				if e != nil {
 					return e
 				}
-				m.Opportunities = append(m.Opportunities, StewardshipOpportunity{ID: oid, DedupeKey: key, Status: "open", Rank: len(m.Opportunities) + 1, Version: 1, Comments: []OpportunityComment{}})
+				m.Opportunities = append(m.Opportunities, StewardshipOpportunity{ID: oid, DedupeKey: key, Status: "open", Rank: len(m.Opportunities) + 1, Version: 1, EvaluationVersion: 1, Comments: []OpportunityComment{}})
 				found = len(m.Opportunities) - 1
 			}
 			o := &m.Opportunities[found]
@@ -217,6 +217,8 @@ func (s *Store) PublishStewardshipOpportunities(id, mandateID, actor string, fin
 				o.EvaluatedAt = now
 			} else {
 				o.Version++
+				o.EvaluationVersion++
+				o.Approval = nil
 			}
 			o.MandateVersion, o.RepositoryID, o.EvidenceType, o.EvidenceID, o.EvidenceRevision = m.Version, finding.RepositoryID, finding.EvidenceType, finding.EvidenceID, finding.EvidenceRevision
 			o.Title, o.Summary, o.Severity, o.ExpectedValue, o.Confidence = strings.TrimSpace(finding.Title), strings.TrimSpace(finding.Summary), finding.Severity, strings.TrimSpace(finding.ExpectedValue), finding.Confidence
@@ -339,7 +341,7 @@ func (s *Store) DecideStewardshipOpportunity(id, mandateID, opportunityID, actor
 			if !ok {
 				return ErrInvalid
 			}
-			o.Approval = &OpportunityApproval{Decision: decision.Action, ActorID: actor, Reason: reason, Version: o.Version, CreatedAt: now}
+			o.Approval = &OpportunityApproval{Decision: decision.Action, ActorID: actor, Reason: reason, Version: o.EvaluationVersion, CreatedAt: now}
 			if decision.Action == "reject" {
 				o.Status = "dismissed"
 				o.DecisionReason = reason
@@ -402,7 +404,7 @@ func (s *Store) ReserveStewardshipOpportunity(id, mandateID, opportunityID, acto
 		if m.UsedActions+1 > revision.Budget.MaxActions {
 			blockers = append(blockers, "action_budget_exhausted")
 		}
-		if o.Admission == "approval_required" && (o.Approval == nil || o.Approval.Decision != "approve") {
+		if o.Admission == "approval_required" && (o.Approval == nil || o.Approval.Decision != "approve" || o.Approval.Version != o.EvaluationVersion) {
 			blockers = append(blockers, "human_approval_required")
 		}
 		if o.Admission == "auto_start_eligible" && (m.Acceptance == nil || (m.Acceptance.OperatorID != actor && !HasRole(*v, actor, "owner"))) {

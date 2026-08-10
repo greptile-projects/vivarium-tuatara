@@ -345,6 +345,7 @@ type StewardshipOpportunity struct {
 	SnoozedUntil      *time.Time            `json:"snoozed_until,omitempty"`
 	DecisionReason    string                `json:"decision_reason,omitempty"`
 	Version           int                   `json:"version"`
+	EvaluationVersion int                   `json:"evaluation_version"`
 	EvaluatedBy       string                `json:"evaluated_by"`
 	EvaluatedAt       time.Time             `json:"evaluated_at"`
 	UpdatedBy         string                `json:"updated_by"`

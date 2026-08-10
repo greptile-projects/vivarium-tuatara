@@ -115,6 +115,9 @@ whenever dependencies change or the web job fails before it starts.
   conflicting work, exhausted budgets, moved bases, changed mandate policy, and
   concurrent decisions remain explicit attributed blockers or conflicts, while
   promoted assignments use the existing activity and inbox projections.
+  Reevaluation invalidates prior approval through a distinct evaluation
+  version, and promotion requires readable incident and proposal conflict
+  stores before its durable reservation.
   Organization
   owners define versioned draft policies across visibility, reviews, checks,
   integration, release provenance, dependency use, promotion,

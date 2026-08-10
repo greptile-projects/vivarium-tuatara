@@ -1765,7 +1765,11 @@ verification plan; the proposal reasoning retains the organization, mandate,
 opportunity, evidence, and exact base revision. Active incidents, embargoed
 security evidence, same-title open work, exhausted action/agent-minute budgets,
 a moved base, changed mandate policy or acceptance, and missing approval return
-named blockers. Reservation and opportunity versions make concurrent approval
+named blockers. Incident and proposal conflict storage must both be readable
+before reservation; unavailable state returns `503` without changing the
+opportunity. Reevaluation clears any earlier approval and advances a separate
+evaluation version, which the approval must exactly match at reservation.
+Reservation and opportunity versions make concurrent approval
 or promotion a conflict, while exact retries reconcile the same proposal and
 task identities. Accepted work is linked from the opportunity and task
 assignment/promotion activity feeds the established activity and inbox views.
