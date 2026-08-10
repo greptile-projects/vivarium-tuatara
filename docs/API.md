@@ -32,6 +32,13 @@ claim/risk/verification items, investigation conclusion identity, analysis
 status, and owner acknowledgements. A moved selected ref returns `409
 assessment_context_changed`; existing history remains readable with
 `context_state: changed` and must be rerun rather than rewritten.
+Implementation publication holds the selected Git reference lock across atomic
+proposal/task creation and assessment linking, so a concurrent stock push
+cannot cross the revision-validation boundary. If proposal persistence is
+visible but directory durability is uncertain, or assessment linking needs
+reconciliation, the endpoint returns `202` with the stable proposal and task
+identities plus a recovery instruction; it never reports persisted work as an
+invalid request.
 
 Task-scoped workspaces and agent change sessions copy this reasoning snapshot
 into their launch context. Ordinary task contribution endpoints continue to

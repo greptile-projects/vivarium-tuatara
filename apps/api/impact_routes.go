@@ -321,26 +321,49 @@ func registerImpactRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *
 		}
 		var proposal proposals.Proposal
 		var created []proposals.Task
-		err := catalog.WithCurrentParticipants(participants, v.RepositoryID, func() error {
-			var createErr error
-			proposal, created, createErr = proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: v.RepositoryID, ActorID: actor.UserID, Title: in.Title, Body: in.Body, Origin: origin, Tasks: tasks})
-			return createErr
-		})
-		if err != nil {
-			writeAPIError(w, 400, "invalid_implementation", "human owners must be current participants and the plan must be valid")
+		var next impacts.Assessment
+		var createUncertain bool
+		var linkErr error
+		repository, openErr := gitStore.Open(v.RepositoryID)
+		if openErr != nil {
+			writeAPIError(w, 409, "assessment_context_changed", "the selected ref is no longer available")
 			return
 		}
-		ids := make([]string, len(created))
-		for i := range created {
-			ids[i] = created[i].ID
+		publish := func() error {
+			var createErr error
+			proposal, created, createErr = proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: v.RepositoryID, ActorID: actor.UserID, Title: in.Title, Body: in.Body, Origin: origin, Tasks: tasks})
+			if createErr != nil && !errors.Is(createErr, proposals.ErrDurabilityUncertain) {
+				return createErr
+			}
+			createUncertain = errors.Is(createErr, proposals.ErrDurabilityUncertain)
+			ids := make([]string, len(created))
+			for i := range created {
+				ids[i] = created[i].ID
+			}
+			next, linkErr = store.LinkImplementation(v.ID, v.Version, actor.UserID, proposal.ID, ids)
+			return nil
 		}
-		next, linkErr := store.LinkImplementation(v.ID, v.Version, actor.UserID, proposal.ID, ids)
-		if linkErr != nil && !errors.Is(linkErr, impacts.ErrConflict) {
-			writeAPIError(w, 202, "implementation_link_pending", "implementation exists and its assessment link needs reconciliation")
+		err := catalog.WithCurrentParticipants(participants, v.RepositoryID, func() error {
+			name := impactReferenceName(repository, v.Ref)
+			if name == "" {
+				return publish() // an exact object ID is immutable
+			}
+			return repository.WithReferenceTarget(name, v.Revision, publish)
+		})
+		if err != nil {
+			if errors.Is(err, storage.ErrReferenceExists) || errors.Is(err, storage.ErrReferenceNotFound) {
+				writeAPIError(w, 409, "assessment_context_changed", "the selected ref moved; rerun the assessment instead of rewriting its evidence")
+				return
+			}
+			writeAPIError(w, 400, "invalid_implementation", "human owners must be current participants and the plan must be valid")
 			return
 		}
 		if linkErr != nil {
 			next, _ = store.Get(v.ID)
+		}
+		if createUncertain || linkErr != nil {
+			writeJSON(w, 202, map[string]any{"assessment": projectImpact(next, actor.UserID, catalog), "proposal": proposal, "tasks": created, "recovery": "implementation durability or assessment linking is pending; retry this exact request"})
+			return
 		}
 		writeJSON(w, 201, map[string]any{"assessment": projectImpact(next, actor.UserID, catalog), "proposal": proposal, "tasks": created})
 	})
@@ -589,6 +612,27 @@ func withImpactContext(gitStore *storage.Store, catalog *repositories.Store, val
 		value.ContextState = "current"
 	}
 	return value
+}
+
+func impactReferenceName(repo *storage.Repository, ref string) string {
+	ref = strings.TrimSpace(ref)
+	if len(ref) == 40 && regexp.MustCompile(`^[0-9a-fA-F]{40}$`).MatchString(ref) {
+		return ""
+	}
+	candidates := []string{ref, "refs/heads/" + ref, "refs/tags/" + ref}
+	for _, name := range candidates {
+		if name == "" {
+			continue
+		}
+		value, err := repo.ReadReference(name)
+		if err == nil {
+			if value.Symbolic {
+				return value.Target
+			}
+			return name
+		}
+	}
+	return ref
 }
 func writeImpactMutation(w http.ResponseWriter, v impacts.Assessment, err error, user string, c *repositories.Store) {
 	if err == nil {

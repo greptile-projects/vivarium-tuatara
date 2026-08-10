@@ -350,7 +350,10 @@ whenever dependencies change or the web job fails before it starts.
   version, exact revision, optional investigation conclusion, selected
   claims/risks/verification needs, and owner acknowledgements. Selected-ref
   movement marks the assessment context changed and blocks new implementation;
-  retained work is never rewritten.
+  retained work is never rewritten. Implementation publication holds the
+  selected Git reference lock through proposal/task creation and assessment
+  linking. Post-persist durability uncertainty returns stable identities in a
+  retryable `202` response rather than being misreported as validation failure.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version
