@@ -111,6 +111,55 @@ func TestSharedPresenceDiscussionAndVersionedControlSurviveRestart(t *testing.T)
 	}
 }
 
+func TestControlTransferWaitsForAdmittedMutationAndRejectsStaleActor(t *testing.T) {
+	store, _ := New(t.TempDir())
+	creator := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	peer := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	created, err := store.Create(Workspace{RepositoryID: "repository", CommitID: "commit", CreatorID: creator}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, finish := make(chan struct{}), make(chan struct{})
+	mutationDone := make(chan error, 1)
+	go func() {
+		mutationDone <- store.WithControl(created.ID, creator, "commands", func(Workspace) error {
+			close(started)
+			<-finish
+			return nil
+		})
+	}()
+	<-started
+	transferDone := make(chan error, 1)
+	go func() {
+		_, transferErr := store.SetControl(created.ID, peer, "human", peer, "execute", []string{"commands"}, 1, 300)
+		transferDone <- transferErr
+	}()
+	select {
+	case err := <-transferDone:
+		t.Fatalf("transfer completed during admitted mutation: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(finish)
+	if err := <-mutationDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-transferDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WithControl(created.ID, creator, "commands", func(Workspace) error { return nil }); !errors.Is(err, ErrControl) {
+		t.Fatalf("former controller mutation = %v", err)
+	}
+}
+
+func TestControlCanBeExplicitlyReleased(t *testing.T) {
+	store, _ := New(t.TempDir())
+	created, _ := store.Create(Workspace{RepositoryID: "repository", CommitID: "commit", CreatorID: "actor"}, []byte("definition"))
+	released, err := store.SetControl(created.ID, "actor", "", "", "observe", nil, 1, 0)
+	if err != nil || released.Control.PrincipalID != "" || len(released.Control.Scopes) != 0 || released.Control.Version != 2 {
+		t.Fatalf("release = %#v, %v", released.Control, err)
+	}
+}
+
 func TestCommandEvidenceDoesNotRetainPrivateInput(t *testing.T) {
 	store, _ := New(t.TempDir())
 	created, _ := store.Create(Workspace{RepositoryID: "repository", CommitID: "commit", CreatorID: "actor"}, []byte("definition"))

@@ -124,10 +124,6 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 		if !ok {
 			return
 		}
-		if !workspace.CanControl(actor.UserID, "lifecycle", time.Now().UTC()) {
-			writeAPIError(w, 409, "workspace_control_required", "workspace lifecycle control is held by another participant or has expired")
-			return
-		}
 		var input struct {
 			Foundation string `json:"foundation"`
 		}
@@ -135,7 +131,7 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
-		updated, err := store.Transition(workspace.ID, actor.UserID, input.Foundation, "suspended")
+		updated, err := store.TransitionControlled(workspace.ID, actor.UserID, input.Foundation, "suspended")
 		writeWorkspaceTransition(w, updated, err)
 	})
 	mux.HandleFunc("POST /workspaces/{workspace_id}/resume", func(w http.ResponseWriter, r *http.Request) {
@@ -143,10 +139,6 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 		if !ok {
 			return
 		}
-		if !workspace.CanControl(actor.UserID, "lifecycle", time.Now().UTC()) {
-			writeAPIError(w, 409, "workspace_control_required", "workspace lifecycle control is held by another participant or has expired")
-			return
-		}
 		var input struct {
 			Foundation string `json:"foundation"`
 		}
@@ -154,7 +146,7 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
-		updated, err := store.Transition(workspace.ID, actor.UserID, input.Foundation, "running")
+		updated, err := store.TransitionControlled(workspace.ID, actor.UserID, input.Foundation, "running")
 		writeWorkspaceTransition(w, updated, err)
 	})
 }
@@ -178,6 +170,10 @@ func authorizeWorkspace(w http.ResponseWriter, r *http.Request, store *workspace
 	return item, actor, true
 }
 func writeWorkspaceTransition(w http.ResponseWriter, item workspaces.Workspace, err error) {
+	if errors.Is(err, workspaces.ErrControl) {
+		writeAPIError(w, 409, "workspace_control_required", "workspace lifecycle control is held by another participant or has expired")
+		return
+	}
 	if errors.Is(err, workspaces.ErrConflict) {
 		writeAPIError(w, 409, "workspace_foundation_changed", "workspace state or frozen foundation changed")
 		return

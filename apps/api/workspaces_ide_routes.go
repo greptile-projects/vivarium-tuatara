@@ -110,10 +110,6 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 		if !ok {
 			return
 		}
-		if !item.CanControl(actor.UserID, "files", time.Now().UTC()) {
-			writeAPIError(w, 409, "workspace_control_required", "live file control is held by another participant or has expired")
-			return
-		}
 		var input struct {
 			Path           string `json:"path"`
 			Content        string `json:"content"`
@@ -135,8 +131,12 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 		if !valid {
 			return
 		}
-		_, err := workspaceAuthorizedExec(catalog, item, actor, true, 10*time.Second, path.Dir(name), strings.NewReader(input.Content), "sh", "-c", workspaceFileWriteScript, "sh", path.Base(name), input.ExpectedSHA256)
+		err := workspaceControlledExec(store, catalog, item, actor, "files", 10*time.Second, path.Dir(name), strings.NewReader(input.Content), "sh", "-c", workspaceFileWriteScript, "sh", path.Base(name), input.ExpectedSHA256)
 		if err != nil {
+			if errors.Is(err, workspaces.ErrControl) {
+				writeAPIError(w, 409, "workspace_control_required", "live file control is held by another participant or has expired")
+				return
+			}
 			var exit *exec.ExitError
 			if errors.As(err, &exit) && exit.ExitCode() == 41 {
 				writeAPIError(w, 409, "workspace_file_changed", "file changed since it was opened")
@@ -182,10 +182,6 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 		if !ok {
 			return
 		}
-		if !item.CanControl(actor.UserID, "commands", time.Now().UTC()) {
-			writeAPIError(w, 409, "workspace_control_required", "live command control is held by another participant or has expired")
-			return
-		}
 		var input struct {
 			Command        string `json:"command"`
 			Directory      string `json:"directory"`
@@ -211,7 +207,16 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 			return
 		}
 		start := time.Now().UTC()
-		out, runErr := workspaceAuthorizedExec(catalog, item, actor, true, time.Duration(input.TimeoutSeconds)*time.Second, dir, nil, "sh", "-lc", input.Command)
+		var out []byte
+		runErr := store.WithControl(item.ID, actor.UserID, "commands", func(current workspaces.Workspace) error {
+			var executeErr error
+			out, executeErr = workspaceAuthorizedExec(catalog, current, actor, true, time.Duration(input.TimeoutSeconds)*time.Second, dir, nil, "sh", "-lc", input.Command)
+			return executeErr
+		})
+		if errors.Is(runErr, workspaces.ErrControl) {
+			writeAPIError(w, 409, "workspace_control_required", "live command control is held by another participant or has expired")
+			return
+		}
 		code := 0
 		if runErr != nil {
 			code = -1
@@ -283,6 +288,13 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(200)
 		_, _ = w.Write(out)
+	})
+}
+
+func workspaceControlledExec(store *workspaces.Store, catalog *repositories.Store, item workspaces.Workspace, actor auth.Credential, scope string, timeout time.Duration, dir string, stdin *strings.Reader, args ...string) error {
+	return store.WithControl(item.ID, actor.UserID, scope, func(current workspaces.Workspace) error {
+		_, err := workspaceAuthorizedExec(catalog, current, actor, true, timeout, dir, stdin, args...)
+		return err
 	})
 }
 

@@ -90,6 +90,20 @@ func registerWorkspaceCollaborationRoutes(mux *http.ServeMux, catalog *repositor
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
+		release := in.PrincipalKind == "" && in.PrincipalID == "" && in.Mode == "observe" && len(in.Scopes) == 0
+		if release {
+			updated, err := store.SetControl(item.ID, actor.UserID, "", "", "observe", nil, in.ExpectedVersion, 0)
+			if errors.Is(err, workspaces.ErrControl) {
+				writeAPIError(w, 409, "workspace_control_changed", "control changed since it was observed")
+				return
+			}
+			if err != nil {
+				writeAPIError(w, 422, "workspace_control_invalid", "control could not be released")
+				return
+			}
+			writeJSON(w, 200, updated)
+			return
+		}
 		if !slices.Contains([]string{"human", "approved_agent"}, in.PrincipalKind) || !slices.Contains([]string{"observe", "guide", "edit", "execute"}, in.Mode) || len(in.PrincipalID) != 32 || len(in.Scopes) == 0 || len(in.Scopes) > 3 {
 			writeAPIError(w, 422, "workspace_control_invalid", "control requires a human or approved agent, mode, bounded scope, and identity")
 			return

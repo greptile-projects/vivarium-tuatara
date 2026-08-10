@@ -191,6 +191,9 @@ func (s *Store) Leave(id, actor string) (Workspace, error) {
 }
 
 func (s *Store) SetControl(id, actor, principalKind, principalID, mode string, scopes []string, expectedVersion, seconds int) (Workspace, error) {
+	control := s.controlLock(id)
+	control.Lock()
+	defer control.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	w, err := s.read(id)
@@ -249,6 +252,25 @@ func (w Workspace) CanControl(actor, scope string, now time.Time) bool {
 	return false
 }
 
+// WithControl serializes the final live-lease check and mutation execution with
+// control transfer. Once admitted, a mutation finishes before a takeover can
+// publish; a request that lost control before admission fails closed.
+func (s *Store) WithControl(id, actor, scope string, operation func(Workspace) error) error {
+	control := s.controlLock(id)
+	control.Lock()
+	defer control.Unlock()
+	s.mu.Lock()
+	w, err := s.read(id)
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if !w.CanControl(actor, scope, s.now()) {
+		return ErrControl
+	}
+	return operation(w)
+}
+
 func (s *Store) RecordCommand(id string, outcome CommandOutcome) (Workspace, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -288,9 +310,11 @@ func (s *Store) RecordChange(id string, change Change) (Workspace, error) {
 }
 
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root       string
+	mu         sync.Mutex
+	controlsMu sync.Mutex
+	controls   map[string]*sync.Mutex
+	now        func() time.Time
 }
 
 func New(root string) (*Store, error) {
@@ -300,7 +324,15 @@ func New(root string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Join(root, "runtime"), 0700); err != nil {
 		return nil, err
 	}
-	return &Store{root: root, now: func() time.Time { return time.Now().UTC() }}, nil
+	return &Store{root: root, controls: map[string]*sync.Mutex{}, now: func() time.Time { return time.Now().UTC() }}, nil
+}
+func (s *Store) controlLock(id string) *sync.Mutex {
+	s.controlsMu.Lock()
+	defer s.controlsMu.Unlock()
+	if s.controls[id] == nil {
+		s.controls[id] = &sync.Mutex{}
+	}
+	return s.controls[id]
 }
 func (s *Store) RuntimePath(id string) string { return filepath.Join(s.root, "runtime", id) }
 func (s *Store) Create(w Workspace, definitionBytes []byte) (Workspace, error) {
@@ -389,9 +421,25 @@ func (s *Store) ListAll() ([]Workspace, error) {
 func (s *Store) Transition(id, actor, expectedFoundation, target string) (Workspace, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.transition(id, actor, expectedFoundation, target, false)
+}
+
+func (s *Store) TransitionControlled(id, actor, expectedFoundation, target string) (Workspace, error) {
+	control := s.controlLock(id)
+	control.Lock()
+	defer control.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.transition(id, actor, expectedFoundation, target, true)
+}
+
+func (s *Store) transition(id, actor, expectedFoundation, target string, requireControl bool) (Workspace, error) {
 	w, e := s.read(id)
 	if e != nil {
 		return Workspace{}, e
+	}
+	if requireControl && !w.CanControl(actor, "lifecycle", s.now()) {
+		return Workspace{}, ErrControl
 	}
 	if expectedFoundation == "" || expectedFoundation != w.DefinitionSHA256 {
 		return Workspace{}, ErrConflict

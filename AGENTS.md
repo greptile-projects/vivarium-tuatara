@@ -265,6 +265,10 @@ whenever dependencies change or the web job fails before it starts.
   selection grants no caller authority. Concurrent file saves still use their
   content digest, stale takeovers conflict, and durable command outcomes retain
   only a command SHA-256 rather than private terminal input.
+  Empty-principal observe control explicitly releases a lease. Per-workspace
+  control serialization covers final live-lease validation through mutation
+  execution, so takeover waits for admitted work and stale actors fail before
+  execution without blocking unrelated presence or discussion writes.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version
