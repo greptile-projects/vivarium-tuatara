@@ -21,7 +21,7 @@ export type DevelopmentWorkspace = {
   repository_id: string;
   commit_id: string;
   creator_id: string;
-  state: "provisioning" | "running" | "suspended" | "failed";
+  state: "provisioning" | "running" | "suspended" | "failed" | "stopped" | "expired";
   definition_sha256: string;
   created_at: string;
   updated_at: string;
@@ -63,7 +63,20 @@ export type DevelopmentWorkspace = {
   control: { version:number; principal_kind:"human"|"approved_agent"; principal_id:string; mode:"observe"|"guide"|"edit"|"execute"; scopes:("files"|"commands"|"lifecycle")[]; granted_by:string; granted_at:string; expires_at:string };
   messages: { id:string; actor_id:string; body:string; created_at:string }[];
   head_checkpoint_id?: string;
+  policy: WorkspacePolicy;
+  policy_scope: string;
+  policy_version: number;
+  last_activity_at: string;
+  expires_at?: string;
+  expiry_announced_at?: string;
+  stopped_at?: string;
+  stopped_by?: string;
+  stop_reason?: string;
+  rebuild_required: boolean;
+  rebuild_reasons: string[];
 };
+export type WorkspacePolicy = { version:number; max_cpus:number; max_memory_mb:number; max_storage_mb:number; network:"none"; idle_minutes:number; max_runtime_hours:number; retention_hours:number; sharing:"private"|"repository"|"organization"; agent_execution:boolean; updated_by?:string; updated_at?:string };
+export type WorkspaceConsumption = { workspace_id:string; repository_id:string; creator_id:string; state:string; cpu_seconds:number; memory_mb_hours:number; storage_mb_hours:number; measured_at:string };
 export type WorkspaceCheckpoint = {
   id:string; workspace_id:string; repository_id:string; base_commit_id:string;
   definition_sha256:string; parent_checkpoint_id?:string; title:string; description?:string;

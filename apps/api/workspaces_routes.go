@@ -25,6 +25,7 @@ import (
 )
 
 func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, incidentStore *incidents.Store, store *workspaces.Store, authStore *auth.Store, organizationStore *organizations.Store, checkStore *checkruns.Store, sessionStore *changesessions.Store) {
+	registerWorkspaceGovernanceRoutes(mux, catalog, store, authStore, organizationStore)
 	registerWorkspaceIDERoutes(mux, catalog, store, authStore)
 	registerWorkspaceCollaborationRoutes(mux, catalog, store, authStore, organizationStore)
 	registerWorkspaceCheckpointRoutes(mux, git, catalog, pullStore, store, authStore, checkStore, sessionStore)
@@ -78,11 +79,30 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 			writeAPIError(w, 422, "workspace_definition_invalid", err.Error())
 			return
 		}
+		repositoryPolicy, err := store.GetPolicy("repository", input.RepositoryID)
+		if err != nil {
+			writeAPIError(w, 500, "workspace_policy_unavailable", "workspace policy could not be read")
+			return
+		}
+		policyScope := "repository"
+		if repoMeta.OrganizationID != "" {
+			organizationPolicy, policyErr := store.GetPolicy("organization", repoMeta.OrganizationID)
+			if policyErr != nil {
+				writeAPIError(w, 500, "workspace_policy_unavailable", "workspace policy could not be read")
+				return
+			}
+			repositoryPolicy = workspaces.Constrain(organizationPolicy, repositoryPolicy)
+			policyScope = "organization+repository"
+		}
+		if definition.Resources.CPUs > repositoryPolicy.MaxCPUs || definition.Resources.MemoryMB > repositoryPolicy.MaxMemoryMB || definition.Resources.StorageMB > repositoryPolicy.MaxStorageMB {
+			writeAPIError(w, 422, "workspace_policy_resources_exceeded", "workspace definition exceeds the effective resource policy")
+			return
+		}
 		role := "collaborator"
 		if actor.UserID == repoMeta.OwnerID {
 			role = "owner"
 		}
-		created, err := store.Create(workspaces.Workspace{RepositoryID: input.RepositoryID, CommitID: input.CommitID, Definition: definition, Source: input.Source, CreatorID: actor.UserID, Access: workspaces.Access{Role: role, Scopes: []string{"repositories:read", "repositories:write"}}}, definitionBytes)
+		created, err := store.Create(workspaces.Workspace{RepositoryID: input.RepositoryID, OrganizationID: repoMeta.OrganizationID, CommitID: input.CommitID, Definition: definition, Source: input.Source, CreatorID: actor.UserID, Access: workspaces.Access{Role: role, Scopes: []string{"repositories:read", "repositories:write"}}, Policy: repositoryPolicy, PolicyScope: policyScope, PolicyVersion: repositoryPolicy.Version}, definitionBytes)
 		if err != nil {
 			writeAPIError(w, 500, "workspace_create_failed", "workspace could not be created")
 			return
@@ -166,7 +186,7 @@ func authorizeWorkspace(w http.ResponseWriter, r *http.Request, store *workspace
 	}
 	meta, err := catalog.GetByID(item.RepositoryID)
 	collaborator, _ := catalog.HasCollaborator(actor.UserID, item.RepositoryID)
-	if err != nil || (actor.UserID != meta.OwnerID && !collaborator) {
+	if err != nil || (actor.UserID != meta.OwnerID && !collaborator) || (item.Policy.Sharing == "private" && actor.UserID != item.CreatorID && actor.UserID != meta.OwnerID) {
 		writeAPIError(w, 404, "workspace_not_found", "workspace not found")
 		return item, auth.Credential{}, false
 	}

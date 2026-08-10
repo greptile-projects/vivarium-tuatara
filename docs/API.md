@@ -56,6 +56,31 @@ participants. `POST /workspaces/{id}/suspend` and `/resume` accept
 `{"foundation":"<definition_sha256>"}`. A stale hash, invalid state, or missing
 materialized runtime returns `409 workspace_foundation_changed`; resume never
 resolves a branch, changes the commit or definition, or reruns setup.
+
+Workspace governance is versioned independently at `GET|PUT
+/repositories/{repository_id}/workspace-policy` and, for organization owners,
+`GET|PUT /organizations/{organization_id}/workspace-policy`. Updates
+compare-and-swap `expected_version` and bound CPU, memory, storage, idle time,
+maximum runtime, retention, sharing, network, and approved-agent execution.
+Organization limits constrain repository settings; network is currently
+fail-closed to `none`. Launch rejects definitions above the effective limits
+and snapshots that policy into the workspace. Repository-policy changes mark
+existing active environments `rebuild_required` while leaving them available
+to checkpoint and export.
+
+Repository owners inspect attributed reservations and elapsed consumption at
+`GET /repositories/{repository_id}/workspace-usage`. `POST
+/workspaces/{id}/expiry` announces a future expiry so collaborators can publish
+or checkpoint legitimate unpublished work. Startup and a periodic lifecycle
+pass autonomously expire environments after that deadline or their idle limit;
+`POST .../reconcile` provides the same idempotent owner-triggered check, and
+`POST .../stop` immediately removes compute. Teardown must succeed before a
+terminal state is committed, and the full removal/publication interval is
+serialized with suspend and resume. These terminal actions revoke control and remove the named
+container but preserve the workspace record, provenance ledger, checkpoints,
+published commits, and pull links. Private sharing restricts a workspace to its
+creator and repository owner; repository access is still revalidated for every
+other mode, and policy can disable new approved-agent control leases.
 Responses contain the resource array and `next_cursor`, which is `null` on the
 last page. Pass a non-null `next_cursor` unchanged as the next request's
 `after`; cursors outside the authenticated collection return

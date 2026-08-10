@@ -127,6 +127,10 @@ func registerWorkspaceCollaborationRoutes(mux *http.ServeMux, catalog *repositor
 			writeAPIError(w, 422, "workspace_control_principal_invalid", "agent must be approved for the repository organization")
 			return
 		}
+		if in.PrincipalKind == "approved_agent" && !item.Policy.AgentExecution {
+			writeAPIError(w, 403, "workspace_agent_execution_disabled", "workspace policy disables agent execution")
+			return
+		}
 		updated, err := store.SetControl(item.ID, actor.UserID, in.PrincipalKind, in.PrincipalID, in.Mode, in.Scopes, in.ExpectedVersion, in.ExpiresIn)
 		if errors.Is(err, workspaces.ErrControl) {
 			writeAPIError(w, 409, "workspace_control_changed", "control changed since it was observed")

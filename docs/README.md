@@ -24,6 +24,15 @@ participant authorization. Launch requires the exact commit to contain
 declared tools and dependencies, setup commands, and bounded CPU, memory,
 storage, and setup duration.
 
+Repository and organization owners layer versioned workspace governance over
+that definition: strict organization limits constrain repository CPU, memory,
+storage, network, idle, runtime, retention, sharing, and approved-agent
+execution choices. Launch snapshots the effective policy; later policy changes
+make active environments visibly rebuild-required instead of silently changing
+their foundation. Owners can inspect creator-attributed CPU time and reserved
+memory/storage, announce an expiry window for checkpoint export, or stop and
+expire compute while retained checkpoints and published Git evidence remain.
+
 The API snapshots the definition and its SHA-256, materializes only the named
 Git commit into a size-limited tmpfs, reserves a bounded share of the same
 storage budget for `/tmp`, and runs setup in that named, read-only-root,

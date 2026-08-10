@@ -111,27 +111,39 @@ type Change struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 type Workspace struct {
-	ID               string           `json:"id"`
-	RepositoryID     string           `json:"repository_id"`
-	CommitID         string           `json:"commit_id"`
-	Definition       Definition       `json:"definition"`
-	DefinitionSHA256 string           `json:"definition_sha256"`
-	Source           Source           `json:"source"`
-	CreatorID        string           `json:"creator_id"`
-	Access           Access           `json:"effective_access"`
-	State            string           `json:"state"`
-	Setup            []SetupStep      `json:"setup_evidence"`
-	Events           []Event          `json:"events"`
-	Commands         []CommandOutcome `json:"command_outcomes"`
-	Changes          []Change         `json:"changes"`
-	Presence         []Presence       `json:"presence"`
-	Control          Control          `json:"control"`
-	Messages         []Message        `json:"messages"`
-	HeadCheckpointID string           `json:"head_checkpoint_id,omitempty"`
-	CreatedAt        time.Time        `json:"created_at"`
-	UpdatedAt        time.Time        `json:"updated_at"`
-	SuspendedAt      *time.Time       `json:"suspended_at,omitempty"`
-	ResumedAt        *time.Time       `json:"resumed_at,omitempty"`
+	ID                string           `json:"id"`
+	RepositoryID      string           `json:"repository_id"`
+	OrganizationID    string           `json:"organization_id,omitempty"`
+	CommitID          string           `json:"commit_id"`
+	Definition        Definition       `json:"definition"`
+	DefinitionSHA256  string           `json:"definition_sha256"`
+	Source            Source           `json:"source"`
+	CreatorID         string           `json:"creator_id"`
+	Access            Access           `json:"effective_access"`
+	State             string           `json:"state"`
+	Setup             []SetupStep      `json:"setup_evidence"`
+	Events            []Event          `json:"events"`
+	Commands          []CommandOutcome `json:"command_outcomes"`
+	Changes           []Change         `json:"changes"`
+	Presence          []Presence       `json:"presence"`
+	Control           Control          `json:"control"`
+	Messages          []Message        `json:"messages"`
+	HeadCheckpointID  string           `json:"head_checkpoint_id,omitempty"`
+	CreatedAt         time.Time        `json:"created_at"`
+	UpdatedAt         time.Time        `json:"updated_at"`
+	SuspendedAt       *time.Time       `json:"suspended_at,omitempty"`
+	ResumedAt         *time.Time       `json:"resumed_at,omitempty"`
+	Policy            Policy           `json:"policy"`
+	PolicyScope       string           `json:"policy_scope"`
+	PolicyVersion     int              `json:"policy_version"`
+	LastActivityAt    time.Time        `json:"last_activity_at"`
+	ExpiresAt         *time.Time       `json:"expires_at,omitempty"`
+	ExpiryAnnouncedAt *time.Time       `json:"expiry_announced_at,omitempty"`
+	StoppedAt         *time.Time       `json:"stopped_at,omitempty"`
+	StoppedBy         string           `json:"stopped_by,omitempty"`
+	StopReason        string           `json:"stop_reason,omitempty"`
+	RebuildRequired   bool             `json:"rebuild_required"`
+	RebuildReasons    []string         `json:"rebuild_reasons"`
 }
 
 func randomID(size int) (string, error) {
@@ -162,6 +174,7 @@ func (s *Store) Join(id, actor, focus, path string) (Workspace, error) {
 		w.Events = append(w.Events, Event{Kind: "presence.joined", ActorID: actor, Role: "observation", CreatedAt: now})
 	}
 	w.UpdatedAt = now
+	w.LastActivityAt = now
 	return w, s.write(w)
 }
 
@@ -251,6 +264,7 @@ func (s *Store) AddMessage(id, actor, body string) (Workspace, error) {
 		w.Messages = w.Messages[len(w.Messages)-200:]
 	}
 	w.UpdatedAt = now
+	w.LastActivityAt = now
 	w.Events = append(w.Events, Event{ID: mid, Kind: "discussion.message", ActorID: actor, Role: "instruction", Detail: mid, CreatedAt: now})
 	return w, s.write(w)
 }
@@ -314,6 +328,7 @@ func (s *Store) RecordCommand(id string, outcome CommandOutcome) (Workspace, err
 		w.Commands = w.Commands[len(w.Commands)-100:]
 	}
 	w.UpdatedAt = s.now()
+	w.LastActivityAt = w.UpdatedAt
 	w.Events = append(w.Events, Event{Kind: "command.completed", ActorID: outcome.ActorID, Role: "execution", Detail: outcome.ID, CreatedAt: w.UpdatedAt})
 	err = s.write(w)
 	return w, err
@@ -338,6 +353,7 @@ func (s *Store) RecordChange(id string, change Change) (Workspace, error) {
 		w.Changes = w.Changes[len(w.Changes)-200:]
 	}
 	w.UpdatedAt = s.now()
+	w.LastActivityAt = w.UpdatedAt
 	w.Events = append(w.Events, Event{Kind: "file.changed", ActorID: change.ActorID, Role: "authorship", Detail: change.Path, CreatedAt: w.UpdatedAt})
 	err = s.write(w)
 	return w, err
@@ -456,6 +472,11 @@ func (s *Store) Create(w Workspace, definitionBytes []byte) (Workspace, error) {
 	w.DefinitionSHA256 = hex.EncodeToString(sum[:])
 	now := s.now()
 	w.CreatedAt, w.UpdatedAt = now, now
+	w.LastActivityAt = now
+	if w.Policy.MaxRuntimeHours > 0 {
+		expires := now.Add(time.Duration(w.Policy.MaxRuntimeHours) * time.Hour)
+		w.ExpiresAt = &expires
+	}
 	w.State = "provisioning"
 	w.Control = Control{Version: 1, PrincipalKind: "human", PrincipalID: w.CreatorID, Mode: "execute", Scopes: []string{"files", "commands", "lifecycle"}, GrantedBy: w.CreatorID, GrantedAt: now, ExpiresAt: now.Add(time.Hour)}
 	w.Presence = []Presence{}
@@ -489,6 +510,85 @@ func (s *Store) Complete(id string, steps []SetupStep, failure bool) (Workspace,
 	w.Events = append(w.Events, Event{Kind: "setup_completed", ActorID: w.CreatorID, CreatedAt: w.UpdatedAt})
 	e = s.write(w)
 	return w, e
+}
+
+// Stop removes compute authority while retaining the workspace record,
+// checkpoints, provenance ledger, and any already-published Git objects.
+func (s *Store) Stop(id, actor, reason, state string) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stopLocked(id, actor, reason, state)
+}
+
+func (s *Store) stopLocked(id, actor, reason, state string) (Workspace, error) {
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if w.State == "stopped" || w.State == "expired" {
+		return Workspace{}, ErrConflict
+	}
+	if state != "stopped" && state != "expired" {
+		return Workspace{}, ErrInvalid
+	}
+	now := s.now()
+	w.State, w.StoppedAt, w.StoppedBy, w.StopReason = state, &now, actor, reason
+	w.Control = Control{Version: w.Control.Version + 1, Mode: "observe", GrantedBy: actor, GrantedAt: now, ExpiresAt: now}
+	w.Presence = []Presence{}
+	w.UpdatedAt = now
+	w.Events = append(w.Events, Event{Kind: state, ActorID: actor, Role: "instruction", Detail: reason, CreatedAt: now})
+	return w, s.write(w)
+}
+
+// StopControlled serializes external compute teardown and terminal state
+// publication with suspend/resume. The global store lock is deliberately not
+// held while teardown runs, so unrelated workspaces remain available.
+func (s *Store) StopControlled(id, actor, reason, state string, teardown func() error) (Workspace, error) {
+	control := s.controlLock(id)
+	control.Lock()
+	defer control.Unlock()
+	s.mu.Lock()
+	w, err := s.read(id)
+	s.mu.Unlock()
+	if err != nil {
+		return Workspace{}, err
+	}
+	if w.State == "stopped" || w.State == "expired" {
+		return Workspace{}, ErrConflict
+	}
+	if err = teardown(); err != nil {
+		return Workspace{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stopLocked(id, actor, reason, state)
+}
+
+func (s *Store) AnnounceExpiry(id, actor string, at time.Time, reason string) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if !at.After(s.now()) {
+		return Workspace{}, ErrInvalid
+	}
+	now := s.now()
+	w.ExpiresAt, w.ExpiryAnnouncedAt, w.UpdatedAt = &at, &now, now
+	w.Events = append(w.Events, Event{Kind: "expiry.announced", ActorID: actor, Role: "instruction", Detail: reason, CreatedAt: now})
+	return w, s.write(w)
+}
+
+func (s *Store) MarkRebuild(id string, reasons []string) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	w.RebuildRequired, w.RebuildReasons, w.UpdatedAt = len(reasons) > 0, append([]string(nil), reasons...), s.now()
+	return w, s.write(w)
 }
 func (s *Store) Get(id string) (Workspace, error) {
 	s.mu.Lock()
@@ -594,6 +694,14 @@ func (s *Store) readName(name string) (Workspace, error) {
 	var w Workspace
 	if json.Unmarshal(body, &w) != nil {
 		return Workspace{}, ErrNotFound
+	}
+	if w.Policy.Version == 0 {
+		w.Policy = DefaultPolicy()
+		w.PolicyVersion = w.Policy.Version
+		w.PolicyScope = "platform-default"
+	}
+	if w.LastActivityAt.IsZero() {
+		w.LastActivityAt = w.UpdatedAt
 	}
 	// Presence is a renewable observation, not authority. A disconnected client
 	// disappears deterministically even when it cannot publish an explicit leave.
