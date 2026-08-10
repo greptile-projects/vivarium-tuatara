@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -111,6 +112,10 @@ type organizationMandateInput struct {
 	RequiredHumanDecisions []string                          `json:"required_human_decisions"`
 	Reason                 string                            `json:"reason"`
 	ExpectedVersion        int                               `json:"expected_version"`
+}
+
+type organizationOpportunityEvaluationInput struct {
+	Findings []organizations.OpportunityFinding `json:"findings"`
 }
 
 func mandateRevision(in organizationMandateInput) organizations.MandateRevision {
@@ -345,6 +350,58 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 			return
 		}
 		writeJSON(w, 200, mandate)
+	})
+	mux.HandleFunc("GET /organizations/{id}/stewardship-mandates/{mandate_id}/opportunities", func(w http.ResponseWriter, r *http.Request) {
+		_, organization, ok := require(w, r, "repositories:read")
+		if !ok {
+			return
+		}
+		for _, mandate := range organization.StewardshipMandates {
+			if mandate.ID == r.PathValue("mandate_id") {
+				items := append([]organizations.StewardshipOpportunity(nil), mandate.Opportunities...)
+				slices.SortStableFunc(items, func(a, b organizations.StewardshipOpportunity) int {
+					if a.Rank != b.Rank {
+						return a.Rank - b.Rank
+					}
+					return b.UpdatedAt.Compare(a.UpdatedAt)
+				})
+				writeJSON(w, 200, map[string]any{"items": items, "mandate_id": mandate.ID, "mandate_version": mandate.Version})
+				return
+			}
+		}
+		writeAPIError(w, 404, "stewardship_mandate_not_found", "mandate not found")
+	})
+	mux.HandleFunc("POST /organizations/{id}/stewardship-mandates/{mandate_id}/evaluations", func(w http.ResponseWriter, r *http.Request) {
+		actor, organization, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in organizationOpportunityEvaluationInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_stewardship_evaluation", "bounded findings are required")
+			return
+		}
+		_, items, err := orgs.PublishStewardshipOpportunities(organization.ID, r.PathValue("mandate_id"), actor.UserID, in.Findings)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		writeJSON(w, 200, map[string]any{"items": items})
+	})
+	mux.HandleFunc("POST /organizations/{id}/stewardship-mandates/{mandate_id}/opportunities/{opportunity_id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, organization, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in organizations.OpportunityDecision
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_stewardship_decision", "an action and expected_version are required")
+			return
+		}
+		_, item, err := orgs.DecideStewardshipOpportunity(organization.ID, r.PathValue("mandate_id"), r.PathValue("opportunity_id"), actor.UserID, in)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		writeJSON(w, 200, item)
 	})
 	mux.HandleFunc("GET /organizations/{id}/stewardship-mandates/{mandate_id}/preview", func(w http.ResponseWriter, r *http.Request) {
 		_, organization, ok := require(w, r, "repositories:read")

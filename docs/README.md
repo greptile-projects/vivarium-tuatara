@@ -1260,6 +1260,17 @@ them immediately, preserving unrelated sessions and work. Public directory reads
 and agents and public-repository responsibility; accepted members see the full
 organization-visible structure and attribution timeline.
 
+An accepted proactive stewardship mandate turns trusted evidence into a shared,
+rank-ordered opportunity backlog. Activation requests an evaluation; trusted
+producers use the same public evaluation boundary after relevant repository,
+dependency, check, release, incident, security, or usage changes. Findings
+explain their scope and retain severity, expected value, confidence, affected
+owners and revisions, and revision-pinned citations. Stable deduplication
+updates one item as evidence changes, while superseded citations remain visibly
+stale. The queue grants no new authority. Organization collaborators inspect,
+discuss, rerank, dismiss, snooze, reopen, or mark recommendations incorrect
+with compare-and-swap decisions, making proactive attention challengeable.
+
 The access API is rooted at `/organizations/{id}/access-requests`. Decisions
 are posted to `/access-requests/{request-id}/decision`; live grants appear on
 the member organization and portfolio projections, revoke with an expected

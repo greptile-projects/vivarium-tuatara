@@ -81,6 +81,57 @@ func TestRemovingOperatorInvalidatesAcceptedStewardshipMandate(t *testing.T) {
 	}
 }
 
+func TestStewardshipOpportunitiesDeduplicateRetainStaleEvidenceAndAcceptChallenges(t *testing.T) {
+	store, _ := New(t.TempDir())
+	base := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return base }
+	owner := "0123456789abcdef0123456789abcdef"
+	operator := "abcdef0123456789abcdef0123456789"
+	repository := "11111111111111111111111111111111"
+	v, _ := store.Create("Runtime", "runtime", "", owner)
+	v, _ = store.Invite(v.ID, owner, operator)
+	v, _ = store.AcceptInvitation(v.ID, v.Invitations[0].ID, operator)
+	v, _ = store.RegisterAgent(v.ID, owner, "Caretaker", "caretaker", "", "organization", []string{"inspect"}, []string{operator}, nil)
+	revision := MandateRevision{DesiredOutcomes: []string{"Keep checks green"}, Repositories: []MandateRepository{{RepositoryID: repository, Branches: []string{"main"}}}, TrustedSignals: []string{"required checks"}, Exclusions: []string{"writes"}, Budget: MandateBudget{MaxAgentMinutes: 60, MaxActions: 10}, StartsAt: base.Add(time.Minute), ExpiresAt: base.Add(time.Hour), AgentID: v.Agents[0].ID, AllowedActions: []string{"summarize"}, RequiredHumanDecisions: []string{"merge"}}
+	v, mandate, _ := store.CreateStewardshipMandate(v.ID, owner, "Runtime health", revision)
+	v, mandate, _ = store.AcceptStewardshipMandate(v.ID, mandate.ID, operator, 1)
+	store.now = func() time.Time { return base.Add(2 * time.Minute) }
+	finding := OpportunityFinding{RepositoryID: repository, Signal: "required checks", EvidenceType: "check", EvidenceID: "required-ci", EvidenceRevision: "run-1", Title: "Required checks are failing", Summary: "The default branch cannot ship.", Severity: "high", ExpectedValue: "Restore the release path.", Confidence: .9, AffectedOwnerIDs: []string{owner}, AffectedRevisions: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, InScopeReason: "The mandate requires green checks.", Citations: []OpportunityCitation{{Kind: "check", ResourceID: "required-ci", Revision: "run-1", Label: "Failed run"}}}
+	v, items, err := store.PublishStewardshipOpportunities(v.ID, mandate.ID, operator, []OpportunityFinding{finding, finding})
+	if err != nil || len(items) != 1 || len(v.StewardshipMandates[0].Opportunities) != 1 || items[0].Version != 1 || len(items[0].Citations) != 1 {
+		t.Fatalf("publish = %#v, %v", items, err)
+	}
+	finding.EvidenceRevision = "run-2"
+	finding.Citations = []OpportunityCitation{{Kind: "check", ResourceID: "required-ci", Revision: "run-2", Label: "Latest failed run"}}
+	v, items, err = store.PublishStewardshipOpportunities(v.ID, mandate.ID, operator, []OpportunityFinding{finding})
+	if err != nil || len(v.StewardshipMandates[0].Opportunities) != 1 || len(items[0].Citations) != 2 || !items[0].Citations[0].Stale || items[0].Citations[1].Stale {
+		t.Fatalf("dedupe/stale = %#v, %v", items, err)
+	}
+	_, item, err := store.DecideStewardshipOpportunity(v.ID, mandate.ID, items[0].ID, owner, OpportunityDecision{ExpectedVersion: items[0].Version, Action: "incorrect", Reason: "The run belongs to an obsolete branch."})
+	if err != nil || item.Status != "incorrect" || item.DecisionReason == "" {
+		t.Fatalf("challenge = %#v, %v", item, err)
+	}
+	second := finding
+	second.EvidenceID, second.EvidenceRevision, second.Title = "dependency-audit", "scan-1", "Dependency support is ending"
+	second.Citations = []OpportunityCitation{{Kind: "dependency", ResourceID: "dependency-audit", Revision: "scan-1", Label: "Support policy"}}
+	_, added, err := store.PublishStewardshipOpportunities(v.ID, mandate.ID, operator, []OpportunityFinding{second})
+	if err != nil || added[0].Rank != 2 {
+		t.Fatalf("second publish = %#v, %v", added, err)
+	}
+	_, moved, err := store.DecideStewardshipOpportunity(v.ID, mandate.ID, item.ID, owner, OpportunityDecision{ExpectedVersion: item.Version, Action: "rank", Rank: 2})
+	if err != nil || moved.Rank != 2 {
+		t.Fatalf("rank move = %#v, %v", moved, err)
+	}
+	persisted, err := store.Get(v.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := persisted.StewardshipMandates[0].Opportunities
+	if len(queue) != 2 || queue[0].Rank != 2 || queue[1].Rank != 1 || queue[0].Rank == queue[1].Rank || queue[1].Version != added[0].Version+1 {
+		t.Fatalf("rank move did not persist a unique, versioned order: %#v", queue)
+	}
+}
+
 func TestRemoveMemberCleanupFailurePreventsMembershipCommit(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {

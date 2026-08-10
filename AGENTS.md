@@ -98,7 +98,15 @@ whenever dependencies change or the web job fails before it starts.
   decisions. Each revision requires current operator acceptance and supports
   pause, expiry, and revocation; its access preview reports only independent
   live grants and effective policy, because a mandate grants no implicit Git,
-  review, merge, credential, deployment, or repository authority. Organization
+  review, merge, credential, deployment, or repository authority. Mandate
+  activation requests an evidence evaluation, and trusted producers publish
+  bounded evaluations after relevant repository, dependency, check, release,
+  incident, security, or usage changes. Stable deduplication creates a ranked
+  opportunity queue with severity, value, confidence, affected owners and
+  revisions, scope rationale, and citations; newer evidence retains superseded
+  citations as stale. Current collaborators discuss, rank, dismiss, snooze,
+  reopen, or mark findings incorrect through compare-and-swap public surfaces.
+  Organization
   owners define versioned draft policies across visibility, reviews, checks,
   integration, release provenance, dependency use, promotion,
   and agent authority, targeted to the organization, a team, or a repository.

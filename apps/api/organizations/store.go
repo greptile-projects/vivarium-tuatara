@@ -266,16 +266,64 @@ type MandateAcceptance struct {
 }
 
 type StewardshipMandate struct {
-	ID         string             `json:"id"`
-	Title      string             `json:"title"`
-	Version    int                `json:"version"`
-	Status     string             `json:"status"`
-	Revisions  []MandateRevision  `json:"revisions"`
-	Acceptance *MandateAcceptance `json:"acceptance,omitempty"`
-	PausedBy   string             `json:"paused_by,omitempty"`
-	PausedAt   *time.Time         `json:"paused_at,omitempty"`
-	RevokedBy  string             `json:"revoked_by,omitempty"`
-	RevokedAt  *time.Time         `json:"revoked_at,omitempty"`
+	ID            string                   `json:"id"`
+	Title         string                   `json:"title"`
+	Version       int                      `json:"version"`
+	Status        string                   `json:"status"`
+	Revisions     []MandateRevision        `json:"revisions"`
+	Acceptance    *MandateAcceptance       `json:"acceptance,omitempty"`
+	PausedBy      string                   `json:"paused_by,omitempty"`
+	PausedAt      *time.Time               `json:"paused_at,omitempty"`
+	RevokedBy     string                   `json:"revoked_by,omitempty"`
+	RevokedAt     *time.Time               `json:"revoked_at,omitempty"`
+	Opportunities []StewardshipOpportunity `json:"opportunities"`
+}
+
+type OpportunityCitation struct {
+	Kind       string `json:"kind"`
+	ResourceID string `json:"resource_id"`
+	Revision   string `json:"revision"`
+	Label      string `json:"label"`
+	URL        string `json:"url,omitempty"`
+	Stale      bool   `json:"stale"`
+}
+
+type OpportunityComment struct {
+	ID        string    `json:"id"`
+	ActorID   string    `json:"actor_id"`
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// StewardshipOpportunity is reviewable coordination evidence, not an agent
+// command. DedupeKey is retained server-side so repeated evaluations converge.
+type StewardshipOpportunity struct {
+	ID                string                `json:"id"`
+	DedupeKey         string                `json:"dedupe_key"`
+	MandateVersion    int                   `json:"mandate_version"`
+	RepositoryID      string                `json:"repository_id"`
+	EvidenceType      string                `json:"evidence_type"`
+	EvidenceID        string                `json:"evidence_id"`
+	EvidenceRevision  string                `json:"evidence_revision"`
+	Title             string                `json:"title"`
+	Summary           string                `json:"summary"`
+	Severity          string                `json:"severity"`
+	ExpectedValue     string                `json:"expected_value"`
+	Confidence        float64               `json:"confidence"`
+	AffectedOwnerIDs  []string              `json:"affected_owner_ids"`
+	AffectedRevisions []string              `json:"affected_revisions"`
+	Citations         []OpportunityCitation `json:"citations"`
+	InScopeReason     string                `json:"in_scope_reason"`
+	Status            string                `json:"status"`
+	Rank              int                   `json:"rank"`
+	SnoozedUntil      *time.Time            `json:"snoozed_until,omitempty"`
+	DecisionReason    string                `json:"decision_reason,omitempty"`
+	Version           int                   `json:"version"`
+	EvaluatedBy       string                `json:"evaluated_by"`
+	EvaluatedAt       time.Time             `json:"evaluated_at"`
+	UpdatedBy         string                `json:"updated_by"`
+	UpdatedAt         time.Time             `json:"updated_at"`
+	Comments          []OpportunityComment  `json:"comments"`
 }
 
 type Event struct {
@@ -436,6 +484,11 @@ func (s *Store) Get(id string) (Organization, error) {
 	}
 	if v.StewardshipMandates == nil {
 		v.StewardshipMandates = []StewardshipMandate{}
+	}
+	for i := range v.StewardshipMandates {
+		if v.StewardshipMandates[i].Opportunities == nil {
+			v.StewardshipMandates[i].Opportunities = []StewardshipOpportunity{}
+		}
 	}
 	if v.Events == nil {
 		v.Events = []Event{}
@@ -1355,7 +1408,7 @@ func (s *Store) CreateStewardshipMandate(id, actor, title string, revision Manda
 		now := s.now().Truncate(time.Microsecond)
 		revision.Version, revision.CreatedBy, revision.CreatedAt = 1, actor, now
 		revision.Reason = strings.TrimSpace(revision.Reason)
-		created = StewardshipMandate{ID: mid, Title: title, Version: 1, Status: "pending_acceptance", Revisions: []MandateRevision{revision}}
+		created = StewardshipMandate{ID: mid, Title: title, Version: 1, Status: "pending_acceptance", Revisions: []MandateRevision{revision}, Opportunities: []StewardshipOpportunity{}}
 		v.StewardshipMandates = append(v.StewardshipMandates, created)
 		return s.event(v, "stewardship_mandate.created", actor, mid, map[string]any{"version": 1, "agent_id": revision.AgentID})
 	})
@@ -1414,7 +1467,10 @@ func (s *Store) AcceptStewardshipMandate(id, mandateID, actor string, expected i
 		m.Acceptance = &MandateAcceptance{Version: m.Version, OperatorID: actor, AcceptedAt: now}
 		m.Status = "active"
 		out = *m
-		return s.event(v, "stewardship_mandate.accepted", actor, mandateID, map[string]any{"version": m.Version})
+		if err := s.event(v, "stewardship_mandate.accepted", actor, mandateID, map[string]any{"version": m.Version}); err != nil {
+			return err
+		}
+		return s.event(v, "stewardship_evaluation.requested", actor, mandateID, map[string]any{"version": m.Version, "reason": "activation"})
 	})
 	return v, out, err
 }

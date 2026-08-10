@@ -1727,6 +1727,29 @@ portfolio access grants and per-repository effective policy, plus an explicit
 empty `implicit_authority` list. A mandate never creates a credential or
 grants Git write, review, merge, deployment, or other repository authority;
 those require the existing independently approved grant paths.
+
+Accepting a mandate appends a `stewardship_evaluation.requested` activation
+event. Trusted evidence producers use `POST
+.../stewardship-mandates/{mandate_id}/evaluations` at activation and after
+repository, dependency, check, release, incident, security, or usage changes.
+The accepted operator submits bounded findings whose `signal` exactly matches
+a trusted signal and whose repository appears in the current revision. Each
+finding names its evidence identity and revision, severity (`critical`, `high`,
+`medium`, or `low`), expected value, confidence from 0 through 1, affected
+owner IDs and revisions, citations, and an explicit in-scope explanation. The
+endpoint confers no evidence-source access: producers may submit only evidence
+they can already inspect through independent authority.
+
+The server derives a stable deduplication identity when `dedupe_key` is omitted;
+a producer may supply one to converge renamed evidence. A newer evidence
+revision updates that opportunity and retains earlier citations with `stale:
+true`. New items consume the mandate action budget; reevaluation does not.
+Accepted members inspect the rank-ordered queue at `GET
+.../{mandate_id}/opportunities` and post compare-and-swap `rank`, `dismiss`,
+`snooze`, `incorrect`, `reopen`, or `comment` actions to
+`.../opportunities/{opportunity_id}`. Decisions and discussions retain actor,
+reason, version, and time; stale concurrent decisions return `409`.
+
 Pending invitees receive only organization identity and their own invitation,
 not membership, teams, agents, transfers, responsibility, or events. A public
 child also omits its `parent_id` when that parent is not public. Responsibility
