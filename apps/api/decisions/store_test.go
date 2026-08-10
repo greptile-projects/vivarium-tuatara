@@ -74,10 +74,17 @@ func TestAlternativesCompareCommonCriteriaAndPreserveSupersededDissent(t *testin
 		t.Fatal(err)
 	}
 	evidence := []Evidence{{Kind: "usage", ResourceID: "latency-dashboard", Revision: "window:2026-08-10T18:00Z/19:00Z", Label: "production p95"}}
-	alt := Alternative{Title: "Bounded FIFO", Summary: "Bound the queue.", Assumptions: []string{"Traffic remains bursty"}, Tradeoffs: []string{"Reject overload"}, Risks: []string{"Retry storms"}, CompatibilityImpact: "No wire change", Cost: "Two engineer-days", ExpectedOutcomes: []string{"Stable tail latency"}, Evidence: evidence, Criteria: []CriterionAssessment{{Criterion: "p95 under 100ms", Outcome: "Model predicts 82ms", Evidence: evidence}}}
+	alt := Alternative{Title: "Bounded FIFO", Summary: "Bound the queue.", Assumptions: []string{"Traffic remains bursty"}, Tradeoffs: []string{"Reject overload"}, Risks: []string{"Retry storms"}, CompatibilityImpact: "No wire change", Cost: "Two engineer-days", ExpectedOutcomes: []string{"Stable tail latency"}, Evidence: evidence, Criteria: []CriterionAssessment{{Criterion: "p95 under 100ms", Outcome: "Model predicts 82ms", Evidence: evidence}}, EvidenceStatus: EvidenceStatus{MissingKinds: []string{"fabricated"}, MissingCriteria: []string{"fabricated"}}}
 	v, err = s.AddAlternative(v.ID, actor, 1, alt)
 	if err != nil || len(v.Alternatives) != 1 || v.Version != 2 {
 		t.Fatalf("alternative = %#v, %v", v, err)
+	}
+	if len(v.Alternatives[0].EvidenceStatus.MissingKinds) != 4 || v.Alternatives[0].EvidenceStatus.MissingKinds[0] != "code" {
+		t.Fatalf("creation evidence status = %#v", v.Alternatives[0].EvidenceStatus)
+	}
+	stored, _ := s.read(v.ID)
+	if len(stored.Alternatives[0].EvidenceStatus.MissingKinds) != 0 || len(stored.Alternatives[0].EvidenceStatus.MissingCriteria) != 0 {
+		t.Fatalf("persisted client projection = %#v", stored.Alternatives[0].EvidenceStatus)
 	}
 	projected, _ := s.Get(v.ID)
 	if len(projected.Alternatives[0].EvidenceStatus.MissingKinds) != 4 || projected.Alternatives[0].EvidenceStatus.MissingKinds[0] != "code" {

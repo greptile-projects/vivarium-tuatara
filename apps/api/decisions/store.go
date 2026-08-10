@@ -307,6 +307,7 @@ func projectEvidence(v Decision, now time.Time) Decision {
 	kinds := []string{"code", "dependency", "release", "incident", "usage"}
 	for i := range v.Alternatives {
 		a := &v.Alternatives[i]
+		a.EvidenceStatus = EvidenceStatus{MissingKinds: []string{}, Stale: []Evidence{}, MissingCriteria: []string{}}
 		seen := map[string]bool{}
 		for _, e := range a.Evidence {
 			seen[e.Kind] = true
@@ -504,6 +505,7 @@ func (s *Store) AddAlternative(id, actor string, expected int, input Alternative
 		return v, ErrNotFound
 	}
 	now := s.now()
+	input.EvidenceStatus = EvidenceStatus{}
 	input, e = validateAlternative(input, now, v.Scope.SuccessMeasures)
 	if e != nil {
 		return v, e
@@ -518,7 +520,10 @@ func (s *Store) AddAlternative(id, actor string, expected int, input Alternative
 	v.UpdatedAt = now
 	h, _ := randomID()
 	v.History = append(v.History, History{ID: h, Kind: "alternative_proposed", ActorID: actor, Version: v.Version, Summary: "Proposed alternative: " + input.Title, CreatedAt: now})
-	return v, s.write(v)
+	if e = s.write(v); e != nil {
+		return v, e
+	}
+	return projectEvidence(v, now), nil
 }
 func (s *Store) AddFinding(id, actor string, input Finding) (Decision, error) {
 	s.mu.Lock()
