@@ -1402,7 +1402,11 @@ func (s *Store) AcceptStewardshipMandate(id, mandateID, actor string, expected i
 			return ErrConflict
 		}
 		latest := m.Revisions[len(m.Revisions)-1]
-		agent := v.Agents[agentIndex(v, latest.AgentID)]
+		i = agentIndex(v, latest.AgentID)
+		if i < 0 {
+			return ErrNotFound
+		}
+		agent := v.Agents[i]
 		if !slices.Contains(agent.OperatorIDs, actor) || !latest.ExpiresAt.After(s.now()) {
 			return ErrNotFound
 		}

@@ -73,6 +73,9 @@ func TestRemovingOperatorInvalidatesAcceptedStewardshipMandate(t *testing.T) {
 	if mandate.Status != "pending_acceptance" || mandate.Acceptance != nil {
 		t.Fatalf("removed operator retained acceptance: %#v", mandate)
 	}
+	if _, _, err = store.AcceptStewardshipMandate(v.ID, mandate.ID, owner, mandate.Version); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("accept with removed agent = %v", err)
+	}
 	if _, _, err = store.ChangeStewardshipMandateState(v.ID, mandate.ID, owner, "resume", mandate.Version); !errors.Is(err, ErrConflict) {
 		t.Fatalf("resume after removal = %v", err)
 	}
