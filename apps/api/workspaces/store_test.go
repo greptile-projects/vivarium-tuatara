@@ -52,7 +52,7 @@ func TestWorkspaceCommandAndChangeEvidenceIsBoundedAndContentFree(t *testing.T) 
 	}
 	now := time.Now().UTC()
 	for index := 0; index < 105; index++ {
-		if _, err = store.RecordCommand(created.ID, CommandOutcome{Command: "go test ./...", ActorID: "actor", StartedAt: now, CompletedAt: now}); err != nil {
+		if _, err = store.RecordCommand(created.ID, CommandOutcome{CommandSHA256: strings.Repeat("a", 64), ActorID: "actor", StartedAt: now, CompletedAt: now}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -71,6 +71,57 @@ func TestWorkspaceCommandAndChangeEvidenceIsBoundedAndContentFree(t *testing.T) 
 	}
 	if strings.Contains(string(body), string(secret)) {
 		t.Fatal("changed file content leaked into durable workspace evidence")
+	}
+}
+
+func TestSharedPresenceDiscussionAndVersionedControlSurviveRestart(t *testing.T) {
+	root := t.TempDir()
+	store, _ := New(root)
+	creator := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	peer := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	created, err := store.Create(Workspace{RepositoryID: "repository", CommitID: "commit", CreatorID: creator}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined, err := store.Join(created.ID, peer, "file", "main.go")
+	if err != nil || len(joined.Presence) != 1 || joined.Presence[0].Path != "main.go" {
+		t.Fatalf("join = %#v, %v", joined, err)
+	}
+	controlled, err := store.SetControl(created.ID, peer, "human", peer, "edit", []string{"files"}, 1, 300)
+	if err != nil || !controlled.CanControl(peer, "files", time.Now()) || controlled.CanControl(creator, "files", time.Now()) {
+		t.Fatalf("control = %#v, %v", controlled.Control, err)
+	}
+	if _, err = store.SetControl(created.ID, creator, "human", creator, "execute", []string{"commands"}, 1, 300); !errors.Is(err, ErrControl) {
+		t.Fatalf("stale control = %v", err)
+	}
+	if _, err = store.AddMessage(created.ID, creator, "Please keep the test focused."); err != nil {
+		t.Fatal(err)
+	}
+	reopened, _ := New(root)
+	durable, err := reopened.Get(created.ID)
+	if err != nil || len(durable.Messages) != 1 || len(durable.Presence) != 1 || durable.Control.Version != 2 {
+		t.Fatalf("durable = %#v, %v", durable, err)
+	}
+	roles := map[string]bool{}
+	for _, event := range durable.Events {
+		roles[event.Role] = true
+	}
+	if !roles["observation"] || !roles["instruction"] {
+		t.Fatalf("activity roles = %#v", roles)
+	}
+}
+
+func TestCommandEvidenceDoesNotRetainPrivateInput(t *testing.T) {
+	store, _ := New(t.TempDir())
+	created, _ := store.Create(Workspace{RepositoryID: "repository", CommitID: "commit", CreatorID: "actor"}, []byte("definition"))
+	secret := "export PRIVATE_TOKEN=do-not-share"
+	digest := sha256.Sum256([]byte(secret))
+	if _, err := store.RecordCommand(created.ID, CommandOutcome{CommandSHA256: hex.EncodeToString(digest[:]), ActorID: "actor", StartedAt: time.Now(), CompletedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := os.ReadFile(filepath.Join(store.root, created.ID+".json"))
+	if strings.Contains(string(body), secret) {
+		t.Fatal("private terminal input entered the durable record")
 	}
 }
 

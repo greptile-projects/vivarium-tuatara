@@ -20,7 +20,7 @@ import (
 
 const workspaceOutputLimit = 128 * 1024
 const workspaceFileWriteScript = `set -eu
-p=./$1
+p=$1
 expected=$2
 [ -f "$p" ] && [ ! -L "$p" ] || exit 42
 tmp=$(mktemp "$p.vivarium-new.XXXXXX")
@@ -110,6 +110,10 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 		if !ok {
 			return
 		}
+		if !item.CanControl(actor.UserID, "files", time.Now().UTC()) {
+			writeAPIError(w, 409, "workspace_control_required", "live file control is held by another participant or has expired")
+			return
+		}
 		var input struct {
 			Path           string `json:"path"`
 			Content        string `json:"content"`
@@ -178,6 +182,10 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 		if !ok {
 			return
 		}
+		if !item.CanControl(actor.UserID, "commands", time.Now().UTC()) {
+			writeAPIError(w, 409, "workspace_control_required", "live command control is held by another participant or has expired")
+			return
+		}
 		var input struct {
 			Command        string `json:"command"`
 			Directory      string `json:"directory"`
@@ -215,7 +223,8 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 		if len(out) > workspaceOutputLimit {
 			out = append(out[:workspaceOutputLimit], []byte("\n[output truncated]")...)
 		}
-		outcome := workspaces.CommandOutcome{Command: input.Command, Directory: strings.TrimPrefix(dir, "/workspace"), ExitCode: code, Output: string(out), ActorID: actor.UserID, StartedAt: start, CompletedAt: time.Now().UTC()}
+		commandDigest := sha256.Sum256([]byte(input.Command))
+		outcome := workspaces.CommandOutcome{CommandSHA256: hex.EncodeToString(commandDigest[:]), Directory: strings.TrimPrefix(dir, "/workspace"), ExitCode: code, Output: string(out), ActorID: actor.UserID, StartedAt: start, CompletedAt: time.Now().UTC()}
 		updated, err := store.RecordCommand(item.ID, outcome)
 		if err != nil {
 			writeAPIError(w, 500, "workspace_command_evidence_failed", "command finished but evidence could not be saved")
