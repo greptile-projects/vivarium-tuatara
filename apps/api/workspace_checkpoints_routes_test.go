@@ -44,6 +44,16 @@ func TestCompareCheckpointTreesCapturesDiffWithoutCredentials(t *testing.T) {
 	if _, err = compareCheckpointTrees(base, runtime); err == nil {
 		t.Fatal("oversized credential content was captured")
 	}
+	os.Remove(filepath.Join(runtime, "large.txt"))
+	os.WriteFile(filepath.Join(runtime, ".npmrc"), []byte("//registry.npmjs.org/:_authToken=npm_secret"), 0600)
+	if _, err = compareCheckpointTrees(base, runtime); err == nil {
+		t.Fatal("npm credential file was captured")
+	}
+	os.Remove(filepath.Join(runtime, ".npmrc"))
+	os.WriteFile(filepath.Join(runtime, "registry.txt"), []byte("//registry.npmjs.org/:_authToken=npm_secret"), 0600)
+	if _, err = compareCheckpointTrees(base, runtime); err == nil {
+		t.Fatal("disguised npm auth directive was captured")
+	}
 }
 
 func TestMissingCheckpointDependencies(t *testing.T) {

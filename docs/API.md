@@ -109,6 +109,8 @@ are `observation`, `instruction`, `authorship`, and `execution`.
 dependency names and notes. It snapshots only regular repository-file changes
 against the workspace's exact base commit, with a 32 MiB total limit. Suspected
 credential paths or contents reject the request with `422 checkpoint_not_safe`.
+This includes package-manager authentication files such as changed `.npmrc`
+records and npm `_authToken`/`_auth` directives regardless of filename.
 Inspection covers the complete bounded snapshot rather than treating large
 files as implicitly safe. Runtime capture and durable publication are one
 workspace-admission operation, ordered against controlled file mutations.

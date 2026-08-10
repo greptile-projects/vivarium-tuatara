@@ -274,8 +274,8 @@ whenever dependencies change or the web job fails before it starts.
   exact base plus the frozen environment definition and declared
   reproducibility metadata beneath `$WORKSPACE_STORAGE_ROOT/checkpoints`.
   Participant reads expose file operations, hashes, modes, sizes, and parent lineage but
-  not stored file bytes; credential-like content and unrelated runtime evidence
-  fail closed. Restore requires a divergence/conflict/dependency preflight
+  not stored file bytes; credential-like content, package-manager authentication
+  files/directives, and unrelated runtime evidence fail closed. Restore requires a divergence/conflict/dependency preflight
   token and live file control, revalidates the token inside control admission,
   and moves the checkpoint head so later checkpoints explicitly branch from the
   restored record. Runtime capture through checkpoint publication shares that

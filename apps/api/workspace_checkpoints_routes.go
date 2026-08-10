@@ -324,14 +324,14 @@ func compareCheckpointTrees(baseRoot, runtimeRoot string) ([]workspaces.Checkpoi
 func looksCredentialPath(p string) bool {
 	p = strings.ToLower(p)
 	base := filepath.Base(p)
-	if base == ".env" || strings.HasPrefix(base, ".env.") || strings.Contains(p, "credentials") || strings.Contains(p, ".ssh/") || strings.HasSuffix(base, ".pem") || strings.HasSuffix(base, ".key") {
+	if base == ".env" || strings.HasPrefix(base, ".env.") || base == ".npmrc" || base == ".yarnrc.yml" || base == ".pypirc" || base == ".netrc" || base == ".git-credentials" || strings.Contains(p, "credentials") || strings.Contains(p, ".ssh/") || strings.HasSuffix(base, ".pem") || strings.HasSuffix(base, ".key") {
 		return true
 	}
 	return false
 }
 func looksCredentialContent(data []byte) bool {
 	s := strings.ToUpper(string(data))
-	markers := []string{"-----BEGIN PRIVATE KEY-----", "-----BEGIN OPENSSH PRIVATE KEY-----", "AWS_SECRET_ACCESS_KEY=", "GITHUB_TOKEN=", "OPENAI_API_KEY=", "PASSWORD=", "CLIENT_SECRET="}
+	markers := []string{"-----BEGIN PRIVATE KEY-----", "-----BEGIN OPENSSH PRIVATE KEY-----", "AWS_SECRET_ACCESS_KEY=", "GITHUB_TOKEN=", "OPENAI_API_KEY=", "PASSWORD=", "CLIENT_SECRET=", "_AUTH"}
 	for _, marker := range markers {
 		if strings.Contains(s, marker) {
 			return true

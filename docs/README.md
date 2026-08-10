@@ -64,6 +64,7 @@ workspace definition and digest, declared dependencies and reproduction notes,
 plus an ordered manifest of added, modified, and deleted repository files.
 Participant reads expose file operations, hashes, modes, sizes, and parent
 lineage rather than stored bytes or textual patches. Credential-like paths or content,
+including package-manager authentication files and directives,
 non-regular filesystem state, and snapshots over 32 MiB fail closed; terminal
 input, command output, presence, previews, processes, and container state are
 outside the checkpoint boundary.
