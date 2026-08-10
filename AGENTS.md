@@ -321,6 +321,14 @@ whenever dependencies change or the web job fails before it starts.
   to one immutable commit, expose incomplete-analysis limits, project catalog
   ownership, and include only readable dependency declarations recorded for
   that revision.
+  Grounded questions at `/repositories/{id}/explanations` freeze repository,
+  file, proposal, task, pull, incident, or workspace context to one exact
+  revision and stream only a fully retained attributed conversation. Claims
+  distinguish evidence, inference, and uncertainty and cite exact source lines
+  or immutable check/dependency resources; bounded gaps remain explicit and
+  every durable read revalidates repository access. Private workspace context
+  retains its sharing boundary. `$EXPLANATION_STORAGE_ROOT` defaults to
+  `explanations`.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version

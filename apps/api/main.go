@@ -20,6 +20,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/explanations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
@@ -204,12 +205,20 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	explanationRoot := os.Getenv("EXPLANATION_STORAGE_ROOT")
+	if explanationRoot == "" {
+		explanationRoot = "explanations"
+	}
+	explanationStore, err := explanations.New(explanationRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, workspaceStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, workspaceStore, explanationStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -286,6 +295,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var packageStore *packages.Store
 	var organizationStore *organizations.Store
 	var workspaceStore *workspaces.Store
+	var explanationStore *explanations.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -304,6 +314,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			organizationStore = value
 		case *workspaces.Store:
 			workspaceStore = value
+		case *explanations.Store:
+			explanationStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -361,6 +373,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && workspaceStore != nil {
 		registerWorkspaceRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, incidentStore, workspaceStore, authStore, organizationStore, checkRunStore, changeSessionStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && explanationStore != nil {
+		registerExplanationRoutes(mux, store, repositoryCatalog, authStore, explanationStore, proposalStore, pullRequestStore, incidentStore, workspaceStore, checkRunStore, relationshipStore)
 	}
 	mux.HandleFunc("GET /git/{remote}/info/refs", func(w http.ResponseWriter, r *http.Request) {
 		service := r.URL.Query().Get("service")

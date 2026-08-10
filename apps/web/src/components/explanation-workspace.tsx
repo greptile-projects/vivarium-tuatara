@@ -1,0 +1,39 @@
+"use client";
+
+import Link from "next/link";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { api, type ExplanationClaim, type ExplanationConversation } from "@/lib/api";
+import { useAuth } from "./auth";
+import { Badge, Button, Card } from "./ui";
+
+type ContextKind = ExplanationConversation["context"]["kind"];
+
+export function ExplanationWorkspace({ repositoryID, initialRef = "", initialPath = "", initialKind = "repository", initialResourceID = "" }: { repositoryID:string; initialRef?:string; initialPath?:string; initialKind?:ContextKind; initialResourceID?:string }) {
+  const { token } = useAuth();
+  const [history,setHistory]=useState<ExplanationConversation[]>([]);
+  const [selected,setSelected]=useState<ExplanationConversation|null>(null);
+  const [claims,setClaims]=useState<ExplanationClaim[]>([]);
+  const [streaming,setStreaming]=useState(false);
+  const [error,setError]=useState("");
+  const load=useCallback(async()=>{ if(!token)return; try { const result=await api<{conversations:ExplanationConversation[]}>(`/repositories/${repositoryID}/explanations`,{},token); setHistory(result.conversations); } catch(reason){setError(reason instanceof Error?reason.message:"Conversation history could not be loaded.");}},[repositoryID,token]);
+  useEffect(()=>{void Promise.resolve().then(load)},[load]);
+
+  async function ask(event:FormEvent<HTMLFormElement>){
+    event.preventDefault(); if(!token)return; setStreaming(true);setError("");setSelected(null);setClaims([]);
+    const form=new FormData(event.currentTarget); const kind=String(form.get("kind")) as ContextKind;
+    const body={question:String(form.get("question")),ref:String(form.get("ref")),context:{kind,resource_id:String(form.get("resource_id")||"")||undefined,path:String(form.get("path")||"")||undefined}};
+    try {
+      const response=await fetch(`/api/repositories/${repositoryID}/explanations`,{method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},body:JSON.stringify(body)});
+      if(!response.ok||!response.body){ const failure=await response.json().catch(()=>null) as {error?:{message?:string}}|null; throw new Error(failure?.error?.message??`Request failed (${response.status})`); }
+      const reader=response.body.getReader();const decoder=new TextDecoder();let pending="";
+      for(;;){const {done,value}=await reader.read();pending+=decoder.decode(value,{stream:!done});const lines=pending.split("\n");pending=lines.pop()??"";for(const line of lines){if(!line.trim())continue;const item=JSON.parse(line) as {event:string;claim?:ExplanationClaim;conversation?:ExplanationConversation};if(item.event==="claim"&&item.claim)setClaims(current=>[...current,item.claim!]);if(item.event==="done"&&item.conversation){setSelected(item.conversation);setHistory(current=>[item.conversation!,...current.filter(x=>x.id!==item.conversation!.id)]);}}if(done)break;}
+    } catch(reason){setError(reason instanceof Error?reason.message:"The grounded answer could not be streamed.");} finally{setStreaming(false);}
+  }
+  const shown=selected?.claims??claims;
+  return <div className="space-y-6">
+    <header><Link href={`/repositories/${repositoryID}`} className="text-sm text-[var(--muted)] hover:text-[var(--brand)]">Repository</Link><h1 className="mt-2 text-2xl font-semibold">Ask the codebase</h1><p className="mt-2 max-w-3xl text-sm text-[var(--muted)]">Ask from a specific collaboration context. Answers freeze one permitted revision, label uncertainty, and retain exact citations so another collaborator can reproduce them.</p></header>
+    <Card className="p-5"><form onSubmit={ask} className="space-y-4"><div className="grid gap-3 md:grid-cols-3"><label className="text-xs font-semibold">Context<select name="kind" defaultValue={initialKind} className="mt-1 min-h-10 w-full rounded-lg border border-[var(--line-strong)] bg-white px-3 font-normal"><option value="repository">Repository</option><option value="file">File</option><option value="proposal">Proposal</option><option value="task">Task (proposal:task)</option><option value="pull_request">Pull request</option><option value="incident">Incident</option><option value="workspace">Workspace</option></select></label><label className="text-xs font-semibold">Context ID <span className="font-normal text-[var(--muted)]">(when needed)</span><input name="resource_id" defaultValue={initialResourceID} className="mt-1 min-h-10 w-full rounded-lg border border-[var(--line-strong)] px-3 font-mono font-normal" /></label><label className="text-xs font-semibold">File path <span className="font-normal text-[var(--muted)]">(file context)</span><input name="path" defaultValue={initialPath} className="mt-1 min-h-10 w-full rounded-lg border border-[var(--line-strong)] px-3 font-mono font-normal" /></label></div><label className="block text-xs font-semibold">Revision or branch<input name="ref" required={initialKind!=="pull_request"&&initialKind!=="workspace"} defaultValue={initialRef} placeholder="Exact commit preferred" className="mt-1 min-h-10 w-full rounded-lg border border-[var(--line-strong)] px-3 font-mono font-normal" /></label><label className="block text-xs font-semibold">Question<textarea name="question" required maxLength={2000} rows={3} placeholder="Why does this authorization path fail closed?" className="mt-1 w-full rounded-lg border border-[var(--line-strong)] p-3 font-normal" /></label><Button disabled={streaming}>{streaming?"Grounding answer…":"Ask with evidence"}</Button></form>{error&&<p role="alert" className="mt-3 text-sm text-[var(--danger)]">{error}</p>}</Card>
+    {(streaming||selected)&&<section aria-live="polite" className="space-y-3"><div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">Grounded answer</h2>{selected&&<><Badge tone={selected.analysis_status==="complete"?"success":"warning"}>{selected.analysis_status}</Badge><code className="text-xs">{selected.revision}</code></>}</div>{shown.map(claim=><Card key={claim.id} className="p-4"><div className="flex gap-2"><Badge tone={claim.basis==="uncertainty"?"warning":claim.basis==="inference"?"info":"success"}>{claim.basis}</Badge><Badge>{claim.confidence} confidence</Badge></div><p className="mt-3 text-sm leading-6">{claim.text}</p><ul className="mt-3 space-y-1">{claim.citations.map((citation,index)=><li key={`${citation.kind}:${citation.path}:${citation.start_line}:${index}`} className="text-xs text-[var(--muted)]"><Badge>{citation.kind}</Badge>{citation.path?<Link href={`/repositories/${repositoryID}?ref=${citation.revision}&path=${encodeURIComponent(citation.path)}${citation.start_line?`#L${citation.start_line}`:""}`} className="ml-2 font-mono text-[var(--brand)] hover:underline">{citation.path}{citation.start_line?`:${citation.start_line}`:""}</Link>:<code className="ml-2">{citation.revision.slice(0,12)}</code>}<span className="ml-2">{citation.label}</span></li>)}</ul></Card>)}{streaming&&<p className="text-sm text-[var(--muted)]">Receiving retained claims…</p>}{selected?.analysis_reason&&<p className="text-sm text-[var(--muted)]">Coverage: {selected.analysis_reason}</p>}</section>}
+    <section><h2 className="text-lg font-semibold">Durable conversations</h2>{history.length?<div className="mt-3 space-y-2">{history.map(item=><button key={item.id} type="button" onClick={()=>setSelected(item)} className="w-full rounded-xl border border-[var(--line)] bg-white p-4 text-left hover:border-[var(--brand)]"><span className="text-sm font-semibold">{item.question}</span><span className="mt-1 block text-xs text-[var(--muted)]">Asked by {item.asked_by} · {new Date(item.created_at).toLocaleString()} · <code>{item.revision.slice(0,12)}</code></span></button>)}</div>:<Card className="mt-3 p-5 text-sm text-[var(--muted)]">No retained explanations yet.</Card>}</section>
+  </div>;
+}
