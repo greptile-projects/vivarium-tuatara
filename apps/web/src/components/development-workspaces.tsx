@@ -5,13 +5,309 @@ import { FormEvent, useEffect, useState } from "react";
 import { api, APIError, DevelopmentWorkspace } from "@/lib/api";
 import { useAuth } from "./auth";
 import { Badge, Button, Card } from "./ui";
+import { WorkspaceIDE } from "./workspace-ide";
 
-const short = (value:string) => value.slice(0,8);
-export function DevelopmentWorkspaces({workspaceID}:{workspaceID?:string}) {
-  const {token}=useAuth(); const [items,setItems]=useState<DevelopmentWorkspace[]>([]); const [error,setError]=useState(""); const [pending,setPending]=useState(false);
-  useEffect(()=>{if(!token)return;let active=true;const request=workspaceID?api<DevelopmentWorkspace>(`/workspaces/${workspaceID}`,{},token).then(value=>[value]):api<{items:DevelopmentWorkspace[]}>("/workspaces",{},token).then(value=>value.items);void request.then(value=>{if(active){setError("");setItems(value)}}).catch(e=>{if(active)setError(e instanceof APIError?e.message:"Workspaces could not be loaded.")});return()=>{active=false}},[token,workspaceID]);
-  async function transition(item:DevelopmentWorkspace,target:"suspend"|"resume"){if(!token)return;setPending(true);try{const updated=await api<DevelopmentWorkspace>(`/workspaces/${item.id}/${target}`,{method:"POST",body:JSON.stringify({foundation:item.definition_sha256})},token);setItems(current=>current.map(value=>value.id===updated.id?updated:value))}catch(e){setError(e instanceof APIError?e.message:"Lifecycle update failed.")}finally{setPending(false)}}
-  return <div className="space-y-4">{error&&<Card className="border-[var(--danger)] p-4 text-sm text-[var(--danger)]">{error}</Card>}{!workspaceID&&<div className="flex justify-end"><Link href="/workspaces/new" className="inline-flex min-h-9 items-center rounded-lg bg-[var(--brand)] px-4 text-sm font-semibold text-white">Launch workspace</Link></div>}{items.map(item=><Card key={item.id} className="p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><Badge tone={item.state==="running"?"success":item.state==="failed"?"danger":"warning"}>{item.state}</Badge><span className="font-mono text-xs text-[var(--muted)]">{short(item.id)}</span></div><h2 className="mt-3 font-semibold">Revision {short(item.commit_id)}</h2><p className="mt-1 text-sm text-[var(--muted)]">From {item.source.kind.replaceAll("_"," ")} · created {new Date(item.created_at).toLocaleString()}</p></div>{!workspaceID&&<Link className="text-sm font-semibold text-[var(--brand)]" href={`/workspaces/${item.id}`}>Inspect →</Link>}</div><dl className="mt-5 grid gap-3 text-sm sm:grid-cols-3"><div><dt className="text-xs font-semibold text-[var(--muted)]">Foundation</dt><dd className="mt-1 font-mono">sha256:{short(item.definition_sha256)}</dd></div><div><dt className="text-xs font-semibold text-[var(--muted)]">Runtime</dt><dd className="mt-1">{item.definition.image}</dd></div><div><dt className="text-xs font-semibold text-[var(--muted)]">Resources</dt><dd className="mt-1">{item.definition.resources.cpus} CPU · {item.definition.resources.memory_mb} MB</dd></div></dl>{workspaceID&&<><p className="mt-5 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Setup evidence</p><ol className="mt-2 space-y-2">{item.setup_evidence.map((step,index)=><li key={index} className="rounded-lg bg-[var(--canvas)] p-3 text-xs"><Badge tone={step.state==="passed"?"success":"danger"}>{step.state}</Badge><code className="ml-2">{step.command}</code>{step.output&&<pre className="mt-2 overflow-auto whitespace-pre-wrap text-[var(--muted)]">{step.output}</pre>}</li>)}</ol><p className="mt-5 text-xs text-[var(--muted)]">Effective access: {item.effective_access.role} · {item.effective_access.scopes.join(", ")}</p>{item.state==="running"&&<Button className="mt-4" disabled={pending} onClick={()=>void transition(item,"suspend")}>Suspend</Button>}{item.state==="suspended"&&<Button className="mt-4" disabled={pending} onClick={()=>void transition(item,"resume")}>Resume exact foundation</Button>}</>}</Card>)}</div>
+const short = (value: string) => value.slice(0, 8);
+export function DevelopmentWorkspaces({
+  workspaceID,
+}: {
+  workspaceID?: string;
+}) {
+  const { token } = useAuth();
+  const [items, setItems] = useState<DevelopmentWorkspace[]>([]);
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
+  useEffect(() => {
+    if (!token) return;
+    let active = true;
+    const request = workspaceID
+      ? api<DevelopmentWorkspace>(`/workspaces/${workspaceID}`, {}, token).then(
+          (value) => [value],
+        )
+      : api<{ items: DevelopmentWorkspace[] }>("/workspaces", {}, token).then(
+          (value) => value.items,
+        );
+    void request
+      .then((value) => {
+        if (active) {
+          setError("");
+          setItems(value);
+        }
+      })
+      .catch((e) => {
+        if (active)
+          setError(
+            e instanceof APIError
+              ? e.message
+              : "Workspaces could not be loaded.",
+          );
+      });
+    return () => {
+      active = false;
+    };
+  }, [token, workspaceID]);
+  async function transition(
+    item: DevelopmentWorkspace,
+    target: "suspend" | "resume",
+  ) {
+    if (!token) return;
+    setPending(true);
+    try {
+      const updated = await api<DevelopmentWorkspace>(
+        `/workspaces/${item.id}/${target}`,
+        {
+          method: "POST",
+          body: JSON.stringify({ foundation: item.definition_sha256 }),
+        },
+        token,
+      );
+      setItems((current) =>
+        current.map((value) => (value.id === updated.id ? updated : value)),
+      );
+    } catch (e) {
+      setError(e instanceof APIError ? e.message : "Lifecycle update failed.");
+    } finally {
+      setPending(false);
+    }
+  }
+  return (
+    <div className="space-y-4">
+      {error && (
+        <Card className="border-[var(--danger)] p-4 text-sm text-[var(--danger)]">
+          {error}
+        </Card>
+      )}
+      {!workspaceID && (
+        <div className="flex justify-end">
+          <Link
+            href="/workspaces/new"
+            className="inline-flex min-h-9 items-center rounded-lg bg-[var(--brand)] px-4 text-sm font-semibold text-white"
+          >
+            Launch workspace
+          </Link>
+        </div>
+      )}
+      {items.map((item) => (
+        <Card key={item.id} className="p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <Badge
+                  tone={
+                    item.state === "running"
+                      ? "success"
+                      : item.state === "failed"
+                        ? "danger"
+                        : "warning"
+                  }
+                >
+                  {item.state}
+                </Badge>
+                <span className="font-mono text-xs text-[var(--muted)]">
+                  {short(item.id)}
+                </span>
+              </div>
+              <h2 className="mt-3 font-semibold">
+                Revision {short(item.commit_id)}
+              </h2>
+              <p className="mt-1 text-sm text-[var(--muted)]">
+                From {item.source.kind.replaceAll("_", " ")} · created{" "}
+                {new Date(item.created_at).toLocaleString()}
+              </p>
+            </div>
+            {!workspaceID && (
+              <Link
+                className="text-sm font-semibold text-[var(--brand)]"
+                href={`/workspaces/${item.id}`}
+              >
+                Inspect →
+              </Link>
+            )}
+          </div>
+          <dl className="mt-5 grid gap-3 text-sm sm:grid-cols-3">
+            <div>
+              <dt className="text-xs font-semibold text-[var(--muted)]">
+                Foundation
+              </dt>
+              <dd className="mt-1 font-mono">
+                sha256:{short(item.definition_sha256)}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs font-semibold text-[var(--muted)]">
+                Runtime
+              </dt>
+              <dd className="mt-1">{item.definition.image}</dd>
+            </div>
+            <div>
+              <dt className="text-xs font-semibold text-[var(--muted)]">
+                Resources
+              </dt>
+              <dd className="mt-1">
+                {item.definition.resources.cpus} CPU ·{" "}
+                {item.definition.resources.memory_mb} MB
+              </dd>
+            </div>
+          </dl>
+          {workspaceID && (
+            <>
+              <p className="mt-5 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
+                Setup evidence
+              </p>
+              <ol className="mt-2 space-y-2">
+                {item.setup_evidence.map((step, index) => (
+                  <li
+                    key={index}
+                    className="rounded-lg bg-[var(--canvas)] p-3 text-xs"
+                  >
+                    <Badge
+                      tone={step.state === "passed" ? "success" : "danger"}
+                    >
+                      {step.state}
+                    </Badge>
+                    <code className="ml-2">{step.command}</code>
+                    {step.output && (
+                      <pre className="mt-2 overflow-auto whitespace-pre-wrap text-[var(--muted)]">
+                        {step.output}
+                      </pre>
+                    )}
+                  </li>
+                ))}
+              </ol>
+              <p className="mt-5 text-xs text-[var(--muted)]">
+                Effective access: {item.effective_access.role} ·{" "}
+                {item.effective_access.scopes.join(", ")}
+              </p>
+              {item.state === "running" && (
+                <Button
+                  className="mt-4"
+                  disabled={pending}
+                  onClick={() => void transition(item, "suspend")}
+                >
+                  Suspend
+                </Button>
+              )}
+              {item.state === "suspended" && (
+                <Button
+                  className="mt-4"
+                  disabled={pending}
+                  onClick={() => void transition(item, "resume")}
+                >
+                  Resume exact foundation
+                </Button>
+              )}
+            </>
+          )}
+          {workspaceID && item.state === "running" && (
+            <WorkspaceIDE workspace={item} onWorkspace={(updated) => setItems([updated])} />
+          )}
+        </Card>
+      ))}
+    </div>
+  );
 }
 
-export function WorkspaceLauncher(){const {token}=useAuth();const [pending,setPending]=useState(false);const [error,setError]=useState("");async function submit(event:FormEvent<HTMLFormElement>){event.preventDefault();if(!token)return;setPending(true);const data=new FormData(event.currentTarget);const kind=String(data.get("kind"));const source:Record<string,string>={kind};for(const key of ["proposal_id","task_id","pull_request_id","incident_id","repair_id"]){const value=String(data.get(key)||"").trim();if(value)source[key]=value}try{const created=await api<DevelopmentWorkspace>("/workspaces",{method:"POST",body:JSON.stringify({repository_id:String(data.get("repository_id")),commit_id:String(data.get("commit_id")),source})},token);location.href=`/workspaces/${created.id}`}catch(e){setError(e instanceof APIError?e.message:"Workspace could not be launched.");setPending(false)}}return <Card className="p-6"><form onSubmit={submit} className="grid gap-4"><label className="text-sm font-semibold">Repository ID<input required name="repository_id" className="mt-1 w-full rounded-lg border border-[var(--line)] p-2 font-mono font-normal"/></label><label className="text-sm font-semibold">Exact commit<input required name="commit_id" className="mt-1 w-full rounded-lg border border-[var(--line)] p-2 font-mono font-normal"/></label><label className="text-sm font-semibold">Shared context<select name="kind" className="mt-1 w-full rounded-lg border border-[var(--line)] p-2 font-normal"><option value="repository">Repository</option><option value="proposal_task">Proposal task</option><option value="pull_request">Pull request</option><option value="incident_repair">Incident repair</option></select></label><div className="grid gap-3 sm:grid-cols-2">{["proposal_id","task_id","pull_request_id","incident_id","repair_id"].map(name=><label key={name} className="text-xs font-semibold capitalize">{name.replaceAll("_"," ")}<input name={name} className="mt-1 w-full rounded-lg border border-[var(--line)] p-2 font-mono font-normal"/></label>)}</div>{error&&<p role="alert" className="text-sm text-[var(--danger)]">{error}</p>}<Button disabled={pending}>{pending?"Provisioning exact revision…":"Launch isolated workspace"}</Button></form></Card>}
+export function WorkspaceLauncher() {
+  const { token } = useAuth();
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!token) return;
+    setPending(true);
+    const data = new FormData(event.currentTarget);
+    const kind = String(data.get("kind"));
+    const source: Record<string, string> = { kind };
+    for (const key of [
+      "proposal_id",
+      "task_id",
+      "pull_request_id",
+      "incident_id",
+      "repair_id",
+    ]) {
+      const value = String(data.get(key) || "").trim();
+      if (value) source[key] = value;
+    }
+    try {
+      const created = await api<DevelopmentWorkspace>(
+        "/workspaces",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            repository_id: String(data.get("repository_id")),
+            commit_id: String(data.get("commit_id")),
+            source,
+          }),
+        },
+        token,
+      );
+      location.href = `/workspaces/${created.id}`;
+    } catch (e) {
+      setError(
+        e instanceof APIError ? e.message : "Workspace could not be launched.",
+      );
+      setPending(false);
+    }
+  }
+  return (
+    <Card className="p-6">
+      <form onSubmit={submit} className="grid gap-4">
+        <label className="text-sm font-semibold">
+          Repository ID
+          <input
+            required
+            name="repository_id"
+            className="mt-1 w-full rounded-lg border border-[var(--line)] p-2 font-mono font-normal"
+          />
+        </label>
+        <label className="text-sm font-semibold">
+          Exact commit
+          <input
+            required
+            name="commit_id"
+            className="mt-1 w-full rounded-lg border border-[var(--line)] p-2 font-mono font-normal"
+          />
+        </label>
+        <label className="text-sm font-semibold">
+          Shared context
+          <select
+            name="kind"
+            className="mt-1 w-full rounded-lg border border-[var(--line)] p-2 font-normal"
+          >
+            <option value="repository">Repository</option>
+            <option value="proposal_task">Proposal task</option>
+            <option value="pull_request">Pull request</option>
+            <option value="incident_repair">Incident repair</option>
+          </select>
+        </label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {[
+            "proposal_id",
+            "task_id",
+            "pull_request_id",
+            "incident_id",
+            "repair_id",
+          ].map((name) => (
+            <label key={name} className="text-xs font-semibold capitalize">
+              {name.replaceAll("_", " ")}
+              <input
+                name={name}
+                className="mt-1 w-full rounded-lg border border-[var(--line)] p-2 font-mono font-normal"
+              />
+            </label>
+          ))}
+        </div>
+        {error && (
+          <p role="alert" className="text-sm text-[var(--danger)]">
+            {error}
+          </p>
+        )}
+        <Button disabled={pending}>
+          {pending
+            ? "Provisioning exact revision…"
+            : "Launch isolated workspace"}
+        </Button>
+      </form>
+    </Card>
+  );
+}

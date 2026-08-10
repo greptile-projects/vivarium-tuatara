@@ -39,6 +39,13 @@ changes. Suspend and resume require the frozen definition hash and reuse the
 same materialized commit without resolving a branch or silently rerunning setup;
 a missing runtime or changed foundation fails closed.
 
+The workspace detail surface and equivalent API expose a bounded file tree,
+compare-and-swap text editing, literal search, attributed command/terminal
+outcomes, loopback port discovery, and authenticated sandboxed application
+previews against that same named container. Durable change evidence stores
+paths, sizes, and hashes rather than file snapshots. Runtime commands receive
+no platform-managed secrets, and preview ports are never published directly.
+
 ## Unsafe package recovery
 
 Package lifecycle decisions are attributable append-only coordination records,

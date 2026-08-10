@@ -1,8 +1,14 @@
 package workspaces
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestSuspendResumePreservesFrozenFoundation(t *testing.T) {
@@ -35,6 +41,36 @@ func TestSuspendResumePreservesFrozenFoundation(t *testing.T) {
 	resumed, err := store.Transition(created.ID, created.CreatorID, created.DefinitionSHA256, "running")
 	if err != nil || resumed.DefinitionSHA256 != created.DefinitionSHA256 || resumed.CommitID != created.CommitID {
 		t.Fatalf("resume = %#v, %v", resumed, err)
+	}
+}
+
+func TestWorkspaceCommandAndChangeEvidenceIsBoundedAndContentFree(t *testing.T) {
+	store, _ := New(t.TempDir())
+	created, err := store.Create(Workspace{RepositoryID: "repository", CommitID: "commit", CreatorID: "actor"}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	for index := 0; index < 105; index++ {
+		if _, err = store.RecordCommand(created.ID, CommandOutcome{Command: "go test ./...", ActorID: "actor", StartedAt: now, CompletedAt: now}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	secret := []byte("not-retained-source-secret")
+	digest := sha256.Sum256(secret)
+	updated, err := store.RecordChange(created.ID, Change{Path: "config.txt", SHA256: hex.EncodeToString(digest[:]), Size: len(secret), ActorID: "actor", CreatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Commands) != 100 || len(updated.Changes) != 1 || updated.Changes[0].SHA256 == "" {
+		t.Fatalf("unexpected evidence: %#v", updated)
+	}
+	body, err := os.ReadFile(filepath.Join(store.root, created.ID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), string(secret)) {
+		t.Fatal("changed file content leaked into durable workspace evidence")
 	}
 }
 
