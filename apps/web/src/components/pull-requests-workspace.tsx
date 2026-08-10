@@ -1375,7 +1375,7 @@ export function PullRequestDetail({
                 <p className="mt-2 line-clamp-3 text-xs leading-5 text-[var(--muted)]">
                   {proposal.body}
                 </p>
-                {pull.task_id && <div className="mt-3 rounded-lg border border-[var(--line)] p-3 text-xs"><p className="font-semibold">Connected proposal task</p><p className="mt-1 font-mono text-[var(--muted)]">task {pull.task_id}</p>{pull.task_session_id && <p className="mt-1 font-mono text-[var(--muted)]">session {pull.task_session_id} · run {pull.task_run_id}</p>}<p className="mt-2">The source snapshot, automated checks, and execution evidence all belong to this review candidate.</p></div>}
+                {pull.task_id && <div className="mt-3 rounded-lg border border-[var(--line)] p-3 text-xs"><p className="font-semibold">Connected proposal task</p><p className="mt-1 font-mono text-[var(--muted)]">task {pull.task_id}</p>{proposal.reasoning&&<><p className="mt-2">Justified by impact assessment <code>{proposal.reasoning.assessment_id.slice(0,8)}</code> at <code>{proposal.reasoning.revision.slice(0,12)}</code>.</p><p className="mt-1">{proposal.reasoning.items.length} frozen claim, risk, or verification item(s) · {proposal.reasoning.acknowledgements.filter(item=>item.acknowledged_by).length} owner acknowledgement(s).</p></>}{pull.task_session_id && <p className="mt-1 font-mono text-[var(--muted)]">session {pull.task_session_id} · run {pull.task_run_id}</p>}<p className="mt-2">The source snapshot, automated checks, and execution evidence all belong to this review candidate.</p></div>}
               </div>
             ) : (
               <p className="mt-2 text-sm leading-6 text-[var(--muted)]">

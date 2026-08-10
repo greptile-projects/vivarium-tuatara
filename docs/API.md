@@ -21,6 +21,38 @@ requires current read access to the source repository. Stale versions return
 `409 assessment_changed`, and a moved conclusion ref returns `409
 conclusion_revision_changed`.
 
+`POST /repositories/{id}/impact-assessments/{assessment-id}/implementation`
+accepts the current assessment `version`, a proposal title/body, one or more
+`item_ids`, and one to 20 ordered tasks. Each task names a human or generated
+agent owner and may depend on its predecessor. Human owners must still be
+repository participants. The proposal, tasks, assignments, and immutable
+reasoning snapshot are created atomically; retries converge on the assessment
+identity. The snapshot retains the assessment version and revision, selected
+claim/risk/verification items, investigation conclusion identity, analysis
+status, and owner acknowledgements. A moved selected ref returns `409
+assessment_context_changed`; existing history remains readable with
+`context_state: changed` and must be rerun rather than rewritten.
+Implementation publication holds the selected Git reference lock across atomic
+proposal/task creation and assessment linking, so a concurrent stock push
+cannot cross the revision-validation boundary. If proposal persistence is
+visible but directory durability is uncertain, or assessment linking needs
+reconciliation, the endpoint returns `202` with the stable proposal and task
+identities plus a recovery instruction; it never reports persisted work as an
+invalid request. When linking succeeded, clients confirm the returned stable
+identity through a fresh assessment read. If linking is absent, clients reload
+and resubmit with the freshly read assessment version. An exact replay carrying
+the pre-link version is also recognized only when its
+proposal text, selected item order, ordered task definitions, ownership, and
+dependencies match the immutable linked implementation; it returns those same
+identities with `recovered: true`. Any changed stale payload remains invalid.
+Generated-agent creation may omit an assignee ID for server allocation, but an
+explicit agent ID on recovery must exactly match the retained assignment.
+
+Task-scoped workspaces and agent change sessions copy this reasoning snapshot
+into their launch context. Ordinary task contribution endpoints continue to
+publish linked pulls; proposal and pull reads expose the stable assessment,
+revision, selected items, and acknowledgement trail for reviewers.
+
 The JSON API is the supported application boundary for browsers, agents, and
 external consumers. Durable files beneath the configured storage roots are
 private implementation details. Git clients use the smart HTTP URLs returned

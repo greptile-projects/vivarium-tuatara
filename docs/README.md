@@ -265,6 +265,17 @@ repository access to read or acknowledge it. An uncommitted proposed diff
 remains visible only to assessment participants. Durable records live beneath
 `$IMPACT_STORAGE_ROOT` (default `impact-assessments`).
 
+Assessment participants can carry that decision directly into implementation
+by selecting retained impact items and creating one proposal with an ordered
+human- and generated-agent-owned task plan. The plan freezes the assessment
+version, exact commit, investigation conclusion, selected claims, risks,
+verification needs, and owner acknowledgements in every task. Task work then
+uses the existing scoped workspace or agent-session launch and ordinary pull
+publication paths; those launches preload the frozen reasoning, while proposal
+and pull review surfaces link back to it. If the selected branch moves, the
+assessment is reported as changed and cannot start new work, preserving the old
+trail instead of silently refreshing its evidence.
+
 ## Web interface foundation
 
 The web application uses a persistent workbench shell so account, repository,

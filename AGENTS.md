@@ -344,6 +344,21 @@ whenever dependencies change or the web job fails before it starts.
   acknowledge explicit requests only when retained consumer evidence names
   their repository and they can currently read the source assessment.
   `$IMPACT_STORAGE_ROOT` defaults to `impact-assessments`.
+  Assessment participants convert selected retained items into one atomic
+  proposal and ordered human- or generated-agent-owned task plan. Proposal,
+  task, workspace, change-session, and pull projections retain the assessment
+  version, exact revision, optional investigation conclusion, selected
+  claims/risks/verification needs, and owner acknowledgements. Selected-ref
+  movement marks the assessment context changed and blocks new implementation;
+  retained work is never rewritten. Implementation publication holds the
+  selected Git reference lock through proposal/task creation and assessment
+  linking. Post-persist durability uncertainty returns stable identities in a
+  recoverable `202` response rather than being misreported as validation
+  failure. A successful link is confirmed by rereading the assessment. An exact
+  pre-link-version replay returns the existing work only when proposal text,
+  selected items, ordered tasks, ownership, and dependencies match; changed
+  stale payloads remain invalid. An omitted generated-agent ID permits server
+  allocation, while any explicitly supplied recovery ID must match exactly.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version

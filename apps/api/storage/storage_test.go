@@ -571,6 +571,38 @@ func TestDeleteReferenceIfTargetProtectsConcurrentPush(t *testing.T) {
 	}
 }
 
+func TestWithReferenceTargetExcludesConcurrentUpdate(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("reference-admission")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := writeObject(t, repo, storage.BlobObject, []byte("first"))
+	second := writeObject(t, repo, storage.BlobObject, []byte("second"))
+	name := "refs/heads/main"
+	if err = repo.CreateReference(storage.Reference{Name: name, Target: string(first)}); err != nil {
+		t.Fatal(err)
+	}
+	update := make(chan error, 1)
+	err = repo.WithReferenceTarget(name, string(first), func() error {
+		go func() { update <- repo.UpdateReference(storage.Reference{Name: name, Target: string(second)}) }()
+		if concurrent := <-update; concurrent == nil {
+			t.Fatal("concurrent update crossed reference admission lock")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := repo.ReadReference(name)
+	if err != nil || current.Target != string(first) {
+		t.Fatalf("reference = %#v, %v", current, err)
+	}
+}
+
 func TestReferencesRejectIntermediateSymlinks(t *testing.T) {
 	store, err := storage.New(t.TempDir())
 	if err != nil {

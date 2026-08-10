@@ -69,6 +69,19 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 			writeAPIError(w, 422, "workspace_source_invalid", err.Error())
 			return
 		}
+		var reasoning *workspaces.ReasoningContext
+		if input.Source.Kind == "proposal_task" && proposalStore != nil {
+			task, taskErr := proposalStore.GetTask(input.RepositoryID, input.Source.ProposalID, input.Source.TaskID)
+			if taskErr == nil && task.Reasoning != nil {
+				reasoning = &workspaces.ReasoningContext{AssessmentID: task.Reasoning.AssessmentID, AssessmentVersion: task.Reasoning.AssessmentVersion, Revision: task.Reasoning.Revision, ExplanationID: task.Reasoning.ExplanationID, ConclusionEntryID: task.Reasoning.ConclusionEntryID}
+				for _, item := range task.Reasoning.Items {
+					reasoning.Items = append(reasoning.Items, workspaces.ReasoningItem{ID: item.ID, Kind: item.Kind, Summary: item.Summary, Status: item.Status})
+				}
+				for _, item := range task.Reasoning.Acknowledgements {
+					reasoning.Acknowledgements = append(reasoning.Acknowledgements, workspaces.ReasoningAcknowledgement{RepositoryID: item.RepositoryID, OwnerID: item.OwnerID, AcknowledgedBy: item.AcknowledgedBy, Note: item.Note})
+				}
+			}
+		}
 		definitionBytes, err := exec.Command("git", "--git-dir="+repo.Path(), "show", input.CommitID+":"+workspaces.DefinitionPath).Output()
 		if err != nil {
 			writeAPIError(w, 422, "workspace_definition_missing", "the exact revision must contain .vivarium/workspace.json")
@@ -102,7 +115,7 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 		if actor.UserID == repoMeta.OwnerID {
 			role = "owner"
 		}
-		created, err := store.Create(workspaces.Workspace{RepositoryID: input.RepositoryID, OrganizationID: repoMeta.OrganizationID, CommitID: input.CommitID, Definition: definition, Source: input.Source, CreatorID: actor.UserID, Access: workspaces.Access{Role: role, Scopes: []string{"repositories:read", "repositories:write"}}, Policy: repositoryPolicy, PolicyScope: policyScope, PolicyVersion: repositoryPolicy.Version}, definitionBytes)
+		created, err := store.Create(workspaces.Workspace{RepositoryID: input.RepositoryID, OrganizationID: repoMeta.OrganizationID, CommitID: input.CommitID, Definition: definition, Source: input.Source, CreatorID: actor.UserID, Access: workspaces.Access{Role: role, Scopes: []string{"repositories:read", "repositories:write"}}, Policy: repositoryPolicy, PolicyScope: policyScope, PolicyVersion: repositoryPolicy.Version, Reasoning: reasoning}, definitionBytes)
 		if err != nil {
 			writeAPIError(w, 500, "workspace_create_failed", "workspace could not be created")
 			return

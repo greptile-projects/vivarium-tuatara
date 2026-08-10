@@ -111,39 +111,61 @@ type Change struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 type Workspace struct {
-	ID                string           `json:"id"`
-	RepositoryID      string           `json:"repository_id"`
-	OrganizationID    string           `json:"organization_id,omitempty"`
-	CommitID          string           `json:"commit_id"`
-	Definition        Definition       `json:"definition"`
-	DefinitionSHA256  string           `json:"definition_sha256"`
-	Source            Source           `json:"source"`
-	CreatorID         string           `json:"creator_id"`
-	Access            Access           `json:"effective_access"`
-	State             string           `json:"state"`
-	Setup             []SetupStep      `json:"setup_evidence"`
-	Events            []Event          `json:"events"`
-	Commands          []CommandOutcome `json:"command_outcomes"`
-	Changes           []Change         `json:"changes"`
-	Presence          []Presence       `json:"presence"`
-	Control           Control          `json:"control"`
-	Messages          []Message        `json:"messages"`
-	HeadCheckpointID  string           `json:"head_checkpoint_id,omitempty"`
-	CreatedAt         time.Time        `json:"created_at"`
-	UpdatedAt         time.Time        `json:"updated_at"`
-	SuspendedAt       *time.Time       `json:"suspended_at,omitempty"`
-	ResumedAt         *time.Time       `json:"resumed_at,omitempty"`
-	Policy            Policy           `json:"policy"`
-	PolicyScope       string           `json:"policy_scope"`
-	PolicyVersion     int              `json:"policy_version"`
-	LastActivityAt    time.Time        `json:"last_activity_at"`
-	ExpiresAt         *time.Time       `json:"expires_at,omitempty"`
-	ExpiryAnnouncedAt *time.Time       `json:"expiry_announced_at,omitempty"`
-	StoppedAt         *time.Time       `json:"stopped_at,omitempty"`
-	StoppedBy         string           `json:"stopped_by,omitempty"`
-	StopReason        string           `json:"stop_reason,omitempty"`
-	RebuildRequired   bool             `json:"rebuild_required"`
-	RebuildReasons    []string         `json:"rebuild_reasons"`
+	ID                string            `json:"id"`
+	RepositoryID      string            `json:"repository_id"`
+	OrganizationID    string            `json:"organization_id,omitempty"`
+	CommitID          string            `json:"commit_id"`
+	Definition        Definition        `json:"definition"`
+	DefinitionSHA256  string            `json:"definition_sha256"`
+	Source            Source            `json:"source"`
+	CreatorID         string            `json:"creator_id"`
+	Access            Access            `json:"effective_access"`
+	State             string            `json:"state"`
+	Setup             []SetupStep       `json:"setup_evidence"`
+	Events            []Event           `json:"events"`
+	Commands          []CommandOutcome  `json:"command_outcomes"`
+	Changes           []Change          `json:"changes"`
+	Presence          []Presence        `json:"presence"`
+	Control           Control           `json:"control"`
+	Messages          []Message         `json:"messages"`
+	HeadCheckpointID  string            `json:"head_checkpoint_id,omitempty"`
+	CreatedAt         time.Time         `json:"created_at"`
+	UpdatedAt         time.Time         `json:"updated_at"`
+	SuspendedAt       *time.Time        `json:"suspended_at,omitempty"`
+	ResumedAt         *time.Time        `json:"resumed_at,omitempty"`
+	Policy            Policy            `json:"policy"`
+	PolicyScope       string            `json:"policy_scope"`
+	PolicyVersion     int               `json:"policy_version"`
+	LastActivityAt    time.Time         `json:"last_activity_at"`
+	ExpiresAt         *time.Time        `json:"expires_at,omitempty"`
+	ExpiryAnnouncedAt *time.Time        `json:"expiry_announced_at,omitempty"`
+	StoppedAt         *time.Time        `json:"stopped_at,omitempty"`
+	StoppedBy         string            `json:"stopped_by,omitempty"`
+	StopReason        string            `json:"stop_reason,omitempty"`
+	RebuildRequired   bool              `json:"rebuild_required"`
+	RebuildReasons    []string          `json:"rebuild_reasons"`
+	Reasoning         *ReasoningContext `json:"reasoning,omitempty"`
+}
+type ReasoningContext struct {
+	AssessmentID      string                     `json:"assessment_id"`
+	AssessmentVersion int                        `json:"assessment_version"`
+	Revision          string                     `json:"revision"`
+	ExplanationID     string                     `json:"explanation_id,omitempty"`
+	ConclusionEntryID string                     `json:"conclusion_entry_id,omitempty"`
+	Items             []ReasoningItem            `json:"items"`
+	Acknowledgements  []ReasoningAcknowledgement `json:"acknowledgements,omitempty"`
+}
+type ReasoningItem struct {
+	ID      string `json:"id"`
+	Kind    string `json:"kind"`
+	Summary string `json:"summary"`
+	Status  string `json:"status"`
+}
+type ReasoningAcknowledgement struct {
+	RepositoryID   string `json:"repository_id"`
+	OwnerID        string `json:"owner_id"`
+	AcknowledgedBy string `json:"acknowledged_by"`
+	Note           string `json:"note,omitempty"`
 }
 
 func randomID(size int) (string, error) {
