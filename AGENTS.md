@@ -359,6 +359,12 @@ whenever dependencies change or the web job fails before it starts.
   selected items, ordered tasks, ownership, and dependencies match; changed
   stale payloads remain invalid. An omitted generated-agent ID permits server
   allocation, while any explicitly supplied recovery ID must match exactly.
+  The connected code-intelligence browser journey carries an unfamiliar
+  developer from exact symbol navigation through a grounded shared
+  investigation, affected-consumer owner acknowledgement, agent-owned task,
+  repository check, independent review, and merge. Playwright isolates
+  explanation and impact records beneath its temporary API stores alongside
+  the other journey state.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version
