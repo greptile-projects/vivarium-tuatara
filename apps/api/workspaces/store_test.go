@@ -153,10 +153,28 @@ func TestControlTransferWaitsForAdmittedMutationAndRejectsStaleActor(t *testing.
 
 func TestControlCanBeExplicitlyReleased(t *testing.T) {
 	store, _ := New(t.TempDir())
-	created, _ := store.Create(Workspace{RepositoryID: "repository", CommitID: "commit", CreatorID: "actor"}, []byte("definition"))
-	released, err := store.SetControl(created.ID, "actor", "", "", "observe", nil, 1, 0)
+	holder := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	other := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	created, _ := store.Create(Workspace{RepositoryID: "repository", CommitID: "commit", CreatorID: holder}, []byte("definition"))
+	if _, err := store.ReleaseControl(created.ID, other, 1); !errors.Is(err, ErrControl) {
+		t.Fatalf("non-holder release = %v", err)
+	}
+	retained, err := store.Get(created.ID)
+	if err != nil || retained.Control.PrincipalID != holder || retained.Control.Version != 1 {
+		t.Fatalf("control after denied release = %#v, %v", retained.Control, err)
+	}
+	released, err := store.ReleaseControl(created.ID, holder, 1)
 	if err != nil || released.Control.PrincipalID != "" || len(released.Control.Scopes) != 0 || released.Control.Version != 2 {
 		t.Fatalf("release = %#v, %v", released.Control, err)
+	}
+	if _, err := store.SetControl(created.ID, holder, "", "", "observe", nil, 2, 0); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("empty transfer = %v", err)
+	}
+	expiredStore, _ := New(t.TempDir())
+	expired, _ := expiredStore.Create(Workspace{RepositoryID: "repository", CommitID: "commit", CreatorID: holder}, []byte("definition"))
+	expiredStore.now = func() time.Time { return expired.Control.ExpiresAt.Add(time.Second) }
+	if _, err := expiredStore.ReleaseControl(expired.ID, holder, 1); !errors.Is(err, ErrControl) {
+		t.Fatalf("expired holder release = %v", err)
 	}
 }
 

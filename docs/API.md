@@ -94,7 +94,8 @@ the corresponding unexpired human control scope and otherwise return `409
 workspace_control_required`. Selecting an agent grants no caller authority;
 agent execution remains a separately authorized boundary.
 An empty principal with `mode: "observe"`, empty scopes, and the current version
-explicitly releases control. Final lease validation and mutation admission are
+lets the current live human holder explicitly release control; other writers
+cannot clear that lease. Final lease validation and mutation admission are
 serialized with transfer: a takeover waits for already-admitted work, while a
 request that loses its lease before admission is rejected.
 

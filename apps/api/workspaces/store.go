@@ -204,15 +204,32 @@ func (s *Store) SetControl(id, actor, principalKind, principalID, mode string, s
 		return Workspace{}, ErrControl
 	}
 	now := s.now()
-	if principalID == "" {
-		mode = "observe"
-		scopes = []string{}
-	} else if seconds < 30 || seconds > 3600 {
+	if principalID == "" || seconds < 30 || seconds > 3600 {
 		return Workspace{}, ErrInvalid
 	}
 	w.Control = Control{Version: expectedVersion + 1, PrincipalKind: principalKind, PrincipalID: principalID, Mode: mode, Scopes: append([]string(nil), scopes...), GrantedBy: actor, GrantedAt: now, ExpiresAt: now.Add(time.Duration(seconds) * time.Second)}
 	w.UpdatedAt = now
 	w.Events = append(w.Events, Event{Kind: "control.changed", ActorID: actor, Role: "instruction", Detail: principalKind + ":" + principalID, CreatedAt: now})
+	return w, s.write(w)
+}
+
+func (s *Store) ReleaseControl(id, actor string, expectedVersion int) (Workspace, error) {
+	control := s.controlLock(id)
+	control.Lock()
+	defer control.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	now := s.now()
+	if expectedVersion != w.Control.Version || w.Control.PrincipalKind != "human" || w.Control.PrincipalID != actor || !w.Control.ExpiresAt.After(now) {
+		return Workspace{}, ErrControl
+	}
+	w.Control = Control{Version: expectedVersion + 1, Mode: "observe", Scopes: []string{}, GrantedBy: actor, GrantedAt: now, ExpiresAt: now}
+	w.UpdatedAt = now
+	w.Events = append(w.Events, Event{Kind: "control.changed", ActorID: actor, Role: "instruction", CreatedAt: now})
 	return w, s.write(w)
 }
 
