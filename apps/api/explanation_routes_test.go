@@ -132,6 +132,13 @@ func TestGroundedExplanationStreamsAndRetainsExactEvidence(t *testing.T) {
 		t.Fatal("private workspace context is visible to collaborator before HTTP request")
 	}
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/collaborators", `{"user_id":"`+collaborator.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	unrelatedResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"unrelated-investigation-auth"}`, owner.Credential.Token, http.StatusCreated)
+	var unrelated repositories.Repository
+	json.NewDecoder(unrelatedResponse.Body).Decode(&unrelated)
+	unrelatedResponse.Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+unrelated.ID+"/collaborators", `{"user_id":"`+collaborator.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+unrelated.ID+"/explanations/"+final.ID+"/participants", `{"user_id":"`+collaborator.User.ID+`"}`, owner.Credential.Token, http.StatusNotFound).Body.Close()
+	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/explanations/"+final.ID, "", collaborator.Credential.Token, http.StatusNotFound).Body.Close()
 	legacy := final
 	legacy.ID = "11111111111111111111111111111111"
 	legacy.Participants = nil

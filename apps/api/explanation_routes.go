@@ -171,10 +171,15 @@ func registerExplanationRoutes(mux *http.ServeMux, gitStore *storage.Store, cata
 			writeAPIError(w, 400, "invalid_request", "user_id is required")
 			return
 		}
+		item, readErr := store.Get(r.PathValue("explanation_id"))
+		if readErr != nil || item.RepositoryID != r.PathValue("id") || !explanationVisibleTo(actor.UserID, item, catalog, workspaceStore) {
+			writeAPIError(w, 404, "participant_not_found", "the investigation or repository participant was not found")
+			return
+		}
 		var updated explanations.Conversation
-		err := catalog.WithCurrentParticipants([]string{actor.UserID, input.UserID}, r.PathValue("id"), func() error {
+		err := catalog.WithCurrentParticipants([]string{actor.UserID, input.UserID}, item.RepositoryID, func() error {
 			var e error
-			updated, e = store.AddParticipant(r.PathValue("explanation_id"), actor.UserID, input.UserID)
+			updated, e = store.AddParticipant(item.ID, item.RepositoryID, actor.UserID, input.UserID)
 			return e
 		})
 		if err != nil {

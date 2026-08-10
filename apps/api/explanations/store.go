@@ -153,9 +153,9 @@ func (s *Store) Update(id string, mutate func(*Conversation) error) (Conversatio
 	return value, nil
 }
 
-func (s *Store) AddParticipant(id, actor, userID string) (Conversation, error) {
+func (s *Store) AddParticipant(id, repositoryID, actor, userID string) (Conversation, error) {
 	return s.Update(id, func(v *Conversation) error {
-		if !participant(v.Participants, actor) || userID == "" {
+		if v.RepositoryID != repositoryID || !participant(v.Participants, actor) || userID == "" {
 			return ErrNotFound
 		}
 		if participant(v.Participants, userID) {
