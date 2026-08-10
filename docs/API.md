@@ -1,5 +1,23 @@
 # HTTP API contract
 
+## Prospective impact assessments
+
+`POST /repositories/{id}/impact-assessments` creates a durable assessment for a
+current repository participant. The request supplies `title`, `ref`, and one
+source: `selected_code` (`path`, `start_line`, `end_line`),
+`investigation_conclusion` (`explanation_id`, `entry_id`), or `proposed_diff`
+(`diff`). An optional `query` narrows the bounded lexical analysis. The response
+retains the resolved revision, completeness, and visible references, tests,
+owners, interfaces, consumers, releases, packages, and environments.
+
+Collection and detail reads return records the actor participates in or must
+acknowledge. Cross-repository evidence is filtered through current visibility;
+requested owners who are not participants never receive the proposed diff.
+Participants mutate with the last observed `version` using nested `POST`
+`/participants`, `/items`, and `/acknowledgement-requests`. The named owner uses
+`POST .../acknowledgement-requests/{request-id}`. Stale versions return `409
+assessment_changed`.
+
 The JSON API is the supported application boundary for browsers, agents, and
 external consumers. Durable files beneath the configured storage roots are
 private implementation details. Git clients use the smart HTTP URLs returned

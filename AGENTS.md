@@ -334,6 +334,15 @@ whenever dependencies change or the web job fails before it starts.
   stale without rewriting history; workspace attachments retain identifiers
   and revisions, never credentials or copied private output.
   `$EXPLANATION_STORAGE_ROOT` defaults to `explanations`.
+  Prospective impact assessments at `/repositories/{id}/impact` freeze selected
+  code, an investigation conclusion, or a proposed diff to one exact revision.
+  Bounded analysis joins lexical references and tests with currently visible
+  owners, packages, interfaces, consumers, releases, and environments; every
+  read filters retained cross-repository evidence through current access.
+  Invited participants refine the version-guarded record with accepted risks,
+  unknowns, and verification needs, while affected repository owners can
+  acknowledge explicit requests without receiving an uncommitted proposed
+  diff. `$IMPACT_STORAGE_ROOT` defaults to `impact-assessments`.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version

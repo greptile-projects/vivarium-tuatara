@@ -30,6 +30,14 @@ export type ExplanationConversation = {
   id:string; repository_id:string; revision:string; context:{kind:"repository"|"file"|"proposal"|"task"|"pull_request"|"incident"|"workspace";resource_id?:string;path?:string};
   question:string; asked_by:string; agent:string; answer:string; claims:ExplanationClaim[]; participants:{user_id:string;invited_by?:string;joined_at:string}[]; entries:ExplanationEntry[]; analysis_status:"complete"|"incomplete"; analysis_reason?:string; created_at:string; updated_at:string;
 };
+export type ImpactEvidence = { kind:string; repository_id:string; revision:string; path?:string; line?:number; resource_id?:string; label:string; owner_id?:string; state?:string; verification?:string };
+export type ImpactAssessment = {
+  id:string; repository_id:string; revision:string; title:string; source:{kind:"selected_code"|"investigation_conclusion"|"proposed_diff";path?:string;start_line?:number;end_line?:number;explanation_id?:string;entry_id?:string;diff?:string}; created_by:string;
+  participants:{user_id:string;invited_by?:string;joined_at:string}[];
+  items:{id:string;kind:"reference"|"test"|"owner"|"package"|"interface"|"consumer"|"release"|"environment"|"risk"|"unknown";summary:string;status:"candidate"|"accepted_risk"|"unknown"|"verification_required";evidence?:ImpactEvidence[];added_by:string;created_at?:string}[];
+  acknowledgement_requests:{id:string;repository_id:string;owner_id:string;requested_by:string;note?:string;requested_at:string;acknowledged_by?:string;acknowledgement?:string;acknowledged_at?:string}[];
+  analysis_status:"complete"|"incomplete"; analysis_reason?:string; version:number; created_at:string; updated_at:string;
+};
 export type DevelopmentWorkspace = {
   id: string;
   repository_id: string;
