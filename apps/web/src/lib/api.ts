@@ -16,6 +16,16 @@ export type Repository = {
   created_at: string;
   upstream_repository_id?: string;
 };
+export type DevelopmentWorkspace = {
+  id: string; repository_id: string; commit_id: string; creator_id: string;
+  state: "provisioning" | "running" | "suspended" | "failed";
+  definition_sha256: string; created_at: string; updated_at: string;
+  source: { kind: "repository" | "proposal_task" | "pull_request" | "incident_repair"; repository_id: string; proposal_id?: string; task_id?: string; pull_request_id?: string; incident_id?: string; repair_id?: string };
+  definition: { version: number; image: string; tools: {name:string;version:string}[]; dependencies: string[]; setup: string[]; resources: {cpus:number;memory_mb:number;storage_mb:number;setup_seconds:number} };
+  effective_access: { role: string; scopes: string[] };
+  setup_evidence: {command:string;state:string;exit_code:number;output?:string;started_at:string;completed_at:string}[];
+  events: {kind:string;actor_id:string;created_at:string}[];
+};
 export type Organization = {
   id: string;
   name: string;

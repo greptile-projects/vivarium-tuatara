@@ -14,6 +14,31 @@ The supported consumer contract, including authentication, stable error
 shapes, validation, and collection pagination, is documented in [API.md](API.md).
 Consumers should use that HTTP boundary rather than reading storage roots.
 
+## Reproducible development workspaces
+
+Development environments are shared, revision-pinned collaboration records.
+The `/workspaces` web surface and public API launch from a repository, proposal
+task, pull request, or incident emergency-repair context only after current
+participant authorization. Launch requires the exact commit to contain
+`.vivarium/workspace.json` version 1. That file supplies the container image,
+declared tools and dependencies, setup commands, and bounded CPU, memory,
+storage, and setup duration.
+
+The API snapshots the definition and its SHA-256, materializes only the named
+Git commit into a size-limited tmpfs, reserves a bounded share of the same
+storage budget for `/tmp`, and runs setup in that named, read-only-root,
+network-disabled, capability-dropped container without platform credentials.
+Images with declared Docker volumes are rejected before container creation so
+image metadata cannot introduce writable storage outside that total budget.
+Setup failure or timeout force-removes the workload instead of only terminating
+its Docker client. The workspace record retains source context,
+creator, launch-time effective access, commands, bounded output, exit status,
+timestamps, and lifecycle history beneath `$WORKSPACE_STORAGE_ROOT` (default
+`workspaces`). Current repository access is revalidated on reads and lifecycle
+changes. Suspend and resume require the frozen definition hash and reuse the
+same materialized commit without resolving a branch or silently rerunning setup;
+a missing runtime or changed foundation fails closed.
+
 ## Unsafe package recovery
 
 Package lifecycle decisions are attributable append-only coordination records,
