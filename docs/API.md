@@ -1831,3 +1831,29 @@ child also omits its `parent_id` when that parent is not public. Responsibility
 publication holds the repository catalog boundary across a final current-group
 check and organization write; directory reads independently discard links to
 repositories no longer in the current portfolio.
+
+## Technical decisions
+
+`POST /repositories/{repository_id}/decisions` requires repository write
+participation and accepts `source` plus `scope`. Source kind is `repository`,
+`proposal`, `investigation`, `incident`, `evolution_plan`, or
+`stewardship_opportunity`; non-repository sources require their durable
+`resource_id`. Scope contains the question, constraint and success-measure
+arrays, RFC 3339 deadline, affected resource references, participants,
+and a participant `owner_id`. Every owner and participant ID must resolve to a
+current platform identity on creation and every scope revision. Creation
+returns a durable `pending` decision;
+pending is informational and creates no workflow gate.
+
+`GET /decisions` returns decisions in repositories currently accessible to the
+actor and can filter by `repository_id`, `source_kind`, and `source_id`. These
+source filters let related surfaces project that a decision remains pending
+without coupling their mutation rules to it. `GET /decisions/{id}` revalidates
+current repository participation. Participants with current repository write
+access publish compare-and-swap scope revisions through `PUT /decisions/{id}`
+using `expected_version`, complete replacement `scope`, and an attributable
+change `summary`; stale updates return `409 decision_changed`. `POST
+/decisions/{id}/discussion` appends a bounded body without advancing the scope
+version. Scope creation, every revision, and discussion remain in one ordered
+immutable `history`. Records default beneath `$DECISION_STORAGE_ROOT`
+(`decisions`).
