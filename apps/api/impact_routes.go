@@ -52,6 +52,7 @@ func registerImpactRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *
 			return
 		}
 		query := strings.TrimSpace(in.Query)
+		conclusionRevisionChanged := false
 		switch in.Source.Kind {
 		case "selected_code":
 			if in.Source.Path == "" || in.Source.StartLine < 1 || in.Source.EndLine < in.Source.StartLine {
@@ -60,6 +61,7 @@ func registerImpactRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *
 				query = selectedCodeQuery(repo.Path(), string(revision), in.Source)
 			}
 		case "investigation_conclusion":
+			query = ""
 			if explanationStore == nil {
 				err = impacts.ErrNotFound
 				break
@@ -72,7 +74,11 @@ func registerImpactRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *
 			if err == nil {
 				for _, entry := range conversation.Entries {
 					if entry.ID == in.Source.EntryID && entry.Kind == "conclusion" {
-						query = entry.Body
+						if entry.Revision != string(revision) {
+							conclusionRevisionChanged = true
+						} else {
+							query = entry.Body
+						}
 					}
 				}
 			}
@@ -85,6 +91,10 @@ func registerImpactRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *
 			}
 		default:
 			err = impacts.ErrInvalid
+		}
+		if conclusionRevisionChanged {
+			writeAPIError(w, 409, "conclusion_revision_changed", "the requested ref no longer resolves to the conclusion revision")
+			return
 		}
 		if err != nil || query == "" {
 			writeAPIError(w, 400, "invalid_source", "the selected source is unavailable or contains no analyzable behavior")
@@ -199,7 +209,7 @@ func registerImpactRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *
 			return
 		}
 		target, err := catalog.GetByID(in.RepositoryID)
-		if err != nil || !visibleRepository(target, actor.UserID, catalog) {
+		if err != nil || !visibleRepository(target, actor.UserID, catalog) || !assessmentAffectsRepository(v, target.ID) {
 			writeAPIError(w, 404, "owner_not_found", "affected owner not found")
 			return
 		}
@@ -212,6 +222,9 @@ func registerImpactRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *
 		writeImpactMutation(w, next, err, actor.UserID, catalog)
 	})
 	mux.HandleFunc("POST /repositories/{id}/impact-assessments/{assessment_id}/acknowledgement-requests/{request_id}", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, allowed := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !allowed {
+			return
+		}
 		actor, v, ok := mutate(w, r)
 		if !ok {
 			return
@@ -286,17 +299,26 @@ func deriveImpact(gitDir, repositoryID, revision, query string, catalog *reposit
 		tokens = tokens[:8]
 	}
 	items := []impacts.Item{}
+	incomplete := map[string]bool{}
 	add := func(kind, summary, status string, e ...impacts.Evidence) {
 		items = append(items, impacts.Item{ID: "derived-" + kind + "-" + string(rune(len(items)+97)), Kind: kind, Summary: summary, Status: status, Evidence: e, AddedBy: "vivarium-impact-agent-v1"})
 	}
-	files, _ := exec.Command("git", "--git-dir="+gitDir, "ls-tree", "-r", "--name-only", revision).Output()
+	files, treeErr := exec.Command("git", "--git-dir="+gitDir, "ls-tree", "-r", "--name-only", revision).Output()
+	if treeErr != nil {
+		incomplete["the revision file list could not be read"] = true
+	}
 	scanned := 0
 	for _, path := range strings.Split(strings.TrimSpace(string(files)), "\n") {
 		if scanned >= 300 || !sourcePath(path) {
 			continue
 		}
 		body, err := exec.Command("git", "--git-dir="+gitDir, "show", revision+":"+path).Output()
-		if err != nil || len(body) > 512<<10 {
+		if err != nil {
+			incomplete["one or more source files could not be read"] = true
+			continue
+		}
+		if len(body) > 512<<10 {
+			incomplete["one or more source files exceeded the 512 KiB analysis limit"] = true
 			continue
 		}
 		scanned++
@@ -325,7 +347,11 @@ func deriveImpact(gitDir, repositoryID, revision, query string, catalog *reposit
 				}
 			}
 		}
+		if scan.Err() != nil {
+			incomplete["one or more source lines exceeded the lexical scanner limit"] = true
+		}
 		if len(items) >= 80 {
+			incomplete["lexical analysis reached the 80-item result limit"] = true
 			break
 		}
 	}
@@ -374,12 +400,34 @@ func deriveImpact(gitDir, repositoryID, revision, query string, catalog *reposit
 	}
 	sort.SliceStable(items, func(i, j int) bool { return items[i].Kind < items[j].Kind })
 	status := "complete"
-	reason := ""
 	if scanned >= 300 {
+		incomplete["bounded lexical analysis reached the 300-file limit"] = true
+	}
+	reasons := make([]string, 0, len(incomplete))
+	for value := range incomplete {
+		reasons = append(reasons, value)
+	}
+	sort.Strings(reasons)
+	reason := strings.Join(reasons, "; ")
+	if len(reasons) > 0 {
 		status = "incomplete"
-		reason = "bounded lexical analysis reached the 300-file limit; record remaining unknowns explicitly"
+		reason += "; record remaining unknowns explicitly"
 	}
 	return items, status, reason
+}
+
+func assessmentAffectsRepository(v impacts.Assessment, repositoryID string) bool {
+	for _, item := range v.Items {
+		if item.Kind != "consumer" {
+			continue
+		}
+		for _, evidence := range item.Evidence {
+			if evidence.Kind == "consumer" && evidence.RepositoryID == repositoryID && evidence.OwnerID != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 func visibleID(id, user string, c *repositories.Store) bool {
 	v, e := c.GetByID(id)

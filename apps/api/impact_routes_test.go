@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/explanations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/impacts"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
@@ -70,4 +72,108 @@ func hasImpactKind(v impacts.Assessment, kind string) bool {
 		}
 	}
 	return false
+}
+
+func TestImpactAnalysisReportsScannerOmissions(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	repoRecord, err := catalog.Create("owner", "scanner-impact")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, _ := gitStore.Open(repoRecord.ID)
+	longLine := strings.Repeat("x", 70*1024) + "\nAuthorize()\n"
+	blob, _ := repo.WriteObject(storage.BlobObject, []byte(longLine))
+	tree := writeTestTree(t, repo, testTreeEntry{"100644", "scanner.go", blob})
+	commit := writeTestCommit(t, repo, tree, nil, 1700000000, "scanner fixture")
+	items, status, reason := deriveImpact(repo.Path(), repoRecord.ID, string(commit), "Authorize", catalog, nil, nil, nil, nil, "owner")
+	if status != "incomplete" || !strings.Contains(reason, "scanner limit") {
+		t.Fatalf("analysis = %q, %q, %#v", status, reason, items)
+	}
+}
+
+func TestImpactConclusionMustMatchRequestedRevision(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	impactStore, _ := impacts.New(t.TempDir())
+	explanationStore, _ := explanations.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, nil, impactStore, explanationStore))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "impact-conclusion-owner")
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"conclusion-impact"}`, owner.Credential.Token, http.StatusCreated)
+	var repository repositories.Repository
+	json.NewDecoder(response.Body).Decode(&repository)
+	response.Body.Close()
+	repo, _ := gitStore.Open(repository.ID)
+	blobA, _ := repo.WriteObject(storage.BlobObject, []byte("func Authorize() bool { return true }\n"))
+	treeA := writeTestTree(t, repo, testTreeEntry{"100644", "authorize.go", blobA})
+	commitA := writeTestCommit(t, repo, treeA, nil, 1700000000, "revision A")
+	if err := repo.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(commitA)}); err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := explanationStore.Create(explanations.Conversation{RepositoryID: repository.ID, Revision: string(commitA), Context: explanations.Context{Kind: "repository"}, Question: "How does authorization work?", AskedBy: owner.User.ID, Claims: []explanations.Claim{{Text: "Authorization is centralized", Basis: "evidence", Confidence: "high"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err = explanationStore.AddEntry(conversation.ID, explanations.Entry{Kind: "conclusion", Body: "Authorize is the behavior boundary", ActorID: owner.User.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conclusion := conversation.Entries[len(conversation.Entries)-1]
+	blobB, _ := repo.WriteObject(storage.BlobObject, []byte("func Permit() bool { return true }\n"))
+	treeB := writeTestTree(t, repo, testTreeEntry{"100644", "authorize.go", blobB})
+	commitB := writeTestCommit(t, repo, treeB, []storage.ObjectID{commitA}, 1700000001, "revision B")
+	if err := repo.UpdateReferenceIfTarget(storage.Reference{Name: "refs/heads/main", Target: string(commitB)}, string(commitA)); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"title":"Assess conclusion","ref":"main","source":{"kind":"investigation_conclusion","explanation_id":"` + conversation.ID + `","entry_id":"` + conclusion.ID + `"}}`
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/impact-assessments", body, owner.Credential.Token, http.StatusConflict).Body.Close()
+	values, _ := impactStore.List(repository.ID)
+	if len(values) != 0 {
+		t.Fatalf("mismatched conclusion persisted: %#v", values)
+	}
+}
+
+func TestImpactAcknowledgementRejectsUnrelatedTargetsAndUnauthorizedOwners(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	impactStore, _ := impacts.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, nil, impactStore))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "private-impact-owner")
+	other := createTestAccount(t, server.URL, "unrelated-owner")
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"private-impact"}`, owner.Credential.Token, http.StatusCreated)
+	var source repositories.Repository
+	json.NewDecoder(response.Body).Decode(&source)
+	response.Body.Close()
+	repo, _ := gitStore.Open(source.ID)
+	blob, _ := repo.WriteObject(storage.BlobObject, []byte("func Change() {}\n"))
+	tree := writeTestTree(t, repo, testTreeEntry{"100644", "change.go", blob})
+	commit := writeTestCommit(t, repo, tree, nil, 1700000000, "source")
+	repo.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(commit)})
+	targetResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"unrelated"}`, other.Credential.Token, http.StatusCreated)
+	var target repositories.Repository
+	json.NewDecoder(targetResponse.Body).Decode(&target)
+	targetResponse.Body.Close()
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+target.ID, `{"visibility":"public"}`, other.Credential.Token, http.StatusOK).Body.Close()
+	created := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+source.ID+"/impact-assessments", `{"title":"Private change","ref":"main","query":"Change","source":{"kind":"proposed_diff","diff":"+Change()"}}`, owner.Credential.Token, http.StatusCreated)
+	var assessment impacts.Assessment
+	json.NewDecoder(created.Body).Decode(&assessment)
+	created.Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+source.ID+"/impact-assessments/"+assessment.ID+"/acknowledgement-requests", `{"repository_id":"`+target.ID+`","version":1}`, owner.Credential.Token, http.StatusNotFound).Body.Close()
+	// Seed a legacy/malicious request directly: the acknowledgement route must
+	// still deny an owner who cannot read the private source assessment.
+	seeded, err := impactStore.Request(assessment.ID, assessment.Version, impacts.AcknowledgementRequest{RepositoryID: target.ID, OwnerID: other.User.ID, RequestedBy: owner.User.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+source.ID+"/impact-assessments/"+assessment.ID+"/acknowledgement-requests/"+seeded.AcknowledgementRequests[0].ID, `{"version":2}`, other.Credential.Token, http.StatusNotFound).Body.Close()
+	reopened, _ := impactStore.Get(assessment.ID)
+	if reopened.AcknowledgementRequests[0].AcknowledgedBy != "" {
+		t.Fatal("unauthorized owner acknowledged private assessment")
+	}
 }

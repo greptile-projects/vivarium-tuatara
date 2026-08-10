@@ -259,9 +259,10 @@ is explicit rather than silently presented as exhaustive.
 Assessment participants use compare-and-swap versions to invite collaborators,
 add verification needs, accepted risks, and unknowns, and request an affected
 repository owner's acknowledgement. Every read revalidates visibility for each
-cross-repository evidence item. Requested owners see only evidence they can
-currently read, and an uncommitted proposed diff remains visible only to
-assessment participants. Durable records live beneath
+cross-repository evidence item. A request is limited to repositories named by
+retained consumer evidence, and its current owner must also retain source
+repository access to read or acknowledge it. An uncommitted proposed diff
+remains visible only to assessment participants. Durable records live beneath
 `$IMPACT_STORAGE_ROOT` (default `impact-assessments`).
 
 ## Web interface foundation

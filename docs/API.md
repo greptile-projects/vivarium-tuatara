@@ -15,8 +15,11 @@ acknowledge. Cross-repository evidence is filtered through current visibility;
 requested owners who are not participants never receive the proposed diff.
 Participants mutate with the last observed `version` using nested `POST`
 `/participants`, `/items`, and `/acknowledgement-requests`. The named owner uses
-`POST .../acknowledgement-requests/{request-id}`. Stale versions return `409
-assessment_changed`.
+`POST .../acknowledgement-requests/{request-id}`. Requests are accepted only
+for repositories named by derived consumer evidence; acknowledgement also
+requires current read access to the source repository. Stale versions return
+`409 assessment_changed`, and a moved conclusion ref returns `409
+conclusion_revision_changed`.
 
 The JSON API is the supported application boundary for browsers, agents, and
 external consumers. Durable files beneath the configured storage roots are

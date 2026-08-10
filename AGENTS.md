@@ -341,8 +341,9 @@ whenever dependencies change or the web job fails before it starts.
   read filters retained cross-repository evidence through current access.
   Invited participants refine the version-guarded record with accepted risks,
   unknowns, and verification needs, while affected repository owners can
-  acknowledge explicit requests without receiving an uncommitted proposed
-  diff. `$IMPACT_STORAGE_ROOT` defaults to `impact-assessments`.
+  acknowledge explicit requests only when retained consumer evidence names
+  their repository and they can currently read the source assessment.
+  `$IMPACT_STORAGE_ROOT` defaults to `impact-assessments`.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version
