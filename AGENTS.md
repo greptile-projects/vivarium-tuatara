@@ -115,6 +115,11 @@ whenever dependencies change or the web job fails before it starts.
   conflicting work, exhausted budgets, moved bases, changed mandate policy, and
   concurrent decisions remain explicit attributed blockers or conflicts, while
   promoted assignments use the existing activity and inbox projections.
+  Promoted steward agent work revalidates the live accepted mandate, operator,
+  approved agent, opportunity link, and exact base before task-session launch.
+  Its ordinary pull freezes server-derived changes with commands, checks,
+  residual risks, criterion status, citations, and agent/initiator authorship;
+  no review, queue, fork, owner-acknowledgement, or merge rule is bypassed.
   Reevaluation invalidates prior approval through a distinct evaluation
   version, and promotion requires readable incident and proposal conflict
   stores before its durable reservation. Unlinked retries revalidate current

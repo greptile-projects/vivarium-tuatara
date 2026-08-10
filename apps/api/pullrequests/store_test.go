@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
@@ -17,6 +18,27 @@ import (
 
 type queueRequirements struct {
 	policy repositories.IntegrationQueuePolicy
+}
+
+func TestTaskContributionFreezesReviewEvidence(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	repository, _ := gitStore.Create(testID('1'))
+	tree, _ := repository.WriteObject(storage.TreeObject, nil)
+	base := writeCommit(t, repository, tree, "base")
+	head := writeCommit(t, repository, tree, "head")
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)})
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/agent/task", Target: string(head)})
+	store, _ := New(t.TempDir(), gitStore)
+	proposalID, taskID, sessionID, runID := testID('3'), testID('4'), testID('5'), testID('6')
+	evidence := &TaskReviewEvidence{BaseRevision: string(base), AssignmentID: testID('7'), AgentID: testID('8'), InitiatorID: testID('9'), Mandate: "Repair only the accepted failure.", CompletionCriteria: "The regression passes.", Outcome: changesessions.Outcome{Summary: "Fixed the regression.", CommitID: string(head), Commits: []string{string(head)}, Commands: []changesessions.Command{{Command: "go test ./...", ExitCode: 0}}, Criteria: []changesessions.Criterion{{Criterion: "The regression passes.", Status: "met", Evidence: "go test ./..."}}}}
+	pull, err := store.CreateTaskContributionFromWithEvidence(repository.ID(), repository.ID(), testID('2'), "Repair", "Review this governed change.", "agent/task", "main", string(head), []string{string(head)}, &proposalID, &taskID, &sessionID, &runID, evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.Get(repository.ID(), pull.ID)
+	if err != nil || stored.TaskEvidence == nil || stored.TaskEvidence.AgentID != evidence.AgentID || len(stored.TaskEvidence.Outcome.Commands) != 1 || stored.TaskEvidence.Outcome.Criteria[0].Status != "met" {
+		t.Fatalf("stored review evidence = %#v, %v", stored.TaskEvidence, err)
+	}
 }
 
 func (q queueRequirements) RequiredChecks(string, string) ([]string, error) {

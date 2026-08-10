@@ -3,11 +3,13 @@ package main
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/relationships"
@@ -17,11 +19,7 @@ import (
 
 // registerTaskChangeSessionRoutes connects proposal planning to the existing
 // durable session protocol without manufacturing a placeholder pull request.
-func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, sessionStore *changesessions.Store, authStore *auth.Store, relationStores ...*relationships.Store) {
-	var relationStore *relationships.Store
-	if len(relationStores) > 0 {
-		relationStore = relationStores[0]
-	}
+func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, sessionStore *changesessions.Store, authStore *auth.Store, relationStore *relationships.Store, organizationStore *organizations.Store) {
 	key := func(r *http.Request) (string, string, string) {
 		return r.PathValue("id"), r.PathValue("proposal_id"), r.PathValue("task_id")
 	}
@@ -105,6 +103,17 @@ func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store
 		var uncertain bool
 		responseWritten := errors.New("task start response written")
 		err = proposalStore.WithStartableAgentTask(r.PathValue("id"), r.PathValue("proposal_id"), r.PathValue("task_id"), input.ExpectedAssignmentID, func(proposal proposals.Proposal, task proposals.Task, allTasks []proposals.Task, comments []proposals.Comment) error {
+			if task.Reasoning != nil && task.Reasoning.AnalysisStatus == "stewardship_opportunity" {
+				if organizationStore == nil {
+					writeAPIError(w, 503, "stewardship_state_unavailable", "stewardship authority could not be revalidated")
+					return responseWritten
+				}
+				organization, getErr := organizationStore.Get(task.Reasoning.OrganizationID)
+				if getErr != nil || !startableStewardshipTask(organization, task, actor.UserID, r.PathValue("proposal_id"), time.Now().UTC()) {
+					writeAPIError(w, 409, "stewardship_authority_changed", "the accepted mandate, opportunity, operator, agent, or recorded revision changed")
+					return responseWritten
+				}
+			}
 			existing, listErr := sessionStore.List(r.PathValue("id"), task.ID)
 			if listErr != nil {
 				writeChangeSessionError(w, listErr)
@@ -198,7 +207,7 @@ func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store
 			}
 			context := changesessions.TaskContext{AssignmentID: task.Assignment.ID, ContextRevision: task.ContextRevision, RepositoryName: repositoryRecord.Name, ProposalTitle: proposal.Title, ProposalBody: proposal.Body, TaskTitle: task.Title, TaskOutcome: task.Outcome, Mandate: task.Assignment.Mandate, Dependencies: dependencies, Discussion: discussion}
 			if task.Reasoning != nil {
-				reasoning := &changesessions.TaskReasoning{AssessmentID: task.Reasoning.AssessmentID, AssessmentVersion: task.Reasoning.AssessmentVersion, Revision: task.Reasoning.Revision, ExplanationID: task.Reasoning.ExplanationID, ConclusionEntryID: task.Reasoning.ConclusionEntryID}
+				reasoning := &changesessions.TaskReasoning{AssessmentID: task.Reasoning.AssessmentID, AssessmentVersion: task.Reasoning.AssessmentVersion, Revision: task.Reasoning.Revision, ExplanationID: task.Reasoning.ExplanationID, ConclusionEntryID: task.Reasoning.ConclusionEntryID, OrganizationID: task.Reasoning.OrganizationID, MandateID: task.Reasoning.MandateID, OpportunityID: task.Reasoning.OpportunityID}
 				for _, item := range task.Reasoning.Items {
 					reasoning.Items = append(reasoning.Items, changesessions.TaskReasoningItem{ID: item.ID, Kind: item.Kind, Summary: item.Summary, Status: item.Status})
 				}
@@ -380,10 +389,12 @@ func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store
 		writeJSON(w, http.StatusCreated, event)
 	})
 	type completionInput struct {
-		Summary            string                 `json:"summary"`
-		CommitID           string                 `json:"commit_id"`
-		Checks             []changesessions.Check `json:"checks"`
-		UnresolvedConcerns []string               `json:"unresolved_concerns"`
+		Summary            string                     `json:"summary"`
+		CommitID           string                     `json:"commit_id"`
+		Checks             []changesessions.Check     `json:"checks"`
+		UnresolvedConcerns []string                   `json:"unresolved_concerns"`
+		Commands           []changesessions.Command   `json:"commands"`
+		CompletionCriteria []changesessions.Criterion `json:"completion_criteria"`
 	}
 	mux.HandleFunc("POST /repositories/{id}/proposals/{proposal_id}/tasks/{task_id}/sessions/{session_id}/runs/{run_id}/completion", func(w http.ResponseWriter, r *http.Request) {
 		credential, ok := authenticateRequest(w, r, authStore, "git:write", false)
@@ -448,7 +459,7 @@ func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store
 			for i, change := range changes {
 				files[i] = changesessions.ChangedFile{Path: change.Path, Status: change.Status}
 			}
-			completed, event, err = sessionStore.CompleteRun(r.PathValue("id"), r.PathValue("task_id"), run.SessionID, run.ID, credential.ID, input.Summary, input.CommitID, commits, files, input.Checks, input.UnresolvedConcerns)
+			completed, event, err = sessionStore.CompleteRunWithEvidence(r.PathValue("id"), r.PathValue("task_id"), run.SessionID, run.ID, credential.ID, input.Summary, input.CommitID, commits, files, input.Checks, input.UnresolvedConcerns, input.Commands, input.CompletionCriteria)
 			return err
 		}
 		err = repository.WithReferenceTarget("refs/heads/"+run.WorkingBranch, input.CommitID, complete)
@@ -506,4 +517,25 @@ func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store
 		}
 		writeJSON(w, 200, map[string]any{"run": run, "interventions": interventions, "task_context": session.TaskContext})
 	})
+}
+
+func startableStewardshipTask(organization organizations.Organization, task proposals.Task, operatorID, proposalID string, now time.Time) bool {
+	if task.Reasoning == nil {
+		return true
+	}
+	for _, mandate := range organization.StewardshipMandates {
+		if mandate.ID != task.Reasoning.MandateID || mandate.Status != "active" || mandate.Acceptance == nil || mandate.Acceptance.Version != mandate.Version || mandate.Acceptance.OperatorID != operatorID || len(mandate.Revisions) == 0 {
+			continue
+		}
+		revision := mandate.Revisions[len(mandate.Revisions)-1]
+		if now.Before(revision.StartsAt) || !now.Before(revision.ExpiresAt) || task.Assignment == nil || task.Assignment.AssigneeID != revision.AgentID || task.Assignment.Access.BaseRevision != task.Reasoning.Revision {
+			return false
+		}
+		for _, opportunity := range mandate.Opportunities {
+			if opportunity.ID == task.Reasoning.OpportunityID && opportunity.Work != nil && opportunity.Work.ProposalID == proposalID && opportunity.Work.BaseRevision == task.Assignment.Access.BaseRevision && slices.Contains(opportunity.Work.TaskIDs, task.ID) && opportunity.Status == "promoted" {
+				return true
+			}
+		}
+	}
+	return false
 }

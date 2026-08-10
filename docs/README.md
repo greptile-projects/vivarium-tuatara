@@ -1281,6 +1281,20 @@ bases, changed policy/acceptance, and racing decisions before work is assigned,
 then projects accepted assignments through the existing activity and inbox
 surfaces.
 
+Promoted agent work remains governed after planning. Only the mandate's
+approved agent may own its agent task, and launch revalidates the exact active
+mandate version, accepting operator, linked opportunity, recorded base, and
+assignment before creating the ordinary isolated task branch and credential.
+Pause, expiry, revision, operator change, or agent replacement stops new
+execution without erasing planned work. Completion retains bounded commands,
+check claims, residual concerns, and a met, partial, or not-met status with
+evidence for the recorded criterion. A stewarded pull cannot publish without
+that command and criterion evidence. The ordinary pull freezes those claims
+beside server-derived commits and files, exact opportunity citations, mandate,
+base, initiator, and agent authorship. It gains no exception from repository or
+fork boundaries, owner acknowledgements, checks, review, integration queues,
+stale-revision protection, or merge permission.
+
 The access API is rooted at `/organizations/{id}/access-requests`. Decisions
 are posted to `/access-requests/{request-id}/decision`; live grants appear on
 the member organization and portfolio projections, revoke with an expected
