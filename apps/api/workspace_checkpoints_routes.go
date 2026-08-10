@@ -463,9 +463,23 @@ func checkpointTrees(gitPath string, w workspaces.Workspace) (string, string, fu
 		return "", "", func() {}, e
 	}
 	container := "vivarium-workspace-" + w.ID
-	if out, e := exec.Command("docker", "cp", container+":/workspace/.", runtime).CombinedOutput(); e != nil {
+	capture := exec.Command("docker", "exec", container, "tar", "-c", "-C", "/workspace", ".")
+	extractRuntime := exec.Command("tar", "-x", "-C", runtime)
+	pipe, e = capture.StdoutPipe()
+	if e != nil {
 		cleanup()
-		return "", "", func() {}, fmt.Errorf("workspace runtime unavailable: %s", strings.TrimSpace(string(out)))
+		return "", "", func() {}, e
+	}
+	extractRuntime.Stdin = pipe
+	if e = capture.Start(); e == nil {
+		e = extractRuntime.Run()
+		if x := capture.Wait(); e == nil {
+			e = x
+		}
+	}
+	if e != nil {
+		cleanup()
+		return "", "", func() {}, fmt.Errorf("workspace runtime unavailable: %w", e)
 	}
 	return base, runtime, cleanup, nil
 }
@@ -660,6 +674,11 @@ const checkpointRestoreScript = `set -eu
 root=$1
 tx=$(mktemp -d "$root/.vivarium-restore.XXXXXX")
 applying=0
+physical_parent() {
+	candidate=$1
+	while [ ! -d "$candidate" ]; do candidate=$(dirname "$candidate"); done
+	(cd -P -- "$candidate" && pwd -P)
+}
 rollback() {
 	while IFS="$(printf '\t')" read -r operation mode encoded payload; do
 		path=$(printf '%s' "$encoded" | base64 -d)
@@ -688,7 +707,7 @@ mkdir "$tx/backup"
 while IFS="$(printf '\t')" read -r operation mode encoded payload; do
 	path=$(printf '%s' "$encoded" | base64 -d)
 	case "$path" in ""|/*|../*|*/../*|*/..) exit 42 ;; esac
-	parent=$(realpath -m "$root/$(dirname "$path")")
+	parent=$(physical_parent "$root/$(dirname "$path")")
 	case "$parent" in "$root"|"$root"/*) ;; *) exit 42 ;; esac
 	target="$root/$path"
 	if [ -e "$target" ] || [ -L "$target" ]; then cp -a -- "$target" "$tx/backup/$payload"; fi
@@ -707,7 +726,7 @@ while IFS="$(printf '\t')" read -r operation mode encoded payload; do
 		parent=$(dirname "$parent")
 	done
 	mkdir -p -- "$(dirname "$target")"
-	parent=$(realpath -m "$(dirname "$target")")
+	parent=$(cd -P -- "$(dirname "$target")" && pwd -P)
 	case "$parent" in "$root"|"$root"/*) ;; *) exit 42 ;; esac
 	cp -- "$tx/payload/$payload" "$target.vivarium-new"
 	chmod "$mode" "$target.vivarium-new"

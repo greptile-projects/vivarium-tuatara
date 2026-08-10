@@ -307,6 +307,13 @@ whenever dependencies change or the web job fails before it starts.
   first post-upgrade event; normal checks, stale-review,
   protection, and queue rules apply while terminal input, outputs, credentials,
   discussion, and unpublished runtime files stay out of Git and review text.
+  The connected workspace browser journey proves a proposal-task room can join
+  a peer and approved agent through editing, execution, intervention,
+  suspend/reconnect, explicit conflicting-checkpoint restoration, governed pull
+  merge, and compute expiry without losing retained attribution. Workspace
+  runtime automation must remain compatible with declared minimal images (the
+  journey uses Alpine); capture reads the live tmpfs from inside the container,
+  not the image layer exposed by `docker cp`.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version
