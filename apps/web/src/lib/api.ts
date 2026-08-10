@@ -157,6 +157,16 @@ export type OrganizationStewardshipMandate = {
   id:string; title:string; version:number; status:"pending_acceptance"|"active"|"paused"|"expired"|"revoked";
   revisions:OrganizationStewardshipMandateRevision[];
   acceptance?:{version:number;operator_id:string;accepted_at:string}; paused_by?:string; paused_at?:string; revoked_by?:string; revoked_at?:string;
+  opportunities:OrganizationStewardshipOpportunity[];
+};
+export type OrganizationStewardshipOpportunity = {
+  id:string; mandate_version:number; repository_id:string; evidence_type:"repository"|"dependency"|"check"|"release"|"incident"|"security"|"usage";
+  evidence_id:string; evidence_revision:string; title:string; summary:string; severity:"critical"|"high"|"medium"|"low";
+  expected_value:string; confidence:number; affected_owner_ids:string[]; affected_revisions:string[]; in_scope_reason:string;
+  citations:{kind:string;resource_id:string;revision:string;label:string;url?:string;stale:boolean}[];
+  status:"open"|"dismissed"|"snoozed"|"incorrect"; rank:number; snoozed_until?:string; decision_reason?:string;
+  version:number; evaluated_by:string; evaluated_at:string; updated_by:string; updated_at:string;
+  comments:{id:string;actor_id:string;body:string;created_at:string}[];
 };
 export type OrganizationStewardshipPreview = {
   mandate_id:string; version:number; status:string; access_grants:OrganizationAccessGrant[];
