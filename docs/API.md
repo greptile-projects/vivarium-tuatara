@@ -1896,3 +1896,11 @@ caller. Decision reads report invalidation when the repository default branch
 moves, the workspace definition differs, or workspace policy marks the
 environment rebuild-required. Experiment attachment has no publication or
 merge effect; checkpoint publication remains a separate governed endpoint.
+Experiment launch records the default-branch commit and definition digest that
+were current at registration, separately from the intentionally selected
+experiment revision. Reads compare against that launch baseline, so historical
+pins are not immediately stale. Identical workspace creation requests for the
+same actor, decision, alternative, and commit hold a cross-process claim through
+provisioning and return the existing running workspace on retry; registering
+that same workspace again returns its existing experiment without duplicating
+history or activity.

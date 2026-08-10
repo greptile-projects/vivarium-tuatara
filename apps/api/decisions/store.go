@@ -130,18 +130,20 @@ type ExperimentEvidence struct {
 	RecordedAt     time.Time     `json:"recorded_at"`
 }
 type Experiment struct {
-	ID                  string               `json:"id"`
-	AlternativeID       string               `json:"alternative_id"`
-	WorkspaceID         string               `json:"workspace_id"`
-	Revision            string               `json:"revision"`
-	DefinitionSHA256    string               `json:"definition_sha256"`
-	Commands            []string             `json:"commands"`
-	LaunchedBy          string               `json:"launched_by"`
-	LaunchedAt          time.Time            `json:"launched_at"`
-	Version             int                  `json:"version"`
-	Evidence            []ExperimentEvidence `json:"evidence"`
-	Invalidated         bool                 `json:"invalidated"`
-	InvalidationReasons []string             `json:"invalidation_reasons"`
+	ID                      string               `json:"id"`
+	AlternativeID           string               `json:"alternative_id"`
+	WorkspaceID             string               `json:"workspace_id"`
+	Revision                string               `json:"revision"`
+	DefinitionSHA256        string               `json:"definition_sha256"`
+	DefaultBranchRevision   string               `json:"default_branch_revision"`
+	DefaultDefinitionSHA256 string               `json:"default_definition_sha256"`
+	Commands                []string             `json:"commands"`
+	LaunchedBy              string               `json:"launched_by"`
+	LaunchedAt              time.Time            `json:"launched_at"`
+	Version                 int                  `json:"version"`
+	Evidence                []ExperimentEvidence `json:"evidence"`
+	Invalidated             bool                 `json:"invalidated"`
+	InvalidationReasons     []string             `json:"invalidation_reasons"`
 }
 type Decision struct {
 	ID           string        `json:"id"`
@@ -315,7 +317,7 @@ func (s *Store) Create(repo string, source Source, scope Scope, actor string) (D
 	return v, s.write(v)
 }
 
-func (s *Store) LaunchExperiment(id, actor, alternativeID, workspaceID, revision, definition string, commands []string) (Decision, error) {
+func (s *Store) LaunchExperiment(id, actor, alternativeID, workspaceID, revision, definition, defaultRevision, defaultDefinition string, commands []string) (Decision, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	u, e := s.lock()
@@ -334,11 +336,14 @@ func (s *Store) LaunchExperiment(id, actor, alternativeID, workspaceID, revision
 	for _, a := range v.Alternatives {
 		found = found || a.ID == alternativeID && a.SupersededBy == ""
 	}
-	if !found || workspaceID == "" || revision == "" || definition == "" || len(commands) == 0 || len(commands) > 20 {
+	if !found || workspaceID == "" || revision == "" || definition == "" || defaultRevision == "" || defaultDefinition == "" || len(commands) == 0 || len(commands) > 20 {
 		return v, ErrInvalid
 	}
 	for _, x := range v.Experiments {
 		if x.WorkspaceID == workspaceID {
+			if x.AlternativeID == alternativeID && x.Revision == revision && x.DefinitionSHA256 == definition {
+				return projectEvidence(v, s.now()), nil
+			}
 			return v, ErrConflict
 		}
 	}
@@ -350,7 +355,7 @@ func (s *Store) LaunchExperiment(id, actor, alternativeID, workspaceID, revision
 	now := s.now()
 	experimentID, _ := randomID()
 	historyID, _ := randomID()
-	v.Experiments = append(v.Experiments, Experiment{ID: experimentID, AlternativeID: alternativeID, WorkspaceID: workspaceID, Revision: revision, DefinitionSHA256: definition, Commands: commands, LaunchedBy: actor, LaunchedAt: now, Version: 1, Evidence: []ExperimentEvidence{}, InvalidationReasons: []string{}})
+	v.Experiments = append(v.Experiments, Experiment{ID: experimentID, AlternativeID: alternativeID, WorkspaceID: workspaceID, Revision: revision, DefinitionSHA256: definition, DefaultBranchRevision: defaultRevision, DefaultDefinitionSHA256: defaultDefinition, Commands: commands, LaunchedBy: actor, LaunchedAt: now, Version: 1, Evidence: []ExperimentEvidence{}, InvalidationReasons: []string{}})
 	v.UpdatedAt = now
 	v.History = append(v.History, History{ID: historyID, Kind: "experiment_launched", ActorID: actor, Version: v.Version, Summary: "Launched a bounded alternative experiment", CreatedAt: now})
 	if e = s.write(v); e != nil {

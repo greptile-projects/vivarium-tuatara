@@ -242,11 +242,17 @@ func registerDecisionRoutes(mux *http.ServeMux, git *storage.Store, catalog *rep
 			writeAPIError(w, 422, "experiment_workspace_invalid", "workspace must be an exact decision-experiment workspace for this alternative")
 			return
 		}
+		for _, existing := range v.Experiments {
+			if existing.WorkspaceID == workspace.ID && existing.AlternativeID == in.AlternativeID {
+				writeJSON(w, 200, projectDecisionExperiments(v, git, catalog, workspaceStore))
+				return
+			}
+		}
 		commands := []string{}
 		for _, command := range workspace.Definition.Experiments {
 			commands = append(commands, command.Command)
 		}
-		v, err = store.LaunchExperiment(v.ID, actor.UserID, in.AlternativeID, workspace.ID, workspace.CommitID, workspace.DefinitionSHA256, commands)
+		v, err = store.LaunchExperiment(v.ID, actor.UserID, in.AlternativeID, workspace.ID, workspace.CommitID, workspace.DefinitionSHA256, workspace.Source.DefaultBranchRevision, workspace.Source.DefaultDefinitionSHA256, commands)
 		if writeDecisionError(w, err) {
 			return
 		}
@@ -314,32 +320,17 @@ func projectDecisionExperiments(v decisions.Decision, git *storage.Store, catalo
 	if git == nil || catalog == nil || workspaceStore == nil {
 		return v
 	}
-	meta, metaErr := catalog.GetByID(v.RepositoryID)
-	repo, repoErr := git.Open(v.RepositoryID)
-	current := ""
-	if metaErr == nil && repoErr == nil {
-		if ref, err := repo.ReadReference("refs/heads/" + meta.DefaultBranch); err == nil {
-			current = ref.Target
-		}
-	}
+	current, currentDefinition, baselineErr := currentDecisionBaseline(v.RepositoryID, git, catalog)
 	for i := range v.Experiments {
 		experiment := &v.Experiments[i]
 		reasons := []string{}
-		if current == "" {
+		if baselineErr != nil {
 			reasons = append(reasons, "current code revision is unavailable")
-		} else if current != experiment.Revision {
+		} else if experiment.DefaultBranchRevision == "" || current != experiment.DefaultBranchRevision {
 			reasons = append(reasons, "default-branch code changed after the experiment")
 		}
-		if repoErr == nil && current != "" {
-			definition, err := exec.Command("git", "--git-dir="+repo.Path(), "show", current+":"+workspaces.DefinitionPath).Output()
-			if err != nil {
-				reasons = append(reasons, "current workspace environment definition is unavailable")
-			} else {
-				digest := sha256.Sum256(definition)
-				if hex.EncodeToString(digest[:]) != experiment.DefinitionSHA256 {
-					reasons = append(reasons, "workspace dependencies or environment changed after the experiment")
-				}
-			}
+		if baselineErr == nil && (experiment.DefaultDefinitionSHA256 == "" || currentDefinition != experiment.DefaultDefinitionSHA256) {
+			reasons = append(reasons, "workspace dependencies or environment changed after the experiment")
 		}
 		workspace, err := workspaceStore.Get(experiment.WorkspaceID)
 		if err != nil {
@@ -355,6 +346,30 @@ func projectDecisionExperiments(v decisions.Decision, git *storage.Store, catalo
 		experiment.Invalidated, experiment.InvalidationReasons = len(reasons) > 0, reasons
 	}
 	return v
+}
+
+func currentDecisionBaseline(repositoryID string, git *storage.Store, catalog *repositories.Store) (string, string, error) {
+	if git == nil || catalog == nil {
+		return "", "", errors.New("baseline unavailable")
+	}
+	meta, err := catalog.GetByID(repositoryID)
+	if err != nil {
+		return "", "", err
+	}
+	repo, err := git.Open(repositoryID)
+	if err != nil {
+		return "", "", err
+	}
+	ref, err := repo.ReadReference("refs/heads/" + meta.DefaultBranch)
+	if err != nil {
+		return "", "", err
+	}
+	definition, err := exec.Command("git", "--git-dir="+repo.Path(), "show", ref.Target+":"+workspaces.DefinitionPath).Output()
+	if err != nil {
+		return "", "", err
+	}
+	digest := sha256.Sum256(definition)
+	return ref.Target, hex.EncodeToString(digest[:]), nil
 }
 
 func validateDecisionUsers(w http.ResponseWriter, identities *users.Store, scope decisions.Scope) bool {

@@ -998,6 +998,12 @@ whenever dependencies change or the web job fails before it starts.
   environment, or policy drift. Experiment checkpoints remain exploratory;
   publishing one still requires the workspace's separate ordinary Git/pull
   workflow and is never implied by evidence attachment.
+  Launch snapshots the then-current default branch and workspace-definition
+  digest independently of the experiment's selected commit, so intentional
+  historical pins begin valid and only later drift invalidates them. Identical
+  decision/alternative/commit launches by one actor are serialized across
+  processes and reuse the running workspace; linking that workspace to the
+  decision is idempotent, making a failed second request safely retryable.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

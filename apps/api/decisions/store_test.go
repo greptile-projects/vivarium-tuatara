@@ -63,11 +63,15 @@ func TestExperimentRetainsAttributedWorkspaceEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v, err = s.LaunchExperiment(v.ID, "owner", v.Alternatives[0].ID, "workspace", "0123456789abcdef", "definition-sha", []string{"benchmark"})
+	v, err = s.LaunchExperiment(v.ID, "owner", v.Alternatives[0].ID, "workspace", "0123456789abcdef", "definition-sha", "default-revision", "default-definition", []string{"benchmark"})
 	if err != nil || len(v.Experiments) != 1 {
 		t.Fatalf("launch = %#v, %v", v.Experiments, err)
 	}
 	experiment := v.Experiments[0]
+	v, err = s.LaunchExperiment(v.ID, "owner", v.Alternatives[0].ID, "workspace", "0123456789abcdef", "definition-sha", "default-revision", "default-definition", []string{"benchmark"})
+	if err != nil || len(v.Experiments) != 1 {
+		t.Fatalf("idempotent launch = %#v, %v", v.Experiments, err)
+	}
 	artifactSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	v, err = s.AttachExperimentEvidence(v.ID, experiment.ID, "owner", 1, ExperimentEvidence{CheckpointIDs: []string{"checkpoint"}, CommandIDs: []string{"command"}, Measurements: []Measurement{{Name: "throughput", Value: 1420, Unit: "requests/s"}}, Artifacts: []Artifact{{Label: "profile", Path: "artifacts/profile.pb", SHA256: artifactSHA, Size: 42}}, CPUSeconds: 12, MemoryMBHours: 0.2, StorageMBHours: 0.1, Notes: "Three bounded runs"})
 	if err != nil || v.Experiments[0].Version != 2 || v.Experiments[0].Evidence[0].RecordedBy != "owner" {

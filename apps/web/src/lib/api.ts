@@ -72,6 +72,8 @@ export type DecisionExperiment = {
   workspace_id: string;
   revision: string;
   definition_sha256: string;
+  default_branch_revision: string;
+  default_definition_sha256: string;
   commands: string[];
   launched_by: string;
   launched_at: string;
@@ -326,6 +328,8 @@ export type DevelopmentWorkspace = {
     repair_id?: string;
     decision_id?: string;
     alternative_id?: string;
+    default_branch_revision?: string;
+    default_definition_sha256?: string;
   };
   definition: {
     version: number;

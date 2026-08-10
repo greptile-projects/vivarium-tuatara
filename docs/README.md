@@ -1382,3 +1382,8 @@ to reproduce the run. The comparison flags evidence when the default branch,
 workspace definition, or effective workspace policy has changed. Attaching an
 experiment never publishes its checkpoint, opens a pull request, or merges
 code; those remain explicit, separate governed workspace actions.
+The launch baseline records what default-branch code and environment were
+current at that moment independently of the selected revision, preserving
+deliberate historical comparisons. Workspace creation and decision linking are
+retry-safe: identical launches reuse one running workspace and an exact link
+retry returns the retained experiment.

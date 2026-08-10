@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -68,6 +70,33 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 		if err = validateWorkspaceSource(input.Source, input.CommitID, proposalStore, pullStore, incidentStore); err != nil {
 			writeAPIError(w, 422, "workspace_source_invalid", err.Error())
 			return
+		}
+		var releaseExperimentClaim func()
+		if input.Source.Kind == "decision_experiment" {
+			existing, reused, release, claimErr := store.ClaimDecisionExperiment(input.RepositoryID, input.CommitID, actor.UserID, input.Source.DecisionID, input.Source.AlternativeID)
+			if claimErr != nil {
+				writeAPIError(w, 500, "workspace_create_failed", "experiment launch could not be reserved")
+				return
+			}
+			if reused {
+				w.Header().Set("Location", "/workspaces/"+existing.ID)
+				writeJSON(w, 200, existing)
+				return
+			}
+			releaseExperimentClaim = release
+			defer releaseExperimentClaim()
+			baseline, baselineErr := repo.ReadReference("refs/heads/" + repoMeta.DefaultBranch)
+			if baselineErr != nil {
+				writeAPIError(w, 503, "experiment_baseline_unavailable", "the current default-branch experiment baseline is unavailable")
+				return
+			}
+			baselineDefinition, baselineErr := exec.Command("git", "--git-dir="+repo.Path(), "show", baseline.Target+":"+workspaces.DefinitionPath).Output()
+			if baselineErr != nil {
+				writeAPIError(w, 503, "experiment_baseline_unavailable", "the current default-branch experiment environment is unavailable")
+				return
+			}
+			digest := sha256.Sum256(baselineDefinition)
+			input.Source.DefaultBranchRevision, input.Source.DefaultDefinitionSHA256 = baseline.Target, hex.EncodeToString(digest[:])
 		}
 		var reasoning *workspaces.ReasoningContext
 		if input.Source.Kind == "proposal_task" && proposalStore != nil {
