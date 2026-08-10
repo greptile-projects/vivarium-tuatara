@@ -1055,6 +1055,10 @@ whenever dependencies change or the web job fails before it starts.
   exact repository access requirements. Invitees (or an approved agent's
   current operator) accept or decline through compare-and-swap responses;
   organizer-only charter changes and all responses remain actor-stamped.
+  Material shared-charter or participant-invitation changes reset affected
+  acceptance to pending; shared purpose, budget, deadline, escalation, name,
+  or participant-composition changes require every retained participant to
+  accept the revised operating contract again.
   Effective-access previews derive current repository participation and live
   organization grants on every read. A charter never mints a credential or
   grants repository authority, so missing access remains an explicit gap before

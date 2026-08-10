@@ -146,6 +146,24 @@ func sameInvitationTerms(a, b Participant) bool {
 	return true
 }
 
+func sameSharedCharterTerms(t Team, c Charter) bool {
+	if t.Name != c.Name || t.Purpose != c.Purpose || t.EscalationPath != c.EscalationPath ||
+		!sameBudget(t.OverallBudget, c.OverallBudget) || !sameTime(t.Deadline, c.Deadline) ||
+		len(t.Participants) != len(c.Participants) {
+		return false
+	}
+	principals := map[string]bool{}
+	for _, p := range t.Participants {
+		principals[p.PrincipalType+":"+p.PrincipalID] = true
+	}
+	for _, p := range c.Participants {
+		if !principals[p.PrincipalType+":"+p.PrincipalID] {
+			return false
+		}
+	}
+	return true
+}
+
 func sameBudget(a, b *Budget) bool {
 	return a == nil && b == nil || a != nil && b != nil && *a == *b
 }
@@ -256,6 +274,7 @@ func (s *Store) Update(v, actor string, expected int, c Charter) (Team, error) {
 		return t, ErrInvalid
 	}
 	now := s.now()
+	sharedTermsUnchanged := sameSharedCharterTerms(t, c)
 	old := map[string]Participant{}
 	for _, p := range t.Participants {
 		old[p.PrincipalType+":"+p.PrincipalID] = p
@@ -263,7 +282,7 @@ func (s *Store) Update(v, actor string, expected int, c Charter) (Team, error) {
 	for i := range c.Participants {
 		p := &c.Participants[i]
 		if prior, ok := old[p.PrincipalType+":"+p.PrincipalID]; ok {
-			if sameInvitationTerms(prior, *p) {
+			if sharedTermsUnchanged && sameInvitationTerms(prior, *p) {
 				p.Status = prior.Status
 				p.InvitedBy = prior.InvitedBy
 				p.InvitedAt = prior.InvitedAt

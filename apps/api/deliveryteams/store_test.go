@@ -75,3 +75,34 @@ func TestChangedInvitationTermsRequireFreshAcceptance(t *testing.T) {
 		t.Fatalf("changed acceptance = %#v", v.Participants[0])
 	}
 }
+
+func TestChangedSharedCharterTermsRequireFreshAcceptance(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, err := s.Create("repo", Outcome{Kind: "planned_outcome", ResourceID: "outcome", Title: "Outcome"}, charter("alice", "lead"), "organizer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.Respond(v.ID, "alice-slot", "alice", "accepted", v.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := charter("alice", "lead")
+	changed.Purpose = "Deliver the revised governed result"
+	v, err = s.Update(v.ID, "organizer", v.Version, changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Participants[0].Status != "pending" || v.Participants[0].RespondedBy != "" || v.Participants[0].RespondedAt != nil {
+		t.Fatalf("shared-term acceptance = %#v", v.Participants[0])
+	}
+	reloaded, err := s.Get(v.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Participants[0].Status != "pending" {
+		t.Fatalf("persisted participant = %#v", reloaded.Participants[0])
+	}
+	if _, err = s.Respond(v.ID, "alice-slot", "alice", "accepted", v.Version); err != nil {
+		t.Fatalf("fresh acceptance: %v", err)
+	}
+}

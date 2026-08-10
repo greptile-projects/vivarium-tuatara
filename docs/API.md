@@ -1987,8 +1987,11 @@ gap, not an implicit request or grant.
 
 `PUT /delivery-teams/{id}` is organizer-only and compare-and-swaps
 `expected_version`. It replaces the declarative charter, preserves response
-state for unchanged principals, starts new principals as pending, and appends
-an attributable history event. `POST
+state only when the shared charter and that participant's invitation terms are
+unchanged, starts new or materially changed invitations as pending, and appends
+an attributable history event. Shared purpose, budget, deadline, escalation,
+name, or participant-composition changes require every retained participant to
+respond again. `POST
 /delivery-teams/{id}/participants/{participant-id}/response` accepts
 `expected_version` and `decision` (`accepted` or `declined`). A human invitee
 responds for themself; a current operator responds for an approved agent.
