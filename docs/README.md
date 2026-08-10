@@ -58,6 +58,24 @@ observation, instruction, authorship, and execution, while terminal input is
 represented only by SHA-256 and never enters the workspace record. File writes
 still compare-and-swap the opened content digest across control transfers.
 
+Unfinished repository work can be retained independently of the live runtime
+as an attributed checkpoint. A checkpoint freezes the exact base commit,
+workspace definition and digest, declared dependencies and reproduction notes,
+plus an ordered manifest of added, modified, and deleted repository files.
+Participant reads expose hashes, modes, sizes, bounded text patches, and parent
+lineage rather than the private stored bytes. Credential-like paths or content,
+non-regular filesystem state, and snapshots over 32 MiB fail closed; terminal
+input, command output, presence, previews, processes, and container state are
+outside the checkpoint boundary.
+
+Restore requires `GET /workspaces/{id}/checkpoints/{checkpoint-id}/restore`
+preflight. It reports live-path conflicts, a moved repository base, missing
+declared dependencies, and definition drift, and returns a token bound to the
+current snapshot and lineage. Applying requires the current human file-control
+lease and rechecks that token inside control admission. Restore moves the
+workspace checkpoint head to the selected record, so the next checkpoint forms
+an explicit branch while prior descendants remain retained.
+
 ## Unsafe package recovery
 
 Package lifecycle decisions are attributable append-only coordination records,

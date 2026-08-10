@@ -6,6 +6,7 @@ import { api, APIError, DevelopmentWorkspace } from "@/lib/api";
 import { useAuth } from "./auth";
 import { Badge, Button, Card } from "./ui";
 import { WorkspaceIDE } from "./workspace-ide";
+import { WorkspaceCheckpoints } from "./workspace-checkpoints";
 
 const short = (value: string) => value.slice(0, 8);
 export function DevelopmentWorkspaces({
@@ -242,7 +243,7 @@ export function DevelopmentWorkspaces({
             </>
           )}
           {workspaceID && item.state === "running" && (
-            <WorkspaceIDE workspace={item} onWorkspace={(updated) => setItems([updated])} />
+            <><WorkspaceCheckpoints workspace={item} onWorkspace={(updated) => setItems([updated])} /><WorkspaceIDE workspace={item} onWorkspace={(updated) => setItems([updated])} /></>
           )}
         </Card>
       ))}

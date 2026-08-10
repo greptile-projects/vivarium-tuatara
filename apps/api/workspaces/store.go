@@ -127,6 +127,7 @@ type Workspace struct {
 	Presence         []Presence       `json:"presence"`
 	Control          Control          `json:"control"`
 	Messages         []Message        `json:"messages"`
+	HeadCheckpointID string           `json:"head_checkpoint_id,omitempty"`
 	CreatedAt        time.Time        `json:"created_at"`
 	UpdatedAt        time.Time        `json:"updated_at"`
 	SuspendedAt      *time.Time       `json:"suspended_at,omitempty"`

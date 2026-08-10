@@ -104,6 +104,25 @@ directory, bounded output, exit status, actor, and times, so collaborators can
 understand execution without revealing private terminal input. Activity roles
 are `observation`, `instruction`, `authorship`, and `execution`.
 
+`POST /workspaces/{id}/checkpoints` accepts a bounded `title`, `description`,
+`expected_parent_checkpoint_id`, and `reproducibility` declaration containing
+dependency names and notes. It snapshots only regular repository-file changes
+against the workspace's exact base commit, with a 32 MiB total limit. Suspected
+credential paths or contents reject the request with `422 checkpoint_not_safe`.
+`GET /workspaces/{id}/checkpoints` and `GET .../checkpoints/{checkpoint-id}`
+return attribution, environment definition, parent lineage, change operations,
+hashes, modes, sizes, and bounded text patches; private stored file bytes are
+never returned.
+
+`GET .../checkpoints/{checkpoint-id}/restore` returns base divergence, live
+path conflicts, missing declared dependencies, reproducibility reasons, and a
+`preflight_token`. `POST` to the same route accepts that token and optional
+`allow_conflicts`. It requires current human file control and revalidates the
+token after admission; changed workspace state returns `409
+checkpoint_preflight_changed`, while unaccepted overlapping changes return
+`409 checkpoint_restore_conflicts`. A successful restore updates the workspace
+checkpoint head, making the next checkpoint a retained lineage branch.
+
 ## Activity
 
 `GET /activity` returns a newest-first, cursor-paginated `events` collection
