@@ -64,24 +64,82 @@ type SetupStep struct {
 type Event struct {
 	Kind      string    `json:"kind"`
 	ActorID   string    `json:"actor_id"`
+	Detail    string    `json:"detail,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+type CommandOutcome struct {
+	ID          string    `json:"id"`
+	Command     string    `json:"command"`
+	Directory   string    `json:"directory"`
+	ExitCode    int       `json:"exit_code"`
+	Output      string    `json:"output,omitempty"`
+	ActorID     string    `json:"actor_id"`
+	StartedAt   time.Time `json:"started_at"`
+	CompletedAt time.Time `json:"completed_at"`
+}
+type Change struct {
+	Path      string    `json:"path"`
+	SHA256    string    `json:"sha256"`
+	Size      int       `json:"size"`
+	ActorID   string    `json:"actor_id"`
 	CreatedAt time.Time `json:"created_at"`
 }
 type Workspace struct {
-	ID               string      `json:"id"`
-	RepositoryID     string      `json:"repository_id"`
-	CommitID         string      `json:"commit_id"`
-	Definition       Definition  `json:"definition"`
-	DefinitionSHA256 string      `json:"definition_sha256"`
-	Source           Source      `json:"source"`
-	CreatorID        string      `json:"creator_id"`
-	Access           Access      `json:"effective_access"`
-	State            string      `json:"state"`
-	Setup            []SetupStep `json:"setup_evidence"`
-	Events           []Event     `json:"events"`
-	CreatedAt        time.Time   `json:"created_at"`
-	UpdatedAt        time.Time   `json:"updated_at"`
-	SuspendedAt      *time.Time  `json:"suspended_at,omitempty"`
-	ResumedAt        *time.Time  `json:"resumed_at,omitempty"`
+	ID               string           `json:"id"`
+	RepositoryID     string           `json:"repository_id"`
+	CommitID         string           `json:"commit_id"`
+	Definition       Definition       `json:"definition"`
+	DefinitionSHA256 string           `json:"definition_sha256"`
+	Source           Source           `json:"source"`
+	CreatorID        string           `json:"creator_id"`
+	Access           Access           `json:"effective_access"`
+	State            string           `json:"state"`
+	Setup            []SetupStep      `json:"setup_evidence"`
+	Events           []Event          `json:"events"`
+	Commands         []CommandOutcome `json:"command_outcomes"`
+	Changes          []Change         `json:"changes"`
+	CreatedAt        time.Time        `json:"created_at"`
+	UpdatedAt        time.Time        `json:"updated_at"`
+	SuspendedAt      *time.Time       `json:"suspended_at,omitempty"`
+	ResumedAt        *time.Time       `json:"resumed_at,omitempty"`
+}
+
+func (s *Store) RecordCommand(id string, outcome CommandOutcome) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	b := make([]byte, 12)
+	if _, err = rand.Read(b); err != nil {
+		return Workspace{}, err
+	}
+	outcome.ID = hex.EncodeToString(b)
+	w.Commands = append(w.Commands, outcome)
+	if len(w.Commands) > 100 {
+		w.Commands = w.Commands[len(w.Commands)-100:]
+	}
+	w.UpdatedAt = s.now()
+	w.Events = append(w.Events, Event{Kind: "command_completed", ActorID: outcome.ActorID, Detail: outcome.ID, CreatedAt: w.UpdatedAt})
+	err = s.write(w)
+	return w, err
+}
+func (s *Store) RecordChange(id string, change Change) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	w.Changes = append(w.Changes, change)
+	if len(w.Changes) > 200 {
+		w.Changes = w.Changes[len(w.Changes)-200:]
+	}
+	w.UpdatedAt = s.now()
+	w.Events = append(w.Events, Event{Kind: "file_changed", ActorID: change.ActorID, Detail: change.Path, CreatedAt: w.UpdatedAt})
+	err = s.write(w)
+	return w, err
 }
 
 type Store struct {

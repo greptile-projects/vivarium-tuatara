@@ -252,6 +252,11 @@ whenever dependencies change or the web job fails before it starts.
   before container creation. Setup failure or timeout force-removes that
   workload and any attached volumes. Suspend/resume uses the definition SHA-256 as a
   compare-and-swap foundation and never resolves a moving branch or reruns setup.
+  Running workspace automation reuses that container for bounded file browsing,
+  compare-and-swap editing, literal search, attributed command outcomes,
+  loopback port discovery, and authenticated sandboxed previews. Durable change
+  evidence retains file hashes rather than contents; no platform-managed secret
+  or credential is injected into commands, snapshots, logs, or previews.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version

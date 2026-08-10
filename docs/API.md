@@ -62,6 +62,21 @@ last page. Pass a non-null `next_cursor` unchanged as the next request's
 `invalid_pagination`. Collection order is oldest creation first, with opaque ID
 as the deterministic tie-breaker.
 
+Running workspace automation uses the same current-participant authorization
+and exact workspace identity. `GET /workspaces/{id}/files?path=...` lists one
+directory, `GET .../file?path=...` reads an editable text file, and `PUT
+.../file` accepts `path`, `content`, and the prior `expected_sha256`; concurrent
+changes return `409 workspace_file_changed`. Saves retain only path, size, and
+content digest as durable evidence, never file contents. `GET .../search?q=`
+performs bounded literal search. `POST .../commands` accepts a command, relative
+working directory, and 1–300 second timeout and retains its bounded attributed
+outcome. `GET .../ports` discovers loopback listeners, while `GET
+.../preview?port=&path=` proxies at most 1 MiB through an authenticated,
+sandboxed HTML response without publishing a container port. These endpoints
+reject non-running workspaces. Commands receive no platform, repository,
+deployment, or environment credentials, so platform-managed secrets cannot
+enter snapshots, logs, or shared previews.
+
 ## Activity
 
 `GET /activity` returns a newest-first, cursor-paginated `events` collection

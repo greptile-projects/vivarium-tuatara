@@ -17,14 +17,48 @@ export type Repository = {
   upstream_repository_id?: string;
 };
 export type DevelopmentWorkspace = {
-  id: string; repository_id: string; commit_id: string; creator_id: string;
+  id: string;
+  repository_id: string;
+  commit_id: string;
+  creator_id: string;
   state: "provisioning" | "running" | "suspended" | "failed";
-  definition_sha256: string; created_at: string; updated_at: string;
-  source: { kind: "repository" | "proposal_task" | "pull_request" | "incident_repair"; repository_id: string; proposal_id?: string; task_id?: string; pull_request_id?: string; incident_id?: string; repair_id?: string };
-  definition: { version: number; image: string; tools: {name:string;version:string}[]; dependencies: string[]; setup: string[]; resources: {cpus:number;memory_mb:number;storage_mb:number;setup_seconds:number} };
+  definition_sha256: string;
+  created_at: string;
+  updated_at: string;
+  source: {
+    kind: "repository" | "proposal_task" | "pull_request" | "incident_repair";
+    repository_id: string;
+    proposal_id?: string;
+    task_id?: string;
+    pull_request_id?: string;
+    incident_id?: string;
+    repair_id?: string;
+  };
+  definition: {
+    version: number;
+    image: string;
+    tools: { name: string; version: string }[];
+    dependencies: string[];
+    setup: string[];
+    resources: {
+      cpus: number;
+      memory_mb: number;
+      storage_mb: number;
+      setup_seconds: number;
+    };
+  };
   effective_access: { role: string; scopes: string[] };
-  setup_evidence: {command:string;state:string;exit_code:number;output?:string;started_at:string;completed_at:string}[];
-  events: {kind:string;actor_id:string;created_at:string}[];
+  setup_evidence: {
+    command: string;
+    state: string;
+    exit_code: number;
+    output?: string;
+    started_at: string;
+    completed_at: string;
+  }[];
+  events: { kind: string; actor_id: string; detail?: string; created_at: string }[];
+  command_outcomes: { id:string; command:string; directory:string; exit_code:number; output?:string; actor_id:string; started_at:string; completed_at:string }[];
+  changes: { path:string; sha256:string; size:number; actor_id:string; created_at:string }[];
 };
 export type Organization = {
   id: string;
@@ -34,8 +68,22 @@ export type Organization = {
   created_by: string;
   created_at: string;
   members: { user_id: string; role: "owner" | "member"; joined_at: string }[];
-  invitations: { id: string; user_id: string; invited_by: string; created_at: string }[];
-  transfers: { id: string; repository_id: string; from_owner_id: string; requested_by: string; status: "pending" | "accepted"; requested_at: string; accepted_by?: string; accepted_at?: string }[];
+  invitations: {
+    id: string;
+    user_id: string;
+    invited_by: string;
+    created_at: string;
+  }[];
+  transfers: {
+    id: string;
+    repository_id: string;
+    from_owner_id: string;
+    requested_by: string;
+    status: "pending" | "accepted";
+    requested_at: string;
+    accepted_by?: string;
+    accepted_at?: string;
+  }[];
   teams: OrganizationTeam[];
   agents: OrganizationAgent[];
   access_grants: OrganizationAccessGrant[];
@@ -45,20 +93,183 @@ export type Organization = {
   initiatives: OrganizationInitiative[];
   events: OrganizationEvent[];
 };
-export type OrganizationPolicyRules = {repository_visibility?:"public"|"private";minimum_reviews?:number;required_checks?:string[];integration?:"direct"|"queue";release_provenance?:"attested";dependency_use?:"active-only"|"approved-only";promotion_approvals?:number;agent_authority?:"explicit-grants"|"disabled"};
-export type OrganizationPolicy = {id:string;name:string;description?:string;version:number;status:"draft"|"active"|"superseded";targets:{kind:"organization"|"team"|"repository";id?:string}[];rules:OrganizationPolicyRules;created_by:string;created_at:string;activated_by?:string;activated_at?:string;applies_to_new_work:boolean};
-export type OrganizationPolicyException = {id:string;policy_id:string;repository_id:string;rule:string;requested_value:string;reason:string;requester_id:string;expires_at:string;status:"pending"|"approved"|"denied";created_at:string;decided_by?:string;decided_at?:string};
-export type OrganizationResourceScope = {kind:"repository"|"package"|"environment"|"collaboration";id:string};
-export type OrganizationAccessGrant = {id:string;principal_type:"team"|"agent";principal_id:string;role:"viewer"|"contributor"|"maintainer"|"operator";resources:OrganizationResourceScope[];exceptions:{resource:OrganizationResourceScope;reason:string}[];reason:string;expires_at?:string;version:number;granted_by:string;granted_at:string;revoked_by?:string;revoked_at?:string;derived_credentials:{id:string;operator_id:string;created_at:string}[]};
-export type OrganizationAccessRequest = {id:string;requester_id:string;principal_type:"team"|"agent";principal_id:string;role:string;resources:OrganizationResourceScope[];exceptions:{resource:OrganizationResourceScope;reason:string}[];reason:string;expires_at?:string;status:"pending"|"approved"|"denied";created_at:string;decided_by?:string;decided_at?:string;grant_id?:string};
-export type OrganizationTeam = { id:string; name:string; slug:string; description?:string; parent_id?:string; visibility:"public"|"organization"; version:number; created_by:string; created_at:string; members:{user_id:string;role:"member"|"maintainer";added_by:string;added_at:string}[]; responsibilities:{id:string;repository_id:string;area:string;description?:string;added_by:string;added_at:string}[] };
-export type OrganizationAgent = { id:string; name:string; slug:string; description?:string; visibility:"public"|"organization"; capabilities:string[]; operator_ids:string[]; team_ids:string[]; version:number; registered_by:string; registered_at:string };
-export type OrganizationEvent = { id:string; action:string; actor_id:string; target_id?:string; created_at:string; details?:Record<string,unknown> };
-export type OrganizationInitiativeSource = {kind:"proposal"|"evolution"|"incident"|"security";repository_id?:string;id:string};
-export type OrganizationInitiativeOwner = {type:"human"|"team"|"agent";id:string};
-export type OrganizationInitiativeItem = {id:string;title:string;repository_id:string;contribution?:OrganizationInitiativeSource;owner:OrganizationInitiativeOwner;dependency_ids:string[];status:"todo"|"in_progress"|"completed";position:number;blocked?:boolean;blocker_ids?:string[];ownership_state?:"accountable"|"reassignment_required";reassignment_note?:string};
-export type OrganizationInitiative = {id:string;title:string;description?:string;source:OrganizationInitiativeSource;status:"active"|"completed";version:number;work_items:OrganizationInitiativeItem[];policy_exceptions?:OrganizationPolicyException[];upcoming_releases?:ReleaseCandidate[];created_by:string;created_at:string;updated_at:string};
-export type OrganizationDirectory = { organization_id:string; name:string; slug:string; teams:{team:OrganizationTeam;effective_members:{user_id:string;role:string;reason:string;source_team_id:string}[]}[]; agents:OrganizationAgent[]; events?:OrganizationEvent[] };
+export type OrganizationPolicyRules = {
+  repository_visibility?: "public" | "private";
+  minimum_reviews?: number;
+  required_checks?: string[];
+  integration?: "direct" | "queue";
+  release_provenance?: "attested";
+  dependency_use?: "active-only" | "approved-only";
+  promotion_approvals?: number;
+  agent_authority?: "explicit-grants" | "disabled";
+};
+export type OrganizationPolicy = {
+  id: string;
+  name: string;
+  description?: string;
+  version: number;
+  status: "draft" | "active" | "superseded";
+  targets: { kind: "organization" | "team" | "repository"; id?: string }[];
+  rules: OrganizationPolicyRules;
+  created_by: string;
+  created_at: string;
+  activated_by?: string;
+  activated_at?: string;
+  applies_to_new_work: boolean;
+};
+export type OrganizationPolicyException = {
+  id: string;
+  policy_id: string;
+  repository_id: string;
+  rule: string;
+  requested_value: string;
+  reason: string;
+  requester_id: string;
+  expires_at: string;
+  status: "pending" | "approved" | "denied";
+  created_at: string;
+  decided_by?: string;
+  decided_at?: string;
+};
+export type OrganizationResourceScope = {
+  kind: "repository" | "package" | "environment" | "collaboration";
+  id: string;
+};
+export type OrganizationAccessGrant = {
+  id: string;
+  principal_type: "team" | "agent";
+  principal_id: string;
+  role: "viewer" | "contributor" | "maintainer" | "operator";
+  resources: OrganizationResourceScope[];
+  exceptions: { resource: OrganizationResourceScope; reason: string }[];
+  reason: string;
+  expires_at?: string;
+  version: number;
+  granted_by: string;
+  granted_at: string;
+  revoked_by?: string;
+  revoked_at?: string;
+  derived_credentials: {
+    id: string;
+    operator_id: string;
+    created_at: string;
+  }[];
+};
+export type OrganizationAccessRequest = {
+  id: string;
+  requester_id: string;
+  principal_type: "team" | "agent";
+  principal_id: string;
+  role: string;
+  resources: OrganizationResourceScope[];
+  exceptions: { resource: OrganizationResourceScope; reason: string }[];
+  reason: string;
+  expires_at?: string;
+  status: "pending" | "approved" | "denied";
+  created_at: string;
+  decided_by?: string;
+  decided_at?: string;
+  grant_id?: string;
+};
+export type OrganizationTeam = {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  parent_id?: string;
+  visibility: "public" | "organization";
+  version: number;
+  created_by: string;
+  created_at: string;
+  members: {
+    user_id: string;
+    role: "member" | "maintainer";
+    added_by: string;
+    added_at: string;
+  }[];
+  responsibilities: {
+    id: string;
+    repository_id: string;
+    area: string;
+    description?: string;
+    added_by: string;
+    added_at: string;
+  }[];
+};
+export type OrganizationAgent = {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  visibility: "public" | "organization";
+  capabilities: string[];
+  operator_ids: string[];
+  team_ids: string[];
+  version: number;
+  registered_by: string;
+  registered_at: string;
+};
+export type OrganizationEvent = {
+  id: string;
+  action: string;
+  actor_id: string;
+  target_id?: string;
+  created_at: string;
+  details?: Record<string, unknown>;
+};
+export type OrganizationInitiativeSource = {
+  kind: "proposal" | "evolution" | "incident" | "security";
+  repository_id?: string;
+  id: string;
+};
+export type OrganizationInitiativeOwner = {
+  type: "human" | "team" | "agent";
+  id: string;
+};
+export type OrganizationInitiativeItem = {
+  id: string;
+  title: string;
+  repository_id: string;
+  contribution?: OrganizationInitiativeSource;
+  owner: OrganizationInitiativeOwner;
+  dependency_ids: string[];
+  status: "todo" | "in_progress" | "completed";
+  position: number;
+  blocked?: boolean;
+  blocker_ids?: string[];
+  ownership_state?: "accountable" | "reassignment_required";
+  reassignment_note?: string;
+};
+export type OrganizationInitiative = {
+  id: string;
+  title: string;
+  description?: string;
+  source: OrganizationInitiativeSource;
+  status: "active" | "completed";
+  version: number;
+  work_items: OrganizationInitiativeItem[];
+  policy_exceptions?: OrganizationPolicyException[];
+  upcoming_releases?: ReleaseCandidate[];
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+export type OrganizationDirectory = {
+  organization_id: string;
+  name: string;
+  slug: string;
+  teams: {
+    team: OrganizationTeam;
+    effective_members: {
+      user_id: string;
+      role: string;
+      reason: string;
+      source_team_id: string;
+    }[];
+  }[];
+  agents: OrganizationAgent[];
+  events?: OrganizationEvent[];
+};
 export type OrganizationPortfolio = {
   organization: Organization;
   repositories: Repository[];
@@ -95,7 +306,13 @@ export type PackageVersion = {
   release_id: string;
   source_commit: string;
   build_id: string;
-  build_attestation: { step: string; image: string; command: string; attempt: number; state: string };
+  build_attestation: {
+    step: string;
+    image: string;
+    command: string;
+    attempt: number;
+    state: string;
+  };
   artifact_id: string;
   artifact_path: string;
   content_type: string;
@@ -119,22 +336,76 @@ export type PackageVersion = {
 };
 export type DependencyInventory = {
   inventory: {
-    id: string; repository_id: string; commit_id: string; recorded_by: string; recorded_at: string;
-    entries: { name: string; version: string; constraint?: string; direct: boolean; paths: string[]; package_id?: string; license?: string; support?: string; state: "resolved" | "stale" | "unresolved"; provenance_gaps?: string[] }[];
+    id: string;
+    repository_id: string;
+    commit_id: string;
+    recorded_by: string;
+    recorded_at: string;
+    entries: {
+      name: string;
+      version: string;
+      constraint?: string;
+      direct: boolean;
+      paths: string[];
+      package_id?: string;
+      license?: string;
+      support?: string;
+      state: "resolved" | "stale" | "unresolved";
+      provenance_gaps?: string[];
+    }[];
   };
   current: boolean;
   releases: ReleaseCandidate[];
   builds: { id: string; state: string; artifact_id?: string }[];
-  deployments: { id: string; environment_id: string; release_id: string; artifact_id: string; state: string; current: boolean }[];
-  remediation?: { status: string; proposal_id: string; task_id: string; replacement_version: string };
+  deployments: {
+    id: string;
+    environment_id: string;
+    release_id: string;
+    artifact_id: string;
+    state: string;
+    current: boolean;
+  }[];
+  remediation?: {
+    status: string;
+    proposal_id: string;
+    task_id: string;
+    replacement_version: string;
+  };
 };
 export type PackageUpdate = {
-  id: string; repository_id: string; package_name: string; from_version: string; to_version: string; base_commit: string; proposal_id: string; task_id: string;
-  manifest: { version: number; dependencies: { name: string; constraint: string }[]; lock: { name: string; version: string }[] };
-  release_notes: string; compatibility_evidence: { step: string; image: string; command: string; attempt: number; state: string };
-  affected_dependency_paths: string[]; created_by: string; created_at: string;
+  id: string;
+  repository_id: string;
+  package_name: string;
+  from_version: string;
+  to_version: string;
+  base_commit: string;
+  proposal_id: string;
+  task_id: string;
+  manifest: {
+    version: number;
+    dependencies: { name: string; constraint: string }[];
+    lock: { name: string; version: string }[];
+  };
+  release_notes: string;
+  compatibility_evidence: {
+    step: string;
+    image: string;
+    command: string;
+    attempt: number;
+    state: string;
+  };
+  affected_dependency_paths: string[];
+  created_by: string;
+  created_at: string;
 };
-export type PackageUpdatePolicy = { repository_id: string; package_name: string; strategy: "patch" | "minor" | "major"; action: "proposal"; updated_by: string; updated_at: string };
+export type PackageUpdatePolicy = {
+  repository_id: string;
+  package_name: string;
+  strategy: "patch" | "minor" | "major";
+  action: "proposal";
+  updated_by: string;
+  updated_at: string;
+};
 export type InterfacePublication = {
   id: string;
   repository_id: string;
@@ -262,17 +533,29 @@ export type EvolutionPlan = {
     next_action?: string;
     configured_by: string;
     configured_at: string;
-    approvals: { repository_id: string; actor_id: string; created_at: string }[];
+    approvals: {
+      repository_id: string;
+      actor_id: string;
+      created_at: string;
+    }[];
     phases: {
       id: string;
       name: string;
       repository_ids: string[];
       migration_task_ids: Record<string, string>;
       environment_ids?: Record<string, string>;
-      state?: "blocked" | "awaiting_approval" | "ready" | "paused" | "completed";
+      state?:
+        "blocked" | "awaiting_approval" | "ready" | "paused" | "completed";
       next_action?: string;
     }[];
-    outcomes: { phase_id: string; repository_id: string; pull_request_id?: string; release_id?: string; deployment_id?: string; state: string }[];
+    outcomes: {
+      phase_id: string;
+      repository_id: string;
+      pull_request_id?: string;
+      release_id?: string;
+      deployment_id?: string;
+      state: string;
+    }[];
   };
 };
 export type ReleaseArtifact = {
