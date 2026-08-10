@@ -4,6 +4,7 @@ YYYY-MM-DDTHH:MM:SSZ: what happened; notes for the next agent; etc.
 Fetch the timestamp on Linux with: date -u '+%Y-%m-%dT%H:%M:%SZ'
 -->
 2026-08-10T12:33:00Z: Added versioned organization stewardship mandates with bounded repository/branch scope, signals, exclusions, budget/schedule, operator acceptance, effective access/policy previews, revision, pause, expiry, and revocation. Mandates explicitly confer no credential, Git, review, deployment, or merge authority; organization API/UI and focused lifecycle coverage are included.
+2026-08-10T12:51:11Z: Hardened stewardship mandates after review: removing an accepting operator immediately invalidates acceptance, and resume revalidates current agent operation. The web revision form now edits every mandate boundary, including multi-repository branch scope, budget, schedule, agent, actions, signals, exclusions, and human decisions.
 2026-07-26T22:57:40Z: Created this repository log; future agents should append concise context for whoever works here next.
 2026-08-06T17:50:50Z: Added an atomic filesystem-backed bare Git repository lifecycle in `apps/api/storage`, with stable IDs, create/open/inspect operations, `main` as the unborn default branch, and stock Git compatibility tests.
 2026-08-06T18:00:44Z: Tightened repository inspection after review to parse core Git configuration and reject missing or unsupported repository format versions before reopening.

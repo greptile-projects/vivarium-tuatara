@@ -594,6 +594,18 @@ func (s *Store) RemoveMember(id, actor, user string, beforeCommit func(Organizat
 					}
 				}
 				v.Agents = agents
+				for i := range v.StewardshipMandates {
+					mandate := &v.StewardshipMandates[i]
+					if mandate.Acceptance == nil || mandate.Acceptance.OperatorID != user || mandate.Status == "revoked" {
+						continue
+					}
+					mandate.Acceptance = nil
+					mandate.PausedBy, mandate.PausedAt = "", nil
+					mandate.Status = "pending_acceptance"
+					if err := s.event(v, "stewardship_mandate.acceptance.invalidated", actor, mandate.ID, map[string]any{"removed_operator_id": user, "version": mandate.Version}); err != nil {
+						return err
+					}
+				}
 				return s.event(v, "member.removed", actor, user, nil)
 			}
 		}
@@ -1428,7 +1440,9 @@ func (s *Store) ChangeStewardshipMandateState(id, mandateID, actor, action strin
 			}
 			m.Status, m.PausedBy, m.PausedAt = "paused", actor, &now
 		case "resume":
-			if m.Status != "paused" || m.Acceptance == nil || m.Acceptance.Version != m.Version || !m.Revisions[len(m.Revisions)-1].ExpiresAt.After(now) {
+			latest := m.Revisions[len(m.Revisions)-1]
+			i := agentIndex(v, latest.AgentID)
+			if m.Status != "paused" || m.Acceptance == nil || m.Acceptance.Version != m.Version || i < 0 || !slices.Contains(v.Agents[i].OperatorIDs, m.Acceptance.OperatorID) || !latest.ExpiresAt.After(now) {
 				return ErrConflict
 			}
 			m.Status, m.PausedBy, m.PausedAt = "active", "", nil
