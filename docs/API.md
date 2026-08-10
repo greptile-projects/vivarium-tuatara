@@ -1919,8 +1919,11 @@ decision version. It requires one current selected alternative, explicit
 rejection of every other current alternative, rationale, accepted tradeoffs,
 conditions, a future review date, retained dissent finding IDs, and exact
 evidence already cited by the decision. Every request must be approved.
-Exceptions must reference an approved policy request, match its policy/rule,
-give a reason, and expire in the future. Publication appends an immutable
+Policy approval requests may freeze `exception_reason` and
+`exception_expires_at`. Exceptions must reference an approved policy request,
+match its policy/rule and normalized exception reason, and expire in the future
+no later than that approved ceiling. The dissent list must be a duplicate-free
+snapshot of every current opposing finding. Publication appends an immutable
 numbered commitment with its approval snapshot. Later material scope,
 alternative, finding, experiment, or experiment-evidence changes set the live
 record back to `pending`, supersede current requests, and mark the prior

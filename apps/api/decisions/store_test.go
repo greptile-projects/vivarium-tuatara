@@ -167,7 +167,8 @@ func TestGovernedCommitmentRetainsApprovalsExceptionsAndReopens(t *testing.T) {
 	}
 	v, _ = s.AddAlternative(v.ID, "owner", v.Version, alt("FIFO"))
 	v, _ = s.AddAlternative(v.ID, "owner", v.Version, alt("LIFO"))
-	v, err = s.RequestApproval(v.ID, "owner", v.Version, ApprovalRequest{Kind: "policy", PolicyID: "policy", PolicyRule: "minimum_reviews", ApproverID: "approver", Reason: "Policy requires accountable review"})
+	exceptionExpiry := now.Add(7 * 24 * time.Hour)
+	v, err = s.RequestApproval(v.ID, "owner", v.Version, ApprovalRequest{Kind: "policy", PolicyID: "policy", PolicyRule: "minimum_reviews", ApproverID: "approver", Reason: "Policy requires accountable review", ExceptionReason: "Migration window", ExceptionExpiresAt: &exceptionExpiry})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +180,23 @@ func TestGovernedCommitmentRetainsApprovalsExceptionsAndReopens(t *testing.T) {
 		t.Fatal(err)
 	}
 	selected := v.Alternatives[0]
-	v, err = s.Publish(v.ID, "owner", v.Version, Commitment{SelectedAlternativeID: selected.ID, RejectedAlternativeIDs: []string{v.Alternatives[1].ID}, Rationale: "Best observed latency under the retained evidence.", AcceptedTradeoffs: []string{"Reject overload"}, Conditions: []string{"Monitor retries"}, ReviewDate: now.Add(30 * 24 * time.Hour), Evidence: selected.Evidence, Exceptions: []Exception{{ApprovalRequestID: v.ApprovalRequests[0].ID, PolicyID: "policy", PolicyRule: "minimum_reviews", Reason: "Migration window", ExpiresAt: now.Add(7 * 24 * time.Hour)}}})
+	v, err = s.AddFinding(v.ID, "owner", Finding{AlternativeID: selected.ID, Body: "Retries remain a concern.", Position: "oppose", Uncertainty: "one region", Citations: evidence})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitment := Commitment{SelectedAlternativeID: selected.ID, RejectedAlternativeIDs: []string{v.Alternatives[1].ID}, Rationale: "Best observed latency under the retained evidence.", AcceptedTradeoffs: []string{"Reject overload"}, Conditions: []string{"Monitor retries"}, ReviewDate: now.Add(30 * 24 * time.Hour), Evidence: selected.Evidence, DissentFindingIDs: []string{v.Findings[0].ID}, Exceptions: []Exception{{ApprovalRequestID: v.ApprovalRequests[0].ID, PolicyID: "policy", PolicyRule: "minimum_reviews", Reason: "Migration window", ExpiresAt: exceptionExpiry}}}
+	omitted := commitment
+	omitted.DissentFindingIDs = nil
+	if _, publishErr := s.Publish(v.ID, "owner", v.Version, omitted); !errors.Is(publishErr, ErrInvalid) {
+		t.Fatalf("omitted dissent accepted: %v", publishErr)
+	}
+	mismatched := commitment
+	mismatched.Exceptions[0].Reason = "Data export"
+	if _, publishErr := s.Publish(v.ID, "owner", v.Version, mismatched); !errors.Is(publishErr, ErrInvalid) {
+		t.Fatalf("mismatched exception accepted: %v", publishErr)
+	}
+	commitment.Exceptions[0].Reason = "Migration window"
+	v, err = s.Publish(v.ID, "owner", v.Version, commitment)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +207,7 @@ func TestGovernedCommitmentRetainsApprovalsExceptionsAndReopens(t *testing.T) {
 	if err != nil || v.Status != "published" {
 		t.Fatalf("discussion reopened = %s, %v", v.Status, err)
 	}
-	v, err = s.AddFinding(v.ID, "owner", Finding{AlternativeID: selected.ID, Body: "A new trace exposes retries.", Position: "oppose", Uncertainty: "one region", Citations: evidence})
+	v, err = s.AddFinding(v.ID, "owner", Finding{AlternativeID: selected.ID, Body: "A new trace exposes more retries.", Position: "oppose", Uncertainty: "one region", Citations: evidence})
 	if err != nil {
 		t.Fatal(err)
 	}

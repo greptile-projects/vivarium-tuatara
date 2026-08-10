@@ -146,19 +146,21 @@ type Experiment struct {
 	InvalidationReasons     []string             `json:"invalidation_reasons"`
 }
 type ApprovalRequest struct {
-	ID           string     `json:"id"`
-	Kind         string     `json:"kind"`
-	RepositoryID string     `json:"repository_id,omitempty"`
-	PolicyID     string     `json:"policy_id,omitempty"`
-	PolicyRule   string     `json:"policy_rule,omitempty"`
-	ApproverID   string     `json:"approver_id"`
-	Reason       string     `json:"reason"`
-	Status       string     `json:"status"`
-	RequestedBy  string     `json:"requested_by"`
-	RequestedAt  time.Time  `json:"requested_at"`
-	DecidedBy    string     `json:"decided_by,omitempty"`
-	DecisionNote string     `json:"decision_note,omitempty"`
-	DecidedAt    *time.Time `json:"decided_at,omitempty"`
+	ID                 string     `json:"id"`
+	Kind               string     `json:"kind"`
+	RepositoryID       string     `json:"repository_id,omitempty"`
+	PolicyID           string     `json:"policy_id,omitempty"`
+	PolicyRule         string     `json:"policy_rule,omitempty"`
+	ApproverID         string     `json:"approver_id"`
+	Reason             string     `json:"reason"`
+	ExceptionReason    string     `json:"exception_reason,omitempty"`
+	ExceptionExpiresAt *time.Time `json:"exception_expires_at,omitempty"`
+	Status             string     `json:"status"`
+	RequestedBy        string     `json:"requested_by"`
+	RequestedAt        time.Time  `json:"requested_at"`
+	DecidedBy          string     `json:"decided_by,omitempty"`
+	DecisionNote       string     `json:"decision_note,omitempty"`
+	DecidedAt          *time.Time `json:"decided_at,omitempty"`
 }
 type Exception struct {
 	ApprovalRequestID string    `json:"approval_request_id"`
@@ -821,12 +823,17 @@ func (s *Store) RequestApproval(id, actor string, expected int, input ApprovalRe
 		return v, ErrNotFound
 	}
 	input.Kind, input.RepositoryID, input.PolicyID, input.PolicyRule, input.ApproverID, input.Reason = strings.TrimSpace(input.Kind), strings.TrimSpace(input.RepositoryID), strings.TrimSpace(input.PolicyID), strings.TrimSpace(input.PolicyRule), strings.TrimSpace(input.ApproverID), strings.TrimSpace(input.Reason)
+	input.ExceptionReason = strings.TrimSpace(input.ExceptionReason)
 	if (input.Kind != "affected_owner" && input.Kind != "policy") || input.ApproverID == "" || input.Reason == "" || len(input.Reason) > 1000 || (input.Kind == "affected_owner" && input.RepositoryID == "") || (input.Kind == "policy" && (input.PolicyID == "" || input.PolicyRule == "")) {
+		return v, ErrInvalid
+	}
+	if input.Kind != "policy" && (input.ExceptionReason != "" || input.ExceptionExpiresAt != nil) || (input.ExceptionReason == "") != (input.ExceptionExpiresAt == nil) || len(input.ExceptionReason) > 1000 || (input.ExceptionExpiresAt != nil && !input.ExceptionExpiresAt.After(s.now())) {
 		return v, ErrInvalid
 	}
 	for i := range v.ApprovalRequests {
 		x := &v.ApprovalRequests[i]
-		if x.Status == "pending" && x.Kind == input.Kind && x.RepositoryID == input.RepositoryID && x.PolicyID == input.PolicyID && x.PolicyRule == input.PolicyRule && x.ApproverID == input.ApproverID {
+		sameTerms := x.ExceptionReason == input.ExceptionReason && ((x.ExceptionExpiresAt == nil && input.ExceptionExpiresAt == nil) || (x.ExceptionExpiresAt != nil && input.ExceptionExpiresAt != nil && x.ExceptionExpiresAt.Equal(*input.ExceptionExpiresAt)))
+		if x.Status == "pending" && x.Kind == input.Kind && x.RepositoryID == input.RepositoryID && x.PolicyID == input.PolicyID && x.PolicyRule == input.PolicyRule && x.ApproverID == input.ApproverID && sameTerms {
 			return projectEvidence(v, s.now()), nil
 		}
 		if x.Status == "rejected" && x.Kind == input.Kind && x.RepositoryID == input.RepositoryID && x.PolicyID == input.PolicyID && x.PolicyRule == input.PolicyRule && x.ApproverID == input.ApproverID {
@@ -944,10 +951,15 @@ func (s *Store) Publish(id, actor string, expected int, input Commitment) (Decis
 			findings[f.ID] = true
 		}
 	}
+	seenDissent := map[string]bool{}
 	for _, fid := range input.DissentFindingIDs {
-		if !findings[fid] {
+		if !findings[fid] || seenDissent[fid] {
 			return v, ErrInvalid
 		}
+		seenDissent[fid] = true
+	}
+	if len(seenDissent) != len(findings) {
+		return v, ErrInvalid
 	}
 	available := map[string]Evidence{}
 	for _, a := range v.Alternatives {
@@ -988,7 +1000,8 @@ func (s *Store) Publish(id, actor string, expected int, input Commitment) (Decis
 	}
 	for _, x := range input.Exceptions {
 		request, exists := approved[x.ApprovalRequestID]
-		if !exists || request.Kind != "policy" || request.PolicyID != x.PolicyID || request.PolicyRule != x.PolicyRule || strings.TrimSpace(x.Reason) == "" || !x.ExpiresAt.After(s.now()) {
+		x.Reason = strings.TrimSpace(x.Reason)
+		if !exists || request.Kind != "policy" || request.PolicyID != x.PolicyID || request.PolicyRule != x.PolicyRule || request.ExceptionReason == "" || x.Reason != request.ExceptionReason || request.ExceptionExpiresAt == nil || x.ExpiresAt.After(*request.ExceptionExpiresAt) || !x.ExpiresAt.After(s.now()) {
 			return v, ErrInvalid
 		}
 	}

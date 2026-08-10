@@ -1013,6 +1013,9 @@ whenever dependencies change or the web job fails before it starts.
   governance conflicts. Scope, alternative, finding, or experiment changes
   reopen a published decision, supersede its approvals, and retain the prior
   commitment instead of rewriting it; discussion alone is non-material.
+  Every current opposing finding must appear exactly once in the commitment.
+  Policy exception approvals freeze the normalized reason and maximum expiry;
+  publication cannot substitute another purpose or extend that authorization.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

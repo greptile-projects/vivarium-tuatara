@@ -76,6 +76,7 @@ export type TechnicalDecision = {
 export type DecisionApprovalRequest = {
   id: string; kind: "affected_owner" | "policy"; repository_id?: string;
   policy_id?: string; policy_rule?: string; approver_id: string; reason: string;
+  exception_reason?: string; exception_expires_at?: string;
   status: "pending" | "approved" | "rejected" | "superseded";
   requested_by: string; requested_at: string; decided_by?: string;
   decision_note?: string; decided_at?: string;
