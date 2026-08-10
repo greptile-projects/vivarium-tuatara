@@ -22,7 +22,7 @@ const workspaceOutputLimit = 128 * 1024
 
 func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store, store *workspaces.Store, authStore *auth.Store) {
 	mux.HandleFunc("GET /workspaces/{workspace_id}/files", func(w http.ResponseWriter, r *http.Request) {
-		item, _, ok := authorizeRunningWorkspace(w, r, store, catalog, authStore, "repositories:read")
+		item, actor, ok := authorizeRunningWorkspace(w, r, store, catalog, authStore, "repositories:read")
 		if !ok {
 			return
 		}
@@ -30,7 +30,7 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 		if !ok {
 			return
 		}
-		out, err := workspaceExec(item.ID, 15*time.Second, "/workspace", nil, "find", dir, "-mindepth", "1", "-maxdepth", "1", "-printf", "%y\t%s\t%f\n")
+		out, err := workspaceAuthorizedExec(catalog, item, actor, false, 15*time.Second, "/workspace", nil, "find", dir, "-mindepth", "1", "-maxdepth", "1", "-printf", "%y\t%s\t%f\n")
 		if err != nil {
 			writeRuntimeError(w, err)
 			return
@@ -58,7 +58,7 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 		writeJSON(w, 200, map[string]any{"commit_id": item.CommitID, "path": strings.TrimPrefix(dir, "/workspace"), "entries": entries})
 	})
 	mux.HandleFunc("GET /workspaces/{workspace_id}/file", func(w http.ResponseWriter, r *http.Request) {
-		item, _, ok := authorizeRunningWorkspace(w, r, store, catalog, authStore, "repositories:read")
+		item, actor, ok := authorizeRunningWorkspace(w, r, store, catalog, authStore, "repositories:read")
 		if !ok {
 			return
 		}
@@ -66,7 +66,7 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 		if !ok {
 			return
 		}
-		out, err := workspaceExec(item.ID, 10*time.Second, "/workspace", nil, "sh", "-c", "test -f \"$1\" && ! test -L \"$1\" && cat -- \"$1\"", "sh", name)
+		out, err := workspaceAuthorizedExec(catalog, item, actor, false, 10*time.Second, "/workspace", nil, "sh", "-c", "test -f \"$1\" && ! test -L \"$1\" && cat -- \"$1\"", "sh", name)
 		if err != nil {
 			writeAPIError(w, 404, "workspace_file_not_found", "workspace file not found")
 			return
@@ -96,12 +96,16 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 			writeAPIError(w, 422, "workspace_file_too_large", "editable files are limited to 128 KiB")
 			return
 		}
+		if !validWorkspaceDigest(input.ExpectedSHA256) {
+			writeAPIError(w, 422, "workspace_file_digest_invalid", "expected_sha256 must be a complete SHA-256 digest")
+			return
+		}
 		name, valid := workspaceFilePath(w, input.Path)
 		if !valid {
 			return
 		}
-		script := "set -eu; p=$1; expected=$2; if [ -L \"$p\" ]; then exit 42; fi; if [ -n \"$expected\" ] && [ -f \"$p\" ]; then actual=$(sha256sum \"$p\" | cut -d' ' -f1); [ \"$actual\" = \"$expected\" ] || exit 41; fi; mkdir -p \"$(dirname \"$p\")\"; tmp=\"$p.vivarium-tmp\"; cat >\"$tmp\"; mv \"$tmp\" \"$p\""
-		_, err := workspaceExec(item.ID, 10*time.Second, "/workspace", strings.NewReader(input.Content), "sh", "-c", script, "sh", name, input.ExpectedSHA256)
+		script := "set -eu; p=$1; expected=$2; [ -f \"$p\" ] && [ ! -L \"$p\" ] || exit 42; actual=$(sha256sum \"$p\" | cut -d' ' -f1); [ \"$actual\" = \"$expected\" ] || exit 41; tmp=$(mktemp \"$p.vivarium-tmp.XXXXXX\"); trap 'rm -f \"$tmp\"' EXIT; cat >\"$tmp\"; mv \"$tmp\" \"$p\"; trap - EXIT"
+		_, err := workspaceAuthorizedExec(catalog, item, actor, true, 10*time.Second, "/workspace", strings.NewReader(input.Content), "sh", "-c", script, "sh", name, input.ExpectedSHA256)
 		if err != nil {
 			var exit *exec.ExitError
 			if errors.As(err, &exit) && exit.ExitCode() == 41 {
@@ -121,7 +125,7 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 		writeJSON(w, 200, map[string]any{"change": change, "workspace": updated})
 	})
 	mux.HandleFunc("GET /workspaces/{workspace_id}/search", func(w http.ResponseWriter, r *http.Request) {
-		item, _, ok := authorizeRunningWorkspace(w, r, store, catalog, authStore, "repositories:read")
+		item, actor, ok := authorizeRunningWorkspace(w, r, store, catalog, authStore, "repositories:read")
 		if !ok {
 			return
 		}
@@ -130,7 +134,7 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 			writeAPIError(w, 422, "workspace_search_invalid", "q must be 1-200 characters")
 			return
 		}
-		out, err := workspaceExec(item.ID, 15*time.Second, "/workspace", nil, "grep", "-RInF", "--exclude-dir=.git", "--", q, ".")
+		out, err := workspaceAuthorizedExec(catalog, item, actor, false, 15*time.Second, "/workspace", nil, "grep", "-RInF", "--exclude-dir=.git", "--", q, ".")
 		if err != nil {
 			var x *exec.ExitError
 			if !errors.As(err, &x) || x.ExitCode() != 1 {
@@ -173,7 +177,7 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 			return
 		}
 		start := time.Now().UTC()
-		out, runErr := workspaceExec(item.ID, time.Duration(input.TimeoutSeconds)*time.Second, dir, nil, "sh", "-lc", input.Command)
+		out, runErr := workspaceAuthorizedExec(catalog, item, actor, true, time.Duration(input.TimeoutSeconds)*time.Second, dir, nil, "sh", "-lc", input.Command)
 		code := 0
 		if runErr != nil {
 			code = -1
@@ -194,11 +198,11 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 		writeJSON(w, 200, map[string]any{"outcome": updated.Commands[len(updated.Commands)-1], "commit_id": item.CommitID})
 	})
 	mux.HandleFunc("GET /workspaces/{workspace_id}/ports", func(w http.ResponseWriter, r *http.Request) {
-		item, _, ok := authorizeRunningWorkspace(w, r, store, catalog, authStore, "repositories:read")
+		item, actor, ok := authorizeRunningWorkspace(w, r, store, catalog, authStore, "repositories:read")
 		if !ok {
 			return
 		}
-		out, err := workspaceExec(item.ID, 5*time.Second, "/workspace", nil, "sh", "-c", "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | awk 'NR>1 {split($2,a,\":\"); print a[2]}' | sort -u")
+		out, err := workspaceAuthorizedExec(catalog, item, actor, false, 5*time.Second, "/workspace", nil, "sh", "-c", "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | awk 'NR>1 {split($2,a,\":\"); print a[2]}' | sort -u")
 		if err != nil {
 			writeRuntimeError(w, err)
 			return
@@ -213,7 +217,7 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 		writeJSON(w, 200, map[string]any{"ports": ports, "preview_note": "Previews are authenticated and proxied without publishing container ports."})
 	})
 	mux.HandleFunc("GET /workspaces/{workspace_id}/preview", func(w http.ResponseWriter, r *http.Request) {
-		item, _, ok := authorizeRunningWorkspace(w, r, store, catalog, authStore, "repositories:read")
+		item, actor, ok := authorizeRunningWorkspace(w, r, store, catalog, authStore, "repositories:read")
 		if !ok {
 			return
 		}
@@ -231,7 +235,7 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 			return
 		}
 		url := fmt.Sprintf("http://127.0.0.1:%d%s", port, previewPath)
-		out, runErr := workspaceExec(item.ID, 15*time.Second, "/workspace", nil, "sh", "-c", "if command -v wget >/dev/null; then wget -qO- -- \"$1\"; elif command -v curl >/dev/null; then curl -fsS --max-time 10 -- \"$1\"; else exit 127; fi", "sh", url)
+		out, runErr := workspaceAuthorizedExec(catalog, item, actor, false, 15*time.Second, "/workspace", nil, "sh", "-c", "if command -v wget >/dev/null; then wget -qO- -- \"$1\"; elif command -v curl >/dev/null; then curl -fsS --max-time 10 -- \"$1\"; else exit 127; fi", "sh", url)
 		if runErr != nil {
 			writeAPIError(w, 502, "workspace_preview_unavailable", "application preview did not respond")
 			return
@@ -274,6 +278,48 @@ func workspaceFilePath(w http.ResponseWriter, value string) (string, bool) {
 	}
 	return workspacePath(w, value)
 }
+func validWorkspaceDigest(value string) bool {
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == sha256.Size
+}
+func workspaceAuthorizedExec(catalog *repositories.Store, item workspaces.Workspace, actor auth.Credential, mutation bool, timeout time.Duration, dir string, stdin *strings.Reader, args ...string) ([]byte, error) {
+	var output []byte
+	operation := func() error {
+		canonicalDir, err := canonicalWorkspacePath(item.ID, dir)
+		if err != nil {
+			return err
+		}
+		resolvedArgs := append([]string(nil), args...)
+		for index, value := range resolvedArgs {
+			if value == "/workspace" || strings.HasPrefix(value, "/workspace/") {
+				resolvedArgs[index], err = canonicalWorkspacePath(item.ID, value)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		output, err = workspaceExec(item.ID, timeout, canonicalDir, stdin, resolvedArgs...)
+		return err
+	}
+	var err error
+	if mutation {
+		err = catalog.WithCurrentParticipant(actor.UserID, item.RepositoryID, operation)
+	} else {
+		err = catalog.WithCurrentReadAccess(actor.UserID, []string{item.RepositoryID}, operation)
+	}
+	return output, err
+}
+func canonicalWorkspacePath(id, value string) (string, error) {
+	out, err := workspaceExec(id, 5*time.Second, "/workspace", nil, "readlink", "-f", "--", value)
+	if err != nil {
+		return "", errors.New("workspace path does not exist")
+	}
+	resolved := strings.TrimSpace(string(out))
+	if resolved != "/workspace" && !strings.HasPrefix(resolved, "/workspace/") {
+		return "", errors.New("workspace path escapes the workspace root")
+	}
+	return resolved, nil
+}
 func workspaceExec(id string, timeout time.Duration, dir string, stdin *strings.Reader, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -290,5 +336,9 @@ func workspaceExec(id string, timeout time.Duration, dir string, stdin *strings.
 	return out, err
 }
 func writeRuntimeError(w http.ResponseWriter, err error) {
+	if errors.Is(err, repositories.ErrNotFound) || errors.Is(err, repositories.ErrInvalidCollaborator) {
+		writeAPIError(w, 404, "workspace_not_found", "workspace not found")
+		return
+	}
 	writeAPIError(w, 422, "workspace_runtime_failed", strings.TrimSpace(err.Error()))
 }
