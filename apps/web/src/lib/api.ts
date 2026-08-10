@@ -481,7 +481,7 @@ export type OrganizationStewardshipOpportunity = {
     stale: boolean;
   }[];
   status:
-    "open" | "dismissed" | "snoozed" | "incorrect" | "promoting" | "accepted";
+    "open" | "dismissed" | "snoozed" | "incorrect" | "promoting" | "promoted" | "accepted";
   rank: number;
   snoozed_until?: string;
   decision_reason?: string;

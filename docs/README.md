@@ -1307,6 +1307,15 @@ revoked repository access, anomalous consumption, or budget overrun pauses the
 affected automation and leaves an attributed remediation notice rather than
 silently continuing.
 
+The connected stewardship journey proves that lifecycle as one public
+collaboration record. A maintainer discusses and approves a trace-backed
+finding while dismissing a lower-value recommendation; the accepted operator
+then launches the exact promoted agent task, receives maintainer guidance,
+publishes structured command and criterion evidence, and hands the pull through
+normal checks, review, merge, and release. The retained report links the
+opportunity and delivered outcome, accounts for reserved and reported use, and
+remains readable after the maintainer revokes the mandate.
+
 The access API is rooted at `/organizations/{id}/access-requests`. Decisions
 are posted to `/access-requests/{request-id}/decision`; live grants appear on
 the member organization and portfolio projections, revoke with an expected

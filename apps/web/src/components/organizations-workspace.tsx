@@ -1416,8 +1416,8 @@ function StewardshipHistory({ group, mandate, submit, owner, operator }: { group
       <Button>Record outcome</Button>
     </form>}
     {owner && <form className="mt-4 grid gap-2 sm:grid-cols-2" onSubmit={(e)=>{e.preventDefault();const d=new FormData(e.currentTarget);void submit(`/organizations/${group.id}/stewardship-mandates/${mandate.id}/tuning`,{method:"PUT",body:JSON.stringify({expected_version:tuning.version,priority_evidence:comma(d.get("priority")),ignored_evidence:comma(d.get("ignored")),minimum_confidence:Number(d.get("confidence"))})});}}>
-      <input name="priority" defaultValue={tuning.priority_evidence.join(", ")} placeholder="Priority authorized evidence types" className="min-h-10 rounded border px-3" />
-      <input name="ignored" defaultValue={tuning.ignored_evidence.join(", ")} placeholder="Ignore authorized evidence types" className="min-h-10 rounded border px-3" />
+      <input name="priority" defaultValue={(tuning.priority_evidence ?? []).join(", ")} placeholder="Priority authorized evidence types" className="min-h-10 rounded border px-3" />
+      <input name="ignored" defaultValue={(tuning.ignored_evidence ?? []).join(", ")} placeholder="Ignore authorized evidence types" className="min-h-10 rounded border px-3" />
       <input name="confidence" type="number" min="0" max="1" step="0.05" defaultValue={tuning.minimum_confidence} aria-label="Minimum confidence" className="min-h-10 rounded border px-3" />
       <Button>Update judgment tuning</Button>
       <p className="text-xs text-[var(--muted)] sm:col-span-2">Adding signals, repositories, actions, budget, agent authority, or other scope requires Publish revision and fresh operator acceptance.</p>

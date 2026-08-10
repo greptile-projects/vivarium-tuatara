@@ -492,7 +492,7 @@ func (s *Store) LinkStewardshipOpportunityWork(id, mandateID, opportunityID, act
 		}
 		now := s.now().Truncate(time.Microsecond)
 		o.Work = &OpportunityWorkLink{ProposalID: proposalID, TaskIDs: taskIDs, BaseRevision: base, CreatedBy: actor, CreatedAt: now}
-		o.Status = "accepted"
+		o.Status = "promoted"
 		o.Version++
 		o.UpdatedBy, o.UpdatedAt = actor, now
 		out = *o
