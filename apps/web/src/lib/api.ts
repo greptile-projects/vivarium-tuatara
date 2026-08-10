@@ -435,6 +435,7 @@ export type OrganizationStewardshipMandate = {
   };
   outcomes: {
     id: string;
+    idempotency_key: string;
     opportunity_id?: string;
     kind: "implementation" | "verification" | "release" | "resource" | "false_positive" | "goal" | "automation";
     status: "succeeded" | "failed" | "partial" | "inactive" | "revoked_access" | "anomalous";

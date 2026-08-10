@@ -253,6 +253,16 @@ func (s *Store) PublishStewardshipOpportunities(id, mandateID, actor string, fin
 				m.Opportunities[i].Rank = i + 1
 			}
 		}
+		returned := map[string]bool{}
+		for _, item := range out {
+			returned[item.ID] = true
+		}
+		out = out[:0]
+		for _, item := range m.Opportunities {
+			if returned[item.ID] {
+				out = append(out, item)
+			}
+		}
 		return s.event(v, "stewardship_opportunities.evaluated", actor, mandateID, map[string]any{"mandate_version": m.Version, "findings": len(uniqueFindings)})
 	})
 	return v, out, err

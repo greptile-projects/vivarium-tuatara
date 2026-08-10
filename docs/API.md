@@ -1804,7 +1804,10 @@ dispositions, accepted and rejected recommendations, implementation,
 verification, release, resource, false-positive, automation, and goal outcomes,
 current budget use, notices, and the newest progress recorded for each mandate
 goal. Owners and the accepted operator append immutable outcome evidence at
-`POST .../{mandate_id}/outcomes`. Three consecutive failures, inactivity,
+`POST .../{mandate_id}/outcomes`; every outcome carries a required client-stable
+`idempotency_key`, whose exact replay returns retained state without charging
+resource use or creating another notice, while a changed replay conflicts.
+Three consecutive failures, inactivity,
 revoked access, anomalous consumption, or crossing the accepted budget pauses
 active automation and retains an actionable notice; revoking an independent
 agent repository grant also pauses every affected active mandate.

@@ -305,6 +305,7 @@ type StewardshipTuning struct {
 
 type StewardshipOutcome struct {
 	ID                  string    `json:"id"`
+	IdempotencyKey      string    `json:"idempotency_key"`
 	OpportunityID       string    `json:"opportunity_id,omitempty"`
 	Kind                string    `json:"kind"`
 	Status              string    `json:"status"`
@@ -1689,7 +1690,8 @@ func (s *Store) RecordStewardshipOutcome(id, mandateID, actor string, input Stew
 		if !operator && !HasRole(*v, actor, "owner") {
 			return ErrNotFound
 		}
-		if !slices.Contains([]string{"implementation", "verification", "release", "resource", "false_positive", "goal", "automation"}, input.Kind) || !slices.Contains([]string{"succeeded", "failed", "partial", "inactive", "revoked_access", "anomalous"}, input.Status) || input.AgentMinutes < 0 || input.Actions < 0 || input.GoalProgress < 0 || input.GoalProgress > 100 || input.ConsecutiveFailures < 0 {
+		key, keyOK := clean(input.IdempotencyKey, 200)
+		if !keyOK || !slices.Contains([]string{"implementation", "verification", "release", "resource", "false_positive", "goal", "automation"}, input.Kind) || !slices.Contains([]string{"succeeded", "failed", "partial", "inactive", "revoked_access", "anomalous"}, input.Status) || input.AgentMinutes < 0 || input.Actions < 0 || input.GoalProgress < 0 || input.GoalProgress > 100 || input.ConsecutiveFailures < 0 {
 			return ErrInvalid
 		}
 		summary, ok := clean(input.Summary, 2000)
@@ -1707,6 +1709,18 @@ func (s *Store) RecordStewardshipOutcome(id, mandateID, actor string, input Stew
 		}
 		if input.Goal != "" && !slices.Contains(m.Revisions[len(m.Revisions)-1].DesiredOutcomes, input.Goal) {
 			return ErrInvalid
+		}
+		input.IdempotencyKey = key
+		for _, prior := range m.Outcomes {
+			if prior.IdempotencyKey != key {
+				continue
+			}
+			matches := prior.RecordedBy == actor && prior.OpportunityID == input.OpportunityID && prior.Kind == input.Kind && prior.Status == input.Status && prior.Summary == summary && prior.Goal == input.Goal && prior.GoalProgress == input.GoalProgress && prior.AgentMinutes == input.AgentMinutes && prior.Actions == input.Actions && prior.ConsecutiveFailures == input.ConsecutiveFailures
+			if !matches {
+				return ErrConflict
+			}
+			out = *m
+			return nil
 		}
 		oid, e := newID()
 		if e != nil {
@@ -1878,15 +1892,32 @@ func (s *Store) RevokeAccessGrant(id, grantID, actor string, expected int, revok
 					if m.Status != "active" || len(m.Revisions) == 0 || m.Revisions[len(m.Revisions)-1].AgentID != g.PrincipalID {
 						continue
 					}
-					affected := false
+					lostCoverage := false
 					for _, resource := range g.Resources {
-						if resource.Kind == "repository" {
-							for _, scope := range m.Revisions[len(m.Revisions)-1].Repositories {
-								affected = affected || scope.RepositoryID == resource.ID
+						if resource.Kind != "repository" || resourceDenied(*g, resource) {
+							continue
+						}
+						inScope := false
+						for _, scope := range m.Revisions[len(m.Revisions)-1].Repositories {
+							inScope = inScope || scope.RepositoryID == resource.ID
+						}
+						if !inScope {
+							continue
+						}
+						covered := false
+						for gi := range v.AccessGrants {
+							other := v.AccessGrants[gi]
+							if other.ID == g.ID || other.PrincipalType != "agent" || other.PrincipalID != g.PrincipalID || other.RevokedAt != nil || (other.ExpiresAt != nil && !other.ExpiresAt.After(now)) || resourceDenied(other, resource) {
+								continue
 							}
+							covered = covered || slices.Contains(other.Resources, resource)
+						}
+						if !covered {
+							lostCoverage = true
+							break
 						}
 					}
-					if !affected {
+					if !lostCoverage {
 						continue
 					}
 					nid, err := newID()
