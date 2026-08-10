@@ -301,7 +301,7 @@ func (s *Store) RecordCommand(id string, outcome CommandOutcome) (Workspace, err
 		return Workspace{}, err
 	}
 	outcome.ID = outcomeID
-	provenance, err := s.readProvenance(id)
+	provenance, err := s.readOrSeedProvenance(id, w)
 	if err != nil {
 		return Workspace{}, err
 	}
@@ -325,7 +325,7 @@ func (s *Store) RecordChange(id string, change Change) (Workspace, error) {
 	if err != nil {
 		return Workspace{}, err
 	}
-	provenance, err := s.readProvenance(id)
+	provenance, err := s.readOrSeedProvenance(id, w)
 	if err != nil {
 		return Workspace{}, err
 	}
@@ -370,6 +370,18 @@ func (s *Store) readProvenance(id string) (provenanceRecord, error) {
 	var value provenanceRecord
 	if json.Unmarshal(b, &value) != nil {
 		return provenanceRecord{}, ErrInvalid
+	}
+	return value, nil
+}
+func (s *Store) readOrSeedProvenance(id string, w Workspace) (provenanceRecord, error) {
+	_, statErr := os.Stat(s.provenancePath(id))
+	value, err := s.readProvenance(id)
+	if err != nil {
+		return value, err
+	}
+	if errors.Is(statErr, os.ErrNotExist) {
+		value.Changes = append([]Change(nil), w.Changes...)
+		value.Commands = append([]CommandOutcome(nil), w.Commands...)
 	}
 	return value, nil
 }

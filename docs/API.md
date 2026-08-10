@@ -139,8 +139,11 @@ effects, and failed pull creation compare-and-swap restores or removes the
 branch without overwriting a concurrent push. A post-pull linkage failure
 durably records `link_pending`, returns `202` with
 `Vivarium-Recovery-Publication: pending`, and an exact retry links the existing
-pull before checks start. The server constructs one Git commit exclusively
-from the checkpoint manifest and stored bytes. With pull creation enabled, it
+pull before checks start. Publication intent is durably staged outside the checkpoint record before a
+branch changes and updated with the pull/link stages, so even a late checkpoint
+directory failure can reconcile the existing commit and pull on retry.
+The server constructs one Git commit exclusively from the checkpoint manifest
+and stored bytes. With pull creation enabled, it
 opens an ordinary pull (preserving proposal-task context when applicable),
 starts repository-defined checks, and records bidirectional workspace,
 checkpoint, task/session, contributor, and command-digest links. Task session
@@ -149,7 +152,8 @@ proposal, and task. Contributor and command evidence is frozen during
 checkpoint capture rather than reconstructed from later bounded workspace
 history. The evidence source is a private append-only workspace ledger, so the
 bounded command/change arrays used by workspace reads cannot evict provenance
-before capture. The generated
+before capture. When a legacy workspace first records post-upgrade activity,
+its retained histories seed that ledger before the new event is appended. The generated
 pull body lists inspected file hashes and attributed command IDs/digests, never
 terminal input, command output, credentials, presence, messages, or other
 runtime state. Existing stale-review, check, review, merge, and queue rules

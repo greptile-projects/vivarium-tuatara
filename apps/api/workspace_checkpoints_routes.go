@@ -140,6 +140,7 @@ func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, c
 				if pullErr == nil {
 					checkpoint, pullErr = store.ConfirmCheckpointPublicationLink(item.ID, checkpoint.ID, pull.ID)
 					if pullErr == nil {
+						_ = store.ClearPublicationIntent(item.ID, checkpoint.ID)
 						startCheckRuns(git, checks, pull)
 					}
 				}
@@ -179,6 +180,43 @@ func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, c
 			writeAPIError(w, 404, "repository_not_found", "repository not found")
 			return
 		}
+		if intent, intentErr := store.GetPublicationIntent(item.ID, checkpoint.ID); intentErr == nil {
+			if intent.Publication.Branch != input.Branch {
+				writeAPIError(w, 409, "checkpoint_publication_pending", "checkpoint publication recovery requires the original branch")
+				return
+			}
+			var pull pullrequests.PullRequest
+			var repairErr error
+			if intent.Publication.PullRequestID != "" {
+				pull, repairErr = pulls.Get(item.RepositoryID, intent.Publication.PullRequestID)
+			} else {
+				ref, refErr := repository.ReadReference("refs/heads/" + intent.Publication.Branch)
+				if refErr != nil || ref.Target != intent.Publication.CommitID {
+					repairErr = errors.New("publication branch is not durable")
+				}
+			}
+			if repairErr == nil && intent.Publication.PullRequestID != "" && intent.Publication.LinkPending {
+				pull, repairErr = pulls.LinkWorkspace(item.RepositoryID, pull.ID, item.ID, checkpoint.ID, intent.Publication.ContributorIDs, intent.Publication.CommandIDs)
+				if repairErr == nil {
+					intent.Publication.LinkPending = false
+					repairErr = store.SavePublicationIntent(intent)
+				}
+			}
+			if repairErr == nil {
+				checkpoint, repairErr = store.RecordCheckpointPublication(item.ID, checkpoint.ID, intent.Publication)
+			}
+			if repairErr != nil {
+				w.Header().Set("Vivarium-Recovery-Publication", "pending")
+				writeJSON(w, 202, map[string]any{"checkpoint": checkpoint.Public(), "pull_request": pull})
+				return
+			}
+			_ = store.ClearPublicationIntent(item.ID, checkpoint.ID)
+			if intent.Publication.PullRequestID != "" {
+				startCheckRuns(git, checks, pull)
+			}
+			writeJSON(w, 200, map[string]any{"checkpoint": checkpoint, "pull_request": pull})
+			return
+		}
 		if input.CreatePull {
 			if _, targetErr := repository.ReadReference("refs/heads/" + input.TargetBranch); targetErr != nil {
 				writeAPIError(w, 422, "checkpoint_publication_invalid", "target_branch must identify an existing branch")
@@ -215,6 +253,12 @@ func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, c
 			writeAPIError(w, 500, "checkpoint_commit_failed", "checkpoint could not be committed")
 			return
 		}
+		contributors, commandIDs := workspacePublicationEvidence(checkpoint)
+		intent := workspaces.PublicationIntent{WorkspaceID: item.ID, CheckpointID: checkpoint.ID, Publication: workspaces.Publication{Branch: input.Branch, CommitID: commitID, TaskID: item.Source.TaskID, SessionID: input.SessionID, ContributorIDs: contributors, CommandIDs: commandIDs, LinkPending: input.CreatePull, PublishedBy: actor.UserID, PublishedAt: time.Now().UTC()}}
+		if err = store.SavePublicationIntent(intent); err != nil {
+			writeAPIError(w, 500, "checkpoint_publication_unavailable", "publication recovery could not be reserved")
+			return
+		}
 		newRef := storage.Reference{Name: refName, Target: commitID}
 		if refErr == nil {
 			err = repository.UpdateReferenceIfTarget(newRef, current.Target)
@@ -222,10 +266,10 @@ func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, c
 			err = repository.CreateReference(newRef)
 		}
 		if err != nil {
+			_ = store.ClearPublicationIntent(item.ID, checkpoint.ID)
 			writeAPIError(w, 409, "workspace_branch_changed", "the branch changed while publishing")
 			return
 		}
-		contributors, commandIDs := workspacePublicationEvidence(checkpoint)
 		var pull *pullrequests.PullRequest
 		if input.CreatePull {
 			title := strings.TrimSpace(input.Title)
@@ -250,7 +294,13 @@ func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, c
 				} else {
 					_ = repository.DeleteReferenceIfTarget(refName, commitID)
 				}
+				_ = store.ClearPublicationIntent(item.ID, checkpoint.ID)
 				writeAPIError(w, 409, "checkpoint_pull_failed", "branch was published but pull request creation failed")
+				return
+			}
+			intent.Publication.PullRequestID = created.ID
+			if err = store.SavePublicationIntent(intent); err != nil {
+				writeAPIError(w, 500, "checkpoint_link_failed", "pull request was created and publication recovery is pending")
 				return
 			}
 			created, err = pulls.LinkWorkspace(item.RepositoryID, created.ID, item.ID, checkpoint.ID, contributors, commandIDs)
@@ -264,7 +314,11 @@ func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, c
 				writeJSON(w, 202, map[string]any{"checkpoint": pending, "pull_request": created})
 				return
 			}
-			startCheckRuns(git, checks, created)
+			intent.Publication.LinkPending = false
+			if err = store.SavePublicationIntent(intent); err != nil {
+				writeAPIError(w, 500, "checkpoint_link_failed", "linked pull publication recovery is pending")
+				return
+			}
 			pull = &created
 		}
 		pullID := ""
@@ -275,6 +329,10 @@ func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, c
 		if err != nil {
 			writeAPIError(w, 500, "checkpoint_link_failed", "Git publication succeeded but checkpoint attribution is pending")
 			return
+		}
+		_ = store.ClearPublicationIntent(item.ID, checkpoint.ID)
+		if pull != nil {
+			startCheckRuns(git, checks, *pull)
 		}
 		writeJSON(w, 201, map[string]any{"checkpoint": published, "pull_request": pull})
 	})

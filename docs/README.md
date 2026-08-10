@@ -90,10 +90,13 @@ proposal task/session context when supplied, names exact contributors, and
 summarizes file hashes plus command digests frozen at checkpoint capture. A
 cross-process checkpoint publication claim excludes duplicate branch/pull
 effects, branch compensation is compare-and-swap safe, and post-pull linkage
-failure becomes durable retryable intent rather than an orphan. Supplied task
+failure becomes durable retryable intent rather than an orphan. An outbox
+created before Git mutation also recovers a linked pull when the final
+checkpoint-record write itself fails. Supplied task
 sessions must belong to the same repository/proposal/task. Checkpoint capture
 uses a private append-only evidence ledger independently of bounded workspace
-display histories. Repository checks, stale-revision
+display histories; legacy retained histories seed the ledger before the first
+new event. Repository checks, stale-revision
 reviews, branch protection, and the integration queue apply without a
 workspace-specific bypass. Terminal input, outputs, discussion, credentials,
 and unpublished runtime files remain outside the commit and generated review.

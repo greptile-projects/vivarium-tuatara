@@ -70,6 +70,80 @@ type Publication struct {
 	PublishedAt    time.Time `json:"published_at"`
 }
 
+type PublicationIntent struct {
+	WorkspaceID  string      `json:"workspace_id"`
+	CheckpointID string      `json:"checkpoint_id"`
+	Publication  Publication `json:"publication"`
+}
+
+func (s *Store) publicationIntentPath(workspaceID, id string) string {
+	return filepath.Join(s.root, "publication-intents", workspaceID, id+".json")
+}
+func (s *Store) SavePublicationIntent(intent PublicationIntent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dir := filepath.Dir(s.publicationIntentPath(intent.WorkspaceID, intent.CheckpointID))
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(intent, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".intent-")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if err = tmp.Chmod(0600); err == nil {
+		_, err = tmp.Write(b)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err = os.Rename(name, s.publicationIntentPath(intent.WorkspaceID, intent.CheckpointID)); err != nil {
+		return err
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}
+func (s *Store) GetPublicationIntent(workspaceID, id string) (PublicationIntent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, err := os.ReadFile(s.publicationIntentPath(workspaceID, id))
+	if errors.Is(err, os.ErrNotExist) {
+		return PublicationIntent{}, ErrNotFound
+	}
+	if err != nil {
+		return PublicationIntent{}, err
+	}
+	var intent PublicationIntent
+	if json.Unmarshal(b, &intent) != nil || intent.WorkspaceID != workspaceID || intent.CheckpointID != id {
+		return PublicationIntent{}, ErrNotFound
+	}
+	return intent, nil
+}
+func (s *Store) ClearPublicationIntent(workspaceID, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	err := os.Remove(s.publicationIntentPath(workspaceID, id))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
 func (s *Store) ConfirmCheckpointPublicationLink(workspaceID, id, pullID string) (Checkpoint, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
