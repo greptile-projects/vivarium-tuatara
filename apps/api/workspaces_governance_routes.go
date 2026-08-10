@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -131,12 +132,15 @@ func registerWorkspaceGovernanceRoutes(mux *http.ServeMux, repos *repositories.S
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
+		if err := removeWorkspaceRuntime(item.ID); err != nil {
+			writeAPIError(w, 503, "workspace_teardown_failed", "workspace compute could not be removed; retry the stop")
+			return
+		}
 		updated, err := store.Stop(item.ID, actor.UserID, strings.TrimSpace(in.Reason), "stopped")
 		if err != nil {
 			writeAPIError(w, 409, "workspace_stop_failed", "workspace could not be stopped")
 			return
 		}
-		_ = exec.Command("docker", "rm", "-f", "-v", "vivarium-workspace-"+item.ID).Run()
 		writeJSON(w, 200, updated)
 	})
 	mux.HandleFunc("POST /workspaces/{workspace_id}/reconcile", func(w http.ResponseWriter, r *http.Request) {
@@ -144,19 +148,64 @@ func registerWorkspaceGovernanceRoutes(mux *http.ServeMux, repos *repositories.S
 		if !ok {
 			return
 		}
-		now := time.Now().UTC()
-		reason := ""
-		if item.ExpiresAt != nil && !item.ExpiresAt.After(now) {
-			reason = "announced workspace expiry reached"
-		} else if item.Policy.IdleMinutes > 0 && item.LastActivityAt.Add(time.Duration(item.Policy.IdleMinutes)*time.Minute).Before(now) {
-			reason = "workspace idle limit reached"
-		}
-		if reason != "" && (item.State == "running" || item.State == "suspended") {
-			item, _ = store.Stop(item.ID, actor.UserID, reason, "expired")
-			_ = exec.Command("docker", "rm", "-f", "-v", "vivarium-workspace-"+item.ID).Run()
+		item, err := reconcileWorkspaceLifecycle(store, item, actor.UserID, time.Now().UTC())
+		if err != nil {
+			writeAPIError(w, 503, "workspace_teardown_failed", "expired workspace compute could not be removed; retry reconciliation")
+			return
 		}
 		writeJSON(w, 200, item)
 	})
+}
+
+func removeWorkspaceRuntime(id string) error {
+	output, err := exec.Command("docker", "rm", "-f", "-v", "vivarium-workspace-"+id).CombinedOutput()
+	if err != nil && !strings.Contains(strings.ToLower(string(output)), "no such container") {
+		return err
+	}
+	return nil
+}
+
+func reconcileWorkspaceLifecycle(store *workspaces.Store, item workspaces.Workspace, actor string, now time.Time) (workspaces.Workspace, error) {
+	if item.State != "running" && item.State != "suspended" {
+		return item, nil
+	}
+	reason := ""
+	if item.ExpiresAt != nil && !item.ExpiresAt.After(now) {
+		reason = "workspace runtime deadline reached"
+	} else if item.Policy.IdleMinutes > 0 && !item.LastActivityAt.Add(time.Duration(item.Policy.IdleMinutes)*time.Minute).After(now) {
+		reason = "workspace idle limit reached"
+	}
+	if reason == "" {
+		return item, nil
+	}
+	if err := removeWorkspaceRuntime(item.ID); err != nil {
+		return item, err
+	}
+	return store.Stop(item.ID, actor, reason, "expired")
+}
+
+func startWorkspaceRecovery(store *workspaces.Store) {
+	recover := func() {
+		items, err := store.ListAll()
+		if err != nil {
+			log.Printf("recover workspaces: %v", err)
+			return
+		}
+		now := time.Now().UTC()
+		for _, item := range items {
+			if _, err := reconcileWorkspaceLifecycle(store, item, "workspace-lifecycle", now); err != nil {
+				log.Printf("recover workspace %s: %v", item.ID, err)
+			}
+		}
+	}
+	recover()
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			recover()
+		}
+	}()
 }
 
 func workspaceOwner(w http.ResponseWriter, r *http.Request, store *workspaces.Store, repos *repositories.Store, credentials *auth.Store) (workspaces.Workspace, auth.Credential, bool) {

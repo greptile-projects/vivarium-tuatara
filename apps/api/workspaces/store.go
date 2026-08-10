@@ -113,6 +113,7 @@ type Change struct {
 type Workspace struct {
 	ID                string           `json:"id"`
 	RepositoryID      string           `json:"repository_id"`
+	OrganizationID    string           `json:"organization_id,omitempty"`
 	CommitID          string           `json:"commit_id"`
 	Definition        Definition       `json:"definition"`
 	DefinitionSHA256  string           `json:"definition_sha256"`
@@ -173,6 +174,7 @@ func (s *Store) Join(id, actor, focus, path string) (Workspace, error) {
 		w.Events = append(w.Events, Event{Kind: "presence.joined", ActorID: actor, Role: "observation", CreatedAt: now})
 	}
 	w.UpdatedAt = now
+	w.LastActivityAt = now
 	return w, s.write(w)
 }
 
@@ -262,6 +264,7 @@ func (s *Store) AddMessage(id, actor, body string) (Workspace, error) {
 		w.Messages = w.Messages[len(w.Messages)-200:]
 	}
 	w.UpdatedAt = now
+	w.LastActivityAt = now
 	w.Events = append(w.Events, Event{ID: mid, Kind: "discussion.message", ActorID: actor, Role: "instruction", Detail: mid, CreatedAt: now})
 	return w, s.write(w)
 }
@@ -325,6 +328,7 @@ func (s *Store) RecordCommand(id string, outcome CommandOutcome) (Workspace, err
 		w.Commands = w.Commands[len(w.Commands)-100:]
 	}
 	w.UpdatedAt = s.now()
+	w.LastActivityAt = w.UpdatedAt
 	w.Events = append(w.Events, Event{Kind: "command.completed", ActorID: outcome.ActorID, Role: "execution", Detail: outcome.ID, CreatedAt: w.UpdatedAt})
 	err = s.write(w)
 	return w, err
@@ -349,6 +353,7 @@ func (s *Store) RecordChange(id string, change Change) (Workspace, error) {
 		w.Changes = w.Changes[len(w.Changes)-200:]
 	}
 	w.UpdatedAt = s.now()
+	w.LastActivityAt = w.UpdatedAt
 	w.Events = append(w.Events, Event{Kind: "file.changed", ActorID: change.ActorID, Role: "authorship", Detail: change.Path, CreatedAt: w.UpdatedAt})
 	err = s.write(w)
 	return w, err
@@ -515,6 +520,9 @@ func (s *Store) Stop(id, actor, reason, state string) (Workspace, error) {
 	w, err := s.read(id)
 	if err != nil {
 		return Workspace{}, err
+	}
+	if w.State == "stopped" || w.State == "expired" {
+		return Workspace{}, ErrConflict
 	}
 	if state != "stopped" && state != "expired" {
 		return Workspace{}, ErrInvalid

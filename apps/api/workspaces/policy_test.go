@@ -63,3 +63,55 @@ func TestStopRetainsWorkspaceAndConsumptionEvidence(t *testing.T) {
 		t.Fatalf("usage = %#v", usage)
 	}
 }
+
+func TestOrganizationPolicyUpdateMarksOnlyItsWorkspacesForRebuild(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := store.Create(Workspace{RepositoryID: "repo-1", OrganizationID: "org-1", CommitID: "commit", CreatorID: "owner", Policy: DefaultPolicy()}, []byte("one"))
+	second, _ := store.Create(Workspace{RepositoryID: "repo-2", OrganizationID: "org-2", CommitID: "commit", CreatorID: "owner", Policy: DefaultPolicy()}, []byte("two"))
+	update := DefaultPolicy()
+	update.MaxCPUs = 2
+	if _, err = store.PutPolicy("organization", "org-1", "owner", update, 1); err != nil {
+		t.Fatal(err)
+	}
+	first, _ = store.Get(first.ID)
+	second, _ = store.Get(second.ID)
+	if !first.RebuildRequired || second.RebuildRequired {
+		t.Fatalf("first=%#v second=%#v", first, second)
+	}
+}
+
+func TestActivityMutationsRenewIdleDeadline(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return clock }
+	w, err := store.Create(Workspace{RepositoryID: "repo", CommitID: "commit", CreatorID: "owner", Policy: DefaultPolicy()}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(time.Minute)
+	w, err = store.Join(w.ID, "owner", "workspace", "")
+	if err != nil || !w.LastActivityAt.Equal(clock) {
+		t.Fatal("presence did not renew activity", err)
+	}
+	clock = clock.Add(time.Minute)
+	w, err = store.AddMessage(w.ID, "owner", "still here")
+	if err != nil || !w.LastActivityAt.Equal(clock) {
+		t.Fatal("message did not renew activity", err)
+	}
+	clock = clock.Add(time.Minute)
+	w, err = store.RecordCommand(w.ID, CommandOutcome{ActorID: "owner"})
+	if err != nil || !w.LastActivityAt.Equal(clock) {
+		t.Fatal("command did not renew activity", err)
+	}
+	clock = clock.Add(time.Minute)
+	w, err = store.RecordChange(w.ID, Change{ActorID: "owner", Path: "README.md"})
+	if err != nil || !w.LastActivityAt.Equal(clock) {
+		t.Fatal("edit did not renew activity", err)
+	}
+}

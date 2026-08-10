@@ -102,7 +102,7 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 		if actor.UserID == repoMeta.OwnerID {
 			role = "owner"
 		}
-		created, err := store.Create(workspaces.Workspace{RepositoryID: input.RepositoryID, CommitID: input.CommitID, Definition: definition, Source: input.Source, CreatorID: actor.UserID, Access: workspaces.Access{Role: role, Scopes: []string{"repositories:read", "repositories:write"}}, Policy: repositoryPolicy, PolicyScope: policyScope, PolicyVersion: repositoryPolicy.Version}, definitionBytes)
+		created, err := store.Create(workspaces.Workspace{RepositoryID: input.RepositoryID, OrganizationID: repoMeta.OrganizationID, CommitID: input.CommitID, Definition: definition, Source: input.Source, CreatorID: actor.UserID, Access: workspaces.Access{Role: role, Scopes: []string{"repositories:read", "repositories:write"}}, Policy: repositoryPolicy, PolicyScope: policyScope, PolicyVersion: repositoryPolicy.Version}, definitionBytes)
 		if err != nil {
 			writeAPIError(w, 500, "workspace_create_failed", "workspace could not be created")
 			return

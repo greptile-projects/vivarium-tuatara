@@ -93,3 +93,36 @@ func TestProvisionWorkspaceRejectsImageDeclaredVolumesBeforeContainerCreation(t 
 		t.Fatal("container was created for image-declared volume")
 	}
 }
+
+func TestWorkspaceLifecycleDoesNotCommitExpiryWhenTeardownFails(t *testing.T) {
+	bin := t.TempDir()
+	docker := filepath.Join(bin, "docker")
+	if err := os.WriteFile(docker, []byte("#!/bin/sh\necho teardown failed >&2\nexit 73\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	store, err := workspaces.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := store.Create(workspaces.Workspace{RepositoryID: "repo", CommitID: "commit", CreatorID: "owner", Policy: workspaces.DefaultPolicy()}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err = store.Complete(item.ID, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired := time.Now().UTC().Add(-time.Minute)
+	item.ExpiresAt = &expired
+	if _, err = reconcileWorkspaceLifecycle(store, item, "workspace-lifecycle", time.Now().UTC()); err == nil {
+		t.Fatal("teardown failure was ignored")
+	}
+	retained, err := store.Get(item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retained.State != "running" || retained.StoppedAt != nil {
+		t.Fatalf("workspace terminalized before teardown: %#v", retained)
+	}
+}

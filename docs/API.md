@@ -71,9 +71,11 @@ to checkpoint and export.
 Repository owners inspect attributed reservations and elapsed consumption at
 `GET /repositories/{repository_id}/workspace-usage`. `POST
 /workspaces/{id}/expiry` announces a future expiry so collaborators can publish
-or checkpoint legitimate unpublished work. `POST .../reconcile` expires an
-environment after that deadline or its idle limit; `POST .../stop` immediately
-removes compute. These terminal actions revoke control and remove the named
+or checkpoint legitimate unpublished work. Startup and a periodic lifecycle
+pass autonomously expire environments after that deadline or their idle limit;
+`POST .../reconcile` provides the same idempotent owner-triggered check, and
+`POST .../stop` immediately removes compute. Teardown must succeed before a
+terminal state is committed. These terminal actions revoke control and remove the named
 container but preserve the workspace record, provenance ledger, checkpoints,
 published commits, and pull links. Private sharing restricts a workspace to its
 creator and repository owner; repository access is still revalidated for every

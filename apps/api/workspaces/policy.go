@@ -114,17 +114,18 @@ func (s *Store) PutPolicy(scope, id, actor string, p Policy, expected int) (Poli
 	if err := os.Rename(tmp, path); err != nil {
 		return Policy{}, err
 	}
-	if scope == "repository" {
+	if scope == "repository" || scope == "organization" {
 		entries, _ := os.ReadDir(s.root)
 		for _, entry := range entries {
 			if entry.IsDir() {
 				continue
 			}
 			w, readErr := s.readName(entry.Name())
-			if readErr != nil || w.RepositoryID != id || w.State == "stopped" || w.State == "expired" {
+			matches := scope == "repository" && w.RepositoryID == id || scope == "organization" && w.OrganizationID == id
+			if readErr != nil || !matches || w.State == "stopped" || w.State == "expired" {
 				continue
 			}
-			w.RebuildRequired, w.RebuildReasons, w.UpdatedAt = true, []string{"workspace policy changed after launch"}, s.now()
+			w.RebuildRequired, w.RebuildReasons, w.UpdatedAt = true, []string{scope + " workspace policy changed after launch"}, s.now()
 			_ = s.write(w)
 		}
 	}

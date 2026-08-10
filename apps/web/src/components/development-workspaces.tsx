@@ -213,7 +213,7 @@ export function DevelopmentWorkspaces({
                 Effective access: {item.effective_access.role} ·{" "}
                 {item.effective_access.scopes.join(", ")}
               </p>
-              <WorkspaceGovernance workspace={item} onWorkspace={(updated) => setItems([updated])} />
+              <WorkspaceGovernance workspace={item} onWorkspace={(updated) => setItems((current) => current.map((value) => value.id === updated.id ? updated : value))} />
               {!controlsLifecycle(item) && (
                 <Button
                   className="mt-4"

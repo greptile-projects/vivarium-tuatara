@@ -259,7 +259,9 @@ whenever dependencies change or the web job fails before it starts.
   active work rebuild-required. Owners inspect attributed elapsed/reserved
   consumption, announce expiry for checkpoint export, and stop or expire only
   compute and control authority while checkpoint, provenance, commit, and pull
-  evidence remains retained.
+  evidence remains retained. Startup and periodic lifecycle recovery enforce
+  runtime and idle deadlines; compute teardown succeeds before terminal state
+  is recorded, so failed removal remains live and retryable.
   Running workspace automation reuses that container for bounded file browsing,
   compare-and-swap editing, literal search, attributed command outcomes,
   loopback port discovery, and authenticated sandboxed previews. Durable change
