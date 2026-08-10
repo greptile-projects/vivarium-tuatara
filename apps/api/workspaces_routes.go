@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -68,6 +70,33 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 		if err = validateWorkspaceSource(input.Source, input.CommitID, proposalStore, pullStore, incidentStore); err != nil {
 			writeAPIError(w, 422, "workspace_source_invalid", err.Error())
 			return
+		}
+		var releaseExperimentClaim func()
+		if input.Source.Kind == "decision_experiment" {
+			existing, reused, release, claimErr := store.ClaimDecisionExperiment(input.RepositoryID, input.CommitID, actor.UserID, input.Source.DecisionID, input.Source.AlternativeID)
+			if claimErr != nil {
+				writeAPIError(w, 500, "workspace_create_failed", "experiment launch could not be reserved")
+				return
+			}
+			if reused {
+				w.Header().Set("Location", "/workspaces/"+existing.ID)
+				writeJSON(w, 200, existing)
+				return
+			}
+			releaseExperimentClaim = release
+			defer releaseExperimentClaim()
+			baseline, baselineErr := repo.ReadReference("refs/heads/" + repoMeta.DefaultBranch)
+			if baselineErr != nil {
+				writeAPIError(w, 503, "experiment_baseline_unavailable", "the current default-branch experiment baseline is unavailable")
+				return
+			}
+			baselineDefinition, baselineErr := exec.Command("git", "--git-dir="+repo.Path(), "show", baseline.Target+":"+workspaces.DefinitionPath).Output()
+			if baselineErr != nil {
+				writeAPIError(w, 503, "experiment_baseline_unavailable", "the current default-branch experiment environment is unavailable")
+				return
+			}
+			digest := sha256.Sum256(baselineDefinition)
+			input.Source.DefaultBranchRevision, input.Source.DefaultDefinitionSHA256 = baseline.Target, hex.EncodeToString(digest[:])
 		}
 		var reasoning *workspaces.ReasoningContext
 		if input.Source.Kind == "proposal_task" && proposalStore != nil {
@@ -233,6 +262,17 @@ func parseWorkspaceDefinition(body []byte) (workspaces.Definition, error) {
 	if len(d.Tools) > 50 || len(d.Dependencies) > 100 {
 		return d, errors.New("tools and dependencies must be bounded")
 	}
+	if len(d.Experiments) > 20 {
+		return d, errors.New("at most 20 experiment commands are allowed")
+	}
+	seenExperiments := map[string]bool{}
+	for _, experiment := range d.Experiments {
+		name, command := strings.TrimSpace(experiment.Name), strings.TrimSpace(experiment.Command)
+		if name == "" || command == "" || len(name) > 100 || len(command) > 2000 || seenExperiments[name] {
+			return d, errors.New("experiment commands require unique bounded names and commands")
+		}
+		seenExperiments[name] = true
+	}
 	for _, tool := range d.Tools {
 		if strings.TrimSpace(tool.Name) == "" || strings.TrimSpace(tool.Version) == "" || len(tool.Name) > 100 || len(tool.Version) > 100 {
 			return d, errors.New("tools require bounded names and versions")
@@ -256,6 +296,11 @@ func parseWorkspaceDefinition(body []byte) (workspaces.Definition, error) {
 func validateWorkspaceSource(source workspaces.Source, commit string, ps *proposals.Store, prs *pullrequests.Store, is *incidents.Store) error {
 	switch source.Kind {
 	case "repository":
+		return nil
+	case "decision_experiment":
+		if strings.TrimSpace(source.DecisionID) == "" || strings.TrimSpace(source.AlternativeID) == "" {
+			return errors.New("decision experiments require a decision and alternative")
+		}
 		return nil
 	case "proposal_task":
 		if ps == nil {
@@ -296,7 +341,7 @@ func validateWorkspaceSource(source workspaces.Source, commit string, ps *propos
 		}
 		return errors.New("incident repair not found")
 	default:
-		return errors.New("source kind must be repository, proposal_task, pull_request, or incident_repair")
+		return errors.New("source kind must be repository, proposal_task, pull_request, incident_repair, or decision_experiment")
 	}
 }
 func provisionWorkspace(gitPath, runtime, id, commit string, d workspaces.Definition) ([]workspaces.SetupStep, bool) {

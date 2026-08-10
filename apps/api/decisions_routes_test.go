@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,7 +16,48 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
+
+func TestHistoricalExperimentInvalidatesOnlyAfterLaunchBaselineMoves(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	ownerID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	meta, err := catalog.Create(ownerID, "historical-experiment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, _ := gitStore.Open(meta.ID)
+	definition := []byte(`{"version":1,"image":"alpine","tools":[],"dependencies":[],"setup":[],"experiments":[{"name":"bench","command":"true"}],"resources":{"cpus":1,"memory_mb":64,"storage_mb":32,"setup_seconds":30}}`)
+	blob, _ := repo.WriteObject(storage.BlobObject, definition)
+	definitionTree := writeTestTree(t, repo, testTreeEntry{mode: "100644", name: "workspace.json", id: blob})
+	root := writeTestTree(t, repo, testTreeEntry{mode: "40000", name: ".vivarium", id: definitionTree})
+	old := writeTestCommit(t, repo, root, nil, 1, "old")
+	baseline := writeTestCommit(t, repo, root, []storage.ObjectID{old}, 2, "baseline")
+	if err = repo.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(baseline)}); err != nil {
+		t.Fatal(err)
+	}
+	workspaceStore, _ := workspaces.New(t.TempDir())
+	workspace, _ := workspaceStore.Create(workspaces.Workspace{RepositoryID: meta.ID, CommitID: string(old), CreatorID: ownerID, Source: workspaces.Source{Kind: "decision_experiment", DecisionID: "decision", AlternativeID: "alternative"}, Definition: workspaces.Definition{Version: 1, Image: "alpine"}}, definition)
+	workspace, _ = workspaceStore.Complete(workspace.ID, nil, false)
+	digest := sha256.Sum256(definition)
+	if _, _, err = currentDecisionBaseline(meta.ID, gitStore, catalog); err != nil {
+		t.Fatalf("baseline: %v", err)
+	}
+	decision := decisions.Decision{RepositoryID: meta.ID, Experiments: []decisions.Experiment{{ID: "experiment", WorkspaceID: workspace.ID, Revision: string(old), DefinitionSHA256: workspace.DefinitionSHA256, DefaultBranchRevision: string(baseline), DefaultDefinitionSHA256: hex.EncodeToString(digest[:])}}}
+	projected := projectDecisionExperiments(decision, gitStore, catalog, workspaceStore)
+	if projected.Experiments[0].Invalidated {
+		t.Fatalf("historical pin invalidated at launch = %#v", projected.Experiments[0].InvalidationReasons)
+	}
+	later := writeTestCommit(t, repo, root, []storage.ObjectID{baseline}, 3, "later")
+	if err = repo.UpdateReferenceIfTarget(storage.Reference{Name: "refs/heads/main", Target: string(later)}, string(baseline)); err != nil {
+		t.Fatal(err)
+	}
+	projected = projectDecisionExperiments(decision, gitStore, catalog, workspaceStore)
+	if !projected.Experiments[0].Invalidated {
+		t.Fatal("post-launch default branch movement was not reported")
+	}
+}
 
 func TestDecisionAPIKeepsPendingContextCollaborativeAndVersioned(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())

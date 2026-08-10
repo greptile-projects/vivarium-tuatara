@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -34,21 +35,30 @@ type Tool struct {
 	Version string `json:"version"`
 }
 type Definition struct {
-	Version      int       `json:"version"`
-	Image        string    `json:"image"`
-	Tools        []Tool    `json:"tools"`
-	Dependencies []string  `json:"dependencies"`
-	Setup        []string  `json:"setup"`
-	Resources    Resources `json:"resources"`
+	Version      int                 `json:"version"`
+	Image        string              `json:"image"`
+	Tools        []Tool              `json:"tools"`
+	Dependencies []string            `json:"dependencies"`
+	Setup        []string            `json:"setup"`
+	Experiments  []ExperimentCommand `json:"experiments,omitempty"`
+	Resources    Resources           `json:"resources"`
+}
+type ExperimentCommand struct {
+	Name    string `json:"name"`
+	Command string `json:"command"`
 }
 type Source struct {
-	Kind          string `json:"kind"`
-	RepositoryID  string `json:"repository_id"`
-	ProposalID    string `json:"proposal_id,omitempty"`
-	TaskID        string `json:"task_id,omitempty"`
-	PullRequestID string `json:"pull_request_id,omitempty"`
-	IncidentID    string `json:"incident_id,omitempty"`
-	RepairID      string `json:"repair_id,omitempty"`
+	Kind                    string `json:"kind"`
+	RepositoryID            string `json:"repository_id"`
+	ProposalID              string `json:"proposal_id,omitempty"`
+	TaskID                  string `json:"task_id,omitempty"`
+	PullRequestID           string `json:"pull_request_id,omitempty"`
+	IncidentID              string `json:"incident_id,omitempty"`
+	RepairID                string `json:"repair_id,omitempty"`
+	DecisionID              string `json:"decision_id,omitempty"`
+	AlternativeID           string `json:"alternative_id,omitempty"`
+	DefaultBranchRevision   string `json:"default_branch_revision,omitempty"`
+	DefaultDefinitionSHA256 string `json:"default_definition_sha256,omitempty"`
 }
 type Access struct {
 	Role   string   `json:"role"`
@@ -479,6 +489,44 @@ func (s *Store) controlLock(id string) *sync.Mutex {
 	return s.controls[id]
 }
 func (s *Store) RuntimePath(id string) string { return filepath.Join(s.root, "runtime", id) }
+
+// ClaimDecisionExperiment serializes identical workspace launches across
+// processes. The caller holds the returned release through provisioning so an
+// exact retry either creates the one workspace or reuses its running result.
+func (s *Store) ClaimDecisionExperiment(repositoryID, commitID, creatorID, decisionID, alternativeID string) (Workspace, bool, func(), error) {
+	claim, err := os.OpenFile(filepath.Join(s.root, ".decision-experiment-launch.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return Workspace{}, false, nil, err
+	}
+	if err = syscall.Flock(int(claim.Fd()), syscall.LOCK_EX); err != nil {
+		claim.Close()
+		return Workspace{}, false, nil, err
+	}
+	release := func() { _ = syscall.Flock(int(claim.Fd()), syscall.LOCK_UN); _ = claim.Close() }
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		release()
+		return Workspace{}, false, nil, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		workspace, readErr := s.readName(entry.Name())
+		if readErr != nil {
+			release()
+			return Workspace{}, false, nil, readErr
+		}
+		if workspace.RepositoryID == repositoryID && workspace.CommitID == commitID && workspace.CreatorID == creatorID && workspace.Source.Kind == "decision_experiment" && workspace.Source.DecisionID == decisionID && workspace.Source.AlternativeID == alternativeID && workspace.State == "running" {
+			release()
+			return workspace, true, func() {}, nil
+		}
+	}
+	return Workspace{}, false, release, nil
+}
+
 func (s *Store) Create(w Workspace, definitionBytes []byte) (Workspace, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

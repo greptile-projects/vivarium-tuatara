@@ -48,6 +48,7 @@ export type TechnicalDecision = {
   version: number;
   alternatives: DecisionAlternative[];
   findings: DecisionFinding[];
+  experiments: DecisionExperiment[];
   history: {
     id: string;
     kind:
@@ -64,6 +65,34 @@ export type TechnicalDecision = {
   }[];
   created_at: string;
   updated_at: string;
+};
+export type DecisionExperiment = {
+  id: string;
+  alternative_id: string;
+  workspace_id: string;
+  revision: string;
+  definition_sha256: string;
+  default_branch_revision: string;
+  default_definition_sha256: string;
+  commands: string[];
+  launched_by: string;
+  launched_at: string;
+  version: number;
+  invalidated: boolean;
+  invalidation_reasons: string[];
+  evidence: {
+    id: string;
+    checkpoint_ids: string[];
+    command_ids: string[];
+    measurements: { name: string; value: number; unit: string }[];
+    artifacts: { label: string; path: string; sha256: string; size: number }[];
+    cpu_seconds: number;
+    memory_mb_hours: number;
+    storage_mb_hours: number;
+    notes?: string;
+    recorded_by: string;
+    recorded_at: string;
+  }[];
 };
 export type DecisionEvidence = {
   kind: "code" | "dependency" | "release" | "incident" | "usage";
@@ -290,13 +319,17 @@ export type DevelopmentWorkspace = {
   created_at: string;
   updated_at: string;
   source: {
-    kind: "repository" | "proposal_task" | "pull_request" | "incident_repair";
+    kind: "repository" | "proposal_task" | "pull_request" | "incident_repair" | "decision_experiment";
     repository_id: string;
     proposal_id?: string;
     task_id?: string;
     pull_request_id?: string;
     incident_id?: string;
     repair_id?: string;
+    decision_id?: string;
+    alternative_id?: string;
+    default_branch_revision?: string;
+    default_definition_sha256?: string;
   };
   definition: {
     version: number;
@@ -304,6 +337,7 @@ export type DevelopmentWorkspace = {
     tools: { name: string; version: string }[];
     dependencies: string[];
     setup: string[];
+    experiments?: { name: string; command: string }[];
     resources: {
       cpus: number;
       memory_mb: number;

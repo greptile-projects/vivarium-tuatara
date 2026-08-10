@@ -205,3 +205,26 @@ func TestDefinitionSnapshotIsIndependentOfCaller(t *testing.T) {
 		t.Fatalf("loaded = %#v, %v", loaded, err)
 	}
 }
+
+func TestDecisionExperimentLaunchClaimReusesRunningWorkspace(t *testing.T) {
+	store, _ := New(t.TempDir())
+	source := Source{Kind: "decision_experiment", DecisionID: "decision", AlternativeID: "alternative"}
+	_, reused, release, err := store.ClaimDecisionExperiment("repo", "commit", "owner", "decision", "alternative")
+	if err != nil || reused {
+		t.Fatalf("initial claim reused = %v, %v", reused, err)
+	}
+	created, err := store.Create(Workspace{RepositoryID: "repo", CommitID: "commit", CreatorID: "owner", Source: source, Definition: Definition{Version: 1, Image: "alpine"}}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err = store.Complete(created.ID, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	existing, reused, release, err := store.ClaimDecisionExperiment("repo", "commit", "owner", "decision", "alternative")
+	defer release()
+	if err != nil || !reused || existing.ID != created.ID {
+		t.Fatalf("retry = %#v, %v, %v", existing, reused, err)
+	}
+}

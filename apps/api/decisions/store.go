@@ -105,6 +105,46 @@ type Finding struct {
 	Superseded    bool       `json:"superseded"`
 	CreatedAt     time.Time  `json:"created_at"`
 }
+type Measurement struct {
+	Name  string  `json:"name"`
+	Value float64 `json:"value"`
+	Unit  string  `json:"unit"`
+}
+type Artifact struct {
+	Label  string `json:"label"`
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+type ExperimentEvidence struct {
+	ID             string        `json:"id"`
+	CheckpointIDs  []string      `json:"checkpoint_ids"`
+	CommandIDs     []string      `json:"command_ids"`
+	Measurements   []Measurement `json:"measurements"`
+	Artifacts      []Artifact    `json:"artifacts"`
+	CPUSeconds     float64       `json:"cpu_seconds"`
+	MemoryMBHours  float64       `json:"memory_mb_hours"`
+	StorageMBHours float64       `json:"storage_mb_hours"`
+	Notes          string        `json:"notes,omitempty"`
+	RecordedBy     string        `json:"recorded_by"`
+	RecordedAt     time.Time     `json:"recorded_at"`
+}
+type Experiment struct {
+	ID                      string               `json:"id"`
+	AlternativeID           string               `json:"alternative_id"`
+	WorkspaceID             string               `json:"workspace_id"`
+	Revision                string               `json:"revision"`
+	DefinitionSHA256        string               `json:"definition_sha256"`
+	DefaultBranchRevision   string               `json:"default_branch_revision"`
+	DefaultDefinitionSHA256 string               `json:"default_definition_sha256"`
+	Commands                []string             `json:"commands"`
+	LaunchedBy              string               `json:"launched_by"`
+	LaunchedAt              time.Time            `json:"launched_at"`
+	Version                 int                  `json:"version"`
+	Evidence                []ExperimentEvidence `json:"evidence"`
+	Invalidated             bool                 `json:"invalidated"`
+	InvalidationReasons     []string             `json:"invalidation_reasons"`
+}
 type Decision struct {
 	ID           string        `json:"id"`
 	RepositoryID string        `json:"repository_id"`
@@ -116,6 +156,7 @@ type Decision struct {
 	History      []History     `json:"history"`
 	Alternatives []Alternative `json:"alternatives"`
 	Findings     []Finding     `json:"findings"`
+	Experiments  []Experiment  `json:"experiments"`
 	CreatedAt    time.Time     `json:"created_at"`
 	UpdatedAt    time.Time     `json:"updated_at"`
 }
@@ -272,8 +313,120 @@ func (s *Store) Create(repo string, source Source, scope Scope, actor string) (D
 		return Decision{}, e
 	}
 	h, _ := randomID()
-	v := Decision{ID: x, RepositoryID: repo, Source: source, Status: "pending", Scope: scope, CreatedBy: actor, Version: 1, CreatedAt: now, UpdatedAt: now, History: []History{{ID: h, Kind: "scope_created", ActorID: actor, Version: 1, Summary: "Opened the decision", CreatedAt: now}}, Alternatives: []Alternative{}, Findings: []Finding{}}
+	v := Decision{ID: x, RepositoryID: repo, Source: source, Status: "pending", Scope: scope, CreatedBy: actor, Version: 1, CreatedAt: now, UpdatedAt: now, History: []History{{ID: h, Kind: "scope_created", ActorID: actor, Version: 1, Summary: "Opened the decision", CreatedAt: now}}, Alternatives: []Alternative{}, Findings: []Finding{}, Experiments: []Experiment{}}
 	return v, s.write(v)
+}
+
+func (s *Store) LaunchExperiment(id, actor, alternativeID, workspaceID, revision, definition, defaultRevision, defaultDefinition string, commands []string) (Decision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, e := s.lock()
+	if e != nil {
+		return Decision{}, e
+	}
+	defer u()
+	v, e := s.read(id)
+	if e != nil {
+		return v, e
+	}
+	if !isParticipant(v, actor) {
+		return v, ErrNotFound
+	}
+	found := false
+	for _, a := range v.Alternatives {
+		found = found || a.ID == alternativeID && a.SupersededBy == ""
+	}
+	if !found || workspaceID == "" || revision == "" || definition == "" || defaultRevision == "" || defaultDefinition == "" || len(commands) == 0 || len(commands) > 20 {
+		return v, ErrInvalid
+	}
+	for _, x := range v.Experiments {
+		if x.WorkspaceID == workspaceID {
+			if x.AlternativeID == alternativeID && x.Revision == revision && x.DefinitionSHA256 == definition {
+				return projectEvidence(v, s.now()), nil
+			}
+			return v, ErrConflict
+		}
+	}
+	for _, command := range commands {
+		if strings.TrimSpace(command) == "" || len(command) > 2000 {
+			return v, ErrInvalid
+		}
+	}
+	now := s.now()
+	experimentID, _ := randomID()
+	historyID, _ := randomID()
+	v.Experiments = append(v.Experiments, Experiment{ID: experimentID, AlternativeID: alternativeID, WorkspaceID: workspaceID, Revision: revision, DefinitionSHA256: definition, DefaultBranchRevision: defaultRevision, DefaultDefinitionSHA256: defaultDefinition, Commands: commands, LaunchedBy: actor, LaunchedAt: now, Version: 1, Evidence: []ExperimentEvidence{}, InvalidationReasons: []string{}})
+	v.UpdatedAt = now
+	v.History = append(v.History, History{ID: historyID, Kind: "experiment_launched", ActorID: actor, Version: v.Version, Summary: "Launched a bounded alternative experiment", CreatedAt: now})
+	if e = s.write(v); e != nil {
+		return v, e
+	}
+	return projectEvidence(v, now), nil
+}
+
+func (s *Store) AttachExperimentEvidence(id, experimentID, actor string, expected int, input ExperimentEvidence) (Decision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, e := s.lock()
+	if e != nil {
+		return Decision{}, e
+	}
+	defer u()
+	v, e := s.read(id)
+	if e != nil {
+		return v, e
+	}
+	if !isParticipant(v, actor) {
+		return v, ErrNotFound
+	}
+	index := -1
+	for i := range v.Experiments {
+		if v.Experiments[i].ID == experimentID {
+			index = i
+		}
+	}
+	if index < 0 {
+		return v, ErrNotFound
+	}
+	experiment := &v.Experiments[index]
+	if experiment.Version != expected {
+		return v, ErrConflict
+	}
+	if input.CPUSeconds < 0 || input.MemoryMBHours < 0 || input.StorageMBHours < 0 || len(input.CheckpointIDs) > 100 || len(input.CommandIDs) > 100 || len(input.Measurements) > 100 || len(input.Artifacts) > 100 {
+		return v, ErrInvalid
+	}
+	input.Notes = strings.TrimSpace(input.Notes)
+	if len(input.Notes) > 4000 {
+		return v, ErrInvalid
+	}
+	for i := range input.Measurements {
+		input.Measurements[i].Name = strings.TrimSpace(input.Measurements[i].Name)
+		input.Measurements[i].Unit = strings.TrimSpace(input.Measurements[i].Unit)
+		if input.Measurements[i].Name == "" || input.Measurements[i].Unit == "" {
+			return v, ErrInvalid
+		}
+	}
+	for i := range input.Artifacts {
+		a := &input.Artifacts[i]
+		a.Label, a.Path, a.SHA256 = strings.TrimSpace(a.Label), strings.TrimSpace(a.Path), strings.ToLower(strings.TrimSpace(a.SHA256))
+		_, digestErr := hex.DecodeString(a.SHA256)
+		cleanPath := filepath.Clean(a.Path)
+		if a.Label == "" || a.Path == "" || filepath.IsAbs(a.Path) || cleanPath == ".." || strings.HasPrefix(cleanPath, ".."+string(filepath.Separator)) || len(a.SHA256) != 64 || digestErr != nil || a.Size < 0 {
+			return v, ErrInvalid
+		}
+	}
+	now := s.now()
+	input.ID, _ = randomID()
+	input.RecordedBy, input.RecordedAt = actor, now
+	experiment.Evidence = append(experiment.Evidence, input)
+	experiment.Version++
+	v.UpdatedAt = now
+	historyID, _ := randomID()
+	v.History = append(v.History, History{ID: historyID, Kind: "experiment_evidence", ActorID: actor, Version: v.Version, Summary: "Attached attributed experiment evidence", CreatedAt: now})
+	if e = s.write(v); e != nil {
+		return v, e
+	}
+	return projectEvidence(v, now), nil
 }
 func (s *Store) Get(id string) (Decision, error) {
 	s.mu.Lock()

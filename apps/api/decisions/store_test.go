@@ -46,6 +46,42 @@ func TestDecisionRetainsVersionedScopeAndDiscussion(t *testing.T) {
 	}
 }
 
+func TestExperimentRetainsAttributedWorkspaceEvidence(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 10, 19, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	deadline := now.Add(24 * time.Hour)
+	v, err := s.Create("repo", Source{Kind: "repository", ResourceID: "repo"}, Scope{Question: "Which parser?", Constraints: []string{"No production writes"}, SuccessMeasures: []string{"Throughput"}, Deadline: &deadline, OwnerID: "owner", Participants: []Participant{{UserID: "owner"}}, AffectedResources: []Resource{{Kind: "repository", Label: "Parser"}}}, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := []Evidence{{Kind: "usage", ResourceID: "baseline", Revision: "window", Label: "baseline"}}
+	v, err = s.AddAlternative(v.ID, "owner", 1, Alternative{Title: "Streaming", Summary: "Stream input", Assumptions: []string{"Input is ordered"}, Tradeoffs: []string{"More state"}, Risks: []string{"Partial reads"}, CompatibilityImpact: "None", Cost: "One day", ExpectedOutcomes: []string{"Higher throughput"}, Evidence: evidence, Criteria: []CriterionAssessment{{Criterion: "Throughput", Outcome: "Not yet demonstrated", Evidence: evidence}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.LaunchExperiment(v.ID, "owner", v.Alternatives[0].ID, "workspace", "0123456789abcdef", "definition-sha", "default-revision", "default-definition", []string{"benchmark"})
+	if err != nil || len(v.Experiments) != 1 {
+		t.Fatalf("launch = %#v, %v", v.Experiments, err)
+	}
+	experiment := v.Experiments[0]
+	v, err = s.LaunchExperiment(v.ID, "owner", v.Alternatives[0].ID, "workspace", "0123456789abcdef", "definition-sha", "default-revision", "default-definition", []string{"benchmark"})
+	if err != nil || len(v.Experiments) != 1 {
+		t.Fatalf("idempotent launch = %#v, %v", v.Experiments, err)
+	}
+	artifactSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	v, err = s.AttachExperimentEvidence(v.ID, experiment.ID, "owner", 1, ExperimentEvidence{CheckpointIDs: []string{"checkpoint"}, CommandIDs: []string{"command"}, Measurements: []Measurement{{Name: "throughput", Value: 1420, Unit: "requests/s"}}, Artifacts: []Artifact{{Label: "profile", Path: "artifacts/profile.pb", SHA256: artifactSHA, Size: 42}}, CPUSeconds: 12, MemoryMBHours: 0.2, StorageMBHours: 0.1, Notes: "Three bounded runs"})
+	if err != nil || v.Experiments[0].Version != 2 || v.Experiments[0].Evidence[0].RecordedBy != "owner" {
+		t.Fatalf("evidence = %#v, %v", v.Experiments[0], err)
+	}
+	if _, err = s.AttachExperimentEvidence(v.ID, experiment.ID, "owner", 1, ExperimentEvidence{}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale evidence = %v", err)
+	}
+}
+
 func TestDecisionRejectsUnknownParticipantAndInvalidScope(t *testing.T) {
 	s, _ := New(t.TempDir())
 	deadline := time.Now().Add(time.Hour)

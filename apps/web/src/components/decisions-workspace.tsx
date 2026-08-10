@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { api, type Repository, type TechnicalDecision } from "@/lib/api";
+import { api, type DevelopmentWorkspace, type Repository, type TechnicalDecision } from "@/lib/api";
 import { useAuth } from "./auth";
 import { Badge, Button, Card } from "./ui";
 import { Icons } from "./icons";
@@ -199,6 +199,23 @@ export function DecisionsWorkspace({ decisionId }: { decisionId?: string }) {
     } finally {
       setPending(false);
     }
+  }
+  async function launchExperiment(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); if (!current) return; setPending(true); setError("");
+    const form = e.currentTarget, d = new FormData(form), alternativeID = String(d.get("alternative_id"));
+    try {
+      const workspace = await api<DevelopmentWorkspace>("/workspaces", { method: "POST", body: JSON.stringify({ repository_id: current.repository_id, commit_id: d.get("commit_id"), source: { kind: "decision_experiment", decision_id: current.id, alternative_id: alternativeID } }) }, token);
+      const updated = await api<TechnicalDecision>(`/decisions/${current.id}/experiments`, { method: "POST", body: JSON.stringify({ alternative_id: alternativeID, workspace_id: workspace.id }) }, token);
+      setCurrent(updated); form.reset();
+    } catch (x) { setError(x instanceof Error ? x.message : "Experiment could not be launched."); } finally { setPending(false); }
+  }
+  async function attachEvidence(e: FormEvent<HTMLFormElement>, experimentID: string, version: number) {
+    e.preventDefault(); if (!current) return; setPending(true); const form = e.currentTarget, d = new FormData(form);
+    try {
+      const measurements = lines(d.get("measurements")).map((row) => { const [name, value, unit] = row.split("|").map((x) => x.trim()); return { name, value: Number(value), unit }; });
+      const artifacts = lines(d.get("artifacts")).map((row) => { const [label, path, sha256, size] = row.split("|").map((x) => x.trim()); return { label, path, sha256, size: Number(size) }; });
+      setCurrent(await api<TechnicalDecision>(`/decisions/${current.id}/experiments/${experimentID}/evidence`, { method: "POST", body: JSON.stringify({ expected_version: version, evidence: { checkpoint_ids: lines(d.get("checkpoints")), command_ids: lines(d.get("commands")), measurements, artifacts, notes: d.get("notes") } }) }, token)); form.reset();
+    } catch (x) { setError(x instanceof Error ? x.message : "Experiment evidence could not be attached."); } finally { setPending(false); }
   }
   if (authLoading || loading)
     return (
@@ -429,6 +446,27 @@ export function DecisionsWorkspace({ decisionId }: { decisionId?: string }) {
               </div>
             </form>
           </details>
+        </Card>
+        <Card className="p-6">
+          <h2 className="text-lg font-semibold">Bounded experiments</h2>
+          <p className="mt-1 text-sm text-[var(--muted)]">Experiments use the exact revision&apos;s repository-defined commands in an isolated shared workspace. Checkpoints stay exploratory until someone separately publishes one through ordinary review.</p>
+          <div className="mt-5 space-y-4">
+            {current.experiments?.map((experiment) => (
+              <article key={experiment.id} className="rounded-lg border p-4">
+                <div className="flex flex-wrap gap-2"><Badge>{experiment.invalidated ? "Evidence invalidated" : "Evidence current"}</Badge><Badge>{experiment.commands.join(", ")}</Badge></div>
+                <p className="mt-2 font-mono text-xs">Revision {experiment.revision}</p>
+                {experiment.invalidated && <p className="mt-2 text-sm text-[var(--danger)]">{experiment.invalidation_reasons.join(" · ")}</p>}
+                <Link href={`/workspaces/${experiment.workspace_id}`} className="mt-2 inline-block text-sm font-semibold text-[var(--brand)]">Open shared experiment workspace →</Link>
+                {experiment.evidence.map((evidence) => <div key={evidence.id} className="mt-3 rounded bg-[var(--surface-2)] p-3 text-sm"><b>{evidence.measurements.map((x) => `${x.name}: ${x.value} ${x.unit}`).join(" · ") || "Recorded evidence"}</b><p className="mt-1 text-xs text-[var(--muted)]">{evidence.checkpoint_ids.length} checkpoints · {evidence.command_ids.length} logs · {evidence.artifacts.length} artifacts · {evidence.cpu_seconds.toFixed(1)} CPU seconds · by {evidence.recorded_by}</p>{evidence.notes && <p className="mt-2">{evidence.notes}</p>}</div>)}
+                <details className="mt-3"><summary className="cursor-pointer text-sm font-semibold">Attach workspace evidence</summary><form onSubmit={(event) => attachEvidence(event, experiment.id, experiment.version)} className="mt-3 grid gap-3"><ListField name="checkpoints" title="Checkpoint IDs" /><ListField name="commands" title="Command outcome IDs (logs)" /><ListField name="measurements" title="Measurements: name | value | unit" /><ListField name="artifacts" title="Artifacts: label | path | SHA-256 | bytes" /><label className="text-sm font-semibold">Notes<textarea name="notes" rows={3} className="mt-1 w-full rounded-lg border p-2 font-normal" /></label><div><Button type="submit" disabled={pending}>Attach attributed evidence</Button></div></form></details>
+              </article>
+            ))}
+          </div>
+          <form onSubmit={launchExperiment} className="mt-6 grid gap-3 sm:grid-cols-2">
+            <label className="text-sm font-semibold">Alternative<select name="alternative_id" required className="mt-1 min-h-10 w-full rounded-lg border px-3">{current.alternatives.map((a) => <option key={a.id} value={a.id}>{a.title}</option>)}</select></label>
+            <Field name="commit_id" title="Exact commit SHA" />
+            <div className="sm:col-span-2"><Button type="submit" disabled={pending || current.alternatives.length === 0}>Launch isolated experiment</Button></div>
+          </form>
         </Card>
         <Card className="p-6">
           <h2 className="text-lg font-semibold">Cited research and dissent</h2>
