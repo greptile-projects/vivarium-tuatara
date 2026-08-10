@@ -344,7 +344,15 @@ func registerImpactRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *
 			return nil
 		}
 		err := catalog.WithCurrentParticipants(participants, v.RepositoryID, func() error {
-			name := impactReferenceName(repository, v.Ref)
+			selectedRef := v.Ref
+			if selectedRef == "" {
+				meta, metaErr := catalog.GetByID(v.RepositoryID)
+				if metaErr != nil {
+					return metaErr
+				}
+				selectedRef = meta.DefaultBranch
+			}
+			name := impactReferenceName(repository, selectedRef)
 			if name == "" {
 				return publish() // an exact object ID is immutable
 			}
