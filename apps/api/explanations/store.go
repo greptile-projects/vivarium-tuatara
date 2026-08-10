@@ -220,7 +220,17 @@ func participant(items []Participant, userID string) bool {
 			return true
 		}
 	}
-	return len(items) == 0
+	return false
+}
+
+// migrateLegacy projects the durable historical asker as the sole participant
+// for records written before explicit invitations existed. No other repository
+// participant inherits access merely because participant data is absent.
+func migrateLegacy(value Conversation) Conversation {
+	if len(value.Participants) == 0 && value.AskedBy != "" {
+		value.Participants = []Participant{{UserID: value.AskedBy, JoinedAt: value.CreatedAt}}
+	}
+	return value
 }
 
 func IsParticipant(value Conversation, userID string) bool {
@@ -265,7 +275,7 @@ func (s *Store) read(id string) (Conversation, error) {
 	if err != nil || json.Unmarshal(body, &value) != nil || value.ID != id {
 		return value, ErrNotFound
 	}
-	return value, nil
+	return migrateLegacy(value), nil
 }
 
 func (s *Store) Get(id string) (Conversation, error) {
@@ -299,7 +309,7 @@ func (s *Store) List(repositoryID string) ([]Conversation, error) {
 		var value Conversation
 		body, readErr := os.ReadFile(filepath.Join(s.root, entry.Name()))
 		if readErr == nil && json.Unmarshal(body, &value) == nil && value.RepositoryID == repositoryID {
-			out = append(out, value)
+			out = append(out, migrateLegacy(value))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })

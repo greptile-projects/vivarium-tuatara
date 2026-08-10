@@ -61,7 +61,7 @@ func registerExplanationRoutes(mux *http.ServeMux, gitStore *storage.Store, cata
 			return
 		}
 		if input.Context.Kind == "workspace" && workspaceStore != nil {
-			if !explanationVisibleTo(actor.UserID, explanations.Conversation{RepositoryID: r.PathValue("id"), Context: input.Context}, catalog, workspaceStore) {
+			if !explanationVisibleTo(actor.UserID, explanations.Conversation{RepositoryID: r.PathValue("id"), Participants: []explanations.Participant{{UserID: actor.UserID}}, Context: input.Context}, catalog, workspaceStore) {
 				writeAPIError(w, 404, "context_not_found", "the selected context is not available in this repository")
 				return
 			}
@@ -213,8 +213,31 @@ func registerExplanationRoutes(mux *http.ServeMux, gitStore *storage.Store, cata
 				return
 			}
 			repo, x := gitStore.Open(item.RepositoryID)
-			if x != nil || exec.Command("git", "--git-dir="+repo.Path(), "cat-file", "-e", item.Revision+":"+input.Path).Run() != nil {
+			if x != nil {
 				writeAPIError(w, 404, "reference_not_found", "code reference not found at the investigation revision")
+				return
+			}
+			object := item.Revision + ":" + input.Path
+			sizeOutput, sizeErr := exec.Command("git", "--git-dir="+repo.Path(), "cat-file", "-s", object).Output()
+			size, parseErr := strconv.Atoi(strings.TrimSpace(string(sizeOutput)))
+			if sizeErr != nil || parseErr != nil || size < 0 || size > explanationByteLimit {
+				writeAPIError(w, 404, "reference_not_found", "code reference not found at the investigation revision")
+				return
+			}
+			body, readErr := exec.Command("git", "--git-dir="+repo.Path(), "show", object).Output()
+			if readErr != nil || len(body) != size || strings.IndexByte(string(body), 0) >= 0 {
+				writeAPIError(w, 404, "reference_not_found", "code reference not found at the investigation revision")
+				return
+			}
+			lineCount := strings.Count(string(body), "\n")
+			if len(body) > 0 && body[len(body)-1] != '\n' {
+				lineCount++
+			}
+			if input.EndLine == 0 {
+				input.EndLine = input.StartLine
+			}
+			if input.StartLine > lineCount || input.EndLine > lineCount {
+				writeAPIError(w, 400, "invalid_entry", "code reference lines must exist at the investigation revision")
 				return
 			}
 			entry.Citations = []explanations.Citation{{Kind: "source", Revision: item.Revision, Path: input.Path, StartLine: input.StartLine, EndLine: input.EndLine, Label: "participant code reference"}}

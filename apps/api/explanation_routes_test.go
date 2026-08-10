@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -21,7 +23,8 @@ func TestGroundedExplanationStreamsAndRetainsExactEvidence(t *testing.T) {
 	identities, _ := users.New(t.TempDir())
 	credentials, _ := auth.New(t.TempDir())
 	catalog, _ := repositories.New(t.TempDir(), gitStore)
-	explanationStore, _ := explanations.New(t.TempDir())
+	explanationRoot := t.TempDir()
+	explanationStore, _ := explanations.New(explanationRoot)
 	workspaceStore, _ := workspaces.New(t.TempDir())
 	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, nil, explanationStore, workspaceStore))
 	defer server.Close()
@@ -129,6 +132,18 @@ func TestGroundedExplanationStreamsAndRetainsExactEvidence(t *testing.T) {
 		t.Fatal("private workspace context is visible to collaborator before HTTP request")
 	}
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/collaborators", `{"user_id":"`+collaborator.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	legacy := final
+	legacy.ID = "11111111111111111111111111111111"
+	legacy.Participants = nil
+	legacyBody, _ := json.Marshal(legacy)
+	if err := os.WriteFile(filepath.Join(explanationRoot, legacy.ID+".json"), legacyBody, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/explanations/"+legacy.ID, "", owner.Credential.Token, http.StatusOK).Body.Close()
+	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/explanations/"+legacy.ID, "", collaborator.Credential.Token, http.StatusNotFound).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/explanations/"+legacy.ID+"/participants", `{"user_id":"`+collaborator.User.ID+`"}`, collaborator.Credential.Token, http.StatusNotFound).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/explanations/"+legacy.ID+"/entries", `{"kind":"hypothesis","body":"uninvited"}`, collaborator.Credential.Token, http.StatusNotFound).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/explanations/"+legacy.ID+"/reruns", `{"ref":"main"}`, collaborator.Credential.Token, http.StatusNotFound).Body.Close()
 	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/explanations/"+final.ID, "", collaborator.Credential.Token, http.StatusNotFound).Body.Close()
 	invited := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/explanations/"+final.ID+"/participants", `{"user_id":"`+collaborator.User.ID+`"}`, owner.Credential.Token, http.StatusCreated)
 	var shared explanations.Conversation
@@ -142,6 +157,14 @@ func TestGroundedExplanationStreamsAndRetainsExactEvidence(t *testing.T) {
 	entryResponse.Body.Close()
 	if got := shared.Entries[len(shared.Entries)-1]; got.Kind != "hypothesis" || got.ActorID != collaborator.User.ID {
 		t.Fatalf("shared entry = %#v", got)
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/explanations/"+final.ID+"/entries", `{"kind":"code_reference","body":"Impossible line","path":"authorize.go","start_line":999,"end_line":1000}`, collaborator.Credential.Token, http.StatusBadRequest).Body.Close()
+	validReference := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/explanations/"+final.ID+"/entries", `{"kind":"code_reference","body":"Authorization declaration","path":"authorize.go","start_line":4}`, collaborator.Credential.Token, http.StatusCreated)
+	json.NewDecoder(validReference.Body).Decode(&shared)
+	validReference.Body.Close()
+	validCitation := shared.Entries[len(shared.Entries)-1].Citations[0]
+	if validCitation.StartLine != 4 || validCitation.EndLine != 4 {
+		t.Fatalf("single-line citation = %#v", validCitation)
 	}
 	challengeResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/explanations/"+final.ID+"/entries", `{"kind":"challenge","body":"Verify whether callers normalize whitespace first.","supersedes_id":"`+shared.Entries[len(shared.Entries)-1].ID+`"}`, owner.Credential.Token, http.StatusCreated)
 	challengeResponse.Body.Close()
@@ -167,8 +190,8 @@ func TestGroundedExplanationStreamsAndRetainsExactEvidence(t *testing.T) {
 	}
 	historyResponse.Body.Close()
 	for _, item := range history.Conversations {
-		if item.ID == privateID {
-			t.Fatalf("private conversation disclosed in history: %#v", item)
+		if item.ID == privateID || item.ID == legacy.ID {
+			t.Fatalf("unavailable investigation disclosed in history: %#v", item)
 		}
 	}
 	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/explanations/"+privateID, "", collaborator.Credential.Token, http.StatusNotFound).Body.Close()
