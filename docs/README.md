@@ -246,6 +246,25 @@ Workspace attachments retain only an authorized identity and frozen revision,
 never credentials, hidden files, or copied runtime output.
 `$EXPLANATION_STORAGE_ROOT` defaults to `explanations`.
 
+## Prospective change impact
+
+Impact assessment turns revision-pinned understanding into a reviewable
+pre-implementation decision. A repository participant starts from selected
+lines, a retained investigation conclusion, or a proposed diff. The bounded
+analyzer records exact reference and test locations, verification guidance,
+and joins them to currently readable owners, interface consumers, exact
+releases, published packages, and promoted environments. Incomplete coverage
+is explicit rather than silently presented as exhaustive.
+
+Assessment participants use compare-and-swap versions to invite collaborators,
+add verification needs, accepted risks, and unknowns, and request an affected
+repository owner's acknowledgement. Every read revalidates visibility for each
+cross-repository evidence item. A request is limited to repositories named by
+retained consumer evidence, and its current owner must also retain source
+repository access to read or acknowledge it. An uncommitted proposed diff
+remains visible only to assessment participants. Durable records live beneath
+`$IMPACT_STORAGE_ROOT` (default `impact-assessments`).
+
 ## Web interface foundation
 
 The web application uses a persistent workbench shell so account, repository,
