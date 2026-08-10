@@ -36,6 +36,8 @@ async function json(page: Page, method: "get" | "post" | "put", path: string, he
 
 test("maintainers carry a proactive steward finding through governed delivery and revoke it", async ({ browser }) => {
   test.setTimeout(300_000);
+  const dockerAvailable = await run("docker", ["info"]).then(() => true, () => false);
+  test.skip(!dockerAvailable, "the stewardship journey requires the Docker-backed check executor");
   await run("docker", ["image", "inspect", "alpine:3.22"]).catch(() => run("docker", ["pull", "alpine:3.22"]));
   const copies: string[] = [];
   try {
