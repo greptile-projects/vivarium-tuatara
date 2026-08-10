@@ -226,6 +226,19 @@ participation; ordinary merges, releases, checksummed builds, and production
 deployments then advance consumer-first and leave the completed evidence and
 attribution visible in the relationship workspace.
 
+## Grounded collaborative explanations
+
+Repository participants can ask revision-aware questions from repository,
+file, proposal, task, pull, incident, or workspace context in the repository's
+“Ask the codebase” surface. The server resolves that context to one immutable
+commit, collects only currently permitted bounded source, documentation,
+history, check, and declared-dependency evidence, and persists the complete
+attributed result before streaming its structured claims. Citations link to
+exact paths and lines, evidence is distinct from inference and uncertainty, and
+incomplete coverage stays visible. Durable conversation reads revalidate live
+repository access; private workspace context also retains its narrower sharing
+boundary. `$EXPLANATION_STORAGE_ROOT` defaults to `explanations`.
+
 ## Web interface foundation
 
 The web application uses a persistent workbench shell so account, repository,

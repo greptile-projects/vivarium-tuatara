@@ -16,6 +16,27 @@ only when declared at that commit and their provider remains readable.
 `analysis.status` becomes `incomplete` whenever file, byte, or result bounds
 prevent full lexical coverage, with counters and a reason returned explicitly.
 
+## Grounded code explanations
+
+`POST /repositories/{id}/explanations` requires an authenticated current reader
+and accepts `question`, `ref`, and a context with `kind` set to `repository`,
+`file`, `proposal`, `task`, `pull_request`, `incident`, or `workspace`.
+Resource contexts also carry `resource_id`; task IDs use
+`{proposal-id}:{task-id}`, and file contexts carry `path`. Pull requests and
+workspaces select their own frozen revision; other contexts resolve `ref` once.
+Private workspace sharing is enforced before its revision can be used.
+
+The response is `application/x-ndjson`: a `conversation` event is followed by
+ordered `claim` events and one `done` event containing the complete retained
+conversation. Every claim labels its `basis` as `evidence`, `inference`, or
+`uncertainty`, reports confidence, and cites an exact revision plus a source
+path and line or an immutable check/dependency resource. Bounded collection is
+reported as `analysis_status: incomplete` with a reason. The complete answer is
+persisted before streaming, so an interrupted client can replay it from
+`GET /repositories/{id}/explanations/{explanation-id}`. Collection history is
+available at `GET /repositories/{id}/explanations`; both reads revalidate
+current repository access.
+
 ## Conventions
 
 - Requests and responses use JSON. Successful resource creation returns `201`

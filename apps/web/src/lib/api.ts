@@ -23,6 +23,12 @@ export type CodeNavigationResult = {
   dependencies:{id:string;provider_repository_id:string;interface_name:string;constraint:string;commit_id:string}[];
   analysis:{status:"complete"|"incomplete";reason:string;files_scanned:number;bytes_scanned:number;result_limit:number;method:string};
 };
+export type ExplanationCitation = { kind:string; revision:string; path?:string; start_line?:number; end_line?:number; commit_id?:string; resource_id?:string; label:string };
+export type ExplanationClaim = { id:string; text:string; basis:"evidence"|"inference"|"uncertainty"; confidence:"high"|"medium"|"low"; citations:ExplanationCitation[] };
+export type ExplanationConversation = {
+  id:string; repository_id:string; revision:string; context:{kind:"repository"|"file"|"proposal"|"task"|"pull_request"|"incident"|"workspace";resource_id?:string;path?:string};
+  question:string; asked_by:string; agent:string; answer:string; claims:ExplanationClaim[]; analysis_status:"complete"|"incomplete"; analysis_reason?:string; created_at:string;
+};
 export type DevelopmentWorkspace = {
   id: string;
   repository_id: string;
