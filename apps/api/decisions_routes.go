@@ -7,17 +7,22 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/decisions"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/explanations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/relationships"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
@@ -136,7 +141,7 @@ type decisionDeliveryObservationInput struct {
 	ResourceID   string `json:"resource_id"`
 }
 
-func registerDecisionRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, identities *users.Store, store *decisions.Store, activity *activities.Store, proposalStore *proposals.Store, explanationStore *explanations.Store, incidentStore *incidents.Store, relationshipStore *relationships.Store, organizationStore *organizations.Store, workspaceStore *workspaces.Store) {
+func registerDecisionRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, identities *users.Store, store *decisions.Store, activity *activities.Store, proposalStore *proposals.Store, explanationStore *explanations.Store, incidentStore *incidents.Store, relationshipStore *relationships.Store, organizationStore *organizations.Store, workspaceStore *workspaces.Store, pullStore *pullrequests.Store, checkStore *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store) {
 	mux.HandleFunc("POST /repositories/{id}/decisions", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
 		if !ok {
@@ -423,20 +428,28 @@ func registerDecisionRoutes(mux *http.ServeMux, git *storage.Store, catalog *rep
 		}(), AnalysisStatus: "accepted_decision"}
 		var proposal proposals.Proposal
 		var createdTasks []proposals.Task
-		var updated decisions.Decision
+		updated := v
+		var durabilityUncertain bool
 		publish := func() error {
 			var createErr error
 			proposal, createdTasks, createErr = proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: v.RepositoryID, ActorID: actor.UserID, Title: in.Title, Body: in.Body, Origin: origin, Tasks: tasks})
 			if createErr != nil && !errors.Is(createErr, proposals.ErrDurabilityUncertain) {
 				return createErr
 			}
+			durabilityUncertain = errors.Is(createErr, proposals.ErrDurabilityUncertain)
 			taskIDs := make([]string, len(createdTasks))
 			for i := range createdTasks {
 				taskIDs[i] = createdTasks[i].ID
 			}
 			var linkErr error
 			updated, linkErr = store.LinkImplementation(v.ID, actor.UserID, decisions.Implementation{CommitmentVersion: commitment.Version, ProposalID: proposal.ID, TaskIDs: taskIDs, Revision: revision})
-			return linkErr
+			if linkErr != nil {
+				durabilityUncertain = true
+				if visible, getErr := store.Get(v.ID); getErr == nil {
+					updated = visible
+				}
+			}
+			return nil
 		}
 		err = catalog.WithCurrentParticipants(participants, v.RepositoryID, func() error {
 			return bare.WithReferenceTarget("refs/heads/"+repository.DefaultBranch, revision, publish)
@@ -450,6 +463,11 @@ func registerDecisionRoutes(mux *http.ServeMux, git *storage.Store, catalog *rep
 			return
 		}
 		recordActivity(activity, catalog, activities.Event{Kind: "decision.implementation_created", ActorID: actor.UserID, RepositoryID: v.RepositoryID, ResourceType: "decision", ResourceID: v.ID, ResourceTitle: v.Scope.Question})
+		if durabilityUncertain {
+			w.Header().Set("Vivarium-Recovery-Implementation", "pending")
+			writeJSON(w, 202, map[string]any{"decision": updated, "proposal": proposal, "tasks": createdTasks, "recovery_pending": true})
+			return
+		}
 		writeJSON(w, 201, map[string]any{"decision": updated, "proposal": proposal, "tasks": createdTasks})
 	})
 	mux.HandleFunc("POST /decisions/{id}/implementation/{proposal_id}/observations", func(w http.ResponseWriter, r *http.Request) {
@@ -462,7 +480,11 @@ func registerDecisionRoutes(mux *http.ServeMux, git *storage.Store, catalog *rep
 			writeAPIError(w, 400, "invalid_request", "delivery observation is required")
 			return
 		}
-		updated, err := store.ReportDelivery(v.ID, r.PathValue("proposal_id"), actor.UserID, decisions.DeliveryObservation{Kind: in.Kind, Summary: in.Summary, ResourceKind: in.ResourceKind, ResourceID: in.ResourceID})
+		if !validDecisionDeliveryResource(v.RepositoryID, r.PathValue("proposal_id"), in.ResourceKind, in.ResourceID, proposalStore, pullStore, checkStore, releaseStore, deploymentStore) {
+			writeAPIError(w, 422, "delivery_evidence_invalid", "delivery evidence must be a retained resource linked to this implementation")
+			return
+		}
+		updated, err := store.ReportDelivery(v.ID, r.PathValue("proposal_id"), actor.UserID, decisions.DeliveryObservation{Kind: in.Kind, Summary: in.Summary, ResourceKind: in.ResourceKind, ResourceID: in.ResourceID, EvidenceVerified: true})
 		if writeDecisionError(w, err) {
 			return
 		}
@@ -642,6 +664,68 @@ func projectDecisionExperiments(v decisions.Decision, git *storage.Store, catalo
 		experiment.Invalidated, experiment.InvalidationReasons = len(reasons) > 0, reasons
 	}
 	return v
+}
+
+func validDecisionDeliveryResource(repositoryID, proposalID, kind, resourceID string, proposalStore *proposals.Store, pullStore *pullrequests.Store, checkStore *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store) bool {
+	kind, resourceID = strings.TrimSpace(kind), strings.TrimSpace(resourceID)
+	if proposalStore == nil || resourceID == "" {
+		return false
+	}
+	tasks, err := proposalStore.ListTasks(repositoryID, proposalID)
+	if err != nil {
+		return false
+	}
+	pullIDs := []string{}
+	for _, task := range tasks {
+		contributions := append([]proposals.TaskContribution(nil), task.Contributions...)
+		if task.Contribution != nil {
+			contributions = append(contributions, *task.Contribution)
+		}
+		for _, contribution := range contributions {
+			if contribution.PullRequestID != "" && !slices.Contains(pullIDs, contribution.PullRequestID) {
+				pullIDs = append(pullIDs, contribution.PullRequestID)
+			}
+		}
+	}
+	linkedPull := func(id string) bool {
+		if pullStore == nil || !slices.Contains(pullIDs, id) {
+			return false
+		}
+		pull, getErr := pullStore.Get(repositoryID, id)
+		return getErr == nil && pull.ProposalID != nil && *pull.ProposalID == proposalID
+	}
+	switch kind {
+	case "review", "integration":
+		return linkedPull(resourceID)
+	case "check":
+		if checkStore == nil {
+			return false
+		}
+		for _, pullID := range pullIDs {
+			if linkedPull(pullID) {
+				if _, getErr := checkStore.Get(repositoryID, pullID, resourceID); getErr == nil {
+					return true
+				}
+			}
+		}
+	case "release":
+		if releaseStore == nil {
+			return false
+		}
+		release, getErr := releaseStore.Get(repositoryID, resourceID)
+		return getErr == nil && slices.Contains(release.Inclusions.ProposalIDs, proposalID)
+	case "deployment":
+		if deploymentStore == nil || releaseStore == nil {
+			return false
+		}
+		promotion, getErr := deploymentStore.GetPromotion(repositoryID, resourceID)
+		if getErr != nil {
+			return false
+		}
+		release, releaseErr := releaseStore.Get(repositoryID, promotion.ReleaseID)
+		return releaseErr == nil && slices.Contains(release.Inclusions.ProposalIDs, proposalID)
+	}
+	return false
 }
 
 func currentDecisionBaseline(repositoryID string, git *storage.Store, catalog *repositories.Store) (string, string, error) {

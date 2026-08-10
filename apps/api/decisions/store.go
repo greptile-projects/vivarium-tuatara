@@ -198,13 +198,14 @@ type Implementation struct {
 	Observations      []DeliveryObservation `json:"observations"`
 }
 type DeliveryObservation struct {
-	ID           string    `json:"id"`
-	Kind         string    `json:"kind"`
-	Summary      string    `json:"summary"`
-	ResourceKind string    `json:"resource_kind"`
-	ResourceID   string    `json:"resource_id"`
-	ActorID      string    `json:"actor_id"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID               string    `json:"id"`
+	Kind             string    `json:"kind"`
+	Summary          string    `json:"summary"`
+	ResourceKind     string    `json:"resource_kind"`
+	ResourceID       string    `json:"resource_id"`
+	ActorID          string    `json:"actor_id"`
+	CreatedAt        time.Time `json:"created_at"`
+	EvidenceVerified bool      `json:"-"`
 }
 type Decision struct {
 	ID               string            `json:"id"`
@@ -285,7 +286,7 @@ func (s *Store) ReportDelivery(id, proposalID, actor string, observation Deliver
 	observation.Kind, observation.Summary = strings.TrimSpace(observation.Kind), strings.TrimSpace(observation.Summary)
 	observation.ResourceKind, observation.ResourceID = strings.TrimSpace(observation.ResourceKind), strings.TrimSpace(observation.ResourceID)
 	allowed := observation.Kind == "coverage" || observation.Kind == "deviation" || observation.Kind == "assumption_changed" || observation.Kind == "failed_measure" || observation.Kind == "incompatible_work"
-	if !allowed || observation.Summary == "" || len(observation.Summary) > 2000 || observation.ResourceKind == "" || observation.ResourceID == "" {
+	if !allowed || !observation.EvidenceVerified || observation.Summary == "" || len(observation.Summary) > 2000 || observation.ResourceKind == "" || observation.ResourceID == "" {
 		return v, ErrInvalid
 	}
 	index := -1

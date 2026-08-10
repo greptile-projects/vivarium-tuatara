@@ -1940,11 +1940,18 @@ The server freezes the current default-branch commit and derives task outcomes
 and verification plans from those exact constraints and measures. The ordinary
 proposal/task assignment APIs then launch sessions or workspaces and publish
 pulls; no authority is added. An exact retry returns the retained plan, while
-changed reuse conflicts instead of silently replacing it.
+changed reuse conflicts instead of silently replacing it. Cross-store
+durability uncertainty returns `202` with stable proposal/task identities,
+`recovery_pending: true`, and `Vivarium-Recovery-Implementation: pending`; an
+exact retry reconciles the decision link without duplicating work.
 
 `POST /decisions/{id}/implementation/{proposal_id}/observations` appends an
 attributable delivery finding with a summary and linked `resource_kind` and
 `resource_id`. Kind is `coverage`, `deviation`, `assumption_changed`,
 `failed_measure`, or `incompatible_work`. Coverage remains retained evidence;
 every other kind marks the linked commitment reopened and the decision pending
-with the finding as its explicit revisit reason.
+with the finding as its explicit revisit reason. The named review/integration
+pull, check run, release, or deployment must exist and derive from that exact
+proposal through its task contributions and release inclusion; arbitrary or
+unrelated resource identifiers are rejected before the decision store admits
+the observation.

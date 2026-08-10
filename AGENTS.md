@@ -1021,6 +1021,10 @@ whenever dependencies change or the web job fails before it starts.
   commitment identity through scoped sessions, workspaces, linked pulls,
   checks, releases, and deployments without adding authority. Attributable
   delivery observations link coverage or drift to those ordinary resources.
+  Observation admission verifies the retained review/integration pull, check,
+  release inclusion, or deployment back to the exact proposal. Cross-store
+  publication uncertainty returns stable proposal/task identities in a
+  retryable `202` and exact retries reconcile the decision link.
   A deviation, changed assumption, failed measure, or incompatible work
   reopens the exact commitment with an actionable revisit reason, while
   confirmed coverage remains retained delivery evidence.

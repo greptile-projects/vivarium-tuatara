@@ -126,7 +126,10 @@ func TestAcceptedCommitmentLinksOneImmutableImplementation(t *testing.T) {
 	if _, err := s.LinkImplementation(v.ID, "owner", Implementation{CommitmentVersion: 1, ProposalID: "different", TaskIDs: []string{"different"}, Revision: strings.Repeat("b", 40)}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("changed retry = %v", err)
 	}
-	reopened, err := s.ReportDelivery(v.ID, "proposal", "reviewer", DeliveryObservation{Kind: "failed_measure", Summary: "p95 reached 140ms", ResourceKind: "deployment", ResourceID: "production-42"})
+	if _, err := s.ReportDelivery(v.ID, "proposal", "reviewer", DeliveryObservation{Kind: "failed_measure", Summary: "forged", ResourceKind: "deployment", ResourceID: "missing"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unverified evidence = %v", err)
+	}
+	reopened, err := s.ReportDelivery(v.ID, "proposal", "reviewer", DeliveryObservation{Kind: "failed_measure", Summary: "p95 reached 140ms", ResourceKind: "deployment", ResourceID: "production-42", EvidenceVerified: true})
 	if err != nil || reopened.Status != "pending" || reopened.Commitments[0].Status != "reopened" || len(reopened.Implementations[0].Observations) != 1 {
 		t.Fatalf("reopened = %#v, %v", reopened, err)
 	}
