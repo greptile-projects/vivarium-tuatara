@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -48,7 +49,10 @@ func TestRepositoryBrowsingPreservesBranchAndCommitRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	hiddenBranch := "vivarium-security/disclosures/advisory/fix-staged"
-	if err := repo.CreateReference(storage.Reference{Name: "refs/heads/" + hiddenBranch, Target: string(commit)}); err != nil {
+	hiddenSource, _ := repo.WriteObject(storage.BlobObject, []byte("package secret\n\nfunc Embargoed() {}\n"))
+	hiddenTree := writeTestTree(t, repo, testTreeEntry{"100644", "secret.go", hiddenSource})
+	hiddenCommit := writeTestCommit(t, repo, hiddenTree, []storage.ObjectID{commit}, 1700000001, "embargoed source")
+	if err := repo.CreateReference(storage.Reference{Name: "refs/heads/" + hiddenBranch, Target: string(hiddenCommit)}); err != nil {
 		t.Fatal(err)
 	}
 	if output, err := exec.Command("git", "--git-dir", repo.Path(), "pack-refs", "--all", "--prune").CombinedOutput(); err != nil {
@@ -94,6 +98,8 @@ func TestRepositoryBrowsingPreservesBranchAndCommitRevision(t *testing.T) {
 		}
 	}
 	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/commits?ref="+hiddenBranch, "", account.Credential.Token, http.StatusNotFound).Body.Close()
+	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/tree?ref="+string(hiddenCommit), "", account.Credential.Token, http.StatusNotFound).Body.Close()
+	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/code-navigation?ref="+string(hiddenCommit)+"&q=Embargoed", "", account.Credential.Token, http.StatusNotFound).Body.Close()
 
 	missing := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/tree?ref=missing", "", account.Credential.Token, http.StatusNotFound)
 	missing.Body.Close()
@@ -218,4 +224,51 @@ func TestCodeNavigationPinsEvidenceAndClassifiesSource(t *testing.T) {
 		t.Fatalf("result kinds = %#v", kinds)
 	}
 	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/code-navigation?ref=main&q=", "", owner.Credential.Token, http.StatusBadRequest).Body.Close()
+}
+
+func TestCodeNavigationReportsOversizedContentAsIncompleteWithoutReadingPastBudget(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	server := httptest.NewServer(newAuthenticatedAppHandler(gitStore, identities, credentials, catalog))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "bounded-navigator")
+	created := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"bounded-map"}`, owner.Credential.Token, http.StatusCreated)
+	var repository repositories.Repository
+	json.NewDecoder(created.Body).Decode(&repository)
+	created.Body.Close()
+	repo, _ := gitStore.Open(repository.ID)
+	oversized, _ := repo.WriteObject(storage.BlobObject, bytes.Repeat([]byte("x"), codeNavigationByteLimit+1))
+	longLine := append(bytes.Repeat([]byte("x"), 1024*1024+1), []byte("\nfunc FindAfterLongLine() {}\n")...)
+	longBlob, _ := repo.WriteObject(storage.BlobObject, longLine)
+	tree := writeTestTree(t, repo, testTreeEntry{"100644", "long.go", longBlob}, testTreeEntry{"100644", "oversized.go", oversized})
+	commit := writeTestCommit(t, repo, tree, nil, 1700000000, "bounded source")
+	if err := repo.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(commit)}); err != nil {
+		t.Fatal(err)
+	}
+	request, _ := http.NewRequest(http.MethodGet, server.URL+"/repositories/"+repository.ID+"/code-navigation?ref="+string(commit)+"&q=FindAfterLongLine", nil)
+	request.Header.Set("Authorization", "Bearer "+owner.Credential.Token)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("navigation status %d: %s", response.StatusCode, body)
+	}
+	var result struct {
+		Results  []codeLocation `json:"results"`
+		Analysis struct {
+			Status string `json:"status"`
+			Bytes  int    `json:"bytes_scanned"`
+		} `json:"analysis"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if result.Analysis.Status != "incomplete" || result.Analysis.Bytes > codeNavigationByteLimit || len(result.Results) != 0 {
+		t.Fatalf("bounded analysis = %#v", result)
+	}
 }

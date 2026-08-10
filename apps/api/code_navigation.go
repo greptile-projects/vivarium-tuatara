@@ -68,6 +68,12 @@ func registerCodeNavigationRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 			if !sourcePath(path) {
 				continue
 			}
+			sizeOut, sizeErr := exec.Command("git", "--git-dir="+repo.Path(), "cat-file", "-s", string(revision)+":"+path).Output()
+			size, parseErr := strconv.ParseInt(strings.TrimSpace(string(sizeOut)), 10, 64)
+			if sizeErr != nil || parseErr != nil || size > int64(codeNavigationByteLimit-bytesRead) {
+				skipped++
+				continue
+			}
 			body, readErr := exec.Command("git", "--git-dir="+repo.Path(), "show", string(revision)+":"+path).Output()
 			if readErr != nil || strings.IndexByte(string(body), 0) >= 0 {
 				skipped++
@@ -100,6 +106,9 @@ func registerCodeNavigationRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 					skipped += len(paths) - scanned
 					break
 				}
+			}
+			if scanner.Err() != nil {
+				skipped++
 			}
 			if len(matches) >= 250 {
 				break
@@ -149,7 +158,10 @@ func registerCodeNavigationRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 		if !complete {
 			reason = "bounded analysis skipped files or stopped at the result limit"
 		}
-		writeJSON(w, 200, map[string]any{"repository_id": meta.ID, "revision": string(revision), "query": query, "results": matches, "ownership": owners, "dependencies": dependencies, "analysis": map[string]any{"status": map[bool]string{true: "complete", false: "incomplete"}[complete], "reason": reason, "files_scanned": scanned, "bytes_scanned": bytesRead, "result_limit": 250, "method": "revision-pinned lexical analysis"}})
+		response := map[string]any{"repository_id": meta.ID, "revision": string(revision), "query": query, "results": matches, "ownership": owners, "dependencies": dependencies, "analysis": map[string]any{"status": map[bool]string{true: "complete", false: "incomplete"}[complete], "reason": reason, "files_scanned": scanned, "bytes_scanned": bytesRead, "result_limit": 250, "method": "revision-pinned lexical analysis"}}
+		if err := catalog.WithCurrentReadAccess(actor.UserID, []string{meta.ID}, func() error { writeJSON(w, 200, response); return nil }); err != nil {
+			writeAPIError(w, 404, "repository_not_found", "repository not found")
+		}
 	})
 }
 

@@ -33,6 +33,8 @@ export function RepositoryBrowser({ id }: { id: string }) {
   const search = useSearchParams();
   const selectedRef = search.get("ref") ?? "";
   const currentPath = search.get("path") ?? "";
+  const requestedLine = Number(search.get("line") ?? 0);
+  const selectedLine = Number.isSafeInteger(requestedLine) && requestedLine > 0 ? requestedLine : 0;
   const [repository, setRepository] = useState<Repository | null>(null);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [commits, setCommits] = useState<Commit[]>([]);
@@ -307,7 +309,7 @@ export function RepositoryBrowser({ id }: { id: string }) {
                 entries={tree.entries}
               />
             ) : blob ? (
-              <BlobView blob={blob} />
+              <BlobView blob={blob} selectedLine={selectedLine} />
             ) : (
               <div className="p-10 text-center">
                 <h2 className="font-semibold">Ready for the first commit</h2>
@@ -565,7 +567,10 @@ function TreeList({
   );
 }
 
-function BlobView({ blob }: { blob: BlobResult }) {
+function BlobView({ blob, selectedLine }: { blob: BlobResult; selectedLine: number }) {
+  useEffect(() => {
+    if (selectedLine > 0) document.getElementById(`L${selectedLine}`)?.scrollIntoView({ block: "center" });
+  }, [blob.path, selectedLine]);
   return blob.is_binary ? (
     <div className="p-8 text-center">
       <h2 className="font-semibold">Binary file</h2>
@@ -580,8 +585,8 @@ function BlobView({ blob }: { blob: BlobResult }) {
         <code>{blob.revision.slice(0, 7)}</code>
         {blob.truncated && " · preview limited to 512 KiB"}
       </div>
-      <pre className="max-h-[45rem] overflow-auto p-4 font-mono text-xs leading-6">
-        <code>{blob.content}</code>
+      <pre className="max-h-[45rem] overflow-auto py-4 font-mono text-xs leading-6">
+        <code>{blob.content.split("\n").map((line, index) => { const number = index + 1; const selected = number === selectedLine; return <span id={`L${number}`} key={number} className={`block px-4 ${selected ? "bg-[var(--warning-soft)]" : ""}`}><a href={`#L${number}`} aria-label={`Line ${number}`} className="mr-4 inline-block w-10 select-none text-right text-[var(--muted)] hover:text-[var(--brand)]">{number}</a>{line || " "}</span>; })}</code>
       </pre>
     </div>
   );
