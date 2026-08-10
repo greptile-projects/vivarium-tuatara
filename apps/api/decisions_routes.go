@@ -4,19 +4,25 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/decisions"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/explanations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/relationships"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
@@ -114,8 +120,28 @@ type decisionPublishInput struct {
 	ExpectedVersion int                  `json:"expected_version"`
 	Commitment      decisions.Commitment `json:"commitment"`
 }
+type decisionImplementationTaskInput struct {
+	Title                 string `json:"title"`
+	AssigneeType          string `json:"assignee_type"`
+	AssigneeID            string `json:"assignee_id"`
+	ConstraintIndexes     []int  `json:"constraint_indexes"`
+	SuccessMeasureIndexes []int  `json:"success_measure_indexes"`
+	DependsOnPrevious     bool   `json:"depends_on_previous"`
+}
+type decisionImplementationInput struct {
+	CommitmentVersion int                               `json:"commitment_version"`
+	Title             string                            `json:"title"`
+	Body              string                            `json:"body"`
+	Tasks             []decisionImplementationTaskInput `json:"tasks"`
+}
+type decisionDeliveryObservationInput struct {
+	Kind         string `json:"kind"`
+	Summary      string `json:"summary"`
+	ResourceKind string `json:"resource_kind"`
+	ResourceID   string `json:"resource_id"`
+}
 
-func registerDecisionRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, identities *users.Store, store *decisions.Store, activity *activities.Store, proposalStore *proposals.Store, explanationStore *explanations.Store, incidentStore *incidents.Store, relationshipStore *relationships.Store, organizationStore *organizations.Store, workspaceStore *workspaces.Store) {
+func registerDecisionRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, identities *users.Store, store *decisions.Store, activity *activities.Store, proposalStore *proposals.Store, explanationStore *explanations.Store, incidentStore *incidents.Store, relationshipStore *relationships.Store, organizationStore *organizations.Store, workspaceStore *workspaces.Store, pullStore *pullrequests.Store, checkStore *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store) {
 	mux.HandleFunc("POST /repositories/{id}/decisions", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
 		if !ok {
@@ -314,6 +340,157 @@ func registerDecisionRoutes(mux *http.ServeMux, git *storage.Store, catalog *rep
 		recordActivity(activity, catalog, activities.Event{Kind: "decision.published", ActorID: actor.UserID, RepositoryID: v.RepositoryID, ResourceType: "decision", ResourceID: v.ID, ResourceTitle: v.Scope.Question})
 		writeJSON(w, 201, updated)
 	})
+	mux.HandleFunc("POST /decisions/{id}/implementation", func(w http.ResponseWriter, r *http.Request) {
+		v, actor, ok := authorizeDecision(w, r, catalog, credentials, store, "repositories:write")
+		if !ok {
+			return
+		}
+		var in decisionImplementationInput
+		if decodeJSON(r, &in) != nil || len(in.Tasks) == 0 || len(in.Tasks) > 20 || proposalStore == nil || git == nil {
+			writeAPIError(w, 400, "invalid_request", "an accepted commitment and ordered tasks are required")
+			return
+		}
+		var commitment *decisions.Commitment
+		for i := range v.Commitments {
+			if v.Commitments[i].Version == in.CommitmentVersion && v.Commitments[i].Status == "published" {
+				commitment = &v.Commitments[i]
+			}
+		}
+		if v.Status != "published" || commitment == nil {
+			writeAPIError(w, 409, "decision_not_accepted", "implementation requires the current accepted commitment")
+			return
+		}
+		repository, err := catalog.Get(actor.UserID, v.RepositoryID)
+		if err != nil {
+			writeAPIError(w, 503, "repository_unavailable", "repository context is unavailable")
+			return
+		}
+		bare, err := git.Open(v.RepositoryID)
+		if err != nil {
+			writeAPIError(w, 503, "repository_unavailable", "repository context is unavailable")
+			return
+		}
+		revisionBytes, err := exec.Command("git", "--git-dir="+bare.Path(), "rev-parse", "refs/heads/"+repository.DefaultBranch).Output()
+		revision := strings.TrimSpace(string(revisionBytes))
+		if err != nil || len(revision) != 40 {
+			writeAPIError(w, 409, "implementation_base_unavailable", "the default branch has no exact implementation base")
+			return
+		}
+		coveredConstraints, coveredMeasures := make([]bool, len(v.Scope.Constraints)), make([]bool, len(v.Scope.SuccessMeasures))
+		tasks := make([]proposals.ImplementationTaskInput, 0, len(in.Tasks))
+		participants := []string{actor.UserID}
+		items := make([]proposals.ReasoningItem, 0, len(v.Scope.Constraints)+len(v.Scope.SuccessMeasures))
+		for i, value := range v.Scope.Constraints {
+			items = append(items, proposals.ReasoningItem{ID: "constraint-" + fmt.Sprint(i), Kind: "decision_constraint", Summary: value, Status: "required"})
+		}
+		for i, value := range v.Scope.SuccessMeasures {
+			items = append(items, proposals.ReasoningItem{ID: "measure-" + fmt.Sprint(i), Kind: "decision_success_measure", Summary: value, Status: "required"})
+		}
+		for _, value := range in.Tasks {
+			criteria, measures := []string{}, []string{}
+			for _, index := range value.ConstraintIndexes {
+				if index < 0 || index >= len(v.Scope.Constraints) {
+					writeAPIError(w, 400, "invalid_coverage", "task constraint coverage is outside the accepted decision")
+					return
+				}
+				coveredConstraints[index] = true
+				criteria = append(criteria, v.Scope.Constraints[index])
+			}
+			for _, index := range value.SuccessMeasureIndexes {
+				if index < 0 || index >= len(v.Scope.SuccessMeasures) {
+					writeAPIError(w, 400, "invalid_coverage", "task success-measure coverage is outside the accepted decision")
+					return
+				}
+				coveredMeasures[index] = true
+				measures = append(measures, v.Scope.SuccessMeasures[index])
+			}
+			if len(criteria) == 0 || len(measures) == 0 {
+				writeAPIError(w, 400, "invalid_coverage", "every task must enforce a constraint and verify a success measure")
+				return
+			}
+			tasks = append(tasks, proposals.ImplementationTaskInput{Title: value.Title, Outcome: "Satisfy: " + strings.Join(criteria, "; "), VerificationPlan: "Demonstrate: " + strings.Join(measures, "; "), Risk: "Deviation requires an explicit decision revisit request.", AssigneeType: value.AssigneeType, AssigneeID: value.AssigneeID, DependsOnPrevious: value.DependsOnPrevious})
+			if value.AssigneeType == "human" {
+				participants = append(participants, value.AssigneeID)
+			}
+		}
+		for _, covered := range append(coveredConstraints, coveredMeasures...) {
+			if !covered {
+				writeAPIError(w, 400, "incomplete_coverage", "the implementation plan must cover every accepted constraint and success measure")
+				return
+			}
+		}
+		origin := proposals.ReasoningOrigin{DecisionID: v.ID, CommitmentVersion: commitment.Version, Revision: revision, Items: items, SelectedItemIDs: func() []string {
+			ids := []string{}
+			for _, item := range items {
+				ids = append(ids, item.ID)
+			}
+			return ids
+		}(), AnalysisStatus: "accepted_decision"}
+		var proposal proposals.Proposal
+		var createdTasks []proposals.Task
+		updated := v
+		var durabilityUncertain bool
+		publish := func() error {
+			var createErr error
+			proposal, createdTasks, createErr = proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: v.RepositoryID, ActorID: actor.UserID, Title: in.Title, Body: in.Body, Origin: origin, Tasks: tasks})
+			if createErr != nil && !errors.Is(createErr, proposals.ErrDurabilityUncertain) {
+				return createErr
+			}
+			durabilityUncertain = errors.Is(createErr, proposals.ErrDurabilityUncertain)
+			taskIDs := make([]string, len(createdTasks))
+			for i := range createdTasks {
+				taskIDs[i] = createdTasks[i].ID
+			}
+			var linkErr error
+			updated, linkErr = store.LinkImplementation(v.ID, actor.UserID, decisions.Implementation{CommitmentVersion: commitment.Version, ProposalID: proposal.ID, TaskIDs: taskIDs, Revision: revision})
+			if linkErr != nil {
+				durabilityUncertain = true
+				if visible, getErr := store.Get(v.ID); getErr == nil {
+					updated = visible
+				}
+			}
+			return nil
+		}
+		err = catalog.WithCurrentParticipants(participants, v.RepositoryID, func() error {
+			return bare.WithReferenceTarget("refs/heads/"+repository.DefaultBranch, revision, publish)
+		})
+		if err != nil {
+			if errors.Is(err, storage.ErrReferenceExists) || errors.Is(err, storage.ErrReferenceNotFound) {
+				writeAPIError(w, 409, "implementation_base_changed", "the default branch moved; rebuild the implementation plan")
+				return
+			}
+			writeAPIError(w, 422, "implementation_invalid", "human owners must be current participants and the plan must match the accepted decision")
+			return
+		}
+		recordActivity(activity, catalog, activities.Event{Kind: "decision.implementation_created", ActorID: actor.UserID, RepositoryID: v.RepositoryID, ResourceType: "decision", ResourceID: v.ID, ResourceTitle: v.Scope.Question})
+		if durabilityUncertain {
+			w.Header().Set("Vivarium-Recovery-Implementation", "pending")
+			writeJSON(w, 202, map[string]any{"decision": updated, "proposal": proposal, "tasks": createdTasks, "recovery_pending": true})
+			return
+		}
+		writeJSON(w, 201, map[string]any{"decision": updated, "proposal": proposal, "tasks": createdTasks})
+	})
+	mux.HandleFunc("POST /decisions/{id}/implementation/{proposal_id}/observations", func(w http.ResponseWriter, r *http.Request) {
+		v, actor, ok := authorizeDecision(w, r, catalog, credentials, store, "repositories:write")
+		if !ok {
+			return
+		}
+		var in decisionDeliveryObservationInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "delivery observation is required")
+			return
+		}
+		if !validDecisionDeliveryResource(v.RepositoryID, r.PathValue("proposal_id"), in.Kind, in.ResourceKind, in.ResourceID, proposalStore, pullStore, checkStore, releaseStore, deploymentStore) {
+			writeAPIError(w, 422, "delivery_evidence_invalid", "delivery evidence must be a retained resource linked to this implementation")
+			return
+		}
+		updated, err := store.ReportDelivery(v.ID, r.PathValue("proposal_id"), actor.UserID, decisions.DeliveryObservation{Kind: in.Kind, Summary: in.Summary, ResourceKind: in.ResourceKind, ResourceID: in.ResourceID, EvidenceVerified: true})
+		if writeDecisionError(w, err) {
+			return
+		}
+		recordActivity(activity, catalog, activities.Event{Kind: "decision.delivery_" + in.Kind, ActorID: actor.UserID, RepositoryID: v.RepositoryID, ResourceType: "decision", ResourceID: v.ID, ResourceTitle: v.Scope.Question})
+		writeJSON(w, 201, updated)
+	})
 	mux.HandleFunc("POST /decisions/{id}/research-credentials", func(w http.ResponseWriter, r *http.Request) {
 		v, actor, ok := authorizeDecision(w, r, catalog, credentials, store, "repositories:write")
 		if !ok {
@@ -487,6 +664,124 @@ func projectDecisionExperiments(v decisions.Decision, git *storage.Store, catalo
 		experiment.Invalidated, experiment.InvalidationReasons = len(reasons) > 0, reasons
 	}
 	return v
+}
+
+func validDecisionDeliveryResource(repositoryID, proposalID, observationKind, resourceKind, resourceID string, proposalStore *proposals.Store, pullStore *pullrequests.Store, checkStore *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store) bool {
+	observationKind, resourceKind, resourceID = strings.TrimSpace(observationKind), strings.TrimSpace(resourceKind), strings.TrimSpace(resourceID)
+	if proposalStore == nil || resourceID == "" {
+		return false
+	}
+	tasks, err := proposalStore.ListTasks(repositoryID, proposalID)
+	if err != nil {
+		return false
+	}
+	pullIDs := []string{}
+	contributionStatus := map[string]string{}
+	for _, task := range tasks {
+		for _, historical := range task.Contributions {
+			if historical.PullRequestID != "" && !slices.Contains(pullIDs, historical.PullRequestID) {
+				pullIDs = append(pullIDs, historical.PullRequestID)
+			}
+		}
+		if task.Contribution != nil && task.Contribution.PullRequestID != "" && task.Contribution.ContextRevision == task.ContextRevision {
+			if !slices.Contains(pullIDs, task.Contribution.PullRequestID) {
+				pullIDs = append(pullIDs, task.Contribution.PullRequestID)
+			}
+			contributionStatus[task.Contribution.PullRequestID] = task.Contribution.Status
+		}
+	}
+	linkedPull := func(id string) bool {
+		if pullStore == nil || !slices.Contains(pullIDs, id) {
+			return false
+		}
+		pull, getErr := pullStore.Get(repositoryID, id)
+		return getErr == nil && pull.ProposalID != nil && *pull.ProposalID == proposalID
+	}
+	switch resourceKind {
+	case "review":
+		if !linkedPull(resourceID) {
+			return false
+		}
+		if observationKind != "coverage" {
+			return true
+		}
+		if contributionStatus[resourceID] != "review" {
+			return false
+		}
+		pull, _ := pullStore.Get(repositoryID, resourceID)
+		reviews, reviewErr := pullStore.ListReviews(repositoryID, resourceID)
+		if reviewErr != nil {
+			return false
+		}
+		for _, review := range reviews {
+			if review.Decision == pullrequests.Approved && !review.Stale && review.ReviewedCommitID == pull.SourceCommitID {
+				return true
+			}
+		}
+		return false
+	case "integration":
+		if !linkedPull(resourceID) {
+			return false
+		}
+		if observationKind != "coverage" {
+			return true
+		}
+		if contributionStatus[resourceID] != "merged" {
+			return false
+		}
+		pull, _ := pullStore.Get(repositoryID, resourceID)
+		return pull.Status == pullrequests.Merged
+	case "check":
+		if checkStore == nil {
+			return false
+		}
+		for _, pullID := range pullIDs {
+			if !linkedPull(pullID) {
+				continue
+			}
+			run, getErr := checkStore.Get(repositoryID, pullID, resourceID)
+			if getErr == nil && observationKind != "coverage" {
+				return true
+			}
+			if getErr == nil && run.State == "succeeded" && contributionStatus[pullID] == "review" {
+				pull, _ := pullStore.Get(repositoryID, pullID)
+				if run.CommitID == pull.SourceCommitID {
+					return true
+				}
+			}
+		}
+	case "release":
+		if releaseStore == nil {
+			return false
+		}
+		release, getErr := releaseStore.Get(repositoryID, resourceID)
+		return getErr == nil && slices.Contains(release.Inclusions.ProposalIDs, proposalID) && observationKind != "coverage"
+	case "deployment":
+		if deploymentStore == nil || releaseStore == nil {
+			return false
+		}
+		promotion, getErr := deploymentStore.GetPromotion(repositoryID, resourceID)
+		if getErr != nil {
+			return false
+		}
+		release, releaseErr := releaseStore.Get(repositoryID, promotion.ReleaseID)
+		if releaseErr != nil || !slices.Contains(release.Inclusions.ProposalIDs, proposalID) {
+			return false
+		}
+		if observationKind != "coverage" {
+			return true
+		}
+		if promotion.State != "succeeded" || len(tasks) == 0 {
+			return false
+		}
+		for _, task := range tasks {
+			if task.Contribution == nil || task.Contribution.ContextRevision != task.ContextRevision || task.Contribution.Status != "merged" || !slices.Contains(release.Inclusions.PullRequestIDs, task.Contribution.PullRequestID) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func currentDecisionBaseline(repositoryID string, git *storage.Store, catalog *repositories.Store) (string, string, error) {

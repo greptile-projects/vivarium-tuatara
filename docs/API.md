@@ -1929,3 +1929,37 @@ numbered commitment with its approval snapshot. Later material scope,
 alternative, finding, experiment, or experiment-evidence changes set the live
 record back to `pending`, supersede current requests, and mark the prior
 commitment `reopened`; discussion does not reopen it.
+
+`POST /decisions/{id}/implementation` requires repository write participation
+and a currently published `commitment_version`. It accepts a proposal title and
+body plus one to 20 ordered tasks. Each task names `human` or `agent` ownership,
+an optional generated-agent ID, zero-based `constraint_indexes` and
+`success_measure_indexes`, and whether it depends on its predecessor. Every
+task must cover both kinds and the complete plan must cover the accepted scope.
+The server freezes the current default-branch commit and derives task outcomes
+and verification plans from those exact constraints and measures. The ordinary
+proposal/task assignment APIs then launch sessions or workspaces and publish
+pulls; no authority is added. An exact retry returns the retained plan, while
+changed reuse conflicts instead of silently replacing it. Cross-store
+durability uncertainty returns `202` with stable proposal/task identities,
+`recovery_pending: true`, and `Vivarium-Recovery-Implementation: pending`; an
+exact retry reconciles the decision link without duplicating work.
+
+`POST /decisions/{id}/implementation/{proposal_id}/observations` appends an
+attributable delivery finding with a summary and linked `resource_kind` and
+`resource_id`. Kind is `coverage`, `deviation`, `assumption_changed`,
+`failed_measure`, or `incompatible_work`. Coverage remains retained evidence;
+every other kind marks the linked commitment reopened and the decision pending
+with the finding as its explicit revisit reason. The named review/integration
+pull, check run, release, or deployment must exist and derive from that exact
+proposal through its task contributions and release inclusion; arbitrary or
+unrelated resource identifiers are rejected before the decision store admits
+the observation. A `coverage` observation additionally requires a current
+approval for a review pull, a merged integration pull, a successful check at
+the pull's current source commit, or a successful deployment. A release
+candidate alone is not terminal coverage. Non-coverage findings may cite
+linked failed or nonterminal resources because those states are the evidence
+for a deviation or revisit request. Review, integration, and check coverage is
+limited to each task's authoritative current contribution; superseded pulls
+remain historical evidence but cannot satisfy coverage. Deployment coverage
+requires its successful release to include every current merged task pull.

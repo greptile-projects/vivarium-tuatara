@@ -49,6 +49,24 @@ func TestProposalAndConversationPersistWithAttribution(t *testing.T) {
 	}
 }
 
+func TestDecisionImplementationFreezesCriteriaOwnershipAndRetry(t *testing.T) {
+	store, _ := New(t.TempDir())
+	origin := ReasoningOrigin{DecisionID: strings.Repeat("d", 32), CommitmentVersion: 2, Revision: strings.Repeat("a", 40), AnalysisStatus: "accepted_decision", SelectedItemIDs: []string{"constraint-0", "measure-0"}, Items: []ReasoningItem{{ID: "constraint-0", Kind: "decision_constraint", Summary: "No downtime", Status: "required"}, {ID: "measure-0", Kind: "decision_success_measure", Summary: "p95 under 100ms", Status: "required"}}}
+	input := ImplementationInput{RepositoryID: repositoryID, ActorID: authorID, Title: "Deliver accepted queue", Body: "Keep the rationale enforceable.", Origin: origin, Tasks: []ImplementationTaskInput{{Title: "Implement guard", Outcome: "Satisfy: No downtime", VerificationPlan: "Demonstrate: p95 under 100ms", Risk: "Revisit on deviation", AssigneeType: "human", AssigneeID: commenterID}, {Title: "Verify rollout", Outcome: "Satisfy: No downtime", VerificationPlan: "Demonstrate: p95 under 100ms", Risk: "Revisit on deviation", AssigneeType: "agent", DependsOnPrevious: true}}}
+	proposal, tasks, err := store.CreateImplementation(input)
+	if err != nil || proposal.Reasoning.DecisionID != origin.DecisionID || len(tasks) != 2 || tasks[1].Assignment == nil || tasks[1].Assignment.AssigneeType != "agent" || tasks[1].DependencyIDs[0] != tasks[0].ID {
+		t.Fatalf("created = %#v %#v, %v", proposal, tasks, err)
+	}
+	retryProposal, retryTasks, err := store.CreateImplementation(input)
+	if err != nil || retryProposal.ID != proposal.ID || retryTasks[0].ID != tasks[0].ID {
+		t.Fatalf("retry = %#v %#v, %v", retryProposal, retryTasks, err)
+	}
+	input.Tasks[0].Outcome = "silently changed"
+	if _, _, err = store.CreateImplementation(input); !errors.Is(err, ErrImplementationConflict) {
+		t.Fatalf("changed retry = %v", err)
+	}
+}
+
 func TestCorrectiveWorkPublishesAtomicallyAndDeduplicatesRetry(t *testing.T) {
 	root := t.TempDir()
 	store, _ := New(root)
