@@ -377,7 +377,10 @@ func (s *Store) Update(id, actor string, expected int, scope Scope, summary stri
 	v.UpdatedAt = now
 	h, _ := idgen()
 	v.History = append(v.History, History{ID: h, Kind: "scope_changed", ActorID: actor, Version: v.Version, Summary: summary, CreatedAt: now})
-	return v, s.write(v)
+	if e = s.write(v); e != nil {
+		return v, e
+	}
+	return projectEvidence(v, now), nil
 }
 func idgen() (string, error) { return randomID() }
 func (s *Store) Discuss(id, actor, body string) (Decision, error) {
@@ -403,7 +406,10 @@ func (s *Store) Discuss(id, actor, body string) (Decision, error) {
 	now := s.now()
 	v.History = append(v.History, History{ID: h, Kind: "discussion", ActorID: actor, Version: v.Version, Summary: "Added to the discussion", Body: body, CreatedAt: now})
 	v.UpdatedAt = now
-	return v, s.write(v)
+	if e = s.write(v); e != nil {
+		return v, e
+	}
+	return projectEvidence(v, now), nil
 }
 func isParticipant(v Decision, u string) bool {
 	for _, p := range v.Scope.Participants {
@@ -572,5 +578,8 @@ func (s *Store) AddFinding(id, actor string, input Finding) (Decision, error) {
 	v.UpdatedAt = now
 	h, _ := randomID()
 	v.History = append(v.History, History{ID: h, Kind: "research_finding", ActorID: actor, Version: v.Version, Summary: "Added cited " + input.Position + " finding", Body: input.Body, CreatedAt: now})
-	return v, s.write(v)
+	if e = s.write(v); e != nil {
+		return v, e
+	}
+	return projectEvidence(v, now), nil
 }

@@ -69,7 +69,8 @@ func TestAlternativesCompareCommonCriteriaAndPreserveSupersededDissent(t *testin
 	s.now = func() time.Time { return now }
 	actor := "11111111111111111111111111111111"
 	deadline := now.Add(time.Hour)
-	v, err := s.Create("22222222222222222222222222222222", Source{Kind: "repository"}, Scope{Question: "Queue model?", Constraints: []string{"No downtime"}, SuccessMeasures: []string{"p95 under 100ms"}, Deadline: &deadline, AffectedResources: []Resource{{Kind: "repository", Label: "API"}}, Participants: []Participant{{UserID: actor}}, OwnerID: actor}, actor)
+	scope := Scope{Question: "Queue model?", Constraints: []string{"No downtime"}, SuccessMeasures: []string{"p95 under 100ms"}, Deadline: &deadline, AffectedResources: []Resource{{Kind: "repository", Label: "API"}}, Participants: []Participant{{UserID: actor}}, OwnerID: actor}
+	v, err := s.Create("22222222222222222222222222222222", Source{Kind: "repository"}, scope, actor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,13 +87,22 @@ func TestAlternativesCompareCommonCriteriaAndPreserveSupersededDissent(t *testin
 	if len(stored.Alternatives[0].EvidenceStatus.MissingKinds) != 0 || len(stored.Alternatives[0].EvidenceStatus.MissingCriteria) != 0 {
 		t.Fatalf("persisted client projection = %#v", stored.Alternatives[0].EvidenceStatus)
 	}
+	now = now.Add(31 * 24 * time.Hour)
+	v, err = s.Discuss(v.ID, actor, "Compare the evidence age.")
+	if err != nil || len(v.Alternatives[0].EvidenceStatus.MissingKinds) != 4 || len(v.Alternatives[0].EvidenceStatus.Stale) != 2 {
+		t.Fatalf("discussion evidence status = %#v, %v", v.Alternatives[0].EvidenceStatus, err)
+	}
+	v, err = s.Update(v.ID, actor, 2, scope, "Reconfirmed the scope")
+	if err != nil || len(v.Alternatives[0].EvidenceStatus.MissingKinds) != 4 || len(v.Alternatives[0].EvidenceStatus.Stale) != 2 {
+		t.Fatalf("update evidence status = %#v, %v", v.Alternatives[0].EvidenceStatus, err)
+	}
 	projected, _ := s.Get(v.ID)
 	if len(projected.Alternatives[0].EvidenceStatus.MissingKinds) != 4 || projected.Alternatives[0].EvidenceStatus.MissingKinds[0] != "code" {
 		t.Fatalf("evidence status = %#v", projected.Alternatives[0].EvidenceStatus)
 	}
 	bad := alt
 	bad.Criteria = nil
-	if _, err = s.AddAlternative(v.ID, actor, 2, bad); !errors.Is(err, ErrInvalid) {
+	if _, err = s.AddAlternative(v.ID, actor, 3, bad); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("missing common criterion = %v", err)
 	}
 	v, err = s.AddFinding(v.ID, actor, Finding{AlternativeID: v.Alternatives[0].ID, Body: "The model excludes retry amplification.", Position: "oppose", Uncertainty: "Retry distribution is sampled, not traced.", Citations: evidence})
