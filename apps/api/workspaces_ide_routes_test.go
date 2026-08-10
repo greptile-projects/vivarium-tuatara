@@ -31,14 +31,21 @@ func TestWorkspaceListUsesPortableFindActions(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(directory, ".vivarium"), 0700); err != nil {
 		t.Fatal(err)
 	}
+	bin := t.TempDir()
+	for name, target := range map[string]string{"find": "/usr/bin/find", "sh": "/bin/sh"} {
+		if err := os.Symlink(target, filepath.Join(bin, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	command := exec.Command("find", ".", "-mindepth", "1", "-maxdepth", "1", "-exec", "sh", "-c", workspaceListScript, "sh", "{}", "+")
 	command.Dir = directory
+	command.Env = append(os.Environ(), "PATH="+bin)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("portable listing: %v: %s", err, output)
 	}
 	listing := string(output)
-	if !strings.Contains(listing, "f\t8\tfeature.txt\n") || !strings.Contains(listing, "d\t0\t.vivarium\n") {
+	if !strings.Contains(listing, "f\t0\tfeature.txt\n") || !strings.Contains(listing, "d\t0\t.vivarium\n") {
 		t.Fatalf("listing = %q", listing)
 	}
 }

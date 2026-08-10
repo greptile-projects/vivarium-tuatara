@@ -24,15 +24,12 @@ const workspaceListScript = `for p do
 	name=${p#./}
 	if [ -d "$p" ] && [ ! -L "$p" ]; then
 		kind=d
-		size=0
 	elif [ -f "$p" ] && [ ! -L "$p" ]; then
 		kind=f
-		size=$(wc -c <"$p") || exit
 	else
 		kind=o
-		size=0
 	fi
-	printf '%s\t%s\t%s\n' "$kind" "$size" "$name"
+	printf '%s\t0\t%s\n' "$kind" "$name"
 done`
 const workspaceFileWriteScript = `set -eu
 p=$1
