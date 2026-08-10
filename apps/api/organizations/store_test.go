@@ -3,6 +3,7 @@ package organizations
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -155,6 +156,24 @@ func TestStewardshipOpportunitiesDeduplicateRetainStaleEvidenceAndAcceptChalleng
 	queue := persisted.StewardshipMandates[0].Opportunities
 	if len(queue) != 2 || queue[0].Rank != 2 || queue[1].Rank != 1 || queue[0].Rank == queue[1].Rank || queue[1].Version != added[0].Version+1 {
 		t.Fatalf("rank move did not persist a unique, versioned order: %#v", queue)
+	}
+	_, approvedRetry, err := store.DecideStewardshipOpportunity(v.ID, mandate.ID, queue[1].ID, owner, OpportunityDecision{ExpectedVersion: queue[1].Version, Action: "approve", Reason: "Proceed within the current mandate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := store.ReserveStewardshipOpportunity(v.ID, mandate.ID, approvedRetry.ID, operator, approvedRetry.Version, 0, nil)
+	if err != nil || reserved.Status != "promoting" {
+		t.Fatalf("reserve = %#v, %v", reserved, err)
+	}
+	if _, _, err = store.ChangeStewardshipMandateState(v.ID, mandate.ID, owner, "pause", mandate.Version); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := store.ReserveStewardshipOpportunity(v.ID, mandate.ID, reserved.ID, operator, reserved.Version, 0, nil)
+	if err != nil || retry.Status != "promoting" || !slices.Contains(retry.Blockers, "mandate_or_policy_changed") {
+		t.Fatalf("stale reservation retry = %#v, %v", retry, err)
+	}
+	if _, err = store.LinkStewardshipOpportunityWork(v.ID, mandate.ID, reserved.ID, operator, "22222222222222222222222222222222", strings.Repeat("a", 40), []string{"33333333333333333333333333333333"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("link after pause = %v", err)
 	}
 }
 

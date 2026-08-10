@@ -381,12 +381,12 @@ func (s *Store) ReserveStewardshipOpportunity(id, mandateID, opportunityID, acto
 			return ErrNotFound
 		}
 		o := &m.Opportunities[j]
-		if o.Status == "promoting" && o.Work == nil && o.UpdatedBy == actor {
-			out = *o
-			return nil
-		}
-		if o.Version != expectedVersion || o.Work != nil || o.Status != "open" {
+		retry := o.Status == "promoting" && o.Work == nil && o.UpdatedBy == actor
+		if !retry && (o.Version != expectedVersion || o.Work != nil || o.Status != "open") {
 			return ErrConflict
+		}
+		if retry {
+			agentMinutes = o.ReservedAgentMinutes
 		}
 		revision := m.Revisions[len(m.Revisions)-1]
 		if m.Status != "active" || m.Version != o.MandateVersion || m.Acceptance == nil || m.Acceptance.Version != m.Version {
@@ -395,13 +395,13 @@ func (s *Store) ReserveStewardshipOpportunity(id, mandateID, opportunityID, acto
 		if o.PolicyFingerprint != opportunityPolicyFingerprint(*v, o.RepositoryID) {
 			blockers = append(blockers, "repository_policy_changed")
 		}
-		if agentMinutes < 0 || m.UsedAgentMinutes+agentMinutes > revision.Budget.MaxAgentMinutes {
+		if agentMinutes < 0 || (!retry && m.UsedAgentMinutes+agentMinutes > revision.Budget.MaxAgentMinutes) || (retry && m.UsedAgentMinutes > revision.Budget.MaxAgentMinutes) {
 			blockers = append(blockers, "agent_minute_budget_exhausted")
 		}
 		if agentMinutes > o.MaxAgentMinutes {
 			blockers = append(blockers, "opportunity_agent_minute_limit")
 		}
-		if m.UsedActions+1 > revision.Budget.MaxActions {
+		if (!retry && m.UsedActions+1 > revision.Budget.MaxActions) || (retry && m.UsedActions > revision.Budget.MaxActions) {
 			blockers = append(blockers, "action_budget_exhausted")
 		}
 		if o.Admission == "approval_required" && (o.Approval == nil || o.Approval.Decision != "approve" || o.Approval.Version != o.EvaluationVersion) {
@@ -417,7 +417,13 @@ func (s *Store) ReserveStewardshipOpportunity(id, mandateID, opportunityID, acto
 			out = *o
 			return s.event(v, "stewardship_opportunity.blocked", actor, opportunityID, map[string]any{"blockers": blockers})
 		}
+		if retry {
+			o.Blockers = []string{}
+			out = *o
+			return nil
+		}
 		o.Status, o.Blockers = "promoting", []string{}
+		o.ReservedAgentMinutes = agentMinutes
 		m.UsedAgentMinutes += agentMinutes
 		m.UsedActions++
 		o.Version++
@@ -447,6 +453,10 @@ func (s *Store) LinkStewardshipOpportunityWork(id, mandateID, opportunityID, act
 		}
 		o := &m.Opportunities[j]
 		if o.Status != "promoting" || o.Work != nil || !validID(proposalID) || len(base) != 40 || len(taskIDs) == 0 {
+			return ErrConflict
+		}
+		revision := m.Revisions[len(m.Revisions)-1]
+		if m.Status != "active" || m.Version != o.MandateVersion || m.Acceptance == nil || m.Acceptance.Version != m.Version || o.PolicyFingerprint != opportunityPolicyFingerprint(*v, o.RepositoryID) || m.UsedAgentMinutes > revision.Budget.MaxAgentMinutes || m.UsedActions > revision.Budget.MaxActions || o.ReservedAgentMinutes > o.MaxAgentMinutes || (o.Admission == "approval_required" && (o.Approval == nil || o.Approval.Decision != "approve" || o.Approval.Version != o.EvaluationVersion)) || (o.Admission == "auto_start_eligible" && m.Acceptance.OperatorID != actor && !HasRole(*v, actor, "owner")) {
 			return ErrConflict
 		}
 		now := s.now().Truncate(time.Microsecond)

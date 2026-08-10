@@ -117,7 +117,9 @@ whenever dependencies change or the web job fails before it starts.
   promoted assignments use the existing activity and inbox projections.
   Reevaluation invalidates prior approval through a distinct evaluation
   version, and promotion requires readable incident and proposal conflict
-  stores before its durable reservation.
+  stores before its durable reservation. Unlinked retries revalidate current
+  external blockers and organization governance without double-charging their
+  reservation, and final linking rejects a paused or changed mandate.
   Organization
   owners define versioned draft policies across visibility, reviews, checks,
   integration, release provenance, dependency use, promotion,

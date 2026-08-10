@@ -1769,6 +1769,11 @@ named blockers. Incident and proposal conflict storage must both be readable
 before reservation; unavailable state returns `503` without changing the
 opportunity. Reevaluation clears any earlier approval and advances a separate
 evaluation version, which the approval must exactly match at reservation.
+An unlinked reservation retry recomputes external blockers and revalidates the
+current mandate, acceptance, policy, approval, operator, and already-consumed
+budgets without charging them twice. Final linking repeats the organization
+governance checks, so pausing or revising a mandate cannot authorize completion
+through a stale same-actor retry.
 Reservation and opportunity versions make concurrent approval
 or promotion a conflict, while exact retries reconcile the same proposal and
 task identities. Accepted work is linked from the opportunity and task
