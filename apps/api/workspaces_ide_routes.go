@@ -19,6 +19,33 @@ import (
 )
 
 const workspaceOutputLimit = 128 * 1024
+const workspaceFileWriteScript = `set -eu
+p=$1
+expected=$2
+[ -f "$p" ] && [ ! -L "$p" ] || exit 42
+tmp=$(mktemp "$p.vivarium-new.XXXXXX")
+backup=$(mktemp "$p.vivarium-old.XXXXXX")
+rm -f "$backup"
+trap 'rm -f "$tmp" "$backup"' EXIT
+cat >"$tmp"
+mv "$p" "$backup"
+actual=$(sha256sum "$backup" | cut -d' ' -f1)
+if [ "$actual" != "$expected" ]; then
+	[ -e "$p" ] || mv "$backup" "$p"
+	exit 41
+fi
+if ! ln "$tmp" "$p"; then
+	[ -e "$p" ] || mv "$backup" "$p"
+	exit 41
+fi
+actual=$(sha256sum "$backup" | cut -d' ' -f1)
+if [ "$actual" != "$expected" ]; then
+	[ ! "$p" -ef "$tmp" ] || rm -f "$p"
+	[ -e "$p" ] || mv "$backup" "$p"
+	exit 41
+fi
+rm -f "$tmp" "$backup"
+trap - EXIT`
 
 func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store, store *workspaces.Store, authStore *auth.Store) {
 	mux.HandleFunc("GET /workspaces/{workspace_id}/files", func(w http.ResponseWriter, r *http.Request) {
@@ -104,8 +131,7 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 		if !valid {
 			return
 		}
-		script := "set -eu; p=$1; expected=$2; [ -f \"$p\" ] && [ ! -L \"$p\" ] || exit 42; actual=$(sha256sum \"$p\" | cut -d' ' -f1); [ \"$actual\" = \"$expected\" ] || exit 41; tmp=$(mktemp \"$p.vivarium-tmp.XXXXXX\"); trap 'rm -f \"$tmp\"' EXIT; cat >\"$tmp\"; mv \"$tmp\" \"$p\"; trap - EXIT"
-		_, err := workspaceAuthorizedExec(catalog, item, actor, true, 10*time.Second, "/workspace", strings.NewReader(input.Content), "sh", "-c", script, "sh", name, input.ExpectedSHA256)
+		_, err := workspaceAuthorizedExec(catalog, item, actor, true, 10*time.Second, "/workspace", strings.NewReader(input.Content), "sh", "-c", workspaceFileWriteScript, "sh", name, input.ExpectedSHA256)
 		if err != nil {
 			var exit *exec.ExitError
 			if errors.As(err, &exit) && exit.ExitCode() == 41 {
