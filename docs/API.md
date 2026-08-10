@@ -45,6 +45,8 @@ the pre-link version is also recognized only when its
 proposal text, selected item order, ordered task definitions, ownership, and
 dependencies match the immutable linked implementation; it returns those same
 identities with `recovered: true`. Any changed stale payload remains invalid.
+Generated-agent creation may omit an assignee ID for server allocation, but an
+explicit agent ID on recovery must exactly match the retained assignment.
 
 Task-scoped workspaces and agent change sessions copy this reasoning snapshot
 into their launch context. Ordinary task contribution endpoints continue to

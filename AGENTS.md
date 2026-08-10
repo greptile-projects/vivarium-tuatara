@@ -357,7 +357,8 @@ whenever dependencies change or the web job fails before it starts.
   failure. A successful link is confirmed by rereading the assessment. An exact
   pre-link-version replay returns the existing work only when proposal text,
   selected items, ordered tasks, ownership, and dependencies match; changed
-  stale payloads remain invalid.
+  stale payloads remain invalid. An omitted generated-agent ID permits server
+  allocation, while any explicitly supplied recovery ID must match exactly.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version

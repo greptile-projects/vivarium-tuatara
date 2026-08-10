@@ -409,7 +409,7 @@ func recoverImpactImplementation(proposalStore *proposals.Store, assessment impa
 	}
 	for index := range tasks {
 		input, task := requested[index], tasks[index]
-		if task.Title != strings.TrimSpace(input.Title) || task.Outcome != strings.TrimSpace(input.Outcome) || task.Assignment == nil || task.Assignment.AssigneeType != input.AssigneeType || (input.AssigneeType == "human" && task.Assignment.AssigneeID != input.AssigneeID) {
+		if task.Title != strings.TrimSpace(input.Title) || task.Outcome != strings.TrimSpace(input.Outcome) || task.Assignment == nil || task.Assignment.AssigneeType != input.AssigneeType || (input.AssigneeID != "" && task.Assignment.AssigneeID != input.AssigneeID) {
 			return proposals.Proposal{}, nil, false
 		}
 		expectedDependencies := []string{}

@@ -118,6 +118,8 @@ func TestImpactImplementationRetainsReasoningInOwnedTasks(t *testing.T) {
 	if !recovered.Recovered || recovered.Proposal.ID != result.Proposal.ID || len(recovered.Tasks) != 2 || recovered.Tasks[0].ID != result.Tasks[0].ID {
 		t.Fatalf("exact implementation retry = %#v", recovered)
 	}
+	mismatchedAgent := strings.Replace(body, `"assignee_type":"agent"`, `"assignee_type":"agent","assignee_id":"`+strings.Repeat("f", 32)+`"`, 1)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/impact-assessments/"+assessment.ID+"/implementation", mismatchedAgent, owner.Credential.Token, http.StatusBadRequest).Body.Close()
 	newCommit := writeTestCommit(t, repo, tree, []storage.ObjectID{commit}, 1700000001, "later")
 	if err := repo.UpdateReferenceIfTarget(storage.Reference{Name: "refs/heads/main", Target: string(newCommit)}, string(commit)); err != nil {
 		t.Fatal(err)
