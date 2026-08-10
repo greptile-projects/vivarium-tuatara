@@ -16,6 +16,26 @@ export type Repository = {
   created_at: string;
   upstream_repository_id?: string;
 };
+export type TechnicalDecision = {
+  id: string;
+  repository_id: string;
+  source: { kind: "repository" | "proposal" | "investigation" | "incident" | "evolution_plan" | "stewardship_opportunity"; resource_id?: string };
+  status: "pending";
+  scope: {
+    question: string;
+    constraints: string[];
+    success_measures: string[];
+    deadline?: string;
+    affected_resources: { kind: string; repository_id?: string; resource_id?: string; label: string }[];
+    participants: { user_id: string; added_by: string; added_at: string }[];
+    owner_id: string;
+  };
+  created_by: string;
+  version: number;
+  history: { id: string; kind: "scope_created" | "scope_changed" | "discussion"; actor_id: string; version: number; summary: string; body?: string; created_at: string }[];
+  created_at: string;
+  updated_at: string;
+};
 export type CodeNavigationResult = {
   repository_id: string;
   revision: string;

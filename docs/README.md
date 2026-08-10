@@ -1347,3 +1347,14 @@ policy decision. The owner then merges the retained work and carries its exact
 package inventory through an attested release and governed deployment. The
 Playwright server isolates organization records beneath
 `$ORGANIZATION_STORAGE_ROOT` with every other temporary journey store.
+
+## Evidence-driven technical decisions
+
+Technical choices can be opened before implementation from repository,
+proposal, investigation, incident, evolution-plan, or stewardship-opportunity
+context. The `/decisions` workspace makes the pending question, constraints,
+success measures, deadline, affected resources, participants, and accountable
+owner visible to current repository collaborators. Version-guarded scope
+revisions and discussion share an attributable retained history. Related work
+can discover the pending record by its source identity, but the record is
+coordination context rather than a contribution gate.

@@ -975,6 +975,14 @@ whenever dependencies change or the web job fails before it starts.
   Pull synchronization checks open status and merge intent under its lock
   before invoking completion, preventing blocked or concurrent merges from
   terminalizing a run whose revision cannot enter review.
+- Consequential technical choices live at `/decisions` as repository-authorized
+  pending records sourced from repository, proposal, investigation, incident,
+  evolution-plan, or stewardship-opportunity context. Each keeps a versioned
+  question, constraints, success measures, deadline, affected resources,
+  participants, accountable owner, and one attributable scope/discussion
+  history beneath `$DECISION_STORAGE_ROOT` (default `decisions`). A decision is
+  coordination context only: its pending state is discoverable by source and
+  does not block proposals, pulls, tasks, or other contributions.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 
