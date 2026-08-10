@@ -107,6 +107,20 @@ func TestStewardshipOpportunitiesDeduplicateRetainStaleEvidenceAndAcceptChalleng
 	if err != nil || len(v.StewardshipMandates[0].Opportunities) != 1 || len(items[0].Citations) != 2 || !items[0].Citations[0].Stale || items[0].Citations[1].Stale {
 		t.Fatalf("dedupe/stale = %#v, %v", items, err)
 	}
+	if items[0].Admission != "approval_required" {
+		t.Fatalf("unconfigured opportunity bypassed human approval: %#v", items[0])
+	}
+	if _, _, err = store.DecideStewardshipOpportunity(v.ID, mandate.ID, items[0].ID, operator, OpportunityDecision{ExpectedVersion: items[0].Version, Action: "approve", Reason: "ship it"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("non-owner approval = %v", err)
+	}
+	_, approved, err := store.DecideStewardshipOpportunity(v.ID, mandate.ID, items[0].ID, owner, OpportunityDecision{ExpectedVersion: items[0].Version, Action: "approve", Reason: "Current maintainer priority"})
+	if err != nil || approved.Approval == nil || approved.Approval.ActorID != owner {
+		t.Fatalf("approval = %#v, %v", approved, err)
+	}
+	if _, _, err = store.DecideStewardshipOpportunity(v.ID, mandate.ID, items[0].ID, owner, OpportunityDecision{ExpectedVersion: items[0].Version, Action: "approve", Reason: "racing decision"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("concurrent approval = %v", err)
+	}
+	items[0] = approved
 	_, item, err := store.DecideStewardshipOpportunity(v.ID, mandate.ID, items[0].ID, owner, OpportunityDecision{ExpectedVersion: items[0].Version, Action: "incorrect", Reason: "The run belongs to an obsolete branch."})
 	if err != nil || item.Status != "incorrect" || item.DecisionReason == "" {
 		t.Fatalf("challenge = %#v, %v", item, err)

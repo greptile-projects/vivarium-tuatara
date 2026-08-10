@@ -381,7 +381,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerSecurityAdvisoryRoutes(mux, store, repositoryCatalog, userStore, securityAdvisoryStore, releaseStore, checkRunStore, deploymentStore, authStore, activityStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && userStore != nil && organizationStore != nil {
-		registerOrganizationRoutes(mux, organizationStore, repositoryCatalog, userStore, authStore, proposalStore, pullRequestStore, releaseStore, packageStore, incidentStore, relationshipStore, securityAdvisoryStore)
+		registerOrganizationRoutes(mux, store, organizationStore, repositoryCatalog, userStore, authStore, activityStore, proposalStore, pullRequestStore, releaseStore, packageStore, incidentStore, relationshipStore, securityAdvisoryStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && workspaceStore != nil {
 		registerWorkspaceRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, incidentStore, workspaceStore, authStore, organizationStore, checkRunStore, changeSessionStore)
@@ -3024,6 +3024,12 @@ func classifyInboxEvent(userID, ownerID string, event activities.Event, proposal
 	}
 	if event.Kind == "mention.created" && event.TargetUserID != nil && *event.TargetUserID == userID {
 		return "response", "Respond to mention", nil
+	}
+	if strings.HasPrefix(event.Kind, "stewardship_opportunity.") && event.TargetUserID != nil && *event.TargetUserID == userID {
+		if event.Kind == "stewardship_opportunity.approve" {
+			return "response", "Plan accepted stewardship follow-up", nil
+		}
+		return "awareness", "Review stewardship decision", nil
 	}
 	if strings.HasPrefix(event.Kind, "access.") && event.TargetUserID != nil && *event.TargetUserID == userID {
 		return "awareness", "Review repository access", nil

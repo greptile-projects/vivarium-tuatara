@@ -59,6 +59,9 @@ type ReasoningOrigin struct {
 	Items             []ReasoningItem            `json:"items"`
 	Acknowledgements  []ReasoningAcknowledgement `json:"acknowledgements,omitempty"`
 	AnalysisStatus    string                     `json:"analysis_status"`
+	OrganizationID    string                     `json:"organization_id,omitempty"`
+	MandateID         string                     `json:"mandate_id,omitempty"`
+	OpportunityID     string                     `json:"opportunity_id,omitempty"`
 }
 
 type ReasoningItem struct {
@@ -88,6 +91,8 @@ type Task struct {
 	ProposalID           string             `json:"proposal_id"`
 	Title                string             `json:"title"`
 	Outcome              string             `json:"outcome"`
+	Risk                 string             `json:"risk,omitempty"`
+	VerificationPlan     string             `json:"verification_plan,omitempty"`
 	Status               string             `json:"status"`
 	Position             int                `json:"position"`
 	DependencyIDs        []string           `json:"dependency_ids"`
@@ -107,8 +112,8 @@ type Task struct {
 }
 
 type ImplementationTaskInput struct {
-	Title, Outcome, AssigneeType, AssigneeID string
-	DependsOnPrevious                        bool
+	Title, Outcome, Risk, VerificationPlan, AssigneeType, AssigneeID string
+	DependsOnPrevious                                                bool
 }
 
 type ImplementationInput struct {
@@ -396,7 +401,7 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 	changes := make([]TaskChange, 0, len(input.Tasks)*2)
 	for index, value := range input.Tasks {
 		taskTitle, outcome, validationErr := validateTaskContent(value.Title, value.Outcome)
-		if validationErr != nil || (value.AssigneeType != "human" && value.AssigneeType != "agent") {
+		if validationErr != nil || len(value.Risk) > 4000 || len(value.VerificationPlan) > 4000 || (value.AssigneeType != "human" && value.AssigneeType != "agent") {
 			return Proposal{}, nil, ErrInvalid
 		}
 		assignee := value.AssigneeID
@@ -423,10 +428,10 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 			scopes, branch = []string{"git:read", "git:write"}, "task-scoped branch (created when work starts)"
 		}
 		taskOrigin := origin
-		task := Task{ID: taskID, ProposalID: proposalID, Title: taskTitle, Outcome: outcome, Status: TaskTodo, Position: index, DependencyIDs: dependencies, ContextRevision: 1, ContextState: "current", CreatedBy: input.ActorID, UpdatedBy: input.ActorID, CreatedAt: now, UpdatedAt: now, Reasoning: &taskOrigin}
+		task := Task{ID: taskID, ProposalID: proposalID, Title: taskTitle, Outcome: outcome, Risk: strings.TrimSpace(value.Risk), VerificationPlan: strings.TrimSpace(value.VerificationPlan), Status: TaskTodo, Position: index, DependencyIDs: dependencies, ContextRevision: 1, ContextState: "current", CreatedBy: input.ActorID, UpdatedBy: input.ActorID, CreatedAt: now, UpdatedAt: now, Reasoning: &taskOrigin}
 		task.Assignment = &TaskAssignment{ID: assignmentID, AssigneeType: value.AssigneeType, AssigneeID: assignee, Mandate: outcome, Access: TaskAccess{RepositoryID: input.RepositoryID, BaseRevision: origin.Revision, Scopes: scopes, Branch: branch}, AssignedBy: input.ActorID, AssignedAt: now, ContextRevision: 1}
 		tasks = append(tasks, task)
-		created, _ := newTaskChange(Task{ID: task.ID, ProposalID: proposalID, Title: task.Title, Outcome: task.Outcome, Status: task.Status, Position: index, DependencyIDs: dependencies, ContextRevision: 1, ContextState: "current", Ready: index == 0, CreatedBy: input.ActorID, UpdatedBy: input.ActorID, CreatedAt: now, UpdatedAt: now, Reasoning: &taskOrigin}, input.ActorID, "created", now)
+		created, _ := newTaskChange(Task{ID: task.ID, ProposalID: proposalID, Title: task.Title, Outcome: task.Outcome, Risk: task.Risk, VerificationPlan: task.VerificationPlan, Status: task.Status, Position: index, DependencyIDs: dependencies, ContextRevision: 1, ContextState: "current", Ready: index == 0, CreatedBy: input.ActorID, UpdatedBy: input.ActorID, CreatedAt: now, UpdatedAt: now, Reasoning: &taskOrigin}, input.ActorID, "created", now)
 		assigned, _ := newTaskChange(task, input.ActorID, "assigned", now)
 		changes = append(changes, created, assigned)
 	}

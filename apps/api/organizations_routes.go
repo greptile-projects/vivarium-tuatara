@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
@@ -17,6 +18,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/securityadvisories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
 
@@ -110,6 +112,7 @@ type organizationMandateInput struct {
 	AgentID                string                            `json:"agent_id"`
 	AllowedActions         []string                          `json:"allowed_actions"`
 	RequiredHumanDecisions []string                          `json:"required_human_decisions"`
+	OpportunityPolicies    []organizations.OpportunityPolicy `json:"opportunity_policies"`
 	Reason                 string                            `json:"reason"`
 	ExpectedVersion        int                               `json:"expected_version"`
 }
@@ -117,12 +120,28 @@ type organizationMandateInput struct {
 type organizationOpportunityEvaluationInput struct {
 	Findings []organizations.OpportunityFinding `json:"findings"`
 }
-
-func mandateRevision(in organizationMandateInput) organizations.MandateRevision {
-	return organizations.MandateRevision{DesiredOutcomes: in.DesiredOutcomes, Repositories: in.Repositories, TrustedSignals: in.TrustedSignals, Exclusions: in.Exclusions, Budget: in.Budget, StartsAt: in.StartsAt.UTC(), ExpiresAt: in.ExpiresAt.UTC(), AgentID: in.AgentID, AllowedActions: in.AllowedActions, RequiredHumanDecisions: in.RequiredHumanDecisions, Reason: in.Reason}
+type organizationOpportunityPromotionInput struct {
+	ExpectedVersion int    `json:"expected_version"`
+	Title           string `json:"title"`
+	Body            string `json:"body"`
+	BaseRevision    string `json:"base_revision"`
+	AgentMinutes    int    `json:"agent_minutes"`
+	Tasks           []struct {
+		Title              string `json:"title"`
+		OwnerType          string `json:"owner_type"`
+		OwnerID            string `json:"owner_id"`
+		CompletionCriteria string `json:"completion_criteria"`
+		Risk               string `json:"risk"`
+		VerificationPlan   string `json:"verification_plan"`
+		DependsOnPrevious  bool   `json:"depends_on_previous"`
+	} `json:"tasks"`
 }
 
-func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, repos *repositories.Store, usersStore *users.Store, credentials *auth.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, packageStore *packages.Store, incidentStore *incidents.Store, relationshipStore *relationships.Store, securityStore *securityadvisories.Store) {
+func mandateRevision(in organizationMandateInput) organizations.MandateRevision {
+	return organizations.MandateRevision{DesiredOutcomes: in.DesiredOutcomes, Repositories: in.Repositories, TrustedSignals: in.TrustedSignals, Exclusions: in.Exclusions, Budget: in.Budget, StartsAt: in.StartsAt.UTC(), ExpiresAt: in.ExpiresAt.UTC(), AgentID: in.AgentID, AllowedActions: in.AllowedActions, RequiredHumanDecisions: in.RequiredHumanDecisions, OpportunityPolicies: in.OpportunityPolicies, Reason: in.Reason}
+}
+
+func registerOrganizationRoutes(mux *http.ServeMux, gitStore *storage.Store, orgs *organizations.Store, repos *repositories.Store, usersStore *users.Store, credentials *auth.Store, activityStore *activities.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, packageStore *packages.Store, incidentStore *incidents.Store, relationshipStore *relationships.Store, securityStore *securityadvisories.Store) {
 	project := func(v organizations.Organization, actor string) organizations.Organization {
 		now := time.Now().UTC()
 		for i := range v.StewardshipMandates {
@@ -401,7 +420,179 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 		if writeOrganizationError(w, err) {
 			return
 		}
+		if (in.Action == "approve" || in.Action == "reject") && activityStore != nil {
+			for _, target := range item.AffectedOwnerIDs {
+				if target == actor.UserID {
+					continue
+				}
+				targetID := target
+				recordActivity(activityStore, repos, activities.Event{Kind: "stewardship_opportunity." + in.Action, ActorID: actor.UserID, RepositoryID: item.RepositoryID, ResourceType: "organization", ResourceID: organization.ID, ResourceTitle: item.Title, TargetUserID: &targetID})
+			}
+		}
 		writeJSON(w, 200, item)
+	})
+	mux.HandleFunc("POST /organizations/{id}/stewardship-mandates/{mandate_id}/opportunities/{opportunity_id}/promotion", func(w http.ResponseWriter, r *http.Request) {
+		actor, organization, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in organizationOpportunityPromotionInput
+		if decodeJSON(r, &in) != nil || len(in.Tasks) == 0 || len(in.Tasks) > 20 || len(in.BaseRevision) != 40 {
+			writeAPIError(w, 400, "invalid_opportunity_promotion", "current base revision and one to twenty owned tasks are required")
+			return
+		}
+		if strings.TrimSpace(in.Title) == "" || len(in.Title) > 200 || strings.TrimSpace(in.Body) == "" || len(in.Body) > 10000 {
+			writeAPIError(w, 400, "invalid_opportunity_promotion", "proposal title and body are required")
+			return
+		}
+		for _, task := range in.Tasks {
+			if strings.TrimSpace(task.Title) == "" || len(task.Title) > 200 || strings.TrimSpace(task.CompletionCriteria) == "" || len(task.CompletionCriteria) > 4000 || strings.TrimSpace(task.Risk) == "" || len(task.Risk) > 4000 || strings.TrimSpace(task.VerificationPlan) == "" || len(task.VerificationPlan) > 4000 {
+				writeAPIError(w, 400, "invalid_opportunity_promotion", "each task requires completion criteria, risk, and a verification plan")
+				return
+			}
+			validOwner := false
+			if task.OwnerType == "human" {
+				for _, member := range organization.Members {
+					validOwner = validOwner || member.UserID == task.OwnerID
+				}
+			}
+			if task.OwnerType == "agent" {
+				for _, agent := range organization.Agents {
+					validOwner = validOwner || agent.ID == task.OwnerID
+				}
+			}
+			if !validOwner {
+				writeAPIError(w, 400, "invalid_opportunity_owner", "each task owner must be a current organization member or approved agent")
+				return
+			}
+			if task.OwnerType == "agent" && in.AgentMinutes < 1 {
+				writeAPIError(w, 400, "invalid_opportunity_budget", "agent-owned tasks require a positive reserved minute budget")
+				return
+			}
+		}
+		var opportunity *organizations.StewardshipOpportunity
+		for _, mandate := range organization.StewardshipMandates {
+			if mandate.ID == r.PathValue("mandate_id") {
+				for i := range mandate.Opportunities {
+					if mandate.Opportunities[i].ID == r.PathValue("opportunity_id") {
+						copy := mandate.Opportunities[i]
+						opportunity = &copy
+					}
+				}
+			}
+		}
+		if opportunity == nil {
+			writeAPIError(w, 404, "stewardship_opportunity_not_found", "opportunity not found")
+			return
+		}
+		if opportunity.Work != nil {
+			created, proposalErr := proposalStore.Get(opportunity.RepositoryID, opportunity.Work.ProposalID)
+			createdTasks, tasksErr := proposalStore.ListTasks(opportunity.RepositoryID, opportunity.Work.ProposalID)
+			matches := proposalErr == nil && tasksErr == nil && created.Title == strings.TrimSpace(in.Title) && created.Body == strings.TrimSpace(in.Body) && opportunity.Work.BaseRevision == strings.ToLower(in.BaseRevision) && len(createdTasks) == len(in.Tasks) && len(opportunity.Work.TaskIDs) == len(createdTasks)
+			for i := range createdTasks {
+				matches = matches && createdTasks[i].ID == opportunity.Work.TaskIDs[i] && createdTasks[i].Title == strings.TrimSpace(in.Tasks[i].Title) && createdTasks[i].Outcome == strings.TrimSpace(in.Tasks[i].CompletionCriteria) && createdTasks[i].Risk == strings.TrimSpace(in.Tasks[i].Risk) && createdTasks[i].VerificationPlan == strings.TrimSpace(in.Tasks[i].VerificationPlan) && createdTasks[i].Assignment != nil && createdTasks[i].Assignment.AssigneeType == in.Tasks[i].OwnerType && createdTasks[i].Assignment.AssigneeID == in.Tasks[i].OwnerID
+			}
+			if !matches {
+				writeAPIError(w, 409, "opportunity_promotion_superseded", "the opportunity is already linked to different work")
+				return
+			}
+			writeJSON(w, 200, map[string]any{"opportunity": opportunity, "proposal": created, "tasks": createdTasks})
+			return
+		}
+		repository, err := repos.GetByID(opportunity.RepositoryID)
+		if err != nil || repository.OrganizationID != organization.ID {
+			writeAPIError(w, 409, "repository_stewardship_changed", "repository stewardship changed")
+			return
+		}
+		participant, participantErr := repos.HasCollaborator(actor.UserID, repository.ID)
+		if participantErr != nil || (repository.OwnerID != actor.UserID && !participant) {
+			writeAPIError(w, 403, "repository_write_forbidden", "current repository participation is required")
+			return
+		}
+		gitRepository, err := gitStore.Open(repository.ID)
+		if err != nil {
+			writeAPIError(w, 409, "base_revision_unavailable", "repository base is unavailable")
+			return
+		}
+		ref, err := gitRepository.ReadReference("refs/heads/" + repository.DefaultBranch)
+		if err != nil {
+			writeAPIError(w, 409, "base_revision_unavailable", "default branch is unavailable")
+			return
+		}
+		blockers := []string{}
+		if ref.Target != strings.ToLower(in.BaseRevision) {
+			blockers = append(blockers, "base_revision_changed")
+		}
+		if incidentStore != nil {
+			if list, listErr := incidentStore.List(); listErr == nil {
+				for _, incident := range list {
+					if incident.Status == "resolved" {
+						continue
+					}
+					for _, scope := range incident.Scopes {
+						if scope.RepositoryID == repository.ID {
+							blockers = append(blockers, "active_incident:"+incident.ID)
+						}
+					}
+				}
+			}
+		}
+		if opportunity.EvidenceType == "security" && securityStore != nil {
+			if advisory, getErr := securityStore.Get(opportunity.EvidenceID); getErr != nil {
+				blockers = append(blockers, "security_embargo_state_unverified")
+			} else if advisory.EmbargoState != "disclosed" {
+				blockers = append(blockers, "embargoed_evidence:"+advisory.ID)
+			}
+		} else if opportunity.EvidenceType == "security" {
+			blockers = append(blockers, "security_embargo_state_unavailable")
+		}
+		if existing, listErr := proposalStore.List(repository.ID); listErr == nil {
+			for _, proposal := range existing {
+				if proposal.Status == proposals.Open && strings.EqualFold(strings.TrimSpace(proposal.Title), strings.TrimSpace(in.Title)) {
+					blockers = append(blockers, "conflicting_work:"+proposal.ID)
+				}
+			}
+		}
+		reserved, err := orgs.ReserveStewardshipOpportunity(organization.ID, r.PathValue("mandate_id"), opportunity.ID, actor.UserID, in.ExpectedVersion, in.AgentMinutes, blockers)
+		if err != nil {
+			writeOrganizationError(w, err)
+			return
+		}
+		if len(reserved.Blockers) > 0 {
+			writeJSON(w, 409, reserved)
+			return
+		}
+		items := []proposals.ReasoningItem{{ID: opportunity.ID, Kind: "opportunity", Summary: opportunity.Summary, Status: "accepted"}}
+		tasks := make([]proposals.ImplementationTaskInput, 0, len(in.Tasks))
+		for index, task := range in.Tasks {
+			items = append(items, proposals.ReasoningItem{ID: opportunity.ID + string(rune('a'+index)), Kind: "risk", Summary: task.Risk + " | verify: " + task.VerificationPlan, Status: "accepted"})
+			tasks = append(tasks, proposals.ImplementationTaskInput{Title: task.Title, Outcome: task.CompletionCriteria, Risk: task.Risk, VerificationPlan: task.VerificationPlan, AssigneeType: task.OwnerType, AssigneeID: task.OwnerID, DependsOnPrevious: task.DependsOnPrevious})
+		}
+		created, createdTasks, err := proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: repository.ID, ActorID: actor.UserID, Title: in.Title, Body: in.Body, Origin: proposals.ReasoningOrigin{AssessmentID: opportunity.ID, AssessmentVersion: reserved.Version, Revision: ref.Target, SelectedItemIDs: []string{opportunity.ID}, Items: items, AnalysisStatus: "stewardship_opportunity", OrganizationID: organization.ID, MandateID: r.PathValue("mandate_id"), OpportunityID: opportunity.ID}, Tasks: tasks})
+		if err != nil {
+			writeProposalError(w, err)
+			return
+		}
+		matches := created.Title == strings.TrimSpace(in.Title) && created.Body == strings.TrimSpace(in.Body) && len(createdTasks) == len(in.Tasks)
+		for i := range createdTasks {
+			matches = matches && createdTasks[i].Title == strings.TrimSpace(in.Tasks[i].Title) && createdTasks[i].Outcome == strings.TrimSpace(in.Tasks[i].CompletionCriteria) && createdTasks[i].Risk == strings.TrimSpace(in.Tasks[i].Risk) && createdTasks[i].VerificationPlan == strings.TrimSpace(in.Tasks[i].VerificationPlan) && createdTasks[i].Assignment != nil && createdTasks[i].Assignment.AssigneeType == in.Tasks[i].OwnerType && createdTasks[i].Assignment.AssigneeID == in.Tasks[i].OwnerID
+		}
+		if !matches {
+			writeAPIError(w, 409, "opportunity_promotion_superseded", "the promotion reservation already contains different work")
+			return
+		}
+		taskIDs := make([]string, len(createdTasks))
+		for i := range createdTasks {
+			taskIDs[i] = createdTasks[i].ID
+		}
+		linked, err := orgs.LinkStewardshipOpportunityWork(organization.ID, r.PathValue("mandate_id"), opportunity.ID, actor.UserID, created.ID, ref.Target, taskIDs)
+		if err != nil {
+			writeOrganizationError(w, err)
+			return
+		}
+		recordActivity(activityStore, repos, activities.Event{Kind: "stewardship_opportunity.promoted", ActorID: actor.UserID, RepositoryID: repository.ID, ResourceType: "proposal", ResourceID: created.ID, ResourceTitle: created.Title})
+		recordTaskTransitions(activityStore, repos, actor.UserID, repository.ID, created.ID, nil, createdTasks)
+		writeJSON(w, 201, map[string]any{"opportunity": linked, "proposal": created, "tasks": createdTasks})
 	})
 	mux.HandleFunc("GET /organizations/{id}/stewardship-mandates/{mandate_id}/preview", func(w http.ResponseWriter, r *http.Request) {
 		_, organization, ok := require(w, r, "repositories:read")

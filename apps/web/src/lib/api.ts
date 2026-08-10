@@ -17,34 +17,176 @@ export type Repository = {
   upstream_repository_id?: string;
 };
 export type CodeNavigationResult = {
-  repository_id:string; revision:string; query:string;
-  results:{kind:"definition"|"reference"|"caller"|"test";path:string;line:number;preview:string;commit_id?:string;commit_summary?:string}[];
-  ownership:{kind:"repository_owner"|"collaborator";id:string}[];
-  dependencies:{id:string;provider_repository_id:string;interface_name:string;constraint:string;commit_id:string}[];
-  analysis:{status:"complete"|"incomplete";reason:string;files_scanned:number;bytes_scanned:number;result_limit:number;method:string};
+  repository_id: string;
+  revision: string;
+  query: string;
+  results: {
+    kind: "definition" | "reference" | "caller" | "test";
+    path: string;
+    line: number;
+    preview: string;
+    commit_id?: string;
+    commit_summary?: string;
+  }[];
+  ownership: { kind: "repository_owner" | "collaborator"; id: string }[];
+  dependencies: {
+    id: string;
+    provider_repository_id: string;
+    interface_name: string;
+    constraint: string;
+    commit_id: string;
+  }[];
+  analysis: {
+    status: "complete" | "incomplete";
+    reason: string;
+    files_scanned: number;
+    bytes_scanned: number;
+    result_limit: number;
+    method: string;
+  };
 };
-export type ExplanationCitation = { kind:string; revision:string; path?:string; start_line?:number; end_line?:number; commit_id?:string; resource_id?:string; label:string; stale?:boolean };
-export type ExplanationClaim = { id:string; text:string; basis:"evidence"|"inference"|"uncertainty"; confidence:"high"|"medium"|"low"; citations:ExplanationCitation[] };
-export type ExplanationEntry = { id:string; kind:"code_reference"|"query"|"runtime_observation"|"hypothesis"|"agent_finding"|"conclusion"|"challenge"; body:string; actor_id:string; revision:string; citations?:ExplanationCitation[]; resource_id?:string; supersedes_id?:string; created_at:string };
+export type ExplanationCitation = {
+  kind: string;
+  revision: string;
+  path?: string;
+  start_line?: number;
+  end_line?: number;
+  commit_id?: string;
+  resource_id?: string;
+  label: string;
+  stale?: boolean;
+};
+export type ExplanationClaim = {
+  id: string;
+  text: string;
+  basis: "evidence" | "inference" | "uncertainty";
+  confidence: "high" | "medium" | "low";
+  citations: ExplanationCitation[];
+};
+export type ExplanationEntry = {
+  id: string;
+  kind:
+    | "code_reference"
+    | "query"
+    | "runtime_observation"
+    | "hypothesis"
+    | "agent_finding"
+    | "conclusion"
+    | "challenge";
+  body: string;
+  actor_id: string;
+  revision: string;
+  citations?: ExplanationCitation[];
+  resource_id?: string;
+  supersedes_id?: string;
+  created_at: string;
+};
 export type ExplanationConversation = {
-  id:string; repository_id:string; revision:string; context:{kind:"repository"|"file"|"proposal"|"task"|"pull_request"|"incident"|"workspace";resource_id?:string;path?:string};
-  question:string; asked_by:string; agent:string; answer:string; claims:ExplanationClaim[]; participants:{user_id:string;invited_by?:string;joined_at:string}[]; entries:ExplanationEntry[]; analysis_status:"complete"|"incomplete"; analysis_reason?:string; created_at:string; updated_at:string;
+  id: string;
+  repository_id: string;
+  revision: string;
+  context: {
+    kind:
+      | "repository"
+      | "file"
+      | "proposal"
+      | "task"
+      | "pull_request"
+      | "incident"
+      | "workspace";
+    resource_id?: string;
+    path?: string;
+  };
+  question: string;
+  asked_by: string;
+  agent: string;
+  answer: string;
+  claims: ExplanationClaim[];
+  participants: { user_id: string; invited_by?: string; joined_at: string }[];
+  entries: ExplanationEntry[];
+  analysis_status: "complete" | "incomplete";
+  analysis_reason?: string;
+  created_at: string;
+  updated_at: string;
 };
-export type ImpactEvidence = { kind:string; repository_id:string; revision:string; path?:string; line?:number; resource_id?:string; label:string; owner_id?:string; state?:string; verification?:string };
+export type ImpactEvidence = {
+  kind: string;
+  repository_id: string;
+  revision: string;
+  path?: string;
+  line?: number;
+  resource_id?: string;
+  label: string;
+  owner_id?: string;
+  state?: string;
+  verification?: string;
+};
 export type ImpactAssessment = {
-  id:string; repository_id:string; revision:string; title:string; source:{kind:"selected_code"|"investigation_conclusion"|"proposed_diff";path?:string;start_line?:number;end_line?:number;explanation_id?:string;entry_id?:string;diff?:string}; created_by:string;
-  participants:{user_id:string;invited_by?:string;joined_at:string}[];
-  items:{id:string;kind:"reference"|"test"|"owner"|"package"|"interface"|"consumer"|"release"|"environment"|"risk"|"unknown";summary:string;status:"candidate"|"accepted_risk"|"unknown"|"verification_required";evidence?:ImpactEvidence[];added_by:string;created_at?:string}[];
-  acknowledgement_requests:{id:string;repository_id:string;owner_id:string;requested_by:string;note?:string;requested_at:string;acknowledged_by?:string;acknowledgement?:string;acknowledged_at?:string}[];
-  analysis_status:"complete"|"incomplete"; analysis_reason?:string; version:number; created_at:string; updated_at:string;
-  context_state:"current"|"changed"; implementation?:{proposal_id:string;task_ids:string[];created_by:string;created_at:string};
+  id: string;
+  repository_id: string;
+  revision: string;
+  title: string;
+  source: {
+    kind: "selected_code" | "investigation_conclusion" | "proposed_diff";
+    path?: string;
+    start_line?: number;
+    end_line?: number;
+    explanation_id?: string;
+    entry_id?: string;
+    diff?: string;
+  };
+  created_by: string;
+  participants: { user_id: string; invited_by?: string; joined_at: string }[];
+  items: {
+    id: string;
+    kind:
+      | "reference"
+      | "test"
+      | "owner"
+      | "package"
+      | "interface"
+      | "consumer"
+      | "release"
+      | "environment"
+      | "risk"
+      | "unknown";
+    summary: string;
+    status: "candidate" | "accepted_risk" | "unknown" | "verification_required";
+    evidence?: ImpactEvidence[];
+    added_by: string;
+    created_at?: string;
+  }[];
+  acknowledgement_requests: {
+    id: string;
+    repository_id: string;
+    owner_id: string;
+    requested_by: string;
+    note?: string;
+    requested_at: string;
+    acknowledged_by?: string;
+    acknowledgement?: string;
+    acknowledged_at?: string;
+  }[];
+  analysis_status: "complete" | "incomplete";
+  analysis_reason?: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  context_state: "current" | "changed";
+  implementation?: {
+    proposal_id: string;
+    task_ids: string[];
+    created_by: string;
+    created_at: string;
+  };
 };
 export type DevelopmentWorkspace = {
   id: string;
   repository_id: string;
   commit_id: string;
   creator_id: string;
-  state: "provisioning" | "running" | "suspended" | "failed" | "stopped" | "expired";
+  state:
+    "provisioning" | "running" | "suspended" | "failed" | "stopped" | "expired";
   definition_sha256: string;
   created_at: string;
   updated_at: string;
@@ -79,12 +221,54 @@ export type DevelopmentWorkspace = {
     started_at: string;
     completed_at: string;
   }[];
-  events: { id?:string; kind: string; actor_id: string; role?:"observation"|"instruction"|"authorship"|"execution"; detail?: string; created_at: string }[];
-  command_outcomes: { id:string; command_sha256:string; directory:string; exit_code:number; output?:string; actor_id:string; started_at:string; completed_at:string }[];
-  changes: { path:string; sha256:string; size:number; actor_id:string; created_at:string }[];
-  presence: { actor_id:string; focus:"workspace"|"file"|"terminal"|"command"|"preview"; path?:string; joined_at:string; seen_at:string }[];
-  control: { version:number; principal_kind:"human"|"approved_agent"; principal_id:string; mode:"observe"|"guide"|"edit"|"execute"; scopes:("files"|"commands"|"lifecycle")[]; granted_by:string; granted_at:string; expires_at:string };
-  messages: { id:string; actor_id:string; body:string; created_at:string }[];
+  events: {
+    id?: string;
+    kind: string;
+    actor_id: string;
+    role?: "observation" | "instruction" | "authorship" | "execution";
+    detail?: string;
+    created_at: string;
+  }[];
+  command_outcomes: {
+    id: string;
+    command_sha256: string;
+    directory: string;
+    exit_code: number;
+    output?: string;
+    actor_id: string;
+    started_at: string;
+    completed_at: string;
+  }[];
+  changes: {
+    path: string;
+    sha256: string;
+    size: number;
+    actor_id: string;
+    created_at: string;
+  }[];
+  presence: {
+    actor_id: string;
+    focus: "workspace" | "file" | "terminal" | "command" | "preview";
+    path?: string;
+    joined_at: string;
+    seen_at: string;
+  }[];
+  control: {
+    version: number;
+    principal_kind: "human" | "approved_agent";
+    principal_id: string;
+    mode: "observe" | "guide" | "edit" | "execute";
+    scopes: ("files" | "commands" | "lifecycle")[];
+    granted_by: string;
+    granted_at: string;
+    expires_at: string;
+  };
+  messages: {
+    id: string;
+    actor_id: string;
+    body: string;
+    created_at: string;
+  }[];
   head_checkpoint_id?: string;
   policy: WorkspacePolicy;
   policy_scope: string;
@@ -98,20 +282,78 @@ export type DevelopmentWorkspace = {
   rebuild_required: boolean;
   rebuild_reasons: string[];
 };
-export type WorkspacePolicy = { version:number; max_cpus:number; max_memory_mb:number; max_storage_mb:number; network:"none"; idle_minutes:number; max_runtime_hours:number; retention_hours:number; sharing:"private"|"repository"|"organization"; agent_execution:boolean; updated_by?:string; updated_at?:string };
-export type WorkspaceConsumption = { workspace_id:string; repository_id:string; creator_id:string; state:string; cpu_seconds:number; memory_mb_hours:number; storage_mb_hours:number; measured_at:string };
+export type WorkspacePolicy = {
+  version: number;
+  max_cpus: number;
+  max_memory_mb: number;
+  max_storage_mb: number;
+  network: "none";
+  idle_minutes: number;
+  max_runtime_hours: number;
+  retention_hours: number;
+  sharing: "private" | "repository" | "organization";
+  agent_execution: boolean;
+  updated_by?: string;
+  updated_at?: string;
+};
+export type WorkspaceConsumption = {
+  workspace_id: string;
+  repository_id: string;
+  creator_id: string;
+  state: string;
+  cpu_seconds: number;
+  memory_mb_hours: number;
+  storage_mb_hours: number;
+  measured_at: string;
+};
 export type WorkspaceCheckpoint = {
-  id:string; workspace_id:string; repository_id:string; base_commit_id:string;
-  definition_sha256:string; parent_checkpoint_id?:string; title:string; description?:string;
-  reproducibility:{dependencies:string[];notes?:string}; created_by:string; created_at:string;
-  files:{path:string;operation:"add"|"modify"|"delete";mode?:number;size?:number;sha256?:string}[];
-  contributor_ids:string[];
-  commands:{id:string;sha256:string;exit_code:number;actor_id:string}[];
-  publication?:{branch:string;commit_id:string;pull_request_id?:string;task_id?:string;session_id?:string;contributor_ids:string[];command_ids:string[];link_pending?:boolean;published_by:string;published_at:string};
+  id: string;
+  workspace_id: string;
+  repository_id: string;
+  base_commit_id: string;
+  definition_sha256: string;
+  parent_checkpoint_id?: string;
+  title: string;
+  description?: string;
+  reproducibility: { dependencies: string[]; notes?: string };
+  created_by: string;
+  created_at: string;
+  files: {
+    path: string;
+    operation: "add" | "modify" | "delete";
+    mode?: number;
+    size?: number;
+    sha256?: string;
+  }[];
+  contributor_ids: string[];
+  commands: {
+    id: string;
+    sha256: string;
+    exit_code: number;
+    actor_id: string;
+  }[];
+  publication?: {
+    branch: string;
+    commit_id: string;
+    pull_request_id?: string;
+    task_id?: string;
+    session_id?: string;
+    contributor_ids: string[];
+    command_ids: string[];
+    link_pending?: boolean;
+    published_by: string;
+    published_at: string;
+  };
 };
 export type CheckpointAnalysis = {
-  checkpoint_id:string; preflight_token:string; base_diverged:boolean; repository_head?:string;
-  conflicts:string[]; missing_dependencies:string[]; reproducible:boolean; reasons:string[];
+  checkpoint_id: string;
+  preflight_token: string;
+  base_diverged: boolean;
+  repository_head?: string;
+  conflicts: string[];
+  missing_dependencies: string[];
+  reproducible: boolean;
+  reasons: string[];
 };
 export type Organization = {
   id: string;
@@ -148,29 +390,112 @@ export type Organization = {
   events: OrganizationEvent[];
 };
 export type OrganizationStewardshipMandateRevision = {
-  version:number; desired_outcomes:string[]; repositories:{repository_id:string;branches:string[]}[];
-  trusted_signals:string[]; exclusions:string[]; budget:{max_agent_minutes:number;max_actions:number};
-  starts_at:string; expires_at:string; agent_id:string; allowed_actions:string[]; required_human_decisions:string[];
-  reason:string; created_by:string; created_at:string;
+  version: number;
+  desired_outcomes: string[];
+  repositories: { repository_id: string; branches: string[] }[];
+  trusted_signals: string[];
+  exclusions: string[];
+  budget: { max_agent_minutes: number; max_actions: number };
+  starts_at: string;
+  expires_at: string;
+  agent_id: string;
+  allowed_actions: string[];
+  required_human_decisions: string[];
+  opportunity_policies: {
+    evidence_type: string;
+    minimum_severity: string;
+    mode: "approval_required" | "auto_start";
+    max_agent_minutes: number;
+  }[];
+  reason: string;
+  created_by: string;
+  created_at: string;
 };
 export type OrganizationStewardshipMandate = {
-  id:string; title:string; version:number; status:"pending_acceptance"|"active"|"paused"|"expired"|"revoked";
-  revisions:OrganizationStewardshipMandateRevision[];
-  acceptance?:{version:number;operator_id:string;accepted_at:string}; paused_by?:string; paused_at?:string; revoked_by?:string; revoked_at?:string;
-  opportunities:OrganizationStewardshipOpportunity[];
+  id: string;
+  title: string;
+  version: number;
+  status: "pending_acceptance" | "active" | "paused" | "expired" | "revoked";
+  revisions: OrganizationStewardshipMandateRevision[];
+  acceptance?: { version: number; operator_id: string; accepted_at: string };
+  paused_by?: string;
+  paused_at?: string;
+  revoked_by?: string;
+  revoked_at?: string;
+  opportunities: OrganizationStewardshipOpportunity[];
 };
 export type OrganizationStewardshipOpportunity = {
-  id:string; mandate_version:number; repository_id:string; evidence_type:"repository"|"dependency"|"check"|"release"|"incident"|"security"|"usage";
-  evidence_id:string; evidence_revision:string; title:string; summary:string; severity:"critical"|"high"|"medium"|"low";
-  expected_value:string; confidence:number; affected_owner_ids:string[]; affected_revisions:string[]; in_scope_reason:string;
-  citations:{kind:string;resource_id:string;revision:string;label:string;url?:string;stale:boolean}[];
-  status:"open"|"dismissed"|"snoozed"|"incorrect"; rank:number; snoozed_until?:string; decision_reason?:string;
-  version:number; evaluated_by:string; evaluated_at:string; updated_by:string; updated_at:string;
-  comments:{id:string;actor_id:string;body:string;created_at:string}[];
+  id: string;
+  mandate_version: number;
+  repository_id: string;
+  evidence_type:
+    | "repository"
+    | "dependency"
+    | "check"
+    | "release"
+    | "incident"
+    | "security"
+    | "usage";
+  evidence_id: string;
+  evidence_revision: string;
+  title: string;
+  summary: string;
+  severity: "critical" | "high" | "medium" | "low";
+  expected_value: string;
+  confidence: number;
+  affected_owner_ids: string[];
+  affected_revisions: string[];
+  in_scope_reason: string;
+  citations: {
+    kind: string;
+    resource_id: string;
+    revision: string;
+    label: string;
+    url?: string;
+    stale: boolean;
+  }[];
+  status:
+    "open" | "dismissed" | "snoozed" | "incorrect" | "promoting" | "accepted";
+  rank: number;
+  snoozed_until?: string;
+  decision_reason?: string;
+  admission: "approval_required" | "auto_start_eligible";
+  max_agent_minutes: number;
+  blockers: string[];
+  approval?: {
+    decision: string;
+    actor_id: string;
+    reason: string;
+    opportunity_version: number;
+    created_at: string;
+  };
+  work?: {
+    proposal_id: string;
+    task_ids: string[];
+    base_revision: string;
+    created_by: string;
+    created_at: string;
+  };
+  version: number;
+  evaluated_by: string;
+  evaluated_at: string;
+  updated_by: string;
+  updated_at: string;
+  comments: {
+    id: string;
+    actor_id: string;
+    body: string;
+    created_at: string;
+  }[];
 };
 export type OrganizationStewardshipPreview = {
-  mandate_id:string; version:number; status:string; access_grants:OrganizationAccessGrant[];
-  effective_policies:Record<string,{rules:OrganizationPolicyRules}>; implicit_authority:string[]; notice:string;
+  mandate_id: string;
+  version: number;
+  status: string;
+  access_grants: OrganizationAccessGrant[];
+  effective_policies: Record<string, { rules: OrganizationPolicyRules }>;
+  implicit_authority: string[];
+  notice: string;
 };
 export type OrganizationPolicyRules = {
   repository_visibility?: "public" | "private";
@@ -1126,6 +1451,8 @@ export type ProposalTask = {
   proposal_id: string;
   title: string;
   outcome: string;
+  risk?: string;
+  verification_plan?: string;
   status: "todo" | "in_progress" | "completed" | "cancelled";
   position: number;
   dependency_ids: string[];
@@ -1164,7 +1491,26 @@ export type ProposalTask = {
   };
   reasoning?: ReasoningOrigin;
 };
-export type ReasoningOrigin = {assessment_id:string;assessment_version:number;revision:string;explanation_id?:string;conclusion_entry_id?:string;selected_item_ids:string[];items:{id:string;kind:string;summary:string;status:string}[];acknowledgements:{request_id:string;repository_id:string;owner_id:string;acknowledged_by:string;note?:string}[];analysis_status:string};
+export type ReasoningOrigin = {
+  assessment_id: string;
+  assessment_version: number;
+  revision: string;
+  explanation_id?: string;
+  conclusion_entry_id?: string;
+  selected_item_ids: string[];
+  items: { id: string; kind: string; summary: string; status: string }[];
+  acknowledgements: {
+    request_id: string;
+    repository_id: string;
+    owner_id: string;
+    acknowledged_by: string;
+    note?: string;
+  }[];
+  analysis_status: string;
+  organization_id?: string;
+  mandate_id?: string;
+  opportunity_id?: string;
+};
 export type ProposalTaskChange = {
   id: string;
   task_id: string;

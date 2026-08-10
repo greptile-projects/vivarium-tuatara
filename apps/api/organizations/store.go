@@ -242,6 +242,13 @@ type MandateBudget struct {
 	MaxActions      int `json:"max_actions"`
 }
 
+type OpportunityPolicy struct {
+	EvidenceType    string `json:"evidence_type"`
+	MinimumSeverity string `json:"minimum_severity"`
+	Mode            string `json:"mode"`
+	MaxAgentMinutes int    `json:"max_agent_minutes"`
+}
+
 type MandateRevision struct {
 	Version                int                 `json:"version"`
 	DesiredOutcomes        []string            `json:"desired_outcomes"`
@@ -254,6 +261,7 @@ type MandateRevision struct {
 	AgentID                string              `json:"agent_id"`
 	AllowedActions         []string            `json:"allowed_actions"`
 	RequiredHumanDecisions []string            `json:"required_human_decisions"`
+	OpportunityPolicies    []OpportunityPolicy `json:"opportunity_policies"`
 	Reason                 string              `json:"reason"`
 	CreatedBy              string              `json:"created_by"`
 	CreatedAt              time.Time           `json:"created_at"`
@@ -266,17 +274,19 @@ type MandateAcceptance struct {
 }
 
 type StewardshipMandate struct {
-	ID            string                   `json:"id"`
-	Title         string                   `json:"title"`
-	Version       int                      `json:"version"`
-	Status        string                   `json:"status"`
-	Revisions     []MandateRevision        `json:"revisions"`
-	Acceptance    *MandateAcceptance       `json:"acceptance,omitempty"`
-	PausedBy      string                   `json:"paused_by,omitempty"`
-	PausedAt      *time.Time               `json:"paused_at,omitempty"`
-	RevokedBy     string                   `json:"revoked_by,omitempty"`
-	RevokedAt     *time.Time               `json:"revoked_at,omitempty"`
-	Opportunities []StewardshipOpportunity `json:"opportunities"`
+	ID               string                   `json:"id"`
+	Title            string                   `json:"title"`
+	Version          int                      `json:"version"`
+	Status           string                   `json:"status"`
+	Revisions        []MandateRevision        `json:"revisions"`
+	Acceptance       *MandateAcceptance       `json:"acceptance,omitempty"`
+	PausedBy         string                   `json:"paused_by,omitempty"`
+	PausedAt         *time.Time               `json:"paused_at,omitempty"`
+	RevokedBy        string                   `json:"revoked_by,omitempty"`
+	RevokedAt        *time.Time               `json:"revoked_at,omitempty"`
+	Opportunities    []StewardshipOpportunity `json:"opportunities"`
+	UsedAgentMinutes int                      `json:"used_agent_minutes"`
+	UsedActions      int                      `json:"used_actions"`
 }
 
 type OpportunityCitation struct {
@@ -293,6 +303,22 @@ type OpportunityComment struct {
 	ActorID   string    `json:"actor_id"`
 	Body      string    `json:"body"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+type OpportunityApproval struct {
+	Decision  string    `json:"decision"`
+	ActorID   string    `json:"actor_id"`
+	Reason    string    `json:"reason"`
+	Version   int       `json:"opportunity_version"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type OpportunityWorkLink struct {
+	ProposalID   string    `json:"proposal_id"`
+	TaskIDs      []string  `json:"task_ids"`
+	BaseRevision string    `json:"base_revision"`
+	CreatedBy    string    `json:"created_by"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // StewardshipOpportunity is reviewable coordination evidence, not an agent
@@ -324,6 +350,12 @@ type StewardshipOpportunity struct {
 	UpdatedBy         string                `json:"updated_by"`
 	UpdatedAt         time.Time             `json:"updated_at"`
 	Comments          []OpportunityComment  `json:"comments"`
+	Admission         string                `json:"admission"`
+	MaxAgentMinutes   int                   `json:"max_agent_minutes"`
+	PolicyFingerprint string                `json:"policy_fingerprint"`
+	Blockers          []string              `json:"blockers"`
+	Approval          *OpportunityApproval  `json:"approval,omitempty"`
+	Work              *OpportunityWorkLink  `json:"work,omitempty"`
 }
 
 type Event struct {
@@ -1372,6 +1404,13 @@ func validateMandateRevision(v *Organization, r MandateRevision, now time.Time) 
 	}
 	if !validateText(r.DesiredOutcomes, 1000) || !validateText(r.TrustedSignals, 300) || !validateText(r.Exclusions, 1000) || !validateText(r.AllowedActions, 100) || !validateText(r.RequiredHumanDecisions, 500) {
 		return false
+	}
+	seenPolicies := map[string]bool{}
+	for _, policy := range r.OpportunityPolicies {
+		if !slices.Contains([]string{"repository", "dependency", "check", "release", "incident", "security", "usage"}, policy.EvidenceType) || !slices.Contains([]string{"critical", "high", "medium", "low"}, policy.MinimumSeverity) || !slices.Contains([]string{"approval_required", "auto_start"}, policy.Mode) || policy.MaxAgentMinutes < 0 || policy.MaxAgentMinutes > r.Budget.MaxAgentMinutes || seenPolicies[policy.EvidenceType] {
+			return false
+		}
+		seenPolicies[policy.EvidenceType] = true
 	}
 	seen := map[string]bool{}
 	for _, scope := range r.Repositories {

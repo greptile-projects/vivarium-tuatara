@@ -4,9 +4,27 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
+
+func opportunityPolicyFingerprint(v Organization, repositoryID string) string {
+	parts := []string{}
+	for _, policy := range v.Policies {
+		if policy.Status == "active" {
+			parts = append(parts, policy.ID+":"+strconv.Itoa(policy.Version))
+		}
+	}
+	for _, exception := range v.PolicyExceptions {
+		if exception.RepositoryID == repositoryID {
+			parts = append(parts, exception.ID+":"+exception.Status+":"+exception.ExpiresAt.UTC().Format(time.RFC3339Nano))
+		}
+	}
+	slices.Sort(parts)
+	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
+	return hex.EncodeToString(sum[:])
+}
 
 type OpportunityFinding struct {
 	RepositoryID      string                `json:"repository_id"`
@@ -33,6 +51,29 @@ type OpportunityDecision struct {
 	Until           *time.Time `json:"until"`
 	Reason          string     `json:"reason"`
 	Comment         string     `json:"comment"`
+}
+
+func opportunityAdmission(revision MandateRevision, finding OpportunityFinding) string {
+	levels := map[string]int{"low": 1, "medium": 2, "high": 3, "critical": 4}
+	for _, policy := range revision.OpportunityPolicies {
+		if policy.EvidenceType == finding.EvidenceType && levels[finding.Severity] >= levels[policy.MinimumSeverity] {
+			if policy.Mode == "auto_start" {
+				return "auto_start_eligible"
+			}
+			return "approval_required"
+		}
+	}
+	return "approval_required"
+}
+
+func opportunityAgentLimit(revision MandateRevision, finding OpportunityFinding) int {
+	levels := map[string]int{"low": 1, "medium": 2, "high": 3, "critical": 4}
+	for _, policy := range revision.OpportunityPolicies {
+		if policy.EvidenceType == finding.EvidenceType && levels[finding.Severity] >= levels[policy.MinimumSeverity] {
+			return policy.MaxAgentMinutes
+		}
+	}
+	return 0
 }
 
 func opportunityKey(f OpportunityFinding) string {
@@ -140,9 +181,10 @@ func (s *Store) PublishStewardshipOpportunities(id, mandateID, actor string, fin
 				newKeys[key] = true
 			}
 		}
-		if len(m.Opportunities)+len(newKeys) > revision.Budget.MaxActions {
+		if m.UsedActions+len(newKeys) > revision.Budget.MaxActions {
 			return ErrConflict
 		}
+		m.UsedActions += len(newKeys)
 		for _, finding := range uniqueFindings {
 			key, found := opportunityKey(finding), -1
 			for j := range m.Opportunities {
@@ -179,6 +221,12 @@ func (s *Store) PublishStewardshipOpportunities(id, mandateID, actor string, fin
 			o.MandateVersion, o.RepositoryID, o.EvidenceType, o.EvidenceID, o.EvidenceRevision = m.Version, finding.RepositoryID, finding.EvidenceType, finding.EvidenceID, finding.EvidenceRevision
 			o.Title, o.Summary, o.Severity, o.ExpectedValue, o.Confidence = strings.TrimSpace(finding.Title), strings.TrimSpace(finding.Summary), finding.Severity, strings.TrimSpace(finding.ExpectedValue), finding.Confidence
 			o.AffectedOwnerIDs, o.AffectedRevisions, o.Citations, o.InScopeReason = finding.AffectedOwnerIDs, finding.AffectedRevisions, citations, strings.TrimSpace(finding.InScopeReason)
+			o.Admission = opportunityAdmission(revision, finding)
+			o.MaxAgentMinutes = opportunityAgentLimit(revision, finding)
+			o.PolicyFingerprint = opportunityPolicyFingerprint(*v, finding.RepositoryID)
+			if o.Blockers == nil {
+				o.Blockers = []string{}
+			}
 			o.EvaluatedBy, o.UpdatedBy, o.UpdatedAt = actor, actor, now
 			out = append(out, *o)
 		}
@@ -213,6 +261,9 @@ func (s *Store) DecideStewardshipOpportunity(id, mandateID, opportunityID, actor
 			return ErrConflict
 		}
 		now := s.now().Truncate(time.Microsecond)
+		if (o.Work != nil || o.Status == "promoting") && decision.Action != "comment" && decision.Action != "rank" {
+			return ErrConflict
+		}
 		switch decision.Action {
 		case "rank":
 			if decision.Rank < 1 || decision.Rank > 100000 {
@@ -251,9 +302,11 @@ func (s *Store) DecideStewardshipOpportunity(id, mandateID, opportunityID, actor
 			}
 		case "dismiss":
 			o.Status = "dismissed"
+			o.Approval = nil
 			o.DecisionReason = strings.TrimSpace(decision.Reason)
 		case "incorrect":
 			o.Status = "incorrect"
+			o.Approval = nil
 			o.DecisionReason = strings.TrimSpace(decision.Reason)
 		case "snooze":
 			if decision.Until == nil || !decision.Until.After(now) {
@@ -261,8 +314,12 @@ func (s *Store) DecideStewardshipOpportunity(id, mandateID, opportunityID, actor
 			}
 			until := decision.Until.UTC()
 			o.Status, o.SnoozedUntil = "snoozed", &until
+			o.Approval = nil
 			o.DecisionReason = strings.TrimSpace(decision.Reason)
 		case "reopen":
+			if !slices.Contains([]string{"dismissed", "snoozed", "incorrect"}, o.Status) {
+				return ErrConflict
+			}
 			o.Status, o.SnoozedUntil, o.DecisionReason = "open", nil, ""
 		case "comment":
 			body, ok := clean(decision.Comment, 4000)
@@ -274,6 +331,19 @@ func (s *Store) DecideStewardshipOpportunity(id, mandateID, opportunityID, actor
 				return e
 			}
 			o.Comments = append(o.Comments, OpportunityComment{ID: cid, ActorID: actor, Body: body, CreatedAt: now})
+		case "approve", "reject":
+			if !HasRole(*v, actor, "owner") || o.Status != "open" || o.Work != nil || (decision.Action == "approve" && o.Admission != "approval_required") {
+				return ErrConflict
+			}
+			reason, ok := clean(decision.Reason, 1000)
+			if !ok {
+				return ErrInvalid
+			}
+			o.Approval = &OpportunityApproval{Decision: decision.Action, ActorID: actor, Reason: reason, Version: o.Version, CreatedAt: now}
+			if decision.Action == "reject" {
+				o.Status = "dismissed"
+				o.DecisionReason = reason
+			}
 		default:
 			return ErrInvalid
 		}
@@ -283,4 +353,107 @@ func (s *Store) DecideStewardshipOpportunity(id, mandateID, opportunityID, actor
 		return s.event(v, "stewardship_opportunity."+decision.Action, actor, opportunityID, map[string]any{"version": o.Version})
 	})
 	return v, out, err
+}
+
+// ReserveStewardshipOpportunity serializes admission before proposal side
+// effects. A retry observes the reservation/work link instead of spending
+// contributor attention twice.
+func (s *Store) ReserveStewardshipOpportunity(id, mandateID, opportunityID, actor string, expectedVersion, agentMinutes int, blockers []string) (StewardshipOpportunity, error) {
+	var out StewardshipOpportunity
+	_, err := s.mutate(id, func(v *Organization) error {
+		if !HasRole(*v, actor, "") {
+			return ErrNotFound
+		}
+		i := mandateIndex(v, mandateID)
+		if i < 0 {
+			return ErrNotFound
+		}
+		m := &v.StewardshipMandates[i]
+		j := -1
+		for k := range m.Opportunities {
+			if m.Opportunities[k].ID == opportunityID {
+				j = k
+			}
+		}
+		if j < 0 {
+			return ErrNotFound
+		}
+		o := &m.Opportunities[j]
+		if o.Status == "promoting" && o.Work == nil && o.UpdatedBy == actor {
+			out = *o
+			return nil
+		}
+		if o.Version != expectedVersion || o.Work != nil || o.Status != "open" {
+			return ErrConflict
+		}
+		revision := m.Revisions[len(m.Revisions)-1]
+		if m.Status != "active" || m.Version != o.MandateVersion || m.Acceptance == nil || m.Acceptance.Version != m.Version {
+			blockers = append(blockers, "mandate_or_policy_changed")
+		}
+		if o.PolicyFingerprint != opportunityPolicyFingerprint(*v, o.RepositoryID) {
+			blockers = append(blockers, "repository_policy_changed")
+		}
+		if agentMinutes < 0 || m.UsedAgentMinutes+agentMinutes > revision.Budget.MaxAgentMinutes {
+			blockers = append(blockers, "agent_minute_budget_exhausted")
+		}
+		if agentMinutes > o.MaxAgentMinutes {
+			blockers = append(blockers, "opportunity_agent_minute_limit")
+		}
+		if m.UsedActions+1 > revision.Budget.MaxActions {
+			blockers = append(blockers, "action_budget_exhausted")
+		}
+		if o.Admission == "approval_required" && (o.Approval == nil || o.Approval.Decision != "approve") {
+			blockers = append(blockers, "human_approval_required")
+		}
+		if o.Admission == "auto_start_eligible" && (m.Acceptance == nil || (m.Acceptance.OperatorID != actor && !HasRole(*v, actor, "owner"))) {
+			blockers = append(blockers, "operator_or_owner_required")
+		}
+		if len(blockers) > 0 {
+			o.Blockers = slices.Compact(blockers)
+			o.Version++
+			o.UpdatedBy, o.UpdatedAt = actor, s.now().Truncate(time.Microsecond)
+			out = *o
+			return s.event(v, "stewardship_opportunity.blocked", actor, opportunityID, map[string]any{"blockers": blockers})
+		}
+		o.Status, o.Blockers = "promoting", []string{}
+		m.UsedAgentMinutes += agentMinutes
+		m.UsedActions++
+		o.Version++
+		o.UpdatedBy, o.UpdatedAt = actor, s.now().Truncate(time.Microsecond)
+		out = *o
+		return s.event(v, "stewardship_opportunity.admitted", actor, opportunityID, map[string]any{"admission": o.Admission})
+	})
+	return out, err
+}
+
+func (s *Store) LinkStewardshipOpportunityWork(id, mandateID, opportunityID, actor, proposalID, base string, taskIDs []string) (StewardshipOpportunity, error) {
+	var out StewardshipOpportunity
+	_, err := s.mutate(id, func(v *Organization) error {
+		i := mandateIndex(v, mandateID)
+		if i < 0 {
+			return ErrNotFound
+		}
+		m := &v.StewardshipMandates[i]
+		j := -1
+		for k := range m.Opportunities {
+			if m.Opportunities[k].ID == opportunityID {
+				j = k
+			}
+		}
+		if j < 0 {
+			return ErrNotFound
+		}
+		o := &m.Opportunities[j]
+		if o.Status != "promoting" || o.Work != nil || !validID(proposalID) || len(base) != 40 || len(taskIDs) == 0 {
+			return ErrConflict
+		}
+		now := s.now().Truncate(time.Microsecond)
+		o.Work = &OpportunityWorkLink{ProposalID: proposalID, TaskIDs: taskIDs, BaseRevision: base, CreatedBy: actor, CreatedAt: now}
+		o.Status = "accepted"
+		o.Version++
+		o.UpdatedBy, o.UpdatedAt = actor, now
+		out = *o
+		return s.event(v, "stewardship_opportunity.promoted", actor, proposalID, map[string]any{"opportunity_id": opportunityID, "tasks": len(taskIDs)})
+	})
+	return out, err
 }
