@@ -62,8 +62,8 @@ Unfinished repository work can be retained independently of the live runtime
 as an attributed checkpoint. A checkpoint freezes the exact base commit,
 workspace definition and digest, declared dependencies and reproduction notes,
 plus an ordered manifest of added, modified, and deleted repository files.
-Participant reads expose hashes, modes, sizes, bounded text patches, and parent
-lineage rather than the private stored bytes. Credential-like paths or content,
+Participant reads expose file operations, hashes, modes, sizes, and parent
+lineage rather than stored bytes or textual patches. Credential-like paths or content,
 non-regular filesystem state, and snapshots over 32 MiB fail closed; terminal
 input, command output, presence, previews, processes, and container state are
 outside the checkpoint boundary.

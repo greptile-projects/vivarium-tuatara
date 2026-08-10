@@ -111,7 +111,7 @@ against the workspace's exact base commit, with a 32 MiB total limit. Suspected
 credential paths or contents reject the request with `422 checkpoint_not_safe`.
 `GET /workspaces/{id}/checkpoints` and `GET .../checkpoints/{checkpoint-id}`
 return attribution, environment definition, parent lineage, change operations,
-hashes, modes, sizes, and bounded text patches; private stored file bytes are
+hashes, modes, and sizes; private stored file bytes and textual patches are
 never returned.
 
 `GET .../checkpoints/{checkpoint-id}/restore` returns base divergence, live

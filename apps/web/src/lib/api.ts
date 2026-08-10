@@ -68,7 +68,7 @@ export type WorkspaceCheckpoint = {
   id:string; workspace_id:string; repository_id:string; base_commit_id:string;
   definition_sha256:string; parent_checkpoint_id?:string; title:string; description?:string;
   reproducibility:{dependencies:string[];notes?:string}; created_by:string; created_at:string;
-  files:{path:string;operation:"add"|"modify"|"delete";mode?:number;size?:number;sha256?:string;patch?:string}[];
+  files:{path:string;operation:"add"|"modify"|"delete";mode?:number;size?:number;sha256?:string}[];
 };
 export type CheckpointAnalysis = {
   checkpoint_id:string; preflight_token:string; base_diverged:boolean; repository_head?:string;

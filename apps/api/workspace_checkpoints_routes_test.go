@@ -1,9 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
 func TestCompareCheckpointTreesCapturesDiffWithoutCredentials(t *testing.T) {
@@ -39,5 +44,36 @@ func TestMissingCheckpointDependencies(t *testing.T) {
 	got := missingDependencies([]string{"go", "bun"}, []string{"go"})
 	if len(got) != 1 || got[0] != "bun" {
 		t.Fatalf("missing = %v", got)
+	}
+}
+
+func TestCheckpointRestoreRollsBackEveryEarlierMutation(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "first.txt"), []byte("before"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "blocked"), []byte("not a directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := workspaces.Checkpoint{Files: []workspaces.CheckpointFile{
+		{Path: "first.txt", Operation: "modify", Mode: 0600, ContentB64: base64.StdEncoding.EncodeToString([]byte("after"))},
+		{Path: "blocked/second.txt", Operation: "add", Mode: 0600, ContentB64: base64.StdEncoding.EncodeToString([]byte("fails"))},
+	}}
+	archive, err := checkpointRestoreArchive(checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", "-c", checkpointRestoreScript, "sh", root)
+	cmd.Stdin = bytes.NewReader(archive)
+	if err = cmd.Run(); err == nil {
+		t.Fatal("restore unexpectedly succeeded")
+	}
+	got, err := os.ReadFile(filepath.Join(root, "first.txt"))
+	if err != nil || string(got) != "before" {
+		t.Fatalf("first file after rollback = %q, %v", got, err)
+	}
+	blocked, err := os.ReadFile(filepath.Join(root, "blocked"))
+	if err != nil || string(blocked) != "not a directory" {
+		t.Fatalf("blocker after rollback = %q, %v", blocked, err)
 	}
 }

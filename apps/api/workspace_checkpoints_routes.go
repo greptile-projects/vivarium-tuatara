@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
@@ -135,6 +136,7 @@ func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, c
 			return
 		}
 		checkpoint, _ := store.CheckpointSnapshot(item.ID, a.CheckpointID)
+		var updated workspaces.Workspace
 		err = store.WithControl(item.ID, actor.UserID, "files", func(current workspaces.Workspace) error {
 			fresh, freshErr := analyzeCheckpointRestore(git, store, current, r.PathValue("checkpoint_id"))
 			if freshErr != nil {
@@ -143,7 +145,12 @@ func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, c
 			if fresh.PreflightToken != input.PreflightToken {
 				return workspaces.ErrCheckpointConflict
 			}
-			return applyCheckpoint(catalog, current, actor, checkpoint)
+			if applyErr := applyCheckpoint(catalog, current, actor, checkpoint); applyErr != nil {
+				return applyErr
+			}
+			var recordErr error
+			updated, recordErr = store.RecordCheckpointRestore(item.ID, checkpoint.ID, current.HeadCheckpointID, actor.UserID)
+			return recordErr
 		})
 		if errors.Is(err, workspaces.ErrControl) {
 			writeAPIError(w, 409, "workspace_control_required", "live file control is held by another participant or has expired")
@@ -155,11 +162,6 @@ func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, c
 		}
 		if err != nil {
 			writeAPIError(w, 500, "checkpoint_restore_failed", "checkpoint could not be restored")
-			return
-		}
-		updated, err := store.RecordCheckpointRestore(item.ID, checkpoint.ID, actor.UserID)
-		if err != nil {
-			writeAPIError(w, 500, "checkpoint_restore_failed", "files restored but lineage evidence could not be saved")
 			return
 		}
 		writeJSON(w, 200, map[string]any{"workspace": updated, "analysis": a})
@@ -403,25 +405,95 @@ func missingDependencies(required, declared []string) []string {
 	}
 	return out
 }
+
+const checkpointRestoreScript = `set -eu
+root=$1
+tx=$(mktemp -d "$root/.vivarium-restore.XXXXXX")
+applying=0
+rollback() {
+	while IFS="$(printf '\t')" read -r operation mode encoded payload; do
+		path=$(printf '%s' "$encoded" | base64 -d)
+		target="$root/$path"
+		rm -rf -- "$target"
+		if [ -e "$tx/backup/$payload" ] || [ -L "$tx/backup/$payload" ]; then
+			mkdir -p -- "$(dirname "$target")"
+			cp -a -- "$tx/backup/$payload" "$target"
+		fi
+	done < "$tx/manifest"
+}
+finish() {
+	status=$?
+	if [ "$applying" = 1 ] && [ "$status" != 0 ]; then rollback || true; fi
+	rm -rf -- "$tx"
+	exit "$status"
+}
+trap finish EXIT HUP INT TERM
+tar -x -C "$tx"
+mkdir "$tx/backup"
+while IFS="$(printf '\t')" read -r operation mode encoded payload; do
+	path=$(printf '%s' "$encoded" | base64 -d)
+	case "$path" in ""|/*|../*|*/../*|*/..) exit 42 ;; esac
+	parent=$(realpath -m "$root/$(dirname "$path")")
+	case "$parent" in "$root"|"$root"/*) ;; *) exit 42 ;; esac
+	target="$root/$path"
+	if [ -e "$target" ] || [ -L "$target" ]; then cp -a -- "$target" "$tx/backup/$payload"; fi
+done < "$tx/manifest"
+applying=1
+while IFS="$(printf '\t')" read -r operation mode encoded payload; do
+	path=$(printf '%s' "$encoded" | base64 -d)
+	target="$root/$path"
+	if [ "$operation" = delete ]; then rm -rf -- "$target"; continue; fi
+	mkdir -p -- "$(dirname "$target")"
+	parent=$(realpath -m "$(dirname "$target")")
+	case "$parent" in "$root"|"$root"/*) ;; *) exit 42 ;; esac
+	cp -- "$tx/payload/$payload" "$target.vivarium-new"
+	chmod "$mode" "$target.vivarium-new"
+	rm -rf -- "$target"
+	mv -f -- "$target.vivarium-new" "$target"
+done < "$tx/manifest"
+applying=0`
+
 func applyCheckpoint(catalog *repositories.Store, w workspaces.Workspace, actor auth.Credential, c workspaces.Checkpoint) error {
+	archive, err := checkpointRestoreArchive(c)
+	if err != nil {
+		return err
+	}
+	_, err = workspaceAuthorizedExec(catalog, w, actor, true, 60*time.Second, "/workspace", bytes.NewReader(archive), "sh", "-c", checkpointRestoreScript, "sh", "/workspace")
+	return err
+}
+
+func checkpointRestoreArchive(c workspaces.Checkpoint) ([]byte, error) {
+	var archive bytes.Buffer
+	tw := tar.NewWriter(&archive)
+	var manifest strings.Builder
 	for _, f := range c.Files {
-		target := "/workspace/" + f.Path
+		encoded := base64.StdEncoding.EncodeToString([]byte(f.Path))
+		payloadSum := sha256.Sum256([]byte(f.Path))
+		payload := hex.EncodeToString(payloadSum[:])
+		fmt.Fprintf(&manifest, "%s\t%o\t%s\t%s\n", f.Operation, f.Mode, encoded, payload)
 		if f.Operation == "delete" {
-			if _, err := workspaceAuthorizedExec(catalog, w, actor, true, 15*time.Second, "/workspace", nil, "rm", "-f", "--", f.Path); err != nil {
-				return err
-			}
 			continue
 		}
 		data, err := base64.StdEncoding.DecodeString(f.ContentB64)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		dir := filepath.ToSlash(filepath.Dir(target))
-		base := filepath.Base(target)
-		script := "set -eu; mkdir -p -- \"$1\"; cat >\"$1/$2\"; chmod \"$3\" \"$1/$2\""
-		if _, err = workspaceAuthorizedExec(catalog, w, actor, true, 15*time.Second, "/workspace", bytes.NewReader(data), "sh", "-c", script, "sh", dir, base, fmt.Sprintf("%o", f.Mode)); err != nil {
-			return err
+		if err = tw.WriteHeader(&tar.Header{Name: "payload/" + payload, Mode: 0600, Size: int64(len(data)), Typeflag: tar.TypeReg}); err != nil {
+			return nil, err
+		}
+		if _, err = tw.Write(data); err != nil {
+			return nil, err
 		}
 	}
-	return nil
+	manifestBytes := []byte(manifest.String())
+	if err := tw.WriteHeader(&tar.Header{Name: "manifest", Mode: 0600, Size: int64(len(manifestBytes)), Typeflag: tar.TypeReg}); err != nil {
+		return nil, err
+	}
+	if _, err := tw.Write(manifestBytes); err != nil {
+		return nil, err
+	}
+	if err := tw.Close(); err != nil {
+		return nil, err
+	}
+	return archive.Bytes(), nil
 }

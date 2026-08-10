@@ -49,11 +49,15 @@ type Checkpoint struct {
 func (c Checkpoint) Public() Checkpoint {
 	for i := range c.Files {
 		c.Files[i].ContentB64 = ""
+		c.Files[i].Patch = ""
 	}
 	return c
 }
 
 func (s *Store) CreateCheckpoint(workspaceID, actor, expectedParent, title, description string, reproducibility Reproducibility, files []CheckpointFile) (Checkpoint, error) {
+	control := s.controlLock(workspaceID)
+	control.Lock()
+	defer control.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	w, err := s.read(workspaceID)
@@ -125,7 +129,10 @@ func (s *Store) ListCheckpoints(workspaceID string) ([]Checkpoint, error) {
 	return out, nil
 }
 
-func (s *Store) RecordCheckpointRestore(workspaceID, checkpointID, actor string) (Workspace, error) {
+// RecordCheckpointRestore publishes restore lineage while the caller holds the
+// workspace control lock. expectedHead binds publication to the preflight head;
+// CreateCheckpoint takes that same lock, so it cannot interleave with apply.
+func (s *Store) RecordCheckpointRestore(workspaceID, checkpointID, expectedHead, actor string) (Workspace, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	w, err := s.read(workspaceID)
@@ -134,6 +141,9 @@ func (s *Store) RecordCheckpointRestore(workspaceID, checkpointID, actor string)
 	}
 	if _, err = s.readCheckpoint(workspaceID, checkpointID); err != nil {
 		return w, err
+	}
+	if w.HeadCheckpointID != expectedHead {
+		return w, ErrCheckpointConflict
 	}
 	w.HeadCheckpointID = checkpointID
 	w.UpdatedAt = s.now()
