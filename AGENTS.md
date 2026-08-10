@@ -287,6 +287,14 @@ whenever dependencies change or the web job fails before it starts.
   initiative accountability, policy evidence, and delivery remain intact.
   Playwright isolates organization records beneath
   `$ORGANIZATION_STORAGE_ROOT` with its other temporary API stores.
+  The connected technical-decision browser journey carries a shared repository
+  question through affected-owner invitation, scoped agent research, retained
+  dissent, separately reproduced exact-revision prototypes, approval, ordinary
+  human- and agent-authored task pulls, checks, review, merge, and release. A
+  linked failed success measure reopens the commitment without discarding its
+  alternatives, experiments, approvals, delivery identities, permissions, or
+  attribution. Playwright isolates these records beneath
+  `$DECISION_STORAGE_ROOT` with its other temporary API stores.
   Reproducible development workspaces at `/workspaces` launch only for current
   repository participants and freeze an exact commit plus the versioned
   `.vivarium/workspace.json` definition. The definition declares the container
