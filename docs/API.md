@@ -104,6 +104,30 @@ directory, bounded output, exit status, actor, and times, so collaborators can
 understand execution without revealing private terminal input. Activity roles
 are `observation`, `instruction`, `authorship`, and `execution`.
 
+`POST /workspaces/{id}/checkpoints` accepts a bounded `title`, `description`,
+`expected_parent_checkpoint_id`, and `reproducibility` declaration containing
+dependency names and notes. It snapshots only regular repository-file changes
+against the workspace's exact base commit, with a 32 MiB total limit. Suspected
+credential paths or contents reject the request with `422 checkpoint_not_safe`.
+This includes package-manager authentication files such as changed `.npmrc`
+records and npm `_authToken`/`_auth` directives regardless of filename.
+Inspection covers the complete bounded snapshot rather than treating large
+files as implicitly safe. Runtime capture and durable publication are one
+workspace-admission operation, ordered against controlled file mutations.
+`GET /workspaces/{id}/checkpoints` and `GET .../checkpoints/{checkpoint-id}`
+return attribution, environment definition, parent lineage, change operations,
+hashes, modes, and sizes; private stored file bytes and textual patches are
+never returned.
+
+`GET .../checkpoints/{checkpoint-id}/restore` returns base divergence, live
+path conflicts, missing declared dependencies, reproducibility reasons, and a
+`preflight_token`. `POST` to the same route accepts that token and optional
+`allow_conflicts`. It requires current human file control and revalidates the
+token after admission; changed workspace state returns `409
+checkpoint_preflight_changed`, while unaccepted overlapping changes return
+`409 checkpoint_restore_conflicts`. A successful restore updates the workspace
+checkpoint head, making the next checkpoint a retained lineage branch.
+
 ## Activity
 
 `GET /activity` returns a newest-first, cursor-paginated `events` collection

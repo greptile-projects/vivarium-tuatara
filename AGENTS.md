@@ -270,6 +270,17 @@ whenever dependencies change or the web job fails before it starts.
   control serialization covers final live-lease validation through mutation
   execution, so takeover waits for admitted work and stale actors fail before
   execution without blocking unrelated presence or discussion writes.
+  Attributed workspace checkpoints retain only repository changes against the
+  exact base plus the frozen environment definition and declared
+  reproducibility metadata beneath `$WORKSPACE_STORAGE_ROOT/checkpoints`.
+  Participant reads expose file operations, hashes, modes, sizes, and parent lineage but
+  not stored file bytes; credential-like content, package-manager authentication
+  files/directives, and unrelated runtime evidence fail closed. Restore requires a divergence/conflict/dependency preflight
+  token and live file control, revalidates the token inside control admission,
+  and moves the checkpoint head so later checkpoints explicitly branch from the
+  restored record. Runtime capture through checkpoint publication shares that
+  admission lock with file mutations. Restore stages and backs up every target;
+  failures restore files and remove transaction-created parent directories.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version

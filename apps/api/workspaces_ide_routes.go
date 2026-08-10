@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os/exec"
 	"path"
@@ -291,7 +292,7 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 	})
 }
 
-func workspaceControlledExec(store *workspaces.Store, catalog *repositories.Store, item workspaces.Workspace, actor auth.Credential, scope string, timeout time.Duration, dir string, stdin *strings.Reader, args ...string) error {
+func workspaceControlledExec(store *workspaces.Store, catalog *repositories.Store, item workspaces.Workspace, actor auth.Credential, scope string, timeout time.Duration, dir string, stdin io.Reader, args ...string) error {
 	return store.WithControl(item.ID, actor.UserID, scope, func(current workspaces.Workspace) error {
 		_, err := workspaceAuthorizedExec(catalog, current, actor, true, timeout, dir, stdin, args...)
 		return err
@@ -329,7 +330,7 @@ func validWorkspaceDigest(value string) bool {
 	decoded, err := hex.DecodeString(value)
 	return err == nil && len(decoded) == sha256.Size
 }
-func workspaceAuthorizedExec(catalog *repositories.Store, item workspaces.Workspace, actor auth.Credential, mutation bool, timeout time.Duration, dir string, stdin *strings.Reader, args ...string) ([]byte, error) {
+func workspaceAuthorizedExec(catalog *repositories.Store, item workspaces.Workspace, actor auth.Credential, mutation bool, timeout time.Duration, dir string, stdin io.Reader, args ...string) ([]byte, error) {
 	var output []byte
 	operation := func() error {
 		wrapper := `set -eu
@@ -352,7 +353,7 @@ exec "$@"`
 	}
 	return output, err
 }
-func workspaceExec(id string, timeout time.Duration, dir string, stdin *strings.Reader, args ...string) ([]byte, error) {
+func workspaceExec(id string, timeout time.Duration, dir string, stdin io.Reader, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	dockerArgs := []string{"exec", "--workdir", dir, "vivarium-workspace-" + id}
