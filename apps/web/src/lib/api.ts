@@ -144,7 +144,23 @@ export type Organization = {
   policies: OrganizationPolicy[];
   policy_exceptions: OrganizationPolicyException[];
   initiatives: OrganizationInitiative[];
+  stewardship_mandates: OrganizationStewardshipMandate[];
   events: OrganizationEvent[];
+};
+export type OrganizationStewardshipMandateRevision = {
+  version:number; desired_outcomes:string[]; repositories:{repository_id:string;branches:string[]}[];
+  trusted_signals:string[]; exclusions:string[]; budget:{max_agent_minutes:number;max_actions:number};
+  starts_at:string; expires_at:string; agent_id:string; allowed_actions:string[]; required_human_decisions:string[];
+  reason:string; created_by:string; created_at:string;
+};
+export type OrganizationStewardshipMandate = {
+  id:string; title:string; version:number; status:"pending_acceptance"|"active"|"paused"|"expired"|"revoked";
+  revisions:OrganizationStewardshipMandateRevision[];
+  acceptance?:{version:number;operator_id:string;accepted_at:string}; paused_by?:string; paused_at?:string; revoked_by?:string; revoked_at?:string;
+};
+export type OrganizationStewardshipPreview = {
+  mandate_id:string; version:number; status:string; access_grants:OrganizationAccessGrant[];
+  effective_policies:Record<string,{rules:OrganizationPolicyRules}>; implicit_authority:string[]; notice:string;
 };
 export type OrganizationPolicyRules = {
   repository_visibility?: "public" | "private";

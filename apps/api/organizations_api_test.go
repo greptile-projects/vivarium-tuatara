@@ -122,6 +122,57 @@ func TestOrganizationMembershipAndAcceptedRepositoryStewardship(t *testing.T) {
 	}
 }
 
+func TestOrganizationStewardshipMandatePublicLifecycleAndNoImplicitAuthority(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	groups, _ := organizations.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, nil, groups))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "mandate-owner")
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/organizations", `{"name":"Caretakers","slug":"caretakers"}`, owner.Credential.Token, http.StatusCreated)
+	var group organizations.Organization
+	if err := json.NewDecoder(response.Body).Decode(&group); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/repositories", `{"name":"runtime"}`, owner.Credential.Token, http.StatusCreated)
+	var repository repositories.Repository
+	if err := json.NewDecoder(response.Body).Decode(&repository); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/agents", `{"name":"Caretaker","slug":"caretaker","capabilities":["inspect checks"],"operator_ids":["`+owner.User.ID+`"],"team_ids":[]}`, owner.Credential.Token, http.StatusCreated)
+	if err := json.NewDecoder(response.Body).Decode(&group); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	starts, expires := time.Now().UTC().Add(time.Minute).Format(time.RFC3339), time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	body := `{"title":"Keep runtime healthy","desired_outcomes":["required checks stay green"],"repositories":[{"repository_id":"` + repository.ID + `","branches":["main"]}],"trusted_signals":["required checks"],"exclusions":["no source writes"],"budget":{"max_agent_minutes":30,"max_actions":10},"starts_at":"` + starts + `","expires_at":"` + expires + `","agent_id":"` + group.Agents[0].ID + `","allowed_actions":["inspect_checks","summarize"],"required_human_decisions":["merge or release"]}`
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/stewardship-mandates", body, owner.Credential.Token, http.StatusCreated)
+	var mandate organizations.StewardshipMandate
+	if err := json.NewDecoder(response.Body).Decode(&mandate); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	response = authenticatedRequest(t, http.MethodGet, server.URL+"/organizations/"+group.ID+"/stewardship-mandates/"+mandate.ID+"/preview", "", owner.Credential.Token, http.StatusOK)
+	var preview struct {
+		AccessGrants      []organizations.AccessGrant `json:"access_grants"`
+		ImplicitAuthority []string                    `json:"implicit_authority"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&preview); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if len(preview.AccessGrants) != 0 || len(preview.ImplicitAuthority) != 0 {
+		t.Fatalf("mandate conferred authority: %#v", preview)
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/stewardship-mandates/"+mandate.ID+"/accept", `{"expected_version":1}`, owner.Credential.Token, http.StatusOK).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/stewardship-mandates/"+mandate.ID+"/pause", `{"expected_version":1}`, owner.Credential.Token, http.StatusOK).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/stewardship-mandates/"+mandate.ID+"/revoke", `{"expected_version":1}`, owner.Credential.Token, http.StatusOK).Body.Close()
+}
+
 func TestOrganizationInitiativeProjectsDependenciesAndRejectsUnknownSources(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	identities, _ := users.New(t.TempDir())

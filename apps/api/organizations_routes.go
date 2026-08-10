@@ -97,9 +97,35 @@ type organizationInitiativeItemInput struct {
 	Status          string                        `json:"status"`
 	ExpectedVersion int                           `json:"expected_version"`
 }
+type organizationMandateInput struct {
+	Title                  string                            `json:"title"`
+	DesiredOutcomes        []string                          `json:"desired_outcomes"`
+	Repositories           []organizations.MandateRepository `json:"repositories"`
+	TrustedSignals         []string                          `json:"trusted_signals"`
+	Exclusions             []string                          `json:"exclusions"`
+	Budget                 organizations.MandateBudget       `json:"budget"`
+	StartsAt               time.Time                         `json:"starts_at"`
+	ExpiresAt              time.Time                         `json:"expires_at"`
+	AgentID                string                            `json:"agent_id"`
+	AllowedActions         []string                          `json:"allowed_actions"`
+	RequiredHumanDecisions []string                          `json:"required_human_decisions"`
+	Reason                 string                            `json:"reason"`
+	ExpectedVersion        int                               `json:"expected_version"`
+}
+
+func mandateRevision(in organizationMandateInput) organizations.MandateRevision {
+	return organizations.MandateRevision{DesiredOutcomes: in.DesiredOutcomes, Repositories: in.Repositories, TrustedSignals: in.TrustedSignals, Exclusions: in.Exclusions, Budget: in.Budget, StartsAt: in.StartsAt.UTC(), ExpiresAt: in.ExpiresAt.UTC(), AgentID: in.AgentID, AllowedActions: in.AllowedActions, RequiredHumanDecisions: in.RequiredHumanDecisions, Reason: in.Reason}
+}
 
 func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, repos *repositories.Store, usersStore *users.Store, credentials *auth.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, packageStore *packages.Store, incidentStore *incidents.Store, relationshipStore *relationships.Store, securityStore *securityadvisories.Store) {
 	project := func(v organizations.Organization, actor string) organizations.Organization {
+		now := time.Now().UTC()
+		for i := range v.StewardshipMandates {
+			m := &v.StewardshipMandates[i]
+			if m.Status != "revoked" && len(m.Revisions) > 0 && !m.Revisions[len(m.Revisions)-1].ExpiresAt.After(now) {
+				m.Status = "expired"
+			}
+		}
 		// Initiatives are returned only through the portfolio projection, where
 		// private source authorization and live ownership can be revalidated.
 		v.Initiatives = []organizations.Initiative{}
@@ -120,6 +146,7 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 			v.Policies = []organizations.Policy{}
 			v.PolicyExceptions = []organizations.PolicyException{}
 			v.Initiatives = []organizations.Initiative{}
+			v.StewardshipMandates = []organizations.StewardshipMandate{}
 			v.Events = []organizations.Event{}
 			return v
 		}
@@ -214,6 +241,148 @@ func registerOrganizationRoutes(mux *http.ServeMux, orgs *organizations.Store, r
 			}
 		}
 		writeJSON(w, 200, organizations.ProjectDirectory(v, member, visibleRepos))
+	})
+	mux.HandleFunc("POST /organizations/{id}/stewardship-mandates", func(w http.ResponseWriter, r *http.Request) {
+		actor, organization, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in organizationMandateInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_stewardship_mandate", "bounded mandate content is required")
+			return
+		}
+		portfolio, err := repos.ListOrganization(organization.ID)
+		if err != nil {
+			writeRepositoryError(w, err)
+			return
+		}
+		owned := map[string]bool{}
+		for _, repo := range portfolio {
+			owned[repo.ID] = true
+		}
+		for _, scope := range in.Repositories {
+			if !owned[scope.RepositoryID] {
+				writeAPIError(w, 400, "invalid_stewardship_mandate", "every repository must belong to the organization")
+				return
+			}
+		}
+		_, mandate, err := orgs.CreateStewardshipMandate(organization.ID, actor.UserID, in.Title, mandateRevision(in))
+		if writeOrganizationError(w, err) {
+			return
+		}
+		w.Header().Set("Location", "/organizations/"+organization.ID+"/stewardship-mandates/"+mandate.ID)
+		writeJSON(w, 201, mandate)
+	})
+	mux.HandleFunc("PUT /organizations/{id}/stewardship-mandates/{mandate_id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, organization, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in organizationMandateInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_stewardship_mandate", "revision and expected_version are required")
+			return
+		}
+		portfolio, err := repos.ListOrganization(organization.ID)
+		if err != nil {
+			writeRepositoryError(w, err)
+			return
+		}
+		owned := map[string]bool{}
+		for _, repo := range portfolio {
+			owned[repo.ID] = true
+		}
+		for _, scope := range in.Repositories {
+			if !owned[scope.RepositoryID] {
+				writeAPIError(w, 400, "invalid_stewardship_mandate", "every repository must belong to the organization")
+				return
+			}
+		}
+		_, mandate, err := orgs.ReviseStewardshipMandate(organization.ID, r.PathValue("mandate_id"), actor.UserID, in.ExpectedVersion, mandateRevision(in))
+		if writeOrganizationError(w, err) {
+			return
+		}
+		writeJSON(w, 200, mandate)
+	})
+	mux.HandleFunc("POST /organizations/{id}/stewardship-mandates/{mandate_id}/accept", func(w http.ResponseWriter, r *http.Request) {
+		actor, organization, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int `json:"expected_version"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_stewardship_mandate", "expected_version is required")
+			return
+		}
+		_, mandate, err := orgs.AcceptStewardshipMandate(organization.ID, r.PathValue("mandate_id"), actor.UserID, in.ExpectedVersion)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		writeJSON(w, 200, mandate)
+	})
+	mux.HandleFunc("POST /organizations/{id}/stewardship-mandates/{mandate_id}/{action}", func(w http.ResponseWriter, r *http.Request) {
+		action := r.PathValue("action")
+		if action != "pause" && action != "resume" && action != "revoke" {
+			writeAPIError(w, 404, "stewardship_mandate_not_found", "mandate action not found")
+			return
+		}
+		actor, organization, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int `json:"expected_version"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_stewardship_mandate", "expected_version is required")
+			return
+		}
+		_, mandate, err := orgs.ChangeStewardshipMandateState(organization.ID, r.PathValue("mandate_id"), actor.UserID, action, in.ExpectedVersion)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		writeJSON(w, 200, mandate)
+	})
+	mux.HandleFunc("GET /organizations/{id}/stewardship-mandates/{mandate_id}/preview", func(w http.ResponseWriter, r *http.Request) {
+		_, organization, ok := require(w, r, "repositories:read")
+		if !ok {
+			return
+		}
+		var mandate *organizations.StewardshipMandate
+		for i := range organization.StewardshipMandates {
+			if organization.StewardshipMandates[i].ID == r.PathValue("mandate_id") {
+				mandate = &organization.StewardshipMandates[i]
+			}
+		}
+		if mandate == nil {
+			writeAPIError(w, 404, "stewardship_mandate_not_found", "mandate not found")
+			return
+		}
+		latest := mandate.Revisions[len(mandate.Revisions)-1]
+		now := time.Now().UTC()
+		grants := []organizations.AccessGrant{}
+		policies := map[string]organizations.EffectivePolicy{}
+		for _, scope := range latest.Repositories {
+			for _, grant := range organization.AccessGrants {
+				if grant.PrincipalType != "agent" || grant.PrincipalID != latest.AgentID || grant.RevokedAt != nil || (grant.ExpiresAt != nil && !grant.ExpiresAt.After(now)) {
+					continue
+				}
+				for _, resource := range grant.Resources {
+					if resource.Kind == "repository" && resource.ID == scope.RepositoryID {
+						grants = append(grants, grant)
+					}
+				}
+			}
+			policies[scope.RepositoryID] = organizations.EffectivePolicies(organization, scope.RepositoryID, organizations.ResponsibleTeamIDs(organization, scope.RepositoryID), false, now)
+		}
+		status := mandate.Status
+		if status != "revoked" && !latest.ExpiresAt.After(now) {
+			status = "expired"
+		}
+		writeJSON(w, 200, map[string]any{"mandate_id": mandate.ID, "version": mandate.Version, "status": status, "access_grants": grants, "effective_policies": policies, "implicit_authority": []string{}, "notice": "This mandate grants no repository write, Git, review, credential, deployment, or merge authority. Only separate live grants apply."})
 	})
 	mux.HandleFunc("POST /organizations/{id}/teams", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := require(w, r, "repositories:write")
