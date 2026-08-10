@@ -1820,6 +1820,11 @@ Adding a signal or evidence class, repository, action, budget, agent, or any
 other scope or authority still requires a new mandate revision and fresh
 operator acceptance.
 
+Successful work linking moves an opportunity from `promoting` to `promoted`.
+That durable state is required by the task-session authority check and remains
+the disposition reported after delivery; `accepted` describes the maintainer's
+recommendation decision, not an executable opportunity state.
+
 Pending invitees receive only organization identity and their own invitation,
 not membership, teams, agents, transfers, responsibility, or events. A public
 child also omits its `parent_id` when that parent is not public. Responsibility

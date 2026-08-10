@@ -130,6 +130,12 @@ whenever dependencies change or the web job fails before it starts.
   writes use a stable idempotency key so delivery retries cannot double-charge
   usage or duplicate safety decisions, and access revocation pauses only after
   the final applicable live agent grant is gone.
+  The connected stewardship browser journey carries two newly evaluated
+  findings through maintainer discussion, dismissal and approval, bounded
+  agent guidance and implementation, ordinary checks/review/merge, release
+  outcome accounting, and final mandate revocation. Promoted opportunities use
+  the durable `promoted` status required by task-session authority validation;
+  empty tuning and reasoning acknowledgement projections remain valid UI state.
   Reevaluation invalidates prior approval through a distinct evaluation
   version, and promotion requires readable incident and proposal conflict
   stores before its durable reservation. Unlinked retries revalidate current
