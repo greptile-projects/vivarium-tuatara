@@ -129,6 +129,34 @@ func TestGroundedExplanationStreamsAndRetainsExactEvidence(t *testing.T) {
 		t.Fatal("private workspace context is visible to collaborator before HTTP request")
 	}
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/collaborators", `{"user_id":"`+collaborator.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/explanations/"+final.ID, "", collaborator.Credential.Token, http.StatusNotFound).Body.Close()
+	invited := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/explanations/"+final.ID+"/participants", `{"user_id":"`+collaborator.User.ID+`"}`, owner.Credential.Token, http.StatusCreated)
+	var shared explanations.Conversation
+	json.NewDecoder(invited.Body).Decode(&shared)
+	invited.Body.Close()
+	if len(shared.Participants) != 2 || shared.Participants[1].InvitedBy != owner.User.ID {
+		t.Fatalf("participants = %#v", shared.Participants)
+	}
+	entryResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/explanations/"+final.ID+"/entries", `{"kind":"hypothesis","body":"The empty identity is the authorization boundary."}`, collaborator.Credential.Token, http.StatusCreated)
+	json.NewDecoder(entryResponse.Body).Decode(&shared)
+	entryResponse.Body.Close()
+	if got := shared.Entries[len(shared.Entries)-1]; got.Kind != "hypothesis" || got.ActorID != collaborator.User.ID {
+		t.Fatalf("shared entry = %#v", got)
+	}
+	challengeResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/explanations/"+final.ID+"/entries", `{"kind":"challenge","body":"Verify whether callers normalize whitespace first.","supersedes_id":"`+shared.Entries[len(shared.Entries)-1].ID+`"}`, owner.Credential.Token, http.StatusCreated)
+	challengeResponse.Body.Close()
+	updatedSource, _ := repo.WriteObject(storage.BlobObject, []byte("package access\n\n// Authorize trims identity before rejecting it.\nfunc Authorize(identity string) bool { return strings.TrimSpace(identity) != \"\" }\n"))
+	updatedTree := writeTestTree(t, repo, testTreeEntry{"100644", "README.md", docs}, testTreeEntry{"100644", "authorize.go", updatedSource})
+	updatedCommit := writeTestCommit(t, repo, updatedTree, []storage.ObjectID{commit}, 1700000100, "normalize authorization")
+	if err := repo.UpdateReferenceIfTarget(storage.Reference{Name: "refs/heads/main", Target: string(updatedCommit)}, string(commit)); err != nil {
+		t.Fatal(err)
+	}
+	rerunResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/explanations/"+final.ID+"/reruns", `{"ref":"main"}`, collaborator.Credential.Token, http.StatusCreated)
+	json.NewDecoder(rerunResponse.Body).Decode(&shared)
+	rerunResponse.Body.Close()
+	if shared.Revision != string(updatedCommit) || !shared.Entries[0].Citations[0].Stale {
+		t.Fatalf("rerun did not retain stale evidence: %#v", shared)
+	}
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/explanations", `{"question":"What happened here?","context":{"kind":"workspace","resource_id":"`+privateWorkspace.ID+`"}}`, collaborator.Credential.Token, http.StatusNotFound).Body.Close()
 	historyResponse := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/explanations", "", collaborator.Credential.Token, http.StatusOK)
 	var history struct {

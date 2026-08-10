@@ -23,11 +23,12 @@ export type CodeNavigationResult = {
   dependencies:{id:string;provider_repository_id:string;interface_name:string;constraint:string;commit_id:string}[];
   analysis:{status:"complete"|"incomplete";reason:string;files_scanned:number;bytes_scanned:number;result_limit:number;method:string};
 };
-export type ExplanationCitation = { kind:string; revision:string; path?:string; start_line?:number; end_line?:number; commit_id?:string; resource_id?:string; label:string };
+export type ExplanationCitation = { kind:string; revision:string; path?:string; start_line?:number; end_line?:number; commit_id?:string; resource_id?:string; label:string; stale?:boolean };
 export type ExplanationClaim = { id:string; text:string; basis:"evidence"|"inference"|"uncertainty"; confidence:"high"|"medium"|"low"; citations:ExplanationCitation[] };
+export type ExplanationEntry = { id:string; kind:"code_reference"|"query"|"runtime_observation"|"hypothesis"|"agent_finding"|"conclusion"|"challenge"; body:string; actor_id:string; revision:string; citations?:ExplanationCitation[]; resource_id?:string; supersedes_id?:string; created_at:string };
 export type ExplanationConversation = {
   id:string; repository_id:string; revision:string; context:{kind:"repository"|"file"|"proposal"|"task"|"pull_request"|"incident"|"workspace";resource_id?:string;path?:string};
-  question:string; asked_by:string; agent:string; answer:string; claims:ExplanationClaim[]; analysis_status:"complete"|"incomplete"; analysis_reason?:string; created_at:string;
+  question:string; asked_by:string; agent:string; answer:string; claims:ExplanationClaim[]; participants:{user_id:string;invited_by?:string;joined_at:string}[]; entries:ExplanationEntry[]; analysis_status:"complete"|"incomplete"; analysis_reason?:string; created_at:string; updated_at:string;
 };
 export type DevelopmentWorkspace = {
   id: string;

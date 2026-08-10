@@ -226,9 +226,9 @@ participation; ordinary merges, releases, checksummed builds, and production
 deployments then advance consumer-first and leave the completed evidence and
 attribution visible in the relationship workspace.
 
-## Grounded collaborative explanations
+## Collaborative code investigations
 
-Repository participants can ask revision-aware questions from repository,
+Repository participants can open revision-aware investigations from repository,
 file, proposal, task, pull, incident, or workspace context in the repository's
 “Ask the codebase” surface. The server resolves that context to one immutable
 commit, collects only currently permitted bounded source, documentation,
@@ -237,7 +237,14 @@ attributed result before streaming its structured claims. Citations link to
 exact paths and lines, evidence is distinct from inference and uncertainty, and
 incomplete coverage stays visible. Durable conversation reads revalidate live
 repository access; private workspace context also retains its narrower sharing
-boundary. `$EXPLANATION_STORAGE_ROOT` defaults to `explanations`.
+boundary. Explicitly invited current participants share an ordered canvas of
+code references, queries, bounded workspace observations, hypotheses, agent
+findings, challenges, supersessions, and conclusions. Rerunning at a new commit
+preserves the earlier reasoning and marks older citations stale, so a peer can
+join midway and verify what changed without trusting private agent context.
+Workspace attachments retain only an authorized identity and frozen revision,
+never credentials, hidden files, or copied runtime output.
+`$EXPLANATION_STORAGE_ROOT` defaults to `explanations`.
 
 ## Web interface foundation
 

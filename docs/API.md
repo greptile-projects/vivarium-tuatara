@@ -16,9 +16,9 @@ only when declared at that commit and their provider remains readable.
 `analysis.status` becomes `incomplete` whenever file, byte, or result bounds
 prevent full lexical coverage, with counters and a reason returned explicitly.
 
-## Grounded code explanations
+## Collaborative code investigations
 
-`POST /repositories/{id}/explanations` requires an authenticated current reader
+`POST /repositories/{id}/explanations` requires a current repository participant
 and accepts `question`, `ref`, and a context with `kind` set to `repository`,
 `file`, `proposal`, `task`, `pull_request`, `incident`, or `workspace`.
 Resource contexts also carry `resource_id`; task IDs use
@@ -35,7 +35,21 @@ reported as `analysis_status: incomplete` with a reason. The complete answer is
 persisted before streaming, so an interrupted client can replay it from
 `GET /repositories/{id}/explanations/{explanation-id}`. Collection history is
 available at `GET /repositories/{id}/explanations`; both reads revalidate
-current repository access.
+current repository access and explicit investigation membership. The opener is
+the first participant. An existing participant can invite another current
+repository participant with `POST .../{explanation-id}/participants`; repository
+access alone does not disclose a shared investigation.
+
+`POST .../{explanation-id}/entries` appends an attributable ordered canvas entry
+of kind `code_reference`, `query`, `runtime_observation`, `hypothesis`,
+`agent_finding`, `conclusion`, or `challenge`. Challenges can name
+`supersedes_id`. Code references are verified against the frozen Git tree.
+Runtime observations can name only a currently visible bounded workspace; the
+attachment retains its identity and revision, never output, credentials, or
+hidden files. `POST .../{explanation-id}/reruns` resolves `ref` to a new
+immutable revision and appends findings without rewriting earlier history.
+Projected citations report `stale: true` when their revision differs from the
+current run.
 
 ## Conventions
 
