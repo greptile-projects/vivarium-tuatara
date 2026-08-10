@@ -5,6 +5,17 @@ external consumers. Durable files beneath the configured storage roots are
 private implementation details. Git clients use the smart HTTP URLs returned
 by repository resources.
 
+## Repository code navigation
+
+`GET /repositories/{id}/code-navigation?ref={branch-or-commit}&q={query}` uses
+the repository read boundary. `ref` resolves once and `revision` is the exact
+commit used for every result and blame record. Results classify definitions,
+references, callers, and tests with source locations and last-change commits;
+ownership lists the catalog owner and collaborators. Dependencies are included
+only when declared at that commit and their provider remains readable.
+`analysis.status` becomes `incomplete` whenever file, byte, or result bounds
+prevent full lexical coverage, with counters and a reason returned explicitly.
+
 ## Conventions
 
 - Requests and responses use JSON. Successful resource creation returns `201`

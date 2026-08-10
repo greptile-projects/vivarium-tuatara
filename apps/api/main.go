@@ -319,6 +319,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil {
 		registerRepositoryRoutes(mux, store, repositoryCatalog, userStore, authStore, activityStore)
+		registerCodeNavigationRoutes(mux, store, repositoryCatalog, authStore, relationshipStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && proposalStore != nil {
 		registerProposalRoutes(mux, store, repositoryCatalog, proposalStore, authStore, activityStore, userStore)

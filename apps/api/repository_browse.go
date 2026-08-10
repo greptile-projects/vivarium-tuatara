@@ -172,6 +172,13 @@ func resolveRevision(repo *storage.Repository, ref string) (storage.ObjectID, er
 		if _, err := repo.ReadCommit(id); err != nil {
 			return "", err
 		}
+		visible, err := revisionReachableFromVisibleBranch(repo, id)
+		if err != nil {
+			return "", err
+		}
+		if !visible {
+			return "", storage.ErrReferenceNotFound
+		}
 		return id, nil
 	}
 	reference, err := repo.ReadReference("refs/heads/" + ref)
@@ -183,6 +190,29 @@ func resolveRevision(repo *storage.Repository, ref string) (storage.ObjectID, er
 		return "", err
 	}
 	return id, nil
+}
+
+func revisionReachableFromVisibleBranch(repo *storage.Repository, id storage.ObjectID) (bool, error) {
+	references, err := repo.ListReferences()
+	if err != nil {
+		return false, err
+	}
+	for _, reference := range references {
+		name, branch := strings.CutPrefix(reference.Name, "refs/heads/")
+		if !branch || reference.Symbolic || strings.HasPrefix(name, "vivarium-security/") {
+			continue
+		}
+		ancestry, readErr := repo.ListCommitAncestry(storage.ObjectID(reference.Target))
+		if readErr != nil {
+			return false, readErr
+		}
+		for _, commit := range ancestry {
+			if commit.ID == id {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func resolveTree(repo *storage.Repository, root storage.ObjectID, name string) (storage.ObjectID, error) {

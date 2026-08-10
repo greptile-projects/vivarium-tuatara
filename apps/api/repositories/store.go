@@ -216,7 +216,7 @@ type Store struct {
 // collaborator changes therefore commit wholly before or after publication of
 // evidence derived from those repositories.
 func (s *Store) WithCurrentReadAccess(actorID string, repositoryIDs []string, fn func() error) error {
-	if !validID(actorID) || len(repositoryIDs) == 0 || fn == nil {
+	if (actorID != "" && !validID(actorID)) || len(repositoryIDs) == 0 || fn == nil {
 		return ErrNotFound
 	}
 	s.mu.Lock()
