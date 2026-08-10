@@ -353,7 +353,11 @@ whenever dependencies change or the web job fails before it starts.
   retained work is never rewritten. Implementation publication holds the
   selected Git reference lock through proposal/task creation and assessment
   linking. Post-persist durability uncertainty returns stable identities in a
-  retryable `202` response rather than being misreported as validation failure.
+  recoverable `202` response rather than being misreported as validation
+  failure. A successful link is confirmed by rereading the assessment. An exact
+  pre-link-version replay returns the existing work only when proposal text,
+  selected items, ordered tasks, ownership, and dependencies match; changed
+  stale payloads remain invalid.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version

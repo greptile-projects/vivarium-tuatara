@@ -38,7 +38,13 @@ cannot cross the revision-validation boundary. If proposal persistence is
 visible but directory durability is uncertain, or assessment linking needs
 reconciliation, the endpoint returns `202` with the stable proposal and task
 identities plus a recovery instruction; it never reports persisted work as an
-invalid request.
+invalid request. When linking succeeded, clients confirm the returned stable
+identity through a fresh assessment read. If linking is absent, clients reload
+and resubmit with the freshly read assessment version. An exact replay carrying
+the pre-link version is also recognized only when its
+proposal text, selected item order, ordered task definitions, ownership, and
+dependencies match the immutable linked implementation; it returns those same
+identities with `recovered: true`. Any changed stale payload remains invalid.
 
 Task-scoped workspaces and agent change sessions copy this reasoning snapshot
 into their launch context. Ordinary task contribution endpoints continue to

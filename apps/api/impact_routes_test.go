@@ -107,6 +107,17 @@ func TestImpactImplementationRetainsReasoningInOwnedTasks(t *testing.T) {
 	if result.Tasks[0].Assignment.AssigneeType != "human" || result.Tasks[1].Assignment.AssigneeType != "agent" {
 		t.Fatalf("task ownership = %#v", result.Tasks)
 	}
+	retry := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/impact-assessments/"+assessment.ID+"/implementation", body, owner.Credential.Token, http.StatusOK)
+	var recovered struct {
+		Proposal  proposals.Proposal `json:"proposal"`
+		Tasks     []proposals.Task   `json:"tasks"`
+		Recovered bool               `json:"recovered"`
+	}
+	json.NewDecoder(retry.Body).Decode(&recovered)
+	retry.Body.Close()
+	if !recovered.Recovered || recovered.Proposal.ID != result.Proposal.ID || len(recovered.Tasks) != 2 || recovered.Tasks[0].ID != result.Tasks[0].ID {
+		t.Fatalf("exact implementation retry = %#v", recovered)
+	}
 	newCommit := writeTestCommit(t, repo, tree, []storage.ObjectID{commit}, 1700000001, "later")
 	if err := repo.UpdateReferenceIfTarget(storage.Reference{Name: "refs/heads/main", Target: string(newCommit)}, string(commit)); err != nil {
 		t.Fatal(err)

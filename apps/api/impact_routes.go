@@ -267,10 +267,6 @@ func registerImpactRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *
 			writeAPIError(w, 404, "assessment_not_found", "impact assessment not found")
 			return
 		}
-		if withImpactContext(gitStore, catalog, v).ContextState != "current" {
-			writeAPIError(w, 409, "assessment_context_changed", "the selected ref moved; rerun the assessment instead of rewriting its evidence")
-			return
-		}
 		var in struct {
 			Version int      `json:"version"`
 			Title   string   `json:"title"`
@@ -284,8 +280,20 @@ func registerImpactRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *
 				DependsOnPrevious bool   `json:"depends_on_previous"`
 			} `json:"tasks"`
 		}
-		if decodeJSON(r, &in) != nil || in.Version != v.Version || len(in.ItemIDs) == 0 || len(in.Tasks) == 0 {
+		if decodeJSON(r, &in) != nil || len(in.ItemIDs) == 0 || len(in.Tasks) == 0 {
 			writeAPIError(w, 400, "invalid_implementation", "current version, cited impact items, and ordered owned tasks are required")
+			return
+		}
+		if in.Version != v.Version {
+			if proposal, tasks, recovered := recoverImpactImplementation(proposalStore, v, in.Version, in.Title, in.Body, in.ItemIDs, in.Tasks); recovered {
+				writeJSON(w, 200, map[string]any{"assessment": projectImpact(withImpactContext(gitStore, catalog, v), actor.UserID, catalog), "proposal": proposal, "tasks": tasks, "recovered": true})
+				return
+			}
+			writeAPIError(w, 400, "invalid_implementation", "current version, cited impact items, and ordered owned tasks are required")
+			return
+		}
+		if withImpactContext(gitStore, catalog, v).ContextState != "current" {
+			writeAPIError(w, 409, "assessment_context_changed", "the selected ref moved; rerun the assessment instead of rewriting its evidence")
 			return
 		}
 		selected := map[string]bool{}
@@ -370,11 +378,61 @@ func registerImpactRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *
 			next, _ = store.Get(v.ID)
 		}
 		if createUncertain || linkErr != nil {
-			writeJSON(w, 202, map[string]any{"assessment": projectImpact(next, actor.UserID, catalog), "proposal": proposal, "tasks": created, "recovery": "implementation durability or assessment linking is pending; retry this exact request"})
+			recovery := "the implementation is linked; confirm it through the returned assessment or a fresh assessment read"
+			if linkErr != nil {
+				recovery = "reload the assessment; if implementation is absent, resubmit using the freshly read version"
+			}
+			writeJSON(w, 202, map[string]any{"assessment": projectImpact(next, actor.UserID, catalog), "proposal": proposal, "tasks": created, "recovery": recovery})
 			return
 		}
 		writeJSON(w, 201, map[string]any{"assessment": projectImpact(next, actor.UserID, catalog), "proposal": proposal, "tasks": created})
 	})
+}
+
+func recoverImpactImplementation(proposalStore *proposals.Store, assessment impacts.Assessment, requestedVersion int, title, body string, itemIDs []string, requested []struct {
+	Title             string `json:"title"`
+	Outcome           string `json:"outcome"`
+	AssigneeType      string `json:"assignee_type"`
+	AssigneeID        string `json:"assignee_id"`
+	DependsOnPrevious bool   `json:"depends_on_previous"`
+}) (proposals.Proposal, []proposals.Task, bool) {
+	if assessment.Implementation == nil || requestedVersion+1 != assessment.Version || assessment.Implementation.ProposalID == "" {
+		return proposals.Proposal{}, nil, false
+	}
+	proposal, err := proposalStore.Get(assessment.RepositoryID, assessment.Implementation.ProposalID)
+	if err != nil || proposal.Reasoning == nil || proposal.Reasoning.AssessmentID != assessment.ID || proposal.Reasoning.AssessmentVersion != requestedVersion || proposal.Title != strings.TrimSpace(title) || proposal.Body != strings.TrimSpace(body) || !sameStrings(proposal.Reasoning.SelectedItemIDs, itemIDs) {
+		return proposals.Proposal{}, nil, false
+	}
+	tasks, err := proposalStore.ListTasks(assessment.RepositoryID, proposal.ID)
+	if err != nil || len(tasks) != len(requested) {
+		return proposals.Proposal{}, nil, false
+	}
+	for index := range tasks {
+		input, task := requested[index], tasks[index]
+		if task.Title != strings.TrimSpace(input.Title) || task.Outcome != strings.TrimSpace(input.Outcome) || task.Assignment == nil || task.Assignment.AssigneeType != input.AssigneeType || (input.AssigneeType == "human" && task.Assignment.AssigneeID != input.AssigneeID) {
+			return proposals.Proposal{}, nil, false
+		}
+		expectedDependencies := []string{}
+		if input.DependsOnPrevious && index > 0 {
+			expectedDependencies = []string{tasks[index-1].ID}
+		}
+		if !sameStrings(task.DependencyIDs, expectedDependencies) {
+			return proposals.Proposal{}, nil, false
+		}
+	}
+	return proposal, tasks, true
+}
+
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func selectedCodeQuery(gitDir, revision string, source impacts.Source) string {
