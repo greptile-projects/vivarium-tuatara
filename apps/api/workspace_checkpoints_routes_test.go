@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
@@ -53,6 +54,49 @@ func TestCompareCheckpointTreesCapturesDiffWithoutCredentials(t *testing.T) {
 	os.WriteFile(filepath.Join(runtime, "registry.txt"), []byte("//registry.npmjs.org/:_authToken=npm_secret"), 0600)
 	if _, err = compareCheckpointTrees(base, runtime); err == nil {
 		t.Fatal("disguised npm auth directive was captured")
+	}
+}
+
+func TestCommitCheckpointPublishesOnlyManifestAtExactBase(t *testing.T) {
+	root, work := filepath.Join(t.TempDir(), "repo.git"), filepath.Join(t.TempDir(), "work")
+	run := func(args ...string) string {
+		t.Helper()
+		out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v: %v: %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	run("git", "init", "--bare", "-q", root)
+	run("git", "init", "-q", work)
+	run("git", "-C", work, "config", "user.name", "Test")
+	run("git", "-C", work, "config", "user.email", "test@example.com")
+	os.WriteFile(filepath.Join(work, "kept.txt"), []byte("before\n"), 0600)
+	os.WriteFile(filepath.Join(work, "deleted.txt"), []byte("remove\n"), 0600)
+	run("git", "-C", work, "add", ".")
+	run("git", "-C", work, "commit", "-qm", "base")
+	base := run("git", "-C", work, "rev-parse", "HEAD")
+	run("git", "-C", work, "push", "-q", root, "HEAD:main")
+	checkpoint := workspaces.Checkpoint{ID: strings.Repeat("1", 32), WorkspaceID: strings.Repeat("2", 32), BaseCommitID: base, Title: "Reviewed files", Files: []workspaces.CheckpointFile{
+		{Path: "kept.txt", Operation: "modify", Mode: 0600, ContentB64: base64.StdEncoding.EncodeToString([]byte("after\n"))},
+		{Path: "added.txt", Operation: "add", Mode: 0600, ContentB64: base64.StdEncoding.EncodeToString([]byte("published\n"))},
+		{Path: "deleted.txt", Operation: "delete"},
+	}}
+	commit, err := commitCheckpoint(root, checkpoint, strings.Repeat("a", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := run("git", "--git-dir="+root, "show", commit+":kept.txt"); got != "after" {
+		t.Fatalf("kept = %q", got)
+	}
+	if got := run("git", "--git-dir="+root, "show", commit+":added.txt"); got != "published" {
+		t.Fatalf("added = %q", got)
+	}
+	if err := exec.Command("git", "--git-dir="+root, "cat-file", "-e", commit+":deleted.txt").Run(); err == nil {
+		t.Fatal("deleted file remained")
+	}
+	if got := run("git", "--git-dir="+root, "rev-parse", commit+"^"); got != base {
+		t.Fatalf("parent = %s", got)
 	}
 }
 

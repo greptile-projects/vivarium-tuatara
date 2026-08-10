@@ -2,6 +2,7 @@ package workspaces
 
 import (
 	"encoding/base64"
+	"strings"
 	"testing"
 	"time"
 )
@@ -43,6 +44,37 @@ func TestCheckpointLineageAndPublicSnapshot(t *testing.T) {
 	}
 	if _, err = s.RecordCheckpointRestore(w.ID, c.ID, second.ID, "peer"); err != ErrCheckpointConflict {
 		t.Fatalf("stale restore lineage err = %v", err)
+	}
+}
+
+func TestCheckpointPublicationIsBidirectionalAndIdempotent(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.Create(Workspace{RepositoryID: strings.Repeat("0", 32), CommitID: strings.Repeat("a", 40), CreatorID: "user"}, []byte(`{"version":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.CreateCheckpoint(w.ID, "user", "", "review", "", Reproducibility{}, []CheckpointFile{{Path: "work.txt", Operation: "add", SHA256: "abc"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication := Publication{Branch: "workspace/review", CommitID: strings.Repeat("b", 40), PullRequestID: strings.Repeat("c", 32), ContributorIDs: []string{"user"}, PublishedBy: "user", PublishedAt: time.Now().UTC()}
+	got, err := s.RecordCheckpointPublication(w.ID, c.ID, publication)
+	if err != nil || got.Publication == nil || got.Publication.PullRequestID != publication.PullRequestID {
+		t.Fatalf("publication = %#v, %v", got.Publication, err)
+	}
+	if _, err = s.RecordCheckpointPublication(w.ID, c.ID, publication); err != nil {
+		t.Fatalf("idempotent retry: %v", err)
+	}
+	publication.CommitID = strings.Repeat("d", 40)
+	if _, err = s.RecordCheckpointPublication(w.ID, c.ID, publication); err != ErrCheckpointConflict {
+		t.Fatalf("replacement = %v", err)
+	}
+	updated, err := s.Get(w.ID)
+	if err != nil || updated.Events[len(updated.Events)-1].Kind != "checkpoint.published" {
+		t.Fatalf("events = %#v, %v", updated.Events, err)
 	}
 }
 

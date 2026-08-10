@@ -281,6 +281,13 @@ whenever dependencies change or the web job fails before it starts.
   restored record. Runtime capture through checkpoint publication shares that
   admission lock with file mutations. Restore stages and backs up every target;
   failures restore files and remove transaction-created parent directories.
+  Authorized checkpoint publication creates one commit solely from the stored
+  inspected manifest, compare-and-swap advances an existing base-matching
+  branch or creates a new one, and can open an ordinary governed pull. Pulls
+  and checkpoints retain bidirectional workspace, task/session, contributor,
+  file-hash, and command-digest provenance; normal checks, stale-review,
+  protection, and queue rules apply while terminal input, outputs, credentials,
+  discussion, and unpublished runtime files stay out of Git and review text.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version

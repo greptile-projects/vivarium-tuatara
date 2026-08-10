@@ -358,7 +358,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerOrganizationRoutes(mux, organizationStore, repositoryCatalog, userStore, authStore, proposalStore, pullRequestStore, releaseStore, packageStore, incidentStore, relationshipStore, securityAdvisoryStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && workspaceStore != nil {
-		registerWorkspaceRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, incidentStore, workspaceStore, authStore, organizationStore)
+		registerWorkspaceRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, incidentStore, workspaceStore, authStore, organizationStore, checkRunStore)
 	}
 	mux.HandleFunc("GET /git/{remote}/info/refs", func(w http.ResponseWriter, r *http.Request) {
 		service := r.URL.Query().Get("service")

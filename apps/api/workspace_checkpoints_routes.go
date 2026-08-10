@@ -13,11 +13,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
@@ -36,7 +39,7 @@ type checkpointAnalysis struct {
 	Reasons             []string `json:"reasons"`
 }
 
-func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, store *workspaces.Store, authStore *auth.Store) {
+func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, pulls *pullrequests.Store, store *workspaces.Store, authStore *auth.Store, checks *checkruns.Store) {
 	mux.HandleFunc("GET /workspaces/{workspace_id}/checkpoints", func(w http.ResponseWriter, r *http.Request) {
 		item, _, ok := authorizeWorkspace(w, r, store, catalog, authStore, "repositories:read")
 		if !ok {
@@ -100,6 +103,133 @@ func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, c
 			return
 		}
 		writeJSON(w, 200, c)
+	})
+	mux.HandleFunc("POST /workspaces/{workspace_id}/checkpoints/{checkpoint_id}/publish", func(w http.ResponseWriter, r *http.Request) {
+		item, actor, ok := authorizeWorkspace(w, r, store, catalog, authStore, "repositories:write")
+		if !ok {
+			return
+		}
+		if pulls == nil {
+			writeAPIError(w, 503, "checkpoint_publication_unavailable", "pull request governance is unavailable")
+			return
+		}
+		var input struct {
+			Branch         string `json:"branch"`
+			ExpectedCommit string `json:"expected_commit_id"`
+			TargetBranch   string `json:"target_branch"`
+			Title          string `json:"title"`
+			SessionID      string `json:"session_id"`
+			CreatePull     bool   `json:"create_pull_request"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		checkpoint, err := store.CheckpointSnapshot(item.ID, r.PathValue("checkpoint_id"))
+		if err != nil {
+			writeAPIError(w, 404, "checkpoint_not_found", "checkpoint not found")
+			return
+		}
+		if checkpoint.Publication != nil {
+			writeJSON(w, 200, checkpoint.Public())
+			return
+		}
+		input.Branch, input.TargetBranch = strings.TrimSpace(input.Branch), strings.TrimSpace(input.TargetBranch)
+		if input.TargetBranch == "" {
+			input.TargetBranch = "main"
+		}
+		if input.Branch == "" || exec.Command("git", "check-ref-format", "--branch", input.Branch).Run() != nil || input.Branch == input.TargetBranch || len(checkpoint.Files) == 0 {
+			writeAPIError(w, 422, "checkpoint_publication_invalid", "a non-empty checkpoint and distinct valid branch are required")
+			return
+		}
+		if input.SessionID != "" {
+			if decoded, decodeErr := hex.DecodeString(input.SessionID); decodeErr != nil || len(decoded) != 16 || item.Source.Kind != "proposal_task" {
+				writeAPIError(w, 422, "checkpoint_publication_invalid", "session_id must identify this proposal-task publication")
+				return
+			}
+		}
+		repository, err := git.Open(item.RepositoryID)
+		if err != nil {
+			writeAPIError(w, 404, "repository_not_found", "repository not found")
+			return
+		}
+		if input.CreatePull {
+			if _, targetErr := repository.ReadReference("refs/heads/" + input.TargetBranch); targetErr != nil {
+				writeAPIError(w, 422, "checkpoint_publication_invalid", "target_branch must identify an existing branch")
+				return
+			}
+			if title := strings.TrimSpace(input.Title); len(title) > 200 {
+				writeAPIError(w, 422, "checkpoint_publication_invalid", "title must be at most 200 characters")
+				return
+			}
+		}
+		refName := "refs/heads/" + input.Branch
+		current, refErr := repository.ReadReference(refName)
+		if refErr == nil {
+			if input.ExpectedCommit == "" || current.Target != input.ExpectedCommit || current.Target != checkpoint.BaseCommitID {
+				writeAPIError(w, 409, "workspace_branch_changed", "the working branch no longer names the checkpoint base")
+				return
+			}
+		} else if !errors.Is(refErr, storage.ErrReferenceNotFound) || input.ExpectedCommit != "" {
+			writeAPIError(w, 409, "workspace_branch_changed", "the branch expectation does not match repository state")
+			return
+		}
+		commitID, err := commitCheckpoint(repository.Path(), checkpoint, actor.UserID)
+		if err != nil {
+			writeAPIError(w, 500, "checkpoint_commit_failed", "checkpoint could not be committed")
+			return
+		}
+		newRef := storage.Reference{Name: refName, Target: commitID}
+		if refErr == nil {
+			err = repository.UpdateReferenceIfTarget(newRef, current.Target)
+		} else {
+			err = repository.CreateReference(newRef)
+		}
+		if err != nil {
+			writeAPIError(w, 409, "workspace_branch_changed", "the branch changed while publishing")
+			return
+		}
+		contributors, commandIDs := workspacePublicationEvidence(item, checkpoint)
+		var pull *pullrequests.PullRequest
+		if input.CreatePull {
+			title := strings.TrimSpace(input.Title)
+			if title == "" {
+				title = checkpoint.Title
+			}
+			body := workspacePullBody(item, checkpoint, contributors, commandIDs)
+			var created pullrequests.PullRequest
+			if item.Source.Kind == "proposal_task" {
+				proposalID, taskID := item.Source.ProposalID, item.Source.TaskID
+				var sessionID *string
+				if input.SessionID != "" {
+					sessionID = &input.SessionID
+				}
+				created, err = pulls.CreateTaskContribution(item.RepositoryID, actor.UserID, title, body, input.Branch, input.TargetBranch, commitID, []string{commitID}, &proposalID, &taskID, sessionID, nil)
+			} else {
+				created, err = pulls.Create(item.RepositoryID, actor.UserID, title, body, input.Branch, input.TargetBranch, nil)
+			}
+			if err != nil {
+				writeAPIError(w, 409, "checkpoint_pull_failed", "branch was published but pull request creation failed")
+				return
+			}
+			created, err = pulls.LinkWorkspace(item.RepositoryID, created.ID, item.ID, checkpoint.ID, contributors, commandIDs)
+			if err != nil {
+				writeAPIError(w, 500, "checkpoint_link_failed", "pull request was created but workspace attribution is pending")
+				return
+			}
+			startCheckRuns(git, checks, created)
+			pull = &created
+		}
+		pullID := ""
+		if pull != nil {
+			pullID = pull.ID
+		}
+		published, err := store.RecordCheckpointPublication(item.ID, checkpoint.ID, workspaces.Publication{Branch: input.Branch, CommitID: commitID, PullRequestID: pullID, TaskID: item.Source.TaskID, SessionID: input.SessionID, ContributorIDs: contributors, PublishedBy: actor.UserID, PublishedAt: time.Now().UTC()})
+		if err != nil {
+			writeAPIError(w, 500, "checkpoint_link_failed", "Git publication succeeded but checkpoint attribution is pending")
+			return
+		}
+		writeJSON(w, 201, map[string]any{"checkpoint": published, "pull_request": pull})
 	})
 	mux.HandleFunc("GET /workspaces/{workspace_id}/checkpoints/{checkpoint_id}/restore", func(w http.ResponseWriter, r *http.Request) {
 		item, _, ok := authorizeRunningWorkspace(w, r, store, catalog, authStore, "repositories:read")
@@ -510,4 +640,113 @@ func checkpointRestoreArchive(c workspaces.Checkpoint) ([]byte, error) {
 		return nil, err
 	}
 	return archive.Bytes(), nil
+}
+
+func commitCheckpoint(gitPath string, checkpoint workspaces.Checkpoint, actor string) (string, error) {
+	index, err := os.CreateTemp("", "vivarium-publish-index-")
+	if err != nil {
+		return "", err
+	}
+	indexPath := index.Name()
+	_ = index.Close()
+	_ = os.Remove(indexPath)
+	defer os.Remove(indexPath)
+	run := func(stdin []byte, args ...string) ([]byte, error) {
+		cmd := exec.Command("git", append([]string{"--git-dir=" + gitPath}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+indexPath)
+		if stdin != nil {
+			cmd.Stdin = bytes.NewReader(stdin)
+		}
+		out, runErr := cmd.CombinedOutput()
+		if runErr != nil {
+			return nil, fmt.Errorf("git %s: %w: %s", args[0], runErr, out)
+		}
+		return bytes.TrimSpace(out), nil
+	}
+	if _, err = run(nil, "read-tree", checkpoint.BaseCommitID); err != nil {
+		return "", err
+	}
+	for _, file := range checkpoint.Files {
+		if file.Operation == "delete" {
+			if _, err = run([]byte("0 0000000000000000000000000000000000000000\t"+file.Path+"\n"), "update-index", "--index-info"); err != nil {
+				return "", err
+			}
+			continue
+		}
+		content, decodeErr := base64.StdEncoding.DecodeString(file.ContentB64)
+		if decodeErr != nil {
+			return "", decodeErr
+		}
+		blob, hashErr := run(content, "hash-object", "-w", "--stdin")
+		if hashErr != nil {
+			return "", hashErr
+		}
+		mode := "100644"
+		if file.Mode&0111 != 0 {
+			mode = "100755"
+		}
+		if _, err = run(nil, "update-index", "--add", "--cacheinfo", mode+","+string(blob)+","+file.Path); err != nil {
+			return "", err
+		}
+	}
+	tree, err := run(nil, "write-tree")
+	if err != nil {
+		return "", err
+	}
+	message := checkpoint.Title + "\n\nPublished from workspace " + checkpoint.WorkspaceID + " checkpoint " + checkpoint.ID
+	cmd := exec.Command("git", "--git-dir="+gitPath, "commit-tree", string(tree), "-p", checkpoint.BaseCommitID, "-F", "-")
+	cmd.Stdin = strings.NewReader(message)
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Vivarium collaborator", "GIT_AUTHOR_EMAIL="+actor+"@users.vivarium.invalid", "GIT_COMMITTER_NAME=Vivarium", "GIT_COMMITTER_EMAIL=platform@vivarium.invalid")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("commit checkpoint: %w: %s", err, out)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func workspacePublicationEvidence(workspace workspaces.Workspace, checkpoint workspaces.Checkpoint) ([]string, []string) {
+	contributors := map[string]bool{checkpoint.CreatedBy: true}
+	paths := map[string]bool{}
+	for _, file := range checkpoint.Files {
+		paths[file.Path] = true
+	}
+	for _, change := range workspace.Changes {
+		if paths[change.Path] {
+			contributors[change.ActorID] = true
+		}
+	}
+	commandIDs := make([]string, 0, len(workspace.Commands))
+	for _, command := range workspace.Commands {
+		contributors[command.ActorID] = true
+		commandIDs = append(commandIDs, command.ID)
+	}
+	ids := make([]string, 0, len(contributors))
+	for id := range contributors {
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	sort.Strings(commandIDs)
+	return ids, commandIDs
+}
+
+func workspacePullBody(workspace workspaces.Workspace, checkpoint workspaces.Checkpoint, contributors, commands []string) string {
+	changes := make([]string, 0, len(checkpoint.Files))
+	for _, file := range checkpoint.Files {
+		changes = append(changes, "- `"+file.Operation+"` `"+file.Path+"` (`"+file.SHA256+"`)")
+	}
+	commandLines := []string{"- No recorded commands."}
+	if len(commands) > 0 {
+		commandLines = commandLines[:0]
+		for _, command := range workspace.Commands {
+			commandLines = append(commandLines, "- `"+command.ID+"` digest `"+command.CommandSHA256+"`, exit "+strconv.Itoa(command.ExitCode)+", by `"+command.ActorID+"`")
+		}
+	}
+	body := checkpoint.Description + "\n\n## Workspace provenance\n\nWorkspace `" + workspace.ID + "`; checkpoint `" + checkpoint.ID + "`; exact base `" + checkpoint.BaseCommitID + "`. Contributors: `" + strings.Join(contributors, "`, `") + "`.\n\n## Changes\n\n" + strings.Join(changes, "\n") + "\n\n## Commands performed\n\n" + strings.Join(commandLines, "\n") + "\n\nOnly the checkpoint's inspected repository-file manifest was committed; workspace activity, outputs, and credentials were not exported."
+	runes := []rune(body)
+	if len(runes) > 19000 {
+		body = string(runes[:19000]) + "\n\n_Evidence summary truncated; the checkpoint manifest remains authoritative._"
+	}
+	return body
 }

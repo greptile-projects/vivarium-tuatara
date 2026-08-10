@@ -81,6 +81,17 @@ finish between the snapshot and lineage update. Restore stages and backs up all
 targets before mutation; failure restores them and removes parent directories
 introduced by the transaction.
 
+An authorized participant can publish a retained checkpoint into normal Git
+governance. Publication either compare-and-swap advances an existing working
+branch from the checkpoint base or creates a branch there, then creates one
+commit from only the inspected checkpoint file manifest. An optional ordinary
+pull retains links in both directions to the workspace and checkpoint, carries
+proposal task/session context when supplied, names exact contributors, and
+summarizes file hashes plus command digests. Repository checks, stale-revision
+reviews, branch protection, and the integration queue apply without a
+workspace-specific bypass. Terminal input, outputs, discussion, credentials,
+and unpublished runtime files remain outside the commit and generated review.
+
 ## Unsafe package recovery
 
 Package lifecycle decisions are attributable append-only coordination records,

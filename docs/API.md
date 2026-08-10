@@ -128,6 +128,21 @@ checkpoint_preflight_changed`, while unaccepted overlapping changes return
 `409 checkpoint_restore_conflicts`. A successful restore updates the workspace
 checkpoint head, making the next checkpoint a retained lineage branch.
 
+`POST /workspaces/{id}/checkpoints/{checkpoint-id}/publish` requires current
+`repositories:write` access. It accepts `branch`, optional
+`expected_commit_id`, `target_branch`, `title`, `session_id`, and
+`create_pull_request`. A new branch starts at the checkpoint's exact base; an
+existing branch advances only when its current tip equals both the supplied
+expectation and that base. The server constructs one Git commit exclusively
+from the checkpoint manifest and stored bytes. With pull creation enabled, it
+opens an ordinary pull (preserving proposal-task context when applicable),
+starts repository-defined checks, and records bidirectional workspace,
+checkpoint, task/session, contributor, and command-digest links. The generated
+pull body lists inspected file hashes and attributed command IDs/digests, never
+terminal input, command output, credentials, presence, messages, or other
+runtime state. Existing stale-review, check, review, merge, and queue rules
+govern the pull.
+
 ## Activity
 
 `GET /activity` returns a newest-first, cursor-paginated `events` collection

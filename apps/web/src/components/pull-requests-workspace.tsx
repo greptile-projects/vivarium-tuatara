@@ -1382,6 +1382,7 @@ export function PullRequestDetail({
                 No proposal is linked to this change.
               </p>
             )}
+            {pull.workspace_id && <div className="mt-3 rounded-lg border border-[var(--line)] p-3 text-xs"><p className="font-semibold">Created in a collaborative workspace</p><p className="mt-1 font-mono text-[var(--muted)]">checkpoint {pull.workspace_checkpoint_id} · {pull.workspace_contributor_ids?.length ?? 0} contributors · {pull.workspace_command_ids?.length ?? 0} commands</p><Link href={`/workspaces/${pull.workspace_id}`} className="mt-2 inline-block text-[var(--brand)] hover:underline">Inspect originating workspace</Link></div>}
           </Card>
           <Card className="p-5">
             <h2 className="font-semibold">Change summary</h2>

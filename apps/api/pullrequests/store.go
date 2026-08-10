@@ -59,6 +59,10 @@ type PullRequest struct {
 	TaskSessionID            *string                `json:"task_session_id,omitempty"`
 	TaskRunID                *string                `json:"task_run_id,omitempty"`
 	TaskCommitIDs            []string               `json:"task_commit_ids,omitempty"`
+	WorkspaceID              string                 `json:"workspace_id,omitempty"`
+	WorkspaceCheckpointID    string                 `json:"workspace_checkpoint_id,omitempty"`
+	WorkspaceContributorIDs  []string               `json:"workspace_contributor_ids,omitempty"`
+	WorkspaceCommandIDs      []string               `json:"workspace_command_ids,omitempty"`
 	TaskStatePending         string                 `json:"task_state_pending,omitempty"`
 	Status                   string                 `json:"status"`
 	MaintainerEditsAllowed   bool                   `json:"maintainer_edits_allowed"`
@@ -78,6 +82,40 @@ type PullRequest struct {
 	QueueFinalizedAt         *time.Time             `json:"queue_finalized_at,omitempty"`
 	IntegrationCandidates    []IntegrationCandidate `json:"integration_candidates,omitempty"`
 	mergeIntent              *mergeIntent
+}
+
+// LinkWorkspace records collaboration provenance without changing ordinary
+// pull revision, review, check, or integration behavior.
+func (s *Store) LinkWorkspace(repositoryID, pullID, workspaceID, checkpointID string, contributors, commands []string) (PullRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return PullRequest{}, err
+	}
+	defer unlock()
+	p, err := s.read(repositoryID, pullID)
+	if err != nil {
+		return p, err
+	}
+	if !validID(workspaceID) || !validID(checkpointID) {
+		return p, ErrInvalid
+	}
+	for _, id := range contributors {
+		if !validID(id) {
+			return p, ErrInvalid
+		}
+	}
+	for _, id := range commands {
+		if strings.TrimSpace(id) == "" || len(id) > 128 {
+			return p, ErrInvalid
+		}
+	}
+	p.WorkspaceID, p.WorkspaceCheckpointID = workspaceID, checkpointID
+	p.WorkspaceContributorIDs = append([]string(nil), contributors...)
+	p.WorkspaceCommandIDs = append([]string(nil), commands...)
+	_, err = s.write(p)
+	return p, err
 }
 
 // QueueAction is the durable, attributable operating history for one entry.

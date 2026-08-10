@@ -69,6 +69,7 @@ export type WorkspaceCheckpoint = {
   definition_sha256:string; parent_checkpoint_id?:string; title:string; description?:string;
   reproducibility:{dependencies:string[];notes?:string}; created_by:string; created_at:string;
   files:{path:string;operation:"add"|"modify"|"delete";mode?:number;size?:number;sha256?:string}[];
+  publication?:{branch:string;commit_id:string;pull_request_id?:string;task_id?:string;session_id?:string;contributor_ids:string[];published_by:string;published_at:string};
 };
 export type CheckpointAnalysis = {
   checkpoint_id:string; preflight_token:string; base_diverged:boolean; repository_head?:string;
@@ -1132,6 +1133,10 @@ export type PullRequest = {
   task_id?: string;
   task_session_id?: string;
   task_run_id?: string;
+  workspace_id?: string;
+  workspace_checkpoint_id?: string;
+  workspace_contributor_ids?: string[];
+  workspace_command_ids?: string[];
   status: "open" | "closed" | "merged";
   maintainer_edits_allowed: boolean;
   created_at: string;

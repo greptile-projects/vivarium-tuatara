@@ -44,6 +44,18 @@ type Checkpoint struct {
 	Files              []CheckpointFile `json:"files"`
 	CreatedBy          string           `json:"created_by"`
 	CreatedAt          time.Time        `json:"created_at"`
+	Publication        *Publication     `json:"publication,omitempty"`
+}
+
+type Publication struct {
+	Branch         string    `json:"branch"`
+	CommitID       string    `json:"commit_id"`
+	PullRequestID  string    `json:"pull_request_id,omitempty"`
+	TaskID         string    `json:"task_id,omitempty"`
+	SessionID      string    `json:"session_id,omitempty"`
+	ContributorIDs []string  `json:"contributor_ids"`
+	PublishedBy    string    `json:"published_by"`
+	PublishedAt    time.Time `json:"published_at"`
 }
 
 func (c Checkpoint) Public() Checkpoint {
@@ -125,6 +137,32 @@ func (s *Store) CheckpointSnapshot(workspaceID, id string) (Checkpoint, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.readCheckpoint(workspaceID, id)
+}
+
+func (s *Store) RecordCheckpointPublication(workspaceID, id string, publication Publication) (Checkpoint, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, err := s.readCheckpoint(workspaceID, id)
+	if err != nil {
+		return c, err
+	}
+	if c.Publication != nil {
+		if c.Publication.CommitID == publication.CommitID && c.Publication.PullRequestID == publication.PullRequestID {
+			return c.Public(), nil
+		}
+		return c, ErrCheckpointConflict
+	}
+	c.Publication = &publication
+	if err = s.writeCheckpoint(c); err != nil {
+		return c, err
+	}
+	w, err := s.read(workspaceID)
+	if err == nil {
+		w.UpdatedAt = publication.PublishedAt
+		w.Events = append(w.Events, Event{Kind: "checkpoint.published", ActorID: publication.PublishedBy, Role: "authorship", Detail: id, CreatedAt: publication.PublishedAt})
+		err = s.write(w)
+	}
+	return c.Public(), err
 }
 
 func (s *Store) ListCheckpoints(workspaceID string) ([]Checkpoint, error) {
