@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -28,6 +29,14 @@ type decisionUpdateInput struct {
 }
 type decisionDiscussionInput struct {
 	Body string `json:"body"`
+}
+type decisionAlternativeInput struct {
+	ExpectedVersion int                   `json:"expected_version"`
+	Alternative     decisions.Alternative `json:"alternative"`
+}
+type decisionResearchCredentialInput struct {
+	ExpiresIn     int    `json:"expires_in"`
+	AlternativeID string `json:"alternative_id"`
 }
 
 func registerDecisionRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, identities *users.Store, store *decisions.Store, activity *activities.Store, proposalStore *proposals.Store, explanationStore *explanations.Store, incidentStore *incidents.Store, relationshipStore *relationships.Store, organizationStore *organizations.Store) {
@@ -129,6 +138,77 @@ func registerDecisionRoutes(mux *http.ServeMux, catalog *repositories.Store, cre
 			return
 		}
 		recordActivity(activity, catalog, activities.Event{Kind: "decision.discussed", ActorID: actor.UserID, RepositoryID: v.RepositoryID, ResourceType: "decision", ResourceID: v.ID, ResourceTitle: v.Scope.Question})
+		writeJSON(w, 201, v)
+	})
+	mux.HandleFunc("POST /decisions/{id}/alternatives", func(w http.ResponseWriter, r *http.Request) {
+		_, actor, ok := authorizeDecision(w, r, catalog, credentials, store, "repositories:write")
+		if !ok {
+			return
+		}
+		var in decisionAlternativeInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "expected_version and alternative are required")
+			return
+		}
+		v, err := store.AddAlternative(r.PathValue("id"), actor.UserID, in.ExpectedVersion, in.Alternative)
+		if writeDecisionError(w, err) {
+			return
+		}
+		recordActivity(activity, catalog, activities.Event{Kind: "decision.alternative_proposed", ActorID: actor.UserID, RepositoryID: v.RepositoryID, ResourceType: "decision", ResourceID: v.ID, ResourceTitle: v.Scope.Question})
+		writeJSON(w, 201, v)
+	})
+	mux.HandleFunc("POST /decisions/{id}/research-credentials", func(w http.ResponseWriter, r *http.Request) {
+		v, actor, ok := authorizeDecision(w, r, catalog, credentials, store, "repositories:write")
+		if !ok {
+			return
+		}
+		var in decisionResearchCredentialInput
+		if decodeJSON(r, &in) != nil || in.ExpiresIn < 60 || in.ExpiresIn > 86400 {
+			writeAPIError(w, 400, "invalid_request", "expires_in must be between 60 and 86400 seconds")
+			return
+		}
+		selected := false
+		for _, alternative := range v.Alternatives {
+			selected = selected || alternative.ID == in.AlternativeID && alternative.SupersededBy == ""
+		}
+		if !selected {
+			writeAPIError(w, 400, "invalid_alternative", "a current decision alternative must be selected")
+			return
+		}
+		issued, err := credentials.IssueBound(actor.UserID, auth.API, "Decision research "+v.ID+":"+in.AlternativeID, []string{"decisions:research", "repositories:read"}, time.Duration(in.ExpiresIn)*time.Second, v.RepositoryID, "")
+		if err != nil {
+			writeAPIError(w, 500, "credential_storage_unavailable", "research credential could not be issued")
+			return
+		}
+		writeJSON(w, 201, issued)
+	})
+	mux.HandleFunc("POST /decisions/{id}/findings", func(w http.ResponseWriter, r *http.Request) {
+		v, err := store.Get(r.PathValue("id"))
+		if writeDecisionError(w, err) {
+			return
+		}
+		actor, ok := authenticateRequest(w, r, credentials, "decisions:research", false)
+		if !ok {
+			return
+		}
+		prefix := "Decision research " + v.ID + ":"
+		if actor.RepositoryID != v.RepositoryID || !strings.HasPrefix(actor.Name, prefix) {
+			writeAPIError(w, 404, "decision_not_found", "decision not found")
+			return
+		}
+		var in decisions.Finding
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "finding and citations are required")
+			return
+		}
+		if in.AlternativeID != strings.TrimPrefix(actor.Name, prefix) {
+			writeAPIError(w, 404, "alternative_not_found", "alternative not found")
+			return
+		}
+		v, err = store.AddFinding(v.ID, actor.UserID, in)
+		if writeDecisionError(w, err) {
+			return
+		}
 		writeJSON(w, 201, v)
 	})
 }

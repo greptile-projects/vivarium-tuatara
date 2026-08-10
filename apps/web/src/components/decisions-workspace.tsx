@@ -152,6 +152,54 @@ export function DecisionsWorkspace({ decisionId }: { decisionId?: string }) {
       setPending(false);
     }
   }
+  async function propose(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!current) return;
+    setPending(true);
+    const form = e.currentTarget,
+      d = new FormData(form);
+    try {
+      const evidence = evidenceFrom(d.get("evidence"), current.repository_id);
+      const outcomes = lines(d.get("criterion_outcomes"));
+      setCurrent(
+        await api<TechnicalDecision>(
+          `/decisions/${current.id}/alternatives`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              expected_version: current.version,
+              alternative: {
+                title: d.get("title"),
+                summary: d.get("summary"),
+                assumptions: lines(d.get("assumptions")),
+                tradeoffs: lines(d.get("tradeoffs")),
+                risks: lines(d.get("risks")),
+                compatibility_impact: d.get("compatibility_impact"),
+                cost: d.get("cost"),
+                expected_outcomes: lines(d.get("expected_outcomes")),
+                evidence,
+                criteria: current.scope.success_measures.map(
+                  (criterion, i) => ({
+                    criterion,
+                    outcome: outcomes[i] || "Not yet demonstrated",
+                    evidence,
+                  }),
+                ),
+              },
+            }),
+          },
+          token,
+        ),
+      );
+      form.reset();
+    } catch (x) {
+      setError(
+        x instanceof Error ? x.message : "Alternative could not be proposed.",
+      );
+    } finally {
+      setPending(false);
+    }
+  }
   if (authLoading || loading)
     return (
       <Card className="p-8 text-sm text-[var(--muted)]">
@@ -243,6 +291,179 @@ export function DecisionsWorkspace({ decisionId }: { decisionId?: string }) {
           </Card>
         </div>
         <Card className="p-6">
+          <h2 className="text-lg font-semibold">Compare alternatives</h2>
+          <p className="mt-1 text-sm text-[var(--muted)]">
+            Every claim is separated from its exact, inspectable evidence. Empty
+            criterion outcomes are shown as missing rather than inferred from
+            prose.
+          </p>
+          {current.alternatives.length ? (
+            <div className="mt-5 overflow-x-auto">
+              <table className="w-full min-w-[48rem] text-left text-sm">
+                <thead>
+                  <tr className="border-b">
+                    <th className="p-3">Alternative</th>
+                    <th className="p-3">Assumptions / tradeoffs</th>
+                    <th className="p-3">Risk / compatibility</th>
+                    <th className="p-3">Cost / outcomes</th>
+                    <th className="p-3">Common criteria & evidence</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {current.alternatives.map((a) => (
+                    <tr key={a.id} className="border-b align-top">
+                      <td className="p-3">
+                        <b>{a.title}</b>
+                        <p className="mt-1 text-[var(--muted)]">{a.summary}</p>
+                      </td>
+                      <td className="p-3">
+                        {a.assumptions.join("; ")}
+                        <hr className="my-2" />
+                        {a.tradeoffs.join("; ")}
+                      </td>
+                      <td className="p-3">
+                        {a.risks.join("; ")}
+                        <hr className="my-2" />
+                        {a.compatibility_impact}
+                      </td>
+                      <td className="p-3">
+                        {a.cost}
+                        <hr className="my-2" />
+                        {a.expected_outcomes.join("; ")}
+                      </td>
+                      <td className="p-3 space-y-2">
+                        {a.criteria.map((c) => (
+                          <div key={c.criterion}>
+                            <b>{c.criterion}</b>: {c.outcome}
+                            <div className="text-xs text-[var(--muted)]">
+                              {c.evidence
+                                .map(
+                                  (e) =>
+                                    `${e.kind}: ${e.label} @ ${e.revision}`,
+                                )
+                                .join(" · ")}
+                            </div>
+                          </div>
+                        ))}
+                        {a.evidence_status?.missing_kinds?.length > 0 && (
+                          <p className="rounded bg-[var(--warning-soft)] p-2 text-xs">
+                            Missing evidence: {a.evidence_status.missing_kinds.join(", ")}
+                          </p>
+                        )}
+                        {a.evidence_status?.stale?.length > 0 && (
+                          <p className="rounded bg-[var(--danger-soft)] p-2 text-xs">
+                            Stale evidence: {a.evidence_status.stale.map((e) => e.label).join(", ")}
+                          </p>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="mt-4 rounded-lg bg-[var(--surface-2)] p-4 text-sm">
+              No alternatives yet. A preference without an alternative and
+              current evidence remains visibly unsupported.
+            </p>
+          )}
+          <details className="mt-6">
+            <summary className="cursor-pointer font-semibold">
+              Propose an evidence-backed alternative
+            </summary>
+            <form onSubmit={propose} className="mt-4 grid gap-3 sm:grid-cols-2">
+              <Field name="title" title="Title" />
+              <label className="text-sm font-semibold">
+                Summary
+                <textarea
+                  name="summary"
+                  required
+                  rows={3}
+                  className="mt-1 w-full rounded-lg border p-2"
+                />
+              </label>
+              <ListField name="assumptions" title="Assumptions" />
+              <ListField name="tradeoffs" title="Tradeoffs" />
+              <ListField name="risks" title="Risks" />
+              <label className="text-sm font-semibold">
+                Compatibility impact
+                <textarea
+                  name="compatibility_impact"
+                  required
+                  rows={3}
+                  className="mt-1 w-full rounded-lg border p-2"
+                />
+              </label>
+              <label className="text-sm font-semibold">
+                Cost
+                <textarea
+                  name="cost"
+                  required
+                  rows={3}
+                  className="mt-1 w-full rounded-lg border p-2"
+                />
+              </label>
+              <ListField name="expected_outcomes" title="Expected outcomes" />
+              <ListField
+                name="criterion_outcomes"
+                title={`Criterion outcomes (in this order: ${current.scope.success_measures.join("; ")})`}
+              />
+              <label className="text-sm font-semibold sm:col-span-2">
+                Exact evidence
+                <textarea
+                  name="evidence"
+                  required
+                  rows={5}
+                  placeholder="kind | resource ID | exact revision | label | code path | start line | end line"
+                  className="mt-1 w-full rounded-lg border p-2 font-mono font-normal"
+                />
+                <span className="mt-1 block text-xs font-normal text-[var(--muted)]">
+                  Kinds: code, dependency, release, incident, usage. Code
+                  requires path and line range.
+                </span>
+              </label>
+              <div>
+                <Button type="submit" disabled={pending}>
+                  Propose alternative
+                </Button>
+              </div>
+            </form>
+          </details>
+        </Card>
+        <Card className="p-6">
+          <h2 className="text-lg font-semibold">Cited research and dissent</h2>
+          {current.findings.length ? (
+            <div className="mt-4 space-y-3">
+              {current.findings.map((f) => (
+                <article
+                  key={f.id}
+                  className={`rounded-lg border p-4 ${f.superseded ? "opacity-60" : ""}`}
+                >
+                  <div className="flex gap-2">
+                    <Badge>{f.position}</Badge>
+                    {f.superseded && <Badge>Superseded</Badge>}
+                  </div>
+                  <p className="mt-2 text-sm">{f.body}</p>
+                  <p className="mt-2 text-xs text-[var(--muted)]">
+                    Uncertainty: {f.uncertainty}
+                  </p>
+                  <p className="mt-1 text-xs text-[var(--muted)]">
+                    {f.citations
+                      .map((c) => `${c.label} @ ${c.revision}`)
+                      .join(" · ")}
+                  </p>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-[var(--muted)]">
+              No research findings yet. Issue a bounded research credential
+              through the API to let a read-only agent inspect selected options
+              and append cited support, dissent, or uncertainty.
+            </p>
+          )}
+        </Card>
+        <Card className="p-6">
           <h2 className="text-lg font-semibold">History and discussion</h2>
           <div className="mt-4 space-y-4">
             {current.history.map((h) => (
@@ -330,6 +551,35 @@ export function DecisionsWorkspace({ decisionId }: { decisionId?: string }) {
         )}
       </div>
     </div>
+  );
+}
+function evidenceFrom(value: FormDataEntryValue | null, repositoryID: string) {
+  return lines(value).map((row) => {
+    const [kind, resource_id, revision, label, path, start, end] = row
+      .split("|")
+      .map((x) => x.trim());
+    return {
+      kind,
+      resource_id,
+      revision,
+      label,
+      repository_id: kind === "code" ? repositoryID : undefined,
+      path: path || undefined,
+      start_line: start ? Number(start) : undefined,
+      end_line: end ? Number(end) : undefined,
+    };
+  });
+}
+function Field({ name, title }: { name: string; title: string }) {
+  return (
+    <label className="text-sm font-semibold">
+      {title}
+      <input
+        name={name}
+        required
+        className="mt-1 min-h-10 w-full rounded-lg border px-3 font-normal"
+      />
+    </label>
   );
 }
 function scopeFrom(d: FormData, userID: string, current?: TechnicalDecision) {

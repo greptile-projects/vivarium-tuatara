@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/decisions"
@@ -67,4 +68,44 @@ func TestDecisionAPIKeepsPendingContextCollaborativeAndVersioned(t *testing.T) {
 	if len(result.Decisions) != 1 {
 		t.Fatalf("listed = %#v", result)
 	}
+}
+
+func TestDecisionResearchCredentialIsReadOnlyAndDecisionBound(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	decisionStore, _ := decisions.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, nil, decisionStore))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "research-owner")
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"research-source"}`, owner.Credential.Token, http.StatusCreated)
+	var repository repositories.Repository
+	json.NewDecoder(response.Body).Decode(&repository)
+	response.Body.Close()
+	deadline := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	scope := decisions.Scope{Question: "Which queue?", Constraints: []string{"No downtime"}, SuccessMeasures: []string{"p95 under 100ms"}, Deadline: &deadline, AffectedResources: []decisions.Resource{{Kind: "repository", RepositoryID: repository.ID, Label: "API"}}, Participants: []decisions.Participant{{UserID: owner.User.ID}}, OwnerID: owner.User.ID}
+	decision, err := decisionStore.Create(repository.ID, decisions.Source{Kind: "repository", ResourceID: repository.ID}, scope, owner.User.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := []decisions.Evidence{{Kind: "usage", ResourceID: "latency", Revision: "window:2026-08-10", Label: "p95"}}
+	alternative := decisions.Alternative{Title: "FIFO", Summary: "Bound it", Assumptions: []string{"Bursty load"}, Tradeoffs: []string{"Reject overload"}, Risks: []string{"Retries"}, CompatibilityImpact: "None", Cost: "Two days", ExpectedOutcomes: []string{"Stable latency"}, Evidence: evidence, Criteria: []decisions.CriterionAssessment{{Criterion: "p95 under 100ms", Outcome: "82ms", Evidence: evidence}}}
+	decision, err = decisionStore.AddAlternative(decision.ID, owner.User.ID, 1, alternative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuedResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/decisions/"+decision.ID+"/research-credentials", fmt.Sprintf(`{"expires_in":600,"alternative_id":%q}`, decision.Alternatives[0].ID), owner.Credential.Token, http.StatusCreated)
+	var issued auth.IssuedCredential
+	json.NewDecoder(issuedResponse.Body).Decode(&issued)
+	issuedResponse.Body.Close()
+	authenticatedRequest(t, http.MethodGet, server.URL+"/decisions/"+decision.ID, "", issued.Token, http.StatusOK).Body.Close()
+	finding := fmt.Sprintf(`{"alternative_id":%q,"body":"Retry evidence weakens this option.","position":"oppose","uncertainty":"One region only.","citations":[{"kind":"usage","resource_id":"latency","revision":"window:2026-08-10","label":"p95"}]}`, decision.Alternatives[0].ID)
+	result := authenticatedRequest(t, http.MethodPost, server.URL+"/decisions/"+decision.ID+"/findings", finding, issued.Token, http.StatusCreated)
+	json.NewDecoder(result.Body).Decode(&decision)
+	result.Body.Close()
+	if len(decision.Findings) != 1 || decision.Findings[0].Position != "oppose" {
+		t.Fatalf("finding = %#v", decision.Findings)
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/decisions/"+decision.ID+"/discussion", `{"body":"cannot mutate"}`, issued.Token, http.StatusUnauthorized).Body.Close()
 }

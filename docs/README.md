@@ -1358,3 +1358,15 @@ owner visible to current repository collaborators. Version-guarded scope
 revisions and discussion share an attributable retained history. Related work
 can discover the pending record by its source identity, but the record is
 coordination context rather than a contribution gate.
+
+Participants propose explicit alternatives rather than burying preferences in
+discussion. Each alternative separates assumptions, tradeoffs, risks,
+compatibility impact, cost, and expected outcomes, evaluates every shared
+success measure, and cites exact code lines, dependency records, releases,
+incidents, or usage windows. The comparison reports absent evidence classes
+and citations older than 30 days. A participant can issue a short-lived
+credential bound to one repository, decision, and selected alternative. It
+carries `decisions:research` plus repository-bound read access: an agent can
+inspect the selected context and append cited support, opposition, or neutral
+findings and explicit uncertainty, but cannot mutate the repository. Findings may supersede earlier claims without
+deleting the dissent or evidence that informed them.
