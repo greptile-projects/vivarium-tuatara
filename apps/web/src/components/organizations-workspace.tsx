@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useId, useState, type FormEvent } from "react";
 import {
   api,
   type Organization,
@@ -1392,6 +1392,38 @@ function OpportunityQueue({
     </details>
   );
 }
+
+function StewardshipHistory({ group, mandate, submit, owner, operator }: { group: Organization; mandate: OrganizationStewardshipMandate; submit: (path: string, options: RequestInit) => Promise<void>; owner: boolean; operator: boolean | undefined }) {
+  const formID = useId(), [outcomeKey, setOutcomeKey] = useState(`outcome-${formID}`);
+  const outcomes = mandate.outcomes ?? [], notices = mandate.notices ?? [], tuning = mandate.tuning ?? { version: 0, priority_evidence: [], ignored_evidence: [], minimum_confidence: 0 };
+  const dispositions = mandate.opportunities.reduce<Record<string, number>>((all, item) => ({ ...all, [item.status]: (all[item.status] ?? 0) + 1 }), {});
+  const recommendations = mandate.opportunities.reduce((all, item) => ({ accepted: all.accepted + Number(item.approval?.decision === "approve"), rejected: all.rejected + Number(item.approval?.decision === "reject") }), { accepted: 0, rejected: 0 });
+  return <details className="mt-4 border-t border-[var(--line)] pt-3">
+    <summary className="cursor-pointer text-sm font-semibold text-[var(--brand)]">Learning and outcomes · {outcomes.length} records</summary>
+    <p className="mt-2 text-xs text-[var(--muted)]">Disposition {Object.entries(dispositions).map(([status, count]) => `${status} ${count}`).join(" · ") || "none"} · recommendations accepted {recommendations.accepted} / rejected {recommendations.rejected} · resource use {mandate.used_agent_minutes ?? 0} minutes / {mandate.used_actions ?? 0} actions. Tuning filters only evidence already authorized by this revision.</p>
+    {notices.map((notice) => <div key={notice.id} className="mt-2 rounded bg-[var(--warning-soft)] p-3 text-xs"><strong>{notice.kind.replaceAll("_", " ")}</strong> · {notice.summary}<p className="mt-1">Action: {notice.action}</p></div>)}
+    {outcomes.slice().reverse().map((outcome) => <p key={outcome.id} className="mt-2 rounded bg-[var(--surface)] p-3 text-xs"><strong>{outcome.kind} · {outcome.status}</strong> — {outcome.summary}{outcome.goal && ` · ${outcome.goal}: ${outcome.goal_progress}%`}<br/><span className="text-[var(--muted)]">{outcome.agent_minutes ?? 0} minutes · {outcome.actions ?? 0} actions · {new Date(outcome.recorded_at).toLocaleString()}</span></p>)}
+    {(owner || operator) && <form className="mt-3 grid gap-2 sm:grid-cols-2" onSubmit={(e) => { e.preventDefault(); const f=e.currentTarget,d=new FormData(f); void submit(`/organizations/${group.id}/stewardship-mandates/${mandate.id}/outcomes`, {method:"POST", body:JSON.stringify({idempotency_key:d.get("idempotency_key"),kind:d.get("kind"),status:d.get("status"),summary:d.get("summary"),goal:d.get("goal"),goal_progress:Number(d.get("progress")),agent_minutes:Number(d.get("minutes")),actions:Number(d.get("actions")),consecutive_failures:Number(d.get("failures"))})}).then(()=>{f.reset();setOutcomeKey(crypto.randomUUID());}); }}>
+      <input type="hidden" name="idempotency_key" value={outcomeKey} readOnly />
+      <select name="kind" className="min-h-10 rounded border bg-white px-3">{["implementation","verification","release","resource","false_positive","goal","automation"].map(x=><option key={x}>{x}</option>)}</select>
+      <select name="status" className="min-h-10 rounded border bg-white px-3">{["succeeded","failed","partial","inactive","revoked_access","anomalous"].map(x=><option key={x}>{x}</option>)}</select>
+      <textarea name="summary" required maxLength={2000} placeholder="What happened and what should change?" className="rounded border p-3 sm:col-span-2" />
+      <select name="goal" className="min-h-10 rounded border bg-white px-3"><option value="">No goal update</option>{mandate.revisions.at(-1)?.desired_outcomes.map(x=><option key={x}>{x}</option>)}</select>
+      <input name="progress" type="number" min="0" max="100" defaultValue="0" aria-label="Goal progress percent" className="min-h-10 rounded border px-3" />
+      <input name="minutes" type="number" min="0" defaultValue="0" aria-label="Agent minutes used" className="min-h-10 rounded border px-3" />
+      <input name="actions" type="number" min="0" defaultValue="0" aria-label="Actions used" className="min-h-10 rounded border px-3" />
+      <input name="failures" type="number" min="0" defaultValue="0" aria-label="Consecutive failures" className="min-h-10 rounded border px-3" />
+      <Button>Record outcome</Button>
+    </form>}
+    {owner && <form className="mt-4 grid gap-2 sm:grid-cols-2" onSubmit={(e)=>{e.preventDefault();const d=new FormData(e.currentTarget);void submit(`/organizations/${group.id}/stewardship-mandates/${mandate.id}/tuning`,{method:"PUT",body:JSON.stringify({expected_version:tuning.version,priority_evidence:comma(d.get("priority")),ignored_evidence:comma(d.get("ignored")),minimum_confidence:Number(d.get("confidence"))})});}}>
+      <input name="priority" defaultValue={tuning.priority_evidence.join(", ")} placeholder="Priority authorized evidence types" className="min-h-10 rounded border px-3" />
+      <input name="ignored" defaultValue={tuning.ignored_evidence.join(", ")} placeholder="Ignore authorized evidence types" className="min-h-10 rounded border px-3" />
+      <input name="confidence" type="number" min="0" max="1" step="0.05" defaultValue={tuning.minimum_confidence} aria-label="Minimum confidence" className="min-h-10 rounded border px-3" />
+      <Button>Update judgment tuning</Button>
+      <p className="text-xs text-[var(--muted)] sm:col-span-2">Adding signals, repositories, actions, budget, agent authority, or other scope requires Publish revision and fresh operator acceptance.</p>
+    </form>}
+  </details>;
+}
 function RevisionFields({
   revision,
   group,
@@ -1704,6 +1736,7 @@ function StewardshipWorkspace({
               </div>
             )}
             <OpportunityQueue group={group} mandate={m} submit={submit} />
+            <StewardshipHistory group={group} mandate={m} submit={submit} owner={owner} operator={operator} />
             {owner && m.status !== "revoked" && (
               <details className="mt-3">
                 <summary className="cursor-pointer text-xs font-semibold text-[var(--brand)]">

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -167,6 +168,11 @@ func (s *Store) PublishStewardshipOpportunities(id, mandateID, actor string, fin
 			if !validateFinding(revision, finding) {
 				return ErrInvalid
 			}
+			// Tuning can suppress or de-prioritize only evidence classes already
+			// authorized by the accepted revision; it never expands that set.
+			if finding.Confidence < m.Tuning.MinimumConfidence || slices.Contains(m.Tuning.IgnoredEvidence, finding.EvidenceType) {
+				continue
+			}
 			key := opportunityKey(finding)
 			if index, duplicate := batchIndexes[key]; duplicate {
 				// Producers may converge renamed or revised evidence with an
@@ -231,6 +237,31 @@ func (s *Store) PublishStewardshipOpportunities(id, mandateID, actor string, fin
 			}
 			o.EvaluatedBy, o.UpdatedBy, o.UpdatedAt = actor, actor, now
 			out = append(out, *o)
+		}
+		if len(m.Tuning.PriorityEvidence) > 0 {
+			sort.SliceStable(m.Opportunities, func(i, j int) bool {
+				ai, aj := slices.Index(m.Tuning.PriorityEvidence, m.Opportunities[i].EvidenceType), slices.Index(m.Tuning.PriorityEvidence, m.Opportunities[j].EvidenceType)
+				if ai < 0 {
+					ai = len(m.Tuning.PriorityEvidence)
+				}
+				if aj < 0 {
+					aj = len(m.Tuning.PriorityEvidence)
+				}
+				return ai < aj
+			})
+			for i := range m.Opportunities {
+				m.Opportunities[i].Rank = i + 1
+			}
+		}
+		returned := map[string]bool{}
+		for _, item := range out {
+			returned[item.ID] = true
+		}
+		out = out[:0]
+		for _, item := range m.Opportunities {
+			if returned[item.ID] {
+				out = append(out, item)
+			}
 		}
 		return s.event(v, "stewardship_opportunities.evaluated", actor, mandateID, map[string]any{"mandate_version": m.Version, "findings": len(uniqueFindings)})
 	})

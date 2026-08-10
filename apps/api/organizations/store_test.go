@@ -406,3 +406,99 @@ func TestInitiativeRejectsDependencyCycles(t *testing.T) {
 		t.Fatalf("cyclic initiative persisted: %#v", stored.Initiatives)
 	}
 }
+
+func TestStewardshipLearningReportTuningAndSafetyPause(t *testing.T) {
+	store, _ := New(t.TempDir())
+	base := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return base }
+	owner, operator := "0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789"
+	repository := "11111111111111111111111111111111"
+	v, _ := store.Create("Runtime", "runtime", "", owner)
+	v, _ = store.Invite(v.ID, owner, operator)
+	v, _ = store.AcceptInvitation(v.ID, v.Invitations[0].ID, operator)
+	v, _ = store.RegisterAgent(v.ID, owner, "Caretaker", "caretaker", "", "organization", []string{"inspect"}, []string{operator}, nil)
+	revision := MandateRevision{DesiredOutcomes: []string{"Keep releases healthy"}, Repositories: []MandateRepository{{RepositoryID: repository, Branches: []string{"main"}}}, TrustedSignals: []string{"checks"}, Exclusions: []string{"writes"}, Budget: MandateBudget{MaxAgentMinutes: 60, MaxActions: 10}, StartsAt: base.Add(time.Minute), ExpiresAt: base.Add(time.Hour), AgentID: v.Agents[0].ID, AllowedActions: []string{"summarize"}, RequiredHumanDecisions: []string{"merge"}, OpportunityPolicies: []OpportunityPolicy{{EvidenceType: "check", MinimumSeverity: "medium", Mode: "approval_required", MaxAgentMinutes: 30}, {EvidenceType: "release", MinimumSeverity: "high", Mode: "approval_required", MaxAgentMinutes: 20}}}
+	v, mandate, err := store.CreateStewardshipMandate(v.ID, owner, "Learning steward", revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, mandate, err = store.AcceptStewardshipMandate(v.ID, mandate.ID, operator, mandate.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, mandate, err = store.TuneStewardshipMandate(v.ID, mandate.ID, owner, 0, StewardshipTuning{PriorityEvidence: []string{"release"}, IgnoredEvidence: []string{"check"}, MinimumConfidence: .8})
+	if err != nil || mandate.Version != 1 || mandate.Acceptance == nil || mandate.Tuning.Version != 1 {
+		t.Fatalf("safe tuning changed authority: %#v, %v", mandate, err)
+	}
+	if _, _, err = store.TuneStewardshipMandate(v.ID, mandate.ID, owner, 1, StewardshipTuning{PriorityEvidence: []string{"security"}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("tuning expanded evidence authority: %v", err)
+	}
+	store.now = func() time.Time { return base.Add(2 * time.Minute) }
+	outcome := StewardshipOutcome{IdempotencyKey: "implementation-run-3", Kind: "implementation", Status: "failed", Summary: "Third retry failed the same verification", Goal: "Keep releases healthy", GoalProgress: 35, AgentMinutes: 12, Actions: 2, ConsecutiveFailures: 3}
+	_, mandate, err = store.RecordStewardshipOutcome(v.ID, mandate.ID, operator, outcome)
+	if err != nil || mandate.Status != "paused" || len(mandate.Notices) != 1 || mandate.Notices[0].Kind != "repeated_failures" {
+		t.Fatalf("unsafe automation was not paused: %#v, %v", mandate, err)
+	}
+	_, replayed, err := store.RecordStewardshipOutcome(v.ID, mandate.ID, operator, outcome)
+	if err != nil || len(replayed.Outcomes) != 1 || len(replayed.Notices) != 1 || replayed.UsedAgentMinutes != 12 || replayed.UsedActions != 2 {
+		t.Fatalf("outcome retry duplicated accounting: %#v, %v", replayed, err)
+	}
+	outcome.Actions = 3
+	if _, _, err = store.RecordStewardshipOutcome(v.ID, mandate.ID, operator, outcome); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed idempotency replay = %v", err)
+	}
+	report, err := store.StewardshipReport(v.ID, mandate.ID, owner)
+	if err != nil || report.GoalProgress["Keep releases healthy"] != 35 || report.UsedAgentMinutes != 12 || len(report.Outcomes) != 1 || len(report.Notices) != 1 {
+		t.Fatalf("report = %#v, %v", report, err)
+	}
+}
+
+func TestStewardshipPriorityResponseMatchesPersistedRanks(t *testing.T) {
+	store, _ := New(t.TempDir())
+	base := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return base }
+	owner, operator, repository := "0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789", "11111111111111111111111111111111"
+	v, _ := store.Create("Runtime", "runtime-priority", "", owner)
+	v, _ = store.Invite(v.ID, owner, operator)
+	v, _ = store.AcceptInvitation(v.ID, v.Invitations[0].ID, operator)
+	v, _ = store.RegisterAgent(v.ID, owner, "Caretaker", "priority-caretaker", "", "organization", []string{"inspect"}, []string{operator}, nil)
+	revision := MandateRevision{DesiredOutcomes: []string{"Healthy releases"}, Repositories: []MandateRepository{{RepositoryID: repository, Branches: []string{"main"}}}, TrustedSignals: []string{"health"}, Exclusions: []string{"writes"}, Budget: MandateBudget{MaxAgentMinutes: 60, MaxActions: 10}, StartsAt: base.Add(time.Minute), ExpiresAt: base.Add(time.Hour), AgentID: v.Agents[0].ID, AllowedActions: []string{"summarize"}, RequiredHumanDecisions: []string{"merge"}, OpportunityPolicies: []OpportunityPolicy{{EvidenceType: "check", MinimumSeverity: "low", Mode: "approval_required"}, {EvidenceType: "release", MinimumSeverity: "low", Mode: "approval_required"}}}
+	v, mandate, _ := store.CreateStewardshipMandate(v.ID, owner, "Priority", revision)
+	v, mandate, _ = store.AcceptStewardshipMandate(v.ID, mandate.ID, operator, 1)
+	v, mandate, _ = store.TuneStewardshipMandate(v.ID, mandate.ID, owner, 0, StewardshipTuning{PriorityEvidence: []string{"release"}})
+	store.now = func() time.Time { return base.Add(2 * time.Minute) }
+	finding := func(kind, id string) OpportunityFinding {
+		return OpportunityFinding{RepositoryID: repository, Signal: "health", EvidenceType: kind, EvidenceID: id, EvidenceRevision: "v1", Title: kind, Summary: kind, Severity: "high", ExpectedValue: "health", Confidence: 1, AffectedOwnerIDs: []string{owner}, AffectedRevisions: []string{strings.Repeat("a", 40)}, InScopeReason: "health", Citations: []OpportunityCitation{{Kind: kind, ResourceID: id, Revision: "v1", Label: kind}}}
+	}
+	v, returned, err := store.PublishStewardshipOpportunities(v.ID, mandate.ID, operator, []OpportunityFinding{finding("check", "ci"), finding("release", "candidate")})
+	if err != nil || len(returned) != 2 || returned[0].EvidenceType != "release" || returned[0].Rank != 1 || v.StewardshipMandates[0].Opportunities[0].ID != returned[0].ID {
+		t.Fatalf("response and persisted priority differ: %#v %#v, %v", returned, v.StewardshipMandates[0].Opportunities, err)
+	}
+}
+
+func TestRevokingOverlappingGrantPausesOnlyAfterFinalCoverage(t *testing.T) {
+	store, _ := New(t.TempDir())
+	base := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return base }
+	owner, operator, repository := "0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789", "11111111111111111111111111111111"
+	v, _ := store.Create("Runtime", "runtime-grants", "", owner)
+	v, _ = store.Invite(v.ID, owner, operator)
+	v, _ = store.AcceptInvitation(v.ID, v.Invitations[0].ID, operator)
+	v, _ = store.RegisterAgent(v.ID, owner, "Caretaker", "grant-caretaker", "", "organization", []string{"inspect"}, []string{operator}, nil)
+	revision := MandateRevision{DesiredOutcomes: []string{"Healthy"}, Repositories: []MandateRepository{{RepositoryID: repository, Branches: []string{"main"}}}, TrustedSignals: []string{"health"}, Exclusions: []string{"writes"}, Budget: MandateBudget{MaxAgentMinutes: 60, MaxActions: 10}, StartsAt: base.Add(time.Minute), ExpiresAt: base.Add(time.Hour), AgentID: v.Agents[0].ID, AllowedActions: []string{"summarize"}, RequiredHumanDecisions: []string{"merge"}}
+	v, mandate, _ := store.CreateStewardshipMandate(v.ID, owner, "Coverage", revision)
+	v, _, _ = store.AcceptStewardshipMandate(v.ID, mandate.ID, operator, 1)
+	resource := ResourceScope{Kind: "repository", ID: repository}
+	v, _ = store.mutate(v.ID, func(current *Organization) error {
+		current.AccessGrants = []AccessGrant{{ID: strings.Repeat("1", 32), PrincipalType: "agent", PrincipalID: revision.AgentID, Role: "contributor", Resources: []ResourceScope{resource}, Version: 1}, {ID: strings.Repeat("2", 32), PrincipalType: "agent", PrincipalID: revision.AgentID, Role: "contributor", Resources: []ResourceScope{resource}, Version: 1}}
+		return nil
+	})
+	v, err := store.RevokeAccessGrant(v.ID, strings.Repeat("1", 32), owner, 1, nil)
+	if err != nil || v.StewardshipMandates[0].Status != "active" || len(v.StewardshipMandates[0].Notices) != 0 {
+		t.Fatalf("overlapping coverage paused mandate: %#v, %v", v.StewardshipMandates[0], err)
+	}
+	v, err = store.RevokeAccessGrant(v.ID, strings.Repeat("2", 32), owner, 1, nil)
+	if err != nil || v.StewardshipMandates[0].Status != "paused" || len(v.StewardshipMandates[0].Notices) != 1 {
+		t.Fatalf("final coverage revocation did not pause: %#v, %v", v.StewardshipMandates[0], err)
+	}
+}

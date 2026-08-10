@@ -1295,6 +1295,18 @@ base, initiator, and agent authorship. It gains no exception from repository or
 fork boundaries, owner acknowledgements, checks, review, integration queues,
 stale-revision protection, or merge permission.
 
+Long-running mandates retain a learning ledger alongside that governed work.
+Collaborators can inspect recommendation dispositions and decisions,
+implementation and verification outcomes, release results, resource use,
+false-positive feedback, and progress against each declared goal. Maintainers
+may use that history to reorder or suppress already-authorized evidence and set
+a stricter confidence floor without changing authority. Any expansion of
+signals, scope, actions, budget, agent, or access remains a versioned mandate
+revision that the operator must accept again. Repeated failure, inactivity,
+revoked repository access, anomalous consumption, or budget overrun pauses the
+affected automation and leaves an attributed remediation notice rather than
+silently continuing.
+
 The access API is rooted at `/organizations/{id}/access-requests`. Decisions
 are posted to `/access-requests/{request-id}/decision`; live grants appear on
 the member organization and portfolio projections, revoke with an expected

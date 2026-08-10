@@ -120,6 +120,16 @@ whenever dependencies change or the web job fails before it starts.
   Its ordinary pull freezes server-derived changes with commands, checks,
   residual risks, criterion status, citations, and agent/initiator authorship;
   no review, queue, fork, owner-acknowledgement, or merge rule is bypassed.
+  Stewardship reports retain opportunity dispositions, recommendation
+  decisions, implementation, verification, release, resource, false-positive,
+  and goal outcomes. Maintainers may narrow or reorder already-authorized
+  evidence through versioned tuning; scope, authority, agent, action, and budget
+  changes still require a freshly accepted mandate revision. Repeated failures,
+  inactivity, revoked repository access, anomalous consumption, and budget
+  overruns pause affected automation with actionable retained notices. Outcome
+  writes use a stable idempotency key so delivery retries cannot double-charge
+  usage or duplicate safety decisions, and access revocation pauses only after
+  the final applicable live agent grant is gone.
   Reevaluation invalidates prior approval through a distinct evaluation
   version, and promotion requires readable incident and proposal conflict
   stores before its durable reservation. Unlinked retries revalidate current
