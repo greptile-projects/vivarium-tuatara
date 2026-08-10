@@ -21,6 +21,23 @@ requires current read access to the source repository. Stale versions return
 `409 assessment_changed`, and a moved conclusion ref returns `409
 conclusion_revision_changed`.
 
+`POST /repositories/{id}/impact-assessments/{assessment-id}/implementation`
+accepts the current assessment `version`, a proposal title/body, one or more
+`item_ids`, and one to 20 ordered tasks. Each task names a human or generated
+agent owner and may depend on its predecessor. Human owners must still be
+repository participants. The proposal, tasks, assignments, and immutable
+reasoning snapshot are created atomically; retries converge on the assessment
+identity. The snapshot retains the assessment version and revision, selected
+claim/risk/verification items, investigation conclusion identity, analysis
+status, and owner acknowledgements. A moved selected ref returns `409
+assessment_context_changed`; existing history remains readable with
+`context_state: changed` and must be rerun rather than rewritten.
+
+Task-scoped workspaces and agent change sessions copy this reasoning snapshot
+into their launch context. Ordinary task contribution endpoints continue to
+publish linked pulls; proposal and pull reads expose the stable assessment,
+revision, selected items, and acknowledgement trail for reviewers.
+
 The JSON API is the supported application boundary for browsers, agents, and
 external consumers. Durable files beneath the configured storage roots are
 private implementation details. Git clients use the smart HTTP URLs returned

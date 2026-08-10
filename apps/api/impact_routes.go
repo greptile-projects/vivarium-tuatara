@@ -14,6 +14,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/explanations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/impacts"
 	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/relationships"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
@@ -27,7 +28,7 @@ type impactInput struct {
 	Query  string         `json:"query"`
 }
 
-func registerImpactRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *repositories.Store, credentials *auth.Store, store *impacts.Store, explanationStore *explanations.Store, relationStore *relationships.Store, releaseStore *releases.Store, packageStore *packages.Store, deploymentStore *deployments.Store) {
+func registerImpactRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *repositories.Store, credentials *auth.Store, store *impacts.Store, explanationStore *explanations.Store, proposalStore *proposals.Store, relationStore *relationships.Store, releaseStore *releases.Store, packageStore *packages.Store, deploymentStore *deployments.Store) {
 	mux.HandleFunc("POST /repositories/{id}/impact-assessments", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
 		if !ok {
@@ -101,7 +102,8 @@ func registerImpactRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *
 			return
 		}
 		items, status, reason := deriveImpact(repo.Path(), r.PathValue("id"), string(revision), query, catalog, relationStore, releaseStore, packageStore, deploymentStore, actor.UserID)
-		assessment := impacts.Assessment{RepositoryID: r.PathValue("id"), Revision: string(revision), Title: in.Title, Source: in.Source, CreatedBy: actor.UserID, Items: items, AnalysisStatus: status, AnalysisReason: reason}
+		assessment := impacts.Assessment{RepositoryID: r.PathValue("id"), Revision: string(revision), Ref: strings.TrimSpace(in.Ref), Title: in.Title, Source: in.Source, CreatedBy: actor.UserID, Items: items, AnalysisStatus: status, AnalysisReason: reason}
+		assessment.ContextState = "current"
 		err = catalog.WithCurrentParticipant(actor.UserID, r.PathValue("id"), func() error { var createErr error; assessment, createErr = store.Create(assessment); return createErr })
 		if err != nil {
 			writeAPIError(w, 403, "assessment_forbidden", "only a current repository participant may retain an assessment")
@@ -122,6 +124,7 @@ func registerImpactRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *
 		visible := []impacts.Assessment{}
 		for _, v := range values {
 			if impacts.IsParticipant(v, actor.UserID) || impactOwnerRequest(v, actor.UserID) {
+				v = withImpactContext(gitStore, catalog, v)
 				visible = append(visible, projectImpact(v, actor.UserID, catalog))
 			}
 		}
@@ -137,7 +140,7 @@ func registerImpactRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *
 			writeAPIError(w, 404, "assessment_not_found", "impact assessment not found")
 			return
 		}
-		writeJSON(w, 200, projectImpact(v, actor.UserID, catalog))
+		writeJSON(w, 200, projectImpact(withImpactContext(gitStore, catalog, v), actor.UserID, catalog))
 	})
 	mutate := func(w http.ResponseWriter, r *http.Request) (auth.Credential, impacts.Assessment, bool) {
 		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
@@ -254,6 +257,92 @@ func registerImpactRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *
 		}
 		next, err := store.Acknowledge(v.ID, in.Version, request.ID, actor.UserID, in.Note)
 		writeImpactMutation(w, next, err, actor.UserID, catalog)
+	})
+	mux.HandleFunc("POST /repositories/{id}/impact-assessments/{assessment_id}/implementation", func(w http.ResponseWriter, r *http.Request) {
+		actor, v, ok := mutate(w, r)
+		if !ok {
+			return
+		}
+		if proposalStore == nil || !impacts.IsParticipant(v, actor.UserID) {
+			writeAPIError(w, 404, "assessment_not_found", "impact assessment not found")
+			return
+		}
+		if withImpactContext(gitStore, catalog, v).ContextState != "current" {
+			writeAPIError(w, 409, "assessment_context_changed", "the selected ref moved; rerun the assessment instead of rewriting its evidence")
+			return
+		}
+		var in struct {
+			Version int      `json:"version"`
+			Title   string   `json:"title"`
+			Body    string   `json:"body"`
+			ItemIDs []string `json:"item_ids"`
+			Tasks   []struct {
+				Title             string `json:"title"`
+				Outcome           string `json:"outcome"`
+				AssigneeType      string `json:"assignee_type"`
+				AssigneeID        string `json:"assignee_id"`
+				DependsOnPrevious bool   `json:"depends_on_previous"`
+			} `json:"tasks"`
+		}
+		if decodeJSON(r, &in) != nil || in.Version != v.Version || len(in.ItemIDs) == 0 || len(in.Tasks) == 0 {
+			writeAPIError(w, 400, "invalid_implementation", "current version, cited impact items, and ordered owned tasks are required")
+			return
+		}
+		selected := map[string]bool{}
+		originItems := []proposals.ReasoningItem{}
+		for _, id := range in.ItemIDs {
+			selected[id] = true
+		}
+		for _, item := range v.Items {
+			if selected[item.ID] {
+				originItems = append(originItems, proposals.ReasoningItem{ID: item.ID, Kind: item.Kind, Summary: item.Summary, Status: item.Status})
+				delete(selected, item.ID)
+			}
+		}
+		if len(selected) != 0 {
+			writeAPIError(w, 400, "invalid_implementation", "every cited item must belong to the frozen assessment")
+			return
+		}
+		acks := []proposals.ReasoningAcknowledgement{}
+		for _, value := range v.AcknowledgementRequests {
+			acks = append(acks, proposals.ReasoningAcknowledgement{RequestID: value.ID, RepositoryID: value.RepositoryID, OwnerID: value.OwnerID, AcknowledgedBy: value.AcknowledgedBy, Note: value.Acknowledgement})
+		}
+		origin := proposals.ReasoningOrigin{AssessmentID: v.ID, AssessmentVersion: v.Version, Revision: v.Revision, SelectedItemIDs: append([]string(nil), in.ItemIDs...), Items: originItems, Acknowledgements: acks, AnalysisStatus: v.AnalysisStatus}
+		if v.Source.Kind == "investigation_conclusion" {
+			origin.ExplanationID, origin.ConclusionEntryID = v.Source.ExplanationID, v.Source.EntryID
+		}
+		tasks := make([]proposals.ImplementationTaskInput, 0, len(in.Tasks))
+		participants := []string{actor.UserID}
+		for _, item := range in.Tasks {
+			tasks = append(tasks, proposals.ImplementationTaskInput{Title: item.Title, Outcome: item.Outcome, AssigneeType: item.AssigneeType, AssigneeID: item.AssigneeID, DependsOnPrevious: item.DependsOnPrevious})
+			if item.AssigneeType == "human" {
+				participants = append(participants, item.AssigneeID)
+			}
+		}
+		var proposal proposals.Proposal
+		var created []proposals.Task
+		err := catalog.WithCurrentParticipants(participants, v.RepositoryID, func() error {
+			var createErr error
+			proposal, created, createErr = proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: v.RepositoryID, ActorID: actor.UserID, Title: in.Title, Body: in.Body, Origin: origin, Tasks: tasks})
+			return createErr
+		})
+		if err != nil {
+			writeAPIError(w, 400, "invalid_implementation", "human owners must be current participants and the plan must be valid")
+			return
+		}
+		ids := make([]string, len(created))
+		for i := range created {
+			ids[i] = created[i].ID
+		}
+		next, linkErr := store.LinkImplementation(v.ID, v.Version, actor.UserID, proposal.ID, ids)
+		if linkErr != nil && !errors.Is(linkErr, impacts.ErrConflict) {
+			writeAPIError(w, 202, "implementation_link_pending", "implementation exists and its assessment link needs reconciliation")
+			return
+		}
+		if linkErr != nil {
+			next, _ = store.Get(v.ID)
+		}
+		writeJSON(w, 201, map[string]any{"assessment": projectImpact(next, actor.UserID, catalog), "proposal": proposal, "tasks": created})
 	})
 }
 
@@ -449,6 +538,9 @@ func impactOwnerRequest(v impacts.Assessment, user string) bool {
 	return false
 }
 func projectImpact(v impacts.Assessment, user string, c *repositories.Store) impacts.Assessment {
+	if v.ContextState == "" {
+		v.ContextState = "current"
+	}
 	if !impacts.IsParticipant(v, user) {
 		// A requested owner may review the retained visible evidence and decision,
 		// but an uncommitted proposed diff remains private to assessment participants.
@@ -476,6 +568,27 @@ func projectImpact(v impacts.Assessment, user string, c *repositories.Store) imp
 	}
 	v.AcknowledgementRequests = requests
 	return v
+}
+
+func withImpactContext(gitStore *storage.Store, catalog *repositories.Store, value impacts.Assessment) impacts.Assessment {
+	value.ContextState = "changed"
+	repo, err := gitStore.Open(value.RepositoryID)
+	if err != nil {
+		return value
+	}
+	ref := value.Ref
+	if ref == "" {
+		meta, metaErr := catalog.GetByID(value.RepositoryID)
+		if metaErr != nil {
+			return value
+		}
+		ref = meta.DefaultBranch
+	}
+	resolved, err := resolveRevision(repo, ref)
+	if err == nil && string(resolved) == value.Revision {
+		value.ContextState = "current"
+	}
+	return value
 }
 func writeImpactMutation(w http.ResponseWriter, v impacts.Assessment, err error, user string, c *repositories.Store) {
 	if err == nil {

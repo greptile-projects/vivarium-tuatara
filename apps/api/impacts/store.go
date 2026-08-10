@@ -69,6 +69,7 @@ type Assessment struct {
 	ID                      string                   `json:"id"`
 	RepositoryID            string                   `json:"repository_id"`
 	Revision                string                   `json:"revision"`
+	Ref                     string                   `json:"ref"`
 	Title                   string                   `json:"title"`
 	Source                  Source                   `json:"source"`
 	CreatedBy               string                   `json:"created_by"`
@@ -80,6 +81,15 @@ type Assessment struct {
 	Version                 int                      `json:"version"`
 	CreatedAt               time.Time                `json:"created_at"`
 	UpdatedAt               time.Time                `json:"updated_at"`
+	Implementation          *Implementation          `json:"implementation,omitempty"`
+	ContextState            string                   `json:"context_state"`
+}
+
+type Implementation struct {
+	ProposalID string    `json:"proposal_id"`
+	TaskIDs    []string  `json:"task_ids"`
+	CreatedBy  string    `json:"created_by"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 type Store struct {
@@ -186,6 +196,21 @@ func (s *Store) Acknowledge(id string, version int, requestID, actor, note strin
 			}
 		}
 		return ErrNotFound
+	})
+}
+func (s *Store) LinkImplementation(id string, version int, actor, proposalID string, taskIDs []string) (Assessment, error) {
+	return s.Update(id, version, func(v *Assessment) error {
+		if !participant(v, actor) || proposalID == "" || len(taskIDs) == 0 {
+			return ErrInvalid
+		}
+		if v.Implementation != nil {
+			if v.Implementation.ProposalID == proposalID {
+				return nil
+			}
+			return ErrConflict
+		}
+		v.Implementation = &Implementation{ProposalID: proposalID, TaskIDs: append([]string(nil), taskIDs...), CreatedBy: actor, CreatedAt: s.now()}
+		return nil
 	})
 }
 func participant(v *Assessment, user string) bool {

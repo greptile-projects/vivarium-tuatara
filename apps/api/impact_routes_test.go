@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/explanations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/impacts"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
@@ -62,6 +64,59 @@ func TestImpactAssessmentFreezesEvidenceAndRequiresExplicitParticipation(t *test
 	read.Body.Close()
 	if len(visible.Participants) != 2 || visible.Version != 2 {
 		t.Fatalf("invited assessment = %#v", visible)
+	}
+}
+
+func TestImpactImplementationRetainsReasoningInOwnedTasks(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	impactStore, _ := impacts.New(t.TempDir())
+	proposalStore, _ := proposals.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, proposalStore, nil, nil, nil, nil, impactStore))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "implementation-owner")
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"reasoned-change"}`, owner.Credential.Token, http.StatusCreated)
+	var repository repositories.Repository
+	json.NewDecoder(response.Body).Decode(&repository)
+	response.Body.Close()
+	repo, _ := gitStore.Open(repository.ID)
+	blob, _ := repo.WriteObject(storage.BlobObject, []byte("func Authorize() bool { return true }\n"))
+	tree := writeTestTree(t, repo, testTreeEntry{"100644", "authorize.go", blob})
+	commit := writeTestCommit(t, repo, tree, nil, 1700000000, "base")
+	if err := repo.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(commit)}); err != nil {
+		t.Fatal(err)
+	}
+	created := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/impact-assessments", `{"title":"Authorization risk","ref":"main","query":"Authorize","source":{"kind":"selected_code","path":"authorize.go","start_line":1,"end_line":1}}`, owner.Credential.Token, http.StatusCreated)
+	var assessment impacts.Assessment
+	json.NewDecoder(created.Body).Decode(&assessment)
+	created.Body.Close()
+	body := fmt.Sprintf(`{"version":%d,"title":"Implement authorization decision","body":"Preserve the validated risk and verification context.","item_ids":[%q],"tasks":[{"title":"Change authorization","outcome":"Update behavior and verify the cited call site.","assignee_type":"human","assignee_id":%q},{"title":"Verify consumers","outcome":"Run the frozen verification requirements.","assignee_type":"agent","depends_on_previous":true}]}`, assessment.Version, assessment.Items[0].ID, owner.User.ID)
+	implemented := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/impact-assessments/"+assessment.ID+"/implementation", body, owner.Credential.Token, http.StatusCreated)
+	var result struct {
+		Assessment impacts.Assessment `json:"assessment"`
+		Proposal   proposals.Proposal `json:"proposal"`
+		Tasks      []proposals.Task   `json:"tasks"`
+	}
+	json.NewDecoder(implemented.Body).Decode(&result)
+	implemented.Body.Close()
+	if result.Assessment.Implementation == nil || len(result.Tasks) != 2 || result.Tasks[1].DependencyIDs[0] != result.Tasks[0].ID || result.Tasks[0].Reasoning == nil || result.Tasks[0].Reasoning.Revision != string(commit) || result.Proposal.Reasoning == nil {
+		t.Fatalf("implementation provenance = %#v", result)
+	}
+	if result.Tasks[0].Assignment.AssigneeType != "human" || result.Tasks[1].Assignment.AssigneeType != "agent" {
+		t.Fatalf("task ownership = %#v", result.Tasks)
+	}
+	newCommit := writeTestCommit(t, repo, tree, []storage.ObjectID{commit}, 1700000001, "later")
+	if err := repo.UpdateReferenceIfTarget(storage.Reference{Name: "refs/heads/main", Target: string(newCommit)}, string(commit)); err != nil {
+		t.Fatal(err)
+	}
+	read := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/impact-assessments/"+assessment.ID, "", owner.Credential.Token, http.StatusOK)
+	var changed impacts.Assessment
+	json.NewDecoder(read.Body).Decode(&changed)
+	read.Body.Close()
+	if changed.ContextState != "changed" {
+		t.Fatalf("context state = %q", changed.ContextState)
 	}
 }
 

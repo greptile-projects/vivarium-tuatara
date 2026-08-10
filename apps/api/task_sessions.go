@@ -197,6 +197,16 @@ func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store
 				return responseWritten
 			}
 			context := changesessions.TaskContext{AssignmentID: task.Assignment.ID, ContextRevision: task.ContextRevision, RepositoryName: repositoryRecord.Name, ProposalTitle: proposal.Title, ProposalBody: proposal.Body, TaskTitle: task.Title, TaskOutcome: task.Outcome, Mandate: task.Assignment.Mandate, Dependencies: dependencies, Discussion: discussion}
+			if task.Reasoning != nil {
+				reasoning := &changesessions.TaskReasoning{AssessmentID: task.Reasoning.AssessmentID, AssessmentVersion: task.Reasoning.AssessmentVersion, Revision: task.Reasoning.Revision, ExplanationID: task.Reasoning.ExplanationID, ConclusionEntryID: task.Reasoning.ConclusionEntryID}
+				for _, item := range task.Reasoning.Items {
+					reasoning.Items = append(reasoning.Items, changesessions.TaskReasoningItem{ID: item.ID, Kind: item.Kind, Summary: item.Summary, Status: item.Status})
+				}
+				for _, item := range task.Reasoning.Acknowledgements {
+					reasoning.Acknowledgements = append(reasoning.Acknowledgements, changesessions.TaskReasoningAcknowledgement{RepositoryID: item.RepositoryID, OwnerID: item.OwnerID, AcknowledgedBy: item.AcknowledgedBy, Note: item.Note})
+				}
+				context.Reasoning = reasoning
+			}
 			var createErr error
 			session, run, createErr = sessionStore.CreateForTaskWithRun(r.PathValue("id"), proposal.ID, task.ID, actor.UserID, task.Assignment.AssigneeID, task.Assignment.Access.BaseRevision, context, input.ContextPaths, branch, issued.ID, issued.ExpiresAt)
 			if createErr != nil && !errors.Is(createErr, changesessions.ErrDurabilityUncertain) {

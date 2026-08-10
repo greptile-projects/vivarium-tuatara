@@ -35,15 +35,44 @@ const (
 )
 
 type Proposal struct {
-	ID           string     `json:"id"`
-	RepositoryID string     `json:"repository_id"`
-	AuthorID     string     `json:"author_id"`
-	Title        string     `json:"title"`
-	Body         string     `json:"body"`
-	Status       string     `json:"status"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
-	ClosedAt     *time.Time `json:"closed_at"`
+	ID           string           `json:"id"`
+	RepositoryID string           `json:"repository_id"`
+	AuthorID     string           `json:"author_id"`
+	Title        string           `json:"title"`
+	Body         string           `json:"body"`
+	Status       string           `json:"status"`
+	CreatedAt    time.Time        `json:"created_at"`
+	UpdatedAt    time.Time        `json:"updated_at"`
+	ClosedAt     *time.Time       `json:"closed_at"`
+	Reasoning    *ReasoningOrigin `json:"reasoning,omitempty"`
+}
+
+// ReasoningOrigin is an immutable, revision-exact handoff from collaborative
+// investigation and impact analysis into implementation and review.
+type ReasoningOrigin struct {
+	AssessmentID      string                     `json:"assessment_id"`
+	AssessmentVersion int                        `json:"assessment_version"`
+	Revision          string                     `json:"revision"`
+	ExplanationID     string                     `json:"explanation_id,omitempty"`
+	ConclusionEntryID string                     `json:"conclusion_entry_id,omitempty"`
+	SelectedItemIDs   []string                   `json:"selected_item_ids"`
+	Items             []ReasoningItem            `json:"items"`
+	Acknowledgements  []ReasoningAcknowledgement `json:"acknowledgements,omitempty"`
+	AnalysisStatus    string                     `json:"analysis_status"`
+}
+
+type ReasoningItem struct {
+	ID      string `json:"id"`
+	Kind    string `json:"kind"`
+	Summary string `json:"summary"`
+	Status  string `json:"status"`
+}
+type ReasoningAcknowledgement struct {
+	RequestID      string `json:"request_id"`
+	RepositoryID   string `json:"repository_id"`
+	OwnerID        string `json:"owner_id"`
+	AcknowledgedBy string `json:"acknowledged_by"`
+	Note           string `json:"note,omitempty"`
 }
 
 type Comment struct {
@@ -74,6 +103,18 @@ type Task struct {
 	Assignment           *TaskAssignment    `json:"assignment,omitempty"`
 	Contribution         *TaskContribution  `json:"contribution,omitempty"`
 	Contributions        []TaskContribution `json:"contributions,omitempty"`
+	Reasoning            *ReasoningOrigin   `json:"reasoning,omitempty"`
+}
+
+type ImplementationTaskInput struct {
+	Title, Outcome, AssigneeType, AssigneeID string
+	DependsOnPrevious                        bool
+}
+
+type ImplementationInput struct {
+	RepositoryID, ActorID, Title, Body string
+	Origin                             ReasoningOrigin
+	Tasks                              []ImplementationTaskInput
 }
 
 // TaskContribution is the bidirectional review handoff. Status follows the
@@ -305,6 +346,99 @@ func New(root string) (*Store, error) {
 		return nil, fmt.Errorf("create proposal store: %w", err)
 	}
 	return &Store{root: abs, now: func() time.Time { return time.Now().UTC() }, directorySync: syncDirectory, readFile: os.ReadFile}, nil
+}
+
+// CreateImplementation atomically creates an ordered, owned plan from one
+// frozen reasoning snapshot. Assessment identity makes retries converge.
+func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Task, error) {
+	if !validID(input.RepositoryID) || !validID(input.ActorID) || !validID(input.Origin.AssessmentID) || len(input.Origin.Revision) != 40 || input.Origin.AssessmentVersion < 1 || len(input.Tasks) == 0 || len(input.Tasks) > 20 || len(input.Origin.Items) == 0 {
+		return Proposal{}, nil, ErrInvalid
+	}
+	title, body, err := validateContent(input.Title, input.Body)
+	if err != nil {
+		return Proposal{}, nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Proposal{}, nil, err
+	}
+	defer unlock()
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return Proposal{}, nil, err
+	}
+	for _, entry := range entries {
+		id, ok := strings.CutSuffix(entry.Name(), ".json")
+		if entry.IsDir() || !ok || !validID(id) {
+			continue
+		}
+		r, readErr := s.read(id)
+		if readErr != nil {
+			return Proposal{}, nil, readErr
+		}
+		if r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && r.Proposal.Reasoning.AssessmentID == input.Origin.AssessmentID {
+			return r.Proposal, append([]Task(nil), r.Tasks...), nil
+		}
+	}
+	proposalID, err := newID()
+	if err != nil {
+		return Proposal{}, nil, err
+	}
+	now := s.now().Truncate(time.Microsecond)
+	origin := input.Origin
+	origin.SelectedItemIDs = cloneStrings(origin.SelectedItemIDs)
+	origin.Items = append([]ReasoningItem(nil), origin.Items...)
+	origin.Acknowledgements = append([]ReasoningAcknowledgement(nil), origin.Acknowledgements...)
+	p := Proposal{ID: proposalID, RepositoryID: input.RepositoryID, AuthorID: input.ActorID, Title: title, Body: body, Status: Open, CreatedAt: now, UpdatedAt: now, Reasoning: &origin}
+	tasks := make([]Task, 0, len(input.Tasks))
+	changes := make([]TaskChange, 0, len(input.Tasks)*2)
+	for index, value := range input.Tasks {
+		taskTitle, outcome, validationErr := validateTaskContent(value.Title, value.Outcome)
+		if validationErr != nil || (value.AssigneeType != "human" && value.AssigneeType != "agent") {
+			return Proposal{}, nil, ErrInvalid
+		}
+		assignee := value.AssigneeID
+		if value.AssigneeType == "agent" && assignee == "" {
+			assignee, err = newID()
+		}
+		if err != nil || !validID(assignee) {
+			return Proposal{}, nil, ErrInvalid
+		}
+		taskID, idErr := newID()
+		if idErr != nil {
+			return Proposal{}, nil, idErr
+		}
+		assignmentID, idErr := newID()
+		if idErr != nil {
+			return Proposal{}, nil, idErr
+		}
+		dependencies := []string{}
+		if value.DependsOnPrevious && index > 0 {
+			dependencies = []string{tasks[index-1].ID}
+		}
+		scopes, branch := []string{}, "no new access; existing collaborator authority only"
+		if value.AssigneeType == "agent" {
+			scopes, branch = []string{"git:read", "git:write"}, "task-scoped branch (created when work starts)"
+		}
+		taskOrigin := origin
+		task := Task{ID: taskID, ProposalID: proposalID, Title: taskTitle, Outcome: outcome, Status: TaskTodo, Position: index, DependencyIDs: dependencies, ContextRevision: 1, ContextState: "current", CreatedBy: input.ActorID, UpdatedBy: input.ActorID, CreatedAt: now, UpdatedAt: now, Reasoning: &taskOrigin}
+		task.Assignment = &TaskAssignment{ID: assignmentID, AssigneeType: value.AssigneeType, AssigneeID: assignee, Mandate: outcome, Access: TaskAccess{RepositoryID: input.RepositoryID, BaseRevision: origin.Revision, Scopes: scopes, Branch: branch}, AssignedBy: input.ActorID, AssignedAt: now, ContextRevision: 1}
+		tasks = append(tasks, task)
+		created, _ := newTaskChange(Task{ID: task.ID, ProposalID: proposalID, Title: task.Title, Outcome: task.Outcome, Status: task.Status, Position: index, DependencyIDs: dependencies, ContextRevision: 1, ContextState: "current", Ready: index == 0, CreatedBy: input.ActorID, UpdatedBy: input.ActorID, CreatedAt: now, UpdatedAt: now, Reasoning: &taskOrigin}, input.ActorID, "created", now)
+		assigned, _ := newTaskChange(task, input.ActorID, "assigned", now)
+		changes = append(changes, created, assigned)
+	}
+	deriveTasks(tasks)
+	r := record{Proposal: p, Tasks: tasks, TaskChanges: changes}
+	if committed, writeErr := s.write(r); writeErr != nil {
+		if committed {
+			return p, tasks, fmt.Errorf("%w: %v", ErrDurabilityUncertain, writeErr)
+		}
+		return Proposal{}, nil, writeErr
+	}
+	return p, tasks, nil
 }
 
 func (s *Store) Create(repositoryID, authorID, title, body string) (Proposal, error) {

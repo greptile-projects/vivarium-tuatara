@@ -103,6 +103,29 @@ type TaskContext struct {
 	Mandate         string           `json:"mandate"`
 	Dependencies    []TaskDependency `json:"dependencies"`
 	Discussion      []TaskDiscussion `json:"discussion"`
+	Reasoning       *TaskReasoning   `json:"reasoning,omitempty"`
+}
+
+type TaskReasoning struct {
+	AssessmentID      string                         `json:"assessment_id"`
+	AssessmentVersion int                            `json:"assessment_version"`
+	Revision          string                         `json:"revision"`
+	ExplanationID     string                         `json:"explanation_id,omitempty"`
+	ConclusionEntryID string                         `json:"conclusion_entry_id,omitempty"`
+	Items             []TaskReasoningItem            `json:"items"`
+	Acknowledgements  []TaskReasoningAcknowledgement `json:"acknowledgements,omitempty"`
+}
+type TaskReasoningItem struct {
+	ID      string `json:"id"`
+	Kind    string `json:"kind"`
+	Summary string `json:"summary"`
+	Status  string `json:"status"`
+}
+type TaskReasoningAcknowledgement struct {
+	RepositoryID   string `json:"repository_id"`
+	OwnerID        string `json:"owner_id"`
+	AcknowledgedBy string `json:"acknowledged_by"`
+	Note           string `json:"note,omitempty"`
 }
 
 type TaskDependency struct {

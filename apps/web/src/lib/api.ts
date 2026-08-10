@@ -37,6 +37,7 @@ export type ImpactAssessment = {
   items:{id:string;kind:"reference"|"test"|"owner"|"package"|"interface"|"consumer"|"release"|"environment"|"risk"|"unknown";summary:string;status:"candidate"|"accepted_risk"|"unknown"|"verification_required";evidence?:ImpactEvidence[];added_by:string;created_at?:string}[];
   acknowledgement_requests:{id:string;repository_id:string;owner_id:string;requested_by:string;note?:string;requested_at:string;acknowledged_by?:string;acknowledgement?:string;acknowledged_at?:string}[];
   analysis_status:"complete"|"incomplete"; analysis_reason?:string; version:number; created_at:string; updated_at:string;
+  context_state:"current"|"changed"; implementation?:{proposal_id:string;task_ids:string[];created_by:string;created_at:string};
 };
 export type DevelopmentWorkspace = {
   id: string;
@@ -1085,6 +1086,7 @@ export type Proposal = {
   created_at: string;
   updated_at: string;
   closed_at?: string;
+  reasoning?: ReasoningOrigin;
 };
 export type ProposalComment = {
   id: string;
@@ -1134,7 +1136,9 @@ export type ProposalTask = {
     status: "review" | "merged" | "closed" | "superseded";
     context_revision: number;
   };
+  reasoning?: ReasoningOrigin;
 };
+export type ReasoningOrigin = {assessment_id:string;assessment_version:number;revision:string;explanation_id?:string;conclusion_entry_id?:string;selected_item_ids:string[];items:{id:string;kind:string;summary:string;status:string}[];acknowledgements:{request_id:string;repository_id:string;owner_id:string;acknowledged_by:string;note?:string}[];analysis_status:string};
 export type ProposalTaskChange = {
   id: string;
   task_id: string;
