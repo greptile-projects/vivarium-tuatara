@@ -61,9 +61,7 @@ func registerExplanationRoutes(mux *http.ServeMux, gitStore *storage.Store, cata
 			return
 		}
 		if input.Context.Kind == "workspace" && workspaceStore != nil {
-			workspace, workspaceErr := workspaceStore.Get(input.Context.ResourceID)
-			meta, metaErr := catalog.GetByID(r.PathValue("id"))
-			if workspaceErr != nil || metaErr != nil || workspace.RepositoryID != r.PathValue("id") || (workspace.Policy.Sharing == "private" && actor.UserID != workspace.CreatorID && actor.UserID != meta.OwnerID) {
+			if !explanationVisibleTo(actor.UserID, explanations.Conversation{RepositoryID: r.PathValue("id"), Context: input.Context}, catalog, workspaceStore) {
 				writeAPIError(w, 404, "context_not_found", "the selected context is not available in this repository")
 				return
 			}
@@ -128,7 +126,13 @@ func registerExplanationRoutes(mux *http.ServeMux, gitStore *storage.Store, cata
 			writeAPIError(w, 500, "explanation_unavailable", "explanations could not be read")
 			return
 		}
-		if err := catalog.WithCurrentReadAccess(actor.UserID, []string{r.PathValue("id")}, func() error { writeJSON(w, 200, map[string]any{"conversations": items}); return nil }); err != nil {
+		visible := items[:0]
+		for _, item := range items {
+			if explanationVisibleTo(actor.UserID, item, catalog, workspaceStore) {
+				visible = append(visible, item)
+			}
+		}
+		if err := catalog.WithCurrentReadAccess(actor.UserID, []string{r.PathValue("id")}, func() error { writeJSON(w, 200, map[string]any{"conversations": visible}); return nil }); err != nil {
 			writeAPIError(w, 404, "repository_not_found", "repository not found")
 		}
 	})
@@ -141,7 +145,7 @@ func registerExplanationRoutes(mux *http.ServeMux, gitStore *storage.Store, cata
 			return
 		}
 		item, err := store.Get(r.PathValue("explanation_id"))
-		if err != nil || item.RepositoryID != r.PathValue("id") {
+		if err != nil || item.RepositoryID != r.PathValue("id") || !explanationVisibleTo(actor.UserID, item, catalog, workspaceStore) {
 			writeAPIError(w, 404, "explanation_not_found", "explanation not found")
 			return
 		}
@@ -149,6 +153,27 @@ func registerExplanationRoutes(mux *http.ServeMux, gitStore *storage.Store, cata
 			writeAPIError(w, 404, "repository_not_found", "repository not found")
 		}
 	})
+}
+
+// explanationVisibleTo retains context-specific visibility on replay. A
+// missing or moved workspace fails closed because its sharing boundary can no
+// longer be established from the durable authority.
+func explanationVisibleTo(actorID string, conversation explanations.Conversation, catalog *repositories.Store, workspaceStore *workspaces.Store) bool {
+	if conversation.Context.Kind != "workspace" {
+		return true
+	}
+	if workspaceStore == nil {
+		return false
+	}
+	workspace, err := workspaceStore.Get(conversation.Context.ResourceID)
+	if err != nil || workspace.RepositoryID != conversation.RepositoryID {
+		return false
+	}
+	if workspace.Policy.Sharing != "private" {
+		return true
+	}
+	meta, err := catalog.GetByID(conversation.RepositoryID)
+	return err == nil && (actorID == workspace.CreatorID || actorID == meta.OwnerID)
 }
 
 func resolveExplanationContext(repo *storage.Repository, repositoryID string, input explanationInput, proposalStore *proposals.Store, pullStore *pullrequests.Store, incidentStore *incidents.Store, workspaceStore *workspaces.Store) (storage.ObjectID, error) {

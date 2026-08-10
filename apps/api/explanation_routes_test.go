@@ -13,6 +13,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
 func TestGroundedExplanationStreamsAndRetainsExactEvidence(t *testing.T) {
@@ -21,7 +22,8 @@ func TestGroundedExplanationStreamsAndRetainsExactEvidence(t *testing.T) {
 	credentials, _ := auth.New(t.TempDir())
 	catalog, _ := repositories.New(t.TempDir(), gitStore)
 	explanationStore, _ := explanations.New(t.TempDir())
-	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, nil, explanationStore))
+	workspaceStore, _ := workspaces.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, nil, explanationStore, workspaceStore))
 	defer server.Close()
 	owner := createTestAccount(t, server.URL, "explainer")
 	created := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"grounded"}`, owner.Credential.Token, http.StatusCreated)
@@ -97,4 +99,50 @@ func TestGroundedExplanationStreamsAndRetainsExactEvidence(t *testing.T) {
 		t.Fatalf("anonymous status = %d", unauthorized.StatusCode)
 	}
 	unauthorized.Body.Close()
+
+	privatePolicy := workspaces.DefaultPolicy()
+	privatePolicy.Sharing = "private"
+	privateWorkspace, err := workspaceStore.Create(workspaces.Workspace{RepositoryID: repository.ID, CommitID: string(commit), CreatorID: owner.User.ID, Policy: privatePolicy}, []byte(`{"version":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if privateWorkspace.Policy.Sharing != "private" {
+		t.Fatalf("workspace sharing = %q", privateWorkspace.Policy.Sharing)
+	}
+	storedWorkspace, _ := workspaceStore.Get(privateWorkspace.ID)
+	if storedWorkspace.Policy.Sharing != "private" {
+		t.Fatalf("stored workspace sharing = %q", storedWorkspace.Policy.Sharing)
+	}
+	privateResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/explanations", `{"question":"Why does Authorize reject identity?","context":{"kind":"workspace","resource_id":"`+privateWorkspace.ID+`"}}`, owner.Credential.Token, http.StatusCreated)
+	privateLocation := privateResponse.Header.Get("Location")
+	privateResponse.Body.Close()
+	privateID := privateLocation[strings.LastIndex(privateLocation, "/")+1:]
+	if privateID == "" {
+		t.Fatal("private conversation location is empty")
+	}
+
+	collaborator := createTestAccount(t, server.URL, "explanation-reader")
+	if collaborator.User.ID == owner.User.ID || collaborator.User.ID == privateWorkspace.CreatorID {
+		t.Fatalf("collaborator identity unexpectedly equals owner: %#v %#v", collaborator.User, owner.User)
+	}
+	if explanationVisibleTo(collaborator.User.ID, explanations.Conversation{RepositoryID: repository.ID, Context: explanations.Context{Kind: "workspace", ResourceID: privateWorkspace.ID}}, catalog, workspaceStore) {
+		t.Fatal("private workspace context is visible to collaborator before HTTP request")
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/collaborators", `{"user_id":"`+collaborator.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/explanations", `{"question":"What happened here?","context":{"kind":"workspace","resource_id":"`+privateWorkspace.ID+`"}}`, collaborator.Credential.Token, http.StatusNotFound).Body.Close()
+	historyResponse := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/explanations", "", collaborator.Credential.Token, http.StatusOK)
+	var history struct {
+		Conversations []explanations.Conversation `json:"conversations"`
+	}
+	if err := json.NewDecoder(historyResponse.Body).Decode(&history); err != nil {
+		t.Fatal(err)
+	}
+	historyResponse.Body.Close()
+	for _, item := range history.Conversations {
+		if item.ID == privateID {
+			t.Fatalf("private conversation disclosed in history: %#v", item)
+		}
+	}
+	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/explanations/"+privateID, "", collaborator.Credential.Token, http.StatusNotFound).Body.Close()
+	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/explanations/"+privateID, "", owner.Credential.Token, http.StatusOK).Body.Close()
 }
