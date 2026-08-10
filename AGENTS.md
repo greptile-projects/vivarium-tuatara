@@ -261,7 +261,9 @@ whenever dependencies change or the web job fails before it starts.
   compute and control authority while checkpoint, provenance, commit, and pull
   evidence remains retained. Startup and periodic lifecycle recovery enforce
   runtime and idle deadlines; compute teardown succeeds before terminal state
-  is recorded, so failed removal remains live and retryable.
+  is recorded, so failed removal remains live and retryable. Teardown and
+  terminal publication hold the same per-workspace lifecycle admission lock as
+  suspend/resume, preventing a successful resume from racing removed compute.
   Running workspace automation reuses that container for bounded file browsing,
   compare-and-swap editing, literal search, attributed command outcomes,
   loopback port discovery, and authenticated sandboxed previews. Durable change

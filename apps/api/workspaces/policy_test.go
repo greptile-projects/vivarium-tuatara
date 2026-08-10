@@ -1,6 +1,7 @@
 package workspaces
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -113,5 +114,48 @@ func TestActivityMutationsRenewIdleDeadline(t *testing.T) {
 	w, err = store.RecordChange(w.ID, Change{ActorID: "owner", Path: "README.md"})
 	if err != nil || !w.LastActivityAt.Equal(clock) {
 		t.Fatal("edit did not renew activity", err)
+	}
+}
+
+func TestStopControlledSerializesRuntimeTeardownWithResume(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := store.Create(Workspace{RepositoryID: "repo", CommitID: "commit", CreatorID: "owner", Policy: DefaultPolicy()}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err = store.Complete(w.ID, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err = store.TransitionControlled(w.ID, "owner", w.DefinitionSHA256, "suspended")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	stopped := make(chan error, 1)
+	go func() {
+		_, stopErr := store.StopControlled(w.ID, "workspace-lifecycle", "expired", "expired", func() error { close(started); <-release; return nil })
+		stopped <- stopErr
+	}()
+	<-started
+	resumed := make(chan error, 1)
+	go func() {
+		_, resumeErr := store.TransitionControlled(w.ID, "owner", w.DefinitionSHA256, "running")
+		resumed <- resumeErr
+	}()
+	select {
+	case err := <-resumed:
+		t.Fatalf("resume escaped lifecycle serialization: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if err = <-stopped; err != nil {
+		t.Fatal(err)
+	}
+	if err = <-resumed; !errors.Is(err, ErrConflict) {
+		t.Fatalf("resume error = %v", err)
 	}
 }

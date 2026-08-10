@@ -75,7 +75,8 @@ or checkpoint legitimate unpublished work. Startup and a periodic lifecycle
 pass autonomously expire environments after that deadline or their idle limit;
 `POST .../reconcile` provides the same idempotent owner-triggered check, and
 `POST .../stop` immediately removes compute. Teardown must succeed before a
-terminal state is committed. These terminal actions revoke control and remove the named
+terminal state is committed, and the full removal/publication interval is
+serialized with suspend and resume. These terminal actions revoke control and remove the named
 container but preserve the workspace record, provenance ledger, checkpoints,
 published commits, and pull links. Private sharing restricts a workspace to its
 creator and repository owner; repository access is still revalidated for every

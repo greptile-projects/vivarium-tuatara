@@ -132,13 +132,13 @@ func registerWorkspaceGovernanceRoutes(mux *http.ServeMux, repos *repositories.S
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
-		if err := removeWorkspaceRuntime(item.ID); err != nil {
-			writeAPIError(w, 503, "workspace_teardown_failed", "workspace compute could not be removed; retry the stop")
+		updated, err := store.StopControlled(item.ID, actor.UserID, strings.TrimSpace(in.Reason), "stopped", func() error { return removeWorkspaceRuntime(item.ID) })
+		if errors.Is(err, workspaces.ErrConflict) {
+			writeAPIError(w, 409, "workspace_stop_failed", "workspace is already terminal")
 			return
 		}
-		updated, err := store.Stop(item.ID, actor.UserID, strings.TrimSpace(in.Reason), "stopped")
 		if err != nil {
-			writeAPIError(w, 409, "workspace_stop_failed", "workspace could not be stopped")
+			writeAPIError(w, 503, "workspace_teardown_failed", "workspace compute could not be removed; retry the stop")
 			return
 		}
 		writeJSON(w, 200, updated)
@@ -178,10 +178,7 @@ func reconcileWorkspaceLifecycle(store *workspaces.Store, item workspaces.Worksp
 	if reason == "" {
 		return item, nil
 	}
-	if err := removeWorkspaceRuntime(item.ID); err != nil {
-		return item, err
-	}
-	return store.Stop(item.ID, actor, reason, "expired")
+	return store.StopControlled(item.ID, actor, reason, "expired", func() error { return removeWorkspaceRuntime(item.ID) })
 }
 
 func startWorkspaceRecovery(store *workspaces.Store) {

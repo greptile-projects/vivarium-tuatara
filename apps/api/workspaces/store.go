@@ -517,6 +517,10 @@ func (s *Store) Complete(id string, steps []SetupStep, failure bool) (Workspace,
 func (s *Store) Stop(id, actor, reason, state string) (Workspace, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.stopLocked(id, actor, reason, state)
+}
+
+func (s *Store) stopLocked(id, actor, reason, state string) (Workspace, error) {
 	w, err := s.read(id)
 	if err != nil {
 		return Workspace{}, err
@@ -534,6 +538,30 @@ func (s *Store) Stop(id, actor, reason, state string) (Workspace, error) {
 	w.UpdatedAt = now
 	w.Events = append(w.Events, Event{Kind: state, ActorID: actor, Role: "instruction", Detail: reason, CreatedAt: now})
 	return w, s.write(w)
+}
+
+// StopControlled serializes external compute teardown and terminal state
+// publication with suspend/resume. The global store lock is deliberately not
+// held while teardown runs, so unrelated workspaces remain available.
+func (s *Store) StopControlled(id, actor, reason, state string, teardown func() error) (Workspace, error) {
+	control := s.controlLock(id)
+	control.Lock()
+	defer control.Unlock()
+	s.mu.Lock()
+	w, err := s.read(id)
+	s.mu.Unlock()
+	if err != nil {
+		return Workspace{}, err
+	}
+	if w.State == "stopped" || w.State == "expired" {
+		return Workspace{}, ErrConflict
+	}
+	if err = teardown(); err != nil {
+		return Workspace{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stopLocked(id, actor, reason, state)
 }
 
 func (s *Store) AnnounceExpiry(id, actor string, at time.Time, reason string) (Workspace, error) {
