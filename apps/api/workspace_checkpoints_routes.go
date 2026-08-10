@@ -132,6 +132,23 @@ func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, c
 			return
 		}
 		if checkpoint.Publication != nil {
+			if checkpoint.Publication.LinkPending {
+				pull, pullErr := pulls.Get(item.RepositoryID, checkpoint.Publication.PullRequestID)
+				if pullErr == nil {
+					pull, pullErr = pulls.LinkWorkspace(item.RepositoryID, pull.ID, item.ID, checkpoint.ID, checkpoint.Publication.ContributorIDs, checkpoint.Publication.CommandIDs)
+				}
+				if pullErr == nil {
+					checkpoint, pullErr = store.ConfirmCheckpointPublicationLink(item.ID, checkpoint.ID, pull.ID)
+					if pullErr == nil {
+						startCheckRuns(git, checks, pull)
+					}
+				}
+				if pullErr != nil {
+					w.Header().Set("Vivarium-Recovery-Publication", "pending")
+					writeJSON(w, 202, map[string]any{"checkpoint": checkpoint.Public(), "pull_request": pull})
+					return
+				}
+			}
 			writeJSON(w, 200, checkpoint.Public())
 			return
 		}
@@ -238,7 +255,13 @@ func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, c
 			}
 			created, err = pulls.LinkWorkspace(item.RepositoryID, created.ID, item.ID, checkpoint.ID, contributors, commandIDs)
 			if err != nil {
-				writeAPIError(w, 500, "checkpoint_link_failed", "pull request was created but workspace attribution is pending")
+				pending, recordErr := store.RecordCheckpointPublication(item.ID, checkpoint.ID, workspaces.Publication{Branch: input.Branch, CommitID: commitID, PullRequestID: created.ID, TaskID: item.Source.TaskID, SessionID: input.SessionID, ContributorIDs: contributors, CommandIDs: commandIDs, LinkPending: true, PublishedBy: actor.UserID, PublishedAt: time.Now().UTC()})
+				if recordErr != nil {
+					writeAPIError(w, 500, "checkpoint_link_failed", "publication recovery could not be recorded")
+					return
+				}
+				w.Header().Set("Vivarium-Recovery-Publication", "pending")
+				writeJSON(w, 202, map[string]any{"checkpoint": pending, "pull_request": created})
 				return
 			}
 			startCheckRuns(git, checks, created)
@@ -248,7 +271,7 @@ func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, c
 		if pull != nil {
 			pullID = pull.ID
 		}
-		published, err := store.RecordCheckpointPublication(item.ID, checkpoint.ID, workspaces.Publication{Branch: input.Branch, CommitID: commitID, PullRequestID: pullID, TaskID: item.Source.TaskID, SessionID: input.SessionID, ContributorIDs: contributors, PublishedBy: actor.UserID, PublishedAt: time.Now().UTC()})
+		published, err := store.RecordCheckpointPublication(item.ID, checkpoint.ID, workspaces.Publication{Branch: input.Branch, CommitID: commitID, PullRequestID: pullID, TaskID: item.Source.TaskID, SessionID: input.SessionID, ContributorIDs: contributors, CommandIDs: commandIDs, PublishedBy: actor.UserID, PublishedAt: time.Now().UTC()})
 		if err != nil {
 			writeAPIError(w, 500, "checkpoint_link_failed", "Git publication succeeded but checkpoint attribution is pending")
 			return

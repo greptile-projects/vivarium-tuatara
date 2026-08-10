@@ -60,13 +60,17 @@ func TestCheckpointPublicationIsBidirectionalAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	publication := Publication{Branch: "workspace/review", CommitID: strings.Repeat("b", 40), PullRequestID: strings.Repeat("c", 32), ContributorIDs: []string{"user"}, PublishedBy: "user", PublishedAt: time.Now().UTC()}
+	publication := Publication{Branch: "workspace/review", CommitID: strings.Repeat("b", 40), PullRequestID: strings.Repeat("c", 32), ContributorIDs: []string{"user"}, CommandIDs: []string{"command"}, LinkPending: true, PublishedBy: "user", PublishedAt: time.Now().UTC()}
 	got, err := s.RecordCheckpointPublication(w.ID, c.ID, publication)
 	if err != nil || got.Publication == nil || got.Publication.PullRequestID != publication.PullRequestID {
 		t.Fatalf("publication = %#v, %v", got.Publication, err)
 	}
 	if _, err = s.RecordCheckpointPublication(w.ID, c.ID, publication); err != nil {
 		t.Fatalf("idempotent retry: %v", err)
+	}
+	confirmed, err := s.ConfirmCheckpointPublicationLink(w.ID, c.ID, publication.PullRequestID)
+	if err != nil || confirmed.Publication.LinkPending {
+		t.Fatalf("confirm = %#v, %v", confirmed.Publication, err)
 	}
 	publication.CommitID = strings.Repeat("d", 40)
 	if _, err = s.RecordCheckpointPublication(w.ID, c.ID, publication); err != ErrCheckpointConflict {
@@ -93,6 +97,16 @@ func TestCheckpointFreezesContributorAndCommandEvidenceAtCapture(t *testing.T) {
 	if _, err = s.RecordCommand(w.ID, CommandOutcome{CommandSHA256: "before", ActorID: "runner", ExitCode: 0}); err != nil {
 		t.Fatal(err)
 	}
+	for i := 0; i < 201; i++ {
+		if _, err = s.RecordChange(w.ID, Change{Path: "unrelated.txt", ActorID: "later"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 101; i++ {
+		if _, err = s.RecordCommand(w.ID, CommandOutcome{CommandSHA256: "later", ActorID: "later", ExitCode: 0}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	c, err := s.CaptureAndCreateCheckpoint(w.ID, "creator", "", "frozen", "", Reproducibility{}, func(Workspace) ([]CheckpointFile, error) {
 		return []CheckpointFile{{Path: "work.txt", Operation: "add"}}, nil
 	})
@@ -106,7 +120,7 @@ func TestCheckpointFreezesContributorAndCommandEvidenceAtCapture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stored.Commands) != 1 || stored.Commands[0].SHA256 != "before" || strings.Join(stored.ContributorIDs, ",") != "author,creator,runner" {
+	if len(stored.Commands) != 102 || stored.Commands[0].SHA256 != "before" || strings.Join(stored.ContributorIDs, ",") != "author,creator,later,runner" {
 		t.Fatalf("evidence = %#v, %#v", stored.ContributorIDs, stored.Commands)
 	}
 }

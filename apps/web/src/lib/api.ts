@@ -71,7 +71,7 @@ export type WorkspaceCheckpoint = {
   files:{path:string;operation:"add"|"modify"|"delete";mode?:number;size?:number;sha256?:string}[];
   contributor_ids:string[];
   commands:{id:string;sha256:string;exit_code:number;actor_id:string}[];
-  publication?:{branch:string;commit_id:string;pull_request_id?:string;task_id?:string;session_id?:string;contributor_ids:string[];published_by:string;published_at:string};
+  publication?:{branch:string;commit_id:string;pull_request_id?:string;task_id?:string;session_id?:string;contributor_ids:string[];command_ids:string[];link_pending?:boolean;published_by:string;published_at:string};
 };
 export type CheckpointAnalysis = {
   checkpoint_id:string; preflight_token:string; base_diverged:boolean; repository_head?:string;

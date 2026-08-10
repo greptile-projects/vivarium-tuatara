@@ -301,6 +301,14 @@ func (s *Store) RecordCommand(id string, outcome CommandOutcome) (Workspace, err
 		return Workspace{}, err
 	}
 	outcome.ID = outcomeID
+	provenance, err := s.readProvenance(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	provenance.Commands = append(provenance.Commands, outcome)
+	if err = s.writeProvenance(id, provenance); err != nil {
+		return Workspace{}, err
+	}
 	w.Commands = append(w.Commands, outcome)
 	if len(w.Commands) > 100 {
 		w.Commands = w.Commands[len(w.Commands)-100:]
@@ -315,6 +323,14 @@ func (s *Store) RecordChange(id string, change Change) (Workspace, error) {
 	defer s.mu.Unlock()
 	w, err := s.read(id)
 	if err != nil {
+		return Workspace{}, err
+	}
+	provenance, err := s.readProvenance(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	provenance.Changes = append(provenance.Changes, change)
+	if err = s.writeProvenance(id, provenance); err != nil {
 		return Workspace{}, err
 	}
 	w.Changes = append(w.Changes, change)
@@ -333,6 +349,66 @@ type Store struct {
 	controlsMu sync.Mutex
 	controls   map[string]*sync.Mutex
 	now        func() time.Time
+}
+
+type provenanceRecord struct {
+	Changes  []Change         `json:"changes"`
+	Commands []CommandOutcome `json:"commands"`
+}
+
+func (s *Store) provenancePath(id string) string {
+	return filepath.Join(s.root, "provenance", id+".json")
+}
+func (s *Store) readProvenance(id string) (provenanceRecord, error) {
+	b, err := os.ReadFile(s.provenancePath(id))
+	if errors.Is(err, os.ErrNotExist) {
+		return provenanceRecord{}, nil
+	}
+	if err != nil {
+		return provenanceRecord{}, err
+	}
+	var value provenanceRecord
+	if json.Unmarshal(b, &value) != nil {
+		return provenanceRecord{}, ErrInvalid
+	}
+	return value, nil
+}
+func (s *Store) writeProvenance(id string, value provenanceRecord) error {
+	dir := filepath.Dir(s.provenancePath(id))
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	b, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".provenance-")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if err = tmp.Chmod(0600); err == nil {
+		_, err = tmp.Write(b)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err = os.Rename(name, s.provenancePath(id)); err != nil {
+		return err
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }
 
 func New(root string) (*Store, error) {
@@ -374,6 +450,9 @@ func (s *Store) Create(w Workspace, definitionBytes []byte) (Workspace, error) {
 	w.Messages = []Message{}
 	w.Events = []Event{{Kind: "created", ActorID: w.CreatorID, Role: "authorship", CreatedAt: now}}
 	if err := os.MkdirAll(s.RuntimePath(w.ID), 0700); err != nil {
+		return Workspace{}, err
+	}
+	if err := s.writeProvenance(w.ID, provenanceRecord{}); err != nil {
 		return Workspace{}, err
 	}
 	if err := s.write(w); err != nil {

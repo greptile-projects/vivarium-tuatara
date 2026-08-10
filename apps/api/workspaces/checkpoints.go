@@ -64,8 +64,30 @@ type Publication struct {
 	TaskID         string    `json:"task_id,omitempty"`
 	SessionID      string    `json:"session_id,omitempty"`
 	ContributorIDs []string  `json:"contributor_ids"`
+	CommandIDs     []string  `json:"command_ids"`
+	LinkPending    bool      `json:"link_pending,omitempty"`
 	PublishedBy    string    `json:"published_by"`
 	PublishedAt    time.Time `json:"published_at"`
+}
+
+func (s *Store) ConfirmCheckpointPublicationLink(workspaceID, id, pullID string) (Checkpoint, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, err := s.readCheckpoint(workspaceID, id)
+	if err != nil {
+		return c, err
+	}
+	if c.Publication == nil || c.Publication.PullRequestID != pullID {
+		return c, ErrCheckpointConflict
+	}
+	if !c.Publication.LinkPending {
+		return c.Public(), nil
+	}
+	c.Publication.LinkPending = false
+	if err = s.writeCheckpoint(c); err != nil {
+		return c, err
+	}
+	return c.Public(), nil
 }
 
 func (c Checkpoint) Public() Checkpoint {
@@ -99,7 +121,16 @@ func (s *Store) CaptureAndCreateCheckpoint(workspaceID, actor, expectedParent, t
 	if err != nil {
 		return Checkpoint{}, err
 	}
-	contributors, commands := checkpointEvidence(w, files, actor)
+	provenance, err := s.readProvenance(workspaceID)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	// Legacy workspace records predate the private ledger; retain their bounded
+	// evidence on the first checkpoint instead of silently dropping it.
+	if len(provenance.Changes) == 0 && len(provenance.Commands) == 0 && (len(w.Changes) > 0 || len(w.Commands) > 0) {
+		provenance.Changes, provenance.Commands = w.Changes, w.Commands
+	}
+	contributors, commands := checkpointEvidence(provenance.Changes, provenance.Commands, files, actor)
 	return s.createCheckpointWithEvidence(workspaceID, actor, expectedParent, title, description, reproducibility, files, contributors, commands)
 }
 
@@ -138,18 +169,18 @@ func (s *Store) createCheckpointWithEvidence(workspaceID, actor, expectedParent,
 	return c.Public(), nil
 }
 
-func checkpointEvidence(w Workspace, files []CheckpointFile, creator string) ([]string, []CommandEvidence) {
+func checkpointEvidence(changes []Change, commandHistory []CommandOutcome, files []CheckpointFile, creator string) ([]string, []CommandEvidence) {
 	contributors, paths := map[string]bool{creator: true}, map[string]bool{}
 	for _, file := range files {
 		paths[file.Path] = true
 	}
-	for _, change := range w.Changes {
+	for _, change := range changes {
 		if paths[change.Path] {
 			contributors[change.ActorID] = true
 		}
 	}
-	commands := make([]CommandEvidence, 0, len(w.Commands))
-	for _, command := range w.Commands {
+	commands := make([]CommandEvidence, 0, len(commandHistory))
+	for _, command := range commandHistory {
 		contributors[command.ActorID] = true
 		commands = append(commands, CommandEvidence{ID: command.ID, SHA256: command.CommandSHA256, ExitCode: command.ExitCode, ActorID: command.ActorID})
 	}
