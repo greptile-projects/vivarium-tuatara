@@ -1712,6 +1712,21 @@ nested effective membership, public-repository responsibility, and public
 agents. Members additionally receive organization-visible records and the
 immutable actor-stamped event history. Private repository responsibility and
 organization-only nesting are omitted from public projection.
+
+Organization owners create ongoing agent responsibility contracts with `POST
+/organizations/{id}/stewardship-mandates`. Each immutable revision names
+desired outcomes, organization repositories and branches, trusted signals,
+explicit exclusions, agent-minute/action budgets, start and expiry, one
+approved agent, allowed actions, and decisions reserved for humans. The
+agent's current operator accepts the exact version through `POST
+.../stewardship-mandates/{mandate_id}/accept`; `PUT` publishes a new revision
+and clears prior acceptance. Owner-only `pause`, `resume`, and `revoke`
+commands require `expected_version`, while expiry is derived from the latest
+revision's schedule. `GET .../{mandate_id}/preview` reports matching live
+portfolio access grants and per-repository effective policy, plus an explicit
+empty `implicit_authority` list. A mandate never creates a credential or
+grants Git write, review, merge, deployment, or other repository authority;
+those require the existing independently approved grant paths.
 Pending invitees receive only organization identity and their own invitation,
 not membership, teams, agents, transfers, responsibility, or events. A public
 child also omits its `parent_id` when that parent is not public. Responsibility

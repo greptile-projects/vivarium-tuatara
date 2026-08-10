@@ -92,6 +92,13 @@ whenever dependencies change or the web job fails before it starts.
   agent operators can mint only exact repository-bound Git credentials whose
   lifetime cannot outlast the live grant; grant revocation immediately revokes
   those credentials without touching unrelated credentials. Organization
+  owners also publish versioned proactive stewardship mandates with desired
+  outcomes, repository/branch scope, trusted signals, exclusions, bounded
+  budget and schedule, approved agent, allowed actions, and required human
+  decisions. Each revision requires current operator acceptance and supports
+  pause, expiry, and revocation; its access preview reports only independent
+  live grants and effective policy, because a mandate grants no implicit Git,
+  review, merge, credential, deployment, or repository authority. Organization
   owners define versioned draft policies across visibility, reviews, checks,
   integration, release provenance, dependency use, promotion,
   and agent authority, targeted to the organization, a team, or a repository.

@@ -6,6 +6,81 @@ import (
 	"time"
 )
 
+func TestStewardshipMandateRequiresCurrentOperatorAcceptanceAfterEveryRevision(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := "0123456789abcdef0123456789abcdef"
+	operator := "abcdef0123456789abcdef0123456789"
+	repository := "11111111111111111111111111111111"
+	v, _ := store.Create("Runtime", "runtime", "", owner)
+	v, _ = store.Invite(v.ID, owner, operator)
+	v, _ = store.AcceptInvitation(v.ID, v.Invitations[0].ID, operator)
+	v, err = store.RegisterAgent(v.ID, owner, "Caretaker", "caretaker", "", "organization", []string{"inspect"}, []string{operator}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Add(time.Minute)
+	revision := MandateRevision{DesiredOutcomes: []string{"Keep checks green"}, Repositories: []MandateRepository{{RepositoryID: repository, Branches: []string{"main"}}}, TrustedSignals: []string{"required checks"}, Exclusions: []string{"No source writes"}, Budget: MandateBudget{MaxAgentMinutes: 120, MaxActions: 20}, StartsAt: now, ExpiresAt: now.Add(24 * time.Hour), AgentID: v.Agents[0].ID, AllowedActions: []string{"inspect_checks", "summarize"}, RequiredHumanDecisions: []string{"Any Git write or merge"}}
+	v, mandate, err := store.CreateStewardshipMandate(v.ID, owner, "Keep runtime healthy", revision)
+	if err != nil || mandate.Status != "pending_acceptance" {
+		t.Fatalf("create = %#v, %v", mandate, err)
+	}
+	if _, _, err = store.AcceptStewardshipMandate(v.ID, mandate.ID, owner, 1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("non-operator acceptance = %v", err)
+	}
+	v, mandate, err = store.AcceptStewardshipMandate(v.ID, mandate.ID, operator, 1)
+	if err != nil || mandate.Status != "active" || mandate.Acceptance.OperatorID != operator {
+		t.Fatalf("accept = %#v, %v", mandate, err)
+	}
+	revision.DesiredOutcomes = []string{"Keep checks green", "Report regressions"}
+	v, mandate, err = store.ReviseStewardshipMandate(v.ID, mandate.ID, owner, 1, revision)
+	if err != nil || mandate.Version != 2 || mandate.Acceptance != nil || mandate.Status != "pending_acceptance" || len(mandate.Revisions) != 2 {
+		t.Fatalf("revise = %#v, %v", mandate, err)
+	}
+	_, mandate, err = store.AcceptStewardshipMandate(v.ID, mandate.ID, operator, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, mandate, err = store.ChangeStewardshipMandateState(v.ID, mandate.ID, owner, "pause", 2)
+	if err != nil || mandate.Status != "paused" {
+		t.Fatalf("pause = %#v, %v", mandate, err)
+	}
+	_, mandate, err = store.ChangeStewardshipMandateState(v.ID, mandate.ID, owner, "revoke", 2)
+	if err != nil || mandate.Status != "revoked" || mandate.RevokedAt == nil {
+		t.Fatalf("revoke = %#v, %v", mandate, err)
+	}
+}
+
+func TestRemovingOperatorInvalidatesAcceptedStewardshipMandate(t *testing.T) {
+	store, _ := New(t.TempDir())
+	owner := "0123456789abcdef0123456789abcdef"
+	operator := "abcdef0123456789abcdef0123456789"
+	v, _ := store.Create("Runtime", "runtime", "", owner)
+	v, _ = store.Invite(v.ID, owner, operator)
+	v, _ = store.AcceptInvitation(v.ID, v.Invitations[0].ID, operator)
+	v, _ = store.RegisterAgent(v.ID, owner, "Caretaker", "caretaker", "", "organization", []string{"inspect"}, []string{operator}, nil)
+	start := time.Now().UTC().Add(time.Minute)
+	revision := MandateRevision{DesiredOutcomes: []string{"Keep checks green"}, Repositories: []MandateRepository{{RepositoryID: "11111111111111111111111111111111", Branches: []string{"main"}}}, TrustedSignals: []string{"checks"}, Exclusions: []string{"writes"}, Budget: MandateBudget{MaxAgentMinutes: 60, MaxActions: 10}, StartsAt: start, ExpiresAt: start.Add(time.Hour), AgentID: v.Agents[0].ID, AllowedActions: []string{"inspect"}, RequiredHumanDecisions: []string{"merge"}}
+	v, mandate, _ := store.CreateStewardshipMandate(v.ID, owner, "Runtime health", revision)
+	v, mandate, _ = store.AcceptStewardshipMandate(v.ID, mandate.ID, operator, 1)
+	v, err := store.RemoveMember(v.ID, owner, operator, func(Organization) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	mandate = v.StewardshipMandates[0]
+	if mandate.Status != "pending_acceptance" || mandate.Acceptance != nil {
+		t.Fatalf("removed operator retained acceptance: %#v", mandate)
+	}
+	if _, _, err = store.AcceptStewardshipMandate(v.ID, mandate.ID, owner, mandate.Version); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("accept with removed agent = %v", err)
+	}
+	if _, _, err = store.ChangeStewardshipMandateState(v.ID, mandate.ID, owner, "resume", mandate.Version); !errors.Is(err, ErrConflict) {
+		t.Fatalf("resume after removal = %v", err)
+	}
+}
+
 func TestRemoveMemberCleanupFailurePreventsMembershipCommit(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {

@@ -229,6 +229,55 @@ type Initiative struct {
 	UpdatedAt   time.Time            `json:"updated_at"`
 }
 
+// StewardshipMandate is a coordination contract. It deliberately contains no
+// credential or grant identifier: allowed actions describe expectations and
+// never confer repository, Git, review, or merge authority.
+type MandateRepository struct {
+	RepositoryID string   `json:"repository_id"`
+	Branches     []string `json:"branches"`
+}
+
+type MandateBudget struct {
+	MaxAgentMinutes int `json:"max_agent_minutes"`
+	MaxActions      int `json:"max_actions"`
+}
+
+type MandateRevision struct {
+	Version                int                 `json:"version"`
+	DesiredOutcomes        []string            `json:"desired_outcomes"`
+	Repositories           []MandateRepository `json:"repositories"`
+	TrustedSignals         []string            `json:"trusted_signals"`
+	Exclusions             []string            `json:"exclusions"`
+	Budget                 MandateBudget       `json:"budget"`
+	StartsAt               time.Time           `json:"starts_at"`
+	ExpiresAt              time.Time           `json:"expires_at"`
+	AgentID                string              `json:"agent_id"`
+	AllowedActions         []string            `json:"allowed_actions"`
+	RequiredHumanDecisions []string            `json:"required_human_decisions"`
+	Reason                 string              `json:"reason"`
+	CreatedBy              string              `json:"created_by"`
+	CreatedAt              time.Time           `json:"created_at"`
+}
+
+type MandateAcceptance struct {
+	Version    int       `json:"version"`
+	OperatorID string    `json:"operator_id"`
+	AcceptedAt time.Time `json:"accepted_at"`
+}
+
+type StewardshipMandate struct {
+	ID         string             `json:"id"`
+	Title      string             `json:"title"`
+	Version    int                `json:"version"`
+	Status     string             `json:"status"`
+	Revisions  []MandateRevision  `json:"revisions"`
+	Acceptance *MandateAcceptance `json:"acceptance,omitempty"`
+	PausedBy   string             `json:"paused_by,omitempty"`
+	PausedAt   *time.Time         `json:"paused_at,omitempty"`
+	RevokedBy  string             `json:"revoked_by,omitempty"`
+	RevokedAt  *time.Time         `json:"revoked_at,omitempty"`
+}
+
 type Event struct {
 	ID        string         `json:"id"`
 	Action    string         `json:"action"`
@@ -239,23 +288,24 @@ type Event struct {
 }
 
 type Organization struct {
-	ID               string            `json:"id"`
-	Name             string            `json:"name"`
-	Slug             string            `json:"slug"`
-	Description      string            `json:"description,omitempty"`
-	CreatedBy        string            `json:"created_by"`
-	CreatedAt        time.Time         `json:"created_at"`
-	Members          []Member          `json:"members"`
-	Invitations      []Invitation      `json:"invitations"`
-	Transfers        []Transfer        `json:"transfers"`
-	Teams            []Team            `json:"teams"`
-	Agents           []Agent           `json:"agents"`
-	AccessGrants     []AccessGrant     `json:"access_grants"`
-	AccessRequests   []AccessRequest   `json:"access_requests"`
-	Policies         []Policy          `json:"policies"`
-	PolicyExceptions []PolicyException `json:"policy_exceptions"`
-	Initiatives      []Initiative      `json:"initiatives"`
-	Events           []Event           `json:"events"`
+	ID                  string               `json:"id"`
+	Name                string               `json:"name"`
+	Slug                string               `json:"slug"`
+	Description         string               `json:"description,omitempty"`
+	CreatedBy           string               `json:"created_by"`
+	CreatedAt           time.Time            `json:"created_at"`
+	Members             []Member             `json:"members"`
+	Invitations         []Invitation         `json:"invitations"`
+	Transfers           []Transfer           `json:"transfers"`
+	Teams               []Team               `json:"teams"`
+	Agents              []Agent              `json:"agents"`
+	AccessGrants        []AccessGrant        `json:"access_grants"`
+	AccessRequests      []AccessRequest      `json:"access_requests"`
+	Policies            []Policy             `json:"policies"`
+	PolicyExceptions    []PolicyException    `json:"policy_exceptions"`
+	Initiatives         []Initiative         `json:"initiatives"`
+	StewardshipMandates []StewardshipMandate `json:"stewardship_mandates"`
+	Events              []Event              `json:"events"`
 }
 
 type Store struct {
@@ -342,7 +392,7 @@ func (s *Store) Create(name, slug, description, actor string) (Organization, err
 			return err
 		}
 		now := s.now().Truncate(time.Microsecond)
-		created = Organization{ID: id, Name: name, Slug: slug, Description: strings.TrimSpace(description), CreatedBy: actor, CreatedAt: now, Members: []Member{{UserID: actor, Role: "owner", JoinedAt: now}}, Invitations: []Invitation{}, Transfers: []Transfer{}, Teams: []Team{}, Agents: []Agent{}, AccessGrants: []AccessGrant{}, AccessRequests: []AccessRequest{}, Policies: []Policy{}, PolicyExceptions: []PolicyException{}, Initiatives: []Initiative{}, Events: []Event{}}
+		created = Organization{ID: id, Name: name, Slug: slug, Description: strings.TrimSpace(description), CreatedBy: actor, CreatedAt: now, Members: []Member{{UserID: actor, Role: "owner", JoinedAt: now}}, Invitations: []Invitation{}, Transfers: []Transfer{}, Teams: []Team{}, Agents: []Agent{}, AccessGrants: []AccessGrant{}, AccessRequests: []AccessRequest{}, Policies: []Policy{}, PolicyExceptions: []PolicyException{}, Initiatives: []Initiative{}, StewardshipMandates: []StewardshipMandate{}, Events: []Event{}}
 		if err := s.event(&created, "organization.created", actor, id, nil); err != nil {
 			return err
 		}
@@ -383,6 +433,9 @@ func (s *Store) Get(id string) (Organization, error) {
 	}
 	if v.Initiatives == nil {
 		v.Initiatives = []Initiative{}
+	}
+	if v.StewardshipMandates == nil {
+		v.StewardshipMandates = []StewardshipMandate{}
 	}
 	if v.Events == nil {
 		v.Events = []Event{}
@@ -541,6 +594,18 @@ func (s *Store) RemoveMember(id, actor, user string, beforeCommit func(Organizat
 					}
 				}
 				v.Agents = agents
+				for i := range v.StewardshipMandates {
+					mandate := &v.StewardshipMandates[i]
+					if mandate.Acceptance == nil || mandate.Acceptance.OperatorID != user || mandate.Status == "revoked" {
+						continue
+					}
+					mandate.Acceptance = nil
+					mandate.PausedBy, mandate.PausedAt = "", nil
+					mandate.Status = "pending_acceptance"
+					if err := s.event(v, "stewardship_mandate.acceptance.invalidated", actor, mandate.ID, map[string]any{"removed_operator_id": user, "version": mandate.Version}); err != nil {
+						return err
+					}
+				}
 				return s.event(v, "member.removed", actor, user, nil)
 			}
 		}
@@ -1234,6 +1299,172 @@ func mergePolicyRules(dst *PolicyRules, src PolicyRules) {
 		dst.AgentAuthority = src.AgentAuthority
 	}
 }
+
+func mandateIndex(v *Organization, id string) int {
+	for i := range v.StewardshipMandates {
+		if v.StewardshipMandates[i].ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func validateMandateRevision(v *Organization, r MandateRevision, now time.Time) bool {
+	if agentIndex(v, r.AgentID) < 0 || len(r.DesiredOutcomes) == 0 || len(r.DesiredOutcomes) > 20 || len(r.Repositories) == 0 || len(r.Repositories) > 50 || len(r.TrustedSignals) == 0 || len(r.TrustedSignals) > 50 || len(r.Exclusions) == 0 || len(r.Exclusions) > 50 || len(r.AllowedActions) == 0 || len(r.AllowedActions) > 20 || len(r.RequiredHumanDecisions) == 0 || len(r.RequiredHumanDecisions) > 20 || r.Budget.MaxAgentMinutes < 1 || r.Budget.MaxAgentMinutes > 525600 || r.Budget.MaxActions < 1 || r.Budget.MaxActions > 100000 || !r.ExpiresAt.After(now) || !r.ExpiresAt.After(r.StartsAt) || r.ExpiresAt.After(r.StartsAt.Add(366*24*time.Hour)) {
+		return false
+	}
+	validateText := func(values []string, max int) bool {
+		_, ok := normalizeList(values, func(x string) bool { _, valid := clean(x, max); return valid })
+		return ok
+	}
+	if !validateText(r.DesiredOutcomes, 1000) || !validateText(r.TrustedSignals, 300) || !validateText(r.Exclusions, 1000) || !validateText(r.AllowedActions, 100) || !validateText(r.RequiredHumanDecisions, 500) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, scope := range r.Repositories {
+		if !validID(scope.RepositoryID) || seen[scope.RepositoryID] || len(scope.Branches) == 0 || len(scope.Branches) > 100 {
+			return false
+		}
+		seen[scope.RepositoryID] = true
+		if !validateText(scope.Branches, 255) {
+			return false
+		}
+		for _, branch := range scope.Branches {
+			if strings.HasPrefix(branch, "-") || strings.ContainsAny(branch, " ~^:?*[\\") || strings.Contains(branch, "..") || strings.Contains(branch, "@{") {
+				return false
+			}
+		}
+	}
+	return len(r.Reason) <= 1000
+}
+
+func (s *Store) CreateStewardshipMandate(id, actor, title string, revision MandateRevision) (Organization, StewardshipMandate, error) {
+	title, ok := clean(title, 200)
+	if !ok {
+		return Organization{}, StewardshipMandate{}, ErrInvalid
+	}
+	var created StewardshipMandate
+	v, err := s.mutate(id, func(v *Organization) error {
+		if !HasRole(*v, actor, "owner") || revision.StartsAt.Before(s.now().Add(-time.Minute)) || !validateMandateRevision(v, revision, s.now()) {
+			return ErrInvalid
+		}
+		mid, e := newID()
+		if e != nil {
+			return e
+		}
+		now := s.now().Truncate(time.Microsecond)
+		revision.Version, revision.CreatedBy, revision.CreatedAt = 1, actor, now
+		revision.Reason = strings.TrimSpace(revision.Reason)
+		created = StewardshipMandate{ID: mid, Title: title, Version: 1, Status: "pending_acceptance", Revisions: []MandateRevision{revision}}
+		v.StewardshipMandates = append(v.StewardshipMandates, created)
+		return s.event(v, "stewardship_mandate.created", actor, mid, map[string]any{"version": 1, "agent_id": revision.AgentID})
+	})
+	return v, created, err
+}
+
+func (s *Store) ReviseStewardshipMandate(id, mandateID, actor string, expected int, revision MandateRevision) (Organization, StewardshipMandate, error) {
+	var out StewardshipMandate
+	v, err := s.mutate(id, func(v *Organization) error {
+		if !HasRole(*v, actor, "owner") || !validateMandateRevision(v, revision, s.now()) {
+			return ErrInvalid
+		}
+		i := mandateIndex(v, mandateID)
+		if i < 0 {
+			return ErrNotFound
+		}
+		m := &v.StewardshipMandates[i]
+		if m.Version != expected || m.Status == "revoked" {
+			return ErrConflict
+		}
+		now := s.now().Truncate(time.Microsecond)
+		m.Version++
+		revision.Version, revision.CreatedBy, revision.CreatedAt = m.Version, actor, now
+		m.Revisions = append(m.Revisions, revision)
+		m.Status = "pending_acceptance"
+		m.Acceptance = nil
+		m.PausedBy = ""
+		m.PausedAt = nil
+		out = *m
+		return s.event(v, "stewardship_mandate.revised", actor, mandateID, map[string]any{"version": m.Version})
+	})
+	return v, out, err
+}
+
+func (s *Store) AcceptStewardshipMandate(id, mandateID, actor string, expected int) (Organization, StewardshipMandate, error) {
+	var out StewardshipMandate
+	v, err := s.mutate(id, func(v *Organization) error {
+		i := mandateIndex(v, mandateID)
+		if i < 0 {
+			return ErrNotFound
+		}
+		m := &v.StewardshipMandates[i]
+		if m.Version != expected || m.Status != "pending_acceptance" {
+			return ErrConflict
+		}
+		latest := m.Revisions[len(m.Revisions)-1]
+		i = agentIndex(v, latest.AgentID)
+		if i < 0 {
+			return ErrNotFound
+		}
+		agent := v.Agents[i]
+		if !slices.Contains(agent.OperatorIDs, actor) || !latest.ExpiresAt.After(s.now()) {
+			return ErrNotFound
+		}
+		now := s.now().Truncate(time.Microsecond)
+		m.Acceptance = &MandateAcceptance{Version: m.Version, OperatorID: actor, AcceptedAt: now}
+		m.Status = "active"
+		out = *m
+		return s.event(v, "stewardship_mandate.accepted", actor, mandateID, map[string]any{"version": m.Version})
+	})
+	return v, out, err
+}
+
+func (s *Store) ChangeStewardshipMandateState(id, mandateID, actor, action string, expected int) (Organization, StewardshipMandate, error) {
+	var out StewardshipMandate
+	v, err := s.mutate(id, func(v *Organization) error {
+		if !HasRole(*v, actor, "owner") {
+			return ErrNotFound
+		}
+		i := mandateIndex(v, mandateID)
+		if i < 0 {
+			return ErrNotFound
+		}
+		m := &v.StewardshipMandates[i]
+		if m.Version != expected {
+			return ErrConflict
+		}
+		now := s.now().Truncate(time.Microsecond)
+		if action != "revoke" && !m.Revisions[len(m.Revisions)-1].ExpiresAt.After(now) {
+			return ErrConflict
+		}
+		switch action {
+		case "pause":
+			if m.Status != "active" {
+				return ErrConflict
+			}
+			m.Status, m.PausedBy, m.PausedAt = "paused", actor, &now
+		case "resume":
+			latest := m.Revisions[len(m.Revisions)-1]
+			i := agentIndex(v, latest.AgentID)
+			if m.Status != "paused" || m.Acceptance == nil || m.Acceptance.Version != m.Version || i < 0 || !slices.Contains(v.Agents[i].OperatorIDs, m.Acceptance.OperatorID) || !latest.ExpiresAt.After(now) {
+				return ErrConflict
+			}
+			m.Status, m.PausedBy, m.PausedAt = "active", "", nil
+		case "revoke":
+			if m.Status == "revoked" {
+				out = *m
+				return nil
+			}
+			m.Status, m.RevokedBy, m.RevokedAt = "revoked", actor, &now
+		default:
+			return ErrInvalid
+		}
+		out = *m
+		return s.event(v, "stewardship_mandate."+action+"d", actor, mandateID, map[string]any{"version": m.Version})
+	})
+	return v, out, err
+}
+
 func validateAccess(role, reason string, resources []ResourceScope, exceptions []AccessException, expires *time.Time, now time.Time) bool {
 	if !validRole(role) || len(resources) == 0 || len(resources) > 100 || len(exceptions) > 100 || len(reason) > 1000 || (expires != nil && !expires.After(now)) {
 		return false
