@@ -1396,9 +1396,9 @@ the selected alternative, every rejected alternative, rationale, accepted
 tradeoffs, dissent, conditions, review date, and the exact retained evidence
 considered. It also snapshots the approval trail and any approved, expiring
 policy exception, so downstream work can explain the temporary deviation.
-Every current opposing finding is retained exactly once. An exception can use
-only the purpose approved by the policy owner and cannot outlive the approval's
-frozen maximum expiry.
+Every current non-superseded opposing finding is retained exactly once. An
+exception can use only the purpose approved by the policy owner, cannot outlive
+the approval's frozen maximum expiry, and cannot reuse one approval twice.
 Material scope, alternative, finding, or experiment changes reopen the decision,
 supersede the old approvals, and retain the earlier commitment unchanged;
 discussion can clarify a published choice without silently invalidating it.

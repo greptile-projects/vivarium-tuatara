@@ -184,7 +184,12 @@ func TestGovernedCommitmentRetainsApprovalsExceptionsAndReopens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	commitment := Commitment{SelectedAlternativeID: selected.ID, RejectedAlternativeIDs: []string{v.Alternatives[1].ID}, Rationale: "Best observed latency under the retained evidence.", AcceptedTradeoffs: []string{"Reject overload"}, Conditions: []string{"Monitor retries"}, ReviewDate: now.Add(30 * 24 * time.Hour), Evidence: selected.Evidence, DissentFindingIDs: []string{v.Findings[0].ID}, Exceptions: []Exception{{ApprovalRequestID: v.ApprovalRequests[0].ID, PolicyID: "policy", PolicyRule: "minimum_reviews", Reason: "Migration window", ExpiresAt: exceptionExpiry}}}
+	firstDissent := v.Findings[0].ID
+	v, err = s.AddFinding(v.ID, "owner", Finding{AlternativeID: selected.ID, Body: "A broader trace confirms retries.", Position: "oppose", Uncertainty: "two regions", Citations: evidence, SupersedesID: firstDissent})
+	if err != nil || !v.Findings[0].Superseded {
+		t.Fatalf("replacement dissent = %#v, %v", v.Findings, err)
+	}
+	commitment := Commitment{SelectedAlternativeID: selected.ID, RejectedAlternativeIDs: []string{v.Alternatives[1].ID}, Rationale: "Best observed latency under the retained evidence.", AcceptedTradeoffs: []string{"Reject overload"}, Conditions: []string{"Monitor retries"}, ReviewDate: now.Add(30 * 24 * time.Hour), Evidence: selected.Evidence, DissentFindingIDs: []string{v.Findings[1].ID}, Exceptions: []Exception{{ApprovalRequestID: v.ApprovalRequests[0].ID, PolicyID: "policy", PolicyRule: "minimum_reviews", Reason: "Migration window", ExpiresAt: exceptionExpiry}}}
 	omitted := commitment
 	omitted.DissentFindingIDs = nil
 	if _, publishErr := s.Publish(v.ID, "owner", v.Version, omitted); !errors.Is(publishErr, ErrInvalid) {
@@ -196,6 +201,11 @@ func TestGovernedCommitmentRetainsApprovalsExceptionsAndReopens(t *testing.T) {
 		t.Fatalf("mismatched exception accepted: %v", publishErr)
 	}
 	commitment.Exceptions[0].Reason = "Migration window"
+	duplicate := commitment
+	duplicate.Exceptions = append(append([]Exception{}, commitment.Exceptions...), commitment.Exceptions[0])
+	if _, publishErr := s.Publish(v.ID, "owner", v.Version, duplicate); !errors.Is(publishErr, ErrInvalid) {
+		t.Fatalf("duplicate exception accepted: %v", publishErr)
+	}
 	v, err = s.Publish(v.ID, "owner", v.Version, commitment)
 	if err != nil {
 		t.Fatal(err)

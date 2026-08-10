@@ -947,7 +947,7 @@ func (s *Store) Publish(id, actor string, expected int, input Commitment) (Decis
 	}
 	findings := map[string]bool{}
 	for _, f := range v.Findings {
-		if f.Position == "oppose" {
+		if f.Position == "oppose" && !f.Superseded {
 			findings[f.ID] = true
 		}
 	}
@@ -998,12 +998,14 @@ func (s *Store) Publish(id, actor string, expected int, input Commitment) (Decis
 			approved[request.ID] = request
 		}
 	}
+	seenExceptions := map[string]bool{}
 	for _, x := range input.Exceptions {
 		request, exists := approved[x.ApprovalRequestID]
 		x.Reason = strings.TrimSpace(x.Reason)
-		if !exists || request.Kind != "policy" || request.PolicyID != x.PolicyID || request.PolicyRule != x.PolicyRule || request.ExceptionReason == "" || x.Reason != request.ExceptionReason || request.ExceptionExpiresAt == nil || x.ExpiresAt.After(*request.ExceptionExpiresAt) || !x.ExpiresAt.After(s.now()) {
+		if seenExceptions[x.ApprovalRequestID] || !exists || request.Kind != "policy" || request.PolicyID != x.PolicyID || request.PolicyRule != x.PolicyRule || request.ExceptionReason == "" || x.Reason != request.ExceptionReason || request.ExceptionExpiresAt == nil || x.ExpiresAt.After(*request.ExceptionExpiresAt) || !x.ExpiresAt.After(s.now()) {
 			return v, ErrInvalid
 		}
+		seenExceptions[x.ApprovalRequestID] = true
 	}
 	now := s.now()
 	input.ReopenedAt, input.ReopenReason = nil, ""
