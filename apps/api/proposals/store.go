@@ -23,6 +23,7 @@ var (
 	ErrDurabilityUncertain    = errors.New("proposal mutation is visible but durability is uncertain")
 	ErrTaskAssignmentConflict = errors.New("task assignment changed")
 	ErrCorrectiveConflict     = errors.New("corrective work operation changed")
+	ErrImplementationConflict = errors.New("implementation plan changed")
 )
 
 const (
@@ -50,6 +51,8 @@ type Proposal struct {
 // ReasoningOrigin is an immutable, revision-exact handoff from collaborative
 // investigation and impact analysis into implementation and review.
 type ReasoningOrigin struct {
+	DecisionID        string                     `json:"decision_id,omitempty"`
+	CommitmentVersion int                        `json:"commitment_version,omitempty"`
 	AssessmentID      string                     `json:"assessment_id"`
 	AssessmentVersion int                        `json:"assessment_version"`
 	Revision          string                     `json:"revision"`
@@ -356,7 +359,9 @@ func New(root string) (*Store, error) {
 // CreateImplementation atomically creates an ordered, owned plan from one
 // frozen reasoning snapshot. Assessment identity makes retries converge.
 func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Task, error) {
-	if !validID(input.RepositoryID) || !validID(input.ActorID) || !validID(input.Origin.AssessmentID) || len(input.Origin.Revision) != 40 || input.Origin.AssessmentVersion < 1 || len(input.Tasks) == 0 || len(input.Tasks) > 20 || len(input.Origin.Items) == 0 {
+	isAssessment := validID(input.Origin.AssessmentID) && input.Origin.AssessmentVersion > 0
+	isDecision := validID(input.Origin.DecisionID) && input.Origin.CommitmentVersion > 0
+	if !validID(input.RepositoryID) || !validID(input.ActorID) || (!isAssessment && !isDecision) || (isAssessment && isDecision) || len(input.Origin.Revision) != 40 || len(input.Tasks) == 0 || len(input.Tasks) > 20 || len(input.Origin.Items) == 0 {
 		return Proposal{}, nil, ErrInvalid
 	}
 	title, body, err := validateContent(input.Title, input.Body)
@@ -383,7 +388,16 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 		if readErr != nil {
 			return Proposal{}, nil, readErr
 		}
-		if r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && r.Proposal.Reasoning.AssessmentID == input.Origin.AssessmentID {
+		if r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && ((isAssessment && r.Proposal.Reasoning.AssessmentID == input.Origin.AssessmentID) || (isDecision && r.Proposal.Reasoning.DecisionID == input.Origin.DecisionID && r.Proposal.Reasoning.CommitmentVersion == input.Origin.CommitmentVersion)) {
+			if r.Proposal.Title != title || r.Proposal.Body != body || len(r.Tasks) != len(input.Tasks) {
+				return Proposal{}, nil, ErrImplementationConflict
+			}
+			for i, task := range r.Tasks {
+				value := input.Tasks[i]
+				if task.Title != strings.TrimSpace(value.Title) || task.Outcome != strings.TrimSpace(value.Outcome) || task.Risk != strings.TrimSpace(value.Risk) || task.VerificationPlan != strings.TrimSpace(value.VerificationPlan) || task.Assignment == nil || task.Assignment.AssigneeType != value.AssigneeType || (value.AssigneeID != "" && task.Assignment.AssigneeID != value.AssigneeID) || (i > 0 && value.DependsOnPrevious != (len(task.DependencyIDs) == 1 && task.DependencyIDs[0] == r.Tasks[i-1].ID)) {
+					return Proposal{}, nil, ErrImplementationConflict
+				}
+			}
 			return r.Proposal, append([]Task(nil), r.Tasks...), nil
 		}
 	}

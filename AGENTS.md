@@ -1013,6 +1013,17 @@ whenever dependencies change or the web job fails before it starts.
   governance conflicts. Scope, alternative, finding, or experiment changes
   reopen a published decision, supersede its approvals, and retain the prior
   commitment instead of rewriting it; discussion alone is non-material.
+  Each accepted commitment can publish one retry-safe implementation handoff
+  into an ordinary proposal with ordered human- and agent-owned tasks at the
+  frozen default-branch revision. The server derives task outcomes and
+  verification plans from explicit constraints and success measures and
+  rejects incomplete coverage; proposal/task reasoning retains decision and
+  commitment identity through scoped sessions, workspaces, linked pulls,
+  checks, releases, and deployments without adding authority. Attributable
+  delivery observations link coverage or drift to those ordinary resources.
+  A deviation, changed assumption, failed measure, or incompatible work
+  reopens the exact commitment with an actionable revisit reason, while
+  confirmed coverage remains retained delivery evidence.
   Every current, non-superseded opposing finding must appear exactly once in
   the commitment. Each approved exception request can appear at most once.
   Policy exception approvals freeze the normalized reason and maximum expiry;

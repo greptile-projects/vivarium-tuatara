@@ -1929,3 +1929,22 @@ numbered commitment with its approval snapshot. Later material scope,
 alternative, finding, experiment, or experiment-evidence changes set the live
 record back to `pending`, supersede current requests, and mark the prior
 commitment `reopened`; discussion does not reopen it.
+
+`POST /decisions/{id}/implementation` requires repository write participation
+and a currently published `commitment_version`. It accepts a proposal title and
+body plus one to 20 ordered tasks. Each task names `human` or `agent` ownership,
+an optional generated-agent ID, zero-based `constraint_indexes` and
+`success_measure_indexes`, and whether it depends on its predecessor. Every
+task must cover both kinds and the complete plan must cover the accepted scope.
+The server freezes the current default-branch commit and derives task outcomes
+and verification plans from those exact constraints and measures. The ordinary
+proposal/task assignment APIs then launch sessions or workspaces and publish
+pulls; no authority is added. An exact retry returns the retained plan, while
+changed reuse conflicts instead of silently replacing it.
+
+`POST /decisions/{id}/implementation/{proposal_id}/observations` appends an
+attributable delivery finding with a summary and linked `resource_kind` and
+`resource_id`. Kind is `coverage`, `deviation`, `assumption_changed`,
+`failed_measure`, or `incompatible_work`. Coverage remains retained evidence;
+every other kind marks the linked commitment reopened and the decision pending
+with the finding as its explicit revisit reason.

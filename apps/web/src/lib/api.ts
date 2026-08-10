@@ -51,6 +51,7 @@ export type TechnicalDecision = {
   experiments: DecisionExperiment[];
   approval_requests: DecisionApprovalRequest[];
   commitments: DecisionCommitment[];
+  implementations: { commitment_version: number; proposal_id: string; task_ids: string[]; revision: string; created_by: string; created_at: string; observations: { id:string; kind:string; summary:string; resource_kind:string; resource_id:string; actor_id:string; created_at:string }[] }[];
   history: {
     id: string;
     kind:

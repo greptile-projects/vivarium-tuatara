@@ -188,6 +188,24 @@ type Commitment struct {
 	ReopenedAt             *time.Time        `json:"reopened_at,omitempty"`
 	ReopenReason           string            `json:"reopen_reason,omitempty"`
 }
+type Implementation struct {
+	CommitmentVersion int                   `json:"commitment_version"`
+	ProposalID        string                `json:"proposal_id"`
+	TaskIDs           []string              `json:"task_ids"`
+	Revision          string                `json:"revision"`
+	CreatedBy         string                `json:"created_by"`
+	CreatedAt         time.Time             `json:"created_at"`
+	Observations      []DeliveryObservation `json:"observations"`
+}
+type DeliveryObservation struct {
+	ID           string    `json:"id"`
+	Kind         string    `json:"kind"`
+	Summary      string    `json:"summary"`
+	ResourceKind string    `json:"resource_kind"`
+	ResourceID   string    `json:"resource_id"`
+	ActorID      string    `json:"actor_id"`
+	CreatedAt    time.Time `json:"created_at"`
+}
 type Decision struct {
 	ID               string            `json:"id"`
 	RepositoryID     string            `json:"repository_id"`
@@ -202,9 +220,107 @@ type Decision struct {
 	Experiments      []Experiment      `json:"experiments"`
 	ApprovalRequests []ApprovalRequest `json:"approval_requests"`
 	Commitments      []Commitment      `json:"commitments"`
+	Implementations  []Implementation  `json:"implementations"`
 	CreatedAt        time.Time         `json:"created_at"`
 	UpdatedAt        time.Time         `json:"updated_at"`
 }
+
+// LinkImplementation retains the immutable handoff from an accepted
+// commitment into ordinary proposal/task governance. Exact retries converge.
+func (s *Store) LinkImplementation(id, actor string, implementation Implementation) (Decision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Decision{}, err
+	}
+	defer unlock()
+	v, err := s.read(id)
+	if err != nil {
+		return v, err
+	}
+	if actor == "" || implementation.CommitmentVersion < 1 || len(implementation.Revision) != 40 || implementation.ProposalID == "" || len(implementation.TaskIDs) == 0 {
+		return v, ErrInvalid
+	}
+	validCommitment := false
+	for _, c := range v.Commitments {
+		validCommitment = validCommitment || (c.Version == implementation.CommitmentVersion && c.Status == "published")
+	}
+	if !validCommitment || v.Status != "published" {
+		return v, ErrConflict
+	}
+	for _, existing := range v.Implementations {
+		if existing.CommitmentVersion == implementation.CommitmentVersion {
+			if existing.ProposalID != implementation.ProposalID || existing.Revision != implementation.Revision || strings.Join(existing.TaskIDs, "\x00") != strings.Join(implementation.TaskIDs, "\x00") {
+				return v, ErrConflict
+			}
+			return v, nil
+		}
+	}
+	implementation.CreatedBy, implementation.CreatedAt = actor, s.now().UTC().Truncate(time.Microsecond)
+	implementation.TaskIDs = append([]string(nil), implementation.TaskIDs...)
+	v.Implementations = append(v.Implementations, implementation)
+	v.History = append(v.History, History{ID: implementation.ProposalID, Kind: "implementation_created", ActorID: actor, Version: v.Version, Summary: "Accepted decision converted into accountable implementation", CreatedAt: implementation.CreatedAt})
+	v.UpdatedAt = implementation.CreatedAt
+	if err := s.write(v); err != nil {
+		return v, err
+	}
+	return v, nil
+}
+
+// ReportDelivery appends evidence from review through deployment. Material
+// drift reopens the commitment so downstream work cannot silently claim it.
+func (s *Store) ReportDelivery(id, proposalID, actor string, observation DeliveryObservation) (Decision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Decision{}, err
+	}
+	defer unlock()
+	v, err := s.read(id)
+	if err != nil {
+		return v, err
+	}
+	observation.Kind, observation.Summary = strings.TrimSpace(observation.Kind), strings.TrimSpace(observation.Summary)
+	observation.ResourceKind, observation.ResourceID = strings.TrimSpace(observation.ResourceKind), strings.TrimSpace(observation.ResourceID)
+	allowed := observation.Kind == "coverage" || observation.Kind == "deviation" || observation.Kind == "assumption_changed" || observation.Kind == "failed_measure" || observation.Kind == "incompatible_work"
+	if !allowed || observation.Summary == "" || len(observation.Summary) > 2000 || observation.ResourceKind == "" || observation.ResourceID == "" {
+		return v, ErrInvalid
+	}
+	index := -1
+	for i := range v.Implementations {
+		if v.Implementations[i].ProposalID == proposalID {
+			index = i
+		}
+	}
+	if index < 0 {
+		return v, ErrNotFound
+	}
+	observation.ID, err = randomID()
+	if err != nil {
+		return v, err
+	}
+	observation.ActorID, observation.CreatedAt = actor, s.now().UTC().Truncate(time.Microsecond)
+	v.Implementations[index].Observations = append(v.Implementations[index].Observations, observation)
+	if observation.Kind != "coverage" {
+		v.Status = "pending"
+		for i := range v.Commitments {
+			if v.Commitments[i].Version == v.Implementations[index].CommitmentVersion && v.Commitments[i].Status == "published" {
+				v.Commitments[i].Status = "reopened"
+				v.Commitments[i].ReopenedAt = &observation.CreatedAt
+				v.Commitments[i].ReopenReason = observation.Kind + ": " + observation.Summary
+			}
+		}
+	}
+	v.History = append(v.History, History{ID: observation.ID, Kind: "delivery_" + observation.Kind, ActorID: actor, Version: v.Version, Summary: observation.Summary, CreatedAt: observation.CreatedAt})
+	v.UpdatedAt = observation.CreatedAt
+	if err = s.write(v); err != nil {
+		return v, err
+	}
+	return v, nil
+}
+
 type Store struct {
 	root string
 	mu   sync.Mutex

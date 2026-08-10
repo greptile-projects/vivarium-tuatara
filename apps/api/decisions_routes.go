@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -113,6 +114,26 @@ type decisionApprovalResponseInput struct {
 type decisionPublishInput struct {
 	ExpectedVersion int                  `json:"expected_version"`
 	Commitment      decisions.Commitment `json:"commitment"`
+}
+type decisionImplementationTaskInput struct {
+	Title                 string `json:"title"`
+	AssigneeType          string `json:"assignee_type"`
+	AssigneeID            string `json:"assignee_id"`
+	ConstraintIndexes     []int  `json:"constraint_indexes"`
+	SuccessMeasureIndexes []int  `json:"success_measure_indexes"`
+	DependsOnPrevious     bool   `json:"depends_on_previous"`
+}
+type decisionImplementationInput struct {
+	CommitmentVersion int                               `json:"commitment_version"`
+	Title             string                            `json:"title"`
+	Body              string                            `json:"body"`
+	Tasks             []decisionImplementationTaskInput `json:"tasks"`
+}
+type decisionDeliveryObservationInput struct {
+	Kind         string `json:"kind"`
+	Summary      string `json:"summary"`
+	ResourceKind string `json:"resource_kind"`
+	ResourceID   string `json:"resource_id"`
 }
 
 func registerDecisionRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, identities *users.Store, store *decisions.Store, activity *activities.Store, proposalStore *proposals.Store, explanationStore *explanations.Store, incidentStore *incidents.Store, relationshipStore *relationships.Store, organizationStore *organizations.Store, workspaceStore *workspaces.Store) {
@@ -312,6 +333,140 @@ func registerDecisionRoutes(mux *http.ServeMux, git *storage.Store, catalog *rep
 			return
 		}
 		recordActivity(activity, catalog, activities.Event{Kind: "decision.published", ActorID: actor.UserID, RepositoryID: v.RepositoryID, ResourceType: "decision", ResourceID: v.ID, ResourceTitle: v.Scope.Question})
+		writeJSON(w, 201, updated)
+	})
+	mux.HandleFunc("POST /decisions/{id}/implementation", func(w http.ResponseWriter, r *http.Request) {
+		v, actor, ok := authorizeDecision(w, r, catalog, credentials, store, "repositories:write")
+		if !ok {
+			return
+		}
+		var in decisionImplementationInput
+		if decodeJSON(r, &in) != nil || len(in.Tasks) == 0 || len(in.Tasks) > 20 || proposalStore == nil || git == nil {
+			writeAPIError(w, 400, "invalid_request", "an accepted commitment and ordered tasks are required")
+			return
+		}
+		var commitment *decisions.Commitment
+		for i := range v.Commitments {
+			if v.Commitments[i].Version == in.CommitmentVersion && v.Commitments[i].Status == "published" {
+				commitment = &v.Commitments[i]
+			}
+		}
+		if v.Status != "published" || commitment == nil {
+			writeAPIError(w, 409, "decision_not_accepted", "implementation requires the current accepted commitment")
+			return
+		}
+		repository, err := catalog.Get(actor.UserID, v.RepositoryID)
+		if err != nil {
+			writeAPIError(w, 503, "repository_unavailable", "repository context is unavailable")
+			return
+		}
+		bare, err := git.Open(v.RepositoryID)
+		if err != nil {
+			writeAPIError(w, 503, "repository_unavailable", "repository context is unavailable")
+			return
+		}
+		revisionBytes, err := exec.Command("git", "--git-dir="+bare.Path(), "rev-parse", "refs/heads/"+repository.DefaultBranch).Output()
+		revision := strings.TrimSpace(string(revisionBytes))
+		if err != nil || len(revision) != 40 {
+			writeAPIError(w, 409, "implementation_base_unavailable", "the default branch has no exact implementation base")
+			return
+		}
+		coveredConstraints, coveredMeasures := make([]bool, len(v.Scope.Constraints)), make([]bool, len(v.Scope.SuccessMeasures))
+		tasks := make([]proposals.ImplementationTaskInput, 0, len(in.Tasks))
+		participants := []string{actor.UserID}
+		items := make([]proposals.ReasoningItem, 0, len(v.Scope.Constraints)+len(v.Scope.SuccessMeasures))
+		for i, value := range v.Scope.Constraints {
+			items = append(items, proposals.ReasoningItem{ID: "constraint-" + fmt.Sprint(i), Kind: "decision_constraint", Summary: value, Status: "required"})
+		}
+		for i, value := range v.Scope.SuccessMeasures {
+			items = append(items, proposals.ReasoningItem{ID: "measure-" + fmt.Sprint(i), Kind: "decision_success_measure", Summary: value, Status: "required"})
+		}
+		for _, value := range in.Tasks {
+			criteria, measures := []string{}, []string{}
+			for _, index := range value.ConstraintIndexes {
+				if index < 0 || index >= len(v.Scope.Constraints) {
+					writeAPIError(w, 400, "invalid_coverage", "task constraint coverage is outside the accepted decision")
+					return
+				}
+				coveredConstraints[index] = true
+				criteria = append(criteria, v.Scope.Constraints[index])
+			}
+			for _, index := range value.SuccessMeasureIndexes {
+				if index < 0 || index >= len(v.Scope.SuccessMeasures) {
+					writeAPIError(w, 400, "invalid_coverage", "task success-measure coverage is outside the accepted decision")
+					return
+				}
+				coveredMeasures[index] = true
+				measures = append(measures, v.Scope.SuccessMeasures[index])
+			}
+			if len(criteria) == 0 || len(measures) == 0 {
+				writeAPIError(w, 400, "invalid_coverage", "every task must enforce a constraint and verify a success measure")
+				return
+			}
+			tasks = append(tasks, proposals.ImplementationTaskInput{Title: value.Title, Outcome: "Satisfy: " + strings.Join(criteria, "; "), VerificationPlan: "Demonstrate: " + strings.Join(measures, "; "), Risk: "Deviation requires an explicit decision revisit request.", AssigneeType: value.AssigneeType, AssigneeID: value.AssigneeID, DependsOnPrevious: value.DependsOnPrevious})
+			if value.AssigneeType == "human" {
+				participants = append(participants, value.AssigneeID)
+			}
+		}
+		for _, covered := range append(coveredConstraints, coveredMeasures...) {
+			if !covered {
+				writeAPIError(w, 400, "incomplete_coverage", "the implementation plan must cover every accepted constraint and success measure")
+				return
+			}
+		}
+		origin := proposals.ReasoningOrigin{DecisionID: v.ID, CommitmentVersion: commitment.Version, Revision: revision, Items: items, SelectedItemIDs: func() []string {
+			ids := []string{}
+			for _, item := range items {
+				ids = append(ids, item.ID)
+			}
+			return ids
+		}(), AnalysisStatus: "accepted_decision"}
+		var proposal proposals.Proposal
+		var createdTasks []proposals.Task
+		var updated decisions.Decision
+		publish := func() error {
+			var createErr error
+			proposal, createdTasks, createErr = proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: v.RepositoryID, ActorID: actor.UserID, Title: in.Title, Body: in.Body, Origin: origin, Tasks: tasks})
+			if createErr != nil && !errors.Is(createErr, proposals.ErrDurabilityUncertain) {
+				return createErr
+			}
+			taskIDs := make([]string, len(createdTasks))
+			for i := range createdTasks {
+				taskIDs[i] = createdTasks[i].ID
+			}
+			var linkErr error
+			updated, linkErr = store.LinkImplementation(v.ID, actor.UserID, decisions.Implementation{CommitmentVersion: commitment.Version, ProposalID: proposal.ID, TaskIDs: taskIDs, Revision: revision})
+			return linkErr
+		}
+		err = catalog.WithCurrentParticipants(participants, v.RepositoryID, func() error {
+			return bare.WithReferenceTarget("refs/heads/"+repository.DefaultBranch, revision, publish)
+		})
+		if err != nil {
+			if errors.Is(err, storage.ErrReferenceExists) || errors.Is(err, storage.ErrReferenceNotFound) {
+				writeAPIError(w, 409, "implementation_base_changed", "the default branch moved; rebuild the implementation plan")
+				return
+			}
+			writeAPIError(w, 422, "implementation_invalid", "human owners must be current participants and the plan must match the accepted decision")
+			return
+		}
+		recordActivity(activity, catalog, activities.Event{Kind: "decision.implementation_created", ActorID: actor.UserID, RepositoryID: v.RepositoryID, ResourceType: "decision", ResourceID: v.ID, ResourceTitle: v.Scope.Question})
+		writeJSON(w, 201, map[string]any{"decision": updated, "proposal": proposal, "tasks": createdTasks})
+	})
+	mux.HandleFunc("POST /decisions/{id}/implementation/{proposal_id}/observations", func(w http.ResponseWriter, r *http.Request) {
+		v, actor, ok := authorizeDecision(w, r, catalog, credentials, store, "repositories:write")
+		if !ok {
+			return
+		}
+		var in decisionDeliveryObservationInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "delivery observation is required")
+			return
+		}
+		updated, err := store.ReportDelivery(v.ID, r.PathValue("proposal_id"), actor.UserID, decisions.DeliveryObservation{Kind: in.Kind, Summary: in.Summary, ResourceKind: in.ResourceKind, ResourceID: in.ResourceID})
+		if writeDecisionError(w, err) {
+			return
+		}
+		recordActivity(activity, catalog, activities.Event{Kind: "decision.delivery_" + in.Kind, ActorID: actor.UserID, RepositoryID: v.RepositoryID, ResourceType: "decision", ResourceID: v.ID, ResourceTitle: v.Scope.Question})
 		writeJSON(w, 201, updated)
 	})
 	mux.HandleFunc("POST /decisions/{id}/research-credentials", func(w http.ResponseWriter, r *http.Request) {

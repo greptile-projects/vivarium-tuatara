@@ -14,6 +14,24 @@ The supported consumer contract, including authentication, stable error
 shapes, validation, and collection pagination, is documented in [API.md](API.md).
 Consumers should use that HTTP boundary rather than reading storage roots.
 
+## Accountable decision delivery
+
+An accepted technical decision can be converted once per commitment into an
+ordinary proposal with ordered human- and agent-owned tasks. The server freezes
+the current default-branch revision and derives every task outcome and
+verification plan from explicit decision constraints and success measures; the
+plan is rejected unless all of them are covered. Decision and commitment
+identity remains on proposal and task reasoning, so existing scoped sessions,
+workspaces, linked pulls, checks, release inclusions, and deployments preserve
+the rationale without gaining any new authority or bypass.
+
+Collaborators append attributable delivery observations linked to a review,
+check, integration attempt, release, or deployment. Confirmed coverage remains
+evidence on the accepted commitment. A deviation, changed assumption, failed
+measure, or incompatible work reopens the exact commitment and decision with an
+actionable reason, requiring explicit reconsideration rather than allowing
+downstream delivery to silently claim the obsolete choice.
+
 ## Exact-revision code navigation
 
 The repository code workspace searches one immutable commit for symbols and

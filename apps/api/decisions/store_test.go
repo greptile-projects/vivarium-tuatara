@@ -2,6 +2,7 @@ package decisions
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -96,6 +97,38 @@ func TestDecisionRejectsUnknownParticipantAndInvalidScope(t *testing.T) {
 	bad.OwnerID = "missing"
 	if _, err = s.Update(v.ID, "owner", 1, bad, "bad"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("owner err = %v", err)
+	}
+}
+
+func TestAcceptedCommitmentLinksOneImmutableImplementation(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 10, 21, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	deadline := now.Add(time.Hour)
+	v, err := s.Create("repo", Source{Kind: "repository"}, Scope{Question: "Ship it?", Constraints: []string{"No downtime"}, SuccessMeasures: []string{"p95 under 100ms"}, Deadline: &deadline, AffectedResources: []Resource{{Kind: "repository", Label: "repo"}}, Participants: []Participant{{UserID: "owner"}}, OwnerID: "owner"}, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.Status = "published"
+	v.Commitments = []Commitment{{Version: 1, Status: "published"}}
+	if err := s.write(v); err != nil {
+		t.Fatal(err)
+	}
+	input := Implementation{CommitmentVersion: 1, ProposalID: "proposal", TaskIDs: []string{"task-a", "task-b"}, Revision: strings.Repeat("a", 40)}
+	linked, err := s.LinkImplementation(v.ID, "owner", input)
+	if err != nil || len(linked.Implementations) != 1 || linked.History[len(linked.History)-1].Kind != "implementation_created" {
+		t.Fatalf("linked = %#v, %v", linked, err)
+	}
+	retry, err := s.LinkImplementation(v.ID, "owner", input)
+	if err != nil || len(retry.Implementations) != 1 || retry.Implementations[0].ProposalID != "proposal" {
+		t.Fatalf("retry = %#v, %v", retry, err)
+	}
+	if _, err := s.LinkImplementation(v.ID, "owner", Implementation{CommitmentVersion: 1, ProposalID: "different", TaskIDs: []string{"different"}, Revision: strings.Repeat("b", 40)}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed retry = %v", err)
+	}
+	reopened, err := s.ReportDelivery(v.ID, "proposal", "reviewer", DeliveryObservation{Kind: "failed_measure", Summary: "p95 reached 140ms", ResourceKind: "deployment", ResourceID: "production-42"})
+	if err != nil || reopened.Status != "pending" || reopened.Commitments[0].Status != "reopened" || len(reopened.Implementations[0].Observations) != 1 {
+		t.Fatalf("reopened = %#v, %v", reopened, err)
 	}
 }
 
