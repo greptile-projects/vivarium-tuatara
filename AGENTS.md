@@ -252,6 +252,14 @@ whenever dependencies change or the web job fails before it starts.
   before container creation. Setup failure or timeout force-removes that
   workload and any attached volumes. Suspend/resume uses the definition SHA-256 as a
   compare-and-swap foundation and never resolves a moving branch or reruns setup.
+  Repository and organization owners additionally define versioned workspace
+  policies for resource ceilings, network isolation, idle/runtime/retention,
+  sharing, and approved-agent execution. Organization limits constrain local
+  repository policy. Launch snapshots the effective policy; later changes mark
+  active work rebuild-required. Owners inspect attributed elapsed/reserved
+  consumption, announce expiry for checkpoint export, and stop or expire only
+  compute and control authority while checkpoint, provenance, commit, and pull
+  evidence remains retained.
   Running workspace automation reuses that container for bounded file browsing,
   compare-and-swap editing, literal search, attributed command outcomes,
   loopback port discovery, and authenticated sandboxed previews. Durable change

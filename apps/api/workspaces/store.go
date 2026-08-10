@@ -111,27 +111,38 @@ type Change struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 type Workspace struct {
-	ID               string           `json:"id"`
-	RepositoryID     string           `json:"repository_id"`
-	CommitID         string           `json:"commit_id"`
-	Definition       Definition       `json:"definition"`
-	DefinitionSHA256 string           `json:"definition_sha256"`
-	Source           Source           `json:"source"`
-	CreatorID        string           `json:"creator_id"`
-	Access           Access           `json:"effective_access"`
-	State            string           `json:"state"`
-	Setup            []SetupStep      `json:"setup_evidence"`
-	Events           []Event          `json:"events"`
-	Commands         []CommandOutcome `json:"command_outcomes"`
-	Changes          []Change         `json:"changes"`
-	Presence         []Presence       `json:"presence"`
-	Control          Control          `json:"control"`
-	Messages         []Message        `json:"messages"`
-	HeadCheckpointID string           `json:"head_checkpoint_id,omitempty"`
-	CreatedAt        time.Time        `json:"created_at"`
-	UpdatedAt        time.Time        `json:"updated_at"`
-	SuspendedAt      *time.Time       `json:"suspended_at,omitempty"`
-	ResumedAt        *time.Time       `json:"resumed_at,omitempty"`
+	ID                string           `json:"id"`
+	RepositoryID      string           `json:"repository_id"`
+	CommitID          string           `json:"commit_id"`
+	Definition        Definition       `json:"definition"`
+	DefinitionSHA256  string           `json:"definition_sha256"`
+	Source            Source           `json:"source"`
+	CreatorID         string           `json:"creator_id"`
+	Access            Access           `json:"effective_access"`
+	State             string           `json:"state"`
+	Setup             []SetupStep      `json:"setup_evidence"`
+	Events            []Event          `json:"events"`
+	Commands          []CommandOutcome `json:"command_outcomes"`
+	Changes           []Change         `json:"changes"`
+	Presence          []Presence       `json:"presence"`
+	Control           Control          `json:"control"`
+	Messages          []Message        `json:"messages"`
+	HeadCheckpointID  string           `json:"head_checkpoint_id,omitempty"`
+	CreatedAt         time.Time        `json:"created_at"`
+	UpdatedAt         time.Time        `json:"updated_at"`
+	SuspendedAt       *time.Time       `json:"suspended_at,omitempty"`
+	ResumedAt         *time.Time       `json:"resumed_at,omitempty"`
+	Policy            Policy           `json:"policy"`
+	PolicyScope       string           `json:"policy_scope"`
+	PolicyVersion     int              `json:"policy_version"`
+	LastActivityAt    time.Time        `json:"last_activity_at"`
+	ExpiresAt         *time.Time       `json:"expires_at,omitempty"`
+	ExpiryAnnouncedAt *time.Time       `json:"expiry_announced_at,omitempty"`
+	StoppedAt         *time.Time       `json:"stopped_at,omitempty"`
+	StoppedBy         string           `json:"stopped_by,omitempty"`
+	StopReason        string           `json:"stop_reason,omitempty"`
+	RebuildRequired   bool             `json:"rebuild_required"`
+	RebuildReasons    []string         `json:"rebuild_reasons"`
 }
 
 func randomID(size int) (string, error) {
@@ -456,6 +467,11 @@ func (s *Store) Create(w Workspace, definitionBytes []byte) (Workspace, error) {
 	w.DefinitionSHA256 = hex.EncodeToString(sum[:])
 	now := s.now()
 	w.CreatedAt, w.UpdatedAt = now, now
+	w.LastActivityAt = now
+	if w.Policy.MaxRuntimeHours > 0 {
+		expires := now.Add(time.Duration(w.Policy.MaxRuntimeHours) * time.Hour)
+		w.ExpiresAt = &expires
+	}
 	w.State = "provisioning"
 	w.Control = Control{Version: 1, PrincipalKind: "human", PrincipalID: w.CreatorID, Mode: "execute", Scopes: []string{"files", "commands", "lifecycle"}, GrantedBy: w.CreatorID, GrantedAt: now, ExpiresAt: now.Add(time.Hour)}
 	w.Presence = []Presence{}
@@ -489,6 +505,54 @@ func (s *Store) Complete(id string, steps []SetupStep, failure bool) (Workspace,
 	w.Events = append(w.Events, Event{Kind: "setup_completed", ActorID: w.CreatorID, CreatedAt: w.UpdatedAt})
 	e = s.write(w)
 	return w, e
+}
+
+// Stop removes compute authority while retaining the workspace record,
+// checkpoints, provenance ledger, and any already-published Git objects.
+func (s *Store) Stop(id, actor, reason, state string) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if state != "stopped" && state != "expired" {
+		return Workspace{}, ErrInvalid
+	}
+	now := s.now()
+	w.State, w.StoppedAt, w.StoppedBy, w.StopReason = state, &now, actor, reason
+	w.Control = Control{Version: w.Control.Version + 1, Mode: "observe", GrantedBy: actor, GrantedAt: now, ExpiresAt: now}
+	w.Presence = []Presence{}
+	w.UpdatedAt = now
+	w.Events = append(w.Events, Event{Kind: state, ActorID: actor, Role: "instruction", Detail: reason, CreatedAt: now})
+	return w, s.write(w)
+}
+
+func (s *Store) AnnounceExpiry(id, actor string, at time.Time, reason string) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if !at.After(s.now()) {
+		return Workspace{}, ErrInvalid
+	}
+	now := s.now()
+	w.ExpiresAt, w.ExpiryAnnouncedAt, w.UpdatedAt = &at, &now, now
+	w.Events = append(w.Events, Event{Kind: "expiry.announced", ActorID: actor, Role: "instruction", Detail: reason, CreatedAt: now})
+	return w, s.write(w)
+}
+
+func (s *Store) MarkRebuild(id string, reasons []string) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	w.RebuildRequired, w.RebuildReasons, w.UpdatedAt = len(reasons) > 0, append([]string(nil), reasons...), s.now()
+	return w, s.write(w)
 }
 func (s *Store) Get(id string) (Workspace, error) {
 	s.mu.Lock()
@@ -594,6 +658,14 @@ func (s *Store) readName(name string) (Workspace, error) {
 	var w Workspace
 	if json.Unmarshal(body, &w) != nil {
 		return Workspace{}, ErrNotFound
+	}
+	if w.Policy.Version == 0 {
+		w.Policy = DefaultPolicy()
+		w.PolicyVersion = w.Policy.Version
+		w.PolicyScope = "platform-default"
+	}
+	if w.LastActivityAt.IsZero() {
+		w.LastActivityAt = w.UpdatedAt
 	}
 	// Presence is a renewable observation, not authority. A disconnected client
 	// disappears deterministically even when it cannot publish an explicit leave.

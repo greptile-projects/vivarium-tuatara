@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
-import { api, APIError, DevelopmentWorkspace } from "@/lib/api";
+import { api, APIError, DevelopmentWorkspace, WorkspaceConsumption, WorkspacePolicy } from "@/lib/api";
 import { useAuth } from "./auth";
 import { Badge, Button, Card } from "./ui";
 import { WorkspaceIDE } from "./workspace-ide";
@@ -213,6 +213,7 @@ export function DevelopmentWorkspaces({
                 Effective access: {item.effective_access.role} ·{" "}
                 {item.effective_access.scopes.join(", ")}
               </p>
+              <WorkspaceGovernance workspace={item} onWorkspace={(updated) => setItems([updated])} />
               {!controlsLifecycle(item) && (
                 <Button
                   className="mt-4"
@@ -249,6 +250,15 @@ export function DevelopmentWorkspaces({
       ))}
     </div>
   );
+}
+
+function WorkspaceGovernance({workspace,onWorkspace}:{workspace:DevelopmentWorkspace;onWorkspace:(workspace:DevelopmentWorkspace)=>void}) {
+  const {token}=useAuth(); const [usage,setUsage]=useState<WorkspaceConsumption>(); const [currentPolicy,setCurrentPolicy]=useState<WorkspacePolicy>(workspace.policy); const [error,setError]=useState(""); const [pending,setPending]=useState(false);
+  const owner=workspace.effective_access.role==="owner";
+  useEffect(()=>{if(!token||!owner)return;void Promise.all([api<{items:WorkspaceConsumption[]}>(`/repositories/${workspace.repository_id}/workspace-usage`,{},token),api<WorkspacePolicy>(`/repositories/${workspace.repository_id}/workspace-policy`,{},token)]).then(([v,p])=>{setUsage(v.items.find(x=>x.workspace_id===workspace.id));setCurrentPolicy(p)}).catch(()=>{});},[token,owner,workspace.id,workspace.repository_id]);
+  async function savePolicy(event:FormEvent<HTMLFormElement>){event.preventDefault();if(!token)return;setPending(true);const data=new FormData(event.currentTarget);const input:Omit<WorkspacePolicy,"updated_by"|"updated_at">={version:currentPolicy.version,max_cpus:Number(data.get("max_cpus")),max_memory_mb:Number(data.get("max_memory_mb")),max_storage_mb:Number(data.get("max_storage_mb")),network:"none",idle_minutes:Number(data.get("idle_minutes")),max_runtime_hours:Number(data.get("max_runtime_hours")),retention_hours:Number(data.get("retention_hours")),sharing:String(data.get("sharing")) as WorkspacePolicy["sharing"],agent_execution:data.get("agent_execution")==="on"};try{setCurrentPolicy(await api<WorkspacePolicy>(`/repositories/${workspace.repository_id}/workspace-policy`,{method:"PUT",body:JSON.stringify({...input,expected_version:currentPolicy.version})},token));}catch(e){setError(e instanceof APIError?e.message:"Policy could not be saved.");}finally{setPending(false)}}
+  async function act(kind:"stop"|"expiry"){if(!token)return;setPending(true);try{const body=kind==="expiry"?{expires_at:new Date(Date.now()+24*60*60*1000).toISOString(),reason:"Owner-announced expiry; export unpublished work before this time."}:{reason:"Stopped by repository owner"};onWorkspace(await api<DevelopmentWorkspace>(`/workspaces/${workspace.id}/${kind}`,{method:"POST",body:JSON.stringify(body)},token));}catch(e){setError(e instanceof APIError?e.message:"Workspace governance update failed.")}finally{setPending(false)}}
+  return <section className="mt-5 rounded-lg border border-[var(--line)] p-4"><h3 className="font-semibold">Governance and consumption</h3><p className="mt-1 text-xs text-[var(--muted)]">Launch policy {workspace.policy_scope} v{workspace.policy_version} · {workspace.policy.sharing} sharing · network {workspace.policy.network} · idle after {workspace.policy.idle_minutes} minutes</p>{workspace.rebuild_required&&<p className="mt-2 text-sm text-[var(--warning)]">Rebuild required: {workspace.rebuild_reasons.join("; ")}</p>}{workspace.expires_at&&<p className="mt-2 text-sm">Expiry: {new Date(workspace.expires_at).toLocaleString()}{workspace.expiry_announced_at?" (announced)":""}</p>}{workspace.stop_reason&&<p className="mt-2 text-sm text-[var(--danger)]">{workspace.stop_reason}</p>}{usage&&<dl className="mt-3 grid gap-2 text-xs sm:grid-cols-3"><div><dt>CPU consumed</dt><dd>{Math.round(usage.cpu_seconds)} seconds</dd></div><div><dt>Memory reserved</dt><dd>{usage.memory_mb_hours.toFixed(1)} MB-hours</dd></div><div><dt>Storage reserved</dt><dd>{usage.storage_mb_hours.toFixed(1)} MB-hours</dd></div></dl>}{owner&&<><form onSubmit={savePolicy} className="mt-4 grid gap-2 sm:grid-cols-3">{[["max_cpus","Max CPUs",currentPolicy.max_cpus],["max_memory_mb","Memory MB",currentPolicy.max_memory_mb],["max_storage_mb","Storage MB",currentPolicy.max_storage_mb],["idle_minutes","Idle minutes",currentPolicy.idle_minutes],["max_runtime_hours","Runtime hours",currentPolicy.max_runtime_hours],["retention_hours","Retention hours",currentPolicy.retention_hours]].map(([name,label,value])=><label className="text-xs font-semibold" key={String(name)}>{label}<input name={String(name)} type="number" step={name==="max_cpus"?"0.25":"1"} defaultValue={value} className="mt-1 w-full rounded-lg border border-[var(--line)] p-2 font-normal"/></label>)}<label className="text-xs font-semibold">Sharing<select name="sharing" defaultValue={currentPolicy.sharing} className="mt-1 w-full rounded-lg border border-[var(--line)] p-2 font-normal"><option value="private">Creator only</option><option value="repository">Repository collaborators</option><option value="organization">Organization</option></select></label><label className="flex items-center gap-2 text-xs font-semibold"><input name="agent_execution" type="checkbox" defaultChecked={currentPolicy.agent_execution}/> Allow approved agents</label><Button disabled={pending}>Save repository policy</Button></form><div className="mt-3 flex gap-2"><Button disabled={pending||!!workspace.expiry_announced_at} onClick={()=>void act("expiry")}>Announce 24-hour expiry</Button><Button disabled={pending||workspace.state==="stopped"||workspace.state==="expired"} onClick={()=>void act("stop")}>Stop compute</Button></div></>}{error&&<p role="alert" className="mt-2 text-sm text-[var(--danger)]">{error}</p>}</section>
 }
 
 export function WorkspaceLauncher() {
