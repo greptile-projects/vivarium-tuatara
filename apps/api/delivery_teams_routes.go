@@ -76,7 +76,7 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, catalog *repositories.Store,
 		out := []deliveryteams.Team{}
 		for _, v := range all {
 			if allowed[v.RepositoryID] || deliveryInvitee(v, actor.UserID, orgs, catalog) {
-				out = append(out, projectDeliveryAccess(v, catalog, orgs))
+				out = append(out, projectDeliveryAccess(v, actor.UserID, catalog, orgs))
 			}
 		}
 		writeJSON(w, 200, map[string]any{"delivery_teams": out})
@@ -100,7 +100,7 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, catalog *repositories.Store,
 			writeAPIError(w, 404, "delivery_team_not_found", "delivery team not found")
 			return
 		}
-		writeJSON(w, 200, projectDeliveryAccess(v, catalog, orgs))
+		writeJSON(w, 200, projectDeliveryAccess(v, actor.UserID, catalog, orgs))
 	})
 	mux.HandleFunc("PUT /delivery-teams/{id}", func(w http.ResponseWriter, r *http.Request) {
 		existing, err := store.Get(r.PathValue("id"))
@@ -274,6 +274,21 @@ func grantCovers(g organizations.AccessGrant, repo string) bool {
 	}
 	return false
 }
+func agentGrantAccess(o organizations.Organization, agent, repo string) (string, string) {
+	level, source := "none", "no independent grant"
+	for _, g := range o.AccessGrants {
+		if g.PrincipalType != "agent" || g.PrincipalID != agent || !grantCovers(g, repo) {
+			continue
+		}
+		if level == "none" {
+			level, source = "read", "organization grant "+g.ID
+		}
+		if g.Role != "viewer" {
+			level, source = "write", "organization grant "+g.ID
+		}
+	}
+	return level, source
+}
 func deliveryInvitee(v deliveryteams.Team, user string, orgs *organizations.Store, catalogs ...*repositories.Store) bool {
 	for _, p := range v.Participants {
 		if p.PrincipalType == "human" && p.PrincipalID == user {
@@ -285,10 +300,11 @@ func deliveryInvitee(v deliveryteams.Team, user string, orgs *organizations.Stor
 	}
 	return false
 }
-func projectDeliveryAccess(v deliveryteams.Team, catalog *repositories.Store, orgs *organizations.Store) deliveryteams.Team {
+func projectDeliveryAccess(v deliveryteams.Team, viewer string, catalog *repositories.Store, orgs *organizations.Store) deliveryteams.Team {
 	repo, _ := catalog.GetByID(v.RepositoryID)
 	for i := range v.Participants {
 		p := &v.Participants[i]
+		p.CanRespond = p.Status == "pending" && (p.PrincipalType == "human" && p.PrincipalID == viewer || p.PrincipalType == "agent" && agentOperator(v.RepositoryID, p.PrincipalID, viewer, orgs, catalog))
 		p.AccessPreview = []deliveryteams.AccessPreview{}
 		for _, req := range p.RequiredAccess {
 			level, source := "none", "no independent grant"
@@ -304,15 +320,7 @@ func projectDeliveryAccess(v deliveryteams.Team, catalog *repositories.Store, or
 			} else {
 				if repo.OrganizationID != "" {
 					if o, err := orgs.Get(repo.OrganizationID); err == nil {
-						for _, g := range o.AccessGrants {
-							if g.PrincipalType == "agent" && g.PrincipalID == p.PrincipalID && grantCovers(g, req.RepositoryID) {
-								level = "read"
-								if g.Role != "viewer" {
-									level = "write"
-								}
-								source = "organization grant " + g.ID
-							}
-						}
+						level, source = agentGrantAccess(o, p.PrincipalID, req.RepositoryID)
 					}
 				}
 			}

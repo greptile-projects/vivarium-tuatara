@@ -50,3 +50,28 @@ func TestCharterRejectsDuplicatePrincipalAndStaleResponse(t *testing.T) {
 		t.Fatalf("stale response = %v", err)
 	}
 }
+
+func TestChangedInvitationTermsRequireFreshAcceptance(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, err := s.Create("repo", Outcome{Kind: "planned_outcome", ResourceID: "outcome", Title: "Outcome"}, charter("alice", "lead"), "organizer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.Respond(v.ID, "alice-slot", "alice", "accepted", v.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unchanged := charter("alice", "lead")
+	v, err = s.Update(v.ID, "organizer", v.Version, unchanged)
+	if err != nil || v.Participants[0].Status != "accepted" {
+		t.Fatalf("unchanged acceptance = %#v, %v", v.Participants[0], err)
+	}
+	changed := charter("alice", "delivery lead")
+	v, err = s.Update(v.ID, "organizer", v.Version, changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Participants[0].Status != "pending" || v.Participants[0].RespondedBy != "" || v.Participants[0].RespondedAt != nil {
+		t.Fatalf("changed acceptance = %#v", v.Participants[0])
+	}
+}

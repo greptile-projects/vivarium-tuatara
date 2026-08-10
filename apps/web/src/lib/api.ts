@@ -10,7 +10,7 @@ export type DeliveryTeam = {
   outcome: { kind: "proposal" | "initiative" | "decision" | "incident_follow_up" | "planned_outcome"; resource_id: string; title: string };
   overall_budget?: { unit: "minutes" | "credits" | "usd"; limit: number };
   deadline?: string; escalation_path: string; version: number;
-  participants: { id: string; principal_type: "human" | "agent"; principal_id: string; role: string; responsibility: string; why: string; budget?: { unit: string; limit: number }; deadline?: string; escalation: string; required_access: { repository_id: string; level: "read" | "write" }[]; access_preview: { repository_id: string; required: string; effective: string; source: string; sufficient: boolean }[]; status: "pending" | "accepted" | "declined"; invited_by: string; invited_at: string; responded_by?: string; responded_at?: string }[];
+  participants: { id: string; principal_type: "human" | "agent"; principal_id: string; role: string; responsibility: string; why: string; budget?: { unit: string; limit: number }; deadline?: string; escalation: string; required_access: { repository_id: string; level: "read" | "write" }[]; access_preview: { repository_id: string; required: string; effective: string; source: string; sufficient: boolean }[]; status: "pending" | "accepted" | "declined"; can_respond: boolean; invited_by: string; invited_at: string; responded_by?: string; responded_at?: string }[];
   events: { id: string; kind: string; actor_id: string; summary: string; version: number; created_at: string }[];
   created_at: string; updated_at: string;
 };

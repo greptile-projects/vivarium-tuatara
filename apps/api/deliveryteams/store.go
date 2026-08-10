@@ -56,6 +56,7 @@ type Participant struct {
 	RespondedBy    string              `json:"responded_by,omitempty"`
 	RespondedAt    *time.Time          `json:"responded_at,omitempty"`
 	ReplacedBy     string              `json:"replaced_by,omitempty"`
+	CanRespond     bool                `json:"can_respond"`
 }
 type Event struct {
 	ID        string    `json:"id"`
@@ -128,6 +129,29 @@ func validCharter(c Charter) bool {
 		seen[key] = true
 	}
 	return len(c.Participants) > 0
+}
+
+func sameInvitationTerms(a, b Participant) bool {
+	if a.PrincipalType != b.PrincipalType || a.PrincipalID != b.PrincipalID ||
+		a.Role != b.Role || a.Responsibility != b.Responsibility || a.Why != b.Why ||
+		a.Escalation != b.Escalation || !sameBudget(a.Budget, b.Budget) || !sameTime(a.Deadline, b.Deadline) ||
+		len(a.RequiredAccess) != len(b.RequiredAccess) {
+		return false
+	}
+	for i := range a.RequiredAccess {
+		if a.RequiredAccess[i] != b.RequiredAccess[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func sameBudget(a, b *Budget) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
+}
+
+func sameTime(a, b *time.Time) bool {
+	return a == nil && b == nil || a != nil && b != nil && a.Equal(*b)
 }
 func (s *Store) path(v string) string { return filepath.Join(s.root, v+".json") }
 func (s *Store) read(v string) (Team, error) {
@@ -239,11 +263,19 @@ func (s *Store) Update(v, actor string, expected int, c Charter) (Team, error) {
 	for i := range c.Participants {
 		p := &c.Participants[i]
 		if prior, ok := old[p.PrincipalType+":"+p.PrincipalID]; ok {
-			p.Status = prior.Status
-			p.InvitedBy = prior.InvitedBy
-			p.InvitedAt = prior.InvitedAt
-			p.RespondedBy = prior.RespondedBy
-			p.RespondedAt = prior.RespondedAt
+			if sameInvitationTerms(prior, *p) {
+				p.Status = prior.Status
+				p.InvitedBy = prior.InvitedBy
+				p.InvitedAt = prior.InvitedAt
+				p.RespondedBy = prior.RespondedBy
+				p.RespondedAt = prior.RespondedAt
+			} else {
+				p.Status = "pending"
+				p.InvitedBy = actor
+				p.InvitedAt = now
+				p.RespondedBy = ""
+				p.RespondedAt = nil
+			}
 		} else {
 			p.Status = "pending"
 			p.InvitedBy = actor

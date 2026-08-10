@@ -9,6 +9,7 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deliveryteams"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
@@ -53,4 +54,15 @@ func TestDeliveryTeamAPIInvitesWithoutGrantingRepositoryAuthority(t *testing.T) 
 		t.Fatalf("acceptance = %#v", team)
 	}
 	authenticatedRequest(t, http.MethodPut, server.URL+"/delivery-teams/"+team.ID, fmt.Sprintf(`{"expected_version":%d,"charter":{}}`, team.Version), invitee.Credential.Token, http.StatusNotFound).Body.Close()
+}
+
+func TestAgentGrantAccessRetainsStrongestOverlappingGrant(t *testing.T) {
+	o := organizations.Organization{AccessGrants: []organizations.AccessGrant{
+		{ID: "write", PrincipalType: "agent", PrincipalID: "agent", Role: "maintainer", Resources: []organizations.ResourceScope{{Kind: "repository", ID: "repo"}}},
+		{ID: "viewer", PrincipalType: "agent", PrincipalID: "agent", Role: "viewer", Resources: []organizations.ResourceScope{{Kind: "repository", ID: "repo"}}},
+	}}
+	level, source := agentGrantAccess(o, "agent", "repo")
+	if level != "write" || source != "organization grant write" {
+		t.Fatalf("access = %s, %s", level, source)
+	}
 }
