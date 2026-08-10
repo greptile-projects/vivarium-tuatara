@@ -109,6 +109,9 @@ are `observation`, `instruction`, `authorship`, and `execution`.
 dependency names and notes. It snapshots only regular repository-file changes
 against the workspace's exact base commit, with a 32 MiB total limit. Suspected
 credential paths or contents reject the request with `422 checkpoint_not_safe`.
+Inspection covers the complete bounded snapshot rather than treating large
+files as implicitly safe. Runtime capture and durable publication are one
+workspace-admission operation, ordered against controlled file mutations.
 `GET /workspaces/{id}/checkpoints` and `GET .../checkpoints/{checkpoint-id}`
 return attribution, environment definition, parent lineage, change operations,
 hashes, modes, and sizes; private stored file bytes and textual patches are

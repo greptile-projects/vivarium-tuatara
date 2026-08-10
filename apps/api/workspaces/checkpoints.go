@@ -58,6 +58,29 @@ func (s *Store) CreateCheckpoint(workspaceID, actor, expectedParent, title, desc
 	control := s.controlLock(workspaceID)
 	control.Lock()
 	defer control.Unlock()
+	return s.createCheckpoint(workspaceID, actor, expectedParent, title, description, reproducibility, files)
+}
+
+// CaptureAndCreateCheckpoint holds the same admission lock as controlled file
+// mutations from the first runtime read through durable lineage publication.
+func (s *Store) CaptureAndCreateCheckpoint(workspaceID, actor, expectedParent, title, description string, reproducibility Reproducibility, capture func(Workspace) ([]CheckpointFile, error)) (Checkpoint, error) {
+	control := s.controlLock(workspaceID)
+	control.Lock()
+	defer control.Unlock()
+	s.mu.Lock()
+	w, err := s.read(workspaceID)
+	s.mu.Unlock()
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	files, err := capture(w)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	return s.createCheckpoint(workspaceID, actor, expectedParent, title, description, reproducibility, files)
+}
+
+func (s *Store) createCheckpoint(workspaceID, actor, expectedParent, title, description string, reproducibility Reproducibility, files []CheckpointFile) (Checkpoint, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	w, err := s.read(workspaceID)

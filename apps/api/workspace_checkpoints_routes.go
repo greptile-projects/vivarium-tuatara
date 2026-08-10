@@ -64,12 +64,16 @@ func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, c
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
-		files, err := captureWorkspaceCheckpoint(git, item)
-		if err != nil {
+		captureFailed := false
+		created, err := store.CaptureAndCreateCheckpoint(item.ID, actor.UserID, input.ExpectedParent, input.Title, input.Description, input.Reproducibility, func(current workspaces.Workspace) ([]workspaces.CheckpointFile, error) {
+			files, captureErr := captureWorkspaceCheckpoint(git, current)
+			captureFailed = captureErr != nil
+			return files, captureErr
+		})
+		if captureFailed {
 			writeAPIError(w, 422, "checkpoint_not_safe", err.Error())
 			return
 		}
-		created, err := store.CreateCheckpoint(item.ID, actor.UserID, input.ExpectedParent, input.Title, input.Description, input.Reproducibility, files)
 		if errors.Is(err, workspaces.ErrCheckpointConflict) {
 			writeAPIError(w, 409, "checkpoint_lineage_changed", "another checkpoint or restore changed the workspace lineage")
 			return
@@ -326,9 +330,6 @@ func looksCredentialPath(p string) bool {
 	return false
 }
 func looksCredentialContent(data []byte) bool {
-	if len(data) > 2<<20 {
-		return false
-	}
 	s := strings.ToUpper(string(data))
 	markers := []string{"-----BEGIN PRIVATE KEY-----", "-----BEGIN OPENSSH PRIVATE KEY-----", "AWS_SECRET_ACCESS_KEY=", "GITHUB_TOKEN=", "OPENAI_API_KEY=", "PASSWORD=", "CLIENT_SECRET="}
 	for _, marker := range markers {
@@ -420,6 +421,10 @@ rollback() {
 			cp -a -- "$tx/backup/$payload" "$target"
 		fi
 	done < "$tx/manifest"
+	while read -r encoded; do
+		directory=$(printf '%s' "$encoded" | base64 -d)
+		rmdir -- "$directory" 2>/dev/null || true
+	done < "$tx/missing-dirs"
 }
 finish() {
 	status=$?
@@ -430,6 +435,7 @@ finish() {
 trap finish EXIT HUP INT TERM
 tar -x -C "$tx"
 mkdir "$tx/backup"
+: > "$tx/missing-dirs"
 while IFS="$(printf '\t')" read -r operation mode encoded payload; do
 	path=$(printf '%s' "$encoded" | base64 -d)
 	case "$path" in ""|/*|../*|*/../*|*/..) exit 42 ;; esac
@@ -443,6 +449,14 @@ while IFS="$(printf '\t')" read -r operation mode encoded payload; do
 	path=$(printf '%s' "$encoded" | base64 -d)
 	target="$root/$path"
 	if [ "$operation" = delete ]; then rm -rf -- "$target"; continue; fi
+	parent=$(dirname "$target")
+	while [ "$parent" != "$root" ]; do
+		if [ ! -e "$parent" ] && [ ! -L "$parent" ]; then
+			printf '%s' "$parent" | base64 | tr -d '\n' >> "$tx/missing-dirs"
+			printf '\n' >> "$tx/missing-dirs"
+		fi
+		parent=$(dirname "$parent")
+	done
 	mkdir -p -- "$(dirname "$target")"
 	parent=$(realpath -m "$(dirname "$target")")
 	case "$parent" in "$root"|"$root"/*) ;; *) exit 42 ;; esac

@@ -38,6 +38,12 @@ func TestCompareCheckpointTreesCapturesDiffWithoutCredentials(t *testing.T) {
 	if _, err = compareCheckpointTrees(base, runtime); err == nil {
 		t.Fatal("credential content was captured")
 	}
+	os.Remove(filepath.Join(runtime, "config.txt"))
+	oversized := append([]byte("AWS_SECRET_ACCESS_KEY=secret\n"), bytes.Repeat([]byte("x"), 2<<20)...)
+	os.WriteFile(filepath.Join(runtime, "large.txt"), oversized, 0600)
+	if _, err = compareCheckpointTrees(base, runtime); err == nil {
+		t.Fatal("oversized credential content was captured")
+	}
 }
 
 func TestMissingCheckpointDependencies(t *testing.T) {
@@ -57,6 +63,7 @@ func TestCheckpointRestoreRollsBackEveryEarlierMutation(t *testing.T) {
 	}
 	checkpoint := workspaces.Checkpoint{Files: []workspaces.CheckpointFile{
 		{Path: "first.txt", Operation: "modify", Mode: 0600, ContentB64: base64.StdEncoding.EncodeToString([]byte("after"))},
+		{Path: "created/parents/new.txt", Operation: "add", Mode: 0600, ContentB64: base64.StdEncoding.EncodeToString([]byte("temporary"))},
 		{Path: "blocked/second.txt", Operation: "add", Mode: 0600, ContentB64: base64.StdEncoding.EncodeToString([]byte("fails"))},
 	}}
 	archive, err := checkpointRestoreArchive(checkpoint)
@@ -65,7 +72,8 @@ func TestCheckpointRestoreRollsBackEveryEarlierMutation(t *testing.T) {
 	}
 	cmd := exec.Command("sh", "-c", checkpointRestoreScript, "sh", root)
 	cmd.Stdin = bytes.NewReader(archive)
-	if err = cmd.Run(); err == nil {
+	trace, runErr := cmd.CombinedOutput()
+	if err = runErr; err == nil {
 		t.Fatal("restore unexpectedly succeeded")
 	}
 	got, err := os.ReadFile(filepath.Join(root, "first.txt"))
@@ -75,5 +83,8 @@ func TestCheckpointRestoreRollsBackEveryEarlierMutation(t *testing.T) {
 	blocked, err := os.ReadFile(filepath.Join(root, "blocked"))
 	if err != nil || string(blocked) != "not a directory" {
 		t.Fatalf("blocker after rollback = %q, %v", blocked, err)
+	}
+	if _, err = os.Stat(filepath.Join(root, "created")); !os.IsNotExist(err) {
+		t.Fatalf("restore left created parent directories: %v\n%s", err, trace)
 	}
 }

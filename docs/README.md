@@ -74,7 +74,11 @@ declared dependencies, and definition drift, and returns a token bound to the
 current snapshot and lineage. Applying requires the current human file-control
 lease and rechecks that token inside control admission. Restore moves the
 workspace checkpoint head to the selected record, so the next checkpoint forms
-an explicit branch while prior descendants remain retained.
+an explicit branch while prior descendants remain retained. Checkpoint capture
+and publication share that admission boundary, so an admitted file write cannot
+finish between the snapshot and lineage update. Restore stages and backs up all
+targets before mutation; failure restores them and removes parent directories
+introduced by the transaction.
 
 ## Unsafe package recovery
 

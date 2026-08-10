@@ -95,3 +95,43 @@ func TestCheckpointCreationCannotInterleaveWithRestoreLineage(t *testing.T) {
 		t.Fatal("intervening checkpoint did not publish after restore")
 	}
 }
+
+func TestCheckpointCaptureWaitsForAdmittedFileMutation(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.Create(Workspace{RepositoryID: "0123456789abcdef0123456789abcdef", CommitID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CreatorID: "user"}, []byte(`{"version":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutationAdmitted, releaseMutation := make(chan struct{}), make(chan struct{})
+	mutation := make(chan error, 1)
+	go func() {
+		mutation <- s.WithControl(w.ID, "user", "files", func(Workspace) error { close(mutationAdmitted); <-releaseMutation; return nil })
+	}()
+	<-mutationAdmitted
+	captureStarted := make(chan struct{})
+	created := make(chan error, 1)
+	go func() {
+		_, e := s.CaptureAndCreateCheckpoint(w.ID, "peer", "", "after mutation", "", Reproducibility{}, func(Workspace) ([]CheckpointFile, error) { close(captureStarted); return nil, nil })
+		created <- e
+	}()
+	select {
+	case <-captureStarted:
+		t.Fatal("checkpoint captured during admitted mutation")
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(releaseMutation)
+	if err = <-mutation; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-captureStarted:
+	case <-time.After(time.Second):
+		t.Fatal("checkpoint capture did not resume")
+	}
+	if err = <-created; err != nil {
+		t.Fatal(err)
+	}
+}

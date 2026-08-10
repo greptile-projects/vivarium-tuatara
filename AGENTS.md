@@ -278,7 +278,9 @@ whenever dependencies change or the web job fails before it starts.
   fail closed. Restore requires a divergence/conflict/dependency preflight
   token and live file control, revalidates the token inside control admission,
   and moves the checkpoint head so later checkpoints explicitly branch from the
-  restored record.
+  restored record. Runtime capture through checkpoint publication shares that
+  admission lock with file mutations. Restore stages and backs up every target;
+  failures restore files and remove transaction-created parent directories.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version
