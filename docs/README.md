@@ -1387,3 +1387,18 @@ current at that moment independently of the selected revision, preserving
 deliberate historical comparisons. Workspace creation and decision linking are
 retry-safe: identical launches reuse one running workspace and an exact link
 retry returns the retained experiment.
+
+The accountable owner can request an acknowledgement from the current owner of
+an affected repository or an approval tied to an applicable active organization
+policy rule. Requests, approvals, rejections, and unresolved conflicts are
+public to current decision readers. Publication freezes a numbered commitment:
+the selected alternative, every rejected alternative, rationale, accepted
+tradeoffs, dissent, conditions, review date, and the exact retained evidence
+considered. It also snapshots the approval trail and any approved, expiring
+policy exception, so downstream work can explain the temporary deviation.
+Every current non-superseded opposing finding is retained exactly once. An
+exception can use only the purpose approved by the policy owner, cannot outlive
+the approval's frozen maximum expiry, and cannot reuse one approval twice.
+Material scope, alternative, finding, or experiment changes reopen the decision,
+supersede the old approvals, and retain the earlier commitment unchanged;
+discussion can clarify a published choice without silently invalidating it.

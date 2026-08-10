@@ -1004,6 +1004,19 @@ whenever dependencies change or the web job fails before it starts.
   decision/alternative/commit launches by one actor are serialized across
   processes and reuse the running workspace; linking that workspace to the
   decision is idempotent, making a failed second request safely retryable.
+  The accountable owner turns that context into an immutable commitment only
+  after resolving requested affected-repository-owner acknowledgements and
+  active organization-policy approvals. Each published version freezes its
+  selected and rejected alternatives, rationale, accepted tradeoffs, dissent,
+  conditions, review date, exact cited evidence, approvals, and authorized
+  expiring policy exceptions. Pending and rejected requests remain visible as
+  governance conflicts. Scope, alternative, finding, or experiment changes
+  reopen a published decision, supersede its approvals, and retain the prior
+  commitment instead of rewriting it; discussion alone is non-material.
+  Every current, non-superseded opposing finding must appear exactly once in
+  the commitment. Each approved exception request can appear at most once.
+  Policy exception approvals freeze the normalized reason and maximum expiry;
+  publication cannot substitute another purpose or extend that authorization.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

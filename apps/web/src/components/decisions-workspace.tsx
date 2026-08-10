@@ -200,6 +200,20 @@ export function DecisionsWorkspace({ decisionId }: { decisionId?: string }) {
       setPending(false);
     }
   }
+  async function requestApproval(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); if (!current) return; setPending(true); setError(""); const form=e.currentTarget,d=new FormData(form),kind=String(d.get("kind"));
+    const exceptionExpiry=String(d.get("exception_expires_at")||"");
+    try { setCurrent(await api<TechnicalDecision>(`/decisions/${current.id}/approval-requests`,{method:"POST",body:JSON.stringify({expected_version:current.version,request:{kind,repository_id:kind==="affected_owner"?d.get("repository_id"):undefined,policy_id:kind==="policy"?d.get("policy_id"):undefined,policy_rule:kind==="policy"?d.get("policy_rule"):undefined,approver_id:d.get("approver_id"),reason:d.get("reason"),exception_reason:kind==="policy"?d.get("exception_reason"):undefined,exception_expires_at:kind==="policy"&&exceptionExpiry?new Date(exceptionExpiry).toISOString():undefined}})},token)); form.reset(); } catch(x){setError(x instanceof Error?x.message:"Approval could not be requested.")} finally{setPending(false)}
+  }
+  async function respondApproval(requestID:string, decision:"approve"|"reject") {
+    if(!current)return;setPending(true);setError("");try{setCurrent(await api<TechnicalDecision>(`/decisions/${current.id}/approval-requests/${requestID}/response`,{method:"POST",body:JSON.stringify({decision,note:decision==="approve"?"Acknowledged with current authority.":"Conflict remains unresolved."})},token))}catch(x){setError(x instanceof Error?x.message:"Approval response failed.")}finally{setPending(false)}
+  }
+  async function publishDecision(e:FormEvent<HTMLFormElement>){
+    e.preventDefault();if(!current)return;setPending(true);setError("");const form=e.currentTarget,d=new FormData(form),selected=String(d.get("selected_alternative_id"));
+    const evidence=[...current.alternatives.flatMap(a=>[...a.evidence,...a.criteria.flatMap(c=>c.evidence)]),...current.findings.flatMap(f=>f.citations)].filter((item,index,all)=>all.findIndex(x=>`${x.kind}|${x.resource_id}|${x.revision}|${x.path}|${x.start_line}|${x.end_line}`===`${item.kind}|${item.resource_id}|${item.revision}|${item.path}|${item.start_line}|${item.end_line}`)===index);
+    const exceptions=lines(d.get("exceptions")).map(row=>{const [approval_request_id,reason,expires_at]=row.split("|").map(x=>x.trim()),request=current.approval_requests.find(x=>x.id===approval_request_id);return{approval_request_id,policy_id:request?.policy_id,policy_rule:request?.policy_rule,reason,expires_at:new Date(expires_at).toISOString()}});
+    try{setCurrent(await api<TechnicalDecision>(`/decisions/${current.id}/publish`,{method:"POST",body:JSON.stringify({expected_version:current.version,commitment:{selected_alternative_id:selected,rejected_alternative_ids:current.alternatives.filter(a=>a.id!==selected&&!a.superseded_by).map(a=>a.id),rationale:d.get("rationale"),accepted_tradeoffs:lines(d.get("accepted_tradeoffs")),dissent_finding_ids:current.findings.filter(f=>f.position==="oppose"&&!f.superseded).map(f=>f.id),conditions:lines(d.get("conditions")),review_date:new Date(String(d.get("review_date"))).toISOString(),evidence,exceptions}})},token));form.reset()}catch(x){setError(x instanceof Error?x.message:"Decision could not be published.")}finally{setPending(false)}
+  }
   async function launchExperiment(e: FormEvent<HTMLFormElement>) {
     e.preventDefault(); if (!current) return; setPending(true); setError("");
     const form = e.currentTarget, d = new FormData(form), alternativeID = String(d.get("alternative_id"));
@@ -248,7 +262,7 @@ export function DecisionsWorkspace({ decisionId }: { decisionId?: string }) {
         </Link>
         <header>
           <div className="flex gap-2">
-            <Badge>Pending decision</Badge>
+            <Badge>{current.status === "published" ? "Published decision" : "Pending decision"}</Badge>
             <Badge>{label(current.source.kind)}</Badge>
           </div>
           <h1 className="mt-3 max-w-4xl text-3xl font-semibold tracking-[-.03em]">
@@ -307,6 +321,14 @@ export function DecisionsWorkspace({ decisionId }: { decisionId?: string }) {
             </p>
           </Card>
         </div>
+        <Card className="p-6">
+          <h2 className="text-lg font-semibold">Commitment and governance</h2>
+          <p className="mt-1 text-sm text-[var(--muted)]">Affected owners and active organization policy approvers resolve visible requests before the accountable owner publishes. New material evidence reopens the record and retains the prior version.</p>
+          {current.approval_requests?.length > 0 && <div className="mt-4 space-y-2">{current.approval_requests.map(request=><div key={request.id} className="rounded-lg border p-3 text-sm"><div className="flex flex-wrap items-center gap-2"><Badge>{request.status}</Badge><b>{label(request.kind)}</b><span>for {request.approver_id}</span></div><p className="mt-1">{request.reason}</p>{request.status==="rejected"&&<p className="mt-1 text-[var(--danger)]">Conflict: {request.decision_note||"approval rejected"}</p>}{request.status==="pending"&&request.approver_id===user.id&&<div className="mt-2 flex gap-2"><Button disabled={pending} onClick={()=>respondApproval(request.id,"approve")}>Approve</Button><Button disabled={pending} onClick={()=>respondApproval(request.id,"reject")}>Reject</Button></div>}</div>)}</div>}
+          {current.scope.owner_id===user.id&&current.status==="pending"&&<details className="mt-4"><summary className="cursor-pointer font-semibold">Request an acknowledgement or policy approval</summary><form onSubmit={requestApproval} className="mt-3 grid gap-3 sm:grid-cols-2"><label className="text-sm font-semibold">Requirement<select name="kind" className="mt-1 min-h-10 w-full rounded-lg border px-3"><option value="affected_owner">Affected repository owner</option><option value="policy">Organization policy</option></select></label><Field name="approver_id" title="Current approver user ID"/><Field name="repository_id" title="Affected repository ID" required={false}/><Field name="policy_id" title="Active policy ID" required={false}/><Field name="policy_rule" title="Policy rule" required={false}/><label className="text-sm font-semibold sm:col-span-2">Reason<textarea name="reason" required rows={2} className="mt-1 w-full rounded-lg border p-2"/></label><label className="text-sm font-semibold">Authorized exception terms (policy requests only)<textarea name="exception_reason" rows={2} className="mt-1 w-full rounded-lg border p-2 font-normal"/></label><label className="text-sm font-semibold">Maximum exception expiry<input type="date" name="exception_expires_at" className="mt-1 min-h-10 w-full rounded-lg border px-3 font-normal"/></label><div><Button type="submit" disabled={pending}>Request approval</Button></div></form></details>}
+          {current.commitments?.map(commitment=><article key={commitment.version} className="mt-5 rounded-lg bg-[var(--surface-2)] p-4 text-sm"><div className="flex gap-2"><Badge>Decision v{commitment.version}</Badge><Badge>{commitment.status}</Badge></div><p className="mt-2 font-semibold">{current.alternatives.find(a=>a.id===commitment.selected_alternative_id)?.title||commitment.selected_alternative_id}</p><p className="mt-2">{commitment.rationale}</p><p className="mt-2 text-xs text-[var(--muted)]">{commitment.evidence.length} exact citations · {commitment.approvals.length} approval records · review {new Date(commitment.review_date).toLocaleDateString()}</p>{commitment.reopen_reason&&<p className="mt-2 text-[var(--danger)]">Reopened: {commitment.reopen_reason}</p>}{commitment.exceptions.filter(x=>new Date(x.expires_at)>new Date()).map(x=><p key={x.approval_request_id} className="mt-2 rounded bg-[var(--warning-soft)] p-2">Exception: {x.policy_rule} — {x.reason} (expires {new Date(x.expires_at).toLocaleDateString()})</p>)}</article>)}
+          {current.scope.owner_id===user.id&&current.status==="pending"&&current.alternatives.length>0&&<form onSubmit={publishDecision} className="mt-5 grid gap-3 sm:grid-cols-2"><label className="text-sm font-semibold">Selected alternative<select name="selected_alternative_id" className="mt-1 min-h-10 w-full rounded-lg border px-3">{current.alternatives.filter(a=>!a.superseded_by).map(a=><option value={a.id} key={a.id}>{a.title}</option>)}</select></label><label className="text-sm font-semibold">Review date<input type="date" name="review_date" required className="mt-1 min-h-10 w-full rounded-lg border px-3"/></label><label className="text-sm font-semibold sm:col-span-2">Rationale<textarea name="rationale" required rows={4} className="mt-1 w-full rounded-lg border p-2"/></label><ListField name="accepted_tradeoffs" title="Accepted tradeoffs"/><ListField name="conditions" title="Conditions"/><label className="text-sm font-semibold sm:col-span-2">Authorized time-bounded exceptions<textarea name="exceptions" rows={3} placeholder="approved policy request ID | reason | expiry date" className="mt-1 w-full rounded-lg border p-2 font-mono font-normal"/></label><div className="sm:col-span-2"><Button type="submit" disabled={pending}>Publish versioned decision</Button></div></form>}
+        </Card>
         <Card className="p-6">
           <h2 className="text-lg font-semibold">Compare alternatives</h2>
           <p className="mt-1 text-sm text-[var(--muted)]">
@@ -608,13 +630,13 @@ function evidenceFrom(value: FormDataEntryValue | null, repositoryID: string) {
     };
   });
 }
-function Field({ name, title }: { name: string; title: string }) {
+function Field({ name, title, required = true }: { name: string; title: string; required?: boolean }) {
   return (
     <label className="text-sm font-semibold">
       {title}
       <input
         name={name}
-        required
+        required={required}
         className="mt-1 min-h-10 w-full rounded-lg border px-3 font-normal"
       />
     </label>

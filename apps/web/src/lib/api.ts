@@ -29,7 +29,7 @@ export type TechnicalDecision = {
       | "stewardship_opportunity";
     resource_id?: string;
   };
-  status: "pending";
+  status: "pending" | "published";
   scope: {
     question: string;
     constraints: string[];
@@ -49,6 +49,8 @@ export type TechnicalDecision = {
   alternatives: DecisionAlternative[];
   findings: DecisionFinding[];
   experiments: DecisionExperiment[];
+  approval_requests: DecisionApprovalRequest[];
+  commitments: DecisionCommitment[];
   history: {
     id: string;
     kind:
@@ -56,7 +58,12 @@ export type TechnicalDecision = {
       | "scope_changed"
       | "discussion"
       | "alternative_proposed"
-      | "research_finding";
+      | "research_finding"
+      | "approval_requested"
+      | "approval_approved"
+      | "approval_rejected"
+      | "decision_published"
+      | "decision_reopened";
     actor_id: string;
     version: number;
     summary: string;
@@ -65,6 +72,23 @@ export type TechnicalDecision = {
   }[];
   created_at: string;
   updated_at: string;
+};
+export type DecisionApprovalRequest = {
+  id: string; kind: "affected_owner" | "policy"; repository_id?: string;
+  policy_id?: string; policy_rule?: string; approver_id: string; reason: string;
+  exception_reason?: string; exception_expires_at?: string;
+  status: "pending" | "approved" | "rejected" | "superseded";
+  requested_by: string; requested_at: string; decided_by?: string;
+  decision_note?: string; decided_at?: string;
+};
+export type DecisionCommitment = {
+  version: number; decision_version: number; status: "published" | "reopened";
+  selected_alternative_id: string; rejected_alternative_ids: string[];
+  rationale: string; accepted_tradeoffs: string[]; dissent_finding_ids: string[];
+  conditions: string[]; review_date: string; evidence: DecisionEvidence[];
+  approvals: DecisionApprovalRequest[];
+  exceptions: { approval_request_id: string; policy_id: string; policy_rule: string; reason: string; expires_at: string }[];
+  published_by: string; published_at: string; reopened_at?: string; reopen_reason?: string;
 };
 export type DecisionExperiment = {
   id: string;

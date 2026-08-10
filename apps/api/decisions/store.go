@@ -145,20 +145,65 @@ type Experiment struct {
 	Invalidated             bool                 `json:"invalidated"`
 	InvalidationReasons     []string             `json:"invalidation_reasons"`
 }
+type ApprovalRequest struct {
+	ID                 string     `json:"id"`
+	Kind               string     `json:"kind"`
+	RepositoryID       string     `json:"repository_id,omitempty"`
+	PolicyID           string     `json:"policy_id,omitempty"`
+	PolicyRule         string     `json:"policy_rule,omitempty"`
+	ApproverID         string     `json:"approver_id"`
+	Reason             string     `json:"reason"`
+	ExceptionReason    string     `json:"exception_reason,omitempty"`
+	ExceptionExpiresAt *time.Time `json:"exception_expires_at,omitempty"`
+	Status             string     `json:"status"`
+	RequestedBy        string     `json:"requested_by"`
+	RequestedAt        time.Time  `json:"requested_at"`
+	DecidedBy          string     `json:"decided_by,omitempty"`
+	DecisionNote       string     `json:"decision_note,omitempty"`
+	DecidedAt          *time.Time `json:"decided_at,omitempty"`
+}
+type Exception struct {
+	ApprovalRequestID string    `json:"approval_request_id"`
+	PolicyID          string    `json:"policy_id"`
+	PolicyRule        string    `json:"policy_rule"`
+	Reason            string    `json:"reason"`
+	ExpiresAt         time.Time `json:"expires_at"`
+}
+type Commitment struct {
+	Version                int               `json:"version"`
+	DecisionVersion        int               `json:"decision_version"`
+	Status                 string            `json:"status"`
+	SelectedAlternativeID  string            `json:"selected_alternative_id"`
+	RejectedAlternativeIDs []string          `json:"rejected_alternative_ids"`
+	Rationale              string            `json:"rationale"`
+	AcceptedTradeoffs      []string          `json:"accepted_tradeoffs"`
+	DissentFindingIDs      []string          `json:"dissent_finding_ids"`
+	Conditions             []string          `json:"conditions"`
+	ReviewDate             time.Time         `json:"review_date"`
+	Evidence               []Evidence        `json:"evidence"`
+	Approvals              []ApprovalRequest `json:"approvals"`
+	Exceptions             []Exception       `json:"exceptions"`
+	PublishedBy            string            `json:"published_by"`
+	PublishedAt            time.Time         `json:"published_at"`
+	ReopenedAt             *time.Time        `json:"reopened_at,omitempty"`
+	ReopenReason           string            `json:"reopen_reason,omitempty"`
+}
 type Decision struct {
-	ID           string        `json:"id"`
-	RepositoryID string        `json:"repository_id"`
-	Source       Source        `json:"source"`
-	Status       string        `json:"status"`
-	Scope        Scope         `json:"scope"`
-	CreatedBy    string        `json:"created_by"`
-	Version      int           `json:"version"`
-	History      []History     `json:"history"`
-	Alternatives []Alternative `json:"alternatives"`
-	Findings     []Finding     `json:"findings"`
-	Experiments  []Experiment  `json:"experiments"`
-	CreatedAt    time.Time     `json:"created_at"`
-	UpdatedAt    time.Time     `json:"updated_at"`
+	ID               string            `json:"id"`
+	RepositoryID     string            `json:"repository_id"`
+	Source           Source            `json:"source"`
+	Status           string            `json:"status"`
+	Scope            Scope             `json:"scope"`
+	CreatedBy        string            `json:"created_by"`
+	Version          int               `json:"version"`
+	History          []History         `json:"history"`
+	Alternatives     []Alternative     `json:"alternatives"`
+	Findings         []Finding         `json:"findings"`
+	Experiments      []Experiment      `json:"experiments"`
+	ApprovalRequests []ApprovalRequest `json:"approval_requests"`
+	Commitments      []Commitment      `json:"commitments"`
+	CreatedAt        time.Time         `json:"created_at"`
+	UpdatedAt        time.Time         `json:"updated_at"`
 }
 type Store struct {
 	root string
@@ -313,7 +358,7 @@ func (s *Store) Create(repo string, source Source, scope Scope, actor string) (D
 		return Decision{}, e
 	}
 	h, _ := randomID()
-	v := Decision{ID: x, RepositoryID: repo, Source: source, Status: "pending", Scope: scope, CreatedBy: actor, Version: 1, CreatedAt: now, UpdatedAt: now, History: []History{{ID: h, Kind: "scope_created", ActorID: actor, Version: 1, Summary: "Opened the decision", CreatedAt: now}}, Alternatives: []Alternative{}, Findings: []Finding{}, Experiments: []Experiment{}}
+	v := Decision{ID: x, RepositoryID: repo, Source: source, Status: "pending", Scope: scope, CreatedBy: actor, Version: 1, CreatedAt: now, UpdatedAt: now, History: []History{{ID: h, Kind: "scope_created", ActorID: actor, Version: 1, Summary: "Opened the decision", CreatedAt: now}}, Alternatives: []Alternative{}, Findings: []Finding{}, Experiments: []Experiment{}, ApprovalRequests: []ApprovalRequest{}, Commitments: []Commitment{}}
 	return v, s.write(v)
 }
 
@@ -356,7 +401,9 @@ func (s *Store) LaunchExperiment(id, actor, alternativeID, workspaceID, revision
 	experimentID, _ := randomID()
 	historyID, _ := randomID()
 	v.Experiments = append(v.Experiments, Experiment{ID: experimentID, AlternativeID: alternativeID, WorkspaceID: workspaceID, Revision: revision, DefinitionSHA256: definition, DefaultBranchRevision: defaultRevision, DefaultDefinitionSHA256: defaultDefinition, Commands: commands, LaunchedBy: actor, LaunchedAt: now, Version: 1, Evidence: []ExperimentEvidence{}, InvalidationReasons: []string{}})
+	v.Version++
 	v.UpdatedAt = now
+	reopen(&v, actor, "A new experiment changed the decision context", now)
 	v.History = append(v.History, History{ID: historyID, Kind: "experiment_launched", ActorID: actor, Version: v.Version, Summary: "Launched a bounded alternative experiment", CreatedAt: now})
 	if e = s.write(v); e != nil {
 		return v, e
@@ -420,7 +467,9 @@ func (s *Store) AttachExperimentEvidence(id, experimentID, actor string, expecte
 	input.RecordedBy, input.RecordedAt = actor, now
 	experiment.Evidence = append(experiment.Evidence, input)
 	experiment.Version++
+	v.Version++
 	v.UpdatedAt = now
+	reopen(&v, actor, "New experiment evidence changed the decision context", now)
 	historyID, _ := randomID()
 	v.History = append(v.History, History{ID: historyID, Kind: "experiment_evidence", ActorID: actor, Version: v.Version, Summary: "Attached attributed experiment evidence", CreatedAt: now})
 	if e = s.write(v); e != nil {
@@ -486,6 +535,20 @@ func projectEvidence(v Decision, now time.Time) Decision {
 	}
 	return v
 }
+func reopen(v *Decision, actor, reason string, now time.Time) {
+	if v.Status != "published" || len(v.Commitments) == 0 {
+		return
+	}
+	last := &v.Commitments[len(v.Commitments)-1]
+	last.Status, last.ReopenReason = "reopened", reason
+	last.ReopenedAt = &now
+	v.Status = "pending"
+	for i := range v.ApprovalRequests {
+		v.ApprovalRequests[i].Status = "superseded"
+	}
+	h, _ := randomID()
+	v.History = append(v.History, History{ID: h, Kind: "decision_reopened", ActorID: actor, Version: v.Version, Summary: reason, CreatedAt: now})
+}
 func (s *Store) Update(id, actor string, expected int, scope Scope, summary string) (Decision, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -528,6 +591,7 @@ func (s *Store) Update(id, actor string, expected int, scope Scope, summary stri
 	v.Scope = scope
 	v.Version++
 	v.UpdatedAt = now
+	reopen(&v, actor, "Material scope changes require a fresh decision", now)
 	h, _ := idgen()
 	v.History = append(v.History, History{ID: h, Kind: "scope_changed", ActorID: actor, Version: v.Version, Summary: summary, CreatedAt: now})
 	if e = s.write(v); e != nil {
@@ -677,6 +741,7 @@ func (s *Store) AddAlternative(id, actor string, expected int, input Alternative
 	v.Alternatives = append(v.Alternatives, input)
 	v.Version++
 	v.UpdatedAt = now
+	reopen(&v, actor, "A new alternative changed the decision context", now)
 	h, _ := randomID()
 	v.History = append(v.History, History{ID: h, Kind: "alternative_proposed", ActorID: actor, Version: v.Version, Summary: "Proposed alternative: " + input.Title, CreatedAt: now})
 	if e = s.write(v); e != nil {
@@ -728,9 +793,234 @@ func (s *Store) AddFinding(id, actor string, input Finding) (Decision, error) {
 	input.ActorID = actor
 	input.CreatedAt = now
 	v.Findings = append(v.Findings, input)
+	v.Version++
 	v.UpdatedAt = now
+	reopen(&v, actor, "New evidence or dissent changed the decision context", now)
 	h, _ := randomID()
 	v.History = append(v.History, History{ID: h, Kind: "research_finding", ActorID: actor, Version: v.Version, Summary: "Added cited " + input.Position + " finding", Body: input.Body, CreatedAt: now})
+	if e = s.write(v); e != nil {
+		return v, e
+	}
+	return projectEvidence(v, now), nil
+}
+
+func (s *Store) RequestApproval(id, actor string, expected int, input ApprovalRequest) (Decision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, e := s.lock()
+	if e != nil {
+		return Decision{}, e
+	}
+	defer u()
+	v, e := s.read(id)
+	if e != nil {
+		return v, e
+	}
+	if v.Version != expected {
+		return v, ErrConflict
+	}
+	if actor != v.Scope.OwnerID || v.Status != "pending" {
+		return v, ErrNotFound
+	}
+	input.Kind, input.RepositoryID, input.PolicyID, input.PolicyRule, input.ApproverID, input.Reason = strings.TrimSpace(input.Kind), strings.TrimSpace(input.RepositoryID), strings.TrimSpace(input.PolicyID), strings.TrimSpace(input.PolicyRule), strings.TrimSpace(input.ApproverID), strings.TrimSpace(input.Reason)
+	input.ExceptionReason = strings.TrimSpace(input.ExceptionReason)
+	if (input.Kind != "affected_owner" && input.Kind != "policy") || input.ApproverID == "" || input.Reason == "" || len(input.Reason) > 1000 || (input.Kind == "affected_owner" && input.RepositoryID == "") || (input.Kind == "policy" && (input.PolicyID == "" || input.PolicyRule == "")) {
+		return v, ErrInvalid
+	}
+	if input.Kind != "policy" && (input.ExceptionReason != "" || input.ExceptionExpiresAt != nil) || (input.ExceptionReason == "") != (input.ExceptionExpiresAt == nil) || len(input.ExceptionReason) > 1000 || (input.ExceptionExpiresAt != nil && !input.ExceptionExpiresAt.After(s.now())) {
+		return v, ErrInvalid
+	}
+	for i := range v.ApprovalRequests {
+		x := &v.ApprovalRequests[i]
+		sameTerms := x.ExceptionReason == input.ExceptionReason && ((x.ExceptionExpiresAt == nil && input.ExceptionExpiresAt == nil) || (x.ExceptionExpiresAt != nil && input.ExceptionExpiresAt != nil && x.ExceptionExpiresAt.Equal(*input.ExceptionExpiresAt)))
+		if x.Status == "pending" && x.Kind == input.Kind && x.RepositoryID == input.RepositoryID && x.PolicyID == input.PolicyID && x.PolicyRule == input.PolicyRule && x.ApproverID == input.ApproverID && sameTerms {
+			return projectEvidence(v, s.now()), nil
+		}
+		if x.Status == "rejected" && x.Kind == input.Kind && x.RepositoryID == input.RepositoryID && x.PolicyID == input.PolicyID && x.PolicyRule == input.PolicyRule && x.ApproverID == input.ApproverID {
+			x.Status = "superseded"
+		}
+	}
+	now := s.now()
+	input.ID, _ = randomID()
+	input.Status, input.RequestedBy, input.RequestedAt = "pending", actor, now
+	input.DecidedBy, input.DecisionNote, input.DecidedAt = "", "", nil
+	v.ApprovalRequests = append(v.ApprovalRequests, input)
+	v.Version++
+	v.UpdatedAt = now
+	h, _ := randomID()
+	v.History = append(v.History, History{ID: h, Kind: "approval_requested", ActorID: actor, Version: v.Version, Summary: "Requested " + input.Kind + " approval", CreatedAt: now})
+	if e = s.write(v); e != nil {
+		return v, e
+	}
+	return projectEvidence(v, now), nil
+}
+
+func (s *Store) RespondApproval(id, requestID, actor, response, note string) (Decision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, e := s.lock()
+	if e != nil {
+		return Decision{}, e
+	}
+	defer u()
+	v, e := s.read(id)
+	if e != nil {
+		return v, e
+	}
+	note = strings.TrimSpace(note)
+	if (response != "approve" && response != "reject") || len(note) > 2000 {
+		return v, ErrInvalid
+	}
+	index := -1
+	for i := range v.ApprovalRequests {
+		if v.ApprovalRequests[i].ID == requestID {
+			index = i
+		}
+	}
+	if index < 0 || v.ApprovalRequests[index].ApproverID != actor || v.ApprovalRequests[index].Status != "pending" {
+		return v, ErrNotFound
+	}
+	now := s.now()
+	x := &v.ApprovalRequests[index]
+	x.Status, x.DecidedBy, x.DecisionNote, x.DecidedAt = map[bool]string{true: "approved", false: "rejected"}[response == "approve"], actor, note, &now
+	v.Version++
+	v.UpdatedAt = now
+	h, _ := randomID()
+	v.History = append(v.History, History{ID: h, Kind: "approval_" + x.Status, ActorID: actor, Version: v.Version, Summary: "Approval request " + x.Status, Body: note, CreatedAt: now})
+	if e = s.write(v); e != nil {
+		return v, e
+	}
+	return projectEvidence(v, now), nil
+}
+
+func evidenceKey(e Evidence) string {
+	return fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%d\x00%d", e.Kind, e.ResourceID, e.Revision, e.Path, e.StartLine, e.EndLine)
+}
+
+func (s *Store) Publish(id, actor string, expected int, input Commitment) (Decision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, e := s.lock()
+	if e != nil {
+		return Decision{}, e
+	}
+	defer u()
+	v, e := s.read(id)
+	if e != nil {
+		return v, e
+	}
+	if v.Version != expected {
+		return v, ErrConflict
+	}
+	if actor != v.Scope.OwnerID || v.Status != "pending" {
+		return v, ErrNotFound
+	}
+	input.Rationale = strings.TrimSpace(input.Rationale)
+	if input.Rationale == "" || len(input.Rationale) > 8000 || input.ReviewDate.IsZero() || !input.ReviewDate.After(s.now()) {
+		return v, ErrInvalid
+	}
+	var ok bool
+	if input.AcceptedTradeoffs, ok = cleanList(input.AcceptedTradeoffs); !ok || len(input.AcceptedTradeoffs) == 0 {
+		return v, ErrInvalid
+	}
+	if input.Conditions, ok = cleanList(input.Conditions); !ok {
+		return v, ErrInvalid
+	}
+	alts := map[string]bool{}
+	for _, a := range v.Alternatives {
+		if a.SupersededBy == "" {
+			alts[a.ID] = true
+		}
+	}
+	if !alts[input.SelectedAlternativeID] {
+		return v, ErrInvalid
+	}
+	seenReject := map[string]bool{}
+	for _, rid := range input.RejectedAlternativeIDs {
+		if !alts[rid] || rid == input.SelectedAlternativeID || seenReject[rid] {
+			return v, ErrInvalid
+		}
+		seenReject[rid] = true
+	}
+	if len(seenReject) != len(alts)-1 {
+		return v, ErrInvalid
+	}
+	findings := map[string]bool{}
+	for _, f := range v.Findings {
+		if f.Position == "oppose" && !f.Superseded {
+			findings[f.ID] = true
+		}
+	}
+	seenDissent := map[string]bool{}
+	for _, fid := range input.DissentFindingIDs {
+		if !findings[fid] || seenDissent[fid] {
+			return v, ErrInvalid
+		}
+		seenDissent[fid] = true
+	}
+	if len(seenDissent) != len(findings) {
+		return v, ErrInvalid
+	}
+	available := map[string]Evidence{}
+	for _, a := range v.Alternatives {
+		for _, x := range a.Evidence {
+			available[evidenceKey(x)] = x
+		}
+		for _, c := range a.Criteria {
+			for _, x := range c.Evidence {
+				available[evidenceKey(x)] = x
+			}
+		}
+	}
+	for _, f := range v.Findings {
+		for _, x := range f.Citations {
+			available[evidenceKey(x)] = x
+		}
+	}
+	if len(input.Evidence) == 0 {
+		return v, ErrInvalid
+	}
+	for i, x := range input.Evidence {
+		retained, exists := available[evidenceKey(x)]
+		if !exists {
+			return v, ErrInvalid
+		}
+		input.Evidence[i] = retained
+	}
+	for _, request := range v.ApprovalRequests {
+		if request.Status == "pending" || request.Status == "rejected" {
+			return v, ErrConflict
+		}
+	}
+	approved := map[string]ApprovalRequest{}
+	for _, request := range v.ApprovalRequests {
+		if request.Status == "approved" {
+			approved[request.ID] = request
+		}
+	}
+	seenExceptions := map[string]bool{}
+	for _, x := range input.Exceptions {
+		request, exists := approved[x.ApprovalRequestID]
+		x.Reason = strings.TrimSpace(x.Reason)
+		if seenExceptions[x.ApprovalRequestID] || !exists || request.Kind != "policy" || request.PolicyID != x.PolicyID || request.PolicyRule != x.PolicyRule || request.ExceptionReason == "" || x.Reason != request.ExceptionReason || request.ExceptionExpiresAt == nil || x.ExpiresAt.After(*request.ExceptionExpiresAt) || !x.ExpiresAt.After(s.now()) {
+			return v, ErrInvalid
+		}
+		seenExceptions[x.ApprovalRequestID] = true
+	}
+	now := s.now()
+	input.ReopenedAt, input.ReopenReason = nil, ""
+	input.Version = len(v.Commitments) + 1
+	input.DecisionVersion = v.Version
+	input.Status = "published"
+	input.Approvals = append([]ApprovalRequest(nil), v.ApprovalRequests...)
+	input.PublishedBy = actor
+	input.PublishedAt = now
+	v.Commitments = append(v.Commitments, input)
+	v.Status = "published"
+	v.Version++
+	v.UpdatedAt = now
+	h, _ := randomID()
+	v.History = append(v.History, History{ID: h, Kind: "decision_published", ActorID: actor, Version: v.Version, Summary: "Published decision version", Body: input.Rationale, CreatedAt: now})
 	if e = s.write(v); e != nil {
 		return v, e
 	}
