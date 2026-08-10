@@ -1420,3 +1420,13 @@ the approval's frozen maximum expiry, and cannot reuse one approval twice.
 Material scope, alternative, finding, or experiment changes reopen the decision,
 supersede the old approvals, and retain the earlier commitment unchanged;
 discussion can clarify a published choice without silently invalidating it.
+
+The connected decision journey proves this is one collaboration loop rather
+than a set of disconnected records. Two repository owners open and govern a
+shared uncertainty, compare agent-researched alternatives with retained
+dissent, and reproduce the selected prototype in separate exact-revision
+workspaces. The accepted commitment becomes ordinary human- and agent-authored
+tasks, checks, independent review, merges, and a release. A linked production
+measure that disproves the selected assumption reopens the decision while its
+alternatives, experiments, approval, dissent, implementation identities,
+release evidence, permissions, and actor attribution remain inspectable.
