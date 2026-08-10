@@ -406,3 +406,40 @@ func TestInitiativeRejectsDependencyCycles(t *testing.T) {
 		t.Fatalf("cyclic initiative persisted: %#v", stored.Initiatives)
 	}
 }
+
+func TestStewardshipLearningReportTuningAndSafetyPause(t *testing.T) {
+	store, _ := New(t.TempDir())
+	base := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return base }
+	owner, operator := "0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789"
+	repository := "11111111111111111111111111111111"
+	v, _ := store.Create("Runtime", "runtime", "", owner)
+	v, _ = store.Invite(v.ID, owner, operator)
+	v, _ = store.AcceptInvitation(v.ID, v.Invitations[0].ID, operator)
+	v, _ = store.RegisterAgent(v.ID, owner, "Caretaker", "caretaker", "", "organization", []string{"inspect"}, []string{operator}, nil)
+	revision := MandateRevision{DesiredOutcomes: []string{"Keep releases healthy"}, Repositories: []MandateRepository{{RepositoryID: repository, Branches: []string{"main"}}}, TrustedSignals: []string{"checks"}, Exclusions: []string{"writes"}, Budget: MandateBudget{MaxAgentMinutes: 60, MaxActions: 10}, StartsAt: base.Add(time.Minute), ExpiresAt: base.Add(time.Hour), AgentID: v.Agents[0].ID, AllowedActions: []string{"summarize"}, RequiredHumanDecisions: []string{"merge"}, OpportunityPolicies: []OpportunityPolicy{{EvidenceType: "check", MinimumSeverity: "medium", Mode: "approval_required", MaxAgentMinutes: 30}, {EvidenceType: "release", MinimumSeverity: "high", Mode: "approval_required", MaxAgentMinutes: 20}}}
+	v, mandate, err := store.CreateStewardshipMandate(v.ID, owner, "Learning steward", revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, mandate, err = store.AcceptStewardshipMandate(v.ID, mandate.ID, operator, mandate.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, mandate, err = store.TuneStewardshipMandate(v.ID, mandate.ID, owner, 0, StewardshipTuning{PriorityEvidence: []string{"release"}, IgnoredEvidence: []string{"check"}, MinimumConfidence: .8})
+	if err != nil || mandate.Version != 1 || mandate.Acceptance == nil || mandate.Tuning.Version != 1 {
+		t.Fatalf("safe tuning changed authority: %#v, %v", mandate, err)
+	}
+	if _, _, err = store.TuneStewardshipMandate(v.ID, mandate.ID, owner, 1, StewardshipTuning{PriorityEvidence: []string{"security"}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("tuning expanded evidence authority: %v", err)
+	}
+	store.now = func() time.Time { return base.Add(2 * time.Minute) }
+	_, mandate, err = store.RecordStewardshipOutcome(v.ID, mandate.ID, operator, StewardshipOutcome{Kind: "implementation", Status: "failed", Summary: "Third retry failed the same verification", Goal: "Keep releases healthy", GoalProgress: 35, AgentMinutes: 12, Actions: 2, ConsecutiveFailures: 3})
+	if err != nil || mandate.Status != "paused" || len(mandate.Notices) != 1 || mandate.Notices[0].Kind != "repeated_failures" {
+		t.Fatalf("unsafe automation was not paused: %#v, %v", mandate, err)
+	}
+	report, err := store.StewardshipReport(v.ID, mandate.ID, owner)
+	if err != nil || report.GoalProgress["Keep releases healthy"] != 35 || report.UsedAgentMinutes != 12 || len(report.Outcomes) != 1 || len(report.Notices) != 1 {
+		t.Fatalf("report = %#v, %v", report, err)
+	}
+}

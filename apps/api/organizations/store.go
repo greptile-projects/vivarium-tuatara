@@ -287,6 +287,57 @@ type StewardshipMandate struct {
 	Opportunities    []StewardshipOpportunity `json:"opportunities"`
 	UsedAgentMinutes int                      `json:"used_agent_minutes"`
 	UsedActions      int                      `json:"used_actions"`
+	Tuning           StewardshipTuning        `json:"tuning"`
+	Outcomes         []StewardshipOutcome     `json:"outcomes"`
+	Notices          []StewardshipNotice      `json:"notices"`
+}
+
+// StewardshipTuning changes judgment within an accepted mandate. It cannot
+// add evidence types, signals, repositories, actions, budget, or authority.
+type StewardshipTuning struct {
+	Version           int       `json:"version"`
+	PriorityEvidence  []string  `json:"priority_evidence"`
+	IgnoredEvidence   []string  `json:"ignored_evidence"`
+	MinimumConfidence float64   `json:"minimum_confidence"`
+	UpdatedBy         string    `json:"updated_by,omitempty"`
+	UpdatedAt         time.Time `json:"updated_at,omitempty"`
+}
+
+type StewardshipOutcome struct {
+	ID                  string    `json:"id"`
+	OpportunityID       string    `json:"opportunity_id,omitempty"`
+	Kind                string    `json:"kind"`
+	Status              string    `json:"status"`
+	Summary             string    `json:"summary"`
+	Goal                string    `json:"goal,omitempty"`
+	GoalProgress        int       `json:"goal_progress,omitempty"`
+	AgentMinutes        int       `json:"agent_minutes,omitempty"`
+	Actions             int       `json:"actions,omitempty"`
+	ConsecutiveFailures int       `json:"consecutive_failures,omitempty"`
+	RecordedBy          string    `json:"recorded_by"`
+	RecordedAt          time.Time `json:"recorded_at"`
+}
+
+type StewardshipNotice struct {
+	ID        string    `json:"id"`
+	Kind      string    `json:"kind"`
+	Summary   string    `json:"summary"`
+	Action    string    `json:"action"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type StewardshipReport struct {
+	MandateID        string               `json:"mandate_id"`
+	MandateVersion   int                  `json:"mandate_version"`
+	Status           string               `json:"status"`
+	Dispositions     map[string]int       `json:"opportunity_dispositions"`
+	Recommendations  map[string]int       `json:"recommendations"`
+	Outcomes         []StewardshipOutcome `json:"outcomes"`
+	Notices          []StewardshipNotice  `json:"notices"`
+	Tuning           StewardshipTuning    `json:"tuning"`
+	UsedAgentMinutes int                  `json:"used_agent_minutes"`
+	UsedActions      int                  `json:"used_actions"`
+	GoalProgress     map[string]int       `json:"goal_progress"`
 }
 
 type OpportunityCitation struct {
@@ -1562,6 +1613,138 @@ func (s *Store) ChangeStewardshipMandateState(id, mandateID, actor, action strin
 	return v, out, err
 }
 
+func (s *Store) StewardshipReport(id, mandateID, actor string) (StewardshipReport, error) {
+	v, err := s.Get(id)
+	if err != nil || !HasRole(v, actor, "") {
+		return StewardshipReport{}, ErrNotFound
+	}
+	i := mandateIndex(&v, mandateID)
+	if i < 0 {
+		return StewardshipReport{}, ErrNotFound
+	}
+	m := v.StewardshipMandates[i]
+	report := StewardshipReport{MandateID: m.ID, MandateVersion: m.Version, Status: m.Status, Dispositions: map[string]int{}, Recommendations: map[string]int{"accepted": 0, "rejected": 0}, Outcomes: append([]StewardshipOutcome(nil), m.Outcomes...), Notices: append([]StewardshipNotice(nil), m.Notices...), Tuning: m.Tuning, UsedAgentMinutes: m.UsedAgentMinutes, UsedActions: m.UsedActions, GoalProgress: map[string]int{}}
+	for _, opportunity := range m.Opportunities {
+		report.Dispositions[opportunity.Status]++
+		if opportunity.Approval != nil {
+			report.Recommendations[map[string]string{"approve": "accepted", "reject": "rejected"}[opportunity.Approval.Decision]]++
+		}
+	}
+	for _, outcome := range m.Outcomes {
+		if outcome.Goal != "" && outcome.GoalProgress > report.GoalProgress[outcome.Goal] {
+			report.GoalProgress[outcome.Goal] = outcome.GoalProgress
+		}
+	}
+	return report, nil
+}
+
+func (s *Store) TuneStewardshipMandate(id, mandateID, actor string, expected int, tuning StewardshipTuning) (Organization, StewardshipMandate, error) {
+	var out StewardshipMandate
+	v, err := s.mutate(id, func(v *Organization) error {
+		if !HasRole(*v, actor, "owner") || tuning.MinimumConfidence < 0 || tuning.MinimumConfidence > 1 {
+			return ErrInvalid
+		}
+		i := mandateIndex(v, mandateID)
+		if i < 0 {
+			return ErrNotFound
+		}
+		m := &v.StewardshipMandates[i]
+		if m.Status == "revoked" || m.Tuning.Version != expected {
+			return ErrConflict
+		}
+		allowed := map[string]bool{}
+		for _, policy := range m.Revisions[len(m.Revisions)-1].OpportunityPolicies {
+			allowed[policy.EvidenceType] = true
+		}
+		priority, ok := normalizeList(tuning.PriorityEvidence, func(x string) bool { return allowed[x] })
+		if !ok {
+			return ErrInvalid
+		}
+		ignored, ok := normalizeList(tuning.IgnoredEvidence, func(x string) bool { return allowed[x] })
+		if !ok {
+			return ErrInvalid
+		}
+		for _, x := range ignored {
+			if slices.Contains(priority, x) {
+				return ErrInvalid
+			}
+		}
+		now := s.now().Truncate(time.Microsecond)
+		m.Tuning = StewardshipTuning{Version: expected + 1, PriorityEvidence: priority, IgnoredEvidence: ignored, MinimumConfidence: tuning.MinimumConfidence, UpdatedBy: actor, UpdatedAt: now}
+		out = *m
+		return s.event(v, "stewardship_mandate.tuned", actor, mandateID, map[string]any{"tuning_version": m.Tuning.Version, "authority_changed": false})
+	})
+	return v, out, err
+}
+
+func (s *Store) RecordStewardshipOutcome(id, mandateID, actor string, input StewardshipOutcome) (Organization, StewardshipMandate, error) {
+	var out StewardshipMandate
+	v, err := s.mutate(id, func(v *Organization) error {
+		i := mandateIndex(v, mandateID)
+		if i < 0 {
+			return ErrNotFound
+		}
+		m := &v.StewardshipMandates[i]
+		operator := m.Acceptance != nil && m.Acceptance.OperatorID == actor
+		if !operator && !HasRole(*v, actor, "owner") {
+			return ErrNotFound
+		}
+		if !slices.Contains([]string{"implementation", "verification", "release", "resource", "false_positive", "goal", "automation"}, input.Kind) || !slices.Contains([]string{"succeeded", "failed", "partial", "inactive", "revoked_access", "anomalous"}, input.Status) || input.AgentMinutes < 0 || input.Actions < 0 || input.GoalProgress < 0 || input.GoalProgress > 100 || input.ConsecutiveFailures < 0 {
+			return ErrInvalid
+		}
+		summary, ok := clean(input.Summary, 2000)
+		if !ok {
+			return ErrInvalid
+		}
+		if input.OpportunityID != "" {
+			found := false
+			for _, opportunity := range m.Opportunities {
+				found = found || opportunity.ID == input.OpportunityID
+			}
+			if !found {
+				return ErrInvalid
+			}
+		}
+		if input.Goal != "" && !slices.Contains(m.Revisions[len(m.Revisions)-1].DesiredOutcomes, input.Goal) {
+			return ErrInvalid
+		}
+		oid, e := newID()
+		if e != nil {
+			return e
+		}
+		now := s.now().Truncate(time.Microsecond)
+		input.ID, input.Summary, input.RecordedBy, input.RecordedAt = oid, summary, actor, now
+		m.Outcomes = append(m.Outcomes, input)
+		m.UsedAgentMinutes += input.AgentMinutes
+		m.UsedActions += input.Actions
+		pauseKind := ""
+		if input.ConsecutiveFailures >= 3 {
+			pauseKind = "repeated_failures"
+		}
+		if input.Status == "inactive" {
+			pauseKind = "inactivity"
+		}
+		if input.Status == "revoked_access" {
+			pauseKind = "revoked_access"
+		}
+		budget := m.Revisions[len(m.Revisions)-1].Budget
+		if input.Status == "anomalous" || m.UsedAgentMinutes > budget.MaxAgentMinutes || m.UsedActions > budget.MaxActions {
+			pauseKind = "anomalous_consumption"
+		}
+		if pauseKind != "" && m.Status == "active" {
+			nid, e := newID()
+			if e != nil {
+				return e
+			}
+			m.Status, m.PausedBy, m.PausedAt = "paused", actor, &now
+			m.Notices = append(m.Notices, StewardshipNotice{ID: nid, Kind: pauseKind, Summary: summary, Action: "Review the retained outcome, authority, and budget; revise the mandate for any material scope or authority change before resuming.", CreatedAt: now})
+		}
+		out = *m
+		return s.event(v, "stewardship_outcome.recorded", actor, mandateID, map[string]any{"outcome_id": oid, "kind": input.Kind, "status": input.Status, "automation_paused": pauseKind != ""})
+	})
+	return v, out, err
+}
+
 func validateAccess(role, reason string, resources []ResourceScope, exceptions []AccessException, expires *time.Time, now time.Time) bool {
 	if !validRole(role) || len(resources) == 0 || len(resources) > 100 || len(exceptions) > 100 || len(reason) > 1000 || (expires != nil && !expires.After(now)) {
 		return false
@@ -1689,6 +1872,31 @@ func (s *Store) RevokeAccessGrant(id, grantID, actor string, expected int, revok
 			}
 			now := s.now().Truncate(time.Microsecond)
 			g.RevokedAt, g.RevokedBy, g.Version = &now, actor, g.Version+1
+			if g.PrincipalType == "agent" {
+				for mi := range v.StewardshipMandates {
+					m := &v.StewardshipMandates[mi]
+					if m.Status != "active" || len(m.Revisions) == 0 || m.Revisions[len(m.Revisions)-1].AgentID != g.PrincipalID {
+						continue
+					}
+					affected := false
+					for _, resource := range g.Resources {
+						if resource.Kind == "repository" {
+							for _, scope := range m.Revisions[len(m.Revisions)-1].Repositories {
+								affected = affected || scope.RepositoryID == resource.ID
+							}
+						}
+					}
+					if !affected {
+						continue
+					}
+					nid, err := newID()
+					if err != nil {
+						return err
+					}
+					m.Status, m.PausedBy, m.PausedAt = "paused", actor, &now
+					m.Notices = append(m.Notices, StewardshipNotice{ID: nid, Kind: "revoked_access", Summary: "An independent repository access grant used by the approved steward was revoked.", Action: "Review current access and planned work. Restore authority independently or revise the mandate before resuming.", CreatedAt: now})
+				}
+			}
 			return s.event(v, "access.revoked", actor, grantID, nil)
 		}
 		return ErrNotFound

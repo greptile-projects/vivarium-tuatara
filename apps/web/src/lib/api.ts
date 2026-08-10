@@ -423,6 +423,31 @@ export type OrganizationStewardshipMandate = {
   revoked_by?: string;
   revoked_at?: string;
   opportunities: OrganizationStewardshipOpportunity[];
+  used_agent_minutes: number;
+  used_actions: number;
+  tuning: {
+    version: number;
+    priority_evidence: string[];
+    ignored_evidence: string[];
+    minimum_confidence: number;
+    updated_by?: string;
+    updated_at?: string;
+  };
+  outcomes: {
+    id: string;
+    opportunity_id?: string;
+    kind: "implementation" | "verification" | "release" | "resource" | "false_positive" | "goal" | "automation";
+    status: "succeeded" | "failed" | "partial" | "inactive" | "revoked_access" | "anomalous";
+    summary: string;
+    goal?: string;
+    goal_progress?: number;
+    agent_minutes?: number;
+    actions?: number;
+    consecutive_failures?: number;
+    recorded_by: string;
+    recorded_at: string;
+  }[];
+  notices: { id: string; kind: string; summary: string; action: string; created_at: string }[];
 };
 export type OrganizationStewardshipOpportunity = {
   id: string;

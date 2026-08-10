@@ -391,6 +391,52 @@ func registerOrganizationRoutes(mux *http.ServeMux, gitStore *storage.Store, org
 		}
 		writeAPIError(w, 404, "stewardship_mandate_not_found", "mandate not found")
 	})
+	mux.HandleFunc("GET /organizations/{id}/stewardship-mandates/{mandate_id}/report", func(w http.ResponseWriter, r *http.Request) {
+		actor, organization, ok := require(w, r, "repositories:read")
+		if !ok {
+			return
+		}
+		report, err := orgs.StewardshipReport(organization.ID, r.PathValue("mandate_id"), actor.UserID)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		writeJSON(w, 200, report)
+	})
+	mux.HandleFunc("PUT /organizations/{id}/stewardship-mandates/{mandate_id}/tuning", func(w http.ResponseWriter, r *http.Request) {
+		actor, organization, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int `json:"expected_version"`
+			organizations.StewardshipTuning
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_stewardship_tuning", "bounded tuning and expected_version are required")
+			return
+		}
+		_, mandate, err := orgs.TuneStewardshipMandate(organization.ID, r.PathValue("mandate_id"), actor.UserID, in.ExpectedVersion, in.StewardshipTuning)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		writeJSON(w, 200, mandate)
+	})
+	mux.HandleFunc("POST /organizations/{id}/stewardship-mandates/{mandate_id}/outcomes", func(w http.ResponseWriter, r *http.Request) {
+		actor, organization, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in organizations.StewardshipOutcome
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_stewardship_outcome", "a bounded outcome is required")
+			return
+		}
+		_, mandate, err := orgs.RecordStewardshipOutcome(organization.ID, r.PathValue("mandate_id"), actor.UserID, in)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		writeJSON(w, 201, mandate)
+	})
 	mux.HandleFunc("POST /organizations/{id}/stewardship-mandates/{mandate_id}/evaluations", func(w http.ResponseWriter, r *http.Request) {
 		actor, organization, ok := require(w, r, "repositories:write")
 		if !ok {

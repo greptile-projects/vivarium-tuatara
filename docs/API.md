@@ -1799,6 +1799,24 @@ whose normalized summary, commits, files, checks, commands, criteria, or
 residual concerns differ returns the existing terminal-run conflict instead of
 silently discarding corrected evidence.
 
+`GET .../stewardship-mandates/{mandate_id}/report` projects opportunity
+dispositions, accepted and rejected recommendations, implementation,
+verification, release, resource, false-positive, automation, and goal outcomes,
+current budget use, notices, and the newest progress recorded for each mandate
+goal. Owners and the accepted operator append immutable outcome evidence at
+`POST .../{mandate_id}/outcomes`. Three consecutive failures, inactivity,
+revoked access, anomalous consumption, or crossing the accepted budget pauses
+active automation and retains an actionable notice; revoking an independent
+agent repository grant also pauses every affected active mandate.
+
+Owners use `PUT .../{mandate_id}/tuning` with a tuning `expected_version` to
+prioritize or ignore evidence classes already listed in the accepted revision
+and raise the minimum confidence threshold. Tuning never changes the mandate
+version or acceptance because it can only narrow or reorder existing evidence.
+Adding a signal or evidence class, repository, action, budget, agent, or any
+other scope or authority still requires a new mandate revision and fresh
+operator acceptance.
+
 Pending invitees receive only organization identity and their own invitation,
 not membership, teams, agents, transfers, responsibility, or events. A public
 child also omits its `parent_id` when that parent is not public. Responsibility
