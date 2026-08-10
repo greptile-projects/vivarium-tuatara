@@ -1840,7 +1840,9 @@ participation and accepts `source` plus `scope`. Source kind is `repository`,
 `stewardship_opportunity`; non-repository sources require their durable
 `resource_id`. Scope contains the question, constraint and success-measure
 arrays, RFC 3339 deadline, affected resource references, participants,
-and a participant `owner_id`. Creation returns a durable `pending` decision;
+and a participant `owner_id`. Every owner and participant ID must resolve to a
+current platform identity on creation and every scope revision. Creation
+returns a durable `pending` decision;
 pending is informational and creates no workflow gate.
 
 `GET /decisions` returns decisions in repositories currently accessible to the

@@ -14,6 +14,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/relationships"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
 
 type decisionCreateInput struct {
@@ -29,7 +30,7 @@ type decisionDiscussionInput struct {
 	Body string `json:"body"`
 }
 
-func registerDecisionRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *decisions.Store, activity *activities.Store, proposalStore *proposals.Store, explanationStore *explanations.Store, incidentStore *incidents.Store, relationshipStore *relationships.Store, organizationStore *organizations.Store) {
+func registerDecisionRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, identities *users.Store, store *decisions.Store, activity *activities.Store, proposalStore *proposals.Store, explanationStore *explanations.Store, incidentStore *incidents.Store, relationshipStore *relationships.Store, organizationStore *organizations.Store) {
 	mux.HandleFunc("POST /repositories/{id}/decisions", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
 		if !ok {
@@ -44,6 +45,9 @@ func registerDecisionRoutes(mux *http.ServeMux, catalog *repositories.Store, cre
 			in.Source.ResourceID = r.PathValue("id")
 		}
 		if !decisionSourceExists(w, r.PathValue("id"), actor.UserID, in.Source, proposalStore, explanationStore, incidentStore, relationshipStore, organizationStore) {
+			return
+		}
+		if !validateDecisionUsers(w, identities, in.Scope) {
 			return
 		}
 		v, err := store.Create(r.PathValue("id"), in.Source, in.Scope, actor.UserID)
@@ -100,6 +104,9 @@ func registerDecisionRoutes(mux *http.ServeMux, catalog *repositories.Store, cre
 			writeAPIError(w, 400, "invalid_request", "expected_version, scope, and summary are required")
 			return
 		}
+		if !validateDecisionUsers(w, identities, in.Scope) {
+			return
+		}
 		v, err := store.Update(r.PathValue("id"), actor.UserID, in.ExpectedVersion, in.Scope, in.Summary)
 		if writeDecisionError(w, err) {
 			return
@@ -124,6 +131,33 @@ func registerDecisionRoutes(mux *http.ServeMux, catalog *repositories.Store, cre
 		recordActivity(activity, catalog, activities.Event{Kind: "decision.discussed", ActorID: actor.UserID, RepositoryID: v.RepositoryID, ResourceType: "decision", ResourceID: v.ID, ResourceTitle: v.Scope.Question})
 		writeJSON(w, 201, v)
 	})
+}
+
+func validateDecisionUsers(w http.ResponseWriter, identities *users.Store, scope decisions.Scope) bool {
+	if identities == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "decision_identity_unavailable", "decision identities are unavailable")
+		return false
+	}
+	ids := append([]decisions.Participant(nil), scope.Participants...)
+	ownerFound := false
+	for _, participant := range ids {
+		if participant.UserID == scope.OwnerID {
+			ownerFound = true
+		}
+		if _, err := identities.Get(participant.UserID); err != nil {
+			if errors.Is(err, users.ErrNotFound) {
+				writeAPIError(w, http.StatusBadRequest, "invalid_decision_participant", "every decision participant must be an existing user")
+			} else {
+				writeAPIError(w, http.StatusInternalServerError, "decision_identity_unavailable", "decision identities are unavailable")
+			}
+			return false
+		}
+	}
+	if !ownerFound {
+		writeAPIError(w, http.StatusBadRequest, "invalid_decision_owner", "the decision owner must be an existing participant")
+		return false
+	}
+	return true
 }
 
 func decisionSourceExists(w http.ResponseWriter, repositoryID, actor string, source decisions.Source, proposalStore *proposals.Store, explanationStore *explanations.Store, incidentStore *incidents.Store, relationshipStore *relationships.Store, organizationStore *organizations.Store) bool {

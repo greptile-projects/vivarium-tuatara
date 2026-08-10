@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -28,6 +29,9 @@ func TestDecisionAPIKeepsPendingContextCollaborativeAndVersioned(t *testing.T) {
 	var repository repositories.Repository
 	json.NewDecoder(response.Body).Decode(&repository)
 	response.Body.Close()
+	unknown := "ffffffffffffffffffffffffffffffff"
+	invalid := fmt.Sprintf(`{"source":{"kind":"repository","resource_id":%q},"scope":{"question":"Who owns this?","constraints":["No downtime"],"success_measures":["An answer"],"deadline":"2026-09-01T00:00:00Z","affected_resources":[{"kind":"repository","repository_id":%q,"label":"Repository"}],"participants":[{"user_id":%q}],"owner_id":%q}}`, repository.ID, repository.ID, unknown, unknown)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/decisions", invalid, owner.Credential.Token, http.StatusBadRequest).Body.Close()
 	body := fmt.Sprintf(`{"source":{"kind":"repository","resource_id":%q},"scope":{"question":"How should requests be queued?","constraints":["No downtime"],"success_measures":["p95 below 100ms"],"deadline":"2026-09-01T00:00:00Z","affected_resources":[{"kind":"service","repository_id":%q,"label":"API"}],"participants":[{"user_id":%q},{"user_id":%q}],"owner_id":%q}}`, repository.ID, repository.ID, owner.User.ID, peer.User.ID, owner.User.ID)
 	created := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/decisions", body, owner.Credential.Token, http.StatusCreated)
 	var decision decisions.Decision
@@ -45,6 +49,8 @@ func TestDecisionAPIKeepsPendingContextCollaborativeAndVersioned(t *testing.T) {
 		t.Fatalf("discussion = %#v", decision.History)
 	}
 	update := fmt.Sprintf(`{"expected_version":1,"summary":"Added an operability constraint","scope":{"question":"How should requests be queued?","constraints":["No downtime","Operators can drain queues"],"success_measures":["p95 below 100ms"],"deadline":"2026-09-01T00:00:00Z","affected_resources":[{"kind":"service","repository_id":%q,"label":"API"}],"participants":[{"user_id":%q},{"user_id":%q}],"owner_id":%q}}`, repository.ID, owner.User.ID, peer.User.ID, owner.User.ID)
+	invalidUpdate := strings.Replace(update, peer.User.ID, unknown, 1)
+	authenticatedRequest(t, http.MethodPut, server.URL+"/decisions/"+decision.ID, invalidUpdate, peer.Credential.Token, http.StatusBadRequest).Body.Close()
 	changed := authenticatedRequest(t, http.MethodPut, server.URL+"/decisions/"+decision.ID, update, peer.Credential.Token, http.StatusOK)
 	json.NewDecoder(changed.Body).Decode(&decision)
 	changed.Body.Close()
