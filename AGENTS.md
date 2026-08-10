@@ -1025,6 +1025,10 @@ whenever dependencies change or the web job fails before it starts.
   release inclusion, or deployment back to the exact proposal. Cross-store
   publication uncertainty returns stable proposal/task identities in a
   retryable `202` and exact retries reconcile the decision link.
+  Coverage requires successful current evidence: an approval at the live pull
+  revision, merged integration, a successful check at that revision, or a
+  successful deployment. A candidate release is not terminal coverage, while
+  deviations may cite linked failed/nonterminal resources as their evidence.
   A deviation, changed assumption, failed measure, or incompatible work
   reopens the exact commitment with an actionable revisit reason, while
   confirmed coverage remains retained delivery evidence.

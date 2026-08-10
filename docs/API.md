@@ -1954,4 +1954,9 @@ with the finding as its explicit revisit reason. The named review/integration
 pull, check run, release, or deployment must exist and derive from that exact
 proposal through its task contributions and release inclusion; arbitrary or
 unrelated resource identifiers are rejected before the decision store admits
-the observation.
+the observation. A `coverage` observation additionally requires a current
+approval for a review pull, a merged integration pull, a successful check at
+the pull's current source commit, or a successful deployment. A release
+candidate alone is not terminal coverage. Non-coverage findings may cite
+linked failed or nonterminal resources because those states are the evidence
+for a deviation or revisit request.

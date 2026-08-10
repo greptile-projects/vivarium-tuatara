@@ -480,7 +480,7 @@ func registerDecisionRoutes(mux *http.ServeMux, git *storage.Store, catalog *rep
 			writeAPIError(w, 400, "invalid_request", "delivery observation is required")
 			return
 		}
-		if !validDecisionDeliveryResource(v.RepositoryID, r.PathValue("proposal_id"), in.ResourceKind, in.ResourceID, proposalStore, pullStore, checkStore, releaseStore, deploymentStore) {
+		if !validDecisionDeliveryResource(v.RepositoryID, r.PathValue("proposal_id"), in.Kind, in.ResourceKind, in.ResourceID, proposalStore, pullStore, checkStore, releaseStore, deploymentStore) {
 			writeAPIError(w, 422, "delivery_evidence_invalid", "delivery evidence must be a retained resource linked to this implementation")
 			return
 		}
@@ -666,8 +666,8 @@ func projectDecisionExperiments(v decisions.Decision, git *storage.Store, catalo
 	return v
 }
 
-func validDecisionDeliveryResource(repositoryID, proposalID, kind, resourceID string, proposalStore *proposals.Store, pullStore *pullrequests.Store, checkStore *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store) bool {
-	kind, resourceID = strings.TrimSpace(kind), strings.TrimSpace(resourceID)
+func validDecisionDeliveryResource(repositoryID, proposalID, observationKind, resourceKind, resourceID string, proposalStore *proposals.Store, pullStore *pullrequests.Store, checkStore *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store) bool {
+	observationKind, resourceKind, resourceID = strings.TrimSpace(observationKind), strings.TrimSpace(resourceKind), strings.TrimSpace(resourceID)
 	if proposalStore == nil || resourceID == "" {
 		return false
 	}
@@ -694,16 +694,49 @@ func validDecisionDeliveryResource(repositoryID, proposalID, kind, resourceID st
 		pull, getErr := pullStore.Get(repositoryID, id)
 		return getErr == nil && pull.ProposalID != nil && *pull.ProposalID == proposalID
 	}
-	switch kind {
-	case "review", "integration":
-		return linkedPull(resourceID)
+	switch resourceKind {
+	case "review":
+		if !linkedPull(resourceID) {
+			return false
+		}
+		if observationKind != "coverage" {
+			return true
+		}
+		pull, _ := pullStore.Get(repositoryID, resourceID)
+		reviews, reviewErr := pullStore.ListReviews(repositoryID, resourceID)
+		if reviewErr != nil {
+			return false
+		}
+		for _, review := range reviews {
+			if review.Decision == pullrequests.Approved && !review.Stale && review.ReviewedCommitID == pull.SourceCommitID {
+				return true
+			}
+		}
+		return false
+	case "integration":
+		if !linkedPull(resourceID) {
+			return false
+		}
+		if observationKind != "coverage" {
+			return true
+		}
+		pull, _ := pullStore.Get(repositoryID, resourceID)
+		return pull.Status == pullrequests.Merged
 	case "check":
 		if checkStore == nil {
 			return false
 		}
 		for _, pullID := range pullIDs {
-			if linkedPull(pullID) {
-				if _, getErr := checkStore.Get(repositoryID, pullID, resourceID); getErr == nil {
+			if !linkedPull(pullID) {
+				continue
+			}
+			run, getErr := checkStore.Get(repositoryID, pullID, resourceID)
+			if getErr == nil && observationKind != "coverage" {
+				return true
+			}
+			if getErr == nil && run.State == "succeeded" {
+				pull, _ := pullStore.Get(repositoryID, pullID)
+				if run.CommitID == pull.SourceCommitID {
 					return true
 				}
 			}
@@ -713,7 +746,7 @@ func validDecisionDeliveryResource(repositoryID, proposalID, kind, resourceID st
 			return false
 		}
 		release, getErr := releaseStore.Get(repositoryID, resourceID)
-		return getErr == nil && slices.Contains(release.Inclusions.ProposalIDs, proposalID)
+		return getErr == nil && slices.Contains(release.Inclusions.ProposalIDs, proposalID) && observationKind != "coverage"
 	case "deployment":
 		if deploymentStore == nil || releaseStore == nil {
 			return false
@@ -723,7 +756,7 @@ func validDecisionDeliveryResource(repositoryID, proposalID, kind, resourceID st
 			return false
 		}
 		release, releaseErr := releaseStore.Get(repositoryID, promotion.ReleaseID)
-		return releaseErr == nil && slices.Contains(release.Inclusions.ProposalIDs, proposalID)
+		return releaseErr == nil && slices.Contains(release.Inclusions.ProposalIDs, proposalID) && (observationKind != "coverage" || promotion.State == "succeeded")
 	}
 	return false
 }
