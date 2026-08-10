@@ -20,7 +20,7 @@ import (
 
 const workspaceOutputLimit = 128 * 1024
 const workspaceFileWriteScript = `set -eu
-p=$1
+p=./$1
 expected=$2
 [ -f "$p" ] && [ ! -L "$p" ] || exit 42
 tmp=$(mktemp "$p.vivarium-new.XXXXXX")
@@ -57,7 +57,7 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 		if !ok {
 			return
 		}
-		out, err := workspaceAuthorizedExec(catalog, item, actor, false, 15*time.Second, "/workspace", nil, "find", dir, "-mindepth", "1", "-maxdepth", "1", "-printf", "%y\t%s\t%f\n")
+		out, err := workspaceAuthorizedExec(catalog, item, actor, false, 15*time.Second, dir, nil, "find", ".", "-mindepth", "1", "-maxdepth", "1", "-printf", "%y\t%s\t%f\n")
 		if err != nil {
 			writeRuntimeError(w, err)
 			return
@@ -93,7 +93,7 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 		if !ok {
 			return
 		}
-		out, err := workspaceAuthorizedExec(catalog, item, actor, false, 10*time.Second, "/workspace", nil, "sh", "-c", "test -f \"$1\" && ! test -L \"$1\" && cat -- \"$1\"", "sh", name)
+		out, err := workspaceAuthorizedExec(catalog, item, actor, false, 10*time.Second, path.Dir(name), nil, "sh", "-c", "exec 3<\"$1\"; resolved=$(readlink -f /proc/self/fd/3); case \"$resolved\" in /workspace/*) cat <&3 ;; *) exit 42 ;; esac", "sh", path.Base(name))
 		if err != nil {
 			writeAPIError(w, 404, "workspace_file_not_found", "workspace file not found")
 			return
@@ -131,7 +131,7 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 		if !valid {
 			return
 		}
-		_, err := workspaceAuthorizedExec(catalog, item, actor, true, 10*time.Second, "/workspace", strings.NewReader(input.Content), "sh", "-c", workspaceFileWriteScript, "sh", name, input.ExpectedSHA256)
+		_, err := workspaceAuthorizedExec(catalog, item, actor, true, 10*time.Second, path.Dir(name), strings.NewReader(input.Content), "sh", "-c", workspaceFileWriteScript, "sh", path.Base(name), input.ExpectedSHA256)
 		if err != nil {
 			var exit *exec.ExitError
 			if errors.As(err, &exit) && exit.ExitCode() == 41 {
@@ -311,20 +311,16 @@ func validWorkspaceDigest(value string) bool {
 func workspaceAuthorizedExec(catalog *repositories.Store, item workspaces.Workspace, actor auth.Credential, mutation bool, timeout time.Duration, dir string, stdin *strings.Reader, args ...string) ([]byte, error) {
 	var output []byte
 	operation := func() error {
-		canonicalDir, err := canonicalWorkspacePath(item.ID, dir)
-		if err != nil {
-			return err
-		}
-		resolvedArgs := append([]string(nil), args...)
-		for index, value := range resolvedArgs {
-			if value == "/workspace" || strings.HasPrefix(value, "/workspace/") {
-				resolvedArgs[index], err = canonicalWorkspacePath(item.ID, value)
-				if err != nil {
-					return err
-				}
-			}
-		}
-		output, err = workspaceExec(item.ID, timeout, canonicalDir, stdin, resolvedArgs...)
+		wrapper := `set -eu
+cd -P -- "$1"
+physical=$(pwd -P)
+case "$physical" in /workspace|/workspace/*) ;; *) exit 42 ;; esac
+shift
+exec "$@"`
+		wrapped := []string{"sh", "-c", wrapper, "sh", dir}
+		wrapped = append(wrapped, args...)
+		var err error
+		output, err = workspaceExec(item.ID, timeout, "/workspace", stdin, wrapped...)
 		return err
 	}
 	var err error
@@ -334,17 +330,6 @@ func workspaceAuthorizedExec(catalog *repositories.Store, item workspaces.Worksp
 		err = catalog.WithCurrentReadAccess(actor.UserID, []string{item.RepositoryID}, operation)
 	}
 	return output, err
-}
-func canonicalWorkspacePath(id, value string) (string, error) {
-	out, err := workspaceExec(id, 5*time.Second, "/workspace", nil, "readlink", "-f", "--", value)
-	if err != nil {
-		return "", errors.New("workspace path does not exist")
-	}
-	resolved := strings.TrimSpace(string(out))
-	if resolved != "/workspace" && !strings.HasPrefix(resolved, "/workspace/") {
-		return "", errors.New("workspace path escapes the workspace root")
-	}
-	return resolved, nil
 }
 func workspaceExec(id string, timeout time.Duration, dir string, stdin *strings.Reader, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
