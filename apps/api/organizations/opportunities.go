@@ -207,7 +207,37 @@ func (s *Store) DecideStewardshipOpportunity(id, mandateID, opportunityID, actor
 			if decision.Rank < 1 || decision.Rank > 100000 {
 				return ErrInvalid
 			}
-			o.Rank = decision.Rank
+			order := make([]int, 0, len(m.Opportunities)-1)
+			for k := range m.Opportunities {
+				if k != j {
+					order = append(order, k)
+				}
+			}
+			slices.SortStableFunc(order, func(a, b int) int {
+				left, right := m.Opportunities[a], m.Opportunities[b]
+				if left.Rank != right.Rank {
+					return left.Rank - right.Rank
+				}
+				if compared := right.UpdatedAt.Compare(left.UpdatedAt); compared != 0 {
+					return compared
+				}
+				return strings.Compare(left.ID, right.ID)
+			})
+			position := min(decision.Rank-1, len(order))
+			order = append(order, 0)
+			copy(order[position+1:], order[position:])
+			order[position] = j
+			for rank, k := range order {
+				peer := &m.Opportunities[k]
+				if peer.Rank == rank+1 {
+					continue
+				}
+				peer.Rank = rank + 1
+				if k != j {
+					peer.Version++
+					peer.UpdatedBy, peer.UpdatedAt = actor, now
+				}
+			}
 		case "dismiss":
 			o.Status = "dismissed"
 			o.DecisionReason = strings.TrimSpace(decision.Reason)

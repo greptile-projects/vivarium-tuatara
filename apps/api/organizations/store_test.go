@@ -111,6 +111,25 @@ func TestStewardshipOpportunitiesDeduplicateRetainStaleEvidenceAndAcceptChalleng
 	if err != nil || item.Status != "incorrect" || item.DecisionReason == "" {
 		t.Fatalf("challenge = %#v, %v", item, err)
 	}
+	second := finding
+	second.EvidenceID, second.EvidenceRevision, second.Title = "dependency-audit", "scan-1", "Dependency support is ending"
+	second.Citations = []OpportunityCitation{{Kind: "dependency", ResourceID: "dependency-audit", Revision: "scan-1", Label: "Support policy"}}
+	_, added, err := store.PublishStewardshipOpportunities(v.ID, mandate.ID, operator, []OpportunityFinding{second})
+	if err != nil || added[0].Rank != 2 {
+		t.Fatalf("second publish = %#v, %v", added, err)
+	}
+	_, moved, err := store.DecideStewardshipOpportunity(v.ID, mandate.ID, item.ID, owner, OpportunityDecision{ExpectedVersion: item.Version, Action: "rank", Rank: 2})
+	if err != nil || moved.Rank != 2 {
+		t.Fatalf("rank move = %#v, %v", moved, err)
+	}
+	persisted, err := store.Get(v.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := persisted.StewardshipMandates[0].Opportunities
+	if len(queue) != 2 || queue[0].Rank != 2 || queue[1].Rank != 1 || queue[0].Rank == queue[1].Rank || queue[1].Version != added[0].Version+1 {
+		t.Fatalf("rank move did not persist a unique, versioned order: %#v", queue)
+	}
 }
 
 func TestRemoveMemberCleanupFailurePreventsMembershipCommit(t *testing.T) {
