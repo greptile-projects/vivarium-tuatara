@@ -1959,4 +1959,7 @@ approval for a review pull, a merged integration pull, a successful check at
 the pull's current source commit, or a successful deployment. A release
 candidate alone is not terminal coverage. Non-coverage findings may cite
 linked failed or nonterminal resources because those states are the evidence
-for a deviation or revisit request.
+for a deviation or revisit request. Review, integration, and check coverage is
+limited to each task's authoritative current contribution; superseded pulls
+remain historical evidence but cannot satisfy coverage. Deployment coverage
+requires its successful release to include every current merged task pull.

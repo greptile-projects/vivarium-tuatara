@@ -1029,6 +1029,9 @@ whenever dependencies change or the web job fails before it starts.
   revision, merged integration, a successful check at that revision, or a
   successful deployment. A candidate release is not terminal coverage, while
   deviations may cite linked failed/nonterminal resources as their evidence.
+  Superseded task contributions remain historical evidence only: coverage uses
+  the authoritative current contribution, and deployment coverage requires the
+  successful release to include every current merged task pull.
   A deviation, changed assumption, failed measure, or incompatible work
   reopens the exact commitment with an actionable revisit reason, while
   confirmed coverage remains retained delivery evidence.

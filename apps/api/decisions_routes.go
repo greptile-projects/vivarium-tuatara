@@ -676,15 +676,18 @@ func validDecisionDeliveryResource(repositoryID, proposalID, observationKind, re
 		return false
 	}
 	pullIDs := []string{}
+	contributionStatus := map[string]string{}
 	for _, task := range tasks {
-		contributions := append([]proposals.TaskContribution(nil), task.Contributions...)
-		if task.Contribution != nil {
-			contributions = append(contributions, *task.Contribution)
-		}
-		for _, contribution := range contributions {
-			if contribution.PullRequestID != "" && !slices.Contains(pullIDs, contribution.PullRequestID) {
-				pullIDs = append(pullIDs, contribution.PullRequestID)
+		for _, historical := range task.Contributions {
+			if historical.PullRequestID != "" && !slices.Contains(pullIDs, historical.PullRequestID) {
+				pullIDs = append(pullIDs, historical.PullRequestID)
 			}
+		}
+		if task.Contribution != nil && task.Contribution.PullRequestID != "" && task.Contribution.ContextRevision == task.ContextRevision {
+			if !slices.Contains(pullIDs, task.Contribution.PullRequestID) {
+				pullIDs = append(pullIDs, task.Contribution.PullRequestID)
+			}
+			contributionStatus[task.Contribution.PullRequestID] = task.Contribution.Status
 		}
 	}
 	linkedPull := func(id string) bool {
@@ -701,6 +704,9 @@ func validDecisionDeliveryResource(repositoryID, proposalID, observationKind, re
 		}
 		if observationKind != "coverage" {
 			return true
+		}
+		if contributionStatus[resourceID] != "review" {
+			return false
 		}
 		pull, _ := pullStore.Get(repositoryID, resourceID)
 		reviews, reviewErr := pullStore.ListReviews(repositoryID, resourceID)
@@ -720,6 +726,9 @@ func validDecisionDeliveryResource(repositoryID, proposalID, observationKind, re
 		if observationKind != "coverage" {
 			return true
 		}
+		if contributionStatus[resourceID] != "merged" {
+			return false
+		}
 		pull, _ := pullStore.Get(repositoryID, resourceID)
 		return pull.Status == pullrequests.Merged
 	case "check":
@@ -734,7 +743,7 @@ func validDecisionDeliveryResource(repositoryID, proposalID, observationKind, re
 			if getErr == nil && observationKind != "coverage" {
 				return true
 			}
-			if getErr == nil && run.State == "succeeded" {
+			if getErr == nil && run.State == "succeeded" && contributionStatus[pullID] == "review" {
 				pull, _ := pullStore.Get(repositoryID, pullID)
 				if run.CommitID == pull.SourceCommitID {
 					return true
@@ -756,7 +765,21 @@ func validDecisionDeliveryResource(repositoryID, proposalID, observationKind, re
 			return false
 		}
 		release, releaseErr := releaseStore.Get(repositoryID, promotion.ReleaseID)
-		return releaseErr == nil && slices.Contains(release.Inclusions.ProposalIDs, proposalID) && (observationKind != "coverage" || promotion.State == "succeeded")
+		if releaseErr != nil || !slices.Contains(release.Inclusions.ProposalIDs, proposalID) {
+			return false
+		}
+		if observationKind != "coverage" {
+			return true
+		}
+		if promotion.State != "succeeded" || len(tasks) == 0 {
+			return false
+		}
+		for _, task := range tasks {
+			if task.Contribution == nil || task.Contribution.ContextRevision != task.ContextRevision || task.Contribution.Status != "merged" || !slices.Contains(release.Inclusions.PullRequestIDs, task.Contribution.PullRequestID) {
+				return false
+			}
+		}
+		return true
 	}
 	return false
 }
