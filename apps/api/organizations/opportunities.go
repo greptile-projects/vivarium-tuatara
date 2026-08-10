@@ -120,11 +120,22 @@ func (s *Store) PublishStewardshipOpportunities(id, mandateID, actor string, fin
 			existing[item.DedupeKey] = true
 		}
 		newKeys := map[string]bool{}
+		uniqueFindings := make([]OpportunityFinding, 0, len(findings))
+		batchIndexes := map[string]int{}
 		for _, finding := range findings {
 			if !validateFinding(revision, finding) {
 				return ErrInvalid
 			}
 			key := opportunityKey(finding)
+			if index, duplicate := batchIndexes[key]; duplicate {
+				// Producers may converge renamed or revised evidence with an
+				// explicit key. The last occurrence is the batch's intended
+				// current representation, but it is still only one update.
+				uniqueFindings[index] = finding
+				continue
+			}
+			batchIndexes[key] = len(uniqueFindings)
+			uniqueFindings = append(uniqueFindings, finding)
 			if !existing[key] {
 				newKeys[key] = true
 			}
@@ -132,7 +143,7 @@ func (s *Store) PublishStewardshipOpportunities(id, mandateID, actor string, fin
 		if len(m.Opportunities)+len(newKeys) > revision.Budget.MaxActions {
 			return ErrConflict
 		}
-		for _, finding := range findings {
+		for _, finding := range uniqueFindings {
 			key, found := opportunityKey(finding), -1
 			for j := range m.Opportunities {
 				if m.Opportunities[j].DedupeKey == key {
@@ -171,7 +182,7 @@ func (s *Store) PublishStewardshipOpportunities(id, mandateID, actor string, fin
 			o.EvaluatedBy, o.UpdatedBy, o.UpdatedAt = actor, actor, now
 			out = append(out, *o)
 		}
-		return s.event(v, "stewardship_opportunities.evaluated", actor, mandateID, map[string]any{"mandate_version": m.Version, "findings": len(findings)})
+		return s.event(v, "stewardship_opportunities.evaluated", actor, mandateID, map[string]any{"mandate_version": m.Version, "findings": len(uniqueFindings)})
 	})
 	return v, out, err
 }

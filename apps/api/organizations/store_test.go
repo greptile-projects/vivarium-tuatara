@@ -97,8 +97,8 @@ func TestStewardshipOpportunitiesDeduplicateRetainStaleEvidenceAndAcceptChalleng
 	v, mandate, _ = store.AcceptStewardshipMandate(v.ID, mandate.ID, operator, 1)
 	store.now = func() time.Time { return base.Add(2 * time.Minute) }
 	finding := OpportunityFinding{RepositoryID: repository, Signal: "required checks", EvidenceType: "check", EvidenceID: "required-ci", EvidenceRevision: "run-1", Title: "Required checks are failing", Summary: "The default branch cannot ship.", Severity: "high", ExpectedValue: "Restore the release path.", Confidence: .9, AffectedOwnerIDs: []string{owner}, AffectedRevisions: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, InScopeReason: "The mandate requires green checks.", Citations: []OpportunityCitation{{Kind: "check", ResourceID: "required-ci", Revision: "run-1", Label: "Failed run"}}}
-	v, items, err := store.PublishStewardshipOpportunities(v.ID, mandate.ID, operator, []OpportunityFinding{finding})
-	if err != nil || len(items) != 1 || len(v.StewardshipMandates[0].Opportunities) != 1 {
+	v, items, err := store.PublishStewardshipOpportunities(v.ID, mandate.ID, operator, []OpportunityFinding{finding, finding})
+	if err != nil || len(items) != 1 || len(v.StewardshipMandates[0].Opportunities) != 1 || items[0].Version != 1 || len(items[0].Citations) != 1 {
 		t.Fatalf("publish = %#v, %v", items, err)
 	}
 	finding.EvidenceRevision = "run-2"
