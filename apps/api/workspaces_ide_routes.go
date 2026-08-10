@@ -20,6 +20,17 @@ import (
 )
 
 const workspaceOutputLimit = 128 * 1024
+const workspaceListScript = `for p do
+	name=${p#./}
+	if [ -d "$p" ] && [ ! -L "$p" ]; then
+		kind=d
+	elif [ -f "$p" ] && [ ! -L "$p" ]; then
+		kind=f
+	else
+		kind=o
+	fi
+	printf '%s\t0\t%s\n' "$kind" "$name"
+done`
 const workspaceFileWriteScript = `set -eu
 p=$1
 expected=$2
@@ -58,7 +69,7 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 		if !ok {
 			return
 		}
-		out, err := workspaceAuthorizedExec(catalog, item, actor, false, 15*time.Second, dir, nil, "find", ".", "-mindepth", "1", "-maxdepth", "1", "-printf", "%y\t%s\t%f\n")
+		out, err := workspaceAuthorizedExec(catalog, item, actor, false, 15*time.Second, dir, nil, "find", ".", "-mindepth", "1", "-maxdepth", "1", "-exec", "sh", "-c", workspaceListScript, "sh", "{}", "+")
 		if err != nil {
 			writeRuntimeError(w, err)
 			return
@@ -356,7 +367,11 @@ exec "$@"`
 func workspaceExec(id string, timeout time.Duration, dir string, stdin io.Reader, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	dockerArgs := []string{"exec", "--workdir", dir, "vivarium-workspace-" + id}
+	dockerArgs := []string{"exec"}
+	if stdin != nil {
+		dockerArgs = append(dockerArgs, "-i")
+	}
+	dockerArgs = append(dockerArgs, "--workdir", dir, "vivarium-workspace-"+id)
 	dockerArgs = append(dockerArgs, args...)
 	cmd := exec.CommandContext(ctx, "docker", dockerArgs...)
 	if stdin != nil {

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWorkspaceEditRequiresCompleteDigest(t *testing.T) {
@@ -19,6 +20,49 @@ func TestWorkspaceEditRequiresCompleteDigest(t *testing.T) {
 		if got := validWorkspaceDigest(test.value); got != test.want {
 			t.Fatalf("validWorkspaceDigest(%q) = %v, want %v", test.value, got, test.want)
 		}
+	}
+}
+
+func TestWorkspaceListUsesPortableFindActions(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "feature.txt"), []byte("planned\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(directory, ".vivarium"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	for name, target := range map[string]string{"find": "/usr/bin/find", "sh": "/bin/sh"} {
+		if err := os.Symlink(target, filepath.Join(bin, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	command := exec.Command("find", ".", "-mindepth", "1", "-maxdepth", "1", "-exec", "sh", "-c", workspaceListScript, "sh", "{}", "+")
+	command.Dir = directory
+	command.Env = append(os.Environ(), "PATH="+bin)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("portable listing: %v: %s", err, output)
+	}
+	listing := string(output)
+	if !strings.Contains(listing, "f\t0\tfeature.txt\n") || !strings.Contains(listing, "d\t0\t.vivarium\n") {
+		t.Fatalf("listing = %q", listing)
+	}
+}
+
+func TestWorkspaceExecAttachesProvidedStdin(t *testing.T) {
+	bin := t.TempDir()
+	docker := filepath.Join(bin, "docker")
+	if err := os.WriteFile(docker, []byte("#!/bin/sh\ncase \" $* \" in *\" exec -i \"*) cat ;; *) exit 42 ;; esac\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	output, err := workspaceExec("0123456789abcdef0123456789abcdef", time.Second, "/workspace", strings.NewReader("saved body"), "sh", "-c", "cat")
+	if err != nil {
+		t.Fatalf("workspace exec: %v", err)
+	}
+	if string(output) != "saved body" {
+		t.Fatalf("output = %q", output)
 	}
 }
 

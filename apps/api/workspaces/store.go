@@ -647,23 +647,20 @@ func (s *Store) transition(id, actor, expectedFoundation, target string, require
 	if e != nil {
 		return Workspace{}, e
 	}
-	if requireControl && !w.CanControl(actor, "lifecycle", s.now()) {
-		return Workspace{}, ErrControl
-	}
 	if expectedFoundation == "" || expectedFoundation != w.DefinitionSHA256 {
 		return Workspace{}, ErrConflict
+	}
+	if (target == "suspended" && w.State != "running") || (target == "running" && w.State != "suspended") {
+		return Workspace{}, ErrConflict
+	}
+	if requireControl && !w.CanControl(actor, "lifecycle", s.now()) {
+		return Workspace{}, ErrControl
 	}
 	now := s.now()
 	switch target {
 	case "suspended":
-		if w.State != "running" {
-			return Workspace{}, ErrConflict
-		}
 		w.SuspendedAt = &now
 	case "running":
-		if w.State != "suspended" {
-			return Workspace{}, ErrConflict
-		}
 		if _, e = os.Stat(s.RuntimePath(id)); e != nil {
 			return Workspace{}, ErrConflict
 		}

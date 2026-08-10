@@ -90,6 +90,12 @@ finish between the snapshot and lineage update. Restore stages and backs up all
 targets before mutation; failure restores them and removes parent directories
 introduced by the transaction.
 
+When live paths conflict, the browser requires an explicit replacement
+confirmation before sending the API's conflict override. Runtime capture
+streams from inside the bounded tmpfs rather than reading the container image
+layer, and image-side automation uses portable shell operations so minimal
+foundations such as Alpine remain usable.
+
 An authorized participant can publish a retained checkpoint into normal Git
 governance. Publication either compare-and-swap advances an existing working
 branch from the checkpoint base or creates a branch there, then creates one
@@ -109,6 +115,12 @@ new event. Repository checks, stale-revision
 reviews, branch protection, and the integration queue apply without a
 workspace-specific bypass. Terminal input, outputs, discussion, credentials,
 and unpublished runtime files remain outside the commit and generated review.
+
+The connected workspace browser journey carries an organization-approved
+agent, two human participants, and a proposal task through shared editing,
+commands, intervention, suspension, reconnect, conflicting checkpoint restore,
+publication, checks, review, merge, and compute expiry while retaining the full
+permission-aware workspace and pull provenance.
 
 ## Unsafe package recovery
 
