@@ -1857,3 +1857,23 @@ change `summary`; stale updates return `409 decision_changed`. `POST
 version. Scope creation, every revision, and discussion remain in one ordered
 immutable `history`. Records default beneath `$DECISION_STORAGE_ROOT`
 (`decisions`).
+
+`POST /decisions/{id}/alternatives` requires repository write participation
+and compare-and-swap `expected_version`. Its `alternative` contains a title,
+summary, assumptions, tradeoffs, risks, compatibility impact, cost, expected
+outcomes, exact evidence, and one assessment for every current success measure.
+Evidence kind is `code`, `dependency`, `release`, `incident`, or `usage`; every
+citation requires a durable resource identity, exact revision or time window,
+and label; capture time is assigned by the server. Code evidence additionally requires repository, path,
+and line range. Reads derive `evidence_status.missing_kinds`,
+`missing_criteria`, and citations stale after 30 days.
+
+`POST /decisions/{id}/research-credentials` accepts `alternative_id` and
+`expires_in` from 60 through 86400 seconds. It issues an API credential bound
+to that repository, decision, and current alternative with
+`decisions:research` plus repository-bound `repositories:read`; it has no write
+scope. `POST /decisions/{id}/findings` accepts that credential
+plus the selected alternative, body, `support`, `oppose`, or `neutral`
+position, explicit uncertainty, exact citations, and optional
+`supersedes_id`. Supersession marks but retains the earlier same-alternative
+finding, preserving dissent and its historical evidence.

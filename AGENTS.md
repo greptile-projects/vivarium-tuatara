@@ -983,6 +983,13 @@ whenever dependencies change or the web job fails before it starts.
   history beneath `$DECISION_STORAGE_ROOT` (default `decisions`). A decision is
   coordination context only: its pending state is discoverable by source and
   does not block proposals, pulls, tasks, or other contributions.
+  Participants compare structured alternatives against every shared success
+  measure with exact code, dependency, release, incident, and usage citations;
+  reads identify missing evidence classes and evidence older than 30 days.
+  Short-lived `decisions:research` credentials are bound to one repository,
+  decision, and selected alternative. They grant repository read plus cited
+  finding publication but no mutation, while retained positions and
+  supersession preserve dissent.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

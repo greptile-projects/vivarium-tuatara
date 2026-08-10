@@ -19,22 +19,101 @@ export type Repository = {
 export type TechnicalDecision = {
   id: string;
   repository_id: string;
-  source: { kind: "repository" | "proposal" | "investigation" | "incident" | "evolution_plan" | "stewardship_opportunity"; resource_id?: string };
+  source: {
+    kind:
+      | "repository"
+      | "proposal"
+      | "investigation"
+      | "incident"
+      | "evolution_plan"
+      | "stewardship_opportunity";
+    resource_id?: string;
+  };
   status: "pending";
   scope: {
     question: string;
     constraints: string[];
     success_measures: string[];
     deadline?: string;
-    affected_resources: { kind: string; repository_id?: string; resource_id?: string; label: string }[];
+    affected_resources: {
+      kind: string;
+      repository_id?: string;
+      resource_id?: string;
+      label: string;
+    }[];
     participants: { user_id: string; added_by: string; added_at: string }[];
     owner_id: string;
   };
   created_by: string;
   version: number;
-  history: { id: string; kind: "scope_created" | "scope_changed" | "discussion"; actor_id: string; version: number; summary: string; body?: string; created_at: string }[];
+  alternatives: DecisionAlternative[];
+  findings: DecisionFinding[];
+  history: {
+    id: string;
+    kind:
+      | "scope_created"
+      | "scope_changed"
+      | "discussion"
+      | "alternative_proposed"
+      | "research_finding";
+    actor_id: string;
+    version: number;
+    summary: string;
+    body?: string;
+    created_at: string;
+  }[];
   created_at: string;
   updated_at: string;
+};
+export type DecisionEvidence = {
+  kind: "code" | "dependency" | "release" | "incident" | "usage";
+  repository_id?: string;
+  resource_id: string;
+  revision: string;
+  path?: string;
+  start_line?: number;
+  end_line?: number;
+  label: string;
+  captured_at?: string;
+};
+export type DecisionAlternative = {
+  id: string;
+  title: string;
+  summary: string;
+  assumptions: string[];
+  tradeoffs: string[];
+  risks: string[];
+  compatibility_impact: string;
+  cost: string;
+  expected_outcomes: string[];
+  evidence: DecisionEvidence[];
+  criteria: {
+    criterion: string;
+    outcome: string;
+    evidence: DecisionEvidence[];
+  }[];
+  evidence_status: {
+    missing_kinds: string[];
+    stale: DecisionEvidence[];
+    missing_criteria: string[];
+  };
+  proposed_by: string;
+  version: number;
+  superseded_by?: string;
+  created_at: string;
+  updated_at: string;
+};
+export type DecisionFinding = {
+  id: string;
+  alternative_id: string;
+  body: string;
+  position: "support" | "oppose" | "neutral";
+  uncertainty: string;
+  citations: DecisionEvidence[];
+  actor_id: string;
+  supersedes_id?: string;
+  superseded: boolean;
+  created_at: string;
 };
 export type CodeNavigationResult = {
   repository_id: string;
@@ -457,8 +536,21 @@ export type OrganizationStewardshipMandate = {
     id: string;
     idempotency_key: string;
     opportunity_id?: string;
-    kind: "implementation" | "verification" | "release" | "resource" | "false_positive" | "goal" | "automation";
-    status: "succeeded" | "failed" | "partial" | "inactive" | "revoked_access" | "anomalous";
+    kind:
+      | "implementation"
+      | "verification"
+      | "release"
+      | "resource"
+      | "false_positive"
+      | "goal"
+      | "automation";
+    status:
+      | "succeeded"
+      | "failed"
+      | "partial"
+      | "inactive"
+      | "revoked_access"
+      | "anomalous";
     summary: string;
     goal?: string;
     goal_progress?: number;
@@ -468,7 +560,13 @@ export type OrganizationStewardshipMandate = {
     recorded_by: string;
     recorded_at: string;
   }[];
-  notices: { id: string; kind: string; summary: string; action: string; created_at: string }[];
+  notices: {
+    id: string;
+    kind: string;
+    summary: string;
+    action: string;
+    created_at: string;
+  }[];
 };
 export type OrganizationStewardshipOpportunity = {
   id: string;
@@ -501,7 +599,13 @@ export type OrganizationStewardshipOpportunity = {
     stale: boolean;
   }[];
   status:
-    "open" | "dismissed" | "snoozed" | "incorrect" | "promoting" | "promoted" | "accepted";
+    | "open"
+    | "dismissed"
+    | "snoozed"
+    | "incorrect"
+    | "promoting"
+    | "promoted"
+    | "accepted";
   rank: number;
   snoozed_until?: string;
   decision_reason?: string;
@@ -1611,7 +1715,11 @@ export type PullRequest = {
       changed_files: { path: string; status: string }[];
       checks: { name: string; status: string; details?: string }[];
       commands: { command: string; exit_code: number; summary?: string }[];
-      completion_criteria: { criterion: string; status: "met" | "partial" | "not_met"; evidence: string }[];
+      completion_criteria: {
+        criterion: string;
+        status: "met" | "partial" | "not_met";
+        evidence: string;
+      }[];
       unresolved_concerns: string[];
       completed_at: string;
     };
