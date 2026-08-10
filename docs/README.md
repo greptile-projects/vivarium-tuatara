@@ -276,6 +276,16 @@ and pull review surfaces link back to it. If the selected branch moves, the
 assessment is reported as changed and cannot start new work, preserving the old
 trail instead of silently refreshing its evidence.
 
+The connected code-intelligence browser journey proves this is one workflow:
+an unfamiliar developer navigates exact symbol evidence, asks a grounded
+question, invites an affected consumer owner to refine the conclusion, records
+and acknowledges cross-repository impact, launches agent-owned implementation,
+and merges only after the identified repository check and independent review.
+The final pull, task session, proposal reasoning, investigation, and assessment
+retain the exact revision and attributable decisions. Playwright isolates both
+`$EXPLANATION_STORAGE_ROOT` and `$IMPACT_STORAGE_ROOT` with its other temporary
+API stores.
+
 ## Web interface foundation
 
 The web application uses a persistent workbench shell so account, repository,
