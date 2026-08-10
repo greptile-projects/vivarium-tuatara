@@ -50,8 +50,8 @@ cleanup removes both the named container and any attached volumes. The named
 container is force-removed after setup failure or timeout. Creation
 returns the durable workspace after bounded setup, including its
 state, creator, exact commit, complete definition and SHA-256, source, effective
-access, setup evidence, and lifecycle events. `GET /workspaces` lists the
-actor's launches; `GET /workspaces/{id}` is available to current repository
+access, setup evidence, and lifecycle events. `GET /workspaces` lists launches
+across the actor's current repository collaborations; `GET /workspaces/{id}` is available to current repository
 participants. `POST /workspaces/{id}/suspend` and `/resume` accept
 `{"foundation":"<definition_sha256>"}`. A stale hash, invalid state, or missing
 materialized runtime returns `409 workspace_foundation_changed`; resume never
@@ -76,6 +76,33 @@ sandboxed HTML response without publishing a container port. These endpoints
 reject non-running workspaces. Commands receive no platform, repository,
 deployment, or environment credentials, so platform-managed secrets cannot
 enter snapshots, logs, or shared previews.
+
+`PUT /workspaces/{id}/presence` accepts a `focus` of `workspace`, `file`,
+`terminal`, `command`, or `preview` plus an optional bounded `path`; clients
+renew it while connected. `DELETE .../presence` records a deliberate leave.
+Presence expires after 20 seconds without renewal, so abrupt disconnects do not
+leave a participant online. Discussion and typed activity remain durable.
+`POST .../messages` accepts a 1–4000 character `body`.
+
+`PUT /workspaces/{id}/control` compare-and-swaps `expected_version` and names a
+`human` or `approved_agent`, an `observe`, `guide`, `edit`, or `execute` mode,
+a subset of `files`, `commands`, and `lifecycle`, and an `expires_in` lease of
+30–3600 seconds. Humans must be current repository participants; agents must be
+approved in its organization. Stale updates return `409
+workspace_control_changed`. File, command, suspend, and resume routes require
+the corresponding unexpired human control scope and otherwise return `409
+workspace_control_required`. Selecting an agent grants no caller authority;
+agent execution remains a separately authorized boundary.
+An empty principal with `mode: "observe"`, empty scopes, and the current version
+lets the current live human holder explicitly release control; other writers
+cannot clear that lease. Final lease validation and mutation admission are
+serialized with transfer: a takeover waits for already-admitted work, while a
+request that loses its lease before admission is rejected.
+
+Command outcomes omit submitted commands. They retain `command_sha256`,
+directory, bounded output, exit status, actor, and times, so collaborators can
+understand execution without revealing private terminal input. Activity roles
+are `observation`, `instruction`, `authorship`, and `execution`.
 
 ## Activity
 

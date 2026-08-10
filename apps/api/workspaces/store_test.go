@@ -52,7 +52,7 @@ func TestWorkspaceCommandAndChangeEvidenceIsBoundedAndContentFree(t *testing.T) 
 	}
 	now := time.Now().UTC()
 	for index := 0; index < 105; index++ {
-		if _, err = store.RecordCommand(created.ID, CommandOutcome{Command: "go test ./...", ActorID: "actor", StartedAt: now, CompletedAt: now}); err != nil {
+		if _, err = store.RecordCommand(created.ID, CommandOutcome{CommandSHA256: strings.Repeat("a", 64), ActorID: "actor", StartedAt: now, CompletedAt: now}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -71,6 +71,124 @@ func TestWorkspaceCommandAndChangeEvidenceIsBoundedAndContentFree(t *testing.T) 
 	}
 	if strings.Contains(string(body), string(secret)) {
 		t.Fatal("changed file content leaked into durable workspace evidence")
+	}
+}
+
+func TestSharedPresenceDiscussionAndVersionedControlSurviveRestart(t *testing.T) {
+	root := t.TempDir()
+	store, _ := New(root)
+	creator := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	peer := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	created, err := store.Create(Workspace{RepositoryID: "repository", CommitID: "commit", CreatorID: creator}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined, err := store.Join(created.ID, peer, "file", "main.go")
+	if err != nil || len(joined.Presence) != 1 || joined.Presence[0].Path != "main.go" {
+		t.Fatalf("join = %#v, %v", joined, err)
+	}
+	controlled, err := store.SetControl(created.ID, peer, "human", peer, "edit", []string{"files"}, 1, 300)
+	if err != nil || !controlled.CanControl(peer, "files", time.Now()) || controlled.CanControl(creator, "files", time.Now()) {
+		t.Fatalf("control = %#v, %v", controlled.Control, err)
+	}
+	if _, err = store.SetControl(created.ID, creator, "human", creator, "execute", []string{"commands"}, 1, 300); !errors.Is(err, ErrControl) {
+		t.Fatalf("stale control = %v", err)
+	}
+	if _, err = store.AddMessage(created.ID, creator, "Please keep the test focused."); err != nil {
+		t.Fatal(err)
+	}
+	reopened, _ := New(root)
+	durable, err := reopened.Get(created.ID)
+	if err != nil || len(durable.Messages) != 1 || len(durable.Presence) != 1 || durable.Control.Version != 2 {
+		t.Fatalf("durable = %#v, %v", durable, err)
+	}
+	roles := map[string]bool{}
+	for _, event := range durable.Events {
+		roles[event.Role] = true
+	}
+	if !roles["observation"] || !roles["instruction"] {
+		t.Fatalf("activity roles = %#v", roles)
+	}
+}
+
+func TestControlTransferWaitsForAdmittedMutationAndRejectsStaleActor(t *testing.T) {
+	store, _ := New(t.TempDir())
+	creator := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	peer := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	created, err := store.Create(Workspace{RepositoryID: "repository", CommitID: "commit", CreatorID: creator}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, finish := make(chan struct{}), make(chan struct{})
+	mutationDone := make(chan error, 1)
+	go func() {
+		mutationDone <- store.WithControl(created.ID, creator, "commands", func(Workspace) error {
+			close(started)
+			<-finish
+			return nil
+		})
+	}()
+	<-started
+	transferDone := make(chan error, 1)
+	go func() {
+		_, transferErr := store.SetControl(created.ID, peer, "human", peer, "execute", []string{"commands"}, 1, 300)
+		transferDone <- transferErr
+	}()
+	select {
+	case err := <-transferDone:
+		t.Fatalf("transfer completed during admitted mutation: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(finish)
+	if err := <-mutationDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-transferDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WithControl(created.ID, creator, "commands", func(Workspace) error { return nil }); !errors.Is(err, ErrControl) {
+		t.Fatalf("former controller mutation = %v", err)
+	}
+}
+
+func TestControlCanBeExplicitlyReleased(t *testing.T) {
+	store, _ := New(t.TempDir())
+	holder := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	other := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	created, _ := store.Create(Workspace{RepositoryID: "repository", CommitID: "commit", CreatorID: holder}, []byte("definition"))
+	if _, err := store.ReleaseControl(created.ID, other, 1); !errors.Is(err, ErrControl) {
+		t.Fatalf("non-holder release = %v", err)
+	}
+	retained, err := store.Get(created.ID)
+	if err != nil || retained.Control.PrincipalID != holder || retained.Control.Version != 1 {
+		t.Fatalf("control after denied release = %#v, %v", retained.Control, err)
+	}
+	released, err := store.ReleaseControl(created.ID, holder, 1)
+	if err != nil || released.Control.PrincipalID != "" || len(released.Control.Scopes) != 0 || released.Control.Version != 2 {
+		t.Fatalf("release = %#v, %v", released.Control, err)
+	}
+	if _, err := store.SetControl(created.ID, holder, "", "", "observe", nil, 2, 0); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("empty transfer = %v", err)
+	}
+	expiredStore, _ := New(t.TempDir())
+	expired, _ := expiredStore.Create(Workspace{RepositoryID: "repository", CommitID: "commit", CreatorID: holder}, []byte("definition"))
+	expiredStore.now = func() time.Time { return expired.Control.ExpiresAt.Add(time.Second) }
+	if _, err := expiredStore.ReleaseControl(expired.ID, holder, 1); !errors.Is(err, ErrControl) {
+		t.Fatalf("expired holder release = %v", err)
+	}
+}
+
+func TestCommandEvidenceDoesNotRetainPrivateInput(t *testing.T) {
+	store, _ := New(t.TempDir())
+	created, _ := store.Create(Workspace{RepositoryID: "repository", CommitID: "commit", CreatorID: "actor"}, []byte("definition"))
+	secret := "export PRIVATE_TOKEN=do-not-share"
+	digest := sha256.Sum256([]byte(secret))
+	if _, err := store.RecordCommand(created.ID, CommandOutcome{CommandSHA256: hex.EncodeToString(digest[:]), ActorID: "actor", StartedAt: time.Now(), CompletedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := os.ReadFile(filepath.Join(store.root, created.ID+".json"))
+	if strings.Contains(string(body), secret) {
+		t.Fatal("private terminal input entered the durable record")
 	}
 }
 

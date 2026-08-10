@@ -14,6 +14,7 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
@@ -21,8 +22,9 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
-func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, incidentStore *incidents.Store, store *workspaces.Store, authStore *auth.Store) {
+func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, incidentStore *incidents.Store, store *workspaces.Store, authStore *auth.Store, organizationStore *organizations.Store) {
 	registerWorkspaceIDERoutes(mux, catalog, store, authStore)
+	registerWorkspaceCollaborationRoutes(mux, catalog, store, authStore, organizationStore)
 	mux.HandleFunc("POST /workspaces", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)
 		if !ok {
@@ -96,10 +98,18 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 		if !ok {
 			return
 		}
-		items, err := store.List(actor.UserID)
+		all, err := store.ListAll()
 		if err != nil {
 			writeAPIError(w, 500, "workspace_list_failed", "workspaces could not be listed")
 			return
+		}
+		items := []workspaces.Workspace{}
+		for _, item := range all {
+			meta, metaErr := catalog.GetByID(item.RepositoryID)
+			collaborator, _ := catalog.HasCollaborator(actor.UserID, item.RepositoryID)
+			if metaErr == nil && (meta.OwnerID == actor.UserID || collaborator) {
+				items = append(items, item)
+			}
 		}
 		writeJSON(w, 200, map[string]any{"items": items})
 	})
@@ -121,7 +131,7 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
-		updated, err := store.Transition(workspace.ID, actor.UserID, input.Foundation, "suspended")
+		updated, err := store.TransitionControlled(workspace.ID, actor.UserID, input.Foundation, "suspended")
 		writeWorkspaceTransition(w, updated, err)
 	})
 	mux.HandleFunc("POST /workspaces/{workspace_id}/resume", func(w http.ResponseWriter, r *http.Request) {
@@ -136,7 +146,7 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
-		updated, err := store.Transition(workspace.ID, actor.UserID, input.Foundation, "running")
+		updated, err := store.TransitionControlled(workspace.ID, actor.UserID, input.Foundation, "running")
 		writeWorkspaceTransition(w, updated, err)
 	})
 }
@@ -160,6 +170,10 @@ func authorizeWorkspace(w http.ResponseWriter, r *http.Request, store *workspace
 	return item, actor, true
 }
 func writeWorkspaceTransition(w http.ResponseWriter, item workspaces.Workspace, err error) {
+	if errors.Is(err, workspaces.ErrControl) {
+		writeAPIError(w, 409, "workspace_control_required", "workspace lifecycle control is held by another participant or has expired")
+		return
+	}
 	if errors.Is(err, workspaces.ErrConflict) {
 		writeAPIError(w, 409, "workspace_foundation_changed", "workspace state or frozen foundation changed")
 		return

@@ -20,7 +20,7 @@ import (
 
 const workspaceOutputLimit = 128 * 1024
 const workspaceFileWriteScript = `set -eu
-p=./$1
+p=$1
 expected=$2
 [ -f "$p" ] && [ ! -L "$p" ] || exit 42
 tmp=$(mktemp "$p.vivarium-new.XXXXXX")
@@ -131,8 +131,12 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 		if !valid {
 			return
 		}
-		_, err := workspaceAuthorizedExec(catalog, item, actor, true, 10*time.Second, path.Dir(name), strings.NewReader(input.Content), "sh", "-c", workspaceFileWriteScript, "sh", path.Base(name), input.ExpectedSHA256)
+		err := workspaceControlledExec(store, catalog, item, actor, "files", 10*time.Second, path.Dir(name), strings.NewReader(input.Content), "sh", "-c", workspaceFileWriteScript, "sh", path.Base(name), input.ExpectedSHA256)
 		if err != nil {
+			if errors.Is(err, workspaces.ErrControl) {
+				writeAPIError(w, 409, "workspace_control_required", "live file control is held by another participant or has expired")
+				return
+			}
 			var exit *exec.ExitError
 			if errors.As(err, &exit) && exit.ExitCode() == 41 {
 				writeAPIError(w, 409, "workspace_file_changed", "file changed since it was opened")
@@ -203,7 +207,16 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 			return
 		}
 		start := time.Now().UTC()
-		out, runErr := workspaceAuthorizedExec(catalog, item, actor, true, time.Duration(input.TimeoutSeconds)*time.Second, dir, nil, "sh", "-lc", input.Command)
+		var out []byte
+		runErr := store.WithControl(item.ID, actor.UserID, "commands", func(current workspaces.Workspace) error {
+			var executeErr error
+			out, executeErr = workspaceAuthorizedExec(catalog, current, actor, true, time.Duration(input.TimeoutSeconds)*time.Second, dir, nil, "sh", "-lc", input.Command)
+			return executeErr
+		})
+		if errors.Is(runErr, workspaces.ErrControl) {
+			writeAPIError(w, 409, "workspace_control_required", "live command control is held by another participant or has expired")
+			return
+		}
 		code := 0
 		if runErr != nil {
 			code = -1
@@ -215,7 +228,8 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 		if len(out) > workspaceOutputLimit {
 			out = append(out[:workspaceOutputLimit], []byte("\n[output truncated]")...)
 		}
-		outcome := workspaces.CommandOutcome{Command: input.Command, Directory: strings.TrimPrefix(dir, "/workspace"), ExitCode: code, Output: string(out), ActorID: actor.UserID, StartedAt: start, CompletedAt: time.Now().UTC()}
+		commandDigest := sha256.Sum256([]byte(input.Command))
+		outcome := workspaces.CommandOutcome{CommandSHA256: hex.EncodeToString(commandDigest[:]), Directory: strings.TrimPrefix(dir, "/workspace"), ExitCode: code, Output: string(out), ActorID: actor.UserID, StartedAt: start, CompletedAt: time.Now().UTC()}
 		updated, err := store.RecordCommand(item.ID, outcome)
 		if err != nil {
 			writeAPIError(w, 500, "workspace_command_evidence_failed", "command finished but evidence could not be saved")
@@ -274,6 +288,13 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(200)
 		_, _ = w.Write(out)
+	})
+}
+
+func workspaceControlledExec(store *workspaces.Store, catalog *repositories.Store, item workspaces.Workspace, actor auth.Credential, scope string, timeout time.Duration, dir string, stdin *strings.Reader, args ...string) error {
+	return store.WithControl(item.ID, actor.UserID, scope, func(current workspaces.Workspace) error {
+		_, err := workspaceAuthorizedExec(catalog, current, actor, true, timeout, dir, stdin, args...)
+		return err
 	})
 }
 

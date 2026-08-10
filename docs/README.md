@@ -46,6 +46,18 @@ previews against that same named container. Durable change evidence stores
 paths, sizes, and hashes rather than file snapshots. Runtime commands receive
 no platform-managed secrets, and preview ports are never published directly.
 
+Workspace implementation is a live shared activity. Current repository
+participants publish renewable presence with a workspace, file, terminal,
+command, or preview focus, reconnect to the same discussion and activity, and
+observe file, command, lifecycle, and control outcomes. One versioned, expiring
+control lease names a current human or organization-approved agent, its mode,
+and exact file, command, and lifecycle scopes. Any current participant may take
+over with the last observed version; stale attempts conflict. The server
+enforces the lease again at execution time. Durable activity distinguishes
+observation, instruction, authorship, and execution, while terminal input is
+represented only by SHA-256 and never enters the workspace record. File writes
+still compare-and-swap the opened content digest across control transfers.
+
 ## Unsafe package recovery
 
 Package lifecycle decisions are attributable append-only coordination records,

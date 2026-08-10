@@ -56,9 +56,12 @@ export type DevelopmentWorkspace = {
     started_at: string;
     completed_at: string;
   }[];
-  events: { kind: string; actor_id: string; detail?: string; created_at: string }[];
-  command_outcomes: { id:string; command:string; directory:string; exit_code:number; output?:string; actor_id:string; started_at:string; completed_at:string }[];
+  events: { id?:string; kind: string; actor_id: string; role?:"observation"|"instruction"|"authorship"|"execution"; detail?: string; created_at: string }[];
+  command_outcomes: { id:string; command_sha256:string; directory:string; exit_code:number; output?:string; actor_id:string; started_at:string; completed_at:string }[];
   changes: { path:string; sha256:string; size:number; actor_id:string; created_at:string }[];
+  presence: { actor_id:string; focus:"workspace"|"file"|"terminal"|"command"|"preview"; path?:string; joined_at:string; seen_at:string }[];
+  control: { version:number; principal_kind:"human"|"approved_agent"; principal_id:string; mode:"observe"|"guide"|"edit"|"execute"; scopes:("files"|"commands"|"lifecycle")[]; granted_by:string; granted_at:string; expires_at:string };
+  messages: { id:string; actor_id:string; body:string; created_at:string }[];
 };
 export type Organization = {
   id: string;

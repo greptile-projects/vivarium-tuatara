@@ -257,6 +257,19 @@ whenever dependencies change or the web job fails before it starts.
   loopback port discovery, and authenticated sandboxed previews. Durable change
   evidence retains file hashes rather than contents; no platform-managed secret
   or credential is injected into commands, snapshots, logs, or previews.
+  Current participants share renewable workspace/file/terminal/command/preview
+  presence, discussion, and typed observation, instruction, authorship, and
+  execution history. A compare-and-swap versioned, expiring control lease names
+  one current human or organization-approved agent plus exact file, command,
+  and lifecycle scopes. Runtime mutations enforce the live human lease; agent
+  selection grants no caller authority. Concurrent file saves still use their
+  content digest, stale takeovers conflict, and durable command outcomes retain
+  only a command SHA-256 rather than private terminal input.
+  Empty-principal observe control lets only the current live human holder
+  explicitly release a lease. Per-workspace
+  control serialization covers final live-lease validation through mutation
+  execution, so takeover waits for admitted work and stale actors fail before
+  execution without blocking unrelated presence or discussion writes.
   Repository relationship graphs at `/repositories/{id}/relationships` join
   immutable versioned interface publications to exact consumer revisions,
   optional releases and environments, repository owners, and semantic-version

@@ -13,10 +13,16 @@ export function DevelopmentWorkspaces({
 }: {
   workspaceID?: string;
 }) {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const [items, setItems] = useState<DevelopmentWorkspace[]>([]);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const controlsLifecycle = (item: DevelopmentWorkspace) =>
+    item.control?.principal_kind === "human" &&
+    item.control.principal_id === user?.id &&
+    item.control.mode === "execute" &&
+    item.control.scopes.includes("lifecycle") &&
+    new Date(item.control.expires_at) > new Date();
   useEffect(() => {
     if (!token) return;
     let active = true;
@@ -66,6 +72,34 @@ export function DevelopmentWorkspaces({
       );
     } catch (e) {
       setError(e instanceof APIError ? e.message : "Lifecycle update failed.");
+    } finally {
+      setPending(false);
+    }
+  }
+  async function takeLifecycleControl(item: DevelopmentWorkspace) {
+    if (!token || !user) return;
+    setPending(true);
+    try {
+      const updated = await api<DevelopmentWorkspace>(
+        `/workspaces/${item.id}/control`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            expected_version: item.control.version,
+            principal_kind: "human",
+            principal_id: user.id,
+            mode: "execute",
+            scopes: ["files", "commands", "lifecycle"],
+            expires_in: 900,
+          }),
+        },
+        token,
+      );
+      setItems((current) =>
+        current.map((value) => (value.id === updated.id ? updated : value)),
+      );
+    } catch (e) {
+      setError(e instanceof APIError ? e.message : "Control takeover failed.");
     } finally {
       setPending(false);
     }
@@ -178,10 +212,19 @@ export function DevelopmentWorkspaces({
                 Effective access: {item.effective_access.role} ·{" "}
                 {item.effective_access.scopes.join(", ")}
               </p>
-              {item.state === "running" && (
+              {!controlsLifecycle(item) && (
                 <Button
                   className="mt-4"
                   disabled={pending}
+                  onClick={() => void takeLifecycleControl(item)}
+                >
+                  Take lifecycle control
+                </Button>
+              )}
+              {item.state === "running" && (
+                <Button
+                  className="mt-4"
+                  disabled={pending || !controlsLifecycle(item)}
                   onClick={() => void transition(item, "suspend")}
                 >
                   Suspend
@@ -190,7 +233,7 @@ export function DevelopmentWorkspaces({
               {item.state === "suspended" && (
                 <Button
                   className="mt-4"
-                  disabled={pending}
+                  disabled={pending || !controlsLifecycle(item)}
                   onClick={() => void transition(item, "resume")}
                 >
                   Resume exact foundation
