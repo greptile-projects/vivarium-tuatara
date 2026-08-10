@@ -253,8 +253,20 @@ func (s *Store) WithCurrentReadAccess(actorID string, repositoryIDs []string, fn
 // proving userID is a current owner or contributor. Access removal therefore
 // commits wholly before or after the dependent mutation performed by fn.
 func (s *Store) WithCurrentParticipant(userID, repositoryID string, fn func() error) error {
-	if !validID(userID) || !validID(repositoryID) || fn == nil {
+	return s.WithCurrentParticipants([]string{userID}, repositoryID, fn)
+}
+
+// WithCurrentParticipants holds one catalog boundary while proving every user
+// still participates in the repository. It is used when a collaboration
+// mutation names both its actor and another authority-bearing participant.
+func (s *Store) WithCurrentParticipants(userIDs []string, repositoryID string, fn func() error) error {
+	if len(userIDs) == 0 || !validID(repositoryID) || fn == nil {
 		return ErrInvalidCollaborator
+	}
+	for _, userID := range userIDs {
+		if !validID(userID) {
+			return ErrInvalidCollaborator
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -270,8 +282,10 @@ func (s *Store) WithCurrentParticipant(userID, repositoryID string, fn func() er
 	if _, err := s.git.Open(repositoryID); err != nil {
 		return ErrNotFound
 	}
-	if repository.OwnerID != userID && !slices.Contains(collaboratorIDs(repository), userID) {
-		return ErrInvalidCollaborator
+	for _, userID := range userIDs {
+		if repository.OwnerID != userID && !slices.Contains(collaboratorIDs(repository), userID) {
+			return ErrInvalidCollaborator
+		}
 	}
 	if s.afterParticipantAuthorization != nil {
 		s.afterParticipantAuthorization()

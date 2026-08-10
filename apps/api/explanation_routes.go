@@ -61,7 +61,7 @@ func registerExplanationRoutes(mux *http.ServeMux, gitStore *storage.Store, cata
 			return
 		}
 		if input.Context.Kind == "workspace" && workspaceStore != nil {
-			if !explanationVisibleTo(actor.UserID, explanations.Conversation{RepositoryID: r.PathValue("id"), Context: input.Context}, catalog, workspaceStore) {
+			if !explanationVisibleTo(actor.UserID, explanations.Conversation{RepositoryID: r.PathValue("id"), Participants: []explanations.Participant{{UserID: actor.UserID}}, Context: input.Context}, catalog, workspaceStore) {
 				writeAPIError(w, 404, "context_not_found", "the selected context is not available in this repository")
 				return
 			}
@@ -78,7 +78,7 @@ func registerExplanationRoutes(mux *http.ServeMux, gitStore *storage.Store, cata
 		claims, status, reason := explanationClaims(repo.Path(), r.PathValue("id"), string(revision), input, pullStore, checkStore, relationStore)
 		answer := composeExplanation(claims, status)
 		var conversation explanations.Conversation
-		err = catalog.WithCurrentReadAccess(actor.UserID, []string{r.PathValue("id")}, func() error {
+		err = catalog.WithCurrentParticipant(actor.UserID, r.PathValue("id"), func() error {
 			var createErr error
 			conversation, createErr = store.Create(explanations.Conversation{RepositoryID: r.PathValue("id"), Revision: string(revision), Context: input.Context, Question: input.Question, AskedBy: actor.UserID, Answer: answer, Claims: claims, AnalysisStatus: status, AnalysisReason: reason})
 			return createErr
@@ -132,7 +132,13 @@ func registerExplanationRoutes(mux *http.ServeMux, gitStore *storage.Store, cata
 				visible = append(visible, item)
 			}
 		}
-		if err := catalog.WithCurrentReadAccess(actor.UserID, []string{r.PathValue("id")}, func() error { writeJSON(w, 200, map[string]any{"conversations": visible}); return nil }); err != nil {
+		if err := catalog.WithCurrentReadAccess(actor.UserID, []string{r.PathValue("id")}, func() error {
+			for i := range visible {
+				visible[i] = projectExplanation(visible[i])
+			}
+			writeJSON(w, 200, map[string]any{"conversations": visible})
+			return nil
+		}); err != nil {
 			writeAPIError(w, 404, "repository_not_found", "repository not found")
 		}
 	})
@@ -149,9 +155,158 @@ func registerExplanationRoutes(mux *http.ServeMux, gitStore *storage.Store, cata
 			writeAPIError(w, 404, "explanation_not_found", "explanation not found")
 			return
 		}
-		if err := catalog.WithCurrentReadAccess(actor.UserID, []string{item.RepositoryID}, func() error { writeJSON(w, 200, item); return nil }); err != nil {
+		if err := catalog.WithCurrentReadAccess(actor.UserID, []string{item.RepositoryID}, func() error { writeJSON(w, 200, projectExplanation(item)); return nil }); err != nil {
 			writeAPIError(w, 404, "repository_not_found", "repository not found")
 		}
+	})
+	mux.HandleFunc("POST /repositories/{id}/explanations/{explanation_id}/participants", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+		if !ok {
+			return
+		}
+		var input struct {
+			UserID string `json:"user_id"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_request", "user_id is required")
+			return
+		}
+		item, readErr := store.Get(r.PathValue("explanation_id"))
+		if readErr != nil || item.RepositoryID != r.PathValue("id") || !explanationVisibleTo(actor.UserID, item, catalog, workspaceStore) {
+			writeAPIError(w, 404, "participant_not_found", "the investigation or repository participant was not found")
+			return
+		}
+		var updated explanations.Conversation
+		err := catalog.WithCurrentParticipants([]string{actor.UserID, input.UserID}, item.RepositoryID, func() error {
+			var e error
+			updated, e = store.AddParticipant(item.ID, item.RepositoryID, actor.UserID, input.UserID)
+			return e
+		})
+		if err != nil {
+			writeAPIError(w, 404, "participant_not_found", "the investigation or repository participant was not found")
+			return
+		}
+		writeJSON(w, 201, projectExplanation(updated))
+	})
+	mux.HandleFunc("POST /repositories/{id}/explanations/{explanation_id}/entries", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+		if !ok {
+			return
+		}
+		var input struct {
+			Kind         string `json:"kind"`
+			Body         string `json:"body"`
+			Path         string `json:"path"`
+			ResourceID   string `json:"resource_id"`
+			SupersedesID string `json:"supersedes_id"`
+			StartLine    int    `json:"start_line"`
+			EndLine      int    `json:"end_line"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_request", "entry is invalid")
+			return
+		}
+		item, e := store.Get(r.PathValue("explanation_id"))
+		if e != nil || item.RepositoryID != r.PathValue("id") || !explanationVisibleTo(actor.UserID, item, catalog, workspaceStore) {
+			writeAPIError(w, 404, "explanation_not_found", "investigation not found")
+			return
+		}
+		entry := explanations.Entry{Kind: input.Kind, Body: input.Body, ActorID: actor.UserID, ResourceID: input.ResourceID, SupersedesID: input.SupersedesID}
+		if input.Kind == "code_reference" {
+			if input.Path == "" || input.StartLine < 1 || (input.EndLine != 0 && input.EndLine < input.StartLine) {
+				writeAPIError(w, 400, "invalid_entry", "a code reference requires a valid path and line range")
+				return
+			}
+			repo, x := gitStore.Open(item.RepositoryID)
+			if x != nil {
+				writeAPIError(w, 404, "reference_not_found", "code reference not found at the investigation revision")
+				return
+			}
+			object := item.Revision + ":" + input.Path
+			sizeOutput, sizeErr := exec.Command("git", "--git-dir="+repo.Path(), "cat-file", "-s", object).Output()
+			size, parseErr := strconv.Atoi(strings.TrimSpace(string(sizeOutput)))
+			if sizeErr != nil || parseErr != nil || size < 0 || size > explanationByteLimit {
+				writeAPIError(w, 404, "reference_not_found", "code reference not found at the investigation revision")
+				return
+			}
+			body, readErr := exec.Command("git", "--git-dir="+repo.Path(), "show", object).Output()
+			if readErr != nil || len(body) != size || strings.IndexByte(string(body), 0) >= 0 {
+				writeAPIError(w, 404, "reference_not_found", "code reference not found at the investigation revision")
+				return
+			}
+			lineCount := strings.Count(string(body), "\n")
+			if len(body) > 0 && body[len(body)-1] != '\n' {
+				lineCount++
+			}
+			if input.EndLine == 0 {
+				input.EndLine = input.StartLine
+			}
+			if input.StartLine > lineCount || input.EndLine > lineCount {
+				writeAPIError(w, 400, "invalid_entry", "code reference lines must exist at the investigation revision")
+				return
+			}
+			entry.Citations = []explanations.Citation{{Kind: "source", Revision: item.Revision, Path: input.Path, StartLine: input.StartLine, EndLine: input.EndLine, Label: "participant code reference"}}
+		}
+		if input.Kind == "runtime_observation" {
+			if workspaceStore == nil {
+				writeAPIError(w, 404, "workspace_not_found", "bounded workspace not found")
+				return
+			}
+			workspace, x := workspaceStore.Get(input.ResourceID)
+			if x != nil || workspace.RepositoryID != item.RepositoryID || !explanationVisibleTo(actor.UserID, explanations.Conversation{RepositoryID: item.RepositoryID, Participants: item.Participants, Context: explanations.Context{Kind: "workspace", ResourceID: input.ResourceID}}, catalog, workspaceStore) {
+				writeAPIError(w, 404, "workspace_not_found", "bounded workspace not found")
+				return
+			}
+			entry.Citations = []explanations.Citation{{Kind: "workspace", Revision: workspace.CommitID, ResourceID: workspace.ID, Label: "bounded workspace observation"}}
+		}
+		var updated explanations.Conversation
+		e = catalog.WithCurrentParticipant(actor.UserID, item.RepositoryID, func() error { var x error; updated, x = store.AddEntry(item.ID, entry); return x })
+		if e != nil {
+			writeAPIError(w, 400, "invalid_entry", "entry could not be added")
+			return
+		}
+		writeJSON(w, 201, projectExplanation(updated))
+	})
+	mux.HandleFunc("POST /repositories/{id}/explanations/{explanation_id}/reruns", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+		if !ok {
+			return
+		}
+		var input struct {
+			Ref string `json:"ref"`
+		}
+		if decodeJSON(r, &input) != nil || strings.TrimSpace(input.Ref) == "" {
+			writeAPIError(w, 400, "invalid_request", "ref is required")
+			return
+		}
+		item, e := store.Get(r.PathValue("explanation_id"))
+		if e != nil || item.RepositoryID != r.PathValue("id") || !explanationVisibleTo(actor.UserID, item, catalog, workspaceStore) {
+			writeAPIError(w, 404, "explanation_not_found", "investigation not found")
+			return
+		}
+		repo, e := gitStore.Open(item.RepositoryID)
+		if e != nil {
+			writeBrowseError(w, e)
+			return
+		}
+		runInput := explanationInput{Question: item.Question, Ref: input.Ref, Context: item.Context}
+		revision, e := resolveExplanationContext(repo, item.RepositoryID, runInput, proposalStore, pullStore, incidentStore, workspaceStore)
+		if e != nil {
+			writeAPIError(w, 404, "revision_not_found", "revision not found")
+			return
+		}
+		claims, status, reason := explanationClaims(repo.Path(), item.RepositoryID, string(revision), runInput, pullStore, checkStore, relationStore)
+		var updated explanations.Conversation
+		e = catalog.WithCurrentParticipant(actor.UserID, item.RepositoryID, func() error {
+			var x error
+			updated, x = store.Rerun(item.ID, actor.UserID, string(revision), composeExplanation(claims, status), status, reason, claims)
+			return x
+		})
+		if e != nil {
+			writeAPIError(w, 409, "rerun_failed", "investigation could not be rerun")
+			return
+		}
+		writeJSON(w, 201, projectExplanation(updated))
 	})
 }
 
@@ -159,6 +314,9 @@ func registerExplanationRoutes(mux *http.ServeMux, gitStore *storage.Store, cata
 // missing or moved workspace fails closed because its sharing boundary can no
 // longer be established from the durable authority.
 func explanationVisibleTo(actorID string, conversation explanations.Conversation, catalog *repositories.Store, workspaceStore *workspaces.Store) bool {
+	if !explanations.IsParticipant(conversation, actorID) {
+		return false
+	}
 	if conversation.Context.Kind != "workspace" {
 		return true
 	}
@@ -174,6 +332,20 @@ func explanationVisibleTo(actorID string, conversation explanations.Conversation
 	}
 	meta, err := catalog.GetByID(conversation.RepositoryID)
 	return err == nil && (actorID == workspace.CreatorID || actorID == meta.OwnerID)
+}
+
+func projectExplanation(value explanations.Conversation) explanations.Conversation {
+	for i := range value.Entries {
+		for j := range value.Entries[i].Citations {
+			value.Entries[i].Citations[j].Stale = value.Entries[i].Citations[j].Revision != value.Revision
+		}
+	}
+	for i := range value.Claims {
+		for j := range value.Claims[i].Citations {
+			value.Claims[i].Citations[j].Stale = value.Claims[i].Citations[j].Revision != value.Revision
+		}
+	}
+	return value
 }
 
 func resolveExplanationContext(repo *storage.Repository, repositoryID string, input explanationInput, proposalStore *proposals.Store, pullStore *pullrequests.Store, incidentStore *incidents.Store, workspaceStore *workspaces.Store) (storage.ObjectID, error) {
