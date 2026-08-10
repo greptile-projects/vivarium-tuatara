@@ -192,9 +192,12 @@ func TestCompletedRunCredentialIsDeniedByDurableState(t *testing.T) {
 	if err != nil || !allowed {
 		t.Fatalf("active run allowed = %v, %v", allowed, err)
 	}
-	completed, _, err := store.CompleteRun(repositoryID, pullID, session.ID, run.ID, credentialID, "Published reviewable work.", head, []string{head}, nil, []Check{{Name: "go test ./...", Status: "passed"}}, nil)
+	completed, _, err := store.CompleteRunWithEvidence(repositoryID, pullID, session.ID, run.ID, credentialID, "Published reviewable work.", head, []string{head}, nil, []Check{{Name: "go test ./...", Status: "passed"}}, nil, []Command{{Command: "go test ./...", ExitCode: 0, Summary: "all packages passed"}}, []Criterion{{Criterion: "tests pass", Status: "met", Evidence: "go test ./... passed"}})
 	if err != nil || completed.State != Completed {
 		t.Fatalf("completion = %+v, %v", completed, err)
+	}
+	if len(completed.Outcome.Commands) != 1 || completed.Outcome.Commands[0].Command != "go test ./..." || len(completed.Outcome.Criteria) != 1 || completed.Outcome.Criteria[0].Status != "met" {
+		t.Fatalf("review evidence = %#v", completed.Outcome)
 	}
 	allowed, err = store.AllowsGitWrite(repositoryID, credentialID)
 	if err != nil || allowed {

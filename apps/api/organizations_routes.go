@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -445,6 +446,17 @@ func registerOrganizationRoutes(mux *http.ServeMux, gitStore *storage.Store, org
 			writeAPIError(w, 400, "invalid_opportunity_promotion", "proposal title and body are required")
 			return
 		}
+		var currentMandate *organizations.StewardshipMandate
+		for i := range organization.StewardshipMandates {
+			if organization.StewardshipMandates[i].ID == r.PathValue("mandate_id") {
+				currentMandate = &organization.StewardshipMandates[i]
+			}
+		}
+		if currentMandate == nil || len(currentMandate.Revisions) == 0 {
+			writeAPIError(w, 404, "stewardship_mandate_not_found", "mandate not found")
+			return
+		}
+		stewardAgentID := currentMandate.Revisions[len(currentMandate.Revisions)-1].AgentID
 		for _, task := range in.Tasks {
 			if strings.TrimSpace(task.Title) == "" || len(task.Title) > 200 || strings.TrimSpace(task.CompletionCriteria) == "" || len(task.CompletionCriteria) > 4000 || strings.TrimSpace(task.Risk) == "" || len(task.Risk) > 4000 || strings.TrimSpace(task.VerificationPlan) == "" || len(task.VerificationPlan) > 4000 {
 				writeAPIError(w, 400, "invalid_opportunity_promotion", "each task requires completion criteria, risk, and a verification plan")
@@ -458,7 +470,7 @@ func registerOrganizationRoutes(mux *http.ServeMux, gitStore *storage.Store, org
 			}
 			if task.OwnerType == "agent" {
 				for _, agent := range organization.Agents {
-					validOwner = validOwner || agent.ID == task.OwnerID
+					validOwner = validOwner || (agent.ID == task.OwnerID && task.OwnerID == stewardAgentID)
 				}
 			}
 			if !validOwner {
@@ -574,7 +586,10 @@ func registerOrganizationRoutes(mux *http.ServeMux, gitStore *storage.Store, org
 			writeJSON(w, 409, reserved)
 			return
 		}
-		items := []proposals.ReasoningItem{{ID: opportunity.ID, Kind: "opportunity", Summary: opportunity.Summary, Status: "accepted"}}
+		items := []proposals.ReasoningItem{{ID: opportunity.ID, Kind: "opportunity", Summary: opportunity.Summary, Status: "accepted"}, {ID: opportunity.EvidenceID, Kind: opportunity.EvidenceType, Summary: opportunity.EvidenceRevision, Status: "cited"}}
+		for index, citation := range opportunity.Citations {
+			items = append(items, proposals.ReasoningItem{ID: opportunity.ID + "-citation-" + strconv.Itoa(index+1), Kind: "citation:" + citation.Kind, Summary: citation.Label + " @ " + citation.Revision, Status: map[bool]string{true: "stale", false: "current"}[citation.Stale]})
+		}
 		tasks := make([]proposals.ImplementationTaskInput, 0, len(in.Tasks))
 		for index, task := range in.Tasks {
 			items = append(items, proposals.ReasoningItem{ID: opportunity.ID + string(rune('a'+index)), Kind: "risk", Summary: task.Risk + " | verify: " + task.VerificationPlan, Status: "accepted"})

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -112,6 +113,9 @@ type TaskReasoning struct {
 	Revision          string                         `json:"revision"`
 	ExplanationID     string                         `json:"explanation_id,omitempty"`
 	ConclusionEntryID string                         `json:"conclusion_entry_id,omitempty"`
+	OrganizationID    string                         `json:"organization_id,omitempty"`
+	MandateID         string                         `json:"mandate_id,omitempty"`
+	OpportunityID     string                         `json:"opportunity_id,omitempty"`
 	Items             []TaskReasoningItem            `json:"items"`
 	Acknowledgements  []TaskReasoningAcknowledgement `json:"acknowledgements,omitempty"`
 }
@@ -237,8 +241,25 @@ type Outcome struct {
 	Commits      []string      `json:"commits"`
 	ChangedFiles []ChangedFile `json:"changed_files"`
 	Checks       []Check       `json:"checks"`
+	Commands     []Command     `json:"commands"`
+	Criteria     []Criterion   `json:"completion_criteria"`
 	Concerns     []string      `json:"unresolved_concerns"`
 	CompletedAt  time.Time     `json:"completed_at"`
+}
+
+// Command and Criterion are agent-authored claims bound to the completed run.
+// Git commits and changed files remain server-derived; reviewers can compare
+// these narrative execution claims with ordinary repository checks.
+type Command struct {
+	Command  string `json:"command"`
+	ExitCode int    `json:"exit_code"`
+	Summary  string `json:"summary,omitempty"`
+}
+
+type Criterion struct {
+	Criterion string `json:"criterion"`
+	Status    string `json:"status"`
+	Evidence  string `json:"evidence"`
 }
 
 type record struct {
@@ -627,8 +648,12 @@ func (s *Store) AppendWorkEvent(repositoryID, pullRequestID, sessionID, runID, c
 
 // CompleteRun atomically records a structured, attributed review handoff.
 func (s *Store) CompleteRun(repositoryID, pullRequestID, sessionID, runID, credentialID, summary, commitID string, commits []string, files []ChangedFile, checks []Check, concerns []string) (Run, Event, error) {
+	return s.CompleteRunWithEvidence(repositoryID, pullRequestID, sessionID, runID, credentialID, summary, commitID, commits, files, checks, concerns, nil, nil)
+}
+
+func (s *Store) CompleteRunWithEvidence(repositoryID, pullRequestID, sessionID, runID, credentialID, summary, commitID string, commits []string, files []ChangedFile, checks []Check, concerns []string, commands []Command, criteria []Criterion) (Run, Event, error) {
 	summary = strings.TrimSpace(summary)
-	if summary == "" || len([]rune(summary)) > 10000 || !validObjectID(commitID) || len(commits) == 0 || len(commits) > 200 || len(files) > 2000 || len(checks) > 100 || len(concerns) > 100 {
+	if summary == "" || len([]rune(summary)) > 10000 || !validObjectID(commitID) || len(commits) == 0 || len(commits) > 200 || len(files) > 2000 || len(checks) > 100 || len(concerns) > 100 || len(commands) > 100 || len(criteria) > 20 {
 		return Run{}, Event{}, ErrInvalid
 	}
 	for _, id := range commits {
@@ -645,6 +670,18 @@ func (s *Store) CompleteRun(repositoryID, pullRequestID, sessionID, runID, crede
 	for i := range concerns {
 		concerns[i] = strings.TrimSpace(concerns[i])
 		if concerns[i] == "" || len([]rune(concerns[i])) > 2000 {
+			return Run{}, Event{}, ErrInvalid
+		}
+	}
+	for i := range commands {
+		commands[i].Command, commands[i].Summary = strings.TrimSpace(commands[i].Command), strings.TrimSpace(commands[i].Summary)
+		if commands[i].Command == "" || len([]rune(commands[i].Command)) > 2000 || len([]rune(commands[i].Summary)) > 2000 {
+			return Run{}, Event{}, ErrInvalid
+		}
+	}
+	for i := range criteria {
+		criteria[i].Criterion, criteria[i].Status, criteria[i].Evidence = strings.TrimSpace(criteria[i].Criterion), strings.TrimSpace(criteria[i].Status), strings.TrimSpace(criteria[i].Evidence)
+		if criteria[i].Criterion == "" || len([]rune(criteria[i].Criterion)) > 4000 || !slices.Contains([]string{"met", "partial", "not_met"}, criteria[i].Status) || criteria[i].Evidence == "" || len([]rune(criteria[i].Evidence)) > 4000 {
 			return Run{}, Event{}, ErrInvalid
 		}
 	}
@@ -691,7 +728,7 @@ func (s *Store) CompleteRun(repositoryID, pullRequestID, sessionID, runID, crede
 	}
 	now := s.now().Truncate(time.Microsecond)
 	run.State, run.UpdatedAt = Completed, now
-	run.Outcome = &Outcome{Summary: summary, CommitID: commitID, Commits: append([]string{}, commits...), ChangedFiles: append([]ChangedFile{}, files...), Checks: append([]Check{}, checks...), Concerns: append([]string{}, concerns...), CompletedAt: now}
+	run.Outcome = &Outcome{Summary: summary, CommitID: commitID, Commits: append([]string{}, commits...), ChangedFiles: append([]ChangedFile{}, files...), Checks: append([]Check{}, checks...), Commands: append([]Command{}, commands...), Criteria: append([]Criterion{}, criteria...), Concerns: append([]string{}, concerns...), CompletedAt: now}
 	event := Event{ID: eventID, SessionID: sessionID, Kind: "run.completed", ActorID: run.InitiatorID, InitiatorID: run.InitiatorID, AgentID: run.AgentID, RevisionID: run.SourceCommitID, State: Completed, RunID: run.ID, Message: summary, Branch: run.WorkingBranch, CommitID: commitID, CreatedAt: now}
 	rec.Events = append(rec.Events, event)
 	rec.Session.UpdatedAt = now

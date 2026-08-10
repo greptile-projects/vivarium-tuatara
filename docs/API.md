@@ -1779,6 +1779,22 @@ or promotion a conflict, while exact retries reconcile the same proposal and
 task identities. Accepted work is linked from the opportunity and task
 assignment/promotion activity feeds the established activity and inbox views.
 
+For a promoted agent task, `POST
+/repositories/{id}/proposals/{proposal_id}/tasks/{task_id}/sessions` also
+revalidates the active accepted mandate, its current operator and approved
+agent, the linked opportunity, and exact recorded base. Changed governance
+returns `409 stewardship_authority_changed` before branch or credential
+creation. Task completion accepts bounded `commands` (`command`, `exit_code`,
+optional `summary`) and `completion_criteria` (`criterion`, `status` of `met`,
+`partial`, or `not_met`, and `evidence`). Stewarded publication requires a
+command and the exact promoted task criterion status or returns `409
+stewardship_evidence_incomplete`. Its ordinary pull exposes immutable
+`task_evidence` containing the exact base, assignment, initiator and agent,
+mandate and stewardship identities, cited reasoning, server-derived commits
+and files, command/check claims, residual concerns, and criterion status. This
+evidence grants no check, review, queue, fork, acknowledgement, or merge
+exception.
+
 Pending invitees receive only organization identity and their own invitation,
 not membership, teams, agents, transfers, responsibility, or events. A public
 child also omits its `parent_id` when that parent is not public. Responsibility

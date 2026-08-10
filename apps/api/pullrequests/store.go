@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
@@ -59,6 +60,7 @@ type PullRequest struct {
 	TaskSessionID            *string                `json:"task_session_id,omitempty"`
 	TaskRunID                *string                `json:"task_run_id,omitempty"`
 	TaskCommitIDs            []string               `json:"task_commit_ids,omitempty"`
+	TaskEvidence             *TaskReviewEvidence    `json:"task_evidence,omitempty"`
 	WorkspaceID              string                 `json:"workspace_id,omitempty"`
 	WorkspaceCheckpointID    string                 `json:"workspace_checkpoint_id,omitempty"`
 	WorkspaceContributorIDs  []string               `json:"workspace_contributor_ids,omitempty"`
@@ -82,6 +84,30 @@ type PullRequest struct {
 	QueueFinalizedAt         *time.Time             `json:"queue_finalized_at,omitempty"`
 	IntegrationCandidates    []IntegrationCandidate `json:"integration_candidates,omitempty"`
 	mergeIntent              *mergeIntent
+}
+
+// TaskReviewEvidence freezes the execution and intent offered to reviewers;
+// it conveys provenance, never extra review or merge authority.
+type TaskReviewEvidence struct {
+	BaseRevision       string                 `json:"base_revision"`
+	AssignmentID       string                 `json:"assignment_id"`
+	AgentID            string                 `json:"agent_id"`
+	InitiatorID        string                 `json:"initiator_id"`
+	Mandate            string                 `json:"mandate"`
+	OrganizationID     string                 `json:"organization_id,omitempty"`
+	MandateID          string                 `json:"mandate_id,omitempty"`
+	OpportunityID      string                 `json:"opportunity_id,omitempty"`
+	EvidenceRevision   string                 `json:"evidence_revision,omitempty"`
+	Reasoning          []ReviewReasoningItem  `json:"reasoning"`
+	CompletionCriteria string                 `json:"completion_criteria"`
+	Outcome            changesessions.Outcome `json:"outcome"`
+}
+
+type ReviewReasoningItem struct {
+	ID      string `json:"id"`
+	Kind    string `json:"kind"`
+	Summary string `json:"summary"`
+	Status  string `json:"status"`
 }
 
 // LinkWorkspace records collaboration provenance without changing ordinary
@@ -406,13 +432,13 @@ func (s *Store) Create(repositoryID, authorID, title, body, sourceBranch, target
 // Its reachable objects are imported into the target without publishing a ref,
 // keeping every later review and merge operation pinned to the adopted commit.
 func (s *Store) CreateFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, proposalID *string) (PullRequest, error) {
-	return s.createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, "", nil, proposalID, nil, nil, nil, false)
+	return s.createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, "", nil, proposalID, nil, nil, nil, false, nil)
 }
 
 // FindOrCreateRecovery enforces one review boundary for a deterministic
 // repository/source-branch pair under the cross-process pull-store lock.
 func (s *Store) FindOrCreateRecovery(repositoryID, authorID, title, body, sourceBranch, targetBranch string) (PullRequest, error) {
-	return s.createFrom(repositoryID, repositoryID, authorID, title, body, sourceBranch, targetBranch, "", nil, nil, nil, nil, nil, true)
+	return s.createFrom(repositoryID, repositoryID, authorID, title, body, sourceBranch, targetBranch, "", nil, nil, nil, nil, nil, true, nil)
 }
 
 // CreateTaskContribution publishes task-scoped work into ordinary review while
@@ -422,10 +448,14 @@ func (s *Store) CreateTaskContribution(repositoryID, authorID, title, body, sour
 }
 
 func (s *Store) CreateTaskContributionFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, expectedSourceCommit string, commitIDs []string, proposalID, taskID *string, sessionID, runID *string) (PullRequest, error) {
-	return s.createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, expectedSourceCommit, commitIDs, proposalID, taskID, sessionID, runID, false)
+	return s.CreateTaskContributionFromWithEvidence(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, expectedSourceCommit, commitIDs, proposalID, taskID, sessionID, runID, nil)
 }
 
-func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, expectedSourceCommit string, commitIDs []string, proposalID, taskID, sessionID, runID *string, uniqueSource bool) (PullRequest, error) {
+func (s *Store) CreateTaskContributionFromWithEvidence(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, expectedSourceCommit string, commitIDs []string, proposalID, taskID *string, sessionID, runID *string, reviewEvidence *TaskReviewEvidence) (PullRequest, error) {
+	return s.createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, expectedSourceCommit, commitIDs, proposalID, taskID, sessionID, runID, false, reviewEvidence)
+}
+
+func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, expectedSourceCommit string, commitIDs []string, proposalID, taskID, sessionID, runID *string, uniqueSource bool, reviewEvidence *TaskReviewEvidence) (PullRequest, error) {
 	if !validID(repositoryID) || !validID(sourceRepositoryID) || !validID(authorID) {
 		return PullRequest{}, ErrInvalid
 	}
@@ -480,7 +510,7 @@ func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, bo
 	if taskID != nil && len(commitIDs) == 0 {
 		commitIDs = []string{sourceCommit}
 	}
-	p := PullRequest{ID: id, RepositoryID: repositoryID, SourceRepositoryID: sourceRepositoryID, AuthorID: authorID, Title: title, Body: body, SourceBranch: sourceBranch, TargetBranch: targetBranch, SourceCommitID: sourceCommit, TargetCommitID: targetCommit, ProposalID: proposalID, TaskID: taskID, TaskSessionID: sessionID, TaskRunID: runID, TaskCommitIDs: append([]string(nil), commitIDs...), Status: Open, CreatedAt: now, UpdatedAt: now}
+	p := PullRequest{ID: id, RepositoryID: repositoryID, SourceRepositoryID: sourceRepositoryID, AuthorID: authorID, Title: title, Body: body, SourceBranch: sourceBranch, TargetBranch: targetBranch, SourceCommitID: sourceCommit, TargetCommitID: targetCommit, ProposalID: proposalID, TaskID: taskID, TaskSessionID: sessionID, TaskRunID: runID, TaskCommitIDs: append([]string(nil), commitIDs...), TaskEvidence: reviewEvidence, Status: Open, CreatedAt: now, UpdatedAt: now}
 	if taskID != nil {
 		p.TaskStatePending = "review"
 	}

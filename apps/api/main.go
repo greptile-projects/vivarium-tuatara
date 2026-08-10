@@ -355,7 +355,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerChangeSessionRoutes(mux, store, repositoryCatalog, pullRequestStore, changeSessionStore, authStore, activityStore, checkRunStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && proposalStore != nil && changeSessionStore != nil {
-		registerTaskChangeSessionRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, changeSessionStore, authStore, relationshipStore)
+		registerTaskChangeSessionRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, changeSessionStore, authStore, relationshipStore, organizationStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && activityStore != nil {
 		registerActivityRoutes(mux, repositoryCatalog, activityStore, authStore)
@@ -976,6 +976,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		var sessionID, runID *string
 		commits := []string{}
 		expectedSourceCommit := ""
+		var reviewEvidence *pullrequests.TaskReviewEvidence
 		if task.Assignment.AssigneeType == "agent" {
 			if sessionStore == nil || input.SessionID == "" || input.RunID == "" {
 				writeAPIError(w, 409, "task_not_publishable", "completed agent session evidence is required")
@@ -998,12 +999,32 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 					found = true
 					commits = append(commits, run.Outcome.Commits...)
 					expectedSourceCommit = run.Outcome.CommitID
+					reasoning := []pullrequests.ReviewReasoningItem{}
+					if task.Reasoning != nil {
+						for _, item := range task.Reasoning.Items {
+							reasoning = append(reasoning, pullrequests.ReviewReasoningItem{ID: item.ID, Kind: item.Kind, Summary: item.Summary, Status: item.Status})
+						}
+					}
+					reviewEvidence = &pullrequests.TaskReviewEvidence{BaseRevision: run.SourceCommitID, AssignmentID: task.Assignment.ID, AgentID: run.AgentID, InitiatorID: run.InitiatorID, Mandate: task.Assignment.Mandate, CompletionCriteria: task.Outcome, Outcome: *run.Outcome, Reasoning: reasoning}
+					if task.Reasoning != nil {
+						reviewEvidence.OrganizationID, reviewEvidence.MandateID, reviewEvidence.OpportunityID, reviewEvidence.EvidenceRevision = task.Reasoning.OrganizationID, task.Reasoning.MandateID, task.Reasoning.OpportunityID, task.Reasoning.Revision
+					}
 					break
 				}
 			}
 			if !found {
 				writeAPIError(w, 409, "task_not_publishable", "completed agent session evidence does not match the source branch")
 				return
+			}
+			if task.Reasoning != nil && task.Reasoning.AnalysisStatus == "stewardship_opportunity" {
+				criterionRecorded := false
+				for _, criterion := range reviewEvidence.Outcome.Criteria {
+					criterionRecorded = criterionRecorded || criterion.Criterion == task.Outcome
+				}
+				if len(reviewEvidence.Outcome.Commands) == 0 || !criterionRecorded {
+					writeAPIError(w, 409, "stewardship_evidence_incomplete", "stewarded publication requires commands and the recorded completion criterion status")
+					return
+				}
 			}
 			sessionID, runID = &input.SessionID, &input.RunID
 		}
@@ -1017,7 +1038,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 			}
 			sourceRepositoryID = source.ID
 		}
-		created, err := store.CreateTaskContributionFrom(r.PathValue("id"), sourceRepositoryID, actor.UserID, input.Title, input.Body, input.SourceBranch, input.TargetBranch, expectedSourceCommit, commits, &proposalID, &taskID, sessionID, runID)
+		created, err := store.CreateTaskContributionFromWithEvidence(r.PathValue("id"), sourceRepositoryID, actor.UserID, input.Title, input.Body, input.SourceBranch, input.TargetBranch, expectedSourceCommit, commits, &proposalID, &taskID, sessionID, runID, reviewEvidence)
 		if errors.Is(err, pullrequests.ErrSourceChanged) {
 			writeAPIError(w, 409, "task_not_publishable", "the source branch no longer matches the completed task work")
 			return

@@ -1546,6 +1546,30 @@ export type PullRequest = {
   task_id?: string;
   task_session_id?: string;
   task_run_id?: string;
+  task_evidence?: {
+    base_revision: string;
+    assignment_id: string;
+    agent_id: string;
+    initiator_id: string;
+    mandate: string;
+    organization_id?: string;
+    mandate_id?: string;
+    opportunity_id?: string;
+    evidence_revision?: string;
+    reasoning: { id: string; kind: string; summary: string; status: string }[];
+    completion_criteria: string;
+    outcome: {
+      summary: string;
+      commit_id: string;
+      commits: string[];
+      changed_files: { path: string; status: string }[];
+      checks: { name: string; status: string; details?: string }[];
+      commands: { command: string; exit_code: number; summary?: string }[];
+      completion_criteria: { criterion: string; status: "met" | "partial" | "not_met"; evidence: string }[];
+      unresolved_concerns: string[];
+      completed_at: string;
+    };
+  };
   workspace_id?: string;
   workspace_checkpoint_id?: string;
   workspace_contributor_ids?: string[];
@@ -1799,6 +1823,12 @@ export type AgentRun = {
       name: string;
       status: "passed" | "failed" | "skipped";
       details?: string;
+    }[];
+    commands: { command: string; exit_code: number; summary?: string }[];
+    completion_criteria: {
+      criterion: string;
+      status: "met" | "partial" | "not_met";
+      evidence: string;
     }[];
     unresolved_concerns: string[];
     completed_at: string;
