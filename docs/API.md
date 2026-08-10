@@ -45,7 +45,9 @@ Creation partitions the declared storage budget between a size-limited
 `/workspace` tmpfs and 16 MiB of bounded `/tmp` scratch space; the remaining
 container root is read-only. Declared storage therefore bounds
 collaborator-controlled writes without exposing a writable host bind or layer.
-The named container is force-removed after setup failure or timeout. Creation
+Images declaring Docker volumes are rejected before container creation, and
+cleanup removes both the named container and any attached volumes. The named
+container is force-removed after setup failure or timeout. Creation
 returns the durable workspace after bounded setup, including its
 state, creator, exact commit, complete definition and SHA-256, source, effective
 access, setup evidence, and lifecycle events. `GET /workspaces` lists the

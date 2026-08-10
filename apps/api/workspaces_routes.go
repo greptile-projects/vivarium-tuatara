@@ -250,6 +250,24 @@ func validateWorkspaceSource(source workspaces.Source, commit string, ps *propos
 }
 func provisionWorkspace(gitPath, runtime, id, commit string, d workspaces.Definition) ([]workspaces.SetupStep, bool) {
 	container := "vivarium-workspace-" + id
+	inspectOutput, inspectErr := exec.Command("docker", "image", "inspect", d.Image).CombinedOutput()
+	if inspectErr != nil {
+		return []workspaces.SetupStep{failedSetupStep("validate workspace image volumes", inspectOutput, inspectErr)}, true
+	}
+	var imageMetadata []struct {
+		Config struct {
+			Volumes map[string]json.RawMessage `json:"Volumes"`
+		} `json:"Config"`
+	}
+	if err := json.Unmarshal(inspectOutput, &imageMetadata); err != nil || len(imageMetadata) != 1 {
+		if err == nil {
+			err = errors.New("docker returned unexpected image metadata")
+		}
+		return []workspaces.SetupStep{failedSetupStep("validate workspace image volumes", nil, err)}, true
+	}
+	if len(imageMetadata[0].Config.Volumes) != 0 {
+		return []workspaces.SetupStep{failedSetupStep("validate workspace image volumes", nil, errors.New("workspace images must not declare writable volumes"))}, true
+	}
 	// StorageMB is one total budget. Reserve bounded scratch space for tools
 	// that require /tmp and make every other image path read-only, so setup
 	// cannot escape the declared budget through the container writable layer.
@@ -259,7 +277,7 @@ func provisionWorkspace(gitPath, runtime, id, commit string, d workspaces.Defini
 	if out, err := exec.Command("docker", createArgs...).CombinedOutput(); err != nil {
 		return []workspaces.SetupStep{failedSetupStep("create bounded workspace", out, err)}, true
 	}
-	cleanup := func() { _ = exec.Command("docker", "rm", "-f", container).Run() }
+	cleanup := func() { _ = exec.Command("docker", "rm", "-f", "-v", container).Run() }
 	if out, err := exec.Command("docker", "start", container).CombinedOutput(); err != nil {
 		cleanup()
 		return []workspaces.SetupStep{failedSetupStep("start bounded workspace", out, err)}, true

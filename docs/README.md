@@ -28,6 +28,8 @@ The API snapshots the definition and its SHA-256, materializes only the named
 Git commit into a size-limited tmpfs, reserves a bounded share of the same
 storage budget for `/tmp`, and runs setup in that named, read-only-root,
 network-disabled, capability-dropped container without platform credentials.
+Images with declared Docker volumes are rejected before container creation so
+image metadata cannot introduce writable storage outside that total budget.
 Setup failure or timeout force-removes the workload instead of only terminating
 its Docker client. The workspace record retains source context,
 creator, launch-time effective access, commands, bounded output, exit status,

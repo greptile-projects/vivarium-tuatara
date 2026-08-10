@@ -65,3 +65,31 @@ func TestProvisionWorkspaceEnforcesStorageAndRemovesFailedContainer(t *testing.T
 		})
 	}
 }
+
+func TestProvisionWorkspaceRejectsImageDeclaredVolumesBeforeContainerCreation(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker unavailable")
+	}
+	if err := exec.Command("docker", "image", "inspect", "alpine:3.22").Run(); err != nil {
+		t.Skip("alpine:3.22 unavailable")
+	}
+	contextDirectory := t.TempDir()
+	dockerfile := []byte("FROM alpine:3.22\nVOLUME /image-volume\n")
+	if err := os.WriteFile(filepath.Join(contextDirectory, "Dockerfile"), dockerfile, 0600); err != nil {
+		t.Fatal(err)
+	}
+	image := "vivarium-workspace-volume-test:" + strings.ToLower(strings.ReplaceAll(t.Name(), "/", "-"))
+	command := exec.Command("docker", "build", "-q", "-t", image, contextDirectory)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build volume image: %v: %s", err, output)
+	}
+	t.Cleanup(func() { _ = exec.Command("docker", "image", "rm", "-f", image).Run() })
+	id := "33333333333333333333333333333333"
+	steps, failed := provisionWorkspace("unused", t.TempDir(), id, "unused", workspaces.Definition{Image: image, Resources: workspaces.Resources{CPUs: 1, MemoryMB: 256, StorageMB: 128, SetupSeconds: 20}})
+	if !failed || len(steps) != 1 || steps[0].Command != "validate workspace image volumes" || !strings.Contains(steps[0].Output, "must not declare writable volumes") {
+		t.Fatalf("provision = %#v, failed %v", steps, failed)
+	}
+	if err := exec.Command("docker", "inspect", "vivarium-workspace-"+id).Run(); err == nil {
+		t.Fatal("container was created for image-declared volume")
+	}
+}
