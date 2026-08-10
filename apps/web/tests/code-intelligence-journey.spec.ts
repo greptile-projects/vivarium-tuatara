@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -38,11 +38,14 @@ test("a shared code investigation becomes an owner-reviewed verified change", as
   test.setTimeout(240_000);
   await run("docker", ["image", "inspect", "alpine:3.22"]).catch(() => run("docker", ["pull", "alpine:3.22"]));
   const copies: string[] = [];
+  let developerContext: BrowserContext | undefined;
+  let ownerContext: BrowserContext | undefined;
   try {
     const suffix = Date.now().toString(36);
-    const developerContext = await browser.newContext();
+    developerContext = await browser.newContext();
     const developerPage = await developerContext.newPage();
-    const ownerPage = await (await browser.newContext()).newPage();
+    ownerContext = await browser.newContext();
+    const ownerPage = await ownerContext.newPage();
     const developer = await account(developerPage, "Intelligence Developer", `intel-developer-${suffix}`);
     const affectedOwner = await account(ownerPage, "Affected Owner", `intel-owner-${suffix}`);
 
@@ -195,6 +198,10 @@ test("a shared code investigation becomes an owner-reviewed verified change", as
     await git(providerCopy, "pull", "--ff-only");
     expect(await readFile(join(providerCopy, "authorize.go"), "utf8")).toContain("strings.TrimSpace(identity)");
   } finally {
-    await Promise.all(copies.map((path) => rm(path, { recursive: true, force: true })));
+    try {
+      await Promise.all([developerContext?.close(), ownerContext?.close()]);
+    } finally {
+      await Promise.all(copies.map((path) => rm(path, { recursive: true, force: true })));
+    }
   }
 });
