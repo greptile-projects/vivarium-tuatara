@@ -81,6 +81,26 @@ finish between the snapshot and lineage update. Restore stages and backs up all
 targets before mutation; failure restores them and removes parent directories
 introduced by the transaction.
 
+An authorized participant can publish a retained checkpoint into normal Git
+governance. Publication either compare-and-swap advances an existing working
+branch from the checkpoint base or creates a branch there, then creates one
+commit from only the inspected checkpoint file manifest. An optional ordinary
+pull retains links in both directions to the workspace and checkpoint, carries
+proposal task/session context when supplied, names exact contributors, and
+summarizes file hashes plus command digests frozen at checkpoint capture. A
+cross-process checkpoint publication claim excludes duplicate branch/pull
+effects, branch compensation is compare-and-swap safe, and post-pull linkage
+failure becomes durable retryable intent rather than an orphan. An outbox
+created before Git mutation also recovers a linked pull when the final
+checkpoint-record write itself fails. Supplied task
+sessions must belong to the same repository/proposal/task. Checkpoint capture
+uses a private append-only evidence ledger independently of bounded workspace
+display histories; legacy retained histories seed the ledger before the first
+new event. Repository checks, stale-revision
+reviews, branch protection, and the integration queue apply without a
+workspace-specific bypass. Terminal input, outputs, discussion, credentials,
+and unpublished runtime files remain outside the commit and generated review.
+
 ## Unsafe package recovery
 
 Package lifecycle decisions are attributable append-only coordination records,

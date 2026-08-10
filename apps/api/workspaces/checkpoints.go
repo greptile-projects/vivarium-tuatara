@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -31,19 +32,136 @@ type CheckpointFile struct {
 }
 
 type Checkpoint struct {
-	ID                 string           `json:"id"`
-	WorkspaceID        string           `json:"workspace_id"`
-	RepositoryID       string           `json:"repository_id"`
-	BaseCommitID       string           `json:"base_commit_id"`
-	Definition         Definition       `json:"definition"`
-	DefinitionSHA256   string           `json:"definition_sha256"`
-	ParentCheckpointID string           `json:"parent_checkpoint_id,omitempty"`
-	Title              string           `json:"title"`
-	Description        string           `json:"description,omitempty"`
-	Reproducibility    Reproducibility  `json:"reproducibility"`
-	Files              []CheckpointFile `json:"files"`
-	CreatedBy          string           `json:"created_by"`
-	CreatedAt          time.Time        `json:"created_at"`
+	ID                 string            `json:"id"`
+	WorkspaceID        string            `json:"workspace_id"`
+	RepositoryID       string            `json:"repository_id"`
+	BaseCommitID       string            `json:"base_commit_id"`
+	Definition         Definition        `json:"definition"`
+	DefinitionSHA256   string            `json:"definition_sha256"`
+	ParentCheckpointID string            `json:"parent_checkpoint_id,omitempty"`
+	Title              string            `json:"title"`
+	Description        string            `json:"description,omitempty"`
+	Reproducibility    Reproducibility   `json:"reproducibility"`
+	Files              []CheckpointFile  `json:"files"`
+	CreatedBy          string            `json:"created_by"`
+	CreatedAt          time.Time         `json:"created_at"`
+	Publication        *Publication      `json:"publication,omitempty"`
+	ContributorIDs     []string          `json:"contributor_ids"`
+	Commands           []CommandEvidence `json:"commands"`
+}
+
+type CommandEvidence struct {
+	ID       string `json:"id"`
+	SHA256   string `json:"sha256"`
+	ExitCode int    `json:"exit_code"`
+	ActorID  string `json:"actor_id"`
+}
+
+type Publication struct {
+	Branch         string    `json:"branch"`
+	CommitID       string    `json:"commit_id"`
+	PullRequestID  string    `json:"pull_request_id,omitempty"`
+	TaskID         string    `json:"task_id,omitempty"`
+	SessionID      string    `json:"session_id,omitempty"`
+	ContributorIDs []string  `json:"contributor_ids"`
+	CommandIDs     []string  `json:"command_ids"`
+	LinkPending    bool      `json:"link_pending,omitempty"`
+	PublishedBy    string    `json:"published_by"`
+	PublishedAt    time.Time `json:"published_at"`
+}
+
+type PublicationIntent struct {
+	WorkspaceID  string      `json:"workspace_id"`
+	CheckpointID string      `json:"checkpoint_id"`
+	Publication  Publication `json:"publication"`
+}
+
+func (s *Store) publicationIntentPath(workspaceID, id string) string {
+	return filepath.Join(s.root, "publication-intents", workspaceID, id+".json")
+}
+func (s *Store) SavePublicationIntent(intent PublicationIntent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dir := filepath.Dir(s.publicationIntentPath(intent.WorkspaceID, intent.CheckpointID))
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(intent, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".intent-")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if err = tmp.Chmod(0600); err == nil {
+		_, err = tmp.Write(b)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err = os.Rename(name, s.publicationIntentPath(intent.WorkspaceID, intent.CheckpointID)); err != nil {
+		return err
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}
+func (s *Store) GetPublicationIntent(workspaceID, id string) (PublicationIntent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, err := os.ReadFile(s.publicationIntentPath(workspaceID, id))
+	if errors.Is(err, os.ErrNotExist) {
+		return PublicationIntent{}, ErrNotFound
+	}
+	if err != nil {
+		return PublicationIntent{}, err
+	}
+	var intent PublicationIntent
+	if json.Unmarshal(b, &intent) != nil || intent.WorkspaceID != workspaceID || intent.CheckpointID != id {
+		return PublicationIntent{}, ErrNotFound
+	}
+	return intent, nil
+}
+func (s *Store) ClearPublicationIntent(workspaceID, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	err := os.Remove(s.publicationIntentPath(workspaceID, id))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+func (s *Store) ConfirmCheckpointPublicationLink(workspaceID, id, pullID string) (Checkpoint, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, err := s.readCheckpoint(workspaceID, id)
+	if err != nil {
+		return c, err
+	}
+	if c.Publication == nil || c.Publication.PullRequestID != pullID {
+		return c, ErrCheckpointConflict
+	}
+	if !c.Publication.LinkPending {
+		return c.Public(), nil
+	}
+	c.Publication.LinkPending = false
+	if err = s.writeCheckpoint(c); err != nil {
+		return c, err
+	}
+	return c.Public(), nil
 }
 
 func (c Checkpoint) Public() Checkpoint {
@@ -77,10 +195,24 @@ func (s *Store) CaptureAndCreateCheckpoint(workspaceID, actor, expectedParent, t
 	if err != nil {
 		return Checkpoint{}, err
 	}
-	return s.createCheckpoint(workspaceID, actor, expectedParent, title, description, reproducibility, files)
+	provenance, err := s.readProvenance(workspaceID)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	// Legacy workspace records predate the private ledger; retain their bounded
+	// evidence on the first checkpoint instead of silently dropping it.
+	if len(provenance.Changes) == 0 && len(provenance.Commands) == 0 && (len(w.Changes) > 0 || len(w.Commands) > 0) {
+		provenance.Changes, provenance.Commands = w.Changes, w.Commands
+	}
+	contributors, commands := checkpointEvidence(provenance.Changes, provenance.Commands, files, actor)
+	return s.createCheckpointWithEvidence(workspaceID, actor, expectedParent, title, description, reproducibility, files, contributors, commands)
 }
 
 func (s *Store) createCheckpoint(workspaceID, actor, expectedParent, title, description string, reproducibility Reproducibility, files []CheckpointFile) (Checkpoint, error) {
+	return s.createCheckpointWithEvidence(workspaceID, actor, expectedParent, title, description, reproducibility, files, nil, nil)
+}
+
+func (s *Store) createCheckpointWithEvidence(workspaceID, actor, expectedParent, title, description string, reproducibility Reproducibility, files []CheckpointFile, contributors []string, commands []CommandEvidence) (Checkpoint, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	w, err := s.read(workspaceID)
@@ -98,7 +230,7 @@ func (s *Store) createCheckpoint(workspaceID, actor, expectedParent, title, desc
 		return Checkpoint{}, err
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-	c := Checkpoint{ID: id, WorkspaceID: w.ID, RepositoryID: w.RepositoryID, BaseCommitID: w.CommitID, Definition: w.Definition, DefinitionSHA256: w.DefinitionSHA256, ParentCheckpointID: w.HeadCheckpointID, Title: strings.TrimSpace(title), Description: strings.TrimSpace(description), Reproducibility: reproducibility, Files: files, CreatedBy: actor, CreatedAt: s.now()}
+	c := Checkpoint{ID: id, WorkspaceID: w.ID, RepositoryID: w.RepositoryID, BaseCommitID: w.CommitID, Definition: w.Definition, DefinitionSHA256: w.DefinitionSHA256, ParentCheckpointID: w.HeadCheckpointID, Title: strings.TrimSpace(title), Description: strings.TrimSpace(description), Reproducibility: reproducibility, Files: files, CreatedBy: actor, CreatedAt: s.now(), ContributorIDs: contributors, Commands: commands}
 	if err = s.writeCheckpoint(c); err != nil {
 		return Checkpoint{}, err
 	}
@@ -109,6 +241,61 @@ func (s *Store) createCheckpoint(workspaceID, actor, expectedParent, title, desc
 		return Checkpoint{}, err
 	}
 	return c.Public(), nil
+}
+
+func checkpointEvidence(changes []Change, commandHistory []CommandOutcome, files []CheckpointFile, creator string) ([]string, []CommandEvidence) {
+	contributors, paths := map[string]bool{creator: true}, map[string]bool{}
+	for _, file := range files {
+		paths[file.Path] = true
+	}
+	for _, change := range changes {
+		if paths[change.Path] {
+			contributors[change.ActorID] = true
+		}
+	}
+	commands := make([]CommandEvidence, 0, len(commandHistory))
+	for _, command := range commandHistory {
+		contributors[command.ActorID] = true
+		commands = append(commands, CommandEvidence{ID: command.ID, SHA256: command.CommandSHA256, ExitCode: command.ExitCode, ActorID: command.ActorID})
+	}
+	ids := make([]string, 0, len(contributors))
+	for id := range contributors {
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids, commands
+}
+
+// ClaimCheckpointPublication serializes the unpublished check through all Git
+// and pull side effects across both goroutines and API processes.
+func (s *Store) ClaimCheckpointPublication(workspaceID, id string) (Checkpoint, func(), error) {
+	control := s.controlLock(workspaceID)
+	control.Lock()
+	file, err := os.OpenFile(filepath.Join(s.root, ".checkpoint-publication-"+workspaceID+".lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		control.Unlock()
+		return Checkpoint{}, nil, err
+	}
+	if err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+		_ = file.Close()
+		control.Unlock()
+		return Checkpoint{}, nil, err
+	}
+	release := func() { _ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN); _ = file.Close(); control.Unlock() }
+	s.mu.Lock()
+	checkpoint, err := s.readCheckpoint(workspaceID, id)
+	s.mu.Unlock()
+	if err != nil {
+		release()
+		return Checkpoint{}, nil, err
+	}
+	if checkpoint.Publication != nil {
+		release()
+		return checkpoint.Public(), nil, ErrCheckpointConflict
+	}
+	return checkpoint, release, nil
 }
 
 func (s *Store) GetCheckpoint(workspaceID, id string) (Checkpoint, error) {
@@ -125,6 +312,32 @@ func (s *Store) CheckpointSnapshot(workspaceID, id string) (Checkpoint, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.readCheckpoint(workspaceID, id)
+}
+
+func (s *Store) RecordCheckpointPublication(workspaceID, id string, publication Publication) (Checkpoint, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, err := s.readCheckpoint(workspaceID, id)
+	if err != nil {
+		return c, err
+	}
+	if c.Publication != nil {
+		if c.Publication.CommitID == publication.CommitID && c.Publication.PullRequestID == publication.PullRequestID {
+			return c.Public(), nil
+		}
+		return c, ErrCheckpointConflict
+	}
+	c.Publication = &publication
+	if err = s.writeCheckpoint(c); err != nil {
+		return c, err
+	}
+	w, err := s.read(workspaceID)
+	if err == nil {
+		w.UpdatedAt = publication.PublishedAt
+		w.Events = append(w.Events, Event{Kind: "checkpoint.published", ActorID: publication.PublishedBy, Role: "authorship", Detail: id, CreatedAt: publication.PublishedAt})
+		err = s.write(w)
+	}
+	return c.Public(), err
 }
 
 func (s *Store) ListCheckpoints(workspaceID string) ([]Checkpoint, error) {

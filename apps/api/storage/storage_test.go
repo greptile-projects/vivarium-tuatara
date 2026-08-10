@@ -545,6 +545,32 @@ func TestWithReferenceTargetCoordinatesObservationWithStockGitWriter(t *testing.
 	}
 }
 
+func TestDeleteReferenceIfTargetProtectsConcurrentPush(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := store.Create("project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := writeObject(t, repo, storage.BlobObject, []byte("first"))
+	second := writeObject(t, repo, storage.BlobObject, []byte("second"))
+	name := "refs/heads/publication"
+	if err = repo.CreateReference(storage.Reference{Name: name, Target: string(first)}); err != nil {
+		t.Fatal(err)
+	}
+	if err = repo.DeleteReferenceIfTarget(name, string(second)); !errors.Is(err, storage.ErrReferenceExists) {
+		t.Fatalf("stale delete = %v", err)
+	}
+	if err = repo.DeleteReferenceIfTarget(name, string(first)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = repo.ReadReference(name); !errors.Is(err, storage.ErrReferenceNotFound) {
+		t.Fatalf("reference remained: %v", err)
+	}
+}
+
 func TestReferencesRejectIntermediateSymlinks(t *testing.T) {
 	store, err := storage.New(t.TempDir())
 	if err != nil {

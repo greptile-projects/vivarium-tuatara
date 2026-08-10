@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
@@ -22,10 +24,10 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
-func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, incidentStore *incidents.Store, store *workspaces.Store, authStore *auth.Store, organizationStore *organizations.Store) {
+func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, incidentStore *incidents.Store, store *workspaces.Store, authStore *auth.Store, organizationStore *organizations.Store, checkStore *checkruns.Store, sessionStore *changesessions.Store) {
 	registerWorkspaceIDERoutes(mux, catalog, store, authStore)
 	registerWorkspaceCollaborationRoutes(mux, catalog, store, authStore, organizationStore)
-	registerWorkspaceCheckpointRoutes(mux, git, catalog, store, authStore)
+	registerWorkspaceCheckpointRoutes(mux, git, catalog, pullStore, store, authStore, checkStore, sessionStore)
 	mux.HandleFunc("POST /workspaces", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, authStore, "repositories:write", false)
 		if !ok {
