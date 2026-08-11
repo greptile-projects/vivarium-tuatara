@@ -111,7 +111,15 @@ func registerContributorHelpRoutes(mux *http.ServeMux, ws *workspaces.Store, rep
 				return
 			}
 		}
-		updated, err := ws.AddContributionHelp(item.ID, actor.UserID, workspaces.ContributionHelpEntry{Kind: in.Kind, Action: in.Action, Body: in.Body, ReplyTo: in.ReplyTo, DecisionOwner: in.DecisionOwner, DueAt: in.DueAt, RequestedBy: actor.UserID, AgentID: in.AgentID}, in.ExpectedVersion)
+		var updated workspaces.Workspace
+		err := withContributionMentorMutation(repos, item, actor.UserID, mentor, func() (mutationErr error) {
+			updated, mutationErr = ws.AddContributionHelp(item.ID, actor.UserID, workspaces.ContributionHelpEntry{Kind: in.Kind, Action: in.Action, Body: in.Body, ReplyTo: in.ReplyTo, DecisionOwner: in.DecisionOwner, DueAt: in.DueAt, RequestedBy: actor.UserID, AgentID: in.AgentID}, in.ExpectedVersion)
+			return mutationErr
+		})
+		if errors.Is(err, repositories.ErrInvalidCollaborator) || errors.Is(err, repositories.ErrNotFound) {
+			writeAPIError(w, 403, "contribution_mentor_access_revoked", "designated mentor access to the upstream repository was revoked")
+			return
+		}
 		if errors.Is(err, workspaces.ErrConflict) {
 			writeAPIError(w, 409, "contribution_help_changed", "help thread changed since it was observed")
 			return
@@ -145,7 +153,15 @@ func registerContributorHelpRoutes(mux *http.ServeMux, ws *workspaces.Store, rep
 			writeAPIError(w, 403, "contribution_decision_owner_required", "only the visible decision owner can close this item")
 			return
 		}
-		updated, err := ws.ResolveContributionHelp(item.ID, actor.UserID, target.ID, in.Status, in.ExpectedVersion)
+		var updated workspaces.Workspace
+		err := withContributionMentorMutation(repos, item, actor.UserID, mentor, func() (mutationErr error) {
+			updated, mutationErr = ws.ResolveContributionHelp(item.ID, actor.UserID, target.ID, in.Status, in.ExpectedVersion)
+			return mutationErr
+		})
+		if errors.Is(err, repositories.ErrInvalidCollaborator) || errors.Is(err, repositories.ErrNotFound) {
+			writeAPIError(w, 403, "contribution_mentor_access_revoked", "designated mentor access to the upstream repository was revoked")
+			return
+		}
 		if err != nil {
 			writeAPIError(w, 409, "contribution_help_changed", "help thread changed since it was observed")
 			return
@@ -171,7 +187,15 @@ func registerContributorHelpRoutes(mux *http.ServeMux, ws *workspaces.Store, rep
 			writeAPIError(w, 422, "mentor_availability_invalid", "availability and a bounded response window are required")
 			return
 		}
-		updated, err := ws.SetMentorAvailability(item.ID, actor.UserID, in.Status, strings.TrimSpace(in.Note), in.ResponseHours, in.ExpectedVersion)
+		var updated workspaces.Workspace
+		err := withContributionMentorMutation(repos, item, actor.UserID, mentor, func() (mutationErr error) {
+			updated, mutationErr = ws.SetMentorAvailability(item.ID, actor.UserID, in.Status, strings.TrimSpace(in.Note), in.ResponseHours, in.ExpectedVersion)
+			return mutationErr
+		})
+		if errors.Is(err, repositories.ErrInvalidCollaborator) || errors.Is(err, repositories.ErrNotFound) {
+			writeAPIError(w, 403, "contribution_mentor_access_revoked", "designated mentor access to the upstream repository was revoked")
+			return
+		}
 		if err != nil {
 			writeAPIError(w, 409, "contribution_help_changed", "help thread changed since it was observed")
 			return
@@ -196,7 +220,15 @@ func registerContributorHelpRoutes(mux *http.ServeMux, ws *workspaces.Store, rep
 			writeAPIError(w, 403, "mentor_required", "a designated mentor must confirm reassignment")
 			return
 		}
-		updated, err := ws.SetContributionState(item.ID, actor.UserID, in.State, strings.TrimSpace(in.Reason), in.ExpectedVersion)
+		var updated workspaces.Workspace
+		err := withContributionMentorMutation(repos, item, actor.UserID, mentor, func() (mutationErr error) {
+			updated, mutationErr = ws.SetContributionState(item.ID, actor.UserID, in.State, strings.TrimSpace(in.Reason), in.ExpectedVersion)
+			return mutationErr
+		})
+		if errors.Is(err, repositories.ErrInvalidCollaborator) || errors.Is(err, repositories.ErrNotFound) {
+			writeAPIError(w, 403, "contribution_mentor_access_revoked", "designated mentor access to the upstream repository was revoked")
+			return
+		}
 		if err != nil {
 			writeAPIError(w, 409, "contribution_help_changed", "help thread changed since it was observed")
 			return
@@ -212,6 +244,13 @@ func currentContributionMentor(repos *repositories.Store, repositoryID, actorID 
 	}
 	collaborator, err := repos.HasCollaborator(actorID, repositoryID)
 	return err == nil && (upstream.OwnerID == actorID || collaborator)
+}
+
+func withContributionMentorMutation(repos *repositories.Store, workspace workspaces.Workspace, actorID string, mentor bool, mutation func() error) error {
+	if !mentor {
+		return mutation()
+	}
+	return repos.WithCurrentParticipant(actorID, workspace.ContributorContext.UpstreamRepositoryID, mutation)
 }
 
 func validContributionAgent(orgs *organizations.Store, repos *repositories.Store, repositoryID, agentID, operatorID string) bool {

@@ -1,10 +1,12 @@
 package main
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
 func TestCurrentContributionMentorRejectsRemovedPublicCollaborator(t *testing.T) {
@@ -35,5 +37,11 @@ func TestCurrentContributionMentorRejectsRemovedPublicCollaborator(t *testing.T)
 	}
 	if currentContributionMentor(repos, repo.ID, mentor) {
 		t.Fatal("removed mentor retained authority on public repository")
+	}
+	mutated := false
+	workspace := workspaces.Workspace{ContributorContext: &workspaces.ContributorContext{UpstreamRepositoryID: repo.ID}}
+	err = withContributionMentorMutation(repos, workspace, mentor, true, func() error { mutated = true; return nil })
+	if !errors.Is(err, repositories.ErrInvalidCollaborator) || mutated {
+		t.Fatalf("revoked mentor mutation = %v, persisted = %v", err, mutated)
 	}
 }
