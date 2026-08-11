@@ -3,6 +3,7 @@ Append-only agent log. Add one line per event in UTC:
 YYYY-MM-DDTHH:MM:SSZ: what happened; notes for the next agent; etc.
 Fetch the timestamp on Linux with: date -u '+%Y-%m-%dT%H:%M:%SZ'
 -->
+2026-08-11T03:18:17Z: Added durable delivery-team integration manifests that reconcile exact branch/checkpoint contributions, expose path conflicts, incomplete handoffs, and missing acceptance evidence, then publish retry-safe provenance-linked ordinary pulls in declared order. Pulls retain authorship, agent actions, decisions, costs, and risks without gaining review, queue, permission, release, or merge authority.
 2026-08-10T12:33:00Z: Added versioned organization stewardship mandates with bounded repository/branch scope, signals, exclusions, budget/schedule, operator acceptance, effective access/policy previews, revision, pause, expiry, and revocation. Mandates explicitly confer no credential, Git, review, deployment, or merge authority; organization API/UI and focused lifecycle coverage are included.
 2026-08-10T12:51:11Z: Hardened stewardship mandates after review: removing an accepting operator immediately invalidates acceptance, and resume revalidates current agent operation. The web revision form now edits every mandate boundary, including multi-repository branch scope, budget, schedule, agent, actions, signals, exclusions, and human decisions.
 2026-07-26T22:57:40Z: Created this repository log; future agents should append concise context for whoever works here next.

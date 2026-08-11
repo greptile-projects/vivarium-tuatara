@@ -65,6 +65,10 @@ type PullRequest struct {
 	WorkspaceCheckpointID    string                 `json:"workspace_checkpoint_id,omitempty"`
 	WorkspaceContributorIDs  []string               `json:"workspace_contributor_ids,omitempty"`
 	WorkspaceCommandIDs      []string               `json:"workspace_command_ids,omitempty"`
+	DeliveryTeamID           string                 `json:"delivery_team_id,omitempty"`
+	DeliveryIntegrationID    string                 `json:"delivery_integration_id,omitempty"`
+	DeliveryStreamID         string                 `json:"delivery_stream_id,omitempty"`
+	DeliveryIntegrationOrder int                    `json:"delivery_integration_order,omitempty"`
 	TaskStatePending         string                 `json:"task_state_pending,omitempty"`
 	Status                   string                 `json:"status"`
 	MaintainerEditsAllowed   bool                   `json:"maintainer_edits_allowed"`
@@ -84,6 +88,28 @@ type PullRequest struct {
 	QueueFinalizedAt         *time.Time             `json:"queue_finalized_at,omitempty"`
 	IntegrationCandidates    []IntegrationCandidate `json:"integration_candidates,omitempty"`
 	mergeIntent              *mergeIntent
+}
+
+// LinkDeliveryIntegration retains a pull's place in a distributed outcome
+// without changing any ordinary review, check, queue, or merge rule.
+func (s *Store) LinkDeliveryIntegration(repositoryID, pullID, teamID, integrationID, streamID string, order int) (PullRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return PullRequest{}, err
+	}
+	defer unlock()
+	p, err := s.read(repositoryID, pullID)
+	if err != nil {
+		return p, err
+	}
+	if !validID(teamID) || !validID(integrationID) || strings.TrimSpace(streamID) == "" || order < 1 {
+		return p, ErrInvalid
+	}
+	p.DeliveryTeamID, p.DeliveryIntegrationID, p.DeliveryStreamID, p.DeliveryIntegrationOrder = teamID, integrationID, streamID, order
+	_, err = s.write(p)
+	return p, err
 }
 
 // TaskReviewEvidence freezes the execution and intent offered to reviewers;

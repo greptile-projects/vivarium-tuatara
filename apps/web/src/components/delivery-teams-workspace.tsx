@@ -1,41 +1,1691 @@
 "use client";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import Link from "next/link";
 import { api, type DeliveryTeam, type Repository } from "@/lib/api";
 import { useAuth } from "./auth";
 import { Badge, Button, Card } from "./ui";
 
-const field = "mt-1 min-h-10 w-full rounded-lg border border-[var(--line-strong)] bg-white px-3 py-2 text-sm";
-const parsePeople = (value: string, repositoryId: string) => value.split("\n").map(x=>x.trim()).filter(Boolean).map((line,index)=>{const [principal_type,principal_id,role,responsibility,why,escalation,level="read"] = line.split("|").map(x=>x.trim());return {id:`invite-${Date.now()}-${index}`,principal_type,principal_id,role,responsibility,why,escalation,required_access:[{repository_id:repositoryId,level}]};});
-const list=(value:string)=>value.split(",").map(x=>x.trim()).filter(Boolean);
-const parseStreams=(value:string,repositoryId:string)=>{
-  const rows=value.split("\n").map(x=>x.trim()).filter(Boolean).map(line=>{const [id,owner_participant_id,title,revision,paths,rawInputs,artifacts,dependencies,criteria,order,budget,assumptions]=line.split("|").map(x=>x.trim());return {id,owner_participant_id,title,revision,paths:list(paths),rawInputs:list(rawInputs),artifacts:list(artifacts),dependencies:list(dependencies),criteria:list(criteria),order:Number(order),budget:budget?Number(budget):undefined,assumptions:list(assumptions)};});
-  const byID=new Map(rows.map(row=>[row.id,row]));
-  return rows.map(row=>({id:row.id,owner_participant_id:row.owner_participant_id,title:row.title,inputs:row.rawInputs.map(value=>{const [name,artifact,explicitSource]=value.split("@").map(x=>x.trim());const source_stream_id=explicitSource||row.dependencies.find(id=>byID.get(id)?.artifacts.includes(artifact));return source_stream_id?{name,artifact,source_stream_id}:{name,artifact,repository_id:repositoryId,revision:row.revision};}),expected_artifacts:row.artifacts,dependency_ids:row.dependencies,acceptance_criteria:row.criteria,repository_scope:[{repository_id:repositoryId,reference:"main",revision:row.revision,paths:row.paths}],integration_order:row.order,budget:row.budget?{unit:"minutes",limit:row.budget}:undefined,assumptions:row.assumptions}));
+const field =
+  "mt-1 min-h-10 w-full rounded-lg border border-[var(--line-strong)] bg-white px-3 py-2 text-sm";
+const parsePeople = (value: string, repositoryId: string) =>
+  value
+    .split("\n")
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .map((line, index) => {
+      const [
+        principal_type,
+        principal_id,
+        role,
+        responsibility,
+        why,
+        escalation,
+        level = "read",
+      ] = line.split("|").map((x) => x.trim());
+      return {
+        id: `invite-${Date.now()}-${index}`,
+        principal_type,
+        principal_id,
+        role,
+        responsibility,
+        why,
+        escalation,
+        required_access: [{ repository_id: repositoryId, level }],
+      };
+    });
+const list = (value: string) =>
+  value
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+const parseStreams = (value: string, repositoryId: string) => {
+  const rows = value
+    .split("\n")
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [
+        id,
+        owner_participant_id,
+        title,
+        revision,
+        paths,
+        rawInputs,
+        artifacts,
+        dependencies,
+        criteria,
+        order,
+        budget,
+        assumptions,
+      ] = line.split("|").map((x) => x.trim());
+      return {
+        id,
+        owner_participant_id,
+        title,
+        revision,
+        paths: list(paths),
+        rawInputs: list(rawInputs),
+        artifacts: list(artifacts),
+        dependencies: list(dependencies),
+        criteria: list(criteria),
+        order: Number(order),
+        budget: budget ? Number(budget) : undefined,
+        assumptions: list(assumptions),
+      };
+    });
+  const byID = new Map(rows.map((row) => [row.id, row]));
+  return rows.map((row) => ({
+    id: row.id,
+    owner_participant_id: row.owner_participant_id,
+    title: row.title,
+    inputs: row.rawInputs.map((value) => {
+      const [name, artifact, explicitSource] = value
+        .split("@")
+        .map((x) => x.trim());
+      const source_stream_id =
+        explicitSource ||
+        row.dependencies.find((id) =>
+          byID.get(id)?.artifacts.includes(artifact),
+        );
+      return source_stream_id
+        ? { name, artifact, source_stream_id }
+        : {
+            name,
+            artifact,
+            repository_id: repositoryId,
+            revision: row.revision,
+          };
+    }),
+    expected_artifacts: row.artifacts,
+    dependency_ids: row.dependencies,
+    acceptance_criteria: row.criteria,
+    repository_scope: [
+      {
+        repository_id: repositoryId,
+        reference: "main",
+        revision: row.revision,
+        paths: row.paths,
+      },
+    ],
+    integration_order: row.order,
+    budget: row.budget ? { unit: "minutes", limit: row.budget } : undefined,
+    assumptions: row.assumptions,
+  }));
 };
 export function DeliveryTeamsWorkspace() {
-  const {token,loading:authLoading}=useAuth();
-  const [teams,setTeams]=useState<DeliveryTeam[]>([]),[repos,setRepos]=useState<Repository[]>([]),[loading,setLoading]=useState(true),[pending,setPending]=useState(false),[error,setError]=useState("");
-  const load=useCallback(async()=>{if(authLoading)return;if(!token){setLoading(false);return}try{const [a,b]=await Promise.all([api<{delivery_teams:DeliveryTeam[]}>("/delivery-teams",{},token),api<{repositories:Repository[]}>("/repositories?limit=100",{},token)]);setTeams(a.delivery_teams);setRepos(b.repositories)}catch(e){setError(e instanceof Error?e.message:"Delivery teams could not be loaded.")}finally{setLoading(false)}},[authLoading,token]);
-  useEffect(()=>{void Promise.resolve().then(load);const timer=window.setInterval(()=>void load(),15000);return()=>window.clearInterval(timer)},[load]);
-  async function create(e:FormEvent<HTMLFormElement>){e.preventDefault();setPending(true);setError("");const d=new FormData(e.currentTarget),repositoryId=String(d.get("repository_id")),localDeadline=String(d.get("deadline")??"");try{await api(`/repositories/${repositoryId}/delivery-teams`,{method:"POST",body:JSON.stringify({outcome:{kind:d.get("outcome_kind"),resource_id:d.get("outcome_id"),title:d.get("outcome_title")},charter:{name:d.get("name"),purpose:d.get("purpose"),deadline:localDeadline?new Date(localDeadline).toISOString():undefined,escalation_path:d.get("escalation_path"),overall_budget:d.get("budget")?{unit:d.get("budget_unit"),limit:Number(d.get("budget"))}:undefined,participants:parsePeople(String(d.get("participants")),repositoryId)}})},token);e.currentTarget.reset();await load()}catch(x){setError(x instanceof Error?x.message:"Delivery team could not be created.")}finally{setPending(false)}}
-  async function respond(team:DeliveryTeam,participantId:string,decision:string){setPending(true);try{await api(`/delivery-teams/${team.id}/participants/${participantId}/response`,{method:"POST",body:JSON.stringify({expected_version:team.version,decision})},token);await load()}catch(e){setError(e instanceof Error?e.message:"Invitation response failed.")}finally{setPending(false)}}
-  async function plan(e:FormEvent<HTMLFormElement>,team:DeliveryTeam){e.preventDefault();setPending(true);setError("");const d=new FormData(e.currentTarget);try{await api(`/delivery-teams/${team.id}/plan`,{method:"PUT",body:JSON.stringify({expected_version:team.version,plan:{streams:parseStreams(String(d.get("streams")),team.repository_id)}})},token);await load()}catch(x){setError(x instanceof Error?x.message:"Execution plan could not be proposed.")}finally{setPending(false)}}
-  async function respondPlan(team:DeliveryTeam,participantId:string,decision:string){if(!team.plan)return;setPending(true);setError("");try{await api(`/delivery-teams/${team.id}/plan/participants/${participantId}/response`,{method:"POST",body:JSON.stringify({expected_version:team.version,expected_plan_revision:team.plan.revision,decision})},token);await load()}catch(x){setError(x instanceof Error?x.message:"Plan response failed.")}finally{setPending(false)}}
-  async function attachContext(e:FormEvent<HTMLFormElement>,team:DeliveryTeam,streamId:string){e.preventDefault();const d=new FormData(e.currentTarget);setPending(true);setError("");try{await api(`/delivery-teams/${team.id}/streams/${streamId}/contexts`,{method:"POST",body:JSON.stringify({expected_version:team.version,context:{kind:d.get("kind"),resource_id:d.get("resource_id"),parent_id:d.get("parent_id"),repository_id:d.get("repository_id"),revision:d.get("revision")}})},token);e.currentTarget.reset();await load()}catch(x){setError(x instanceof Error?x.message:"Work context could not be attached.")}finally{setPending(false)}}
-  async function publishEntry(e:FormEvent<HTMLFormElement>,team:DeliveryTeam,streamId:string){e.preventDefault();const d=new FormData(e.currentTarget),citation=String(d.get("citation_id")??"").trim(),context=team.plan?.streams.find(s=>s.id===streamId)?.contexts.find(c=>c.resource_id===citation);setPending(true);setError("");try{await api(`/delivery-teams/${team.id}/timeline`,{method:"POST",body:JSON.stringify({expected_version:team.version,entry:{stream_id:streamId,kind:d.get("kind"),body:d.get("body"),citations:context?[{kind:context.kind,resource_id:context.resource_id,repository_id:context.repository_id,revision:context.revision,label:d.get("label")}]:[]}})},token);e.currentTarget.reset();await load()}catch(x){setError(x instanceof Error?x.message:"Timeline entry could not be published.")}finally{setPending(false)}}
-  async function requestHandoff(e:FormEvent<HTMLFormElement>,team:DeliveryTeam,streamId:string){e.preventDefault();const d=new FormData(e.currentTarget);setPending(true);setError("");try{await api(`/delivery-teams/${team.id}/handoffs`,{method:"POST",body:JSON.stringify({expected_version:team.version,handoff:{stream_id:streamId,to_participant_id:d.get("recipient"),input_entry_ids:list(String(d.get("inputs"))),acceptance_criteria:list(String(d.get("criteria"))),residual_uncertainty:list(String(d.get("uncertainty")))}})},token);e.currentTarget.reset();await load()}catch(x){setError(x instanceof Error?x.message:"Handoff could not be requested.")}finally{setPending(false)}}
-  async function acceptHandoff(e:FormEvent<HTMLFormElement>,team:DeliveryTeam,handoffId:string){e.preventDefault();const d=new FormData(e.currentTarget);setPending(true);setError("");try{await api(`/delivery-teams/${team.id}/handoffs/${handoffId}/accept`,{method:"POST",body:JSON.stringify({expected_version:team.version,verification_entry_ids:list(String(d.get("verification"))),note:d.get("note")})},token);await load()}catch(x){setError(x instanceof Error?x.message:"Handoff could not be accepted.")}finally{setPending(false)}}
-  async function reportStatus(e:FormEvent<HTMLFormElement>,team:DeliveryTeam,streamId:string,revision:string){e.preventDefault();const d=new FormData(e.currentTarget),questions=list(String(d.get("questions"))).map((body,index)=>({id:`question-${Date.now()}-${index}`,body,ask_of:String(d.get("ask_of")),urgency:d.get("urgency")})),blocker=String(d.get("blocker")).trim();setPending(true);setError("");try{await api(`/delivery-teams/${team.id}/streams/${streamId}/status`,{method:"PUT",body:JSON.stringify({expected_version:team.version,status:{status:d.get("status"),summary:d.get("summary"),progress_percent:Number(d.get("progress")),revision,resource_use:d.get("consumed")?{unit:d.get("unit"),consumed:Number(d.get("consumed"))}:undefined,questions,blockers:blocker?[{kind:d.get("blocker_kind"),summary:blocker,recovery:d.get("recovery")}]:[],predicted_next_action:d.get("next_action")}})},token);await load()}catch(x){setError(x instanceof Error?x.message:"Stream status could not be reported.")}finally{setPending(false)}}
-  async function intervene(e:FormEvent<HTMLFormElement>,team:DeliveryTeam,streamId?:string){e.preventDefault();const d=new FormData(e.currentTarget),action=String(d.get("action"));setPending(true);setError("");try{await api(`/delivery-teams/${team.id}/interventions`,{method:"POST",body:JSON.stringify({expected_version:team.version,intervention:{scope:streamId?"stream":"team",stream_id:streamId,action,guidance:d.get("guidance"),new_owner_participant_id:action==="reassign"?d.get("owner"):undefined,paths:action==="narrow"?list(String(d.get("paths"))):undefined}})},token);await load()}catch(x){setError(x instanceof Error?x.message:"Intervention could not be applied.")}finally{setPending(false)}}
-  if(loading)return <p className="text-sm text-[var(--muted)]">Loading delivery teams…</p>;
-  if(!token)return <Card className="p-6"><p>Sign in to assemble and review delivery teams.</p></Card>;
-  return <div className="space-y-8"><header><p className="text-xs font-semibold uppercase tracking-[.16em] text-[var(--brand-strong)]">Shared outcomes</p><h1 className="mt-2 text-3xl font-semibold tracking-tight">Delivery teams</h1><p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--muted)]">Agree on responsibility, limits, resources, and escalation before coordinated work starts. Charters describe authority; they never create it.</p></header>{error&&<p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{error}</p>}
-  <Card className="p-5"><h2 className="text-lg font-semibold">Form a team</h2><form onSubmit={create} className="mt-4 grid gap-4 md:grid-cols-2"><label className="text-sm">Repository<select required name="repository_id" className={field}>{repos.map(r=><option key={r.id} value={r.id}>{r.name}</option>)}</select></label><label className="text-sm">Outcome type<select name="outcome_kind" className={field}><option value="proposal">Proposal</option><option value="initiative">Initiative</option><option value="decision">Decision</option><option value="incident_follow_up">Incident follow-up</option><option value="planned_outcome">Other planned outcome</option></select></label><label className="text-sm">Outcome ID<input required name="outcome_id" className={field}/></label><label className="text-sm">Outcome title<input required name="outcome_title" className={field}/></label><label className="text-sm">Team name<input required name="name" className={field}/></label><label className="text-sm">Deadline<input type="datetime-local" name="deadline" className={field}/></label><label className="text-sm md:col-span-2">Purpose<textarea required name="purpose" className={field}/></label><label className="text-sm">Budget<input min="1" type="number" name="budget" className={field}/></label><label className="text-sm">Budget unit<select name="budget_unit" className={field}><option value="minutes">Agent minutes</option><option value="credits">Credits</option><option value="usd">USD</option></select></label><label className="text-sm md:col-span-2">Team escalation path<textarea required name="escalation_path" className={field} placeholder="Who decides when scope, risk, or budget changes?"/></label><label className="text-sm md:col-span-2">Participants <span className="text-[var(--muted)]">— one per line: human|ID|role|responsibility|why involved|escalation|read or write</span><textarea required rows={5} name="participants" className={field}/></label><div className="md:col-span-2"><Button disabled={pending}>Create charter and invite</Button></div></form></Card>
-  <section className="space-y-4"><h2 className="text-xl font-semibold">Current charters and plans</h2>{teams.length===0?<Card className="p-6 text-sm text-[var(--muted)]">No delivery teams yet.</Card>:teams.map(team=><Card key={team.id} className="p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-semibold">{team.name}</h3><p className="mt-1 text-sm text-[var(--muted)]">{team.outcome.title} · organized by {team.organizer_id}</p></div><Badge tone="info">team v{team.version}</Badge></div><p className="mt-3 text-sm">{team.purpose}</p><p className="mt-2 text-xs text-[var(--muted)]">Escalation: {team.escalation_path}{team.deadline?` · Due ${new Date(team.deadline).toLocaleString()}`:""}</p><div className="mt-4 grid gap-3 lg:grid-cols-2">{team.participants.map(p=><div key={p.id} className="rounded-lg border border-[var(--line)] p-4"><div className="flex items-center justify-between"><strong className="text-sm">{p.role}</strong><Badge tone={p.status==="accepted"?"success":p.status==="declined"?"danger":"warning"}>{p.status}</Badge></div><p className="mt-1 text-xs text-[var(--muted)]">slot {p.id} · {p.principal_type} {p.principal_id}</p><p className="mt-2 text-sm">{p.responsibility}</p><p className="mt-1 text-xs text-[var(--muted)]">Why: {p.why} · Escalate: {p.escalation}</p>{p.access_preview.map(a=><p key={a.repository_id} className={`mt-2 text-xs ${a.sufficient?"text-emerald-700":"text-amber-700"}`}>{a.sufficient?"Access ready":"Access gap"}: needs {a.required}, has {a.effective} ({a.source})</p>)}{p.can_respond&&<div className="mt-3 flex gap-2"><Button disabled={pending} onClick={()=>respond(team,p.id,"accepted")}>Accept</Button><Button variant="secondary" disabled={pending} onClick={()=>respond(team,p.id,"declined")}>Decline</Button></div>}</div>)}</div>
-  <div className="mt-5 border-t border-[var(--line)] pt-5"><div className="flex items-center justify-between"><h4 className="font-semibold">Shared execution plan</h4>{team.plan&&<Badge tone={team.plan.blockers.length?"warning":"success"}>revision {team.plan.revision}</Badge>}</div>{team.plan&&<><div className="mt-3 space-y-3">{team.plan.blockers.map((b,i)=><p key={`${b.kind}-${i}`} className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900"><strong>{b.kind.replaceAll("_"," ")}</strong> · {b.summary}</p>)}{team.plan.streams.map(s=><div key={s.id} className="rounded-lg border border-[var(--line)] p-4"><div className="flex flex-wrap items-center justify-between gap-2"><strong>{s.integration_order}. {s.title}</strong><span className="text-xs text-[var(--muted)]">owner {s.owner_participant_id}{s.budget?` · ${s.budget.limit} ${s.budget.unit}`:""}</span></div><p className="mt-2 text-sm"><strong>Produces:</strong> {s.expected_artifacts.join(", ")} · <strong>Accept when:</strong> {s.acceptance_criteria.join("; ")}</p><p className="mt-1 text-xs text-[var(--muted)]"><strong>Inputs:</strong> {s.inputs.map(i=>`${i.name} → ${i.artifact} @ ${(i.revision??i.source_stream_id)?.slice(0,8)}`).join(", ")||"none"} · <strong>Depends on:</strong> {s.dependency_ids.join(", ")||"none"}</p>{s.repository_scope.map(scope=><p key={`${scope.repository_id}-${scope.revision}`} className="mt-1 font-mono text-xs text-[var(--muted)]">{scope.reference}@{scope.revision.slice(0,12)} · {scope.paths.join(", ")}</p>)}<p className="mt-1 text-xs text-[var(--muted)]"><strong>Assumes:</strong> {s.assumptions.join("; ")}</p><div className="mt-2 flex flex-wrap gap-2">{s.contexts.map(c=><Badge key={c.id} tone="info">{c.kind} · {c.resource_id} @ {c.revision.slice(0,8)}</Badge>)}</div><details className="mt-3"><summary className="cursor-pointer text-xs font-medium">Attach scoped work or publish evidence</summary><form onSubmit={e=>attachContext(e,team,s.id)} className="mt-2 grid gap-2 md:grid-cols-2"><select name="kind" className={field}><option value="change_session">Change session</option><option value="investigation">Investigation</option><option value="experiment">Experiment</option><option value="workspace">Workspace</option></select><input required name="resource_id" className={field} placeholder="Resource ID"/><input required name="repository_id" className={field} defaultValue={s.repository_scope[0]?.repository_id}/><input required name="revision" className={field} defaultValue={s.repository_scope[0]?.revision}/><Button disabled={pending}>Attach exact context</Button></form><form onSubmit={e=>publishEntry(e,team,s.id)} className="mt-3 grid gap-2 md:grid-cols-2"><select name="kind" className={field}><option value="finding">Finding</option><option value="question">Question</option><option value="checkpoint">Checkpoint</option><option value="artifact">Artifact</option><option value="decision">Decision</option><option value="uncertainty">Residual uncertainty</option></select><input required name="body" className={field} placeholder="Useful, reviewable update"/><input name="citation_kind" className={field} placeholder="Citation kind"/><input name="citation_id" className={field} placeholder="Citation resource ID"/><input name="label" className={field} placeholder="Citation label"/><input name="repository_id" className={field} defaultValue={s.repository_scope[0]?.repository_id}/><input name="revision" className={field} defaultValue={s.repository_scope[0]?.revision}/><Button disabled={pending}>Publish to team</Button></form></details></div>)}</div><div className="mt-3 flex flex-wrap gap-2">{team.plan.acceptances.map(a=><div key={a.participant_id} className="rounded-lg border border-[var(--line)] p-3 text-xs">{a.participant_id}: <strong>{a.status}</strong>{a.can_respond&&a.status!=="accepted"&&<span className="ml-2 inline-flex gap-1"><Button disabled={pending} onClick={()=>respondPlan(team,a.participant_id,"accepted")}>Accept replan</Button><Button variant="secondary" disabled={pending} onClick={()=>respondPlan(team,a.participant_id,"declined")}>Decline</Button></span>}</div>)}</div></>}
-  <details className="mt-4"><summary className="cursor-pointer text-sm font-medium">Propose or revise parallel streams</summary><form onSubmit={e=>plan(e,team)} className="mt-3"><p className="text-xs leading-5 text-[var(--muted)]">One per line: ID | owner slot | title | 40-character revision | paths | inputs as name@artifact or name@artifact@producer stream | artifacts | dependencies | acceptance criteria | integration order | minute budget | assumptions. An artifact produced by one declared dependency is linked to that stream automatically. Separate lists with commas.</p><textarea required rows={5} name="streams" className={field} placeholder="api | invite-1 | Define contract | 0123… | apps/api | source@current API | contract | | contract tests pass | 1 | 30 | schema remains stable"/><Button disabled={pending}>Publish material plan revision</Button></form></details>{team.plan_history.length>0&&<details className="mt-4"><summary className="cursor-pointer text-sm font-medium">Retained plan revisions</summary><ul className="mt-2 space-y-1 text-xs text-[var(--muted)]">{team.plan_history.map(p=><li key={p.revision}>revision {p.revision} · proposed by {p.proposed_by} · {new Date(p.updated_at).toLocaleString()}</li>)}</ul></details>}</div>
-  {team.plan&&<div className="mt-5 border-t border-[var(--line)] pt-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><h4 className="font-semibold">Live team workspace</h4><p className="mt-1 text-xs text-[var(--muted)]">Refreshes every 15 seconds. Controls retain accepted work and never grant repository authority.</p></div><form onSubmit={e=>intervene(e,team)} className="flex flex-wrap gap-2"><select name="action" className={field}><option value="pause">Pause whole effort</option><option value="resume">Resume whole effort</option><option value="cancel">Cancel whole effort</option><option value="guide">Guide whole effort</option></select><input required name="guidance" className={field} placeholder="Team-wide direction or reason"/><Button disabled={pending}>Apply team control</Button></form></div><div className="mt-4 grid gap-4 xl:grid-cols-2">{team.plan.streams.map(stream=>{const live=team.stream_statuses.find(s=>s.stream_id===stream.id);return <div key={stream.id} className="rounded-xl border border-[var(--line)] p-4"><div className="flex items-center justify-between gap-2"><strong>{stream.title}</strong><Badge tone={live?.status==="running"||live?.status==="completed"?"success":live?.status==="failed"||live?.status==="blocked"?"danger":"warning"}>{live?.status??"not reported"}</Badge></div><p className="mt-2 text-sm">{live?.summary??"The owner has not published a live snapshot."}</p><div className="mt-3 h-2 overflow-hidden rounded bg-slate-100"><div className="h-full bg-[var(--brand)]" style={{width:`${live?.progress_percent??0}%`}}/></div><p className="mt-1 text-xs text-[var(--muted)]">{live?.progress_percent??0}% · revision {(live?.revision||stream.repository_scope[0]?.revision).slice(0,8)}{live?.resource_use?` · ${live.resource_use.consumed} ${live.resource_use.unit} used`:""}</p><p className="mt-3 text-xs"><strong>Active control:</strong> {live?.active_control?`${live.active_control.principal_type} ${live.active_control.principal_id}`:"none reported"}</p><p className="mt-1 text-xs"><strong>Predicted next:</strong> {live?.predicted_next_action||"Owner status report"}</p>{live?.blockers.map((b,i)=><div key={`${b.kind}-${i}`} className="mt-2 rounded-lg bg-red-50 p-3 text-xs text-red-900"><strong>{b.kind.replaceAll("_"," ")}</strong> · {b.summary}<br/><span>Recovery: {b.recovery}</span></div>)}{live?.questions.map(q=><p key={q.id} className="mt-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-900"><strong>{q.urgency} question for {q.ask_of}:</strong> {q.body}</p>)}<details className="mt-3"><summary className="cursor-pointer text-xs font-medium">Report status or steer this stream</summary><form onSubmit={e=>reportStatus(e,team,stream.id,stream.repository_scope[0].revision)} className="mt-2 grid gap-2 md:grid-cols-2"><select name="status" className={field}><option value="running">Running</option><option value="queued">Queued</option><option value="blocked">Blocked</option><option value="paused">Paused</option><option value="failed">Failed</option><option value="completed">Completed</option></select><input required name="summary" className={field} placeholder="Current work and result"/><input required type="number" min="0" max="100" name="progress" className={field} placeholder="Progress %"/><input type="number" min="0" name="consumed" className={field} placeholder="Resource consumed"/><select name="unit" className={field} defaultValue={stream.budget?.unit??"minutes"}><option value="minutes">minutes</option><option value="credits">credits</option><option value="usd">USD</option></select><input required name="next_action" className={field} placeholder="Predicted next action"/><input name="questions" className={field} placeholder="Open questions, comma separated"/><input name="ask_of" className={field} placeholder="Who should answer?"/><select name="urgency" className={field}><option value="normal">Normal question</option><option value="urgent">Urgent question</option></select><select name="blocker_kind" className={field}><option value="other">Other blocker</option><option value="agent_failed">Agent failed</option><option value="access_revoked">Access revoked</option><option value="stale_revision">Stale revision</option><option value="conflicting_output">Conflicting output</option><option value="participant_disconnected">Participant disconnected</option><option value="dependency_blocked">Dependency blocked</option></select><input name="blocker" className={field} placeholder="Blocker summary"/><input name="recovery" className={field} placeholder="Bounded recovery or escalation"/><Button disabled={pending}>Publish live snapshot</Button></form><form onSubmit={e=>intervene(e,team,stream.id)} className="mt-3 grid gap-2 md:grid-cols-2"><select name="action" className={field}><option value="guide">Guide</option><option value="pause">Pause</option><option value="resume">Resume</option><option value="cancel">Cancel</option><option value="reassign">Reassign (organizer)</option><option value="narrow">Narrow scope (organizer)</option></select><input required name="guidance" className={field} placeholder="Direction and reason"/><select name="owner" className={field}>{team.participants.filter(p=>p.status==="accepted"&&p.id!==stream.owner_participant_id).map(p=><option key={p.id} value={p.id}>{p.role} · {p.id}</option>)}</select><input name="paths" className={field} placeholder="Retained paths for narrowing"/><Button disabled={pending}>Intervene in stream</Button></form></details></div>})}</div>{team.interventions.length>0&&<details className="mt-4"><summary className="cursor-pointer text-sm font-medium">Retained intervention history</summary><ul className="mt-2 space-y-1 text-xs text-[var(--muted)]">{[...team.interventions].reverse().map(i=><li key={i.id}>{new Date(i.created_at).toLocaleString()} · {i.actor_id} {i.action} {i.stream_id||"whole team"} at plan r{i.plan_revision} — {i.guidance}</li>)}</ul></details>}</div>}
-  <div className="mt-5 border-t border-[var(--line)] pt-5"><h4 className="font-semibold">Permission-aware team timeline</h4><p className="mt-1 text-xs text-[var(--muted)]">Only exact-revision evidence you can currently read appears here. Private prompts, terminal input, and credentials are never copied.</p><div className="mt-3 space-y-2">{team.timeline.map(entry=><div key={entry.id} className="rounded-lg border border-[var(--line)] p-3"><div className="flex justify-between gap-2"><Badge tone={entry.kind==="uncertainty"?"warning":"info"}>{entry.kind}</Badge><span className="text-xs text-[var(--muted)]">{entry.author_type} {entry.author_id} · plan r{entry.plan_revision}</span></div><p className="mt-2 text-sm">{entry.body}</p><p className="mt-1 font-mono text-xs text-[var(--muted)]">entry {entry.id} {entry.citations.map(c=>`· ${c.label} ${c.resource_id}@${c.revision.slice(0,8)}`).join(" ")}</p></div>)}</div>{team.plan?.streams.map(stream=><details key={stream.id} className="mt-3"><summary className="cursor-pointer text-sm font-medium">Request handoff for {stream.title}</summary><form onSubmit={e=>requestHandoff(e,team,stream.id)} className="mt-2 grid gap-2 md:grid-cols-2"><select required name="recipient" className={field}>{team.participants.filter(p=>p.id!==stream.owner_participant_id&&p.status==="accepted").map(p=><option key={p.id} value={p.id}>{p.role} · {p.id}</option>)}</select><input required name="inputs" className={field} placeholder="Timeline entry IDs, comma separated"/><input required name="criteria" className={field} placeholder="Acceptance criteria, comma separated"/><input name="uncertainty" className={field} placeholder="Residual uncertainty, comma separated"/><Button disabled={pending}>Request structured handoff</Button></form></details>)}</div>
-  <div className="mt-5 border-t border-[var(--line)] pt-5"><h4 className="font-semibold">Governed handoffs</h4><div className="mt-3 space-y-3">{team.handoffs.map(h=><div key={h.id} className="rounded-lg border border-[var(--line)] p-4"><div className="flex justify-between gap-2"><strong className="text-sm">{h.from_participant_id} → {h.to_participant_id}</strong><Badge tone={h.status==="accepted"?"success":"warning"}>{h.status}</Badge></div><p className="mt-2 text-sm"><strong>Accept when:</strong> {h.acceptance_criteria.join("; ")}</p><p className="mt-1 text-sm"><strong>Still uncertain:</strong> {h.residual_uncertainty.join("; ")||"nothing declared"}</p><p className="mt-1 font-mono text-xs text-[var(--muted)]">inputs {h.input_entry_ids.join(", ")} · plan r{h.plan_revision}</p>{h.status==="pending"&&<form onSubmit={e=>acceptHandoff(e,team,h.id)} className="mt-3 grid gap-2 md:grid-cols-2"><input required name="verification" className={field} placeholder="Your verification timeline entry IDs"/><input required name="note" className={field} placeholder="How you verified the handoff"/><Button disabled={pending}>Accept with verification</Button></form>}{h.acceptance_note&&<p className="mt-2 text-sm text-emerald-800">Verified: {h.acceptance_note}</p>}</div>)}</div></div>
-  <details className="mt-4"><summary className="cursor-pointer text-sm font-medium">Attributable team history</summary><ul className="mt-2 space-y-1 text-xs text-[var(--muted)]">{team.events.map(e=><li key={e.id}>{new Date(e.created_at).toLocaleString()} · {e.actor_id} · {e.summary}</li>)}</ul></details></Card>)}</section></div>;
+  const { token, loading: authLoading } = useAuth();
+  const [teams, setTeams] = useState<DeliveryTeam[]>([]),
+    [repos, setRepos] = useState<Repository[]>([]),
+    [loading, setLoading] = useState(true),
+    [pending, setPending] = useState(false),
+    [error, setError] = useState("");
+  const load = useCallback(async () => {
+    if (authLoading) return;
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+    try {
+      const [a, b] = await Promise.all([
+        api<{ delivery_teams: DeliveryTeam[] }>("/delivery-teams", {}, token),
+        api<{ repositories: Repository[] }>(
+          "/repositories?limit=100",
+          {},
+          token,
+        ),
+      ]);
+      setTeams(a.delivery_teams);
+      setRepos(b.repositories);
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Delivery teams could not be loaded.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [authLoading, token]);
+  useEffect(() => {
+    void Promise.resolve().then(load);
+    const timer = window.setInterval(() => void load(), 15000);
+    return () => window.clearInterval(timer);
+  }, [load]);
+  async function create(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setPending(true);
+    setError("");
+    const d = new FormData(e.currentTarget),
+      repositoryId = String(d.get("repository_id")),
+      localDeadline = String(d.get("deadline") ?? "");
+    try {
+      await api(
+        `/repositories/${repositoryId}/delivery-teams`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            outcome: {
+              kind: d.get("outcome_kind"),
+              resource_id: d.get("outcome_id"),
+              title: d.get("outcome_title"),
+            },
+            charter: {
+              name: d.get("name"),
+              purpose: d.get("purpose"),
+              deadline: localDeadline
+                ? new Date(localDeadline).toISOString()
+                : undefined,
+              escalation_path: d.get("escalation_path"),
+              overall_budget: d.get("budget")
+                ? { unit: d.get("budget_unit"), limit: Number(d.get("budget")) }
+                : undefined,
+              participants: parsePeople(
+                String(d.get("participants")),
+                repositoryId,
+              ),
+            },
+          }),
+        },
+        token,
+      );
+      e.currentTarget.reset();
+      await load();
+    } catch (x) {
+      setError(
+        x instanceof Error ? x.message : "Delivery team could not be created.",
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+  async function respond(
+    team: DeliveryTeam,
+    participantId: string,
+    decision: string,
+  ) {
+    setPending(true);
+    try {
+      await api(
+        `/delivery-teams/${team.id}/participants/${participantId}/response`,
+        {
+          method: "POST",
+          body: JSON.stringify({ expected_version: team.version, decision }),
+        },
+        token,
+      );
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Invitation response failed.");
+    } finally {
+      setPending(false);
+    }
+  }
+  async function plan(e: FormEvent<HTMLFormElement>, team: DeliveryTeam) {
+    e.preventDefault();
+    setPending(true);
+    setError("");
+    const d = new FormData(e.currentTarget);
+    try {
+      await api(
+        `/delivery-teams/${team.id}/plan`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            expected_version: team.version,
+            plan: {
+              streams: parseStreams(
+                String(d.get("streams")),
+                team.repository_id,
+              ),
+            },
+          }),
+        },
+        token,
+      );
+      await load();
+    } catch (x) {
+      setError(
+        x instanceof Error
+          ? x.message
+          : "Execution plan could not be proposed.",
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+  async function respondPlan(
+    team: DeliveryTeam,
+    participantId: string,
+    decision: string,
+  ) {
+    if (!team.plan) return;
+    setPending(true);
+    setError("");
+    try {
+      await api(
+        `/delivery-teams/${team.id}/plan/participants/${participantId}/response`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expected_version: team.version,
+            expected_plan_revision: team.plan.revision,
+            decision,
+          }),
+        },
+        token,
+      );
+      await load();
+    } catch (x) {
+      setError(x instanceof Error ? x.message : "Plan response failed.");
+    } finally {
+      setPending(false);
+    }
+  }
+  async function attachContext(
+    e: FormEvent<HTMLFormElement>,
+    team: DeliveryTeam,
+    streamId: string,
+  ) {
+    e.preventDefault();
+    const d = new FormData(e.currentTarget);
+    setPending(true);
+    setError("");
+    try {
+      await api(
+        `/delivery-teams/${team.id}/streams/${streamId}/contexts`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expected_version: team.version,
+            context: {
+              kind: d.get("kind"),
+              resource_id: d.get("resource_id"),
+              parent_id: d.get("parent_id"),
+              repository_id: d.get("repository_id"),
+              revision: d.get("revision"),
+            },
+          }),
+        },
+        token,
+      );
+      e.currentTarget.reset();
+      await load();
+    } catch (x) {
+      setError(
+        x instanceof Error ? x.message : "Work context could not be attached.",
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+  async function publishEntry(
+    e: FormEvent<HTMLFormElement>,
+    team: DeliveryTeam,
+    streamId: string,
+  ) {
+    e.preventDefault();
+    const d = new FormData(e.currentTarget),
+      citation = String(d.get("citation_id") ?? "").trim(),
+      context = team.plan?.streams
+        .find((s) => s.id === streamId)
+        ?.contexts.find((c) => c.resource_id === citation);
+    setPending(true);
+    setError("");
+    try {
+      await api(
+        `/delivery-teams/${team.id}/timeline`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expected_version: team.version,
+            entry: {
+              stream_id: streamId,
+              kind: d.get("kind"),
+              body: d.get("body"),
+              citations: context
+                ? [
+                    {
+                      kind: context.kind,
+                      resource_id: context.resource_id,
+                      repository_id: context.repository_id,
+                      revision: context.revision,
+                      label: d.get("label"),
+                    },
+                  ]
+                : [],
+            },
+          }),
+        },
+        token,
+      );
+      e.currentTarget.reset();
+      await load();
+    } catch (x) {
+      setError(
+        x instanceof Error
+          ? x.message
+          : "Timeline entry could not be published.",
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+  async function requestHandoff(
+    e: FormEvent<HTMLFormElement>,
+    team: DeliveryTeam,
+    streamId: string,
+  ) {
+    e.preventDefault();
+    const d = new FormData(e.currentTarget);
+    setPending(true);
+    setError("");
+    try {
+      await api(
+        `/delivery-teams/${team.id}/handoffs`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expected_version: team.version,
+            handoff: {
+              stream_id: streamId,
+              to_participant_id: d.get("recipient"),
+              input_entry_ids: list(String(d.get("inputs"))),
+              acceptance_criteria: list(String(d.get("criteria"))),
+              residual_uncertainty: list(String(d.get("uncertainty"))),
+            },
+          }),
+        },
+        token,
+      );
+      e.currentTarget.reset();
+      await load();
+    } catch (x) {
+      setError(
+        x instanceof Error ? x.message : "Handoff could not be requested.",
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+  async function acceptHandoff(
+    e: FormEvent<HTMLFormElement>,
+    team: DeliveryTeam,
+    handoffId: string,
+  ) {
+    e.preventDefault();
+    const d = new FormData(e.currentTarget);
+    setPending(true);
+    setError("");
+    try {
+      await api(
+        `/delivery-teams/${team.id}/handoffs/${handoffId}/accept`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expected_version: team.version,
+            verification_entry_ids: list(String(d.get("verification"))),
+            note: d.get("note"),
+          }),
+        },
+        token,
+      );
+      await load();
+    } catch (x) {
+      setError(
+        x instanceof Error ? x.message : "Handoff could not be accepted.",
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+  async function reportStatus(
+    e: FormEvent<HTMLFormElement>,
+    team: DeliveryTeam,
+    streamId: string,
+    revision: string,
+  ) {
+    e.preventDefault();
+    const d = new FormData(e.currentTarget),
+      questions = list(String(d.get("questions"))).map((body, index) => ({
+        id: `question-${Date.now()}-${index}`,
+        body,
+        ask_of: String(d.get("ask_of")),
+        urgency: d.get("urgency"),
+      })),
+      blocker = String(d.get("blocker")).trim();
+    setPending(true);
+    setError("");
+    try {
+      await api(
+        `/delivery-teams/${team.id}/streams/${streamId}/status`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            expected_version: team.version,
+            status: {
+              status: d.get("status"),
+              summary: d.get("summary"),
+              progress_percent: Number(d.get("progress")),
+              revision,
+              resource_use: d.get("consumed")
+                ? { unit: d.get("unit"), consumed: Number(d.get("consumed")) }
+                : undefined,
+              questions,
+              blockers: blocker
+                ? [
+                    {
+                      kind: d.get("blocker_kind"),
+                      summary: blocker,
+                      recovery: d.get("recovery"),
+                    },
+                  ]
+                : [],
+              predicted_next_action: d.get("next_action"),
+            },
+          }),
+        },
+        token,
+      );
+      await load();
+    } catch (x) {
+      setError(
+        x instanceof Error ? x.message : "Stream status could not be reported.",
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+  async function intervene(
+    e: FormEvent<HTMLFormElement>,
+    team: DeliveryTeam,
+    streamId?: string,
+  ) {
+    e.preventDefault();
+    const d = new FormData(e.currentTarget),
+      action = String(d.get("action"));
+    setPending(true);
+    setError("");
+    try {
+      await api(
+        `/delivery-teams/${team.id}/interventions`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expected_version: team.version,
+            intervention: {
+              scope: streamId ? "stream" : "team",
+              stream_id: streamId,
+              action,
+              guidance: d.get("guidance"),
+              new_owner_participant_id:
+                action === "reassign" ? d.get("owner") : undefined,
+              paths:
+                action === "narrow" ? list(String(d.get("paths"))) : undefined,
+            },
+          }),
+        },
+        token,
+      );
+      await load();
+    } catch (x) {
+      setError(
+        x instanceof Error ? x.message : "Intervention could not be applied.",
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+  async function reconcile(e: FormEvent<HTMLFormElement>, team: DeliveryTeam) {
+    e.preventDefault();
+    if (!team.plan) return;
+    const d = new FormData(e.currentTarget);
+    setPending(true);
+    setError("");
+    const contributions = String(d.get("contributions"))
+      .split("\n")
+      .map((x) => x.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [
+          stream_id,
+          source_kind,
+          workspace_id,
+          checkpoint_id,
+          branch,
+          commit_id,
+          evidence = "",
+          risks = "",
+          decisions = "",
+        ] = line.split("|").map((x) => x.trim());
+        const acceptance_evidence = Object.fromEntries(
+          evidence
+            .split(";")
+            .map((x) => x.trim())
+            .filter(Boolean)
+            .map((item) => {
+              const split = item.lastIndexOf("=");
+              return [item.slice(0, split).trim(), list(item.slice(split + 1))];
+            }),
+        );
+        const stream = team.plan!.streams.find((x) => x.id === stream_id);
+        return {
+          stream_id,
+          repository_id:
+            stream?.repository_scope[0]?.repository_id ?? team.repository_id,
+          source_kind,
+          workspace_id: workspace_id || undefined,
+          checkpoint_id: checkpoint_id || undefined,
+          branch,
+          commit_id,
+          acceptance_evidence,
+          residual_risks: list(risks),
+          decisions: list(decisions),
+        };
+      });
+    try {
+      await api(
+        `/delivery-teams/${team.id}/integrations`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expected_version: team.version,
+            plan_revision: team.plan.revision,
+            base_revision: d.get("base_revision"),
+            contributions,
+          }),
+        },
+        token,
+      );
+      e.currentTarget.reset();
+      await load();
+    } catch (x) {
+      setError(
+        x instanceof Error
+          ? x.message
+          : "Contributions could not be reconciled.",
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+  async function publishIntegration(team: DeliveryTeam, integrationId: string) {
+    setPending(true);
+    setError("");
+    try {
+      await api(
+        `/delivery-teams/${team.id}/integrations/${integrationId}/publish`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expected_version: team.version,
+            target_branch: "main",
+          }),
+        },
+        token,
+      );
+      await load();
+    } catch (x) {
+      setError(
+        x instanceof Error
+          ? x.message
+          : "Ordered pull requests could not be published.",
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+  if (loading)
+    return (
+      <p className="text-sm text-[var(--muted)]">Loading delivery teams…</p>
+    );
+  if (!token)
+    return (
+      <Card className="p-6">
+        <p>Sign in to assemble and review delivery teams.</p>
+      </Card>
+    );
+  return (
+    <div className="space-y-8">
+      <header>
+        <p className="text-xs font-semibold uppercase tracking-[.16em] text-[var(--brand-strong)]">
+          Shared outcomes
+        </p>
+        <h1 className="mt-2 text-3xl font-semibold tracking-tight">
+          Delivery teams
+        </h1>
+        <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--muted)]">
+          Agree on responsibility, limits, resources, and escalation before
+          coordinated work starts. Charters describe authority; they never
+          create it.
+        </p>
+      </header>
+      {error && (
+        <p
+          role="alert"
+          className="rounded-lg bg-red-50 p-3 text-sm text-red-800"
+        >
+          {error}
+        </p>
+      )}
+      <Card className="p-5">
+        <h2 className="text-lg font-semibold">Form a team</h2>
+        <form onSubmit={create} className="mt-4 grid gap-4 md:grid-cols-2">
+          <label className="text-sm">
+            Repository
+            <select required name="repository_id" className={field}>
+              {repos.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm">
+            Outcome type
+            <select name="outcome_kind" className={field}>
+              <option value="proposal">Proposal</option>
+              <option value="initiative">Initiative</option>
+              <option value="decision">Decision</option>
+              <option value="incident_follow_up">Incident follow-up</option>
+              <option value="planned_outcome">Other planned outcome</option>
+            </select>
+          </label>
+          <label className="text-sm">
+            Outcome ID
+            <input required name="outcome_id" className={field} />
+          </label>
+          <label className="text-sm">
+            Outcome title
+            <input required name="outcome_title" className={field} />
+          </label>
+          <label className="text-sm">
+            Team name
+            <input required name="name" className={field} />
+          </label>
+          <label className="text-sm">
+            Deadline
+            <input type="datetime-local" name="deadline" className={field} />
+          </label>
+          <label className="text-sm md:col-span-2">
+            Purpose
+            <textarea required name="purpose" className={field} />
+          </label>
+          <label className="text-sm">
+            Budget
+            <input min="1" type="number" name="budget" className={field} />
+          </label>
+          <label className="text-sm">
+            Budget unit
+            <select name="budget_unit" className={field}>
+              <option value="minutes">Agent minutes</option>
+              <option value="credits">Credits</option>
+              <option value="usd">USD</option>
+            </select>
+          </label>
+          <label className="text-sm md:col-span-2">
+            Team escalation path
+            <textarea
+              required
+              name="escalation_path"
+              className={field}
+              placeholder="Who decides when scope, risk, or budget changes?"
+            />
+          </label>
+          <label className="text-sm md:col-span-2">
+            Participants{" "}
+            <span className="text-[var(--muted)]">
+              — one per line: human|ID|role|responsibility|why
+              involved|escalation|read or write
+            </span>
+            <textarea required rows={5} name="participants" className={field} />
+          </label>
+          <div className="md:col-span-2">
+            <Button disabled={pending}>Create charter and invite</Button>
+          </div>
+        </form>
+      </Card>
+      <section className="space-y-4">
+        <h2 className="text-xl font-semibold">Current charters and plans</h2>
+        {teams.length === 0 ? (
+          <Card className="p-6 text-sm text-[var(--muted)]">
+            No delivery teams yet.
+          </Card>
+        ) : (
+          teams.map((team) => (
+            <Card key={team.id} className="p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-semibold">{team.name}</h3>
+                  <p className="mt-1 text-sm text-[var(--muted)]">
+                    {team.outcome.title} · organized by {team.organizer_id}
+                  </p>
+                </div>
+                <Badge tone="info">team v{team.version}</Badge>
+              </div>
+              <p className="mt-3 text-sm">{team.purpose}</p>
+              <p className="mt-2 text-xs text-[var(--muted)]">
+                Escalation: {team.escalation_path}
+                {team.deadline
+                  ? ` · Due ${new Date(team.deadline).toLocaleString()}`
+                  : ""}
+              </p>
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                {team.participants.map((p) => (
+                  <div
+                    key={p.id}
+                    className="rounded-lg border border-[var(--line)] p-4"
+                  >
+                    <div className="flex items-center justify-between">
+                      <strong className="text-sm">{p.role}</strong>
+                      <Badge
+                        tone={
+                          p.status === "accepted"
+                            ? "success"
+                            : p.status === "declined"
+                              ? "danger"
+                              : "warning"
+                        }
+                      >
+                        {p.status}
+                      </Badge>
+                    </div>
+                    <p className="mt-1 text-xs text-[var(--muted)]">
+                      slot {p.id} · {p.principal_type} {p.principal_id}
+                    </p>
+                    <p className="mt-2 text-sm">{p.responsibility}</p>
+                    <p className="mt-1 text-xs text-[var(--muted)]">
+                      Why: {p.why} · Escalate: {p.escalation}
+                    </p>
+                    {p.access_preview.map((a) => (
+                      <p
+                        key={a.repository_id}
+                        className={`mt-2 text-xs ${a.sufficient ? "text-emerald-700" : "text-amber-700"}`}
+                      >
+                        {a.sufficient ? "Access ready" : "Access gap"}: needs{" "}
+                        {a.required}, has {a.effective} ({a.source})
+                      </p>
+                    ))}
+                    {p.can_respond && (
+                      <div className="mt-3 flex gap-2">
+                        <Button
+                          disabled={pending}
+                          onClick={() => respond(team, p.id, "accepted")}
+                        >
+                          Accept
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          disabled={pending}
+                          onClick={() => respond(team, p.id, "declined")}
+                        >
+                          Decline
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div className="mt-5 border-t border-[var(--line)] pt-5">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-semibold">Shared execution plan</h4>
+                  {team.plan && (
+                    <Badge
+                      tone={team.plan.blockers.length ? "warning" : "success"}
+                    >
+                      revision {team.plan.revision}
+                    </Badge>
+                  )}
+                </div>
+                {team.plan && (
+                  <>
+                    <div className="mt-3 space-y-3">
+                      {team.plan.blockers.map((b, i) => (
+                        <p
+                          key={`${b.kind}-${i}`}
+                          className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900"
+                        >
+                          <strong>{b.kind.replaceAll("_", " ")}</strong> ·{" "}
+                          {b.summary}
+                        </p>
+                      ))}
+                      {team.plan.streams.map((s) => (
+                        <div
+                          key={s.id}
+                          className="rounded-lg border border-[var(--line)] p-4"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <strong>
+                              {s.integration_order}. {s.title}
+                            </strong>
+                            <span className="text-xs text-[var(--muted)]">
+                              owner {s.owner_participant_id}
+                              {s.budget
+                                ? ` · ${s.budget.limit} ${s.budget.unit}`
+                                : ""}
+                            </span>
+                          </div>
+                          <p className="mt-2 text-sm">
+                            <strong>Produces:</strong>{" "}
+                            {s.expected_artifacts.join(", ")} ·{" "}
+                            <strong>Accept when:</strong>{" "}
+                            {s.acceptance_criteria.join("; ")}
+                          </p>
+                          <p className="mt-1 text-xs text-[var(--muted)]">
+                            <strong>Inputs:</strong>{" "}
+                            {s.inputs
+                              .map(
+                                (i) =>
+                                  `${i.name} → ${i.artifact} @ ${(i.revision ?? i.source_stream_id)?.slice(0, 8)}`,
+                              )
+                              .join(", ") || "none"}{" "}
+                            · <strong>Depends on:</strong>{" "}
+                            {s.dependency_ids.join(", ") || "none"}
+                          </p>
+                          {s.repository_scope.map((scope) => (
+                            <p
+                              key={`${scope.repository_id}-${scope.revision}`}
+                              className="mt-1 font-mono text-xs text-[var(--muted)]"
+                            >
+                              {scope.reference}@{scope.revision.slice(0, 12)} ·{" "}
+                              {scope.paths.join(", ")}
+                            </p>
+                          ))}
+                          <p className="mt-1 text-xs text-[var(--muted)]">
+                            <strong>Assumes:</strong> {s.assumptions.join("; ")}
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {s.contexts.map((c) => (
+                              <Badge key={c.id} tone="info">
+                                {c.kind} · {c.resource_id} @{" "}
+                                {c.revision.slice(0, 8)}
+                              </Badge>
+                            ))}
+                          </div>
+                          <details className="mt-3">
+                            <summary className="cursor-pointer text-xs font-medium">
+                              Attach scoped work or publish evidence
+                            </summary>
+                            <form
+                              onSubmit={(e) => attachContext(e, team, s.id)}
+                              className="mt-2 grid gap-2 md:grid-cols-2"
+                            >
+                              <select name="kind" className={field}>
+                                <option value="change_session">
+                                  Change session
+                                </option>
+                                <option value="investigation">
+                                  Investigation
+                                </option>
+                                <option value="experiment">Experiment</option>
+                                <option value="workspace">Workspace</option>
+                              </select>
+                              <input
+                                required
+                                name="resource_id"
+                                className={field}
+                                placeholder="Resource ID"
+                              />
+                              <input
+                                required
+                                name="repository_id"
+                                className={field}
+                                defaultValue={
+                                  s.repository_scope[0]?.repository_id
+                                }
+                              />
+                              <input
+                                required
+                                name="revision"
+                                className={field}
+                                defaultValue={s.repository_scope[0]?.revision}
+                              />
+                              <Button disabled={pending}>
+                                Attach exact context
+                              </Button>
+                            </form>
+                            <form
+                              onSubmit={(e) => publishEntry(e, team, s.id)}
+                              className="mt-3 grid gap-2 md:grid-cols-2"
+                            >
+                              <select name="kind" className={field}>
+                                <option value="finding">Finding</option>
+                                <option value="question">Question</option>
+                                <option value="checkpoint">Checkpoint</option>
+                                <option value="artifact">Artifact</option>
+                                <option value="decision">Decision</option>
+                                <option value="uncertainty">
+                                  Residual uncertainty
+                                </option>
+                              </select>
+                              <input
+                                required
+                                name="body"
+                                className={field}
+                                placeholder="Useful, reviewable update"
+                              />
+                              <input
+                                name="citation_kind"
+                                className={field}
+                                placeholder="Citation kind"
+                              />
+                              <input
+                                name="citation_id"
+                                className={field}
+                                placeholder="Citation resource ID"
+                              />
+                              <input
+                                name="label"
+                                className={field}
+                                placeholder="Citation label"
+                              />
+                              <input
+                                name="repository_id"
+                                className={field}
+                                defaultValue={
+                                  s.repository_scope[0]?.repository_id
+                                }
+                              />
+                              <input
+                                name="revision"
+                                className={field}
+                                defaultValue={s.repository_scope[0]?.revision}
+                              />
+                              <Button disabled={pending}>
+                                Publish to team
+                              </Button>
+                            </form>
+                          </details>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {team.plan.acceptances.map((a) => (
+                        <div
+                          key={a.participant_id}
+                          className="rounded-lg border border-[var(--line)] p-3 text-xs"
+                        >
+                          {a.participant_id}: <strong>{a.status}</strong>
+                          {a.can_respond && a.status !== "accepted" && (
+                            <span className="ml-2 inline-flex gap-1">
+                              <Button
+                                disabled={pending}
+                                onClick={() =>
+                                  respondPlan(
+                                    team,
+                                    a.participant_id,
+                                    "accepted",
+                                  )
+                                }
+                              >
+                                Accept replan
+                              </Button>
+                              <Button
+                                variant="secondary"
+                                disabled={pending}
+                                onClick={() =>
+                                  respondPlan(
+                                    team,
+                                    a.participant_id,
+                                    "declined",
+                                  )
+                                }
+                              >
+                                Decline
+                              </Button>
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+                <details className="mt-4">
+                  <summary className="cursor-pointer text-sm font-medium">
+                    Propose or revise parallel streams
+                  </summary>
+                  <form onSubmit={(e) => plan(e, team)} className="mt-3">
+                    <p className="text-xs leading-5 text-[var(--muted)]">
+                      One per line: ID | owner slot | title | 40-character
+                      revision | paths | inputs as name@artifact or
+                      name@artifact@producer stream | artifacts | dependencies |
+                      acceptance criteria | integration order | minute budget |
+                      assumptions. An artifact produced by one declared
+                      dependency is linked to that stream automatically.
+                      Separate lists with commas.
+                    </p>
+                    <textarea
+                      required
+                      rows={5}
+                      name="streams"
+                      className={field}
+                      placeholder="api | invite-1 | Define contract | 0123… | apps/api | source@current API | contract | | contract tests pass | 1 | 30 | schema remains stable"
+                    />
+                    <Button disabled={pending}>
+                      Publish material plan revision
+                    </Button>
+                  </form>
+                </details>
+                {team.plan_history.length > 0 && (
+                  <details className="mt-4">
+                    <summary className="cursor-pointer text-sm font-medium">
+                      Retained plan revisions
+                    </summary>
+                    <ul className="mt-2 space-y-1 text-xs text-[var(--muted)]">
+                      {team.plan_history.map((p) => (
+                        <li key={p.revision}>
+                          revision {p.revision} · proposed by {p.proposed_by} ·{" "}
+                          {new Date(p.updated_at).toLocaleString()}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </div>
+              {team.plan && (
+                <div className="mt-5 border-t border-[var(--line)] pt-5">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h4 className="font-semibold">Live team workspace</h4>
+                      <p className="mt-1 text-xs text-[var(--muted)]">
+                        Refreshes every 15 seconds. Controls retain accepted
+                        work and never grant repository authority.
+                      </p>
+                    </div>
+                    <form
+                      onSubmit={(e) => intervene(e, team)}
+                      className="flex flex-wrap gap-2"
+                    >
+                      <select name="action" className={field}>
+                        <option value="pause">Pause whole effort</option>
+                        <option value="resume">Resume whole effort</option>
+                        <option value="cancel">Cancel whole effort</option>
+                        <option value="guide">Guide whole effort</option>
+                      </select>
+                      <input
+                        required
+                        name="guidance"
+                        className={field}
+                        placeholder="Team-wide direction or reason"
+                      />
+                      <Button disabled={pending}>Apply team control</Button>
+                    </form>
+                  </div>
+                  <div className="mt-4 grid gap-4 xl:grid-cols-2">
+                    {team.plan.streams.map((stream) => {
+                      const live = team.stream_statuses.find(
+                        (s) => s.stream_id === stream.id,
+                      );
+                      return (
+                        <div
+                          key={stream.id}
+                          className="rounded-xl border border-[var(--line)] p-4"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <strong>{stream.title}</strong>
+                            <Badge
+                              tone={
+                                live?.status === "running" ||
+                                live?.status === "completed"
+                                  ? "success"
+                                  : live?.status === "failed" ||
+                                      live?.status === "blocked"
+                                    ? "danger"
+                                    : "warning"
+                              }
+                            >
+                              {live?.status ?? "not reported"}
+                            </Badge>
+                          </div>
+                          <p className="mt-2 text-sm">
+                            {live?.summary ??
+                              "The owner has not published a live snapshot."}
+                          </p>
+                          <div className="mt-3 h-2 overflow-hidden rounded bg-slate-100">
+                            <div
+                              className="h-full bg-[var(--brand)]"
+                              style={{
+                                width: `${live?.progress_percent ?? 0}%`,
+                              }}
+                            />
+                          </div>
+                          <p className="mt-1 text-xs text-[var(--muted)]">
+                            {live?.progress_percent ?? 0}% · revision{" "}
+                            {(
+                              live?.revision ||
+                              stream.repository_scope[0]?.revision
+                            ).slice(0, 8)}
+                            {live?.resource_use
+                              ? ` · ${live.resource_use.consumed} ${live.resource_use.unit} used`
+                              : ""}
+                          </p>
+                          <p className="mt-3 text-xs">
+                            <strong>Active control:</strong>{" "}
+                            {live?.active_control
+                              ? `${live.active_control.principal_type} ${live.active_control.principal_id}`
+                              : "none reported"}
+                          </p>
+                          <p className="mt-1 text-xs">
+                            <strong>Predicted next:</strong>{" "}
+                            {live?.predicted_next_action ||
+                              "Owner status report"}
+                          </p>
+                          {live?.blockers.map((b, i) => (
+                            <div
+                              key={`${b.kind}-${i}`}
+                              className="mt-2 rounded-lg bg-red-50 p-3 text-xs text-red-900"
+                            >
+                              <strong>{b.kind.replaceAll("_", " ")}</strong> ·{" "}
+                              {b.summary}
+                              <br />
+                              <span>Recovery: {b.recovery}</span>
+                            </div>
+                          ))}
+                          {live?.questions.map((q) => (
+                            <p
+                              key={q.id}
+                              className="mt-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-900"
+                            >
+                              <strong>
+                                {q.urgency} question for {q.ask_of}:
+                              </strong>{" "}
+                              {q.body}
+                            </p>
+                          ))}
+                          <details className="mt-3">
+                            <summary className="cursor-pointer text-xs font-medium">
+                              Report status or steer this stream
+                            </summary>
+                            <form
+                              onSubmit={(e) =>
+                                reportStatus(
+                                  e,
+                                  team,
+                                  stream.id,
+                                  stream.repository_scope[0].revision,
+                                )
+                              }
+                              className="mt-2 grid gap-2 md:grid-cols-2"
+                            >
+                              <select name="status" className={field}>
+                                <option value="running">Running</option>
+                                <option value="queued">Queued</option>
+                                <option value="blocked">Blocked</option>
+                                <option value="paused">Paused</option>
+                                <option value="failed">Failed</option>
+                                <option value="completed">Completed</option>
+                              </select>
+                              <input
+                                required
+                                name="summary"
+                                className={field}
+                                placeholder="Current work and result"
+                              />
+                              <input
+                                required
+                                type="number"
+                                min="0"
+                                max="100"
+                                name="progress"
+                                className={field}
+                                placeholder="Progress %"
+                              />
+                              <input
+                                type="number"
+                                min="0"
+                                name="consumed"
+                                className={field}
+                                placeholder="Resource consumed"
+                              />
+                              <select
+                                name="unit"
+                                className={field}
+                                defaultValue={stream.budget?.unit ?? "minutes"}
+                              >
+                                <option value="minutes">minutes</option>
+                                <option value="credits">credits</option>
+                                <option value="usd">USD</option>
+                              </select>
+                              <input
+                                required
+                                name="next_action"
+                                className={field}
+                                placeholder="Predicted next action"
+                              />
+                              <input
+                                name="questions"
+                                className={field}
+                                placeholder="Open questions, comma separated"
+                              />
+                              <input
+                                name="ask_of"
+                                className={field}
+                                placeholder="Who should answer?"
+                              />
+                              <select name="urgency" className={field}>
+                                <option value="normal">Normal question</option>
+                                <option value="urgent">Urgent question</option>
+                              </select>
+                              <select name="blocker_kind" className={field}>
+                                <option value="other">Other blocker</option>
+                                <option value="agent_failed">
+                                  Agent failed
+                                </option>
+                                <option value="access_revoked">
+                                  Access revoked
+                                </option>
+                                <option value="stale_revision">
+                                  Stale revision
+                                </option>
+                                <option value="conflicting_output">
+                                  Conflicting output
+                                </option>
+                                <option value="participant_disconnected">
+                                  Participant disconnected
+                                </option>
+                                <option value="dependency_blocked">
+                                  Dependency blocked
+                                </option>
+                              </select>
+                              <input
+                                name="blocker"
+                                className={field}
+                                placeholder="Blocker summary"
+                              />
+                              <input
+                                name="recovery"
+                                className={field}
+                                placeholder="Bounded recovery or escalation"
+                              />
+                              <Button disabled={pending}>
+                                Publish live snapshot
+                              </Button>
+                            </form>
+                            <form
+                              onSubmit={(e) => intervene(e, team, stream.id)}
+                              className="mt-3 grid gap-2 md:grid-cols-2"
+                            >
+                              <select name="action" className={field}>
+                                <option value="guide">Guide</option>
+                                <option value="pause">Pause</option>
+                                <option value="resume">Resume</option>
+                                <option value="cancel">Cancel</option>
+                                <option value="reassign">
+                                  Reassign (organizer)
+                                </option>
+                                <option value="narrow">
+                                  Narrow scope (organizer)
+                                </option>
+                              </select>
+                              <input
+                                required
+                                name="guidance"
+                                className={field}
+                                placeholder="Direction and reason"
+                              />
+                              <select name="owner" className={field}>
+                                {team.participants
+                                  .filter(
+                                    (p) =>
+                                      p.status === "accepted" &&
+                                      p.id !== stream.owner_participant_id,
+                                  )
+                                  .map((p) => (
+                                    <option key={p.id} value={p.id}>
+                                      {p.role} · {p.id}
+                                    </option>
+                                  ))}
+                              </select>
+                              <input
+                                name="paths"
+                                className={field}
+                                placeholder="Retained paths for narrowing"
+                              />
+                              <Button disabled={pending}>
+                                Intervene in stream
+                              </Button>
+                            </form>
+                          </details>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {team.interventions.length > 0 && (
+                    <details className="mt-4">
+                      <summary className="cursor-pointer text-sm font-medium">
+                        Retained intervention history
+                      </summary>
+                      <ul className="mt-2 space-y-1 text-xs text-[var(--muted)]">
+                        {[...team.interventions].reverse().map((i) => (
+                          <li key={i.id}>
+                            {new Date(i.created_at).toLocaleString()} ·{" "}
+                            {i.actor_id} {i.action}{" "}
+                            {i.stream_id || "whole team"} at plan r
+                            {i.plan_revision} — {i.guidance}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                </div>
+              )}
+              {team.plan && (
+                <div className="mt-5 border-t border-[var(--line)] pt-5">
+                  <h4 className="font-semibold">Coherent contributions</h4>
+                  <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
+                    Reconcile exact branches or published checkpoints before
+                    review. Conflicts and criteria without retained evidence
+                    stay explicit; publication grants no review or merge
+                    authority.
+                  </p>
+                  <details className="mt-3">
+                    <summary className="cursor-pointer text-sm font-medium">
+                      Prepare integration manifest
+                    </summary>
+                    <form
+                      onSubmit={(event) => reconcile(event, team)}
+                      className="mt-3 space-y-2"
+                    >
+                      <input
+                        required
+                        name="base_revision"
+                        className={field}
+                        defaultValue={
+                          team.plan.streams[0]?.repository_scope[0]?.revision
+                        }
+                        aria-label="Shared base revision"
+                      />
+                      <textarea
+                        required
+                        rows={4}
+                        name="contributions"
+                        className={field}
+                        aria-label="Contributions"
+                        placeholder="stream | branch or checkpoint | workspace | checkpoint | branch | tip | criterion=timeline entry | risks | decisions"
+                      />
+                      <Button disabled={pending}>
+                        Reconcile exact contributions
+                      </Button>
+                    </form>
+                  </details>
+                  <div className="mt-4 space-y-3">
+                    {[...team.integrations].reverse().map((integration) => (
+                      <div
+                        key={integration.id}
+                        className="rounded-lg border border-[var(--line)] p-4"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <strong>Manifest {integration.id.slice(0, 8)}</strong>
+                          <Badge
+                            tone={
+                              integration.published_at
+                                ? "success"
+                                : integration.blockers.length
+                                  ? "warning"
+                                  : "info"
+                            }
+                          >
+                            {integration.published_at
+                              ? "published"
+                              : integration.blockers.length
+                                ? `${integration.blockers.length} blockers`
+                                : "ready"}
+                          </Badge>
+                        </div>
+                        <p className="mt-1 font-mono text-xs text-[var(--muted)]">
+                          base {integration.base_revision.slice(0, 12)} · plan r
+                          {integration.plan_revision}
+                        </p>
+                        {integration.blockers.map((blocker, index) => (
+                          <p
+                            key={`${blocker.kind}-${index}`}
+                            className="mt-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-900"
+                          >
+                            <strong>{blocker.kind.replaceAll("_", " ")}</strong>{" "}
+                            · {blocker.summary}
+                            {blocker.paths?.length
+                              ? ` · ${blocker.paths.join(", ")}`
+                              : ""}
+                            {blocker.criteria?.length
+                              ? ` · ${blocker.criteria.join("; ")}`
+                              : ""}
+                          </p>
+                        ))}
+                        <ol className="mt-3 space-y-2">
+                          {integration.contributions.map((contribution) => {
+                            const linked = integration.pull_requests.find(
+                              (pull) =>
+                                pull.stream_id === contribution.stream_id,
+                            );
+                            return (
+                              <li
+                                key={contribution.stream_id}
+                                className="rounded-lg bg-slate-50 p-3 text-xs"
+                              >
+                                <strong>
+                                  {contribution.integration_order}.{" "}
+                                  {contribution.stream_id}
+                                </strong>{" "}
+                                ·{" "}
+                                <code>
+                                  {contribution.branch}@
+                                  {contribution.commit_id.slice(0, 8)}
+                                </code>
+                                <p className="mt-1">
+                                  {contribution.changed_paths.length} files ·
+                                  authors{" "}
+                                  {contribution.authors.join(", ") ||
+                                    "Git attributed"}{" "}
+                                  · agent actions{" "}
+                                  {contribution.agent_actions.join(", ") ||
+                                    "none"}
+                                  {contribution.cost
+                                    ? ` · ${contribution.cost.consumed} ${contribution.cost.unit}`
+                                    : ""}
+                                </p>
+                                <p className="mt-1">
+                                  <strong>Risks:</strong>{" "}
+                                  {contribution.residual_risks.join("; ") ||
+                                    "none declared"}
+                                </p>
+                                {linked && (
+                                  <Link
+                                    className="mt-2 inline-block font-semibold text-[var(--brand)] underline"
+                                    href={`/pulls/${contribution.repository_id}/${linked.pull_request_id}`}
+                                  >
+                                    Review ordinary pull
+                                  </Link>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ol>
+                        {!integration.published_at &&
+                          integration.blockers.length === 0 && (
+                            <Button
+                              className="mt-3"
+                              disabled={pending}
+                              onClick={() =>
+                                publishIntegration(team, integration.id)
+                              }
+                            >
+                              Publish ordered pull requests
+                            </Button>
+                          )}
+                        <p className="mt-2 text-xs text-[var(--muted)]">
+                          Prepared by {integration.prepared_by}
+                          {integration.published_by
+                            ? ` · published by ${integration.published_by}`
+                            : ""}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="mt-5 border-t border-[var(--line)] pt-5">
+                <h4 className="font-semibold">
+                  Permission-aware team timeline
+                </h4>
+                <p className="mt-1 text-xs text-[var(--muted)]">
+                  Only exact-revision evidence you can currently read appears
+                  here. Private prompts, terminal input, and credentials are
+                  never copied.
+                </p>
+                <div className="mt-3 space-y-2">
+                  {team.timeline.map((entry) => (
+                    <div
+                      key={entry.id}
+                      className="rounded-lg border border-[var(--line)] p-3"
+                    >
+                      <div className="flex justify-between gap-2">
+                        <Badge
+                          tone={
+                            entry.kind === "uncertainty" ? "warning" : "info"
+                          }
+                        >
+                          {entry.kind}
+                        </Badge>
+                        <span className="text-xs text-[var(--muted)]">
+                          {entry.author_type} {entry.author_id} · plan r
+                          {entry.plan_revision}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-sm">{entry.body}</p>
+                      <p className="mt-1 font-mono text-xs text-[var(--muted)]">
+                        entry {entry.id}{" "}
+                        {entry.citations
+                          .map(
+                            (c) =>
+                              `· ${c.label} ${c.resource_id}@${c.revision.slice(0, 8)}`,
+                          )
+                          .join(" ")}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                {team.plan?.streams.map((stream) => (
+                  <details key={stream.id} className="mt-3">
+                    <summary className="cursor-pointer text-sm font-medium">
+                      Request handoff for {stream.title}
+                    </summary>
+                    <form
+                      onSubmit={(e) => requestHandoff(e, team, stream.id)}
+                      className="mt-2 grid gap-2 md:grid-cols-2"
+                    >
+                      <select required name="recipient" className={field}>
+                        {team.participants
+                          .filter(
+                            (p) =>
+                              p.id !== stream.owner_participant_id &&
+                              p.status === "accepted",
+                          )
+                          .map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.role} · {p.id}
+                            </option>
+                          ))}
+                      </select>
+                      <input
+                        required
+                        name="inputs"
+                        className={field}
+                        placeholder="Timeline entry IDs, comma separated"
+                      />
+                      <input
+                        required
+                        name="criteria"
+                        className={field}
+                        placeholder="Acceptance criteria, comma separated"
+                      />
+                      <input
+                        name="uncertainty"
+                        className={field}
+                        placeholder="Residual uncertainty, comma separated"
+                      />
+                      <Button disabled={pending}>
+                        Request structured handoff
+                      </Button>
+                    </form>
+                  </details>
+                ))}
+              </div>
+              <div className="mt-5 border-t border-[var(--line)] pt-5">
+                <h4 className="font-semibold">Governed handoffs</h4>
+                <div className="mt-3 space-y-3">
+                  {team.handoffs.map((h) => (
+                    <div
+                      key={h.id}
+                      className="rounded-lg border border-[var(--line)] p-4"
+                    >
+                      <div className="flex justify-between gap-2">
+                        <strong className="text-sm">
+                          {h.from_participant_id} → {h.to_participant_id}
+                        </strong>
+                        <Badge
+                          tone={h.status === "accepted" ? "success" : "warning"}
+                        >
+                          {h.status}
+                        </Badge>
+                      </div>
+                      <p className="mt-2 text-sm">
+                        <strong>Accept when:</strong>{" "}
+                        {h.acceptance_criteria.join("; ")}
+                      </p>
+                      <p className="mt-1 text-sm">
+                        <strong>Still uncertain:</strong>{" "}
+                        {h.residual_uncertainty.join("; ") ||
+                          "nothing declared"}
+                      </p>
+                      <p className="mt-1 font-mono text-xs text-[var(--muted)]">
+                        inputs {h.input_entry_ids.join(", ")} · plan r
+                        {h.plan_revision}
+                      </p>
+                      {h.status === "pending" && (
+                        <form
+                          onSubmit={(e) => acceptHandoff(e, team, h.id)}
+                          className="mt-3 grid gap-2 md:grid-cols-2"
+                        >
+                          <input
+                            required
+                            name="verification"
+                            className={field}
+                            placeholder="Your verification timeline entry IDs"
+                          />
+                          <input
+                            required
+                            name="note"
+                            className={field}
+                            placeholder="How you verified the handoff"
+                          />
+                          <Button disabled={pending}>
+                            Accept with verification
+                          </Button>
+                        </form>
+                      )}
+                      {h.acceptance_note && (
+                        <p className="mt-2 text-sm text-emerald-800">
+                          Verified: {h.acceptance_note}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <details className="mt-4">
+                <summary className="cursor-pointer text-sm font-medium">
+                  Attributable team history
+                </summary>
+                <ul className="mt-2 space-y-1 text-xs text-[var(--muted)]">
+                  {team.events.map((e) => (
+                    <li key={e.id}>
+                      {new Date(e.created_at).toLocaleString()} · {e.actor_id} ·{" "}
+                      {e.summary}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            </Card>
+          ))
+        )}
+      </section>
+    </div>
+  );
 }
