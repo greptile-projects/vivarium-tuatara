@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os/exec"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/decisions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
@@ -23,7 +25,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
 
-func registerPreviewRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, pulls *pullrequests.Store, runs *checkruns.Store, store *previews.Store, authStore *auth.Store, userStore *users.Store, proposalStore *proposals.Store, decisionStore *decisions.Store, issueStore *issues.Store, activityStore *activities.Store) {
+func registerPreviewRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, pulls *pullrequests.Store, runs *checkruns.Store, store *previews.Store, sessionStore *changesessions.Store, authStore *auth.Store, userStore *users.Store, proposalStore *proposals.Store, decisionStore *decisions.Store, issueStore *issues.Store, activityStore *activities.Store) {
 	project := func(p previews.Preview) previews.Preview {
 		if run, e := runs.Get(p.RepositoryID, p.PullRequestID, p.BuildRunID); e == nil {
 			p.State = run.State
@@ -311,6 +313,120 @@ func registerPreviewRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 		}
 		writeJSON(w, 200, finding)
 	})
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/previews/{preview_id}/findings/{finding_id}/repair", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, authStore, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if sessionStore == nil {
+			writeAPIError(w, 503, "repair_unavailable", "repair sessions unavailable")
+			return
+		}
+		var in struct {
+			Version            int      `json:"version"`
+			AcceptanceCriteria []string `json:"acceptance_criteria"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if len(in.AcceptanceCriteria) == 0 || len(in.AcceptanceCriteria) > 20 {
+			writeAPIError(w, 422, "preview_repair_invalid", "one to 20 acceptance criteria are required")
+			return
+		}
+		for i := range in.AcceptanceCriteria {
+			in.AcceptanceCriteria[i] = strings.TrimSpace(in.AcceptanceCriteria[i])
+			if in.AcceptanceCriteria[i] == "" || utf8.RuneCountInString(in.AcceptanceCriteria[i]) > 1000 {
+				writeAPIError(w, 422, "preview_repair_invalid", "acceptance criteria must be 1-1000 characters")
+				return
+			}
+		}
+		p, err := store.Get(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("preview_id"))
+		if err != nil {
+			writeAPIError(w, 404, "preview_not_found", "preview not found")
+			return
+		}
+		var source *previews.Finding
+		for i := range p.Findings {
+			if p.Findings[i].ID == r.PathValue("finding_id") {
+				source = &p.Findings[i]
+				break
+			}
+		}
+		if source == nil {
+			writeAPIError(w, 404, "preview_finding_not_found", "preview finding not found")
+			return
+		}
+		if source.Repair != nil {
+			if !slices.Equal(source.Repair.AcceptanceCriteria, in.AcceptanceCriteria) {
+				writeAPIError(w, 409, "preview_finding_changed", "finding already has different repair criteria")
+				return
+			}
+			if source.Repair.PublishedCommitID != "" && source.Repair.PreviewAttemptID == "" {
+				if current, pullErr := pulls.Get(p.RepositoryID, p.PullRequestID); pullErr == nil && current.Status == pullrequests.Open && current.SourceCommitID == source.Repair.PublishedCommitID {
+					if attempt, previewErr := createRepairPreviewAttempt(git, runs, store, current, actor.UserID, source.Repair.SessionID, source.ID); previewErr == nil {
+						_, repaired, updateErr := store.MutateFinding(p.RepositoryID, p.PullRequestID, p.ID, source.ID, actor.UserID, source.Version, func(f *previews.Finding) error { f.Repair.PreviewAttemptID = attempt.ID; return nil })
+						if updateErr == nil {
+							source = &repaired
+						}
+					}
+				}
+			}
+			session, sessionErr := sessionStore.Get(p.RepositoryID, p.PullRequestID, source.Repair.SessionID)
+			if writeChangeSessionError(w, sessionErr) {
+				return
+			}
+			writeJSON(w, 200, map[string]any{"finding": source, "session": session})
+			return
+		}
+		pull, err := pulls.Get(p.RepositoryID, p.PullRequestID)
+		if writePullRequestError(w, err) {
+			return
+		}
+		if pull.Status != pullrequests.Open || pull.SourceCommitID != p.Revision {
+			writeAPIError(w, 409, "preview_repair_stale", "repairs require an open pull at the finding revision")
+			return
+		}
+		evidence := changesessions.PreviewEvidence{PreviewID: p.ID, FindingID: source.ID, Revision: source.Revision, Route: source.Route, Title: source.Title, Description: source.Description, Classification: source.Classification, Severity: source.Severity, AuthorID: source.AuthorID, ReproductionSteps: source.ReproductionSteps, AcceptanceCriteria: in.AcceptanceCriteria}
+		for _, item := range source.Evidence {
+			evidence.Evidence = append(evidence.Evidence, changesessions.PreviewArtifact{ID: item.ID, Kind: item.Kind, Name: item.Name, MediaType: item.MediaType, Size: item.Size, Data: item.Data, Redacted: item.Redacted})
+		}
+		for _, item := range source.Comments {
+			evidence.Discussion = append(evidence.Discussion, changesessions.PreviewDiscussion{ID: item.ID, AuthorID: item.AuthorID, Body: item.Body, CreatedAt: item.CreatedAt})
+		}
+		var session changesessions.Session
+		err = pulls.WithSourceRevision(pull.RepositoryID, pull.ID, p.Revision, func(current pullrequests.PullRequest) error {
+			var createErr error
+			session, createErr = sessionStore.FindOrCreateWithPreviewEvidence(current.RepositoryID, current.ID, actor.UserID, current.SourceCommitID, evidence)
+			return createErr
+		})
+		if errors.Is(err, pullrequests.ErrSourceChanged) || errors.Is(err, pullrequests.ErrNotReady) {
+			writeAPIError(w, 409, "preview_repair_stale", "pull request changed while repair was created")
+			return
+		}
+		if err != nil && !errors.Is(err, changesessions.ErrDurabilityUncertain) {
+			writeChangeSessionError(w, err)
+			return
+		}
+		_, finding, linkErr := store.MutateFinding(p.RepositoryID, p.PullRequestID, p.ID, source.ID, actor.UserID, in.Version, func(f *previews.Finding) error {
+			if f.Repair != nil {
+				if f.Repair.SessionID == session.ID {
+					return nil
+				}
+				return previews.ErrInvalid
+			}
+			now := time.Now().UTC()
+			f.Repair = &previews.FindingRepair{SessionID: session.ID, AcceptanceCriteria: append([]string(nil), in.AcceptanceCriteria...), CreatedBy: actor.UserID, CreatedAt: now}
+			f.Events = append(f.Events, previews.FindingEvent{ID: previews.NewID(), Kind: "repair_created", ActorID: actor.UserID, To: session.ID, CreatedAt: now})
+			return nil
+		})
+		if linkErr != nil {
+			writeAPIError(w, 409, "preview_finding_changed", "finding changed; retry to reconcile the retained repair session")
+			return
+		}
+		w.Header().Set("Location", "/repositories/"+p.RepositoryID+"/pulls/"+p.PullRequestID+"/sessions/"+session.ID)
+		writeJSON(w, 201, map[string]any{"finding": finding, "session": session})
+	})
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/previews", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, authStore, r.PathValue("id"), "repositories:write")
 		if !ok {
@@ -506,4 +622,63 @@ func authorizePreviewGuest(w http.ResponseWriter, r *http.Request, catalog *repo
 		return actor, previews.Invitation{}, previews.Preview{}, false
 	}
 	return actor, inv, updated, true
+}
+
+func createRepairPreviewAttempt(git *storage.Store, runs *checkruns.Store, store *previews.Store, pull pullrequests.PullRequest, actorID, sessionID, findingID string) (previews.Preview, error) {
+	repository, err := git.Open(pull.RepositoryID)
+	if err != nil {
+		return previews.Preview{}, err
+	}
+	data, err := exec.Command("git", "--git-dir="+repository.Path(), "show", pull.SourceCommitID+":"+previews.ConfigPath).Output()
+	if err != nil {
+		return previews.Preview{}, err
+	}
+	config, hash, err := previews.ParseConfig(data)
+	if err != nil {
+		return previews.Preview{}, err
+	}
+	quoted := strings.ReplaceAll(config.OutputPath, "'", "'\\''")
+	command := config.Build + " && test -d '" + quoted + "' && cp -R '" + quoted + "'/. \"$VIVARIUM_OUTPUT\"/"
+	p, err := store.ReserveRepairAttempt(pull.RepositoryID, pull.ID, pull.SourceCommitID, actorID, hash, sessionID, findingID, config)
+	if err != nil {
+		return previews.Preview{}, err
+	}
+	definitionName := "preview-repair-" + p.ID
+	var run checkruns.Run
+	if p.BuildRunID != "" {
+		run, err = runs.Get(pull.RepositoryID, pull.ID, p.BuildRunID)
+		if err != nil {
+			return previews.Preview{}, err
+		}
+	} else {
+		createdRuns, createErr := runs.CreateRequested(pull.RepositoryID, pull.ID, pull.SourceCommitID, []checkruns.Definition{{Name: definitionName, Image: config.Image, Command: command, WorkingDirectory: config.WorkingDirectory, Environment: config.Environment, TimeoutSeconds: config.Resources.TimeoutSeconds, CPUs: config.Resources.CPUs, MemoryMB: config.Resources.MemoryMB, StorageMB: config.Resources.StorageMB}}, actorID)
+		if createErr != nil {
+			return previews.Preview{}, createErr
+		}
+		if len(createdRuns) == 1 {
+			run = createdRuns[0]
+		} else {
+			all, listErr := runs.List(pull.RepositoryID, pull.ID)
+			if listErr != nil {
+				return previews.Preview{}, listErr
+			}
+			for _, candidate := range all {
+				if candidate.CommitID == pull.SourceCommitID && candidate.Definition.Name == definitionName {
+					run = candidate
+					break
+				}
+			}
+		}
+		if run.ID == "" {
+			return previews.Preview{}, errors.New("preview build unavailable")
+		}
+		p, err = store.AttachBuildRun(pull.RepositoryID, pull.ID, p.ID, run.ID)
+		if err != nil {
+			return previews.Preview{}, err
+		}
+	}
+	if run.State == "queued" {
+		go runs.Execute(run, repository.Path())
+	}
+	return p, nil
 }

@@ -889,6 +889,18 @@ whenever dependencies change or the web job fails before it starts.
   feedback invitees use the exact `/pulls/{repository-id}/{pull-id}/previews/{preview-id}`
   workspace, whose controls derive from the live invitation instead of catalog
   participation.
+  Current write collaborators can convert a current-revision finding into a
+  retry-safe ordinary pull change session with frozen acceptance criteria,
+  redacted permitted evidence, discussion, reproduction, and authorship. The
+  preview invitation grants no implementation authority; human work and agent
+  credentials retain existing branch boundaries. Agent publication synchronizes
+  normally, starts checks plus a new preview attempt, and back-links the repair
+  commit and attempt to the original finding. The follow-up attempt reserves a
+  stable repair/session preview identity before check creation; exact completion
+  retries reconcile that reservation and its terminal or active build run. A
+  shared preview-store lock holds the reservation scan/write and run attachment
+  across API processes, while check-run creation has its own shared lock around
+  definition-name scan/write so no losing process can strand a duplicate run.
   Fork-source synchronization holds the catalog's cross-process lock while it
   rechecks current target access, imports a newer revision, and publishes the
   pull snapshot, so revocation cannot commit mid-adoption. If the source fork is deleted, synchronization stops but

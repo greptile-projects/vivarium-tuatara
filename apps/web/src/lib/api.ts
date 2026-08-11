@@ -2213,6 +2213,7 @@ export type PreviewFinding = {
   reproduction_steps:string[]; author_id:string; version:number; created_at:string; updated_at:string;
   evidence:{id:string;kind:"screenshot"|"recording"|"console"|"trace"|"annotation";name:string;media_type:string;size:number;data?:string;redacted:boolean}[];
   comments:{id:string;author_id:string;body:string;created_at:string}[];
+  repair?: { session_id:string; acceptance_criteria:string[]; created_by:string; created_at:string; published_commit_id?:string; preview_attempt_id?:string };
 };
 export type FileChange = {
   path: string;
@@ -2341,6 +2342,7 @@ export type ChangeSession = {
   pull_request_id: string;
   initiator_id: string;
   source_commit_id: string;
+  preview_evidence?: { preview_id:string; finding_id:string; revision:string; route:string; title:string; description?:string; classification:string; severity:string; author_id:string; reproduction_steps:string[]; acceptance_criteria:string[]; evidence:{id:string;kind:string;name:string;media_type:string;size:number;data?:string;redacted:boolean}[]; discussion:{id:string;author_id:string;body:string;created_at:string}[] };
   check_evidence?: {
     run_id: string;
     definition: {

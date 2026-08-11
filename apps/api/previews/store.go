@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -111,10 +112,19 @@ type Finding struct {
 	Evidence          []FindingEvidence `json:"evidence"`
 	Comments          []FindingComment  `json:"comments"`
 	Events            []FindingEvent    `json:"events"`
+	Repair            *FindingRepair    `json:"repair,omitempty"`
 	AuthorID          string            `json:"author_id"`
 	Version           int               `json:"version"`
 	CreatedAt         time.Time         `json:"created_at"`
 	UpdatedAt         time.Time         `json:"updated_at"`
+}
+type FindingRepair struct {
+	SessionID          string    `json:"session_id"`
+	AcceptanceCriteria []string  `json:"acceptance_criteria"`
+	CreatedBy          string    `json:"created_by"`
+	CreatedAt          time.Time `json:"created_at"`
+	PublishedCommitID  string    `json:"published_commit_id,omitempty"`
+	PreviewAttemptID   string    `json:"preview_attempt_id,omitempty"`
 }
 type Preview struct {
 	ID               string          `json:"id"`
@@ -125,6 +135,8 @@ type Preview struct {
 	Definition       Config          `json:"definition"`
 	DefinitionSHA256 string          `json:"definition_sha256"`
 	BuildRunID       string          `json:"build_run_id"`
+	RepairSessionID  string          `json:"repair_session_id,omitempty"`
+	RepairFindingID  string          `json:"repair_finding_id,omitempty"`
 	State            string          `json:"state"`
 	Stale            bool            `json:"stale"`
 	URL              string          `json:"url"`
@@ -134,6 +146,79 @@ type Preview struct {
 	AudienceEvents   []AudienceEvent `json:"audience_events"`
 	Feedback         []Feedback      `json:"feedback"`
 	Findings         []Finding       `json:"findings"`
+}
+
+// ReserveRepairAttempt durably assigns one preview identity to a repair before
+// its check run is created. Exact retries therefore reconcile this record.
+func (s *Store) ReserveRepairAttempt(repositoryID, pullID, revision, creator, hash, sessionID, findingID string, c Config) (Preview, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Preview{}, err
+	}
+	defer unlock()
+	entries, err := os.ReadDir(filepath.Join(s.root, repositoryID, pullID))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return Preview{}, err
+	}
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		p, readErr := s.Get(repositoryID, pullID, strings.TrimSuffix(entry.Name(), ".json"))
+		if readErr != nil {
+			return Preview{}, readErr
+		}
+		if p.RepairSessionID == sessionID && p.RepairFindingID == findingID {
+			if p.Revision != revision || p.DefinitionSHA256 != hash {
+				return Preview{}, ErrInvalid
+			}
+			return p, nil
+		}
+	}
+	now := s.now()
+	idb := make([]byte, 16)
+	if _, err := rand.Read(idb); err != nil {
+		return Preview{}, err
+	}
+	p := Preview{ID: hex.EncodeToString(idb), RepositoryID: repositoryID, PullRequestID: pullID, Revision: revision, CreatorID: creator, Definition: c, DefinitionSHA256: hash, RepairSessionID: sessionID, RepairFindingID: findingID, State: "reserved", CreatedAt: now, UpdatedAt: now}
+	p.URL = "/repositories/" + repositoryID + "/pulls/" + pullID + "/previews/" + p.ID + "/content/"
+	return p, s.write(p)
+}
+
+func (s *Store) AttachBuildRun(repo, pull, id, runID string) (Preview, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Preview{}, err
+	}
+	defer unlock()
+	p, err := s.Get(repo, pull, id)
+	if err != nil {
+		return Preview{}, err
+	}
+	if p.BuildRunID != "" && p.BuildRunID != runID {
+		return Preview{}, ErrInvalid
+	}
+	if p.BuildRunID == runID {
+		return p, nil
+	}
+	p.BuildRunID, p.State, p.UpdatedAt = runID, "building", s.now()
+	return p, s.write(p)
+}
+
+func (s *Store) lock() (func(), error) {
+	file, err := os.OpenFile(filepath.Join(s.root, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return func() { _ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN); _ = file.Close() }, nil
 }
 
 type Store struct {

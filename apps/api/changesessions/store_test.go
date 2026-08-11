@@ -53,6 +53,36 @@ func TestCreateReopenAndListTimeline(t *testing.T) {
 	}
 }
 
+func TestPreviewRepairSessionFreezesPermittedEvidenceAndDeduplicates(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repositoryID, pullID, actorID := strings.Repeat("1", 32), strings.Repeat("2", 32), strings.Repeat("3", 32)
+	revision := strings.Repeat("4", 40)
+	evidence := PreviewEvidence{PreviewID: strings.Repeat("5", 32), FindingID: strings.Repeat("6", 32), Revision: revision, Route: "/checkout", Title: "Submit does nothing", Description: "Observed after payment", Classification: "bug", Severity: "blocking", AuthorID: strings.Repeat("7", 32), ReproductionSteps: []string{"Open checkout", "Submit"}, AcceptanceCriteria: []string{"Submitting creates one order"}, Evidence: []PreviewArtifact{{ID: strings.Repeat("8", 32), Kind: "console", Name: "console.txt", MediaType: "text/plain", Size: 12, Data: "safe evidence", Redacted: true}}, Discussion: []PreviewDiscussion{{ID: strings.Repeat("9", 32), AuthorID: actorID, Body: "Diagnosis points to the submit handler."}}}
+	first, err := store.FindOrCreateWithPreviewEvidence(repositoryID, pullID, actorID, revision, evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.FindOrCreateWithPreviewEvidence(repositoryID, pullID, actorID, revision, evidence)
+	if err != nil || second.ID != first.ID {
+		t.Fatalf("retry = %+v, %v", second, err)
+	}
+	evidence.AcceptanceCriteria = []string{"Different outcome"}
+	if _, err := store.FindOrCreateWithPreviewEvidence(repositoryID, pullID, actorID, revision, evidence); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("changed retry error = %v", err)
+	}
+	reopened, err := New(store.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := reopened.Get(repositoryID, pullID, first.ID)
+	if err != nil || loaded.PreviewEvidence == nil || loaded.PreviewEvidence.Revision != revision || loaded.PreviewEvidence.Evidence[0].Data != "safe evidence" || loaded.PreviewEvidence.Discussion[0].Body == "" {
+		t.Fatalf("preview evidence = %#v, %v", loaded.PreviewEvidence, err)
+	}
+}
+
 func TestRecoverySessionFreezesDeploymentEvidence(t *testing.T) {
 	root := t.TempDir()
 	store, err := New(root)
