@@ -41,6 +41,31 @@ func TestTaskContributionFreezesReviewEvidence(t *testing.T) {
 	}
 }
 
+func TestGuidedContributionEvidenceSurvivesOrdinaryForkPull(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	upstream, _ := gitStore.Create(testID('1'))
+	fork, _ := gitStore.Create(testID('2'))
+	tree, _ := upstream.WriteObject(storage.TreeObject, nil)
+	base := writeCommit(t, upstream, tree, "base")
+	_ = upstream.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)})
+	if err := fork.ImportCommit(upstream, base); err != nil {
+		t.Fatal(err)
+	}
+	headTree, _ := fork.WriteObject(storage.TreeObject, nil)
+	head := writeCommit(t, fork, headTree, "guided work")
+	_ = fork.CreateReference(storage.Reference{Name: "refs/heads/contribution/docs", Target: string(head)})
+	store, _ := New(t.TempDir(), gitStore)
+	evidence := ContributionEvidence{OpportunityID: testID('4'), OpportunityVersion: 2, PathwayVersion: 1, UpstreamRevision: string(base), SetupEvidence: []ContributionSetup{{Command: "go test ./...", State: "passed"}}, MentorGuidanceIDs: []string{"guidance-1"}, AgentAssistanceIDs: []string{"agent-help-1"}, AcceptanceCriteria: []string{"Setup is clear"}, SatisfiedCriteria: []string{"Setup is clear"}, CoachingNeeds: []ContributionFinding{{Code: "open_guidance", Message: "Consider another example", Fix: "Discuss in review"}}}
+	pull, err := store.CreateGuidedContributionFrom(upstream.ID(), fork.ID(), testID('3'), "Clarify setup", "Ordinary upstream review.", "contribution/docs", "main", GuidedContributionCreation{WorkspaceID: testID('5'), CheckpointID: testID('6'), Contributors: []string{testID('3')}, CommandIDs: []string{"command-1"}, Evidence: evidence})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.Get(upstream.ID(), pull.ID)
+	if err != nil || stored.SourceRepositoryID != fork.ID() || stored.WorkspaceID != testID('5') || stored.ContributionEvidence == nil || stored.ContributionEvidence.OpportunityID != evidence.OpportunityID || len(stored.ContributionEvidence.CoachingNeeds) != 1 {
+		t.Fatalf("guided pull evidence = %#v, %v", stored, err)
+	}
+}
+
 func (q queueRequirements) RequiredChecks(string, string) ([]string, error) {
 	return append([]string(nil), q.policy.RequiredChecks...), nil
 }

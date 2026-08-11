@@ -142,6 +142,27 @@ type Store struct {
 	now  func() time.Time
 }
 
+// WithInProgressVersion prevents opportunity publication or state changes
+// from interleaving with an admitted guided pull publication.
+func (s *Store) WithInProgressVersion(repositoryID, id string, expectedVersion int, fn func(Opportunity) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items, err := s.read(repositoryID)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if item.ID != id {
+			continue
+		}
+		if item.Version != expectedVersion || item.Status != "in_progress" {
+			return ErrConflict
+		}
+		return fn(item)
+	}
+	return ErrNotFound
+}
+
 func New(root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err

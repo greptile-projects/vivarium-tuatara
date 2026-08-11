@@ -65,6 +65,7 @@ type PullRequest struct {
 	WorkspaceCheckpointID    string                 `json:"workspace_checkpoint_id,omitempty"`
 	WorkspaceContributorIDs  []string               `json:"workspace_contributor_ids,omitempty"`
 	WorkspaceCommandIDs      []string               `json:"workspace_command_ids,omitempty"`
+	ContributionEvidence     *ContributionEvidence  `json:"contribution_evidence,omitempty"`
 	DeliveryTeamID           string                 `json:"delivery_team_id,omitempty"`
 	DeliveryIntegrationID    string                 `json:"delivery_integration_id,omitempty"`
 	DeliveryStreamID         string                 `json:"delivery_stream_id,omitempty"`
@@ -88,6 +89,42 @@ type PullRequest struct {
 	QueueFinalizedAt         *time.Time             `json:"queue_finalized_at,omitempty"`
 	IntegrationCandidates    []IntegrationCandidate `json:"integration_candidates,omitempty"`
 	mergeIntent              *mergeIntent
+}
+
+// ContributionEvidence keeps the intent and support behind guided newcomer
+// work attached to the ordinary pull. It is review context, never authority.
+type ContributionEvidence struct {
+	OpportunityID       string                `json:"opportunity_id"`
+	OpportunityVersion  int                   `json:"opportunity_version"`
+	PathwayVersion      int                   `json:"pathway_version"`
+	UpstreamRevision    string                `json:"upstream_revision"`
+	SetupEvidence       []ContributionSetup   `json:"setup_evidence"`
+	MentorGuidanceIDs   []string              `json:"mentor_guidance_ids"`
+	AgentAssistanceIDs  []string              `json:"agent_assistance_ids"`
+	AcceptanceCriteria  []string              `json:"acceptance_criteria"`
+	SatisfiedCriteria   []string              `json:"satisfied_criteria"`
+	ProjectRequirements []ContributionFinding `json:"project_requirements"`
+	CoachingNeeds       []ContributionFinding `json:"coaching_needs"`
+}
+
+type ContributionSetup struct {
+	Command  string `json:"command"`
+	State    string `json:"state"`
+	ExitCode int    `json:"exit_code"`
+}
+
+type ContributionFinding struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Fix     string `json:"fix"`
+}
+
+type GuidedContributionCreation struct {
+	WorkspaceID  string
+	CheckpointID string
+	Contributors []string
+	CommandIDs   []string
+	Evidence     ContributionEvidence
 }
 
 // LinkDeliveryIntegration retains a pull's place in a distributed outcome
@@ -179,6 +216,26 @@ func (s *Store) LinkWorkspace(repositoryID, pullID, workspaceID, checkpointID st
 	p.WorkspaceID, p.WorkspaceCheckpointID = workspaceID, checkpointID
 	p.WorkspaceContributorIDs = append([]string(nil), contributors...)
 	p.WorkspaceCommandIDs = append([]string(nil), commands...)
+	_, err = s.write(p)
+	return p, err
+}
+
+func (s *Store) LinkContributionEvidence(repositoryID, pullID string, evidence ContributionEvidence) (PullRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return PullRequest{}, err
+	}
+	defer unlock()
+	p, err := s.read(repositoryID, pullID)
+	if err != nil {
+		return p, err
+	}
+	if !validID(evidence.OpportunityID) || evidence.OpportunityVersion < 1 || evidence.PathwayVersion < 1 || !validCommitID(evidence.UpstreamRevision) || len(evidence.AcceptanceCriteria) == 0 {
+		return p, ErrInvalid
+	}
+	p.ContributionEvidence = &evidence
 	_, err = s.write(p)
 	return p, err
 }
@@ -471,13 +528,17 @@ func (s *Store) Create(repositoryID, authorID, title, body, sourceBranch, target
 // Its reachable objects are imported into the target without publishing a ref,
 // keeping every later review and merge operation pinned to the adopted commit.
 func (s *Store) CreateFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, proposalID *string) (PullRequest, error) {
-	return s.createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, "", nil, proposalID, nil, nil, nil, nil, nil)
+	return s.createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, "", nil, proposalID, nil, nil, nil, nil, nil, nil)
+}
+
+func (s *Store) CreateGuidedContributionFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, guided GuidedContributionCreation) (PullRequest, error) {
+	return s.createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, "", nil, nil, nil, nil, nil, nil, nil, &guided)
 }
 
 // FindOrCreateRecovery enforces one review boundary for a deterministic
 // repository/source-branch pair under the cross-process pull-store lock.
 func (s *Store) FindOrCreateRecovery(repositoryID, authorID, title, body, sourceBranch, targetBranch string) (PullRequest, error) {
-	return s.createFrom(repositoryID, repositoryID, authorID, title, body, sourceBranch, targetBranch, "", nil, nil, nil, nil, nil, &recoveryIdentity{}, nil)
+	return s.createFrom(repositoryID, repositoryID, authorID, title, body, sourceBranch, targetBranch, "", nil, nil, nil, nil, nil, &recoveryIdentity{}, nil, nil)
 }
 
 // FindOrCreateDeliveryIntegration recovers only the exact delivery review. An
@@ -487,7 +548,7 @@ func (s *Store) FindOrCreateDeliveryIntegration(repositoryID, authorID, title, b
 		return PullRequest{}, ErrInvalid
 	}
 	recovery := &recoveryIdentity{DeliveryTeamID: teamID, DeliveryIntegrationID: integrationID, DeliveryStreamID: streamID, DeliveryOrder: order}
-	return s.createFrom(repositoryID, repositoryID, authorID, title, body, sourceBranch, targetBranch, "", nil, nil, nil, nil, nil, recovery, nil)
+	return s.createFrom(repositoryID, repositoryID, authorID, title, body, sourceBranch, targetBranch, "", nil, nil, nil, nil, nil, recovery, nil, nil)
 }
 
 // CreateTaskContribution publishes task-scoped work into ordinary review while
@@ -501,10 +562,10 @@ func (s *Store) CreateTaskContributionFrom(repositoryID, sourceRepositoryID, aut
 }
 
 func (s *Store) CreateTaskContributionFromWithEvidence(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, expectedSourceCommit string, commitIDs []string, proposalID, taskID *string, sessionID, runID *string, reviewEvidence *TaskReviewEvidence) (PullRequest, error) {
-	return s.createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, expectedSourceCommit, commitIDs, proposalID, taskID, sessionID, runID, nil, reviewEvidence)
+	return s.createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, expectedSourceCommit, commitIDs, proposalID, taskID, sessionID, runID, nil, reviewEvidence, nil)
 }
 
-func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, expectedSourceCommit string, commitIDs []string, proposalID, taskID, sessionID, runID *string, recovery *recoveryIdentity, reviewEvidence *TaskReviewEvidence) (PullRequest, error) {
+func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, expectedSourceCommit string, commitIDs []string, proposalID, taskID, sessionID, runID *string, recovery *recoveryIdentity, reviewEvidence *TaskReviewEvidence, guided *GuidedContributionCreation) (PullRequest, error) {
 	if !validID(repositoryID) || !validID(sourceRepositoryID) || !validID(authorID) {
 		return PullRequest{}, ErrInvalid
 	}
@@ -526,6 +587,9 @@ func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, bo
 		if !validCommitID(commitID) {
 			return PullRequest{}, ErrInvalid
 		}
+	}
+	if guided != nil && !validGuidedContribution(*guided) {
+		return PullRequest{}, ErrInvalid
 	}
 	repository, err := s.git.Open(repositoryID)
 	if err != nil {
@@ -560,6 +624,13 @@ func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, bo
 		commitIDs = []string{sourceCommit}
 	}
 	p := PullRequest{ID: id, RepositoryID: repositoryID, SourceRepositoryID: sourceRepositoryID, AuthorID: authorID, Title: title, Body: body, SourceBranch: sourceBranch, TargetBranch: targetBranch, SourceCommitID: sourceCommit, TargetCommitID: targetCommit, ProposalID: proposalID, TaskID: taskID, TaskSessionID: sessionID, TaskRunID: runID, TaskCommitIDs: append([]string(nil), commitIDs...), TaskEvidence: reviewEvidence, Status: Open, CreatedAt: now, UpdatedAt: now}
+	if guided != nil {
+		p.WorkspaceID, p.WorkspaceCheckpointID = guided.WorkspaceID, guided.CheckpointID
+		p.WorkspaceContributorIDs = append([]string(nil), guided.Contributors...)
+		p.WorkspaceCommandIDs = append([]string(nil), guided.CommandIDs...)
+		evidence := guided.Evidence
+		p.ContributionEvidence = &evidence
+	}
 	if recovery != nil && recovery.DeliveryTeamID != "" {
 		p.DeliveryTeamID, p.DeliveryIntegrationID, p.DeliveryStreamID, p.DeliveryIntegrationOrder = recovery.DeliveryTeamID, recovery.DeliveryIntegrationID, recovery.DeliveryStreamID, recovery.DeliveryOrder
 	}
@@ -595,6 +666,23 @@ func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, bo
 		return PullRequest{}, err
 	}
 	return p, nil
+}
+
+func validGuidedContribution(g GuidedContributionCreation) bool {
+	if !validID(g.WorkspaceID) || !validID(g.CheckpointID) || !validID(g.Evidence.OpportunityID) || g.Evidence.OpportunityVersion < 1 || g.Evidence.PathwayVersion < 1 || !validCommitID(g.Evidence.UpstreamRevision) || len(g.Evidence.AcceptanceCriteria) == 0 {
+		return false
+	}
+	for _, id := range g.Contributors {
+		if !validID(id) {
+			return false
+		}
+	}
+	for _, id := range g.CommandIDs {
+		if strings.TrimSpace(id) == "" || len(id) > 128 {
+			return false
+		}
+	}
+	return true
 }
 
 func branchCommit(repository *storage.Repository, branch string) (string, error) {

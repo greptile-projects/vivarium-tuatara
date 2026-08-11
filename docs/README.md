@@ -79,6 +79,16 @@ record an edit only under the matching edit lease. The thread grants no
 upstream authority and does not transfer authorship. It is retained with the
 workspace beneath `$WORKSPACE_STORAGE_ROOT`.
 
+The contributor can checkpoint that guided work and preflight it for upstream
+publication. The preflight distinguishes fixable project requirements from
+coaching needs, so unresolved support context is visible without silently
+becoming a merge blocker. Once requirements and the frozen acceptance criteria
+are confirmed, the platform commits only inspected checkpoint files to the
+contributor's fork and opens an ordinary upstream pull. The pull preserves the
+opportunity and pathway revisions, setup evidence, mentor guidance, approved
+agent assistance, acceptance criteria, and contributor attribution; it gains
+no review, check, acknowledgement, queue, permission, or merge bypass.
+
 ## Accountable decision delivery
 
 An accepted technical decision can be converted once per commitment into an

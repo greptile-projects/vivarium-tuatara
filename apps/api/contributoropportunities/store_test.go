@@ -83,6 +83,31 @@ func TestBeginLaunchRevalidatesAndConsumesClaim(t *testing.T) {
 	}
 }
 
+func TestInProgressVersionAdmissionRejectsChangedOpportunity(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, err := s.Publish(sample(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.Claim(repo, v.ID, newcomer, "launching", time.Hour, v.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.BeginLaunch(repo, v.ID, newcomer, v.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := v
+	changed.Status = "paused"
+	if _, err = s.Publish(changed, v.Version); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	if err = s.WithInProgressVersion(repo, v.ID, v.Version, func(Opportunity) error { called = true; return nil }); !errors.Is(err, ErrConflict) || called {
+		t.Fatalf("changed admission = %v, called %v", err, called)
+	}
+}
+
 func TestAbortLaunchRestoresExactClaimForRetry(t *testing.T) {
 	s, err := New(t.TempDir())
 	if err != nil {

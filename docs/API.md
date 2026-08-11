@@ -283,6 +283,25 @@ terminal input, command output, credentials, presence, messages, or other
 runtime state. Existing stale-review, check, review, merge, and queue rules
 govern the pull.
 
+Guided contribution work uses `GET
+/workspaces/{id}/checkpoints/{checkpoint-id}/contribution-publication` as a
+publication preflight. It separates fixable blocking `project_requirements`
+(the frozen pathway acknowledgement and version, live opportunity revision,
+setup verification, a non-empty checkpoint, and explicit acceptance-criterion
+confirmation) from non-blocking `coaching_needs` such as retained diagnostics
+or open help threads. `POST` to that endpoint accepts `branch`,
+`target_branch`, `title`, the exact `satisfied_criteria`, and optional
+`maintainer_edits_allowed`. The server commits the inspected checkpoint to the
+contributor-owned fork and opens a cross-repository pull against upstream. The
+pull retains the opportunity/pathway revisions, setup outcomes, mentor-guidance
+and agent-assistance entry IDs, criteria, contributors, and checkpoint evidence.
+Publication holds exact current-pathway and in-progress-opportunity admissions
+through pull creation and checkpoint recording, so governing changes cannot
+interleave after the final validation.
+This provenance grants no upstream authority: ordinary discussion,
+reproduction, review, required checks, owner acknowledgements, integration
+queues, permissions, and merge rules apply.
+
 ## Activity
 
 `GET /activity` returns a newest-first, cursor-paginated `events` collection
