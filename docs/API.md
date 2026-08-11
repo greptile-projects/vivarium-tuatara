@@ -61,7 +61,9 @@ attempt to the original finding. The repair session/finding pair reserves that
 attempt identity before its check exists, so completion or recovery retries
 reuse the same active or terminal build rather than duplicate provenance. The
 reservation and build-run attachment share a filesystem admission lock across
-API processes configured with the same preview storage root.
+API processes configured with the same preview storage root. Check-run creation
+separately serializes its commit/definition-name scan and write across processes,
+preventing an unlinked losing run before attachment.
 
 ## Prospective impact assessments
 

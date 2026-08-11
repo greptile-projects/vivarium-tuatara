@@ -899,7 +899,8 @@ whenever dependencies change or the web job fails before it starts.
   stable repair/session preview identity before check creation; exact completion
   retries reconcile that reservation and its terminal or active build run. A
   shared preview-store lock holds the reservation scan/write and run attachment
-  across API processes.
+  across API processes, while check-run creation has its own shared lock around
+  definition-name scan/write so no losing process can strand a duplicate run.
   Fork-source synchronization holds the catalog's cross-process lock while it
   rechecks current target access, imports a newer revision, and publishes the
   pull snapshot, so revocation cannot commit mid-adoption. If the source fork is deleted, synchronization stops but

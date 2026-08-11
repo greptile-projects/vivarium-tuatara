@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -64,6 +65,66 @@ func TestCreateRepairsMissingDefinitionForExistingCommit(t *testing.T) {
 		names[run.Definition.Name] = true
 	}
 	if err != nil || len(stored) != 2 || !names["first"] || !names["second"] {
+		t.Fatalf("stored runs = %#v, %v", stored, err)
+	}
+}
+
+func TestCreateRequestedSerializesDefinitionAcrossIndependentStores(t *testing.T) {
+	root := t.TempDir()
+	first, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repositoryID, pullID, commitID := strings.Repeat("1", 32), strings.Repeat("2", 32), strings.Repeat("3", 40)
+	definition := Definition{Name: "preview-repair-stable", Image: "alpine:3.22", Command: "true"}
+	const requests = 32
+	start := make(chan struct{})
+	ids := make(chan string, requests)
+	errs := make(chan error, requests)
+	var wg sync.WaitGroup
+	for i := 0; i < requests; i++ {
+		selected := first
+		if i%2 == 1 {
+			selected = second
+		}
+		wg.Add(1)
+		go func(store *Store) {
+			defer wg.Done()
+			<-start
+			runs, createErr := store.CreateRequested(repositoryID, pullID, commitID, []Definition{definition}, strings.Repeat("4", 32))
+			if createErr != nil {
+				errs <- createErr
+				return
+			}
+			if len(runs) != 1 {
+				errs <- fmt.Errorf("runs = %#v", runs)
+				return
+			}
+			ids <- runs[0].ID
+		}(selected)
+	}
+	close(start)
+	wg.Wait()
+	close(ids)
+	close(errs)
+	for createErr := range errs {
+		t.Fatal(createErr)
+	}
+	var expected string
+	for id := range ids {
+		if expected == "" {
+			expected = id
+		}
+		if id != expected {
+			t.Fatalf("run IDs = %s and %s", expected, id)
+		}
+	}
+	stored, err := first.List(repositoryID, pullID)
+	if err != nil || len(stored) != 1 || stored[0].ID != expected {
 		t.Fatalf("stored runs = %#v, %v", stored, err)
 	}
 }

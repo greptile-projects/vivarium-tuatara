@@ -276,6 +276,11 @@ func (s *Store) CreateRequested(repositoryID, pullRequestID, commitID string, de
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lockCreation()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	dir := filepath.Join(s.root, repositoryID, pullRequestID)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
@@ -323,6 +328,18 @@ func (s *Store) CreateRequested(repositoryID, pullRequestID, commitID string, de
 		}
 	}
 	return append(resumable, missing...), nil
+}
+
+func (s *Store) lockCreation() (func(), error) {
+	file, err := os.OpenFile(filepath.Join(s.root, ".creation.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return func() { _ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN); _ = file.Close() }, nil
 }
 
 func (s *Store) List(repositoryID, pullRequestID string) ([]Run, error) {
