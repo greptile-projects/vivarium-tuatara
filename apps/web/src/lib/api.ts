@@ -6,24 +6,251 @@ export type User = {
   updated_at: string;
 };
 export type DeliveryTeam = {
-  id: string; repository_id: string; name: string; purpose: string; organizer_id: string;
-  outcome: { kind: "proposal" | "initiative" | "decision" | "incident_follow_up" | "planned_outcome"; resource_id: string; title: string };
+  id: string;
+  repository_id: string;
+  name: string;
+  purpose: string;
+  organizer_id: string;
+  outcome: {
+    kind:
+      | "proposal"
+      | "initiative"
+      | "decision"
+      | "incident_follow_up"
+      | "planned_outcome";
+    resource_id: string;
+    title: string;
+  };
   overall_budget?: { unit: "minutes" | "credits" | "usd"; limit: number };
-  deadline?: string; escalation_path: string; version: number;
-  participants: { id: string; principal_type: "human" | "agent"; principal_id: string; role: string; responsibility: string; why: string; budget?: { unit: string; limit: number }; deadline?: string; escalation: string; required_access: { repository_id: string; level: "read" | "write" }[]; access_preview: { repository_id: string; required: string; effective: string; source: string; sufficient: boolean }[]; status: "pending" | "accepted" | "declined"; can_respond: boolean; invited_by: string; invited_at: string; responded_by?: string; responded_at?: string }[];
+  deadline?: string;
+  escalation_path: string;
+  version: number;
+  participants: {
+    id: string;
+    principal_type: "human" | "agent";
+    principal_id: string;
+    role: string;
+    responsibility: string;
+    why: string;
+    budget?: { unit: string; limit: number };
+    deadline?: string;
+    escalation: string;
+    required_access: { repository_id: string; level: "read" | "write" }[];
+    access_preview: {
+      repository_id: string;
+      required: string;
+      effective: string;
+      source: string;
+      sufficient: boolean;
+    }[];
+    status: "pending" | "accepted" | "declined";
+    can_respond: boolean;
+    invited_by: string;
+    invited_at: string;
+    responded_by?: string;
+    responded_at?: string;
+  }[];
   plan?: {
-    revision: number; proposed_by: string; updated_at: string;
-    streams: { id: string; title: string; owner_participant_id: string; inputs: { name: string; source_stream_id?: string; repository_id?: string; revision?: string; artifact: string }[]; expected_artifacts: string[]; dependency_ids: string[]; acceptance_criteria: string[]; repository_scope: { repository_id: string; reference: string; revision: string; paths: string[] }[]; integration_order: number; budget?: { unit: string; limit: number }; assumptions: string[]; contexts: { id:string; kind:"change_session"|"investigation"|"experiment"|"workspace"; resource_id:string; parent_id?:string; repository_id:string; revision:string; attached_by:string; attached_at:string }[] }[];
-    acceptances: { participant_id: string; revision: number; status: "pending" | "accepted" | "declined"; required: boolean; responded_by?: string; responded_at?: string; can_respond: boolean }[];
-    blockers: { kind: "replan_acceptance" | "budget_exceeded" | "overlapping_scope" | "duplicate_artifact" | "unavailable_access" | "owner_unavailable" | "charter_changed"; stream_ids: string[]; owner_participant_ids: string[]; summary: string }[];
+    revision: number;
+    proposed_by: string;
+    updated_at: string;
+    streams: {
+      id: string;
+      title: string;
+      owner_participant_id: string;
+      inputs: {
+        name: string;
+        source_stream_id?: string;
+        repository_id?: string;
+        revision?: string;
+        artifact: string;
+      }[];
+      expected_artifacts: string[];
+      dependency_ids: string[];
+      acceptance_criteria: string[];
+      repository_scope: {
+        repository_id: string;
+        reference: string;
+        revision: string;
+        paths: string[];
+      }[];
+      integration_order: number;
+      budget?: { unit: string; limit: number };
+      assumptions: string[];
+      contexts: {
+        id: string;
+        kind: "change_session" | "investigation" | "experiment" | "workspace";
+        resource_id: string;
+        parent_id?: string;
+        repository_id: string;
+        revision: string;
+        attached_by: string;
+        attached_at: string;
+      }[];
+    }[];
+    acceptances: {
+      participant_id: string;
+      revision: number;
+      status: "pending" | "accepted" | "declined";
+      required: boolean;
+      responded_by?: string;
+      responded_at?: string;
+      can_respond: boolean;
+    }[];
+    blockers: {
+      kind:
+        | "replan_acceptance"
+        | "budget_exceeded"
+        | "overlapping_scope"
+        | "duplicate_artifact"
+        | "unavailable_access"
+        | "owner_unavailable"
+        | "charter_changed";
+      stream_ids: string[];
+      owner_participant_ids: string[];
+      summary: string;
+    }[];
   };
   plan_history: { revision: number; proposed_by: string; updated_at: string }[];
-  timeline: { id:string; stream_id:string; kind:"finding"|"question"|"checkpoint"|"artifact"|"decision"|"uncertainty"; body:string; citations:{kind:string;resource_id:string;repository_id:string;revision:string;label:string}[]; author_id:string;author_type:"human"|"agent";created_by:string;plan_revision:number;created_at:string }[];
-  handoffs: { id:string;stream_id:string;from_participant_id:string;to_participant_id:string;input_entry_ids:string[];inputs:{kind:string;resource_id:string;repository_id:string;revision:string;label:string}[];acceptance_criteria:string[];residual_uncertainty:string[];requested_by:string;requested_at:string;plan_revision:number;status:"pending"|"accepted";accepted_by?:string;accepted_at?:string;verification_entry_ids:string[];acceptance_note?:string }[];
-  stream_statuses: { stream_id:string;status:"queued"|"running"|"paused"|"blocked"|"completed"|"failed"|"canceled";summary:string;progress_percent:number;revision:string;resource_use?:{unit:string;consumed:number};active_control?:{participant_id:string;principal_id:string;principal_type:"human"|"agent";since:string};blockers:{kind:string;summary:string;recovery:string}[];questions:{id:string;body:string;ask_of:string;urgency:"normal"|"urgent"}[];predicted_next_action:string;updated_by:string;updated_at:string }[];
-  interventions: {id:string;scope:"stream"|"team";stream_id?:string;action:"guide"|"pause"|"resume"|"cancel"|"reassign"|"narrow";guidance:string;actor_id:string;principal_id:string;plan_revision:number;created_at:string}[];
-  events: { id: string; kind: string; actor_id: string; summary: string; version: number; created_at: string }[];
-  created_at: string; updated_at: string;
+  timeline: {
+    id: string;
+    stream_id: string;
+    kind:
+      | "finding"
+      | "question"
+      | "checkpoint"
+      | "artifact"
+      | "decision"
+      | "uncertainty";
+    body: string;
+    citations: {
+      kind: string;
+      resource_id: string;
+      repository_id: string;
+      revision: string;
+      label: string;
+    }[];
+    author_id: string;
+    author_type: "human" | "agent";
+    created_by: string;
+    plan_revision: number;
+    created_at: string;
+  }[];
+  handoffs: {
+    id: string;
+    stream_id: string;
+    from_participant_id: string;
+    to_participant_id: string;
+    input_entry_ids: string[];
+    inputs: {
+      kind: string;
+      resource_id: string;
+      repository_id: string;
+      revision: string;
+      label: string;
+    }[];
+    acceptance_criteria: string[];
+    residual_uncertainty: string[];
+    requested_by: string;
+    requested_at: string;
+    plan_revision: number;
+    status: "pending" | "accepted";
+    accepted_by?: string;
+    accepted_at?: string;
+    verification_entry_ids: string[];
+    acceptance_note?: string;
+  }[];
+  stream_statuses: {
+    stream_id: string;
+    status:
+      | "queued"
+      | "running"
+      | "paused"
+      | "blocked"
+      | "completed"
+      | "failed"
+      | "canceled";
+    summary: string;
+    progress_percent: number;
+    revision: string;
+    resource_use?: { unit: string; consumed: number };
+    active_control?: {
+      participant_id: string;
+      principal_id: string;
+      principal_type: "human" | "agent";
+      since: string;
+    };
+    blockers: { kind: string; summary: string; recovery: string }[];
+    questions: {
+      id: string;
+      body: string;
+      ask_of: string;
+      urgency: "normal" | "urgent";
+    }[];
+    predicted_next_action: string;
+    updated_by: string;
+    updated_at: string;
+  }[];
+  interventions: {
+    id: string;
+    scope: "stream" | "team";
+    stream_id?: string;
+    action: "guide" | "pause" | "resume" | "cancel" | "reassign" | "narrow";
+    guidance: string;
+    actor_id: string;
+    principal_id: string;
+    plan_revision: number;
+    created_at: string;
+  }[];
+  integrations: {
+    id: string;
+    plan_revision: number;
+    base_revision: string;
+    prepared_by: string;
+    prepared_at: string;
+    published_by?: string;
+    published_at?: string;
+    blockers: {
+      kind: string;
+      stream_ids: string[];
+      paths?: string[];
+      criteria?: string[];
+      summary: string;
+    }[];
+    contributions: {
+      stream_id: string;
+      repository_id: string;
+      source_kind: "branch" | "checkpoint";
+      workspace_id?: string;
+      checkpoint_id?: string;
+      branch: string;
+      commit_id: string;
+      changed_paths: string[];
+      acceptance_evidence: Record<string, string[]>;
+      authors: string[];
+      agent_actions: string[];
+      decisions: string[];
+      cost?: { unit: string; consumed: number };
+      residual_risks: string[];
+      integration_order: number;
+    }[];
+    pull_requests: {
+      stream_id: string;
+      repository_id: string;
+      pull_request_id: string;
+      order: number;
+    }[];
+  }[];
+  events: {
+    id: string;
+    kind: string;
+    actor_id: string;
+    summary: string;
+    version: number;
+    created_at: string;
+  }[];
+  created_at: string;
+  updated_at: string;
 };
 export type Repository = {
   id: string;
@@ -71,7 +298,23 @@ export type TechnicalDecision = {
   experiments: DecisionExperiment[];
   approval_requests: DecisionApprovalRequest[];
   commitments: DecisionCommitment[];
-  implementations: { commitment_version: number; proposal_id: string; task_ids: string[]; revision: string; created_by: string; created_at: string; observations: { id:string; kind:string; summary:string; resource_kind:string; resource_id:string; actor_id:string; created_at:string }[] }[];
+  implementations: {
+    commitment_version: number;
+    proposal_id: string;
+    task_ids: string[];
+    revision: string;
+    created_by: string;
+    created_at: string;
+    observations: {
+      id: string;
+      kind: string;
+      summary: string;
+      resource_kind: string;
+      resource_id: string;
+      actor_id: string;
+      created_at: string;
+    }[];
+  }[];
   history: {
     id: string;
     kind:
@@ -95,21 +338,46 @@ export type TechnicalDecision = {
   updated_at: string;
 };
 export type DecisionApprovalRequest = {
-  id: string; kind: "affected_owner" | "policy"; repository_id?: string;
-  policy_id?: string; policy_rule?: string; approver_id: string; reason: string;
-  exception_reason?: string; exception_expires_at?: string;
+  id: string;
+  kind: "affected_owner" | "policy";
+  repository_id?: string;
+  policy_id?: string;
+  policy_rule?: string;
+  approver_id: string;
+  reason: string;
+  exception_reason?: string;
+  exception_expires_at?: string;
   status: "pending" | "approved" | "rejected" | "superseded";
-  requested_by: string; requested_at: string; decided_by?: string;
-  decision_note?: string; decided_at?: string;
+  requested_by: string;
+  requested_at: string;
+  decided_by?: string;
+  decision_note?: string;
+  decided_at?: string;
 };
 export type DecisionCommitment = {
-  version: number; decision_version: number; status: "published" | "reopened";
-  selected_alternative_id: string; rejected_alternative_ids: string[];
-  rationale: string; accepted_tradeoffs: string[]; dissent_finding_ids: string[];
-  conditions: string[]; review_date: string; evidence: DecisionEvidence[];
+  version: number;
+  decision_version: number;
+  status: "published" | "reopened";
+  selected_alternative_id: string;
+  rejected_alternative_ids: string[];
+  rationale: string;
+  accepted_tradeoffs: string[];
+  dissent_finding_ids: string[];
+  conditions: string[];
+  review_date: string;
+  evidence: DecisionEvidence[];
   approvals: DecisionApprovalRequest[];
-  exceptions: { approval_request_id: string; policy_id: string; policy_rule: string; reason: string; expires_at: string }[];
-  published_by: string; published_at: string; reopened_at?: string; reopen_reason?: string;
+  exceptions: {
+    approval_request_id: string;
+    policy_id: string;
+    policy_rule: string;
+    reason: string;
+    expires_at: string;
+  }[];
+  published_by: string;
+  published_at: string;
+  reopened_at?: string;
+  reopen_reason?: string;
 };
 export type DecisionExperiment = {
   id: string;
@@ -364,7 +632,12 @@ export type DevelopmentWorkspace = {
   created_at: string;
   updated_at: string;
   source: {
-    kind: "repository" | "proposal_task" | "pull_request" | "incident_repair" | "decision_experiment";
+    kind:
+      | "repository"
+      | "proposal_task"
+      | "pull_request"
+      | "incident_repair"
+      | "decision_experiment";
     repository_id: string;
     proposal_id?: string;
     task_id?: string;

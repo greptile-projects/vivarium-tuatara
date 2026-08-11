@@ -2034,3 +2034,21 @@ an already accepted participant and narrowing selects only paths already in
 scope. Both authority-affecting actions create a material plan revision and
 fresh owner acceptance rather than silently expanding authority. Timeline,
 handoff, prior plan, status, and intervention evidence remains retained.
+
+`POST /delivery-teams/{id}/integrations` compare-and-swaps
+`expected_version`, the current `plan_revision`, one shared 40-character
+`base_revision`, and exactly one contribution per stream. A contribution names
+an exact live branch or a matching published workspace checkpoint, plus
+criterion-to-timeline evidence, decisions, and residual risks. The server
+verifies ancestry, derives paths and checkpoint authors/command IDs, projects
+cost, and persists blockers for overlaps, incomplete streams, pending
+handoffs, plan blockers, and missing or cross-stream acceptance evidence.
+
+`POST /delivery-teams/{id}/integrations/{integration-id}/publish` accepts
+`expected_version` and optional `target_branch` (default `main`). It revalidates
+each branch and the caller's independent write permission in every repository,
+then finds or creates ordinary pulls in declared integration order. Each pull
+retains team, manifest, stream, and order provenance plus commits, evidence,
+authors, agent actions, decisions, cost, and risk. Retry reuses the source
+branch pull. No review, check, queue, release, permission, or merge bypass is
+created.

@@ -2,7 +2,10 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -15,7 +18,9 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
@@ -66,8 +71,18 @@ type deliveryTeamInterventionInput struct {
 	ExpectedVersion int                             `json:"expected_version"`
 	Intervention    deliveryteams.InterventionInput `json:"intervention"`
 }
+type deliveryTeamIntegrationInput struct {
+	ExpectedVersion int                                     `json:"expected_version"`
+	PlanRevision    int                                     `json:"plan_revision"`
+	BaseRevision    string                                  `json:"base_revision"`
+	Contributions   []deliveryteams.IntegrationContribution `json:"contributions"`
+}
+type deliveryTeamPublishIntegrationInput struct {
+	ExpectedVersion int    `json:"expected_version"`
+	TargetBranch    string `json:"target_branch"`
+}
 
-func registerDeliveryTeamRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, identities *users.Store, store *deliveryteams.Store, proposalStore *proposals.Store, decisionStore *decisions.Store, incidentStore *incidents.Store, orgs *organizations.Store, activity *activities.Store, sessionStore *changesessions.Store, workspaceStore *workspaces.Store, explanationStore *explanations.Store) {
+func registerDeliveryTeamRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, identities *users.Store, store *deliveryteams.Store, proposalStore *proposals.Store, decisionStore *decisions.Store, incidentStore *incidents.Store, orgs *organizations.Store, activity *activities.Store, sessionStore *changesessions.Store, workspaceStore *workspaces.Store, explanationStore *explanations.Store, pulls *pullrequests.Store) {
 	mux.HandleFunc("POST /repositories/{id}/delivery-teams", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
 		if !ok {
@@ -441,6 +456,134 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, catalog *repositories.Store,
 		}
 		writeJSON(w, 200, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
 	})
+	mux.HandleFunc("POST /delivery-teams/{id}/integrations", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+		if !ok {
+			return
+		}
+		team, err := store.Get(r.PathValue("id"))
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		principal, accepted := deliveryPlanningPrincipal(team, actor.UserID, orgs, catalog)
+		if !accepted || !deliveryRepositoryWrite(actor.UserID, team.RepositoryID, catalog) {
+			writeAPIError(w, 403, "delivery_integration_forbidden", "an accepted member with independent repository write access is required")
+			return
+		}
+		var in deliveryTeamIntegrationInput
+		if decodeJSON(r, &in) != nil || team.Plan == nil || in.PlanRevision != team.Plan.Revision {
+			writeAPIError(w, 400, "invalid_request", "the current plan revision and contributions are required")
+			return
+		}
+		blockers, valid := analyzeDeliveryIntegration(team, in.BaseRevision, in.Contributions, git, workspaceStore)
+		if !valid {
+			writeAPIError(w, 422, "delivery_integration_invalid", "every contribution must name its exact live branch or published checkpoint")
+			return
+		}
+		team, err = store.PrepareIntegration(team.ID, actor.UserID, principal, in.ExpectedVersion, in.PlanRevision, in.BaseRevision, in.Contributions, blockers)
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		writeJSON(w, 201, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
+	})
+	mux.HandleFunc("POST /delivery-teams/{id}/integrations/{integrationId}/publish", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:write", false)
+		if !ok {
+			return
+		}
+		team, err := store.Get(r.PathValue("id"))
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		// The generic authorizer cannot resolve the repository before loading the
+		// team, so revalidate against the exact charter repository here.
+		if !deliveryRepositoryWrite(actor.UserID, team.RepositoryID, catalog) {
+			writeAPIError(w, 403, "delivery_integration_forbidden", "independent repository write access is required")
+			return
+		}
+		principal, accepted := deliveryPlanningPrincipal(team, actor.UserID, orgs, catalog)
+		if !accepted {
+			writeAPIError(w, 403, "delivery_integration_forbidden", "only an accepted team member may publish")
+			return
+		}
+		var in deliveryTeamPublishIntegrationInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "expected_version is required")
+			return
+		}
+		if team.Version != in.ExpectedVersion {
+			writeAPIError(w, 409, "delivery_team_changed", "delivery team version changed")
+			return
+		}
+		target := strings.TrimSpace(in.TargetBranch)
+		if target == "" {
+			target = "main"
+		}
+		var manifest *deliveryteams.Integration
+		for i := range team.Integrations {
+			if team.Integrations[i].ID == r.PathValue("integrationId") {
+				manifest = &team.Integrations[i]
+			}
+		}
+		if manifest == nil {
+			writeAPIError(w, 404, "delivery_integration_not_found", "integration not found")
+			return
+		}
+		if team.Plan == nil || manifest.PlanRevision != team.Plan.Revision {
+			writeAPIError(w, 409, "delivery_integration_blocked", "the current execution plan changed after reconciliation")
+			return
+		}
+		currentContributions := append([]deliveryteams.IntegrationContribution(nil), manifest.Contributions...)
+		currentBlockers, current := analyzeDeliveryIntegration(team, manifest.BaseRevision, currentContributions, git, workspaceStore)
+		if !current {
+			writeAPIError(w, 409, "delivery_integration_changed", "a contribution changed after reconciliation")
+			return
+		}
+		if len(manifest.Blockers) > 0 || len(currentBlockers) > 0 || manifest.PublishedAt != nil {
+			writeAPIError(w, 409, "delivery_integration_blocked", "resolve conflicts and missing acceptance evidence before publication")
+			return
+		}
+		if pulls == nil {
+			writeAPIError(w, 503, "delivery_integration_unavailable", "pull request governance is unavailable")
+			return
+		}
+		publishStatus, publishCode, publishMessage := 0, "", ""
+		team, err = store.PublishIntegration(team.ID, manifest.ID, actor.UserID, principal, in.ExpectedVersion, func(currentTeam deliveryteams.Team, currentManifest deliveryteams.Integration) ([]deliveryteams.IntegrationPull, error) {
+			if currentTeam.Plan == nil || currentManifest.PlanRevision != currentTeam.Plan.Revision {
+				publishStatus, publishCode, publishMessage = 409, "delivery_integration_blocked", "the current execution plan changed after reconciliation"
+				return nil, deliveryteams.ErrConflict
+			}
+			contributions := append([]deliveryteams.IntegrationContribution(nil), currentManifest.Contributions...)
+			blockers, ready := analyzeDeliveryIntegration(currentTeam, currentManifest.BaseRevision, contributions, git, workspaceStore)
+			if !ready || len(blockers) > 0 {
+				publishStatus, publishCode, publishMessage = 409, "delivery_integration_blocked", "current delivery readiness no longer permits publication"
+				return nil, deliveryteams.ErrConflict
+			}
+			published := []deliveryteams.IntegrationPull{}
+			for _, c := range currentManifest.Contributions {
+				if !deliveryRepositoryWrite(actor.UserID, c.RepositoryID, catalog) {
+					publishStatus, publishCode, publishMessage = 403, "delivery_integration_forbidden", "each contribution requires independent repository write access"
+					return nil, deliveryteams.ErrForbidden
+				}
+				body := deliveryIntegrationPullBody(currentTeam, currentManifest, c)
+				pull, createErr := pulls.FindOrCreateDeliveryIntegration(c.RepositoryID, actor.UserID, c.StreamID+": "+currentTeam.Outcome.Title, body, c.Branch, target, currentTeam.ID, currentManifest.ID, c.StreamID, c.IntegrationOrder)
+				if createErr != nil {
+					publishStatus, publishCode, publishMessage = 409, "delivery_integration_publish_failed", "an ordered contribution could not be opened and linked for review"
+					return nil, deliveryteams.ErrConflict
+				}
+				published = append(published, deliveryteams.IntegrationPull{StreamID: c.StreamID, RepositoryID: c.RepositoryID, PullRequestID: pull.ID, Order: c.IntegrationOrder})
+			}
+			return published, nil
+		})
+		if publishMessage != "" {
+			writeAPIError(w, publishStatus, publishCode, publishMessage)
+			return
+		}
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		writeJSON(w, 201, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
+	})
 }
 
 func deliveryResumeAuthorized(team deliveryteams.Team, scope, streamID string, catalog *repositories.Store, orgs *organizations.Store) bool {
@@ -463,6 +606,172 @@ func deliveryResumeAuthorized(team deliveryteams.Team, scope, streamID string, c
 		}
 	}
 	return scope == "team" || scope == "stream"
+}
+
+func deliveryRepositoryWrite(actor, repositoryID string, catalog *repositories.Store) bool {
+	repository, err := catalog.GetByID(repositoryID)
+	if err != nil {
+		return false
+	}
+	if repository.OwnerID == actor {
+		return true
+	}
+	ok, err := catalog.HasCollaborator(actor, repositoryID)
+	return err == nil && ok
+}
+
+func analyzeDeliveryIntegration(team deliveryteams.Team, base string, contributions []deliveryteams.IntegrationContribution, git *storage.Store, workspaceStore *workspaces.Store) ([]deliveryteams.IntegrationBlocker, bool) {
+	if team.Plan == nil || len(contributions) != len(team.Plan.Streams) || len(base) != 40 {
+		return nil, false
+	}
+	// Convert plan blockers without weakening their attribution.
+	out := make([]deliveryteams.IntegrationBlocker, 0, len(team.Plan.Blockers))
+	for _, b := range team.Plan.Blockers {
+		out = append(out, deliveryteams.IntegrationBlocker{Kind: b.Kind, StreamIDs: b.StreamIDs, Summary: b.Summary})
+	}
+	byStream := map[string]*deliveryteams.IntegrationContribution{}
+	paths := map[string]string{}
+	timeline := map[string]deliveryteams.TimelineEntry{}
+	for _, e := range team.Timeline {
+		timeline[e.ID] = e
+	}
+	for i := range contributions {
+		c := &contributions[i]
+		stream := deliveryStream(team, c.StreamID)
+		if stream == nil || byStream[c.StreamID] != nil || c.RepositoryID == "" || c.Branch == "" {
+			return nil, false
+		}
+		byStream[c.StreamID] = c
+		repository, err := git.Open(c.RepositoryID)
+		if err != nil {
+			return nil, false
+		}
+		ref, err := repository.ReadReference("refs/heads/" + c.Branch)
+		if err != nil || ref.Target != c.CommitID {
+			return nil, false
+		}
+		if exec.Command("git", "--git-dir", repository.Path(), "merge-base", "--is-ancestor", base, c.CommitID).Run() != nil {
+			return nil, false
+		}
+		if c.SourceKind == "checkpoint" {
+			if workspaceStore == nil || c.WorkspaceID == "" || c.CheckpointID == "" {
+				return nil, false
+			}
+			checkpoint, err := workspaceStore.GetCheckpoint(c.WorkspaceID, c.CheckpointID)
+			if err != nil || checkpoint.RepositoryID != c.RepositoryID || checkpoint.Publication == nil || checkpoint.Publication.CommitID != c.CommitID || checkpoint.Publication.Branch != c.Branch {
+				return nil, false
+			}
+			c.Authors = append([]string(nil), checkpoint.ContributorIDs...)
+			c.AgentActions = []string{}
+			for _, command := range checkpoint.Commands {
+				c.AgentActions = append(c.AgentActions, command.ID)
+			}
+		} else if c.SourceKind != "branch" {
+			return nil, false
+		}
+		changed, err := exec.Command("git", "--git-dir", repository.Path(), "diff", "--name-only", base, c.CommitID, "--").Output()
+		if err != nil {
+			return nil, false
+		}
+		c.ChangedPaths = strings.Fields(string(changed))
+		authors, err := exec.Command("git", "--git-dir", repository.Path(), "log", "--format=%an", base+".."+c.CommitID).Output()
+		if err != nil {
+			return nil, false
+		}
+		for _, author := range strings.Split(strings.TrimSpace(string(authors)), "\n") {
+			author = strings.TrimSpace(author)
+			if author != "" && !slices.Contains(c.Authors, author) {
+				c.Authors = append(c.Authors, author)
+			}
+		}
+		for _, entry := range team.Timeline {
+			if entry.StreamID != c.StreamID {
+				continue
+			}
+			if entry.AuthorType == "agent" && !slices.Contains(c.AgentActions, entry.ID) {
+				c.AgentActions = append(c.AgentActions, entry.ID)
+			}
+			if entry.Kind == "decision" && !slices.Contains(c.Decisions, entry.ID) {
+				c.Decisions = append(c.Decisions, entry.ID)
+			}
+		}
+		for _, path := range c.ChangedPaths {
+			if other := paths[path]; other != "" && other != c.StreamID {
+				out = append(out, deliveryteams.IntegrationBlocker{Kind: "content_conflict", StreamIDs: []string{other, c.StreamID}, Paths: []string{path}, Summary: "Parallel contributions change the same path and require explicit reconciliation"})
+			} else {
+				paths[path] = c.StreamID
+			}
+		}
+		missing := []string{}
+		for _, criterion := range stream.AcceptanceCriteria {
+			ids := c.AcceptanceEvidence[criterion]
+			valid := len(ids) > 0
+			for _, entryID := range ids {
+				entry, ok := timeline[entryID]
+				if !ok || entry.StreamID != c.StreamID {
+					valid = false
+				}
+			}
+			if !valid {
+				missing = append(missing, criterion)
+			}
+		}
+		if len(missing) > 0 {
+			out = append(out, deliveryteams.IntegrationBlocker{Kind: "missing_acceptance_evidence", StreamIDs: []string{c.StreamID}, Criteria: missing, Summary: "Acceptance criteria are not backed by retained stream evidence"})
+		}
+		hasStatus := false
+		for _, status := range team.StreamStatuses {
+			if status.StreamID == c.StreamID {
+				hasStatus = true
+				c.Cost = status.ResourceUse
+				if status.Status != "completed" {
+					out = append(out, deliveryteams.IntegrationBlocker{Kind: "stream_incomplete", StreamIDs: []string{c.StreamID}, Summary: "The contribution stream has not reported completion"})
+				}
+			}
+		}
+		if !hasStatus {
+			out = append(out, deliveryteams.IntegrationBlocker{Kind: "stream_incomplete", StreamIDs: []string{c.StreamID}, Summary: "The contribution stream has not reported completion"})
+		}
+	}
+	for _, handoff := range team.Handoffs {
+		if handoff.PlanRevision == team.Plan.Revision && handoff.Status != "accepted" {
+			out = append(out, deliveryteams.IntegrationBlocker{Kind: "handoff_pending", StreamIDs: []string{handoff.StreamID}, Summary: "A declared handoff still requires recipient verification"})
+		}
+	}
+	return out, true
+}
+
+func deliveryStream(team deliveryteams.Team, id string) *deliveryteams.WorkStream {
+	if team.Plan == nil {
+		return nil
+	}
+	for i := range team.Plan.Streams {
+		if team.Plan.Streams[i].ID == id {
+			return &team.Plan.Streams[i]
+		}
+	}
+	return nil
+}
+
+func deliveryIntegrationPullBody(team deliveryteams.Team, integration deliveryteams.Integration, c deliveryteams.IntegrationContribution) string {
+	var b strings.Builder
+	b.WriteString("Part of delivery team **" + team.Name + "** for " + team.Outcome.Title + ".\n\n")
+	b.WriteString("Integration manifest `" + integration.ID + "`, plan revision " + fmt.Sprint(integration.PlanRevision) + ", order " + fmt.Sprint(c.IntegrationOrder) + ". This connection grants no review or merge authority.\n\n")
+	b.WriteString("Base `" + integration.BaseRevision + "`; contribution `" + c.CommitID + "`.\n\n")
+	b.WriteString("Authors: " + strings.Join(c.Authors, ", ") + "\n\nAgent actions: " + strings.Join(c.AgentActions, ", ") + "\n\nDecisions: " + strings.Join(c.Decisions, "; ") + "\n\nResidual risks: " + strings.Join(c.ResidualRisks, "; ") + "\n")
+	if c.Cost != nil {
+		b.WriteString("\nCost: " + fmt.Sprint(c.Cost.Consumed) + " " + c.Cost.Unit + ".\n")
+	}
+	b.WriteString("\nAcceptance evidence:\n")
+	keys := make([]string, 0, len(c.AcceptanceEvidence))
+	for k := range c.AcceptanceEvidence {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
+		b.WriteString("- " + k + ": " + strings.Join(c.AcceptanceEvidence[k], ", ") + "\n")
+	}
+	return b.String()
 }
 
 func deliveryPrincipalCanRead(team deliveryteams.Team, principal, repositoryID string, catalog *repositories.Store, orgs *organizations.Store) bool {
@@ -726,6 +1035,9 @@ func projectDeliveryAccess(v deliveryteams.Team, viewer string, catalog *reposit
 	if v.Interventions == nil {
 		v.Interventions = []deliveryteams.Intervention{}
 	}
+	if v.Integrations == nil {
+		v.Integrations = []deliveryteams.Integration{}
+	}
 	for i := range v.Participants {
 		p := &v.Participants[i]
 		p.CanRespond = p.Status == "pending" && (p.PrincipalType == "human" && p.PrincipalID == viewer || p.PrincipalType == "agent" && agentOperator(v.RepositoryID, p.PrincipalID, viewer, orgs, catalog))
@@ -813,6 +1125,20 @@ func projectDeliveryAccess(v deliveryteams.Team, viewer string, catalog *reposit
 		}
 	}
 	v.Handoffs = visibleHandoffs
+	visibleIntegrations := []deliveryteams.Integration{}
+	for _, integration := range v.Integrations {
+		visible := true
+		for _, contribution := range integration.Contributions {
+			if !deliveryViewerCanRead(v, viewer, contribution.RepositoryID, catalog, orgs) {
+				visible = false
+				break
+			}
+		}
+		if visible {
+			visibleIntegrations = append(visibleIntegrations, integration)
+		}
+	}
+	v.Integrations = visibleIntegrations
 	if v.Plan != nil {
 		for i := range v.Plan.Streams {
 			contexts := []deliveryteams.WorkContext{}

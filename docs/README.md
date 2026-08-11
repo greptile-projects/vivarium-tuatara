@@ -1490,3 +1490,18 @@ or narrow operations remain organizer-only. Reassignment and narrowing create
 fresh plan revisions and owner acceptance, preserving accepted artifacts,
 timeline evidence, handoffs, and intervention history instead of moving work
 or authority implicitly.
+
+Completed parallel work returns through a durable integration manifest rather
+than an unstructured bundle. Each stream contributes an exact live branch tip
+or an already-published workspace checkpoint descended from the shared base.
+The server derives changed paths and checkpoint authors/command evidence,
+retains decisions, costs, and residual risks, and reports path overlaps,
+incomplete streams, pending handoffs, planning blockers, and acceptance
+criteria lacking same-stream evidence. A blocked manifest cannot publish.
+
+A ready manifest opens one retry-safe ordinary pull per contribution in the
+declared integration order. Pulls retain team, manifest, stream, and order
+links. Every branch and repository permission is revalidated at publication;
+required reviews, owner acknowledgements, checks, queues, release policy, and
+stale-revision behavior remain authoritative. Neither team membership nor the
+manifest grants merge authority.

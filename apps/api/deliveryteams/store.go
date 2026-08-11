@@ -229,8 +229,55 @@ type Team struct {
 	Handoffs       []Handoff       `json:"handoffs"`
 	StreamStatuses []StreamStatus  `json:"stream_statuses"`
 	Interventions  []Intervention  `json:"interventions"`
+	Integrations   []Integration   `json:"integrations"`
 	CreatedAt      time.Time       `json:"created_at"`
 	UpdatedAt      time.Time       `json:"updated_at"`
+}
+
+// Integration is the immutable review manifest that turns independently
+// executed streams into an ordered, attributable contribution. It records
+// provenance and readiness only; it grants no review or merge authority.
+type Integration struct {
+	ID            string                    `json:"id"`
+	PlanRevision  int                       `json:"plan_revision"`
+	BaseRevision  string                    `json:"base_revision"`
+	Contributions []IntegrationContribution `json:"contributions"`
+	Blockers      []IntegrationBlocker      `json:"blockers"`
+	PullRequests  []IntegrationPull         `json:"pull_requests"`
+	PreparedBy    string                    `json:"prepared_by"`
+	PreparedAt    time.Time                 `json:"prepared_at"`
+	PublishedBy   string                    `json:"published_by,omitempty"`
+	PublishedAt   *time.Time                `json:"published_at,omitempty"`
+}
+type IntegrationContribution struct {
+	StreamID           string              `json:"stream_id"`
+	RepositoryID       string              `json:"repository_id"`
+	SourceKind         string              `json:"source_kind"`
+	WorkspaceID        string              `json:"workspace_id,omitempty"`
+	CheckpointID       string              `json:"checkpoint_id,omitempty"`
+	Branch             string              `json:"branch"`
+	CommitID           string              `json:"commit_id"`
+	ChangedPaths       []string            `json:"changed_paths"`
+	AcceptanceEvidence map[string][]string `json:"acceptance_evidence"`
+	Authors            []string            `json:"authors"`
+	AgentActions       []string            `json:"agent_actions"`
+	Decisions          []string            `json:"decisions"`
+	Cost               *ResourceUse        `json:"cost,omitempty"`
+	ResidualRisks      []string            `json:"residual_risks"`
+	IntegrationOrder   int                 `json:"integration_order"`
+}
+type IntegrationBlocker struct {
+	Kind      string   `json:"kind"`
+	StreamIDs []string `json:"stream_ids"`
+	Paths     []string `json:"paths,omitempty"`
+	Criteria  []string `json:"criteria,omitempty"`
+	Summary   string   `json:"summary"`
+}
+type IntegrationPull struct {
+	StreamID      string `json:"stream_id"`
+	RepositoryID  string `json:"repository_id"`
+	PullRequestID string `json:"pull_request_id"`
+	Order         int    `json:"order"`
 }
 type Charter struct {
 	Name           string        `json:"name"`
@@ -411,7 +458,7 @@ func (s *Store) Create(repositoryID string, outcome Outcome, c Charter, actor st
 		return Team{}, e
 	}
 	now := s.now()
-	t := Team{ID: i, RepositoryID: repositoryID, Outcome: outcome, Name: c.Name, Purpose: c.Purpose, OrganizerID: actor, OverallBudget: c.OverallBudget, Deadline: c.Deadline, EscalationPath: c.EscalationPath, Version: 1, Participants: c.Participants, PlanHistory: []ExecutionPlan{}, Timeline: []TimelineEntry{}, Handoffs: []Handoff{}, StreamStatuses: []StreamStatus{}, Interventions: []Intervention{}, CreatedAt: now, UpdatedAt: now}
+	t := Team{ID: i, RepositoryID: repositoryID, Outcome: outcome, Name: c.Name, Purpose: c.Purpose, OrganizerID: actor, OverallBudget: c.OverallBudget, Deadline: c.Deadline, EscalationPath: c.EscalationPath, Version: 1, Participants: c.Participants, PlanHistory: []ExecutionPlan{}, Timeline: []TimelineEntry{}, Handoffs: []Handoff{}, StreamStatuses: []StreamStatus{}, Interventions: []Intervention{}, Integrations: []Integration{}, CreatedAt: now, UpdatedAt: now}
 	for j := range t.Participants {
 		t.Participants[j].Status = "pending"
 		t.Participants[j].InvitedBy = actor
@@ -612,6 +659,116 @@ func contextInScope(stream WorkStream, context WorkContext) bool {
 }
 func validTimelineKind(kind string) bool {
 	return slices.Contains([]string{"finding", "question", "checkpoint", "artifact", "decision", "uncertainty"}, kind)
+}
+
+func (s *Store) PrepareIntegration(teamID, actor, principal string, expectedVersion, planRevision int, baseRevision string, contributions []IntegrationContribution, blockers []IntegrationBlocker) (Team, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.read(teamID)
+	if err != nil {
+		return t, err
+	}
+	if t.Version != expectedVersion {
+		return t, ErrConflict
+	}
+	if t.Plan == nil || t.Plan.Revision != planRevision || !validRevision(baseRevision) || participantForPrincipal(t, principal) == nil {
+		return t, ErrForbidden
+	}
+	if len(contributions) != len(t.Plan.Streams) {
+		return t, ErrInvalid
+	}
+	byStream := map[string]IntegrationContribution{}
+	for _, c := range contributions {
+		if c.StreamID == "" || c.RepositoryID == "" || c.Branch == "" || !validRevision(c.CommitID) || byStream[c.StreamID].StreamID != "" {
+			return t, ErrInvalid
+		}
+		byStream[c.StreamID] = c
+	}
+	ordered := make([]IntegrationContribution, 0, len(t.Plan.Streams))
+	for _, stream := range t.Plan.Streams {
+		c, ok := byStream[stream.ID]
+		if !ok {
+			return t, ErrInvalid
+		}
+		c.IntegrationOrder = stream.IntegrationOrder
+		if c.AcceptanceEvidence == nil {
+			c.AcceptanceEvidence = map[string][]string{}
+		}
+		if c.ChangedPaths == nil {
+			c.ChangedPaths = []string{}
+		}
+		if c.Authors == nil {
+			c.Authors = []string{}
+		}
+		if c.AgentActions == nil {
+			c.AgentActions = []string{}
+		}
+		if c.Decisions == nil {
+			c.Decisions = []string{}
+		}
+		if c.ResidualRisks == nil {
+			c.ResidualRisks = []string{}
+		}
+		ordered = append(ordered, c)
+	}
+	i, err := id()
+	if err != nil {
+		return t, err
+	}
+	now := s.now()
+	t.Integrations = append(t.Integrations, Integration{ID: i, PlanRevision: planRevision, BaseRevision: baseRevision, Contributions: ordered, Blockers: blockers, PullRequests: []IntegrationPull{}, PreparedBy: actor, PreparedAt: now})
+	t.Version++
+	t.UpdatedAt = now
+	t.Events = append(t.Events, event("integration.prepared", actor, "Prepared an ordered contribution manifest", t.Version, now))
+	return t, s.write(t)
+}
+
+// PublishIntegration holds the team's admission boundary across external pull
+// effects and the final manifest write. Team mutations therefore cannot make
+// an admitted publication stale after it has created review provenance.
+func (s *Store) PublishIntegration(teamID, integrationID, actor, principal string, expectedVersion int, publish func(Team, Integration) ([]IntegrationPull, error)) (Team, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.read(teamID)
+	if err != nil {
+		return t, err
+	}
+	if t.Version != expectedVersion {
+		return t, ErrConflict
+	}
+	if participantForPrincipal(t, principal) == nil {
+		return t, ErrForbidden
+	}
+	index := -1
+	for i := range t.Integrations {
+		in := &t.Integrations[i]
+		if in.ID != integrationID {
+			continue
+		}
+		if in.PublishedAt != nil || len(in.Blockers) > 0 {
+			return t, ErrInvalid
+		}
+		index = i
+	}
+	if index < 0 {
+		return t, ErrNotFound
+	}
+	pulls, err := publish(t, t.Integrations[index])
+	if err != nil {
+		return t, err
+	}
+	if len(pulls) != len(t.Integrations[index].Contributions) {
+		return t, ErrInvalid
+	}
+	now := s.now()
+	in := &t.Integrations[index]
+	in.PullRequests = append([]IntegrationPull(nil), pulls...)
+	in.PublishedBy = actor
+	in.PublishedAt = &now
+	t.Version++
+	t.UpdatedAt = now
+	t.Events = append(t.Events, event("integration.published", actor, "Published ordered contributions for ordinary review", t.Version, now))
+	return t, s.write(t)
 }
 
 func validatePlan(t Team, input PlanInput) ([]WorkStream, error) {

@@ -1092,6 +1092,21 @@ whenever dependencies change or the web job fails before it starts.
   authority-affecting interventions create a new plan revision and fresh owner
   acceptance while all accepted timeline, handoff, status, and intervention
   evidence remains retained.
+  Accepted repository writers reconcile one exact contribution per current
+  stream into durable integration manifests. Branch tips or already-published
+  workspace checkpoints must descend from the shared base; server-derived
+  paths expose overlaps, while incomplete streams, pending handoffs, plan
+  blockers, and criteria without same-stream evidence block publication. Ready
+  manifests open retry-safe ordinary pulls in declared order and trace team,
+  stream, commits, authorship, agent actions, decisions, costs, and residual
+  risk without bypassing review, checks, queues, release policy, or authority.
+  Publication holds the delivery-team mutation admission boundary across its
+  final live-readiness check, retry-safe pull recovery/linking, and manifest
+  write. Recovery reuses only an open pull at the exact source, target, team,
+  manifest, stream, and order; delivery identity is written atomically with a
+  new pull. Existing links cannot be replaced, so competing status changes,
+  inactive reviews, or unrelated branch-matching reviews cannot strand or
+  commandeer contribution provenance.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 
