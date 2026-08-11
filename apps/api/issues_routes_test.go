@@ -84,6 +84,25 @@ func TestIssueAttachmentsRejectDisallowedEvidence(t *testing.T) {
 	}
 }
 
+func TestLatestReporterDecisionControlsDeliveryResolution(t *testing.T) {
+	commit := strings.Repeat("a", 40)
+	verification := issues.RepairVerification{CandidateCommitID: commit, Decisions: []issues.ResolutionDecision{
+		{ID: "confirmed", Kind: "confirmed", ActorID: "reporter", CommitID: commit},
+		{ID: "override", Kind: "maintainer_override", ActorID: "owner", CommitID: commit},
+		{ID: "rejected", Kind: "rejected", ActorID: "reporter", CommitID: commit},
+	}}
+	if decision := latestReporterConfirmation(verification, "reporter"); decision != nil {
+		t.Fatalf("superseded confirmation selected: %#v", decision)
+	}
+	verification.Decisions = append(verification.Decisions,
+		issues.ResolutionDecision{ID: "other-commit", Kind: "rejected", ActorID: "reporter", CommitID: strings.Repeat("b", 40)},
+		issues.ResolutionDecision{ID: "reconfirmed", Kind: "confirmed", ActorID: "reporter", CommitID: commit},
+	)
+	if decision := latestReporterConfirmation(verification, "reporter"); decision == nil || decision.ID != "reconfirmed" {
+		t.Fatalf("latest exact-candidate confirmation = %#v", decision)
+	}
+}
+
 func TestIssueTriageRetainsCitedHumanAndBoundedAgentConclusions(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	identities, _ := users.New(t.TempDir())

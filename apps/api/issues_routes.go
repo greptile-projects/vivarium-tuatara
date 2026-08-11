@@ -1165,16 +1165,14 @@ func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *rep
 			return
 		}
 		var verification *issues.RepairVerification
-		var reporterDecision *issues.ResolutionDecision
 		for i := range current.RepairVerifications {
 			if current.RepairVerifications[i].ID == in.RepairVerificationID {
 				verification = &current.RepairVerifications[i]
-				for j := range verification.Decisions {
-					if verification.Decisions[j].ActorID == current.ReporterID && verification.Decisions[j].Kind == "confirmed" && verification.Decisions[j].CommitID == verification.CandidateCommitID {
-						reporterDecision = &verification.Decisions[j]
-					}
-				}
 			}
+		}
+		var reporterDecision *issues.ResolutionDecision
+		if verification != nil {
+			reporterDecision = latestReporterConfirmation(*verification, current.ReporterID)
 		}
 		if verification == nil || reporterDecision == nil {
 			writeAPIError(w, 409, "delivery_resolution_unconfirmed", "the reporter must confirm current passing repair proof before delivery can resolve the issue")
@@ -1218,6 +1216,24 @@ func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *rep
 		}
 		writeJSON(w, 201, updated)
 	})
+}
+
+// latestReporterConfirmation applies the append-only decision log in order.
+// A later rejection supersedes an earlier confirmation for the same exact
+// candidate, while a later confirmation after a retry may establish consent.
+func latestReporterConfirmation(verification issues.RepairVerification, reporterID string) *issues.ResolutionDecision {
+	var latest *issues.ResolutionDecision
+	for i := range verification.Decisions {
+		decision := &verification.Decisions[i]
+		if decision.ActorID != reporterID || decision.CommitID != verification.CandidateCommitID || (decision.Kind != "confirmed" && decision.Kind != "rejected") {
+			continue
+		}
+		latest = decision
+	}
+	if latest == nil || latest.Kind != "confirmed" {
+		return nil
+	}
+	return latest
 }
 
 func addIssueFinding(w http.ResponseWriter, r *http.Request, catalog *repositories.Store, store *issues.Store, actor auth.Credential, investigationID string, requireExpected int) {
