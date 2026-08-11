@@ -544,7 +544,10 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 					writeAPIError(w, 503, "delivery_integration_unavailable", "a published contribution could not be recovered")
 					return
 				}
-				startCheckRuns(git, checks, pull)
+				if checkErr := startCheckRuns(git, checks, pull); checkErr != nil {
+					writeAPIError(w, 503, "delivery_checks_unavailable", "required checks could not be recovered; retry publication")
+					return
+				}
 			}
 			writeJSON(w, 200, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
 			return
@@ -613,7 +616,10 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 		// later pull or the final team write fails, an exact retry reconciles the
 		// existing pulls before any check-run side effects begin.
 		for _, pull := range publishedPulls {
-			startCheckRuns(git, checks, pull)
+			if checkErr := startCheckRuns(git, checks, pull); checkErr != nil {
+				writeAPIError(w, 503, "delivery_checks_unavailable", "required checks could not be started; retry publication")
+				return
+			}
 		}
 		writeJSON(w, 201, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
 	})

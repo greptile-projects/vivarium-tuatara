@@ -2058,3 +2058,6 @@ An exact retry of a published integration may use the current team version or
 the immediately preceding pre-publication version. It follows the retained pull
 links and idempotently creates missing exact-revision check definitions or
 resumes nonterminal runs, returning `200` without changing the integration.
+If repository/configuration access or check-run persistence fails for any
+linked pull, publication or recovery returns retryable `503` with
+`delivery_checks_unavailable` rather than reporting that recovery completed.

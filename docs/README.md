@@ -1513,6 +1513,9 @@ pre-publication-version retry after the integration is published. It follows
 the retained pull links and idempotently creates only missing check definitions
 or resumes nonterminal runs, recovering a process stop or transient check-store
 failure without duplicating completed evidence.
+Repository access, configuration reads, and check-run persistence are part of
+that recovery outcome. Any failure returns a retryable `503`; a successful
+response means every linked pull's required check records were reconciled.
 
 The connected delivery-team browser journey carries an accepted technical
 decision through a chartered developer and two independently operated

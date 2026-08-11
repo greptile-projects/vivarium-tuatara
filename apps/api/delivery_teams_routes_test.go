@@ -5,16 +5,40 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deliveryteams"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
+
+func TestDeliveryCheckRecoveryReportsPersistenceFailure(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	repository, _ := gitStore.Create(strings.Repeat("a", 32))
+	config, _ := repository.WriteObject(storage.BlobObject, []byte(`{"version":1,"checks":[{"name":"required","image":"alpine:3.22","command":"true"}]}`))
+	configTree := writeTestTree(t, repository, testTreeEntry{mode: "100644", name: "checks.json", id: config})
+	tree := writeTestTree(t, repository, testTreeEntry{mode: "40000", name: ".vivarium", id: configTree})
+	commit := writeTestCommit(t, repository, tree, nil, 1, "checked contribution")
+	checkRoot := t.TempDir()
+	checks, _ := checkruns.New(checkRoot)
+	if err := os.RemoveAll(checkRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(checkRoot, []byte("storage unavailable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := startCheckRuns(gitStore, checks, pullrequests.PullRequest{ID: strings.Repeat("b", 32), RepositoryID: repository.ID(), SourceCommitID: string(commit)})
+	if err == nil || !strings.Contains(err.Error(), "create check runs") {
+		t.Fatalf("check recovery error = %v", err)
+	}
+}
 
 func TestDeliveryTeamAPIInvitesWithoutGrantingRepositoryAuthority(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())

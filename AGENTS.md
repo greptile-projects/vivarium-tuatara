@@ -1113,7 +1113,9 @@ whenever dependencies change or the web job fails before it starts.
   an exact retry reconciles existing pulls before execution. A published
   integration accepts its current or lost-response pre-publication version as
   an idempotent recovery request, recreating only missing check definitions and
-  resuming nonterminal runs from its durable pull links. The connected
+  resuming nonterminal runs from its durable pull links. Repository,
+  configuration, or check-store persistence failure returns a retryable `503`
+  rather than claiming recovery completed. The connected
   delivery-team browser journey protects the complete accepted-decision loop:
   independently operated specialist agents and a developer accept parallel
   streams, retain a disputed finding and lead resolution, redirect a failed
