@@ -1094,7 +1094,7 @@ export function PullRequestDetail({
             participant={participant}
             sourceCommitID={pull.source_commit_id}
           />
-          <PullRequestPreviews repositoryID={repositoryID} pullRequestID={pullRequestID} participant={participant} />
+          <PullRequestPreviews repositoryID={repositoryID} pullRequestID={pullRequestID} participant={participant} owner={isOwner} />
           <section id="commits" className="scroll-mt-24">
             <div className="mb-3 flex items-baseline justify-between">
               <h2 className="text-lg font-semibold">Commits</h2>

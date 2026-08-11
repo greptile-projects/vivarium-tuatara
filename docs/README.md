@@ -714,7 +714,13 @@ output. Successful builds expose only `index.html` through an authenticated,
 sandboxed URL. Records beneath `$PREVIEW_STORAGE_ROOT` (default `previews`)
 retain creator, revision, definition SHA-256, lifecycle, logs, and failures.
 Pull synchronization marks older previews stale without replacing their URL or
-evidence.
+evidence. Each definition fails closed with network `none`, artifact-only data,
+named identity, and explicit view, test, or feedback actions. A repository owner
+can invite a named user or expand current issue, decision, or proposal
+participants into expiring roles. Invitation, first-entry, and revocation are
+audited. Guests receive only authenticated sandboxed static assets: no logs,
+source, credentials, workspaces, environments, deployments, private services,
+forms, outbound connections, or production authority.
 The API derives the source-only commit set and recursive changed-file summary
 from the fixed target snapshot and explicitly synchronized source revision.
 Immutable pull request comments retain stable author IDs; owners, contributors,

@@ -872,7 +872,13 @@ whenever dependencies change or the web job fails before it starts.
   creator, lifecycle, setup logs, failures, and a sandboxed authenticated
   `index.html` URL beneath `$PREVIEW_STORAGE_ROOT` (default `previews`). Pull
   synchronization projects older previews as stale without replacing their
-  retained URL or evidence.
+  retained URL or evidence. Definitions fail closed on network `none`,
+  artifact-only data, named identity, and explicit view, test, or feedback
+  actions. Repository owners may invite named users or current issue, decision,
+  and proposal participants into attributable roles expiring within 30 days.
+  Entry and revocation are audited; invitations confer no repository,
+  credential, workspace, check-log, environment, deployment, private-service,
+  or production authority.
   Fork-source synchronization holds the catalog's cross-process lock while it
   rechecks current target access, imports a newer revision, and publishes the
   pull snapshot, so revocation cannot commit mid-adoption. If the source fork is deleted, synchronization stops but
