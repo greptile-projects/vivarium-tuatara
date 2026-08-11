@@ -55,17 +55,13 @@ func TestGuidedContributionEvidenceSurvivesOrdinaryForkPull(t *testing.T) {
 	head := writeCommit(t, fork, headTree, "guided work")
 	_ = fork.CreateReference(storage.Reference{Name: "refs/heads/contribution/docs", Target: string(head)})
 	store, _ := New(t.TempDir(), gitStore)
-	pull, err := store.CreateFrom(upstream.ID(), fork.ID(), testID('3'), "Clarify setup", "Ordinary upstream review.", "contribution/docs", "main", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	evidence := ContributionEvidence{OpportunityID: testID('4'), OpportunityVersion: 2, PathwayVersion: 1, UpstreamRevision: string(base), SetupEvidence: []ContributionSetup{{Command: "go test ./...", State: "passed"}}, MentorGuidanceIDs: []string{"guidance-1"}, AgentAssistanceIDs: []string{"agent-help-1"}, AcceptanceCriteria: []string{"Setup is clear"}, SatisfiedCriteria: []string{"Setup is clear"}, CoachingNeeds: []ContributionFinding{{Code: "open_guidance", Message: "Consider another example", Fix: "Discuss in review"}}}
-	pull, err = store.LinkContributionEvidence(upstream.ID(), pull.ID, evidence)
+	pull, err := store.CreateGuidedContributionFrom(upstream.ID(), fork.ID(), testID('3'), "Clarify setup", "Ordinary upstream review.", "contribution/docs", "main", GuidedContributionCreation{WorkspaceID: testID('5'), CheckpointID: testID('6'), Contributors: []string{testID('3')}, CommandIDs: []string{"command-1"}, Evidence: evidence})
 	if err != nil {
 		t.Fatal(err)
 	}
 	stored, err := store.Get(upstream.ID(), pull.ID)
-	if err != nil || stored.SourceRepositoryID != fork.ID() || stored.ContributionEvidence == nil || stored.ContributionEvidence.OpportunityID != evidence.OpportunityID || len(stored.ContributionEvidence.CoachingNeeds) != 1 {
+	if err != nil || stored.SourceRepositoryID != fork.ID() || stored.WorkspaceID != testID('5') || stored.ContributionEvidence == nil || stored.ContributionEvidence.OpportunityID != evidence.OpportunityID || len(stored.ContributionEvidence.CoachingNeeds) != 1 {
 		t.Fatalf("guided pull evidence = %#v, %v", stored, err)
 	}
 }

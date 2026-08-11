@@ -78,7 +78,14 @@ func registerContributorPublicationRoutes(mux *http.ServeMux, git *storage.Store
 			return
 		}
 		if checkpoint.Publication != nil {
-			writeJSON(w, 200, checkpoint.Public())
+			pull, pullErr := pulls.Get(workspace.ContributorContext.UpstreamRepositoryID, checkpoint.Publication.PullRequestID)
+			if pullErr != nil || pull.ContributionEvidence == nil {
+				w.Header().Set("Vivarium-Recovery-Publication", "pending")
+				writeJSON(w, 202, map[string]any{"checkpoint": checkpoint.Public(), "pull_request": pull, "assessment": assessment})
+				return
+			}
+			startCheckRuns(git, checks, pull)
+			writeJSON(w, 200, map[string]any{"checkpoint": checkpoint.Public(), "pull_request": pull, "assessment": assessment})
 			return
 		}
 		forkGit, err := git.Open(workspace.RepositoryID)
@@ -105,6 +112,39 @@ func registerContributorPublicationRoutes(mux *http.ServeMux, git *storage.Store
 			return
 		}
 		defer release()
+		// The request-level preview is advisory. Re-read governing state after
+		// publication admission and bind only this assessment to the pull.
+		assessment, err = assessContributionPublication(workspace, checkpoint, actor.UserID, in.SatisfiedCriteria, opportunities, pathways)
+		if err != nil {
+			writeAPIError(w, 503, "contribution_preflight_unavailable", "contribution requirements could not be revalidated")
+			return
+		}
+		if !assessment.Ready {
+			writeJSON(w, 409, map[string]any{"error": map[string]string{"code": "contribution_governance_changed", "message": "contribution requirements changed during publication"}, "assessment": assessment})
+			return
+		}
+		if intent, intentErr := ws.GetPublicationIntent(workspace.ID, checkpoint.ID); intentErr == nil {
+			if intent.Publication.Branch != in.Branch || intent.Publication.PullRequestID == "" {
+				writeAPIError(w, 409, "contribution_publication_pending", "publication recovery requires the original branch and retained pull")
+				return
+			}
+			pull, pullErr := pulls.Get(workspace.ContributorContext.UpstreamRepositoryID, intent.Publication.PullRequestID)
+			if pullErr != nil || pull.ContributionEvidence == nil {
+				w.Header().Set("Vivarium-Recovery-Publication", "pending")
+				writeJSON(w, 202, map[string]any{"checkpoint": checkpoint.Public(), "pull_request": pull, "assessment": assessment})
+				return
+			}
+			checkpoint, recordErr := ws.RecordCheckpointPublication(workspace.ID, checkpoint.ID, intent.Publication)
+			if recordErr != nil {
+				w.Header().Set("Vivarium-Recovery-Publication", "pending")
+				writeJSON(w, 202, map[string]any{"checkpoint": checkpoint.Public(), "pull_request": pull, "assessment": assessment})
+				return
+			}
+			_ = ws.ClearPublicationIntent(workspace.ID, checkpoint.ID)
+			startCheckRuns(git, checks, pull)
+			writeJSON(w, 200, map[string]any{"checkpoint": checkpoint.Public(), "pull_request": pull, "assessment": assessment})
+			return
+		}
 		if _, refErr := forkGit.ReadReference("refs/heads/" + in.Branch); refErr == nil {
 			writeAPIError(w, 409, "workspace_branch_changed", "the contribution branch already exists")
 			return
@@ -118,29 +158,37 @@ func registerContributorPublicationRoutes(mux *http.ServeMux, git *storage.Store
 			writeAPIError(w, 409, "workspace_branch_changed", "the contribution branch changed while publishing")
 			return
 		}
+		assessment, err = assessContributionPublication(workspace, checkpoint, actor.UserID, in.SatisfiedCriteria, opportunities, pathways)
+		if err != nil || !assessment.Ready {
+			_ = forkGit.DeleteReferenceIfTarget("refs/heads/"+in.Branch, commitID)
+			if err != nil {
+				writeAPIError(w, 503, "contribution_preflight_unavailable", "contribution requirements could not be revalidated")
+			} else {
+				writeJSON(w, 409, map[string]any{"error": map[string]string{"code": "contribution_governance_changed", "message": "contribution requirements changed during publication"}, "assessment": assessment})
+			}
+			return
+		}
 		contributors, commandIDs := workspacePublicationEvidence(checkpoint)
 		evidence := contributionEvidence(workspace, assessment, in.SatisfiedCriteria)
 		body := contributionPullBody(workspace, checkpoint, evidence)
-		pull, err := pulls.CreateFrom(workspace.ContributorContext.UpstreamRepositoryID, workspace.RepositoryID, actor.UserID, in.Title, body, in.Branch, in.TargetBranch, nil)
+		pull, err := pulls.CreateGuidedContributionFrom(workspace.ContributorContext.UpstreamRepositoryID, workspace.RepositoryID, actor.UserID, in.Title, body, in.Branch, in.TargetBranch, pullrequests.GuidedContributionCreation{WorkspaceID: workspace.ID, CheckpointID: checkpoint.ID, Contributors: contributors, CommandIDs: commandIDs, Evidence: evidence})
 		if err != nil {
 			_ = forkGit.DeleteReferenceIfTarget("refs/heads/"+in.Branch, commitID)
 			writeAPIError(w, 409, "contribution_pull_failed", "the fork branch could not enter upstream review")
 			return
 		}
-		pull, err = pulls.LinkWorkspace(pull.RepositoryID, pull.ID, workspace.ID, checkpoint.ID, contributors, commandIDs)
-		if err == nil {
-			pull, err = pulls.LinkContributionEvidence(pull.RepositoryID, pull.ID, evidence)
-		}
-		if err == nil && in.MaintainerEditsAllowed {
+		if in.MaintainerEditsAllowed {
 			pull, err = pulls.UpdatePolicy(pull.RepositoryID, pull.ID, true)
 		}
 		publication := workspaces.Publication{Branch: in.Branch, CommitID: commitID, PullRequestID: pull.ID, ContributorIDs: contributors, CommandIDs: commandIDs, PublishedBy: actor.UserID, PublishedAt: time.Now().UTC()}
+		intentErr := ws.SavePublicationIntent(workspaces.PublicationIntent{WorkspaceID: workspace.ID, CheckpointID: checkpoint.ID, Publication: publication})
 		checkpoint, recordErr := ws.RecordCheckpointPublication(workspace.ID, checkpoint.ID, publication)
-		if err != nil || recordErr != nil {
+		if err != nil || intentErr != nil || recordErr != nil {
 			w.Header().Set("Vivarium-Recovery-Publication", "pending")
 			writeJSON(w, 202, map[string]any{"checkpoint": checkpoint.Public(), "pull_request": pull, "assessment": assessment})
 			return
 		}
+		_ = ws.ClearPublicationIntent(workspace.ID, checkpoint.ID)
 		startCheckRuns(git, checks, pull)
 		w.Header().Set("Location", "/repositories/"+pull.RepositoryID+"/pulls/"+pull.ID)
 		writeJSON(w, 201, map[string]any{"checkpoint": checkpoint.Public(), "pull_request": pull, "assessment": assessment})
