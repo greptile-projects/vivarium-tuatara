@@ -160,6 +160,35 @@ type Implementation struct {
 	CreatedAt             time.Time `json:"created_at"`
 }
 
+// RepairVerification freezes issue-specific proof for one exact pull revision.
+// Decisions are append-only so a maintainer override never erases the
+// reporter's dissent.
+type RepairVerification struct {
+	ID                    string               `json:"id"`
+	PullRequestID         string               `json:"pull_request_id"`
+	CandidateCommitID     string               `json:"candidate_commit_id"`
+	ReproductionAttemptID string               `json:"reproduction_attempt_id"`
+	DefinitionSHA256      string               `json:"definition_sha256"`
+	InputSHA256s          []string             `json:"input_sha256s"`
+	AcceptanceCriteria    []string             `json:"acceptance_criteria"`
+	RequiredRunIDs        []string             `json:"required_run_ids"`
+	ReproductionRunIDs    []string             `json:"reproduction_run_ids"`
+	RequestedBy           string               `json:"requested_by"`
+	Decisions             []ResolutionDecision `json:"decisions"`
+	PreviewAllowed        bool                 `json:"preview_allowed"`
+	PreviewWorkspaceID    string               `json:"preview_workspace_id,omitempty"`
+	CreatedAt             time.Time            `json:"created_at"`
+}
+
+type ResolutionDecision struct {
+	ID        string    `json:"id"`
+	Kind      string    `json:"kind"`
+	ActorID   string    `json:"actor_id"`
+	CommitID  string    `json:"commit_id"`
+	Rationale string    `json:"rationale"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type Issue struct {
 	ID                   string                `json:"id"`
 	RepositoryID         string                `json:"repository_id"`
@@ -184,6 +213,7 @@ type Issue struct {
 	Findings             []Finding             `json:"findings"`
 	Investigations       []Investigation       `json:"investigations"`
 	Implementation       *Implementation       `json:"implementation,omitempty"`
+	RepairVerifications  []RepairVerification  `json:"repair_verifications,omitempty"`
 	DuplicateOf          string                `json:"duplicate_of,omitempty"`
 	Version              int                   `json:"version"`
 	CreatedAt            time.Time             `json:"created_at"`
@@ -219,7 +249,11 @@ func (s *Store) Mutate(repositoryID, id, actor string, expected int, fn func(*Is
 func AddHistory(v *Issue, kind, actor, message string) {
 	v.History = append(v.History, HistoryEntry{ID: newID(), Kind: kind, ActorID: actor, Message: message, CreatedAt: time.Now().UTC()})
 }
-func NewID() string { return newID() }
+
+// NewEvidenceID allocates an opaque identifier for cross-store evidence that
+// is persisted through Mutate.
+func NewEvidenceID() string { return newID() }
+func NewID() string         { return newID() }
 
 func (s *Store) AddReproductionAttempt(repositoryID, id, actor string, attempt ReproductionAttempt) (Issue, error) {
 	s.mu.Lock()

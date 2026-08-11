@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -38,6 +39,16 @@ type Definition struct {
 	WorkingDirectory string            `json:"working_directory,omitempty"`
 	Environment      map[string]string `json:"environment,omitempty"`
 	TimeoutSeconds   int               `json:"timeout_seconds,omitempty"`
+	Inputs           []InputFile       `json:"inputs,omitempty"`
+}
+
+// InputFile is server-frozen verification input. Repository check
+// configuration cannot declare these; issue verification supplies them from
+// retained, checksummed reporter evidence.
+type InputFile struct {
+	Name   string `json:"name"`
+	SHA256 string `json:"sha256"`
+	Data   string `json:"data"`
 }
 
 type Config struct {
@@ -182,6 +193,9 @@ func ParseConfig(data []byte) (Config, error) {
 	seen := map[string]bool{}
 	for i := range c.Checks {
 		x := &c.Checks[i]
+		if len(x.Inputs) != 0 {
+			return Config{}, errors.New("check configuration cannot embed inputs")
+		}
 		if strings.TrimSpace(x.Name) == "" || len(x.Name) > 100 || strings.TrimSpace(x.Command) == "" || len(x.Command) > 4000 || seen[x.Name] || x.TimeoutSeconds < 0 || x.TimeoutSeconds > 3600 {
 			return Config{}, errors.New("invalid check definition")
 		}
@@ -927,6 +941,21 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 	}
 	exit := 0
 	if err == nil {
+		for _, input := range run.Definition.Inputs {
+			clean := filepath.Clean(input.Name)
+			raw, decodeErr := base64.StdEncoding.DecodeString(input.Data)
+			sum := sha256.Sum256(raw)
+			if decodeErr != nil || clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || hex.EncodeToString(sum[:]) != input.SHA256 {
+				err = errors.New("verification input is invalid")
+				break
+			}
+			if writeErr := writeVerificationInput(workspace, clean, raw); writeErr != nil {
+				err = writeErr
+				break
+			}
+		}
+	}
+	if err == nil {
 		dir := filepath.Join(workspace, run.Definition.WorkingDirectory)
 		info, e := os.Stat(dir)
 		if e != nil || !info.IsDir() {
@@ -1032,6 +1061,55 @@ executionDone:
 	last := &run.Attempts[len(run.Attempts)-1]
 	last.State, last.CompletedAt, last.ExitCode, last.Failure = run.State, &done, run.ExitCode, run.Failure
 	s.publishTerminal(run, attemptNumber, done)
+}
+
+// writeVerificationInput walks the disposable checkout through held directory
+// descriptors. Candidate-controlled symlinks (and replacement races) cannot
+// redirect API-process writes outside that checkout.
+func writeVerificationInput(root, name string, data []byte) error {
+	rootFD, err := syscall.Open(root, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer syscall.Close(rootFD)
+	parts := strings.Split(name, string(filepath.Separator))
+	parentFD := rootFD
+	for _, component := range parts[:len(parts)-1] {
+		nextFD, openErr := syscall.Openat(parentFD, component, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+		if errors.Is(openErr, syscall.ENOENT) {
+			if mkdirErr := syscall.Mkdirat(parentFD, component, 0o700); mkdirErr != nil && !errors.Is(mkdirErr, syscall.EEXIST) {
+				if parentFD != rootFD {
+					syscall.Close(parentFD)
+				}
+				return mkdirErr
+			}
+			nextFD, openErr = syscall.Openat(parentFD, component, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+		}
+		if parentFD != rootFD {
+			syscall.Close(parentFD)
+		}
+		if openErr != nil {
+			return openErr
+		}
+		parentFD = nextFD
+	}
+	if parentFD != rootFD {
+		defer syscall.Close(parentFD)
+	}
+	fd, err := syscall.Openat(parentFD, parts[len(parts)-1], syscall.O_WRONLY|syscall.O_CREAT|syscall.O_TRUNC|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o600)
+	if err != nil {
+		return err
+	}
+	file := os.NewFile(uintptr(fd), parts[len(parts)-1])
+	if file == nil {
+		syscall.Close(fd)
+		return errors.New("verification input file unavailable")
+	}
+	defer file.Close()
+	if _, err = file.Write(data); err != nil {
+		return err
+	}
+	return file.Sync()
 }
 
 func (s *Store) updatePublished(run Run) bool {

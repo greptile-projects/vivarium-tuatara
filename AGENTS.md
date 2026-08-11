@@ -1169,6 +1169,17 @@ whenever dependencies change or the web job fails before it starts.
   Recovery compares the entire frozen reasoning origin (version, revision,
   selected evidence, and item snapshots); changed evidence is a `409`, never a
   relink of new issue claims to an older task.
+  Exact repair pull revisions can reserve issue-specific verification that
+  reruns retained clean-environment commands and checksummed reporter inputs
+  beside required checks frozen from the affected base. Pull movement makes
+  proof and confirmation stale. Reporter confirmation/rejection and owner-only
+  reasoned overrides append without rewriting dissent.
+  A running pull-linked workspace at the same candidate revision is the only
+  optional safe-preview handoff and retains normal workspace sharing controls.
+  Verification input staging walks held no-follow directory descriptors so a
+  candidate symlink cannot redirect API writes. A deterministic evidence key
+  is durably reserved on the issue before check creation; recovery links and
+  executes only that reservation's runs, preventing orphan or duplicate work.
 
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.

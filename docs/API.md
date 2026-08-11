@@ -2144,3 +2144,21 @@ only `issues:investigate`. Its nested investigation `GET` exposes only that
 frozen packet, and nested `POST /findings` accepts citations only from the
 selection. Agent findings carry the generated agent identity; the initiator,
 credential binding, mandate, evidence selection, and history remain retained.
+
+Issue repairs gain revision-exact proof through `POST
+/repositories/{id}/issues/{issue-id}/repair-verifications`. The candidate must
+be the current commit of the issue task's ordinary pull. The server freezes the
+original reproduction environment and checksummed inputs, stages those inputs
+in a fresh network-disabled checkout, reruns its retained commands, and runs
+required checks defined by the trusted affected revision. `GET` projects
+permitted logs, criteria, pass state, and staleness. Reporter confirmation or
+rejection and owner-only justified overrides append through the nested
+`/decisions` endpoint without replacing dissent. Pull movement invalidates the
+projection and blocks decisions against stale evidence.
+When the exact candidate already has a running, currently shared pull-linked
+workspace, the proof includes `preview_allowed` and `preview_workspace_id`; its
+existing authenticated workspace preview remains the policy enforcement point.
+Input files are created through descriptor-relative no-follow traversal, so
+candidate archive symlinks cannot redirect staging. The issue durably reserves
+a deterministic verification identity before creating checks; split-outcome
+retries reuse and link that reservation, and execute only its recorded run IDs.

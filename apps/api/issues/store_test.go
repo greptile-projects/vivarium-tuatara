@@ -50,3 +50,31 @@ func TestReproductionAttemptIsRetainedAsImmutableEvidence(t *testing.T) {
 		t.Fatalf("reloaded = %#v, %v", reloaded, err)
 	}
 }
+
+func TestRepairVerificationRetainsReporterDissentAndOverride(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	issue, err := store.Create(Issue{RepositoryID: "repository", ReporterID: "reporter", Title: "Failure", ExpectedBehavior: "works", ObservedBehavior: "fails", Severity: "medium", Environment: "Linux", ReproductionSteps: []string{"run"}, Visibility: "repository"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	verification := RepairVerification{ID: NewEvidenceID(), PullRequestID: strings.Repeat("1", 32), CandidateCommitID: strings.Repeat("a", 40), ReproductionAttemptID: strings.Repeat("2", 32), DefinitionSHA256: strings.Repeat("b", 64), InputSHA256s: []string{strings.Repeat("c", 64)}, AcceptanceCriteria: []string{"upload completes"}, Decisions: []ResolutionDecision{{ID: NewEvidenceID(), Kind: "rejected", ActorID: "reporter", CommitID: strings.Repeat("a", 40), Rationale: "the original behavior remains"}}}
+	updated, err := store.Mutate(issue.RepositoryID, issue.ID, "owner", issue.Version, func(v *Issue) error {
+		verification.Decisions = append(verification.Decisions, ResolutionDecision{ID: NewEvidenceID(), Kind: "maintainer_override", ActorID: "owner", CommitID: verification.CandidateCommitID, Rationale: "release is blocked by separate evidence"})
+		v.RepairVerifications = append(v.RepairVerifications, verification)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decisions := updated.RepairVerifications[0].Decisions
+	if len(decisions) != 2 || decisions[0].Kind != "rejected" || decisions[1].Kind != "maintainer_override" {
+		t.Fatalf("decisions = %#v", decisions)
+	}
+	reloaded, err := store.Get(issue.RepositoryID, issue.ID)
+	if err != nil || len(reloaded.RepairVerifications) != 1 || len(reloaded.RepairVerifications[0].InputSHA256s) != 1 {
+		t.Fatalf("reloaded = %#v, %v", reloaded, err)
+	}
+}
