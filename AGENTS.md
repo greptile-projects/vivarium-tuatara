@@ -1194,7 +1194,10 @@ whenever dependencies change or the web job fails before it starts.
   repositories expose them without authentication. Live reads classify linked
   documentation, ownership, releases, issues, proposals, and workspace
   definitions as current, stale, or inaccessible without changing history.
-  Authenticated readers acknowledge exact revisions. Records default beneath
+  Authenticated readers acknowledge exact revisions; anonymous reads expose
+  only a count, owners see attribution, and readers see only their own record.
+  Visible writes with uncertain directory synchronization return `202` plus
+  the retained identity. Records default beneath
   `$CONTRIBUTOR_PATHWAY_STORAGE_ROOT` (`contributor-pathways`), and the web
   surface is `/repositories/{id}/contribute`.
 

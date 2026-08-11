@@ -81,6 +81,8 @@ func registerContributorPathwayRoutes(mux *http.ServeMux, git *storage.Store, re
 					link.Status, link.StatusDetail = "inaccessible", "Workspace records are unavailable."
 				} else if v, err := workspaceStore.Get(link.ResourceID); err != nil || v.RepositoryID != repositoryID {
 					link.Status, link.StatusDetail = "stale", "The linked workspace definition is no longer available."
+				} else if actorID == "" || !canReadPrivate || v.Policy.Sharing == "private" && actorID != v.CreatorID && actorID != repo.OwnerID {
+					link.Status, link.StatusDetail = "inaccessible", "The linked workspace definition is not accessible."
 				}
 			}
 		}
@@ -116,8 +118,23 @@ func registerContributorPathwayRoutes(mux *http.ServeMux, git *storage.Store, re
 			writeAPIError(w, 500, "contributor_pathway_read_failed", "contributor pathway could not be read")
 			return
 		}
-		acks, _ := pathways.Acknowledgements(r.PathValue("id"))
-		writeJSON(w, 200, map[string]any{"pathway": present(r.PathValue("id"), actorID, current), "history": history, "acknowledgements": acks})
+		acks, err := pathways.Acknowledgements(r.PathValue("id"))
+		if err != nil {
+			writeAPIError(w, 500, "contributor_pathway_read_failed", "contributor pathway could not be read")
+			return
+		}
+		visibleAcks := []contributorpathways.Acknowledgement{}
+		repository, _ := repos.GetByID(r.PathValue("id"))
+		if actorID == repository.OwnerID {
+			visibleAcks = acks
+		} else if actorID != "" {
+			for _, acknowledgement := range acks {
+				if acknowledgement.ActorID == actorID {
+					visibleAcks = append(visibleAcks, acknowledgement)
+				}
+			}
+		}
+		writeJSON(w, 200, map[string]any{"pathway": present(r.PathValue("id"), actorID, current), "history": history, "acknowledgements": visibleAcks, "acknowledgement_count": len(acks)})
 	})
 	mux.HandleFunc("PUT /repositories/{id}/contributor-pathway", func(w http.ResponseWriter, r *http.Request) {
 		actor, owner, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")
@@ -150,12 +167,17 @@ func registerContributorPathwayRoutes(mux *http.ServeMux, git *storage.Store, re
 			writeAPIError(w, 422, "invalid_contributor_pathway", "all contributor expectations and valid requirement links are required")
 			return
 		}
-		if err != nil {
+		if err != nil && !errors.Is(err, contributorpathways.ErrDurabilityUncertain) {
 			writeAPIError(w, 500, "contributor_pathway_write_failed", "contributor pathway could not be published")
 			return
 		}
 		w.Header().Set("Location", "/repositories/"+r.PathValue("id")+"/contributor-pathway")
-		writeJSON(w, 201, present(r.PathValue("id"), actor.UserID, created))
+		status := http.StatusCreated
+		if errors.Is(err, contributorpathways.ErrDurabilityUncertain) {
+			w.Header().Set("Vivarium-Durability", "uncertain")
+			status = http.StatusAccepted
+		}
+		writeJSON(w, status, present(r.PathValue("id"), actor.UserID, created))
 	})
 	mux.HandleFunc("POST /repositories/{id}/contributor-pathway/acknowledgements", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
@@ -188,10 +210,15 @@ func registerContributorPathwayRoutes(mux *http.ServeMux, git *storage.Store, re
 			writeAPIError(w, 422, "invalid_pathway_version", "pathway version does not exist")
 			return
 		}
-		if err != nil {
+		if err != nil && !errors.Is(err, contributorpathways.ErrDurabilityUncertain) {
 			writeAPIError(w, 500, "pathway_acknowledgement_failed", "acknowledgement could not be retained")
 			return
 		}
-		writeJSON(w, 201, ack)
+		status := http.StatusCreated
+		if errors.Is(err, contributorpathways.ErrDurabilityUncertain) {
+			w.Header().Set("Vivarium-Durability", "uncertain")
+			status = http.StatusAccepted
+		}
+		writeJSON(w, status, ack)
 	})
 }

@@ -17,10 +17,11 @@ import (
 )
 
 var (
-	ErrNotFound     = errors.New("contributor pathway not found")
-	ErrInvalid      = errors.New("invalid contributor pathway")
-	ErrConflict     = errors.New("contributor pathway version changed")
-	ErrAcknowledged = errors.New("contributor pathway already acknowledged")
+	ErrNotFound            = errors.New("contributor pathway not found")
+	ErrInvalid             = errors.New("invalid contributor pathway")
+	ErrConflict            = errors.New("contributor pathway version changed")
+	ErrAcknowledged        = errors.New("contributor pathway already acknowledged")
+	ErrDurabilityUncertain = errors.New("contributor pathway mutation is visible but durability is uncertain")
 )
 
 type Setup struct {
@@ -71,16 +72,17 @@ type Acknowledgement struct {
 }
 
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root          string
+	mu            sync.Mutex
+	now           func() time.Time
+	directorySync func(string) error
 }
 
 func New(root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
-	return &Store{root: root, now: time.Now}, nil
+	return &Store{root: root, now: time.Now, directorySync: syncDir}, nil
 }
 
 func (s *Store) Publish(input Revision, expectedVersion int) (Revision, error) {
@@ -113,7 +115,10 @@ func (s *Store) Publish(input Revision, expectedVersion int) (Revision, error) {
 	if err := writeJSON(filepath.Join(dir, "revision-"+formatVersion(input.Version)+".json"), input); err != nil {
 		return Revision{}, err
 	}
-	return input, syncDir(dir)
+	if err := s.directorySync(dir); err != nil {
+		return input, errors.Join(ErrDurabilityUncertain, err)
+	}
+	return input, nil
 }
 
 func (s *Store) Current(repositoryID string) (Revision, error) {
@@ -186,7 +191,10 @@ func (s *Store) Acknowledge(repositoryID string, version int, actorID string) (A
 	if err := writeJSON(name, v); err != nil {
 		return Acknowledgement{}, err
 	}
-	return v, syncDir(dir)
+	if err := s.directorySync(dir); err != nil {
+		return v, errors.Join(ErrDurabilityUncertain, err)
+	}
+	return v, nil
 }
 
 func (s *Store) Acknowledgements(repositoryID string) ([]Acknowledgement, error) {

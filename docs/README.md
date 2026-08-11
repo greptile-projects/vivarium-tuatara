@@ -27,8 +27,9 @@ References to documentation, current ownership, releases, issues, proposals,
 and workspace definitions are projected against live repository state on every
 read. Missing, moved, or private requirements remain in history and are marked
 stale or inaccessible rather than disappearing. Authenticated readers can
-acknowledge an exact revision; publication and acknowledgement attribution are
-append-only beneath `$CONTRIBUTOR_PATHWAY_STORAGE_ROOT` (default
+acknowledge an exact revision. Public reads expose only a non-identifying count;
+owners receive full attribution and other authenticated readers only their own
+acknowledgement. Publication and acknowledgement attribution are append-only beneath `$CONTRIBUTOR_PATHWAY_STORAGE_ROOT` (default
 `contributor-pathways`). The repository's “How to contribute” surface supports
 the same publish, inspect, health, history, and acknowledgement flow.
 

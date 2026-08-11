@@ -25,6 +25,7 @@ export type ContributorPathwayResponse = {
   pathway: ContributorPathway;
   history: ContributorPathway[];
   acknowledgements: { id: string; version: number; actor_id: string; acknowledged_at: string }[];
+  acknowledgement_count: number;
 };
 export type DeliveryTeam = {
   id: string;
