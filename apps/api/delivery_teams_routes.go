@@ -547,36 +547,41 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 			writeAPIError(w, 503, "delivery_integration_unavailable", "pull request governance is unavailable")
 			return
 		}
-		published := []deliveryteams.IntegrationPull{}
-		for _, c := range manifest.Contributions {
-			if !deliveryRepositoryWrite(actor.UserID, c.RepositoryID, catalog) {
-				writeAPIError(w, 403, "delivery_integration_forbidden", "each contribution requires independent repository write access")
-				return
+		publishStatus, publishCode, publishMessage := 0, "", ""
+		team, err = store.PublishIntegration(team.ID, manifest.ID, actor.UserID, principal, in.ExpectedVersion, func(currentTeam deliveryteams.Team, currentManifest deliveryteams.Integration) ([]deliveryteams.IntegrationPull, error) {
+			if currentTeam.Plan == nil || currentManifest.PlanRevision != currentTeam.Plan.Revision {
+				publishStatus, publishCode, publishMessage = 409, "delivery_integration_blocked", "the current execution plan changed after reconciliation"
+				return nil, deliveryteams.ErrConflict
 			}
-			repository, openErr := git.Open(c.RepositoryID)
-			if openErr != nil {
-				writeAPIError(w, 409, "delivery_integration_changed", "a contribution repository is unavailable")
-				return
+			contributions := append([]deliveryteams.IntegrationContribution(nil), currentManifest.Contributions...)
+			blockers, ready := analyzeDeliveryIntegration(currentTeam, currentManifest.BaseRevision, contributions, git, workspaceStore)
+			if !ready || len(blockers) > 0 {
+				publishStatus, publishCode, publishMessage = 409, "delivery_integration_blocked", "current delivery readiness no longer permits publication"
+				return nil, deliveryteams.ErrConflict
 			}
-			ref, refErr := repository.ReadReference("refs/heads/" + c.Branch)
-			if refErr != nil || ref.Target != c.CommitID {
-				writeAPIError(w, 409, "delivery_integration_changed", "a contribution branch moved after reconciliation")
-				return
+			published := []deliveryteams.IntegrationPull{}
+			for _, c := range currentManifest.Contributions {
+				if !deliveryRepositoryWrite(actor.UserID, c.RepositoryID, catalog) {
+					publishStatus, publishCode, publishMessage = 403, "delivery_integration_forbidden", "each contribution requires independent repository write access"
+					return nil, deliveryteams.ErrForbidden
+				}
+				body := deliveryIntegrationPullBody(currentTeam, currentManifest, c)
+				pull, createErr := pulls.FindOrCreateRecovery(c.RepositoryID, actor.UserID, c.StreamID+": "+currentTeam.Outcome.Title, body, c.Branch, target)
+				if createErr == nil {
+					pull, createErr = pulls.LinkDeliveryIntegration(c.RepositoryID, pull.ID, currentTeam.ID, currentManifest.ID, c.StreamID, c.IntegrationOrder)
+				}
+				if createErr != nil {
+					publishStatus, publishCode, publishMessage = 409, "delivery_integration_publish_failed", "an ordered contribution could not be opened and linked for review"
+					return nil, deliveryteams.ErrConflict
+				}
+				published = append(published, deliveryteams.IntegrationPull{StreamID: c.StreamID, RepositoryID: c.RepositoryID, PullRequestID: pull.ID, Order: c.IntegrationOrder})
 			}
-			body := deliveryIntegrationPullBody(team, *manifest, c)
-			pull, createErr := pulls.FindOrCreateRecovery(c.RepositoryID, actor.UserID, c.StreamID+": "+team.Outcome.Title, body, c.Branch, target)
-			if createErr != nil {
-				writeAPIError(w, 409, "delivery_integration_publish_failed", "an ordered contribution could not be opened for review")
-				return
-			}
-			pull, createErr = pulls.LinkDeliveryIntegration(c.RepositoryID, pull.ID, team.ID, manifest.ID, c.StreamID, c.IntegrationOrder)
-			if createErr != nil {
-				writeAPIError(w, 500, "delivery_integration_publish_pending", "the pull exists but its integration provenance is pending")
-				return
-			}
-			published = append(published, deliveryteams.IntegrationPull{StreamID: c.StreamID, RepositoryID: c.RepositoryID, PullRequestID: pull.ID, Order: c.IntegrationOrder})
+			return published, nil
+		})
+		if publishMessage != "" {
+			writeAPIError(w, publishStatus, publishCode, publishMessage)
+			return
 		}
-		team, err = store.RecordIntegrationPulls(team.ID, manifest.ID, actor.UserID, principal, in.ExpectedVersion, published)
 		if writeDeliveryTeamError(w, err) {
 			return
 		}

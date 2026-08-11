@@ -723,7 +723,10 @@ func (s *Store) PrepareIntegration(teamID, actor, principal string, expectedVers
 	return t, s.write(t)
 }
 
-func (s *Store) RecordIntegrationPulls(teamID, integrationID, actor, principal string, expectedVersion int, pulls []IntegrationPull) (Team, error) {
+// PublishIntegration holds the team's admission boundary across external pull
+// effects and the final manifest write. Team mutations therefore cannot make
+// an admitted publication stale after it has created review provenance.
+func (s *Store) PublishIntegration(teamID, integrationID, actor, principal string, expectedVersion int, publish func(Team, Integration) ([]IntegrationPull, error)) (Team, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t, err := s.read(teamID)
@@ -736,24 +739,32 @@ func (s *Store) RecordIntegrationPulls(teamID, integrationID, actor, principal s
 	if participantForPrincipal(t, principal) == nil {
 		return t, ErrForbidden
 	}
-	now := s.now()
-	found := false
+	index := -1
 	for i := range t.Integrations {
 		in := &t.Integrations[i]
 		if in.ID != integrationID {
 			continue
 		}
-		if in.PublishedAt != nil || len(in.Blockers) > 0 || len(pulls) != len(in.Contributions) {
+		if in.PublishedAt != nil || len(in.Blockers) > 0 {
 			return t, ErrInvalid
 		}
-		in.PullRequests = append([]IntegrationPull(nil), pulls...)
-		in.PublishedBy = actor
-		in.PublishedAt = &now
-		found = true
+		index = i
 	}
-	if !found {
+	if index < 0 {
 		return t, ErrNotFound
 	}
+	pulls, err := publish(t, t.Integrations[index])
+	if err != nil {
+		return t, err
+	}
+	if len(pulls) != len(t.Integrations[index].Contributions) {
+		return t, ErrInvalid
+	}
+	now := s.now()
+	in := &t.Integrations[index]
+	in.PullRequests = append([]IntegrationPull(nil), pulls...)
+	in.PublishedBy = actor
+	in.PublishedAt = &now
 	t.Version++
 	t.UpdatedAt = now
 	t.Events = append(t.Events, event("integration.published", actor, "Published ordered contributions for ordinary review", t.Version, now))

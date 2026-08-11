@@ -1100,6 +1100,11 @@ whenever dependencies change or the web job fails before it starts.
   manifests open retry-safe ordinary pulls in declared order and trace team,
   stream, commits, authorship, agent actions, decisions, costs, and residual
   risk without bypassing review, checks, queues, release policy, or authority.
+  Publication holds the delivery-team mutation admission boundary across its
+  final live-readiness check, retry-safe pull recovery/linking, and manifest
+  write. Recovery reuses only an open pull at the exact source and target, and
+  an existing delivery link cannot be replaced, so competing status changes or
+  inactive reviews cannot strand or commandeer contribution provenance.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

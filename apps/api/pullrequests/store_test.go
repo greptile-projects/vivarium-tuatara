@@ -125,6 +125,20 @@ func TestRecoveryIncludesTargetAndDeliveryProvenanceCannotBeReplaced(t *testing.
 	if stored.DeliveryTeamID != testID('3') || stored.DeliveryIntegrationID != testID('4') {
 		t.Fatalf("provenance changed: %#v", stored)
 	}
+	closed, err := store.Close(repository.ID(), mainPull.ID, testID('2'))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := store.FindOrCreateRecovery(repository.ID(), testID('2'), "Replacement", "Active review.", "delivery/topic", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.ID == closed.ID || recovered.Status != Open {
+		t.Fatalf("recovery reused inactive pull: %#v", recovered)
+	}
+	if _, err = store.LinkDeliveryIntegration(repository.ID(), closed.ID, testID('3'), testID('4'), "stream", 1); !errors.Is(err, ErrNotReady) {
+		t.Fatalf("closed delivery link = %v", err)
+	}
 }
 
 func TestWithSourceRevisionSerializesSynchronization(t *testing.T) {
