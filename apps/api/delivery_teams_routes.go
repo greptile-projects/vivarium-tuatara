@@ -38,6 +38,23 @@ type deliveryTeamPlanResponseInput struct {
 	ExpectedPlanRevision int    `json:"expected_plan_revision"`
 	Decision             string `json:"decision"`
 }
+type deliveryTeamContextInput struct {
+	ExpectedVersion int                       `json:"expected_version"`
+	Context         deliveryteams.WorkContext `json:"context"`
+}
+type deliveryTeamTimelineInput struct {
+	ExpectedVersion int                         `json:"expected_version"`
+	Entry           deliveryteams.TimelineInput `json:"entry"`
+}
+type deliveryTeamHandoffInput struct {
+	ExpectedVersion int                        `json:"expected_version"`
+	Handoff         deliveryteams.HandoffInput `json:"handoff"`
+}
+type deliveryTeamHandoffAcceptanceInput struct {
+	ExpectedVersion      int      `json:"expected_version"`
+	VerificationEntryIDs []string `json:"verification_entry_ids"`
+	Note                 string   `json:"note"`
+}
 
 func registerDeliveryTeamRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, identities *users.Store, store *deliveryteams.Store, proposalStore *proposals.Store, decisionStore *decisions.Store, incidentStore *incidents.Store, orgs *organizations.Store, activity *activities.Store) {
 	mux.HandleFunc("POST /repositories/{id}/delivery-teams", func(w http.ResponseWriter, r *http.Request) {
@@ -235,6 +252,133 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, catalog *repositories.Store,
 		}
 		writeJSON(w, 200, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
 	})
+	mux.HandleFunc("POST /delivery-teams/{id}/streams/{streamId}/contexts", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+		if !ok {
+			return
+		}
+		team, err := store.Get(r.PathValue("id"))
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		principal, allowed := deliveryPlanningPrincipal(team, actor.UserID, orgs, catalog)
+		if !allowed {
+			writeAPIError(w, 403, "delivery_stream_forbidden", "only an accepted team member may attach work")
+			return
+		}
+		var in deliveryTeamContextInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "expected_version and context are required")
+			return
+		}
+		in.Context.RepositoryID = strings.TrimSpace(in.Context.RepositoryID)
+		if !deliveryPrincipalCanRead(team, principal, in.Context.RepositoryID, catalog, orgs) {
+			writeAPIError(w, 403, "inaccessible_team_evidence", "work context is outside the participant's current access")
+			return
+		}
+		team, err = store.AttachContext(team.ID, r.PathValue("streamId"), actor.UserID, principal, in.ExpectedVersion, in.Context)
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		writeJSON(w, 200, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
+	})
+	mux.HandleFunc("POST /delivery-teams/{id}/timeline", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+		if !ok {
+			return
+		}
+		team, err := store.Get(r.PathValue("id"))
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		principal, allowed := deliveryPlanningPrincipal(team, actor.UserID, orgs, catalog)
+		if !allowed {
+			writeAPIError(w, 403, "delivery_timeline_forbidden", "only accepted team members may publish")
+			return
+		}
+		var in deliveryTeamTimelineInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "expected_version and entry are required")
+			return
+		}
+		for _, c := range in.Entry.Citations {
+			if !deliveryPrincipalCanRead(team, principal, c.RepositoryID, catalog, orgs) {
+				writeAPIError(w, 403, "inaccessible_team_evidence", "cited evidence is outside the participant's current access")
+				return
+			}
+		}
+		team, err = store.PublishTimeline(team.ID, actor.UserID, principal, in.ExpectedVersion, in.Entry)
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		writeJSON(w, 200, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
+	})
+	mux.HandleFunc("POST /delivery-teams/{id}/handoffs", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+		if !ok {
+			return
+		}
+		team, err := store.Get(r.PathValue("id"))
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		principal, allowed := deliveryPlanningPrincipal(team, actor.UserID, orgs, catalog)
+		if !allowed {
+			writeAPIError(w, 403, "delivery_handoff_forbidden", "only accepted team members may request handoff")
+			return
+		}
+		var in deliveryTeamHandoffInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "expected_version and handoff are required")
+			return
+		}
+		team, err = store.RequestHandoff(team.ID, actor.UserID, principal, in.ExpectedVersion, in.Handoff)
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		writeJSON(w, 201, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
+	})
+	mux.HandleFunc("POST /delivery-teams/{id}/handoffs/{handoffId}/accept", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+		if !ok {
+			return
+		}
+		team, err := store.Get(r.PathValue("id"))
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		principal := ""
+		for _, h := range team.Handoffs {
+			if h.ID == r.PathValue("handoffId") {
+				principal, _ = deliveryParticipantPrincipal(team, h.ToParticipantID, actor.UserID, orgs, catalog)
+			}
+		}
+		if principal == "" {
+			writeAPIError(w, 403, "delivery_handoff_forbidden", "only the named recipient may accept handoff")
+			return
+		}
+		var in deliveryTeamHandoffAcceptanceInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "verification entries and note are required")
+			return
+		}
+		team, err = store.AcceptHandoff(team.ID, r.PathValue("handoffId"), actor.UserID, principal, in.ExpectedVersion, in.VerificationEntryIDs, in.Note)
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		writeJSON(w, 200, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
+	})
+}
+
+func deliveryPrincipalCanRead(team deliveryteams.Team, principal, repositoryID string, catalog *repositories.Store, orgs *organizations.Store) bool {
+	for _, p := range team.Participants {
+		if p.PrincipalID == principal {
+			level, _ := deliveryParticipantAccess(p, repositoryID, catalog, orgs)
+			return level == "read" || level == "write"
+		}
+	}
+	level, _ := deliveryParticipantAccess(deliveryteams.Participant{PrincipalType: "human", PrincipalID: principal}, repositoryID, catalog, orgs)
+	return level == "read" || level == "write"
 }
 
 func deliveryParticipantPrincipal(team deliveryteams.Team, participantID, actor string, orgs *organizations.Store, catalog *repositories.Store) (string, bool) {
@@ -409,6 +553,12 @@ func projectDeliveryAccess(v deliveryteams.Team, viewer string, catalog *reposit
 	if v.PlanHistory == nil {
 		v.PlanHistory = []deliveryteams.ExecutionPlan{}
 	}
+	if v.Timeline == nil {
+		v.Timeline = []deliveryteams.TimelineEntry{}
+	}
+	if v.Handoffs == nil {
+		v.Handoffs = []deliveryteams.Handoff{}
+	}
 	for i := range v.Participants {
 		p := &v.Participants[i]
 		p.CanRespond = p.Status == "pending" && (p.PrincipalType == "human" && p.PrincipalID == viewer || p.PrincipalType == "agent" && agentOperator(v.RepositoryID, p.PrincipalID, viewer, orgs, catalog))
@@ -437,6 +587,58 @@ func projectDeliveryAccess(v deliveryteams.Team, viewer string, catalog *reposit
 					v.Plan.Blockers = append(v.Plan.Blockers, deliveryteams.PlanBlocker{Kind: "unavailable_access", StreamIDs: []string{stream.ID}, OwnerParticipantIDs: []string{stream.OwnerParticipantID}, Summary: "The stream owner lacks independent write access to " + scope.RepositoryID})
 				}
 			}
+		}
+	}
+	viewerPrincipal := viewer
+	for _, p := range v.Participants {
+		if p.PrincipalType == "human" && p.PrincipalID == viewer || p.PrincipalType == "agent" && agentOperator(v.RepositoryID, p.PrincipalID, viewer, orgs, catalog) {
+			viewerPrincipal = p.PrincipalID
+			break
+		}
+	}
+	visibleEntries := []deliveryteams.TimelineEntry{}
+	visibleIDs := map[string]bool{}
+	for _, entry := range v.Timeline {
+		visible := true
+		for _, citation := range entry.Citations {
+			if !deliveryPrincipalCanRead(v, viewerPrincipal, citation.RepositoryID, catalog, orgs) {
+				visible = false
+				break
+			}
+		}
+		if visible {
+			visibleEntries = append(visibleEntries, entry)
+			visibleIDs[entry.ID] = true
+		}
+	}
+	v.Timeline = visibleEntries
+	visibleHandoffs := []deliveryteams.Handoff{}
+	for _, handoff := range v.Handoffs {
+		visible := true
+		for _, entryID := range handoff.InputEntryIDs {
+			if !visibleIDs[entryID] {
+				visible = false
+			}
+		}
+		for _, entryID := range handoff.VerificationEntryIDs {
+			if !visibleIDs[entryID] {
+				visible = false
+			}
+		}
+		if visible {
+			visibleHandoffs = append(visibleHandoffs, handoff)
+		}
+	}
+	v.Handoffs = visibleHandoffs
+	if v.Plan != nil {
+		for i := range v.Plan.Streams {
+			contexts := []deliveryteams.WorkContext{}
+			for _, context := range v.Plan.Streams[i].Contexts {
+				if deliveryPrincipalCanRead(v, viewerPrincipal, context.RepositoryID, catalog, orgs) {
+					contexts = append(contexts, context)
+				}
+			}
+			v.Plan.Streams[i].Contexts = contexts
 		}
 	}
 	return v
