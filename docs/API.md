@@ -2115,3 +2115,6 @@ optional release, environment definition and digest, checksummed inputs, exit
 codes and bounded logs, checksummed artifacts (4 MiB each, 16 MiB total), actor,
 and time. Secret-like evidence fails closed; failed and inconclusive attempts
 remain inspectable and can be rerun in a fresh workspace.
+Artifact collection rejects absolute/traversing paths, backslashes, every
+symlink component, and non-regular files before reading bytes, preventing a
+workspace link from exporting image or temporary-container content.

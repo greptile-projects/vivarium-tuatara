@@ -51,6 +51,34 @@ func TestReproductionInputNamesRemainUniqueAfterSanitizing(t *testing.T) {
 	}
 }
 
+func TestReproductionArtifactReadRejectsSymlinkEscape(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker unavailable")
+	}
+	if err := exec.Command("docker", "image", "inspect", "alpine:3.22").Run(); err != nil {
+		t.Skip("alpine:3.22 unavailable")
+	}
+	id := strings.ToLower(strings.ReplaceAll(t.Name(), "/", "-"))
+	container := "vivarium-workspace-" + id
+	command := exec.Command("docker", "run", "-d", "--name", container, "--read-only", "--tmpfs", "/workspace:rw,noexec,nosuid,nodev,size=16m", "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=4m", "alpine:3.22", "sleep", "60")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("start container: %v: %s", err, output)
+	}
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", "-v", container).Run() })
+	setup := exec.Command("docker", "exec", container, "sh", "-c", "mkdir -p /workspace/reports && printf retained >/workspace/reports/result.txt && printf outside >/tmp/secret && ln -s /tmp/secret /workspace/escaped.txt && ln -s /tmp /workspace/escaped-dir")
+	if output, err := setup.CombinedOutput(); err != nil {
+		t.Fatalf("setup: %v: %s", err, output)
+	}
+	if output, err := readReproductionArtifact(id, "reports/result.txt"); err != nil || string(output) != "retained" {
+		t.Fatalf("regular artifact = %q, %v", output, err)
+	}
+	for _, path := range []string{"escaped.txt", "escaped-dir/secret"} {
+		if output, err := readReproductionArtifact(id, path); err == nil {
+			t.Fatalf("symlink artifact %q returned %q", path, output)
+		}
+	}
+}
+
 func TestProvisionWorkspaceEnforcesStorageAndRemovesFailedContainer(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker unavailable")

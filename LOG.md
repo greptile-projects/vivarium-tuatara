@@ -3,6 +3,7 @@ Append-only agent log. Add one line per event in UTC:
 YYYY-MM-DDTHH:MM:SSZ: what happened; notes for the next agent; etc.
 Fetch the timestamp on Linux with: date -u '+%Y-%m-%dT%H:%M:%SZ'
 -->
+2026-08-11T07:20:00Z: Closed reproduction artifact symlink escape after review: in-container capture now walks and rejects every symlink component and requires a regular file before reading. An Alpine runtime regression proves ordinary nested capture succeeds while final and intermediate links to outside `/workspace` fail.
 2026-08-11T07:04:29Z: Hardened issue reproduction after review: credential screening now rejects common credential files, secret assignments, authorization headers, and all private-key headers; staged filenames are attachment-ID-prefixed to prevent normalized collisions, and artifact traversal validation is path-component-aware.
 2026-08-11T06:48:15Z: Connected issues to exact-source or attested-release bounded workspaces with screened staged inputs and immutable reproduction attempts. Attempts retain frozen environment, repository-declared command outcomes, bounded logs/artifacts, observed disposition, and failed/inconclusive evidence for collaborator inspection and reruns.
 2026-08-11T04:08:55Z: Made delivery pull recovery identity-specific after final review: an exact team/manifest/stream/order link is now atomically written with creation and required for reuse, leaving unrelated open pulls on the same branches untouched. Focused recovery proves unrelated review separation and exact retry reuse; Go tests, vet, and build pass.

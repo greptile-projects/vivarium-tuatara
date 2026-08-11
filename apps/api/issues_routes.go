@@ -326,7 +326,7 @@ func registerIssueRoutes(mux *http.ServeMux, repos *repositories.Store, store *i
 				writeAPIError(w, 422, "reproduction_artifact_invalid", "artifact paths must stay inside the workspace")
 				return
 			}
-			raw, decodeErr := exec.Command("docker", "exec", "vivarium-workspace-"+workspace.ID, "cat", "/workspace/"+clean).Output()
+			raw, decodeErr := readReproductionArtifact(workspace.ID, clean)
 			total += len(raw)
 			encoded := base64.StdEncoding.EncodeToString(raw)
 			if decodeErr != nil || len(raw) > 4<<20 || total > 16<<20 || reproductionSecretLike(clean, encoded) {
@@ -367,6 +367,24 @@ func cleanReproductionArtifactPath(value string) (string, bool) {
 	}
 	clean := path.Clean(value)
 	return clean, clean != "." && !strings.HasPrefix(clean, "/")
+}
+
+const reproductionArtifactReadScript = `
+target=/workspace
+old_ifs=$IFS
+IFS=/
+for component in $1; do
+  [ -n "$component" ] || continue
+  target=$target/$component
+  [ ! -L "$target" ] || exit 42
+done
+IFS=$old_ifs
+[ -f "$target" ] || exit 43
+exec cat "$target"
+`
+
+func readReproductionArtifact(workspaceID, relativePath string) ([]byte, error) {
+	return exec.Command("docker", "exec", "vivarium-workspace-"+workspaceID, "sh", "-c", reproductionArtifactReadScript, "reproduction-artifact-read", relativePath).Output()
 }
 
 var errIssueBodyTooLarge = errors.New("issue body too large")
