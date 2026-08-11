@@ -2012,3 +2012,25 @@ owners receive a `replan_acceptance` blocker. Humans and current approved-agent
 operators respond through `POST
 /delivery-teams/{id}/plan/participants/{participant-id}/response` with both the
 team version and plan revision. Declined or pending boundaries remain visible.
+
+`PUT /delivery-teams/{id}/streams/{stream-id}/status` lets only the accepted
+stream owner (or the current operator of that approved agent) replace its
+compare-and-swap operational snapshot. The snapshot reports queued, running,
+paused, blocked, completed, failed, or canceled state; summary and progress;
+one revision already frozen in the stream scope; bounded resource consumption;
+open questions; structured blockers with an explicit recovery; and the
+predicted next action. Blocker kinds cover agent failure, revoked access, stale
+revision, conflicting output, exhausted budget, disconnection, and dependency
+failure. Crossing the accepted stream budget forces a paused snapshot and an
+explicit budget escalation. Reads also project current loss of independent
+write access as a pause without transferring the stream to another principal.
+
+`POST /delivery-teams/{id}/interventions` accepts `expected_version` and a
+stream- or team-scoped `intervention`. Accepted members may guide and apply
+bounded stream controls; only the organizer can control the whole effort or
+reassign/narrow a stream. Pause, resume, and cancel update operational state;
+guidance is retained in the immutable intervention history. Reassignment names
+an already accepted participant and narrowing selects only paths already in
+scope. Both authority-affecting actions create a material plan revision and
+fresh owner acceptance rather than silently expanding authority. Timeline,
+handoff, prior plan, status, and intervention evidence remains retained.

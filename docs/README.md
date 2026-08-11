@@ -1479,3 +1479,14 @@ an approved agent's current operator) accepts, citing their own retained
 verification and explaining what they checked. Team records never ingest
 terminal input, credentials, hidden prompts, or evidence bodies from the
 attached work system.
+
+The same delivery-team workspace projects each parallel stream's live state,
+progress, exact revision, resource consumption, active human or agent control,
+blockers, questions, and predicted next action. Owners publish bounded status
+snapshots; budget exhaustion and current access loss pause affected work with
+an explicit recovery route. Accepted collaborators can guide or control an
+individual stream, while whole-effort control and authority-changing reassign
+or narrow operations remain organizer-only. Reassignment and narrowing create
+fresh plan revisions and owner acceptance, preserving accepted artifacts,
+timeline evidence, handoffs, and intervention history instead of moving work
+or authority implicitly.

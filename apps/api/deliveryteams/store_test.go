@@ -264,3 +264,51 @@ func TestCitedTimelineAndVerifiedHandoffRetainExactContext(t *testing.T) {
 		t.Fatalf("acceptance = %#v", v.Handoffs[0])
 	}
 }
+
+func TestLiveStreamStatusAndBoundedInterventionPreserveAcceptedWork(t *testing.T) {
+	s, _ := New(t.TempDir())
+	c := charter("alice", "builder")
+	c.Participants = append(c.Participants, Participant{ID: "bob-slot", PrincipalType: "human", PrincipalID: "bob", Role: "recovery lead", Responsibility: "Take explicit reassignment", Why: "Owns recovery", Escalation: "Escalate conflicts"})
+	v, err := s.Create("repo", Outcome{Kind: "planned_outcome", ResourceID: "outcome", Title: "Outcome"}, c, "organizer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, _ = s.Respond(v.ID, "alice-slot", "alice", "accepted", v.Version)
+	v, _ = s.Respond(v.ID, "bob-slot", "bob", "accepted", v.Version)
+	revision := strings.Repeat("a", 40)
+	v, err = s.PutPlan(v.ID, "alice", "alice", v.Version, PlanInput{Streams: []WorkStream{{ID: "build", Title: "Build", OwnerParticipantID: "alice-slot", ExpectedArtifacts: []string{"accepted patch"}, AcceptanceCriteria: []string{"checks pass"}, RepositoryScope: []RevisionScope{{RepositoryID: "repo", Reference: "main", Revision: revision, Paths: []string{"src", "tests"}}}, IntegrationOrder: 1, Budget: &Budget{Unit: "minutes", Limit: 10}, Assumptions: []string{"base remains current"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.ReportStatus(v.ID, "build", "alice", "alice", v.Version, StatusInput{Status: "running", Summary: "Implementation is underway", ProgressPercent: 60, Revision: revision, ResourceUse: &ResourceUse{Unit: "minutes", Consumed: 10}, Questions: []StreamQuestion{{ID: "q1", Body: "Which compatibility edge wins?", AskOf: "organizer", Urgency: "urgent"}}, Blockers: []StreamBlocker{{Kind: "conflicting_output", Summary: "Two generated patches disagree", Recovery: "Keep the accepted patch and request a lead decision"}}, PredictedNextAction: "Compare both patches"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.StreamStatuses[0]; got.Status != "paused" || got.PredictedNextAction != "Escalate the exhausted budget through the team charter" || !slices.ContainsFunc(got.Blockers, func(b StreamBlocker) bool { return b.Kind == "budget_exhausted" }) {
+		t.Fatalf("bounded status = %#v", got)
+	}
+	if _, err = s.ReportStatus(v.ID, "build", "bob", "bob", v.Version, StatusInput{Status: "running", Summary: "Taking over", Revision: revision, PredictedNextAction: "Continue"}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("silent owner expansion = %v", err)
+	}
+	if _, err = s.Intervene(v.ID, "organizer", "organizer", v.Version, InterventionInput{Scope: "stream", StreamID: "build", Action: "resume", Guidance: "Resume beyond the accepted budget"}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("unbounded resume = %v", err)
+	}
+	v, err = s.Intervene(v.ID, "organizer", "organizer", v.Version, InterventionInput{Scope: "stream", StreamID: "build", Action: "guide", Guidance: "Keep the accepted patch and isolate the disagreement"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.Intervene(v.ID, "organizer", "organizer", v.Version, InterventionInput{Scope: "stream", StreamID: "build", Action: "narrow", Guidance: "Limit recovery to implementation", Paths: []string{"src"}})
+	if err != nil || v.Plan.Revision != 2 || len(v.PlanHistory) != 1 || len(v.Plan.Streams[0].RepositoryScope[0].Paths) != 1 {
+		t.Fatalf("narrow = %#v, %v", v.Plan, err)
+	}
+	v, err = s.Intervene(v.ID, "organizer", "organizer", v.Version, InterventionInput{Scope: "stream", StreamID: "build", Action: "reassign", Guidance: "Move only this stream to the recovery lead", NewOwnerParticipantID: "bob-slot"})
+	if err != nil || v.Plan.Revision != 3 || v.Plan.Streams[0].OwnerParticipantID != "bob-slot" || len(v.Plan.Acceptances) != 1 || v.Plan.Acceptances[0].ParticipantID != "bob-slot" || v.Plan.Acceptances[0].Status != "pending" {
+		t.Fatalf("reassign = %#v, %v", v.Plan, err)
+	}
+	if len(v.StreamStatuses) != 1 || len(v.Interventions) != 3 || v.StreamStatuses[0].Questions[0].ID != "q1" || v.StreamStatuses[0].ActiveControl != nil {
+		t.Fatalf("accepted operational evidence discarded: %#v", v)
+	}
+	if _, err = s.Intervene(v.ID, "alice", "alice", v.Version, InterventionInput{Scope: "team", Action: "cancel", Guidance: "Cancel everything"}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("non-organizer team control = %v", err)
+	}
+}

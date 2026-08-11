@@ -141,6 +141,52 @@ type Handoff struct {
 	VerificationEntryIDs []string   `json:"verification_entry_ids"`
 	AcceptanceNote       string     `json:"acceptance_note,omitempty"`
 }
+type ResourceUse struct {
+	Unit     string `json:"unit"`
+	Consumed int    `json:"consumed"`
+}
+type StreamBlocker struct {
+	Kind     string `json:"kind"`
+	Summary  string `json:"summary"`
+	Recovery string `json:"recovery"`
+}
+type StreamQuestion struct {
+	ID      string `json:"id"`
+	Body    string `json:"body"`
+	AskOf   string `json:"ask_of"`
+	Urgency string `json:"urgency"`
+}
+type ActiveControl struct {
+	ParticipantID string    `json:"participant_id"`
+	PrincipalID   string    `json:"principal_id"`
+	PrincipalType string    `json:"principal_type"`
+	Since         time.Time `json:"since"`
+}
+type StreamStatus struct {
+	StreamID            string           `json:"stream_id"`
+	Status              string           `json:"status"`
+	Summary             string           `json:"summary"`
+	ProgressPercent     int              `json:"progress_percent"`
+	Revision            string           `json:"revision"`
+	ResourceUse         *ResourceUse     `json:"resource_use,omitempty"`
+	ActiveControl       *ActiveControl   `json:"active_control,omitempty"`
+	Blockers            []StreamBlocker  `json:"blockers"`
+	Questions           []StreamQuestion `json:"questions"`
+	PredictedNextAction string           `json:"predicted_next_action"`
+	UpdatedBy           string           `json:"updated_by"`
+	UpdatedAt           time.Time        `json:"updated_at"`
+}
+type Intervention struct {
+	ID           string    `json:"id"`
+	Scope        string    `json:"scope"`
+	StreamID     string    `json:"stream_id,omitempty"`
+	Action       string    `json:"action"`
+	Guidance     string    `json:"guidance"`
+	ActorID      string    `json:"actor_id"`
+	PrincipalID  string    `json:"principal_id"`
+	PlanRevision int       `json:"plan_revision"`
+	CreatedAt    time.Time `json:"created_at"`
+}
 type PlanAcceptance struct {
 	ParticipantID string     `json:"participant_id"`
 	Revision      int        `json:"revision"`
@@ -181,6 +227,8 @@ type Team struct {
 	PlanHistory    []ExecutionPlan `json:"plan_history"`
 	Timeline       []TimelineEntry `json:"timeline"`
 	Handoffs       []Handoff       `json:"handoffs"`
+	StreamStatuses []StreamStatus  `json:"stream_statuses"`
+	Interventions  []Intervention  `json:"interventions"`
 	CreatedAt      time.Time       `json:"created_at"`
 	UpdatedAt      time.Time       `json:"updated_at"`
 }
@@ -207,6 +255,24 @@ type HandoffInput struct {
 	InputEntryIDs       []string `json:"input_entry_ids"`
 	AcceptanceCriteria  []string `json:"acceptance_criteria"`
 	ResidualUncertainty []string `json:"residual_uncertainty"`
+}
+type StatusInput struct {
+	Status              string           `json:"status"`
+	Summary             string           `json:"summary"`
+	ProgressPercent     int              `json:"progress_percent"`
+	Revision            string           `json:"revision"`
+	ResourceUse         *ResourceUse     `json:"resource_use,omitempty"`
+	Questions           []StreamQuestion `json:"questions"`
+	Blockers            []StreamBlocker  `json:"blockers"`
+	PredictedNextAction string           `json:"predicted_next_action"`
+}
+type InterventionInput struct {
+	Scope                 string   `json:"scope"`
+	StreamID              string   `json:"stream_id,omitempty"`
+	Action                string   `json:"action"`
+	Guidance              string   `json:"guidance"`
+	NewOwnerParticipantID string   `json:"new_owner_participant_id,omitempty"`
+	Paths                 []string `json:"paths,omitempty"`
 }
 type Store struct {
 	root string
@@ -344,7 +410,7 @@ func (s *Store) Create(repositoryID string, outcome Outcome, c Charter, actor st
 		return Team{}, e
 	}
 	now := s.now()
-	t := Team{ID: i, RepositoryID: repositoryID, Outcome: outcome, Name: c.Name, Purpose: c.Purpose, OrganizerID: actor, OverallBudget: c.OverallBudget, Deadline: c.Deadline, EscalationPath: c.EscalationPath, Version: 1, Participants: c.Participants, PlanHistory: []ExecutionPlan{}, Timeline: []TimelineEntry{}, Handoffs: []Handoff{}, CreatedAt: now, UpdatedAt: now}
+	t := Team{ID: i, RepositoryID: repositoryID, Outcome: outcome, Name: c.Name, Purpose: c.Purpose, OrganizerID: actor, OverallBudget: c.OverallBudget, Deadline: c.Deadline, EscalationPath: c.EscalationPath, Version: 1, Participants: c.Participants, PlanHistory: []ExecutionPlan{}, Timeline: []TimelineEntry{}, Handoffs: []Handoff{}, StreamStatuses: []StreamStatus{}, Interventions: []Intervention{}, CreatedAt: now, UpdatedAt: now}
 	for j := range t.Participants {
 		t.Participants[j].Status = "pending"
 		t.Participants[j].InvitedBy = actor
@@ -1017,4 +1083,212 @@ func (s *Store) AcceptHandoff(teamID, handoffID, actor, actingPrincipal string, 
 		return t, s.write(t)
 	}
 	return t, ErrNotFound
+}
+
+func statusByStream(t *Team, streamID string) *StreamStatus {
+	for i := range t.StreamStatuses {
+		if t.StreamStatuses[i].StreamID == streamID {
+			return &t.StreamStatuses[i]
+		}
+	}
+	return nil
+}
+
+func validOperationalStatus(value string) bool {
+	return slices.Contains([]string{"queued", "running", "paused", "blocked", "completed", "failed", "canceled"}, value)
+}
+
+func revisionInStream(stream WorkStream, revision string) bool {
+	for _, scope := range stream.RepositoryScope {
+		if scope.Revision == revision {
+			return true
+		}
+	}
+	return false
+}
+
+// ReportStatus replaces one owner's bounded operational snapshot. It never
+// changes the plan, authority, or retained evidence that produced the report.
+func (s *Store) ReportStatus(teamID, streamID, actor, actingPrincipal string, expectedVersion int, input StatusInput) (Team, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.read(teamID)
+	if err != nil {
+		return t, err
+	}
+	if t.Version != expectedVersion || t.Plan == nil {
+		return t, ErrConflict
+	}
+	p := participantForPrincipal(t, actingPrincipal)
+	stream := streamByID(&t, streamID)
+	input.Summary, input.PredictedNextAction = strings.TrimSpace(input.Summary), strings.TrimSpace(input.PredictedNextAction)
+	if p == nil || stream == nil || stream.OwnerParticipantID != p.ID {
+		return t, ErrForbidden
+	}
+	if !validOperationalStatus(input.Status) || input.Summary == "" || input.PredictedNextAction == "" || input.ProgressPercent < 0 || input.ProgressPercent > 100 || !revisionInStream(*stream, input.Revision) {
+		return t, ErrInvalid
+	}
+	if input.Status == "completed" && input.ProgressPercent != 100 {
+		return t, ErrInvalid
+	}
+	if input.ResourceUse != nil {
+		if input.ResourceUse.Consumed < 0 || !slices.Contains([]string{"minutes", "credits", "usd"}, input.ResourceUse.Unit) || stream.Budget != nil && input.ResourceUse.Unit != stream.Budget.Unit {
+			return t, ErrInvalid
+		}
+		if current := statusByStream(&t, streamID); current != nil && current.ResourceUse != nil && current.ResourceUse.Unit == input.ResourceUse.Unit && input.ResourceUse.Consumed < current.ResourceUse.Consumed {
+			return t, ErrInvalid
+		}
+	}
+	seenQuestions := map[string]bool{}
+	for i := range input.Questions {
+		q := &input.Questions[i]
+		q.Body, q.AskOf = strings.TrimSpace(q.Body), strings.TrimSpace(q.AskOf)
+		if q.ID == "" || seenQuestions[q.ID] || q.Body == "" || q.AskOf == "" || !slices.Contains([]string{"normal", "urgent"}, q.Urgency) {
+			return t, ErrInvalid
+		}
+		seenQuestions[q.ID] = true
+	}
+	for i := range input.Blockers {
+		b := &input.Blockers[i]
+		b.Summary, b.Recovery = strings.TrimSpace(b.Summary), strings.TrimSpace(b.Recovery)
+		if !slices.Contains([]string{"agent_failed", "access_revoked", "stale_revision", "conflicting_output", "budget_exhausted", "participant_disconnected", "dependency_blocked", "other"}, b.Kind) || b.Summary == "" || b.Recovery == "" {
+			return t, ErrInvalid
+		}
+	}
+	if stream.Budget != nil && input.ResourceUse != nil && input.ResourceUse.Unit == stream.Budget.Unit && input.ResourceUse.Consumed >= stream.Budget.Limit {
+		input.Status = "paused"
+		if !slices.ContainsFunc(input.Blockers, func(b StreamBlocker) bool { return b.Kind == "budget_exhausted" }) {
+			input.Blockers = append(input.Blockers, StreamBlocker{Kind: "budget_exhausted", Summary: "The accepted stream budget is exhausted", Recovery: "The organizer must narrow, reassign, or explicitly revise the accepted budget"})
+		}
+		input.PredictedNextAction = "Escalate the exhausted budget through the team charter"
+	}
+	now := s.now()
+	control := &ActiveControl{ParticipantID: p.ID, PrincipalID: p.PrincipalID, PrincipalType: p.PrincipalType, Since: now}
+	if current := statusByStream(&t, streamID); current != nil && current.ActiveControl != nil && current.ActiveControl.PrincipalID == p.PrincipalID {
+		control.Since = current.ActiveControl.Since
+	}
+	status := StreamStatus{StreamID: streamID, Status: input.Status, Summary: input.Summary, ProgressPercent: input.ProgressPercent, Revision: input.Revision, ResourceUse: input.ResourceUse, ActiveControl: control, Blockers: input.Blockers, Questions: input.Questions, PredictedNextAction: input.PredictedNextAction, UpdatedBy: actor, UpdatedAt: now}
+	if current := statusByStream(&t, streamID); current != nil {
+		*current = status
+	} else {
+		t.StreamStatuses = append(t.StreamStatuses, status)
+	}
+	t.Version++
+	t.UpdatedAt = now
+	t.Events = append(t.Events, event("stream.status_reported", actor, "Reported live status for "+streamID, t.Version, now))
+	return t, s.write(t)
+}
+
+func (s *Store) Intervene(teamID, actor, actingPrincipal string, expectedVersion int, input InterventionInput) (Team, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.read(teamID)
+	if err != nil {
+		return t, err
+	}
+	if t.Version != expectedVersion || t.Plan == nil {
+		return t, ErrConflict
+	}
+	input.Scope, input.Action, input.Guidance = strings.TrimSpace(input.Scope), strings.TrimSpace(input.Action), strings.TrimSpace(input.Guidance)
+	p := participantForPrincipal(t, actingPrincipal)
+	organizer := actor == t.OrganizerID
+	if !organizer && p == nil || !slices.Contains([]string{"stream", "team"}, input.Scope) || !slices.Contains([]string{"guide", "pause", "resume", "cancel", "reassign", "narrow"}, input.Action) || input.Guidance == "" {
+		return t, ErrForbidden
+	}
+	if input.Scope == "team" && !organizer || slices.Contains([]string{"reassign", "narrow"}, input.Action) && !organizer {
+		return t, ErrForbidden
+	}
+	var target *WorkStream
+	if input.Scope == "stream" {
+		target = streamByID(&t, input.StreamID)
+		if target == nil {
+			return t, ErrInvalid
+		}
+	}
+	if input.Action == "reassign" {
+		owner := participantByID(t, input.NewOwnerParticipantID)
+		if target == nil || owner == nil || owner.Status != "accepted" || owner.ID == target.OwnerParticipantID {
+			return t, ErrInvalid
+		}
+		t.PlanHistory = append(t.PlanHistory, clonePlan(*t.Plan))
+		t.Plan.Revision++
+		target.OwnerParticipantID = owner.ID
+		t.Plan.ProposedBy, t.Plan.UpdatedAt = actor, s.now()
+		t.Plan.Acceptances = planAcceptances(t, t.Plan.Streams, t.Plan.Revision, "")
+		t.Plan.Blockers = planBlockers(t, t.Plan.Streams, t.Plan.Acceptances)
+		if state := statusByStream(&t, target.ID); state != nil {
+			state.Status, state.ActiveControl, state.Summary, state.PredictedNextAction = "paused", nil, "Ownership changed through an explicit plan revision", "The new owner must accept the plan and publish a fresh status"
+		}
+	}
+	if input.Action == "narrow" {
+		var ok bool
+		input.Paths, ok = cleanList(input.Paths)
+		if target == nil || !ok || len(input.Paths) == 0 {
+			return t, ErrInvalid
+		}
+		allowed := map[string]bool{}
+		for _, scope := range target.RepositoryScope {
+			for _, path := range scope.Paths {
+				allowed[path] = true
+			}
+		}
+		for _, path := range input.Paths {
+			if !allowed[path] {
+				return t, ErrInvalid
+			}
+		}
+		for _, scope := range target.RepositoryScope {
+			if !slices.ContainsFunc(scope.Paths, func(path string) bool { return slices.Contains(input.Paths, path) }) {
+				return t, ErrInvalid
+			}
+		}
+		t.PlanHistory = append(t.PlanHistory, clonePlan(*t.Plan))
+		t.Plan.Revision++
+		for i := range target.RepositoryScope {
+			target.RepositoryScope[i].Paths = slices.DeleteFunc(target.RepositoryScope[i].Paths, func(path string) bool { return !slices.Contains(input.Paths, path) })
+		}
+		t.Plan.ProposedBy, t.Plan.UpdatedAt = actor, s.now()
+		t.Plan.Acceptances = planAcceptances(t, t.Plan.Streams, t.Plan.Revision, "")
+		t.Plan.Blockers = planBlockers(t, t.Plan.Streams, t.Plan.Acceptances)
+		if state := statusByStream(&t, target.ID); state != nil {
+			state.Status, state.Summary, state.PredictedNextAction = "paused", "Scope narrowed through an explicit plan revision", "Affected owners must accept the narrowed plan"
+		}
+	}
+	if slices.Contains([]string{"pause", "resume", "cancel"}, input.Action) {
+		wanted := map[string]string{"pause": "paused", "resume": "running", "cancel": "canceled"}[input.Action]
+		for i := range t.Plan.Streams {
+			stream := t.Plan.Streams[i]
+			if target != nil && stream.ID != target.ID {
+				continue
+			}
+			state := statusByStream(&t, stream.ID)
+			if state == nil {
+				state = &StreamStatus{StreamID: stream.ID, Revision: stream.RepositoryScope[0].Revision, ProgressPercent: 0, Blockers: []StreamBlocker{}, Questions: []StreamQuestion{}}
+				t.StreamStatuses = append(t.StreamStatuses, *state)
+				state = &t.StreamStatuses[len(t.StreamStatuses)-1]
+			}
+			if state.Status == "completed" || state.Status == "canceled" {
+				continue
+			}
+			if input.Action == "resume" && slices.ContainsFunc(state.Blockers, func(blocker StreamBlocker) bool {
+				return blocker.Kind == "budget_exhausted" || blocker.Kind == "access_revoked"
+			}) {
+				return t, ErrForbidden
+			}
+			state.Status, state.Summary, state.PredictedNextAction, state.UpdatedBy, state.UpdatedAt = wanted, input.Guidance, "Await the next authorized team decision", actor, s.now()
+			if input.Action == "resume" {
+				state.PredictedNextAction = input.Guidance
+			}
+		}
+	}
+	i, err := id()
+	if err != nil {
+		return t, err
+	}
+	now := s.now()
+	t.Interventions = append(t.Interventions, Intervention{ID: i, Scope: input.Scope, StreamID: input.StreamID, Action: input.Action, Guidance: input.Guidance, ActorID: actor, PrincipalID: actingPrincipal, PlanRevision: t.Plan.Revision, CreatedAt: now})
+	t.Version++
+	t.UpdatedAt = now
+	t.Events = append(t.Events, event("stream."+input.Action, actor, "Applied bounded "+input.Action+" intervention", t.Version, now))
+	return t, s.write(t)
 }
