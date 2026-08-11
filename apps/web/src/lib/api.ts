@@ -2202,7 +2202,8 @@ export type PullRequestCommit = {
 export type PullPreview = {
   id: string; repository_id: string; pull_request_id: string; revision: string; creator_id: string;
   definition_sha256: string; build_run_id: string; state: string; stale: boolean; url: string; created_at: string; updated_at: string;
-  definition: { version: number; image: string; build: string; working_directory?: string; output_path: string; environment?: Record<string,string>; resources: { cpus: number; memory_mb: number; storage_mb: number; timeout_seconds: number } };
+  invitations: { id:string; user_id:string; role:"view"|"test"|"feedback"; source_kind:"user"|"issue"|"decision"|"proposal"; source_id?:string; expires_at:string; revoked_at?:string }[];
+  definition: { version: number; image: string; build: string; working_directory?: string; output_path: string; environment?: Record<string,string>; access:{network:"none";data:"preview_artifacts";identity:"named_users";actions:("view"|"test"|"feedback")[]}; resources: { cpus: number; memory_mb: number; storage_mb: number; timeout_seconds: number } };
 };
 export type FileChange = {
   path: string;

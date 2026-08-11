@@ -1,5 +1,27 @@
 # HTTP API contract
 
+## Change preview audiences
+
+Version 1 `.vivarium/preview.json` requires `access` with `network: "none"`,
+`data: "preview_artifacts"`, `identity: "named_users"`, and unique `actions`
+selected from `view`, `test`, and `feedback`. Validation happens before build;
+served content also forbids connections, forms, framing, and referrer leakage.
+
+Only the repository owner manages guests. `POST
+/repositories/{id}/pulls/{pull-id}/previews/{preview-id}/invitations` accepts a
+role, an `expires_at` within 30 days, and either a `user_id` with `source_kind:
+"user"` or a `source_id` whose kind is `issue`, `decision`, or `proposal`.
+Resource sources expand current attributable participants into named
+invitations. `DELETE .../invitations/{invitation-id}` revokes immediately, and
+`GET .../audience` exposes effective access and retained audit to repository
+participants. A feedback guest may submit a bounded attributable note to `POST
+.../{preview-id}/feedback`.
+
+An active guest can fetch only that preview's static content with their account
+session. Invitations are not repository participation and grant no credential,
+source or build-log visibility, workspace or environment access, deployment or
+production action, or private-service connectivity.
+
 ## Prospective impact assessments
 
 `POST /repositories/{id}/impact-assessments` creates a durable assessment for a

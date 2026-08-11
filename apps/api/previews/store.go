@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 )
@@ -20,6 +21,7 @@ import (
 const ConfigPath = ".vivarium/preview.json"
 
 var ErrNotFound = errors.New("preview not found")
+var ErrInvalid = errors.New("invalid preview audience")
 
 type Resources struct {
 	CPUs           float64 `json:"cpus"`
@@ -35,21 +37,57 @@ type Config struct {
 	OutputPath       string            `json:"output_path"`
 	Environment      map[string]string `json:"environment,omitempty"`
 	Resources        Resources         `json:"resources"`
+	Access           AccessPolicy      `json:"access"`
+}
+type AccessPolicy struct {
+	Network  string   `json:"network"`
+	Data     string   `json:"data"`
+	Identity string   `json:"identity"`
+	Actions  []string `json:"actions"`
+}
+type Invitation struct {
+	ID         string     `json:"id"`
+	UserID     string     `json:"user_id"`
+	Role       string     `json:"role"`
+	SourceKind string     `json:"source_kind"`
+	SourceID   string     `json:"source_id,omitempty"`
+	InvitedBy  string     `json:"invited_by"`
+	ExpiresAt  time.Time  `json:"expires_at"`
+	CreatedAt  time.Time  `json:"created_at"`
+	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
+	RevokedBy  string     `json:"revoked_by,omitempty"`
+}
+type AudienceEvent struct {
+	ID           string    `json:"id"`
+	Kind         string    `json:"kind"`
+	ActorID      string    `json:"actor_id"`
+	InvitationID string    `json:"invitation_id"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+type Feedback struct {
+	ID           string    `json:"id"`
+	AuthorID     string    `json:"author_id"`
+	InvitationID string    `json:"invitation_id"`
+	Body         string    `json:"body"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 type Preview struct {
-	ID               string    `json:"id"`
-	RepositoryID     string    `json:"repository_id"`
-	PullRequestID    string    `json:"pull_request_id"`
-	Revision         string    `json:"revision"`
-	CreatorID        string    `json:"creator_id"`
-	Definition       Config    `json:"definition"`
-	DefinitionSHA256 string    `json:"definition_sha256"`
-	BuildRunID       string    `json:"build_run_id"`
-	State            string    `json:"state"`
-	Stale            bool      `json:"stale"`
-	URL              string    `json:"url"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID               string          `json:"id"`
+	RepositoryID     string          `json:"repository_id"`
+	PullRequestID    string          `json:"pull_request_id"`
+	Revision         string          `json:"revision"`
+	CreatorID        string          `json:"creator_id"`
+	Definition       Config          `json:"definition"`
+	DefinitionSHA256 string          `json:"definition_sha256"`
+	BuildRunID       string          `json:"build_run_id"`
+	State            string          `json:"state"`
+	Stale            bool            `json:"stale"`
+	URL              string          `json:"url"`
+	CreatedAt        time.Time       `json:"created_at"`
+	UpdatedAt        time.Time       `json:"updated_at"`
+	Invitations      []Invitation    `json:"invitations"`
+	AudienceEvents   []AudienceEvent `json:"audience_events"`
+	Feedback         []Feedback      `json:"feedback"`
 }
 
 type Store struct {
@@ -64,6 +102,16 @@ func ParseConfig(data []byte) (Config, string, error) {
 	d.DisallowUnknownFields()
 	if d.Decode(&c) != nil || c.Version != 1 || strings.TrimSpace(c.Build) == "" || len(c.Build) > 4000 || c.Resources.CPUs <= 0 || c.Resources.CPUs > 2 || c.Resources.MemoryMB < 64 || c.Resources.MemoryMB > 2048 || c.Resources.StorageMB < 16 || c.Resources.StorageMB > 1024 || c.Resources.TimeoutSeconds < 1 || c.Resources.TimeoutSeconds > 1800 {
 		return c, "", errors.New("invalid preview definition")
+	}
+	if c.Access.Network != "none" || c.Access.Data != "preview_artifacts" || c.Access.Identity != "named_users" || len(c.Access.Actions) == 0 || len(c.Access.Actions) > 3 {
+		return c, "", errors.New("preview access must use network none, preview_artifacts data, named_users identity, and bounded actions")
+	}
+	seenActions := map[string]bool{}
+	for _, action := range c.Access.Actions {
+		if action != "view" && action != "test" && action != "feedback" || seenActions[action] {
+			return c, "", errors.New("invalid preview action")
+		}
+		seenActions[action] = true
 	}
 	if c.WorkingDirectory == "" {
 		c.WorkingDirectory = "."
@@ -114,6 +162,119 @@ func (s *Store) write(p Preview) error {
 	}
 	b, _ := json.MarshalIndent(p, "", "  ")
 	return os.WriteFile(filepath.Join(d, p.ID+".json"), b, 0600)
+}
+
+func (s *Store) Invite(repo, pull, id, actor, user, role, sourceKind, sourceID string, expiresAt time.Time) (Preview, error) {
+	if actor == "" || user == "" || !slicesContains([]string{"view", "test", "feedback"}, role) || !slicesContains([]string{"user", "issue", "decision", "proposal"}, sourceKind) {
+		return Preview{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	if !expiresAt.After(now) || expiresAt.After(now.Add(30*24*time.Hour)) {
+		return Preview{}, ErrInvalid
+	}
+	p, err := s.Get(repo, pull, id)
+	if err != nil {
+		return Preview{}, err
+	}
+	for i := range p.Invitations {
+		invitation := &p.Invitations[i]
+		if invitation.UserID == user && invitation.Role == role && invitation.RevokedAt == nil && invitation.ExpiresAt.After(now) {
+			if invitation.SourceKind == sourceKind && invitation.SourceID == sourceID && invitation.ExpiresAt.Equal(expiresAt) {
+				return p, nil
+			}
+			invitation.RevokedAt, invitation.RevokedBy = &now, actor
+			p.AudienceEvents = append(p.AudienceEvents, AudienceEvent{ID: newID(), Kind: "replaced", ActorID: actor, InvitationID: invitation.ID, CreatedAt: now})
+			break
+		}
+	}
+	raw := make([]byte, 16)
+	_, _ = rand.Read(raw)
+	invitation := Invitation{ID: hex.EncodeToString(raw), UserID: user, Role: role, SourceKind: sourceKind, SourceID: sourceID, InvitedBy: actor, ExpiresAt: expiresAt, CreatedAt: now}
+	p.Invitations = append(p.Invitations, invitation)
+	p.AudienceEvents = append(p.AudienceEvents, AudienceEvent{ID: newID(), Kind: "invited", ActorID: actor, InvitationID: invitation.ID, CreatedAt: now})
+	p.UpdatedAt = now
+	return p, s.write(p)
+}
+func (s *Store) Revoke(repo, pull, id, invitationID, actor string) (Preview, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, err := s.Get(repo, pull, id)
+	if err != nil {
+		return Preview{}, err
+	}
+	now := s.now()
+	for i := range p.Invitations {
+		if p.Invitations[i].ID == invitationID {
+			if p.Invitations[i].RevokedAt == nil {
+				p.Invitations[i].RevokedAt = &now
+				p.Invitations[i].RevokedBy = actor
+				p.AudienceEvents = append(p.AudienceEvents, AudienceEvent{ID: newID(), Kind: "revoked", ActorID: actor, InvitationID: invitationID, CreatedAt: now})
+				p.UpdatedAt = now
+			}
+			return p, s.write(p)
+		}
+	}
+	return Preview{}, ErrNotFound
+}
+func (s *Store) Enter(repo, pull, id, user string) (Preview, Invitation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, err := s.Get(repo, pull, id)
+	if err != nil {
+		return Preview{}, Invitation{}, err
+	}
+	now := s.now()
+	for _, inv := range p.Invitations {
+		if inv.UserID == user && inv.RevokedAt == nil && inv.ExpiresAt.After(now) {
+			for _, event := range p.AudienceEvents {
+				if event.Kind == "entered" && event.InvitationID == inv.ID && event.ActorID == user {
+					return p, inv, nil
+				}
+			}
+			p.AudienceEvents = append(p.AudienceEvents, AudienceEvent{ID: newID(), Kind: "entered", ActorID: user, InvitationID: inv.ID, CreatedAt: now})
+			p.UpdatedAt = now
+			return p, inv, s.write(p)
+		}
+	}
+	return Preview{}, Invitation{}, ErrNotFound
+}
+func (s *Store) AddFeedback(repo, pull, id, user, invitationID, body string) (Preview, error) {
+	if strings.TrimSpace(body) == "" || utf8.RuneCountInString(body) > 4000 {
+		return Preview{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, err := s.Get(repo, pull, id)
+	if err != nil {
+		return Preview{}, err
+	}
+	now := s.now()
+	valid := false
+	for _, inv := range p.Invitations {
+		if inv.ID == invitationID && inv.UserID == user && inv.Role == "feedback" && inv.RevokedAt == nil && inv.ExpiresAt.After(now) {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		return Preview{}, ErrNotFound
+	}
+	feedback := Feedback{ID: newID(), AuthorID: user, InvitationID: invitationID, Body: strings.TrimSpace(body), CreatedAt: now}
+	p.Feedback = append(p.Feedback, feedback)
+	p.AudienceEvents = append(p.AudienceEvents, AudienceEvent{ID: newID(), Kind: "feedback", ActorID: user, InvitationID: invitationID, CreatedAt: now})
+	p.UpdatedAt = now
+	return p, s.write(p)
+}
+func newID() string { raw := make([]byte, 16); _, _ = rand.Read(raw); return hex.EncodeToString(raw) }
+func slicesContains(values []string, value string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
 }
 func (s *Store) Get(repo, pull, id string) (Preview, error) {
 	b, e := os.ReadFile(filepath.Join(s.root, repo, pull, filepath.Base(id)+".json"))
