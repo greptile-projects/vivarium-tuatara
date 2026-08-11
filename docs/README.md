@@ -1549,3 +1549,20 @@ are staged without credentials, and only outcomes matching repository-declared
 reproduction command hashes can enter an immutable attempt. Attempts retain the
 environment, inputs, logs, exit codes, artifacts, observed result, revision,
 and actor; failed and inconclusive runs remain available for collaborator reruns.
+
+Triage then turns that shared reproduction into an explicit, attributable
+working theory. Maintainers compare-and-swap classification, priority,
+assignment, suspected exact revision and owners, and duplicate identity; they
+can connect code, dependencies, releases, deployments, incidents, proposals,
+pulls, and other issues without replacing those authoritative records. Missing
+evidence is requested directly from the reporter and the answer stays beside
+the request.
+
+Human hypotheses, findings, and uncertainty must cite retained reproduction or
+linked evidence. Challenges and superseding claims preserve disagreement rather
+than turning a label or agent result into hidden truth. A maintainer can issue a
+short-lived `issues:investigate` credential over one selected reproduction and
+a bounded link set; the read-only agent can inspect only that packet and append
+cited claims under its generated identity. Current repository participation is
+revalidated on every ordinary issue read, while duplicate, ownership, evidence,
+and access decisions remain actor-stamped in the issue history.
