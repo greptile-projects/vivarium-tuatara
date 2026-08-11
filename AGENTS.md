@@ -1083,6 +1083,15 @@ whenever dependencies change or the web job fails before it starts.
   named human or current agent operator can accept with that retained evidence.
   Team storage contains references and summaries only, never terminal input,
   credentials, hidden prompts, or copied evidence bodies.
+  Each planned stream also retains an owner-published operational snapshot with
+  state, progress, exact revision, bounded resource use, active control,
+  blockers, questions, and predicted next action. Budget exhaustion and live
+  access loss pause only the affected stream with explicit recovery. Accepted
+  members may guide or control individual streams; only the organizer controls
+  the whole effort or changes authority through reassignment/narrowing. Those
+  authority-affecting interventions create a new plan revision and fresh owner
+  acceptance while all accepted timeline, handoff, status, and intervention
+  evidence remains retained.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

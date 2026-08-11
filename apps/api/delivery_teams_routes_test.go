@@ -84,6 +84,21 @@ func TestDeliveryTeamAPIInvitesWithoutGrantingRepositoryAuthority(t *testing.T) 
 	if team.Plan.Acceptances[0].Status != "accepted" || team.Plan.Acceptances[0].RespondedBy != invitee.User.ID {
 		t.Fatalf("plan acceptance = %#v", team.Plan.Acceptances)
 	}
+	statusBody := fmt.Sprintf(`{"expected_version":%d,"status":{"status":"running","summary":"Review is active","progress_percent":40,"revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","resource_use":{"unit":"minutes","consumed":3},"questions":[{"id":"rollback-owner","body":"Who approves the rollback window?","ask_of":"team-owner","urgency":"urgent"}],"blockers":[{"kind":"participant_disconnected","summary":"Operations contact disconnected","recovery":"Pause review and escalate to the organizer"}],"predicted_next_action":"Reproduce rollback"}}`, team.Version)
+	reported := authenticatedRequest(t, http.MethodPut, server.URL+"/delivery-teams/"+team.ID+"/streams/risk-review/status", statusBody, invitee.Credential.Token, http.StatusOK)
+	json.NewDecoder(reported.Body).Decode(&team)
+	reported.Body.Close()
+	if len(team.StreamStatuses) != 1 || team.StreamStatuses[0].Status != "paused" || team.StreamStatuses[0].Blockers[0].Kind != "participant_disconnected" || team.StreamStatuses[0].Blockers[1].Kind != "access_revoked" {
+		t.Fatalf("projected live status = %#v", team.StreamStatuses)
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/delivery-teams/"+team.ID+"/interventions", fmt.Sprintf(`{"expected_version":%d,"intervention":{"scope":"stream","stream_id":"risk-review","action":"resume","guidance":"Resume without restored access"}}`, team.Version), owner.Credential.Token, http.StatusForbidden).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/delivery-teams/"+team.ID+"/interventions", fmt.Sprintf(`{"expected_version":%d,"intervention":{"scope":"team","action":"cancel","guidance":"Cancel without organizer authority"}}`, team.Version), invitee.Credential.Token, http.StatusForbidden).Body.Close()
+	guided := authenticatedRequest(t, http.MethodPost, server.URL+"/delivery-teams/"+team.ID+"/interventions", fmt.Sprintf(`{"expected_version":%d,"intervention":{"scope":"stream","stream_id":"risk-review","action":"guide","guidance":"Preserve evidence and await the operations contact"}}`, team.Version), owner.Credential.Token, http.StatusOK)
+	json.NewDecoder(guided.Body).Decode(&team)
+	guided.Body.Close()
+	if len(team.Interventions) != 1 || team.Interventions[0].ActorID != owner.User.ID || len(team.StreamStatuses[0].Questions) != 1 {
+		t.Fatalf("guided stream = %#v", team)
+	}
 	authenticatedRequest(t, http.MethodPut, server.URL+"/delivery-teams/"+team.ID, fmt.Sprintf(`{"expected_version":%d,"charter":{}}`, team.Version), invitee.Credential.Token, http.StatusNotFound).Body.Close()
 }
 

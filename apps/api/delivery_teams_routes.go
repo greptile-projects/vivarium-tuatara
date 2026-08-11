@@ -58,6 +58,14 @@ type deliveryTeamHandoffAcceptanceInput struct {
 	VerificationEntryIDs []string `json:"verification_entry_ids"`
 	Note                 string   `json:"note"`
 }
+type deliveryTeamStatusInput struct {
+	ExpectedVersion int                       `json:"expected_version"`
+	Status          deliveryteams.StatusInput `json:"status"`
+}
+type deliveryTeamInterventionInput struct {
+	ExpectedVersion int                             `json:"expected_version"`
+	Intervention    deliveryteams.InterventionInput `json:"intervention"`
+}
 
 func registerDeliveryTeamRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, identities *users.Store, store *deliveryteams.Store, proposalStore *proposals.Store, decisionStore *decisions.Store, incidentStore *incidents.Store, orgs *organizations.Store, activity *activities.Store, sessionStore *changesessions.Store, workspaceStore *workspaces.Store, explanationStore *explanations.Store) {
 	mux.HandleFunc("POST /repositories/{id}/delivery-teams", func(w http.ResponseWriter, r *http.Request) {
@@ -380,6 +388,81 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, catalog *repositories.Store,
 		}
 		writeJSON(w, 200, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
 	})
+	mux.HandleFunc("PUT /delivery-teams/{id}/streams/{streamId}/status", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+		if !ok {
+			return
+		}
+		team, err := store.Get(r.PathValue("id"))
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		principal, allowed := deliveryPlanningPrincipal(team, actor.UserID, orgs, catalog)
+		if !allowed {
+			writeAPIError(w, 403, "delivery_stream_forbidden", "only the accepted stream owner may report status")
+			return
+		}
+		var in deliveryTeamStatusInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "expected_version and status are required")
+			return
+		}
+		team, err = store.ReportStatus(team.ID, r.PathValue("streamId"), actor.UserID, principal, in.ExpectedVersion, in.Status)
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		writeJSON(w, 200, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
+	})
+	mux.HandleFunc("POST /delivery-teams/{id}/interventions", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+		if !ok {
+			return
+		}
+		team, err := store.Get(r.PathValue("id"))
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		principal, allowed := deliveryPlanningPrincipal(team, actor.UserID, orgs, catalog)
+		if !allowed {
+			writeAPIError(w, 403, "delivery_intervention_forbidden", "only the organizer or an accepted team member may intervene")
+			return
+		}
+		var in deliveryTeamInterventionInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "expected_version and intervention are required")
+			return
+		}
+		if in.Intervention.Action == "resume" {
+			in.Intervention.ResumeAuthorized = deliveryResumeAuthorized(team, in.Intervention.Scope, in.Intervention.StreamID, catalog, orgs)
+		}
+		team, err = store.Intervene(team.ID, actor.UserID, principal, in.ExpectedVersion, in.Intervention)
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		writeJSON(w, 200, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
+	})
+}
+
+func deliveryResumeAuthorized(team deliveryteams.Team, scope, streamID string, catalog *repositories.Store, orgs *organizations.Store) bool {
+	if team.Plan == nil {
+		return false
+	}
+	for _, stream := range team.Plan.Streams {
+		if scope == "stream" && stream.ID != streamID {
+			continue
+		}
+		owner := participantByDeliveryID(team, stream.OwnerParticipantID)
+		if owner == nil {
+			return false
+		}
+		for _, repository := range stream.RepositoryScope {
+			level, _ := deliveryParticipantAccess(*owner, repository.RepositoryID, catalog, orgs)
+			if level != "write" {
+				return false
+			}
+		}
+	}
+	return scope == "team" || scope == "stream"
 }
 
 func deliveryPrincipalCanRead(team deliveryteams.Team, principal, repositoryID string, catalog *repositories.Store, orgs *organizations.Store) bool {
@@ -637,6 +720,12 @@ func projectDeliveryAccess(v deliveryteams.Team, viewer string, catalog *reposit
 	if v.Handoffs == nil {
 		v.Handoffs = []deliveryteams.Handoff{}
 	}
+	if v.StreamStatuses == nil {
+		v.StreamStatuses = []deliveryteams.StreamStatus{}
+	}
+	if v.Interventions == nil {
+		v.Interventions = []deliveryteams.Intervention{}
+	}
 	for i := range v.Participants {
 		p := &v.Participants[i]
 		p.CanRespond = p.Status == "pending" && (p.PrincipalType == "human" && p.PrincipalID == viewer || p.PrincipalType == "agent" && agentOperator(v.RepositoryID, p.PrincipalID, viewer, orgs, catalog))
@@ -663,6 +752,29 @@ func projectDeliveryAccess(v deliveryteams.Team, viewer string, catalog *reposit
 				level, _ := deliveryParticipantAccess(*p, scope.RepositoryID, catalog, orgs)
 				if level != "write" {
 					v.Plan.Blockers = append(v.Plan.Blockers, deliveryteams.PlanBlocker{Kind: "unavailable_access", StreamIDs: []string{stream.ID}, OwnerParticipantIDs: []string{stream.OwnerParticipantID}, Summary: "The stream owner lacks independent write access to " + scope.RepositoryID})
+					found := false
+					for j := range v.StreamStatuses {
+						if v.StreamStatuses[j].StreamID != stream.ID {
+							continue
+						}
+						found = true
+						if v.StreamStatuses[j].Status != "completed" && v.StreamStatuses[j].Status != "canceled" {
+							v.StreamStatuses[j].Status = "paused"
+							hasAccessBlocker := false
+							for _, blocker := range v.StreamStatuses[j].Blockers {
+								if blocker.Kind == "access_revoked" {
+									hasAccessBlocker = true
+								}
+							}
+							if !hasAccessBlocker {
+								v.StreamStatuses[j].Blockers = append(v.StreamStatuses[j].Blockers, deliveryteams.StreamBlocker{Kind: "access_revoked", Summary: "The current owner lacks independent write access", Recovery: "Restore an independent grant or have the organizer explicitly reassign the stream"})
+							}
+							v.StreamStatuses[j].PredictedNextAction = "Escalate access loss without transferring authority"
+						}
+					}
+					if !found {
+						v.StreamStatuses = append(v.StreamStatuses, deliveryteams.StreamStatus{StreamID: stream.ID, Status: "paused", Revision: scope.Revision, Blockers: []deliveryteams.StreamBlocker{{Kind: "access_revoked", Summary: "The current owner lacks independent write access", Recovery: "Restore an independent grant or have the organizer explicitly reassign the stream"}}, Questions: []deliveryteams.StreamQuestion{}, PredictedNextAction: "Escalate access loss without transferring authority"})
+					}
 				}
 			}
 		}
