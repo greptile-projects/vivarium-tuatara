@@ -39,6 +39,9 @@ type Definition struct {
 	WorkingDirectory string            `json:"working_directory,omitempty"`
 	Environment      map[string]string `json:"environment,omitempty"`
 	TimeoutSeconds   int               `json:"timeout_seconds,omitempty"`
+	CPUs             float64           `json:"cpus,omitempty"`
+	MemoryMB         int               `json:"memory_mb,omitempty"`
+	StorageMB        int               `json:"storage_mb,omitempty"`
 	Inputs           []InputFile       `json:"inputs,omitempty"`
 }
 
@@ -196,7 +199,7 @@ func ParseConfig(data []byte) (Config, error) {
 		if len(x.Inputs) != 0 {
 			return Config{}, errors.New("check configuration cannot embed inputs")
 		}
-		if strings.TrimSpace(x.Name) == "" || len(x.Name) > 100 || strings.TrimSpace(x.Command) == "" || len(x.Command) > 4000 || seen[x.Name] || x.TimeoutSeconds < 0 || x.TimeoutSeconds > 3600 {
+		if strings.TrimSpace(x.Name) == "" || len(x.Name) > 100 || strings.TrimSpace(x.Command) == "" || len(x.Command) > 4000 || seen[x.Name] || x.TimeoutSeconds < 0 || x.TimeoutSeconds > 3600 || x.CPUs < 0 || x.CPUs > 2 || x.MemoryMB < 0 || x.MemoryMB > 2048 || x.StorageMB < 0 || x.StorageMB > 1024 {
 			return Config{}, errors.New("invalid check definition")
 		}
 		if !validImage(x.Image) {
@@ -977,12 +980,24 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(run.Definition.TimeoutSeconds)*time.Second)
 			outputExceeded := make(chan struct{}, 1)
 			stopOutputWatch := make(chan struct{})
-			go watchOutputLimit(ctx, cancel, outputDirectory, outputExceeded, stopOutputWatch)
+			outputLimit := int64(run.Definition.StorageMB) * 1024 * 1024
+			if outputLimit == 0 {
+				outputLimit = 256 * 1024 * 1024
+			}
+			go watchOutputLimit(ctx, cancel, outputDirectory, outputLimit, outputExceeded, stopOutputWatch)
 			// A previous API process may have died while Docker kept the container.
 			// The execution lock makes removing that abandoned tree safe before
 			// relaunching this exact durable run.
 			_ = removeContainer(containerName)
-			args := []string{"run", "--name", containerName, "--pull=never", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=1g", "--cpus=2", "--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "--mount", "type=bind,src=" + workspace + ",dst=/workspace,readonly", "--mount", "type=bind,src=" + outputDirectory + ",dst=/output", "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777", "--workdir", "/workspace/" + run.Definition.WorkingDirectory, "--env", "HOME=/tmp", "--env", "VIVARIUM_OUTPUT=/output", "--env", "CI=true", "--env", "VIVARIUM_COMMIT_SHA=" + run.CommitID}
+			cpus := run.Definition.CPUs
+			if cpus == 0 {
+				cpus = 2
+			}
+			memoryMB := run.Definition.MemoryMB
+			if memoryMB == 0 {
+				memoryMB = 1024
+			}
+			args := []string{"run", "--name", containerName, "--pull=never", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory", fmt.Sprintf("%dm", memoryMB), "--cpus", fmt.Sprintf("%g", cpus), "--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "--mount", "type=bind,src=" + workspace + ",dst=/workspace,readonly", "--mount", "type=bind,src=" + outputDirectory + ",dst=/output", "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777", "--workdir", "/workspace/" + run.Definition.WorkingDirectory, "--env", "HOME=/tmp", "--env", "VIVARIUM_OUTPUT=/output", "--env", "CI=true", "--env", "VIVARIUM_COMMIT_SHA=" + run.CommitID}
 			for k, v := range run.Definition.Environment {
 				args = append(args, "--env", k+"="+v)
 			}
@@ -992,7 +1007,7 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 			cmd.Stderr = &evidenceWriter{store: s, run: run, attempt: attemptNumber, stream: "stderr"}
 			err = cmd.Run()
 			close(stopOutputWatch)
-			artifactErr := s.collectArtifacts(&run, attemptNumber, outputDirectory)
+			artifactErr := s.collectArtifacts(&run, attemptNumber, outputDirectory, outputLimit)
 			if err == nil && artifactErr != nil {
 				err = artifactErr
 			}
@@ -1005,7 +1020,7 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 			} else {
 				select {
 				case <-outputExceeded:
-					err = errors.New("check output exceeded 256 MiB")
+					err = fmt.Errorf("check output exceeded %d MiB", outputLimit/(1024*1024))
 				default:
 				}
 			}
@@ -1126,7 +1141,7 @@ func (s *Store) publishTerminal(run Run, attempt int, at time.Time) bool {
 	return true
 }
 
-func watchOutputLimit(ctx context.Context, cancel context.CancelFunc, directory string, exceeded chan<- struct{}, stop <-chan struct{}) {
+func watchOutputLimit(ctx context.Context, cancel context.CancelFunc, directory string, limit int64, exceeded chan<- struct{}, stop <-chan struct{}) {
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -1142,12 +1157,12 @@ func watchOutputLimit(ctx context.Context, cancel context.CancelFunc, directory 
 						size += info.Size()
 					}
 				}
-				if size > 256*1024*1024 {
+				if size > limit {
 					return errors.New("limit")
 				}
 				return nil
 			})
-			if size > 256*1024*1024 {
+			if size > limit {
 				select {
 				case exceeded <- struct{}{}:
 				default:
@@ -1201,7 +1216,7 @@ func (w *evidenceWriter) Write(body []byte) (int, error) {
 	return original, nil
 }
 
-func (s *Store) collectArtifacts(run *Run, attempt int, temporary string) error {
+func (s *Store) collectArtifacts(run *Run, attempt int, temporary string, limit int64) error {
 	destination := filepath.Join(s.root, run.RepositoryID, run.PullRequestID, "artifacts", run.ID)
 	if err := os.MkdirAll(destination, 0o700); err != nil {
 		return err
@@ -1222,7 +1237,7 @@ func (s *Store) collectArtifacts(run *Run, attempt int, temporary string) error 
 			return errors.New("check artifact is not a regular file")
 		}
 		total += info.Size()
-		if total > 256*1024*1024 {
+		if total > limit {
 			return errors.New("check output exceeded 256 MiB")
 		}
 		relative, err := filepath.Rel(temporary, path)
@@ -1243,7 +1258,7 @@ func (s *Store) collectArtifacts(run *Run, attempt int, temporary string) error 
 			return err
 		}
 		hash := sha256.New()
-		written, copyErr := io.Copy(io.MultiWriter(target, hash), io.LimitReader(source, 256*1024*1024+1))
+		written, copyErr := io.Copy(io.MultiWriter(target, hash), io.LimitReader(source, limit+1))
 		syncErr := target.Sync()
 		closeErr := target.Close()
 		if copyErr != nil {
@@ -1255,7 +1270,7 @@ func (s *Store) collectArtifacts(run *Run, attempt int, temporary string) error 
 		if closeErr != nil {
 			return closeErr
 		}
-		if written > 256*1024*1024 {
+		if written > limit {
 			return errors.New("check artifact exceeds size limit")
 		}
 		artifact := Artifact{ID: id, Attempt: attempt, Path: filepath.ToSlash(relative), Size: written, SHA256: hex.EncodeToString(hash.Sum(nil)), ContentType: mime.TypeByExtension(filepath.Ext(relative)), CreatedAt: s.now().Truncate(time.Microsecond)}

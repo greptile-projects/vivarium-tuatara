@@ -888,7 +888,11 @@ whenever dependencies change or the web job fails before it starts.
   create durable exact-commit runs beneath `$CHECK_RUN_STORAGE_ROOT` (default
   `check-runs`); commands execute in capability-free, network-disabled OCI
   containers using preinstalled images, disposable exported snapshots, and no
-  Git credential. Snapshots are read-only; `$VIVARIUM_OUTPUT` is a bounded
+  Git credential. Definitions may retain bounded `cpus`, `memory_mb`, and
+  `storage_mb`; execution applies those Docker CPU/memory limits and uses
+  storage as the output watcher and artifact collection ceiling. Omitted
+  values preserve the 2 CPU, 1 GiB memory, and 256 MiB output defaults.
+  Snapshots are read-only; `$VIVARIUM_OUTPUT` is a bounded
   writable tmpfs. Startup, a periodic scheduler, and later same-commit triggers
   retry execution or container cleanup under a cross-process execution lock;
   cleanup must be confirmed before a run becomes terminal. The visibility-aware run

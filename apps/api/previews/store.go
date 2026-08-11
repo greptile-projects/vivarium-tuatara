@@ -101,7 +101,7 @@ func (s *Store) Create(repositoryID, pullID, revision, creator, hash, runID stri
 	idb := make([]byte, 16)
 	_, _ = rand.Read(idb)
 	p := Preview{ID: hex.EncodeToString(idb), RepositoryID: repositoryID, PullRequestID: pullID, Revision: revision, CreatorID: creator, Definition: c, DefinitionSHA256: hash, BuildRunID: runID, State: "building", CreatedAt: now, UpdatedAt: now}
-	p.URL = "/repositories/" + repositoryID + "/pulls/" + pullID + "/previews/" + p.ID + "/content"
+	p.URL = "/repositories/" + repositoryID + "/pulls/" + pullID + "/previews/" + p.ID + "/content/"
 	if err := s.write(p); err != nil {
 		return Preview{}, err
 	}

@@ -652,7 +652,10 @@ publication, preventing revocation from committing mid-adoption.
 Candidate revisions can carry their reproducible verification contract in
 `.vivarium/checks.json`. Opening a pull request or explicitly adopting a new
 source revision snapshots those commands into durable check runs for that exact
-commit. Each command executes in a bounded, network-disabled OCI container
+commit. Definitions may set bounded `cpus`, `memory_mb`, and `storage_mb`; the
+executor applies CPU and memory to the container and storage to live output and
+artifact collection, while omitted values keep the established defaults. Each
+command executes in a bounded, network-disabled OCI container
 from a disposable exported snapshot, using a preinstalled image and no
 repository credential. The snapshot is read-only; only bounded temporary and
 output filesystems are writable. Each execution publishes an immutable

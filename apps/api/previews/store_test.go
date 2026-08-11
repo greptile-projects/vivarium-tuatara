@@ -11,6 +11,9 @@ func TestDefinitionAndStaleProjection(t *testing.T) {
 	if err != nil || len(digest) != 64 {
 		t.Fatalf("parse = %#v, %q, %v", config, digest, err)
 	}
+	if config.Resources.CPUs != 1 || config.Resources.MemoryMB != 256 || config.Resources.StorageMB != 64 {
+		t.Fatalf("resource contract was not retained: %#v", config.Resources)
+	}
 	store, err := New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

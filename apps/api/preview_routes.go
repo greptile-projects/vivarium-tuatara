@@ -70,7 +70,7 @@ func registerPreviewRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 		}
 		quoted := strings.ReplaceAll(config.OutputPath, "'", "'\\''")
 		command := config.Build + " && test -d '" + quoted + "' && cp -R '" + quoted + "'/. \"$VIVARIUM_OUTPUT\"/"
-		createdRuns, e := runs.CreateRequested(pull.RepositoryID, pull.ID, pull.SourceCommitID, []checkruns.Definition{{Name: "preview-" + hash[:12], Image: config.Image, Command: command, WorkingDirectory: config.WorkingDirectory, Environment: config.Environment, TimeoutSeconds: config.Resources.TimeoutSeconds}}, actor.UserID)
+		createdRuns, e := runs.CreateRequested(pull.RepositoryID, pull.ID, pull.SourceCommitID, []checkruns.Definition{{Name: "preview-" + hash[:12], Image: config.Image, Command: command, WorkingDirectory: config.WorkingDirectory, Environment: config.Environment, TimeoutSeconds: config.Resources.TimeoutSeconds, CPUs: config.Resources.CPUs, MemoryMB: config.Resources.MemoryMB, StorageMB: config.Resources.StorageMB}}, actor.UserID)
 		if e != nil || len(createdRuns) != 1 {
 			writeAPIError(w, 503, "preview_build_unavailable", "preview build unavailable")
 			return
@@ -99,7 +99,7 @@ func registerPreviewRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 		}
 		writeJSON(w, 200, map[string]any{"events": events})
 	})
-	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/previews/{preview_id}/content", func(w http.ResponseWriter, r *http.Request) {
+	serveContent := func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, catalog, authStore, r.PathValue("id")); !ok {
 			return
 		}
@@ -113,15 +113,24 @@ func registerPreviewRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 			writeAPIError(w, 409, "preview_not_ready", "preview is not ready")
 			return
 		}
+		requested := r.PathValue("asset")
+		if requested == "" {
+			requested = "index.html"
+		}
+		requested = path.Clean(strings.TrimPrefix(requested, "/"))
+		if requested == "." || requested == ".." || strings.HasPrefix(requested, "../") {
+			writeAPIError(w, 404, "preview_asset_not_found", "preview asset not found")
+			return
+		}
 		var selected *checkruns.Artifact
 		for i := range run.Artifacts {
-			if run.Artifacts[i].Path == "index.html" {
+			if run.Artifacts[i].Path == requested {
 				selected = &run.Artifacts[i]
 				break
 			}
 		}
 		if selected == nil {
-			writeAPIError(w, 422, "preview_entrypoint_missing", "preview did not publish index.html")
+			writeAPIError(w, 404, "preview_asset_not_found", "preview asset not found")
 			return
 		}
 		file, a, e := runs.OpenArtifact(p.RepositoryID, p.PullRequestID, p.BuildRunID, selected.ID)
@@ -131,7 +140,9 @@ func registerPreviewRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 		}
 		defer file.Close()
 		w.Header().Set("Content-Type", a.ContentType)
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; sandbox allow-scripts")
 		http.ServeContent(w, r, path.Base(a.Path), a.CreatedAt, file)
-	})
+	}
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/previews/{preview_id}/content", serveContent)
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/previews/{preview_id}/content/{asset...}", serveContent)
 }
