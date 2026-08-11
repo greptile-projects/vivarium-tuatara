@@ -134,9 +134,6 @@ func registerContributorOpportunityRoutes(mux *http.ServeMux, repos *repositorie
 		if !ok {
 			return
 		}
-		if _, _, ok = authorizeRepositoryRead(w, r, repos, credentials, r.PathValue("id")); !ok {
-			return
-		}
 		repo, err := repos.GetByID(r.PathValue("id"))
 		if err != nil {
 			writeAPIError(w, 404, "repository_not_found", "repository not found")
@@ -149,7 +146,16 @@ func registerContributorOpportunityRoutes(mux *http.ServeMux, repos *repositorie
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
-		v, err := opportunities.Release(repo.ID, r.PathValue("opportunity"), actor.UserID, actor.UserID == repo.OwnerID, input.ExpectedVersion)
+		var v contributoropportunities.Opportunity
+		var releaseErr error
+		err = repos.WithCurrentReadAccess(actor.UserID, []string{repo.ID}, func() error {
+			v, releaseErr = opportunities.Release(repo.ID, r.PathValue("opportunity"), actor.UserID, actor.UserID == repo.OwnerID, input.ExpectedVersion)
+			return releaseErr
+		})
+		if errors.Is(err, repositories.ErrNotFound) || errors.Is(err, repositories.ErrInvalidCollaborator) {
+			writeAPIError(w, 404, "repository_not_found", "repository not found")
+			return
+		}
 		opportunityResult(w, v, err, false)
 	})
 }
