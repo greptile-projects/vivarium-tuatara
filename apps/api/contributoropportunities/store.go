@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -91,26 +92,27 @@ type Mentor struct {
 	Note   string `json:"note,omitempty"`
 }
 type Opportunity struct {
-	ID               string    `json:"id"`
-	RepositoryID     string    `json:"repository_id"`
-	Version          int       `json:"version"`
-	Source           Source    `json:"source"`
-	Title            string    `json:"title"`
-	ExpectedOutcome  string    `json:"expected_outcome"`
-	Scope            string    `json:"scope"`
-	RequiredSkills   []string  `json:"required_skills"`
-	Interests        []string  `json:"interests"`
-	DependencyIDs    []string  `json:"dependency_ids"`
-	Risk             string    `json:"risk"`
-	EstimatedMinutes int       `json:"estimated_minutes"`
-	AgentAssistance  bool      `json:"agent_assistance"`
-	Mentors          []Mentor  `json:"mentors"`
-	Revision         string    `json:"revision"`
-	Status           string    `json:"status"`
-	PublishedBy      string    `json:"published_by"`
-	PublishedAt      time.Time `json:"published_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
-	Claim            *Claim    `json:"claim,omitempty"`
+	ID               string      `json:"id"`
+	RepositoryID     string      `json:"repository_id"`
+	Version          int         `json:"version"`
+	Source           Source      `json:"source"`
+	Title            string      `json:"title"`
+	ExpectedOutcome  string      `json:"expected_outcome"`
+	Scope            string      `json:"scope"`
+	RequiredSkills   []string    `json:"required_skills"`
+	Interests        []string    `json:"interests"`
+	DependencyIDs    []string    `json:"dependency_ids"`
+	Risk             string      `json:"risk"`
+	EstimatedMinutes int         `json:"estimated_minutes"`
+	AgentAssistance  bool        `json:"agent_assistance"`
+	Mentors          []Mentor    `json:"mentors"`
+	Revision         string      `json:"revision"`
+	Status           string      `json:"status"`
+	PublishedBy      string      `json:"published_by"`
+	PublishedAt      time.Time   `json:"published_at"`
+	UpdatedAt        time.Time   `json:"updated_at"`
+	Claim            *Claim      `json:"claim,omitempty"`
+	Completion       *Completion `json:"completion,omitempty"`
 }
 type Claim struct {
 	ID         string     `json:"id"`
@@ -120,6 +122,30 @@ type Claim struct {
 	ExpiresAt  time.Time  `json:"expires_at"`
 	ReleasedAt *time.Time `json:"released_at,omitempty"`
 	ReleasedBy string     `json:"released_by,omitempty"`
+}
+type SupportEffort struct {
+	SetupAttempts        int `json:"setup_attempts"`
+	MentorGuidanceItems  int `json:"mentor_guidance_items"`
+	AgentAssistanceItems int `json:"agent_assistance_items"`
+}
+type Readiness struct {
+	ReadyForNext      bool     `json:"ready_for_next"`
+	SkillsRecognized  []string `json:"skills_recognized"`
+	NextOpportunityID string   `json:"next_opportunity_id,omitempty"`
+	Note              string   `json:"note"`
+}
+type Completion struct {
+	ContributorID  string        `json:"contributor_id"`
+	PullRequestID  string        `json:"pull_request_id"`
+	ReleaseID      string        `json:"release_id"`
+	ReleaseVersion string        `json:"release_version"`
+	MergeCommitID  string        `json:"merge_commit_id"`
+	Credit         []string      `json:"credit"`
+	Feedback       string        `json:"feedback"`
+	SupportEffort  SupportEffort `json:"support_effort"`
+	Readiness      Readiness     `json:"readiness"`
+	RecordedBy     string        `json:"recorded_by"`
+	RecordedAt     time.Time     `json:"recorded_at"`
 }
 type Profile struct {
 	Skills           []string `json:"skills"`
@@ -193,6 +219,9 @@ func (s *Store) Publish(v Opportunity, expected int) (Opportunity, error) {
 		}
 	} else if expected != 0 {
 		return Opportunity{}, ErrConflict
+	}
+	if prior != nil && prior.Completion != nil {
+		return Opportunity{}, ErrInvalid
 	}
 	if !valid(v) {
 		return Opportunity{}, ErrInvalid
@@ -315,6 +344,69 @@ func (s *Store) Release(repositoryID, id, actor string, owner bool, expected int
 	}
 	return Opportunity{}, ErrNotFound
 }
+
+// Complete closes an in-progress reservation with delivery evidence. The
+// caller validates the ordinary pull and release before entering this atomic
+// exact-version transition.
+func (s *Store) Complete(repositoryID, id string, expected int, completion Completion) (Opportunity, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	completion = normalizeCompletion(completion)
+	items, err := s.read(repositoryID)
+	if err != nil {
+		return Opportunity{}, err
+	}
+	for _, v := range items {
+		if v.ID != id {
+			continue
+		}
+		if v.Completion != nil {
+			if sameCompletion(*v.Completion, completion) {
+				return v, nil
+			}
+			return Opportunity{}, ErrConflict
+		}
+		if v.Version != expected {
+			return Opportunity{}, ErrConflict
+		}
+		if v.Status != "in_progress" || v.Claim == nil || v.Claim.ActorID != completion.ContributorID || !validCompletion(completion) {
+			return Opportunity{}, ErrInvalid
+		}
+		completion.RecordedAt = s.now().UTC().Truncate(time.Microsecond)
+		v.Status, v.Completion, v.Version, v.UpdatedAt = "completed", &completion, v.Version+1, completion.RecordedAt
+		if err = s.write(v); err != nil {
+			return Opportunity{}, err
+		}
+		return v, nil
+	}
+	return Opportunity{}, ErrNotFound
+}
+
+func validCompletion(v Completion) bool {
+	return validID(v.ContributorID) && validID(v.PullRequestID) && validID(v.ReleaseID) && validID(v.RecordedBy) &&
+		len(v.MergeCommitID) == 40 && strings.TrimSpace(v.ReleaseVersion) != "" && strings.TrimSpace(v.Feedback) != "" && len(v.Feedback) <= 4000 &&
+		strings.TrimSpace(v.Readiness.Note) != "" && len(v.Readiness.Note) <= 2000 && len(v.Credit) > 0 && len(v.Credit) <= 20 && len(v.Readiness.SkillsRecognized) <= 20 &&
+		v.SupportEffort.SetupAttempts >= 0 && v.SupportEffort.MentorGuidanceItems >= 0 && v.SupportEffort.AgentAssistanceItems >= 0 &&
+		(v.Readiness.NextOpportunityID == "" || validID(v.Readiness.NextOpportunityID))
+}
+func sameCompletion(a, b Completion) bool {
+	return a.ContributorID == b.ContributorID && a.PullRequestID == b.PullRequestID && a.ReleaseID == b.ReleaseID && a.ReleaseVersion == b.ReleaseVersion && a.MergeCommitID == b.MergeCommitID &&
+		slices.Equal(a.Credit, b.Credit) && a.Feedback == b.Feedback && a.SupportEffort == b.SupportEffort &&
+		a.Readiness.ReadyForNext == b.Readiness.ReadyForNext && slices.Equal(a.Readiness.SkillsRecognized, b.Readiness.SkillsRecognized) &&
+		a.Readiness.NextOpportunityID == b.Readiness.NextOpportunityID && a.Readiness.Note == b.Readiness.Note && a.RecordedBy == b.RecordedBy
+}
+func normalizeCompletion(v Completion) Completion {
+	v.ReleaseVersion = strings.TrimSpace(v.ReleaseVersion)
+	v.Feedback = strings.TrimSpace(v.Feedback)
+	v.Readiness.Note = strings.TrimSpace(v.Readiness.Note)
+	for i := range v.Credit {
+		v.Credit[i] = strings.TrimSpace(v.Credit[i])
+	}
+	for i := range v.Readiness.SkillsRecognized {
+		v.Readiness.SkillsRecognized[i] = strings.TrimSpace(v.Readiness.SkillsRecognized[i])
+	}
+	return v
+}
 func MatchAll(items []Opportunity, p Profile, now time.Time) []Match {
 	out := []Match{}
 	completed := map[string]bool{}
@@ -326,7 +418,7 @@ func MatchAll(items []Opportunity, p Profile, now time.Time) []Match {
 		if v.Status != "open" {
 			continue
 		}
-		m := Match{Opportunity: v, Ready: v.Claim == nil}
+		m := Match{Opportunity: v, Ready: v.Claim == nil, Reasons: []string{}, Gaps: []string{}}
 		for _, dependency := range v.DependencyIDs {
 			if !completed[dependency] {
 				m.Gaps = append(m.Gaps, "Waiting on dependency "+dependency+".")

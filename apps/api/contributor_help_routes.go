@@ -17,7 +17,7 @@ import (
 type contributionHelpProjection struct {
 	Workspace           workspaces.Workspace `json:"workspace"`
 	ScopeChanged        bool                 `json:"scope_changed"`
-	MentorAccessRevoked []string             `json:"mentor_access_revoked,omitempty"`
+	MentorAccessRevoked []string             `json:"mentor_access_revoked"`
 }
 
 func registerContributorHelpRoutes(mux *http.ServeMux, ws *workspaces.Store, repos *repositories.Store, opportunities *contributoropportunities.Store, orgs *organizations.Store, credentials *auth.Store) {
@@ -50,7 +50,7 @@ func registerContributorHelpRoutes(mux *http.ServeMux, ws *workspaces.Store, rep
 			return
 		}
 		current, opportunityErr := opportunities.Get(item.ContributorContext.UpstreamRepositoryID, item.ContributorContext.OpportunityID)
-		changed := opportunityErr != nil || current.Version != item.ContributorContext.OpportunityVersion || current.Status != "open"
+		changed := opportunityErr != nil || current.Version != item.ContributorContext.OpportunityVersion || current.Status != "in_progress"
 		revoked := []string{}
 		for _, id := range item.ContributorContext.MentorIDs {
 			meta, repositoryErr := repos.GetByID(item.ContributorContext.UpstreamRepositoryID)

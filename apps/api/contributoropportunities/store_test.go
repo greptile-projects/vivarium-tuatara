@@ -210,3 +210,53 @@ func TestListProjectsOnlyActiveClaims(t *testing.T) {
 		t.Fatalf("released list = %#v, %v", items, err)
 	}
 }
+
+func TestCompleteRetainsDeliveredCreditAndIsExactlyRetryable(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 11, 16, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	v, err := s.Publish(sample(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.Claim(repo, v.ID, newcomer, "first contribution", time.Hour, v.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.BeginLaunch(repo, v.ID, newcomer, v.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completion := Completion{
+		ContributorID: newcomer, PullRequestID: "33333333333333333333333333333333", ReleaseID: "44444444444444444444444444444444", ReleaseVersion: "v1.1.0", MergeCommitID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Credit: []string{"implementation", "tests"}, Feedback: "Clear scope and responsive review follow-up.", SupportEffort: SupportEffort{SetupAttempts: 2, MentorGuidanceItems: 1, AgentAssistanceItems: 1},
+		Readiness: Readiness{ReadyForNext: true, SkillsRecognized: []string{"Go", "testing"}, Note: "Ready for another low-risk parser task."}, RecordedBy: owner,
+	}
+	done, err := s.Complete(repo, v.ID, v.Version, completion)
+	if err != nil || done.Status != "completed" || done.Completion == nil || done.Completion.RecordedAt != now || done.Completion.SupportEffort.MentorGuidanceItems != 1 {
+		t.Fatalf("completion = %#v, %v", done, err)
+	}
+	retry, err := s.Complete(repo, v.ID, v.Version, completion)
+	if err != nil || retry.Version != done.Version {
+		t.Fatalf("exact retry = %#v, %v", retry, err)
+	}
+	mutations := map[string]func(*Completion){
+		"feedback":        func(v *Completion) { v.Feedback = "Different assessment" },
+		"credit":          func(v *Completion) { v.Credit = []string{"implementation"} },
+		"skills":          func(v *Completion) { v.Readiness.SkillsRecognized = []string{"Go"} },
+		"release version": func(v *Completion) { v.ReleaseVersion = "v1.1.1" },
+		"support effort":  func(v *Completion) { v.SupportEffort.MentorGuidanceItems++ },
+		"recorded by":     func(v *Completion) { v.RecordedBy = "55555555555555555555555555555555" },
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			changed := completion
+			changed.Credit = append([]string(nil), completion.Credit...)
+			changed.Readiness.SkillsRecognized = append([]string(nil), completion.Readiness.SkillsRecognized...)
+			mutate(&changed)
+			if _, retryErr := s.Complete(repo, v.ID, v.Version, changed); !errors.Is(retryErr, ErrConflict) {
+				t.Fatalf("changed retry = %v", retryErr)
+			}
+		})
+	}
+}

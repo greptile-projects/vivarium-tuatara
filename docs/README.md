@@ -89,6 +89,15 @@ opportunity and pathway revisions, setup evidence, mentor guidance, approved
 agent assistance, acceptance criteria, and contributor attribution; it gains
 no review, check, acknowledgement, queue, permission, or merge bypass.
 
+After that ordinary pull is merged and included in an immutable release, the
+repository owner closes the exact in-progress opportunity through `POST
+/repositories/{id}/contribution-opportunities/{opportunity-id}/completion`.
+The server verifies the guided pull, its merge, release inclusion, and release
+contributor credit before retaining implementation credit, bounded feedback,
+server-derived setup and mentor/agent support counts, recognized skills, and
+readiness for an optional currently-open next opportunity. Exact retries reuse
+the outcome, and completed outcomes remain visible on the contributor surface.
+
 ## Accountable decision delivery
 
 An accepted technical decision can be converted once per commitment into an

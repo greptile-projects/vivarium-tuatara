@@ -1232,6 +1232,11 @@ whenever dependencies change or the web job fails before it starts.
   without discarding progress. Approved-agent explanation, diagnosis, or edits
   require the matching live guide/edit control lease and grant no upstream
   authority.
+  Owners close guided work only after its exact ordinary pull is merged and a
+  release includes both pull and contributor. Completion retains credit,
+  feedback, server-derived setup and mentor/agent support counts, recognized
+  skills, and explicit next-opportunity readiness; exact retries are
+  idempotent.
 
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
