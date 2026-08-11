@@ -1200,6 +1200,15 @@ whenever dependencies change or the web job fails before it starts.
   the retained identity. Records default beneath
   `$CONTRIBUTOR_PATHWAY_STORAGE_ROOT` (`contributor-pathways`), and the web
   surface is `/repositories/{id}/contribute`.
+  Owners separately advertise source-grounded bounded work at
+  `/repositories/{id}/contribution-opportunities`: issue, proposal, planned-task,
+  and stewardship sources retain exact revision, outcome, scope, skills,
+  interests, dependencies, risk, estimate, mentors, and agent-assistance
+  availability. Request-scoped match profiles return explicit reasons and gaps.
+  Exact-version claims are attributable, exclusive, releasable, and expire after
+  one hour to 14 days; they coordinate duplicate effort but grant no repository,
+  Git, workspace, task, or agent authority. Storage defaults beneath
+  `$CONTRIBUTION_OPPORTUNITY_STORAGE_ROOT` (`contribution-opportunities`).
 
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.

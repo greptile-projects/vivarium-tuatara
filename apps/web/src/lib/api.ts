@@ -27,6 +27,14 @@ export type ContributorPathwayResponse = {
   acknowledgements: { id: string; version: number; actor_id: string; acknowledged_at: string }[];
   acknowledgement_count: number;
 };
+export type ContributionOpportunity = {
+  id: string; repository_id: string; version: number; title: string; expected_outcome: string; scope: string;
+  source: { kind: "issue" | "proposal" | "stewardship" | "task"; id: string; parent_id?: string };
+  required_skills: string[]; interests: string[]; dependency_ids: string[]; risk: "low" | "medium" | "high";
+  estimated_minutes: number; agent_assistance: boolean; mentors: { user_id: string; note?: string }[];
+  revision: string; status: "open" | "paused" | "completed"; claim?: { id: string; actor_id: string; note?: string; claimed_at: string; expires_at: string };
+};
+export type ContributionMatch = { opportunity: ContributionOpportunity; score: number; reasons: string[]; gaps: string[]; ready: boolean };
 export type DeliveryTeam = {
   id: string;
   repository_id: string;
