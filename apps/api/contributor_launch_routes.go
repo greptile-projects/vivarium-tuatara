@@ -163,7 +163,20 @@ func registerContributorLaunchRoutes(mux *http.ServeMux, git *storage.Store, rep
 		}
 		forkGit, err := git.Open(fork.ID)
 		if err != nil {
-			writeAPIError(w, 202, "contribution_launch_recovery_required", "the fork was retained but its workspace could not be opened")
+			compensateUnusableContributionFork(w, repos, opportunities, upstream.ID, fork, opportunity, actor.UserID, "the fork could not be opened")
+			return
+		}
+		if _, err = forkGit.ReadCommit(storage.ObjectID(opportunity.Revision)); err != nil {
+			// The published ref can move after preflight but before the fork's
+			// upload-pack snapshot. Import the exact already-authorized opportunity
+			// commit rather than depending on that moving ref a second time.
+			if err = forkGit.ImportCommit(upstreamGit, storage.ObjectID(opportunity.Revision)); err != nil {
+				compensateUnusableContributionFork(w, repos, opportunities, upstream.ID, fork, opportunity, actor.UserID, "the recorded revision could not be preserved in the fork")
+				return
+			}
+		}
+		if _, err = forkGit.ReadCommit(storage.ObjectID(opportunity.Revision)); err != nil {
+			compensateUnusableContributionFork(w, repos, opportunities, upstream.ID, fork, opportunity, actor.UserID, "the recorded revision is unavailable in the fork")
 			return
 		}
 		diagnostics := []string{}
@@ -200,6 +213,18 @@ func registerContributorLaunchRoutes(mux *http.ServeMux, git *storage.Store, rep
 		w.Header().Set("Location", "/workspaces/"+created.ID)
 		writeJSON(w, 201, contributionLaunchResult{Fork: fork, Workspace: created})
 	})
+}
+
+func compensateUnusableContributionFork(w http.ResponseWriter, repos *repositories.Store, opportunities *contributoropportunities.Store, upstreamID string, fork repositories.Repository, opportunity contributoropportunities.Opportunity, actorID, reason string) {
+	if deleteErr := repos.Delete(actorID, fork.ID); deleteErr != nil {
+		writeJSON(w, 202, map[string]any{"fork": fork, "recovery_required": true, "message": reason + "; fork cleanup remains pending"})
+		return
+	}
+	if _, abortErr := opportunities.AbortLaunch(upstreamID, opportunity.ID, actorID, opportunity.Version); abortErr != nil {
+		writeAPIError(w, 202, "contribution_launch_recovery_required", reason+"; the fork was removed but the launch reservation could not be restored")
+		return
+	}
+	writeAPIError(w, 409, "opportunity_revision_changed", reason+"; the exact claim was restored for retry")
 }
 
 func validateContributionSamples(issue issues.Issue, selected []string) error {

@@ -71,6 +71,33 @@ func TestWriteAndReadObjectsAreGitCompatible(t *testing.T) {
 	gitOutput(t, repo.Path(), "fsck", "--full")
 }
 
+func TestImportCommitPreservesExactUnreferencedRevision(t *testing.T) {
+	store, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := store.Create("import-source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := store.Create("import-target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobID := writeObject(t, source, storage.BlobObject, []byte("pinned opportunity\n"))
+	treeID := writeObject(t, source, storage.TreeObject, append([]byte("100644 README.md\x00"), decodeObjectID(t, blobID)...))
+	commitID := writeObject(t, source, storage.CommitObject, []byte(fmt.Sprintf("tree %s\nauthor Test <test@example.com> 1700000000 +0000\ncommitter Test <test@example.com> 1700000000 +0000\n\npinned\n", treeID)))
+	if _, err := target.ReadCommit(commitID); !errors.Is(err, storage.ErrObjectNotFound) {
+		t.Fatalf("target unexpectedly contains revision: %v", err)
+	}
+	if err := target.ImportCommit(source, commitID); err != nil {
+		t.Fatalf("ImportCommit: %v", err)
+	}
+	if commit, err := target.ReadCommit(commitID); err != nil || commit.ID != commitID {
+		t.Fatalf("imported commit = %#v, %v", commit, err)
+	}
+}
+
 func TestCompleteStorageInterfacePassesGitFSCK(t *testing.T) {
 	store, err := storage.New(t.TempDir())
 	if err != nil {
