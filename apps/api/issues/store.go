@@ -18,6 +18,7 @@ var (
 	ErrNotFound            = errors.New("issue not found")
 	ErrInvalid             = errors.New("invalid issue")
 	ErrConflict            = errors.New("issue changed")
+	ErrForbidden           = errors.New("issue status transition forbidden")
 	ErrDurabilityUncertain = errors.New("issue mutation is visible but durability is uncertain")
 )
 
@@ -186,7 +187,7 @@ func (s *Store) AddComment(repositoryID, id, actor, body string) (Issue, error) 
 	return v, nil
 }
 
-func (s *Store) UpdateStatus(repositoryID, id, actor, status string, expected int, message string) (Issue, error) {
+func (s *Store) UpdateStatus(repositoryID, id, actor, status string, expected int, message string, owner bool) (Issue, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v, err := s.read(repositoryID, id)
@@ -198,6 +199,9 @@ func (s *Store) UpdateStatus(repositoryID, id, actor, status string, expected in
 	}
 	if !validStatus(status) {
 		return Issue{}, ErrInvalid
+	}
+	if !owner && (terminalStatus(v.Status) || terminalStatus(status)) {
+		return Issue{}, ErrForbidden
 	}
 	if status == v.Status {
 		return Issue{}, ErrInvalid
@@ -276,6 +280,7 @@ func validVisibility(v string) bool { return v == "public" || v == "repository" 
 func validStatus(v string) bool {
 	return v == "open" || v == "triaged" || v == "in_progress" || v == "resolved" || v == "closed"
 }
+func terminalStatus(v string) bool { return v == "resolved" || v == "closed" }
 func validateAttachments(items []Attachment) error {
 	if len(items) > 10 {
 		return ErrInvalid

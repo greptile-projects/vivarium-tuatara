@@ -226,14 +226,12 @@ func registerIssueRoutes(mux *http.ServeMux, repos *repositories.Store, store *i
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
-		if input.Status == "resolved" || input.Status == "closed" {
-			repo, err := repos.GetByID(r.PathValue("id"))
-			if err != nil || repo.OwnerID != actor.UserID {
-				writeAPIError(w, 403, "issue_status_forbidden", "only the repository owner can resolve or close an issue")
-				return
-			}
+		repo, err := repos.GetByID(r.PathValue("id"))
+		if err != nil {
+			writeAPIError(w, 404, "repository_not_found", "repository not found")
+			return
 		}
-		v, err := store.UpdateStatus(r.PathValue("id"), r.PathValue("issue_id"), actor.UserID, input.Status, input.ExpectedVersion, input.Message)
+		v, err := store.UpdateStatus(r.PathValue("id"), r.PathValue("issue_id"), actor.UserID, input.Status, input.ExpectedVersion, input.Message, repo.OwnerID == actor.UserID)
 		if err != nil && !errors.Is(err, issues.ErrDurabilityUncertain) {
 			writeIssueError(w, err)
 			return
@@ -275,6 +273,8 @@ func writeIssueError(w http.ResponseWriter, err error) {
 		writeAPIError(w, 404, "issue_not_found", "issue not found")
 	case errors.Is(err, issues.ErrConflict):
 		writeAPIError(w, 409, "issue_changed", "issue changed; reload and retry")
+	case errors.Is(err, issues.ErrForbidden):
+		writeAPIError(w, 403, "issue_status_forbidden", "only the repository owner can change a terminal issue status")
 	case errors.Is(err, issues.ErrInvalid):
 		writeAPIError(w, 422, "invalid_issue", "issue fields or attachments are invalid")
 	default:

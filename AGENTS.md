@@ -1130,7 +1130,7 @@ whenever dependencies change or the web job fails before it starts.
   visibility-filtered and omit evidence/discussion. Records default beneath
   `$ISSUE_STORAGE_ROOT` (`issues`). Issue creation admits a 15 MiB encoded body
   for ten 1 MiB raw attachments; affected versions are server-derived from an
-  exact release, terminal status is owner-only, and durability-uncertain visible
+  exact release, entering or leaving terminal status is owner-only, and durability-uncertain visible
   writes return the retained identity as `202`.
 
 - **Docs** — `docs/README.md` records decisions once they're made, not before.

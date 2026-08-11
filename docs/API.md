@@ -2086,8 +2086,10 @@ duplicate discovery cannot disclose private evidence.
 discussion. `PATCH /repositories/{id}/issues/{issue-id}` compare-and-swaps
 `expected_version` while moving through open, triaged, in-progress, resolved,
 or closed status. Only the repository owner may resolve or close; contributors
-can report, discuss, triage, and record work in progress. Opening, comments, and
-status changes remain in immutable actor-stamped history. Writes sync the file
+can report, discuss, triage, and record work in progress while an issue remains
+nonterminal. Leaving a resolved or closed state is also owner-only, enforced
+atomically with the versioned mutation. Opening, comments, and status changes
+remain in immutable actor-stamped history. Writes sync the file
 before rename and its parent directory afterward. A visible rename whose
 directory durability cannot be confirmed returns the retained record as `202`
 with `Vivarium-Durability: uncertain`, allowing exact identity recovery rather
