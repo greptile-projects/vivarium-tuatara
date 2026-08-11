@@ -91,6 +91,7 @@ func TestDeliveryTeamAPIInvitesWithoutGrantingRepositoryAuthority(t *testing.T) 
 	if len(team.StreamStatuses) != 1 || team.StreamStatuses[0].Status != "paused" || team.StreamStatuses[0].Blockers[0].Kind != "participant_disconnected" || team.StreamStatuses[0].Blockers[1].Kind != "access_revoked" {
 		t.Fatalf("projected live status = %#v", team.StreamStatuses)
 	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/delivery-teams/"+team.ID+"/interventions", fmt.Sprintf(`{"expected_version":%d,"intervention":{"scope":"stream","stream_id":"risk-review","action":"resume","guidance":"Resume without restored access"}}`, team.Version), owner.Credential.Token, http.StatusForbidden).Body.Close()
 	authenticatedRequest(t, http.MethodPost, server.URL+"/delivery-teams/"+team.ID+"/interventions", fmt.Sprintf(`{"expected_version":%d,"intervention":{"scope":"team","action":"cancel","guidance":"Cancel without organizer authority"}}`, team.Version), invitee.Credential.Token, http.StatusForbidden).Body.Close()
 	guided := authenticatedRequest(t, http.MethodPost, server.URL+"/delivery-teams/"+team.ID+"/interventions", fmt.Sprintf(`{"expected_version":%d,"intervention":{"scope":"stream","stream_id":"risk-review","action":"guide","guidance":"Preserve evidence and await the operations contact"}}`, team.Version), owner.Credential.Token, http.StatusOK)
 	json.NewDecoder(guided.Body).Decode(&team)

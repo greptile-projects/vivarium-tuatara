@@ -432,12 +432,37 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, catalog *repositories.Store,
 			writeAPIError(w, 400, "invalid_request", "expected_version and intervention are required")
 			return
 		}
+		if in.Intervention.Action == "resume" {
+			in.Intervention.ResumeAuthorized = deliveryResumeAuthorized(team, in.Intervention.Scope, in.Intervention.StreamID, catalog, orgs)
+		}
 		team, err = store.Intervene(team.ID, actor.UserID, principal, in.ExpectedVersion, in.Intervention)
 		if writeDeliveryTeamError(w, err) {
 			return
 		}
 		writeJSON(w, 200, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
 	})
+}
+
+func deliveryResumeAuthorized(team deliveryteams.Team, scope, streamID string, catalog *repositories.Store, orgs *organizations.Store) bool {
+	if team.Plan == nil {
+		return false
+	}
+	for _, stream := range team.Plan.Streams {
+		if scope == "stream" && stream.ID != streamID {
+			continue
+		}
+		owner := participantByDeliveryID(team, stream.OwnerParticipantID)
+		if owner == nil {
+			return false
+		}
+		for _, repository := range stream.RepositoryScope {
+			level, _ := deliveryParticipantAccess(*owner, repository.RepositoryID, catalog, orgs)
+			if level != "write" {
+				return false
+			}
+		}
+	}
+	return scope == "team" || scope == "stream"
 }
 
 func deliveryPrincipalCanRead(team deliveryteams.Team, principal, repositoryID string, catalog *repositories.Store, orgs *organizations.Store) bool {

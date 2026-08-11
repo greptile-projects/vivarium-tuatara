@@ -273,6 +273,7 @@ type InterventionInput struct {
 	Guidance              string   `json:"guidance"`
 	NewOwnerParticipantID string   `json:"new_owner_participant_id,omitempty"`
 	Paths                 []string `json:"paths,omitempty"`
+	ResumeAuthorized      bool     `json:"-"`
 }
 type Store struct {
 	root string
@@ -1107,6 +1108,15 @@ func revisionInStream(stream WorkStream, revision string) bool {
 	return false
 }
 
+func acceptedCurrentPlan(t Team, participantID string) bool {
+	if t.Plan == nil {
+		return false
+	}
+	return slices.ContainsFunc(t.Plan.Acceptances, func(acceptance PlanAcceptance) bool {
+		return acceptance.ParticipantID == participantID && acceptance.Revision == t.Plan.Revision && acceptance.Status == "accepted"
+	})
+}
+
 // ReportStatus replaces one owner's bounded operational snapshot. It never
 // changes the plan, authority, or retained evidence that produced the report.
 func (s *Store) ReportStatus(teamID, streamID, actor, actingPrincipal string, expectedVersion int, input StatusInput) (Team, error) {
@@ -1122,7 +1132,7 @@ func (s *Store) ReportStatus(teamID, streamID, actor, actingPrincipal string, ex
 	p := participantForPrincipal(t, actingPrincipal)
 	stream := streamByID(&t, streamID)
 	input.Summary, input.PredictedNextAction = strings.TrimSpace(input.Summary), strings.TrimSpace(input.PredictedNextAction)
-	if p == nil || stream == nil || stream.OwnerParticipantID != p.ID {
+	if p == nil || stream == nil || stream.OwnerParticipantID != p.ID || !acceptedCurrentPlan(t, p.ID) {
 		return t, ErrForbidden
 	}
 	if !validOperationalStatus(input.Status) || input.Summary == "" || input.PredictedNextAction == "" || input.ProgressPercent < 0 || input.ProgressPercent > 100 || !revisionInStream(*stream, input.Revision) {
@@ -1270,10 +1280,12 @@ func (s *Store) Intervene(teamID, actor, actingPrincipal string, expectedVersion
 			if state.Status == "completed" || state.Status == "canceled" {
 				continue
 			}
-			if input.Action == "resume" && slices.ContainsFunc(state.Blockers, func(blocker StreamBlocker) bool {
-				return blocker.Kind == "budget_exhausted" || blocker.Kind == "access_revoked"
-			}) {
-				return t, ErrForbidden
+			if input.Action == "resume" {
+				if !input.ResumeAuthorized || !acceptedCurrentPlan(t, stream.OwnerParticipantID) || slices.ContainsFunc(state.Blockers, func(blocker StreamBlocker) bool {
+					return blocker.Kind == "budget_exhausted" || blocker.Kind == "access_revoked"
+				}) {
+					return t, ErrForbidden
+				}
 			}
 			state.Status, state.Summary, state.PredictedNextAction, state.UpdatedBy, state.UpdatedAt = wanted, input.Guidance, "Await the next authorized team decision", actor, s.now()
 			if input.Action == "resume" {

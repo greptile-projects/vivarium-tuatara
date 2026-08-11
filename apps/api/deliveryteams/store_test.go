@@ -308,6 +308,17 @@ func TestLiveStreamStatusAndBoundedInterventionPreserveAcceptedWork(t *testing.T
 	if len(v.StreamStatuses) != 1 || len(v.Interventions) != 3 || v.StreamStatuses[0].Questions[0].ID != "q1" || v.StreamStatuses[0].ActiveControl != nil {
 		t.Fatalf("accepted operational evidence discarded: %#v", v)
 	}
+	if _, err = s.ReportStatus(v.ID, "build", "bob", "bob", v.Version, StatusInput{Status: "running", Summary: "Taking control", ProgressPercent: 60, Revision: revision, PredictedNextAction: "Continue the narrowed work"}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("pending plan acceptance gained control: %v", err)
+	}
+	v, err = s.RespondPlan(v.ID, "bob-slot", "bob", "bob", "accepted", v.Version, v.Plan.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.ReportStatus(v.ID, "build", "bob", "bob", v.Version, StatusInput{Status: "running", Summary: "Taking control", ProgressPercent: 60, Revision: revision, PredictedNextAction: "Continue the narrowed work"})
+	if err != nil {
+		t.Fatalf("accepted revised owner status = %v", err)
+	}
 	if _, err = s.Intervene(v.ID, "alice", "alice", v.Version, InterventionInput{Scope: "team", Action: "cancel", Guidance: "Cancel everything"}); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("non-organizer team control = %v", err)
 	}
