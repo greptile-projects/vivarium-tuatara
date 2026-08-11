@@ -177,3 +177,24 @@ func TestPlanRejectsCyclesAndStaleRevisions(t *testing.T) {
 		t.Fatalf("stale response = %v", err)
 	}
 }
+
+func TestDeclinedStreamOwnerImmediatelyBecomesUnavailable(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, _ := s.Create("repo", Outcome{Kind: "planned_outcome", ResourceID: "outcome", Title: "Outcome"}, charter("alice", "lead"), "organizer")
+	plan := PlanInput{Streams: []WorkStream{{ID: "work", Title: "Work", OwnerParticipantID: "alice-slot", ExpectedArtifacts: []string{"result"}, AcceptanceCriteria: []string{"verified"}, RepositoryScope: []RevisionScope{{RepositoryID: "repo", Reference: "main", Revision: strings.Repeat("a", 40), Paths: []string{"src"}}}, IntegrationOrder: 1, Assumptions: []string{"owner remains available"}}}}
+	v, err := s.PutPlan(v.ID, "organizer", "organizer", v.Version, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.Respond(v.ID, "alice-slot", "alice", "declined", v.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(v.Plan.Blockers, func(blocker PlanBlocker) bool { return blocker.Kind == "owner_unavailable" }) {
+		t.Fatalf("declined owner blockers = %#v", v.Plan.Blockers)
+	}
+	reloaded, err := s.Get(v.ID)
+	if err != nil || !slices.ContainsFunc(reloaded.Plan.Blockers, func(blocker PlanBlocker) bool { return blocker.Kind == "owner_unavailable" }) {
+		t.Fatalf("persisted blockers = %#v, %v", reloaded.Plan, err)
+	}
+}

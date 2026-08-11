@@ -406,6 +406,9 @@ func (s *Store) Respond(v, participantID, actor, decision string, expected int) 
 	if !found {
 		return t, ErrForbidden
 	}
+	if t.Plan != nil {
+		t.Plan.Blockers = planBlockers(t, t.Plan.Streams, t.Plan.Acceptances)
+	}
 	t.Version++
 	t.UpdatedAt = now
 	t.Events = append(t.Events, event("invitation."+decision, actor, "Responded to the delivery-team invitation", t.Version, now))

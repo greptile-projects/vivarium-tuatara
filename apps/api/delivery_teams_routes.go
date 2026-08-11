@@ -194,6 +194,15 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, catalog *repositories.Store,
 					return
 				}
 			}
+			for _, input := range stream.Inputs {
+				if input.RepositoryID == "" {
+					continue
+				}
+				if _, err := catalog.GetByID(input.RepositoryID); err != nil {
+					writeAPIError(w, 400, "invalid_repository_input", "a repository-backed work input does not exist")
+					return
+				}
+			}
 		}
 		team, err = store.PutPlan(team.ID, actor.UserID, principal, in.ExpectedVersion, in.Plan)
 		if writeDeliveryTeamError(w, err) {

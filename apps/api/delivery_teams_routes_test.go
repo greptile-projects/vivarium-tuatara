@@ -61,6 +61,16 @@ func TestDeliveryTeamAPIInvitesWithoutGrantingRepositoryAuthority(t *testing.T) 
 	if team.Plan == nil || team.Plan.Revision != 1 || len(team.Plan.Blockers) != 1 || team.Plan.Blockers[0].Kind != "unavailable_access" || team.Plan.Acceptances[0].Status != "accepted" {
 		t.Fatalf("execution plan = %#v", team.Plan)
 	}
+	invalidInput := strings.Replace(planBody, fmt.Sprintf(`"expected_version":%d`, team.Version-1), fmt.Sprintf(`"expected_version":%d`, team.Version), 1)
+	invalidInput = strings.Replace(invalidInput, repository.ID, strings.Repeat("f", 32), 1)
+	authenticatedRequest(t, http.MethodPut, server.URL+"/delivery-teams/"+team.ID+"/plan", invalidInput, invitee.Credential.Token, http.StatusBadRequest).Body.Close()
+	unchanged := authenticatedRequest(t, http.MethodGet, server.URL+"/delivery-teams/"+team.ID, "", invitee.Credential.Token, http.StatusOK)
+	var unchangedTeam deliveryteams.Team
+	json.NewDecoder(unchanged.Body).Decode(&unchangedTeam)
+	unchanged.Body.Close()
+	if unchangedTeam.Version != team.Version || unchangedTeam.Plan.Revision != team.Plan.Revision {
+		t.Fatalf("invalid input persisted: %#v", unchangedTeam.Plan)
+	}
 	planBody = strings.Replace(planBody, fmt.Sprintf(`"expected_version":%d`, team.Version-1), fmt.Sprintf(`"expected_version":%d`, team.Version), 1)
 	revised := authenticatedRequest(t, http.MethodPut, server.URL+"/delivery-teams/"+team.ID+"/plan", planBody, owner.Credential.Token, http.StatusOK)
 	json.NewDecoder(revised.Body).Decode(&team)
