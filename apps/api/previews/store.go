@@ -184,10 +184,9 @@ func (s *Store) Invite(repo, pull, id, actor, user, role, sourceKind, sourceID s
 			if invitation.SourceKind == sourceKind && invitation.SourceID == sourceID && invitation.ExpiresAt.Equal(expiresAt) {
 				return p, nil
 			}
-			invitation.SourceKind, invitation.SourceID, invitation.ExpiresAt, invitation.InvitedBy = sourceKind, sourceID, expiresAt, actor
-			p.AudienceEvents = append(p.AudienceEvents, AudienceEvent{ID: newID(), Kind: "reinvited", ActorID: actor, InvitationID: invitation.ID, CreatedAt: now})
-			p.UpdatedAt = now
-			return p, s.write(p)
+			invitation.RevokedAt, invitation.RevokedBy = &now, actor
+			p.AudienceEvents = append(p.AudienceEvents, AudienceEvent{ID: newID(), Kind: "replaced", ActorID: actor, InvitationID: invitation.ID, CreatedAt: now})
+			break
 		}
 	}
 	raw := make([]byte, 16)
