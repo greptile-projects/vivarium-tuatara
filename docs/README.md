@@ -52,6 +52,19 @@ agent authority. Records default beneath
 `$CONTRIBUTION_OPPORTUNITY_STORAGE_ROOT` (`contribution-opportunities`) and are
 available in the repository's “How to contribute” matcher.
 
+A contributor holding the live exact-version claim can launch that opportunity
+as an independently owned private fork and shared workspace. Launch freezes the
+opportunity revision, current contributor-pathway revision, source evidence,
+expected outcome, scope, prerequisites, and setup guidance into the workspace.
+The fork's `.vivarium/workspace.json` provisions the isolated environment and
+the pathway verification commands append setup evidence; failures remain
+visible as non-reproducible workspace state. Selected issue attachments may be
+staged only after allowlisting and secret-like-content rejection. Missing
+evidence, revisions, guidance, or workspace definitions fail before fork
+creation, while obsolete instructions remain visible diagnostics. The
+workspace links to exact-revision explanations and grants write access only to
+the contributor's fork, never upstream.
+
 ## Accountable decision delivery
 
 An accepted technical decision can be converted once per commitment into an

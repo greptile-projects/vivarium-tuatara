@@ -1209,6 +1209,15 @@ whenever dependencies change or the web job fails before it starts.
   one hour to 14 days; they coordinate duplicate effort but grant no repository,
   Git, workspace, task, or agent authority. Storage defaults beneath
   `$CONTRIBUTION_OPPORTUNITY_STORAGE_ROOT` (`contribution-opportunities`).
+  A live claimant can launch the exact opportunity version into an independently
+  owned fork and isolated shared workspace. It snapshots the current pathway,
+  source evidence, criteria, prerequisites, and recorded revision; runs both
+  `.vivarium/workspace.json` setup and pathway verification; and links to
+  revision-grounded explanations. Only selected issue attachments that pass
+  secret-like-content rejection may be staged. Preflight reports missing
+  access, evidence, revisions, guidance, or definitions before fork creation;
+  retained setup failures and obsolete-guidance diagnostics remain visible,
+  and no upstream write authority is granted.
 
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.

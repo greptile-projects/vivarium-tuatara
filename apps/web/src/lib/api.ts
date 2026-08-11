@@ -32,7 +32,7 @@ export type ContributionOpportunity = {
   source: { kind: "issue" | "proposal" | "stewardship" | "task"; id: string; parent_id?: string };
   required_skills: string[]; interests: string[]; dependency_ids: string[]; risk: "low" | "medium" | "high";
   estimated_minutes: number; agent_assistance: boolean; mentors: { user_id: string; note?: string }[];
-  revision: string; status: "open" | "paused" | "completed"; claim?: { id: string; actor_id: string; note?: string; claimed_at: string; expires_at: string };
+  revision: string; status: "open" | "in_progress" | "paused" | "completed"; claim?: { id: string; actor_id: string; note?: string; claimed_at: string; expires_at: string };
 };
 export type ContributionMatch = { opportunity: ContributionOpportunity; score: number; reasons: string[]; gaps: string[]; ready: boolean };
 export type DeliveryTeam = {
@@ -678,6 +678,13 @@ export type DevelopmentWorkspace = {
     alternative_id?: string;
     default_branch_revision?: string;
     default_definition_sha256?: string;
+    upstream_repository_id?: string;
+    opportunity_id?: string;
+  };
+  contributor_context?: {
+    opportunity_id: string; opportunity_version: number; upstream_repository_id: string; pathway_version: number;
+    guidance: string; prerequisites: string[]; acceptance_criteria: string[]; evidence_kind: string; evidence_id: string;
+    evidence_parent_id?: string; sample_attachment_ids?: string[]; diagnostics: string[];
   };
   definition: {
     version: number;
