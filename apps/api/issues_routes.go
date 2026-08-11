@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
+	"path"
 	"sort"
 	"strings"
 
@@ -320,8 +321,8 @@ func registerIssueRoutes(mux *http.ServeMux, repos *repositories.Store, store *i
 		}
 		total := 0
 		for _, artifactPath := range input.ArtifactPaths {
-			clean := strings.TrimPrefix(strings.TrimSpace(artifactPath), "/workspace/")
-			if clean == "" || strings.Contains(clean, "..") || strings.HasPrefix(clean, "/") {
+			clean, valid := cleanReproductionArtifactPath(artifactPath)
+			if !valid {
 				writeAPIError(w, 422, "reproduction_artifact_invalid", "artifact paths must stay inside the workspace")
 				return
 			}
@@ -347,6 +348,25 @@ func registerIssueRoutes(mux *http.ServeMux, repos *repositories.Store, store *i
 		}
 		writeJSON(w, 201, updated)
 	})
+}
+
+func cleanReproductionArtifactPath(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, "/workspace/") {
+		value = strings.TrimPrefix(value, "/workspace/")
+	} else if strings.HasPrefix(value, "/") {
+		return "", false
+	}
+	if value == "" || strings.Contains(value, "\\") {
+		return "", false
+	}
+	for _, component := range strings.Split(value, "/") {
+		if component == ".." {
+			return "", false
+		}
+	}
+	clean := path.Clean(value)
+	return clean, clean != "." && !strings.HasPrefix(clean, "/")
 }
 
 var errIssueBodyTooLarge = errors.New("issue body too large")

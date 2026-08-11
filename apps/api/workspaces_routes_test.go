@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,45 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
+
+func TestReproductionSecretScreeningRejectsCredentialFormats(t *testing.T) {
+	tests := []struct{ name, body string }{
+		{"input.txt", "GITHUB_TOKEN=ghp_example"},
+		{"input.txt", "CLIENT_SECRET=example"},
+		{".pypirc", "[pypi]\npassword = pypi-example"},
+		{"key.txt", "-----BEGIN OPENSSH PRIVATE KEY-----\nexample"},
+		{"input.txt", "Authorization: Basic example"},
+	}
+	for _, test := range tests {
+		if !reproductionSecretLike(test.name, base64.StdEncoding.EncodeToString([]byte(test.body))) {
+			t.Errorf("accepted credential %q", test.name)
+		}
+	}
+	if reproductionSecretLike("sample.json", base64.StdEncoding.EncodeToString([]byte(`{"failure":"timeout"}`))) {
+		t.Fatal("rejected ordinary reproduction input")
+	}
+}
+
+func TestReproductionArtifactPathValidationIsComponentAware(t *testing.T) {
+	for _, value := range []string{"coverage..json", "reports/coverage..json", "/workspace/reports/result.json"} {
+		if _, ok := cleanReproductionArtifactPath(value); !ok {
+			t.Errorf("rejected confined artifact %q", value)
+		}
+	}
+	for _, value := range []string{"../secret", "reports/../secret", "/etc/passwd", `reports\..\secret`} {
+		if clean, ok := cleanReproductionArtifactPath(value); ok {
+			t.Errorf("accepted escaping artifact %q as %q", value, clean)
+		}
+	}
+}
+
+func TestReproductionInputNamesRemainUniqueAfterSanitizing(t *testing.T) {
+	first := reproductionInputName("attachment-one", "my file.txt")
+	second := reproductionInputName("attachment-two", "my_file.txt")
+	if first == second {
+		t.Fatalf("colliding destinations: %q", first)
+	}
+}
 
 func TestProvisionWorkspaceEnforcesStorageAndRemovesFailedContainer(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {

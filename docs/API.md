@@ -2100,8 +2100,9 @@ Issue reproduction reuses the bounded workspace executor. `POST /workspaces`
 accepts source kind `issue_reproduction` with `issue_id`, an exact `commit_id`,
 and, for released reports, the issue's `release_id`; released reports reject
 any commit other than the attested release commit. Optional
-`input_attachment_ids` are copied into `.vivarium/reproduction-inputs/` only
-after credential-like filenames and content are rejected. The container stays
+`input_attachment_ids` are copied into `.vivarium/reproduction-inputs/` under
+attachment-ID-prefixed names only after credential filenames, secret assignments,
+authorization headers, and private-key material are rejected. The container stays
 network-disabled, read-only-root, resource-bounded, and credential-free.
 
 `POST /repositories/{id}/issues/{issue-id}/reproduction-attempts` freezes a

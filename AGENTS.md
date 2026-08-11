@@ -1134,6 +1134,8 @@ whenever dependencies change or the web job fails before it starts.
   writes return the retained identity as `202`. Issue reproduction launches the
   bounded credential-free workspace at exact source or the attested release;
   selected sanitized inputs are staged under `.vivarium/reproduction-inputs`,
+  using attachment-ID-prefixed collision-proof filenames after conservative
+  credential filename, assignment, authorization-header, and private-key screening,
   and immutable attempts retain only repository-declared command outcomes plus
   their environment, logs, artifacts, observed result, and disposition.
 

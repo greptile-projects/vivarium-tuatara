@@ -237,17 +237,14 @@ func stageIssueInputs(workspaceID string, issue issues.Issue, selected []string)
 	for _, attachment := range issue.Attachments {
 		attachments[attachment.ID] = attachment
 	}
+	seen := map[string]bool{}
 	for _, id := range selected {
 		attachment, ok := attachments[id]
-		if !ok || reproductionSecretLike(attachment.Name, attachment.Data) {
+		if !ok || seen[id] || reproductionSecretLike(attachment.Name, attachment.Data) {
 			return errors.New("input is missing or resembles credential material")
 		}
-		name := strings.Map(func(r rune) rune {
-			if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._-", r) {
-				return r
-			}
-			return '_'
-		}, attachment.Name)
+		seen[id] = true
+		name := reproductionInputName(id, attachment.Name)
 		raw, err := base64.StdEncoding.DecodeString(attachment.Data)
 		if err != nil {
 			return err
@@ -261,16 +258,44 @@ func stageIssueInputs(workspaceID string, issue issues.Issue, selected []string)
 	return nil
 }
 
+func reproductionInputName(id, original string) string {
+	sanitize := func(value string) string {
+		return strings.Map(func(r rune) rune {
+			if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._-", r) {
+				return r
+			}
+			return '_'
+		}, value)
+	}
+	return sanitize(id) + "-" + sanitize(original)
+}
+
 func reproductionSecretLike(name, encoded string) bool {
 	lower := strings.ToLower(name)
-	for _, marker := range []string{".env", "credential", "secret", "token", "password", ".npmrc", ".netrc", "id_rsa", "id_ed25519"} {
+	for _, marker := range []string{".env", "credential", "secret", "token", "password", ".npmrc", ".netrc", ".pypirc", "pip.conf", "id_rsa", "id_ed25519", "id_ecdsa"} {
 		if strings.Contains(lower, marker) {
 			return true
 		}
 	}
 	raw, _ := base64.StdEncoding.DecodeString(encoded)
 	text := strings.ToLower(string(raw))
-	return strings.Contains(text, "-----begin private key-----") || strings.Contains(text, "authorization: bearer ") || strings.Contains(text, "aws_secret_access_key")
+	if strings.Contains(text, "private key-----") || strings.Contains(text, "authorization: bearer ") || strings.Contains(text, "authorization: basic ") {
+		return true
+	}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		separator := strings.IndexAny(line, "=:")
+		if separator < 1 || strings.TrimSpace(line[separator+1:]) == "" {
+			continue
+		}
+		key := strings.NewReplacer("-", "_", ".", "_", " ", "_").Replace(strings.TrimSpace(line[:separator]))
+		for _, marker := range []string{"token", "secret", "password", "passwd", "api_key", "access_key", "private_key", "client_key", "auth_key"} {
+			if strings.Contains(key, marker) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func authorizeWorkspace(w http.ResponseWriter, r *http.Request, store *workspaces.Store, catalog *repositories.Store, authStore *auth.Store, scope string) (workspaces.Workspace, auth.Credential, bool) {
