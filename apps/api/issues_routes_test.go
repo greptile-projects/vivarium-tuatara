@@ -10,6 +10,8 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
@@ -87,7 +89,9 @@ func TestIssueTriageRetainsCitedHumanAndBoundedAgentConclusions(t *testing.T) {
 	credentials, _ := auth.New(t.TempDir())
 	catalog, _ := repositories.New(t.TempDir(), gitStore)
 	issueStore, _ := issues.New(t.TempDir())
-	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, nil, nil, issueStore))
+	proposalStore, _ := proposals.New(t.TempDir())
+	pullStore, _ := pullrequests.New(t.TempDir(), gitStore)
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, proposalStore, pullStore, nil, nil, nil, issueStore))
 	defer server.Close()
 	owner := createTestAccount(t, server.URL, "triage-owner")
 	reporter := createTestAccount(t, server.URL, "triage-reporter")
@@ -109,7 +113,7 @@ func TestIssueTriageRetainsCitedHumanAndBoundedAgentConclusions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v, err = issueStore.AddReproductionAttempt(repo.ID, v.ID, reporter.User.ID, issues.ReproductionAttempt{WorkspaceID: "workspace", CommitID: strings.Repeat("a", 40), DefinitionSHA256: strings.Repeat("b", 64), Commands: []issues.ReproductionCommand{{Name: "reproduce", OutcomeID: "outcome", CommandSHA256: strings.Repeat("c", 64), ExitCode: 1}}, ObservedResult: "failure", Result: "reproduced"})
+	v, err = issueStore.AddReproductionAttempt(repo.ID, v.ID, reporter.User.ID, issues.ReproductionAttempt{WorkspaceID: "workspace", CommitID: string(revision), DefinitionSHA256: strings.Repeat("b", 64), Commands: []issues.ReproductionCommand{{Name: "reproduce", OutcomeID: "outcome", CommandSHA256: strings.Repeat("c", 64), ExitCode: 1}}, ObservedResult: "failure", Result: "reproduced"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +141,21 @@ func TestIssueTriageRetainsCitedHumanAndBoundedAgentConclusions(t *testing.T) {
 	authenticatedRequest(t, http.MethodGet, url+"/investigations/"+launched.Investigation.ID, "", reporter.Credential.Token, http.StatusUnauthorized).Body.Close()
 	response = authenticatedRequest(t, http.MethodPost, url+"/investigations/"+launched.Investigation.ID+"/findings", `{"kind":"uncertainty","statement":"The selected evidence does not isolate encoding.","citation_ids":["`+attemptID+`"]}`, launched.Credential.Token, http.StatusCreated)
 	decodeResponse(t, response, &v)
-	if v.Triage.Classification != "regression" || v.Triage.AssigneeID != owner.User.ID || v.EvidenceRequests[0].State != "answered" || len(v.Findings) != 2 || v.Findings[1].ActorID != launched.Investigation.AgentID {
+	response = authenticatedRequest(t, http.MethodPost, url+"/findings", `{"expected_version":`+strconv.Itoa(v.Version)+`,"kind":"finding","statement":"The parser rejects the retained input.","citation_ids":["`+attemptID+`"]}`, owner.Credential.Token, http.StatusCreated)
+	decodeResponse(t, response, &v)
+	response = authenticatedRequest(t, http.MethodPost, url+"/implementation", `{"expected_version":`+strconv.Itoa(v.Version)+`,"reproduction_attempt_id":"`+attemptID+`","finding_ids":["`+v.Findings[len(v.Findings)-1].ID+`"],"affected_revision":"`+string(revision)+`","acceptance_criteria":["retained reproduction passes","regression coverage passes"],"assignee_type":"human","assignee_id":"`+owner.User.ID+`"}`, owner.Credential.Token, http.StatusCreated)
+	var implementation struct {
+		Issue    issues.Issue       `json:"issue"`
+		Proposal proposals.Proposal `json:"proposal"`
+		Task     proposals.Task     `json:"task"`
+	}
+	decodeResponse(t, response, &implementation)
+	if implementation.Issue.Implementation == nil || implementation.Task.Assignment == nil || implementation.Task.Assignment.AssigneeType != "human" || len(implementation.Task.Assignment.Access.Scopes) != 0 || implementation.Proposal.Reasoning.IssueID != v.ID {
+		t.Fatalf("implementation did not preserve governed issue handoff: %#v", implementation)
+	}
+	authenticatedRequest(t, http.MethodGet, url+"/implementation", "", reporter.Credential.Token, http.StatusOK).Body.Close()
+	v = implementation.Issue
+	if v.Triage.Classification != "regression" || v.Triage.AssigneeID != owner.User.ID || v.EvidenceRequests[0].State != "answered" || len(v.Findings) != 3 || v.Findings[1].ActorID != launched.Investigation.AgentID {
 		t.Fatalf("triage projection = %#v", v)
 	}
 	authenticatedRequest(t, http.MethodPost, url+"/investigations/"+launched.Investigation.ID+"/findings", `{"kind":"finding","statement":"Unselected claim.","citation_ids":["missing"]}`, launched.Credential.Token, http.StatusUnprocessableEntity).Body.Close()

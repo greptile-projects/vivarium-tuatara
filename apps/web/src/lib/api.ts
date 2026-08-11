@@ -1691,6 +1691,7 @@ export type Issue = {
   evidence_requests: { id: string; body: string; requested_from: string; requested_by: string; state: "open" | "answered"; response?: string; responded_by?: string; created_at: string; updated_at: string }[];
   findings: { id: string; kind: "hypothesis" | "finding" | "uncertainty"; statement: string; actor_id: string; investigation_id?: string; citation_ids: string[]; supersedes_id?: string; challenges?: { id: string; actor_id: string; body: string; created_at: string }[]; created_at: string }[];
   investigations: { id: string; agent_id: string; initiator_id: string; mandate: string; reproduction_attempt_id: string; link_ids: string[]; state: string; created_at: string; updated_at: string }[];
+  implementation?: { proposal_id: string; task_id: string; reproduction_attempt_id: string; finding_ids: string[]; affected_revision: string; acceptance_criteria: string[]; created_by: string; created_at: string };
   duplicate_of?: string;
   version: number;
   created_at: string;

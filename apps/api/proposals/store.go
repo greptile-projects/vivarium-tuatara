@@ -51,6 +51,9 @@ type Proposal struct {
 // ReasoningOrigin is an immutable, revision-exact handoff from collaborative
 // investigation and impact analysis into implementation and review.
 type ReasoningOrigin struct {
+	IssueID           string                     `json:"issue_id,omitempty"`
+	IssueVersion      int                        `json:"issue_version,omitempty"`
+	ReproductionID    string                     `json:"reproduction_attempt_id,omitempty"`
 	DecisionID        string                     `json:"decision_id,omitempty"`
 	CommitmentVersion int                        `json:"commitment_version,omitempty"`
 	AssessmentID      string                     `json:"assessment_id"`
@@ -361,7 +364,14 @@ func New(root string) (*Store, error) {
 func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Task, error) {
 	isAssessment := validID(input.Origin.AssessmentID) && input.Origin.AssessmentVersion > 0
 	isDecision := validID(input.Origin.DecisionID) && input.Origin.CommitmentVersion > 0
-	if !validID(input.RepositoryID) || !validID(input.ActorID) || (!isAssessment && !isDecision) || (isAssessment && isDecision) || len(input.Origin.Revision) != 40 || len(input.Tasks) == 0 || len(input.Tasks) > 20 || len(input.Origin.Items) == 0 {
+	isIssue := validID(input.Origin.IssueID) && input.Origin.IssueVersion > 0 && validID(input.Origin.ReproductionID)
+	originCount := 0
+	for _, present := range []bool{isAssessment, isDecision, isIssue} {
+		if present {
+			originCount++
+		}
+	}
+	if !validID(input.RepositoryID) || !validID(input.ActorID) || originCount != 1 || len(input.Origin.Revision) != 40 || len(input.Tasks) == 0 || len(input.Tasks) > 20 || len(input.Origin.Items) == 0 {
 		return Proposal{}, nil, ErrInvalid
 	}
 	title, body, err := validateContent(input.Title, input.Body)
@@ -388,7 +398,7 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 		if readErr != nil {
 			return Proposal{}, nil, readErr
 		}
-		if r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && ((isAssessment && r.Proposal.Reasoning.AssessmentID == input.Origin.AssessmentID) || (isDecision && r.Proposal.Reasoning.DecisionID == input.Origin.DecisionID && r.Proposal.Reasoning.CommitmentVersion == input.Origin.CommitmentVersion)) {
+		if r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && ((isAssessment && r.Proposal.Reasoning.AssessmentID == input.Origin.AssessmentID) || (isDecision && r.Proposal.Reasoning.DecisionID == input.Origin.DecisionID && r.Proposal.Reasoning.CommitmentVersion == input.Origin.CommitmentVersion) || (isIssue && r.Proposal.Reasoning.IssueID == input.Origin.IssueID && r.Proposal.Reasoning.ReproductionID == input.Origin.ReproductionID)) {
 			if r.Proposal.Title != title || r.Proposal.Body != body || len(r.Tasks) != len(input.Tasks) {
 				return Proposal{}, nil, ErrImplementationConflict
 			}

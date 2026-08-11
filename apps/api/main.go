@@ -414,7 +414,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerIncidentRoutes(mux, store, repositoryCatalog, incidentStore, proposalStore, deploymentStore, releaseStore, pullRequestStore, checkRunStore, authStore, activityStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && issueStore != nil {
-		registerIssueRoutes(mux, store, repositoryCatalog, issueStore, releaseStore, deploymentStore, incidentStore, proposalStore, pullRequestStore, packageStore, workspaceStore, authStore, activityStore)
+		registerIssueRoutes(mux, store, repositoryCatalog, issueStore, releaseStore, deploymentStore, incidentStore, proposalStore, pullRequestStore, packageStore, workspaceStore, authStore, activityStore, checkRunStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && userStore != nil && securityAdvisoryStore != nil {
 		registerSecurityAdvisoryRoutes(mux, store, repositoryCatalog, userStore, securityAdvisoryStore, releaseStore, checkRunStore, deploymentStore, authStore, activityStore)
