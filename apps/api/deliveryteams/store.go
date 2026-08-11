@@ -1141,11 +1141,15 @@ func (s *Store) ReportStatus(teamID, streamID, actor, actingPrincipal string, ex
 	if input.Status == "completed" && input.ProgressPercent != 100 {
 		return t, ErrInvalid
 	}
+	current := statusByStream(&t, streamID)
+	if input.ResourceUse == nil && current != nil {
+		input.ResourceUse = current.ResourceUse
+	}
 	if input.ResourceUse != nil {
 		if input.ResourceUse.Consumed < 0 || !slices.Contains([]string{"minutes", "credits", "usd"}, input.ResourceUse.Unit) || stream.Budget != nil && input.ResourceUse.Unit != stream.Budget.Unit {
 			return t, ErrInvalid
 		}
-		if current := statusByStream(&t, streamID); current != nil && current.ResourceUse != nil && current.ResourceUse.Unit == input.ResourceUse.Unit && input.ResourceUse.Consumed < current.ResourceUse.Consumed {
+		if current != nil && current.ResourceUse != nil && current.ResourceUse.Unit == input.ResourceUse.Unit && input.ResourceUse.Consumed < current.ResourceUse.Consumed {
 			return t, ErrInvalid
 		}
 	}
@@ -1174,11 +1178,11 @@ func (s *Store) ReportStatus(teamID, streamID, actor, actingPrincipal string, ex
 	}
 	now := s.now()
 	control := &ActiveControl{ParticipantID: p.ID, PrincipalID: p.PrincipalID, PrincipalType: p.PrincipalType, Since: now}
-	if current := statusByStream(&t, streamID); current != nil && current.ActiveControl != nil && current.ActiveControl.PrincipalID == p.PrincipalID {
+	if current != nil && current.ActiveControl != nil && current.ActiveControl.PrincipalID == p.PrincipalID {
 		control.Since = current.ActiveControl.Since
 	}
 	status := StreamStatus{StreamID: streamID, Status: input.Status, Summary: input.Summary, ProgressPercent: input.ProgressPercent, Revision: input.Revision, ResourceUse: input.ResourceUse, ActiveControl: control, Blockers: input.Blockers, Questions: input.Questions, PredictedNextAction: input.PredictedNextAction, UpdatedBy: actor, UpdatedAt: now}
-	if current := statusByStream(&t, streamID); current != nil {
+	if current != nil {
 		*current = status
 	} else {
 		t.StreamStatuses = append(t.StreamStatuses, status)

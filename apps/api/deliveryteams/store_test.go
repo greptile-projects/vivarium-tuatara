@@ -287,6 +287,13 @@ func TestLiveStreamStatusAndBoundedInterventionPreserveAcceptedWork(t *testing.T
 	if got := v.StreamStatuses[0]; got.Status != "paused" || got.PredictedNextAction != "Escalate the exhausted budget through the team charter" || !slices.ContainsFunc(got.Blockers, func(b StreamBlocker) bool { return b.Kind == "budget_exhausted" }) {
 		t.Fatalf("bounded status = %#v", got)
 	}
+	v, err = s.ReportStatus(v.ID, "build", "alice", "alice", v.Version, StatusInput{Status: "running", Summary: "Attempting to continue without accounting", ProgressPercent: 70, Revision: revision, Questions: []StreamQuestion{{ID: "q1", Body: "Which compatibility edge wins?", AskOf: "organizer", Urgency: "urgent"}}, PredictedNextAction: "Continue without organizer recovery"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.StreamStatuses[0]; got.Status != "paused" || got.ResourceUse == nil || got.ResourceUse.Consumed != 10 || !slices.ContainsFunc(got.Blockers, func(b StreamBlocker) bool { return b.Kind == "budget_exhausted" }) {
+		t.Fatalf("omitted accounting cleared exhausted budget = %#v", got)
+	}
 	if _, err = s.ReportStatus(v.ID, "build", "bob", "bob", v.Version, StatusInput{Status: "running", Summary: "Taking over", Revision: revision, PredictedNextAction: "Continue"}); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("silent owner expansion = %v", err)
 	}
