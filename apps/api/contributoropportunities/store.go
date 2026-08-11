@@ -126,7 +126,9 @@ func (s *Store) Publish(v Opportunity, expected int) (Opportunity, error) {
 		v.ID = prior.ID
 		v.Version = prior.Version + 1
 		v.PublishedAt = prior.PublishedAt
-		v.Claim = activeClaim(prior.Claim, now)
+		// Claims bind to one exact opportunity version. Republishing creates a
+		// new agreement about the work, so it must be explicitly claimed again.
+		v.Claim = nil
 	}
 	v.UpdatedAt = now
 	if v.Status == "" {
@@ -140,7 +142,15 @@ func (s *Store) Publish(v Opportunity, expected int) (Opportunity, error) {
 func (s *Store) List(repositoryID string) ([]Opportunity, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.read(repositoryID)
+	items, err := s.read(repositoryID)
+	if err != nil {
+		return nil, err
+	}
+	now := s.now()
+	for i := range items {
+		items[i].Claim = activeClaim(items[i].Claim, now)
+	}
+	return items, nil
 }
 func (s *Store) Get(repositoryID, id string) (Opportunity, error) {
 	s.mu.Lock()

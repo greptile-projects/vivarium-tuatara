@@ -60,3 +60,67 @@ func TestMatchExplainsConstraints(t *testing.T) {
 		t.Fatalf("match = %#v", m)
 	}
 }
+
+func TestRepublishClearsExactVersionClaim(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	v, err := s.Publish(sample(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.Claim(repo, v.ID, newcomer, "starting", time.Hour, v.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := sample()
+	replacement.ID = v.ID
+	replacement.Scope = "A newly bounded replacement scope."
+	v, err = s.Publish(replacement, v.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Claim != nil {
+		t.Fatalf("republished claim = %#v", v.Claim)
+	}
+	if _, err = s.Claim(repo, v.ID, owner, "new version", time.Hour, v.Version); err != nil {
+		t.Fatalf("claim replacement: %v", err)
+	}
+}
+
+func TestListProjectsOnlyActiveClaims(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	v, err := s.Publish(sample(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.Claim(repo, v.ID, newcomer, "starting", time.Hour, v.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Hour)
+	items, err := s.List(repo)
+	if err != nil || len(items) != 1 || items[0].Claim != nil {
+		t.Fatalf("expired list = %#v, %v", items, err)
+	}
+	v, err = s.Claim(repo, v.ID, newcomer, "again", time.Hour, v.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.Release(repo, v.ID, newcomer, false, v.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err = s.List(repo)
+	if err != nil || items[0].Claim != nil {
+		t.Fatalf("released list = %#v, %v", items, err)
+	}
+}

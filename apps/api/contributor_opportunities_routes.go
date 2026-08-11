@@ -134,6 +134,9 @@ func registerContributorOpportunityRoutes(mux *http.ServeMux, repos *repositorie
 		if !ok {
 			return
 		}
+		if _, _, ok = authorizeRepositoryRead(w, r, repos, credentials, r.PathValue("id")); !ok {
+			return
+		}
 		repo, err := repos.GetByID(r.PathValue("id"))
 		if err != nil {
 			writeAPIError(w, 404, "repository_not_found", "repository not found")
