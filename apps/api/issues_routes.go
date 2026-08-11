@@ -1131,6 +1131,109 @@ func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *rep
 		}
 		writeJSON(w, 200, updated)
 	})
+	mux.HandleFunc("POST /repositories/{id}/issues/{issue_id}/delivery-resolution", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		if releaseStore == nil || deploymentStore == nil || gitStore == nil {
+			writeAPIError(w, 503, "delivery_evidence_unavailable", "release and deployment evidence could not be read")
+			return
+		}
+		var in struct {
+			ExpectedVersion      int    `json:"expected_version"`
+			RepairVerificationID string `json:"repair_verification_id"`
+			ReleaseID            string `json:"release_id"`
+			DeploymentID         string `json:"deployment_id"`
+		}
+		if decodeJSON(r, &in) != nil || in.ExpectedVersion < 1 || strings.TrimSpace(in.RepairVerificationID) == "" || strings.TrimSpace(in.ReleaseID) == "" || strings.TrimSpace(in.DeploymentID) == "" {
+			writeAPIError(w, 422, "delivery_resolution_invalid", "current issue, repair proof, release, and deployment identities are required")
+			return
+		}
+		current, err := store.Get(r.PathValue("id"), r.PathValue("issue_id"))
+		if err != nil {
+			writeIssueError(w, err)
+			return
+		}
+		if current.DeliveryResolution != nil {
+			x := current.DeliveryResolution
+			if x.RepairVerificationID == in.RepairVerificationID && x.ReleaseID == in.ReleaseID && x.DeploymentID == in.DeploymentID {
+				writeJSON(w, 200, current)
+				return
+			}
+			writeAPIError(w, 409, "delivery_resolution_exists", "the issue already retains a different delivered outcome")
+			return
+		}
+		var verification *issues.RepairVerification
+		for i := range current.RepairVerifications {
+			if current.RepairVerifications[i].ID == in.RepairVerificationID {
+				verification = &current.RepairVerifications[i]
+			}
+		}
+		var reporterDecision *issues.ResolutionDecision
+		if verification != nil {
+			reporterDecision = latestReporterConfirmation(*verification, current.ReporterID)
+		}
+		if verification == nil || reporterDecision == nil {
+			writeAPIError(w, 409, "delivery_resolution_unconfirmed", "the reporter must confirm current passing repair proof before delivery can resolve the issue")
+			return
+		}
+		proof := projectVerification(current, *verification)
+		if met, _ := proof["criteria_met"].(bool); !met {
+			writeAPIError(w, 409, "delivery_resolution_unverified", "repair proof must remain complete, passing, and current")
+			return
+		}
+		release, err := releaseStore.Get(current.RepositoryID, in.ReleaseID)
+		if err != nil {
+			writeAPIError(w, 422, "delivery_release_invalid", "release does not belong to this repository")
+			return
+		}
+		deployment, err := deploymentStore.GetPromotion(current.RepositoryID, in.DeploymentID)
+		if err != nil || deployment.State != "succeeded" || deployment.ReleaseID != release.ID || deployment.CommitID != release.CommitID {
+			writeAPIError(w, 409, "delivery_deployment_unverified", "deployment must be a successful promotion of the selected exact release")
+			return
+		}
+		repository, err := gitStore.Open(current.RepositoryID)
+		if err != nil || exec.Command("git", "--git-dir", repository.Path(), "merge-base", "--is-ancestor", verification.CandidateCommitID, release.CommitID).Run() != nil {
+			writeAPIError(w, 409, "delivery_release_missing_repair", "the released commit must contain the exact verified repair revision")
+			return
+		}
+		resolution := issues.DeliveryResolution{ID: issues.NewEvidenceID(), RepairVerificationID: verification.ID, ReleaseID: release.ID, ReleaseVersion: release.Version, ReleaseCommitID: release.CommitID, DeploymentID: deployment.ID, EnvironmentID: deployment.EnvironmentID, ArtifactSHA256: deployment.ArtifactSHA256, ReporterDecisionID: reporterDecision.ID, RecordedBy: actor.UserID, CreatedAt: time.Now().UTC()}
+		updated, err := store.Mutate(current.RepositoryID, current.ID, actor.UserID, in.ExpectedVersion, func(v *issues.Issue) error {
+			if v.DeliveryResolution != nil || v.Version != current.Version {
+				return issues.ErrConflict
+			}
+			v.DeliveryResolution = &resolution
+			from := v.Status
+			v.Status = "resolved"
+			issues.AddHistory(v, "delivered_resolution_recorded", actor.UserID, resolution.ID)
+			v.History = append(v.History, issues.HistoryEntry{ID: issues.NewEvidenceID(), Kind: "status_changed", ActorID: actor.UserID, From: from, To: "resolved", Message: "Reporter-confirmed repair delivered in " + release.Version, CreatedAt: time.Now().UTC()})
+			return nil
+		})
+		if err != nil {
+			writeIssueError(w, err)
+			return
+		}
+		writeJSON(w, 201, updated)
+	})
+}
+
+// latestReporterConfirmation applies the append-only decision log in order.
+// A later rejection supersedes an earlier confirmation for the same exact
+// candidate, while a later confirmation after a retry may establish consent.
+func latestReporterConfirmation(verification issues.RepairVerification, reporterID string) *issues.ResolutionDecision {
+	var latest *issues.ResolutionDecision
+	for i := range verification.Decisions {
+		decision := &verification.Decisions[i]
+		if decision.ActorID != reporterID || decision.CommitID != verification.CandidateCommitID || (decision.Kind != "confirmed" && decision.Kind != "rejected") {
+			continue
+		}
+		latest = decision
+	}
+	if latest == nil || latest.Kind != "confirmed" {
+		return nil
+	}
+	return latest
 }
 
 func addIssueFinding(w http.ResponseWriter, r *http.Request, catalog *repositories.Store, store *issues.Store, actor auth.Credential, investigationID string, requireExpected int) {

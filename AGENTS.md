@@ -1180,6 +1180,14 @@ whenever dependencies change or the web job fails before it starts.
   candidate symlink cannot redirect API writes. A deterministic evidence key
   is durably reserved on the issue before check creation; recovery links and
   executes only that reservation's runs, preventing orphan or duplicate work.
+  Delivered resolution requires current passing proof explicitly confirmed by
+  the reporter, an immutable release whose commit contains that exact repair,
+  and a successful promotion of the same release commit. The issue then freezes
+  the release/version/commit, deployment/environment, artifact checksum,
+  reporter decision, and recording actor before entering `resolved`; exact
+  retries reuse the retained outcome and conflicting delivery claims fail.
+  A non-reproduced attempt remains open while a maintainer requests missing
+  evidence, the reporter answers beside that attempt, and collaborators retry.
 
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
