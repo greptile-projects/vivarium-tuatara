@@ -1166,6 +1166,9 @@ whenever dependencies change or the web job fails before it starts.
   endpoint returns the stable proposal/task identities as `202` with
   `Vivarium-Recovery-Implementation: pending`; an exact retry reuses that
   proposal and completes the issue link instead of duplicating repair work.
+  Recovery compares the entire frozen reasoning origin (version, revision,
+  selected evidence, and item snapshots); changed evidence is a `409`, never a
+  relink of new issue claims to an older task.
 
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.

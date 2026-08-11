@@ -821,6 +821,10 @@ func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *rep
 			issues.AddHistory(v, "implementation_started", actor.UserID, task.ID)
 			return nil
 		})
+		if errors.Is(err, proposals.ErrImplementationConflict) {
+			writeAPIError(w, 409, "issue_implementation_changed", "recovery evidence differs from the frozen implementation; retry the exact original handoff")
+			return
+		}
 		if err != nil && !errors.Is(err, issues.ErrDurabilityUncertain) {
 			// Proposal publication precedes the issue file rename. Once that
 			// durable identity exists, an issue write failure is a recoverable

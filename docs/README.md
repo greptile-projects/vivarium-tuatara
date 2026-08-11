@@ -1581,3 +1581,6 @@ If proposal publication wins but the issue update cannot be persisted, the
 response is `202` with the stable task/proposal identities and
 `Vivarium-Recovery-Implementation: pending`; replaying the exact request
 completes the issue link without creating another repair plan.
+Recovery requires the complete frozen reasoning origin to match, including the
+issue version, affected revision, selected evidence, and finding snapshots;
+changed evidence returns a conflict instead of attaching it to the older task.
