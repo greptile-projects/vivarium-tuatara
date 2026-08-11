@@ -1963,3 +1963,35 @@ for a deviation or revisit request. Review, integration, and check coverage is
 limited to each task's authoritative current contribution; superseded pulls
 remain historical evidence but cannot satisfy coverage. Deployment coverage
 requires its successful release to include every current merged task pull.
+
+## Delivery teams
+
+`POST /repositories/{id}/delivery-teams` creates a version-one operating
+charter for an existing `proposal`, `initiative`, `decision`, or
+`incident_follow_up`, or a named `planned_outcome`. The authenticated caller
+must already have repository write participation. `charter` requires a name,
+purpose, team escalation path, and at least one participant; it may also carry
+an overall budget and deadline. Each participant names a unique `human` or
+organization-approved `agent`, role, responsibility, reason, escalation route,
+optional budget/deadline, and `required_access` entries for the source
+repository at `read` or `write` level. Requested authority outside that
+repository is rejected. Creation sends no credential and changes no repository
+membership.
+
+`GET /delivery-teams` lists charters visible through repository access or a
+direct invitation. `GET /delivery-teams/{id}` applies the same boundary. Every
+participant includes a freshly derived `access_preview` comparing required
+levels with independent current owner/collaborator/public access or a live
+organization agent grant. A false `sufficient` value is a visible preflight
+gap, not an implicit request or grant.
+
+`PUT /delivery-teams/{id}` is organizer-only and compare-and-swaps
+`expected_version`. It replaces the declarative charter, preserves response
+state only when the shared charter and that participant's invitation terms are
+unchanged, starts new or materially changed invitations as pending, and appends
+an attributable history event. Shared purpose, budget, deadline, escalation,
+name, or participant-composition changes require every retained participant to
+respond again. `POST
+/delivery-teams/{id}/participants/{participant-id}/response` accepts
+`expected_version` and `decision` (`accepted` or `declined`). A human invitee
+responds for themself; a current operator responds for an approved agent.

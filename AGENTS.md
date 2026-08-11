@@ -1047,6 +1047,23 @@ whenever dependencies change or the web job fails before it starts.
   the commitment. Each approved exception request can appear at most once.
   Policy exception approvals freeze the normalized reason and maximum expiry;
   publication cannot substitute another purpose or extend that authorization.
+  Temporary outcome delivery teams at `/delivery-teams` retain a versioned
+  operating charter sourced from a proposal, portfolio initiative, technical
+  decision, incident follow-up, or explicitly named planned outcome. Repository
+  writers invite existing humans and organization-approved agents into roles
+  with reasons, responsibilities, budgets, deadlines, escalation paths, and
+  exact repository access requirements. Invitees (or an approved agent's
+  current operator) accept or decline through compare-and-swap responses;
+  organizer-only charter changes and all responses remain actor-stamped.
+  Material shared-charter or participant-invitation changes reset affected
+  acceptance to pending; shared purpose, budget, deadline, escalation, name,
+  or participant-composition changes require every retained participant to
+  accept the revised operating contract again.
+  Effective-access previews derive current repository participation and live
+  organization grants on every read. A charter never mints a credential or
+  grants repository authority, so missing access remains an explicit gap before
+  execution. Records default beneath `$DELIVERY_TEAM_STORAGE_ROOT`
+  (`delivery-teams`).
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

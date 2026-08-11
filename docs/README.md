@@ -1430,3 +1430,24 @@ tasks, checks, independent review, merges, and a release. A linked production
 measure that disproves the selected assumption reopens the decision while its
 alternatives, experiments, approval, dissent, implementation identities,
 release evidence, permissions, and actor attribution remain inspectable.
+
+## Delivery-team charters
+
+Temporary teams make the operating contract around a planned outcome durable
+before work begins. A repository collaborator can bind a charter to an existing
+proposal, organization initiative, technical decision, incident follow-up, or
+an explicitly named planned outcome. The charter identifies the organizer and
+records each human or approved agent's complementary role, responsibility,
+reason for involvement, budget, deadline, escalation route, and exact required
+repository access.
+
+Invitations start pending. Humans respond for themselves; an approved agent's
+current organization operator responds for that agent. Responses and
+organizer-only charter revisions use versions and append actor-stamped history,
+so acceptance, replacement, removal, and changed boundaries cannot be silently
+rewritten. Reads recompute whether each required access level is satisfied by
+independent live repository participation or an organization grant. Team
+membership itself creates no credential, collaborator relationship, Git scope,
+review right, or merge authority; an unmet requirement stays visible as an
+access gap. Durable records use `$DELIVERY_TEAM_STORAGE_ROOT`, defaulting to
+`delivery-teams`.
