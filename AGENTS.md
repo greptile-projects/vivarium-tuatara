@@ -1123,6 +1123,13 @@ whenever dependencies change or the web job fails before it starts.
   pass checks and independent review, merge, and release. Removing an agent
   operator revokes its derived Git credential while the charter, evidence,
   interventions, costs, authorship, handoff, pulls, and release stay retained.
+- **Issues** — Unexpected-behavior reports at `/issues` retain structured
+  expected/observed behavior, severity, environment, ordered reproduction,
+  optional exact release, visibility, bounded allowlisted evidence,
+  discussion, status, and immutable history. Duplicate suggestions are
+  visibility-filtered and omit evidence/discussion. Records default beneath
+  `$ISSUE_STORAGE_ROOT` (`issues`).
+
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 
