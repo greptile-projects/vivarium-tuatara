@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -350,6 +351,7 @@ func (s *Store) Release(repositoryID, id, actor string, owner bool, expected int
 func (s *Store) Complete(repositoryID, id string, expected int, completion Completion) (Opportunity, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	completion = normalizeCompletion(completion)
 	items, err := s.read(repositoryID)
 	if err != nil {
 		return Opportunity{}, err
@@ -388,8 +390,22 @@ func validCompletion(v Completion) bool {
 		(v.Readiness.NextOpportunityID == "" || validID(v.Readiness.NextOpportunityID))
 }
 func sameCompletion(a, b Completion) bool {
-	return a.ContributorID == b.ContributorID && a.PullRequestID == b.PullRequestID && a.ReleaseID == b.ReleaseID && a.MergeCommitID == b.MergeCommitID &&
-		a.Feedback == strings.TrimSpace(b.Feedback) && a.Readiness.ReadyForNext == b.Readiness.ReadyForNext && a.Readiness.NextOpportunityID == b.Readiness.NextOpportunityID && a.Readiness.Note == strings.TrimSpace(b.Readiness.Note)
+	return a.ContributorID == b.ContributorID && a.PullRequestID == b.PullRequestID && a.ReleaseID == b.ReleaseID && a.ReleaseVersion == b.ReleaseVersion && a.MergeCommitID == b.MergeCommitID &&
+		slices.Equal(a.Credit, b.Credit) && a.Feedback == b.Feedback && a.SupportEffort == b.SupportEffort &&
+		a.Readiness.ReadyForNext == b.Readiness.ReadyForNext && slices.Equal(a.Readiness.SkillsRecognized, b.Readiness.SkillsRecognized) &&
+		a.Readiness.NextOpportunityID == b.Readiness.NextOpportunityID && a.Readiness.Note == b.Readiness.Note && a.RecordedBy == b.RecordedBy
+}
+func normalizeCompletion(v Completion) Completion {
+	v.ReleaseVersion = strings.TrimSpace(v.ReleaseVersion)
+	v.Feedback = strings.TrimSpace(v.Feedback)
+	v.Readiness.Note = strings.TrimSpace(v.Readiness.Note)
+	for i := range v.Credit {
+		v.Credit[i] = strings.TrimSpace(v.Credit[i])
+	}
+	for i := range v.Readiness.SkillsRecognized {
+		v.Readiness.SkillsRecognized[i] = strings.TrimSpace(v.Readiness.SkillsRecognized[i])
+	}
+	return v
 }
 func MatchAll(items []Opportunity, p Profile, now time.Time) []Match {
 	out := []Match{}

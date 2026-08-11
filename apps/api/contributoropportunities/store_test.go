@@ -240,8 +240,23 @@ func TestCompleteRetainsDeliveredCreditAndIsExactlyRetryable(t *testing.T) {
 	if err != nil || retry.Version != done.Version {
 		t.Fatalf("exact retry = %#v, %v", retry, err)
 	}
-	completion.Feedback = "Different assessment"
-	if _, err = s.Complete(repo, v.ID, v.Version, completion); !errors.Is(err, ErrConflict) {
-		t.Fatalf("changed retry = %v", err)
+	mutations := map[string]func(*Completion){
+		"feedback":        func(v *Completion) { v.Feedback = "Different assessment" },
+		"credit":          func(v *Completion) { v.Credit = []string{"implementation"} },
+		"skills":          func(v *Completion) { v.Readiness.SkillsRecognized = []string{"Go"} },
+		"release version": func(v *Completion) { v.ReleaseVersion = "v1.1.1" },
+		"support effort":  func(v *Completion) { v.SupportEffort.MentorGuidanceItems++ },
+		"recorded by":     func(v *Completion) { v.RecordedBy = "55555555555555555555555555555555" },
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			changed := completion
+			changed.Credit = append([]string(nil), completion.Credit...)
+			changed.Readiness.SkillsRecognized = append([]string(nil), completion.Readiness.SkillsRecognized...)
+			mutate(&changed)
+			if _, retryErr := s.Complete(repo, v.ID, v.Version, changed); !errors.Is(retryErr, ErrConflict) {
+				t.Fatalf("changed retry = %v", retryErr)
+			}
+		})
 	}
 }
