@@ -28,6 +28,7 @@ import {
 import { useAuth } from "./auth";
 import { ChangeSessionsCard } from "./change-sessions";
 import { PullRequestChecks } from "./pull-request-checks";
+import { PullRequestPreviews } from "./pull-request-previews";
 import { Icons } from "./icons";
 import { Avatar, Badge, Button, Card } from "./ui";
 
@@ -1093,6 +1094,7 @@ export function PullRequestDetail({
             participant={participant}
             sourceCommitID={pull.source_commit_id}
           />
+          <PullRequestPreviews repositoryID={repositoryID} pullRequestID={pullRequestID} participant={participant} />
           <section id="commits" className="scroll-mt-24">
             <div className="mb-3 flex items-baseline justify-between">
               <h2 className="text-lg font-semibold">Commits</h2>

@@ -2199,6 +2199,11 @@ export type PullRequestCommit = {
   headers: { name: string; value: string }[];
   message: string;
 };
+export type PullPreview = {
+  id: string; repository_id: string; pull_request_id: string; revision: string; creator_id: string;
+  definition_sha256: string; build_run_id: string; state: string; stale: boolean; url: string; created_at: string; updated_at: string;
+  definition: { version: number; image: string; build: string; working_directory?: string; output_path: string; environment?: Record<string,string>; resources: { cpus: number; memory_mb: number; storage_mb: number; timeout_seconds: number } };
+};
 export type FileChange = {
   path: string;
   status: "added" | "modified" | "deleted";

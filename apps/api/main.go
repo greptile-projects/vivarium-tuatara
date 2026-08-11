@@ -30,6 +30,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/relationships"
@@ -144,6 +145,14 @@ func main() {
 		checkRunRoot = "check-runs"
 	}
 	checkRunStore, err := checkruns.New(checkRunRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
+	previewRoot := os.Getenv("PREVIEW_STORAGE_ROOT")
+	if previewRoot == "" {
+		previewRoot = "previews"
+	}
+	previewStore, err := previews.New(previewRoot)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -272,7 +281,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -356,6 +365,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var issueStore *issues.Store
 	var contributorPathwayStore *contributorpathways.Store
 	var contributorOpportunityStore *contributoropportunities.Store
+	var previewStore *previews.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -388,6 +398,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			contributorPathwayStore = value
 		case *contributoropportunities.Store:
 			contributorOpportunityStore = value
+		case *previews.Store:
+			previewStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -410,6 +422,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil {
 		registerPullRequestRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, authStore, activityStore, userStore, checkRunStore, changeSessionStore)
+		if previewStore != nil && checkRunStore != nil {
+			registerPreviewRoutes(mux, store, repositoryCatalog, pullRequestStore, checkRunStore, previewStore, authStore)
+		}
 	}
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil && changeSessionStore != nil {
 		registerChangeSessionRoutes(mux, store, repositoryCatalog, pullRequestStore, changeSessionStore, authStore, activityStore, checkRunStore)
