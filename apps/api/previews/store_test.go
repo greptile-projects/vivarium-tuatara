@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -161,6 +162,66 @@ func TestRepairAttemptReservationRetainsExactPreviewAndBuildRun(t *testing.T) {
 	}
 	if _, err := store.AttachBuildRun(repo, pull, first.ID, strings.Repeat("8", 32)); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("replacement run error = %v", err)
+	}
+}
+
+func TestRepairAttemptReservationSerializesIndependentStores(t *testing.T) {
+	config, digest, err := ParseConfig([]byte(`{"version":1,"image":"alpine:3.22","build":"true","output_path":"dist","resources":{"cpus":1,"memory_mb":128,"storage_mb":32,"timeout_seconds":30},"access":{"network":"none","data":"preview_artifacts","identity":"named_users","actions":["feedback"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	first, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, pull, revision := strings.Repeat("1", 32), strings.Repeat("2", 32), strings.Repeat("3", 40)
+	actor, session, finding := strings.Repeat("4", 32), strings.Repeat("5", 32), strings.Repeat("6", 32)
+	const requests = 32
+	ids := make(chan string, requests)
+	errs := make(chan error, requests)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < requests; i++ {
+		selected := first
+		if i%2 == 1 {
+			selected = second
+		}
+		wg.Add(1)
+		go func(store *Store) {
+			defer wg.Done()
+			<-start
+			p, reserveErr := store.ReserveRepairAttempt(repo, pull, revision, actor, digest, session, finding, config)
+			if reserveErr != nil {
+				errs <- reserveErr
+				return
+			}
+			ids <- p.ID
+		}(selected)
+	}
+	close(start)
+	wg.Wait()
+	close(ids)
+	close(errs)
+	for reserveErr := range errs {
+		t.Fatal(reserveErr)
+	}
+	var expected string
+	for id := range ids {
+		if expected == "" {
+			expected = id
+		}
+		if id != expected {
+			t.Fatalf("reservation IDs = %s and %s", expected, id)
+		}
+	}
+	list, err := first.List(repo, pull, revision)
+	if err != nil || len(list) != 1 || list[0].ID != expected {
+		t.Fatalf("reservations = %#v, %v", list, err)
 	}
 }
 

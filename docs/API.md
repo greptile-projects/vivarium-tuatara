@@ -59,7 +59,9 @@ agent run. Publishing that run synchronizes the pull through the normal path,
 starts checks and a fresh preview build, and back-links its commit and preview
 attempt to the original finding. The repair session/finding pair reserves that
 attempt identity before its check exists, so completion or recovery retries
-reuse the same active or terminal build rather than duplicate provenance.
+reuse the same active or terminal build rather than duplicate provenance. The
+reservation and build-run attachment share a filesystem admission lock across
+API processes configured with the same preview storage root.
 
 ## Prospective impact assessments
 

@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -152,6 +153,11 @@ type Preview struct {
 func (s *Store) ReserveRepairAttempt(repositoryID, pullID, revision, creator, hash, sessionID, findingID string, c Config) (Preview, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Preview{}, err
+	}
+	defer unlock()
 	entries, err := os.ReadDir(filepath.Join(s.root, repositoryID, pullID))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return Preview{}, err
@@ -184,6 +190,11 @@ func (s *Store) ReserveRepairAttempt(repositoryID, pullID, revision, creator, ha
 func (s *Store) AttachBuildRun(repo, pull, id, runID string) (Preview, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Preview{}, err
+	}
+	defer unlock()
 	p, err := s.Get(repo, pull, id)
 	if err != nil {
 		return Preview{}, err
@@ -196,6 +207,18 @@ func (s *Store) AttachBuildRun(repo, pull, id, runID string) (Preview, error) {
 	}
 	p.BuildRunID, p.State, p.UpdatedAt = runID, "building", s.now()
 	return p, s.write(p)
+}
+
+func (s *Store) lock() (func(), error) {
+	file, err := os.OpenFile(filepath.Join(s.root, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return func() { _ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN); _ = file.Close() }, nil
 }
 
 type Store struct {
