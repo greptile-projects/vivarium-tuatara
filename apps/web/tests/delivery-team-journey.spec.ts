@@ -142,6 +142,9 @@ test("a governed human-agent team delivers an accepted decision", async ({ brows
     expect(integration.blockers).toEqual([]);
     team = await json(ownerPage, "post", `/delivery-teams/${team.id}/integrations/${integration.id}/publish`, owner.headers, { expected_version: team.version, target_branch: "main" });
     expect(team.integrations.at(-1).pull_requests).toHaveLength(3);
+    // A lost publication response can retry its pre-publication version. The
+    // retry reconciles missing checks without duplicating durable definitions.
+    team = await json(ownerPage, "post", `/delivery-teams/${team.id}/integrations/${integration.id}/publish`, owner.headers, { expected_version: team.version - 1, target_branch: "main" });
 
     await json(ownerPage, "delete", `/organizations/${organization.id}/members/${researchOperator.user.id}`, owner.headers);
     const deniedPush = await git(copies.find((path) => path.includes("delivery-research"))!, "push", "origin", "team-research").then(() => "allowed", (error: any) => String(error.stderr));
@@ -154,6 +157,8 @@ test("a governed human-agent team delivers an accepted decision", async ({ brows
     let lastMerge: any;
     for (const linked of retained.integrations[0].pull_requests.sort((a: any, b: any) => a.order - b.order)) {
       await expect.poll(async () => JSON.stringify(await json(ownerPage, "get", `/repositories/${repository.id}/pulls/${linked.pull_request_id}/checks`, owner.headers)), { message: `checks pass for stream ${linked.stream_id}`, timeout: 60_000 }).toContain('"state":"succeeded"');
+      const checks = await json(ownerPage, "get", `/repositories/${repository.id}/pulls/${linked.pull_request_id}/checks`, owner.headers) as any;
+      expect(checks.check_runs.filter((check: any) => check.definition.name === "coordinated verification")).toHaveLength(1);
       await json(developerPage, "post", `/repositories/${repository.id}/pulls/${linked.pull_request_id}/reviews`, developer.headers, { decision: "approved" });
       lastMerge = await json(ownerPage, "post", `/repositories/${repository.id}/pulls/${linked.pull_request_id}/merge`, owner.headers, {});
     }

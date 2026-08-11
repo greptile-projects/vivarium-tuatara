@@ -2054,3 +2054,7 @@ branch pull. Ordinary exact-revision repository checks start only after every
 ordered pull is created or recovered and the complete link set is durable on
 the integration; failed partial publication starts no checks. No review, check,
 queue, release, permission, or merge bypass is created.
+An exact retry of a published integration may use the current team version or
+the immediately preceding pre-publication version. It follows the retained pull
+links and idempotently creates missing exact-revision check definitions or
+resumes nonterminal runs, returning `200` without changing the integration.

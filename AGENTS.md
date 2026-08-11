@@ -1110,7 +1110,10 @@ whenever dependencies change or the web job fails before it starts.
   exact-revision repository checks only after every ordered pull is created or
   recovered and the complete link set is durable on the integration; a later
   pull or final manifest-write failure therefore starts no partial checks, and
-  an exact retry reconciles existing pulls before execution. The connected
+  an exact retry reconciles existing pulls before execution. A published
+  integration accepts its current or lost-response pre-publication version as
+  an idempotent recovery request, recreating only missing check definitions and
+  resuming nonterminal runs from its durable pull links. The connected
   delivery-team browser journey protects the complete accepted-decision loop:
   independently operated specialist agents and a developer accept parallel
   streams, retain a disputed finding and lead resolution, redirect a failed

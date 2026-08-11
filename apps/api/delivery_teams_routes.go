@@ -512,10 +512,6 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 			writeAPIError(w, 400, "invalid_request", "expected_version is required")
 			return
 		}
-		if team.Version != in.ExpectedVersion {
-			writeAPIError(w, 409, "delivery_team_changed", "delivery team version changed")
-			return
-		}
 		target := strings.TrimSpace(in.TargetBranch)
 		if target == "" {
 			target = "main"
@@ -530,6 +526,33 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 			writeAPIError(w, 404, "delivery_integration_not_found", "integration not found")
 			return
 		}
+		if manifest.PublishedAt != nil {
+			if in.ExpectedVersion != team.Version && in.ExpectedVersion != team.Version-1 {
+				writeAPIError(w, 409, "delivery_team_changed", "delivery team version changed")
+				return
+			}
+			if pulls == nil {
+				writeAPIError(w, 503, "delivery_integration_unavailable", "pull request governance is unavailable")
+				return
+			}
+			// Publication retries are also the recovery path for a crash or
+			// transient check-store failure after the durable integration write.
+			// Check creation is idempotent per pull, commit, and definition.
+			for _, linked := range manifest.PullRequests {
+				pull, pullErr := pulls.Get(linked.RepositoryID, linked.PullRequestID)
+				if pullErr != nil {
+					writeAPIError(w, 503, "delivery_integration_unavailable", "a published contribution could not be recovered")
+					return
+				}
+				startCheckRuns(git, checks, pull)
+			}
+			writeJSON(w, 200, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
+			return
+		}
+		if team.Version != in.ExpectedVersion {
+			writeAPIError(w, 409, "delivery_team_changed", "delivery team version changed")
+			return
+		}
 		if team.Plan == nil || manifest.PlanRevision != team.Plan.Revision {
 			writeAPIError(w, 409, "delivery_integration_blocked", "the current execution plan changed after reconciliation")
 			return
@@ -540,7 +563,7 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 			writeAPIError(w, 409, "delivery_integration_changed", "a contribution changed after reconciliation")
 			return
 		}
-		if len(manifest.Blockers) > 0 || len(currentBlockers) > 0 || manifest.PublishedAt != nil {
+		if len(manifest.Blockers) > 0 || len(currentBlockers) > 0 {
 			writeAPIError(w, 409, "delivery_integration_blocked", "resolve conflicts and missing acceptance evidence before publication")
 			return
 		}

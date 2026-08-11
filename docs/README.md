@@ -1508,6 +1508,11 @@ manifest grants merge authority. Publication starts each pull's ordinary
 exact-revision repository checks only after the complete ordered pull set is
 durably linked to the integration. A later pull or final manifest-write failure
 starts no partial checks; exact retry first reconciles any existing pulls.
+The same publication endpoint accepts a current-version or lost-response
+pre-publication-version retry after the integration is published. It follows
+the retained pull links and idempotently creates only missing check definitions
+or resumes nonterminal runs, recovering a process stop or transient check-store
+failure without duplicating completed evidence.
 
 The connected delivery-team browser journey carries an accepted technical
 decision through a chartered developer and two independently operated
