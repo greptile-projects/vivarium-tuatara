@@ -771,7 +771,10 @@ func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *rep
 		}
 		var proposal proposals.Proposal
 		var task proposals.Task
+		var issueBefore issues.Issue
 		updated, err := store.Mutate(r.PathValue("id"), r.PathValue("issue_id"), actor.UserID, in.ExpectedVersion, func(v *issues.Issue) error {
+			issueBefore = *v
+			issueBefore.History = append([]issues.HistoryEntry(nil), v.History...)
 			if v.Implementation != nil {
 				return issues.ErrConflict
 			}
@@ -819,6 +822,16 @@ func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *rep
 			return nil
 		})
 		if err != nil && !errors.Is(err, issues.ErrDurabilityUncertain) {
+			// Proposal publication precedes the issue file rename. Once that
+			// durable identity exists, an issue write failure is a recoverable
+			// split outcome: the exact request converges through the reasoning
+			// origin and can finish the issue link without duplicating work.
+			if proposal.ID != "" && task.ID != "" {
+				w.Header().Set("Location", "/proposals/"+issueBefore.RepositoryID+"/"+proposal.ID)
+				w.Header().Set("Vivarium-Recovery-Implementation", "pending")
+				writeJSON(w, 202, map[string]any{"issue": issueBefore, "proposal": proposal, "task": task, "pull_request": nil, "recovery_pending": true})
+				return
+			}
 			writeIssueError(w, err)
 			return
 		}

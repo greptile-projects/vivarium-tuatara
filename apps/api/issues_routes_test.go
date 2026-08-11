@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -88,7 +89,8 @@ func TestIssueTriageRetainsCitedHumanAndBoundedAgentConclusions(t *testing.T) {
 	identities, _ := users.New(t.TempDir())
 	credentials, _ := auth.New(t.TempDir())
 	catalog, _ := repositories.New(t.TempDir(), gitStore)
-	issueStore, _ := issues.New(t.TempDir())
+	issueRoot := t.TempDir()
+	issueStore, _ := issues.New(issueRoot)
 	proposalStore, _ := proposals.New(t.TempDir())
 	pullStore, _ := pullrequests.New(t.TempDir(), gitStore)
 	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, proposalStore, pullStore, nil, nil, nil, issueStore))
@@ -143,13 +145,33 @@ func TestIssueTriageRetainsCitedHumanAndBoundedAgentConclusions(t *testing.T) {
 	decodeResponse(t, response, &v)
 	response = authenticatedRequest(t, http.MethodPost, url+"/findings", `{"expected_version":`+strconv.Itoa(v.Version)+`,"kind":"finding","statement":"The parser rejects the retained input.","citation_ids":["`+attemptID+`"]}`, owner.Credential.Token, http.StatusCreated)
 	decodeResponse(t, response, &v)
-	response = authenticatedRequest(t, http.MethodPost, url+"/implementation", `{"expected_version":`+strconv.Itoa(v.Version)+`,"reproduction_attempt_id":"`+attemptID+`","finding_ids":["`+v.Findings[len(v.Findings)-1].ID+`"],"affected_revision":"`+string(revision)+`","acceptance_criteria":["retained reproduction passes","regression coverage passes"],"assignee_type":"human","assignee_id":"`+owner.User.ID+`"}`, owner.Credential.Token, http.StatusCreated)
+	implementationBody := `{"expected_version":` + strconv.Itoa(v.Version) + `,"reproduction_attempt_id":"` + attemptID + `","finding_ids":["` + v.Findings[len(v.Findings)-1].ID + `"],"affected_revision":"` + string(revision) + `","acceptance_criteria":["retained reproduction passes","regression coverage passes"],"assignee_type":"human","assignee_id":"` + owner.User.ID + `"}`
+	if err := os.Chmod(issueRoot, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	response = authenticatedRequest(t, http.MethodPost, url+"/implementation", implementationBody, owner.Credential.Token, http.StatusAccepted)
+	if response.Header.Get("Vivarium-Recovery-Implementation") != "pending" {
+		t.Fatalf("recovery header = %q", response.Header.Get("Vivarium-Recovery-Implementation"))
+	}
+	response.Body.Close()
+	if err := os.Chmod(issueRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	unchanged, err := issueStore.Get(repo.ID, v.ID)
+	if err != nil || unchanged.Implementation != nil || unchanged.Version != v.Version {
+		t.Fatalf("failed issue publication changed issue: %#v, %v", unchanged, err)
+	}
+	response = authenticatedRequest(t, http.MethodPost, url+"/implementation", implementationBody, owner.Credential.Token, http.StatusCreated)
 	var implementation struct {
 		Issue    issues.Issue       `json:"issue"`
 		Proposal proposals.Proposal `json:"proposal"`
 		Task     proposals.Task     `json:"task"`
 	}
 	decodeResponse(t, response, &implementation)
+	allProposals, err := proposalStore.List(repo.ID)
+	if err != nil || len(allProposals) != 1 {
+		t.Fatalf("recovery duplicated implementation proposals: %#v, %v", allProposals, err)
+	}
 	if implementation.Issue.Implementation == nil || implementation.Task.Assignment == nil || implementation.Task.Assignment.AssigneeType != "human" || len(implementation.Task.Assignment.Access.Scopes) != 0 || implementation.Proposal.Reasoning.IssueID != v.ID {
 		t.Fatalf("implementation did not preserve governed issue handoff: %#v", implementation)
 	}

@@ -1162,6 +1162,10 @@ whenever dependencies change or the web job fails before it starts.
   status; human assignment grants nothing and agent authority remains limited
   to the existing task-session branch and credential lifecycle. Checks,
   discussion, review, queues, and merge retain the stock pull boundaries.
+  If proposal publication succeeds before the issue file can be replaced, the
+  endpoint returns the stable proposal/task identities as `202` with
+  `Vivarium-Recovery-Implementation: pending`; an exact retry reuses that
+  proposal and completes the issue link instead of duplicating repair work.
 
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.

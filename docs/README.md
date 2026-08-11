@@ -1577,3 +1577,7 @@ the task and linked pull's live state, while commits, checks, discussion, review
 queueing, and merge continue through ordinary pull-request policy. Retrying the
 same reproduction handoff converges on the existing proposal rather than
 creating duplicate repair work.
+If proposal publication wins but the issue update cannot be persisted, the
+response is `202` with the stable task/proposal identities and
+`Vivarium-Recovery-Implementation: pending`; replaying the exact request
+completes the issue link without creating another repair plan.
