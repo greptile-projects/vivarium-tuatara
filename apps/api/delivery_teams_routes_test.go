@@ -112,3 +112,24 @@ func TestAgentGrantAccessRetainsStrongestOverlappingGrant(t *testing.T) {
 		t.Fatalf("access = %s, %s", level, source)
 	}
 }
+
+func TestDeliveryIntegrationReadinessUsesCurrentStreamState(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	repository, _ := gitStore.Create(strings.Repeat("a", 32))
+	tree, _ := repository.WriteObject(storage.TreeObject, nil)
+	base := writeTestCommit(t, repository, tree, nil, 1, "base")
+	head := writeTestCommit(t, repository, tree, []storage.ObjectID{base}, 2, "contribution")
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/topic", Target: string(head)})
+	entryID := strings.Repeat("b", 32)
+	team := deliveryteams.Team{Plan: &deliveryteams.ExecutionPlan{Revision: 1, Streams: []deliveryteams.WorkStream{{ID: "stream", AcceptanceCriteria: []string{"tests pass"}, IntegrationOrder: 1}}}, Timeline: []deliveryteams.TimelineEntry{{ID: entryID, StreamID: "stream"}}, StreamStatuses: []deliveryteams.StreamStatus{{StreamID: "stream", Status: "completed"}}}
+	contributions := []deliveryteams.IntegrationContribution{{StreamID: "stream", RepositoryID: repository.ID(), SourceKind: "branch", Branch: "topic", CommitID: string(head), AcceptanceEvidence: map[string][]string{"tests pass": {entryID}}}}
+	blockers, valid := analyzeDeliveryIntegration(team, string(base), contributions, gitStore, nil)
+	if !valid || len(blockers) != 0 {
+		t.Fatalf("completed readiness = %#v, %v", blockers, valid)
+	}
+	team.StreamStatuses[0].Status = "running"
+	blockers, valid = analyzeDeliveryIntegration(team, string(base), contributions, gitStore, nil)
+	if !valid || len(blockers) != 1 || blockers[0].Kind != "stream_incomplete" {
+		t.Fatalf("current readiness = %#v, %v", blockers, valid)
+	}
+}

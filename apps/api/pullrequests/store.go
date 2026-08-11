@@ -107,6 +107,9 @@ func (s *Store) LinkDeliveryIntegration(repositoryID, pullID, teamID, integratio
 	if !validID(teamID) || !validID(integrationID) || strings.TrimSpace(streamID) == "" || order < 1 {
 		return p, ErrInvalid
 	}
+	if p.DeliveryTeamID != "" && (p.DeliveryTeamID != teamID || p.DeliveryIntegrationID != integrationID || p.DeliveryStreamID != streamID || p.DeliveryIntegrationOrder != order) {
+		return p, ErrInvalid
+	}
 	p.DeliveryTeamID, p.DeliveryIntegrationID, p.DeliveryStreamID, p.DeliveryIntegrationOrder = teamID, integrationID, streamID, order
 	_, err = s.write(p)
 	return p, err
@@ -553,7 +556,7 @@ func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, bo
 			return PullRequest{}, listErr
 		}
 		for _, candidate := range existing {
-			if candidate.SourceRepositoryID == sourceRepositoryID && candidate.SourceBranch == sourceBranch {
+			if candidate.SourceRepositoryID == sourceRepositoryID && candidate.SourceBranch == sourceBranch && candidate.TargetBranch == targetBranch {
 				return candidate, nil
 			}
 		}

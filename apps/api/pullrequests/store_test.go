@@ -93,6 +93,40 @@ func TestCreateSnapshotsBranchesAndListsByRepository(t *testing.T) {
 	}
 }
 
+func TestRecoveryIncludesTargetAndDeliveryProvenanceCannotBeReplaced(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	repository, _ := gitStore.Create(testID('1'))
+	tree, _ := repository.WriteObject(storage.TreeObject, nil)
+	base := writeCommit(t, repository, tree, "base")
+	head := writeCommit(t, repository, tree, "head")
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)})
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/release", Target: string(base)})
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/delivery/topic", Target: string(head)})
+	store, _ := New(t.TempDir(), gitStore)
+	releasePull, err := store.FindOrCreateRecovery(repository.ID(), testID('2'), "Release", "Release review.", "delivery/topic", "release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	releasePull, err = store.LinkDeliveryIntegration(repository.ID(), releasePull.ID, testID('3'), testID('4'), "release-stream", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainPull, err := store.FindOrCreateRecovery(repository.ID(), testID('2'), "Main", "Main review.", "delivery/topic", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mainPull.ID == releasePull.ID || mainPull.TargetBranch != "main" {
+		t.Fatalf("recovery reused incompatible pull: %#v", mainPull)
+	}
+	if _, err = store.LinkDeliveryIntegration(repository.ID(), releasePull.ID, testID('5'), testID('6'), "other-stream", 2); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("provenance replacement = %v", err)
+	}
+	stored, _ := store.Get(repository.ID(), releasePull.ID)
+	if stored.DeliveryTeamID != testID('3') || stored.DeliveryIntegrationID != testID('4') {
+		t.Fatalf("provenance changed: %#v", stored)
+	}
+}
+
 func TestWithSourceRevisionSerializesSynchronization(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	repository, _ := gitStore.Create(testID('1'))

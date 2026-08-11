@@ -511,6 +511,10 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 			writeAPIError(w, 400, "invalid_request", "expected_version is required")
 			return
 		}
+		if team.Version != in.ExpectedVersion {
+			writeAPIError(w, 409, "delivery_team_changed", "delivery team version changed")
+			return
+		}
 		target := strings.TrimSpace(in.TargetBranch)
 		if target == "" {
 			target = "main"
@@ -525,7 +529,17 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 			writeAPIError(w, 404, "delivery_integration_not_found", "integration not found")
 			return
 		}
-		if len(manifest.Blockers) > 0 || manifest.PublishedAt != nil {
+		if team.Plan == nil || manifest.PlanRevision != team.Plan.Revision {
+			writeAPIError(w, 409, "delivery_integration_blocked", "the current execution plan changed after reconciliation")
+			return
+		}
+		currentContributions := append([]deliveryteams.IntegrationContribution(nil), manifest.Contributions...)
+		currentBlockers, current := analyzeDeliveryIntegration(team, manifest.BaseRevision, currentContributions, git, workspaceStore)
+		if !current {
+			writeAPIError(w, 409, "delivery_integration_changed", "a contribution changed after reconciliation")
+			return
+		}
+		if len(manifest.Blockers) > 0 || len(currentBlockers) > 0 || manifest.PublishedAt != nil {
 			writeAPIError(w, 409, "delivery_integration_blocked", "resolve conflicts and missing acceptance evidence before publication")
 			return
 		}
