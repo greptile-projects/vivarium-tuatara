@@ -1131,7 +1131,11 @@ whenever dependencies change or the web job fails before it starts.
   `$ISSUE_STORAGE_ROOT` (`issues`). Issue creation admits a 15 MiB encoded body
   for ten 1 MiB raw attachments; affected versions are server-derived from an
   exact release, entering or leaving terminal status is owner-only, and durability-uncertain visible
-  writes return the retained identity as `202`.
+  writes return the retained identity as `202`. Issue reproduction launches the
+  bounded credential-free workspace at exact source or the attested release;
+  selected sanitized inputs are staged under `.vivarium/reproduction-inputs`,
+  and immutable attempts retain only repository-declared command outcomes plus
+  their environment, logs, artifacts, observed result, and disposition.
 
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.

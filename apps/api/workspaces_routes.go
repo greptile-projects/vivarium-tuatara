@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,15 +19,17 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
-func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, incidentStore *incidents.Store, store *workspaces.Store, authStore *auth.Store, organizationStore *organizations.Store, checkStore *checkruns.Store, sessionStore *changesessions.Store) {
+func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, incidentStore *incidents.Store, issueStore *issues.Store, releaseStore *releases.Store, store *workspaces.Store, authStore *auth.Store, organizationStore *organizations.Store, checkStore *checkruns.Store, sessionStore *changesessions.Store) {
 	registerWorkspaceGovernanceRoutes(mux, catalog, store, authStore, organizationStore)
 	registerWorkspaceIDERoutes(mux, catalog, store, authStore)
 	registerWorkspaceCollaborationRoutes(mux, catalog, store, authStore, organizationStore)
@@ -37,9 +40,10 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 			return
 		}
 		var input struct {
-			RepositoryID string            `json:"repository_id"`
-			CommitID     string            `json:"commit_id"`
-			Source       workspaces.Source `json:"source"`
+			RepositoryID       string            `json:"repository_id"`
+			CommitID           string            `json:"commit_id"`
+			Source             workspaces.Source `json:"source"`
+			InputAttachmentIDs []string          `json:"input_attachment_ids"`
 		}
 		if err := decodeJSON(r, &input); err != nil {
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
@@ -67,7 +71,7 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 			writeAPIError(w, 422, "workspace_revision_invalid", "commit_id must name an exact repository commit")
 			return
 		}
-		if err = validateWorkspaceSource(input.Source, input.CommitID, proposalStore, pullStore, incidentStore); err != nil {
+		if err = validateWorkspaceSource(input.Source, input.CommitID, proposalStore, pullStore, incidentStore, issueStore, releaseStore); err != nil {
 			writeAPIError(w, 422, "workspace_source_invalid", err.Error())
 			return
 		}
@@ -144,12 +148,21 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 		if actor.UserID == repoMeta.OwnerID {
 			role = "owner"
 		}
-		created, err := store.Create(workspaces.Workspace{RepositoryID: input.RepositoryID, OrganizationID: repoMeta.OrganizationID, CommitID: input.CommitID, Definition: definition, Source: input.Source, CreatorID: actor.UserID, Access: workspaces.Access{Role: role, Scopes: []string{"repositories:read", "repositories:write"}}, Policy: repositoryPolicy, PolicyScope: policyScope, PolicyVersion: repositoryPolicy.Version, Reasoning: reasoning}, definitionBytes)
+		created, err := store.Create(workspaces.Workspace{RepositoryID: input.RepositoryID, OrganizationID: repoMeta.OrganizationID, CommitID: input.CommitID, Definition: definition, Source: input.Source, CreatorID: actor.UserID, Access: workspaces.Access{Role: role, Scopes: []string{"repositories:read", "repositories:write"}}, Policy: repositoryPolicy, PolicyScope: policyScope, PolicyVersion: repositoryPolicy.Version, Reasoning: reasoning, ReproductionInputAttachmentIDs: append([]string(nil), input.InputAttachmentIDs...)}, definitionBytes)
 		if err != nil {
 			writeAPIError(w, 500, "workspace_create_failed", "workspace could not be created")
 			return
 		}
 		steps, failed := provisionWorkspace(repo.Path(), store.RuntimePath(created.ID), created.ID, input.CommitID, definition)
+		if !failed && input.Source.Kind == "issue_reproduction" {
+			issue, issueErr := issueStore.Get(input.RepositoryID, input.Source.IssueID)
+			if issueErr != nil {
+				failed, steps = true, append(steps, failedSetupStep("stage sanitized reproduction inputs", nil, issueErr))
+			} else if stageErr := stageIssueInputs(created.ID, issue, input.InputAttachmentIDs); stageErr != nil {
+				failed, steps = true, append(steps, failedSetupStep("stage sanitized reproduction inputs", nil, stageErr))
+				_ = exec.Command("docker", "rm", "-f", "-v", "vivarium-workspace-"+created.ID).Run()
+			}
+		}
 		created, err = store.Complete(created.ID, steps, failed)
 		if err != nil {
 			writeAPIError(w, 500, "workspace_create_failed", "workspace evidence could not be saved")
@@ -214,6 +227,50 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 		updated, err := store.TransitionControlled(workspace.ID, actor.UserID, input.Foundation, "running")
 		writeWorkspaceTransition(w, updated, err)
 	})
+}
+
+func stageIssueInputs(workspaceID string, issue issues.Issue, selected []string) error {
+	if len(selected) > 10 {
+		return errors.New("at most 10 reproduction inputs are allowed")
+	}
+	attachments := map[string]issues.Attachment{}
+	for _, attachment := range issue.Attachments {
+		attachments[attachment.ID] = attachment
+	}
+	for _, id := range selected {
+		attachment, ok := attachments[id]
+		if !ok || reproductionSecretLike(attachment.Name, attachment.Data) {
+			return errors.New("input is missing or resembles credential material")
+		}
+		name := strings.Map(func(r rune) rune {
+			if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._-", r) {
+				return r
+			}
+			return '_'
+		}, attachment.Name)
+		raw, err := base64.StdEncoding.DecodeString(attachment.Data)
+		if err != nil {
+			return err
+		}
+		cmd := exec.Command("docker", "exec", "-i", "vivarium-workspace-"+workspaceID, "sh", "-c", "mkdir -p /workspace/.vivarium/reproduction-inputs && umask 077 && cat > /workspace/.vivarium/reproduction-inputs/"+name)
+		cmd.Stdin = bytes.NewReader(raw)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("stage input: %s: %w", out, err)
+		}
+	}
+	return nil
+}
+
+func reproductionSecretLike(name, encoded string) bool {
+	lower := strings.ToLower(name)
+	for _, marker := range []string{".env", "credential", "secret", "token", "password", ".npmrc", ".netrc", "id_rsa", "id_ed25519"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	raw, _ := base64.StdEncoding.DecodeString(encoded)
+	text := strings.ToLower(string(raw))
+	return strings.Contains(text, "-----begin private key-----") || strings.Contains(text, "authorization: bearer ") || strings.Contains(text, "aws_secret_access_key")
 }
 
 func authorizeWorkspace(w http.ResponseWriter, r *http.Request, store *workspaces.Store, catalog *repositories.Store, authStore *auth.Store, scope string) (workspaces.Workspace, auth.Credential, bool) {
@@ -293,7 +350,7 @@ func parseWorkspaceDefinition(body []byte) (workspaces.Definition, error) {
 	}
 	return d, nil
 }
-func validateWorkspaceSource(source workspaces.Source, commit string, ps *proposals.Store, prs *pullrequests.Store, is *incidents.Store) error {
+func validateWorkspaceSource(source workspaces.Source, commit string, ps *proposals.Store, prs *pullrequests.Store, is *incidents.Store, issueStore *issues.Store, releaseStore *releases.Store) error {
 	switch source.Kind {
 	case "repository":
 		return nil
@@ -340,8 +397,28 @@ func validateWorkspaceSource(source workspaces.Source, commit string, ps *propos
 			}
 		}
 		return errors.New("incident repair not found")
+	case "issue_reproduction":
+		if issueStore == nil {
+			return errors.New("issues unavailable")
+		}
+		issue, e := issueStore.Get(source.RepositoryID, source.IssueID)
+		if e != nil {
+			return errors.New("issue not found")
+		}
+		if issue.ReleaseID != "" {
+			if releaseStore == nil {
+				return errors.New("affected release unavailable")
+			}
+			release, releaseErr := releaseStore.Get(source.RepositoryID, issue.ReleaseID)
+			if releaseErr != nil || release.CommitID != commit || source.ReleaseID != issue.ReleaseID {
+				return errors.New("revision must match the issue's attested release")
+			}
+		} else if source.ReleaseID != "" {
+			return errors.New("issue has no attested release")
+		}
+		return nil
 	default:
-		return errors.New("source kind must be repository, proposal_task, pull_request, incident_repair, or decision_experiment")
+		return errors.New("source kind must be repository, proposal_task, pull_request, incident_repair, decision_experiment, or issue_reproduction")
 	}
 }
 func provisionWorkspace(gitPath, runtime, id, commit string, d workspaces.Definition) ([]workspaces.SetupStep, bool) {

@@ -49,26 +49,92 @@ type HistoryEntry struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type ReproductionInput struct {
+	AttachmentID string `json:"attachment_id"`
+	Name         string `json:"name"`
+	SHA256       string `json:"sha256"`
+	Size         int    `json:"size"`
+}
+type ReproductionCommand struct {
+	Name          string    `json:"name"`
+	OutcomeID     string    `json:"outcome_id"`
+	CommandSHA256 string    `json:"command_sha256"`
+	ExitCode      int       `json:"exit_code"`
+	Log           string    `json:"log,omitempty"`
+	StartedAt     time.Time `json:"started_at"`
+	CompletedAt   time.Time `json:"completed_at"`
+}
+type ReproductionArtifact struct {
+	Name      string `json:"name"`
+	MediaType string `json:"media_type"`
+	SHA256    string `json:"sha256"`
+	Size      int    `json:"size"`
+	Data      string `json:"data,omitempty"`
+}
+type ReproductionAttempt struct {
+	ID                    string                 `json:"id"`
+	WorkspaceID           string                 `json:"workspace_id"`
+	CommitID              string                 `json:"commit_id"`
+	ReleaseID             string                 `json:"release_id,omitempty"`
+	DefinitionSHA256      string                 `json:"definition_sha256"`
+	EnvironmentDefinition json.RawMessage        `json:"environment_definition"`
+	Inputs                []ReproductionInput    `json:"inputs"`
+	Commands              []ReproductionCommand  `json:"commands"`
+	Artifacts             []ReproductionArtifact `json:"artifacts"`
+	ObservedResult        string                 `json:"observed_result"`
+	Result                string                 `json:"result"`
+	ReproducedBy          string                 `json:"reproduced_by"`
+	CreatedAt             time.Time              `json:"created_at"`
+}
+
 type Issue struct {
-	ID                string         `json:"id"`
-	RepositoryID      string         `json:"repository_id"`
-	ReleaseID         string         `json:"release_id,omitempty"`
-	AffectedVersion   string         `json:"affected_version,omitempty"`
-	Title             string         `json:"title"`
-	ExpectedBehavior  string         `json:"expected_behavior"`
-	ObservedBehavior  string         `json:"observed_behavior"`
-	Severity          string         `json:"severity"`
-	Environment       string         `json:"environment"`
-	ReproductionSteps []string       `json:"reproduction_steps"`
-	Visibility        string         `json:"visibility"`
-	Status            string         `json:"status"`
-	ReporterID        string         `json:"reporter_id"`
-	Attachments       []Attachment   `json:"attachments"`
-	Discussion        []Comment      `json:"discussion"`
-	History           []HistoryEntry `json:"history"`
-	Version           int            `json:"version"`
-	CreatedAt         time.Time      `json:"created_at"`
-	UpdatedAt         time.Time      `json:"updated_at"`
+	ID                   string                `json:"id"`
+	RepositoryID         string                `json:"repository_id"`
+	ReleaseID            string                `json:"release_id,omitempty"`
+	AffectedVersion      string                `json:"affected_version,omitempty"`
+	Title                string                `json:"title"`
+	ExpectedBehavior     string                `json:"expected_behavior"`
+	ObservedBehavior     string                `json:"observed_behavior"`
+	Severity             string                `json:"severity"`
+	Environment          string                `json:"environment"`
+	ReproductionSteps    []string              `json:"reproduction_steps"`
+	Visibility           string                `json:"visibility"`
+	Status               string                `json:"status"`
+	ReporterID           string                `json:"reporter_id"`
+	Attachments          []Attachment          `json:"attachments"`
+	Discussion           []Comment             `json:"discussion"`
+	History              []HistoryEntry        `json:"history"`
+	ReproductionAttempts []ReproductionAttempt `json:"reproduction_attempts"`
+	Version              int                   `json:"version"`
+	CreatedAt            time.Time             `json:"created_at"`
+	UpdatedAt            time.Time             `json:"updated_at"`
+}
+
+func (s *Store) AddReproductionAttempt(repositoryID, id, actor string, attempt ReproductionAttempt) (Issue, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repositoryID, id)
+	if err != nil {
+		return Issue{}, err
+	}
+	if strings.TrimSpace(attempt.WorkspaceID) == "" || len(attempt.CommitID) != 40 || len(attempt.DefinitionSHA256) != 64 || len(attempt.Commands) > 20 || len(attempt.ObservedResult) == 0 || len(attempt.ObservedResult) > 10000 || (attempt.Result != "reproduced" && attempt.Result != "not_reproduced" && attempt.Result != "inconclusive") || len(attempt.Commands) == 0 && attempt.Result != "inconclusive" {
+		return Issue{}, ErrInvalid
+	}
+	attempt.ID = newID()
+	attempt.ReproducedBy = actor
+	attempt.CreatedAt = time.Now().UTC()
+	v.ReproductionAttempts = append(v.ReproductionAttempts, attempt)
+	v.History = append(v.History, HistoryEntry{ID: newID(), Kind: "reproduction_attempted", ActorID: actor, Message: attempt.Result, CreatedAt: attempt.CreatedAt})
+	v.Version++
+	v.UpdatedAt = attempt.CreatedAt
+	committed, err := s.write(v)
+	if err != nil {
+		if committed {
+			return v, errors.Join(ErrDurabilityUncertain, err)
+		}
+		return Issue{}, err
+	}
+	return v, nil
 }
 
 type Store struct {
