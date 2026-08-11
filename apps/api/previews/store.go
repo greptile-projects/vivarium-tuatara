@@ -4,11 +4,13 @@ package previews
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -71,6 +73,49 @@ type Feedback struct {
 	Body         string    `json:"body"`
 	CreatedAt    time.Time `json:"created_at"`
 }
+type FindingEvidence struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	Name      string `json:"name"`
+	MediaType string `json:"media_type"`
+	Size      int    `json:"size"`
+	Data      string `json:"data,omitempty"`
+	Redacted  bool   `json:"redacted"`
+}
+type FindingComment struct {
+	ID        string    `json:"id"`
+	AuthorID  string    `json:"author_id"`
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"created_at"`
+}
+type FindingEvent struct {
+	ID        string    `json:"id"`
+	Kind      string    `json:"kind"`
+	ActorID   string    `json:"actor_id"`
+	From      string    `json:"from,omitempty"`
+	To        string    `json:"to,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+type Finding struct {
+	ID                string            `json:"id"`
+	PreviewID         string            `json:"preview_id"`
+	Revision          string            `json:"revision"`
+	Route             string            `json:"route"`
+	Title             string            `json:"title"`
+	Description       string            `json:"description"`
+	Classification    string            `json:"classification"`
+	Severity          string            `json:"severity"`
+	Status            string            `json:"status"`
+	DuplicateOf       string            `json:"duplicate_of,omitempty"`
+	ReproductionSteps []string          `json:"reproduction_steps"`
+	Evidence          []FindingEvidence `json:"evidence"`
+	Comments          []FindingComment  `json:"comments"`
+	Events            []FindingEvent    `json:"events"`
+	AuthorID          string            `json:"author_id"`
+	Version           int               `json:"version"`
+	CreatedAt         time.Time         `json:"created_at"`
+	UpdatedAt         time.Time         `json:"updated_at"`
+}
 type Preview struct {
 	ID               string          `json:"id"`
 	RepositoryID     string          `json:"repository_id"`
@@ -88,6 +133,7 @@ type Preview struct {
 	Invitations      []Invitation    `json:"invitations"`
 	AudienceEvents   []AudienceEvent `json:"audience_events"`
 	Feedback         []Feedback      `json:"feedback"`
+	Findings         []Finding       `json:"findings"`
 }
 
 type Store struct {
@@ -267,7 +313,130 @@ func (s *Store) AddFeedback(repo, pull, id, user, invitationID, body string) (Pr
 	p.UpdatedAt = now
 	return p, s.write(p)
 }
+
+var bearerValue = regexp.MustCompile(`(?i)bearer\s+[a-z0-9._~+/=-]+`)
+var sensitiveValue = regexp.MustCompile(`(?i)((?:["']?)(?:authorization|cookie|password|passwd|token|secret|api[-_]?key)(?:["']?)(?:\s*[:=]\s*["']?|\s+))([^"'\s,;}]+)`)
+var sensitiveKey = regexp.MustCompile(`(?i)^(authorization|cookie|password|passwd|token|secret|api[-_]?key)$`)
+
+func RedactSensitive(value string) (string, bool) {
+	clean := bearerValue.ReplaceAllString(value, "Bearer [REDACTED]")
+	var structured any
+	if json.Unmarshal([]byte(clean), &structured) == nil {
+		redactJSONValue(structured)
+		if encoded, err := json.Marshal(structured); err == nil {
+			clean = string(encoded)
+		}
+	}
+	clean = sensitiveValue.ReplaceAllString(clean, "$1[REDACTED]")
+	return clean, clean != value
+}
+
+func redactJSONValue(value any) {
+	switch current := value.(type) {
+	case map[string]any:
+		for key, child := range current {
+			if sensitiveKey.MatchString(key) {
+				current[key] = "[REDACTED]"
+			} else {
+				redactJSONValue(child)
+			}
+		}
+	case []any:
+		for _, child := range current {
+			redactJSONValue(child)
+		}
+	}
+}
+func (s *Store) AddFinding(repo, pull, id, actor, route, title, description, classification, severity, duplicateOf string, steps []string, evidence []FindingEvidence) (Preview, Finding, error) {
+	if actor == "" || route == "" || !strings.HasPrefix(route, "/") || utf8.RuneCountInString(route) > 2000 || strings.TrimSpace(title) == "" || utf8.RuneCountInString(title) > 200 || utf8.RuneCountInString(description) > 10000 || !slicesContains([]string{"bug", "usability", "accessibility", "content", "performance", "question", "other"}, classification) || !slicesContains([]string{"blocking", "major", "minor", "note"}, severity) || len(steps) > 30 || len(evidence) > 12 {
+		return Preview{}, Finding{}, ErrInvalid
+	}
+	total := 0
+	for i := range evidence {
+		if !slicesContains([]string{"screenshot", "recording", "console", "trace", "annotation"}, evidence[i].Kind) || evidence[i].Name == "" || len(evidence[i].Name) > 200 {
+			return Preview{}, Finding{}, ErrInvalid
+		}
+		allowedMedia := map[string][]string{"screenshot": {"image/png", "image/jpeg", "image/webp"}, "recording": {"video/webm", "video/mp4"}, "console": {"text/plain"}, "trace": {"application/json", "text/plain"}, "annotation": {"application/json", "text/plain"}}
+		if !slicesContains(allowedMedia[evidence[i].Kind], evidence[i].MediaType) {
+			return Preview{}, Finding{}, ErrInvalid
+		}
+		decoded, decodeErr := base64.StdEncoding.DecodeString(evidence[i].Data)
+		if decodeErr != nil || len(decoded) == 0 || len(decoded) > 5<<20 {
+			return Preview{}, Finding{}, ErrInvalid
+		}
+		evidence[i].Size = len(decoded)
+		total += len(decoded)
+		evidence[i].ID = newID()
+		if evidence[i].Kind == "console" || evidence[i].Kind == "trace" || evidence[i].Kind == "annotation" {
+			clean, changed := RedactSensitive(string(decoded))
+			evidence[i].Data, evidence[i].Redacted = base64.StdEncoding.EncodeToString([]byte(clean)), changed
+		}
+	}
+	if total > 12<<20 {
+		return Preview{}, Finding{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, err := s.Get(repo, pull, id)
+	if err != nil {
+		return Preview{}, Finding{}, err
+	}
+	if duplicateOf != "" {
+		found := false
+		for _, candidate := range p.Findings {
+			if candidate.ID == duplicateOf {
+				found = true
+			}
+		}
+		if !found {
+			return Preview{}, Finding{}, ErrInvalid
+		}
+	}
+	for i := range steps {
+		if utf8.RuneCountInString(steps[i]) > 2000 {
+			return Preview{}, Finding{}, ErrInvalid
+		}
+		steps[i], _ = RedactSensitive(strings.TrimSpace(steps[i]))
+	}
+	route, _ = RedactSensitive(route)
+	title, _ = RedactSensitive(strings.TrimSpace(title))
+	description, _ = RedactSensitive(strings.TrimSpace(description))
+	now := s.now()
+	f := Finding{ID: newID(), PreviewID: p.ID, Revision: p.Revision, Route: route, Title: title, Description: description, Classification: classification, Severity: severity, Status: "open", DuplicateOf: duplicateOf, ReproductionSteps: steps, Evidence: evidence, AuthorID: actor, Version: 1, CreatedAt: now, UpdatedAt: now}
+	f.Events = append(f.Events, FindingEvent{ID: newID(), Kind: "created", ActorID: actor, CreatedAt: now})
+	if duplicateOf != "" {
+		f.Events = append(f.Events, FindingEvent{ID: newID(), Kind: "related_as_duplicate", ActorID: actor, To: duplicateOf, CreatedAt: now})
+	}
+	p.Findings = append(p.Findings, f)
+	p.UpdatedAt = now
+	return p, f, s.write(p)
+}
+func (s *Store) MutateFinding(repo, pull, id, findingID, actor string, expected int, mutate func(*Finding) error) (Preview, Finding, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, err := s.Get(repo, pull, id)
+	if err != nil {
+		return Preview{}, Finding{}, err
+	}
+	for i := range p.Findings {
+		if p.Findings[i].ID == findingID {
+			f := &p.Findings[i]
+			if expected != f.Version {
+				return Preview{}, Finding{}, ErrInvalid
+			}
+			if err = mutate(f); err != nil {
+				return Preview{}, Finding{}, err
+			}
+			f.Version++
+			f.UpdatedAt = s.now()
+			p.UpdatedAt = f.UpdatedAt
+			return p, *f, s.write(p)
+		}
+	}
+	return Preview{}, Finding{}, ErrNotFound
+}
 func newID() string { raw := make([]byte, 16); _, _ = rand.Read(raw); return hex.EncodeToString(raw) }
+func NewID() string { return newID() }
 func slicesContains(values []string, value string) bool {
 	for _, candidate := range values {
 		if candidate == value {

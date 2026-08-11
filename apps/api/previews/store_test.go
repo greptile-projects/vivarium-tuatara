@@ -1,11 +1,62 @@
 package previews
 
 import (
+	"encoding/base64"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestFindingsFreezeRevisionRedactAndRetainCollaboration(t *testing.T) {
+	config, digest, err := ParseConfig([]byte(`{"version":1,"image":"alpine:3.22","build":"true","output_path":"dist","resources":{"cpus":1,"memory_mb":128,"storage_mb":32,"timeout_seconds":30},"access":{"network":"none","data":"preview_artifacts","identity":"named_users","actions":["feedback"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := store.Create("repo", "pull", strings.Repeat("a", 40), "owner", digest, "run", config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := base64.StdEncoding.EncodeToString([]byte("{\"password\":\"json-secret\",\"nested\":{\"api_key\":\"nested-secret\"}}\nAuthorization: Bearer eyJ.test.synthetic.token"))
+	updated, finding, err := store.AddFinding("repo", "pull", p.ID, "guest", "/checkout?plan=team", "Payment fails", "Expected success", "bug", "blocking", "", []string{"Open page", "token=private"}, []FindingEvidence{{Kind: "console", Name: "console.txt", MediaType: "text/plain", Data: secret}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, _ := base64.StdEncoding.DecodeString(finding.Evidence[0].Data)
+	if finding.Revision != p.Revision || finding.Status != "open" || !finding.Evidence[0].Redacted || strings.Contains(string(decoded), "json-secret") || strings.Contains(string(decoded), "nested-secret") || strings.Contains(string(decoded), "eyJ.test.synthetic.token") || strings.Contains(finding.ReproductionSteps[1], "private") {
+		t.Fatalf("unsafe finding = %#v, evidence %q", finding, string(decoded))
+	}
+	persisted, err := store.Get("repo", "pull", p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persistedEvidence, _ := base64.StdEncoding.DecodeString(persisted.Findings[0].Evidence[0].Data)
+	if strings.Contains(string(persistedEvidence), "json-secret") || strings.Contains(string(persistedEvidence), "nested-secret") || strings.Contains(string(persistedEvidence), "eyJ.test.synthetic.token") {
+		t.Fatalf("persisted credentials = %q", persistedEvidence)
+	}
+	_, related, err := store.AddFinding("repo", "pull", p.ID, "owner", "/checkout", "Same failure", "", "bug", "major", finding.ID, []string{"Retry"}, nil)
+	if err != nil || related.DuplicateOf != finding.ID {
+		t.Fatalf("duplicate = %#v, %v", related, err)
+	}
+	_, discussed, err := store.MutateFinding("repo", "pull", p.ID, finding.ID, "owner", finding.Version, func(current *Finding) error {
+		current.Comments = append(current.Comments, FindingComment{ID: NewID(), AuthorID: "owner", Body: "Reproduced"})
+		current.Status = "resolved"
+		return nil
+	})
+	if err != nil || discussed.Version != 2 || discussed.Status != "resolved" {
+		t.Fatalf("decision = %#v, %v", discussed, err)
+	}
+	if _, _, err = store.MutateFinding("repo", "pull", p.ID, finding.ID, "guest", finding.Version, func(*Finding) error { return nil }); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("stale mutation = %v", err)
+	}
+	if len(updated.Findings) != 1 {
+		t.Fatalf("finding was not retained: %#v", updated.Findings)
+	}
+}
 
 func TestDefinitionAndStaleProjection(t *testing.T) {
 	definition := []byte(`{"version":1,"image":"alpine:3.22","build":"mkdir -p dist && printf ok > dist/index.html","output_path":"dist","resources":{"cpus":1,"memory_mb":256,"storage_mb":64,"timeout_seconds":30},"access":{"network":"none","data":"preview_artifacts","identity":"named_users","actions":["view","test","feedback"]}}`)

@@ -879,6 +879,16 @@ whenever dependencies change or the web job fails before it starts.
   Entry and revocation are audited; invitations confer no repository,
   credential, workspace, check-log, environment, deployment, private-service,
   or production authority.
+  Feedback-role participants create pull-visible preview findings pinned to the
+  preview revision and observed route. Findings retain classification,
+  severity, reproduction steps, discussion, duplicate relationships, and
+  resolve/reopen history. Screenshots, recordings, console output, traces, and
+  annotations stay inside the preview audience boundary; allowlisted media and
+  byte limits are enforced, and sensitive text fields are redacted before
+  persistence rather than copied into broader pull comments. Non-repository
+  feedback invitees use the exact `/pulls/{repository-id}/{pull-id}/previews/{preview-id}`
+  workspace, whose controls derive from the live invitation instead of catalog
+  participation.
   Fork-source synchronization holds the catalog's cross-process lock while it
   rechecks current target access, imports a newer revision, and publishes the
   pull snapshot, so revocation cannot commit mid-adoption. If the source fork is deleted, synchronization stops but

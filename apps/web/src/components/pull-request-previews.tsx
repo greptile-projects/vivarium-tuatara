@@ -10,16 +10,19 @@ export function PullRequestPreviews({
   pullRequestID,
   participant,
   owner,
+  previewID,
 }: {
   repositoryID: string;
   pullRequestID: string;
   participant: boolean;
   owner: boolean;
+  previewID?: string;
 }) {
   const { token } = useAuth();
   const [items, setItems] = useState<PullPreview[]>([]);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [feedbackAuthorized, setFeedbackAuthorized] = useState(participant);
   const [audience, setAudience] = useState({
     source_kind: "user",
     user_id: "",
@@ -27,12 +30,20 @@ export function PullRequestPreviews({
     role: "view",
     expires_at: "",
   });
+  const [finding, setFinding] = useState({ route: "/", title: "", description: "", classification: "bug", severity: "major", steps: "", console: "", duplicate_of: "" });
+  const [uploads, setUploads] = useState<File[]>([]);
+  const [comments, setComments] = useState<Record<string, string>>({});
   const base = `/repositories/${repositoryID}/pulls/${pullRequestID}/previews`;
   const load = useCallback(async () => {
     try {
-      setItems(
-        (await api<{ previews: PullPreview[] }>(base, {}, token)).previews,
-      );
+      if (previewID) {
+        const result = await api<{preview:PullPreview;effective_role:string}>(`${base}/${previewID}/findings`, {}, token);
+        setItems([result.preview]);
+        setFeedbackAuthorized(result.effective_role === "feedback");
+      } else {
+        setItems((await api<{ previews: PullPreview[] }>(base, {}, token)).previews);
+        setFeedbackAuthorized(participant);
+      }
       setError("");
     } catch (reason) {
       setError(
@@ -41,7 +52,7 @@ export function PullRequestPreviews({
           : "Previews could not be loaded.",
       );
     }
-  }, [base, token]);
+  }, [base, participant, previewID, token]);
   useEffect(() => {
     void Promise.resolve().then(load);
     const timer = window.setInterval(() => void load(), 3000);
@@ -107,6 +118,43 @@ export function PullRequestPreviews({
       setPending(false);
     }
   }
+  async function createFinding(previewID: string) {
+    setPending(true);
+    try {
+      const consoleText = finding.console.trim();
+      let encodedConsole = "";
+      for (const byte of new TextEncoder().encode(consoleText)) encodedConsole += String.fromCharCode(byte);
+      const uploadedEvidence = await Promise.all(uploads.map(async (file) => {
+        const bytes = new Uint8Array(await file.arrayBuffer()); let binary = "";
+        for (let offset=0; offset<bytes.length; offset+=32768) binary += String.fromCharCode(...bytes.subarray(offset,offset+32768));
+        const kind = file.type.startsWith("image/") ? "screenshot" : file.type.startsWith("video/") ? "recording" : file.type === "application/json" ? "trace" : "annotation";
+        return {kind,name:file.name,media_type:file.type||"text/plain",size:file.size,data:btoa(binary)};
+      }));
+      await api(`${base}/${previewID}/findings`, { method: "POST", body: JSON.stringify({
+        route: finding.route, title: finding.title, description: finding.description,
+        classification: finding.classification, severity: finding.severity,
+        duplicate_of: finding.duplicate_of,
+        reproduction_steps: finding.steps.split("\n").map((step) => step.trim()).filter(Boolean),
+        evidence: [...uploadedEvidence, ...(consoleText ? [{ kind:"console", name:"browser-console.txt", media_type:"text/plain", size:new Blob([consoleText]).size, data:btoa(encodedConsole) }] : [])],
+      }) }, token);
+      setFinding({ ...finding, title:"", description:"", steps:"", console:"", duplicate_of:"" });
+      setUploads([]);
+      await load();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Finding could not be recorded."); }
+    finally { setPending(false); }
+  }
+  async function decide(previewID:string, findingID:string, version:number, decision:Record<string,string>) {
+    setPending(true);
+    try { await api(`${base}/${previewID}/findings/${findingID}/decision`, {method:"POST",body:JSON.stringify({version,...decision})}, token); await load(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Finding changed; reload and try again."); }
+    finally { setPending(false); }
+  }
+  async function comment(previewID:string, findingID:string, version:number) {
+    const body=comments[findingID]?.trim(); if(!body)return; setPending(true);
+    try { await api(`${base}/${previewID}/findings/${findingID}/comments`, {method:"POST",body:JSON.stringify({version,body})}, token); setComments({...comments,[findingID]:""}); await load(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Comment could not be added."); }
+    finally { setPending(false); }
+  }
   return (
     <section id="previews" className="scroll-mt-24 space-y-3">
       <div className="flex items-baseline justify-between gap-3">
@@ -116,7 +164,7 @@ export function PullRequestPreviews({
             Isolated experiences pinned to one review revision
           </p>
         </div>
-        {participant && (
+        {participant && !previewID && (
           <Button disabled={pending} onClick={() => void launch()}>
             {pending ? "Launching…" : "Launch preview"}
           </Button>
@@ -192,14 +240,15 @@ export function PullRequestPreviews({
               >
                 Open exact preview
               </a>
-              <a
+              <a className="text-[var(--muted)] underline" href={`/pulls/${repositoryID}/${pullRequestID}/previews/${item.id}`}>Feedback workspace</a>
+              {participant && <a
                 className="text-[var(--muted)] underline"
                 href={`/api${base}/${item.id}/events`}
                 target="_blank"
                 rel="noreferrer"
               >
                 Build logs
-              </a>
+              </a>}
             </div>
             {owner && (
               <div className="mt-4 space-y-3 border-t border-[var(--line)] pt-4">
@@ -293,6 +342,39 @@ export function PullRequestPreviews({
                     </li>
                   ))}
                 </ul>
+              </div>
+            )}
+            {feedbackAuthorized && item.definition.access.actions.includes("feedback") && (
+              <div className="mt-4 space-y-3 border-t border-[var(--line)] pt-4">
+                <div>
+                  <p className="text-sm font-semibold">Revision-exact findings</p>
+                  <p className="text-xs text-[var(--muted)]">Feedback stays with this preview audience and revision. Sensitive console fields are redacted before retention.</p>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <input className="rounded-lg border border-[var(--line)] bg-transparent p-2 text-sm" value={finding.route} onChange={(e)=>setFinding({...finding,route:e.target.value})} placeholder="Current route, e.g. /checkout" />
+                  <input className="rounded-lg border border-[var(--line)] bg-transparent p-2 text-sm" value={finding.title} onChange={(e)=>setFinding({...finding,title:e.target.value})} placeholder="What did you observe?" />
+                  <select className="rounded-lg border border-[var(--line)] bg-transparent p-2 text-sm" value={finding.classification} onChange={(e)=>setFinding({...finding,classification:e.target.value})}>{["bug","usability","accessibility","content","performance","question","other"].map(v=><option key={v}>{v}</option>)}</select>
+                  <select className="rounded-lg border border-[var(--line)] bg-transparent p-2 text-sm" value={finding.severity} onChange={(e)=>setFinding({...finding,severity:e.target.value})}>{["blocking","major","minor","note"].map(v=><option key={v}>{v}</option>)}</select>
+                  <textarea className="rounded-lg border border-[var(--line)] bg-transparent p-2 text-sm sm:col-span-2" value={finding.description} onChange={(e)=>setFinding({...finding,description:e.target.value})} placeholder="Expected and observed behavior" />
+                  <textarea className="rounded-lg border border-[var(--line)] bg-transparent p-2 text-sm" value={finding.steps} onChange={(e)=>setFinding({...finding,steps:e.target.value})} placeholder="One reproduction step per line" />
+                  <textarea className="rounded-lg border border-[var(--line)] bg-transparent p-2 font-mono text-xs" value={finding.console} onChange={(e)=>setFinding({...finding,console:e.target.value})} placeholder="Optional console output" />
+                  <label className="rounded-lg border border-[var(--line)] p-2 text-xs">Screenshots, recordings, traces, or annotations<input className="mt-1 block w-full" type="file" multiple accept="image/png,image/jpeg,image/webp,video/webm,video/mp4,application/json,text/plain" onChange={(e)=>setUploads(Array.from(e.target.files??[]))}/></label>
+                  <select className="rounded-lg border border-[var(--line)] bg-transparent p-2 text-sm" value={finding.duplicate_of} onChange={(e)=>setFinding({...finding,duplicate_of:e.target.value})}><option value="">Not a duplicate</option>{item.findings?.map(f=><option key={f.id} value={f.id}>Duplicate of {f.title}</option>)}</select>
+                  <Button disabled={pending || !finding.title || !finding.route} onClick={()=>void createFinding(item.id)}>Record finding</Button>
+                </div>
+                <div className="space-y-3">
+                  {item.findings?.map((entry)=><div key={entry.id} className="rounded-lg border border-[var(--line)] p-3 text-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2"><p className="font-semibold">{entry.title}</p><Badge tone={entry.status==="resolved"?"success":entry.severity==="blocking"?"danger":"warning"}>{entry.status} · {entry.severity}</Badge></div>
+                    <p className="mt-1 text-xs text-[var(--muted)]"><code>{entry.route}</code> · revision <code>{entry.revision.slice(0,12)}</code> · {entry.classification} · by {entry.author_id}</p>
+                    {entry.description && <p className="mt-2 whitespace-pre-wrap">{entry.description}</p>}
+                    {entry.reproduction_steps.length>0 && <ol className="mt-2 list-decimal space-y-1 pl-5">{entry.reproduction_steps.map((step,index)=><li key={`${entry.id}-step-${index}`}>{step}</li>)}</ol>}
+                    {entry.evidence.length>0 && <p className="mt-2 text-xs">Evidence: {entry.evidence.map(e=>`${e.kind} ${e.name}${e.redacted?" (redacted)":""}`).join(", ")}</p>}
+                    {entry.duplicate_of && <p className="mt-2 text-xs">Linked duplicate of <code>{entry.duplicate_of.slice(0,8)}</code></p>}
+                    <div className="mt-2 flex gap-2"><Button variant="quiet" disabled={pending} onClick={()=>void decide(item.id,entry.id,entry.version,{status:entry.status==="open"?"resolved":"open"})}>{entry.status==="open"?"Resolve":"Reopen"}</Button></div>
+                    {entry.comments.map(c=><p key={c.id} className="mt-2 rounded bg-[var(--surface-subtle)] p-2"><span className="font-semibold">{c.author_id}</span> {c.body}</p>)}
+                    <div className="mt-2 flex gap-2"><input className="min-w-0 flex-1 rounded-lg border border-[var(--line)] bg-transparent p-2" value={comments[entry.id]??""} onChange={(e)=>setComments({...comments,[entry.id]:e.target.value})} placeholder="Discuss this finding"/><Button variant="secondary" disabled={pending} onClick={()=>void comment(item.id,entry.id,entry.version)}>Comment</Button></div>
+                  </div>)}
+                </div>
               </div>
             )}
             {item.stale && (
