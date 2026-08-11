@@ -189,6 +189,23 @@ type ResolutionDecision struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// DeliveryResolution closes the loop from exact repair proof to an immutable
+// released and successfully promoted commit. The original proof remains the
+// reproducible contract; release/deployment stores remain authoritative.
+type DeliveryResolution struct {
+	ID                   string    `json:"id"`
+	RepairVerificationID string    `json:"repair_verification_id"`
+	ReleaseID            string    `json:"release_id"`
+	ReleaseVersion       string    `json:"release_version"`
+	ReleaseCommitID      string    `json:"release_commit_id"`
+	DeploymentID         string    `json:"deployment_id"`
+	EnvironmentID        string    `json:"environment_id"`
+	ArtifactSHA256       string    `json:"artifact_sha256"`
+	ReporterDecisionID   string    `json:"reporter_decision_id"`
+	RecordedBy           string    `json:"recorded_by"`
+	CreatedAt            time.Time `json:"created_at"`
+}
+
 type Issue struct {
 	ID                   string                `json:"id"`
 	RepositoryID         string                `json:"repository_id"`
@@ -214,6 +231,7 @@ type Issue struct {
 	Investigations       []Investigation       `json:"investigations"`
 	Implementation       *Implementation       `json:"implementation,omitempty"`
 	RepairVerifications  []RepairVerification  `json:"repair_verifications,omitempty"`
+	DeliveryResolution   *DeliveryResolution   `json:"delivery_resolution,omitempty"`
 	DuplicateOf          string                `json:"duplicate_of,omitempty"`
 	Version              int                   `json:"version"`
 	CreatedAt            time.Time             `json:"created_at"`

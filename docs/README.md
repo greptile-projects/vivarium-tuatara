@@ -1591,3 +1591,16 @@ and can confirm or reject the result. A later pull commit makes that confirmatio
 stale; owners may append a reasoned override, but reporter dissent remains.
 A currently shared, running workspace at that same pull revision is projected
 as the optional safe-preview handoff; no verification run publishes a port.
+After the reporter confirms current passing proof, a maintainer can record the
+delivered outcome only from authoritative release and deployment evidence. The
+selected release commit must contain the exact verified repair revision, and
+the selected promotion must have succeeded for that same release commit. The
+resolved issue freezes the release version and commit, deployment environment,
+artifact checksum, reporter decision, and recording actor, preserving a direct
+trail from the original observation to what reached users. Replaying that exact
+delivery is idempotent; a different delivery claim conflicts.
+
+A run that does not reproduce is evidence rather than closure. Maintainers can
+request the missing condition, the reporter answers on the issue, and a later
+workspace attempt retains the corrected evidence and outcome without replacing
+the earlier non-reproduction.

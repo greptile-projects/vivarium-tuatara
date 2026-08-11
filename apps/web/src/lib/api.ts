@@ -1693,6 +1693,7 @@ export type Issue = {
   investigations: { id: string; agent_id: string; initiator_id: string; mandate: string; reproduction_attempt_id: string; link_ids: string[]; state: string; created_at: string; updated_at: string }[];
   implementation?: { proposal_id: string; task_id: string; reproduction_attempt_id: string; finding_ids: string[]; affected_revision: string; acceptance_criteria: string[]; created_by: string; created_at: string };
   repair_verifications?: { id:string; pull_request_id:string; candidate_commit_id:string; reproduction_attempt_id:string; definition_sha256:string; input_sha256s:string[]; acceptance_criteria:string[]; required_run_ids:string[]; reproduction_run_ids:string[]; requested_by:string; preview_allowed:boolean; preview_workspace_id?:string; decisions:{id:string;kind:"confirmed"|"rejected"|"maintainer_override";actor_id:string;commit_id:string;rationale:string;created_at:string}[]; created_at:string }[];
+  delivery_resolution?: { id:string; repair_verification_id:string; release_id:string; release_version:string; release_commit_id:string; deployment_id:string; environment_id:string; artifact_sha256:string; reporter_decision_id:string; recorded_by:string; created_at:string };
   duplicate_of?: string;
   version: number;
   created_at: string;

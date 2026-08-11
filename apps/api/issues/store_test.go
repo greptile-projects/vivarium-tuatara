@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCommittedWriteReportsDirectoryDurabilityUncertainty(t *testing.T) {
@@ -22,6 +23,31 @@ func TestCommittedWriteReportsDirectoryDurabilityUncertainty(t *testing.T) {
 	reloaded, err := store.Get("repository", created.ID)
 	if err != nil || reloaded.ID != created.ID {
 		t.Fatalf("visible committed issue = %#v, %v", reloaded, err)
+	}
+}
+
+func TestIssueStoreRetainsDeliveredResolutionTrail(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := store.Create(Issue{RepositoryID: "repository", ReporterID: "reporter", Title: "released failure", ExpectedBehavior: "works", ObservedBehavior: "fails", Severity: "high", Environment: "linux", ReproductionSteps: []string{"run"}, Visibility: "repository"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	v, err = store.Mutate(v.RepositoryID, v.ID, "owner", v.Version, func(issue *Issue) error {
+		issue.DeliveryResolution = &DeliveryResolution{ID: "resolution", RepairVerificationID: "proof", ReleaseID: "release", ReleaseVersion: "v1.0.1", ReleaseCommitID: strings.Repeat("a", 40), DeploymentID: "deployment", EnvironmentID: "production", ArtifactSHA256: strings.Repeat("b", 64), ReporterDecisionID: "decision", RecordedBy: "owner", CreatedAt: now}
+		issue.Status = "resolved"
+		AddHistory(issue, "delivered_resolution_recorded", "owner", "resolution")
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := store.Get(v.RepositoryID, v.ID)
+	if err != nil || reloaded.Status != "resolved" || reloaded.DeliveryResolution == nil || reloaded.DeliveryResolution.ReporterDecisionID != "decision" || reloaded.DeliveryResolution.ArtifactSHA256 != strings.Repeat("b", 64) {
+		t.Fatalf("delivered resolution = %#v, %v", reloaded, err)
 	}
 }
 
