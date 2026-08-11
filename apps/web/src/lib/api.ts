@@ -1653,6 +1653,35 @@ export type Incident = {
   updated_at: string;
   resolved_at?: string;
 };
+export type Issue = {
+  id: string;
+  repository_id: string;
+  release_id?: string;
+  affected_version?: string;
+  title: string;
+  expected_behavior: string;
+  observed_behavior: string;
+  severity: "low" | "medium" | "high" | "critical";
+  environment: string;
+  reproduction_steps: string[];
+  visibility: "public" | "repository";
+  status: "open" | "triaged" | "in_progress" | "resolved" | "closed";
+  reporter_id: string;
+  attachments: {
+    id: string;
+    kind: "log" | "screenshot" | "trace" | "sample";
+    name: string;
+    media_type: string;
+    size: number;
+    data: string;
+    created_at: string;
+  }[];
+  discussion: { id: string; author_id: string; body: string; created_at: string }[];
+  history: { id: string; kind: string; actor_id: string; from?: string; to?: string; message?: string; created_at: string }[];
+  version: number;
+  created_at: string;
+  updated_at: string;
+};
 export type SecurityAdvisory = {
   id: string;
   title: string;

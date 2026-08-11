@@ -1526,3 +1526,19 @@ ordered pulls pass repository checks, independent review, merge, and release.
 Removing one agent operator revokes the derived Git credential while retaining
 the team's legitimate charter, plan, evidence, interventions, authorship,
 handoff, integration, and delivered outcome.
+
+## Unexpected behavior stays with the repository
+
+Repository participants can open a structured issue against current work or an
+exact retained release. Reports keep reporter, visibility, severity,
+environment, expected and observed behavior, ordered reproduction, bounded
+allowlisted evidence, discussion, status, and actor-stamped history together.
+Built-in templates make the minimum diagnostic context explicit, while
+duplicate suggestions search only records the current participant can read and
+never project candidate attachments or discussion.
+
+The `/issues` workspace supports report creation and repository discovery; the
+repository issue detail route keeps downloadable permitted evidence,
+maintainer status changes, history, and discussion in one collaboration
+surface. Issue visibility does not grant repository access, and attachment
+limits keep this diagnostic path distinct from an arbitrary file store.

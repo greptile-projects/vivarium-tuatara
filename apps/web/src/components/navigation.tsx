@@ -14,6 +14,7 @@ const navigation = [
   { label: "Decisions", href: "/decisions", icon: Icons.Activity },
   { label: "Delivery teams", href: "/delivery-teams", icon: Icons.Spark },
   { label: "Pull requests", href: "/pulls", icon: Icons.GitPull },
+  { label: "Issues", href: "/issues", icon: Icons.Activity },
   { label: "Incidents", href: "/incidents", icon: Icons.Activity },
   { label: "Security", href: "/security", icon: Icons.Code },
   { label: "Inbox", href: "/inbox", icon: Icons.Bell },

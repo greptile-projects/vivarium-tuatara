@@ -25,6 +25,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/explanations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/impacts"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
@@ -184,6 +185,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	issueRoot := os.Getenv("ISSUE_STORAGE_ROOT")
+	if issueRoot == "" {
+		issueRoot = "issues"
+	}
+	issueStore, err := issues.New(issueRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	securityAdvisoryRoot := os.Getenv("SECURITY_ADVISORY_STORAGE_ROOT")
 	if securityAdvisoryRoot == "" {
 		securityAdvisoryRoot = "security-advisories"
@@ -245,7 +254,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -326,6 +335,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var impactStore *impacts.Store
 	var decisionStore *decisions.Store
 	var deliveryTeamStore *deliveryteams.Store
+	var issueStore *issues.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -352,6 +362,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			decisionStore = value
 		case *deliveryteams.Store:
 			deliveryTeamStore = value
+		case *issues.Store:
+			issueStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -400,6 +412,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && incidentStore != nil {
 		registerIncidentRoutes(mux, store, repositoryCatalog, incidentStore, proposalStore, deploymentStore, releaseStore, pullRequestStore, checkRunStore, authStore, activityStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && issueStore != nil {
+		registerIssueRoutes(mux, repositoryCatalog, issueStore, releaseStore, authStore, activityStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && userStore != nil && securityAdvisoryStore != nil {
 		registerSecurityAdvisoryRoutes(mux, store, repositoryCatalog, userStore, securityAdvisoryStore, releaseStore, checkRunStore, deploymentStore, authStore, activityStore)
