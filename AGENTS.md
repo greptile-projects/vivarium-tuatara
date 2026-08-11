@@ -1189,6 +1189,18 @@ whenever dependencies change or the web job fails before it starts.
   A non-reproduced attempt remains open while a maintainer requests missing
   evidence, the reporter answers beside that attempt, and collaborators retry.
 
+- **Contributor pathways** — Repository owners publish immutable numbered
+  onboarding expectations at `/repositories/{id}/contributor-pathway`; public
+  repositories expose them without authentication. Live reads classify linked
+  documentation, ownership, releases, issues, proposals, and workspace
+  definitions as current, stale, or inaccessible without changing history.
+  Authenticated readers acknowledge exact revisions; anonymous reads expose
+  only a count, owners see attribution, and readers see only their own record.
+  Visible writes with uncertain directory synchronization return `202` plus
+  the retained identity. Records default beneath
+  `$CONTRIBUTOR_PATHWAY_STORAGE_ROOT` (`contributor-pathways`), and the web
+  surface is `/repositories/{id}/contribute`.
+
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

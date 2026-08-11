@@ -14,6 +14,25 @@ The supported consumer contract, including authentication, stable error
 shapes, validation, and collection pagination, is documented in [API.md](API.md).
 Consumers should use that HTTP boundary rather than reading storage roots.
 
+## Contributor pathways
+
+Repository owners publish the project's participation contract before a
+newcomer invests effort. Each contributor pathway is an immutable numbered
+revision covering goals, prerequisites, conduct and security expectations,
+supported setup and verification, communication, review, and work categories
+for humans, agents, or either. Public repositories expose the current pathway
+without authentication; private repositories retain their normal read boundary.
+
+References to documentation, current ownership, releases, issues, proposals,
+and workspace definitions are projected against live repository state on every
+read. Missing, moved, or private requirements remain in history and are marked
+stale or inaccessible rather than disappearing. Authenticated readers can
+acknowledge an exact revision. Public reads expose only a non-identifying count;
+owners receive full attribution and other authenticated readers only their own
+acknowledgement. Publication and acknowledgement attribution are append-only beneath `$CONTRIBUTOR_PATHWAY_STORAGE_ROOT` (default
+`contributor-pathways`). The repository's “How to contribute” surface supports
+the same publish, inspect, health, history, and acknowledgement flow.
+
 ## Accountable decision delivery
 
 An accepted technical decision can be converted once per commitment into an
