@@ -78,3 +78,40 @@ func TestDefinitionRejectsSecretsAndUnboundedResources(t *testing.T) {
 		}
 	}
 }
+
+func TestInviteRejectsExpiryElapsedWhileWaitingForStoreLock(t *testing.T) {
+	definition := []byte(`{"version":1,"image":"alpine:3.22","build":"true","output_path":"dist","resources":{"cpus":1,"memory_mb":128,"storage_mb":32,"timeout_seconds":30},"access":{"network":"none","data":"preview_artifacts","identity":"named_users","actions":["view"]}}`)
+	config, digest, err := ParseConfig(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return current }
+	created, err := store.Create(strings.Repeat("a", 32), strings.Repeat("b", 32), strings.Repeat("c", 40), strings.Repeat("d", 32), digest, strings.Repeat("e", 32), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiresAt := current.Add(time.Second)
+	store.mu.Lock()
+	started := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		close(started)
+		_, inviteErr := store.Invite(created.RepositoryID, created.PullRequestID, created.ID, created.CreatorID, strings.Repeat("f", 32), "view", "user", "", expiresAt)
+		result <- inviteErr
+	}()
+	<-started
+	current = expiresAt
+	store.mu.Unlock()
+	if err := <-result; !errors.Is(err, ErrInvalid) {
+		t.Fatalf("contended expired invite error = %v", err)
+	}
+	persisted, err := store.Get(created.RepositoryID, created.PullRequestID, created.ID)
+	if err != nil || len(persisted.Invitations) != 0 {
+		t.Fatalf("expired invitation persisted = %#v, %v", persisted.Invitations, err)
+	}
+}

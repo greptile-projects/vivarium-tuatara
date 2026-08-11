@@ -165,29 +165,31 @@ func (s *Store) write(p Preview) error {
 }
 
 func (s *Store) Invite(repo, pull, id, actor, user, role, sourceKind, sourceID string, expiresAt time.Time) (Preview, error) {
-	if actor == "" || user == "" || !slicesContains([]string{"view", "test", "feedback"}, role) || !slicesContains([]string{"user", "issue", "decision", "proposal"}, sourceKind) || !expiresAt.After(s.now()) || expiresAt.After(s.now().Add(30*24*time.Hour)) {
+	if actor == "" || user == "" || !slicesContains([]string{"view", "test", "feedback"}, role) || !slicesContains([]string{"user", "issue", "decision", "proposal"}, sourceKind) {
 		return Preview{}, ErrInvalid
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := s.now()
+	if !expiresAt.After(now) || expiresAt.After(now.Add(30*24*time.Hour)) {
+		return Preview{}, ErrInvalid
+	}
 	p, err := s.Get(repo, pull, id)
 	if err != nil {
 		return Preview{}, err
 	}
 	for i := range p.Invitations {
 		invitation := &p.Invitations[i]
-		if invitation.UserID == user && invitation.Role == role && invitation.RevokedAt == nil && invitation.ExpiresAt.After(s.now()) {
+		if invitation.UserID == user && invitation.Role == role && invitation.RevokedAt == nil && invitation.ExpiresAt.After(now) {
 			if invitation.SourceKind == sourceKind && invitation.SourceID == sourceID && invitation.ExpiresAt.Equal(expiresAt) {
 				return p, nil
 			}
 			invitation.SourceKind, invitation.SourceID, invitation.ExpiresAt, invitation.InvitedBy = sourceKind, sourceID, expiresAt, actor
-			now := s.now()
 			p.AudienceEvents = append(p.AudienceEvents, AudienceEvent{ID: newID(), Kind: "reinvited", ActorID: actor, InvitationID: invitation.ID, CreatedAt: now})
 			p.UpdatedAt = now
 			return p, s.write(p)
 		}
 	}
-	now := s.now()
 	raw := make([]byte, 16)
 	_, _ = rand.Read(raw)
 	invitation := Invitation{ID: hex.EncodeToString(raw), UserID: user, Role: role, SourceKind: sourceKind, SourceID: sourceID, InvitedBy: actor, ExpiresAt: expiresAt, CreatedAt: now}
