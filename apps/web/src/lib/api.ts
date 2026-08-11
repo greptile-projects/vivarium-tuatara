@@ -678,6 +678,13 @@ export type DevelopmentWorkspace = {
     alternative_id?: string;
     default_branch_revision?: string;
     default_definition_sha256?: string;
+    upstream_repository_id?: string;
+    opportunity_id?: string;
+  };
+  contributor_context?: {
+    opportunity_id: string; opportunity_version: number; upstream_repository_id: string; pathway_version: number;
+    guidance: string; prerequisites: string[]; acceptance_criteria: string[]; evidence_kind: string; evidence_id: string;
+    evidence_parent_id?: string; sample_attachment_ids?: string[]; diagnostics: string[];
   };
   definition: {
     version: number;
