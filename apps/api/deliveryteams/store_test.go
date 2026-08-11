@@ -198,3 +198,69 @@ func TestDeclinedStreamOwnerImmediatelyBecomesUnavailable(t *testing.T) {
 		t.Fatalf("persisted blockers = %#v, %v", reloaded.Plan, err)
 	}
 }
+
+func TestCitedTimelineAndVerifiedHandoffRetainExactContext(t *testing.T) {
+	s, _ := New(t.TempDir())
+	c := charter("alice", "builder")
+	c.Participants = append(c.Participants, Participant{ID: "bob-slot", PrincipalType: "human", PrincipalID: "bob", Role: "reviewer", Responsibility: "Continue verified work", Why: "Owns integration", Escalation: "Raise uncertainty"})
+	v, err := s.Create("repo", Outcome{Kind: "planned_outcome", ResourceID: "outcome", Title: "Outcome"}, c, "organizer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, _ = s.Respond(v.ID, "alice-slot", "alice", "accepted", v.Version)
+	v, _ = s.Respond(v.ID, "bob-slot", "bob", "accepted", v.Version)
+	revision := strings.Repeat("a", 40)
+	v, err = s.PutPlan(v.ID, "alice", "alice", v.Version, PlanInput{Streams: []WorkStream{{ID: "build", Title: "Build", OwnerParticipantID: "alice-slot", ExpectedArtifacts: []string{"patch"}, AcceptanceCriteria: []string{"reviewed"}, RepositoryScope: []RevisionScope{{RepositoryID: "repo", Reference: "main", Revision: revision, Paths: []string{"src"}}}, IntegrationOrder: 1, Assumptions: []string{"API stable"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.AttachContext(v.ID, "build", "alice", "alice", v.Version, WorkContext{Kind: "workspace", ResourceID: "workspace-1", RepositoryID: "repo", Revision: revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.PublishTimeline(v.ID, "alice", "alice", v.Version, TimelineInput{StreamID: "build", Kind: "finding", Body: "The boundary is reproducible", Citations: []Citation{{Kind: "workspace", ResourceID: "workspace-1", RepositoryID: "repo", Revision: revision, Label: "reproduced checkpoint"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finding := v.Timeline[0]
+	if _, err = s.PublishTimeline(v.ID, "alice", "alice", v.Version, TimelineInput{StreamID: "build", Kind: "finding", Body: "Opaque claim", Citations: []Citation{{Kind: "workspace", ResourceID: "missing", RepositoryID: "repo", Revision: revision, Label: "missing"}}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unattached citation = %v", err)
+	}
+	v, err = s.RequestHandoff(v.ID, "alice", "alice", v.Version, HandoffInput{StreamID: "build", ToParticipantID: "bob-slot", InputEntryIDs: []string{finding.ID}, AcceptanceCriteria: []string{"reproduce the checkpoint"}, ResidualUncertainty: []string{"load behavior remains unknown"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handoff := v.Handoffs[0]
+	if len(handoff.Inputs) != 1 || handoff.Inputs[0].Revision != revision || handoff.PlanRevision != v.Plan.Revision {
+		t.Fatalf("frozen handoff = %#v", handoff)
+	}
+	if _, err = s.AcceptHandoff(v.ID, handoff.ID, "bob", "bob", v.Version, []string{finding.ID}, "verified"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("accepted another author's unverifying entry: %v", err)
+	}
+	v, err = s.PublishTimeline(v.ID, "bob", "bob", v.Version, TimelineInput{StreamID: "build", Kind: "uncertainty", Body: "Reproduction completed; load remains open"})
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("non-owner publication = %v", err)
+	}
+	// Transfer does not silently change stream ownership; the recipient publishes verification only after ownership is explicitly replanned.
+	plan := v.Plan.Streams
+	plan[0].OwnerParticipantID = "bob-slot"
+	v, err = s.PutPlan(v.ID, "alice", "alice", v.Version, PlanInput{Streams: plan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Plan.Streams[0].Contexts) != 1 || v.Plan.Streams[0].Contexts[0].ResourceID != "workspace-1" {
+		t.Fatalf("replanned context = %#v", v.Plan.Streams[0].Contexts)
+	}
+	v, err = s.PublishTimeline(v.ID, "bob", "bob", v.Version, TimelineInput{StreamID: "build", Kind: "uncertainty", Body: "Reproduction completed; load remains open"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	verification := v.Timeline[len(v.Timeline)-1]
+	v, err = s.AcceptHandoff(v.ID, handoff.ID, "bob", "bob", v.Version, []string{verification.ID}, "Reproduced the frozen input and accept the remaining load uncertainty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Handoffs[0].Status != "accepted" || v.Handoffs[0].AcceptedBy != "bob" {
+		t.Fatalf("acceptance = %#v", v.Handoffs[0])
+	}
+}

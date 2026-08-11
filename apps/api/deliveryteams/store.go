@@ -92,6 +92,54 @@ type WorkStream struct {
 	IntegrationOrder   int             `json:"integration_order"`
 	Budget             *Budget         `json:"budget,omitempty"`
 	Assumptions        []string        `json:"assumptions"`
+	Contexts           []WorkContext   `json:"contexts"`
+}
+type WorkContext struct {
+	ID           string    `json:"id"`
+	Kind         string    `json:"kind"`
+	ResourceID   string    `json:"resource_id"`
+	ParentID     string    `json:"parent_id,omitempty"`
+	RepositoryID string    `json:"repository_id"`
+	Revision     string    `json:"revision"`
+	AttachedBy   string    `json:"attached_by"`
+	AttachedAt   time.Time `json:"attached_at"`
+}
+type Citation struct {
+	Kind         string `json:"kind"`
+	ResourceID   string `json:"resource_id"`
+	RepositoryID string `json:"repository_id"`
+	Revision     string `json:"revision"`
+	Label        string `json:"label"`
+}
+type TimelineEntry struct {
+	ID           string     `json:"id"`
+	StreamID     string     `json:"stream_id"`
+	Kind         string     `json:"kind"`
+	Body         string     `json:"body"`
+	Citations    []Citation `json:"citations"`
+	AuthorID     string     `json:"author_id"`
+	AuthorType   string     `json:"author_type"`
+	CreatedBy    string     `json:"created_by"`
+	PlanRevision int        `json:"plan_revision"`
+	CreatedAt    time.Time  `json:"created_at"`
+}
+type Handoff struct {
+	ID                   string     `json:"id"`
+	StreamID             string     `json:"stream_id"`
+	FromParticipantID    string     `json:"from_participant_id"`
+	ToParticipantID      string     `json:"to_participant_id"`
+	InputEntryIDs        []string   `json:"input_entry_ids"`
+	Inputs               []Citation `json:"inputs"`
+	AcceptanceCriteria   []string   `json:"acceptance_criteria"`
+	ResidualUncertainty  []string   `json:"residual_uncertainty"`
+	RequestedBy          string     `json:"requested_by"`
+	RequestedAt          time.Time  `json:"requested_at"`
+	PlanRevision         int        `json:"plan_revision"`
+	Status               string     `json:"status"`
+	AcceptedBy           string     `json:"accepted_by,omitempty"`
+	AcceptedAt           *time.Time `json:"accepted_at,omitempty"`
+	VerificationEntryIDs []string   `json:"verification_entry_ids"`
+	AcceptanceNote       string     `json:"acceptance_note,omitempty"`
 }
 type PlanAcceptance struct {
 	ParticipantID string     `json:"participant_id"`
@@ -131,6 +179,8 @@ type Team struct {
 	Events         []Event         `json:"events"`
 	Plan           *ExecutionPlan  `json:"plan,omitempty"`
 	PlanHistory    []ExecutionPlan `json:"plan_history"`
+	Timeline       []TimelineEntry `json:"timeline"`
+	Handoffs       []Handoff       `json:"handoffs"`
 	CreatedAt      time.Time       `json:"created_at"`
 	UpdatedAt      time.Time       `json:"updated_at"`
 }
@@ -144,6 +194,19 @@ type Charter struct {
 }
 type PlanInput struct {
 	Streams []WorkStream `json:"streams"`
+}
+type TimelineInput struct {
+	StreamID  string     `json:"stream_id"`
+	Kind      string     `json:"kind"`
+	Body      string     `json:"body"`
+	Citations []Citation `json:"citations"`
+}
+type HandoffInput struct {
+	StreamID            string   `json:"stream_id"`
+	ToParticipantID     string   `json:"to_participant_id"`
+	InputEntryIDs       []string `json:"input_entry_ids"`
+	AcceptanceCriteria  []string `json:"acceptance_criteria"`
+	ResidualUncertainty []string `json:"residual_uncertainty"`
 }
 type Store struct {
 	root string
@@ -281,7 +344,7 @@ func (s *Store) Create(repositoryID string, outcome Outcome, c Charter, actor st
 		return Team{}, e
 	}
 	now := s.now()
-	t := Team{ID: i, RepositoryID: repositoryID, Outcome: outcome, Name: c.Name, Purpose: c.Purpose, OrganizerID: actor, OverallBudget: c.OverallBudget, Deadline: c.Deadline, EscalationPath: c.EscalationPath, Version: 1, Participants: c.Participants, PlanHistory: []ExecutionPlan{}, CreatedAt: now, UpdatedAt: now}
+	t := Team{ID: i, RepositoryID: repositoryID, Outcome: outcome, Name: c.Name, Purpose: c.Purpose, OrganizerID: actor, OverallBudget: c.OverallBudget, Deadline: c.Deadline, EscalationPath: c.EscalationPath, Version: 1, Participants: c.Participants, PlanHistory: []ExecutionPlan{}, Timeline: []TimelineEntry{}, Handoffs: []Handoff{}, CreatedAt: now, UpdatedAt: now}
 	for j := range t.Participants {
 		t.Participants[j].Status = "pending"
 		t.Participants[j].InvitedBy = actor
@@ -441,6 +504,49 @@ func validRevision(value string) bool {
 	return true
 }
 
+func participantForPrincipal(t Team, principal string) *Participant {
+	for i := range t.Participants {
+		if t.Participants[i].PrincipalID == principal && t.Participants[i].Status == "accepted" {
+			return &t.Participants[i]
+		}
+	}
+	return nil
+}
+func streamByID(t *Team, streamID string) *WorkStream {
+	if t.Plan == nil {
+		return nil
+	}
+	for i := range t.Plan.Streams {
+		if t.Plan.Streams[i].ID == streamID {
+			return &t.Plan.Streams[i]
+		}
+	}
+	return nil
+}
+func citationInScope(stream WorkStream, c Citation) bool {
+	if strings.TrimSpace(c.Kind) == "" || strings.TrimSpace(c.ResourceID) == "" || strings.TrimSpace(c.Label) == "" || !validRevision(c.Revision) {
+		return false
+	}
+	for _, context := range stream.Contexts {
+		if context.Kind == c.Kind && context.ResourceID == c.ResourceID && context.RepositoryID == c.RepositoryID && context.Revision == c.Revision {
+			return true
+		}
+	}
+	return false
+}
+
+func contextInScope(stream WorkStream, context WorkContext) bool {
+	for _, scope := range stream.RepositoryScope {
+		if scope.RepositoryID == context.RepositoryID && scope.Revision == context.Revision {
+			return true
+		}
+	}
+	return false
+}
+func validTimelineKind(kind string) bool {
+	return slices.Contains([]string{"finding", "question", "checkpoint", "artifact", "decision", "uncertainty"}, kind)
+}
+
 func validatePlan(t Team, input PlanInput) ([]WorkStream, error) {
 	if len(input.Streams) == 0 {
 		return nil, ErrInvalid
@@ -453,6 +559,9 @@ func validatePlan(t Team, input PlanInput) ([]WorkStream, error) {
 	orders := map[int]bool{}
 	for i := range input.Streams {
 		x := &input.Streams[i]
+		// Contexts are attached through their dedicated attributable endpoint;
+		// callers cannot smuggle bindings through a plan revision.
+		x.Contexts = []WorkContext{}
 		x.Title = strings.TrimSpace(x.Title)
 		owner, ok := participants[x.OwnerParticipantID]
 		if x.ID == "" || ids[x.ID] || x.Title == "" || !ok || owner.Status == "declined" || x.IntegrationOrder < 1 || orders[x.IntegrationOrder] || !validBudget(x.Budget) {
@@ -654,6 +763,20 @@ func (s *Store) PutPlan(teamID, actor, actingPrincipal string, expectedVersion i
 	if err != nil {
 		return t, err
 	}
+	if t.Plan != nil {
+		for i := range streams {
+			for _, prior := range t.Plan.Streams {
+				if prior.ID != streams[i].ID {
+					continue
+				}
+				for _, context := range prior.Contexts {
+					if contextInScope(streams[i], context) {
+						streams[i].Contexts = append(streams[i].Contexts, context)
+					}
+				}
+			}
+		}
+	}
 	allowed := actor == t.OrganizerID
 	for _, p := range t.Participants {
 		if p.Status == "accepted" && p.PrincipalID == actingPrincipal {
@@ -715,4 +838,183 @@ func (s *Store) RespondPlan(teamID, participantID, actor, actingPrincipal, decis
 	t.UpdatedAt = now
 	t.Events = append(t.Events, event("plan."+decision, actor, "Responded to material execution replanning", t.Version, now))
 	return t, s.write(t)
+}
+
+func (s *Store) AttachContext(teamID, streamID, actor, actingPrincipal string, expectedVersion int, context WorkContext) (Team, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.read(teamID)
+	if err != nil {
+		return t, err
+	}
+	if t.Version != expectedVersion || t.Plan == nil {
+		return t, ErrConflict
+	}
+	p := participantForPrincipal(t, actingPrincipal)
+	stream := streamByID(&t, streamID)
+	if p == nil || stream == nil || (stream.OwnerParticipantID != p.ID && actor != t.OrganizerID) {
+		return t, ErrForbidden
+	}
+	if !slices.Contains([]string{"change_session", "investigation", "experiment", "workspace"}, context.Kind) || strings.TrimSpace(context.ResourceID) == "" || !validRevision(context.Revision) {
+		return t, ErrInvalid
+	}
+	if !contextInScope(*stream, context) {
+		return t, ErrInvalid
+	}
+	for _, existing := range stream.Contexts {
+		if existing.Kind == context.Kind && existing.ResourceID == context.ResourceID {
+			return t, ErrConflict
+		}
+	}
+	context.ID, err = id()
+	if err != nil {
+		return t, err
+	}
+	now := s.now()
+	context.AttachedBy, context.AttachedAt = actor, now
+	stream.Contexts = append(stream.Contexts, context)
+	t.Version++
+	t.UpdatedAt = now
+	t.Events = append(t.Events, event("stream.context_attached", actor, "Attached scoped work context to "+streamID, t.Version, now))
+	return t, s.write(t)
+}
+
+func (s *Store) PublishTimeline(teamID, actor, actingPrincipal string, expectedVersion int, input TimelineInput) (Team, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.read(teamID)
+	if err != nil {
+		return t, err
+	}
+	if t.Version != expectedVersion || t.Plan == nil {
+		return t, ErrConflict
+	}
+	p := participantForPrincipal(t, actingPrincipal)
+	stream := streamByID(&t, input.StreamID)
+	input.Body = strings.TrimSpace(input.Body)
+	if p == nil || stream == nil || input.Body == "" || !validTimelineKind(input.Kind) {
+		return t, ErrInvalid
+	}
+	if stream.OwnerParticipantID != p.ID && actor != t.OrganizerID {
+		return t, ErrForbidden
+	}
+	if len(input.Citations) == 0 && input.Kind != "question" && input.Kind != "uncertainty" {
+		return t, ErrInvalid
+	}
+	for _, c := range input.Citations {
+		if !citationInScope(*stream, c) {
+			return t, ErrInvalid
+		}
+	}
+	i, err := id()
+	if err != nil {
+		return t, err
+	}
+	now := s.now()
+	t.Timeline = append(t.Timeline, TimelineEntry{ID: i, StreamID: input.StreamID, Kind: input.Kind, Body: input.Body, Citations: input.Citations, AuthorID: actingPrincipal, AuthorType: p.PrincipalType, CreatedBy: actor, PlanRevision: t.Plan.Revision, CreatedAt: now})
+	t.Version++
+	t.UpdatedAt = now
+	t.Events = append(t.Events, event("timeline."+input.Kind, actor, "Published cited "+input.Kind+" to the team timeline", t.Version, now))
+	return t, s.write(t)
+}
+
+func (s *Store) RequestHandoff(teamID, actor, actingPrincipal string, expectedVersion int, input HandoffInput) (Team, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.read(teamID)
+	if err != nil {
+		return t, err
+	}
+	if t.Version != expectedVersion || t.Plan == nil {
+		return t, ErrConflict
+	}
+	from := participantForPrincipal(t, actingPrincipal)
+	to := participantByID(t, input.ToParticipantID)
+	stream := streamByID(&t, input.StreamID)
+	var ok bool
+	input.AcceptanceCriteria, ok = cleanList(input.AcceptanceCriteria)
+	if !ok || len(input.AcceptanceCriteria) == 0 {
+		return t, ErrInvalid
+	}
+	input.ResidualUncertainty, ok = cleanList(input.ResidualUncertainty)
+	if !ok {
+		return t, ErrInvalid
+	}
+	input.InputEntryIDs, ok = cleanList(input.InputEntryIDs)
+	if !ok || len(input.InputEntryIDs) == 0 {
+		return t, ErrInvalid
+	}
+	if from == nil || to == nil || to.Status != "accepted" || from.ID == to.ID || stream == nil || stream.OwnerParticipantID != from.ID {
+		return t, ErrForbidden
+	}
+	entries := map[string]TimelineEntry{}
+	for _, e := range t.Timeline {
+		entries[e.ID] = e
+	}
+	inputs := []Citation{}
+	for _, entryID := range input.InputEntryIDs {
+		e, found := entries[entryID]
+		if !found || e.StreamID != input.StreamID {
+			return t, ErrInvalid
+		}
+		inputs = append(inputs, e.Citations...)
+	}
+	i, err := id()
+	if err != nil {
+		return t, err
+	}
+	now := s.now()
+	t.Handoffs = append(t.Handoffs, Handoff{ID: i, StreamID: input.StreamID, FromParticipantID: from.ID, ToParticipantID: to.ID, InputEntryIDs: input.InputEntryIDs, Inputs: inputs, AcceptanceCriteria: input.AcceptanceCriteria, ResidualUncertainty: input.ResidualUncertainty, RequestedBy: actor, RequestedAt: now, PlanRevision: t.Plan.Revision, Status: "pending", VerificationEntryIDs: []string{}})
+	t.Version++
+	t.UpdatedAt = now
+	t.Events = append(t.Events, event("handoff.requested", actor, "Requested a structured handoff for "+input.StreamID, t.Version, now))
+	return t, s.write(t)
+}
+
+func (s *Store) AcceptHandoff(teamID, handoffID, actor, actingPrincipal string, expectedVersion int, verificationIDs []string, note string) (Team, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.read(teamID)
+	if err != nil {
+		return t, err
+	}
+	if t.Version != expectedVersion {
+		return t, ErrConflict
+	}
+	p := participantForPrincipal(t, actingPrincipal)
+	note = strings.TrimSpace(note)
+	verificationIDs, ok := cleanList(verificationIDs)
+	if !ok || len(verificationIDs) == 0 || note == "" || p == nil {
+		return t, ErrInvalid
+	}
+	entries := map[string]TimelineEntry{}
+	for _, e := range t.Timeline {
+		entries[e.ID] = e
+	}
+	for i := range t.Handoffs {
+		h := &t.Handoffs[i]
+		if h.ID != handoffID {
+			continue
+		}
+		if h.Status != "pending" || h.ToParticipantID != p.ID {
+			return t, ErrForbidden
+		}
+		for _, entryID := range verificationIDs {
+			e, found := entries[entryID]
+			if !found || e.StreamID != h.StreamID || e.AuthorID != actingPrincipal {
+				return t, ErrInvalid
+			}
+		}
+		now := s.now()
+		h.Status = "accepted"
+		h.AcceptedBy = actor
+		h.AcceptedAt = &now
+		h.VerificationEntryIDs = verificationIDs
+		h.AcceptanceNote = note
+		t.Version++
+		t.UpdatedAt = now
+		t.Events = append(t.Events, event("handoff.accepted", actor, "Accepted and verified structured handoff for "+h.StreamID, t.Version, now))
+		return t, s.write(t)
+	}
+	return t, ErrNotFound
 }

@@ -1071,6 +1071,18 @@ whenever dependencies change or the web job fails before it starts.
   material-replanning blockers without granting authority. Every affected
   human or approved-agent owner must accept a material plan revision; pending
   or declined boundaries remain visibly blocked.
+  Stream owners attach existing change sessions, investigations, decision
+  experiments, or workspaces at the plan's exact repository revision and
+  publish findings, questions, checkpoints, artifacts, decisions, and residual
+  uncertainty as retained cited timeline entries. Projection revalidates the
+  viewer's independent access and omits inaccessible entries, contexts, and
+  handoffs as a unit. A structured handoff freezes its input entry IDs and
+  citations, plan revision, sender, named recipient, acceptance criteria, and
+  declared uncertainty. It does not reassign the stream: the plan must name the
+  recipient before they can publish their own verification entry, and only the
+  named human or current agent operator can accept with that retained evidence.
+  Team storage contains references and summaries only, never terminal input,
+  credentials, hidden prompts, or copied evidence bodies.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

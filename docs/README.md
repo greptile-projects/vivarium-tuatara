@@ -1461,3 +1461,21 @@ budget, and live access blockers on every read. Because a plan grants no
 authority, an owner without independent repository write access remains
 blocked. Material revisions require each affected human owner or approved
 agent operator to accept the new boundary with team and plan versions.
+
+An accepted stream owner can then bind the stream to an ordinary change
+session, collaborative investigation, decision experiment, or workspace at an
+exact repository revision. The team timeline retains structured findings,
+questions, checkpoints, artifacts, decisions, and uncertainty as summaries
+with citations rather than copying the source system's contents. Every read
+rechecks the viewer's independent repository access and removes an inaccessible
+timeline entry, context binding, or dependent handoff in full.
+
+Handoff requests freeze the producing stream and plan revision, sender and
+recipient participant slots, exact timeline inputs and their citations,
+acceptance criteria, and residual uncertainty. Handoff is coordination, not
+authority or reassignment: the execution plan must explicitly move ownership
+before the recipient can publish a verification entry. Only that recipient (or
+an approved agent's current operator) accepts, citing their own retained
+verification and explaining what they checked. Team records never ingest
+terminal input, credentials, hidden prompts, or evidence bodies from the
+attached work system.

@@ -8,13 +8,16 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/decisions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deliveryteams"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/explanations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
 type deliveryTeamInput struct {
@@ -38,8 +41,25 @@ type deliveryTeamPlanResponseInput struct {
 	ExpectedPlanRevision int    `json:"expected_plan_revision"`
 	Decision             string `json:"decision"`
 }
+type deliveryTeamContextInput struct {
+	ExpectedVersion int                       `json:"expected_version"`
+	Context         deliveryteams.WorkContext `json:"context"`
+}
+type deliveryTeamTimelineInput struct {
+	ExpectedVersion int                         `json:"expected_version"`
+	Entry           deliveryteams.TimelineInput `json:"entry"`
+}
+type deliveryTeamHandoffInput struct {
+	ExpectedVersion int                        `json:"expected_version"`
+	Handoff         deliveryteams.HandoffInput `json:"handoff"`
+}
+type deliveryTeamHandoffAcceptanceInput struct {
+	ExpectedVersion      int      `json:"expected_version"`
+	VerificationEntryIDs []string `json:"verification_entry_ids"`
+	Note                 string   `json:"note"`
+}
 
-func registerDeliveryTeamRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, identities *users.Store, store *deliveryteams.Store, proposalStore *proposals.Store, decisionStore *decisions.Store, incidentStore *incidents.Store, orgs *organizations.Store, activity *activities.Store) {
+func registerDeliveryTeamRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, identities *users.Store, store *deliveryteams.Store, proposalStore *proposals.Store, decisionStore *decisions.Store, incidentStore *incidents.Store, orgs *organizations.Store, activity *activities.Store, sessionStore *changesessions.Store, workspaceStore *workspaces.Store, explanationStore *explanations.Store) {
 	mux.HandleFunc("POST /repositories/{id}/delivery-teams", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
 		if !ok {
@@ -235,6 +255,208 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, catalog *repositories.Store,
 		}
 		writeJSON(w, 200, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
 	})
+	mux.HandleFunc("POST /delivery-teams/{id}/streams/{streamId}/contexts", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+		if !ok {
+			return
+		}
+		team, err := store.Get(r.PathValue("id"))
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		principal, allowed := deliveryPlanningPrincipal(team, actor.UserID, orgs, catalog)
+		if !allowed {
+			writeAPIError(w, 403, "delivery_stream_forbidden", "only an accepted team member may attach work")
+			return
+		}
+		var in deliveryTeamContextInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "expected_version and context are required")
+			return
+		}
+		in.Context.RepositoryID = strings.TrimSpace(in.Context.RepositoryID)
+		if !deliveryPrincipalCanRead(team, principal, in.Context.RepositoryID, catalog, orgs) {
+			writeAPIError(w, 403, "inaccessible_team_evidence", "work context is outside the participant's current access")
+			return
+		}
+		if !deliveryContextExists(in.Context, sessionStore, workspaceStore, explanationStore, decisionStore) {
+			writeAPIError(w, 400, "invalid_work_context", "the exact work context could not be resolved")
+			return
+		}
+		team, err = store.AttachContext(team.ID, r.PathValue("streamId"), actor.UserID, principal, in.ExpectedVersion, in.Context)
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		writeJSON(w, 200, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
+	})
+	mux.HandleFunc("POST /delivery-teams/{id}/timeline", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+		if !ok {
+			return
+		}
+		team, err := store.Get(r.PathValue("id"))
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		principal, allowed := deliveryPlanningPrincipal(team, actor.UserID, orgs, catalog)
+		if !allowed {
+			writeAPIError(w, 403, "delivery_timeline_forbidden", "only accepted team members may publish")
+			return
+		}
+		var in deliveryTeamTimelineInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "expected_version and entry are required")
+			return
+		}
+		for _, c := range in.Entry.Citations {
+			if !deliveryPrincipalCanRead(team, principal, c.RepositoryID, catalog, orgs) {
+				writeAPIError(w, 403, "inaccessible_team_evidence", "cited evidence is outside the participant's current access")
+				return
+			}
+			context, found := deliveryCitationContext(team, in.Entry.StreamID, c)
+			if !found || !deliveryContextExists(context, sessionStore, workspaceStore, explanationStore, decisionStore) {
+				writeAPIError(w, 400, "invalid_team_citation", "cited evidence could not be resolved at its exact revision")
+				return
+			}
+		}
+		team, err = store.PublishTimeline(team.ID, actor.UserID, principal, in.ExpectedVersion, in.Entry)
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		writeJSON(w, 200, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
+	})
+	mux.HandleFunc("POST /delivery-teams/{id}/handoffs", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+		if !ok {
+			return
+		}
+		team, err := store.Get(r.PathValue("id"))
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		principal, allowed := deliveryPlanningPrincipal(team, actor.UserID, orgs, catalog)
+		if !allowed {
+			writeAPIError(w, 403, "delivery_handoff_forbidden", "only accepted team members may request handoff")
+			return
+		}
+		var in deliveryTeamHandoffInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "expected_version and handoff are required")
+			return
+		}
+		team, err = store.RequestHandoff(team.ID, actor.UserID, principal, in.ExpectedVersion, in.Handoff)
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		writeJSON(w, 201, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
+	})
+	mux.HandleFunc("POST /delivery-teams/{id}/handoffs/{handoffId}/accept", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+		if !ok {
+			return
+		}
+		team, err := store.Get(r.PathValue("id"))
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		principal := ""
+		for _, h := range team.Handoffs {
+			if h.ID == r.PathValue("handoffId") {
+				principal, _ = deliveryParticipantPrincipal(team, h.ToParticipantID, actor.UserID, orgs, catalog)
+			}
+		}
+		if principal == "" {
+			writeAPIError(w, 403, "delivery_handoff_forbidden", "only the named recipient may accept handoff")
+			return
+		}
+		var in deliveryTeamHandoffAcceptanceInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "verification entries and note are required")
+			return
+		}
+		team, err = store.AcceptHandoff(team.ID, r.PathValue("handoffId"), actor.UserID, principal, in.ExpectedVersion, in.VerificationEntryIDs, in.Note)
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		writeJSON(w, 200, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
+	})
+}
+
+func deliveryPrincipalCanRead(team deliveryteams.Team, principal, repositoryID string, catalog *repositories.Store, orgs *organizations.Store) bool {
+	for _, p := range team.Participants {
+		if p.PrincipalID == principal {
+			level, _ := deliveryParticipantAccess(p, repositoryID, catalog, orgs)
+			return level == "read" || level == "write"
+		}
+	}
+	level, _ := deliveryParticipantAccess(deliveryteams.Participant{PrincipalType: "human", PrincipalID: principal}, repositoryID, catalog, orgs)
+	return level == "read" || level == "write"
+}
+
+func deliveryContextExists(context deliveryteams.WorkContext, sessions *changesessions.Store, workspacesStore *workspaces.Store, explanationsStore *explanations.Store, decisionStore *decisions.Store) bool {
+	switch context.Kind {
+	case "workspace":
+		if workspacesStore == nil {
+			return false
+		}
+		value, err := workspacesStore.Get(context.ResourceID)
+		return err == nil && value.RepositoryID == context.RepositoryID && value.CommitID == context.Revision
+	case "investigation":
+		if explanationsStore == nil {
+			return false
+		}
+		value, err := explanationsStore.Get(context.ResourceID)
+		return err == nil && value.RepositoryID == context.RepositoryID && value.Revision == context.Revision
+	case "experiment":
+		if decisionStore == nil || context.ParentID == "" {
+			return false
+		}
+		value, err := decisionStore.Get(context.ParentID)
+		if err != nil || value.RepositoryID != context.RepositoryID {
+			return false
+		}
+		for _, experiment := range value.Experiments {
+			if experiment.ID == context.ResourceID && experiment.Revision == context.Revision {
+				return true
+			}
+		}
+	case "change_session":
+		if sessions == nil || context.ParentID == "" {
+			return false
+		}
+		value, err := sessions.Get(context.RepositoryID, context.ParentID, context.ResourceID)
+		return err == nil && value.SourceCommitID == context.Revision
+	}
+	return false
+}
+
+func deliveryCitationContext(team deliveryteams.Team, streamID string, citation deliveryteams.Citation) (deliveryteams.WorkContext, bool) {
+	if team.Plan == nil {
+		return deliveryteams.WorkContext{}, false
+	}
+	for _, stream := range team.Plan.Streams {
+		if stream.ID != streamID {
+			continue
+		}
+		for _, context := range stream.Contexts {
+			if context.Kind == citation.Kind && context.ResourceID == citation.ResourceID && context.RepositoryID == citation.RepositoryID && context.Revision == citation.Revision {
+				return context, true
+			}
+		}
+	}
+	return deliveryteams.WorkContext{}, false
+}
+
+func deliveryViewerCanRead(team deliveryteams.Team, viewer, repositoryID string, catalog *repositories.Store, orgs *organizations.Store) bool {
+	if deliveryPrincipalCanRead(team, viewer, repositoryID, catalog, orgs) {
+		return true
+	}
+	for _, participant := range team.Participants {
+		if participant.PrincipalType == "agent" && agentOperator(team.RepositoryID, participant.PrincipalID, viewer, orgs, catalog) && deliveryPrincipalCanRead(team, participant.PrincipalID, repositoryID, catalog, orgs) {
+			return true
+		}
+	}
+	return false
 }
 
 func deliveryParticipantPrincipal(team deliveryteams.Team, participantID, actor string, orgs *organizations.Store, catalog *repositories.Store) (string, bool) {
@@ -409,6 +631,12 @@ func projectDeliveryAccess(v deliveryteams.Team, viewer string, catalog *reposit
 	if v.PlanHistory == nil {
 		v.PlanHistory = []deliveryteams.ExecutionPlan{}
 	}
+	if v.Timeline == nil {
+		v.Timeline = []deliveryteams.TimelineEntry{}
+	}
+	if v.Handoffs == nil {
+		v.Handoffs = []deliveryteams.Handoff{}
+	}
 	for i := range v.Participants {
 		p := &v.Participants[i]
 		p.CanRespond = p.Status == "pending" && (p.PrincipalType == "human" && p.PrincipalID == viewer || p.PrincipalType == "agent" && agentOperator(v.RepositoryID, p.PrincipalID, viewer, orgs, catalog))
@@ -437,6 +665,51 @@ func projectDeliveryAccess(v deliveryteams.Team, viewer string, catalog *reposit
 					v.Plan.Blockers = append(v.Plan.Blockers, deliveryteams.PlanBlocker{Kind: "unavailable_access", StreamIDs: []string{stream.ID}, OwnerParticipantIDs: []string{stream.OwnerParticipantID}, Summary: "The stream owner lacks independent write access to " + scope.RepositoryID})
 				}
 			}
+		}
+	}
+	visibleEntries := []deliveryteams.TimelineEntry{}
+	visibleIDs := map[string]bool{}
+	for _, entry := range v.Timeline {
+		visible := true
+		for _, citation := range entry.Citations {
+			if !deliveryViewerCanRead(v, viewer, citation.RepositoryID, catalog, orgs) {
+				visible = false
+				break
+			}
+		}
+		if visible {
+			visibleEntries = append(visibleEntries, entry)
+			visibleIDs[entry.ID] = true
+		}
+	}
+	v.Timeline = visibleEntries
+	visibleHandoffs := []deliveryteams.Handoff{}
+	for _, handoff := range v.Handoffs {
+		visible := true
+		for _, entryID := range handoff.InputEntryIDs {
+			if !visibleIDs[entryID] {
+				visible = false
+			}
+		}
+		for _, entryID := range handoff.VerificationEntryIDs {
+			if !visibleIDs[entryID] {
+				visible = false
+			}
+		}
+		if visible {
+			visibleHandoffs = append(visibleHandoffs, handoff)
+		}
+	}
+	v.Handoffs = visibleHandoffs
+	if v.Plan != nil {
+		for i := range v.Plan.Streams {
+			contexts := []deliveryteams.WorkContext{}
+			for _, context := range v.Plan.Streams[i].Contexts {
+				if deliveryViewerCanRead(v, viewer, context.RepositoryID, catalog, orgs) {
+					contexts = append(contexts, context)
+				}
+			}
+			v.Plan.Streams[i].Contexts = contexts
 		}
 	}
 	return v
