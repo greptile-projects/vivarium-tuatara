@@ -2120,3 +2120,27 @@ symlink component, and non-regular files. It opens one descriptor, validates
 that exact descriptor resolves beneath `/workspace`, and reads from the same
 descriptor, preventing links or concurrent path replacement from exporting
 image or temporary-container content.
+
+Collaborative triage remains versioned issue state rather than private labels.
+`PUT /repositories/{id}/issues/{issue-id}/triage` compare-and-swaps a
+classification, priority, current participant assignee, exact suspected commit,
+suspected current participant owners, and optional same-repository duplicate.
+`POST .../links` attaches attributable typed code, dependency, release,
+deployment, incident, proposal, pull-request, or issue references. Duplicate
+identity, ownership, status, comments, links, and every triage revision remain
+in the issue history.
+
+`POST .../evidence-requests` directs a retained question to the reporter; only
+that reporter can answer it with `PUT .../evidence-requests/{request-id}`.
+Humans publish `hypothesis`, `finding`, or `uncertainty` records with `POST
+.../findings`; every claim must cite retained reproduction-attempt or linked-
+evidence IDs, can supersede an earlier claim without rewriting it, and can be
+openly disputed through `POST .../findings/{finding-id}/challenges`.
+
+Maintainers delegate selected evidence with `POST .../investigations`, naming
+one retained reproduction attempt, a bounded subset of linked evidence, a
+mandate, and a 5-minute through 24-hour expiry. The returned API credential has
+only `issues:investigate`. Its nested investigation `GET` exposes only that
+frozen packet, and nested `POST /findings` accepts citations only from the
+selection. Agent findings carry the generated agent identity; the initiator,
+credential binding, mandate, evidence selection, and history remain retained.

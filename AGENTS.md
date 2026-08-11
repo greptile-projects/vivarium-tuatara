@@ -1142,6 +1142,14 @@ whenever dependencies change or the web job fails before it starts.
   validates that exact descriptor beneath `/workspace` through `/proc/self/fd`,
   and reads from it, so path replacement races cannot expose image or temporary-
   container files.
+  Collaborative triage retains compare-and-swap classification, priority,
+  current-participant assignment, exact suspected revision/owners, duplicate
+  identity, and typed code/dependency/release/deployment/incident/existing-work
+  links. Reporter evidence requests, cited human hypotheses/findings/uncertainty,
+  supersession, and open challenges keep diagnosis attributable. Bounded
+  `issues:investigate` credentials expose only one selected reproduction and
+  named links; agent findings cite only that packet and use the generated agent
+  identity without gaining repository write authority.
 
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.

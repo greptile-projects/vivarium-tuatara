@@ -13,6 +13,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -348,6 +349,390 @@ func registerIssueRoutes(mux *http.ServeMux, repos *repositories.Store, store *i
 		}
 		writeJSON(w, 201, updated)
 	})
+	mux.HandleFunc("PUT /repositories/{id}/issues/{issue_id}/triage", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion   int      `json:"expected_version"`
+			Classification    string   `json:"classification"`
+			Priority          string   `json:"priority"`
+			AssigneeID        string   `json:"assignee_id"`
+			SuspectedRevision string   `json:"suspected_revision"`
+			SuspectedOwnerIDs []string `json:"suspected_owner_ids"`
+			DuplicateOf       string   `json:"duplicate_of"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if in.ExpectedVersion < 1 {
+			writeAPIError(w, 422, "invalid_issue_version", "expected_version is required")
+			return
+		}
+		validClass := map[string]bool{"bug": true, "regression": true, "performance": true, "compatibility": true, "documentation": true, "support": true, "unknown": true}
+		validPriority := map[string]bool{"low": true, "normal": true, "high": true, "urgent": true}
+		if !validClass[in.Classification] || !validPriority[in.Priority] {
+			writeAPIError(w, 422, "invalid_triage", "classification and priority are invalid")
+			return
+		}
+		participant := func(id string) bool {
+			if id == "" {
+				return true
+			}
+			repo, err := repos.GetByID(r.PathValue("id"))
+			if err != nil {
+				return false
+			}
+			if repo.OwnerID == id {
+				return true
+			}
+			ok, _ := repos.HasCollaborator(id, repo.ID)
+			return ok
+		}
+		if !participant(strings.TrimSpace(in.AssigneeID)) {
+			writeAPIError(w, 422, "invalid_triage_owner", "assignee must be a current repository participant")
+			return
+		}
+		seenOwners := map[string]bool{}
+		for _, id := range in.SuspectedOwnerIDs {
+			if seenOwners[id] || !participant(id) {
+				writeAPIError(w, 422, "invalid_triage_owner", "suspected owners must be distinct current repository participants")
+				return
+			}
+			seenOwners[id] = true
+		}
+		if in.SuspectedRevision != "" && (len(in.SuspectedRevision) != 40 || strings.Trim(in.SuspectedRevision, "0123456789abcdef") != "") {
+			writeAPIError(w, 422, "invalid_suspected_revision", "suspected revision must be an exact commit ID")
+			return
+		}
+		if in.DuplicateOf != "" {
+			if other, e := store.Get(r.PathValue("id"), in.DuplicateOf); e != nil || other.ID == r.PathValue("issue_id") {
+				writeAPIError(w, 422, "invalid_duplicate", "duplicate must name another visible repository issue")
+				return
+			}
+		}
+		v, e := store.Mutate(r.PathValue("id"), r.PathValue("issue_id"), actor.UserID, in.ExpectedVersion, func(v *issues.Issue) error {
+			v.Triage = issues.Triage{Classification: in.Classification, Priority: in.Priority, AssigneeID: strings.TrimSpace(in.AssigneeID), SuspectedRevision: strings.TrimSpace(in.SuspectedRevision), SuspectedOwnerIDs: in.SuspectedOwnerIDs, UpdatedBy: actor.UserID, UpdatedAt: time.Now().UTC()}
+			v.DuplicateOf = in.DuplicateOf
+			issues.AddHistory(v, "triage_updated", actor.UserID, in.Classification+" / "+in.Priority)
+			return nil
+		})
+		writeIssueMutation(w, v, e, 200)
+	})
+	mux.HandleFunc("POST /repositories/{id}/issues/{issue_id}/links", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int    `json:"expected_version"`
+			Kind            string `json:"kind"`
+			RepositoryID    string `json:"repository_id"`
+			ResourceID      string `json:"resource_id"`
+			Revision        string `json:"revision"`
+			Label           string `json:"label"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if in.ExpectedVersion < 1 {
+			writeAPIError(w, 422, "invalid_issue_version", "expected_version is required")
+			return
+		}
+		kinds := map[string]bool{"code": true, "dependency": true, "release": true, "deployment": true, "incident": true, "proposal": true, "pull_request": true, "issue": true}
+		if !kinds[in.Kind] || strings.TrimSpace(in.ResourceID) == "" || strings.TrimSpace(in.Label) == "" {
+			writeAPIError(w, 422, "invalid_issue_link", "typed links require a resource and label")
+			return
+		}
+		v, e := store.Mutate(r.PathValue("id"), r.PathValue("issue_id"), actor.UserID, in.ExpectedVersion, func(v *issues.Issue) error {
+			for _, x := range v.Links {
+				if x.Kind == in.Kind && x.RepositoryID == in.RepositoryID && x.ResourceID == in.ResourceID {
+					return issues.ErrConflict
+				}
+			}
+			v.Links = append(v.Links, issues.Link{ID: issues.NewID(), Kind: in.Kind, RepositoryID: in.RepositoryID, ResourceID: in.ResourceID, Revision: in.Revision, Label: strings.TrimSpace(in.Label), AddedBy: actor.UserID, CreatedAt: time.Now().UTC()})
+			issues.AddHistory(v, "evidence_linked", actor.UserID, in.Kind+": "+in.Label)
+			return nil
+		})
+		writeIssueMutation(w, v, e, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/issues/{issue_id}/evidence-requests", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int    `json:"expected_version"`
+			Body            string `json:"body"`
+		}
+		if decodeJSON(r, &in) != nil || strings.TrimSpace(in.Body) == "" || in.ExpectedVersion < 1 {
+			writeAPIError(w, 422, "invalid_evidence_request", "request text is required")
+			return
+		}
+		v, e := store.Mutate(r.PathValue("id"), r.PathValue("issue_id"), actor.UserID, in.ExpectedVersion, func(v *issues.Issue) error {
+			now := time.Now().UTC()
+			v.EvidenceRequests = append(v.EvidenceRequests, issues.EvidenceRequest{ID: issues.NewID(), Body: strings.TrimSpace(in.Body), RequestedFrom: v.ReporterID, RequestedBy: actor.UserID, State: "open", CreatedAt: now, UpdatedAt: now})
+			issues.AddHistory(v, "evidence_requested", actor.UserID, in.Body)
+			return nil
+		})
+		writeIssueMutation(w, v, e, 201)
+	})
+	mux.HandleFunc("PUT /repositories/{id}/issues/{issue_id}/evidence-requests/{request_id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int    `json:"expected_version"`
+			Response        string `json:"response"`
+		}
+		if decodeJSON(r, &in) != nil || strings.TrimSpace(in.Response) == "" || in.ExpectedVersion < 1 {
+			writeAPIError(w, 422, "invalid_evidence_response", "response is required")
+			return
+		}
+		v, e := store.Mutate(r.PathValue("id"), r.PathValue("issue_id"), actor.UserID, in.ExpectedVersion, func(v *issues.Issue) error {
+			if actor.UserID != v.ReporterID {
+				return issues.ErrForbidden
+			}
+			for i := range v.EvidenceRequests {
+				if v.EvidenceRequests[i].ID == r.PathValue("request_id") && v.EvidenceRequests[i].State == "open" {
+					v.EvidenceRequests[i].State = "answered"
+					v.EvidenceRequests[i].Response = strings.TrimSpace(in.Response)
+					v.EvidenceRequests[i].RespondedBy = actor.UserID
+					v.EvidenceRequests[i].UpdatedAt = time.Now().UTC()
+					issues.AddHistory(v, "evidence_answered", actor.UserID, in.Response)
+					return nil
+				}
+			}
+			return issues.ErrNotFound
+		})
+		writeIssueMutation(w, v, e, 200)
+	})
+	mux.HandleFunc("POST /repositories/{id}/issues/{issue_id}/findings", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		addIssueFinding(w, r, store, actor, "", 1)
+	})
+	mux.HandleFunc("POST /repositories/{id}/issues/{issue_id}/findings/{finding_id}/challenges", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int    `json:"expected_version"`
+			Body            string `json:"body"`
+		}
+		if decodeJSON(r, &in) != nil || strings.TrimSpace(in.Body) == "" || in.ExpectedVersion < 1 {
+			writeAPIError(w, 422, "invalid_challenge", "challenge is required")
+			return
+		}
+		v, e := store.Mutate(r.PathValue("id"), r.PathValue("issue_id"), actor.UserID, in.ExpectedVersion, func(v *issues.Issue) error {
+			for i := range v.Findings {
+				if v.Findings[i].ID == r.PathValue("finding_id") {
+					v.Findings[i].Challenges = append(v.Findings[i].Challenges, issues.Challenge{ID: issues.NewID(), ActorID: actor.UserID, Body: strings.TrimSpace(in.Body), CreatedAt: time.Now().UTC()})
+					issues.AddHistory(v, "finding_disputed", actor.UserID, in.Body)
+					return nil
+				}
+			}
+			return issues.ErrNotFound
+		})
+		writeIssueMutation(w, v, e, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/issues/{issue_id}/investigations", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion       int      `json:"expected_version"`
+			Mandate               string   `json:"mandate"`
+			ReproductionAttemptID string   `json:"reproduction_attempt_id"`
+			LinkIDs               []string `json:"link_ids"`
+			ExpiresIn             int      `json:"expires_in"`
+		}
+		if decodeJSON(r, &in) != nil || strings.TrimSpace(in.Mandate) == "" || in.ExpiresIn < 300 || in.ExpiresIn > 86400 || in.ExpectedVersion < 1 {
+			writeAPIError(w, 422, "invalid_investigation", "select a reproduction, mandate, and 5 minute to 24 hour expiry")
+			return
+		}
+		issued, e := credentials.Issue(actor.UserID, auth.API, "Issue investigation", []string{"issues:investigate"}, time.Duration(in.ExpiresIn)*time.Second)
+		if e != nil {
+			writeAPIError(w, 500, "investigation_failed", "credential could not be issued")
+			return
+		}
+		agentID := issues.NewID()
+		var investigation issues.Investigation
+		v, e := store.Mutate(r.PathValue("id"), r.PathValue("issue_id"), actor.UserID, in.ExpectedVersion, func(v *issues.Issue) error {
+			found := false
+			for _, x := range v.ReproductionAttempts {
+				found = found || x.ID == in.ReproductionAttemptID
+			}
+			if !found {
+				return issues.ErrInvalid
+			}
+			allowed := map[string]bool{}
+			for _, x := range v.Links {
+				allowed[x.ID] = true
+			}
+			for _, id := range in.LinkIDs {
+				if !allowed[id] {
+					return issues.ErrInvalid
+				}
+			}
+			now := time.Now().UTC()
+			investigation = issues.Investigation{ID: issues.NewID(), AgentID: agentID, InitiatorID: actor.UserID, CredentialID: issued.ID, Mandate: strings.TrimSpace(in.Mandate), ReproductionAttemptID: in.ReproductionAttemptID, LinkIDs: in.LinkIDs, State: "running", CreatedAt: now, UpdatedAt: now}
+			v.Investigations = append(v.Investigations, investigation)
+			issues.AddHistory(v, "investigation_started", actor.UserID, investigation.ID)
+			return nil
+		})
+		if e != nil {
+			_, _ = credentials.Revoke(actor.UserID, issued.ID)
+			writeIssueMutation(w, v, e, 201)
+			return
+		}
+		writeJSON(w, 201, map[string]any{"issue": v, "investigation": investigation, "credential": issued})
+	})
+	mux.HandleFunc("GET /repositories/{id}/issues/{issue_id}/investigations/{investigation_id}", func(w http.ResponseWriter, r *http.Request) {
+		credential, ok := authenticateRequest(w, r, credentials, "issues:investigate", false)
+		if !ok {
+			return
+		}
+		v, e := store.Get(r.PathValue("id"), r.PathValue("issue_id"))
+		if e != nil {
+			writeAPIError(w, 404, "investigation_not_found", "investigation not found")
+			return
+		}
+		for _, x := range v.Investigations {
+			if x.ID == r.PathValue("investigation_id") && x.CredentialID == credential.ID && x.State == "running" {
+				repo, repoErr := repos.GetByID(v.RepositoryID)
+				stillParticipant, _ := repos.HasCollaborator(x.InitiatorID, v.RepositoryID)
+				if repoErr != nil || repo.OwnerID != x.InitiatorID && !stillParticipant {
+					writeAPIError(w, 403, "investigation_access_changed", "the investigation initiator no longer has repository access")
+					return
+				}
+				var attempt issues.ReproductionAttempt
+				for _, a := range v.ReproductionAttempts {
+					if a.ID == x.ReproductionAttemptID {
+						attempt = a
+					}
+				}
+				links := []issues.Link{}
+				for _, l := range v.Links {
+					for _, id := range x.LinkIDs {
+						if l.ID == id {
+							links = append(links, l)
+						}
+					}
+				}
+				writeJSON(w, 200, map[string]any{"investigation": x, "reproduction": attempt, "links": links})
+				return
+			}
+		}
+		writeAPIError(w, 404, "investigation_not_found", "investigation not found")
+	})
+	mux.HandleFunc("POST /repositories/{id}/issues/{issue_id}/investigations/{investigation_id}/findings", func(w http.ResponseWriter, r *http.Request) {
+		credential, ok := authenticateRequest(w, r, credentials, "issues:investigate", false)
+		if !ok {
+			return
+		}
+		current, currentErr := store.Get(r.PathValue("id"), r.PathValue("issue_id"))
+		authorized := false
+		for _, x := range current.Investigations {
+			if x.ID == r.PathValue("investigation_id") && x.CredentialID == credential.ID {
+				repo, repoErr := repos.GetByID(current.RepositoryID)
+				collaborator, _ := repos.HasCollaborator(x.InitiatorID, current.RepositoryID)
+				authorized = currentErr == nil && repoErr == nil && (repo.OwnerID == x.InitiatorID || collaborator)
+			}
+		}
+		if !authorized {
+			writeAPIError(w, 403, "investigation_access_changed", "the investigation selection is unavailable after an access change")
+			return
+		}
+		addIssueFinding(w, r, store, credential, r.PathValue("investigation_id"), 0)
+	})
+}
+
+func addIssueFinding(w http.ResponseWriter, r *http.Request, store *issues.Store, actor auth.Credential, investigationID string, requireExpected int) {
+	var in struct {
+		ExpectedVersion int      `json:"expected_version"`
+		Kind            string   `json:"kind"`
+		Statement       string   `json:"statement"`
+		CitationIDs     []string `json:"citation_ids"`
+		SupersedesID    string   `json:"supersedes_id"`
+	}
+	if decodeJSON(r, &in) != nil {
+		writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+		return
+	}
+	if in.Kind != "hypothesis" && in.Kind != "finding" && in.Kind != "uncertainty" || strings.TrimSpace(in.Statement) == "" || len(in.CitationIDs) == 0 {
+		writeAPIError(w, 422, "invalid_finding", "a typed statement and citations are required")
+		return
+	}
+	if requireExpected == 1 && in.ExpectedVersion < 1 {
+		writeAPIError(w, 422, "invalid_issue_version", "expected_version is required")
+		return
+	}
+	findingActor := actor.UserID
+	v, e := store.Mutate(r.PathValue("id"), r.PathValue("issue_id"), actor.UserID, in.ExpectedVersion, func(v *issues.Issue) error {
+		allowed := map[string]bool{}
+		for _, x := range v.Links {
+			allowed[x.ID] = true
+		}
+		for _, x := range v.ReproductionAttempts {
+			allowed[x.ID] = true
+		}
+		if investigationID != "" {
+			ok := false
+			for _, x := range v.Investigations {
+				if x.ID == investigationID && x.CredentialID == actor.ID && x.State == "running" {
+					ok = true
+					findingActor = x.AgentID
+					allowed = map[string]bool{x.ReproductionAttemptID: true}
+					for _, id := range x.LinkIDs {
+						allowed[id] = true
+					}
+				}
+			}
+			if !ok {
+				return issues.ErrForbidden
+			}
+		}
+		for _, id := range in.CitationIDs {
+			if !allowed[id] {
+				return issues.ErrInvalid
+			}
+		}
+		if in.SupersedesID != "" {
+			found := false
+			for _, x := range v.Findings {
+				found = found || x.ID == in.SupersedesID
+			}
+			if !found {
+				return issues.ErrInvalid
+			}
+		}
+		v.Findings = append(v.Findings, issues.Finding{ID: issues.NewID(), Kind: in.Kind, Statement: strings.TrimSpace(in.Statement), ActorID: findingActor, InvestigationID: investigationID, CitationIDs: in.CitationIDs, SupersedesID: in.SupersedesID, CreatedAt: time.Now().UTC()})
+		issues.AddHistory(v, "finding_published", findingActor, in.Kind)
+		return nil
+	})
+	writeIssueMutation(w, v, e, 201)
+}
+
+func writeIssueMutation(w http.ResponseWriter, v issues.Issue, err error, status int) {
+	if err != nil && !errors.Is(err, issues.ErrDurabilityUncertain) {
+		writeIssueError(w, err)
+		return
+	}
+	if errors.Is(err, issues.ErrDurabilityUncertain) {
+		w.Header().Set("Vivarium-Durability", "uncertain")
+		writeJSON(w, 202, v)
+		return
+	}
+	writeJSON(w, status, v)
 }
 
 func cleanReproductionArtifactPath(value string) (string, bool) {

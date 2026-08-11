@@ -80,3 +80,53 @@ func TestIssueAttachmentsRejectDisallowedEvidence(t *testing.T) {
 		t.Fatal("unsafe screenshot media type accepted")
 	}
 }
+
+func TestIssueTriageRetainsCitedHumanAndBoundedAgentConclusions(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	issueStore, _ := issues.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, nil, nil, issueStore))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "triage-owner")
+	reporter := createTestAccount(t, server.URL, "triage-reporter")
+	created := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"triage"}`, owner.Credential.Token, http.StatusCreated)
+	var repo repositories.Repository
+	decodeResponse(t, created, &repo)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/collaborators", `{"user_id":"`+reporter.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	v, err := issueStore.Create(issues.Issue{RepositoryID: repo.ID, ReporterID: reporter.User.ID, Title: "Failure", ExpectedBehavior: "works", ObservedBehavior: "fails", Severity: "high", Environment: "Linux", ReproductionSteps: []string{"run"}, Visibility: "repository"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = issueStore.AddReproductionAttempt(repo.ID, v.ID, reporter.User.ID, issues.ReproductionAttempt{WorkspaceID: "workspace", CommitID: strings.Repeat("a", 40), DefinitionSHA256: strings.Repeat("b", 64), Commands: []issues.ReproductionCommand{{Name: "reproduce", OutcomeID: "outcome", CommandSHA256: strings.Repeat("c", 64), ExitCode: 1}}, ObservedResult: "failure", Result: "reproduced"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	url := server.URL + "/repositories/" + repo.ID + "/issues/" + v.ID
+	response := authenticatedRequest(t, http.MethodPut, url+"/triage", `{"expected_version":`+strconv.Itoa(v.Version)+`,"classification":"regression","priority":"urgent","assignee_id":"`+owner.User.ID+`","suspected_revision":"`+strings.Repeat("a", 40)+`","suspected_owner_ids":["`+owner.User.ID+`"]}`, owner.Credential.Token, http.StatusOK)
+	decodeResponse(t, response, &v)
+	response = authenticatedRequest(t, http.MethodPost, url+"/links", `{"expected_version":`+strconv.Itoa(v.Version)+`,"kind":"code","repository_id":"`+repo.ID+`","resource_id":"parser.go","revision":"aaaaaaaa","label":"parser entry point"}`, owner.Credential.Token, http.StatusCreated)
+	decodeResponse(t, response, &v)
+	linkID, attemptID := v.Links[0].ID, v.ReproductionAttempts[0].ID
+	response = authenticatedRequest(t, http.MethodPost, url+"/findings", `{"expected_version":`+strconv.Itoa(v.Version)+`,"kind":"hypothesis","statement":"The parser changed behavior.","citation_ids":["`+linkID+`","`+attemptID+`"]}`, owner.Credential.Token, http.StatusCreated)
+	decodeResponse(t, response, &v)
+	response = authenticatedRequest(t, http.MethodPost, url+"/evidence-requests", `{"expected_version":`+strconv.Itoa(v.Version)+`,"body":"Please provide the exact input shape."}`, owner.Credential.Token, http.StatusCreated)
+	decodeResponse(t, response, &v)
+	response = authenticatedRequest(t, http.MethodPut, url+"/evidence-requests/"+v.EvidenceRequests[0].ID, `{"expected_version":`+strconv.Itoa(v.Version)+`,"response":"The input contains an empty header."}`, reporter.Credential.Token, http.StatusOK)
+	decodeResponse(t, response, &v)
+	response = authenticatedRequest(t, http.MethodPost, url+"/investigations", `{"expected_version":`+strconv.Itoa(v.Version)+`,"mandate":"Determine whether the parser is responsible.","reproduction_attempt_id":"`+attemptID+`","link_ids":["`+linkID+`"],"expires_in":600}`, owner.Credential.Token, http.StatusCreated)
+	var launched struct {
+		Issue         issues.Issue          `json:"issue"`
+		Investigation issues.Investigation  `json:"investigation"`
+		Credential    auth.IssuedCredential `json:"credential"`
+	}
+	decodeResponse(t, response, &launched)
+	authenticatedRequest(t, http.MethodGet, url+"/investigations/"+launched.Investigation.ID, "", reporter.Credential.Token, http.StatusUnauthorized).Body.Close()
+	response = authenticatedRequest(t, http.MethodPost, url+"/investigations/"+launched.Investigation.ID+"/findings", `{"kind":"uncertainty","statement":"The selected evidence does not isolate encoding.","citation_ids":["`+attemptID+`"]}`, launched.Credential.Token, http.StatusCreated)
+	decodeResponse(t, response, &v)
+	if v.Triage.Classification != "regression" || v.Triage.AssigneeID != owner.User.ID || v.EvidenceRequests[0].State != "answered" || len(v.Findings) != 2 || v.Findings[1].ActorID != launched.Investigation.AgentID {
+		t.Fatalf("triage projection = %#v", v)
+	}
+	authenticatedRequest(t, http.MethodPost, url+"/investigations/"+launched.Investigation.ID+"/findings", `{"kind":"finding","statement":"Unselected claim.","citation_ids":["missing"]}`, launched.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
+}

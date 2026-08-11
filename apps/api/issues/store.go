@@ -87,6 +87,66 @@ type ReproductionAttempt struct {
 	CreatedAt             time.Time              `json:"created_at"`
 }
 
+type Link struct {
+	ID           string    `json:"id"`
+	Kind         string    `json:"kind"`
+	RepositoryID string    `json:"repository_id,omitempty"`
+	ResourceID   string    `json:"resource_id"`
+	Revision     string    `json:"revision,omitempty"`
+	Label        string    `json:"label"`
+	AddedBy      string    `json:"added_by"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+type Triage struct {
+	Classification    string    `json:"classification,omitempty"`
+	Priority          string    `json:"priority,omitempty"`
+	AssigneeID        string    `json:"assignee_id,omitempty"`
+	SuspectedRevision string    `json:"suspected_revision,omitempty"`
+	SuspectedOwnerIDs []string  `json:"suspected_owner_ids,omitempty"`
+	UpdatedBy         string    `json:"updated_by,omitempty"`
+	UpdatedAt         time.Time `json:"updated_at,omitempty"`
+}
+type EvidenceRequest struct {
+	ID            string    `json:"id"`
+	Body          string    `json:"body"`
+	RequestedFrom string    `json:"requested_from"`
+	RequestedBy   string    `json:"requested_by"`
+	State         string    `json:"state"`
+	Response      string    `json:"response,omitempty"`
+	RespondedBy   string    `json:"responded_by,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+type Finding struct {
+	ID              string      `json:"id"`
+	Kind            string      `json:"kind"`
+	Statement       string      `json:"statement"`
+	ActorID         string      `json:"actor_id"`
+	InvestigationID string      `json:"investigation_id,omitempty"`
+	CitationIDs     []string    `json:"citation_ids"`
+	Challenges      []Challenge `json:"challenges,omitempty"`
+	SupersedesID    string      `json:"supersedes_id,omitempty"`
+	CreatedAt       time.Time   `json:"created_at"`
+}
+type Challenge struct {
+	ID        string    `json:"id"`
+	ActorID   string    `json:"actor_id"`
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"created_at"`
+}
+type Investigation struct {
+	ID                    string    `json:"id"`
+	AgentID               string    `json:"agent_id"`
+	InitiatorID           string    `json:"initiator_id"`
+	CredentialID          string    `json:"credential_id,omitempty"`
+	Mandate               string    `json:"mandate"`
+	ReproductionAttemptID string    `json:"reproduction_attempt_id"`
+	LinkIDs               []string  `json:"link_ids"`
+	State                 string    `json:"state"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
+}
+
 type Issue struct {
 	ID                   string                `json:"id"`
 	RepositoryID         string                `json:"repository_id"`
@@ -105,10 +165,47 @@ type Issue struct {
 	Discussion           []Comment             `json:"discussion"`
 	History              []HistoryEntry        `json:"history"`
 	ReproductionAttempts []ReproductionAttempt `json:"reproduction_attempts"`
+	Triage               Triage                `json:"triage"`
+	Links                []Link                `json:"links"`
+	EvidenceRequests     []EvidenceRequest     `json:"evidence_requests"`
+	Findings             []Finding             `json:"findings"`
+	Investigations       []Investigation       `json:"investigations"`
+	DuplicateOf          string                `json:"duplicate_of,omitempty"`
 	Version              int                   `json:"version"`
 	CreatedAt            time.Time             `json:"created_at"`
 	UpdatedAt            time.Time             `json:"updated_at"`
 }
+
+func (s *Store) Mutate(repositoryID, id, actor string, expected int, fn func(*Issue) error) (Issue, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repositoryID, id)
+	if err != nil {
+		return Issue{}, err
+	}
+	if expected != 0 && expected != v.Version {
+		return Issue{}, ErrConflict
+	}
+	if err = fn(&v); err != nil {
+		return Issue{}, err
+	}
+	now := time.Now().UTC()
+	v.Version++
+	v.UpdatedAt = now
+	committed, err := s.write(v)
+	if err != nil {
+		if committed {
+			return v, errors.Join(ErrDurabilityUncertain, err)
+		}
+		return Issue{}, err
+	}
+	return v, nil
+}
+
+func AddHistory(v *Issue, kind, actor, message string) {
+	v.History = append(v.History, HistoryEntry{ID: newID(), Kind: kind, ActorID: actor, Message: message, CreatedAt: time.Now().UTC()})
+}
+func NewID() string { return newID() }
 
 func (s *Store) AddReproductionAttempt(repositoryID, id, actor string, attempt ReproductionAttempt) (Issue, error) {
 	s.mu.Lock()
