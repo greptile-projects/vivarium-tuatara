@@ -3,16 +3,20 @@ package main
 import (
 	"errors"
 	"net/http"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/contributoropportunities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 )
 
-func registerContributorOpportunityRoutes(mux *http.ServeMux, repos *repositories.Store, opportunities *contributoropportunities.Store, issueStore *issues.Store, proposalStore *proposals.Store, credentials *auth.Store) {
+func registerContributorOpportunityRoutes(mux *http.ServeMux, repos *repositories.Store, opportunities *contributoropportunities.Store, issueStore *issues.Store, proposalStore *proposals.Store, pulls *pullrequests.Store, releaseStore *releases.Store, credentials *auth.Store) {
 	read := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
 		actor, _, ok := authorizeRepositoryRead(w, r, repos, credentials, r.PathValue("id"))
 		return actor, ok
@@ -158,6 +162,80 @@ func registerContributorOpportunityRoutes(mux *http.ServeMux, repos *repositorie
 		}
 		opportunityResult(w, v, err, false)
 	})
+	mux.HandleFunc("POST /repositories/{id}/contribution-opportunities/{opportunity}/completion", func(w http.ResponseWriter, r *http.Request) {
+		actor, owner, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if !owner {
+			writeAPIError(w, 403, "owner_required", "only the repository owner can record a delivered contribution")
+			return
+		}
+		var input struct {
+			ExpectedVersion   int      `json:"expected_version"`
+			PullRequestID     string   `json:"pull_request_id"`
+			ReleaseID         string   `json:"release_id"`
+			Feedback          string   `json:"feedback"`
+			Credit            []string `json:"credit"`
+			ReadyForNext      bool     `json:"ready_for_next"`
+			SkillsRecognized  []string `json:"skills_recognized"`
+			NextOpportunityID string   `json:"next_opportunity_id"`
+			ReadinessNote     string   `json:"readiness_note"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		pull, pullErr := pulls.Get(r.PathValue("id"), input.PullRequestID)
+		release, releaseErr := releaseStore.Get(r.PathValue("id"), input.ReleaseID)
+		if pullErr != nil || releaseErr != nil || !validContributionDelivery(r.PathValue("opportunity"), input.ExpectedVersion, pull, release) {
+			writeAPIError(w, 422, "contribution_delivery_invalid", "completion requires the exact merged guided pull and a release that credits its contributor")
+			return
+		}
+		if input.NextOpportunityID != "" {
+			next, nextErr := opportunities.Get(r.PathValue("id"), input.NextOpportunityID)
+			if nextErr != nil || next.Status != "open" {
+				writeAPIError(w, 422, "next_opportunity_invalid", "the recommended next opportunity must be currently open")
+				return
+			}
+		}
+		completion := contributoropportunities.Completion{
+			ContributorID: pull.AuthorID, PullRequestID: pull.ID, ReleaseID: release.ID, ReleaseVersion: release.Version, MergeCommitID: *pull.MergeCommitID,
+			Credit: cleanContributionText(input.Credit), Feedback: strings.TrimSpace(input.Feedback), RecordedBy: actor.UserID,
+			SupportEffort: contributoropportunities.SupportEffort{SetupAttempts: len(pull.ContributionEvidence.SetupEvidence), MentorGuidanceItems: len(pull.ContributionEvidence.MentorGuidanceIDs), AgentAssistanceItems: len(pull.ContributionEvidence.AgentAssistanceIDs)},
+			Readiness:     contributoropportunities.Readiness{ReadyForNext: input.ReadyForNext, SkillsRecognized: cleanContributionText(input.SkillsRecognized), NextOpportunityID: input.NextOpportunityID, Note: strings.TrimSpace(input.ReadinessNote)},
+		}
+		v, err := opportunities.Complete(r.PathValue("id"), r.PathValue("opportunity"), input.ExpectedVersion, completion)
+		if errors.Is(err, contributoropportunities.ErrConflict) {
+			writeAPIError(w, 409, "opportunity_changed", "contribution opportunity changed")
+			return
+		}
+		if errors.Is(err, contributoropportunities.ErrInvalid) {
+			writeAPIError(w, 422, "contribution_completion_invalid", "credit, feedback, and a bounded readiness assessment are required")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 500, "opportunity_write_failed", "contribution completion could not be retained")
+			return
+		}
+		writeJSON(w, 200, v)
+	})
+}
+
+func validContributionDelivery(opportunityID string, version int, pull pullrequests.PullRequest, release releases.Candidate) bool {
+	return pull.Status == pullrequests.Merged && pull.MergeCommitID != nil && pull.ContributionEvidence != nil &&
+		pull.ContributionEvidence.OpportunityID == opportunityID && pull.ContributionEvidence.OpportunityVersion == version &&
+		slices.Contains(release.Inclusions.PullRequestIDs, pull.ID) && slices.Contains(release.Inclusions.ContributorIDs, pull.AuthorID)
+}
+
+func cleanContributionText(values []string) []string {
+	out := []string{}
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" && len(value) <= 200 && !slices.Contains(out, value) {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 func opportunityResult(w http.ResponseWriter, v contributoropportunities.Opportunity, err error, created bool) {
 	if errors.Is(err, contributoropportunities.ErrConflict) {

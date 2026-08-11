@@ -302,6 +302,15 @@ This provenance grants no upstream authority: ordinary discussion,
 reproduction, review, required checks, owner acknowledgements, integration
 queues, permissions, and merge rules apply.
 
+`POST /repositories/{id}/contribution-opportunities/{opportunity-id}/completion`
+is owner-only and accepts the opportunity's `expected_version`, exact
+`pull_request_id` and `release_id`, bounded `feedback`, `credit`,
+`ready_for_next`, `skills_recognized`, optional `next_opportunity_id`, and a
+`readiness_note`. The pull must be a merged guided contribution for that exact
+opportunity version, and the release must include both the pull and contributor.
+The response retains server-derived setup, mentor-guidance, and approved-agent
+support counts. Exact retries are idempotent; changed evidence conflicts.
+
 ## Activity
 
 `GET /activity` returns a newest-first, cursor-paginated `events` collection

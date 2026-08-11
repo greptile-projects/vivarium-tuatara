@@ -33,6 +33,7 @@ export type ContributionOpportunity = {
   required_skills: string[]; interests: string[]; dependency_ids: string[]; risk: "low" | "medium" | "high";
   estimated_minutes: number; agent_assistance: boolean; mentors: { user_id: string; note?: string }[];
   revision: string; status: "open" | "in_progress" | "paused" | "completed"; claim?: { id: string; actor_id: string; note?: string; claimed_at: string; expires_at: string };
+  completion?: { contributor_id:string; pull_request_id:string; release_id:string; release_version:string; merge_commit_id:string; credit:string[]; feedback:string; support_effort:{ setup_attempts:number; mentor_guidance_items:number; agent_assistance_items:number }; readiness:{ ready_for_next:boolean; skills_recognized:string[]; next_opportunity_id?:string; note:string }; recorded_by:string; recorded_at:string };
 };
 export type ContributionMatch = { opportunity: ContributionOpportunity; score: number; reasons: string[]; gaps: string[]; ready: boolean };
 export type DeliveryTeam = {
