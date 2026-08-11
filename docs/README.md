@@ -1451,3 +1451,13 @@ membership itself creates no credential, collaborator relationship, Git scope,
 review right, or merge authority; an unmet requirement stays visible as an
 access gap. Durable records use `$DELIVERY_TEAM_STORAGE_ROOT`, defaulting to
 `delivery-teams`.
+
+Accepted team members collaboratively publish a separate versioned execution
+plan inside the same record. Its ordered work streams freeze repository paths
+and inputs to exact revisions and name an owner, artifacts, dependencies,
+acceptance criteria, assumptions, budget, and integration position. The server
+rejects malformed or cyclic graphs and projects overlap, duplicate artifact,
+budget, and live access blockers on every read. Because a plan grants no
+authority, an owner without independent repository write access remains
+blocked. Material revisions require each affected human owner or approved
+agent operator to accept the new boundary with team and plan versions.
