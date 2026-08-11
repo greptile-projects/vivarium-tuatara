@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os/exec"
@@ -850,6 +851,241 @@ func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *rep
 			return
 		}
 		writeJSON(w, 201, projection)
+	})
+
+	projectVerification := func(v issues.Issue, verification issues.RepairVerification) map[string]any {
+		var runs []checkruns.Run
+		if checkStore != nil {
+			runs, _ = checkStore.List(v.RepositoryID, verification.PullRequestID)
+		}
+		wanted := map[string]bool{}
+		for _, id := range append(append([]string{}, verification.RequiredRunIDs...), verification.ReproductionRunIDs...) {
+			wanted[id] = true
+		}
+		proof := []checkruns.Run{}
+		allPassed := len(wanted) > 0
+		complete := len(wanted) > 0
+		for _, run := range runs {
+			if wanted[run.ID] {
+				proof = append(proof, run)
+				allPassed = allPassed && run.CommitID == verification.CandidateCommitID && run.State == "success"
+				complete = complete && (run.State == "success" || run.State == "failed" || run.State == "canceled")
+			}
+		}
+		if len(proof) != len(wanted) {
+			allPassed = false
+			complete = false
+		}
+		stale := false
+		if v.Implementation == nil || v.Implementation.ReproductionAttemptID != verification.ReproductionAttemptID {
+			stale = true
+		}
+		if pull, err := pullStore.Get(v.RepositoryID, verification.PullRequestID); err != nil || pull.SourceCommitID != verification.CandidateCommitID {
+			stale = true
+		}
+		return map[string]any{"verification": verification, "runs": proof, "complete": complete, "all_passed": allPassed, "stale": stale, "criteria_met": allPassed && !stale}
+	}
+	mux.HandleFunc("GET /repositories/{id}/issues/{issue_id}/repair-verifications", func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := require(w, r, "repositories:read"); !ok {
+			return
+		}
+		v, err := store.Get(r.PathValue("id"), r.PathValue("issue_id"))
+		if err != nil {
+			writeIssueError(w, err)
+			return
+		}
+		out := []map[string]any{}
+		for _, verification := range v.RepairVerifications {
+			out = append(out, projectVerification(v, verification))
+		}
+		writeJSON(w, 200, map[string]any{"verifications": out})
+	})
+	mux.HandleFunc("POST /repositories/{id}/issues/{issue_id}/repair-verifications", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		if checkStore == nil || pullStore == nil || gitStore == nil {
+			writeAPIError(w, 503, "repair_verification_unavailable", "clean verification execution is unavailable")
+			return
+		}
+		var in struct {
+			ExpectedVersion   int    `json:"expected_version"`
+			PullRequestID     string `json:"pull_request_id"`
+			CandidateCommitID string `json:"candidate_commit_id"`
+		}
+		if decodeJSON(r, &in) != nil || in.ExpectedVersion < 1 {
+			writeAPIError(w, 422, "repair_verification_invalid", "an exact pull revision and current issue version are required")
+			return
+		}
+		current, err := store.Get(r.PathValue("id"), r.PathValue("issue_id"))
+		if err != nil || current.Implementation == nil {
+			writeAPIError(w, 422, "repair_verification_invalid", "the issue has no governed repair")
+			return
+		}
+		pull, err := pullStore.Get(current.RepositoryID, strings.TrimSpace(in.PullRequestID))
+		if err != nil || pull.TaskID == nil || *pull.TaskID != current.Implementation.TaskID || pull.SourceCommitID != strings.ToLower(strings.TrimSpace(in.CandidateCommitID)) {
+			writeAPIError(w, 409, "repair_revision_changed", "verification must target the current exact repair pull revision")
+			return
+		}
+		var attempt *issues.ReproductionAttempt
+		for i := range current.ReproductionAttempts {
+			if current.ReproductionAttempts[i].ID == current.Implementation.ReproductionAttemptID {
+				attempt = &current.ReproductionAttempts[i]
+				break
+			}
+		}
+		if attempt == nil {
+			writeAPIError(w, 422, "repair_reproduction_missing", "the retained reproduction is unavailable")
+			return
+		}
+		var environment workspaces.Definition
+		if json.Unmarshal(attempt.EnvironmentDefinition, &environment) != nil || environment.Image == "" || len(attempt.Commands) == 0 {
+			writeAPIError(w, 422, "repair_reproduction_invalid", "the retained clean environment cannot be executed")
+			return
+		}
+		repository, err := gitStore.Open(current.RepositoryID)
+		if err != nil {
+			writeAPIError(w, 503, "repair_verification_unavailable", "repair repository is unavailable")
+			return
+		}
+		requiredNames, err := repos.RequiredChecks(current.RepositoryID, pull.TargetBranch)
+		if err != nil {
+			writeAPIError(w, 503, "repair_verification_unavailable", "required-check policy is unavailable")
+			return
+		}
+		required, err := trustedRepairCheckDefinitions(repository, current.Implementation.AffectedRevision, requiredNames)
+		if err != nil {
+			writeAPIError(w, 422, "required_checks_unavailable", "the trusted affected revision does not define every required check")
+			return
+		}
+		verificationID := issues.NewEvidenceID()
+		for i := range required {
+			required[i].Name = "issue " + verificationID[:8] + " required: " + required[i].Name
+		}
+		reproduction := []checkruns.Definition{}
+		setup := strings.Join(environment.Setup, " && ")
+		frozenInputs := []checkruns.InputFile{}
+		for _, input := range attempt.Inputs {
+			for _, attachment := range current.Attachments {
+				if attachment.ID == input.AttachmentID {
+					frozenInputs = append(frozenInputs, checkruns.InputFile{Name: input.Name, SHA256: input.SHA256, Data: attachment.Data})
+					break
+				}
+			}
+		}
+		if len(frozenInputs) != len(attempt.Inputs) {
+			writeAPIError(w, 409, "repair_inputs_changed", "the exact retained reproduction inputs are unavailable")
+			return
+		}
+		for i, command := range attempt.Commands {
+			body := command.Name
+			for _, declared := range environment.Experiments {
+				if declared.Name == command.Name {
+					body = declared.Command
+				}
+			}
+			if setup != "" {
+				body = setup + " && " + body
+			}
+			reproduction = append(reproduction, checkruns.Definition{Name: fmt.Sprintf("issue %s reproduction %d: %s", verificationID[:8], i+1, command.Name), Image: environment.Image, Command: body, WorkingDirectory: ".", TimeoutSeconds: max(30, environment.Resources.SetupSeconds)})
+			reproduction[len(reproduction)-1].Inputs = append([]checkruns.InputFile{}, frozenInputs...)
+		}
+		definitions := append(append([]checkruns.Definition{}, required...), reproduction...)
+		executable, err := checkStore.CreateRequested(current.RepositoryID, pull.ID, pull.SourceCommitID, definitions, actor.UserID)
+		if err != nil {
+			writeAPIError(w, 503, "repair_verification_failed", "verification evidence could not be reserved")
+			return
+		}
+		persisted, _ := checkStore.List(current.RepositoryID, pull.ID)
+		ordered, complete := orderedVerificationRuns(persisted, definitions, pull.SourceCommitID)
+		if !complete {
+			writeAPIError(w, 503, "repair_verification_failed", "verification reservation is incomplete")
+			return
+		}
+		verification := issues.RepairVerification{ID: verificationID, PullRequestID: pull.ID, CandidateCommitID: pull.SourceCommitID, ReproductionAttemptID: attempt.ID, DefinitionSHA256: attempt.DefinitionSHA256, AcceptanceCriteria: append([]string{}, current.Implementation.AcceptanceCriteria...), RequestedBy: actor.UserID, CreatedAt: time.Now().UTC(), Decisions: []issues.ResolutionDecision{}}
+		if workspaceStore != nil {
+			if candidates, listErr := workspaceStore.List(actor.UserID); listErr == nil {
+				for _, candidate := range candidates {
+					if candidate.RepositoryID == current.RepositoryID && candidate.CommitID == pull.SourceCommitID && candidate.Source.PullRequestID == pull.ID && candidate.State == "running" {
+						verification.PreviewAllowed, verification.PreviewWorkspaceID = true, candidate.ID
+						break
+					}
+				}
+			}
+		}
+		for _, input := range attempt.Inputs {
+			verification.InputSHA256s = append(verification.InputSHA256s, input.SHA256)
+		}
+		for i := range required {
+			verification.RequiredRunIDs = append(verification.RequiredRunIDs, ordered[i].ID)
+		}
+		for i := range reproduction {
+			verification.ReproductionRunIDs = append(verification.ReproductionRunIDs, ordered[len(required)+i].ID)
+		}
+		updated, err := store.Mutate(current.RepositoryID, current.ID, actor.UserID, in.ExpectedVersion, func(v *issues.Issue) error {
+			if v.Implementation == nil || v.Implementation.ReproductionAttemptID != attempt.ID {
+				return issues.ErrConflict
+			}
+			v.RepairVerifications = append(v.RepairVerifications, verification)
+			issues.AddHistory(v, "repair_verification_started", actor.UserID, verification.ID)
+			return nil
+		})
+		if err != nil {
+			writeIssueError(w, err)
+			return
+		}
+		for _, run := range executable {
+			go checkStore.Execute(run, repository.Path())
+		}
+		writeJSON(w, 202, map[string]any{"issue": updated, "proof": projectVerification(updated, verification)})
+	})
+	mux.HandleFunc("POST /repositories/{id}/issues/{issue_id}/repair-verifications/{verification_id}/decisions", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int    `json:"expected_version"`
+			Kind            string `json:"kind"`
+			Rationale       string `json:"rationale"`
+		}
+		if decodeJSON(r, &in) != nil || in.ExpectedVersion < 1 || strings.TrimSpace(in.Rationale) == "" {
+			writeAPIError(w, 422, "resolution_decision_invalid", "a current version, decision, and rationale are required")
+			return
+		}
+		repo, _ := repos.GetByID(r.PathValue("id"))
+		updated, err := store.Mutate(r.PathValue("id"), r.PathValue("issue_id"), actor.UserID, in.ExpectedVersion, func(v *issues.Issue) error {
+			for i := range v.RepairVerifications {
+				x := &v.RepairVerifications[i]
+				if x.ID != r.PathValue("verification_id") {
+					continue
+				}
+				allowed := actor.UserID == v.ReporterID && (in.Kind == "confirmed" || in.Kind == "rejected") || actor.UserID == repo.OwnerID && in.Kind == "maintainer_override"
+				if !allowed {
+					return issues.ErrForbidden
+				}
+				proof := projectVerification(*v, *x)
+				if stale, _ := proof["stale"].(bool); stale {
+					return issues.ErrConflict
+				}
+				if complete, _ := proof["complete"].(bool); !complete {
+					return issues.ErrConflict
+				}
+				if met, _ := proof["criteria_met"].(bool); in.Kind == "confirmed" && !met {
+					return issues.ErrInvalid
+				}
+				x.Decisions = append(x.Decisions, issues.ResolutionDecision{ID: issues.NewEvidenceID(), Kind: in.Kind, ActorID: actor.UserID, CommitID: x.CandidateCommitID, Rationale: strings.TrimSpace(in.Rationale), CreatedAt: time.Now().UTC()})
+				issues.AddHistory(v, "resolution_"+in.Kind, actor.UserID, x.ID)
+				return nil
+			}
+			return issues.ErrNotFound
+		})
+		if err != nil {
+			writeIssueError(w, err)
+			return
+		}
+		writeJSON(w, 200, updated)
 	})
 }
 

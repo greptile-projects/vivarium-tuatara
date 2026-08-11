@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -38,6 +39,16 @@ type Definition struct {
 	WorkingDirectory string            `json:"working_directory,omitempty"`
 	Environment      map[string]string `json:"environment,omitempty"`
 	TimeoutSeconds   int               `json:"timeout_seconds,omitempty"`
+	Inputs           []InputFile       `json:"inputs,omitempty"`
+}
+
+// InputFile is server-frozen verification input. Repository check
+// configuration cannot declare these; issue verification supplies them from
+// retained, checksummed reporter evidence.
+type InputFile struct {
+	Name   string `json:"name"`
+	SHA256 string `json:"sha256"`
+	Data   string `json:"data"`
 }
 
 type Config struct {
@@ -182,6 +193,9 @@ func ParseConfig(data []byte) (Config, error) {
 	seen := map[string]bool{}
 	for i := range c.Checks {
 		x := &c.Checks[i]
+		if len(x.Inputs) != 0 {
+			return Config{}, errors.New("check configuration cannot embed inputs")
+		}
 		if strings.TrimSpace(x.Name) == "" || len(x.Name) > 100 || strings.TrimSpace(x.Command) == "" || len(x.Command) > 4000 || seen[x.Name] || x.TimeoutSeconds < 0 || x.TimeoutSeconds > 3600 {
 			return Config{}, errors.New("invalid check definition")
 		}
@@ -926,6 +940,26 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 		err = p
 	}
 	exit := 0
+	if err == nil {
+		for _, input := range run.Definition.Inputs {
+			clean := filepath.Clean(input.Name)
+			raw, decodeErr := base64.StdEncoding.DecodeString(input.Data)
+			sum := sha256.Sum256(raw)
+			if decodeErr != nil || clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || hex.EncodeToString(sum[:]) != input.SHA256 {
+				err = errors.New("verification input is invalid")
+				break
+			}
+			target := filepath.Join(workspace, clean)
+			if mkdirErr := os.MkdirAll(filepath.Dir(target), 0o700); mkdirErr != nil {
+				err = mkdirErr
+				break
+			}
+			if writeErr := os.WriteFile(target, raw, 0o600); writeErr != nil {
+				err = writeErr
+				break
+			}
+		}
+	}
 	if err == nil {
 		dir := filepath.Join(workspace, run.Definition.WorkingDirectory)
 		info, e := os.Stat(dir)

@@ -67,6 +67,13 @@ func TestCreateRepairsMissingDefinitionForExistingCommit(t *testing.T) {
 	}
 }
 
+func TestRepositoryConfigurationCannotEmbedVerificationInputs(t *testing.T) {
+	_, err := ParseConfig([]byte(`{"version":1,"checks":[{"name":"quality","image":"alpine:3.22","command":"true","inputs":[{"name":"report.txt","sha256":"deadbeef","data":"c2VjcmV0"}]}]}`))
+	if err == nil {
+		t.Fatal("repository-authored checks embedded server-frozen reporter input")
+	}
+}
+
 func TestEvidenceSequenceHandlesEscapedMaximumLogChunk(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {

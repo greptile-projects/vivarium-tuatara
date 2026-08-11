@@ -1584,3 +1584,10 @@ completes the issue link without creating another repair plan.
 Recovery requires the complete frozen reasoning origin to match, including the
 issue version, affected revision, selected evidence, and finding snapshots;
 changed evidence returns a conflict instead of attaching it to the older task.
+For the resulting exact pull revision, collaborators can reserve issue-specific
+resolution proof that replays the retained reproduction inputs and environment
+beside every required check. The reporter sees the criteria and per-run evidence
+and can confirm or reject the result. A later pull commit makes that confirmation
+stale; owners may append a reasoned override, but reporter dissent remains.
+A currently shared, running workspace at that same pull revision is projected
+as the optional safe-preview handoff; no verification run publishes a port.
