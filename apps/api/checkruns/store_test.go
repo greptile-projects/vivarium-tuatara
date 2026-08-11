@@ -14,14 +14,15 @@ import (
 )
 
 func TestParseConfigValidatesExecutionContext(t *testing.T) {
-	config, err := ParseConfig([]byte(`{"version":1,"checks":[{"name":"test","image":"alpine:3.22","command":"test \"$MODE\" = ci","working_directory":"app","environment":{"MODE":"ci"},"timeout_seconds":30}]}`))
-	if err != nil || len(config.Checks) != 1 || config.Checks[0].WorkingDirectory != "app" {
+	config, err := ParseConfig([]byte(`{"version":1,"checks":[{"name":"test","image":"alpine:3.22","command":"test \"$MODE\" = ci","working_directory":"app","environment":{"MODE":"ci"},"timeout_seconds":30,"cpus":0.5,"memory_mb":384,"storage_mb":96}]}`))
+	if err != nil || len(config.Checks) != 1 || config.Checks[0].WorkingDirectory != "app" || config.Checks[0].CPUs != 0.5 || config.Checks[0].MemoryMB != 384 || config.Checks[0].StorageMB != 96 {
 		t.Fatalf("ParseConfig() = %#v, %v", config, err)
 	}
 	for _, body := range []string{
 		`{"version":2,"checks":[{"name":"test","image":"alpine:3.22","command":"true"}]}`,
 		`{"version":1,"checks":[{"name":"test","image":"alpine:3.22","command":"true","working_directory":"../secret"}]}`,
 		`{"version":1,"checks":[{"name":"test","image":"alpine:3.22","command":"true"},{"name":"test","image":"alpine:3.22","command":"false"}]}`,
+		`{"version":1,"checks":[{"name":"test","image":"alpine:3.22","command":"true","cpus":3}]}`,
 	} {
 		if _, err := ParseConfig([]byte(body)); err == nil {
 			t.Fatalf("ParseConfig(%s) unexpectedly succeeded", body)
