@@ -1149,7 +1149,12 @@ whenever dependencies change or the web job fails before it starts.
   supersession, and open challenges keep diagnosis attributable. Bounded
   `issues:investigate` credentials expose only one selected reproduction and
   named links; agent findings cite only that packet and use the generated agent
-  identity without gaining repository write authority.
+  identity without gaining repository write authority. Link creation resolves
+  code and dependency revisions plus release, deployment, incident, proposal,
+  pull, and issue identities against authoritative stores while holding current
+  read authorization. Investigation packet reads and finding publication hold
+  the repository catalog admission lock through their outcome, and a visible
+  durability-uncertain launch retains its issued credential.
 
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.

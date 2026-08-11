@@ -17,13 +17,19 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
+	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
-func registerIssueRoutes(mux *http.ServeMux, repos *repositories.Store, store *issues.Store, releaseStore *releases.Store, workspaceStore *workspaces.Store, credentials *auth.Store, activity *activities.Store) {
+func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *repositories.Store, store *issues.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, incidentStore *incidents.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, packageStore *packages.Store, workspaceStore *workspaces.Store, credentials *auth.Store, activity *activities.Store) {
 	const issueBodyLimit = 15 << 20
 	require := func(w http.ResponseWriter, r *http.Request, scope string) (auth.Credential, bool) {
 		actor, ok := authenticateRequest(w, r, credentials, scope, false)
@@ -447,16 +453,34 @@ func registerIssueRoutes(mux *http.ServeMux, repos *repositories.Store, store *i
 			writeAPIError(w, 422, "invalid_issue_link", "typed links require a resource and label")
 			return
 		}
-		v, e := store.Mutate(r.PathValue("id"), r.PathValue("issue_id"), actor.UserID, in.ExpectedVersion, func(v *issues.Issue) error {
-			for _, x := range v.Links {
-				if x.Kind == in.Kind && x.RepositoryID == in.RepositoryID && x.ResourceID == in.ResourceID {
-					return issues.ErrConflict
+		in.RepositoryID = strings.TrimSpace(in.RepositoryID)
+		if in.RepositoryID == "" {
+			writeAPIError(w, 422, "invalid_issue_link", "repository_id is required for issue evidence")
+			return
+		}
+		if err := resolveIssueLink(gitStore, repos, store, releaseStore, deploymentStore, incidentStore, proposalStore, pullStore, packageStore, actor.UserID, in.Kind, in.RepositoryID, in.ResourceID, in.Revision); err != nil {
+			writeAPIError(w, 422, "invalid_issue_link", "evidence target or exact revision could not be resolved")
+			return
+		}
+		var v issues.Issue
+		e := repos.WithCurrentReadAccess(actor.UserID, []string{in.RepositoryID}, func() error {
+			var mutationErr error
+			v, mutationErr = store.Mutate(r.PathValue("id"), r.PathValue("issue_id"), actor.UserID, in.ExpectedVersion, func(v *issues.Issue) error {
+				for _, x := range v.Links {
+					if x.Kind == in.Kind && x.RepositoryID == in.RepositoryID && x.ResourceID == in.ResourceID {
+						return issues.ErrConflict
+					}
 				}
-			}
-			v.Links = append(v.Links, issues.Link{ID: issues.NewID(), Kind: in.Kind, RepositoryID: in.RepositoryID, ResourceID: in.ResourceID, Revision: in.Revision, Label: strings.TrimSpace(in.Label), AddedBy: actor.UserID, CreatedAt: time.Now().UTC()})
-			issues.AddHistory(v, "evidence_linked", actor.UserID, in.Kind+": "+in.Label)
-			return nil
+				v.Links = append(v.Links, issues.Link{ID: issues.NewID(), Kind: in.Kind, RepositoryID: in.RepositoryID, ResourceID: in.ResourceID, Revision: in.Revision, Label: strings.TrimSpace(in.Label), AddedBy: actor.UserID, CreatedAt: time.Now().UTC()})
+				issues.AddHistory(v, "evidence_linked", actor.UserID, in.Kind+": "+in.Label)
+				return nil
+			})
+			return mutationErr
 		})
+		if errors.Is(e, repositories.ErrNotFound) {
+			writeAPIError(w, 422, "invalid_issue_link", "evidence repository is unavailable")
+			return
+		}
 		writeIssueMutation(w, v, e, 201)
 	})
 	mux.HandleFunc("POST /repositories/{id}/issues/{issue_id}/evidence-requests", func(w http.ResponseWriter, r *http.Request) {
@@ -516,7 +540,7 @@ func registerIssueRoutes(mux *http.ServeMux, repos *repositories.Store, store *i
 		if !ok {
 			return
 		}
-		addIssueFinding(w, r, store, actor, "", 1)
+		addIssueFinding(w, r, repos, store, actor, "", 1)
 	})
 	mux.HandleFunc("POST /repositories/{id}/issues/{issue_id}/findings/{finding_id}/challenges", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := require(w, r, "repositories:write")
@@ -589,9 +613,14 @@ func registerIssueRoutes(mux *http.ServeMux, repos *repositories.Store, store *i
 			issues.AddHistory(v, "investigation_started", actor.UserID, investigation.ID)
 			return nil
 		})
-		if e != nil {
+		if e != nil && !errors.Is(e, issues.ErrDurabilityUncertain) {
 			_, _ = credentials.Revoke(actor.UserID, issued.ID)
 			writeIssueMutation(w, v, e, 201)
+			return
+		}
+		if errors.Is(e, issues.ErrDurabilityUncertain) {
+			w.Header().Set("Vivarium-Durability", "uncertain")
+			writeJSON(w, 202, map[string]any{"issue": v, "investigation": investigation, "credential": issued})
 			return
 		}
 		writeJSON(w, 201, map[string]any{"issue": v, "investigation": investigation, "credential": issued})
@@ -608,27 +637,27 @@ func registerIssueRoutes(mux *http.ServeMux, repos *repositories.Store, store *i
 		}
 		for _, x := range v.Investigations {
 			if x.ID == r.PathValue("investigation_id") && x.CredentialID == credential.ID && x.State == "running" {
-				repo, repoErr := repos.GetByID(v.RepositoryID)
-				stillParticipant, _ := repos.HasCollaborator(x.InitiatorID, v.RepositoryID)
-				if repoErr != nil || repo.OwnerID != x.InitiatorID && !stillParticipant {
-					writeAPIError(w, 403, "investigation_access_changed", "the investigation initiator no longer has repository access")
-					return
-				}
-				var attempt issues.ReproductionAttempt
-				for _, a := range v.ReproductionAttempts {
-					if a.ID == x.ReproductionAttemptID {
-						attempt = a
-					}
-				}
-				links := []issues.Link{}
-				for _, l := range v.Links {
-					for _, id := range x.LinkIDs {
-						if l.ID == id {
-							links = append(links, l)
+				authorizationErr := repos.WithCurrentParticipant(x.InitiatorID, v.RepositoryID, func() error {
+					var attempt issues.ReproductionAttempt
+					for _, a := range v.ReproductionAttempts {
+						if a.ID == x.ReproductionAttemptID {
+							attempt = a
 						}
 					}
+					links := []issues.Link{}
+					for _, l := range v.Links {
+						for _, id := range x.LinkIDs {
+							if l.ID == id {
+								links = append(links, l)
+							}
+						}
+					}
+					writeJSON(w, 200, map[string]any{"investigation": x, "reproduction": attempt, "links": links})
+					return nil
+				})
+				if authorizationErr != nil {
+					writeAPIError(w, 403, "investigation_access_changed", "the investigation initiator no longer has repository access")
 				}
-				writeJSON(w, 200, map[string]any{"investigation": x, "reproduction": attempt, "links": links})
 				return
 			}
 		}
@@ -639,24 +668,11 @@ func registerIssueRoutes(mux *http.ServeMux, repos *repositories.Store, store *i
 		if !ok {
 			return
 		}
-		current, currentErr := store.Get(r.PathValue("id"), r.PathValue("issue_id"))
-		authorized := false
-		for _, x := range current.Investigations {
-			if x.ID == r.PathValue("investigation_id") && x.CredentialID == credential.ID {
-				repo, repoErr := repos.GetByID(current.RepositoryID)
-				collaborator, _ := repos.HasCollaborator(x.InitiatorID, current.RepositoryID)
-				authorized = currentErr == nil && repoErr == nil && (repo.OwnerID == x.InitiatorID || collaborator)
-			}
-		}
-		if !authorized {
-			writeAPIError(w, 403, "investigation_access_changed", "the investigation selection is unavailable after an access change")
-			return
-		}
-		addIssueFinding(w, r, store, credential, r.PathValue("investigation_id"), 0)
+		addIssueFinding(w, r, repos, store, credential, r.PathValue("investigation_id"), 0)
 	})
 }
 
-func addIssueFinding(w http.ResponseWriter, r *http.Request, store *issues.Store, actor auth.Credential, investigationID string, requireExpected int) {
+func addIssueFinding(w http.ResponseWriter, r *http.Request, catalog *repositories.Store, store *issues.Store, actor auth.Credential, investigationID string, requireExpected int) {
 	var in struct {
 		ExpectedVersion int      `json:"expected_version"`
 		Kind            string   `json:"kind"`
@@ -676,49 +692,75 @@ func addIssueFinding(w http.ResponseWriter, r *http.Request, store *issues.Store
 		writeAPIError(w, 422, "invalid_issue_version", "expected_version is required")
 		return
 	}
-	findingActor := actor.UserID
-	v, e := store.Mutate(r.PathValue("id"), r.PathValue("issue_id"), actor.UserID, in.ExpectedVersion, func(v *issues.Issue) error {
-		allowed := map[string]bool{}
-		for _, x := range v.Links {
-			allowed[x.ID] = true
+	findingActor, authorityID := actor.UserID, actor.UserID
+	if investigationID != "" {
+		current, err := store.Get(r.PathValue("id"), r.PathValue("issue_id"))
+		if err != nil {
+			writeIssueError(w, err)
+			return
 		}
-		for _, x := range v.ReproductionAttempts {
-			allowed[x.ID] = true
+		matched := false
+		for _, x := range current.Investigations {
+			if x.ID == investigationID && x.CredentialID == actor.ID {
+				authorityID, matched = x.InitiatorID, true
+			}
 		}
-		if investigationID != "" {
-			ok := false
-			for _, x := range v.Investigations {
-				if x.ID == investigationID && x.CredentialID == actor.ID && x.State == "running" {
-					ok = true
-					findingActor = x.AgentID
-					allowed = map[string]bool{x.ReproductionAttemptID: true}
-					for _, id := range x.LinkIDs {
-						allowed[id] = true
+		if !matched {
+			writeAPIError(w, 403, "investigation_access_changed", "the investigation selection is unavailable")
+			return
+		}
+	}
+	var v issues.Issue
+	e := catalog.WithCurrentParticipant(authorityID, r.PathValue("id"), func() error {
+		var mutationErr error
+		v, mutationErr = store.Mutate(r.PathValue("id"), r.PathValue("issue_id"), actor.UserID, in.ExpectedVersion, func(v *issues.Issue) error {
+			allowed := map[string]bool{}
+			for _, x := range v.Links {
+				allowed[x.ID] = true
+			}
+			for _, x := range v.ReproductionAttempts {
+				allowed[x.ID] = true
+			}
+			if investigationID != "" {
+				ok := false
+				for _, x := range v.Investigations {
+					if x.ID == investigationID && x.CredentialID == actor.ID && x.State == "running" {
+						ok = true
+						findingActor = x.AgentID
+						allowed = map[string]bool{x.ReproductionAttemptID: true}
+						for _, id := range x.LinkIDs {
+							allowed[id] = true
+						}
 					}
 				}
+				if !ok {
+					return issues.ErrForbidden
+				}
 			}
-			if !ok {
-				return issues.ErrForbidden
+			for _, id := range in.CitationIDs {
+				if !allowed[id] {
+					return issues.ErrInvalid
+				}
 			}
-		}
-		for _, id := range in.CitationIDs {
-			if !allowed[id] {
-				return issues.ErrInvalid
+			if in.SupersedesID != "" {
+				found := false
+				for _, x := range v.Findings {
+					found = found || x.ID == in.SupersedesID
+				}
+				if !found {
+					return issues.ErrInvalid
+				}
 			}
-		}
-		if in.SupersedesID != "" {
-			found := false
-			for _, x := range v.Findings {
-				found = found || x.ID == in.SupersedesID
-			}
-			if !found {
-				return issues.ErrInvalid
-			}
-		}
-		v.Findings = append(v.Findings, issues.Finding{ID: issues.NewID(), Kind: in.Kind, Statement: strings.TrimSpace(in.Statement), ActorID: findingActor, InvestigationID: investigationID, CitationIDs: in.CitationIDs, SupersedesID: in.SupersedesID, CreatedAt: time.Now().UTC()})
-		issues.AddHistory(v, "finding_published", findingActor, in.Kind)
-		return nil
+			v.Findings = append(v.Findings, issues.Finding{ID: issues.NewID(), Kind: in.Kind, Statement: strings.TrimSpace(in.Statement), ActorID: findingActor, InvestigationID: investigationID, CitationIDs: in.CitationIDs, SupersedesID: in.SupersedesID, CreatedAt: time.Now().UTC()})
+			issues.AddHistory(v, "finding_published", findingActor, in.Kind)
+			return nil
+		})
+		return mutationErr
 	})
+	if errors.Is(e, repositories.ErrInvalidCollaborator) || errors.Is(e, repositories.ErrNotFound) {
+		writeAPIError(w, 403, "investigation_access_changed", "repository authority changed before finding publication")
+		return
+	}
 	writeIssueMutation(w, v, e, 201)
 }
 
@@ -733,6 +775,99 @@ func writeIssueMutation(w http.ResponseWriter, v issues.Issue, err error, status
 		return
 	}
 	writeJSON(w, status, v)
+}
+
+func resolveIssueLink(gitStore *storage.Store, catalog *repositories.Store, issueStore *issues.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, incidentStore *incidents.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, packageStore *packages.Store, actorID, kind, repositoryID, resourceID, revision string) error {
+	resourceID, revision = strings.TrimSpace(resourceID), strings.TrimSpace(revision)
+	switch kind {
+	case "code":
+		if gitStore == nil || len(revision) != 40 {
+			return issues.ErrInvalid
+		}
+		repository, err := gitStore.Open(repositoryID)
+		if err != nil {
+			return err
+		}
+		commit, err := repository.ReadCommit(storage.ObjectID(revision))
+		if err != nil {
+			return err
+		}
+		paths, err := repository.WalkTree(commit.Tree)
+		if err != nil {
+			return err
+		}
+		for _, entry := range paths {
+			if entry.Path == resourceID && entry.Type == storage.BlobObject {
+				return nil
+			}
+		}
+	case "dependency":
+		if packageStore == nil || len(revision) != 40 {
+			return issues.ErrInvalid
+		}
+		inventory, err := packageStore.GetInventory(repositoryID, revision)
+		if err != nil {
+			return err
+		}
+		for _, entry := range inventory.Entries {
+			if entry.Name == resourceID {
+				return nil
+			}
+		}
+	case "release":
+		if releaseStore != nil {
+			value, err := releaseStore.Get(repositoryID, resourceID)
+			if err == nil && (revision == "" || value.CommitID == revision) {
+				return nil
+			}
+		}
+	case "deployment":
+		if deploymentStore != nil {
+			value, err := deploymentStore.GetPromotion(repositoryID, resourceID)
+			if err == nil && (revision == "" || value.CommitID == revision) {
+				return nil
+			}
+		}
+	case "incident":
+		participant, _ := catalog.HasCollaborator(actorID, repositoryID)
+		repository, _ := catalog.GetByID(repositoryID)
+		if repository.OwnerID != actorID && !participant {
+			return issues.ErrForbidden
+		}
+		if incidentStore != nil {
+			value, err := incidentStore.Get(resourceID)
+			if err == nil {
+				for _, scope := range value.Scopes {
+					if scope.RepositoryID == repositoryID {
+						return nil
+					}
+				}
+			}
+		}
+	case "proposal":
+		if proposalStore != nil {
+			if _, err := proposalStore.Get(repositoryID, resourceID); err == nil {
+				return nil
+			}
+		}
+	case "pull_request":
+		if pullStore != nil {
+			value, err := pullStore.Get(repositoryID, resourceID)
+			if err == nil && (revision == "" || value.SourceCommitID == revision) {
+				return nil
+			}
+		}
+	case "issue":
+		if issueStore != nil {
+			value, err := issueStore.Get(repositoryID, resourceID)
+			participant, _ := catalog.HasCollaborator(actorID, repositoryID)
+			repository, _ := catalog.GetByID(repositoryID)
+			if err == nil && (value.Visibility == "public" || repository.OwnerID == actorID || participant) {
+				return nil
+			}
+		}
+	}
+	return issues.ErrInvalid
 }
 
 func cleanReproductionArtifactPath(value string) (string, bool) {

@@ -94,6 +94,16 @@ func TestIssueTriageRetainsCitedHumanAndBoundedAgentConclusions(t *testing.T) {
 	created := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"triage"}`, owner.Credential.Token, http.StatusCreated)
 	var repo repositories.Repository
 	decodeResponse(t, created, &repo)
+	gitRepository, err := gitStore.Open(repo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := gitRepository.WriteObject(storage.BlobObject, []byte("package parser"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "parser.go", id: blob})
+	revision := writeTestCommit(t, gitRepository, tree, nil, 1700000000, "parser")
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/collaborators", `{"user_id":"`+reporter.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
 	v, err := issueStore.Create(issues.Issue{RepositoryID: repo.ID, ReporterID: reporter.User.ID, Title: "Failure", ExpectedBehavior: "works", ObservedBehavior: "fails", Severity: "high", Environment: "Linux", ReproductionSteps: []string{"run"}, Visibility: "repository"})
 	if err != nil {
@@ -104,9 +114,11 @@ func TestIssueTriageRetainsCitedHumanAndBoundedAgentConclusions(t *testing.T) {
 		t.Fatal(err)
 	}
 	url := server.URL + "/repositories/" + repo.ID + "/issues/" + v.ID
-	response := authenticatedRequest(t, http.MethodPut, url+"/triage", `{"expected_version":`+strconv.Itoa(v.Version)+`,"classification":"regression","priority":"urgent","assignee_id":"`+owner.User.ID+`","suspected_revision":"`+strings.Repeat("a", 40)+`","suspected_owner_ids":["`+owner.User.ID+`"]}`, owner.Credential.Token, http.StatusOK)
+	response := authenticatedRequest(t, http.MethodPut, url+"/triage", `{"expected_version":`+strconv.Itoa(v.Version)+`,"classification":"regression","priority":"urgent","assignee_id":"`+owner.User.ID+`","suspected_revision":"`+string(revision)+`","suspected_owner_ids":["`+owner.User.ID+`"]}`, owner.Credential.Token, http.StatusOK)
 	decodeResponse(t, response, &v)
-	response = authenticatedRequest(t, http.MethodPost, url+"/links", `{"expected_version":`+strconv.Itoa(v.Version)+`,"kind":"code","repository_id":"`+repo.ID+`","resource_id":"parser.go","revision":"aaaaaaaa","label":"parser entry point"}`, owner.Credential.Token, http.StatusCreated)
+	authenticatedRequest(t, http.MethodPost, url+"/links", `{"expected_version":`+strconv.Itoa(v.Version)+`,"kind":"code","resource_id":"parser.go","revision":"`+string(revision)+`","label":"missing repository"}`, owner.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
+	authenticatedRequest(t, http.MethodPost, url+"/links", `{"expected_version":`+strconv.Itoa(v.Version)+`,"kind":"code","repository_id":"`+repo.ID+`","resource_id":"missing.go","revision":"`+string(revision)+`","label":"missing path"}`, owner.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
+	response = authenticatedRequest(t, http.MethodPost, url+"/links", `{"expected_version":`+strconv.Itoa(v.Version)+`,"kind":"code","repository_id":"`+repo.ID+`","resource_id":"parser.go","revision":"`+string(revision)+`","label":"parser entry point"}`, owner.Credential.Token, http.StatusCreated)
 	decodeResponse(t, response, &v)
 	linkID, attemptID := v.Links[0].ID, v.ReproductionAttempts[0].ID
 	response = authenticatedRequest(t, http.MethodPost, url+"/findings", `{"expected_version":`+strconv.Itoa(v.Version)+`,"kind":"hypothesis","statement":"The parser changed behavior.","citation_ids":["`+linkID+`","`+attemptID+`"]}`, owner.Credential.Token, http.StatusCreated)
@@ -129,4 +141,12 @@ func TestIssueTriageRetainsCitedHumanAndBoundedAgentConclusions(t *testing.T) {
 		t.Fatalf("triage projection = %#v", v)
 	}
 	authenticatedRequest(t, http.MethodPost, url+"/investigations/"+launched.Investigation.ID+"/findings", `{"kind":"finding","statement":"Unselected claim.","citation_ids":["missing"]}`, launched.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
+	response = authenticatedRequest(t, http.MethodPost, url+"/investigations", `{"expected_version":`+strconv.Itoa(v.Version)+`,"mandate":"Check access revocation.","reproduction_attempt_id":"`+attemptID+`","link_ids":["`+linkID+`"],"expires_in":600}`, reporter.Credential.Token, http.StatusCreated)
+	var revoked struct {
+		Investigation issues.Investigation  `json:"investigation"`
+		Credential    auth.IssuedCredential `json:"credential"`
+	}
+	decodeResponse(t, response, &revoked)
+	authenticatedRequest(t, http.MethodDelete, server.URL+"/repositories/"+repo.ID+"/collaborators/"+reporter.User.ID, "", owner.Credential.Token, http.StatusNoContent).Body.Close()
+	authenticatedRequest(t, http.MethodPost, url+"/investigations/"+revoked.Investigation.ID+"/findings", `{"kind":"finding","statement":"Must not publish.","citation_ids":["`+attemptID+`"]}`, revoked.Credential.Token, http.StatusForbidden).Body.Close()
 }
