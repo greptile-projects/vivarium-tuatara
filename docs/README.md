@@ -1504,4 +1504,25 @@ declared integration order. Pulls retain team, manifest, stream, and order
 links. Every branch and repository permission is revalidated at publication;
 required reviews, owner acknowledgements, checks, queues, release policy, and
 stale-revision behavior remain authoritative. Neither team membership nor the
-manifest grants merge authority.
+manifest grants merge authority. Publication starts each pull's ordinary
+exact-revision repository checks only after the complete ordered pull set is
+durably linked to the integration. A later pull or final manifest-write failure
+starts no partial checks; exact retry first reconciles any existing pulls.
+The same publication endpoint accepts a current-version or lost-response
+pre-publication-version retry after the integration is published. It follows
+the retained pull links and idempotently creates only missing check definitions
+or resumes nonterminal runs, recovering a process stop or transient check-store
+failure without duplicating completed evidence.
+Repository access, configuration reads, and check-run persistence are part of
+that recovery outcome. Any failure returns a retryable `503`; a successful
+response means every linked pull's required check records were reconciled.
+
+The connected delivery-team browser journey carries an accepted technical
+decision through a chartered developer and two independently operated
+specialist agents. Parallel execution retains a disputed finding and human
+resolution, a failed stream and bounded redirect, resource costs, and an
+agent-to-human ownership handoff with explicit verification. The resulting
+ordered pulls pass repository checks, independent review, merge, and release.
+Removing one agent operator revokes the derived Git credential while retaining
+the team's legitimate charter, plan, evidence, interventions, authorship,
+handoff, integration, and delivered outcome.

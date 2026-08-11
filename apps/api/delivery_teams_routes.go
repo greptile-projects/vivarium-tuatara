@@ -12,6 +12,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/decisions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deliveryteams"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/explanations"
@@ -82,7 +83,7 @@ type deliveryTeamPublishIntegrationInput struct {
 	TargetBranch    string `json:"target_branch"`
 }
 
-func registerDeliveryTeamRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, identities *users.Store, store *deliveryteams.Store, proposalStore *proposals.Store, decisionStore *decisions.Store, incidentStore *incidents.Store, orgs *organizations.Store, activity *activities.Store, sessionStore *changesessions.Store, workspaceStore *workspaces.Store, explanationStore *explanations.Store, pulls *pullrequests.Store) {
+func registerDeliveryTeamRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, identities *users.Store, store *deliveryteams.Store, proposalStore *proposals.Store, decisionStore *decisions.Store, incidentStore *incidents.Store, orgs *organizations.Store, activity *activities.Store, sessionStore *changesessions.Store, workspaceStore *workspaces.Store, explanationStore *explanations.Store, pulls *pullrequests.Store, checks *checkruns.Store) {
 	mux.HandleFunc("POST /repositories/{id}/delivery-teams", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
 		if !ok {
@@ -511,10 +512,6 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 			writeAPIError(w, 400, "invalid_request", "expected_version is required")
 			return
 		}
-		if team.Version != in.ExpectedVersion {
-			writeAPIError(w, 409, "delivery_team_changed", "delivery team version changed")
-			return
-		}
 		target := strings.TrimSpace(in.TargetBranch)
 		if target == "" {
 			target = "main"
@@ -529,6 +526,36 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 			writeAPIError(w, 404, "delivery_integration_not_found", "integration not found")
 			return
 		}
+		if manifest.PublishedAt != nil {
+			if in.ExpectedVersion != team.Version && in.ExpectedVersion != team.Version-1 {
+				writeAPIError(w, 409, "delivery_team_changed", "delivery team version changed")
+				return
+			}
+			if pulls == nil {
+				writeAPIError(w, 503, "delivery_integration_unavailable", "pull request governance is unavailable")
+				return
+			}
+			// Publication retries are also the recovery path for a crash or
+			// transient check-store failure after the durable integration write.
+			// Check creation is idempotent per pull, commit, and definition.
+			for _, linked := range manifest.PullRequests {
+				pull, pullErr := pulls.Get(linked.RepositoryID, linked.PullRequestID)
+				if pullErr != nil {
+					writeAPIError(w, 503, "delivery_integration_unavailable", "a published contribution could not be recovered")
+					return
+				}
+				if checkErr := startCheckRuns(git, checks, pull); checkErr != nil {
+					writeAPIError(w, 503, "delivery_checks_unavailable", "required checks could not be recovered; retry publication")
+					return
+				}
+			}
+			writeJSON(w, 200, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
+			return
+		}
+		if team.Version != in.ExpectedVersion {
+			writeAPIError(w, 409, "delivery_team_changed", "delivery team version changed")
+			return
+		}
 		if team.Plan == nil || manifest.PlanRevision != team.Plan.Revision {
 			writeAPIError(w, 409, "delivery_integration_blocked", "the current execution plan changed after reconciliation")
 			return
@@ -539,7 +566,7 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 			writeAPIError(w, 409, "delivery_integration_changed", "a contribution changed after reconciliation")
 			return
 		}
-		if len(manifest.Blockers) > 0 || len(currentBlockers) > 0 || manifest.PublishedAt != nil {
+		if len(manifest.Blockers) > 0 || len(currentBlockers) > 0 {
 			writeAPIError(w, 409, "delivery_integration_blocked", "resolve conflicts and missing acceptance evidence before publication")
 			return
 		}
@@ -548,6 +575,7 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 			return
 		}
 		publishStatus, publishCode, publishMessage := 0, "", ""
+		publishedPulls := []pullrequests.PullRequest{}
 		team, err = store.PublishIntegration(team.ID, manifest.ID, actor.UserID, principal, in.ExpectedVersion, func(currentTeam deliveryteams.Team, currentManifest deliveryteams.Integration) ([]deliveryteams.IntegrationPull, error) {
 			if currentTeam.Plan == nil || currentManifest.PlanRevision != currentTeam.Plan.Revision {
 				publishStatus, publishCode, publishMessage = 409, "delivery_integration_blocked", "the current execution plan changed after reconciliation"
@@ -571,6 +599,7 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 					publishStatus, publishCode, publishMessage = 409, "delivery_integration_publish_failed", "an ordered contribution could not be opened and linked for review"
 					return nil, deliveryteams.ErrConflict
 				}
+				publishedPulls = append(publishedPulls, pull)
 				published = append(published, deliveryteams.IntegrationPull{StreamID: c.StreamID, RepositoryID: c.RepositoryID, PullRequestID: pull.ID, Order: c.IntegrationOrder})
 			}
 			return published, nil
@@ -581,6 +610,16 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 		}
 		if writeDeliveryTeamError(w, err) {
 			return
+		}
+		// Pull creation is retry-safe, but checks are intentionally delayed until
+		// the complete ordered set is durably linked to the integration. If a
+		// later pull or the final team write fails, an exact retry reconciles the
+		// existing pulls before any check-run side effects begin.
+		for _, pull := range publishedPulls {
+			if checkErr := startCheckRuns(git, checks, pull); checkErr != nil {
+				writeAPIError(w, 503, "delivery_checks_unavailable", "required checks could not be started; retry publication")
+				return
+			}
 		}
 		writeJSON(w, 201, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
 	})

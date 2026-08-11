@@ -420,7 +420,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerDecisionRoutes(mux, store, repositoryCatalog, authStore, userStore, decisionStore, activityStore, proposalStore, explanationStore, incidentStore, relationshipStore, organizationStore, workspaceStore, pullRequestStore, checkRunStore, releaseStore, deploymentStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && userStore != nil && deliveryTeamStore != nil {
-		registerDeliveryTeamRoutes(mux, store, repositoryCatalog, authStore, userStore, deliveryTeamStore, proposalStore, decisionStore, incidentStore, organizationStore, activityStore, changeSessionStore, workspaceStore, explanationStore, pullRequestStore)
+		registerDeliveryTeamRoutes(mux, store, repositoryCatalog, authStore, userStore, deliveryTeamStore, proposalStore, decisionStore, incidentStore, organizationStore, activityStore, changeSessionStore, workspaceStore, explanationStore, pullRequestStore, checkRunStore)
 	}
 	mux.HandleFunc("GET /git/{remote}/info/refs", func(w http.ResponseWriter, r *http.Request) {
 		service := r.URL.Query().Get("service")
@@ -710,40 +710,43 @@ type reviewInput struct {
 	Decision *string `json:"decision"`
 }
 
-func startCheckRuns(gitStore *storage.Store, runStore *checkruns.Store, pull pullrequests.PullRequest) {
-	startCheckRunsForCommit(gitStore, runStore, pull.RepositoryID, pull.ID, pull.SourceCommitID, nil)
+func startCheckRuns(gitStore *storage.Store, runStore *checkruns.Store, pull pullrequests.PullRequest) error {
+	return startCheckRunsForCommit(gitStore, runStore, pull.RepositoryID, pull.ID, pull.SourceCommitID, nil)
 }
 
-func startCheckRunsForCommit(gitStore *storage.Store, runStore *checkruns.Store, repositoryID, pullRequestID, commitID string, required []string) {
+func startCheckRunsForCommit(gitStore *storage.Store, runStore *checkruns.Store, repositoryID, pullRequestID, commitID string, required []string) error {
 	if gitStore == nil || runStore == nil {
-		return
+		return errors.New("check run storage is unavailable")
 	}
 	if required != nil && len(required) == 0 {
-		return
+		return nil
 	}
 	repository, err := gitStore.Open(repositoryID)
 	if err != nil {
-		log.Printf("open repository for checks: %v", err)
-		return
+		return fmt.Errorf("open repository for checks: %w", err)
 	}
 	command := exec.Command("git", "--git-dir="+repository.Path(), "show", commitID+":"+checkruns.ConfigPath)
 	data, err := command.Output()
 	if err != nil {
 		// A repository opts in by versioning the configuration at the candidate commit.
 		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 128 {
-			return
+			return nil
 		}
-		log.Printf("read check configuration: %v", err)
-		return
+		return fmt.Errorf("read check configuration: %w", err)
 	}
 	config, err := checkruns.ParseConfig(data)
 	if err != nil {
 		log.Printf("invalid check configuration for %s: %v", commitID, err)
 		runs, createErr := runStore.Create(repositoryID, pullRequestID, commitID, []checkruns.Definition{{Name: "configuration", Image: "invalid", Command: "invalid configuration", TimeoutSeconds: 1, WorkingDirectory: "."}})
-		if createErr == nil && len(runs) == 1 {
-			_ = runStore.RecordFailure(runs[0], err.Error())
+		if createErr != nil {
+			return fmt.Errorf("create invalid-configuration check run: %w", createErr)
 		}
-		return
+		if len(runs) == 1 {
+			if recordErr := runStore.RecordFailure(runs[0], err.Error()); recordErr != nil {
+				return fmt.Errorf("record invalid check configuration: %w", recordErr)
+			}
+		}
+		return nil
 	}
 	if required != nil {
 		wanted := map[string]bool{}
@@ -760,12 +763,12 @@ func startCheckRunsForCommit(gitStore *storage.Store, runStore *checkruns.Store,
 	}
 	runs, err := runStore.Create(repositoryID, pullRequestID, commitID, config.Checks)
 	if err != nil {
-		log.Printf("create check runs: %v", err)
-		return
+		return fmt.Errorf("create check runs: %w", err)
 	}
 	for _, run := range runs {
 		go runStore.Execute(run, repository.Path())
 	}
+	return nil
 }
 
 func startBoundCheckRuns(gitStore *storage.Store, runStore *checkruns.Store, repositoryID, pullRequestID, commitID string, definitions []checkruns.Definition) {

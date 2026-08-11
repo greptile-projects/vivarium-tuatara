@@ -2050,5 +2050,14 @@ each branch and the caller's independent write permission in every repository,
 then finds or creates ordinary pulls in declared integration order. Each pull
 retains team, manifest, stream, and order provenance plus commits, evidence,
 authors, agent actions, decisions, cost, and risk. Retry reuses the source
-branch pull. No review, check, queue, release, permission, or merge bypass is
-created.
+branch pull. Ordinary exact-revision repository checks start only after every
+ordered pull is created or recovered and the complete link set is durable on
+the integration; failed partial publication starts no checks. No review, check,
+queue, release, permission, or merge bypass is created.
+An exact retry of a published integration may use the current team version or
+the immediately preceding pre-publication version. It follows the retained pull
+links and idempotently creates missing exact-revision check definitions or
+resumes nonterminal runs, returning `200` without changing the integration.
+If repository/configuration access or check-run persistence fails for any
+linked pull, publication or recovery returns retryable `503` with
+`delivery_checks_unavailable` rather than reporting that recovery completed.

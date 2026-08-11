@@ -1106,7 +1106,23 @@ whenever dependencies change or the web job fails before it starts.
   manifest, stream, and order; delivery identity is written atomically with a
   new pull. Existing links cannot be replaced, so competing status changes,
   inactive reviews, or unrelated branch-matching reviews cannot strand or
-  commandeer contribution provenance.
+  commandeer contribution provenance. Publication starts the ordinary
+  exact-revision repository checks only after every ordered pull is created or
+  recovered and the complete link set is durable on the integration; a later
+  pull or final manifest-write failure therefore starts no partial checks, and
+  an exact retry reconciles existing pulls before execution. A published
+  integration accepts its current or lost-response pre-publication version as
+  an idempotent recovery request, recreating only missing check definitions and
+  resuming nonterminal runs from its durable pull links. Repository,
+  configuration, or check-store persistence failure returns a retryable `503`
+  rather than claiming recovery completed. The connected
+  delivery-team browser journey protects the complete accepted-decision loop:
+  independently operated specialist agents and a developer accept parallel
+  streams, retain a disputed finding and lead resolution, redirect a failed
+  stream, verify an agent-to-human ownership handoff, publish ordered pulls,
+  pass checks and independent review, merge, and release. Removing an agent
+  operator revokes its derived Git credential while the charter, evidence,
+  interventions, costs, authorship, handoff, pulls, and release stay retained.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 
