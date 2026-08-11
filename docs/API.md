@@ -2050,5 +2050,5 @@ each branch and the caller's independent write permission in every repository,
 then finds or creates ordinary pulls in declared integration order. Each pull
 retains team, manifest, stream, and order provenance plus commits, evidence,
 authors, agent actions, decisions, cost, and risk. Retry reuses the source
-branch pull. No review, check, queue, release, permission, or merge bypass is
-created.
+branch pull and starts its ordinary exact-revision repository checks. No
+review, check, queue, release, permission, or merge bypass is created.

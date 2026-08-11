@@ -1106,7 +1106,15 @@ whenever dependencies change or the web job fails before it starts.
   manifest, stream, and order; delivery identity is written atomically with a
   new pull. Existing links cannot be replaced, so competing status changes,
   inactive reviews, or unrelated branch-matching reviews cannot strand or
-  commandeer contribution provenance.
+  commandeer contribution provenance. Publication starts the ordinary
+  exact-revision repository checks for every connected pull. The connected
+  delivery-team browser journey protects the complete accepted-decision loop:
+  independently operated specialist agents and a developer accept parallel
+  streams, retain a disputed finding and lead resolution, redirect a failed
+  stream, verify an agent-to-human ownership handoff, publish ordered pulls,
+  pass checks and independent review, merge, and release. Removing an agent
+  operator revokes its derived Git credential while the charter, evidence,
+  interventions, costs, authorship, handoff, pulls, and release stay retained.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 
