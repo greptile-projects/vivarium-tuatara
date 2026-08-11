@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -57,7 +59,12 @@ func TestRepositoryIssueReportLifecycleAndPrivateDuplicateBoundary(t *testing.T)
 	if issue.Status != "triaged" || len(issue.Discussion) != 1 || len(issue.History) != 3 {
 		t.Fatalf("updated = %#v", issue)
 	}
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+repo.ID+"/issues/"+issue.ID, `{"status":"resolved","expected_version":`+strconv.Itoa(issue.Version)+`}`, reporter.Credential.Token, http.StatusForbidden).Body.Close()
 	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+repo.ID+"/issues/"+issue.ID, `{"status":"resolved","expected_version":1}`, owner.Credential.Token, http.StatusConflict).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/issues", `{"affected_version":"v999.0.0","title":"Unknown release","expected_behavior":"Works","observed_behavior":"Fails","severity":"low","environment":"Linux","reproduction_steps":["Run it"],"visibility":"public"}`, reporter.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
+	boundaryData := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", 1<<20)))
+	boundaryBody := `{"title":"Large log","expected_behavior":"Works","observed_behavior":"Fails","severity":"low","environment":"Linux","reproduction_steps":["Run it"],"visibility":"repository","attachments":[{"kind":"log","name":"full.log","media_type":"text/plain","size":1048576,"data":"` + boundaryData + `"}]}`
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/issues", boundaryBody, reporter.Credential.Token, http.StatusCreated).Body.Close()
 }
 
 func TestIssueAttachmentsRejectDisallowedEvidence(t *testing.T) {

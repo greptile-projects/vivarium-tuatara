@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -15,6 +18,7 @@ import (
 )
 
 func registerIssueRoutes(mux *http.ServeMux, repos *repositories.Store, store *issues.Store, releaseStore *releases.Store, credentials *auth.Store, activity *activities.Store) {
+	const issueBodyLimit = 15 << 20
 	require := func(w http.ResponseWriter, r *http.Request, scope string) (auth.Credential, bool) {
 		actor, ok := authenticateRequest(w, r, credentials, scope, false)
 		if !ok {
@@ -124,11 +128,20 @@ func registerIssueRoutes(mux *http.ServeMux, repos *repositories.Store, store *i
 			return
 		}
 		var input issues.Issue
-		if decodeJSON(r, &input) != nil {
+		if err := decodeIssueJSON(r, &input, issueBodyLimit); err != nil {
+			if errors.Is(err, errIssueBodyTooLarge) {
+				writeAPIError(w, 413, "issue_body_too_large", "issue request exceeds the 15 MiB aggregate limit")
+				return
+			}
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
 		input.RepositoryID, input.ReporterID = r.PathValue("id"), actor.UserID
+		input.Discussion = nil
+		if input.ReleaseID == "" && input.AffectedVersion != "" {
+			writeAPIError(w, 422, "invalid_affected_release", "affected_version is server-derived and requires release_id")
+			return
+		}
 		if input.ReleaseID != "" {
 			if releaseStore == nil {
 				writeAPIError(w, 503, "releases_unavailable", "releases could not be read")
@@ -150,12 +163,17 @@ func registerIssueRoutes(mux *http.ServeMux, repos *repositories.Store, store *i
 			input.Attachments[i].Size = len(raw)
 		}
 		created, err := store.Create(input)
-		if err != nil {
+		if err != nil && !errors.Is(err, issues.ErrDurabilityUncertain) {
 			writeIssueError(w, err)
 			return
 		}
 		recordActivity(activity, repos, activities.Event{Kind: "issue.opened", ActorID: actor.UserID, RepositoryID: created.RepositoryID, ResourceType: "issue", ResourceID: created.ID, ResourceTitle: created.Title})
 		w.Header().Set("Location", "/repositories/"+created.RepositoryID+"/issues/"+created.ID)
+		if errors.Is(err, issues.ErrDurabilityUncertain) {
+			w.Header().Set("Vivarium-Durability", "uncertain")
+			writeJSON(w, 202, created)
+			return
+		}
 		writeJSON(w, 201, created)
 	})
 	mux.HandleFunc("GET /repositories/{id}/issues/{issue_id}", func(w http.ResponseWriter, r *http.Request) {
@@ -183,8 +201,13 @@ func registerIssueRoutes(mux *http.ServeMux, repos *repositories.Store, store *i
 			return
 		}
 		v, err := store.AddComment(r.PathValue("id"), r.PathValue("issue_id"), actor.UserID, input.Body)
-		if err != nil {
+		if err != nil && !errors.Is(err, issues.ErrDurabilityUncertain) {
 			writeIssueError(w, err)
+			return
+		}
+		if errors.Is(err, issues.ErrDurabilityUncertain) {
+			w.Header().Set("Vivarium-Durability", "uncertain")
+			writeJSON(w, 202, v)
 			return
 		}
 		writeJSON(w, 201, v)
@@ -203,13 +226,47 @@ func registerIssueRoutes(mux *http.ServeMux, repos *repositories.Store, store *i
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
+		if input.Status == "resolved" || input.Status == "closed" {
+			repo, err := repos.GetByID(r.PathValue("id"))
+			if err != nil || repo.OwnerID != actor.UserID {
+				writeAPIError(w, 403, "issue_status_forbidden", "only the repository owner can resolve or close an issue")
+				return
+			}
+		}
 		v, err := store.UpdateStatus(r.PathValue("id"), r.PathValue("issue_id"), actor.UserID, input.Status, input.ExpectedVersion, input.Message)
-		if err != nil {
+		if err != nil && !errors.Is(err, issues.ErrDurabilityUncertain) {
 			writeIssueError(w, err)
+			return
+		}
+		if errors.Is(err, issues.ErrDurabilityUncertain) {
+			w.Header().Set("Vivarium-Durability", "uncertain")
+			writeJSON(w, 202, v)
 			return
 		}
 		writeJSON(w, 200, v)
 	})
+}
+
+var errIssueBodyTooLarge = errors.New("issue body too large")
+
+func decodeIssueJSON(r *http.Request, destination any, limit int64) error {
+	data, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
+	if err != nil {
+		return err
+	}
+	if int64(len(data)) > limit {
+		return errIssueBodyTooLarge
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err = decoder.Decode(destination); err != nil {
+		return err
+	}
+	var extra any
+	if err = decoder.Decode(&extra); err != io.EOF {
+		return errors.New("request body must contain one JSON value")
+	}
+	return nil
 }
 
 func writeIssueError(w http.ResponseWriter, err error) {

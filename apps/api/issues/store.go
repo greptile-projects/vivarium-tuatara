@@ -15,9 +15,10 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("issue not found")
-	ErrInvalid  = errors.New("invalid issue")
-	ErrConflict = errors.New("issue changed")
+	ErrNotFound            = errors.New("issue not found")
+	ErrInvalid             = errors.New("invalid issue")
+	ErrConflict            = errors.New("issue changed")
+	ErrDurabilityUncertain = errors.New("issue mutation is visible but durability is uncertain")
 )
 
 type Attachment struct {
@@ -70,8 +71,9 @@ type Issue struct {
 }
 
 type Store struct {
-	root string
-	mu   sync.Mutex
+	root          string
+	mu            sync.Mutex
+	directorySync func(string) error
 }
 
 func New(root string) (*Store, error) {
@@ -81,7 +83,7 @@ func New(root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, err
 	}
-	return &Store{root: root}, nil
+	return &Store{root: root, directorySync: syncDirectory}, nil
 }
 
 func newID() string {
@@ -114,7 +116,11 @@ func (s *Store) Create(v Issue) (Issue, error) {
 		v.Attachments[i].ID, v.Attachments[i].CreatedAt = newID(), now
 	}
 	v.History = []HistoryEntry{{ID: newID(), Kind: "opened", ActorID: v.ReporterID, To: "open", CreatedAt: now}}
-	if err := s.write(v); err != nil {
+	committed, err := s.write(v)
+	if err != nil {
+		if committed {
+			return v, errors.Join(ErrDurabilityUncertain, err)
+		}
 		return Issue{}, err
 	}
 	return v, nil
@@ -170,7 +176,11 @@ func (s *Store) AddComment(repositoryID, id, actor, body string) (Issue, error) 
 	v.History = append(v.History, HistoryEntry{ID: newID(), Kind: "commented", ActorID: actor, Message: body, CreatedAt: now})
 	v.Version++
 	v.UpdatedAt = now
-	if err = s.write(v); err != nil {
+	committed, err := s.write(v)
+	if err != nil {
+		if committed {
+			return v, errors.Join(ErrDurabilityUncertain, err)
+		}
 		return Issue{}, err
 	}
 	return v, nil
@@ -198,7 +208,11 @@ func (s *Store) UpdateStatus(repositoryID, id, actor, status string, expected in
 	v.Version++
 	v.UpdatedAt = now
 	v.History = append(v.History, HistoryEntry{ID: newID(), Kind: "status_changed", ActorID: actor, From: from, To: status, Message: strings.TrimSpace(message), CreatedAt: now})
-	if err = s.write(v); err != nil {
+	committed, err := s.write(v)
+	if err != nil {
+		if committed {
+			return v, errors.Join(ErrDurabilityUncertain, err)
+		}
 		return Issue{}, err
 	}
 	return v, nil
@@ -218,27 +232,42 @@ func (s *Store) read(repo, id string) (Issue, error) {
 	}
 	return v, nil
 }
-func (s *Store) write(v Issue) error {
+func (s *Store) write(v Issue) (bool, error) {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		return err
+		return false, err
 	}
 	f, err := os.CreateTemp(s.root, ".issue-*")
 	if err != nil {
-		return err
+		return false, err
 	}
 	name := f.Name()
 	defer os.Remove(name)
 	if err = f.Chmod(0o600); err == nil {
 		_, err = f.Write(data)
 	}
+	if err == nil {
+		err = f.Sync()
+	}
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
 	}
-	if err == nil {
-		err = os.Rename(name, filepath.Join(s.root, v.ID+".json"))
+	if err != nil {
+		return false, err
 	}
-	return err
+	if err = os.Rename(name, filepath.Join(s.root, v.ID+".json")); err != nil {
+		return false, err
+	}
+	return true, s.directorySync(s.root)
+}
+
+func syncDirectory(path string) error {
+	d, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }
 func validSeverity(v string) bool {
 	return v == "low" || v == "medium" || v == "high" || v == "critical"

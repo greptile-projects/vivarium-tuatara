@@ -2074,7 +2074,9 @@ report to an existing immutable release and the server derives its version.
 Attachments are inline base64 evidence limited to ten 1 MiB files. The API
 accepts plain-text logs, PNG/JPEG/WebP screenshots, JSON or binary traces, and
 text/JSON/binary sample inputs; filenames are reduced to their basename and
-media types are allowlisted. `GET /repositories/{id}/issue-templates` provides
+media types are allowlisted. Issue creation has a separate 15 MiB encoded-body
+limit so all ten raw attachment boundaries remain representable; larger bodies
+return `413 issue_body_too_large`. `GET /repositories/{id}/issue-templates` provides
 the canonical bug and released-regression field sets. `GET
 /repositories/{id}/issue-suggestions?q=...` searches only issues visible to the
 caller and removes attachments and discussion from candidate summaries, so
@@ -2083,6 +2085,11 @@ duplicate discovery cannot disclose private evidence.
 `POST /repositories/{id}/issues/{issue-id}/comments` appends attributable
 discussion. `PATCH /repositories/{id}/issues/{issue-id}` compare-and-swaps
 `expected_version` while moving through open, triaged, in-progress, resolved,
-or closed status. Opening, comments, and status changes remain in immutable
-actor-stamped history. Durable records use `$ISSUE_STORAGE_ROOT`, defaulting to
-`issues`.
+or closed status. Only the repository owner may resolve or close; contributors
+can report, discuss, triage, and record work in progress. Opening, comments, and
+status changes remain in immutable actor-stamped history. Writes sync the file
+before rename and its parent directory afterward. A visible rename whose
+directory durability cannot be confirmed returns the retained record as `202`
+with `Vivarium-Durability: uncertain`, allowing exact identity recovery rather
+than an unsafe duplicate. Durable records use `$ISSUE_STORAGE_ROOT`, defaulting
+to `issues`.
