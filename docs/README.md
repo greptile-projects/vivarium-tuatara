@@ -65,6 +65,20 @@ creation, while obsolete instructions remain visible diagnostics. The
 workspace links to exact-revision explanations and grants write access only to
 the contributor's fork, never upstream.
 
+Each launched contribution workspace carries a shared, version-guarded help
+thread between its contributor and designated mentors. Questions, advice,
+interventions, requested checkpoints and responses, and handoffs retain actor,
+time, response target, status, and whether the contributor or maintainer still
+owns the decision. Mentor availability stays visible; changed opportunity
+scope or lost upstream mentor access derives an attributable reassignment or
+exit path without deleting progress.
+
+Approved-agent help remains subordinate to workspace control. An operated
+approved agent may explain or diagnose only under a live guide lease, and may
+record an edit only under the matching edit lease. The thread grants no
+upstream authority and does not transfer authorship. It is retained with the
+workspace beneath `$WORKSPACE_STORAGE_ROOT`.
+
 ## Accountable decision delivery
 
 An accepted technical decision can be converted once per commitment into an

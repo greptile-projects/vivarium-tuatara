@@ -123,9 +123,15 @@ func registerWorkspaceCollaborationRoutes(mux *http.ServeMux, catalog *repositor
 					return
 				}
 			}
-		} else if !workspaceApprovedAgent(organizationStore, catalog, item.RepositoryID, in.PrincipalID) {
-			writeAPIError(w, 422, "workspace_control_principal_invalid", "agent must be approved for the repository organization")
-			return
+		} else {
+			agentRepositoryID := item.RepositoryID
+			if item.ContributorContext != nil && item.ContributorContext.AgentAssistance {
+				agentRepositoryID = item.ContributorContext.UpstreamRepositoryID
+			}
+			if !workspaceApprovedAgent(organizationStore, catalog, agentRepositoryID, in.PrincipalID) {
+				writeAPIError(w, 422, "workspace_control_principal_invalid", "agent must be approved for the repository organization")
+				return
+			}
 		}
 		if in.PrincipalKind == "approved_agent" && !item.Policy.AgentExecution {
 			writeAPIError(w, 403, "workspace_agent_execution_disabled", "workspace policy disables agent execution")

@@ -1218,6 +1218,13 @@ whenever dependencies change or the web job fails before it starts.
   access, evidence, revisions, guidance, or definitions before fork creation;
   retained setup failures and obsolete-guidance diagnostics remain visible,
   and no upstream write authority is granted.
+  Launched contribution workspaces retain a version-guarded help thread with
+  designated mentors, attributable questions, advice, checkpoints, handoffs,
+  explicit decision ownership, availability, and response expectations.
+  Changed scope or revoked mentor access derives a reassignment/exit path
+  without discarding progress. Approved-agent explanation, diagnosis, or edits
+  require the matching live guide/edit control lease and grant no upstream
+  authority.
 
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.

@@ -186,7 +186,11 @@ func registerContributorLaunchRoutes(mux *http.ServeMux, git *storage.Store, rep
 		if pathway.Setup.WorkspacePath != "" && pathway.Setup.WorkspacePath != workspaces.DefinitionPath {
 			diagnostics = append(diagnostics, "Contribution guidance names an obsolete workspace definition path: "+pathway.Setup.WorkspacePath)
 		}
-		context := &workspaces.ContributorContext{OpportunityID: opportunity.ID, OpportunityVersion: opportunity.Version, UpstreamRepositoryID: upstream.ID, PathwayVersion: pathway.Version, Guidance: pathway.Setup.Summary, Prerequisites: append([]string(nil), pathway.Prerequisites...), AcceptanceCriteria: []string{opportunity.ExpectedOutcome, opportunity.Scope}, EvidenceKind: opportunity.Source.Kind, EvidenceID: opportunity.Source.ID, EvidenceParentID: opportunity.Source.ParentID, SampleAttachmentIDs: append([]string(nil), input.SampleAttachmentIDs...), Diagnostics: diagnostics}
+		mentorIDs := make([]string, 0, len(opportunity.Mentors))
+		for _, mentor := range opportunity.Mentors {
+			mentorIDs = append(mentorIDs, mentor.UserID)
+		}
+		context := &workspaces.ContributorContext{OpportunityID: opportunity.ID, OpportunityVersion: opportunity.Version, UpstreamRepositoryID: upstream.ID, PathwayVersion: pathway.Version, Guidance: pathway.Setup.Summary, Prerequisites: append([]string(nil), pathway.Prerequisites...), AcceptanceCriteria: []string{opportunity.ExpectedOutcome, opportunity.Scope}, EvidenceKind: opportunity.Source.Kind, EvidenceID: opportunity.Source.ID, EvidenceParentID: opportunity.Source.ParentID, SampleAttachmentIDs: append([]string(nil), input.SampleAttachmentIDs...), Diagnostics: diagnostics, MentorIDs: mentorIDs, AgentAssistance: opportunity.AgentAssistance, Help: workspaces.ContributionHelp{Version: 1, State: "active", Entries: []workspaces.ContributionHelpEntry{}, Availability: []workspaces.MentorAvailability{}}}
 		created, err := workspaceStore.Create(workspaces.Workspace{RepositoryID: fork.ID, CommitID: opportunity.Revision, Definition: definition, Source: workspaces.Source{Kind: "repository", RepositoryID: fork.ID, UpstreamRepositoryID: upstream.ID, OpportunityID: opportunity.ID}, CreatorID: actor.UserID, Access: workspaces.Access{Role: "owner", Scopes: []string{"repositories:read", "repositories:write"}}, Policy: policy, PolicyScope: "repository", PolicyVersion: policy.Version, ContributorContext: context}, definitionBytes)
 		if err != nil {
 			writeJSON(w, 202, map[string]any{"fork": fork, "recovery_required": true, "message": "fork retained; workspace persistence must be retried"})

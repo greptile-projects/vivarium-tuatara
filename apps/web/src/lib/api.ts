@@ -684,7 +684,8 @@ export type DevelopmentWorkspace = {
   contributor_context?: {
     opportunity_id: string; opportunity_version: number; upstream_repository_id: string; pathway_version: number;
     guidance: string; prerequisites: string[]; acceptance_criteria: string[]; evidence_kind: string; evidence_id: string;
-    evidence_parent_id?: string; sample_attachment_ids?: string[]; diagnostics: string[];
+    evidence_parent_id?: string; sample_attachment_ids?: string[]; diagnostics: string[]; mentor_ids: string[]; agent_assistance: boolean;
+    help: ContributionHelp;
   };
   definition: {
     version: number;
@@ -770,6 +771,8 @@ export type DevelopmentWorkspace = {
   rebuild_required: boolean;
   rebuild_reasons: string[];
 };
+export type ContributionHelpEntry = {id:string;kind:string;actor_id:string;agent_id?:string;action?:string;body:string;reply_to?:string;status:string;decision_owner:"contributor"|"maintainer";due_at?:string;created_at:string;resolved_at?:string};
+export type ContributionHelp = {version:number;state:"active"|"reassignment_requested"|"exited";state_reason?:string;entries:ContributionHelpEntry[];mentor_availability:{mentor_id:string;status:string;response_hours?:number;note?:string;updated_at:string}[]};
 export type WorkspacePolicy = {
   version: number;
   max_cpus: number;
