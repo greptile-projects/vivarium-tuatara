@@ -294,6 +294,12 @@ func reproductionSecretLike(name, encoded string) bool {
 				return true
 			}
 		}
+		compactKey := strings.ReplaceAll(key, "_", "")
+		for _, marker := range []string{"apikey", "accesskey", "privatekey", "clientkey", "authkey"} {
+			if strings.Contains(compactKey, marker) {
+				return true
+			}
+		}
 	}
 	return false
 }

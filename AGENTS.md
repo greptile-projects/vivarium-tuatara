@@ -1138,9 +1138,10 @@ whenever dependencies change or the web job fails before it starts.
   credential filename, assignment, authorization-header, and private-key screening,
   and immutable attempts retain only repository-declared command outcomes plus
   their environment, logs, artifacts, observed result, and disposition.
-  Artifact capture walks every in-container path component and rejects symlinks
-  before reading a regular file, so lexical confinement cannot expose image or
-  temporary-container files.
+  Artifact capture rejects symlink components, then opens one file descriptor,
+  validates that exact descriptor beneath `/workspace` through `/proc/self/fd`,
+  and reads from it, so path replacement races cannot expose image or temporary-
+  container files.
 
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.

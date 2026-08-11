@@ -370,6 +370,7 @@ func cleanReproductionArtifactPath(value string) (string, bool) {
 }
 
 const reproductionArtifactReadScript = `
+set -f
 target=/workspace
 old_ifs=$IFS
 IFS=/
@@ -379,8 +380,14 @@ for component in $1; do
   [ ! -L "$target" ] || exit 42
 done
 IFS=$old_ifs
-[ -f "$target" ] || exit 43
-exec cat "$target"
+exec 3<"$target" || exit 43
+resolved=$(readlink -f /proc/self/fd/3) || exit 44
+case "$resolved" in
+  /workspace/*) ;;
+  *) exit 45 ;;
+esac
+[ -f /proc/self/fd/3 ] || exit 46
+exec cat <&3
 `
 
 func readReproductionArtifact(workspaceID, relativePath string) ([]byte, error) {

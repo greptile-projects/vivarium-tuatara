@@ -19,6 +19,8 @@ func TestReproductionSecretScreeningRejectsCredentialFormats(t *testing.T) {
 		{".pypirc", "[pypi]\npassword = pypi-example"},
 		{"key.txt", "-----BEGIN OPENSSH PRIVATE KEY-----\nexample"},
 		{"input.txt", "Authorization: Basic example"},
+		{"input.txt", "APIKEY=example"},
+		{"input.txt", "ACCESSKEY=example"},
 	}
 	for _, test := range tests {
 		if !reproductionSecretLike(test.name, base64.StdEncoding.EncodeToString([]byte(test.body))) {
@@ -75,6 +77,20 @@ func TestReproductionArtifactReadRejectsSymlinkEscape(t *testing.T) {
 	for _, path := range []string{"escaped.txt", "escaped-dir/secret"} {
 		if output, err := readReproductionArtifact(id, path); err == nil {
 			t.Fatalf("symlink artifact %q returned %q", path, output)
+		}
+	}
+	if output, err := exec.Command("docker", "exec", container, "sh", "-c", "printf safe >/workspace/raced.txt").CombinedOutput(); err != nil {
+		t.Fatalf("race setup: %v: %s", err, output)
+	}
+	tracer := exec.Command("docker", "exec", container, "sh", "-c", "while :; do rm -f /workspace/raced.next; ln -s /tmp/secret /workspace/raced.next; mv -f /workspace/raced.next /workspace/raced.txt; rm -f /workspace/raced.txt; printf safe >/workspace/raced.txt; done")
+	if err := tracer.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tracer.Process.Kill(); _, _ = tracer.Process.Wait() }()
+	for range 100 {
+		output, err := readReproductionArtifact(id, "raced.txt")
+		if err == nil && string(output) != "safe" {
+			t.Fatalf("raced artifact escaped: %q", output)
 		}
 	}
 }
