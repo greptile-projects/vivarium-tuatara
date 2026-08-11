@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { api, type PullPreview } from "@/lib/api";
 import { useAuth } from "./auth";
 import { Badge, Button, Card } from "./ui";
@@ -33,6 +34,7 @@ export function PullRequestPreviews({
   const [finding, setFinding] = useState({ route: "/", title: "", description: "", classification: "bug", severity: "major", steps: "", console: "", duplicate_of: "" });
   const [uploads, setUploads] = useState<File[]>([]);
   const [comments, setComments] = useState<Record<string, string>>({});
+  const [repairCriteria, setRepairCriteria] = useState<Record<string, string>>({});
   const base = `/repositories/${repositoryID}/pulls/${pullRequestID}/previews`;
   const load = useCallback(async () => {
     try {
@@ -155,6 +157,12 @@ export function PullRequestPreviews({
     catch (reason) { setError(reason instanceof Error ? reason.message : "Comment could not be added."); }
     finally { setPending(false); }
   }
+  async function createRepair(previewID:string, findingID:string, version:number, retainedCriteria?:string[]) {
+    const acceptanceCriteria=retainedCriteria ?? (repairCriteria[findingID]??"").split("\n").map(value=>value.trim()).filter(Boolean); if(!acceptanceCriteria.length)return; setPending(true);
+    try { await api(`${base}/${previewID}/findings/${findingID}/repair`, {method:"POST",body:JSON.stringify({version,acceptance_criteria:acceptanceCriteria})}, token); await load(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Repair session could not be created."); }
+    finally { setPending(false); }
+  }
   return (
     <section id="previews" className="scroll-mt-24 space-y-3">
       <div className="flex items-baseline justify-between gap-3">
@@ -186,7 +194,7 @@ export function PullRequestPreviews({
         </Card>
       ) : (
         items.map((item) => (
-          <Card key={item.id} className="p-5">
+          <Card key={item.id} id={`preview-${item.id}`} className="scroll-mt-24 p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <p className="font-semibold">
@@ -371,6 +379,7 @@ export function PullRequestPreviews({
                     {entry.evidence.length>0 && <p className="mt-2 text-xs">Evidence: {entry.evidence.map(e=>`${e.kind} ${e.name}${e.redacted?" (redacted)":""}`).join(", ")}</p>}
                     {entry.duplicate_of && <p className="mt-2 text-xs">Linked duplicate of <code>{entry.duplicate_of.slice(0,8)}</code></p>}
                     <div className="mt-2 flex gap-2"><Button variant="quiet" disabled={pending} onClick={()=>void decide(item.id,entry.id,entry.version,{status:entry.status==="open"?"resolved":"open"})}>{entry.status==="open"?"Resolve":"Reopen"}</Button></div>
+                    {participant && (entry.repair ? <div className="mt-3 rounded-lg bg-[var(--surface-subtle)] p-3"><p className="font-semibold">Guided repair</p><ul className="mt-1 list-disc pl-5">{entry.repair.acceptance_criteria.map(criterion=><li key={criterion}>{criterion}</li>)}</ul><div className="mt-2 flex flex-wrap gap-3"><Link className="text-[var(--accent)] underline" href={`/pulls/${repositoryID}/${pullRequestID}/sessions/${entry.repair.session_id}`}>Open repair session</Link>{entry.repair.preview_attempt_id && <a className="text-[var(--accent)] underline" href={`#preview-${entry.repair.preview_attempt_id}`}>New preview attempt</a>}</div>{entry.repair.published_commit_id && <p className="mt-1 text-xs">Published commit <code>{entry.repair.published_commit_id.slice(0,12)}</code></p>}</div> : <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]"><textarea className="rounded-lg border border-[var(--line)] bg-transparent p-2 text-sm" value={repairCriteria[entry.id]??""} onChange={(e)=>setRepairCriteria({...repairCriteria,[entry.id]:e.target.value})} placeholder="One acceptance criterion per line"/><Button variant="secondary" disabled={pending || !(repairCriteria[entry.id]??"").trim()} onClick={()=>void createRepair(item.id,entry.id,entry.version)}>Create repair session</Button></div>)}
                     {entry.comments.map(c=><p key={c.id} className="mt-2 rounded bg-[var(--surface-subtle)] p-2"><span className="font-semibold">{c.author_id}</span> {c.body}</p>)}
                     <div className="mt-2 flex gap-2"><input className="min-w-0 flex-1 rounded-lg border border-[var(--line)] bg-transparent p-2" value={comments[entry.id]??""} onChange={(e)=>setComments({...comments,[entry.id]:e.target.value})} placeholder="Discuss this finding"/><Button variant="secondary" disabled={pending} onClick={()=>void comment(item.id,entry.id,entry.version)}>Comment</Button></div>
                   </div>)}

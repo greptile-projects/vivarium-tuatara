@@ -53,9 +53,45 @@ type Session struct {
 	SourceCommitID     string              `json:"source_commit_id"`
 	CheckEvidence      *CheckEvidence      `json:"check_evidence,omitempty"`
 	DeploymentEvidence *DeploymentEvidence `json:"deployment_evidence,omitempty"`
+	PreviewEvidence    *PreviewEvidence    `json:"preview_evidence,omitempty"`
 	State              string              `json:"state"`
 	CreatedAt          time.Time           `json:"created_at"`
 	UpdatedAt          time.Time           `json:"updated_at"`
+}
+
+// PreviewEvidence freezes only the audience-permitted material an authorized
+// repository collaborator deliberately carries into implementation.
+type PreviewEvidence struct {
+	PreviewID          string              `json:"preview_id"`
+	FindingID          string              `json:"finding_id"`
+	Revision           string              `json:"revision"`
+	Route              string              `json:"route"`
+	Title              string              `json:"title"`
+	Description        string              `json:"description,omitempty"`
+	Classification     string              `json:"classification"`
+	Severity           string              `json:"severity"`
+	AuthorID           string              `json:"author_id"`
+	ReproductionSteps  []string            `json:"reproduction_steps"`
+	AcceptanceCriteria []string            `json:"acceptance_criteria"`
+	Evidence           []PreviewArtifact   `json:"evidence"`
+	Discussion         []PreviewDiscussion `json:"discussion"`
+}
+
+type PreviewDiscussion struct {
+	ID        string    `json:"id"`
+	AuthorID  string    `json:"author_id"`
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type PreviewArtifact struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	Name      string `json:"name"`
+	MediaType string `json:"media_type"`
+	Size      int    `json:"size"`
+	Data      string `json:"data,omitempty"`
+	Redacted  bool   `json:"redacted"`
 }
 
 // DeploymentEvidence freezes the failed delivery context at the point a
@@ -295,6 +331,64 @@ func (s *Store) Create(repositoryID, pullRequestID, initiatorID, sourceCommitID 
 
 func (s *Store) CreateWithEvidence(repositoryID, pullRequestID, initiatorID, sourceCommitID string, evidence *CheckEvidence) (Session, error) {
 	return s.CreateWithRecoveryEvidence(repositoryID, pullRequestID, initiatorID, sourceCommitID, evidence, nil)
+}
+
+// FindOrCreateWithPreviewEvidence makes conversion retry-safe: a retained
+// session is reused when linking it back to the finding must be retried.
+func (s *Store) FindOrCreateWithPreviewEvidence(repositoryID, pullRequestID, initiatorID, sourceCommitID string, evidence PreviewEvidence) (Session, error) {
+	if !validID(evidence.PreviewID) || !validID(evidence.FindingID) || evidence.Revision != sourceCommitID || strings.TrimSpace(evidence.Title) == "" || len(evidence.AcceptanceCriteria) == 0 {
+		return Session{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Session{}, err
+	}
+	defer unlock()
+	existing, listErr := s.List(repositoryID, pullRequestID)
+	if listErr != nil {
+		return Session{}, listErr
+	}
+	for _, candidate := range existing {
+		if candidate.PreviewEvidence != nil && candidate.PreviewEvidence.PreviewID == evidence.PreviewID && candidate.PreviewEvidence.FindingID == evidence.FindingID {
+			if !slices.Equal(candidate.PreviewEvidence.AcceptanceCriteria, evidence.AcceptanceCriteria) {
+				return Session{}, ErrInvalid
+			}
+			return candidate, nil
+		}
+	}
+	return s.createPreviewSessionLocked(repositoryID, pullRequestID, initiatorID, sourceCommitID, evidence)
+}
+
+func (s *Store) createPreviewSessionLocked(repositoryID, pullRequestID, initiatorID, sourceCommitID string, evidence PreviewEvidence) (Session, error) {
+	if !validID(repositoryID) || !validID(pullRequestID) || !validID(initiatorID) || !validObjectID(sourceCommitID) {
+		return Session{}, ErrInvalid
+	}
+	sessionID, err := newID()
+	if err != nil {
+		return Session{}, err
+	}
+	eventID, err := newID()
+	if err != nil {
+		return Session{}, err
+	}
+	now := s.now().Truncate(time.Microsecond)
+	evidence.ReproductionSteps = append([]string(nil), evidence.ReproductionSteps...)
+	evidence.AcceptanceCriteria = append([]string(nil), evidence.AcceptanceCriteria...)
+	evidence.Evidence = append([]PreviewArtifact(nil), evidence.Evidence...)
+	evidence.Discussion = append([]PreviewDiscussion(nil), evidence.Discussion...)
+	session := Session{ID: sessionID, RepositoryID: repositoryID, PullRequestID: pullRequestID, InitiatorID: initiatorID, SourceCommitID: sourceCommitID, PreviewEvidence: &evidence, State: Open, CreatedAt: now, UpdatedAt: now}
+	rec := record{Session: session, Events: []Event{{ID: eventID, SessionID: sessionID, Kind: "session.opened", ActorID: initiatorID, RevisionID: sourceCommitID, State: Open, CreatedAt: now}}}
+	directory := filepath.Join(s.root, repositoryID, pullRequestID)
+	if err := s.ensureDirectory(repositoryID, pullRequestID); err != nil {
+		return Session{}, err
+	}
+	committed, err := s.write(directory, rec)
+	if err != nil && committed {
+		return session, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err)
+	}
+	return session, err
 }
 
 func (s *Store) CreateWithRecoveryEvidence(repositoryID, pullRequestID, initiatorID, sourceCommitID string, evidence *CheckEvidence, deployment *DeploymentEvidence) (Session, error) {

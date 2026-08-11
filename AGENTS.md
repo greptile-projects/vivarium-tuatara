@@ -889,6 +889,13 @@ whenever dependencies change or the web job fails before it starts.
   feedback invitees use the exact `/pulls/{repository-id}/{pull-id}/previews/{preview-id}`
   workspace, whose controls derive from the live invitation instead of catalog
   participation.
+  Current write collaborators can convert a current-revision finding into a
+  retry-safe ordinary pull change session with frozen acceptance criteria,
+  redacted permitted evidence, discussion, reproduction, and authorship. The
+  preview invitation grants no implementation authority; human work and agent
+  credentials retain existing branch boundaries. Agent publication synchronizes
+  normally, starts checks plus a new preview attempt, and back-links the repair
+  commit and attempt to the original finding.
   Fork-source synchronization holds the catalog's cross-process lock while it
   rechecks current target access, imports a newer revision, and publishes the
   pull snapshot, so revocation cannot commit mid-adoption. If the source fork is deleted, synchronization stops but

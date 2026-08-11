@@ -423,11 +423,11 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil {
 		registerPullRequestRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, authStore, activityStore, userStore, checkRunStore, changeSessionStore)
 		if previewStore != nil && checkRunStore != nil {
-			registerPreviewRoutes(mux, store, repositoryCatalog, pullRequestStore, checkRunStore, previewStore, authStore, userStore, proposalStore, decisionStore, issueStore, activityStore)
+			registerPreviewRoutes(mux, store, repositoryCatalog, pullRequestStore, checkRunStore, previewStore, changeSessionStore, authStore, userStore, proposalStore, decisionStore, issueStore, activityStore)
 		}
 	}
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil && changeSessionStore != nil {
-		registerChangeSessionRoutes(mux, store, repositoryCatalog, pullRequestStore, changeSessionStore, authStore, activityStore, checkRunStore)
+		registerChangeSessionRoutes(mux, store, repositoryCatalog, pullRequestStore, changeSessionStore, authStore, activityStore, checkRunStore, previewStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && proposalStore != nil && changeSessionStore != nil {
 		registerTaskChangeSessionRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, changeSessionStore, authStore, relationshipStore, organizationStore)
@@ -1844,7 +1844,7 @@ func writePullRequestError(w http.ResponseWriter, err error) bool {
 	return true
 }
 
-func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoriesStore *repositories.Store, pullRequestStore *pullrequests.Store, store *changesessions.Store, authStore *auth.Store, activityStore *activities.Store, checkRunStore *checkruns.Store) {
+func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoriesStore *repositories.Store, pullRequestStore *pullrequests.Store, store *changesessions.Store, authStore *auth.Store, activityStore *activities.Store, checkRunStore *checkruns.Store, previewStore *previews.Store) {
 	loadPull := func(w http.ResponseWriter, r *http.Request) (pullrequests.PullRequest, bool) {
 		pull, err := pullRequestStore.Get(r.PathValue("id"), r.PathValue("pull_id"))
 		if writePullRequestError(w, err) {
@@ -2009,10 +2009,12 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 		CommitID string `json:"commit_id"`
 	}
 	type completionInput struct {
-		Summary            string                 `json:"summary"`
-		CommitID           string                 `json:"commit_id"`
-		Checks             []changesessions.Check `json:"checks"`
-		UnresolvedConcerns []string               `json:"unresolved_concerns"`
+		Summary            string                     `json:"summary"`
+		CommitID           string                     `json:"commit_id"`
+		Checks             []changesessions.Check     `json:"checks"`
+		Commands           []changesessions.Command   `json:"commands"`
+		CompletionCriteria []changesessions.Criterion `json:"completion_criteria"`
+		UnresolvedConcerns []string                   `json:"unresolved_concerns"`
 	}
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/sessions/{session_id}/runs/{run_id}/completion", func(w http.ResponseWriter, r *http.Request) {
 		credential, ok := authenticateRequest(w, r, authStore, "git:write", false)
@@ -2032,6 +2034,26 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 		}
 		if writeChangeSessionError(w, err) {
 			return
+		}
+		session, sessionErr := store.Get(r.PathValue("id"), r.PathValue("pull_id"), r.PathValue("session_id"))
+		if writeChangeSessionError(w, sessionErr) {
+			return
+		}
+		if session.PreviewEvidence != nil {
+			reported := map[string]bool{}
+			for _, criterion := range input.CompletionCriteria {
+				reported[strings.TrimSpace(criterion.Criterion)] = true
+			}
+			for _, criterion := range session.PreviewEvidence.AcceptanceCriteria {
+				if !reported[criterion] {
+					writeAPIError(w, 400, "invalid_run_completion", "preview repair completion must report every frozen acceptance criterion")
+					return
+				}
+			}
+			if len(input.Commands) == 0 {
+				writeAPIError(w, 400, "invalid_run_completion", "preview repair completion must retain command evidence")
+				return
+			}
 		}
 		pull, ok := loadPull(w, r)
 		if !ok {
@@ -2093,7 +2115,7 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 			var completionErr error
 			var syncErr error
 			synchronizedPull, syncErr = pullRequestStore.SynchronizeSourceAfter(r.PathValue("id"), pull.ID, func() error {
-				completed, event, completionErr = store.CompleteRun(r.PathValue("id"), pull.ID, run.SessionID, run.ID, credential.ID, input.Summary, input.CommitID, commits, files, input.Checks, input.UnresolvedConcerns)
+				completed, event, completionErr = store.CompleteRunWithEvidence(r.PathValue("id"), pull.ID, run.SessionID, run.ID, credential.ID, input.Summary, input.CommitID, commits, files, input.Checks, input.UnresolvedConcerns, input.Commands, input.CompletionCriteria)
 				if errors.Is(completionErr, changesessions.ErrDurabilityUncertain) {
 					return nil
 				}
@@ -2128,7 +2150,42 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 				return
 			}
 		}
-		response := map[string]any{"run": completed, "event": event, "pull_request": func() pullrequests.PullRequest {
+		var previewAttempt *previews.Preview
+		if completed.ID != "" && synchronized && previewStore != nil && checkRunStore != nil && completed.Outcome != nil {
+			if session, sessionErr := store.Get(r.PathValue("id"), pull.ID, run.SessionID); sessionErr == nil && session.PreviewEvidence != nil {
+				if origin, originErr := previewStore.Get(pull.RepositoryID, pull.ID, session.PreviewEvidence.PreviewID); originErr == nil {
+					for _, finding := range origin.Findings {
+						if finding.ID == session.PreviewEvidence.FindingID {
+							_, _, _ = previewStore.MutateFinding(pull.RepositoryID, pull.ID, origin.ID, finding.ID, run.InitiatorID, finding.Version, func(f *previews.Finding) error {
+								if f.Repair != nil && f.Repair.SessionID == session.ID {
+									f.Repair.PublishedCommitID = completed.Outcome.CommitID
+								}
+								return nil
+							})
+							break
+						}
+					}
+				}
+				if attempt, previewErr := createPullPreview(gitStore, checkRunStore, previewStore, synchronizedPull, run.InitiatorID); previewErr == nil {
+					previewAttempt = &attempt
+					if origin, originErr := previewStore.Get(pull.RepositoryID, pull.ID, session.PreviewEvidence.PreviewID); originErr == nil {
+						for _, finding := range origin.Findings {
+							if finding.ID == session.PreviewEvidence.FindingID {
+								_, _, _ = previewStore.MutateFinding(pull.RepositoryID, pull.ID, origin.ID, finding.ID, run.InitiatorID, finding.Version, func(f *previews.Finding) error {
+									if f.Repair != nil && f.Repair.SessionID == session.ID {
+										f.Repair.PublishedCommitID = completed.Outcome.CommitID
+										f.Repair.PreviewAttemptID = attempt.ID
+									}
+									return nil
+								})
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+		response := map[string]any{"run": completed, "event": event, "preview_attempt": previewAttempt, "pull_request": func() pullrequests.PullRequest {
 			updated, _ := pullRequestStore.Get(r.PathValue("id"), pull.ID)
 			return updated
 		}()}

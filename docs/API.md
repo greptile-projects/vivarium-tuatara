@@ -46,6 +46,19 @@ session. Invitations are not repository participation and grant no credential,
 source or build-log visibility, workspace or environment access, deployment or
 production action, or private-service connectivity.
 
+A current repository owner or collaborator with write scope converts a current
+finding into guided implementation with `POST
+.../{preview-id}/findings/{finding-id}/repair`, supplying the finding `version`
+and one to 20 `acceptance_criteria`. The pull must still be open at the exact
+preview revision. The retry-safe response links an ordinary pull change session
+whose immutable `preview_evidence` freezes the observation, redacted permitted
+artifacts, discussion, reproduction, authors, revision, and criteria. Preview
+access alone cannot call this endpoint and the session grants no new authority;
+collaborators may work normally or launch the existing repository/branch-bound
+agent run. Publishing that run synchronizes the pull through the normal path,
+starts checks and a fresh preview build, and back-links its commit and preview
+attempt to the original finding.
+
 ## Prospective impact assessments
 
 `POST /repositories/{id}/impact-assessments` creates a durable assessment for a

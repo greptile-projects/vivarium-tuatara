@@ -111,10 +111,19 @@ type Finding struct {
 	Evidence          []FindingEvidence `json:"evidence"`
 	Comments          []FindingComment  `json:"comments"`
 	Events            []FindingEvent    `json:"events"`
+	Repair            *FindingRepair    `json:"repair,omitempty"`
 	AuthorID          string            `json:"author_id"`
 	Version           int               `json:"version"`
 	CreatedAt         time.Time         `json:"created_at"`
 	UpdatedAt         time.Time         `json:"updated_at"`
+}
+type FindingRepair struct {
+	SessionID          string    `json:"session_id"`
+	AcceptanceCriteria []string  `json:"acceptance_criteria"`
+	CreatedBy          string    `json:"created_by"`
+	CreatedAt          time.Time `json:"created_at"`
+	PublishedCommitID  string    `json:"published_commit_id,omitempty"`
+	PreviewAttemptID   string    `json:"preview_attempt_id,omitempty"`
 }
 type Preview struct {
 	ID               string          `json:"id"`
