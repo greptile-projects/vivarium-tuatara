@@ -53,7 +53,7 @@ func registerPreviewRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 		for i := range list {
 			list[i] = project(list[i])
 			if !participant {
-				list[i].Invitations, list[i].AudienceEvents, list[i].Feedback = nil, nil, nil
+				list[i].Invitations, list[i].AudienceEvents, list[i].Feedback, list[i].Findings = nil, nil, nil, nil
 			}
 		}
 		writeJSON(w, 200, map[string]any{"previews": list})
@@ -158,6 +158,156 @@ func registerPreviewRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 		}
 		recordActivity(activityStore, catalog, activities.Event{Kind: "preview.feedback", ActorID: actor.UserID, RepositoryID: p.RepositoryID, ResourceType: "preview", ResourceID: p.ID, ResourceTitle: "Change preview feedback"})
 		writeJSON(w, 201, map[string]any{"recorded": true, "actor_id": actor.UserID, "role": invitation.Role})
+	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/previews/{preview_id}/findings", func(w http.ResponseWriter, r *http.Request) {
+		_, _, p, ok := authorizePreviewGuest(w, r, catalog, store, authStore)
+		if !ok {
+			return
+		}
+		writeJSON(w, 200, map[string]any{"preview_id": p.ID, "revision": p.Revision, "findings": p.Findings, "evidence_policy": map[string]any{"visibility": "preview_audience", "kinds": []string{"screenshot", "recording", "console", "trace", "annotation"}, "max_item_bytes": 5 << 20, "max_total_bytes": 12 << 20, "sensitive_text": "redacted"}})
+	})
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/previews/{preview_id}/findings", func(w http.ResponseWriter, r *http.Request) {
+		actor, invitation, p, ok := authorizePreviewGuest(w, r, catalog, store, authStore)
+		if !ok {
+			return
+		}
+		if invitation.Role != "feedback" || !containsString(p.Definition.Access.Actions, "feedback") {
+			writeAPIError(w, 403, "preview_feedback_restricted", "this invitation does not allow findings")
+			return
+		}
+		var in struct {
+			Route             string                     `json:"route"`
+			Title             string                     `json:"title"`
+			Description       string                     `json:"description"`
+			Classification    string                     `json:"classification"`
+			Severity          string                     `json:"severity"`
+			DuplicateOf       string                     `json:"duplicate_of"`
+			ReproductionSteps []string                   `json:"reproduction_steps"`
+			Evidence          []previews.FindingEvidence `json:"evidence"`
+		}
+		if decodeJSONLimit(r, &in, 17<<20) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		_, finding, err := store.AddFinding(p.RepositoryID, p.PullRequestID, p.ID, actor.UserID, in.Route, in.Title, in.Description, in.Classification, in.Severity, in.DuplicateOf, in.ReproductionSteps, in.Evidence)
+		if err != nil {
+			writeAPIError(w, 422, "preview_finding_invalid", "finding must be revision-routed, bounded, policy-permitted, and relate only visible evidence")
+			return
+		}
+		recordActivity(activityStore, catalog, activities.Event{Kind: "preview.finding", ActorID: actor.UserID, RepositoryID: p.RepositoryID, ResourceType: "pull_request", ResourceID: p.PullRequestID, ResourceTitle: finding.Title})
+		writeJSON(w, 201, finding)
+	})
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/previews/{preview_id}/findings/{finding_id}/comments", func(w http.ResponseWriter, r *http.Request) {
+		actor, invitation, p, ok := authorizePreviewGuest(w, r, catalog, store, authStore)
+		if !ok {
+			return
+		}
+		if invitation.Role != "feedback" || !containsString(p.Definition.Access.Actions, "feedback") {
+			writeAPIError(w, 403, "preview_feedback_restricted", "this invitation does not allow discussion")
+			return
+		}
+		var in struct {
+			Body    string `json:"body"`
+			Version int    `json:"version"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		body, _ := previews.RedactSensitive(strings.TrimSpace(in.Body))
+		if body == "" || utf8.RuneCountInString(body) > 4000 {
+			writeAPIError(w, 422, "preview_comment_invalid", "comment must be 1-4000 characters")
+			return
+		}
+		_, finding, err := store.MutateFinding(p.RepositoryID, p.PullRequestID, p.ID, r.PathValue("finding_id"), actor.UserID, in.Version, func(f *previews.Finding) error {
+			now := time.Now().UTC()
+			f.Comments = append(f.Comments, previews.FindingComment{ID: previews.NewID(), AuthorID: actor.UserID, Body: body, CreatedAt: now})
+			f.Events = append(f.Events, previews.FindingEvent{ID: previews.NewID(), Kind: "commented", ActorID: actor.UserID, CreatedAt: now})
+			return nil
+		})
+		if err != nil {
+			writeAPIError(w, 409, "preview_finding_changed", "finding changed or is unavailable")
+			return
+		}
+		writeJSON(w, 201, finding)
+	})
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/previews/{preview_id}/findings/{finding_id}/decision", func(w http.ResponseWriter, r *http.Request) {
+		actor, invitation, p, ok := authorizePreviewGuest(w, r, catalog, store, authStore)
+		if !ok {
+			return
+		}
+		if invitation.Role != "feedback" || !containsString(p.Definition.Access.Actions, "feedback") {
+			writeAPIError(w, 403, "preview_feedback_restricted", "this invitation does not allow finding decisions")
+			return
+		}
+		var in struct {
+			Version        int    `json:"version"`
+			Status         string `json:"status"`
+			Classification string `json:"classification"`
+			Severity       string `json:"severity"`
+			DuplicateOf    string `json:"duplicate_of"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if in.Status == "" && in.Classification == "" && in.Severity == "" && in.DuplicateOf == "" {
+			writeAPIError(w, 422, "preview_finding_decision_invalid", "a finding decision must change status, classification, severity, or duplicate relation")
+			return
+		}
+		_, finding, err := store.MutateFinding(p.RepositoryID, p.PullRequestID, p.ID, r.PathValue("finding_id"), actor.UserID, in.Version, func(f *previews.Finding) error {
+			now := time.Now().UTC()
+			if in.Status != "" {
+				if in.Status != "open" && in.Status != "resolved" {
+					return previews.ErrInvalid
+				}
+				old := f.Status
+				f.Status = in.Status
+				kind := "resolved"
+				if in.Status == "open" {
+					kind = "reopened"
+				}
+				f.Events = append(f.Events, previews.FindingEvent{ID: previews.NewID(), Kind: kind, ActorID: actor.UserID, From: old, To: in.Status, CreatedAt: now})
+			}
+			if in.Classification != "" {
+				if !containsString([]string{"bug", "usability", "accessibility", "content", "performance", "question", "other"}, in.Classification) {
+					return previews.ErrInvalid
+				}
+				old := f.Classification
+				f.Classification = in.Classification
+				f.Events = append(f.Events, previews.FindingEvent{ID: previews.NewID(), Kind: "classified", ActorID: actor.UserID, From: old, To: in.Classification, CreatedAt: now})
+			}
+			if in.Severity != "" {
+				if !containsString([]string{"blocking", "major", "minor", "note"}, in.Severity) {
+					return previews.ErrInvalid
+				}
+				old := f.Severity
+				f.Severity = in.Severity
+				f.Events = append(f.Events, previews.FindingEvent{ID: previews.NewID(), Kind: "severity_changed", ActorID: actor.UserID, From: old, To: in.Severity, CreatedAt: now})
+			}
+			if in.DuplicateOf != "" {
+				if in.DuplicateOf == f.ID {
+					return previews.ErrInvalid
+				}
+				exists := false
+				for _, candidate := range p.Findings {
+					if candidate.ID == in.DuplicateOf {
+						exists = true
+					}
+				}
+				if !exists {
+					return previews.ErrInvalid
+				}
+				f.DuplicateOf = in.DuplicateOf
+				f.Events = append(f.Events, previews.FindingEvent{ID: previews.NewID(), Kind: "related_as_duplicate", ActorID: actor.UserID, To: in.DuplicateOf, CreatedAt: now})
+			}
+			return nil
+		})
+		if err != nil {
+			writeAPIError(w, 409, "preview_finding_changed", "finding changed or decision is invalid")
+			return
+		}
+		writeJSON(w, 200, finding)
 	})
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/previews", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, authStore, r.PathValue("id"), "repositories:write")

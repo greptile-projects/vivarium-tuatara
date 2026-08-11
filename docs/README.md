@@ -721,6 +721,15 @@ participants into expiring roles. Invitation, first-entry, and revocation are
 audited. Guests receive only authenticated sandboxed static assets: no logs,
 source, credentials, workspaces, environments, deployments, private services,
 forms, outbound connections, or production authority.
+Feedback-role participants can turn an observation into an attributable
+finding pinned to the preview revision and current route. Findings support
+classification, severity, reproduction steps, discussion, duplicate links,
+and version-guarded resolution or reopening. Policy-permitted screenshots,
+recordings, console output, traces, and annotations remain readable only
+through the preview audience boundary; bounded media types and sizes are
+validated and secret-like text fields are redacted before retention. The pull
+workspace projects this shared trail without copying inaccessible evidence into
+ordinary comments.
 The API derives the source-only commit set and recursive changed-file summary
 from the fixed target snapshot and explicitly synchronized source revision.
 Immutable pull request comments retain stable author IDs; owners, contributors,

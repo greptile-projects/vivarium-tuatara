@@ -4120,7 +4120,11 @@ func setSessionCookie(w http.ResponseWriter, token string, expires time.Time) {
 }
 
 func decodeJSON(r *http.Request, destination any) error {
-	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	return decodeJSONLimit(r, destination, 1<<20)
+}
+
+func decodeJSONLimit(r *http.Request, destination any, limit int64) error {
+	decoder := json.NewDecoder(io.LimitReader(r.Body, limit))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
 		return err

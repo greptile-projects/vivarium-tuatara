@@ -17,6 +17,26 @@ invitations. `DELETE .../invitations/{invitation-id}` revokes immediately, and
 participants. A feedback guest may submit a bounded attributable note to `POST
 .../{preview-id}/feedback`.
 
+`GET .../{preview-id}/findings` is available only through the same current
+repository-participant or active-invitation admission and returns the frozen
+preview revision plus its audience-scoped evidence policy. A feedback-role
+participant creates a finding with `POST .../findings`, naming an absolute
+preview `route`, title, classification (`bug`, `usability`, `accessibility`,
+`content`, `performance`, `question`, or `other`), severity (`blocking`,
+`major`, `minor`, or `note`), reproduction steps, and an optional visible
+`duplicate_of`. Evidence data is base64 and limited to 12 items, 5 MiB each and
+12 MiB total: PNG/JPEG/WebP screenshots, WebM/MP4 recordings, text console
+output, JSON/text traces, and JSON/text annotations. The server derives byte
+sizes and redacts credential-like fields in text evidence and narrative fields
+before persistence.
+
+`POST .../findings/{finding-id}/comments` appends audience-scoped discussion.
+`POST .../findings/{finding-id}/decision` classifies, relates, resolves, or
+reopens with the last observed `version`; stale or invalid decisions return
+`409 preview_finding_changed`. All actions retain actor and time. Evidence is
+never projected through public preview lists or ordinary pull comments, so an
+invitation cannot implicitly broaden inaccessible material.
+
 An active guest can fetch only that preview's static content with their account
 session. Invitations are not repository participation and grant no credential,
 source or build-log visibility, workspace or environment access, deployment or
