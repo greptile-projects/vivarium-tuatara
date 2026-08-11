@@ -2062,6 +2062,34 @@ If repository/configuration access or check-run persistence fails for any
 linked pull, publication or recovery returns retryable `503` with
 `delivery_checks_unavailable` rather than reporting that recovery completed.
 
+## Contributor pathways
+
+`GET /repositories/{id}/contributor-pathway` returns the current published
+pathway, immutable revision history, and attributed acknowledgements. Public
+repository reads require no credential; private repositories use the ordinary
+repository read boundary. A missing publication returns
+`404 contributor_pathway_not_found`.
+
+Owners publish with `PUT /repositories/{id}/contributor-pathway`, supplying
+`expected_version` and a `pathway` containing goals, prerequisite strings,
+conduct and security guidance, supported setup summary and verification
+commands, communication expectations, review policy, at least one work
+category, and optional requirement links. Work category `audience` is `human`,
+`agent`, or `human_or_agent`. Requirement kinds are `documentation`,
+`ownership`, `release`, `issue`, `proposal`, and `workspace_definition`.
+Documentation links name a repository-relative `path` and may freeze a
+`revision`; resource links name an exact `resource_id`. A stale expected
+version returns `409 contributor_pathway_changed`. Contributors and agents
+cannot publish on an owner's behalf.
+
+Each current-pathway read derives `current`, `stale`, or `inaccessible` status
+and an explanation for every requirement from current repository content and
+authoritative stores. Status is a projection and is not written into immutable
+history. `POST /repositories/{id}/contributor-pathway/acknowledgements` requires
+an authenticated reader and an exact `version`; the same actor cannot
+acknowledge that version twice. Publication and acknowledgement records live
+beneath `$CONTRIBUTOR_PATHWAY_STORAGE_ROOT`, default `contributor-pathways`.
+
 ## Repository issues
 
 Authenticated repository participants use `GET/POST /repositories/{id}/issues`

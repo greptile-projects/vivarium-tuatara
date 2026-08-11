@@ -19,6 +19,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/contributorpathways"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/decisions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deliveryteams"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
@@ -193,6 +194,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	contributorPathwayRoot := os.Getenv("CONTRIBUTOR_PATHWAY_STORAGE_ROOT")
+	if contributorPathwayRoot == "" {
+		contributorPathwayRoot = "contributor-pathways"
+	}
+	contributorPathwayStore, err := contributorpathways.New(contributorPathwayRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	securityAdvisoryRoot := os.Getenv("SECURITY_ADVISORY_STORAGE_ROOT")
 	if securityAdvisoryRoot == "" {
 		securityAdvisoryRoot = "security-advisories"
@@ -254,7 +263,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -336,6 +345,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var decisionStore *decisions.Store
 	var deliveryTeamStore *deliveryteams.Store
 	var issueStore *issues.Store
+	var contributorPathwayStore *contributorpathways.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -364,6 +374,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			deliveryTeamStore = value
 		case *issues.Store:
 			issueStore = value
+		case *contributorpathways.Store:
+			contributorPathwayStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -415,6 +427,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && issueStore != nil {
 		registerIssueRoutes(mux, store, repositoryCatalog, issueStore, releaseStore, deploymentStore, incidentStore, proposalStore, pullRequestStore, packageStore, workspaceStore, authStore, activityStore, checkRunStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && contributorPathwayStore != nil {
+		registerContributorPathwayRoutes(mux, store, repositoryCatalog, contributorPathwayStore, releaseStore, issueStore, proposalStore, workspaceStore, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && userStore != nil && securityAdvisoryStore != nil {
 		registerSecurityAdvisoryRoutes(mux, store, repositoryCatalog, userStore, securityAdvisoryStore, releaseStore, checkRunStore, deploymentStore, authStore, activityStore)

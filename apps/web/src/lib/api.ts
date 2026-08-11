@@ -5,6 +5,27 @@ export type User = {
   created_at: string;
   updated_at: string;
 };
+export type ContributorPathway = {
+  id: string;
+  repository_id: string;
+  version: number;
+  goals: string;
+  prerequisites: string[];
+  conduct: string;
+  security: string;
+  setup: { summary: string; workspace_path?: string; verification_commands: string[] };
+  communication: string;
+  review_policy: string;
+  work_categories: { name: string; description: string; audience: "human" | "agent" | "human_or_agent" }[];
+  requirements: { kind: "documentation" | "ownership" | "release" | "issue" | "proposal" | "workspace_definition"; label: string; resource_id?: string; path?: string; revision?: string; status?: "current" | "stale" | "inaccessible"; status_detail?: string }[];
+  published_by: string;
+  published_at: string;
+};
+export type ContributorPathwayResponse = {
+  pathway: ContributorPathway;
+  history: ContributorPathway[];
+  acknowledgements: { id: string; version: number; actor_id: string; acknowledged_at: string }[];
+};
 export type DeliveryTeam = {
   id: string;
   repository_id: string;
