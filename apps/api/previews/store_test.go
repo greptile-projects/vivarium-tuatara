@@ -132,6 +132,38 @@ func TestDefinitionAndStaleProjection(t *testing.T) {
 	}
 }
 
+func TestRepairAttemptReservationRetainsExactPreviewAndBuildRun(t *testing.T) {
+	config, digest, err := ParseConfig([]byte(`{"version":1,"image":"alpine:3.22","build":"true","output_path":"dist","resources":{"cpus":1,"memory_mb":128,"storage_mb":32,"timeout_seconds":30},"access":{"network":"none","data":"preview_artifacts","identity":"named_users","actions":["feedback"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, pull, revision := strings.Repeat("1", 32), strings.Repeat("2", 32), strings.Repeat("3", 40)
+	actor, session, finding := strings.Repeat("4", 32), strings.Repeat("5", 32), strings.Repeat("6", 32)
+	first, err := store.ReserveRepairAttempt(repo, pull, revision, actor, digest, session, finding, config)
+	if err != nil || first.BuildRunID != "" || first.State != "reserved" {
+		t.Fatalf("reservation = %#v, %v", first, err)
+	}
+	second, err := store.ReserveRepairAttempt(repo, pull, revision, actor, digest, session, finding, config)
+	if err != nil || second.ID != first.ID {
+		t.Fatalf("retry = %#v, %v", second, err)
+	}
+	attached, err := store.AttachBuildRun(repo, pull, first.ID, strings.Repeat("7", 32))
+	if err != nil || attached.BuildRunID != strings.Repeat("7", 32) {
+		t.Fatalf("attach = %#v, %v", attached, err)
+	}
+	retried, err := store.ReserveRepairAttempt(repo, pull, revision, actor, digest, session, finding, config)
+	if err != nil || retried.ID != first.ID || retried.BuildRunID != attached.BuildRunID {
+		t.Fatalf("attached retry = %#v, %v", retried, err)
+	}
+	if _, err := store.AttachBuildRun(repo, pull, first.ID, strings.Repeat("8", 32)); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("replacement run error = %v", err)
+	}
+}
+
 func TestDefinitionRejectsSecretsAndUnboundedResources(t *testing.T) {
 	for _, body := range []string{
 		`{"version":1,"image":"alpine","build":"true","output_path":"dist","environment":{"GIT_TOKEN":"secret"},"resources":{"cpus":1,"memory_mb":128,"storage_mb":32,"timeout_seconds":30}}`,

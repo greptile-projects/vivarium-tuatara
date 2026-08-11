@@ -134,6 +134,8 @@ type Preview struct {
 	Definition       Config          `json:"definition"`
 	DefinitionSHA256 string          `json:"definition_sha256"`
 	BuildRunID       string          `json:"build_run_id"`
+	RepairSessionID  string          `json:"repair_session_id,omitempty"`
+	RepairFindingID  string          `json:"repair_finding_id,omitempty"`
 	State            string          `json:"state"`
 	Stale            bool            `json:"stale"`
 	URL              string          `json:"url"`
@@ -143,6 +145,57 @@ type Preview struct {
 	AudienceEvents   []AudienceEvent `json:"audience_events"`
 	Feedback         []Feedback      `json:"feedback"`
 	Findings         []Finding       `json:"findings"`
+}
+
+// ReserveRepairAttempt durably assigns one preview identity to a repair before
+// its check run is created. Exact retries therefore reconcile this record.
+func (s *Store) ReserveRepairAttempt(repositoryID, pullID, revision, creator, hash, sessionID, findingID string, c Config) (Preview, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := os.ReadDir(filepath.Join(s.root, repositoryID, pullID))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return Preview{}, err
+	}
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		p, readErr := s.Get(repositoryID, pullID, strings.TrimSuffix(entry.Name(), ".json"))
+		if readErr != nil {
+			return Preview{}, readErr
+		}
+		if p.RepairSessionID == sessionID && p.RepairFindingID == findingID {
+			if p.Revision != revision || p.DefinitionSHA256 != hash {
+				return Preview{}, ErrInvalid
+			}
+			return p, nil
+		}
+	}
+	now := s.now()
+	idb := make([]byte, 16)
+	if _, err := rand.Read(idb); err != nil {
+		return Preview{}, err
+	}
+	p := Preview{ID: hex.EncodeToString(idb), RepositoryID: repositoryID, PullRequestID: pullID, Revision: revision, CreatorID: creator, Definition: c, DefinitionSHA256: hash, RepairSessionID: sessionID, RepairFindingID: findingID, State: "reserved", CreatedAt: now, UpdatedAt: now}
+	p.URL = "/repositories/" + repositoryID + "/pulls/" + pullID + "/previews/" + p.ID + "/content/"
+	return p, s.write(p)
+}
+
+func (s *Store) AttachBuildRun(repo, pull, id, runID string) (Preview, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, err := s.Get(repo, pull, id)
+	if err != nil {
+		return Preview{}, err
+	}
+	if p.BuildRunID != "" && p.BuildRunID != runID {
+		return Preview{}, ErrInvalid
+	}
+	if p.BuildRunID == runID {
+		return p, nil
+	}
+	p.BuildRunID, p.State, p.UpdatedAt = runID, "building", s.now()
+	return p, s.write(p)
 }
 
 type Store struct {

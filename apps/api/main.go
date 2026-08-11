@@ -2166,7 +2166,7 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 						}
 					}
 				}
-				if attempt, previewErr := createPullPreview(gitStore, checkRunStore, previewStore, synchronizedPull, run.InitiatorID); previewErr == nil {
+				if attempt, previewErr := createRepairPreviewAttempt(gitStore, checkRunStore, previewStore, synchronizedPull, run.InitiatorID, session.ID, session.PreviewEvidence.FindingID); previewErr == nil {
 					previewAttempt = &attempt
 					if origin, originErr := previewStore.Get(pull.RepositoryID, pull.ID, session.PreviewEvidence.PreviewID); originErr == nil {
 						for _, finding := range origin.Findings {

@@ -895,7 +895,9 @@ whenever dependencies change or the web job fails before it starts.
   preview invitation grants no implementation authority; human work and agent
   credentials retain existing branch boundaries. Agent publication synchronizes
   normally, starts checks plus a new preview attempt, and back-links the repair
-  commit and attempt to the original finding.
+  commit and attempt to the original finding. The follow-up attempt reserves a
+  stable repair/session preview identity before check creation; exact completion
+  retries reconcile that reservation and its terminal or active build run.
   Fork-source synchronization holds the catalog's cross-process lock while it
   rechecks current target access, imports a newer revision, and publishes the
   pull snapshot, so revocation cannot commit mid-adoption. If the source fork is deleted, synchronization stops but

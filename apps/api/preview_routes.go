@@ -364,7 +364,7 @@ func registerPreviewRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 			}
 			if source.Repair.PublishedCommitID != "" && source.Repair.PreviewAttemptID == "" {
 				if current, pullErr := pulls.Get(p.RepositoryID, p.PullRequestID); pullErr == nil && current.Status == pullrequests.Open && current.SourceCommitID == source.Repair.PublishedCommitID {
-					if attempt, previewErr := createPullPreview(git, runs, store, current, actor.UserID); previewErr == nil {
+					if attempt, previewErr := createRepairPreviewAttempt(git, runs, store, current, actor.UserID, source.Repair.SessionID, source.ID); previewErr == nil {
 						_, repaired, updateErr := store.MutateFinding(p.RepositoryID, p.PullRequestID, p.ID, source.ID, actor.UserID, source.Version, func(f *previews.Finding) error { f.Repair.PreviewAttemptID = attempt.ID; return nil })
 						if updateErr == nil {
 							source = &repaired
@@ -624,7 +624,7 @@ func authorizePreviewGuest(w http.ResponseWriter, r *http.Request, catalog *repo
 	return actor, inv, updated, true
 }
 
-func createPullPreview(git *storage.Store, runs *checkruns.Store, store *previews.Store, pull pullrequests.PullRequest, actorID string) (previews.Preview, error) {
+func createRepairPreviewAttempt(git *storage.Store, runs *checkruns.Store, store *previews.Store, pull pullrequests.PullRequest, actorID, sessionID, findingID string) (previews.Preview, error) {
 	repository, err := git.Open(pull.RepositoryID)
 	if err != nil {
 		return previews.Preview{}, err
@@ -639,14 +639,46 @@ func createPullPreview(git *storage.Store, runs *checkruns.Store, store *preview
 	}
 	quoted := strings.ReplaceAll(config.OutputPath, "'", "'\\''")
 	command := config.Build + " && test -d '" + quoted + "' && cp -R '" + quoted + "'/. \"$VIVARIUM_OUTPUT\"/"
-	createdRuns, err := runs.CreateRequested(pull.RepositoryID, pull.ID, pull.SourceCommitID, []checkruns.Definition{{Name: "preview-" + hash[:12], Image: config.Image, Command: command, WorkingDirectory: config.WorkingDirectory, Environment: config.Environment, TimeoutSeconds: config.Resources.TimeoutSeconds, CPUs: config.Resources.CPUs, MemoryMB: config.Resources.MemoryMB, StorageMB: config.Resources.StorageMB}}, actorID)
-	if err != nil || len(createdRuns) != 1 {
-		return previews.Preview{}, errors.New("preview build unavailable")
-	}
-	p, err := store.Create(pull.RepositoryID, pull.ID, pull.SourceCommitID, actorID, hash, createdRuns[0].ID, config)
+	p, err := store.ReserveRepairAttempt(pull.RepositoryID, pull.ID, pull.SourceCommitID, actorID, hash, sessionID, findingID, config)
 	if err != nil {
 		return previews.Preview{}, err
 	}
-	go runs.Execute(createdRuns[0], repository.Path())
+	definitionName := "preview-repair-" + p.ID
+	var run checkruns.Run
+	if p.BuildRunID != "" {
+		run, err = runs.Get(pull.RepositoryID, pull.ID, p.BuildRunID)
+		if err != nil {
+			return previews.Preview{}, err
+		}
+	} else {
+		createdRuns, createErr := runs.CreateRequested(pull.RepositoryID, pull.ID, pull.SourceCommitID, []checkruns.Definition{{Name: definitionName, Image: config.Image, Command: command, WorkingDirectory: config.WorkingDirectory, Environment: config.Environment, TimeoutSeconds: config.Resources.TimeoutSeconds, CPUs: config.Resources.CPUs, MemoryMB: config.Resources.MemoryMB, StorageMB: config.Resources.StorageMB}}, actorID)
+		if createErr != nil {
+			return previews.Preview{}, createErr
+		}
+		if len(createdRuns) == 1 {
+			run = createdRuns[0]
+		} else {
+			all, listErr := runs.List(pull.RepositoryID, pull.ID)
+			if listErr != nil {
+				return previews.Preview{}, listErr
+			}
+			for _, candidate := range all {
+				if candidate.CommitID == pull.SourceCommitID && candidate.Definition.Name == definitionName {
+					run = candidate
+					break
+				}
+			}
+		}
+		if run.ID == "" {
+			return previews.Preview{}, errors.New("preview build unavailable")
+		}
+		p, err = store.AttachBuildRun(pull.RepositoryID, pull.ID, p.ID, run.ID)
+		if err != nil {
+			return previews.Preview{}, err
+		}
+	}
+	if run.State == "queued" {
+		go runs.Execute(run, repository.Path())
+	}
 	return p, nil
 }

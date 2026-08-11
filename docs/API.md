@@ -57,7 +57,9 @@ access alone cannot call this endpoint and the session grants no new authority;
 collaborators may work normally or launch the existing repository/branch-bound
 agent run. Publishing that run synchronizes the pull through the normal path,
 starts checks and a fresh preview build, and back-links its commit and preview
-attempt to the original finding.
+attempt to the original finding. The repair session/finding pair reserves that
+attempt identity before its check exists, so completion or recovery retries
+reuse the same active or terminal build rather than duplicate provenance.
 
 ## Prospective impact assessments
 
