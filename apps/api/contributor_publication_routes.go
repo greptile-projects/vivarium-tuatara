@@ -171,19 +171,34 @@ func registerContributorPublicationRoutes(mux *http.ServeMux, git *storage.Store
 		contributors, commandIDs := workspacePublicationEvidence(checkpoint)
 		evidence := contributionEvidence(workspace, assessment, in.SatisfiedCriteria)
 		body := contributionPullBody(workspace, checkpoint, evidence)
-		pull, err := pulls.CreateGuidedContributionFrom(workspace.ContributorContext.UpstreamRepositoryID, workspace.RepositoryID, actor.UserID, in.Title, body, in.Branch, in.TargetBranch, pullrequests.GuidedContributionCreation{WorkspaceID: workspace.ID, CheckpointID: checkpoint.ID, Contributors: contributors, CommandIDs: commandIDs, Evidence: evidence})
-		if err != nil {
+		var pull pullrequests.PullRequest
+		var intentErr, recordErr, policyErr error
+		governanceErr := pathways.WithCurrentVersion(workspace.ContributorContext.UpstreamRepositoryID, workspace.ContributorContext.PathwayVersion, func(contributorpathways.Revision) error {
+			return opportunities.WithInProgressVersion(workspace.ContributorContext.UpstreamRepositoryID, workspace.ContributorContext.OpportunityID, workspace.ContributorContext.OpportunityVersion, func(contributoropportunities.Opportunity) error {
+				pull, err = pulls.CreateGuidedContributionFrom(workspace.ContributorContext.UpstreamRepositoryID, workspace.RepositoryID, actor.UserID, in.Title, body, in.Branch, in.TargetBranch, pullrequests.GuidedContributionCreation{WorkspaceID: workspace.ID, CheckpointID: checkpoint.ID, Contributors: contributors, CommandIDs: commandIDs, Evidence: evidence})
+				if err != nil {
+					return err
+				}
+				if in.MaintainerEditsAllowed {
+					pull, policyErr = pulls.UpdatePolicy(pull.RepositoryID, pull.ID, true)
+				}
+				publication := workspaces.Publication{Branch: in.Branch, CommitID: commitID, PullRequestID: pull.ID, ContributorIDs: contributors, CommandIDs: commandIDs, PublishedBy: actor.UserID, PublishedAt: time.Now().UTC()}
+				intentErr = ws.SavePublicationIntent(workspaces.PublicationIntent{WorkspaceID: workspace.ID, CheckpointID: checkpoint.ID, Publication: publication})
+				checkpoint, recordErr = ws.RecordCheckpointPublication(workspace.ID, checkpoint.ID, publication)
+				return nil
+			})
+		})
+		if errors.Is(governanceErr, contributorpathways.ErrConflict) || errors.Is(governanceErr, contributoropportunities.ErrConflict) {
 			_ = forkGit.DeleteReferenceIfTarget("refs/heads/"+in.Branch, commitID)
-			writeAPIError(w, 409, "contribution_pull_failed", "the fork branch could not enter upstream review")
+			writeAPIError(w, 409, "contribution_governance_changed", "pathway or opportunity governance changed during publication")
 			return
 		}
-		if in.MaintainerEditsAllowed {
-			pull, err = pulls.UpdatePolicy(pull.RepositoryID, pull.ID, true)
+		if governanceErr != nil {
+			_ = forkGit.DeleteReferenceIfTarget("refs/heads/"+in.Branch, commitID)
+			writeAPIError(w, 503, "contribution_publication_unavailable", "the governed pull could not be published")
+			return
 		}
-		publication := workspaces.Publication{Branch: in.Branch, CommitID: commitID, PullRequestID: pull.ID, ContributorIDs: contributors, CommandIDs: commandIDs, PublishedBy: actor.UserID, PublishedAt: time.Now().UTC()}
-		intentErr := ws.SavePublicationIntent(workspaces.PublicationIntent{WorkspaceID: workspace.ID, CheckpointID: checkpoint.ID, Publication: publication})
-		checkpoint, recordErr := ws.RecordCheckpointPublication(workspace.ID, checkpoint.ID, publication)
-		if err != nil || intentErr != nil || recordErr != nil {
+		if policyErr != nil || intentErr != nil || recordErr != nil {
 			w.Header().Set("Vivarium-Recovery-Publication", "pending")
 			writeJSON(w, 202, map[string]any{"checkpoint": checkpoint.Public(), "pull_request": pull, "assessment": assessment})
 			return

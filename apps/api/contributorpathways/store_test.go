@@ -34,3 +34,21 @@ func TestVisiblePathwayWritesReportDurabilityUncertaintyWithIdentity(t *testing.
 		t.Fatalf("visible acknowledgement = %#v, %v", stored, err)
 	}
 }
+
+func TestCurrentVersionAdmissionRejectsStaleGovernance(t *testing.T) {
+	store, _ := New(t.TempDir())
+	repositoryID, actorID := "0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789"
+	input := Revision{RepositoryID: repositoryID, PublishedBy: actorID, Goals: "A clear goal", Prerequisites: []string{"Git"}, Conduct: "Be kind", Security: "Report privately", Setup: Setup{Summary: "Run setup"}, Communication: "Use issues", ReviewPolicy: "Owner review", WorkCategories: []WorkCategory{{Name: "Docs", Description: "Clarify docs", Audience: "human"}}}
+	first, err := store.Publish(input, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.ID = first.ID
+	if _, err = store.Publish(input, first.Version); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	if err = store.WithCurrentVersion(repositoryID, first.Version, func(Revision) error { called = true; return nil }); !errors.Is(err, ErrConflict) || called {
+		t.Fatalf("stale admission = %v, called %v", err, called)
+	}
+}

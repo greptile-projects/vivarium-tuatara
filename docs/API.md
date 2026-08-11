@@ -295,6 +295,9 @@ or open help threads. `POST` to that endpoint accepts `branch`,
 contributor-owned fork and opens a cross-repository pull against upstream. The
 pull retains the opportunity/pathway revisions, setup outcomes, mentor-guidance
 and agent-assistance entry IDs, criteria, contributors, and checkpoint evidence.
+Publication holds exact current-pathway and in-progress-opportunity admissions
+through pull creation and checkpoint recording, so governing changes cannot
+interleave after the final validation.
 This provenance grants no upstream authority: ordinary discussion,
 reproduction, review, required checks, owner acknowledgements, integration
 queues, permissions, and merge rules apply.

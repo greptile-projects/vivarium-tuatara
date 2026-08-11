@@ -78,6 +78,26 @@ type Store struct {
 	directorySync func(string) error
 }
 
+// WithCurrentVersion holds the pathway publication boundary while fn commits
+// work whose governing provenance names expectedVersion.
+func (s *Store) WithCurrentVersion(repositoryID string, expectedVersion int, fn func(Revision) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	items, err := s.list(repositoryID)
+	if err != nil {
+		return err
+	}
+	if len(items) == 0 || items[len(items)-1].Version != expectedVersion {
+		return ErrConflict
+	}
+	return fn(items[len(items)-1])
+}
+
 func New(root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
