@@ -53,6 +53,35 @@ func TestMatchClaimExpiryAndRelease(t *testing.T) {
 		t.Fatalf("expired claim = %#v, %v", got.Claim, err)
 	}
 }
+
+func TestBeginLaunchRevalidatesAndConsumesClaim(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	v, err := s.Publish(sample(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.Claim(repo, v.ID, newcomer, "launching", time.Hour, v.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Hour)
+	if _, err = s.BeginLaunch(repo, v.ID, newcomer, v.Version); !errors.Is(err, ErrClaimed) {
+		t.Fatalf("expired launch error = %v", err)
+	}
+	now = now.Add(-time.Minute)
+	v, err = s.BeginLaunch(repo, v.ID, newcomer, v.Version)
+	if err != nil || v.Status != "in_progress" {
+		t.Fatalf("launch = %#v, %v", v, err)
+	}
+	if _, err = s.BeginLaunch(repo, v.ID, newcomer, v.Version); !errors.Is(err, ErrClaimed) {
+		t.Fatalf("duplicate launch error = %v", err)
+	}
+}
 func TestMatchExplainsConstraints(t *testing.T) {
 	v := sample()
 	m := MatchAll([]Opportunity{v}, Profile{Skills: []string{"Go"}, AvailableMinutes: 30, MaximumRisk: "low"}, time.Now())[0]

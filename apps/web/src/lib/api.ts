@@ -32,7 +32,7 @@ export type ContributionOpportunity = {
   source: { kind: "issue" | "proposal" | "stewardship" | "task"; id: string; parent_id?: string };
   required_skills: string[]; interests: string[]; dependency_ids: string[]; risk: "low" | "medium" | "high";
   estimated_minutes: number; agent_assistance: boolean; mentors: { user_id: string; note?: string }[];
-  revision: string; status: "open" | "paused" | "completed"; claim?: { id: string; actor_id: string; note?: string; claimed_at: string; expires_at: string };
+  revision: string; status: "open" | "in_progress" | "paused" | "completed"; claim?: { id: string; actor_id: string; note?: string; claimed_at: string; expires_at: string };
 };
 export type ContributionMatch = { opportunity: ContributionOpportunity; score: number; reasons: string[]; gaps: string[]; ready: boolean };
 export type DeliveryTeam = {

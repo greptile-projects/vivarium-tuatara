@@ -80,6 +80,11 @@ func registerContributorLaunchRoutes(mux *http.ServeMux, git *storage.Store, rep
 			writeAPIError(w, 422, "opportunity_revision_missing", "the recorded opportunity revision is no longer reproducible")
 			return
 		}
+		reachable, err := exec.Command("git", "--git-dir="+upstreamGit.Path(), "for-each-ref", "--format=%(refname)", "--contains="+opportunity.Revision, "refs/heads", "refs/tags").Output()
+		if err != nil || strings.TrimSpace(string(reachable)) == "" {
+			writeAPIError(w, 422, "opportunity_revision_unpublished", "the recorded opportunity revision is not reachable from a published branch or tag")
+			return
+		}
 		definitionBytes, err := exec.Command("git", "--git-dir="+upstreamGit.Path(), "show", opportunity.Revision+":"+workspaces.DefinitionPath).Output()
 		if err != nil {
 			writeAPIError(w, 422, "workspace_definition_missing", "the recorded revision has no repository workspace definition")
@@ -132,6 +137,19 @@ func registerContributorLaunchRoutes(mux *http.ServeMux, git *storage.Store, rep
 		policy := workspaces.DefaultPolicy()
 		if definition.Resources.CPUs > policy.MaxCPUs || definition.Resources.MemoryMB > policy.MaxMemoryMB || definition.Resources.StorageMB > policy.MaxStorageMB {
 			writeAPIError(w, 422, "workspace_policy_resources_exceeded", "workspace definition exceeds the effective fork resource policy")
+			return
+		}
+		opportunity, err = opportunities.BeginLaunch(upstream.ID, opportunity.ID, actor.UserID, input.ExpectedVersion)
+		if errors.Is(err, contributoropportunities.ErrConflict) {
+			writeAPIError(w, 409, "opportunity_changed", "contribution opportunity changed")
+			return
+		}
+		if errors.Is(err, contributoropportunities.ErrClaimed) {
+			writeAPIError(w, 409, "opportunity_claim_required", "the exact reservation expired or is no longer held by this contributor")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 503, "opportunity_launch_unavailable", "the contribution launch could not be durably reserved")
 			return
 		}
 		fork, err := repos.CreateFork(actor.UserID, upstream.ID, strings.TrimSpace(input.ForkName))

@@ -22,6 +22,38 @@ var (
 	ErrClaimed  = errors.New("contribution opportunity is already claimed")
 )
 
+// BeginLaunch atomically revalidates and consumes a live exact-version claim
+// immediately before the caller creates contributor resources.
+func (s *Store) BeginLaunch(repositoryID, id, actor string, expected int) (Opportunity, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items, err := s.read(repositoryID)
+	if err != nil {
+		return Opportunity{}, err
+	}
+	for _, v := range items {
+		if v.ID != id {
+			continue
+		}
+		if v.Version != expected {
+			return Opportunity{}, ErrConflict
+		}
+		now := s.now().UTC()
+		v.Claim = activeClaim(v.Claim, now)
+		if v.Status != "open" || v.Claim == nil || v.Claim.ActorID != actor {
+			return Opportunity{}, ErrClaimed
+		}
+		v.Status = "in_progress"
+		v.Version++
+		v.UpdatedAt = now
+		if err := s.write(v); err != nil {
+			return Opportunity{}, err
+		}
+		return v, nil
+	}
+	return Opportunity{}, ErrNotFound
+}
+
 type Source struct {
 	Kind     string `json:"kind"`
 	ID       string `json:"id"`
@@ -315,7 +347,7 @@ func activeClaim(c *Claim, now time.Time) *Claim {
 	return c
 }
 func valid(v Opportunity) bool {
-	if !(validID(v.RepositoryID) && validID(v.PublishedBy) && strings.TrimSpace(v.Title) != "" && strings.TrimSpace(v.ExpectedOutcome) != "" && strings.TrimSpace(v.Scope) != "" && validID(v.Source.ID) && one(v.Source.Kind, "issue", "proposal", "stewardship", "task") && one(v.Risk, "low", "medium", "high") && v.EstimatedMinutes >= 15 && v.EstimatedMinutes <= 10080 && strings.TrimSpace(v.Revision) != "" && one(defaultStatus(v.Status), "open", "paused", "completed") && len(v.RequiredSkills) <= 20 && len(v.Interests) <= 20 && len(v.DependencyIDs) <= 50 && len(v.Mentors) <= 20) {
+	if !(validID(v.RepositoryID) && validID(v.PublishedBy) && strings.TrimSpace(v.Title) != "" && strings.TrimSpace(v.ExpectedOutcome) != "" && strings.TrimSpace(v.Scope) != "" && validID(v.Source.ID) && one(v.Source.Kind, "issue", "proposal", "stewardship", "task") && one(v.Risk, "low", "medium", "high") && v.EstimatedMinutes >= 15 && v.EstimatedMinutes <= 10080 && strings.TrimSpace(v.Revision) != "" && one(defaultStatus(v.Status), "open", "in_progress", "paused", "completed") && len(v.RequiredSkills) <= 20 && len(v.Interests) <= 20 && len(v.DependencyIDs) <= 50 && len(v.Mentors) <= 20) {
 		return false
 	}
 	for _, mentor := range v.Mentors {
