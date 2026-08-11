@@ -160,11 +160,13 @@ func registerPreviewRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 		writeJSON(w, 201, map[string]any{"recorded": true, "actor_id": actor.UserID, "role": invitation.Role})
 	})
 	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/previews/{preview_id}/findings", func(w http.ResponseWriter, r *http.Request) {
-		_, _, p, ok := authorizePreviewGuest(w, r, catalog, store, authStore)
+		_, invitation, p, ok := authorizePreviewGuest(w, r, catalog, store, authStore)
 		if !ok {
 			return
 		}
-		writeJSON(w, 200, map[string]any{"preview_id": p.ID, "revision": p.Revision, "findings": p.Findings, "evidence_policy": map[string]any{"visibility": "preview_audience", "kinds": []string{"screenshot", "recording", "console", "trace", "annotation"}, "max_item_bytes": 5 << 20, "max_total_bytes": 12 << 20, "sensitive_text": "redacted"}})
+		projection := project(p)
+		projection.Invitations, projection.AudienceEvents, projection.Feedback = nil, nil, nil
+		writeJSON(w, 200, map[string]any{"preview_id": p.ID, "revision": p.Revision, "preview": projection, "effective_role": invitation.Role, "findings": p.Findings, "evidence_policy": map[string]any{"visibility": "preview_audience", "kinds": []string{"screenshot", "recording", "console", "trace", "annotation"}, "max_item_bytes": 5 << 20, "max_total_bytes": 12 << 20, "sensitive_text": "redacted"}})
 	})
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/previews/{preview_id}/findings", func(w http.ResponseWriter, r *http.Request) {
 		actor, invitation, p, ok := authorizePreviewGuest(w, r, catalog, store, authStore)

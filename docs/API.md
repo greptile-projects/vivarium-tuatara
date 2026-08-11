@@ -36,6 +36,10 @@ reopens with the last observed `version`; stale or invalid decisions return
 `409 preview_finding_changed`. All actions retain actor and time. Evidence is
 never projected through public preview lists or ordinary pull comments, so an
 invitation cannot implicitly broaden inaccessible material.
+The findings response also includes a guest-safe `preview` projection and
+`effective_role` for the exact web feedback workspace. Invitation records,
+audience audit, ordinary feedback, source, and build logs are omitted from that
+projection.
 
 An active guest can fetch only that preview's static content with their account
 session. Invitations are not repository participation and grant no credential,

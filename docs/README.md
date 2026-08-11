@@ -730,6 +730,10 @@ through the preview audience boundary; bounded media types and sizes are
 validated and secret-like text fields are redacted before retention. The pull
 workspace projects this shared trail without copying inaccessible evidence into
 ordinary comments.
+The exact `/pulls/{repository-id}/{pull-id}/previews/{preview-id}` feedback
+workspace admits a non-repository guest through the active invitation and
+renders controls from its effective feedback role; it does not require or
+project repository participation.
 The API derives the source-only commit set and recursive changed-file summary
 from the fixed target snapshot and explicitly synchronized source revision.
 Immutable pull request comments retain stable author IDs; owners, contributors,

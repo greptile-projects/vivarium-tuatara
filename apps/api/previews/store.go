@@ -314,13 +314,38 @@ func (s *Store) AddFeedback(repo, pull, id, user, invitationID, body string) (Pr
 	return p, s.write(p)
 }
 
-var sensitiveValue = regexp.MustCompile(`(?i)(authorization|cookie|password|passwd|token|secret|api[-_]?key)(\s*[:=]\s*|\s+)([^\s,;]+)`)
 var bearerValue = regexp.MustCompile(`(?i)bearer\s+[a-z0-9._~+/=-]+`)
+var sensitiveValue = regexp.MustCompile(`(?i)((?:["']?)(?:authorization|cookie|password|passwd|token|secret|api[-_]?key)(?:["']?)(?:\s*[:=]\s*["']?|\s+))([^"'\s,;}]+)`)
+var sensitiveKey = regexp.MustCompile(`(?i)^(authorization|cookie|password|passwd|token|secret|api[-_]?key)$`)
 
 func RedactSensitive(value string) (string, bool) {
-	clean := sensitiveValue.ReplaceAllString(value, "$1$2[REDACTED]")
-	clean = bearerValue.ReplaceAllString(clean, "Bearer [REDACTED]")
+	clean := bearerValue.ReplaceAllString(value, "Bearer [REDACTED]")
+	var structured any
+	if json.Unmarshal([]byte(clean), &structured) == nil {
+		redactJSONValue(structured)
+		if encoded, err := json.Marshal(structured); err == nil {
+			clean = string(encoded)
+		}
+	}
+	clean = sensitiveValue.ReplaceAllString(clean, "$1[REDACTED]")
 	return clean, clean != value
+}
+
+func redactJSONValue(value any) {
+	switch current := value.(type) {
+	case map[string]any:
+		for key, child := range current {
+			if sensitiveKey.MatchString(key) {
+				current[key] = "[REDACTED]"
+			} else {
+				redactJSONValue(child)
+			}
+		}
+	case []any:
+		for _, child := range current {
+			redactJSONValue(child)
+		}
+	}
 }
 func (s *Store) AddFinding(repo, pull, id, actor, route, title, description, classification, severity, duplicateOf string, steps []string, evidence []FindingEvidence) (Preview, Finding, error) {
 	if actor == "" || route == "" || !strings.HasPrefix(route, "/") || utf8.RuneCountInString(route) > 2000 || strings.TrimSpace(title) == "" || utf8.RuneCountInString(title) > 200 || utf8.RuneCountInString(description) > 10000 || !slicesContains([]string{"bug", "usability", "accessibility", "content", "performance", "question", "other"}, classification) || !slicesContains([]string{"blocking", "major", "minor", "note"}, severity) || len(steps) > 30 || len(evidence) > 12 {

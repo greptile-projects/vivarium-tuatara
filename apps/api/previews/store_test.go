@@ -21,14 +21,22 @@ func TestFindingsFreezeRevisionRedactAndRetainCollaboration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	secret := base64.StdEncoding.EncodeToString([]byte("Authorization: Bearer-value\nCookie=session-value"))
+	secret := base64.StdEncoding.EncodeToString([]byte("{\"password\":\"json-secret\",\"nested\":{\"api_key\":\"nested-secret\"}}\nAuthorization: Bearer eyJ.test.synthetic.token"))
 	updated, finding, err := store.AddFinding("repo", "pull", p.ID, "guest", "/checkout?plan=team", "Payment fails", "Expected success", "bug", "blocking", "", []string{"Open page", "token=private"}, []FindingEvidence{{Kind: "console", Name: "console.txt", MediaType: "text/plain", Data: secret}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	decoded, _ := base64.StdEncoding.DecodeString(finding.Evidence[0].Data)
-	if finding.Revision != p.Revision || finding.Status != "open" || !finding.Evidence[0].Redacted || strings.Contains(string(decoded), "Bearer-value") || strings.Contains(finding.ReproductionSteps[1], "private") {
+	if finding.Revision != p.Revision || finding.Status != "open" || !finding.Evidence[0].Redacted || strings.Contains(string(decoded), "json-secret") || strings.Contains(string(decoded), "nested-secret") || strings.Contains(string(decoded), "eyJ.test.synthetic.token") || strings.Contains(finding.ReproductionSteps[1], "private") {
 		t.Fatalf("unsafe finding = %#v, evidence %q", finding, string(decoded))
+	}
+	persisted, err := store.Get("repo", "pull", p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persistedEvidence, _ := base64.StdEncoding.DecodeString(persisted.Findings[0].Evidence[0].Data)
+	if strings.Contains(string(persistedEvidence), "json-secret") || strings.Contains(string(persistedEvidence), "nested-secret") || strings.Contains(string(persistedEvidence), "eyJ.test.synthetic.token") {
+		t.Fatalf("persisted credentials = %q", persistedEvidence)
 	}
 	_, related, err := store.AddFinding("repo", "pull", p.ID, "owner", "/checkout", "Same failure", "", "bug", "major", finding.ID, []string{"Retry"}, nil)
 	if err != nil || related.DuplicateOf != finding.ID {

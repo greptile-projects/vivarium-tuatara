@@ -10,16 +10,19 @@ export function PullRequestPreviews({
   pullRequestID,
   participant,
   owner,
+  previewID,
 }: {
   repositoryID: string;
   pullRequestID: string;
   participant: boolean;
   owner: boolean;
+  previewID?: string;
 }) {
   const { token } = useAuth();
   const [items, setItems] = useState<PullPreview[]>([]);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [feedbackAuthorized, setFeedbackAuthorized] = useState(participant);
   const [audience, setAudience] = useState({
     source_kind: "user",
     user_id: "",
@@ -33,9 +36,14 @@ export function PullRequestPreviews({
   const base = `/repositories/${repositoryID}/pulls/${pullRequestID}/previews`;
   const load = useCallback(async () => {
     try {
-      setItems(
-        (await api<{ previews: PullPreview[] }>(base, {}, token)).previews,
-      );
+      if (previewID) {
+        const result = await api<{preview:PullPreview;effective_role:string}>(`${base}/${previewID}/findings`, {}, token);
+        setItems([result.preview]);
+        setFeedbackAuthorized(result.effective_role === "feedback");
+      } else {
+        setItems((await api<{ previews: PullPreview[] }>(base, {}, token)).previews);
+        setFeedbackAuthorized(participant);
+      }
       setError("");
     } catch (reason) {
       setError(
@@ -44,7 +52,7 @@ export function PullRequestPreviews({
           : "Previews could not be loaded.",
       );
     }
-  }, [base, token]);
+  }, [base, participant, previewID, token]);
   useEffect(() => {
     void Promise.resolve().then(load);
     const timer = window.setInterval(() => void load(), 3000);
@@ -156,7 +164,7 @@ export function PullRequestPreviews({
             Isolated experiences pinned to one review revision
           </p>
         </div>
-        {participant && (
+        {participant && !previewID && (
           <Button disabled={pending} onClick={() => void launch()}>
             {pending ? "Launching…" : "Launch preview"}
           </Button>
@@ -232,14 +240,15 @@ export function PullRequestPreviews({
               >
                 Open exact preview
               </a>
-              <a
+              <a className="text-[var(--muted)] underline" href={`/pulls/${repositoryID}/${pullRequestID}/previews/${item.id}`}>Feedback workspace</a>
+              {participant && <a
                 className="text-[var(--muted)] underline"
                 href={`/api${base}/${item.id}/events`}
                 target="_blank"
                 rel="noreferrer"
               >
                 Build logs
-              </a>
+              </a>}
             </div>
             {owner && (
               <div className="mt-4 space-y-3 border-t border-[var(--line)] pt-4">
@@ -335,7 +344,7 @@ export function PullRequestPreviews({
                 </ul>
               </div>
             )}
-            {participant && item.definition.access.actions.includes("feedback") && (
+            {feedbackAuthorized && item.definition.access.actions.includes("feedback") && (
               <div className="mt-4 space-y-3 border-t border-[var(--line)] pt-4">
                 <div>
                   <p className="text-sm font-semibold">Revision-exact findings</p>
