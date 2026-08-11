@@ -91,7 +91,14 @@ whenever dependencies change or the web job fails before it starts.
   requests, decisions, derived credential IDs, and revocation audit. Approved
   agent operators can mint only exact repository-bound Git credentials whose
   lifetime cannot outlast the live grant; grant revocation immediately revokes
-  those credentials without touching unrelated credentials. Organization
+  those credentials without touching unrelated credentials. Guided contribution
+  checkpoints preflight frozen pathway acknowledgement, opportunity revision,
+  setup evidence, project files, and explicitly confirmed criteria before
+  committing to the contributor-owned fork and opening an ordinary upstream
+  pull. Pull provenance retains mentor guidance, agent assistance, criteria,
+  and contributors while coaching needs remain distinguishable from blocking
+  project requirements; no upstream governance or permission is bypassed.
+  Organization
   owners also publish versioned proactive stewardship mandates with desired
   outcomes, repository/branch scope, trusted signals, exclusions, bounded
   budget and schedule, approved agent, allowed actions, and required human

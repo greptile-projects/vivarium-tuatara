@@ -65,6 +65,7 @@ type PullRequest struct {
 	WorkspaceCheckpointID    string                 `json:"workspace_checkpoint_id,omitempty"`
 	WorkspaceContributorIDs  []string               `json:"workspace_contributor_ids,omitempty"`
 	WorkspaceCommandIDs      []string               `json:"workspace_command_ids,omitempty"`
+	ContributionEvidence     *ContributionEvidence  `json:"contribution_evidence,omitempty"`
 	DeliveryTeamID           string                 `json:"delivery_team_id,omitempty"`
 	DeliveryIntegrationID    string                 `json:"delivery_integration_id,omitempty"`
 	DeliveryStreamID         string                 `json:"delivery_stream_id,omitempty"`
@@ -88,6 +89,34 @@ type PullRequest struct {
 	QueueFinalizedAt         *time.Time             `json:"queue_finalized_at,omitempty"`
 	IntegrationCandidates    []IntegrationCandidate `json:"integration_candidates,omitempty"`
 	mergeIntent              *mergeIntent
+}
+
+// ContributionEvidence keeps the intent and support behind guided newcomer
+// work attached to the ordinary pull. It is review context, never authority.
+type ContributionEvidence struct {
+	OpportunityID       string                `json:"opportunity_id"`
+	OpportunityVersion  int                   `json:"opportunity_version"`
+	PathwayVersion      int                   `json:"pathway_version"`
+	UpstreamRevision    string                `json:"upstream_revision"`
+	SetupEvidence       []ContributionSetup   `json:"setup_evidence"`
+	MentorGuidanceIDs   []string              `json:"mentor_guidance_ids"`
+	AgentAssistanceIDs  []string              `json:"agent_assistance_ids"`
+	AcceptanceCriteria  []string              `json:"acceptance_criteria"`
+	SatisfiedCriteria   []string              `json:"satisfied_criteria"`
+	ProjectRequirements []ContributionFinding `json:"project_requirements"`
+	CoachingNeeds       []ContributionFinding `json:"coaching_needs"`
+}
+
+type ContributionSetup struct {
+	Command  string `json:"command"`
+	State    string `json:"state"`
+	ExitCode int    `json:"exit_code"`
+}
+
+type ContributionFinding struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Fix     string `json:"fix"`
 }
 
 // LinkDeliveryIntegration retains a pull's place in a distributed outcome
@@ -179,6 +208,26 @@ func (s *Store) LinkWorkspace(repositoryID, pullID, workspaceID, checkpointID st
 	p.WorkspaceID, p.WorkspaceCheckpointID = workspaceID, checkpointID
 	p.WorkspaceContributorIDs = append([]string(nil), contributors...)
 	p.WorkspaceCommandIDs = append([]string(nil), commands...)
+	_, err = s.write(p)
+	return p, err
+}
+
+func (s *Store) LinkContributionEvidence(repositoryID, pullID string, evidence ContributionEvidence) (PullRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return PullRequest{}, err
+	}
+	defer unlock()
+	p, err := s.read(repositoryID, pullID)
+	if err != nil {
+		return p, err
+	}
+	if !validID(evidence.OpportunityID) || evidence.OpportunityVersion < 1 || evidence.PathwayVersion < 1 || !validCommitID(evidence.UpstreamRevision) || len(evidence.AcceptanceCriteria) == 0 {
+		return p, ErrInvalid
+	}
+	p.ContributionEvidence = &evidence
 	_, err = s.write(p)
 	return p, err
 }

@@ -846,6 +846,13 @@ export type CheckpointAnalysis = {
   reproducible: boolean;
   reasons: string[];
 };
+export type ContributionPublicationFinding = { code: string; message: string; fix: string };
+export type ContributionPublicationAssessment = {
+  ready: boolean;
+  project_requirements: ContributionPublicationFinding[];
+  coaching_needs: ContributionPublicationFinding[];
+  acceptance_criteria: string[];
+};
 export type Organization = {
   id: string;
   name: string;
@@ -2166,6 +2173,13 @@ export type PullRequest = {
   workspace_checkpoint_id?: string;
   workspace_contributor_ids?: string[];
   workspace_command_ids?: string[];
+  contribution_evidence?: {
+    opportunity_id: string; opportunity_version: number; pathway_version: number; upstream_revision: string;
+    setup_evidence: { command: string; state: string; exit_code: number }[];
+    mentor_guidance_ids: string[]; agent_assistance_ids: string[];
+    acceptance_criteria: string[]; satisfied_criteria: string[];
+    project_requirements: ContributionPublicationFinding[]; coaching_needs: ContributionPublicationFinding[];
+  };
   status: "open" | "closed" | "merged";
   maintainer_edits_allowed: boolean;
   created_at: string;
