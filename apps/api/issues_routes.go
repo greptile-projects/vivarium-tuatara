@@ -17,6 +17,7 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
@@ -29,7 +30,11 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
-func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *repositories.Store, store *issues.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, incidentStore *incidents.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, packageStore *packages.Store, workspaceStore *workspaces.Store, credentials *auth.Store, activity *activities.Store) {
+func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *repositories.Store, store *issues.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, incidentStore *incidents.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, packageStore *packages.Store, workspaceStore *workspaces.Store, credentials *auth.Store, activity *activities.Store, checkStores ...*checkruns.Store) {
+	var checkStore *checkruns.Store
+	if len(checkStores) > 0 {
+		checkStore = checkStores[0]
+	}
 	const issueBodyLimit = 15 << 20
 	require := func(w http.ResponseWriter, r *http.Request, scope string) (auth.Credential, bool) {
 		actor, ok := authenticateRequest(w, r, credentials, scope, false)
@@ -669,6 +674,182 @@ func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *rep
 			return
 		}
 		addIssueFinding(w, r, repos, store, credential, r.PathValue("investigation_id"), 0)
+	})
+	type implementationInput struct {
+		ExpectedVersion       int      `json:"expected_version"`
+		ReproductionAttemptID string   `json:"reproduction_attempt_id"`
+		FindingIDs            []string `json:"finding_ids"`
+		AffectedRevision      string   `json:"affected_revision"`
+		AcceptanceCriteria    []string `json:"acceptance_criteria"`
+		AssigneeType          string   `json:"assignee_type"`
+		AssigneeID            string   `json:"assignee_id"`
+	}
+	projectImplementation := func(v issues.Issue) (map[string]any, error) {
+		if v.Implementation == nil || proposalStore == nil || pullStore == nil {
+			return nil, issues.ErrNotFound
+		}
+		proposal, err := proposalStore.Get(v.RepositoryID, v.Implementation.ProposalID)
+		if err != nil {
+			return nil, err
+		}
+		task, err := proposalStore.GetTask(v.RepositoryID, proposal.ID, v.Implementation.TaskID)
+		if err != nil {
+			return nil, err
+		}
+		var pull any
+		var comments, reviews, checks any
+		if task.Contribution != nil {
+			if candidate, getErr := pullStore.Get(v.RepositoryID, task.Contribution.PullRequestID); getErr == nil {
+				pull = candidate
+				if values, listErr := pullStore.ListComments(v.RepositoryID, candidate.ID); listErr == nil {
+					comments = values
+				}
+				if values, listErr := pullStore.ListReviews(v.RepositoryID, candidate.ID); listErr == nil {
+					reviews = values
+				}
+				if checkStore != nil {
+					if values, listErr := checkStore.List(v.RepositoryID, candidate.ID); listErr == nil {
+						checks = values
+					}
+				}
+			}
+		}
+		return map[string]any{"issue": v, "proposal": proposal, "task": task, "pull_request": pull, "discussion": comments, "reviews": reviews, "checks": checks}, nil
+	}
+	mux.HandleFunc("GET /repositories/{id}/issues/{issue_id}/implementation", func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := require(w, r, "repositories:read"); !ok {
+			return
+		}
+		v, err := store.Get(r.PathValue("id"), r.PathValue("issue_id"))
+		if err != nil {
+			writeIssueError(w, err)
+			return
+		}
+		projection, err := projectImplementation(v)
+		if err != nil {
+			writeAPIError(w, 404, "issue_implementation_not_found", "issue has no governed implementation")
+			return
+		}
+		writeJSON(w, 200, projection)
+	})
+	mux.HandleFunc("POST /repositories/{id}/issues/{issue_id}/implementation", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		if proposalStore == nil || pullStore == nil {
+			writeAPIError(w, 503, "issue_implementation_unavailable", "governed implementation is unavailable")
+			return
+		}
+		var in implementationInput
+		if decodeJSON(r, &in) != nil || in.ExpectedVersion < 1 || (in.AssigneeType != "human" && in.AssigneeType != "agent") {
+			writeAPIError(w, 422, "invalid_issue_implementation", "confirmed evidence, criteria, revision, and an owner are required")
+			return
+		}
+		in.AffectedRevision = strings.ToLower(strings.TrimSpace(in.AffectedRevision))
+		if len(in.AffectedRevision) != 40 || len(in.FindingIDs) == 0 || len(in.FindingIDs) > 20 || len(in.AcceptanceCriteria) == 0 || len(in.AcceptanceCriteria) > 20 {
+			writeAPIError(w, 422, "invalid_issue_implementation", "confirmed evidence, criteria, revision, and an owner are required")
+			return
+		}
+		if in.AssigneeType == "human" {
+			if strings.TrimSpace(in.AssigneeID) == "" {
+				in.AssigneeID = actor.UserID
+			}
+			repo, _ := repos.GetByID(r.PathValue("id"))
+			collaborator, _ := repos.HasCollaborator(in.AssigneeID, r.PathValue("id"))
+			if repo.OwnerID != in.AssigneeID && !collaborator {
+				writeAPIError(w, 422, "invalid_issue_assignee", "human owner must already participate in the repository")
+				return
+			}
+		}
+		for i := range in.AcceptanceCriteria {
+			in.AcceptanceCriteria[i] = strings.TrimSpace(in.AcceptanceCriteria[i])
+			if in.AcceptanceCriteria[i] == "" || len(in.AcceptanceCriteria[i]) > 1000 {
+				writeAPIError(w, 422, "invalid_issue_implementation", "acceptance criteria must be non-empty and bounded")
+				return
+			}
+		}
+		var proposal proposals.Proposal
+		var task proposals.Task
+		var issueBefore issues.Issue
+		updated, err := store.Mutate(r.PathValue("id"), r.PathValue("issue_id"), actor.UserID, in.ExpectedVersion, func(v *issues.Issue) error {
+			issueBefore = *v
+			issueBefore.History = append([]issues.HistoryEntry(nil), v.History...)
+			if v.Implementation != nil {
+				return issues.ErrConflict
+			}
+			var attempt *issues.ReproductionAttempt
+			for i := range v.ReproductionAttempts {
+				if v.ReproductionAttempts[i].ID == in.ReproductionAttemptID {
+					attempt = &v.ReproductionAttempts[i]
+					break
+				}
+			}
+			if attempt == nil || attempt.Result != "reproduced" || attempt.CommitID != in.AffectedRevision {
+				return issues.ErrInvalid
+			}
+			selected := map[string]bool{}
+			items := []proposals.ReasoningItem{{ID: attempt.ID, Kind: "reproduction", Summary: attempt.ObservedResult, Status: "confirmed"}}
+			for _, id := range in.FindingIDs {
+				if selected[id] {
+					return issues.ErrInvalid
+				}
+				selected[id] = true
+			}
+			for _, id := range in.FindingIDs {
+				found := false
+				for _, finding := range v.Findings {
+					if finding.ID == id && finding.Kind == "finding" && len(finding.Challenges) == 0 {
+						items = append(items, proposals.ReasoningItem{ID: id, Kind: "diagnosis", Summary: finding.Statement, Status: "confirmed"})
+						found = true
+						break
+					}
+				}
+				if !found {
+					return issues.ErrInvalid
+				}
+			}
+			criteria := strings.Join(in.AcceptanceCriteria, "\n- ")
+			origin := proposals.ReasoningOrigin{IssueID: v.ID, IssueVersion: v.Version, ReproductionID: attempt.ID, Revision: in.AffectedRevision, SelectedItemIDs: append([]string{attempt.ID}, in.FindingIDs...), Items: items, AnalysisStatus: "issue_repair"}
+			created, tasks, createErr := proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: v.RepositoryID, ActorID: actor.UserID, Title: "Repair: " + v.Title, Body: "Governed repair for issue " + v.ID + ".\n\nAcceptance criteria:\n- " + criteria, Origin: origin, Tasks: []proposals.ImplementationTaskInput{{Title: "Repair " + v.Title, Outcome: "The confirmed failure no longer reproduces and every acceptance criterion is met.", Risk: v.Severity + " severity regression at " + in.AffectedRevision, VerificationPlan: criteria, AssigneeType: in.AssigneeType, AssigneeID: strings.TrimSpace(in.AssigneeID)}}})
+			if createErr != nil && !errors.Is(createErr, proposals.ErrDurabilityUncertain) {
+				return createErr
+			}
+			proposal, task = created, tasks[0]
+			v.Implementation = &issues.Implementation{ProposalID: proposal.ID, TaskID: task.ID, ReproductionAttemptID: attempt.ID, FindingIDs: append([]string(nil), in.FindingIDs...), AffectedRevision: in.AffectedRevision, AcceptanceCriteria: append([]string(nil), in.AcceptanceCriteria...), CreatedBy: actor.UserID, CreatedAt: time.Now().UTC()}
+			v.Status = "in_progress"
+			issues.AddHistory(v, "implementation_started", actor.UserID, task.ID)
+			return nil
+		})
+		if errors.Is(err, proposals.ErrImplementationConflict) {
+			writeAPIError(w, 409, "issue_implementation_changed", "recovery evidence differs from the frozen implementation; retry the exact original handoff")
+			return
+		}
+		if err != nil && !errors.Is(err, issues.ErrDurabilityUncertain) {
+			// Proposal publication precedes the issue file rename. Once that
+			// durable identity exists, an issue write failure is a recoverable
+			// split outcome: the exact request converges through the reasoning
+			// origin and can finish the issue link without duplicating work.
+			if proposal.ID != "" && task.ID != "" {
+				w.Header().Set("Location", "/proposals/"+issueBefore.RepositoryID+"/"+proposal.ID)
+				w.Header().Set("Vivarium-Recovery-Implementation", "pending")
+				writeJSON(w, 202, map[string]any{"issue": issueBefore, "proposal": proposal, "task": task, "pull_request": nil, "recovery_pending": true})
+				return
+			}
+			writeIssueError(w, err)
+			return
+		}
+		projection, projectionErr := projectImplementation(updated)
+		if projectionErr != nil {
+			writeAPIError(w, 503, "issue_implementation_unavailable", "implementation was retained but its projection is temporarily unavailable")
+			return
+		}
+		if errors.Is(err, issues.ErrDurabilityUncertain) {
+			w.Header().Set("Location", "/repositories/"+updated.RepositoryID+"/issues/"+updated.ID+"/implementation")
+			writeJSON(w, 202, projection)
+			return
+		}
+		writeJSON(w, 201, projection)
 	})
 }
 

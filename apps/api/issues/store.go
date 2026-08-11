@@ -147,6 +147,19 @@ type Investigation struct {
 	UpdatedAt             time.Time `json:"updated_at"`
 }
 
+// Implementation freezes the evidence handoff into ordinary proposal/task
+// governance. Live pull/check/review state is projected from those stores.
+type Implementation struct {
+	ProposalID            string    `json:"proposal_id"`
+	TaskID                string    `json:"task_id"`
+	ReproductionAttemptID string    `json:"reproduction_attempt_id"`
+	FindingIDs            []string  `json:"finding_ids"`
+	AffectedRevision      string    `json:"affected_revision"`
+	AcceptanceCriteria    []string  `json:"acceptance_criteria"`
+	CreatedBy             string    `json:"created_by"`
+	CreatedAt             time.Time `json:"created_at"`
+}
+
 type Issue struct {
 	ID                   string                `json:"id"`
 	RepositoryID         string                `json:"repository_id"`
@@ -170,6 +183,7 @@ type Issue struct {
 	EvidenceRequests     []EvidenceRequest     `json:"evidence_requests"`
 	Findings             []Finding             `json:"findings"`
 	Investigations       []Investigation       `json:"investigations"`
+	Implementation       *Implementation       `json:"implementation,omitempty"`
 	DuplicateOf          string                `json:"duplicate_of,omitempty"`
 	Version              int                   `json:"version"`
 	CreatedAt            time.Time             `json:"created_at"`

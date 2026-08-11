@@ -1566,3 +1566,21 @@ a bounded link set; the read-only agent can inspect only that packet and append
 cited claims under its generated identity. Current repository participation is
 revalidated on every ordinary issue read, while duplicate, ownership, evidence,
 and access decisions remain actor-stamped in the issue history.
+
+Once an attempt confirms the failure, a collaborator can select that exact
+attempt, its affected commit, undisputed cited diagnostic findings, and explicit
+acceptance criteria to create one governed implementation proposal and owned
+task. Human owners must already participate and receive no new access; generated
+agents receive only the existing assignment-scoped branch authority when their
+task session starts. The issue retains the frozen evidence handoff and projects
+the task and linked pull's live state, while commits, checks, discussion, review,
+queueing, and merge continue through ordinary pull-request policy. Retrying the
+same reproduction handoff converges on the existing proposal rather than
+creating duplicate repair work.
+If proposal publication wins but the issue update cannot be persisted, the
+response is `202` with the stable task/proposal identities and
+`Vivarium-Recovery-Implementation: pending`; replaying the exact request
+completes the issue link without creating another repair plan.
+Recovery requires the complete frozen reasoning origin to match, including the
+issue version, affected revision, selected evidence, and finding snapshots;
+changed evidence returns a conflict instead of attaching it to the older task.

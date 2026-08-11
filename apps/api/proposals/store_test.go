@@ -67,6 +67,27 @@ func TestDecisionImplementationFreezesCriteriaOwnershipAndRetry(t *testing.T) {
 	}
 }
 
+func TestIssueImplementationRecoveryRejectsChangedEvidence(t *testing.T) {
+	store, _ := New(t.TempDir())
+	origin := ReasoningOrigin{IssueID: strings.Repeat("4", 32), IssueVersion: 7, ReproductionID: strings.Repeat("5", 32), Revision: strings.Repeat("a", 40), SelectedItemIDs: []string{"attempt", "finding-a"}, Items: []ReasoningItem{{ID: "attempt", Kind: "reproduction", Summary: "fails", Status: "confirmed"}, {ID: "finding-a", Kind: "diagnosis", Summary: "parser rejects input", Status: "confirmed"}}, AnalysisStatus: "issue_repair"}
+	input := ImplementationInput{RepositoryID: repositoryID, ActorID: authorID, Title: "Repair parser", Body: "Frozen issue repair", Origin: origin, Tasks: []ImplementationTaskInput{{Title: "Repair parser", Outcome: "Reproduction passes", AssigneeType: "human", AssigneeID: commenterID}}}
+	first, _, err := store.CreateImplementation(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.Origin.SelectedItemIDs = []string{"attempt", "finding-b"}
+	input.Origin.Items = append([]ReasoningItem(nil), origin.Items...)
+	input.Origin.Items[1] = ReasoningItem{ID: "finding-b", Kind: "diagnosis", Summary: "decoder rejects input", Status: "confirmed"}
+	if _, _, err = store.CreateImplementation(input); !errors.Is(err, ErrImplementationConflict) {
+		t.Fatalf("changed issue evidence error = %v", err)
+	}
+	input.Origin = origin
+	recovered, _, err := store.CreateImplementation(input)
+	if err != nil || recovered.ID != first.ID {
+		t.Fatalf("exact recovery = %#v, %v", recovered, err)
+	}
+}
+
 func TestCorrectiveWorkPublishesAtomicallyAndDeduplicatesRetry(t *testing.T) {
 	root := t.TempDir()
 	store, _ := New(root)
