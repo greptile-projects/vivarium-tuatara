@@ -218,11 +218,14 @@ func TestCitedTimelineAndVerifiedHandoffRetainExactContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v, err = s.PublishTimeline(v.ID, "alice", "alice", v.Version, TimelineInput{StreamID: "build", Kind: "finding", Body: "The boundary is reproducible", Citations: []Citation{{Kind: "checkpoint", ResourceID: "checkpoint-1", RepositoryID: "repo", Revision: revision, Label: "reproduced checkpoint"}}})
+	v, err = s.PublishTimeline(v.ID, "alice", "alice", v.Version, TimelineInput{StreamID: "build", Kind: "finding", Body: "The boundary is reproducible", Citations: []Citation{{Kind: "workspace", ResourceID: "workspace-1", RepositoryID: "repo", Revision: revision, Label: "reproduced checkpoint"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	finding := v.Timeline[0]
+	if _, err = s.PublishTimeline(v.ID, "alice", "alice", v.Version, TimelineInput{StreamID: "build", Kind: "finding", Body: "Opaque claim", Citations: []Citation{{Kind: "workspace", ResourceID: "missing", RepositoryID: "repo", Revision: revision, Label: "missing"}}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unattached citation = %v", err)
+	}
 	v, err = s.RequestHandoff(v.ID, "alice", "alice", v.Version, HandoffInput{StreamID: "build", ToParticipantID: "bob-slot", InputEntryIDs: []string{finding.ID}, AcceptanceCriteria: []string{"reproduce the checkpoint"}, ResidualUncertainty: []string{"load behavior remains unknown"}})
 	if err != nil {
 		t.Fatal(err)

@@ -8,13 +8,16 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/decisions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deliveryteams"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/explanations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
 type deliveryTeamInput struct {
@@ -56,7 +59,7 @@ type deliveryTeamHandoffAcceptanceInput struct {
 	Note                 string   `json:"note"`
 }
 
-func registerDeliveryTeamRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, identities *users.Store, store *deliveryteams.Store, proposalStore *proposals.Store, decisionStore *decisions.Store, incidentStore *incidents.Store, orgs *organizations.Store, activity *activities.Store) {
+func registerDeliveryTeamRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, identities *users.Store, store *deliveryteams.Store, proposalStore *proposals.Store, decisionStore *decisions.Store, incidentStore *incidents.Store, orgs *organizations.Store, activity *activities.Store, sessionStore *changesessions.Store, workspaceStore *workspaces.Store, explanationStore *explanations.Store) {
 	mux.HandleFunc("POST /repositories/{id}/delivery-teams", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
 		if !ok {
@@ -276,6 +279,10 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, catalog *repositories.Store,
 			writeAPIError(w, 403, "inaccessible_team_evidence", "work context is outside the participant's current access")
 			return
 		}
+		if !deliveryContextExists(in.Context, sessionStore, workspaceStore, explanationStore, decisionStore) {
+			writeAPIError(w, 400, "invalid_work_context", "the exact work context could not be resolved")
+			return
+		}
 		team, err = store.AttachContext(team.ID, r.PathValue("streamId"), actor.UserID, principal, in.ExpectedVersion, in.Context)
 		if writeDeliveryTeamError(w, err) {
 			return
@@ -304,6 +311,11 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, catalog *repositories.Store,
 		for _, c := range in.Entry.Citations {
 			if !deliveryPrincipalCanRead(team, principal, c.RepositoryID, catalog, orgs) {
 				writeAPIError(w, 403, "inaccessible_team_evidence", "cited evidence is outside the participant's current access")
+				return
+			}
+			context, found := deliveryCitationContext(team, in.Entry.StreamID, c)
+			if !found || !deliveryContextExists(context, sessionStore, workspaceStore, explanationStore, decisionStore) {
+				writeAPIError(w, 400, "invalid_team_citation", "cited evidence could not be resolved at its exact revision")
 				return
 			}
 		}
@@ -379,6 +391,72 @@ func deliveryPrincipalCanRead(team deliveryteams.Team, principal, repositoryID s
 	}
 	level, _ := deliveryParticipantAccess(deliveryteams.Participant{PrincipalType: "human", PrincipalID: principal}, repositoryID, catalog, orgs)
 	return level == "read" || level == "write"
+}
+
+func deliveryContextExists(context deliveryteams.WorkContext, sessions *changesessions.Store, workspacesStore *workspaces.Store, explanationsStore *explanations.Store, decisionStore *decisions.Store) bool {
+	switch context.Kind {
+	case "workspace":
+		if workspacesStore == nil {
+			return false
+		}
+		value, err := workspacesStore.Get(context.ResourceID)
+		return err == nil && value.RepositoryID == context.RepositoryID && value.CommitID == context.Revision
+	case "investigation":
+		if explanationsStore == nil {
+			return false
+		}
+		value, err := explanationsStore.Get(context.ResourceID)
+		return err == nil && value.RepositoryID == context.RepositoryID && value.Revision == context.Revision
+	case "experiment":
+		if decisionStore == nil || context.ParentID == "" {
+			return false
+		}
+		value, err := decisionStore.Get(context.ParentID)
+		if err != nil || value.RepositoryID != context.RepositoryID {
+			return false
+		}
+		for _, experiment := range value.Experiments {
+			if experiment.ID == context.ResourceID && experiment.Revision == context.Revision {
+				return true
+			}
+		}
+	case "change_session":
+		if sessions == nil || context.ParentID == "" {
+			return false
+		}
+		value, err := sessions.Get(context.RepositoryID, context.ParentID, context.ResourceID)
+		return err == nil && value.SourceCommitID == context.Revision
+	}
+	return false
+}
+
+func deliveryCitationContext(team deliveryteams.Team, streamID string, citation deliveryteams.Citation) (deliveryteams.WorkContext, bool) {
+	if team.Plan == nil {
+		return deliveryteams.WorkContext{}, false
+	}
+	for _, stream := range team.Plan.Streams {
+		if stream.ID != streamID {
+			continue
+		}
+		for _, context := range stream.Contexts {
+			if context.Kind == citation.Kind && context.ResourceID == citation.ResourceID && context.RepositoryID == citation.RepositoryID && context.Revision == citation.Revision {
+				return context, true
+			}
+		}
+	}
+	return deliveryteams.WorkContext{}, false
+}
+
+func deliveryViewerCanRead(team deliveryteams.Team, viewer, repositoryID string, catalog *repositories.Store, orgs *organizations.Store) bool {
+	if deliveryPrincipalCanRead(team, viewer, repositoryID, catalog, orgs) {
+		return true
+	}
+	for _, participant := range team.Participants {
+		if participant.PrincipalType == "agent" && agentOperator(team.RepositoryID, participant.PrincipalID, viewer, orgs, catalog) && deliveryPrincipalCanRead(team, participant.PrincipalID, repositoryID, catalog, orgs) {
+			return true
+		}
+	}
+	return false
 }
 
 func deliveryParticipantPrincipal(team deliveryteams.Team, participantID, actor string, orgs *organizations.Store, catalog *repositories.Store) (string, bool) {
@@ -589,19 +667,12 @@ func projectDeliveryAccess(v deliveryteams.Team, viewer string, catalog *reposit
 			}
 		}
 	}
-	viewerPrincipal := viewer
-	for _, p := range v.Participants {
-		if p.PrincipalType == "human" && p.PrincipalID == viewer || p.PrincipalType == "agent" && agentOperator(v.RepositoryID, p.PrincipalID, viewer, orgs, catalog) {
-			viewerPrincipal = p.PrincipalID
-			break
-		}
-	}
 	visibleEntries := []deliveryteams.TimelineEntry{}
 	visibleIDs := map[string]bool{}
 	for _, entry := range v.Timeline {
 		visible := true
 		for _, citation := range entry.Citations {
-			if !deliveryPrincipalCanRead(v, viewerPrincipal, citation.RepositoryID, catalog, orgs) {
+			if !deliveryViewerCanRead(v, viewer, citation.RepositoryID, catalog, orgs) {
 				visible = false
 				break
 			}
@@ -634,7 +705,7 @@ func projectDeliveryAccess(v deliveryteams.Team, viewer string, catalog *reposit
 		for i := range v.Plan.Streams {
 			contexts := []deliveryteams.WorkContext{}
 			for _, context := range v.Plan.Streams[i].Contexts {
-				if deliveryPrincipalCanRead(v, viewerPrincipal, context.RepositoryID, catalog, orgs) {
+				if deliveryViewerCanRead(v, viewer, context.RepositoryID, catalog, orgs) {
 					contexts = append(contexts, context)
 				}
 			}

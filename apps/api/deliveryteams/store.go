@@ -98,6 +98,7 @@ type WorkContext struct {
 	ID           string    `json:"id"`
 	Kind         string    `json:"kind"`
 	ResourceID   string    `json:"resource_id"`
+	ParentID     string    `json:"parent_id,omitempty"`
 	RepositoryID string    `json:"repository_id"`
 	Revision     string    `json:"revision"`
 	AttachedBy   string    `json:"attached_by"`
@@ -526,8 +527,17 @@ func citationInScope(stream WorkStream, c Citation) bool {
 	if strings.TrimSpace(c.Kind) == "" || strings.TrimSpace(c.ResourceID) == "" || strings.TrimSpace(c.Label) == "" || !validRevision(c.Revision) {
 		return false
 	}
+	for _, context := range stream.Contexts {
+		if context.Kind == c.Kind && context.ResourceID == c.ResourceID && context.RepositoryID == c.RepositoryID && context.Revision == c.Revision {
+			return true
+		}
+	}
+	return false
+}
+
+func contextInScope(stream WorkStream, context WorkContext) bool {
 	for _, scope := range stream.RepositoryScope {
-		if scope.RepositoryID == c.RepositoryID && scope.Revision == c.Revision {
+		if scope.RepositoryID == context.RepositoryID && scope.Revision == context.Revision {
 			return true
 		}
 	}
@@ -760,7 +770,7 @@ func (s *Store) PutPlan(teamID, actor, actingPrincipal string, expectedVersion i
 					continue
 				}
 				for _, context := range prior.Contexts {
-					if citationInScope(streams[i], Citation{Kind: context.Kind, ResourceID: context.ResourceID, RepositoryID: context.RepositoryID, Revision: context.Revision, Label: context.Kind}) {
+					if contextInScope(streams[i], context) {
 						streams[i].Contexts = append(streams[i].Contexts, context)
 					}
 				}
@@ -848,7 +858,7 @@ func (s *Store) AttachContext(teamID, streamID, actor, actingPrincipal string, e
 	if !slices.Contains([]string{"change_session", "investigation", "experiment", "workspace"}, context.Kind) || strings.TrimSpace(context.ResourceID) == "" || !validRevision(context.Revision) {
 		return t, ErrInvalid
 	}
-	if !citationInScope(*stream, Citation{Kind: context.Kind, ResourceID: context.ResourceID, RepositoryID: context.RepositoryID, Revision: context.Revision, Label: context.Kind}) {
+	if !contextInScope(*stream, context) {
 		return t, ErrInvalid
 	}
 	for _, existing := range stream.Contexts {
