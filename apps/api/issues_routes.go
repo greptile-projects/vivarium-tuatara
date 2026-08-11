@@ -959,10 +959,6 @@ func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *rep
 			writeAPIError(w, 422, "required_checks_unavailable", "the trusted affected revision does not define every required check")
 			return
 		}
-		verificationID := issues.NewEvidenceID()
-		for i := range required {
-			required[i].Name = "issue " + verificationID[:8] + " required: " + required[i].Name
-		}
 		reproduction := []checkruns.Definition{}
 		setup := strings.Join(environment.Setup, " && ")
 		frozenInputs := []checkruns.InputFile{}
@@ -978,6 +974,12 @@ func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *rep
 			writeAPIError(w, 409, "repair_inputs_changed", "the exact retained reproduction inputs are unavailable")
 			return
 		}
+		keyBody, _ := json.Marshal(map[string]any{"issue_id": current.ID, "pull_id": pull.ID, "commit_id": pull.SourceCommitID, "reproduction_id": attempt.ID, "definition": attempt.DefinitionSHA256, "inputs": attempt.Inputs, "criteria": current.Implementation.AcceptanceCriteria})
+		keySum := sha256.Sum256(keyBody)
+		verificationID := hex.EncodeToString(keySum[:16])
+		for i := range required {
+			required[i].Name = "issue " + verificationID[:8] + " required: " + required[i].Name
+		}
 		for i, command := range attempt.Commands {
 			body := command.Name
 			for _, declared := range environment.Experiments {
@@ -992,17 +994,6 @@ func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *rep
 			reproduction[len(reproduction)-1].Inputs = append([]checkruns.InputFile{}, frozenInputs...)
 		}
 		definitions := append(append([]checkruns.Definition{}, required...), reproduction...)
-		executable, err := checkStore.CreateRequested(current.RepositoryID, pull.ID, pull.SourceCommitID, definitions, actor.UserID)
-		if err != nil {
-			writeAPIError(w, 503, "repair_verification_failed", "verification evidence could not be reserved")
-			return
-		}
-		persisted, _ := checkStore.List(current.RepositoryID, pull.ID)
-		ordered, complete := orderedVerificationRuns(persisted, definitions, pull.SourceCommitID)
-		if !complete {
-			writeAPIError(w, 503, "repair_verification_failed", "verification reservation is incomplete")
-			return
-		}
 		verification := issues.RepairVerification{ID: verificationID, PullRequestID: pull.ID, CandidateCommitID: pull.SourceCommitID, ReproductionAttemptID: attempt.ID, DefinitionSHA256: attempt.DefinitionSHA256, AcceptanceCriteria: append([]string{}, current.Implementation.AcceptanceCriteria...), RequestedBy: actor.UserID, CreatedAt: time.Now().UTC(), Decisions: []issues.ResolutionDecision{}}
 		if workspaceStore != nil {
 			if candidates, listErr := workspaceStore.List(actor.UserID); listErr == nil {
@@ -1017,17 +1008,64 @@ func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *rep
 		for _, input := range attempt.Inputs {
 			verification.InputSHA256s = append(verification.InputSHA256s, input.SHA256)
 		}
+		reserved := false
+		for _, existing := range current.RepairVerifications {
+			if existing.ID != verificationID {
+				continue
+			}
+			verification, reserved = existing, true
+			if len(existing.RequiredRunIDs)+len(existing.ReproductionRunIDs) > 0 {
+				writeJSON(w, 200, map[string]any{"issue": current, "proof": projectVerification(current, existing)})
+				return
+			}
+		}
+		if !reserved {
+			if current.Version != in.ExpectedVersion {
+				writeAPIError(w, 409, "issue_changed", "issue changed")
+				return
+			}
+			current, err = store.Mutate(current.RepositoryID, current.ID, actor.UserID, in.ExpectedVersion, func(v *issues.Issue) error {
+				v.RepairVerifications = append(v.RepairVerifications, verification)
+				issues.AddHistory(v, "repair_verification_reserved", actor.UserID, verification.ID)
+				return nil
+			})
+			if err != nil {
+				writeIssueError(w, err)
+				return
+			}
+		}
+		executable, err := checkStore.CreateRequested(current.RepositoryID, pull.ID, pull.SourceCommitID, definitions, actor.UserID)
+		if err != nil {
+			writeAPIError(w, 503, "repair_verification_failed", "verification evidence could not be reserved")
+			return
+		}
+		persisted, _ := checkStore.List(current.RepositoryID, pull.ID)
+		ordered, complete := orderedVerificationRuns(persisted, definitions, pull.SourceCommitID)
+		if !complete {
+			writeAPIError(w, 503, "repair_verification_failed", "verification reservation is incomplete")
+			return
+		}
 		for i := range required {
 			verification.RequiredRunIDs = append(verification.RequiredRunIDs, ordered[i].ID)
 		}
 		for i := range reproduction {
 			verification.ReproductionRunIDs = append(verification.ReproductionRunIDs, ordered[len(required)+i].ID)
 		}
-		updated, err := store.Mutate(current.RepositoryID, current.ID, actor.UserID, in.ExpectedVersion, func(v *issues.Issue) error {
+		updated, err := store.Mutate(current.RepositoryID, current.ID, actor.UserID, current.Version, func(v *issues.Issue) error {
 			if v.Implementation == nil || v.Implementation.ReproductionAttemptID != attempt.ID {
 				return issues.ErrConflict
 			}
-			v.RepairVerifications = append(v.RepairVerifications, verification)
+			found := false
+			for i := range v.RepairVerifications {
+				if v.RepairVerifications[i].ID == verification.ID && len(v.RepairVerifications[i].RequiredRunIDs)+len(v.RepairVerifications[i].ReproductionRunIDs) == 0 {
+					v.RepairVerifications[i] = verification
+					found = true
+					break
+				}
+			}
+			if !found {
+				return issues.ErrConflict
+			}
 			issues.AddHistory(v, "repair_verification_started", actor.UserID, verification.ID)
 			return nil
 		})
@@ -1035,8 +1073,14 @@ func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *rep
 			writeIssueError(w, err)
 			return
 		}
+		owned := map[string]bool{}
+		for _, id := range append(append([]string{}, verification.RequiredRunIDs...), verification.ReproductionRunIDs...) {
+			owned[id] = true
+		}
 		for _, run := range executable {
-			go checkStore.Execute(run, repository.Path())
+			if owned[run.ID] {
+				go checkStore.Execute(run, repository.Path())
+			}
 		}
 		writeJSON(w, 202, map[string]any{"issue": updated, "proof": projectVerification(updated, verification)})
 	})

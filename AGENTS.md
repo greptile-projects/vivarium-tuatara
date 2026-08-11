@@ -1176,6 +1176,10 @@ whenever dependencies change or the web job fails before it starts.
   reasoned overrides append without rewriting dissent.
   A running pull-linked workspace at the same candidate revision is the only
   optional safe-preview handoff and retains normal workspace sharing controls.
+  Verification input staging walks held no-follow directory descriptors so a
+  candidate symlink cannot redirect API writes. A deterministic evidence key
+  is durably reserved on the issue before check creation; recovery links and
+  executes only that reservation's runs, preventing orphan or duplicate work.
 
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.

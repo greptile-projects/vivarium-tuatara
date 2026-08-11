@@ -74,6 +74,25 @@ func TestRepositoryConfigurationCannotEmbedVerificationInputs(t *testing.T) {
 	}
 }
 
+func TestVerificationInputCannotFollowArchivedSymlink(t *testing.T) {
+	workspace, outside := t.TempDir(), t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(workspace, "retained")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeVerificationInput(workspace, "retained/pwned", []byte("payload")); err == nil {
+		t.Fatal("symlinked parent accepted")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "pwned")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("payload escaped checkout: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "final"), filepath.Join(workspace, "input")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeVerificationInput(workspace, "input", []byte("payload")); err == nil {
+		t.Fatal("symlinked final path accepted")
+	}
+}
+
 func TestEvidenceSequenceHandlesEscapedMaximumLogChunk(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {

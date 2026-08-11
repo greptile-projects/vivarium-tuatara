@@ -949,12 +949,7 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 				err = errors.New("verification input is invalid")
 				break
 			}
-			target := filepath.Join(workspace, clean)
-			if mkdirErr := os.MkdirAll(filepath.Dir(target), 0o700); mkdirErr != nil {
-				err = mkdirErr
-				break
-			}
-			if writeErr := os.WriteFile(target, raw, 0o600); writeErr != nil {
+			if writeErr := writeVerificationInput(workspace, clean, raw); writeErr != nil {
 				err = writeErr
 				break
 			}
@@ -1066,6 +1061,55 @@ executionDone:
 	last := &run.Attempts[len(run.Attempts)-1]
 	last.State, last.CompletedAt, last.ExitCode, last.Failure = run.State, &done, run.ExitCode, run.Failure
 	s.publishTerminal(run, attemptNumber, done)
+}
+
+// writeVerificationInput walks the disposable checkout through held directory
+// descriptors. Candidate-controlled symlinks (and replacement races) cannot
+// redirect API-process writes outside that checkout.
+func writeVerificationInput(root, name string, data []byte) error {
+	rootFD, err := syscall.Open(root, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer syscall.Close(rootFD)
+	parts := strings.Split(name, string(filepath.Separator))
+	parentFD := rootFD
+	for _, component := range parts[:len(parts)-1] {
+		nextFD, openErr := syscall.Openat(parentFD, component, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+		if errors.Is(openErr, syscall.ENOENT) {
+			if mkdirErr := syscall.Mkdirat(parentFD, component, 0o700); mkdirErr != nil && !errors.Is(mkdirErr, syscall.EEXIST) {
+				if parentFD != rootFD {
+					syscall.Close(parentFD)
+				}
+				return mkdirErr
+			}
+			nextFD, openErr = syscall.Openat(parentFD, component, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+		}
+		if parentFD != rootFD {
+			syscall.Close(parentFD)
+		}
+		if openErr != nil {
+			return openErr
+		}
+		parentFD = nextFD
+	}
+	if parentFD != rootFD {
+		defer syscall.Close(parentFD)
+	}
+	fd, err := syscall.Openat(parentFD, parts[len(parts)-1], syscall.O_WRONLY|syscall.O_CREAT|syscall.O_TRUNC|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o600)
+	if err != nil {
+		return err
+	}
+	file := os.NewFile(uintptr(fd), parts[len(parts)-1])
+	if file == nil {
+		syscall.Close(fd)
+		return errors.New("verification input file unavailable")
+	}
+	defer file.Close()
+	if _, err = file.Write(data); err != nil {
+		return err
+	}
+	return file.Sync()
 }
 
 func (s *Store) updatePublished(run Run) bool {

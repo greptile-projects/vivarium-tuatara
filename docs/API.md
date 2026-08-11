@@ -2158,3 +2158,7 @@ projection and blocks decisions against stale evidence.
 When the exact candidate already has a running, currently shared pull-linked
 workspace, the proof includes `preview_allowed` and `preview_workspace_id`; its
 existing authenticated workspace preview remains the policy enforcement point.
+Input files are created through descriptor-relative no-follow traversal, so
+candidate archive symlinks cannot redirect staging. The issue durably reserves
+a deterministic verification identity before creating checks; split-outcome
+retries reuse and link that reservation, and execute only its recorded run IDs.
