@@ -33,6 +33,25 @@ acknowledgement. Publication and acknowledgement attribution are append-only ben
 `contributor-pathways`). The repository's “How to contribute” surface supports
 the same publish, inspect, health, history, and acknowledgement flow.
 
+Repository owners can also publish source-grounded contribution opportunities
+from triaged issues, proposals, planned tasks, and stewardship findings. Each
+record freezes the current revision, expected outcome, bounded scope, required
+skills, topical interests, dependencies, risk, estimate, mentors, and whether
+agent assistance is available. `POST
+/repositories/{id}/contribution-opportunity-matches` compares a reader's skills,
+interests, time, risk preference, and assistance preference with live records
+and returns both reasons and gaps; the profile is evaluated for the request and
+is not retained.
+
+Authenticated readers may claim one exact opportunity version for one hour to
+14 days or release their claim. Claims are attributable, compare-and-swap
+updates; an active claim excludes duplicate reservations and disappears from
+the live projection after release or expiry. It is coordination metadata only:
+claiming never adds repository collaboration, Git, branch, task, workspace, or
+agent authority. Records default beneath
+`$CONTRIBUTION_OPPORTUNITY_STORAGE_ROOT` (`contribution-opportunities`) and are
+available in the repository's “How to contribute” matcher.
+
 ## Accountable decision delivery
 
 An accepted technical decision can be converted once per commitment into an
