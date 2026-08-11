@@ -1,6 +1,9 @@
 package workspaces
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestContributionHelpRetainsOwnershipAndExitHistory(t *testing.T) {
 	s, err := New(t.TempDir())
@@ -49,5 +52,27 @@ func TestContributionAgentActionRetainsExactAuthority(t *testing.T) {
 	}
 	if got := w.Events[len(w.Events)-1].Detail; got != w.ContributorContext.Help.Entries[0].ID+":edit" {
 		t.Fatalf("event detail = %q", got)
+	}
+}
+
+func TestContributionHumanEntryRejectsAgentAuthorityMetadata(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.Create(Workspace{RepositoryID: "repo", CommitID: "revision", CreatorID: "owner", Source: Source{Kind: "repository"}, Definition: Definition{Version: 1, Image: "alpine"}, ContributorContext: &ContributorContext{Help: ContributionHelp{Version: 1, State: "active"}}}, []byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.AddContributionHelp(w.ID, "owner", ContributionHelpEntry{Kind: "question", Action: "edit", AgentID: "spoofed-agent", Body: "Human question", DecisionOwner: "contributor"}, 1)
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("spoofed agent metadata = %v", err)
+	}
+	retained, err := s.Get(w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(retained.ContributorContext.Help.Entries) != 0 {
+		t.Fatalf("spoofed entry retained: %#v", retained.ContributorContext.Help.Entries)
 	}
 }

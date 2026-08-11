@@ -364,7 +364,7 @@ func (s *Store) AddContributionHelp(id, actor string, entry ContributionHelpEntr
 	if w.ContributorContext == nil || w.ContributorContext.Help.Version != expected {
 		return Workspace{}, ErrConflict
 	}
-	if entry.Body == "" || entry.DecisionOwner == "" {
+	if entry.Body == "" || entry.DecisionOwner == "" || (entry.Kind != "agent_action" && (entry.AgentID != "" || entry.Action != "")) {
 		return Workspace{}, ErrInvalid
 	}
 	entry.ID, err = randomID(12)

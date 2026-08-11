@@ -45,16 +45,16 @@ func registerContributorHelpRoutes(mux *http.ServeMux, ws *workspaces.Store, rep
 		return item, actor, mentor, true
 	}
 	mux.HandleFunc("GET /workspaces/{workspace_id}/contribution-help", func(w http.ResponseWriter, r *http.Request) {
-		item, _, _, ok := load(w, r)
+		item, actor, mentor, ok := load(w, r)
 		if !ok {
 			return
 		}
-		current, err := opportunities.Get(item.ContributorContext.UpstreamRepositoryID, item.ContributorContext.OpportunityID)
-		changed := err != nil || current.Version != item.ContributorContext.OpportunityVersion || current.Status != "open"
+		current, opportunityErr := opportunities.Get(item.ContributorContext.UpstreamRepositoryID, item.ContributorContext.OpportunityID)
+		changed := opportunityErr != nil || current.Version != item.ContributorContext.OpportunityVersion || current.Status != "open"
 		revoked := []string{}
 		for _, id := range item.ContributorContext.MentorIDs {
-			meta, e := repos.GetByID(item.ContributorContext.UpstreamRepositoryID)
-			if e != nil {
+			meta, repositoryErr := repos.GetByID(item.ContributorContext.UpstreamRepositoryID)
+			if repositoryErr != nil {
 				revoked = append(revoked, id)
 				continue
 			}
@@ -63,7 +63,18 @@ func registerContributorHelpRoutes(mux *http.ServeMux, ws *workspaces.Store, rep
 				revoked = append(revoked, id)
 			}
 		}
-		writeJSON(w, 200, contributionHelpProjection{Workspace: item, ScopeChanged: changed, MentorAccessRevoked: revoked})
+		projection := contributionHelpProjection{Workspace: item, ScopeChanged: changed, MentorAccessRevoked: revoked}
+		err := withContributionMentorAuthority(repos, item, actor.UserID, mentor, func() error {
+			writeJSON(w, 200, projection)
+			return nil
+		})
+		if errors.Is(err, repositories.ErrInvalidCollaborator) || errors.Is(err, repositories.ErrNotFound) {
+			writeAPIError(w, 403, "contribution_mentor_access_revoked", "designated mentor access to the upstream repository was revoked")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 503, "contribution_help_unavailable", "contribution help could not be read")
+		}
 	})
 	mux.HandleFunc("POST /workspaces/{workspace_id}/contribution-help/entries", func(w http.ResponseWriter, r *http.Request) {
 		item, actor, mentor, ok := load(w, r)
@@ -89,6 +100,10 @@ func registerContributorHelpRoutes(mux *http.ServeMux, ws *workspaces.Store, rep
 			writeAPIError(w, 422, "contribution_help_invalid", "entry requires a supported kind, decision owner, and bounded body")
 			return
 		}
+		if in.Kind != "agent_action" && (in.AgentID != "" || in.Action != "") {
+			writeAPIError(w, 422, "contribution_agent_fields_invalid", "agent identity and action are permitted only for agent actions")
+			return
+		}
 		if in.Kind == "question" && !(!mentor && in.DecisionOwner == "contributor") || slices.Contains([]string{"advice", "checkpoint_request", "handoff", "intervention"}, in.Kind) && !mentor {
 			writeAPIError(w, 403, "contribution_help_role_invalid", "this help entry is not available to the current role")
 			return
@@ -112,7 +127,7 @@ func registerContributorHelpRoutes(mux *http.ServeMux, ws *workspaces.Store, rep
 			}
 		}
 		var updated workspaces.Workspace
-		err := withContributionMentorMutation(repos, item, actor.UserID, mentor, func() (mutationErr error) {
+		err := withContributionMentorAuthority(repos, item, actor.UserID, mentor, func() (mutationErr error) {
 			updated, mutationErr = ws.AddContributionHelp(item.ID, actor.UserID, workspaces.ContributionHelpEntry{Kind: in.Kind, Action: in.Action, Body: in.Body, ReplyTo: in.ReplyTo, DecisionOwner: in.DecisionOwner, DueAt: in.DueAt, RequestedBy: actor.UserID, AgentID: in.AgentID}, in.ExpectedVersion)
 			return mutationErr
 		})
@@ -154,7 +169,7 @@ func registerContributorHelpRoutes(mux *http.ServeMux, ws *workspaces.Store, rep
 			return
 		}
 		var updated workspaces.Workspace
-		err := withContributionMentorMutation(repos, item, actor.UserID, mentor, func() (mutationErr error) {
+		err := withContributionMentorAuthority(repos, item, actor.UserID, mentor, func() (mutationErr error) {
 			updated, mutationErr = ws.ResolveContributionHelp(item.ID, actor.UserID, target.ID, in.Status, in.ExpectedVersion)
 			return mutationErr
 		})
@@ -188,7 +203,7 @@ func registerContributorHelpRoutes(mux *http.ServeMux, ws *workspaces.Store, rep
 			return
 		}
 		var updated workspaces.Workspace
-		err := withContributionMentorMutation(repos, item, actor.UserID, mentor, func() (mutationErr error) {
+		err := withContributionMentorAuthority(repos, item, actor.UserID, mentor, func() (mutationErr error) {
 			updated, mutationErr = ws.SetMentorAvailability(item.ID, actor.UserID, in.Status, strings.TrimSpace(in.Note), in.ResponseHours, in.ExpectedVersion)
 			return mutationErr
 		})
@@ -221,7 +236,7 @@ func registerContributorHelpRoutes(mux *http.ServeMux, ws *workspaces.Store, rep
 			return
 		}
 		var updated workspaces.Workspace
-		err := withContributionMentorMutation(repos, item, actor.UserID, mentor, func() (mutationErr error) {
+		err := withContributionMentorAuthority(repos, item, actor.UserID, mentor, func() (mutationErr error) {
 			updated, mutationErr = ws.SetContributionState(item.ID, actor.UserID, in.State, strings.TrimSpace(in.Reason), in.ExpectedVersion)
 			return mutationErr
 		})
@@ -246,11 +261,11 @@ func currentContributionMentor(repos *repositories.Store, repositoryID, actorID 
 	return err == nil && (upstream.OwnerID == actorID || collaborator)
 }
 
-func withContributionMentorMutation(repos *repositories.Store, workspace workspaces.Workspace, actorID string, mentor bool, mutation func() error) error {
+func withContributionMentorAuthority(repos *repositories.Store, workspace workspaces.Workspace, actorID string, mentor bool, operation func() error) error {
 	if !mentor {
-		return mutation()
+		return operation()
 	}
-	return repos.WithCurrentParticipant(actorID, workspace.ContributorContext.UpstreamRepositoryID, mutation)
+	return repos.WithCurrentParticipant(actorID, workspace.ContributorContext.UpstreamRepositoryID, operation)
 }
 
 func validContributionAgent(orgs *organizations.Store, repos *repositories.Store, repositoryID, agentID, operatorID string) bool {

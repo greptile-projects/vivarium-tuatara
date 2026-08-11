@@ -40,7 +40,7 @@ func TestCurrentContributionMentorRejectsRemovedPublicCollaborator(t *testing.T)
 	}
 	mutated := false
 	workspace := workspaces.Workspace{ContributorContext: &workspaces.ContributorContext{UpstreamRepositoryID: repo.ID}}
-	err = withContributionMentorMutation(repos, workspace, mentor, true, func() error { mutated = true; return nil })
+	err = withContributionMentorAuthority(repos, workspace, mentor, true, func() error { mutated = true; return nil })
 	if !errors.Is(err, repositories.ErrInvalidCollaborator) || mutated {
 		t.Fatalf("revoked mentor mutation = %v, persisted = %v", err, mutated)
 	}
