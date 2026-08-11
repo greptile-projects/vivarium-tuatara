@@ -82,6 +82,38 @@ func TestBeginLaunchRevalidatesAndConsumesClaim(t *testing.T) {
 		t.Fatalf("duplicate launch error = %v", err)
 	}
 }
+
+func TestAbortLaunchRestoresExactClaimForRetry(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	v, err := s.Publish(sample(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.Claim(repo, v.ID, newcomer, "launching", time.Hour, v.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimedVersion := v.Version
+	launch, err := s.BeginLaunch(repo, v.ID, newcomer, claimedVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := s.AbortLaunch(repo, v.ID, newcomer, launch.Version)
+	if err != nil || restored.Status != "open" || restored.Version != claimedVersion || restored.Claim == nil || restored.Claim.ActorID != newcomer {
+		t.Fatalf("restored launch = %#v, %v", restored, err)
+	}
+	if _, err = s.BeginLaunch(repo, v.ID, newcomer, claimedVersion); err != nil {
+		t.Fatalf("identical retry: %v", err)
+	}
+	if _, err = s.AbortLaunch(repo, v.ID, owner, launch.Version); !errors.Is(err, ErrConflict) {
+		t.Fatalf("wrong actor abort error = %v", err)
+	}
+}
 func TestMatchExplainsConstraints(t *testing.T) {
 	v := sample()
 	m := MatchAll([]Opportunity{v}, Profile{Skills: []string{"Go"}, AvailableMinutes: 30, MaximumRisk: "low"}, time.Now())[0]

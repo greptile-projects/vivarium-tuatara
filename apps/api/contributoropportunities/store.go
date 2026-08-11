@@ -54,6 +54,33 @@ func (s *Store) BeginLaunch(repositoryID, id, actor string, expected int) (Oppor
 	return Opportunity{}, ErrNotFound
 }
 
+// AbortLaunch compensates an admission only when the first resource creation
+// failed. Restoring the prior exact version makes the original request safely
+// retryable; callers must not use this after any fork or workspace is retained.
+func (s *Store) AbortLaunch(repositoryID, id, actor string, launchVersion int) (Opportunity, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items, err := s.read(repositoryID)
+	if err != nil {
+		return Opportunity{}, err
+	}
+	for _, v := range items {
+		if v.ID != id {
+			continue
+		}
+		if v.Version != launchVersion || v.Status != "in_progress" || v.Claim == nil || v.Claim.ActorID != actor {
+			return Opportunity{}, ErrConflict
+		}
+		v.Status = "open"
+		v.Version--
+		if err := s.write(v); err != nil {
+			return Opportunity{}, err
+		}
+		return v, nil
+	}
+	return Opportunity{}, ErrNotFound
+}
+
 type Source struct {
 	Kind     string `json:"kind"`
 	ID       string `json:"id"`

@@ -153,7 +153,12 @@ func registerContributorLaunchRoutes(mux *http.ServeMux, git *storage.Store, rep
 			return
 		}
 		fork, err := repos.CreateFork(actor.UserID, upstream.ID, strings.TrimSpace(input.ForkName))
-		if writeRepositoryError(w, err) {
+		if err != nil {
+			if _, abortErr := opportunities.AbortLaunch(upstream.ID, opportunity.ID, actor.UserID, opportunity.Version); abortErr != nil {
+				writeAPIError(w, 202, "contribution_launch_recovery_required", "fork creation failed and the launch reservation could not be restored; retry after inspecting the opportunity")
+				return
+			}
+			writeRepositoryError(w, err)
 			return
 		}
 		forkGit, err := git.Open(fork.ID)
