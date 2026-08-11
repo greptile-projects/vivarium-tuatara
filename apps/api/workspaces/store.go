@@ -66,18 +66,49 @@ type Source struct {
 }
 
 type ContributorContext struct {
-	OpportunityID        string   `json:"opportunity_id"`
-	OpportunityVersion   int      `json:"opportunity_version"`
-	UpstreamRepositoryID string   `json:"upstream_repository_id"`
-	PathwayVersion       int      `json:"pathway_version"`
-	Guidance             string   `json:"guidance"`
-	Prerequisites        []string `json:"prerequisites"`
-	AcceptanceCriteria   []string `json:"acceptance_criteria"`
-	EvidenceKind         string   `json:"evidence_kind"`
-	EvidenceID           string   `json:"evidence_id"`
-	EvidenceParentID     string   `json:"evidence_parent_id,omitempty"`
-	SampleAttachmentIDs  []string `json:"sample_attachment_ids,omitempty"`
-	Diagnostics          []string `json:"diagnostics"`
+	OpportunityID        string           `json:"opportunity_id"`
+	OpportunityVersion   int              `json:"opportunity_version"`
+	UpstreamRepositoryID string           `json:"upstream_repository_id"`
+	PathwayVersion       int              `json:"pathway_version"`
+	Guidance             string           `json:"guidance"`
+	Prerequisites        []string         `json:"prerequisites"`
+	AcceptanceCriteria   []string         `json:"acceptance_criteria"`
+	EvidenceKind         string           `json:"evidence_kind"`
+	EvidenceID           string           `json:"evidence_id"`
+	EvidenceParentID     string           `json:"evidence_parent_id,omitempty"`
+	SampleAttachmentIDs  []string         `json:"sample_attachment_ids,omitempty"`
+	Diagnostics          []string         `json:"diagnostics"`
+	MentorIDs            []string         `json:"mentor_ids,omitempty"`
+	AgentAssistance      bool             `json:"agent_assistance"`
+	Help                 ContributionHelp `json:"help"`
+}
+type ContributionHelp struct {
+	Version      int                     `json:"version"`
+	State        string                  `json:"state"`
+	StateReason  string                  `json:"state_reason,omitempty"`
+	Entries      []ContributionHelpEntry `json:"entries"`
+	Availability []MentorAvailability    `json:"mentor_availability"`
+}
+type ContributionHelpEntry struct {
+	ID            string     `json:"id"`
+	Kind          string     `json:"kind"`
+	ActorID       string     `json:"actor_id"`
+	AgentID       string     `json:"agent_id,omitempty"`
+	Body          string     `json:"body"`
+	ReplyTo       string     `json:"reply_to,omitempty"`
+	Status        string     `json:"status"`
+	DecisionOwner string     `json:"decision_owner"`
+	RequestedBy   string     `json:"requested_by,omitempty"`
+	DueAt         *time.Time `json:"due_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	ResolvedAt    *time.Time `json:"resolved_at,omitempty"`
+}
+type MentorAvailability struct {
+	MentorID      string    `json:"mentor_id"`
+	Status        string    `json:"status"`
+	ResponseHours int       `json:"response_hours,omitempty"`
+	Note          string    `json:"note,omitempty"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 type Access struct {
 	Role   string   `json:"role"`
@@ -319,6 +350,110 @@ func (s *Store) AddMessage(id, actor, body string) (Workspace, error) {
 	w.UpdatedAt = now
 	w.LastActivityAt = now
 	w.Events = append(w.Events, Event{ID: mid, Kind: "discussion.message", ActorID: actor, Role: "instruction", Detail: mid, CreatedAt: now})
+	return w, s.write(w)
+}
+
+func (s *Store) AddContributionHelp(id, actor string, entry ContributionHelpEntry, expected int) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if w.ContributorContext == nil || w.ContributorContext.Help.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	if entry.Body == "" || entry.DecisionOwner == "" {
+		return Workspace{}, ErrInvalid
+	}
+	entry.ID, err = randomID(12)
+	if err != nil {
+		return Workspace{}, err
+	}
+	now := s.now()
+	entry.ActorID, entry.CreatedAt = actor, now
+	if entry.Status == "" {
+		entry.Status = "open"
+	}
+	w.ContributorContext.Help.Entries = append(w.ContributorContext.Help.Entries, entry)
+	w.ContributorContext.Help.Version++
+	w.UpdatedAt, w.LastActivityAt = now, now
+	w.Events = append(w.Events, Event{ID: entry.ID, Kind: "contribution.help." + entry.Kind, ActorID: actor, Role: map[string]string{"agent_action": "execution", "advice": "instruction"}[entry.Kind], Detail: entry.ID, CreatedAt: now})
+	return w, s.write(w)
+}
+
+func (s *Store) ResolveContributionHelp(id, actor, entryID, status string, expected int) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if w.ContributorContext == nil || w.ContributorContext.Help.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	now := s.now()
+	found := false
+	for i := range w.ContributorContext.Help.Entries {
+		if w.ContributorContext.Help.Entries[i].ID == entryID && w.ContributorContext.Help.Entries[i].Status == "open" {
+			w.ContributorContext.Help.Entries[i].Status = status
+			w.ContributorContext.Help.Entries[i].ResolvedAt = &now
+			found = true
+		}
+	}
+	if !found {
+		return Workspace{}, ErrInvalid
+	}
+	w.ContributorContext.Help.Version++
+	w.UpdatedAt = now
+	w.Events = append(w.Events, Event{Kind: "contribution.help.resolved", ActorID: actor, Role: "authorship", Detail: entryID + ":" + status, CreatedAt: now})
+	return w, s.write(w)
+}
+
+func (s *Store) SetMentorAvailability(id, actor, status, note string, hours, expected int) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if w.ContributorContext == nil || w.ContributorContext.Help.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	now := s.now()
+	next := MentorAvailability{MentorID: actor, Status: status, ResponseHours: hours, Note: note, UpdatedAt: now}
+	found := false
+	for i := range w.ContributorContext.Help.Availability {
+		if w.ContributorContext.Help.Availability[i].MentorID == actor {
+			w.ContributorContext.Help.Availability[i] = next
+			found = true
+		}
+	}
+	if !found {
+		w.ContributorContext.Help.Availability = append(w.ContributorContext.Help.Availability, next)
+	}
+	w.ContributorContext.Help.Version++
+	w.UpdatedAt = now
+	w.Events = append(w.Events, Event{Kind: "contribution.mentor.availability", ActorID: actor, Role: "authorship", Detail: status, CreatedAt: now})
+	return w, s.write(w)
+}
+
+func (s *Store) SetContributionState(id, actor, state, reason string, expected int) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if w.ContributorContext == nil || w.ContributorContext.Help.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	now := s.now()
+	w.ContributorContext.Help.State = state
+	w.ContributorContext.Help.StateReason = reason
+	w.ContributorContext.Help.Version++
+	w.UpdatedAt = now
+	w.Events = append(w.Events, Event{Kind: "contribution." + state, ActorID: actor, Role: "authorship", Detail: reason, CreatedAt: now})
 	return w, s.write(w)
 }
 
