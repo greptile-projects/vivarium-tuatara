@@ -444,7 +444,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerContributorPathwayRoutes(mux, store, repositoryCatalog, contributorPathwayStore, releaseStore, issueStore, proposalStore, workspaceStore, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && contributorOpportunityStore != nil {
-		registerContributorOpportunityRoutes(mux, repositoryCatalog, contributorOpportunityStore, issueStore, proposalStore, pullRequestStore, releaseStore, authStore)
+		registerContributorOpportunityRoutes(mux, store, repositoryCatalog, contributorOpportunityStore, issueStore, proposalStore, pullRequestStore, releaseStore, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && contributorOpportunityStore != nil && contributorPathwayStore != nil && workspaceStore != nil {
 		registerContributorLaunchRoutes(mux, store, repositoryCatalog, contributorOpportunityStore, contributorPathwayStore, workspaceStore, issueStore, proposalStore, authStore)

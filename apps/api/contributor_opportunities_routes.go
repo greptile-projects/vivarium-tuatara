@@ -14,9 +14,10 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
-func registerContributorOpportunityRoutes(mux *http.ServeMux, repos *repositories.Store, opportunities *contributoropportunities.Store, issueStore *issues.Store, proposalStore *proposals.Store, pulls *pullrequests.Store, releaseStore *releases.Store, credentials *auth.Store) {
+func registerContributorOpportunityRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, opportunities *contributoropportunities.Store, issueStore *issues.Store, proposalStore *proposals.Store, pulls *pullrequests.Store, releaseStore *releases.Store, credentials *auth.Store) {
 	read := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
 		actor, _, ok := authorizeRepositoryRead(w, r, repos, credentials, r.PathValue("id"))
 		return actor, ok
@@ -188,7 +189,8 @@ func registerContributorOpportunityRoutes(mux *http.ServeMux, repos *repositorie
 		}
 		pull, pullErr := pulls.Get(r.PathValue("id"), input.PullRequestID)
 		release, releaseErr := releaseStore.Get(r.PathValue("id"), input.ReleaseID)
-		if pullErr != nil || releaseErr != nil || !validContributionDelivery(r.PathValue("opportunity"), input.ExpectedVersion, pull, release) {
+		containsMerge := pullErr == nil && releaseErr == nil && pull.MergeCommitID != nil && releaseContainsCommit(git, r.PathValue("id"), release.CommitID, *pull.MergeCommitID)
+		if pullErr != nil || releaseErr != nil || !validContributionDelivery(r.PathValue("opportunity"), input.ExpectedVersion, pull, release, containsMerge) {
 			writeAPIError(w, 422, "contribution_delivery_invalid", "completion requires the exact merged guided pull and a release that credits its contributor")
 			return
 		}
@@ -222,10 +224,22 @@ func registerContributorOpportunityRoutes(mux *http.ServeMux, repos *repositorie
 	})
 }
 
-func validContributionDelivery(opportunityID string, version int, pull pullrequests.PullRequest, release releases.Candidate) bool {
+func validContributionDelivery(opportunityID string, version int, pull pullrequests.PullRequest, release releases.Candidate, releaseContainsMerge bool) bool {
 	return pull.Status == pullrequests.Merged && pull.MergeCommitID != nil && pull.ContributionEvidence != nil &&
 		pull.ContributionEvidence.OpportunityID == opportunityID && pull.ContributionEvidence.OpportunityVersion == version &&
-		slices.Contains(release.Inclusions.PullRequestIDs, pull.ID) && slices.Contains(release.Inclusions.ContributorIDs, pull.AuthorID)
+		releaseContainsMerge && slices.Contains(release.Inclusions.PullRequestIDs, pull.ID) && slices.Contains(release.Inclusions.ContributorIDs, pull.AuthorID)
+}
+
+func releaseContainsCommit(git *storage.Store, repositoryID, releaseCommitID, includedCommitID string) bool {
+	repository, err := git.Open(repositoryID)
+	if err != nil {
+		return false
+	}
+	ancestry, err := repository.ListCommitAncestry(storage.ObjectID(releaseCommitID))
+	if err != nil {
+		return false
+	}
+	return slices.ContainsFunc(ancestry, func(commit storage.Commit) bool { return string(commit.ID) == includedCommitID })
 }
 
 func cleanContributionText(values []string) []string {
