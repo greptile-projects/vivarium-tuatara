@@ -771,7 +771,7 @@ export type DevelopmentWorkspace = {
   rebuild_required: boolean;
   rebuild_reasons: string[];
 };
-export type ContributionHelpEntry = {id:string;kind:string;actor_id:string;agent_id?:string;body:string;reply_to?:string;status:string;decision_owner:"contributor"|"maintainer";due_at?:string;created_at:string;resolved_at?:string};
+export type ContributionHelpEntry = {id:string;kind:string;actor_id:string;agent_id?:string;action?:string;body:string;reply_to?:string;status:string;decision_owner:"contributor"|"maintainer";due_at?:string;created_at:string;resolved_at?:string};
 export type ContributionHelp = {version:number;state:"active"|"reassignment_requested"|"exited";state_reason?:string;entries:ContributionHelpEntry[];mentor_availability:{mentor_id:string;status:string;response_hours?:number;note?:string;updated_at:string}[]};
 export type WorkspacePolicy = {
   version: number;

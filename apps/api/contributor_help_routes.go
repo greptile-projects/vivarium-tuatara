@@ -37,7 +37,8 @@ func registerContributorHelpRoutes(mux *http.ServeMux, ws *workspaces.Store, rep
 			return workspaces.Workspace{}, auth.Credential{}, false, false
 		}
 		if mentor {
-			if _, _, allowed := authorizeRepositoryRead(w, r, repos, credentials, item.ContributorContext.UpstreamRepositoryID); !allowed {
+			if !currentContributionMentor(repos, item.ContributorContext.UpstreamRepositoryID, actor.UserID) {
+				writeAPIError(w, 403, "contribution_mentor_access_revoked", "designated mentor access to the upstream repository was revoked")
 				return workspaces.Workspace{}, auth.Credential{}, false, false
 			}
 		}
@@ -93,6 +94,10 @@ func registerContributorHelpRoutes(mux *http.ServeMux, ws *workspaces.Store, rep
 			return
 		}
 		if in.Kind == "agent_action" {
+			if !slices.Contains([]string{"explain", "diagnose", "edit"}, in.Action) {
+				writeAPIError(w, 422, "contribution_agent_action_invalid", "agent action must be explain, diagnose, or edit")
+				return
+			}
 			if mentor || !item.ContributorContext.AgentAssistance || !validContributionAgent(orgs, repos, item.ContributorContext.UpstreamRepositoryID, in.AgentID, actor.UserID) {
 				writeAPIError(w, 403, "contribution_agent_forbidden", "agent assistance requires an approved agent operated by the contributor")
 				return
@@ -106,7 +111,7 @@ func registerContributorHelpRoutes(mux *http.ServeMux, ws *workspaces.Store, rep
 				return
 			}
 		}
-		updated, err := ws.AddContributionHelp(item.ID, actor.UserID, workspaces.ContributionHelpEntry{Kind: in.Kind, Body: in.Body, ReplyTo: in.ReplyTo, DecisionOwner: in.DecisionOwner, DueAt: in.DueAt, RequestedBy: actor.UserID, AgentID: in.AgentID}, in.ExpectedVersion)
+		updated, err := ws.AddContributionHelp(item.ID, actor.UserID, workspaces.ContributionHelpEntry{Kind: in.Kind, Action: in.Action, Body: in.Body, ReplyTo: in.ReplyTo, DecisionOwner: in.DecisionOwner, DueAt: in.DueAt, RequestedBy: actor.UserID, AgentID: in.AgentID}, in.ExpectedVersion)
 		if errors.Is(err, workspaces.ErrConflict) {
 			writeAPIError(w, 409, "contribution_help_changed", "help thread changed since it was observed")
 			return
@@ -198,6 +203,15 @@ func registerContributorHelpRoutes(mux *http.ServeMux, ws *workspaces.Store, rep
 		}
 		writeJSON(w, 200, updated.ContributorContext.Help)
 	})
+}
+
+func currentContributionMentor(repos *repositories.Store, repositoryID, actorID string) bool {
+	upstream, err := repos.GetByID(repositoryID)
+	if err != nil {
+		return false
+	}
+	collaborator, err := repos.HasCollaborator(actorID, repositoryID)
+	return err == nil && (upstream.OwnerID == actorID || collaborator)
 }
 
 func validContributionAgent(orgs *organizations.Store, repos *repositories.Store, repositoryID, agentID, operatorID string) bool {

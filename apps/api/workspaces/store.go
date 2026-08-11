@@ -94,6 +94,7 @@ type ContributionHelpEntry struct {
 	Kind          string     `json:"kind"`
 	ActorID       string     `json:"actor_id"`
 	AgentID       string     `json:"agent_id,omitempty"`
+	Action        string     `json:"action,omitempty"`
 	Body          string     `json:"body"`
 	ReplyTo       string     `json:"reply_to,omitempty"`
 	Status        string     `json:"status"`
@@ -378,7 +379,11 @@ func (s *Store) AddContributionHelp(id, actor string, entry ContributionHelpEntr
 	w.ContributorContext.Help.Entries = append(w.ContributorContext.Help.Entries, entry)
 	w.ContributorContext.Help.Version++
 	w.UpdatedAt, w.LastActivityAt = now, now
-	w.Events = append(w.Events, Event{ID: entry.ID, Kind: "contribution.help." + entry.Kind, ActorID: actor, Role: map[string]string{"agent_action": "execution", "advice": "instruction"}[entry.Kind], Detail: entry.ID, CreatedAt: now})
+	detail := entry.ID
+	if entry.Action != "" {
+		detail += ":" + entry.Action
+	}
+	w.Events = append(w.Events, Event{ID: entry.ID, Kind: "contribution.help." + entry.Kind, ActorID: actor, Role: map[string]string{"agent_action": "execution", "advice": "instruction"}[entry.Kind], Detail: detail, CreatedAt: now})
 	return w, s.write(w)
 }
 

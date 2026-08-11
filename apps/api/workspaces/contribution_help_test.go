@@ -30,3 +30,24 @@ func TestContributionHelpRetainsOwnershipAndExitHistory(t *testing.T) {
 		t.Fatalf("exit lost help history: %#v", w.ContributorContext.Help)
 	}
 }
+
+func TestContributionAgentActionRetainsExactAuthority(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.Create(Workspace{RepositoryID: "repo", CommitID: "revision", CreatorID: "owner", Source: Source{Kind: "repository"}, Definition: Definition{Version: 1, Image: "alpine"}, ContributorContext: &ContributorContext{Help: ContributionHelp{Version: 1, State: "active"}}}, []byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err = s.AddContributionHelp(w.ID, "owner", ContributionHelpEntry{Kind: "agent_action", Action: "edit", AgentID: "agent", Body: "Adjusted the bounded file.", DecisionOwner: "contributor"}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := w.ContributorContext.Help.Entries[0].Action; got != "edit" {
+		t.Fatalf("action = %q", got)
+	}
+	if got := w.Events[len(w.Events)-1].Detail; got != w.ContributorContext.Help.Entries[0].ID+":edit" {
+		t.Fatalf("event detail = %q", got)
+	}
+}
