@@ -1995,3 +1995,20 @@ respond again. `POST
 /delivery-teams/{id}/participants/{participant-id}/response` accepts
 `expected_version` and `decision` (`accepted` or `declined`). A human invitee
 responds for themself; a current operator responds for an approved agent.
+
+`PUT /delivery-teams/{id}/plan` lets the organizer or any accepted participant
+propose a compare-and-swap `plan` revision. Every stream names a charter
+participant as owner and records ordered dependencies, exact inputs, expected
+artifacts, acceptance criteria, assumptions, budget, integration order, and at
+least one `{repository_id, reference, revision, paths}` scope. Revisions are
+40-character immutable Git identities; stream IDs and integration positions
+are unique and dependencies must be acyclic.
+
+Plan reads derive blockers for overlapping paths, duplicate artifacts, team or
+owner budget overruns, and an owner's missing independent write access. The
+plan does not grant that access. Every stream owner must accept a material
+revision; the proposer accepts their own boundary implicitly and other affected
+owners receive a `replan_acceptance` blocker. Humans and current approved-agent
+operators respond through `POST
+/delivery-teams/{id}/plan/participants/{participant-id}/response` with both the
+team version and plan revision. Declined or pending boundaries remain visible.

@@ -29,6 +29,15 @@ type deliveryTeamResponseInput struct {
 	ExpectedVersion int    `json:"expected_version"`
 	Decision        string `json:"decision"`
 }
+type deliveryTeamPlanInput struct {
+	ExpectedVersion int                     `json:"expected_version"`
+	Plan            deliveryteams.PlanInput `json:"plan"`
+}
+type deliveryTeamPlanResponseInput struct {
+	ExpectedVersion      int    `json:"expected_version"`
+	ExpectedPlanRevision int    `json:"expected_plan_revision"`
+	Decision             string `json:"decision"`
+}
 
 func registerDeliveryTeamRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, identities *users.Store, store *deliveryteams.Store, proposalStore *proposals.Store, decisionStore *decisions.Store, incidentStore *incidents.Store, orgs *organizations.Store, activity *activities.Store) {
 	mux.HandleFunc("POST /repositories/{id}/delivery-teams", func(w http.ResponseWriter, r *http.Request) {
@@ -159,6 +168,102 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, catalog *repositories.Store,
 		}
 		writeJSON(w, 200, v)
 	})
+	mux.HandleFunc("PUT /delivery-teams/{id}/plan", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+		if !ok {
+			return
+		}
+		team, err := store.Get(r.PathValue("id"))
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		principal, allowed := deliveryPlanningPrincipal(team, actor.UserID, orgs, catalog)
+		if !allowed {
+			writeAPIError(w, 403, "delivery_plan_forbidden", "only the organizer or an accepted team member may propose the plan")
+			return
+		}
+		var in deliveryTeamPlanInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "expected_version and plan are required")
+			return
+		}
+		for _, stream := range in.Plan.Streams {
+			for _, scope := range stream.RepositoryScope {
+				if _, err := catalog.GetByID(scope.RepositoryID); err != nil {
+					writeAPIError(w, 400, "invalid_repository_scope", "a scoped repository does not exist")
+					return
+				}
+			}
+			for _, input := range stream.Inputs {
+				if input.RepositoryID == "" {
+					continue
+				}
+				if _, err := catalog.GetByID(input.RepositoryID); err != nil {
+					writeAPIError(w, 400, "invalid_repository_input", "a repository-backed work input does not exist")
+					return
+				}
+			}
+		}
+		team, err = store.PutPlan(team.ID, actor.UserID, principal, in.ExpectedVersion, in.Plan)
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		writeJSON(w, 200, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
+	})
+	mux.HandleFunc("POST /delivery-teams/{id}/plan/participants/{participantId}/response", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+		if !ok {
+			return
+		}
+		team, err := store.Get(r.PathValue("id"))
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		principal, allowed := deliveryParticipantPrincipal(team, r.PathValue("participantId"), actor.UserID, orgs, catalog)
+		if !allowed {
+			writeAPIError(w, 403, "delivery_plan_response_forbidden", "only the affected owner or an approved agent operator may respond")
+			return
+		}
+		var in deliveryTeamPlanResponseInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "expected versions and decision are required")
+			return
+		}
+		team, err = store.RespondPlan(team.ID, r.PathValue("participantId"), actor.UserID, principal, in.Decision, in.ExpectedVersion, in.ExpectedPlanRevision)
+		if writeDeliveryTeamError(w, err) {
+			return
+		}
+		writeJSON(w, 200, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
+	})
+}
+
+func deliveryParticipantPrincipal(team deliveryteams.Team, participantID, actor string, orgs *organizations.Store, catalog *repositories.Store) (string, bool) {
+	for _, p := range team.Participants {
+		if p.ID != participantID {
+			continue
+		}
+		if p.PrincipalType == "human" && p.PrincipalID == actor {
+			return p.PrincipalID, true
+		}
+		if p.PrincipalType == "agent" && agentOperator(team.RepositoryID, p.PrincipalID, actor, orgs, catalog) {
+			return p.PrincipalID, true
+		}
+	}
+	return "", false
+}
+func deliveryPlanningPrincipal(team deliveryteams.Team, actor string, orgs *organizations.Store, catalog *repositories.Store) (string, bool) {
+	if team.OrganizerID == actor {
+		return actor, true
+	}
+	for _, p := range team.Participants {
+		if p.Status != "accepted" {
+			continue
+		}
+		if principal, ok := deliveryParticipantPrincipal(team, p.ID, actor, orgs, catalog); ok {
+			return principal, true
+		}
+	}
+	return "", false
 }
 
 func deliveryOutcomeExists(repo string, o deliveryteams.Outcome, ps *proposals.Store, ds *decisions.Store, is *incidents.Store, orgs *organizations.Store, catalog *repositories.Store) bool {
@@ -301,34 +406,70 @@ func deliveryInvitee(v deliveryteams.Team, user string, orgs *organizations.Stor
 	return false
 }
 func projectDeliveryAccess(v deliveryteams.Team, viewer string, catalog *repositories.Store, orgs *organizations.Store) deliveryteams.Team {
-	repo, _ := catalog.GetByID(v.RepositoryID)
+	if v.PlanHistory == nil {
+		v.PlanHistory = []deliveryteams.ExecutionPlan{}
+	}
 	for i := range v.Participants {
 		p := &v.Participants[i]
 		p.CanRespond = p.Status == "pending" && (p.PrincipalType == "human" && p.PrincipalID == viewer || p.PrincipalType == "agent" && agentOperator(v.RepositoryID, p.PrincipalID, viewer, orgs, catalog))
 		p.AccessPreview = []deliveryteams.AccessPreview{}
 		for _, req := range p.RequiredAccess {
-			level, source := "none", "no independent grant"
-			if p.PrincipalType == "human" {
-				collab, _ := catalog.HasCollaborator(p.PrincipalID, req.RepositoryID)
-				if p.PrincipalID == repo.OwnerID {
-					level, source = "write", "repository owner"
-				} else if collab {
-					level, source = "write", "repository collaborator"
-				} else if repo.Visibility == "public" {
-					level, source = "read", "public repository"
-				}
-			} else {
-				if repo.OrganizationID != "" {
-					if o, err := orgs.Get(repo.OrganizationID); err == nil {
-						level, source = agentGrantAccess(o, p.PrincipalID, req.RepositoryID)
-					}
-				}
-			}
+			level, source := deliveryParticipantAccess(*p, req.RepositoryID, catalog, orgs)
 			sufficient := level == "write" || (level == "read" && req.Level == "read")
 			p.AccessPreview = append(p.AccessPreview, deliveryteams.AccessPreview{RepositoryID: req.RepositoryID, Required: req.Level, Effective: level, Source: source, Sufficient: sufficient})
 		}
 	}
+	if v.Plan != nil {
+		v.Plan.Blockers = append([]deliveryteams.PlanBlocker{}, v.Plan.Blockers...)
+		for i := range v.Plan.Acceptances {
+			a := &v.Plan.Acceptances[i]
+			_, a.CanRespond = deliveryParticipantPrincipal(v, a.ParticipantID, viewer, orgs, catalog)
+			a.CanRespond = a.CanRespond && a.Status == "pending"
+		}
+		for _, stream := range v.Plan.Streams {
+			p := participantByDeliveryID(v, stream.OwnerParticipantID)
+			if p == nil {
+				continue
+			}
+			for _, scope := range stream.RepositoryScope {
+				level, _ := deliveryParticipantAccess(*p, scope.RepositoryID, catalog, orgs)
+				if level != "write" {
+					v.Plan.Blockers = append(v.Plan.Blockers, deliveryteams.PlanBlocker{Kind: "unavailable_access", StreamIDs: []string{stream.ID}, OwnerParticipantIDs: []string{stream.OwnerParticipantID}, Summary: "The stream owner lacks independent write access to " + scope.RepositoryID})
+				}
+			}
+		}
+	}
 	return v
+}
+func participantByDeliveryID(v deliveryteams.Team, id string) *deliveryteams.Participant {
+	for i := range v.Participants {
+		if v.Participants[i].ID == id {
+			return &v.Participants[i]
+		}
+	}
+	return nil
+}
+func deliveryParticipantAccess(p deliveryteams.Participant, repositoryID string, catalog *repositories.Store, orgs *organizations.Store) (string, string) {
+	repo, err := catalog.GetByID(repositoryID)
+	if err != nil {
+		return "none", "repository unavailable"
+	}
+	level, source := "none", "no independent grant"
+	if p.PrincipalType == "human" {
+		collab, _ := catalog.HasCollaborator(p.PrincipalID, repositoryID)
+		if p.PrincipalID == repo.OwnerID {
+			level, source = "write", "repository owner"
+		} else if collab {
+			level, source = "write", "repository collaborator"
+		} else if repo.Visibility == "public" {
+			level, source = "read", "public repository"
+		}
+	} else if repo.OrganizationID != "" {
+		if o, err := orgs.Get(repo.OrganizationID); err == nil {
+			level, source = agentGrantAccess(o, p.PrincipalID, repositoryID)
+		}
+	}
+	return level, source
 }
 func writeDeliveryTeamError(w http.ResponseWriter, e error) bool {
 	if e == nil {

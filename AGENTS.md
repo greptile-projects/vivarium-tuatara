@@ -1064,6 +1064,13 @@ whenever dependencies change or the web job fails before it starts.
   grants repository authority, so missing access remains an explicit gap before
   execution. Records default beneath `$DELIVERY_TEAM_STORAGE_ROOT`
   (`delivery-teams`).
+  Accepted members publish compare-and-swap execution plans whose ordered
+  streams retain owners, exact-revision inputs and repository paths, artifacts,
+  dependencies, acceptance criteria, assumptions, budgets, and integration
+  order. Reads derive overlap, duplicate-artifact, budget, live-access, and
+  material-replanning blockers without granting authority. Every affected
+  human or approved-agent owner must accept a material plan revision; pending
+  or declined boundaries remain visibly blocked.
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
   Update it when you change how the apps fit together, not for every change.
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -52,6 +53,36 @@ func TestDeliveryTeamAPIInvitesWithoutGrantingRepositoryAuthority(t *testing.T) 
 	accepted.Body.Close()
 	if team.Participants[0].Status != "accepted" || team.Events[1].ActorID != invitee.User.ID {
 		t.Fatalf("acceptance = %#v", team)
+	}
+	planBody := fmt.Sprintf(`{"expected_version":%d,"plan":{"streams":[{"id":"risk-review","title":"Verify rollback","owner_participant_id":"reviewer","inputs":[{"name":"source","repository_id":%q,"revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","artifact":"current source"}],"expected_artifacts":["rollback evidence"],"dependency_ids":[],"acceptance_criteria":["rollback completes within five minutes"],"repository_scope":[{"repository_id":%q,"reference":"main","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","paths":["ops"]}],"integration_order":1,"assumptions":["deployment remains reversible"]}]}}`, team.Version, repository.ID, repository.ID)
+	planned := authenticatedRequest(t, http.MethodPut, server.URL+"/delivery-teams/"+team.ID+"/plan", planBody, invitee.Credential.Token, http.StatusOK)
+	json.NewDecoder(planned.Body).Decode(&team)
+	planned.Body.Close()
+	if team.Plan == nil || team.Plan.Revision != 1 || len(team.Plan.Blockers) != 1 || team.Plan.Blockers[0].Kind != "unavailable_access" || team.Plan.Acceptances[0].Status != "accepted" {
+		t.Fatalf("execution plan = %#v", team.Plan)
+	}
+	invalidInput := strings.Replace(planBody, fmt.Sprintf(`"expected_version":%d`, team.Version-1), fmt.Sprintf(`"expected_version":%d`, team.Version), 1)
+	invalidInput = strings.Replace(invalidInput, repository.ID, strings.Repeat("f", 32), 1)
+	authenticatedRequest(t, http.MethodPut, server.URL+"/delivery-teams/"+team.ID+"/plan", invalidInput, invitee.Credential.Token, http.StatusBadRequest).Body.Close()
+	unchanged := authenticatedRequest(t, http.MethodGet, server.URL+"/delivery-teams/"+team.ID, "", invitee.Credential.Token, http.StatusOK)
+	var unchangedTeam deliveryteams.Team
+	json.NewDecoder(unchanged.Body).Decode(&unchangedTeam)
+	unchanged.Body.Close()
+	if unchangedTeam.Version != team.Version || unchangedTeam.Plan.Revision != team.Plan.Revision {
+		t.Fatalf("invalid input persisted: %#v", unchangedTeam.Plan)
+	}
+	planBody = strings.Replace(planBody, fmt.Sprintf(`"expected_version":%d`, team.Version-1), fmt.Sprintf(`"expected_version":%d`, team.Version), 1)
+	revised := authenticatedRequest(t, http.MethodPut, server.URL+"/delivery-teams/"+team.ID+"/plan", planBody, owner.Credential.Token, http.StatusOK)
+	json.NewDecoder(revised.Body).Decode(&team)
+	revised.Body.Close()
+	if team.Plan.Acceptances[0].Status != "pending" || team.Plan.Acceptances[0].CanRespond {
+		t.Fatalf("material replan = %#v", team.Plan)
+	}
+	responded := authenticatedRequest(t, http.MethodPost, server.URL+"/delivery-teams/"+team.ID+"/plan/participants/reviewer/response", fmt.Sprintf(`{"expected_version":%d,"expected_plan_revision":%d,"decision":"accepted"}`, team.Version, team.Plan.Revision), invitee.Credential.Token, http.StatusOK)
+	json.NewDecoder(responded.Body).Decode(&team)
+	responded.Body.Close()
+	if team.Plan.Acceptances[0].Status != "accepted" || team.Plan.Acceptances[0].RespondedBy != invitee.User.ID {
+		t.Fatalf("plan acceptance = %#v", team.Plan.Acceptances)
 	}
 	authenticatedRequest(t, http.MethodPut, server.URL+"/delivery-teams/"+team.ID, fmt.Sprintf(`{"expected_version":%d,"charter":{}}`, team.Version), invitee.Credential.Token, http.StatusNotFound).Body.Close()
 }

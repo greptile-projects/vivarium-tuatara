@@ -11,6 +11,13 @@ export type DeliveryTeam = {
   overall_budget?: { unit: "minutes" | "credits" | "usd"; limit: number };
   deadline?: string; escalation_path: string; version: number;
   participants: { id: string; principal_type: "human" | "agent"; principal_id: string; role: string; responsibility: string; why: string; budget?: { unit: string; limit: number }; deadline?: string; escalation: string; required_access: { repository_id: string; level: "read" | "write" }[]; access_preview: { repository_id: string; required: string; effective: string; source: string; sufficient: boolean }[]; status: "pending" | "accepted" | "declined"; can_respond: boolean; invited_by: string; invited_at: string; responded_by?: string; responded_at?: string }[];
+  plan?: {
+    revision: number; proposed_by: string; updated_at: string;
+    streams: { id: string; title: string; owner_participant_id: string; inputs: { name: string; source_stream_id?: string; repository_id?: string; revision?: string; artifact: string }[]; expected_artifacts: string[]; dependency_ids: string[]; acceptance_criteria: string[]; repository_scope: { repository_id: string; reference: string; revision: string; paths: string[] }[]; integration_order: number; budget?: { unit: string; limit: number }; assumptions: string[] }[];
+    acceptances: { participant_id: string; revision: number; status: "pending" | "accepted" | "declined"; required: boolean; responded_by?: string; responded_at?: string; can_respond: boolean }[];
+    blockers: { kind: "replan_acceptance" | "budget_exceeded" | "overlapping_scope" | "duplicate_artifact" | "unavailable_access" | "owner_unavailable" | "charter_changed"; stream_ids: string[]; owner_participant_ids: string[]; summary: string }[];
+  };
+  plan_history: { revision: number; proposed_by: string; updated_at: string }[];
   events: { id: string; kind: string; actor_id: string; summary: string; version: number; created_at: string }[];
   created_at: string; updated_at: string;
 };

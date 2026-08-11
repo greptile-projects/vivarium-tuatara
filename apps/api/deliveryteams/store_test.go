@@ -2,6 +2,8 @@ package deliveryteams
 
 import (
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -104,5 +106,95 @@ func TestChangedSharedCharterTermsRequireFreshAcceptance(t *testing.T) {
 	}
 	if _, err = s.Respond(v.ID, "alice-slot", "alice", "accepted", v.Version); err != nil {
 		t.Fatalf("fresh acceptance: %v", err)
+	}
+}
+
+func TestParallelPlanSurfacesOverlapBudgetAndRequiresOwnerAcceptance(t *testing.T) {
+	s, _ := New(t.TempDir())
+	c := charter("alice", "implementation lead")
+	c.OverallBudget = &Budget{Unit: "minutes", Limit: 30}
+	c.Participants[0].Budget = &Budget{Unit: "minutes", Limit: 20}
+	c.Participants = append(c.Participants, Participant{ID: "bob-slot", PrincipalType: "human", PrincipalID: "bob", Role: "verification lead", Responsibility: "Own integration evidence", Why: "Maintains the checks", Escalation: "Raise incompatible evidence", RequiredAccess: []AccessRequirement{{RepositoryID: "repo", Level: "write"}}})
+	v, err := s.Create("repo", Outcome{Kind: "planned_outcome", ResourceID: "outcome", Title: "Outcome"}, c, "organizer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, _ = s.Respond(v.ID, "alice-slot", "alice", "accepted", v.Version)
+	v, _ = s.Respond(v.ID, "bob-slot", "bob", "accepted", v.Version)
+	hash := strings.Repeat("a", 40)
+	plan := PlanInput{Streams: []WorkStream{
+		{ID: "implementation", Title: "Implement", OwnerParticipantID: "alice-slot", ExpectedArtifacts: []string{"migration patch"}, AcceptanceCriteria: []string{"unit checks pass"}, RepositoryScope: []RevisionScope{{RepositoryID: "repo", Reference: "main", Revision: hash, Paths: []string{"src"}}}, IntegrationOrder: 1, Budget: &Budget{Unit: "minutes", Limit: 25}, Assumptions: []string{"schema v1 remains stable"}},
+		{ID: "verification", Title: "Verify", OwnerParticipantID: "bob-slot", Inputs: []WorkInput{{Name: "candidate", SourceStreamID: "implementation", Artifact: "migration patch"}}, ExpectedArtifacts: []string{"migration patch"}, DependencyIDs: []string{"implementation"}, AcceptanceCriteria: []string{"integration checks pass"}, RepositoryScope: []RevisionScope{{RepositoryID: "repo", Reference: "main", Revision: hash, Paths: []string{"src/checks"}}}, IntegrationOrder: 2, Budget: &Budget{Unit: "minutes", Limit: 10}, Assumptions: []string{"implementation preserves API"}},
+	}}
+	v, err = s.PutPlan(v.ID, "alice", "alice", v.Version, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Plan.Revision != 1 || len(v.Plan.Blockers) != 5 || v.Plan.Acceptances[0].Status != "accepted" || v.Plan.Acceptances[1].Status != "pending" {
+		t.Fatalf("plan = %#v", v.Plan)
+	}
+	v, err = s.RespondPlan(v.ID, "bob-slot", "bob", "bob", "accepted", v.Version, v.Plan.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, blocker := range v.Plan.Blockers {
+		if blocker.Kind == "replan_acceptance" {
+			t.Fatalf("acceptance blocker remained: %#v", v.Plan.Blockers)
+		}
+	}
+	plan.Streams[0].Assumptions = []string{"schema v2 is now required"}
+	v, err = s.PutPlan(v.ID, "bob", "bob", v.Version, plan)
+	if err != nil || v.Plan.Revision != 2 || v.Plan.Acceptances[0].Status != "pending" {
+		t.Fatalf("replan = %#v, %v", v.Plan, err)
+	}
+	v, err = s.Update(v.ID, "organizer", v.Version, c)
+	if err != nil || v.Plan.Revision != 2 || len(v.PlanHistory) != 1 {
+		t.Fatalf("unchanged charter moved plan = %#v, %v", v.Plan, err)
+	}
+	changedCharter := c
+	changedCharter.Purpose = "Deliver against the changed upstream outcome"
+	v, err = s.Update(v.ID, "organizer", v.Version, changedCharter)
+	if err != nil || v.Plan.Revision != 3 || len(v.PlanHistory) != 2 || !slices.ContainsFunc(v.Plan.Blockers, func(b PlanBlocker) bool { return b.Kind == "charter_changed" }) {
+		t.Fatalf("charter invalidation = %#v, %v", v.Plan, err)
+	}
+}
+
+func TestPlanRejectsCyclesAndStaleRevisions(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, _ := s.Create("repo", Outcome{Kind: "planned_outcome", ResourceID: "outcome", Title: "Outcome"}, charter("alice", "lead"), "organizer")
+	hash := strings.Repeat("a", 40)
+	streams := []WorkStream{{ID: "one", Title: "One", OwnerParticipantID: "alice-slot", ExpectedArtifacts: []string{"one"}, DependencyIDs: []string{"two"}, AcceptanceCriteria: []string{"done"}, RepositoryScope: []RevisionScope{{RepositoryID: "repo", Reference: "main", Revision: hash, Paths: []string{"one"}}}, IntegrationOrder: 1, Assumptions: []string{"stable"}}, {ID: "two", Title: "Two", OwnerParticipantID: "alice-slot", ExpectedArtifacts: []string{"two"}, DependencyIDs: []string{"one"}, AcceptanceCriteria: []string{"done"}, RepositoryScope: []RevisionScope{{RepositoryID: "repo", Reference: "main", Revision: hash, Paths: []string{"two"}}}, IntegrationOrder: 2, Assumptions: []string{"stable"}}}
+	if _, err := s.PutPlan(v.ID, "organizer", "organizer", v.Version, PlanInput{Streams: streams}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("cycle = %v", err)
+	}
+	streams[0].DependencyIDs = nil
+	streams[1].DependencyIDs = []string{"one"}
+	v, err := s.PutPlan(v.ID, "organizer", "organizer", v.Version, PlanInput{Streams: streams})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RespondPlan(v.ID, "alice-slot", "alice", "alice", "accepted", v.Version-1, v.Plan.Revision); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale response = %v", err)
+	}
+}
+
+func TestDeclinedStreamOwnerImmediatelyBecomesUnavailable(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, _ := s.Create("repo", Outcome{Kind: "planned_outcome", ResourceID: "outcome", Title: "Outcome"}, charter("alice", "lead"), "organizer")
+	plan := PlanInput{Streams: []WorkStream{{ID: "work", Title: "Work", OwnerParticipantID: "alice-slot", ExpectedArtifacts: []string{"result"}, AcceptanceCriteria: []string{"verified"}, RepositoryScope: []RevisionScope{{RepositoryID: "repo", Reference: "main", Revision: strings.Repeat("a", 40), Paths: []string{"src"}}}, IntegrationOrder: 1, Assumptions: []string{"owner remains available"}}}}
+	v, err := s.PutPlan(v.ID, "organizer", "organizer", v.Version, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.Respond(v.ID, "alice-slot", "alice", "declined", v.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(v.Plan.Blockers, func(blocker PlanBlocker) bool { return blocker.Kind == "owner_unavailable" }) {
+		t.Fatalf("declined owner blockers = %#v", v.Plan.Blockers)
+	}
+	reloaded, err := s.Get(v.ID)
+	if err != nil || !slices.ContainsFunc(reloaded.Plan.Blockers, func(blocker PlanBlocker) bool { return blocker.Kind == "owner_unavailable" }) {
+		t.Fatalf("persisted blockers = %#v, %v", reloaded.Plan, err)
 	}
 }
