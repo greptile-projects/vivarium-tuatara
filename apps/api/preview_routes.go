@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -147,7 +148,7 @@ func registerPreviewRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
-		if len(strings.TrimSpace(in.Body)) < 1 || len(in.Body) > 4000 {
+		if len(strings.TrimSpace(in.Body)) < 1 || utf8.RuneCountInString(in.Body) > 4000 {
 			writeAPIError(w, 422, "preview_feedback_invalid", "feedback must be 1-4000 characters")
 			return
 		}

@@ -1,6 +1,7 @@
 package previews
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -28,16 +29,32 @@ func TestDefinitionAndStaleProjection(t *testing.T) {
 	if err != nil || len(invited.Invitations) != 1 || invited.Invitations[0].Role != "feedback" {
 		t.Fatalf("invite = %#v, %v", invited, err)
 	}
+	changedExpiry := store.now().Add(24 * time.Hour)
+	reinvited, err := store.Invite(created.RepositoryID, created.PullRequestID, created.ID, created.CreatorID, strings.Repeat("f", 32), "feedback", "decision", strings.Repeat("2", 32), changedExpiry)
+	if err != nil || len(reinvited.Invitations) != 1 || reinvited.Invitations[0].SourceKind != "decision" || reinvited.Invitations[0].SourceID != strings.Repeat("2", 32) || !reinvited.Invitations[0].ExpiresAt.Equal(changedExpiry) || len(reinvited.AudienceEvents) != 2 {
+		t.Fatalf("reinvite = %#v, %v", reinvited, err)
+	}
+	persisted, err := store.Get(created.RepositoryID, created.PullRequestID, created.ID)
+	if err != nil || persisted.Invitations[0].SourceKind != "decision" || !persisted.Invitations[0].ExpiresAt.Equal(changedExpiry) {
+		t.Fatalf("persisted reinvite = %#v, %v", persisted, err)
+	}
 	entered, invitation, err := store.Enter(created.RepositoryID, created.PullRequestID, created.ID, strings.Repeat("f", 32))
-	if err != nil || invitation.ID == "" || len(entered.AudienceEvents) != 2 {
+	if err != nil || invitation.ID == "" || len(entered.AudienceEvents) != 3 {
 		t.Fatalf("enter = %#v, %#v, %v", entered, invitation, err)
 	}
 	commented, err := store.AddFeedback(created.RepositoryID, created.PullRequestID, created.ID, invitation.UserID, invitation.ID, "The checkout flow is clear.")
 	if err != nil || len(commented.Feedback) != 1 || commented.Feedback[0].AuthorID != invitation.UserID {
 		t.Fatalf("feedback = %#v, %v", commented, err)
 	}
+	commented, err = store.AddFeedback(created.RepositoryID, created.PullRequestID, created.ID, invitation.UserID, invitation.ID, strings.Repeat("é", 4000))
+	if err != nil || len(commented.Feedback) != 2 {
+		t.Fatalf("unicode feedback = %d records, %v", len(commented.Feedback), err)
+	}
+	if _, err = store.AddFeedback(created.RepositoryID, created.PullRequestID, created.ID, invitation.UserID, invitation.ID, strings.Repeat("é", 4001)); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("oversize Unicode feedback error = %v", err)
+	}
 	revoked, err := store.Revoke(created.RepositoryID, created.PullRequestID, created.ID, invitation.ID, created.CreatorID)
-	if err != nil || revoked.Invitations[0].RevokedAt == nil || len(revoked.AudienceEvents) != 4 {
+	if err != nil || revoked.Invitations[0].RevokedAt == nil || len(revoked.AudienceEvents) != 6 {
 		t.Fatalf("revoke = %#v, %v", revoked, err)
 	}
 	current, err := store.List(created.RepositoryID, created.PullRequestID, created.Revision)

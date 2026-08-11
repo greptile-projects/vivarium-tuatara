@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 )
@@ -173,9 +174,17 @@ func (s *Store) Invite(repo, pull, id, actor, user, role, sourceKind, sourceID s
 	if err != nil {
 		return Preview{}, err
 	}
-	for _, invitation := range p.Invitations {
+	for i := range p.Invitations {
+		invitation := &p.Invitations[i]
 		if invitation.UserID == user && invitation.Role == role && invitation.RevokedAt == nil && invitation.ExpiresAt.After(s.now()) {
-			return p, nil
+			if invitation.SourceKind == sourceKind && invitation.SourceID == sourceID && invitation.ExpiresAt.Equal(expiresAt) {
+				return p, nil
+			}
+			invitation.SourceKind, invitation.SourceID, invitation.ExpiresAt, invitation.InvitedBy = sourceKind, sourceID, expiresAt, actor
+			now := s.now()
+			p.AudienceEvents = append(p.AudienceEvents, AudienceEvent{ID: newID(), Kind: "reinvited", ActorID: actor, InvitationID: invitation.ID, CreatedAt: now})
+			p.UpdatedAt = now
+			return p, s.write(p)
 		}
 	}
 	now := s.now()
@@ -231,7 +240,7 @@ func (s *Store) Enter(repo, pull, id, user string) (Preview, Invitation, error) 
 	return Preview{}, Invitation{}, ErrNotFound
 }
 func (s *Store) AddFeedback(repo, pull, id, user, invitationID, body string) (Preview, error) {
-	if strings.TrimSpace(body) == "" || len(body) > 4000 {
+	if strings.TrimSpace(body) == "" || utf8.RuneCountInString(body) > 4000 {
 		return Preview{}, ErrInvalid
 	}
 	s.mu.Lock()
