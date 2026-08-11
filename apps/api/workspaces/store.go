@@ -57,6 +57,8 @@ type Source struct {
 	RepairID                string `json:"repair_id,omitempty"`
 	DecisionID              string `json:"decision_id,omitempty"`
 	AlternativeID           string `json:"alternative_id,omitempty"`
+	IssueID                 string `json:"issue_id,omitempty"`
+	ReleaseID               string `json:"release_id,omitempty"`
 	DefaultBranchRevision   string `json:"default_branch_revision,omitempty"`
 	DefaultDefinitionSHA256 string `json:"default_definition_sha256,omitempty"`
 }
@@ -121,40 +123,41 @@ type Change struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 type Workspace struct {
-	ID                string            `json:"id"`
-	RepositoryID      string            `json:"repository_id"`
-	OrganizationID    string            `json:"organization_id,omitempty"`
-	CommitID          string            `json:"commit_id"`
-	Definition        Definition        `json:"definition"`
-	DefinitionSHA256  string            `json:"definition_sha256"`
-	Source            Source            `json:"source"`
-	CreatorID         string            `json:"creator_id"`
-	Access            Access            `json:"effective_access"`
-	State             string            `json:"state"`
-	Setup             []SetupStep       `json:"setup_evidence"`
-	Events            []Event           `json:"events"`
-	Commands          []CommandOutcome  `json:"command_outcomes"`
-	Changes           []Change          `json:"changes"`
-	Presence          []Presence        `json:"presence"`
-	Control           Control           `json:"control"`
-	Messages          []Message         `json:"messages"`
-	HeadCheckpointID  string            `json:"head_checkpoint_id,omitempty"`
-	CreatedAt         time.Time         `json:"created_at"`
-	UpdatedAt         time.Time         `json:"updated_at"`
-	SuspendedAt       *time.Time        `json:"suspended_at,omitempty"`
-	ResumedAt         *time.Time        `json:"resumed_at,omitempty"`
-	Policy            Policy            `json:"policy"`
-	PolicyScope       string            `json:"policy_scope"`
-	PolicyVersion     int               `json:"policy_version"`
-	LastActivityAt    time.Time         `json:"last_activity_at"`
-	ExpiresAt         *time.Time        `json:"expires_at,omitempty"`
-	ExpiryAnnouncedAt *time.Time        `json:"expiry_announced_at,omitempty"`
-	StoppedAt         *time.Time        `json:"stopped_at,omitempty"`
-	StoppedBy         string            `json:"stopped_by,omitempty"`
-	StopReason        string            `json:"stop_reason,omitempty"`
-	RebuildRequired   bool              `json:"rebuild_required"`
-	RebuildReasons    []string          `json:"rebuild_reasons"`
-	Reasoning         *ReasoningContext `json:"reasoning,omitempty"`
+	ID                             string            `json:"id"`
+	RepositoryID                   string            `json:"repository_id"`
+	OrganizationID                 string            `json:"organization_id,omitempty"`
+	CommitID                       string            `json:"commit_id"`
+	Definition                     Definition        `json:"definition"`
+	DefinitionSHA256               string            `json:"definition_sha256"`
+	Source                         Source            `json:"source"`
+	CreatorID                      string            `json:"creator_id"`
+	Access                         Access            `json:"effective_access"`
+	State                          string            `json:"state"`
+	Setup                          []SetupStep       `json:"setup_evidence"`
+	Events                         []Event           `json:"events"`
+	Commands                       []CommandOutcome  `json:"command_outcomes"`
+	Changes                        []Change          `json:"changes"`
+	Presence                       []Presence        `json:"presence"`
+	Control                        Control           `json:"control"`
+	Messages                       []Message         `json:"messages"`
+	HeadCheckpointID               string            `json:"head_checkpoint_id,omitempty"`
+	CreatedAt                      time.Time         `json:"created_at"`
+	UpdatedAt                      time.Time         `json:"updated_at"`
+	SuspendedAt                    *time.Time        `json:"suspended_at,omitempty"`
+	ResumedAt                      *time.Time        `json:"resumed_at,omitempty"`
+	Policy                         Policy            `json:"policy"`
+	PolicyScope                    string            `json:"policy_scope"`
+	PolicyVersion                  int               `json:"policy_version"`
+	LastActivityAt                 time.Time         `json:"last_activity_at"`
+	ExpiresAt                      *time.Time        `json:"expires_at,omitempty"`
+	ExpiryAnnouncedAt              *time.Time        `json:"expiry_announced_at,omitempty"`
+	StoppedAt                      *time.Time        `json:"stopped_at,omitempty"`
+	StoppedBy                      string            `json:"stopped_by,omitempty"`
+	StopReason                     string            `json:"stop_reason,omitempty"`
+	RebuildRequired                bool              `json:"rebuild_required"`
+	RebuildReasons                 []string          `json:"rebuild_reasons"`
+	Reasoning                      *ReasoningContext `json:"reasoning,omitempty"`
+	ReproductionInputAttachmentIDs []string          `json:"reproduction_input_attachment_ids,omitempty"`
 }
 type ReasoningContext struct {
 	AssessmentID      string                     `json:"assessment_id"`

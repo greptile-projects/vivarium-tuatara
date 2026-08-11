@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,89 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
+
+func TestReproductionSecretScreeningRejectsCredentialFormats(t *testing.T) {
+	tests := []struct{ name, body string }{
+		{"input.txt", "GITHUB_TOKEN=ghp_example"},
+		{"input.txt", "CLIENT_SECRET=example"},
+		{".pypirc", "[pypi]\npassword = pypi-example"},
+		{"key.txt", "-----BEGIN OPENSSH PRIVATE KEY-----\nexample"},
+		{"input.txt", "Authorization: Basic example"},
+		{"input.txt", "APIKEY=example"},
+		{"input.txt", "ACCESSKEY=example"},
+	}
+	for _, test := range tests {
+		if !reproductionSecretLike(test.name, base64.StdEncoding.EncodeToString([]byte(test.body))) {
+			t.Errorf("accepted credential %q", test.name)
+		}
+	}
+	if reproductionSecretLike("sample.json", base64.StdEncoding.EncodeToString([]byte(`{"failure":"timeout"}`))) {
+		t.Fatal("rejected ordinary reproduction input")
+	}
+}
+
+func TestReproductionArtifactPathValidationIsComponentAware(t *testing.T) {
+	for _, value := range []string{"coverage..json", "reports/coverage..json", "/workspace/reports/result.json"} {
+		if _, ok := cleanReproductionArtifactPath(value); !ok {
+			t.Errorf("rejected confined artifact %q", value)
+		}
+	}
+	for _, value := range []string{"../secret", "reports/../secret", "/etc/passwd", `reports\..\secret`} {
+		if clean, ok := cleanReproductionArtifactPath(value); ok {
+			t.Errorf("accepted escaping artifact %q as %q", value, clean)
+		}
+	}
+}
+
+func TestReproductionInputNamesRemainUniqueAfterSanitizing(t *testing.T) {
+	first := reproductionInputName("attachment-one", "my file.txt")
+	second := reproductionInputName("attachment-two", "my_file.txt")
+	if first == second {
+		t.Fatalf("colliding destinations: %q", first)
+	}
+}
+
+func TestReproductionArtifactReadRejectsSymlinkEscape(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker unavailable")
+	}
+	if err := exec.Command("docker", "image", "inspect", "alpine:3.22").Run(); err != nil {
+		t.Skip("alpine:3.22 unavailable")
+	}
+	id := strings.ToLower(strings.ReplaceAll(t.Name(), "/", "-"))
+	container := "vivarium-workspace-" + id
+	command := exec.Command("docker", "run", "-d", "--name", container, "--read-only", "--tmpfs", "/workspace:rw,noexec,nosuid,nodev,size=16m", "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=4m", "alpine:3.22", "sleep", "60")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("start container: %v: %s", err, output)
+	}
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", "-v", container).Run() })
+	setup := exec.Command("docker", "exec", container, "sh", "-c", "mkdir -p /workspace/reports && printf retained >/workspace/reports/result.txt && printf outside >/tmp/secret && ln -s /tmp/secret /workspace/escaped.txt && ln -s /tmp /workspace/escaped-dir")
+	if output, err := setup.CombinedOutput(); err != nil {
+		t.Fatalf("setup: %v: %s", err, output)
+	}
+	if output, err := readReproductionArtifact(id, "reports/result.txt"); err != nil || string(output) != "retained" {
+		t.Fatalf("regular artifact = %q, %v", output, err)
+	}
+	for _, path := range []string{"escaped.txt", "escaped-dir/secret"} {
+		if output, err := readReproductionArtifact(id, path); err == nil {
+			t.Fatalf("symlink artifact %q returned %q", path, output)
+		}
+	}
+	if output, err := exec.Command("docker", "exec", container, "sh", "-c", "printf safe >/workspace/raced.txt").CombinedOutput(); err != nil {
+		t.Fatalf("race setup: %v: %s", err, output)
+	}
+	tracer := exec.Command("docker", "exec", container, "sh", "-c", "while :; do rm -f /workspace/raced.next; ln -s /tmp/secret /workspace/raced.next; mv -f /workspace/raced.next /workspace/raced.txt; rm -f /workspace/raced.txt; printf safe >/workspace/raced.txt; done")
+	if err := tracer.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tracer.Process.Kill(); _, _ = tracer.Process.Wait() }()
+	for range 100 {
+		output, err := readReproductionArtifact(id, "raced.txt")
+		if err == nil && string(output) != "safe" {
+			t.Fatalf("raced artifact escaped: %q", output)
+		}
+	}
+}
 
 func TestProvisionWorkspaceEnforcesStorageAndRemovesFailedContainer(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {

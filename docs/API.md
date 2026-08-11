@@ -2095,3 +2095,28 @@ directory durability cannot be confirmed returns the retained record as `202`
 with `Vivarium-Durability: uncertain`, allowing exact identity recovery rather
 than an unsafe duplicate. Durable records use `$ISSUE_STORAGE_ROOT`, defaulting
 to `issues`.
+
+Issue reproduction reuses the bounded workspace executor. `POST /workspaces`
+accepts source kind `issue_reproduction` with `issue_id`, an exact `commit_id`,
+and, for released reports, the issue's `release_id`; released reports reject
+any commit other than the attested release commit. Optional
+`input_attachment_ids` are copied into `.vivarium/reproduction-inputs/` under
+attachment-ID-prefixed names only after credential filenames, secret assignments,
+authorization headers, and private-key material are rejected. The container stays
+network-disabled, read-only-root, resource-bounded, and credential-free.
+
+`POST /repositories/{id}/issues/{issue-id}/reproduction-attempts` freezes a
+completed issue workspace into immutable evidence. It accepts selected staged
+input IDs, workspace command outcome IDs, an observed result, a `reproduced`,
+`not_reproduced`, or `inconclusive` disposition, and optional workspace-local
+artifact paths. Every selected command must hash exactly to a named
+repository-defined `experiments` command. The attempt retains the revision and
+optional release, environment definition and digest, checksummed inputs, exit
+codes and bounded logs, checksummed artifacts (4 MiB each, 16 MiB total), actor,
+and time. Secret-like evidence fails closed; failed and inconclusive attempts
+remain inspectable and can be rerun in a fresh workspace.
+Artifact collection rejects absolute/traversing paths, backslashes, every
+symlink component, and non-regular files. It opens one descriptor, validates
+that exact descriptor resolves beneath `/workspace`, and reads from the same
+descriptor, preventing links or concurrent path replacement from exporting
+image or temporary-container content.

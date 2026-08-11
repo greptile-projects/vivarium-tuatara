@@ -414,7 +414,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerIncidentRoutes(mux, store, repositoryCatalog, incidentStore, proposalStore, deploymentStore, releaseStore, pullRequestStore, checkRunStore, authStore, activityStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && issueStore != nil {
-		registerIssueRoutes(mux, repositoryCatalog, issueStore, releaseStore, authStore, activityStore)
+		registerIssueRoutes(mux, repositoryCatalog, issueStore, releaseStore, workspaceStore, authStore, activityStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && userStore != nil && securityAdvisoryStore != nil {
 		registerSecurityAdvisoryRoutes(mux, store, repositoryCatalog, userStore, securityAdvisoryStore, releaseStore, checkRunStore, deploymentStore, authStore, activityStore)
@@ -423,7 +423,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerOrganizationRoutes(mux, store, organizationStore, repositoryCatalog, userStore, authStore, activityStore, proposalStore, pullRequestStore, releaseStore, packageStore, incidentStore, relationshipStore, securityAdvisoryStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && workspaceStore != nil {
-		registerWorkspaceRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, incidentStore, workspaceStore, authStore, organizationStore, checkRunStore, changeSessionStore)
+		registerWorkspaceRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, incidentStore, issueStore, releaseStore, workspaceStore, authStore, organizationStore, checkRunStore, changeSessionStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && explanationStore != nil {
 		registerExplanationRoutes(mux, store, repositoryCatalog, authStore, explanationStore, proposalStore, pullRequestStore, incidentStore, workspaceStore, checkRunStore, relationshipStore)

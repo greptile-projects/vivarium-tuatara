@@ -1542,3 +1542,10 @@ repository issue detail route keeps downloadable permitted evidence,
 maintainer status changes, history, and discussion in one collaboration
 surface. Issue visibility does not grant repository access, and attachment
 limits keep this diagnostic path distinct from an arbitrary file store.
+
+An issue becomes executable evidence through an `issue_reproduction` workspace
+pinned to exact source or its attested release. Selected sanitized attachments
+are staged without credentials, and only outcomes matching repository-declared
+reproduction command hashes can enter an immutable attempt. Attempts retain the
+environment, inputs, logs, exit codes, artifacts, observed result, revision,
+and actor; failed and inconclusive runs remain available for collaborator reruns.

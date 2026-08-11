@@ -1678,6 +1678,14 @@ export type Issue = {
   }[];
   discussion: { id: string; author_id: string; body: string; created_at: string }[];
   history: { id: string; kind: string; actor_id: string; from?: string; to?: string; message?: string; created_at: string }[];
+  reproduction_attempts: {
+    id: string; workspace_id: string; commit_id: string; release_id?: string; definition_sha256: string;
+    environment_definition: { image: string; tools: { name: string; version: string }[]; dependencies: string[]; resources: { cpus: number; memory_mb: number; storage_mb: number; setup_seconds: number } };
+    inputs: { attachment_id: string; name: string; sha256: string; size: number }[];
+    commands: { name: string; outcome_id: string; command_sha256: string; exit_code: number; log?: string; started_at: string; completed_at: string }[];
+    artifacts: { name: string; media_type: string; sha256: string; size: number; data?: string }[];
+    observed_result: string; result: "reproduced" | "not_reproduced" | "inconclusive"; reproduced_by: string; created_at: string;
+  }[];
   version: number;
   created_at: string;
   updated_at: string;
