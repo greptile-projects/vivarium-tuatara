@@ -566,10 +566,7 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 					return nil, deliveryteams.ErrForbidden
 				}
 				body := deliveryIntegrationPullBody(currentTeam, currentManifest, c)
-				pull, createErr := pulls.FindOrCreateRecovery(c.RepositoryID, actor.UserID, c.StreamID+": "+currentTeam.Outcome.Title, body, c.Branch, target)
-				if createErr == nil {
-					pull, createErr = pulls.LinkDeliveryIntegration(c.RepositoryID, pull.ID, currentTeam.ID, currentManifest.ID, c.StreamID, c.IntegrationOrder)
-				}
+				pull, createErr := pulls.FindOrCreateDeliveryIntegration(c.RepositoryID, actor.UserID, c.StreamID+": "+currentTeam.Outcome.Title, body, c.Branch, target, currentTeam.ID, currentManifest.ID, c.StreamID, c.IntegrationOrder)
 				if createErr != nil {
 					publishStatus, publishCode, publishMessage = 409, "delivery_integration_publish_failed", "an ordered contribution could not be opened and linked for review"
 					return nil, deliveryteams.ErrConflict

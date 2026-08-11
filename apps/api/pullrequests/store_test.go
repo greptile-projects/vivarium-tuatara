@@ -118,6 +118,17 @@ func TestRecoveryIncludesTargetAndDeliveryProvenanceCannotBeReplaced(t *testing.
 	if mainPull.ID == releasePull.ID || mainPull.TargetBranch != "main" {
 		t.Fatalf("recovery reused incompatible pull: %#v", mainPull)
 	}
+	deliveryPull, err := store.FindOrCreateDeliveryIntegration(repository.ID(), testID('2'), "Delivery", "Delivery review.", "delivery/topic", "main", testID('7'), testID('8'), "delivery-stream", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deliveryPull.ID == mainPull.ID || deliveryPull.DeliveryTeamID != testID('7') || deliveryPull.DeliveryIntegrationID != testID('8') {
+		t.Fatalf("delivery recovery adopted unrelated pull: %#v", deliveryPull)
+	}
+	retry, err := store.FindOrCreateDeliveryIntegration(repository.ID(), testID('2'), "Delivery", "Delivery review.", "delivery/topic", "main", testID('7'), testID('8'), "delivery-stream", 1)
+	if err != nil || retry.ID != deliveryPull.ID {
+		t.Fatalf("delivery retry = %#v, %v", retry, err)
+	}
 	if _, err = store.LinkDeliveryIntegration(repository.ID(), releasePull.ID, testID('5'), testID('6'), "other-stream", 2); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("provenance replacement = %v", err)
 	}

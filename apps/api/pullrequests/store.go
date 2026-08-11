@@ -142,6 +142,13 @@ type ReviewReasoningItem struct {
 	Status  string `json:"status"`
 }
 
+type recoveryIdentity struct {
+	DeliveryTeamID        string
+	DeliveryIntegrationID string
+	DeliveryStreamID      string
+	DeliveryOrder         int
+}
+
 // LinkWorkspace records collaboration provenance without changing ordinary
 // pull revision, review, check, or integration behavior.
 func (s *Store) LinkWorkspace(repositoryID, pullID, workspaceID, checkpointID string, contributors, commands []string) (PullRequest, error) {
@@ -464,13 +471,23 @@ func (s *Store) Create(repositoryID, authorID, title, body, sourceBranch, target
 // Its reachable objects are imported into the target without publishing a ref,
 // keeping every later review and merge operation pinned to the adopted commit.
 func (s *Store) CreateFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, proposalID *string) (PullRequest, error) {
-	return s.createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, "", nil, proposalID, nil, nil, nil, false, nil)
+	return s.createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, "", nil, proposalID, nil, nil, nil, nil, nil)
 }
 
 // FindOrCreateRecovery enforces one review boundary for a deterministic
 // repository/source-branch pair under the cross-process pull-store lock.
 func (s *Store) FindOrCreateRecovery(repositoryID, authorID, title, body, sourceBranch, targetBranch string) (PullRequest, error) {
-	return s.createFrom(repositoryID, repositoryID, authorID, title, body, sourceBranch, targetBranch, "", nil, nil, nil, nil, nil, true, nil)
+	return s.createFrom(repositoryID, repositoryID, authorID, title, body, sourceBranch, targetBranch, "", nil, nil, nil, nil, nil, &recoveryIdentity{}, nil)
+}
+
+// FindOrCreateDeliveryIntegration recovers only the exact delivery review. An
+// unrelated pull on the same branches remains an independent review boundary.
+func (s *Store) FindOrCreateDeliveryIntegration(repositoryID, authorID, title, body, sourceBranch, targetBranch, teamID, integrationID, streamID string, order int) (PullRequest, error) {
+	if !validID(teamID) || !validID(integrationID) || strings.TrimSpace(streamID) == "" || order < 1 {
+		return PullRequest{}, ErrInvalid
+	}
+	recovery := &recoveryIdentity{DeliveryTeamID: teamID, DeliveryIntegrationID: integrationID, DeliveryStreamID: streamID, DeliveryOrder: order}
+	return s.createFrom(repositoryID, repositoryID, authorID, title, body, sourceBranch, targetBranch, "", nil, nil, nil, nil, nil, recovery, nil)
 }
 
 // CreateTaskContribution publishes task-scoped work into ordinary review while
@@ -484,10 +501,10 @@ func (s *Store) CreateTaskContributionFrom(repositoryID, sourceRepositoryID, aut
 }
 
 func (s *Store) CreateTaskContributionFromWithEvidence(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, expectedSourceCommit string, commitIDs []string, proposalID, taskID *string, sessionID, runID *string, reviewEvidence *TaskReviewEvidence) (PullRequest, error) {
-	return s.createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, expectedSourceCommit, commitIDs, proposalID, taskID, sessionID, runID, false, reviewEvidence)
+	return s.createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, expectedSourceCommit, commitIDs, proposalID, taskID, sessionID, runID, nil, reviewEvidence)
 }
 
-func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, expectedSourceCommit string, commitIDs []string, proposalID, taskID, sessionID, runID *string, uniqueSource bool, reviewEvidence *TaskReviewEvidence) (PullRequest, error) {
+func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, expectedSourceCommit string, commitIDs []string, proposalID, taskID, sessionID, runID *string, recovery *recoveryIdentity, reviewEvidence *TaskReviewEvidence) (PullRequest, error) {
 	if !validID(repositoryID) || !validID(sourceRepositoryID) || !validID(authorID) {
 		return PullRequest{}, ErrInvalid
 	}
@@ -543,6 +560,9 @@ func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, bo
 		commitIDs = []string{sourceCommit}
 	}
 	p := PullRequest{ID: id, RepositoryID: repositoryID, SourceRepositoryID: sourceRepositoryID, AuthorID: authorID, Title: title, Body: body, SourceBranch: sourceBranch, TargetBranch: targetBranch, SourceCommitID: sourceCommit, TargetCommitID: targetCommit, ProposalID: proposalID, TaskID: taskID, TaskSessionID: sessionID, TaskRunID: runID, TaskCommitIDs: append([]string(nil), commitIDs...), TaskEvidence: reviewEvidence, Status: Open, CreatedAt: now, UpdatedAt: now}
+	if recovery != nil && recovery.DeliveryTeamID != "" {
+		p.DeliveryTeamID, p.DeliveryIntegrationID, p.DeliveryStreamID, p.DeliveryIntegrationOrder = recovery.DeliveryTeamID, recovery.DeliveryIntegrationID, recovery.DeliveryStreamID, recovery.DeliveryOrder
+	}
 	if taskID != nil {
 		p.TaskStatePending = "review"
 	}
@@ -553,13 +573,14 @@ func (s *Store) createFrom(repositoryID, sourceRepositoryID, authorID, title, bo
 		return PullRequest{}, err
 	}
 	defer unlock()
-	if uniqueSource {
+	if recovery != nil {
 		existing, listErr := s.List(repositoryID)
 		if listErr != nil {
 			return PullRequest{}, listErr
 		}
 		for _, candidate := range existing {
-			if candidate.Status == Open && candidate.SourceRepositoryID == sourceRepositoryID && candidate.SourceBranch == sourceBranch && candidate.TargetBranch == targetBranch {
+			matchesDelivery := recovery.DeliveryTeamID == "" || candidate.DeliveryTeamID == recovery.DeliveryTeamID && candidate.DeliveryIntegrationID == recovery.DeliveryIntegrationID && candidate.DeliveryStreamID == recovery.DeliveryStreamID && candidate.DeliveryIntegrationOrder == recovery.DeliveryOrder
+			if candidate.Status == Open && candidate.SourceRepositoryID == sourceRepositoryID && candidate.SourceBranch == sourceBranch && candidate.TargetBranch == targetBranch && matchesDelivery {
 				return candidate, nil
 			}
 		}
