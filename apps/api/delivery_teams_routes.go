@@ -549,6 +549,7 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 			return
 		}
 		publishStatus, publishCode, publishMessage := 0, "", ""
+		publishedPulls := []pullrequests.PullRequest{}
 		team, err = store.PublishIntegration(team.ID, manifest.ID, actor.UserID, principal, in.ExpectedVersion, func(currentTeam deliveryteams.Team, currentManifest deliveryteams.Integration) ([]deliveryteams.IntegrationPull, error) {
 			if currentTeam.Plan == nil || currentManifest.PlanRevision != currentTeam.Plan.Revision {
 				publishStatus, publishCode, publishMessage = 409, "delivery_integration_blocked", "the current execution plan changed after reconciliation"
@@ -572,7 +573,7 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 					publishStatus, publishCode, publishMessage = 409, "delivery_integration_publish_failed", "an ordered contribution could not be opened and linked for review"
 					return nil, deliveryteams.ErrConflict
 				}
-				startCheckRuns(git, checks, pull)
+				publishedPulls = append(publishedPulls, pull)
 				published = append(published, deliveryteams.IntegrationPull{StreamID: c.StreamID, RepositoryID: c.RepositoryID, PullRequestID: pull.ID, Order: c.IntegrationOrder})
 			}
 			return published, nil
@@ -583,6 +584,13 @@ func registerDeliveryTeamRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 		}
 		if writeDeliveryTeamError(w, err) {
 			return
+		}
+		// Pull creation is retry-safe, but checks are intentionally delayed until
+		// the complete ordered set is durably linked to the integration. If a
+		// later pull or the final team write fails, an exact retry reconciles the
+		// existing pulls before any check-run side effects begin.
+		for _, pull := range publishedPulls {
+			startCheckRuns(git, checks, pull)
 		}
 		writeJSON(w, 201, projectDeliveryAccess(team, actor.UserID, catalog, orgs))
 	})

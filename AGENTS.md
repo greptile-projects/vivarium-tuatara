@@ -1107,7 +1107,10 @@ whenever dependencies change or the web job fails before it starts.
   new pull. Existing links cannot be replaced, so competing status changes,
   inactive reviews, or unrelated branch-matching reviews cannot strand or
   commandeer contribution provenance. Publication starts the ordinary
-  exact-revision repository checks for every connected pull. The connected
+  exact-revision repository checks only after every ordered pull is created or
+  recovered and the complete link set is durable on the integration; a later
+  pull or final manifest-write failure therefore starts no partial checks, and
+  an exact retry reconciles existing pulls before execution. The connected
   delivery-team browser journey protects the complete accepted-decision loop:
   independently operated specialist agents and a developer accept parallel
   streams, retain a disputed finding and lead resolution, redirect a failed
