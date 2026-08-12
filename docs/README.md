@@ -1832,7 +1832,15 @@ contact, declared capabilities and supported events, callback/action endpoints,
 requested resource permissions, and credential rotation policy. Both endpoints
 must answer a live ownership challenge. The platform gives the integration a
 stable `extension` principal distinct from users and approved agents, while the
-effective-authority preview remains empty until a future resource-owner
+effective-authority preview remains empty until a resource-owner
 installation. No extension credential is issued during registration, so the
 record is an inspectable contract rather than an implicit delegation of the
 installer's access.
+
+Repository and organization owners install that identity for an explicit
+repository set and selected requested resource types. Each record approves or
+denies every declared capability, permits only non-secret key/value settings,
+and projects resulting actions. Create, upgrade, suspend, resume, transfer, and
+removal are version-guarded and retain actor history. Current ownership is
+revalidated; suspension and removal clear only credentials derived from that
+installation, leaving unrelated installations and attribution intact.

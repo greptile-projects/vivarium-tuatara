@@ -18,6 +18,7 @@ import (
 
 var ErrNotFound = errors.New("extension not found")
 var ErrInvalid = errors.New("invalid extension")
+var ErrConflict = errors.New("extension installation changed")
 
 type Endpoint struct {
 	URL        string    `json:"url"`
@@ -42,6 +43,43 @@ type AuthorityPreview struct {
 	Installed bool            `json:"installed"`
 	Items     []AuthorityItem `json:"items"`
 	Summary   string          `json:"summary"`
+}
+type CapabilityDecision struct {
+	Capability string `json:"capability"`
+	Decision   string `json:"decision"`
+	Reason     string `json:"reason,omitempty"`
+}
+type InstallationEvent struct {
+	Type    string            `json:"type"`
+	ActorID string            `json:"actor_id"`
+	At      time.Time         `json:"at"`
+	Details map[string]string `json:"details,omitempty"`
+}
+type Installation struct {
+	ID                   string               `json:"id"`
+	ExtensionID          string               `json:"extension_id"`
+	ExtensionName        string               `json:"extension_name"`
+	ExtensionVerifiedAt  time.Time            `json:"extension_verified_at"`
+	OwnerType            string               `json:"owner_type"`
+	OwnerID              string               `json:"owner_id"`
+	RepositoryIDs        []string             `json:"repository_ids"`
+	ResourceTypes        []string             `json:"resource_types"`
+	CapabilityDecisions  []CapabilityDecision `json:"capability_decisions"`
+	Settings             map[string]string    `json:"settings"`
+	EffectiveAccess      []Permission         `json:"effective_access"`
+	DerivedCredentialIDs []string             `json:"derived_credential_ids"`
+	Status               string               `json:"status"`
+	Version              int                  `json:"version"`
+	CreatedBy            string               `json:"created_by"`
+	CreatedAt            time.Time            `json:"created_at"`
+	UpdatedAt            time.Time            `json:"updated_at"`
+	Events               []InstallationEvent  `json:"events"`
+}
+type InstallationInput struct {
+	OwnerType, OwnerID           string
+	RepositoryIDs, ResourceTypes []string
+	CapabilityDecisions          []CapabilityDecision
+	Settings                     map[string]string
 }
 
 // Extension is a platform principal separate from its human owner and operator.
@@ -159,6 +197,256 @@ func (s *Store) List(owner string) ([]Extension, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out, nil
+}
+
+func (s *Store) CreateInstallation(extensionID, actor string, in InstallationInput) (Installation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Installation{}, err
+	}
+	defer unlock()
+	extension, err := s.readExtension(extensionID)
+	if err != nil {
+		return Installation{}, err
+	}
+	if !validInstallation(in, extension) {
+		return Installation{}, ErrInvalid
+	}
+	id, err := newID()
+	if err != nil {
+		return Installation{}, err
+	}
+	now := s.now().Truncate(time.Microsecond)
+	v := Installation{ID: id, ExtensionID: extension.ID, ExtensionName: extension.Name, ExtensionVerifiedAt: minTime(extension.CallbackEndpoint.VerifiedAt, extension.ActionEndpoint.VerifiedAt), OwnerType: in.OwnerType, OwnerID: in.OwnerID, RepositoryIDs: clean(in.RepositoryIDs), ResourceTypes: clean(in.ResourceTypes), CapabilityDecisions: in.CapabilityDecisions, Settings: copySettings(in.Settings), EffectiveAccess: effective(extension, in), DerivedCredentialIDs: []string{}, Status: "active", Version: 1, CreatedBy: actor, CreatedAt: now, UpdatedAt: now, Events: []InstallationEvent{{Type: "installation.created", ActorID: actor, At: now}}}
+	if err = writeAtomic(filepath.Join(s.root, "installation-"+id+".json"), v); err != nil {
+		return Installation{}, err
+	}
+	return v, nil
+}
+func (s *Store) GetInstallation(id string) (Installation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.readInstallation(id)
+}
+
+// RecordDerivedCredential attaches only a credential minted for this exact
+// installation, allowing later suspension/removal to revoke it independently.
+func (s *Store) RecordDerivedCredential(id, credentialID string, expected int) (Installation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Installation{}, err
+	}
+	defer unlock()
+	v, err := s.readInstallation(id)
+	if err != nil {
+		return v, err
+	}
+	if v.Version != expected {
+		return v, ErrConflict
+	}
+	if len(credentialID) != 32 || v.Status != "active" {
+		return v, ErrInvalid
+	}
+	for _, x := range v.DerivedCredentialIDs {
+		if x == credentialID {
+			return v, nil
+		}
+	}
+	v.DerivedCredentialIDs = append(v.DerivedCredentialIDs, credentialID)
+	v.Version++
+	v.UpdatedAt = s.now().Truncate(time.Microsecond)
+	if err = writeAtomic(filepath.Join(s.root, "installation-"+id+".json"), v); err != nil {
+		return Installation{}, err
+	}
+	return v, nil
+}
+func (s *Store) ListInstallations(actor string) ([]Installation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, e := os.ReadDir(s.root)
+	if e != nil {
+		return nil, e
+	}
+	out := []Installation{}
+	for _, x := range entries {
+		if !strings.HasPrefix(x.Name(), "installation-") || !strings.HasSuffix(x.Name(), ".json") {
+			continue
+		}
+		var v Installation
+		b, e := os.ReadFile(filepath.Join(s.root, x.Name()))
+		if e != nil {
+			return nil, e
+		}
+		if e = json.Unmarshal(b, &v); e != nil {
+			return nil, e
+		}
+		if actor == "" || v.OwnerID == actor {
+			out = append(out, v)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
+	return out, nil
+}
+func (s *Store) ChangeInstallation(id, actor, action string, expected int, in *InstallationInput, revoke func(string) error) (Installation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Installation{}, err
+	}
+	defer unlock()
+	v, err := s.readInstallation(id)
+	if err != nil {
+		return v, err
+	}
+	if v.Version != expected {
+		return v, ErrConflict
+	}
+	now := s.now().Truncate(time.Microsecond)
+	switch action {
+	case "suspend", "remove":
+		for _, cid := range v.DerivedCredentialIDs {
+			if revoke != nil {
+				if err = revoke(cid); err != nil {
+					return v, err
+				}
+			}
+		}
+		v.DerivedCredentialIDs = []string{}
+		if action == "suspend" {
+			v.Status = "suspended"
+		} else {
+			v.Status = "removed"
+		}
+	case "resume":
+		if v.Status != "suspended" {
+			return v, ErrInvalid
+		}
+		v.Status = "active"
+	case "upgrade":
+		if in == nil {
+			return v, ErrInvalid
+		}
+		ext, e := s.readExtension(v.ExtensionID)
+		if e != nil {
+			return v, e
+		}
+		if !validInstallation(*in, ext) {
+			return v, ErrInvalid
+		}
+		v.RepositoryIDs = clean(in.RepositoryIDs)
+		v.ResourceTypes = clean(in.ResourceTypes)
+		v.CapabilityDecisions = in.CapabilityDecisions
+		v.Settings = copySettings(in.Settings)
+		v.EffectiveAccess = effective(ext, *in)
+		v.ExtensionName = ext.Name
+		v.ExtensionVerifiedAt = minTime(ext.CallbackEndpoint.VerifiedAt, ext.ActionEndpoint.VerifiedAt)
+	case "transfer":
+		if in == nil || !((in.OwnerType == "repository" || in.OwnerType == "organization") && len(in.OwnerID) == 32) {
+			return v, ErrInvalid
+		}
+		v.OwnerType, v.OwnerID = in.OwnerType, in.OwnerID
+	default:
+		return v, ErrInvalid
+	}
+	v.Version++
+	v.UpdatedAt = now
+	v.Events = append(v.Events, InstallationEvent{Type: "installation." + action, ActorID: actor, At: now})
+	if err = writeAtomic(filepath.Join(s.root, "installation-"+id+".json"), v); err != nil {
+		return Installation{}, err
+	}
+	return v, nil
+}
+func (s *Store) readExtension(id string) (Extension, error) {
+	var v Extension
+	if len(id) != 32 {
+		return v, ErrNotFound
+	}
+	b, e := os.ReadFile(filepath.Join(s.root, id+".json"))
+	if os.IsNotExist(e) {
+		return v, ErrNotFound
+	}
+	if e != nil {
+		return v, e
+	}
+	e = json.Unmarshal(b, &v)
+	return v, e
+}
+func (s *Store) readInstallation(id string) (Installation, error) {
+	var v Installation
+	if len(id) != 32 {
+		return v, ErrNotFound
+	}
+	b, e := os.ReadFile(filepath.Join(s.root, "installation-"+id+".json"))
+	if os.IsNotExist(e) {
+		return v, ErrNotFound
+	}
+	if e != nil {
+		return v, e
+	}
+	e = json.Unmarshal(b, &v)
+	return v, e
+}
+func validInstallation(in InstallationInput, e Extension) bool {
+	if (in.OwnerType != "repository" && in.OwnerType != "organization") || len(in.OwnerID) != 32 || len(in.RepositoryIDs) == 0 || len(in.ResourceTypes) == 0 {
+		return false
+	}
+	allowed := map[string]bool{}
+	for _, c := range e.Capabilities {
+		allowed[c] = true
+	}
+	seen := map[string]bool{}
+	for _, d := range in.CapabilityDecisions {
+		if !allowed[d.Capability] || seen[d.Capability] || (d.Decision != "approved" && d.Decision != "denied") {
+			return false
+		}
+		seen[d.Capability] = true
+	}
+	if len(seen) != len(allowed) {
+		return false
+	}
+	for k, v := range in.Settings {
+		if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" || strings.Contains(strings.ToLower(k), "secret") || strings.Contains(strings.ToLower(k), "token") || strings.Contains(strings.ToLower(k), "password") {
+			return false
+		}
+	}
+	return true
+}
+func effective(e Extension, in InstallationInput) []Permission {
+	approved := map[string]bool{}
+	for _, d := range in.CapabilityDecisions {
+		approved[d.Capability] = d.Decision == "approved"
+	}
+	out := []Permission{}
+	if len(approved) == 0 {
+		return out
+	}
+	for _, p := range e.RequestedPermissions {
+		for _, r := range in.ResourceTypes {
+			if p.Resource == r {
+				out = append(out, p)
+				break
+			}
+		}
+	}
+	return out
+}
+func copySettings(v map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, x := range v {
+		out[strings.TrimSpace(k)] = strings.TrimSpace(x)
+	}
+	return out
+}
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
 }
 func validate(owner string, in Registration) error {
 	if owner == "" || len(strings.TrimSpace(in.Name)) < 2 || len(strings.TrimSpace(in.Name)) > 100 || len(strings.TrimSpace(in.OperatorContact)) < 3 || len(in.Capabilities) == 0 || len(in.SupportedEvents) == 0 || len(in.RequestedPermissions) == 0 || in.CredentialRotation.IntervalDays < 1 || in.CredentialRotation.IntervalDays > 365 || in.CredentialRotation.OverlapHours < 0 || in.CredentialRotation.OverlapHours > 168 {

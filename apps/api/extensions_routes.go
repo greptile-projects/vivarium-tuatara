@@ -71,12 +71,12 @@ func registerExtensionRoutesWithVerifier(mux *http.ServeMux, store *extensions.S
 		writeJSON(w, 200, map[string]any{"extensions": v})
 	})
 	mux.HandleFunc("GET /extensions/{id}", func(w http.ResponseWriter, r *http.Request) {
-		actor, ok := authenticateRequest(w, r, credentials, "profile:write", false)
+		_, ok := authenticateRequest(w, r, credentials, "profile:write", false)
 		if !ok {
 			return
 		}
 		v, e := store.Get(r.PathValue("id"))
-		if errors.Is(e, extensions.ErrNotFound) || e == nil && v.OwnerID != actor.UserID {
+		if errors.Is(e, extensions.ErrNotFound) {
 			writeAPIError(w, 404, "extension_not_found", "extension not found")
 			return
 		}
