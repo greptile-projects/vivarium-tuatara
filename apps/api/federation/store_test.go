@@ -4,8 +4,11 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestSignedRepositoryCacheAndFollow(t *testing.T) {
@@ -179,5 +182,29 @@ func readJSONForTest(t *testing.T, path string, out any) {
 	}
 	if err = json.Unmarshal(b, out); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCollaborationEventsAreIdempotentAndRevisionStale(t *testing.T) {
+	s, err := New(t.TempDir(), "Local", "https://local.example", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	v := CollaborationEvent{ID: "event-1", ContributionID: "contribution-1", Sequence: 1, Kind: "review", Actor: "peer:user:author", Revision: strings.Repeat("a", 40), Decision: "approved", CreatedAt: now, OriginInstanceID: strings.Repeat("b", 32), DocumentVersion: 1, SigningKeyID: "key", Signature: "signature", Verification: "verified"}
+	if _, err = s.AppendCollaborationEvent(v); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.AppendCollaborationEvent(v); err != nil {
+		t.Fatalf("idempotent append: %v", err)
+	}
+	changed := v
+	changed.Decision = "changes_requested"
+	if _, err = s.AppendCollaborationEvent(changed); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed retry = %v", err)
+	}
+	items, err := s.ListCollaborationEvents(v.ContributionID, strings.Repeat("c", 40))
+	if err != nil || len(items) != 1 || !items[0].Stale || items[0].Actor != v.Actor || items[0].Verification != "verified" {
+		t.Fatalf("items = %#v, %v", items, err)
 	}
 }

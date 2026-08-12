@@ -2132,6 +2132,8 @@ export type PullRequest = {
   repository_id: string;
   source_repository_id: string;
   author_id: string;
+	  federated_author?: string;
+	  federated_contribution_id?: string;
   title: string;
   body: string;
   source_branch: string;

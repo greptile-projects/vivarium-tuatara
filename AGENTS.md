@@ -120,6 +120,13 @@ whenever dependencies change or the web job fails before it starts.
   Git credentials; synchronization is selected-branch fast-forward only.
   Remote proposal negotiation freezes both tips and creates ordinary target
   review without granting either instance credentials or repository authority.
+  Federated pull collaboration exchanges immutable signed, origin-preserving
+  comment, review/requested-change, revision, bounded check/preview evidence,
+  and closure events keyed by the contribution identity. Delivery is
+  idempotent with explicit pending/conflict recovery; revision movement derives
+  stale evidence normally. Imported claims remain verified remote evidence and
+  never become local users, required checks, credentials, review authority, or
+  merge permission.
   repository projections are bounded signed metadata carrying exact revisions,
   branches, releases, contributor guidance, public issues, and open contribution
   opportunities. Home-instance resolution verifies the retained peer document

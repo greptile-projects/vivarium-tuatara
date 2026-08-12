@@ -35,6 +35,7 @@ import { Icons } from "./icons";
 import { Avatar, Badge, Button, Card } from "./ui";
 
 type PullRow = PullRequest & { repository: Repository };
+type FederationEvent = { id:string;kind:"comment"|"review"|"revision"|"checks"|"preview"|"closure";actor:string;revision?:string;body?:string;decision?:string;state?:string;evidence?:Record<string,unknown>;created_at:string;origin_instance_id:string;verification:string;stale:boolean };
 
 async function allPages<T>(path: string, key: string, token?: string | null) {
   const items: T[] = [];
@@ -530,6 +531,7 @@ export function PullRequestDetail({
   const [files, setFiles] = useState<FileChange[]>([]);
   const [comments, setComments] = useState<PullRequestComment[]>([]);
   const [reviews, setReviews] = useState<PullRequestReview[]>([]);
+  const [federationEvents, setFederationEvents] = useState<FederationEvent[]>([]);
   const [readiness, setReadiness] = useState<MergeReadiness | null>(null);
   const [candidates, setCandidates] = useState<IntegrationCandidate[]>([]);
   const [candidateError, setCandidateError] = useState("");
@@ -571,6 +573,10 @@ export function PullRequestDetail({
       setFiles(filePage.files);
       setComments(discussion);
       setReviews(reviewList);
+	  if (item.federated_contribution_id) {
+	    const shared = await api<{events:FederationEvent[]}>(`${base}/federation-events`,{},token).catch(()=>({events:[]}));
+	    if (active()) setFederationEvents(shared.events);
+	  } else setFederationEvents([]);
       setCandidates(candidatePage.page.candidates);
       setCandidateError(candidatePage.error);
       setSourceRepository(
@@ -951,6 +957,7 @@ export function PullRequestDetail({
             )}
           </section>
           <section id="reviews" className="scroll-mt-24 space-y-3">
+		{pull.federated_contribution_id && <Card className="p-5"><div className="flex items-center justify-between gap-3"><div><h2 className="font-semibold">Federated collaboration</h2><p className="mt-1 text-xs text-[var(--muted)]">Signed claims retain their origin and verification; revision-bound evidence becomes stale normally.</p></div><Badge tone="info">remote contribution</Badge></div><div className="mt-4 space-y-3">{federationEvents.length?federationEvents.map(event=><div key={event.origin_instance_id+event.id} className="rounded-lg border border-[var(--line)] p-3 text-sm"><div className="flex flex-wrap items-center gap-2"><Badge tone={event.verification==="verified"?"success":"warning"}>{event.verification}</Badge><b>{event.kind.replace("_"," ")}</b>{event.stale&&<Badge tone="warning">stale revision</Badge>}<span className="font-mono text-xs text-[var(--muted)]">{event.actor}</span></div>{event.body&&<p className="mt-2 whitespace-pre-wrap">{event.body}</p>}<p className="mt-2 text-xs text-[var(--muted)]">origin {event.origin_instance_id.slice(0,12)}{event.revision?` · revision ${short(event.revision)}`:""} · {formatDate(event.created_at)}</p></div>):<p className="text-sm text-[var(--muted)]">No signed cross-instance activity has arrived yet.</p>}</div>{participant&&pull.status==="open"&&<form className="mt-4 flex gap-2" onSubmit={async e=>{e.preventDefault();const form=e.currentTarget;const body=String(new FormData(form).get("body")??"");setPending(true);try{await api(`/repositories/${repositoryID}/pulls/${pullRequestID}/federation-events`,{method:"POST",body:JSON.stringify({kind:"comment",body})},token);form.reset();await load()}catch(reason){setError(errorMessage(reason,"Signed comment could not be delivered."))}finally{setPending(false)}}}><input name="body" required maxLength={20000} className="min-w-0 flex-1 rounded-lg border border-[var(--line-strong)] px-3 py-2 text-sm" placeholder="Share a signed comment across instances"/><Button disabled={pending}>Send</Button></form>}</Card>}
             <div className="flex items-baseline justify-between">
               <h2 className="text-lg font-semibold">Review decisions</h2>
               <span className="text-xs text-[var(--muted)]">

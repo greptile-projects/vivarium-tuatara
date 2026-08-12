@@ -75,6 +75,17 @@ The target verifies explicit peer trust, signature, target tip, bundle integrity
 and exact commit before creating ordinary review. Neither instance receives a
 credential, collaborator grant, or repository write authority on the other.
 
+Federated pull collaboration uses immutable signed events keyed by the original
+contribution identity. Repository participants can share discussion, review and
+requested-change decisions, exact revision updates, bounded check/preview
+evidence, and closure state. Receivers verify current peer trust and signature,
+deduplicate the origin/event identity, retain the remote actor and verification
+status, and derive staleness against the currently adopted source revision.
+Delivery failure is retained as `pending` (`202`) for safe retry; reuse of an
+event identity with different content conflicts. Shared check and preview claims
+are evidence only: upstream required checks, embargo filtering, repository
+visibility, review permission, closure, and merge authority remain local.
+
 ## Living documentation
 
 Repository owners define documentation collections through
