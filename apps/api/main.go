@@ -453,6 +453,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			registerAcceptanceRoutes(mux, repositoryCatalog, pullRequestStore, acceptanceStore, previewStore, authStore)
 		}
 		registerPullRequestRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, authStore, activityStore, userStore, checkRunStore, changeSessionStore)
+		if documentationStore != nil {
+			registerDocumentationReviewRoutes(mux, store, repositoryCatalog, pullRequestStore, documentationStore, checkRunStore, authStore)
+		}
 		if previewStore != nil && checkRunStore != nil {
 			registerPreviewRoutes(mux, store, repositoryCatalog, pullRequestStore, checkRunStore, previewStore, changeSessionStore, authStore, userStore, proposalStore, decisionStore, issueStore, activityStore)
 		}

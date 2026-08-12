@@ -38,6 +38,22 @@ assistance that must cite sources and explicitly marks uncertainty. Ordinary
 repository permissions govern all operations; collection publication remains
 owner-controlled.
 
+## Documentation pull reviews
+
+`POST /repositories/{id}/pulls/{pull-id}/documentation-review` freezes changed
+reader-facing pages from an exact candidate commit and compares navigation with
+the target. `GET` returns rendered pages, documentation-check evidence and
+artifacts, affected versions, declared gaps, and content-sensitive review
+history. The `/entries` endpoint retains exact-page comments, change requests,
+and bounded preview feedback; `/decisions` retains technical, audience,
+navigation, example, or version approval at the page SHA-256.
+
+Repository owners use `/invitations` to grant expiring `view`, `feedback`, or
+`review` roles for named areas. Invitations grant no repository, Git, merge, or
+publication authority. When the source advances, each retained SHA-256 is
+compared with the new candidate: only evidence for changed pages becomes
+`stale`, and new writes against those pages require a refreshed snapshot.
+
 ## Preview acceptance requirements
 
 Repository owners define the acceptance gate for a target branch with `GET`

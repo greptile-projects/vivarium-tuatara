@@ -391,7 +391,13 @@ whenever dependencies change or the web job fails before it starts.
   `docs/tasks/*` branch. They retain rendered draft revisions, grounded
   references, attributable discussion and suggestions, and identified agent
   assistance with explicit sources and uncertainty; tasks grant no additional
-  Git, workspace, review, or publication authority.
+  Git, workspace, review, or publication authority. Pull-scoped documentation
+  reviews freeze changed rendered pages at the exact candidate commit,
+  navigation differences against the target, documentation-check evidence,
+  affected versions, and explicit gaps. Page/area comments, change requests,
+  approvals, and bounded expiring stakeholder invitations retain the page
+  content SHA-256; synchronization marks only evidence for changed pages stale
+  and grants no repository or publication authority.
   Repository `.vivarium/documentation-checks.json` definitions expand selected
   link, symbol, build, sample, command, and tutorial verification across exact
   source/package/release revision matrices in the ordinary bounded check
