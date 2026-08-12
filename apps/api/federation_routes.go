@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,8 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
+
+const maxFederatedRepositoryResponseBytes = 16 << 20
 
 func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userStore *users.Store, organizationStore *organizations.Store, credentials *auth.Store, gitStore *storage.Store, repositoryStore *repositories.Store, releaseStore *releases.Store, issueStore *issues.Store, pathwayStore *contributorpathways.Store, opportunityStore *contributoropportunities.Store) {
 	mux.HandleFunc("GET /.well-known/vivarium-federation", func(w http.ResponseWriter, _ *http.Request) {
@@ -83,17 +86,7 @@ func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userS
 			writeAPIError(w, 503, "federation_unavailable", "repository branches are temporarily unavailable")
 			return
 		}
-		branches := []federation.RepositoryBranch{}
-		revision := ""
-		for _, ref := range refs {
-			if strings.HasPrefix(ref.Name, "refs/heads/") && !ref.Symbolic {
-				name := strings.TrimPrefix(ref.Name, "refs/heads/")
-				branches = append(branches, federation.RepositoryBranch{Name: name, Revision: ref.Target})
-				if name == repository.DefaultBranch {
-					revision = ref.Target
-				}
-			}
-		}
+		branches, revision := visibleFederationBranches(refs, repository.DefaultBranch)
 		if revision == "" {
 			writeAPIError(w, 503, "federation_unavailable", "default branch revision is unavailable")
 			return
@@ -145,7 +138,15 @@ func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userS
 			writeAPIError(w, 503, "federation_unavailable", err.Error())
 			return
 		}
-		writeJSON(w, 200, signed)
+		body, err := json.Marshal(signed)
+		if err != nil || len(body) > maxFederatedRepositoryResponseBytes {
+			writeAPIError(w, 413, "federated_repository_too_large", "repository metadata exceeds the federation response limit")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", fmt.Sprint(len(body)))
+		w.WriteHeader(200)
+		_, _ = w.Write(body)
 	})
 	require := func(w http.ResponseWriter, r *http.Request) bool {
 		actor, ok := authenticateRequest(w, r, credentials, "", false)
@@ -337,6 +338,25 @@ func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userS
 	})
 }
 
+func visibleFederationBranches(refs []storage.Reference, defaultBranch string) ([]federation.RepositoryBranch, string) {
+	branches := []federation.RepositoryBranch{}
+	revision := ""
+	for _, ref := range refs {
+		if !strings.HasPrefix(ref.Name, "refs/heads/") || ref.Symbolic {
+			continue
+		}
+		name := strings.TrimPrefix(ref.Name, "refs/heads/")
+		if strings.HasPrefix(name, "vivarium-security/") {
+			continue
+		}
+		branches = append(branches, federation.RepositoryBranch{Name: name, Revision: ref.Target})
+		if name == defaultBranch {
+			revision = ref.Target
+		}
+	}
+	return branches, revision
+}
+
 func refreshFederatedRepository(store *federation.Store, reference string) (federation.RepositoryCache, error) {
 	peerID, repositoryID, ok := strings.Cut(strings.TrimSpace(reference), ":")
 	if !ok {
@@ -410,8 +430,16 @@ func fetchFederatedRepository(peer federation.Peer, repositoryID string) (federa
 	if resp.StatusCode != 200 {
 		return federation.SignedRepositorySnapshot{}, fmt.Errorf("peer returned %s", resp.Status)
 	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFederatedRepositoryResponseBytes+1))
+	if err != nil {
+		return federation.SignedRepositorySnapshot{}, fmt.Errorf("read repository response: %w", err)
+	}
+	if len(body) > maxFederatedRepositoryResponseBytes {
+		return federation.SignedRepositorySnapshot{}, fmt.Errorf("peer repository response exceeds %d bytes", maxFederatedRepositoryResponseBytes)
+	}
 	var signed federation.SignedRepositorySnapshot
-	if json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&signed) != nil {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	if decoder.Decode(&signed) != nil || decoder.Decode(&struct{}{}) != io.EOF {
 		return signed, fmt.Errorf("peer returned an invalid repository response")
 	}
 	return signed, nil

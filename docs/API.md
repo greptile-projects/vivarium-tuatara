@@ -7,7 +7,10 @@ projection for a local public repository. Its response wraps a bounded snapshot
 and the current identity-document version/key in an Ed25519 signature. The
 snapshot includes its instance-qualified reference, exact revision, branches,
 and permitted releases, contributor guidance, public issues, and open
-opportunities. Absent sections are distinguishable through `capabilities`.
+opportunities. Embargoed `vivarium-security/*` branches are excluded. Absent
+sections are distinguishable through `capabilities`. Producer and consumer
+enforce the same 16 MiB aggregate response maximum; an authoritative projection
+that exceeds it returns `413`, while a peer exceeding it is rejected explicitly.
 
 Authenticated home-instance clients resolve a trusted peer reference with
 `POST /federation/repositories/resolve` and `{"reference":"peer-id:repo-id"}`.
