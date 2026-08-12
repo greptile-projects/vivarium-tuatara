@@ -166,18 +166,8 @@ func (s *Store) CreateContinuity(kind, id, actor string, expected, version int, 
 			roleFound = true
 		}
 	}
-	standing := func(sid string) bool {
-		if sid == "" {
-			return false
-		}
-		for _, st := range r.Standings {
-			if st.ID == sid && st.CharterVersion == version && st.ExpiresAt.After(now) && st.Status == "active" && st.Role == in.Role {
-				return true
-			}
-		}
-		return false
-	}
-	if !roleFound || (in.Kind != "emergency" && !standing(in.ToStandingID)) || ((in.Kind == "recall" || in.Kind == "succession") && !standing(in.FromStandingID)) {
+	in.CharterVersion = version
+	if !roleFound || !continuityEndpointsValid(r, in, now) {
 		return r, ErrInvalid
 	}
 	for _, resource := range in.Resources {
@@ -186,7 +176,6 @@ func (s *Store) CreateContinuity(kind, id, actor string, expected, version int, 
 		}
 	}
 	in.ID = randomID()
-	in.CharterVersion = version
 	in.Status = "pending"
 	in.CreatedBy = actor
 	in.CreatedAt = now
@@ -215,6 +204,9 @@ func (s *Store) ActOnContinuity(kind, id, actionID, actor, action, reason string
 		}
 		if strings.TrimSpace(reason) == "" {
 			return r, ErrInvalid
+		}
+		if (action == "approve" || action == "complete") && !continuityEndpointsValid(r, *x, now) {
+			return r, ErrConflict
 		}
 		next := ""
 		switch action {
@@ -247,6 +239,27 @@ func (s *Store) ActOnContinuity(kind, id, actionID, actor, action, reason string
 		return r, s.write(r)
 	}
 	return r, ErrNotFound
+}
+
+func continuityEndpointsValid(r Record, action ContinuityAction, now time.Time) bool {
+	standing := func(id string) bool {
+		if id == "" {
+			return false
+		}
+		for _, st := range r.Standings {
+			if st.ID == id && st.CharterVersion == action.CharterVersion && st.ExpiresAt.After(now) && st.Status == "active" && st.Role == action.Role {
+				return true
+			}
+		}
+		return false
+	}
+	if action.Kind == "emergency" {
+		return true
+	}
+	if !standing(action.ToStandingID) {
+		return false
+	}
+	return (action.Kind != "recall" && action.Kind != "succession") || standing(action.FromStandingID)
 }
 
 func declaredResource(v Revision, resource string) bool {
