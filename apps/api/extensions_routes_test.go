@@ -151,6 +151,25 @@ func TestExtensionEndpointVerificationRejectsDevelopmentLocalhostResolvingOutsid
 	}
 }
 
+func TestExtensionEndpointVerificationRejectsMalformedDevelopmentURLBeforeLookup(t *testing.T) {
+	t.Setenv("EXTENSION_DEVELOPMENT_ENDPOINTS", "1")
+	lookedUp := false
+	dialed := false
+	_, err := verifyExtensionEndpointsWithNetwork(context.Background(), func(context.Context, string, string) ([]net.IP, error) {
+		lookedUp = true
+		return nil, errors.New("unexpected lookup")
+	}, func(context.Context, string, string) (net.Conn, error) {
+		dialed = true
+		return nil, errors.New("unexpected dial")
+	}, "http://%")
+	if err == nil || !strings.Contains(err.Error(), "HTTPS") {
+		t.Fatalf("error = %v", err)
+	}
+	if lookedUp || dialed {
+		t.Fatalf("malformed endpoint reached network: lookup=%v dial=%v", lookedUp, dialed)
+	}
+}
+
 func TestExtensionEndpointVerificationRejectsMixedPublicAndPrivateResolution(t *testing.T) {
 	_, err := verifyExtensionEndpointsWithNetwork(context.Background(), func(context.Context, string, string) ([]net.IP, error) {
 		return []net.IP{net.ParseIP("93.184.216.34"), net.ParseIP("127.0.0.1")}, nil

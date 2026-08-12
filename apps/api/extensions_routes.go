@@ -154,8 +154,11 @@ func verifyExtensionEndpointsWithNetwork(ctx context.Context, lookup lookupIPFun
 	challenge := hex.EncodeToString(challengeBytes)
 	for _, value := range raw {
 		u, e := url.Parse(value)
+		if e != nil || u == nil {
+			return time.Time{}, errors.New("endpoints must use HTTPS")
+		}
 		developmentLoopback := os.Getenv("EXTENSION_DEVELOPMENT_ENDPOINTS") == "1" && u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost" || u.Hostname() == "::1")
-		if e != nil || u.Host == "" || u.User != nil || u.Scheme != "https" && !developmentLoopback {
+		if u.Host == "" || u.User != nil || u.Scheme != "https" && !developmentLoopback {
 			return time.Time{}, errors.New("endpoints must use HTTPS")
 		}
 		addresses, e := lookup(ctx, "ip", u.Hostname())
