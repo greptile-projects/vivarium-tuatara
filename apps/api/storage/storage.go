@@ -133,6 +133,42 @@ type Repository struct {
 	inode  uint64
 }
 
+// OpenBundle verifies a Git bundle in an isolated temporary bare repository.
+// The caller owns the returned cleanup function. No reference is published in
+// the platform repository namespace.
+func OpenBundle(bundlePath string) (*Repository, func(), error) {
+	staging, err := os.MkdirTemp("", "vivarium-federation-bundle-")
+	if err != nil {
+		return nil, nil, err
+	}
+	cleanup := func() { _ = os.RemoveAll(staging) }
+	if err := os.Remove(staging); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	command := exec.Command("git", "clone", "--bare", bundlePath, staging)
+	if output, err := command.CombinedOutput(); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("open Git bundle: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	if err := unpackCloneObjects(staging); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	fsck := exec.Command("git", "--git-dir="+staging, "fsck", "--full")
+	if output, err := fsck.CombinedOutput(); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("verify Git bundle: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	info, err := os.Stat(staging)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	stat := info.Sys().(*syscall.Stat_t)
+	return &Repository{id: "federated-transfer", path: staging, device: uint64(stat.Dev), inode: stat.Ino}, cleanup, nil
+}
+
 // Info is a validated snapshot of repository metadata.
 type Info struct {
 	ID            string

@@ -222,13 +222,49 @@ func (s *Store) Identity() (Document, error) {
 	sum := sha256.Sum256(pub)
 	id := "ed25519:" + hex.EncodeToString(sum[:8])
 	instanceSum := sha256.Sum256(pub)
-	d := Document{Protocol: "vivarium-federation/v1", InstanceID: hex.EncodeToString(instanceSum[:16]), Name: s.name, Version: 1, IssuedAt: now, Endpoints: []Endpoint{{Kind: "api", URL: s.publicURL}, {Kind: "actors", URL: s.publicURL + "/federation/actors/{type}/{id}"}, {Kind: "repositories", URL: s.publicURL + "/federation/repositories/{id}"}}, Capabilities: []string{"identity.v1", "actor-resolution.v1", "signed-attribution.v1", "repository-discovery.v1"}, Operators: s.operators, Keys: []Key{{ID: id, Algorithm: "Ed25519", PublicKey: base64.RawURLEncoding.EncodeToString(pub), CreatedAt: now}}, SigningKeyID: id}
+	d := Document{Protocol: "vivarium-federation/v1", InstanceID: hex.EncodeToString(instanceSum[:16]), Name: s.name, Version: 1, IssuedAt: now, Endpoints: []Endpoint{{Kind: "api", URL: s.publicURL}, {Kind: "actors", URL: s.publicURL + "/federation/actors/{type}/{id}"}, {Kind: "repositories", URL: s.publicURL + "/federation/repositories/{id}"}, {Kind: "contributions", URL: s.publicURL + "/federation/contributions"}}, Capabilities: []string{"identity.v1", "actor-resolution.v1", "signed-attribution.v1", "repository-discovery.v1", "repository-contribution.v1"}, Operators: s.operators, Keys: []Key{{ID: id, Algorithm: "Ed25519", PublicKey: base64.RawURLEncoding.EncodeToString(pub), CreatedAt: now}}, SigningKeyID: id}
 	d.Signature = sign(d, priv)
 	v := persistedIdentity{Document: d, PrivateKey: base64.RawURLEncoding.EncodeToString(priv)}
 	if err = writeJSON(p, v); err != nil {
 		return Document{}, err
 	}
 	return d, nil
+}
+
+// SignPayload signs a bounded protocol payload with the instance identity.
+func (s *Store) SignPayload(payload []byte) (int, string, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var v persistedIdentity
+	b, err := os.ReadFile(filepath.Join(s.root, "identity.json"))
+	if err != nil {
+		return 0, "", "", err
+	}
+	if json.Unmarshal(b, &v) != nil {
+		return 0, "", "", ErrInvalid
+	}
+	private, err := base64.RawURLEncoding.DecodeString(v.PrivateKey)
+	if err != nil || len(private) != ed25519.PrivateKeySize {
+		return 0, "", "", ErrInvalid
+	}
+	return v.Document.Version, v.Document.SigningKeyID, base64.RawURLEncoding.EncodeToString(ed25519.Sign(ed25519.PrivateKey(private), payload)), nil
+}
+
+func VerifyPayload(payload []byte, version int, keyID, signature string, document Document) error {
+	if version != document.Version || keyID != document.SigningKeyID {
+		return ErrInvalid
+	}
+	var public []byte
+	for _, key := range document.Keys {
+		if key.ID == keyID && key.RetiredAt == nil {
+			public, _ = base64.RawURLEncoding.DecodeString(key.PublicKey)
+		}
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(signature)
+	if err != nil || len(public) != ed25519.PublicKeySize || !ed25519.Verify(ed25519.PublicKey(public), payload, sig) {
+		return ErrInvalid
+	}
+	return nil
 }
 func (s *Store) IsOperator(id string) bool {
 	for _, v := range s.operators {

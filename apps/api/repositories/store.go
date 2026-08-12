@@ -45,10 +45,112 @@ type Repository struct {
 	GitRemote             string    `json:"git_remote"`
 	CreatedAt             time.Time `json:"created_at"`
 	UpstreamRepositoryID  string    `json:"upstream_repository_id,omitempty"`
+	FederatedUpstream     string    `json:"federated_upstream,omitempty"`
+	FederatedBranch       string    `json:"federated_branch,omitempty"`
 	collaboratorIDs       string
 	organizationMemberIDs string
 	requiredChecks        string
 	integrationPolicies   string
+}
+
+// CreateFederatedFork publishes an independently owned repository from an
+// already verified transfer repository and retains only remote lineage.
+func (s *Store) CreateFederatedFork(ownerID, reference, branch, name string, source *storage.Repository, revision string) (Repository, error) {
+	name, err := validateName(name)
+	if err != nil || source == nil || reference == "" || branch == "" || len(revision) != 40 {
+		if err != nil {
+			return Repository{}, err
+		}
+		return Repository{}, ErrInvalidBranch
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return Repository{}, err
+	}
+	defer unlock()
+	all, err := s.loadActive()
+	if err != nil {
+		return Repository{}, err
+	}
+	for _, repository := range all {
+		if repository.OwnerID == ownerID && strings.EqualFold(repository.Name, name) {
+			return Repository{}, ErrNameTaken
+		}
+	}
+	idBytes := make([]byte, 16)
+	if _, err := rand.Read(idBytes); err != nil {
+		return Repository{}, err
+	}
+	id := hex.EncodeToString(idBytes)
+	if _, err := source.ReadCommit(storage.ObjectID(revision)); err != nil {
+		return Repository{}, ErrInvalidBranch
+	}
+	created, err := s.git.Create(id)
+	if err != nil {
+		return Repository{}, err
+	}
+	if err = created.ImportCommit(source, storage.ObjectID(revision)); err != nil {
+		_ = s.git.Delete(id)
+		return Repository{}, err
+	}
+	if err = created.CreateReference(storage.Reference{Name: "refs/heads/" + branch, Target: revision}); err != nil {
+		_ = s.git.Delete(id)
+		return Repository{}, err
+	}
+	repository := Repository{ID: id, OwnerID: ownerID, Name: name, Visibility: Private, DefaultBranch: branch, GitRemote: "/git/" + id + ".git", CreatedAt: s.now().Truncate(time.Microsecond), FederatedUpstream: reference, FederatedBranch: branch, requiredChecks: "[]"}
+	if err = s.write(repository); err != nil {
+		_ = s.git.Delete(id)
+		return Repository{}, err
+	}
+	return repository, nil
+}
+
+func (s *Store) SynchronizeFederatedFork(ownerID, id, branch string, source *storage.Repository, revision string) (ForkSynchronization, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return ForkSynchronization{}, err
+	}
+	defer unlock()
+	repository, err := s.read(id)
+	if err != nil || repository.OwnerID != ownerID || repository.FederatedUpstream == "" || repository.FederatedBranch != branch {
+		return ForkSynchronization{}, ErrNotFound
+	}
+	fork, err := s.git.Open(id)
+	if err != nil {
+		return ForkSynchronization{}, err
+	}
+	current, err := fork.ReadReference("refs/heads/" + branch)
+	if err != nil || current.Symbolic {
+		return ForkSynchronization{}, ErrInvalidBranch
+	}
+	if current.Target == revision {
+		return ForkSynchronization{Branch: branch, PreviousCommitID: revision, CommitID: revision}, nil
+	}
+	if err = fork.ImportCommit(source, storage.ObjectID(revision)); err != nil {
+		return ForkSynchronization{}, err
+	}
+	ancestry, err := fork.ListCommitAncestry(storage.ObjectID(revision))
+	if err != nil {
+		return ForkSynchronization{}, err
+	}
+	found := false
+	for _, commit := range ancestry {
+		if string(commit.ID) == current.Target {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return ForkSynchronization{}, ErrForkDiverged
+	}
+	if err = fork.UpdateReferenceIfTarget(storage.Reference{Name: "refs/heads/" + branch, Target: revision}, current.Target); err != nil {
+		return ForkSynchronization{}, ErrBranchChanged
+	}
+	return ForkSynchronization{Branch: branch, PreviousCommitID: current.Target, CommitID: revision}, nil
 }
 
 // SetOrganization associates an existing repository with an accountable group
