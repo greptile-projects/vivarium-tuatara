@@ -370,7 +370,10 @@ func resourcePermittedAt(i Installation, repositoryID, resource string, occurred
 	for _, p := range i.EffectiveAccess {
 		if p.Resource == wanted && contains(p.Actions, "read") {
 			boundary := i.AuthorityEffectiveAt[repositoryID+":"+wanted]
-			return !boundary.IsZero() && !occurredAt.Before(boundary)
+			// Authorization and activity timestamps are microsecond-granular.
+			// Equality is therefore ambiguous and must fail closed: only activity
+			// durably observed after the grant boundary may be projected.
+			return !boundary.IsZero() && occurredAt.After(boundary)
 		}
 	}
 	return false

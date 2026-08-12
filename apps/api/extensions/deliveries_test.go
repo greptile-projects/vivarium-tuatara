@@ -4,6 +4,8 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -114,10 +116,46 @@ func TestRecoveryDoesNotBackfillBeforeAuthorityBecameEffective(t *testing.T) {
 		t.Fatalf("historical deliveries = %#v, error = %v", created, err)
 	}
 	event.ID = strings.Repeat("f", 32)
-	event.OccurredAt = boundary
+	event.OccurredAt = boundary.Add(time.Microsecond)
 	created, err = store.EnqueueProjectEvent(event)
 	if err != nil || len(created) != 1 {
 		t.Fatalf("current deliveries = %#v, error = %v", created, err)
+	}
+}
+
+func TestLegacyInstallationMigratesAuthorityBeforeRecovery(t *testing.T) {
+	store, installation, _ := deliveryFixtureWithoutDelivery(t)
+	path := filepath.Join(store.root, "installation-"+installation.ID+".json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if json.Unmarshal(b, &raw) != nil {
+		t.Fatal("decode")
+	}
+	delete(raw, "authority_effective_at")
+	b, _ = json.Marshal(raw)
+	if os.WriteFile(path, b, 0600) != nil {
+		t.Fatal("write")
+	}
+	reopened, err := New(store.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := reopened.GetInstallation(installation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	boundary := migrated.AuthorityEffectiveAt[installation.RepositoryIDs[0]+":pull_requests"]
+	if !boundary.Equal(installation.CreatedAt) {
+		t.Fatalf("boundary=%v want %v", boundary, installation.CreatedAt)
+	}
+	event := projectEvent(installation.RepositoryIDs[0])
+	event.OccurredAt = boundary.Add(time.Microsecond)
+	created, err := reopened.EnqueueProjectEvent(event)
+	if err != nil || len(created) != 1 {
+		t.Fatalf("created=%#v error=%v", created, err)
 	}
 }
 

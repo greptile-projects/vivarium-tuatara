@@ -126,7 +126,42 @@ func New(root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
-	return &Store{root: root, now: func() time.Time { return time.Now().UTC() }}, nil
+	s := &Store{root: root, now: func() time.Time { return time.Now().UTC() }}
+	if err := s.migrateLegacyAuthority(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// Legacy installations were already authorized no later than their durable
+// creation time. Persist that conservative boundary before delivery recovery
+// is enabled, rather than treating a missing post-upgrade field as no access.
+func (s *Store) migrateLegacyAuthority() error {
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), "installation-") || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(s.root, entry.Name())
+		var v Installation
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if json.Unmarshal(b, &v) != nil {
+			return ErrInvalid
+		}
+		if len(v.AuthorityEffectiveAt) == 0 && v.Status == "active" {
+			v.AuthorityEffectiveAt = authorityBoundaries(nil, v.RepositoryIDs, v.EffectiveAccess, v.CreatedAt, true)
+			if err = writeAtomic(path, v); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Store) Create(owner string, in Registration, verified time.Time) (Extension, error) {
