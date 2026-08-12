@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -32,7 +35,9 @@ func TestExtensionRegistrationVerifiesIdentityAndGrantsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	registerExtensionRoutes(mux, store, credentials)
+	registerExtensionRoutesWithVerifier(mux, store, credentials, func(context.Context, ...string) (time.Time, error) {
+		return time.Now().UTC(), nil
+	})
 	body := `{"name":"Review lens","description":"Adds review evidence","operator_contact":"ops@example.test","capabilities":["review annotations"],"callback_endpoint":"` + endpoint.URL + `/events","action_endpoint":"` + endpoint.URL + `/actions","requested_permissions":[{"resource":"pull_requests","actions":["read","comment"]}],"supported_events":["pull_request.opened"],"credential_rotation":{"interval_days":30,"overlap_hours":2}}`
 	req := httptest.NewRequest("POST", "/extensions", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+token.Token)
@@ -61,7 +66,9 @@ func TestExtensionRegistrationRejectsUnverifiedEndpoint(t *testing.T) {
 	token, _ := credentials.Issue("0123456789abcdef0123456789abcdef", auth.Session, "owner", []string{"profile:write"}, time.Hour)
 	store, _ := extensions.New(t.TempDir())
 	mux := http.NewServeMux()
-	registerExtensionRoutes(mux, store, credentials)
+	registerExtensionRoutesWithVerifier(mux, store, credentials, func(context.Context, ...string) (time.Time, error) {
+		return time.Time{}, errors.New("challenge mismatch")
+	})
 	body := `{"name":"Review lens","operator_contact":"ops@example.test","capabilities":["review"],"callback_endpoint":"` + endpoint.URL + `","action_endpoint":"` + endpoint.URL + `","requested_permissions":[{"resource":"pull_requests","actions":["read"]}],"supported_events":["pull_request.opened"],"credential_rotation":{"interval_days":30}}`
 	req := httptest.NewRequest("POST", "/extensions", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+token.Token)
@@ -69,6 +76,38 @@ func TestExtensionRegistrationRejectsUnverifiedEndpoint(t *testing.T) {
 	mux.ServeHTTP(res, req)
 	if res.Code != 422 {
 		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestExtensionEndpointVerificationRejectsNonPublicAddresses(t *testing.T) {
+	for _, address := range []string{"127.0.0.1", "10.0.0.1", "169.254.1.1", "224.0.0.1", "0.0.0.0", "::1", "fc00::1", "fe80::1"} {
+		t.Run(address, func(t *testing.T) {
+			dialed := false
+			_, err := verifyExtensionEndpointsWithNetwork(context.Background(), func(context.Context, string, string) ([]net.IP, error) {
+				return []net.IP{net.ParseIP(address)}, nil
+			}, func(context.Context, string, string) (net.Conn, error) {
+				dialed = true
+				return nil, errors.New("unexpected dial")
+			}, "https://extension.example/events")
+			if err == nil || !strings.Contains(err.Error(), "publicly routable") {
+				t.Fatalf("error = %v", err)
+			}
+			if dialed {
+				t.Fatal("verifier dialed a protected address")
+			}
+		})
+	}
+}
+
+func TestExtensionEndpointVerificationRejectsMixedPublicAndPrivateResolution(t *testing.T) {
+	_, err := verifyExtensionEndpointsWithNetwork(context.Background(), func(context.Context, string, string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("93.184.216.34"), net.ParseIP("127.0.0.1")}, nil
+	}, func(context.Context, string, string) (net.Conn, error) {
+		t.Fatal("mixed resolution must fail before dialing")
+		return nil, nil
+	}, "https://extension.example/events")
+	if err == nil || !strings.Contains(err.Error(), "publicly routable") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

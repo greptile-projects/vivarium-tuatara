@@ -6,11 +6,15 @@ Authenticated developers register an external collaborator with `POST
 /extensions`. The contract names the extension and operator contact, declared
 capabilities, callback and action HTTPS endpoints, requested resource/action
 permissions, supported event types, and a credential rotation interval plus
-optional overlap. Loopback HTTP endpoints are accepted for local development.
+optional overlap. Endpoints must use HTTPS and resolve exclusively to publicly
+routable addresses.
 
 Before persistence the API sends a unique value in
 `Vivarium-Extension-Challenge` to both endpoints with `GET`; each must return a
 successful response that echoes the exact value in the same response header.
+Verification rejects redirects, protected network ranges, and mixed public and
+private DNS answers, and pins the validated addresses while dialing to prevent
+DNS rebinding.
 The resulting record has an independently generated ID and
 `principal_type: "extension"`. It contains the verification times and an
 authority preview whose effective actions are empty and whose decisions are

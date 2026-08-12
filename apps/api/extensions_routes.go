@@ -17,6 +17,10 @@ import (
 )
 
 func registerExtensionRoutes(mux *http.ServeMux, store *extensions.Store, credentials *auth.Store) {
+	registerExtensionRoutesWithVerifier(mux, store, credentials, verifyExtensionEndpoints)
+}
+
+func registerExtensionRoutesWithVerifier(mux *http.ServeMux, store *extensions.Store, credentials *auth.Store, verify func(context.Context, ...string) (time.Time, error)) {
 	mux.HandleFunc("POST /extensions", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, credentials, "profile:write", false)
 		if !ok {
@@ -37,7 +41,7 @@ func registerExtensionRoutes(mux *http.ServeMux, store *extensions.Store, creden
 			writeAPIError(w, 400, "invalid_extension", "request body must be valid JSON")
 			return
 		}
-		verified, err := verifyExtensionEndpoints(r.Context(), in.CallbackEndpoint, in.ActionEndpoint)
+		verified, err := verify(r.Context(), in.CallbackEndpoint, in.ActionEndpoint)
 		if err != nil {
 			writeAPIError(w, 422, "endpoint_verification_failed", err.Error())
 			return
@@ -84,6 +88,13 @@ func registerExtensionRoutes(mux *http.ServeMux, store *extensions.Store, creden
 }
 
 func verifyExtensionEndpoints(ctx context.Context, raw ...string) (time.Time, error) {
+	return verifyExtensionEndpointsWithNetwork(ctx, net.DefaultResolver.LookupIP, (&net.Dialer{Timeout: 5 * time.Second}).DialContext, raw...)
+}
+
+type lookupIPFunc func(context.Context, string, string) ([]net.IP, error)
+type dialContextFunc func(context.Context, string, string) (net.Conn, error)
+
+func verifyExtensionEndpointsWithNetwork(ctx context.Context, lookup lookupIPFunc, dial dialContextFunc, raw ...string) (time.Time, error) {
 	challengeBytes := make([]byte, 24)
 	if _, e := rand.Read(challengeBytes); e != nil {
 		return time.Time{}, errors.New("could not create endpoint challenge")
@@ -91,8 +102,36 @@ func verifyExtensionEndpoints(ctx context.Context, raw ...string) (time.Time, er
 	challenge := hex.EncodeToString(challengeBytes)
 	for _, value := range raw {
 		u, e := url.Parse(value)
-		if e != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Hostname()))) {
-			return time.Time{}, errors.New("endpoints must use HTTPS (HTTP is accepted only for loopback development)")
+		if e != nil || u.Host == "" || u.User != nil || u.Scheme != "https" {
+			return time.Time{}, errors.New("endpoints must use HTTPS")
+		}
+		addresses, e := lookup(ctx, "ip", u.Hostname())
+		if e != nil || len(addresses) == 0 {
+			return time.Time{}, errors.New("endpoint hostname could not be resolved")
+		}
+		for _, address := range addresses {
+			if !publicEndpointIP(address) {
+				return time.Time{}, errors.New("endpoint must resolve only to publicly routable addresses")
+			}
+		}
+		// Dial only an address from the validated resolution. This closes the
+		// DNS-rebinding window between policy validation and connection setup.
+		pinned := append([]net.IP(nil), addresses...)
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+			_, port, splitErr := net.SplitHostPort(address)
+			if splitErr != nil {
+				return nil, splitErr
+			}
+			var last error
+			for _, ip := range pinned {
+				connection, dialErr := dial(ctx, network, net.JoinHostPort(ip.String(), port))
+				if dialErr == nil {
+					return connection, nil
+				}
+				last = dialErr
+			}
+			return nil, last
 		}
 		req, e := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 		if e != nil {
@@ -100,7 +139,8 @@ func verifyExtensionEndpoints(ctx context.Context, raw ...string) (time.Time, er
 		}
 		req.Header.Set("Vivarium-Extension-Challenge", challenge)
 		client := http.Client{
-			Timeout: 5 * time.Second,
+			Timeout:   5 * time.Second,
+			Transport: transport,
 			// The proof belongs to the declared endpoint, not a destination it
 			// selects after receiving the challenge. Never forward the header.
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
@@ -120,7 +160,6 @@ func verifyExtensionEndpoints(ctx context.Context, raw ...string) (time.Time, er
 	return time.Now().UTC().Truncate(time.Microsecond), nil
 }
 
-func isLoopbackHost(host string) bool {
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback() || strings.EqualFold(host, "localhost")
+func publicEndpointIP(ip net.IP) bool {
+	return ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsUnspecified()
 }
