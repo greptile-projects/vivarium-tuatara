@@ -692,6 +692,16 @@ is `409 federated_event_conflict`, and an unavailable peer returns `202` with
 Imported evidence never counts as a local required check, review identity,
 credential, or merge permission.
 
+Merging an open federated pull uses the ordinary `POST
+/repositories/{id}/pulls/{pull-id}/merge` endpoint and its live ownership,
+review, required-check, integration-policy, conflict, and exact-revision rules.
+On success the upstream retains the reachable source objects and records a
+signed `receipt` event containing the contribution/source provenance, merge
+commit and maintainer, plus the verified collaboration snapshot. The receipt is
+stored locally before delivery and queued durably when the source peer is
+offline or no longer trusted. Merge and receipt retries are idempotent; later
+peer or identity loss changes delivery/trust status, not accepted Git history.
+
 On the source instance, `POST
 /federation/contributions/{contribution-id}/agent-sessions` accepts an
 `organization_id`, approved `agent_id`, bounded `instructions`, `context_paths`,

@@ -537,7 +537,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			pullRequestStore.ConfigurePreviewAcceptance(acceptanceStore, previewStore)
 			registerAcceptanceRoutes(mux, repositoryCatalog, pullRequestStore, acceptanceStore, previewStore, authStore)
 		}
-		registerPullRequestRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, authStore, activityStore, userStore, checkRunStore, changeSessionStore, documentationStore)
+		registerPullRequestRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, authStore, activityStore, userStore, checkRunStore, changeSessionStore, documentationStore, federationStore)
 		if documentationStore != nil {
 			registerDocumentationReviewRoutes(mux, store, repositoryCatalog, pullRequestStore, documentationStore, checkRunStore, authStore)
 		}
@@ -1101,7 +1101,11 @@ func repairEvidence(run checkruns.Run, events []checkruns.Event) *changesessions
 	return evidence
 }
 
-func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoriesStore *repositories.Store, proposalStore *proposals.Store, store *pullrequests.Store, authStore *auth.Store, activityStore *activities.Store, userStore *users.Store, checkRunStore *checkruns.Store, sessionStore *changesessions.Store, documentationStore *docscollections.Store) {
+func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoriesStore *repositories.Store, proposalStore *proposals.Store, store *pullrequests.Store, authStore *auth.Store, activityStore *activities.Store, userStore *users.Store, checkRunStore *checkruns.Store, sessionStore *changesessions.Store, documentationStore *docscollections.Store, federationStore ...*federation.Store) {
+	var federated *federation.Store
+	if len(federationStore) > 0 {
+		federated = federationStore[0]
+	}
 	store.ConfigureRequiredChecks(repositoriesStore, checkRunStore)
 	reconcileTaskState := func(pull pullrequests.PullRequest) (pullrequests.PullRequest, error) {
 		if pull.TaskStatePending == "" || pull.ProposalID == nil || pull.TaskID == nil || proposalStore == nil {
@@ -1143,9 +1147,11 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 			return err
 		}
 		if documentationStore != nil && merged.MergedBy != nil {
-			return publishMergedDocumentation(gitStore, documentationStore, merged, *merged.MergedBy)
+			if err := publishMergedDocumentation(gitStore, documentationStore, merged, *merged.MergedBy); err != nil {
+				return err
+			}
 		}
-		return nil
+		return finalizeFederatedMerge(federated, merged)
 	})
 	mux.HandleFunc("GET /repositories/{id}/pulls", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
@@ -1791,6 +1797,11 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 				writeUncertainMutation(w, merged)
 				return
 			}
+		}
+		if federationErr := finalizeFederatedMerge(federated, merged); federationErr != nil {
+			log.Printf("finalize federated merge: %v", federationErr)
+			writeUncertainMutation(w, merged)
+			return
 		}
 		if merged.ProposalID != nil && merged.TaskID == nil && proposalStore != nil {
 			proposal, proposalErr := proposalStore.Get(r.PathValue("id"), *merged.ProposalID)

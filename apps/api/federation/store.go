@@ -192,7 +192,7 @@ func validCollaborationEvent(v CollaborationEvent) bool {
 		return false
 	}
 	switch v.Kind {
-	case "comment", "review", "revision", "checks", "preview", "closure", "agent_session":
+	case "comment", "review", "revision", "checks", "preview", "closure", "agent_session", "receipt":
 	default:
 		return false
 	}
@@ -209,6 +209,9 @@ func validCollaborationEvent(v CollaborationEvent) bool {
 		return false
 	}
 	if v.Kind == "closure" && v.State != "open" && v.State != "closed" {
+		return false
+	}
+	if v.Kind == "receipt" && (len(v.Revision) != 40 || len(v.Evidence) == 0) {
 		return false
 	}
 	return true

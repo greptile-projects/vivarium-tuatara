@@ -1253,6 +1253,86 @@ func recoverFederationDeliveries(store *federation.Store) error {
 	return nil
 }
 
+// finalizeFederatedMerge freezes the locally verified collaboration record in
+// a signed receipt. Retention and outbox publication happen before network I/O,
+// so accepted history never depends on the source instance remaining online.
+func finalizeFederatedMerge(store *federation.Store, pull pullrequests.PullRequest) error {
+	if store == nil || pull.FederatedContributionID == "" || pull.Status != pullrequests.Merged || pull.MergeCommitID == nil || pull.MergedAt == nil || pull.MergedBy == nil {
+		return nil
+	}
+	boundary, err := store.Contribution(pull.FederatedContributionID)
+	if err != nil {
+		return err
+	}
+	events, err := store.ListCollaborationEvents(pull.FederatedContributionID, pull.SourceCommitID)
+	if err != nil {
+		return err
+	}
+	type retainedClaim struct {
+		ID               string `json:"id"`
+		Kind             string `json:"kind"`
+		OriginInstanceID string `json:"origin_instance_id"`
+		SHA256           string `json:"sha256"`
+	}
+	verified := make([]retainedClaim, 0, len(events))
+	for _, event := range events {
+		if event.Kind != "receipt" {
+			raw, _ := json.Marshal(event)
+			digest := sha256.Sum256(raw)
+			verified = append(verified, retainedClaim{ID: event.ID, Kind: event.Kind, OriginInstanceID: event.OriginInstanceID, SHA256: hex.EncodeToString(digest[:])})
+		}
+	}
+	document, err := store.Identity()
+	if err != nil {
+		return err
+	}
+	peerID := ""
+	for _, id := range boundary.InstanceIDs {
+		if id != document.InstanceID {
+			peerID = id
+			break
+		}
+	}
+	if peerID == "" {
+		return federation.ErrInvalid
+	}
+	evidence, err := json.Marshal(map[string]any{
+		"repository_id": pull.RepositoryID, "pull_request_id": pull.ID,
+		"source_instance_id": peerID, "source_actor": pull.FederatedAuthor,
+		"source_revision": pull.SourceCommitID, "target_branch": pull.TargetBranch,
+		"merge_commit_id": *pull.MergeCommitID, "merged_by": *pull.MergedBy,
+		"merged_at": pull.MergedAt, "verified_collaboration": verified,
+	})
+	if err != nil {
+		return err
+	}
+	receipt := federation.CollaborationEvent{
+		ID: "merge-" + pull.ID, ContributionID: pull.FederatedContributionID,
+		Sequence: pull.MergedAt.UnixMicro(), Kind: "receipt",
+		Actor:    document.InstanceID + ":user:" + *pull.MergedBy,
+		Revision: *pull.MergeCommitID, Evidence: evidence, CreatedAt: pull.MergedAt.UTC().Truncate(time.Microsecond),
+		OriginInstanceID: document.InstanceID, Verification: "verified",
+	}
+	version, key, signature, err := store.SignPayload(collaborationEventBytes(receipt))
+	if err != nil {
+		return err
+	}
+	receipt.DocumentVersion, receipt.SigningKeyID, receipt.Signature = version, key, signature
+	if _, err = store.AppendCollaborationEvent(receipt); err != nil {
+		return err
+	}
+	// Always publish an outbox record first. A crash, outage, or trust change can
+	// delay delivery, but cannot erase the upstream's accepted evidence.
+	if err = store.RetainCollaborationDelivery(peerID, receipt, "delivery pending"); err != nil {
+		return err
+	}
+	if err = sendCollaborationEvent(store, peerID, receipt); err != nil {
+		_ = store.RetainCollaborationDelivery(peerID, receipt, err.Error())
+		return nil
+	}
+	return store.CompleteCollaborationDelivery(peerID, receipt.ID)
+}
+
 func startFederationDeliveryRecovery(store *federation.Store) {
 	if store == nil {
 		return
