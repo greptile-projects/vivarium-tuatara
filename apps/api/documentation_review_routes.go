@@ -92,16 +92,35 @@ func registerDocumentationReviewRoutes(mux *http.ServeMux, git *storage.Store, r
 		if err != nil {
 			return review
 		}
+		base, err := documentationReviewPages(repository, pull.TargetCommitID, review.RootPath)
+		if err != nil {
+			return review
+		}
+		baseHashes := map[string]string{}
+		for _, p := range base {
+			baseHashes[p.Path] = p.SourceSHA256
+		}
 		hashes := map[string]string{}
 		for _, p := range current {
 			hashes[p.Path] = p.SourceSHA256
 		}
+		persisted := map[string]bool{}
 		for i := range review.Pages {
+			persisted[review.Pages[i].Path] = true
 			review.Pages[i].Status = "stale"
 			if hashes[review.Pages[i].Path] == review.Pages[i].SourceSHA256 {
 				review.Pages[i].Status = "current"
 			}
 		}
+		// Synchronization may introduce a new changed page after the original
+		// snapshot. Add it to the current projection without rewriting retained
+		// evidence for the original content.
+		for _, p := range current {
+			if !persisted[p.Path] && baseHashes[p.Path] != p.SourceSHA256 {
+				review.Pages = append(review.Pages, p)
+			}
+		}
+		sort.Slice(review.Pages, func(i, j int) bool { return review.Pages[i].Path < review.Pages[j].Path })
 		for i := range review.Entries {
 			review.Entries[i].Stale = hashes[review.Entries[i].Path] != review.Entries[i].SourceSHA256
 		}
@@ -134,6 +153,13 @@ func registerDocumentationReviewRoutes(mux *http.ServeMux, git *storage.Store, r
 		}
 		if decodeJSON(r, &in) != nil {
 			writeAPIError(w, 400, "invalid_documentation_review", "review input is invalid")
+			return
+		}
+		if _, existingErr := docs.GetPullReview(pull.RepositoryID, pull.ID); existingErr == nil {
+			writeAPIError(w, 409, "documentation_review_exists", "documentation review already exists")
+			return
+		} else if !errors.Is(existingErr, docscollections.ErrNotFound) {
+			writeAPIError(w, 500, "documentation_review_read_failed", "documentation review could not be read")
 			return
 		}
 		root := strings.Trim(strings.TrimSpace(in.RootPath), "/")
@@ -246,8 +272,11 @@ func registerDocumentationReviewRoutes(mux *http.ServeMux, git *storage.Store, r
 			writeAPIError(w, 422, "invalid_documentation_review_entry", "exact page, area, kind, and bounded body are required")
 			return
 		}
-		inv, guest := docscollections.ActiveInvitation(review, actor.UserID, time.Now())
-		if guest && (inv.Role == "view" || !reviewContains(inv.Areas, in.Area)) {
+		repository, _ := repos.GetByID(pull.RepositoryID)
+		collaborator, _ := repos.HasCollaborator(actor.UserID, pull.RepositoryID)
+		inv, invited := docscollections.ActiveInvitation(review, actor.UserID, time.Now())
+		invitationOnly := actor.UserID != repository.OwnerID && !collaborator && invited
+		if invitationOnly && (inv.Role == "view" || !reviewContains(inv.Areas, in.Area)) {
 			writeAPIError(w, 403, "documentation_review_forbidden", "invitation does not permit this feedback area")
 			return
 		}
@@ -286,8 +315,11 @@ func registerDocumentationReviewRoutes(mux *http.ServeMux, git *storage.Store, r
 			writeAPIError(w, 422, "invalid_documentation_review_decision", "exact page, area, and decision are required")
 			return
 		}
-		inv, guest := docscollections.ActiveInvitation(review, actor.UserID, time.Now())
-		if guest && (inv.Role != "review" || !reviewContains(inv.Areas, in.Area)) {
+		repository, _ := repos.GetByID(pull.RepositoryID)
+		collaborator, _ := repos.HasCollaborator(actor.UserID, pull.RepositoryID)
+		inv, invited := docscollections.ActiveInvitation(review, actor.UserID, time.Now())
+		invitationOnly := actor.UserID != repository.OwnerID && !collaborator && invited
+		if invitationOnly && (inv.Role != "review" || !reviewContains(inv.Areas, in.Area)) {
 			writeAPIError(w, 403, "documentation_review_forbidden", "invitation does not permit decisions in this area")
 			return
 		}
