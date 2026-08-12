@@ -718,7 +718,8 @@ before building, so source evidence stays read-only while ordinary compilers
 can create the declared, separately size-checked artifact output.
 The platform measures and reserves the immutable source copy separately from
 the preview's declared scratch allowance, so repository size cannot consume the
-build's promised writable capacity.
+build's promised writable capacity. Reservation rounds files to allocation
+pages and includes per-entry metadata rather than trusting logical byte length.
 Pull synchronization marks older previews stale without replacing their URL or
 evidence. Each definition fails closed with network `none`, artifact-only data,
 named identity, and explicit view, test, or feedback actions. A repository owner

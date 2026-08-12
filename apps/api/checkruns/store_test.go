@@ -733,7 +733,20 @@ func TestDirectorySizeMeasuresImmutableSourceReservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	size, err := directorySize(root)
-	if err != nil || size != 65<<20 {
+	if err != nil || size < 65<<20 {
 		t.Fatalf("size=%d err=%v", size, err)
+	}
+}
+
+func TestDirectorySizeReservesAllocationForManySmallFiles(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 17_000; i++ {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("%05d", i)), []byte{'x'}, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	size, err := directorySize(root)
+	if err != nil || size < 17_000*8192 {
+		t.Fatalf("allocation-aware size=%d err=%v", size, err)
 	}
 }

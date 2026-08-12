@@ -495,6 +495,7 @@ type Store struct {
 	acceptance *acceptance.Store
 	previews   interface {
 		List(string, string, string) ([]previews.Preview, error)
+		WithAudienceAdmission(func() error) error
 	}
 }
 
@@ -1828,6 +1829,15 @@ func (s *Store) AdvanceIntegrationQueues() error {
 }
 
 func (s *Store) advanceIntegrationQueue(repositoryID, branch string) error {
+	if s.previews != nil {
+		return s.previews.WithAudienceAdmission(func() error {
+			return s.advanceIntegrationQueueAdmitted(repositoryID, branch)
+		})
+	}
+	return s.advanceIntegrationQueueAdmitted(repositoryID, branch)
+}
+
+func (s *Store) advanceIntegrationQueueAdmitted(repositoryID, branch string) error {
 	var finalizationFailures []error
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2164,6 +2174,22 @@ func candidateState(runs []checkruns.Run, required []string) string {
 // writes an attributable two-parent commit, advances the target with compare-
 // and-swap semantics, and closes the pull request.
 func (s *Store) Merge(repositoryID, pullRequestID, mergerID string) (PullRequest, error) {
+	var merged PullRequest
+	merge := func() error {
+		var err error
+		merged, err = s.merge(repositoryID, pullRequestID, mergerID)
+		return err
+	}
+	if s.previews != nil {
+		if err := s.previews.WithAudienceAdmission(merge); err != nil {
+			return PullRequest{}, err
+		}
+		return merged, nil
+	}
+	return merged, merge()
+}
+
+func (s *Store) merge(repositoryID, pullRequestID, mergerID string) (PullRequest, error) {
 	if !validID(mergerID) {
 		return PullRequest{}, ErrInvalid
 	}

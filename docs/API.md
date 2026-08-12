@@ -38,7 +38,9 @@ the pull's exact current revision. Expiry, revocation, or source movement
 removes decision authority immediately; retained earlier decisions become stale
 evidence and grant no source, log, credential, or repository access.
 Merge readiness revalidates that invitation on every read and again through the
-ordinary direct-merge or queue-landing readiness boundary.
+ordinary direct-merge or queue-landing readiness boundary. Invitation
+publication and final Git publication share one admission lock, so revocation
+commits wholly before readiness or after the authorized merge effect.
 
 ## Change preview audiences
 

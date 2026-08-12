@@ -1121,7 +1121,15 @@ func directorySize(root string) (int64, error) {
 		if err != nil {
 			return err
 		}
-		total += info.Size()
+		// tmpfs charges at least one page plus inode/dentry metadata per copied
+		// file. Reserve rounded allocation and a conservative metadata page so
+		// allocation-heavy trees cannot exhaust the source-copy allowance.
+		const page = int64(4096)
+		allocated := ((info.Size() + page - 1) / page) * page
+		if allocated == 0 {
+			allocated = page
+		}
+		total += allocated + page
 		return nil
 	})
 	return total, err
