@@ -67,6 +67,7 @@ type Installation struct {
 	CapabilityDecisions  []CapabilityDecision `json:"capability_decisions"`
 	Settings             map[string]string    `json:"settings"`
 	EffectiveAccess      []Permission         `json:"effective_access"`
+	AuthorityEffectiveAt map[string]time.Time `json:"authority_effective_at"`
 	DerivedCredentialIDs []string             `json:"derived_credential_ids"`
 	Status               string               `json:"status"`
 	Version              int                  `json:"version"`
@@ -125,7 +126,42 @@ func New(root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
-	return &Store{root: root, now: func() time.Time { return time.Now().UTC() }}, nil
+	s := &Store{root: root, now: func() time.Time { return time.Now().UTC() }}
+	if err := s.migrateLegacyAuthority(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// Legacy installations were already authorized no later than their durable
+// creation time. Persist that conservative boundary before delivery recovery
+// is enabled, rather than treating a missing post-upgrade field as no access.
+func (s *Store) migrateLegacyAuthority() error {
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), "installation-") || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(s.root, entry.Name())
+		var v Installation
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if json.Unmarshal(b, &v) != nil {
+			return ErrInvalid
+		}
+		if len(v.AuthorityEffectiveAt) == 0 && v.Status == "active" {
+			v.AuthorityEffectiveAt = authorityBoundaries(nil, v.RepositoryIDs, v.EffectiveAccess, v.CreatedAt, true)
+			if err = writeAtomic(path, v); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Store) Create(owner string, in Registration, verified time.Time) (Extension, error) {
@@ -222,6 +258,7 @@ func (s *Store) CreateInstallation(extensionID, actor string, in InstallationInp
 	}
 	now := s.now().Truncate(time.Microsecond)
 	v := Installation{ID: id, ExtensionID: extension.ID, ExtensionName: extension.Name, ExtensionVerifiedAt: minTime(extension.CallbackEndpoint.VerifiedAt, extension.ActionEndpoint.VerifiedAt), OwnerType: in.OwnerType, OwnerID: in.OwnerID, RepositoryIDs: clean(in.RepositoryIDs), ResourceTypes: clean(in.ResourceTypes), CapabilityDecisions: in.CapabilityDecisions, Settings: copySettings(in.Settings), EffectiveAccess: effective(extension, in), DerivedCredentialIDs: []string{}, Status: "active", Version: 1, CreatedBy: actor, CreatedAt: now, UpdatedAt: now, Events: []InstallationEvent{{Type: "installation.created", ActorID: actor, At: now}}}
+	v.AuthorityEffectiveAt = authorityBoundaries(nil, v.RepositoryIDs, v.EffectiveAccess, now, false)
 	if err = writeAtomic(filepath.Join(s.root, "installation-"+id+".json"), v); err != nil {
 		return Installation{}, err
 	}
@@ -329,6 +366,7 @@ func (s *Store) ChangeInstallation(id, actor, action string, expected int, in *I
 			return v, ErrInvalid
 		}
 		v.Status = "active"
+		v.AuthorityEffectiveAt = authorityBoundaries(v.AuthorityEffectiveAt, v.RepositoryIDs, v.EffectiveAccess, now, true)
 	case "upgrade":
 		if in == nil {
 			return v, ErrInvalid
@@ -345,6 +383,7 @@ func (s *Store) ChangeInstallation(id, actor, action string, expected int, in *I
 		v.CapabilityDecisions = in.CapabilityDecisions
 		v.Settings = copySettings(in.Settings)
 		v.EffectiveAccess = effective(ext, *in)
+		v.AuthorityEffectiveAt = authorityBoundaries(v.AuthorityEffectiveAt, v.RepositoryIDs, v.EffectiveAccess, now, false)
 		v.ExtensionName = ext.Name
 		v.ExtensionVerifiedAt = minTime(ext.CallbackEndpoint.VerifiedAt, ext.ActionEndpoint.VerifiedAt)
 	case "transfer":
@@ -360,6 +399,7 @@ func (s *Store) ChangeInstallation(id, actor, action string, expected int, in *I
 			}
 			v.RepositoryIDs = clean(in.RepositoryIDs)
 		}
+		v.AuthorityEffectiveAt = authorityBoundaries(nil, v.RepositoryIDs, v.EffectiveAccess, now, true)
 	default:
 		return v, ErrInvalid
 	}
@@ -370,6 +410,24 @@ func (s *Store) ChangeInstallation(id, actor, action string, expected int, in *I
 		return Installation{}, err
 	}
 	return v, nil
+}
+
+func authorityBoundaries(existing map[string]time.Time, repositories []string, access []Permission, now time.Time, reset bool) map[string]time.Time {
+	out := map[string]time.Time{}
+	for _, repositoryID := range repositories {
+		for _, permission := range access {
+			if !contains(permission.Actions, "read") {
+				continue
+			}
+			key := repositoryID + ":" + permission.Resource
+			if !reset && !existing[key].IsZero() {
+				out[key] = existing[key]
+			} else {
+				out[key] = now
+			}
+		}
+	}
+	return out
 }
 func (s *Store) readExtension(id string) (Extension, error) {
 	var v Extension

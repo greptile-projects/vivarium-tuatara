@@ -313,6 +313,7 @@ func main() {
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
 	startWorkspaceRecovery(workspaceStore)
+	startExtensionDeliveryRecovery(activityStore, extensionStore)
 	log.Printf("listening on http://localhost:%s", port)
 	if err := http.ListenAndServe(":"+port, handler); err != nil {
 		log.Fatal(err)
@@ -348,6 +349,50 @@ func startIntegrationQueueRecovery(store *pullrequests.Store) {
 		defer ticker.Stop()
 		for range ticker.C {
 			advance()
+		}
+	}()
+}
+
+func projectExtensionActivity(store *extensions.Store, event activities.Event) error {
+	resourceType := event.ResourceType
+	if strings.HasPrefix(event.Kind, "check.") {
+		resourceType = "check"
+	}
+	_, err := store.EnqueueProjectEvent(extensions.ProjectEvent{ID: event.ID, Type: event.Kind, RepositoryID: event.RepositoryID, ResourceType: resourceType, ResourceID: event.ResourceID, ActorID: event.ActorID, Title: event.ResourceTitle, OccurredAt: event.CreatedAt})
+	return err
+}
+
+// Recovery scans the immutable activity ledger oldest-first. Enqueue is
+// idempotent, so stopping at the first failure preserves commit ordering and a
+// later pass safely resumes without duplicating deliveries.
+func recoverExtensionDeliveries(activityStore *activities.Store, extensionStore *extensions.Store) error {
+	events, err := activityStore.List()
+	if err != nil {
+		return err
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		if err = projectExtensionActivity(extensionStore, events[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func startExtensionDeliveryRecovery(activityStore *activities.Store, extensionStore *extensions.Store) {
+	if activityStore == nil || extensionStore == nil {
+		return
+	}
+	recover := func() {
+		if err := recoverExtensionDeliveries(activityStore, extensionStore); err != nil {
+			log.Printf("recover extension deliveries: %v", err)
+		}
+	}
+	recover()
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			recover()
 		}
 	}()
 }
@@ -439,6 +484,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		}
 	}
 	mux := http.NewServeMux()
+	if activityStore != nil && extensionStore != nil {
+		activityStore.SetObserver(func(activities.Event) error { return recoverExtensionDeliveries(activityStore, extensionStore) })
+	}
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
