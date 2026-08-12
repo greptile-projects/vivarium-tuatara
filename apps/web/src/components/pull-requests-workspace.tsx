@@ -30,6 +30,7 @@ import { ChangeSessionsCard } from "./change-sessions";
 import { PullRequestChecks } from "./pull-request-checks";
 import { PullRequestPreviews } from "./pull-request-previews";
 import { DocumentationPullReviewCard } from "./documentation-pull-review";
+import { ExtensionContributions } from "./extension-contributions";
 import { Icons } from "./icons";
 import { Avatar, Badge, Button, Card } from "./ui";
 
@@ -1095,6 +1096,7 @@ export function PullRequestDetail({
             participant={participant}
             sourceCommitID={pull.source_commit_id}
           />
+          <ExtensionContributions repositoryID={repositoryID} pullRequestID={pullRequestID} revision={pull.source_commit_id} />
           <DocumentationPullReviewCard repositoryID={repositoryID} pullRequestID={pullRequestID} participant={participant} />
           <PullRequestPreviews repositoryID={repositoryID} pullRequestID={pullRequestID} participant={participant} owner={isOwner} />
           <section id="commits" className="scroll-mt-24">

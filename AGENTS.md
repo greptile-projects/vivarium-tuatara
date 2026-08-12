@@ -92,6 +92,13 @@ whenever dependencies change or the web job fails before it starts.
   surfaces expose redacted payloads, attempts, retry, replay, and dead letters;
   duplicate source events are idempotent and inactive, unsubscribed, or
   resource-inaccessible installations receive no delivery.
+  Installation owners mint short-lived `extensions:contribute` credentials
+  derived from the exact installation. Extensions publish append-only,
+  attributed pull evidence at the current revision with idempotency, scope,
+  rate, and payload-budget enforcement. Declared web actions preview inputs and
+  effects and retain the invoking collaborator, but only create a request:
+  extension output never becomes a privileged check, comment, merge, release,
+  deployment, environment change, or embargo bypass.
   Portfolio initiatives retain an existing proposal, evolution, incident, or
   authorized security source plus ordered cross-repository contributions,
   dependencies, and accountable team/human/approved-agent ownership. Portfolio

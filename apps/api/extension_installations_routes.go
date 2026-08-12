@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/extensions"
@@ -87,6 +88,41 @@ func registerExtensionInstallationRoutes(mux *http.ServeMux, store *extensions.S
 			return
 		}
 		writeJSON(w, 200, v)
+	})
+	mux.HandleFunc("POST /extension-installations/{id}/credentials", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:write", false)
+		if !ok {
+			return
+		}
+		v, e := store.GetInstallation(r.PathValue("id"))
+		if e != nil || !authorize(actor.UserID, v.OwnerType, v.OwnerID, v.RepositoryIDs) {
+			writeAPIError(w, 404, "installation_not_found", "installation not found")
+			return
+		}
+		var in struct {
+			Version   int `json:"version"`
+			ExpiresIn int `json:"expires_in"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_credential", "request body must be valid JSON")
+			return
+		}
+		if v.Status != "active" || v.Version != in.Version || in.ExpiresIn < 60 || in.ExpiresIn > 86400 {
+			writeAPIError(w, 409, "installation_changed", "active installation, current version, and lifetime from 60 to 86400 seconds are required")
+			return
+		}
+		issued, e := credentials.Issue(v.ExtensionID, auth.API, "Extension installation "+v.ID, []string{"extensions:contribute"}, time.Duration(in.ExpiresIn)*time.Second)
+		if e != nil {
+			writeAPIError(w, 500, "credential_unavailable", "credential could not be issued")
+			return
+		}
+		updated, e := store.RecordDerivedCredential(v.ID, issued.ID, v.Version)
+		if e != nil {
+			_, _ = credentials.Revoke(v.ExtensionID, issued.ID)
+			writeAPIError(w, 409, "installation_changed", "installation changed before credential publication")
+			return
+		}
+		writeJSON(w, 201, map[string]any{"credential": issued, "installation": updated})
 	})
 	mux.HandleFunc("POST /extension-installations/{id}/{action}", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, credentials, "repositories:write", false)
