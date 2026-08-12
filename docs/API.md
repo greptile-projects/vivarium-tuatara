@@ -2,6 +2,14 @@
 
 ## Governed community proposals
 
+`POST /repositories/{id}/charter/continuity` and the organization equivalent record a pending
+charter-bound nomination, election, recall, succession, or emergency action. The request binds
+the active charter version, governed proposal, declared role and protected resources,
+predecessor/successor standing when required, review time, and expiry. `POST
+.../continuity/{action-id}/actions` approves, completes, relinquishes, or appeals the retained
+record. Reads derive expiration and review-due state. Continuity records never mint resource
+access; independently owned credentials and roles must be approved and revoked separately.
+
 `POST /governance/proposals` opens a proposal beneath an active repository or organization
 charter. It supplies the source, public scope, at least two alternatives, cited evidence,
 affected resources, disclosure requirements, implementation effects, and a `rule` naming the

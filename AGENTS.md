@@ -257,6 +257,10 @@ whenever dependencies change or the web job fails before it starts.
   Reads derive expiry and lost local identity/membership and project nominations plus operational
   access separately. Standing and votes never mint credentials or grant code, secret, merge,
   deployment, or repository authority.
+  Charter continuity records bind nomination, election, recall, succession, and emergency
+  recovery to an active revision, governed proposal, exact role/resources, review deadline,
+  and automatic expiry. They expose unresolved handoffs without minting access; resource roles
+  and derived credentials remain separately approved and revoked at their owning boundary.
   Governed community proposals at `/governance` freeze an active charter decision class and
   may originate from technical decisions, initiatives, policy exceptions, funding/resource
   requests, leadership nominations, or charter amendments. They retain public scope,

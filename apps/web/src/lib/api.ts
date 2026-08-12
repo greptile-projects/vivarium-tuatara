@@ -5,11 +5,212 @@ export type User = {
   created_at: string;
   updated_at: string;
 };
-export type CharterRevision = { id:string; scope_type:"repository"|"organization"; scope_id:string; version:number; status:"draft"|"active"; title:string; summary:string; roles:{name:string;description:string;eligibility:string[]}[]; decision_classes:{name:string;description:string;eligible_roles:string[];participation:number;quorum:number;approval:"majority"|"consensus"|"supermajority";protected_resources:string[]}[]; procedures:{terms:string;removal:string;succession:string;amendments:string}; created_by:string;created_at:string;activated_by?:string;activated_at?:string };
-export type CharterStanding = { id:string;charter_version:number;principal_type:"human";principal_id:string;role:string;responsibilities:string;evidence:{kind:"contribution"|"review"|"support"|"ownership"|"membership";resource_id:string;summary:string}[];status:string;effective_status:string;conflict_of_interest?:string;starts_at?:string;expires_at:string;invited_by:string;invited_at:string;events:{id:string;kind:string;actor_id:string;reason:string;created_at:string}[];eligibility:string;available_actions:string[];nomination_available:boolean;operational_access:string[];authority_note:string };
-export type CharterResponse = { charter:{scope_type:string;scope_id:string;active_version:number;revisions:CharterRevision[];approvals:{id:string;version:number;actor_id:string;decision:string;reason:string;created_at:string}[];exceptions:{id:string;version:number;decision_class:string;resource:string;reason:string;expires_at:string;created_by:string;created_at:string}[];standings:CharterStanding[]};standing:CharterStanding[];preview:{valid:boolean;blockers:string[];relationships:string[];eligible_participants:number;decision_eligibility:Record<string,number>} };
-export type GovernanceReference={kind:string;resource_id:string;revision?:string;label:string;url?:string};
-export type GovernedProposal={id:string;scope_type:"repository"|"organization";scope_id:string;charter_version:number;source:GovernanceReference;title:string;summary:string;scope:string;alternatives:{id:string;title:string;summary:string;effects:string[]}[];evidence:GovernanceReference[];affected_resources:GovernanceReference[];disclosure_requirements:string[];implementation_effects:string[];rule:{decision_class:string;eligible_roles:string[];quorum:number;threshold:"majority"|"supermajority"|"consensus";secret_ballot:boolean;opens_at:string;closes_at:string};electorate:{user_id:string;roles:string[];eligible:boolean;reason?:string}[];analyses:{id:string;actor_type:"human"|"agent";actor_id:string;body:string;position:string;citations:GovernanceReference[];created_at:string}[];ballots:{id:string;actor_id?:string;choice?:string;reason?:string;receipt:string;cast_at:string;eligible_at_tally:boolean;eligibility_reason?:string}[];tally?:{status:string;eligible:number;participating:number;abstentions:number;recusals:number;counts:Record<string,number>;quorum_met:boolean;threshold_met:boolean;result?:string;contested:boolean;contest_reasons:string[];computed_at:string;verification_sha256:string};status:"open"|"closed";created_by:string;created_at:string};
+export type CharterRevision = {
+  id: string;
+  scope_type: "repository" | "organization";
+  scope_id: string;
+  version: number;
+  status: "draft" | "active";
+  title: string;
+  summary: string;
+  roles: { name: string; description: string; eligibility: string[] }[];
+  decision_classes: {
+    name: string;
+    description: string;
+    eligible_roles: string[];
+    participation: number;
+    quorum: number;
+    approval: "majority" | "consensus" | "supermajority";
+    protected_resources: string[];
+  }[];
+  procedures: {
+    terms: string;
+    removal: string;
+    succession: string;
+    amendments: string;
+  };
+  created_by: string;
+  created_at: string;
+  activated_by?: string;
+  activated_at?: string;
+};
+export type CharterStanding = {
+  id: string;
+  charter_version: number;
+  principal_type: "human";
+  principal_id: string;
+  role: string;
+  responsibilities: string;
+  evidence: {
+    kind: "contribution" | "review" | "support" | "ownership" | "membership";
+    resource_id: string;
+    summary: string;
+  }[];
+  status: string;
+  effective_status: string;
+  conflict_of_interest?: string;
+  starts_at?: string;
+  expires_at: string;
+  invited_by: string;
+  invited_at: string;
+  events: {
+    id: string;
+    kind: string;
+    actor_id: string;
+    reason: string;
+    created_at: string;
+  }[];
+  eligibility: string;
+  available_actions: string[];
+  nomination_available: boolean;
+  operational_access: string[];
+  authority_note: string;
+};
+export type CharterContinuity = {
+  id: string;
+  charter_version: number;
+  kind: "nomination" | "election" | "recall" | "succession" | "emergency";
+  role: string;
+  from_standing_id?: string;
+  to_standing_id?: string;
+  governance_proposal_id: string;
+  governance_tally_sha256: string;
+  reason: string;
+  resources: string[];
+  status: string;
+  effective_status: string;
+  expires_at: string;
+  review_at: string;
+  created_by: string;
+  created_at: string;
+  resolved_by?: string;
+  resolved_at?: string;
+  review_required: boolean;
+  authority_note: string;
+  events: {
+    id: string;
+    kind: string;
+    actor_id: string;
+    reason: string;
+    created_at: string;
+  }[];
+};
+export type CharterResponse = {
+  charter: {
+    scope_type: string;
+    scope_id: string;
+    active_version: number;
+    revisions: CharterRevision[];
+    approvals: {
+      id: string;
+      version: number;
+      actor_id: string;
+      decision: string;
+      reason: string;
+      created_at: string;
+    }[];
+    exceptions: {
+      id: string;
+      version: number;
+      decision_class: string;
+      resource: string;
+      reason: string;
+      expires_at: string;
+      created_by: string;
+      created_at: string;
+    }[];
+    standings: CharterStanding[];
+    continuity: CharterContinuity[];
+  };
+  standing: CharterStanding[];
+  continuity: CharterContinuity[];
+  preview: {
+    valid: boolean;
+    blockers: string[];
+    relationships: string[];
+    eligible_participants: number;
+    decision_eligibility: Record<string, number>;
+  };
+};
+export type GovernanceReference = {
+  kind: string;
+  resource_id: string;
+  revision?: string;
+  label: string;
+  url?: string;
+};
+export type GovernedProposal = {
+  id: string;
+  scope_type: "repository" | "organization";
+  scope_id: string;
+  charter_version: number;
+  source: GovernanceReference;
+  title: string;
+  summary: string;
+  scope: string;
+  alternatives: {
+    id: string;
+    title: string;
+    summary: string;
+    effects: string[];
+  }[];
+  evidence: GovernanceReference[];
+  affected_resources: GovernanceReference[];
+  disclosure_requirements: string[];
+  implementation_effects: string[];
+  rule: {
+    decision_class: string;
+    eligible_roles: string[];
+    quorum: number;
+    threshold: "majority" | "supermajority" | "consensus";
+    secret_ballot: boolean;
+    opens_at: string;
+    closes_at: string;
+  };
+  electorate: {
+    user_id: string;
+    roles: string[];
+    eligible: boolean;
+    reason?: string;
+  }[];
+  analyses: {
+    id: string;
+    actor_type: "human" | "agent";
+    actor_id: string;
+    body: string;
+    position: string;
+    citations: GovernanceReference[];
+    created_at: string;
+  }[];
+  ballots: {
+    id: string;
+    actor_id?: string;
+    choice?: string;
+    reason?: string;
+    receipt: string;
+    cast_at: string;
+    eligible_at_tally: boolean;
+    eligibility_reason?: string;
+  }[];
+  tally?: {
+    status: string;
+    eligible: number;
+    participating: number;
+    abstentions: number;
+    recusals: number;
+    counts: Record<string, number>;
+    quorum_met: boolean;
+    threshold_met: boolean;
+    result?: string;
+    contested: boolean;
+    contest_reasons: string[];
+    computed_at: string;
+    verification_sha256: string;
+  };
+  status: "open" | "closed";
+  created_by: string;
+  created_at: string;
+};
 export type ContributorPathway = {
   id: string;
   repository_id: string;
@@ -18,29 +219,105 @@ export type ContributorPathway = {
   prerequisites: string[];
   conduct: string;
   security: string;
-  setup: { summary: string; workspace_path?: string; verification_commands: string[] };
+  setup: {
+    summary: string;
+    workspace_path?: string;
+    verification_commands: string[];
+  };
   communication: string;
   review_policy: string;
-  work_categories: { name: string; description: string; audience: "human" | "agent" | "human_or_agent" }[];
-  requirements: { kind: "documentation" | "ownership" | "release" | "issue" | "proposal" | "workspace_definition"; label: string; resource_id?: string; path?: string; revision?: string; status?: "current" | "stale" | "inaccessible"; status_detail?: string }[];
+  work_categories: {
+    name: string;
+    description: string;
+    audience: "human" | "agent" | "human_or_agent";
+  }[];
+  requirements: {
+    kind:
+      | "documentation"
+      | "ownership"
+      | "release"
+      | "issue"
+      | "proposal"
+      | "workspace_definition";
+    label: string;
+    resource_id?: string;
+    path?: string;
+    revision?: string;
+    status?: "current" | "stale" | "inaccessible";
+    status_detail?: string;
+  }[];
   published_by: string;
   published_at: string;
 };
 export type ContributorPathwayResponse = {
   pathway: ContributorPathway;
   history: ContributorPathway[];
-  acknowledgements: { id: string; version: number; actor_id: string; acknowledged_at: string }[];
+  acknowledgements: {
+    id: string;
+    version: number;
+    actor_id: string;
+    acknowledged_at: string;
+  }[];
   acknowledgement_count: number;
 };
 export type ContributionOpportunity = {
-  id: string; repository_id: string; version: number; title: string; expected_outcome: string; scope: string;
-  source: { kind: "issue" | "proposal" | "stewardship" | "task"; id: string; parent_id?: string };
-  required_skills: string[]; interests: string[]; dependency_ids: string[]; risk: "low" | "medium" | "high";
-  estimated_minutes: number; agent_assistance: boolean; mentors: { user_id: string; note?: string }[];
-  revision: string; status: "open" | "in_progress" | "paused" | "completed"; claim?: { id: string; actor_id: string; note?: string; claimed_at: string; expires_at: string };
-  completion?: { contributor_id:string; pull_request_id:string; release_id:string; release_version:string; merge_commit_id:string; credit:string[]; feedback:string; support_effort:{ setup_attempts:number; mentor_guidance_items:number; agent_assistance_items:number }; readiness:{ ready_for_next:boolean; skills_recognized:string[]; next_opportunity_id?:string; note:string }; recorded_by:string; recorded_at:string };
+  id: string;
+  repository_id: string;
+  version: number;
+  title: string;
+  expected_outcome: string;
+  scope: string;
+  source: {
+    kind: "issue" | "proposal" | "stewardship" | "task";
+    id: string;
+    parent_id?: string;
+  };
+  required_skills: string[];
+  interests: string[];
+  dependency_ids: string[];
+  risk: "low" | "medium" | "high";
+  estimated_minutes: number;
+  agent_assistance: boolean;
+  mentors: { user_id: string; note?: string }[];
+  revision: string;
+  status: "open" | "in_progress" | "paused" | "completed";
+  claim?: {
+    id: string;
+    actor_id: string;
+    note?: string;
+    claimed_at: string;
+    expires_at: string;
+  };
+  completion?: {
+    contributor_id: string;
+    pull_request_id: string;
+    release_id: string;
+    release_version: string;
+    merge_commit_id: string;
+    credit: string[];
+    feedback: string;
+    support_effort: {
+      setup_attempts: number;
+      mentor_guidance_items: number;
+      agent_assistance_items: number;
+    };
+    readiness: {
+      ready_for_next: boolean;
+      skills_recognized: string[];
+      next_opportunity_id?: string;
+      note: string;
+    };
+    recorded_by: string;
+    recorded_at: string;
+  };
 };
-export type ContributionMatch = { opportunity: ContributionOpportunity; score: number; reasons: string[]; gaps: string[]; ready: boolean };
+export type ContributionMatch = {
+  opportunity: ContributionOpportunity;
+  score: number;
+  reasons: string[];
+  gaps: string[];
+  ready: boolean;
+};
 export type DeliveryTeam = {
   id: string;
   repository_id: string;
@@ -688,9 +965,20 @@ export type DevelopmentWorkspace = {
     opportunity_id?: string;
   };
   contributor_context?: {
-    opportunity_id: string; opportunity_version: number; upstream_repository_id: string; pathway_version: number;
-    guidance: string; prerequisites: string[]; acceptance_criteria: string[]; evidence_kind: string; evidence_id: string;
-    evidence_parent_id?: string; sample_attachment_ids?: string[]; diagnostics: string[]; mentor_ids: string[]; agent_assistance: boolean;
+    opportunity_id: string;
+    opportunity_version: number;
+    upstream_repository_id: string;
+    pathway_version: number;
+    guidance: string;
+    prerequisites: string[];
+    acceptance_criteria: string[];
+    evidence_kind: string;
+    evidence_id: string;
+    evidence_parent_id?: string;
+    sample_attachment_ids?: string[];
+    diagnostics: string[];
+    mentor_ids: string[];
+    agent_assistance: boolean;
     help: ContributionHelp;
   };
   definition: {
@@ -777,8 +1065,33 @@ export type DevelopmentWorkspace = {
   rebuild_required: boolean;
   rebuild_reasons: string[];
 };
-export type ContributionHelpEntry = {id:string;kind:string;actor_id:string;agent_id?:string;action?:string;body:string;reply_to?:string;status:string;decision_owner:"contributor"|"maintainer";due_at?:string;created_at:string;resolved_at?:string};
-export type ContributionHelp = {version:number;state:"active"|"reassignment_requested"|"exited";state_reason?:string;entries:ContributionHelpEntry[];mentor_availability:{mentor_id:string;status:string;response_hours?:number;note?:string;updated_at:string}[]};
+export type ContributionHelpEntry = {
+  id: string;
+  kind: string;
+  actor_id: string;
+  agent_id?: string;
+  action?: string;
+  body: string;
+  reply_to?: string;
+  status: string;
+  decision_owner: "contributor" | "maintainer";
+  due_at?: string;
+  created_at: string;
+  resolved_at?: string;
+};
+export type ContributionHelp = {
+  version: number;
+  state: "active" | "reassignment_requested" | "exited";
+  state_reason?: string;
+  entries: ContributionHelpEntry[];
+  mentor_availability: {
+    mentor_id: string;
+    status: string;
+    response_hours?: number;
+    note?: string;
+    updated_at: string;
+  }[];
+};
 export type WorkspacePolicy = {
   version: number;
   max_cpus: number;
@@ -852,7 +1165,11 @@ export type CheckpointAnalysis = {
   reproducible: boolean;
   reasons: string[];
 };
-export type ContributionPublicationFinding = { code: string; message: string; fix: string };
+export type ContributionPublicationFinding = {
+  code: string;
+  message: string;
+  fix: string;
+};
 export type ContributionPublicationAssessment = {
   ready: boolean;
   project_requirements: ContributionPublicationFinding[];
@@ -1729,24 +2046,183 @@ export type Issue = {
     data: string;
     created_at: string;
   }[];
-  discussion: { id: string; author_id: string; body: string; created_at: string }[];
-  history: { id: string; kind: string; actor_id: string; from?: string; to?: string; message?: string; created_at: string }[];
-  reproduction_attempts: {
-    id: string; workspace_id: string; commit_id: string; release_id?: string; definition_sha256: string;
-    environment_definition: { image: string; tools: { name: string; version: string }[]; dependencies: string[]; resources: { cpus: number; memory_mb: number; storage_mb: number; setup_seconds: number } };
-    inputs: { attachment_id: string; name: string; sha256: string; size: number }[];
-    commands: { name: string; outcome_id: string; command_sha256: string; exit_code: number; log?: string; started_at: string; completed_at: string }[];
-    artifacts: { name: string; media_type: string; sha256: string; size: number; data?: string }[];
-    observed_result: string; result: "reproduced" | "not_reproduced" | "inconclusive"; reproduced_by: string; created_at: string;
+  discussion: {
+    id: string;
+    author_id: string;
+    body: string;
+    created_at: string;
   }[];
-  triage: { classification?: "bug" | "regression" | "performance" | "compatibility" | "documentation" | "support" | "unknown"; priority?: "low" | "normal" | "high" | "urgent"; assignee_id?: string; suspected_revision?: string; suspected_owner_ids?: string[]; updated_by?: string; updated_at?: string };
-  links: { id: string; kind: "code" | "dependency" | "release" | "deployment" | "incident" | "proposal" | "pull_request" | "issue"; repository_id?: string; resource_id: string; revision?: string; label: string; added_by: string; created_at: string }[];
-  evidence_requests: { id: string; body: string; requested_from: string; requested_by: string; state: "open" | "answered"; response?: string; responded_by?: string; created_at: string; updated_at: string }[];
-  findings: { id: string; kind: "hypothesis" | "finding" | "uncertainty"; statement: string; actor_id: string; investigation_id?: string; citation_ids: string[]; supersedes_id?: string; challenges?: { id: string; actor_id: string; body: string; created_at: string }[]; created_at: string }[];
-  investigations: { id: string; agent_id: string; initiator_id: string; mandate: string; reproduction_attempt_id: string; link_ids: string[]; state: string; created_at: string; updated_at: string }[];
-  implementation?: { proposal_id: string; task_id: string; reproduction_attempt_id: string; finding_ids: string[]; affected_revision: string; acceptance_criteria: string[]; created_by: string; created_at: string };
-  repair_verifications?: { id:string; pull_request_id:string; candidate_commit_id:string; reproduction_attempt_id:string; definition_sha256:string; input_sha256s:string[]; acceptance_criteria:string[]; required_run_ids:string[]; reproduction_run_ids:string[]; requested_by:string; preview_allowed:boolean; preview_workspace_id?:string; decisions:{id:string;kind:"confirmed"|"rejected"|"maintainer_override";actor_id:string;commit_id:string;rationale:string;created_at:string}[]; created_at:string }[];
-  delivery_resolution?: { id:string; repair_verification_id:string; release_id:string; release_version:string; release_commit_id:string; deployment_id:string; environment_id:string; artifact_sha256:string; reporter_decision_id:string; recorded_by:string; created_at:string };
+  history: {
+    id: string;
+    kind: string;
+    actor_id: string;
+    from?: string;
+    to?: string;
+    message?: string;
+    created_at: string;
+  }[];
+  reproduction_attempts: {
+    id: string;
+    workspace_id: string;
+    commit_id: string;
+    release_id?: string;
+    definition_sha256: string;
+    environment_definition: {
+      image: string;
+      tools: { name: string; version: string }[];
+      dependencies: string[];
+      resources: {
+        cpus: number;
+        memory_mb: number;
+        storage_mb: number;
+        setup_seconds: number;
+      };
+    };
+    inputs: {
+      attachment_id: string;
+      name: string;
+      sha256: string;
+      size: number;
+    }[];
+    commands: {
+      name: string;
+      outcome_id: string;
+      command_sha256: string;
+      exit_code: number;
+      log?: string;
+      started_at: string;
+      completed_at: string;
+    }[];
+    artifacts: {
+      name: string;
+      media_type: string;
+      sha256: string;
+      size: number;
+      data?: string;
+    }[];
+    observed_result: string;
+    result: "reproduced" | "not_reproduced" | "inconclusive";
+    reproduced_by: string;
+    created_at: string;
+  }[];
+  triage: {
+    classification?:
+      | "bug"
+      | "regression"
+      | "performance"
+      | "compatibility"
+      | "documentation"
+      | "support"
+      | "unknown";
+    priority?: "low" | "normal" | "high" | "urgent";
+    assignee_id?: string;
+    suspected_revision?: string;
+    suspected_owner_ids?: string[];
+    updated_by?: string;
+    updated_at?: string;
+  };
+  links: {
+    id: string;
+    kind:
+      | "code"
+      | "dependency"
+      | "release"
+      | "deployment"
+      | "incident"
+      | "proposal"
+      | "pull_request"
+      | "issue";
+    repository_id?: string;
+    resource_id: string;
+    revision?: string;
+    label: string;
+    added_by: string;
+    created_at: string;
+  }[];
+  evidence_requests: {
+    id: string;
+    body: string;
+    requested_from: string;
+    requested_by: string;
+    state: "open" | "answered";
+    response?: string;
+    responded_by?: string;
+    created_at: string;
+    updated_at: string;
+  }[];
+  findings: {
+    id: string;
+    kind: "hypothesis" | "finding" | "uncertainty";
+    statement: string;
+    actor_id: string;
+    investigation_id?: string;
+    citation_ids: string[];
+    supersedes_id?: string;
+    challenges?: {
+      id: string;
+      actor_id: string;
+      body: string;
+      created_at: string;
+    }[];
+    created_at: string;
+  }[];
+  investigations: {
+    id: string;
+    agent_id: string;
+    initiator_id: string;
+    mandate: string;
+    reproduction_attempt_id: string;
+    link_ids: string[];
+    state: string;
+    created_at: string;
+    updated_at: string;
+  }[];
+  implementation?: {
+    proposal_id: string;
+    task_id: string;
+    reproduction_attempt_id: string;
+    finding_ids: string[];
+    affected_revision: string;
+    acceptance_criteria: string[];
+    created_by: string;
+    created_at: string;
+  };
+  repair_verifications?: {
+    id: string;
+    pull_request_id: string;
+    candidate_commit_id: string;
+    reproduction_attempt_id: string;
+    definition_sha256: string;
+    input_sha256s: string[];
+    acceptance_criteria: string[];
+    required_run_ids: string[];
+    reproduction_run_ids: string[];
+    requested_by: string;
+    preview_allowed: boolean;
+    preview_workspace_id?: string;
+    decisions: {
+      id: string;
+      kind: "confirmed" | "rejected" | "maintainer_override";
+      actor_id: string;
+      commit_id: string;
+      rationale: string;
+      created_at: string;
+    }[];
+    created_at: string;
+  }[];
+  delivery_resolution?: {
+    id: string;
+    repair_verification_id: string;
+    release_id: string;
+    release_version: string;
+    release_commit_id: string;
+    deployment_id: string;
+    environment_id: string;
+    artifact_sha256: string;
+    reporter_decision_id: string;
+    recorded_by: string;
+    created_at: string;
+  };
   duplicate_of?: string;
   version: number;
   created_at: string;
@@ -2137,8 +2613,8 @@ export type PullRequest = {
   repository_id: string;
   source_repository_id: string;
   author_id: string;
-	  federated_author?: string;
-	  federated_contribution_id?: string;
+  federated_author?: string;
+  federated_contribution_id?: string;
   title: string;
   body: string;
   source_branch: string;
@@ -2182,11 +2658,17 @@ export type PullRequest = {
   workspace_contributor_ids?: string[];
   workspace_command_ids?: string[];
   contribution_evidence?: {
-    opportunity_id: string; opportunity_version: number; pathway_version: number; upstream_revision: string;
+    opportunity_id: string;
+    opportunity_version: number;
+    pathway_version: number;
+    upstream_revision: string;
     setup_evidence: { command: string; state: string; exit_code: number }[];
-    mentor_guidance_ids: string[]; agent_assistance_ids: string[];
-    acceptance_criteria: string[]; satisfied_criteria: string[];
-    project_requirements: ContributionPublicationFinding[]; coaching_needs: ContributionPublicationFinding[];
+    mentor_guidance_ids: string[];
+    agent_assistance_ids: string[];
+    acceptance_criteria: string[];
+    satisfied_criteria: string[];
+    project_requirements: ContributionPublicationFinding[];
+    coaching_needs: ContributionPublicationFinding[];
   };
   status: "open" | "closed" | "merged";
   maintainer_edits_allowed: boolean;
@@ -2207,20 +2689,95 @@ export type PullRequestCommit = {
   message: string;
 };
 export type PullPreview = {
-  id: string; repository_id: string; pull_request_id: string; revision: string; creator_id: string;
-  definition_sha256: string; build_run_id: string; state: string; stale: boolean; url: string; created_at: string; updated_at: string;
-  invitations: { id:string; user_id:string; role:"view"|"test"|"feedback"; source_kind:"user"|"issue"|"decision"|"proposal"; source_id?:string; expires_at:string; revoked_at?:string }[];
-	findings: PreviewFinding[];
-  definition: { version: number; image: string; build: string; working_directory?: string; output_path: string; environment?: Record<string,string>; access:{network:"none";data:"preview_artifacts";identity:"named_users";actions:("view"|"test"|"feedback")[]}; resources: { cpus: number; memory_mb: number; storage_mb: number; timeout_seconds: number } };
+  id: string;
+  repository_id: string;
+  pull_request_id: string;
+  revision: string;
+  creator_id: string;
+  definition_sha256: string;
+  build_run_id: string;
+  state: string;
+  stale: boolean;
+  url: string;
+  created_at: string;
+  updated_at: string;
+  invitations: {
+    id: string;
+    user_id: string;
+    role: "view" | "test" | "feedback";
+    source_kind: "user" | "issue" | "decision" | "proposal";
+    source_id?: string;
+    expires_at: string;
+    revoked_at?: string;
+  }[];
+  findings: PreviewFinding[];
+  definition: {
+    version: number;
+    image: string;
+    build: string;
+    working_directory?: string;
+    output_path: string;
+    environment?: Record<string, string>;
+    access: {
+      network: "none";
+      data: "preview_artifacts";
+      identity: "named_users";
+      actions: ("view" | "test" | "feedback")[];
+    };
+    resources: {
+      cpus: number;
+      memory_mb: number;
+      storage_mb: number;
+      timeout_seconds: number;
+    };
+  };
 };
 export type PreviewFinding = {
-  id:string; preview_id:string; revision:string; route:string; title:string; description:string;
-  classification:"bug"|"usability"|"accessibility"|"content"|"performance"|"question"|"other";
-  severity:"blocking"|"major"|"minor"|"note"; status:"open"|"resolved"; duplicate_of?:string;
-  reproduction_steps:string[]; author_id:string; version:number; created_at:string; updated_at:string;
-  evidence:{id:string;kind:"screenshot"|"recording"|"console"|"trace"|"annotation";name:string;media_type:string;size:number;data?:string;redacted:boolean}[];
-  comments:{id:string;author_id:string;body:string;created_at:string}[];
-  repair?: { session_id:string; acceptance_criteria:string[]; created_by:string; created_at:string; published_commit_id?:string; preview_attempt_id?:string };
+  id: string;
+  preview_id: string;
+  revision: string;
+  route: string;
+  title: string;
+  description: string;
+  classification:
+    | "bug"
+    | "usability"
+    | "accessibility"
+    | "content"
+    | "performance"
+    | "question"
+    | "other";
+  severity: "blocking" | "major" | "minor" | "note";
+  status: "open" | "resolved";
+  duplicate_of?: string;
+  reproduction_steps: string[];
+  author_id: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  evidence: {
+    id: string;
+    kind: "screenshot" | "recording" | "console" | "trace" | "annotation";
+    name: string;
+    media_type: string;
+    size: number;
+    data?: string;
+    redacted: boolean;
+  }[];
+  comments: {
+    id: string;
+    author_id: string;
+    body: string;
+    created_at: string;
+  }[];
+  repair?: {
+    session_id: string;
+    acceptance_criteria: string[];
+    created_by: string;
+    created_at: string;
+    published_commit_id?: string;
+    preview_attempt_id?: string;
+  };
 };
 export type FileChange = {
   path: string;
@@ -2248,13 +2805,60 @@ export type PullRequestReview = {
   updated_at: string;
 };
 export type DocumentationPullReview = {
-  repository_id:string; pull_request_id:string; revision:string; base_revision:string; root_path:string;
-  pages:{path:string;slug:string;title:string;source_sha256:string;rendered_html:string;status:"current"|"stale"}[];
-  navigation_changes:{kind:string;path:string;before?:string;after?:string}[];
-  verified_examples:{run_id:string;name:string;state:string;version:string;revision:string;selectors:string[];artifact_ids?:string[]}[];
-  affected_versions:string[]; gaps:{id:string;path?:string;area:string;detail:string;identified_by:string}[];
-  entries:{id:string;kind:string;path:string;area:string;body:string;actor_id:string;stale:boolean}[];
-  decisions:{id:string;path:string;area:string;outcome:string;body?:string;actor_id:string;stale:boolean}[];
+  repository_id: string;
+  pull_request_id: string;
+  revision: string;
+  base_revision: string;
+  root_path: string;
+  pages: {
+    path: string;
+    slug: string;
+    title: string;
+    source_sha256: string;
+    rendered_html: string;
+    status: "current" | "stale";
+  }[];
+  navigation_changes: {
+    kind: string;
+    path: string;
+    before?: string;
+    after?: string;
+  }[];
+  verified_examples: {
+    run_id: string;
+    name: string;
+    state: string;
+    version: string;
+    revision: string;
+    selectors: string[];
+    artifact_ids?: string[];
+  }[];
+  affected_versions: string[];
+  gaps: {
+    id: string;
+    path?: string;
+    area: string;
+    detail: string;
+    identified_by: string;
+  }[];
+  entries: {
+    id: string;
+    kind: string;
+    path: string;
+    area: string;
+    body: string;
+    actor_id: string;
+    stale: boolean;
+  }[];
+  decisions: {
+    id: string;
+    path: string;
+    area: string;
+    outcome: string;
+    body?: string;
+    actor_id: string;
+    stale: boolean;
+  }[];
 };
 export type PullRequestBranchState = {
   branch: string;
@@ -2281,10 +2885,51 @@ export type MergeReadiness = {
   preview_acceptance?: {
     revision: string;
     policy_version: number;
-    applicable: { id: string; paths: string[]; risk_classes: string[]; scenarios: { name: string; role: "owner" | "contributor" | "author" | "stakeholder"; blocking: boolean }[] }[];
-    decisions: { id: string; revision: string; policy_version: number; idempotency_key: string; requirement_id: string; scenario: string; role: string; outcome: "accepted" | "rejected" | "overridden"; rationale?: string; actor_id: string; created_at: string }[];
-    stale_decisions: { id: string; revision: string; policy_version: number; idempotency_key: string; requirement_id: string; scenario: string; role: string; outcome: string; rationale?: string; actor_id: string; created_at: string }[];
-    findings: { id: string; preview_id: string; revision: string; title: string; severity: string; status: string; author_id: string }[];
+    applicable: {
+      id: string;
+      paths: string[];
+      risk_classes: string[];
+      scenarios: {
+        name: string;
+        role: "owner" | "contributor" | "author" | "stakeholder";
+        blocking: boolean;
+      }[];
+    }[];
+    decisions: {
+      id: string;
+      revision: string;
+      policy_version: number;
+      idempotency_key: string;
+      requirement_id: string;
+      scenario: string;
+      role: string;
+      outcome: "accepted" | "rejected" | "overridden";
+      rationale?: string;
+      actor_id: string;
+      created_at: string;
+    }[];
+    stale_decisions: {
+      id: string;
+      revision: string;
+      policy_version: number;
+      idempotency_key: string;
+      requirement_id: string;
+      scenario: string;
+      role: string;
+      outcome: string;
+      rationale?: string;
+      actor_id: string;
+      created_at: string;
+    }[];
+    findings: {
+      id: string;
+      preview_id: string;
+      revision: string;
+      title: string;
+      severity: string;
+      status: string;
+      author_id: string;
+    }[];
     missing: { requirement_id: string; scenario: string; role: string }[];
     blocking: boolean;
   };
@@ -2321,7 +2966,21 @@ export type CheckRun = {
   repository_id: string;
   pull_request_id: string;
   commit_id: string;
-  definition: { name: string; image: string; command: string; documentation?: { check: string; collection_id: string; version: string; revision: string; source: "source" | "package" | "release"; selectors: string[]; dependency_paths: string[]; dependency_sha256: string } };
+  definition: {
+    name: string;
+    image: string;
+    command: string;
+    documentation?: {
+      check: string;
+      collection_id: string;
+      version: string;
+      revision: string;
+      source: "source" | "package" | "release";
+      selectors: string[];
+      dependency_paths: string[];
+      dependency_sha256: string;
+    };
+  };
   state: string;
   failure?: string;
   created_at: string;
@@ -2368,7 +3027,34 @@ export type ChangeSession = {
   pull_request_id: string;
   initiator_id: string;
   source_commit_id: string;
-  preview_evidence?: { preview_id:string; finding_id:string; revision:string; route:string; title:string; description?:string; classification:string; severity:string; author_id:string; reproduction_steps:string[]; acceptance_criteria:string[]; evidence:{id:string;kind:string;name:string;media_type:string;size:number;data?:string;redacted:boolean}[]; discussion:{id:string;author_id:string;body:string;created_at:string}[] };
+  preview_evidence?: {
+    preview_id: string;
+    finding_id: string;
+    revision: string;
+    route: string;
+    title: string;
+    description?: string;
+    classification: string;
+    severity: string;
+    author_id: string;
+    reproduction_steps: string[];
+    acceptance_criteria: string[];
+    evidence: {
+      id: string;
+      kind: string;
+      name: string;
+      media_type: string;
+      size: number;
+      data?: string;
+      redacted: boolean;
+    }[];
+    discussion: {
+      id: string;
+      author_id: string;
+      body: string;
+      created_at: string;
+    }[];
+  };
   check_evidence?: {
     run_id: string;
     definition: {
@@ -2574,8 +3260,128 @@ export async function api<T>(
 ): Promise<T> {
   return (await apiResponse<T>(path, init, token)).data;
 }
-export type DocumentationDiagnostic = { code:string; severity:"error"|"warning"; page_path?:string; version_label?:string; detail:string };
-export type DocumentationCollection = { id:string; repository_id:string; collection_id:string; version:number; name:string; description:string; root_path:string; source_ref:string; source_revision:string; audience:"public"|"repository"|"maintainers"; owners:{actor_id:string;role:string}[]; supported_versions:{label:string;source_ref:string;release_id?:string;revision?:string;status?:string;status_detail?:string}[]; navigation:{label:string;slug:string;position:number}[]; rendering:{format:string;syntax_highlighting:boolean;table_of_contents:boolean}; publication_policy:{review_required:boolean;source_branch:string;publish_on_merge:boolean;redirects?:{from:string;to:string}[]}; pages:{path:string;slug:string;title:string;navigation_title?:string;position:number;source_object_id:string;source_sha256:string;authors:string[];links:{kind:string;label:string;resource_id?:string;symbol?:string;path?:string}[];status?:string;status_detail?:string}[]; published_by:string;published_at:string;published_pull_id?:string;diagnostics:DocumentationDiagnostic[] };
-export type DocumentationFeedback={id:string;revision_id:string;page_slug?:string;kind:string;body:string;version_label?:string;query?:string;reporter_id:string;created_at:string;status:string;triage_kind?:string;linked_resource_id?:string};
-export type DocumentationReference={path?:string;start_line?:number;end_line?:number;revision:string;resource_kind?:string;resource_id?:string;label:string};
-export type DocumentationTask={id:string;repository_id:string;title:string;path:string;branch:string;base_revision:string;source:{kind:string;resource_id:string;revision:string;label:string};created_by:string;created_at:string;version:number;drafts:{id:string;version:number;body:string;rendered_html:string;author_id:string;references:DocumentationReference[];created_at:string}[];entries:{id:string;kind:string;body:string;actor_id:string;agent_id?:string;draft_version:number;references?:DocumentationReference[];uncertain?:boolean;created_at:string}[];workspace_id?:string;published_collection_id?:string};
+export type DocumentationDiagnostic = {
+  code: string;
+  severity: "error" | "warning";
+  page_path?: string;
+  version_label?: string;
+  detail: string;
+};
+export type DocumentationCollection = {
+  id: string;
+  repository_id: string;
+  collection_id: string;
+  version: number;
+  name: string;
+  description: string;
+  root_path: string;
+  source_ref: string;
+  source_revision: string;
+  audience: "public" | "repository" | "maintainers";
+  owners: { actor_id: string; role: string }[];
+  supported_versions: {
+    label: string;
+    source_ref: string;
+    release_id?: string;
+    revision?: string;
+    status?: string;
+    status_detail?: string;
+  }[];
+  navigation: { label: string; slug: string; position: number }[];
+  rendering: {
+    format: string;
+    syntax_highlighting: boolean;
+    table_of_contents: boolean;
+  };
+  publication_policy: {
+    review_required: boolean;
+    source_branch: string;
+    publish_on_merge: boolean;
+    redirects?: { from: string; to: string }[];
+  };
+  pages: {
+    path: string;
+    slug: string;
+    title: string;
+    navigation_title?: string;
+    position: number;
+    source_object_id: string;
+    source_sha256: string;
+    authors: string[];
+    links: {
+      kind: string;
+      label: string;
+      resource_id?: string;
+      symbol?: string;
+      path?: string;
+    }[];
+    status?: string;
+    status_detail?: string;
+  }[];
+  published_by: string;
+  published_at: string;
+  published_pull_id?: string;
+  diagnostics: DocumentationDiagnostic[];
+};
+export type DocumentationFeedback = {
+  id: string;
+  revision_id: string;
+  page_slug?: string;
+  kind: string;
+  body: string;
+  version_label?: string;
+  query?: string;
+  reporter_id: string;
+  created_at: string;
+  status: string;
+  triage_kind?: string;
+  linked_resource_id?: string;
+};
+export type DocumentationReference = {
+  path?: string;
+  start_line?: number;
+  end_line?: number;
+  revision: string;
+  resource_kind?: string;
+  resource_id?: string;
+  label: string;
+};
+export type DocumentationTask = {
+  id: string;
+  repository_id: string;
+  title: string;
+  path: string;
+  branch: string;
+  base_revision: string;
+  source: {
+    kind: string;
+    resource_id: string;
+    revision: string;
+    label: string;
+  };
+  created_by: string;
+  created_at: string;
+  version: number;
+  drafts: {
+    id: string;
+    version: number;
+    body: string;
+    rendered_html: string;
+    author_id: string;
+    references: DocumentationReference[];
+    created_at: string;
+  }[];
+  entries: {
+    id: string;
+    kind: string;
+    body: string;
+    actor_id: string;
+    agent_id?: string;
+    draft_version: number;
+    references?: DocumentationReference[];
+    uncertain?: boolean;
+    created_at: string;
+  }[];
+  workspace_id?: string;
+  published_collection_id?: string;
+};
