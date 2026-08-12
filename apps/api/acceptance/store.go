@@ -141,7 +141,7 @@ func validPolicy(p Policy) bool {
 		}
 		seen := map[string]bool{}
 		for _, s := range q.Scenarios {
-			if !clean(s.Name) || (s.Role != "owner" && s.Role != "contributor" && s.Role != "author") || seen[s.Name+"\x00"+s.Role] {
+			if !clean(s.Name) || (s.Role != "owner" && s.Role != "contributor" && s.Role != "author" && s.Role != "stakeholder") || seen[s.Name+"\x00"+s.Role] {
 				return false
 			}
 			seen[s.Name+"\x00"+s.Role] = true

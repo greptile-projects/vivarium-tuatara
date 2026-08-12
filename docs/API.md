@@ -6,7 +6,8 @@ Repository owners define the acceptance gate for a target branch with `GET`
 and `PUT /repositories/{id}/branches/{branch}/preview-acceptance`. A complete
 replacement contains `requirements`; each requirement has a unique `id`,
 optional path globs and risk-class labels, and one or more named `scenarios`.
-Every scenario names the participant role (`owner`, `contributor`, or `author`)
+Every scenario names the participant role (`owner`, `contributor`, `author`, or
+`stakeholder`)
 and whether it blocks merge. Risk-class requirements apply to the selected
 target branch and cannot be evaded by omitting a caller-supplied classification;
 path requirements apply only when the pull changes a matching path.
@@ -31,6 +32,15 @@ required checks. Both direct merge and integration-queue admission recompute
 this same report. The queue also rechecks it immediately before landing and
 durably pauses an invalidated entry, so an older preview decision or newly
 blocking finding cannot authorize a queued commit.
+
+The `stakeholder` role requires a live `feedback` invitation to a preview of
+the pull's exact current revision. Expiry, revocation, or source movement
+removes decision authority immediately; retained earlier decisions become stale
+evidence and grant no source, log, credential, or repository access.
+Merge readiness revalidates that invitation on every read and again through the
+ordinary direct-merge or queue-landing readiness boundary. Invitation
+publication and final Git publication share one admission lock, so revocation
+commits wholly before readiness or after the authorized merge effect.
 
 ## Change preview audiences
 

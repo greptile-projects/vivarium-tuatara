@@ -891,7 +891,12 @@ whenever dependencies change or the web job fails before it starts.
   participation.
   Repository owners define preview acceptance requirements per target branch,
   optionally selecting changed paths or owner-authored risk classes and naming
-  required scenarios plus owner, contributor, or author roles. Attributable
+  required scenarios plus owner, contributor, author, or stakeholder roles.
+  Stakeholder decisions require a live feedback invitation to a preview of the
+  exact adopted revision; expiry, revocation, and source movement fail closed
+  without granting repository access, and every readiness/merge/queue check
+  revalidates that invitation. Final direct and queued Git publication shares
+  the preview audience admission lock with invitation mutation. Attributable
   acceptance, rejection, and owner-only justified override decisions freeze the
   exact adopted revision and policy version. Synchronization or policy
   replacement retains older decisions as stale,

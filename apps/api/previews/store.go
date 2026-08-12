@@ -301,6 +301,11 @@ func (s *Store) Invite(repo, pull, id, actor, user, role, sourceKind, sourceID s
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Preview{}, err
+	}
+	defer unlock()
 	now := s.now()
 	if !expiresAt.After(now) || expiresAt.After(now.Add(30*24*time.Hour)) {
 		return Preview{}, ErrInvalid
@@ -331,6 +336,11 @@ func (s *Store) Invite(repo, pull, id, actor, user, role, sourceKind, sourceID s
 func (s *Store) Revoke(repo, pull, id, invitationID, actor string) (Preview, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Preview{}, err
+	}
+	defer unlock()
 	p, err := s.Get(repo, pull, id)
 	if err != nil {
 		return Preview{}, err
@@ -348,6 +358,17 @@ func (s *Store) Revoke(repo, pull, id, invitationID, actor string) (Preview, err
 		}
 	}
 	return Preview{}, ErrNotFound
+}
+
+// WithAudienceAdmission excludes invitation publication while a caller
+// revalidates audience-backed authority and commits its authorized effect.
+func (s *Store) WithAudienceAdmission(callback func() error) error {
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return callback()
 }
 func (s *Store) Enter(repo, pull, id, user string) (Preview, Invitation, error) {
 	s.mu.Lock()
@@ -487,7 +508,7 @@ func (s *Store) AddFinding(repo, pull, id, actor, route, title, description, cla
 	title, _ = RedactSensitive(strings.TrimSpace(title))
 	description, _ = RedactSensitive(strings.TrimSpace(description))
 	now := s.now()
-	f := Finding{ID: newID(), PreviewID: p.ID, Revision: p.Revision, Route: route, Title: title, Description: description, Classification: classification, Severity: severity, Status: "open", DuplicateOf: duplicateOf, ReproductionSteps: steps, Evidence: evidence, AuthorID: actor, Version: 1, CreatedAt: now, UpdatedAt: now}
+	f := Finding{ID: newID(), PreviewID: p.ID, Revision: p.Revision, Route: route, Title: title, Description: description, Classification: classification, Severity: severity, Status: "open", DuplicateOf: duplicateOf, ReproductionSteps: steps, Evidence: evidence, Comments: []FindingComment{}, Events: []FindingEvent{}, AuthorID: actor, Version: 1, CreatedAt: now, UpdatedAt: now}
 	f.Events = append(f.Events, FindingEvent{ID: newID(), Kind: "created", ActorID: actor, CreatedAt: now})
 	if duplicateOf != "" {
 		f.Events = append(f.Events, FindingEvent{ID: newID(), Kind: "related_as_duplicate", ActorID: actor, To: duplicateOf, CreatedAt: now})

@@ -435,7 +435,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil {
 		if acceptanceStore != nil {
 			pullRequestStore.ConfigurePreviewAcceptance(acceptanceStore, previewStore)
-			registerAcceptanceRoutes(mux, repositoryCatalog, pullRequestStore, acceptanceStore, authStore)
+			registerAcceptanceRoutes(mux, repositoryCatalog, pullRequestStore, acceptanceStore, previewStore, authStore)
 		}
 		registerPullRequestRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, authStore, activityStore, userStore, checkRunStore, changeSessionStore)
 		if previewStore != nil && checkRunStore != nil {

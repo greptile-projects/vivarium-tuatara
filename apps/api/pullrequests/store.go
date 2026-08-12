@@ -495,6 +495,7 @@ type Store struct {
 	acceptance *acceptance.Store
 	previews   interface {
 		List(string, string, string) ([]previews.Preview, error)
+		WithAudienceAdmission(func() error) error
 	}
 }
 
@@ -1373,22 +1374,36 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 		for _, change := range changes {
 			paths = append(paths, change.Path)
 		}
-		risks := []string{}
-		for _, decision := range decisions {
-			if decision.Revision == p.SourceCommitID {
-				risks = append(risks, decision.RiskClasses...)
-			}
-		}
 		findings := []acceptance.Finding{}
+		activeStakeholders := map[string]bool{}
 		if s.previews != nil {
 			attempts, listErr := s.previews.List(repositoryID, pullRequestID, p.SourceCommitID)
 			if listErr != nil {
 				return MergeReadiness{}, listErr
 			}
 			for _, attempt := range attempts {
+				if attempt.Revision == p.SourceCommitID {
+					for _, invitation := range attempt.Invitations {
+						if invitation.Role == "feedback" && invitation.RevokedAt == nil && invitation.ExpiresAt.After(s.now()) {
+							activeStakeholders[invitation.UserID] = true
+						}
+					}
+				}
 				for _, finding := range attempt.Findings {
 					findings = append(findings, acceptance.Finding{ID: finding.ID, PreviewID: attempt.ID, Revision: finding.Revision, Title: finding.Title, Severity: finding.Severity, Status: finding.Status, AuthorID: finding.AuthorID})
 				}
+			}
+		}
+		risks := []string{}
+		for i := range decisions {
+			if decisions[i].Role == "stakeholder" && !activeStakeholders[decisions[i].ActorID] {
+				// Preserve the decision as stale evidence while making it ineligible
+				// to satisfy the live gate after invitation expiry or revocation.
+				decisions[i].PolicyVersion = 0
+				continue
+			}
+			if decisions[i].Revision == p.SourceCommitID {
+				risks = append(risks, decisions[i].RiskClasses...)
 			}
 		}
 		evaluation := acceptance.Evaluate(policy, p.SourceCommitID, paths, risks, decisions, findings)
@@ -1814,6 +1829,15 @@ func (s *Store) AdvanceIntegrationQueues() error {
 }
 
 func (s *Store) advanceIntegrationQueue(repositoryID, branch string) error {
+	if s.previews != nil {
+		return s.previews.WithAudienceAdmission(func() error {
+			return s.advanceIntegrationQueueAdmitted(repositoryID, branch)
+		})
+	}
+	return s.advanceIntegrationQueueAdmitted(repositoryID, branch)
+}
+
+func (s *Store) advanceIntegrationQueueAdmitted(repositoryID, branch string) error {
 	var finalizationFailures []error
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2150,6 +2174,22 @@ func candidateState(runs []checkruns.Run, required []string) string {
 // writes an attributable two-parent commit, advances the target with compare-
 // and-swap semantics, and closes the pull request.
 func (s *Store) Merge(repositoryID, pullRequestID, mergerID string) (PullRequest, error) {
+	var merged PullRequest
+	merge := func() error {
+		var err error
+		merged, err = s.merge(repositoryID, pullRequestID, mergerID)
+		return err
+	}
+	if s.previews != nil {
+		if err := s.previews.WithAudienceAdmission(merge); err != nil {
+			return PullRequest{}, err
+		}
+		return merged, nil
+	}
+	return merged, merge()
+}
+
+func (s *Store) merge(repositoryID, pullRequestID, mergerID string) (PullRequest, error) {
 	if !validID(mergerID) {
 		return PullRequest{}, ErrInvalid
 	}

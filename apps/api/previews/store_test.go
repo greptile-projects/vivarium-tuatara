@@ -273,3 +273,42 @@ func TestInviteRejectsExpiryElapsedWhileWaitingForStoreLock(t *testing.T) {
 		t.Fatalf("expired invitation persisted = %#v, %v", persisted.Invitations, err)
 	}
 }
+
+func TestAudienceAdmissionExcludesCommittedRevocation(t *testing.T) {
+	store, _ := New(t.TempDir())
+	preview, err := store.Create("repo", "pull", strings.Repeat("a", 40), "owner", strings.Repeat("b", 64), "run", Config{Version: 1, Access: AccessPolicy{Actions: []string{"feedback"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err = store.Invite("repo", "pull", preview.ID, "owner", "stakeholder", "feedback", "user", "", time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	admissionDone := make(chan error, 1)
+	go func() {
+		admissionDone <- store.WithAudienceAdmission(func() error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+	revokeDone := make(chan error, 1)
+	go func() {
+		_, revokeErr := store.Revoke("repo", "pull", preview.ID, preview.Invitations[0].ID, "owner")
+		revokeDone <- revokeErr
+	}()
+	select {
+	case err := <-revokeDone:
+		t.Fatalf("revocation committed inside audience admission: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if err := <-admissionDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-revokeDone; err != nil {
+		t.Fatal(err)
+	}
+}

@@ -7,12 +7,14 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/acceptance"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
@@ -680,6 +682,37 @@ func TestIntegrationQueuePausesWhenAcceptanceChangesAfterAdmission(t *testing.T)
 	blocked, _ := store.Get(repository.ID(), pull.ID)
 	if blocked.Status != Open || !blocked.QueuePaused || blocked.MergeCommitID != nil {
 		t.Fatalf("queue landed invalidated acceptance: %#v", blocked)
+	}
+}
+
+func TestStakeholderAcceptanceRequiresLiveInvitationAtReadiness(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	repository, _ := gitStore.Create(testID('1'))
+	baseTree, _ := repository.WriteObject(storage.TreeObject, nil)
+	base := writeCommit(t, repository, baseTree, "base")
+	changedBlob, _ := repository.WriteObject(storage.BlobObject, []byte("changed\n"))
+	changedTree, _ := repository.WriteObject(storage.TreeObject, testTree("experience.txt", changedBlob))
+	head := writeCommitWithParents(t, repository, changedTree, []storage.ObjectID{base}, "head")
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)})
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/topic", Target: string(head)})
+	store, _ := New(t.TempDir(), gitStore)
+	acceptanceStore, _ := acceptance.New(t.TempDir())
+	previewStore, _ := previews.New(t.TempDir())
+	store.ConfigurePreviewAcceptance(acceptanceStore, previewStore)
+	pull, _ := store.Create(repository.ID(), testID('a'), "Candidate", "", "topic", "main", nil)
+	_, _ = store.SetReview(repository.ID(), pull.ID, testID('b'), Approved)
+	policy, _ := acceptanceStore.SetPolicy(repository.ID(), "main", testID('c'), []acceptance.Requirement{{ID: "experience", Scenarios: []acceptance.Scenario{{Name: "customer path", Role: "stakeholder", Blocking: true}}}})
+	preview, _ := previewStore.Create(repository.ID(), pull.ID, pull.SourceCommitID, testID('d'), strings.Repeat("a", 64), testID('e'), previews.Config{Version: 1, Access: previews.AccessPolicy{Actions: []string{"feedback"}}})
+	preview, _ = previewStore.Invite(repository.ID(), pull.ID, preview.ID, testID('d'), testID('f'), "feedback", "user", "", time.Now().Add(time.Hour))
+	_, _ = acceptanceStore.Decide(acceptance.Decision{RepositoryID: repository.ID(), PullRequestID: pull.ID, Revision: pull.SourceCommitID, PolicyVersion: policy.Version, IdempotencyKey: "stakeholder-live", RequirementID: "experience", Scenario: "customer path", Role: "stakeholder", Outcome: "accepted", ActorID: testID('f')})
+	ready, _ := store.Readiness(repository.ID(), pull.ID, true)
+	if !ready.Mergeable {
+		t.Fatalf("live stakeholder acceptance did not satisfy gate: %#v", ready)
+	}
+	_, _ = previewStore.Revoke(repository.ID(), pull.ID, preview.ID, preview.Invitations[0].ID, testID('d'))
+	blocked, _ := store.Readiness(repository.ID(), pull.ID, true)
+	if blocked.Mergeable || blocked.PreviewAcceptance == nil || len(blocked.PreviewAcceptance.Missing) != 1 || len(blocked.PreviewAcceptance.StaleDecisions) != 1 {
+		t.Fatalf("revoked stakeholder acceptance remained live: %#v", blocked)
 	}
 }
 

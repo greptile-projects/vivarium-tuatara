@@ -713,6 +713,13 @@ executor builds that adopted commit and retains setup events and checksummed
 output. Successful builds expose only `index.html` through an authenticated,
 sandboxed URL. Records beneath `$PREVIEW_STORAGE_ROOT` (default `previews`)
 retain creator, revision, definition SHA-256, lifecycle, logs, and failures.
+The executor copies the immutable Git archive into a disposable bounded tmpfs
+before building, so source evidence stays read-only while ordinary compilers
+can create the declared, separately size-checked artifact output.
+The platform measures and reserves the immutable source copy separately from
+the preview's declared scratch allowance, so repository size cannot consume the
+build's promised writable capacity. Reservation rounds files to allocation
+pages and includes per-entry metadata rather than trusting logical byte length.
 Pull synchronization marks older previews stale without replacing their URL or
 evidence. Each definition fails closed with network `none`, artifact-only data,
 named identity, and explicit view, test, or feedback actions. A repository owner
@@ -736,7 +743,8 @@ renders controls from its effective feedback role; it does not require or
 project repository participation.
 Repository owners can layer target-branch preview acceptance policy over this
 evidence. Requirements select changed paths or owner-authored risk classes and
-name promised scenarios plus the owner, contributor, or pull-author role that
+name promised scenarios plus the owner, contributor, pull-author, or invited
+stakeholder role that
 must evaluate them. Acceptance, rejection, and owner-only justified override
 records are append-only and pinned to the adopted source commit and policy
 version. Pull readiness
@@ -744,7 +752,10 @@ shows current and stale decisions separately, blocks on missing current
 blocking scenarios or unresolved blocking preview findings, and reuses that
 same decision for merge and integration-queue admission. Synchronizing a newer
 commit therefore preserves the earlier evaluation as history while requiring
-the affected behavior to be evaluated again.
+the affected behavior to be evaluated again. Stakeholders can decide only
+while they hold a live feedback invitation to a preview of the exact adopted
+revision; expiry, revocation, or synchronization removes that authority without
+adding repository access.
 Decision publication uses a stable caller idempotency key and synced atomic
 storage, making an ambiguous retry converge on the original evidence. A
 rejection remains a veto until an owner records a reasoned override. Queue
