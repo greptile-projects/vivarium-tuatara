@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -86,11 +86,17 @@ test("code and guidance stay aligned through a reader-reported older-version rep
     run("docker", ["pull", "alpine:3.22"]),
   );
   const copies: string[] = [];
+  let ownerContext: BrowserContext | undefined;
+  let contributorContext: BrowserContext | undefined;
+  let readerContext: BrowserContext | undefined;
   try {
-    const suffix = Date.now().toString(36),
-      ownerPage = await (await browser.newContext()).newPage(),
-      contributorPage = await (await browser.newContext()).newPage(),
-      readerPage = await (await browser.newContext()).newPage();
+    const suffix = Date.now().toString(36);
+    ownerContext = await browser.newContext();
+    contributorContext = await browser.newContext();
+    readerContext = await browser.newContext();
+    const ownerPage = await ownerContext.newPage();
+    const contributorPage = await contributorContext.newPage();
+    const readerPage = await readerContext.newPage();
     const owner = await account(
         ownerPage,
         "Guide Owner",
@@ -280,7 +286,7 @@ test("code and guidance stay aligned through a reader-reported older-version rep
         },
       },
     );
-    let drafted = await json(
+    const drafted = await json(
       contributorPage,
       "post",
       `/repositories/${repository.id}/documentation-tasks/${task.id}/drafts`,
@@ -574,6 +580,22 @@ test("code and guidance stay aligned through a reader-reported older-version rep
       legacy.pages[0].source_sha256,
     );
     expect(final.collection.published_pull_id).toBe(repairPull.id);
+    const repairedPage = await json(
+      readerPage,
+      "get",
+      `/repositories/${repository.id}/documentation/${collection.collection_id}/pages/behavior?version=${final.collection.id}`,
+      reader.headers,
+    );
+    expect(repairedPage).toMatchObject({
+      archived: false,
+      collection: {
+        id: final.collection.id,
+        published_pull_id: repairPull.id,
+      },
+    });
+    expect(repairedPage.body).toContain(
+      "For v0.9.0 compatibility, expect `legacy` (not `legacy-compatible`).",
+    );
     const retained = (
       await json(
         ownerPage,
@@ -588,8 +610,11 @@ test("code and guidance stay aligned through a reader-reported older-version rep
       triaged_by: owner.user.id,
     });
   } finally {
-    await Promise.all(
-      copies.map((x) => rm(x, { recursive: true, force: true })),
-    );
+    await Promise.allSettled([
+      ownerContext?.close(),
+      contributorContext?.close(),
+      readerContext?.close(),
+      ...copies.map((x) => rm(x, { recursive: true, force: true })),
+    ]);
   }
 });
