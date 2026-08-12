@@ -1,5 +1,18 @@
 # HTTP API contract
 
+## Documentation collections
+
+- `GET /repositories/{id}/documentation` lists current visible collections.
+- `GET /repositories/{id}/documentation/{collection-id}` returns current
+  health and immutable revision history.
+- `PUT /repositories/{id}/documentation/{collection-id}` owner-publishes a
+  compare-and-swap revision; use `new` with `expected_version: 0` to create.
+
+Publication resolves `source_ref` to an exact commit and derives `.md`, `.mdx`,
+and `.adoc` pages beneath `root_path`. Responses retain source object, hash, and
+authorship evidence and report `missing_owner`, `broken_source`, `stale_source`,
+and `stale_version_mapping` diagnostics.
+
 ## Preview acceptance requirements
 
 Repository owners define the acceptance gate for a target branch with `GET`

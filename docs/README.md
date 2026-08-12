@@ -14,6 +14,22 @@ The supported consumer contract, including authentication, stable error
 shapes, validation, and collection pagination, is documented in [API.md](API.md).
 Consumers should use that HTTP boundary rather than reading storage roots.
 
+## Living documentation
+
+Repository owners define documentation collections through
+`/repositories/{id}/documentation`. Each immutable revision selects an exact
+source branch and commit, repository root path, supported source or release
+versions, owners, audience, navigation, rendering, and review/publication
+policy. Publication freezes every supported page's Git blob, SHA-256, title,
+author, ordering, and links to symbols, packages, releases, decisions, issues,
+and contributor guidance.
+
+Reads compare the reviewed snapshot with current source and release mappings.
+Missing owners, deleted paths, changed blobs, and moved versions remain explicit
+diagnostics while history is retained. Records default beneath
+`$DOCUMENTATION_STORAGE_ROOT` (`documentation`); the web workspace lives at
+`/repositories/{id}/documentation`.
+
 ## Contributor pathways
 
 Repository owners publish the project's participation contract before a
