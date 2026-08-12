@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -30,11 +31,11 @@ func TestMaintainerPublishesReviewedDocumentationAndHealthTracksSource(t *testin
 	tree := writeTestTree(t, gr, testTreeEntry{mode: "100644", name: "guide.md", id: blob})
 	commit := writeTestCommit(t, gr, tree, nil, 1, "review docs")
 	_ = gr.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(commit)})
-	body := `{"expected_version":0,"collection":{"name":"User guide","description":"Reviewed guidance","root_path":"guide.md","source_ref":"main","audience":"public","owners":[{"actor_id":"` + owner.User.ID + `","role":"maintainer"}],"supported_versions":[{"label":"main","source_ref":"main","revision":"` + string(commit) + `"}],"rendering":{"format":"markdown","syntax_highlighting":true,"table_of_contents":true},"publication_policy":{"review_required":true,"source_branch":"main","publish_on_merge":true}}}`
+	body := `{"expected_version":0,"collection":{"name":"User guide","description":"Reviewed guidance","root_path":"guide.md","source_ref":"main","audience":"public","owners":[{"actor_id":"` + owner.User.ID + `","role":"maintainer"}],"supported_versions":[{"label":"main","source_ref":"main"}],"rendering":{"format":"markdown","syntax_highlighting":true,"table_of_contents":true},"publication_policy":{"review_required":true,"source_branch":"main","publish_on_merge":true}}}`
 	response := authenticatedRequest(t, http.MethodPut, server.URL+"/repositories/"+repository.ID+"/documentation/new", body, owner.Credential.Token, http.StatusCreated)
 	var published docscollections.Revision
 	decodeResponse(t, response, &published)
-	if published.SourceRevision != string(commit) || len(published.Pages) != 1 || published.Pages[0].Authors[0] != "Test" || published.Pages[0].Status != "current" {
+	if published.SourceRevision != string(commit) || published.SupportedVersions[0].Revision != string(commit) || len(published.Pages) != 1 || published.Pages[0].Authors[0] != "Test" || published.Pages[0].Status != "current" {
 		t.Fatalf("published = %#v", published)
 	}
 	public := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/documentation/"+published.CollectionID, "", owner.Credential.Token, http.StatusOK)
@@ -58,5 +59,48 @@ func TestMaintainerPublishesReviewedDocumentationAndHealthTracksSource(t *testin
 	}
 	if !strings.Contains(strings.Join(codes, ","), "stale_source") || !strings.Contains(strings.Join(codes, ","), "stale_version_mapping") {
 		t.Fatalf("diagnostics = %#v", projection.Collection.Diagnostics)
+	}
+}
+
+func TestDocumentationHistoryFiltersEveryRevisionAudience(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	docs, _ := docscollections.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, nil, docs))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "docs-history-owner")
+	created := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"history-docs"}`, owner.Credential.Token, http.StatusCreated)
+	var repository repositories.Repository
+	decodeResponse(t, created, &repository)
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+repository.ID, `{"visibility":"public"}`, owner.Credential.Token, http.StatusOK).Body.Close()
+	gr, _ := gitStore.Open(repository.ID)
+	blob, _ := gr.WriteObject(storage.BlobObject, []byte("# Protected history"))
+	tree := writeTestTree(t, gr, testTreeEntry{mode: "100644", name: "guide.md", id: blob})
+	commit := writeTestCommit(t, gr, tree, nil, 1, "review docs")
+	_ = gr.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(commit)})
+	collection := func(expected int, audience string) string {
+		return `{"expected_version":` + fmt.Sprint(expected) + `,"collection":{"name":"Guide","description":"Reviewed guidance","root_path":"guide.md","source_ref":"main","audience":"` + audience + `","owners":[{"actor_id":"` + owner.User.ID + `","role":"maintainer"}],"supported_versions":[{"label":"main","source_ref":"main"}],"rendering":{"format":"markdown"},"publication_policy":{"review_required":true,"source_branch":"main"}}}`
+	}
+	first := authenticatedRequest(t, http.MethodPut, server.URL+"/repositories/"+repository.ID+"/documentation/new", collection(0, "maintainers"), owner.Credential.Token, http.StatusCreated)
+	var published docscollections.Revision
+	decodeResponse(t, first, &published)
+	authenticatedRequest(t, http.MethodPut, server.URL+"/repositories/"+repository.ID+"/documentation/"+published.CollectionID, collection(1, "public"), owner.Credential.Token, http.StatusCreated).Body.Close()
+	ownerDetail := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/documentation/"+published.CollectionID, "", owner.Credential.Token, http.StatusOK)
+	var projection struct {
+		History []docscollections.Revision `json:"history"`
+	}
+	decodeResponse(t, ownerDetail, &projection)
+	if len(projection.History) != 2 {
+		t.Fatalf("owner history = %#v", projection.History)
+	}
+	publicDetail, err := http.Get(server.URL + "/repositories/" + repository.ID + "/documentation/" + published.CollectionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodeResponse(t, publicDetail, &projection)
+	if len(projection.History) != 1 || projection.History[0].Audience != "public" {
+		t.Fatalf("public history = %#v", projection.History)
 	}
 }

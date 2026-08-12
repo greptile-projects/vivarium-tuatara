@@ -135,7 +135,13 @@ func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *
 			writeAPIError(w, 500, "documentation_read_failed", "documentation collection could not be read")
 			return
 		}
-		writeJSON(w, 200, map[string]any{"collection": present(r.PathValue("id"), v), "history": history})
+		visibleHistory := []docscollections.Revision{}
+		for _, revision := range history {
+			if visible(r.PathValue("id"), revision, actor, authenticated) {
+				visibleHistory = append(visibleHistory, revision)
+			}
+		}
+		writeJSON(w, 200, map[string]any{"collection": present(r.PathValue("id"), v), "history": visibleHistory})
 	})
 	mux.HandleFunc("PUT /repositories/{id}/documentation/{collectionID}", func(w http.ResponseWriter, r *http.Request) {
 		actor, owner, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")
@@ -223,6 +229,12 @@ func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *
 		input.Collection.PublishedBy = actor.UserID
 		input.Collection.SourceRef = sourceRef
 		input.Collection.SourceRevision = ref.Target
+		for i := range input.Collection.SupportedVersions {
+			mapping := &input.Collection.SupportedVersions[i]
+			if mapping.ReleaseID == "" && mapping.SourceRef == sourceRef && mapping.Revision == "" {
+				mapping.Revision = ref.Target
+			}
+		}
 		input.Collection.Pages = pages
 		input.Collection.ID = ""
 		input.Collection.Version = 0
