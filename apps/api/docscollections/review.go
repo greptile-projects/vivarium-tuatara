@@ -168,15 +168,20 @@ func (s *Store) CreatePullReview(v PullReview) (PullReview, error) {
 func (s *Store) UpdatePullReview(repo, pull string, mutate func(*PullReview) error) (PullReview, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return PullReview{}, err
+	}
+	defer unlock()
 	var v PullReview
 	if readJSON(s.reviewPath(repo, pull), &v) != nil {
 		return v, ErrNotFound
 	}
-	if err := mutate(&v); err != nil {
+	if err = mutate(&v); err != nil {
 		return v, err
 	}
 	v.UpdatedAt = s.now().UTC()
-	if err := writeJSON(s.reviewPath(repo, pull), v); err != nil {
+	if err = writeJSON(s.reviewPath(repo, pull), v); err != nil {
 		return v, err
 	}
 	return v, nil

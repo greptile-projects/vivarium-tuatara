@@ -48,6 +48,45 @@ func TestCreatePullReviewIsAtomicAcrossStores(t *testing.T) {
 	}
 }
 
+func TestUpdatePullReviewSerializesAcrossStores(t *testing.T) {
+	root := t.TempDir()
+	creator, _ := New(root)
+	base := PullReview{RepositoryID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", PullRequestID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Revision: "1111111111111111111111111111111111111111", BaseRevision: "2222222222222222222222222222222222222222", RootPath: "docs", Pages: []ReviewPage{}, Entries: []ReviewEntry{}, Decisions: []ReviewDecision{}, Invitations: []ReviewInvitation{}}
+	if _, err := creator.CreatePullReview(base); err != nil {
+		t.Fatal(err)
+	}
+	stores := make([]*Store, 12)
+	for i := range stores {
+		stores[i], _ = New(root)
+	}
+	start := make(chan struct{})
+	errs := make(chan error, len(stores))
+	var ready sync.WaitGroup
+	ready.Add(len(stores))
+	for index, store := range stores {
+		go func(index int, store *Store) {
+			ready.Done()
+			<-start
+			_, err := store.UpdatePullReview(base.RepositoryID, base.PullRequestID, func(v *PullReview) error {
+				v.Entries = append(v.Entries, ReviewEntry{ID: reviewID(), Kind: "comment", Path: "docs/guide.md", Area: "technical", Body: string(rune('A' + index))})
+				return nil
+			})
+			errs <- err
+		}(index, store)
+	}
+	ready.Wait()
+	close(start)
+	for range stores {
+		if err := <-errs; err != nil {
+			t.Fatalf("update error = %v", err)
+		}
+	}
+	stored, err := creator.GetPullReview(base.RepositoryID, base.PullRequestID)
+	if err != nil || len(stored.Entries) != len(stores) {
+		t.Fatalf("retained entries = %d, want %d; error = %v", len(stored.Entries), len(stores), err)
+	}
+}
+
 func TestPullReviewRetainsContentExactFeedback(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {
