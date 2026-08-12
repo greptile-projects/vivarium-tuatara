@@ -75,6 +75,13 @@ whenever dependencies change or the web job fails before it starts.
   membership is projected as distinguishable collaborator access so removing a
   member does not erase an independent grant that predates the transfer.
   `$ORGANIZATION_STORAGE_ROOT` defaults to `organizations`.
+  External extensions at `/extensions` retain a distinct `extension` principal,
+  human owner, operator contact, declared capabilities/events, verified callback
+  and action endpoints, requested resource actions, and credential rotation
+  policy beneath `$EXTENSION_STORAGE_ROOT` (default `extensions`). Registration
+  performs a live challenge against both endpoints and previews zero effective
+  authority: it issues no credential and cannot act as its owner, a user, or an
+  approved agent. Installation and scoped authority are separate later steps.
   Portfolio initiatives retain an existing proposal, evolution, incident, or
   authorized security source plus ordered cross-repository contributions,
   dependencies, and accountable team/human/approved-agent ownership. Portfolio

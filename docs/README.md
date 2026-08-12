@@ -1824,3 +1824,15 @@ A run that does not reproduce is evidence rather than closure. Maintainers can
 request the missing condition, the reporter answers on the issue, and a later
 workspace attempt retains the corrected evidence and outcome without replacing
 the earlier non-reproduction.
+# Trusted external extensions
+
+Developers can register independently operated tools at `/extensions` before a
+project shares any context. A registration records the human owner and operator
+contact, declared capabilities and supported events, callback/action endpoints,
+requested resource permissions, and credential rotation policy. Both endpoints
+must answer a live ownership challenge. The platform gives the integration a
+stable `extension` principal distinct from users and approved agents, while the
+effective-authority preview remains empty until a future resource-owner
+installation. No extension credential is issued during registration, so the
+record is an inspectable contract rather than an implicit delegation of the
+installer's access.

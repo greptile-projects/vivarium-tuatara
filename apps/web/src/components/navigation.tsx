@@ -9,6 +9,7 @@ const navigation = [
   { label: "Repositories", href: "/repositories", icon: Icons.Code },
   { label: "Workspaces", href: "/workspaces", icon: Icons.Code },
   { label: "Organizations", href: "/organizations", icon: Icons.Home },
+  { label: "Extensions", href: "/extensions", icon: Icons.Spark },
   { label: "Packages", href: "/packages", icon: Icons.Code },
   { label: "Proposals", href: "/proposals", icon: Icons.Spark },
   { label: "Decisions", href: "/decisions", icon: Icons.Activity },
