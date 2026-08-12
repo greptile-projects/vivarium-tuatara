@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -161,5 +162,41 @@ func verifyExtensionEndpointsWithNetwork(ctx context.Context, lookup lookupIPFun
 }
 
 func publicEndpointIP(ip net.IP) bool {
-	return ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsUnspecified()
+	address, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	address = address.Unmap()
+	if !address.IsGlobalUnicast() {
+		return false
+	}
+	for _, prefix := range nonPublicEndpointPrefixes {
+		if prefix.Contains(address) {
+			return false
+		}
+	}
+	return true
+}
+
+// IsGlobalUnicast includes special-purpose address space. Endpoint ownership
+// verification needs the narrower Internet-public boundary from the IANA
+// special-purpose registries, because routed CGNAT or benchmark space may still
+// reach platform-internal services. The broader enclosing prefixes below fail
+// closed for transition/relay ranges that are inappropriate extension origins.
+var nonPublicEndpointPrefixes = mustEndpointPrefixes(
+	"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8",
+	"169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24",
+	"192.31.196.0/24", "192.52.193.0/24", "192.88.99.0/24",
+	"192.168.0.0/16", "192.175.48.0/24", "198.18.0.0/15",
+	"198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4",
+	"::/128", "::1/128", "64:ff9b:1::/48", "100::/64", "2001::/23",
+	"2001:db8::/32", "2002::/16", "fc00::/7", "fe80::/10", "ff00::/8",
+)
+
+func mustEndpointPrefixes(values ...string) []netip.Prefix {
+	prefixes := make([]netip.Prefix, len(values))
+	for i, value := range values {
+		prefixes[i] = netip.MustParsePrefix(value)
+	}
+	return prefixes
 }
