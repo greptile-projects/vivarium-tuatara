@@ -65,6 +65,94 @@ type Peer struct {
 	RevokedAt      *time.Time `json:"revoked_at,omitempty"`
 	LastError      string     `json:"last_error,omitempty"`
 }
+
+// RepositorySnapshot is a bounded, read-only projection of a repository owned
+// by another instance. It intentionally contains no Git objects, credentials,
+// private discussion, or local authorization claims.
+type RepositorySnapshot struct {
+	Reference           string                  `json:"reference"`
+	InstanceID          string                  `json:"instance_id"`
+	RepositoryID        string                  `json:"repository_id"`
+	Name                string                  `json:"name"`
+	Visibility          string                  `json:"visibility"`
+	DefaultBranch       string                  `json:"default_branch"`
+	Revision            string                  `json:"revision"`
+	Branches            []RepositoryBranch      `json:"branches"`
+	Releases            []RepositoryRelease     `json:"releases"`
+	ContributorGuidance *RepositoryGuidance     `json:"contributor_guidance,omitempty"`
+	Issues              []RepositoryIssue       `json:"issues"`
+	Opportunities       []RepositoryOpportunity `json:"opportunities"`
+	Capabilities        []string                `json:"capabilities"`
+	AuthoritativeURL    string                  `json:"authoritative_url"`
+	GeneratedAt         time.Time               `json:"generated_at"`
+}
+type RepositoryBranch struct {
+	Name     string `json:"name"`
+	Revision string `json:"revision"`
+}
+type RepositoryRelease struct {
+	ID          string `json:"id"`
+	Version     string `json:"version"`
+	Notes       string `json:"notes"`
+	Revision    string `json:"revision"`
+	PublishedAt string `json:"published_at"`
+}
+type RepositoryGuidance struct {
+	Version       int      `json:"version"`
+	Goals         string   `json:"goals"`
+	Prerequisites []string `json:"prerequisites"`
+	SetupSummary  string   `json:"setup_summary"`
+	Communication string   `json:"communication"`
+	ReviewPolicy  string   `json:"review_policy"`
+}
+type RepositoryIssue struct {
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	Severity  string    `json:"severity"`
+	Status    string    `json:"status"`
+	Version   int       `json:"version"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+type RepositoryOpportunity struct {
+	ID               string   `json:"id"`
+	Title            string   `json:"title"`
+	ExpectedOutcome  string   `json:"expected_outcome"`
+	Scope            string   `json:"scope"`
+	Risk             string   `json:"risk"`
+	Revision         string   `json:"revision"`
+	Status           string   `json:"status"`
+	Version          int      `json:"version"`
+	EstimatedMinutes int      `json:"estimated_minutes"`
+	RequiredSkills   []string `json:"required_skills"`
+	AgentAssistance  bool     `json:"agent_assistance"`
+}
+type SignedRepositorySnapshot struct {
+	Snapshot        RepositorySnapshot `json:"snapshot"`
+	DocumentVersion int                `json:"identity_document_version"`
+	SigningKeyID    string             `json:"signing_key_id"`
+	Signature       string             `json:"signature"`
+}
+type RepositoryCache struct {
+	Reference               string              `json:"reference"`
+	PeerID                  string              `json:"peer_id"`
+	RepositoryID            string              `json:"repository_id"`
+	Status                  string              `json:"status"`
+	Snapshot                *RepositorySnapshot `json:"snapshot,omitempty"`
+	RemoteRevision          string              `json:"remote_revision,omitempty"`
+	SignatureVerified       bool                `json:"signature_verified"`
+	IdentityDocumentVersion int                 `json:"identity_document_version,omitempty"`
+	FetchedAt               time.Time           `json:"fetched_at,omitempty"`
+	LastAttemptAt           time.Time           `json:"last_attempt_at"`
+	StaleSince              *time.Time          `json:"stale_since,omitempty"`
+	LastError               string              `json:"last_error,omitempty"`
+}
+type RepositoryFollow struct {
+	UserID           string    `json:"user_id"`
+	Reference        string    `json:"reference"`
+	FollowedAt       time.Time `json:"followed_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	LastSeenRevision string    `json:"last_seen_revision,omitempty"`
+}
 type persistedIdentity struct {
 	Document   Document `json:"document"`
 	PrivateKey string   `json:"private_key"`
@@ -134,7 +222,7 @@ func (s *Store) Identity() (Document, error) {
 	sum := sha256.Sum256(pub)
 	id := "ed25519:" + hex.EncodeToString(sum[:8])
 	instanceSum := sha256.Sum256(pub)
-	d := Document{Protocol: "vivarium-federation/v1", InstanceID: hex.EncodeToString(instanceSum[:16]), Name: s.name, Version: 1, IssuedAt: now, Endpoints: []Endpoint{{Kind: "api", URL: s.publicURL}, {Kind: "actors", URL: s.publicURL + "/federation/actors/{type}/{id}"}}, Capabilities: []string{"identity.v1", "actor-resolution.v1", "signed-attribution.v1"}, Operators: s.operators, Keys: []Key{{ID: id, Algorithm: "Ed25519", PublicKey: base64.RawURLEncoding.EncodeToString(pub), CreatedAt: now}}, SigningKeyID: id}
+	d := Document{Protocol: "vivarium-federation/v1", InstanceID: hex.EncodeToString(instanceSum[:16]), Name: s.name, Version: 1, IssuedAt: now, Endpoints: []Endpoint{{Kind: "api", URL: s.publicURL}, {Kind: "actors", URL: s.publicURL + "/federation/actors/{type}/{id}"}, {Kind: "repositories", URL: s.publicURL + "/federation/repositories/{id}"}}, Capabilities: []string{"identity.v1", "actor-resolution.v1", "signed-attribution.v1", "repository-discovery.v1"}, Operators: s.operators, Keys: []Key{{ID: id, Algorithm: "Ed25519", PublicKey: base64.RawURLEncoding.EncodeToString(pub), CreatedAt: now}}, SigningKeyID: id}
 	d.Signature = sign(d, priv)
 	v := persistedIdentity{Document: d, PrivateKey: base64.RawURLEncoding.EncodeToString(priv)}
 	if err = writeJSON(p, v); err != nil {
@@ -203,6 +291,140 @@ func unsigned(d Document) []byte {
 }
 func sign(d Document, k ed25519.PrivateKey) string {
 	return base64.RawURLEncoding.EncodeToString(ed25519.Sign(k, unsigned(d)))
+}
+func repositoryPayload(snapshot RepositorySnapshot, documentVersion int, keyID string) []byte {
+	b, _ := json.Marshal(struct {
+		Snapshot        RepositorySnapshot `json:"snapshot"`
+		DocumentVersion int                `json:"identity_document_version"`
+		SigningKeyID    string             `json:"signing_key_id"`
+	}{snapshot, documentVersion, keyID})
+	return b
+}
+func (s *Store) SignRepository(snapshot RepositorySnapshot) (SignedRepositorySnapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, err := os.ReadFile(filepath.Join(s.root, "identity.json"))
+	if err != nil {
+		return SignedRepositorySnapshot{}, err
+	}
+	var v persistedIdentity
+	if json.Unmarshal(b, &v) != nil {
+		return SignedRepositorySnapshot{}, ErrInvalid
+	}
+	private, err := base64.RawURLEncoding.DecodeString(v.PrivateKey)
+	if err != nil || len(private) != ed25519.PrivateKeySize {
+		return SignedRepositorySnapshot{}, ErrInvalid
+	}
+	snapshot.InstanceID, snapshot.Reference = v.Document.InstanceID, v.Document.InstanceID+":"+snapshot.RepositoryID
+	snapshot.GeneratedAt = s.now().UTC().Truncate(time.Microsecond)
+	result := SignedRepositorySnapshot{Snapshot: snapshot, DocumentVersion: v.Document.Version, SigningKeyID: v.Document.SigningKeyID}
+	result.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(ed25519.PrivateKey(private), repositoryPayload(snapshot, result.DocumentVersion, result.SigningKeyID)))
+	return result, nil
+}
+func VerifyRepository(signed SignedRepositorySnapshot, document Document) error {
+	if err := Verify(document); err != nil || signed.DocumentVersion != document.Version || signed.SigningKeyID != document.SigningKeyID || signed.Snapshot.InstanceID != document.InstanceID || signed.Snapshot.Reference != document.InstanceID+":"+signed.Snapshot.RepositoryID || signed.Snapshot.Revision == "" {
+		return ErrInvalid
+	}
+	var public []byte
+	for _, key := range document.Keys {
+		if key.ID == signed.SigningKeyID && key.RetiredAt == nil {
+			public, _ = base64.RawURLEncoding.DecodeString(key.PublicKey)
+		}
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(signed.Signature)
+	if err != nil || len(public) != ed25519.PublicKeySize || !ed25519.Verify(ed25519.PublicKey(public), repositoryPayload(signed.Snapshot, signed.DocumentVersion, signed.SigningKeyID), sig) {
+		return ErrInvalid
+	}
+	return nil
+}
+
+func referenceParts(reference string) (string, string, error) {
+	peer, repository, ok := strings.Cut(strings.TrimSpace(reference), ":")
+	if !ok || !validInstanceID(peer) || repository == "" || strings.ContainsAny(repository, "/\\") {
+		return "", "", ErrInvalid
+	}
+	return peer, repository, nil
+}
+func (s *Store) repositoryCachePath(reference string) (string, error) {
+	peer, repository, err := referenceParts(reference)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(s.root, "repositories", peer, repository+".json"), nil
+}
+func (s *Store) PutRepositoryCache(cache RepositoryCache) (RepositoryCache, error) {
+	path, err := s.repositoryCachePath(cache.Reference)
+	if err != nil {
+		return RepositoryCache{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return RepositoryCache{}, err
+	}
+	defer unlock()
+	if err = writeJSON(path, cache); err != nil {
+		return RepositoryCache{}, err
+	}
+	return cache, nil
+}
+func (s *Store) RepositoryCache(reference string) (RepositoryCache, error) {
+	path, err := s.repositoryCachePath(reference)
+	if err != nil {
+		return RepositoryCache{}, err
+	}
+	var v RepositoryCache
+	if readJSON(path, &v) != nil || v.Reference != reference {
+		return RepositoryCache{}, ErrNotFound
+	}
+	return v, nil
+}
+func (s *Store) Follow(userID, reference string, follow bool) (RepositoryFollow, error) {
+	if strings.TrimSpace(userID) == "" {
+		return RepositoryFollow{}, ErrInvalid
+	}
+	if _, _, err := referenceParts(reference); err != nil {
+		return RepositoryFollow{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return RepositoryFollow{}, err
+	}
+	defer unlock()
+	path := filepath.Join(s.root, "follows", userID, strings.ReplaceAll(reference, ":", "-")+".json")
+	if !follow {
+		if err = os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return RepositoryFollow{}, err
+		}
+		return RepositoryFollow{UserID: userID, Reference: reference}, nil
+	}
+	now := s.now().UTC().Truncate(time.Microsecond)
+	v := RepositoryFollow{UserID: userID, Reference: reference, FollowedAt: now, UpdatedAt: now}
+	_ = readJSON(path, &v)
+	v.UpdatedAt = now
+	v.UserID, v.Reference = userID, reference
+	if err = writeJSON(path, v); err != nil {
+		return RepositoryFollow{}, err
+	}
+	return v, nil
+}
+func (s *Store) ListFollows(userID string) ([]RepositoryFollow, error) {
+	files, err := filepath.Glob(filepath.Join(s.root, "follows", userID, "*.json"))
+	if err != nil {
+		return nil, err
+	}
+	out := []RepositoryFollow{}
+	for _, path := range files {
+		var v RepositoryFollow
+		if readJSON(path, &v) == nil && v.UserID == userID {
+			out = append(out, v)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].FollowedAt.Before(out[j].FollowedAt) })
+	return out, nil
 }
 func Verify(d Document) error {
 	if d.Protocol != "vivarium-federation/v1" || !validInstanceID(d.InstanceID) || d.Version < 1 || d.SigningKeyID == "" {
@@ -457,4 +679,11 @@ func writeJSON(p string, v any) error {
 		e = os.Rename(tmp.Name(), p)
 	}
 	return e
+}
+func readJSON(p string, v any) error {
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, v)
 }

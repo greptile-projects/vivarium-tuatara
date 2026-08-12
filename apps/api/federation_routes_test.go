@@ -2,10 +2,55 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/federation"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
+
+func TestVisibleFederationBranchesExcludeSecurityNamespace(t *testing.T) {
+	mainRevision := strings.Repeat("1", 40)
+	branches, revision := visibleFederationBranches([]storage.Reference{
+		{Name: "refs/heads/main", Target: mainRevision},
+		{Name: "refs/heads/vivarium-security/disclosures/CVE-2026-163/fix", Target: strings.Repeat("2", 40)},
+	}, "main")
+	if revision != mainRevision || len(branches) != 1 || branches[0].Name != "main" {
+		t.Fatalf("public branches = %#v, revision = %q", branches, revision)
+	}
+}
+
+func TestFetchFederatedRepositoryUsesSharedResponseLimit(t *testing.T) {
+	valid := federation.SignedRepositorySnapshot{Snapshot: federation.RepositorySnapshot{Name: strings.Repeat("a", 3<<20)}}
+	body, err := json.Marshal(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) }))
+	defer server.Close()
+	result, err := fetchFederatedRepository(federation.Peer{DiscoveryURL: server.URL}, "repository")
+	if err != nil || result.Snapshot.Name != valid.Snapshot.Name {
+		t.Fatalf("large valid response: %v", err)
+	}
+	oversized := bytesOf('x', maxFederatedRepositoryResponseBytes+1)
+	largeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(oversized) }))
+	defer largeServer.Close()
+	if _, err = fetchFederatedRepository(federation.Peer{DiscoveryURL: largeServer.URL}, "repository"); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized response = %v", err)
+	}
+}
+
+func bytesOf(value byte, size int) []byte {
+	result := make([]byte, size)
+	for i := range result {
+		result[i] = value
+	}
+	return result
+}
 
 func TestFederationDialerRejectsNonPublicAddresses(t *testing.T) {
 	for _, address := range []string{"127.0.0.1:443", "10.1.2.3:443", "169.254.1.1:443", "[::1]:443"} {

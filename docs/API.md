@@ -1,5 +1,26 @@
 # HTTP API contract
 
+## Federated repository discovery
+
+`GET /federation/repositories/{id}` is the authoritative public metadata
+projection for a local public repository. Its response wraps a bounded snapshot
+and the current identity-document version/key in an Ed25519 signature. The
+snapshot includes its instance-qualified reference, exact revision, branches,
+and permitted releases, contributor guidance, public issues, and open
+opportunities. Embargoed `vivarium-security/*` branches are excluded. Absent
+sections are distinguishable through `capabilities`. Producer and consumer
+enforce the same 16 MiB aggregate response maximum; an authoritative projection
+that exceeds it returns `413`, while a peer exceeding it is rejected explicitly.
+
+Authenticated home-instance clients resolve a trusted peer reference with
+`POST /federation/repositories/resolve` and `{"reference":"peer-id:repo-id"}`.
+`GET /federation/repositories/{peer}/{repository}` reads the retained snapshot;
+`POST .../refresh` revalidates it. A failed refresh returns `202` with explicit
+status and preserves only an already-permitted stale snapshot. `PUT
+.../follow` with `{"follow":true|false}` changes local follow state, and `GET
+/federation/follows` returns followed repositories with current cache evidence.
+These endpoints never create a local repository or confer repository authority.
+
 ## External extension registration
 
 Authenticated developers register an external collaborator with `POST
