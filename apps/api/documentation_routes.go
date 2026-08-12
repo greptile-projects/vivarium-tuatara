@@ -36,14 +36,25 @@ func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *
 		if len(v.Owners) == 0 {
 			v.Diagnostics = append(v.Diagnostics, docscollections.Diagnostic{Code: "missing_owner", Severity: "error", Detail: "No maintainer or reviewer owns this collection."})
 		}
-		repo, repoErr := repos.GetByID(repositoryID)
 		gr, gitErr := git.Open(repositoryID)
-		currentRevision := ""
+		refTargets := map[string]string{}
+		resolveRef := func(name string) string {
+			if target, ok := refTargets[name]; ok {
+				return target
+			}
+			if gitErr == nil {
+				if ref, err := gr.ReadReference("refs/heads/" + name); err == nil {
+					refTargets[name] = ref.Target
+					return ref.Target
+				}
+			}
+			refTargets[name] = ""
+			return ""
+		}
 		entries := []storage.TreePath{}
-		if repoErr == nil && gitErr == nil {
-			if ref, e := gr.ReadReference("refs/heads/" + repo.DefaultBranch); e == nil {
-				currentRevision = ref.Target
-				if commit, e := gr.ReadCommit(storage.ObjectID(ref.Target)); e == nil {
+		if gitErr == nil {
+			if currentRevision := resolveRef(v.SourceRef); currentRevision != "" {
+				if commit, e := gr.ReadCommit(storage.ObjectID(currentRevision)); e == nil {
 					entries, _ = gr.WalkTree(commit.Tree)
 				}
 			}
@@ -56,7 +67,7 @@ func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *
 			page := &v.Pages[i]
 			current, ok := byPath[page.Path]
 			if !ok || current.Type != storage.BlobObject {
-				page.Status, page.StatusDetail = "broken", "Source path is missing from the current default branch."
+				page.Status, page.StatusDetail = "broken", "Source path is missing from the selected source branch."
 				v.Diagnostics = append(v.Diagnostics, docscollections.Diagnostic{Code: "broken_source", Severity: "error", PagePath: page.Path, Detail: page.StatusDetail})
 			} else if string(current.ID) != page.SourceObjectID {
 				page.Status, page.StatusDetail = "stale", "Source has changed since the reviewed publication."
@@ -76,7 +87,7 @@ func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *
 				} else if mapping.Revision != "" && candidate.CommitID != mapping.Revision {
 					mapping.Status, mapping.StatusDetail = "stale", "Release no longer matches the mapped revision."
 				}
-			} else if mapping.SourceRef == repo.DefaultBranch && mapping.Revision != "" && currentRevision != mapping.Revision {
+			} else if mapping.Revision != "" && resolveRef(mapping.SourceRef) != mapping.Revision {
 				mapping.Status, mapping.StatusDetail = "stale", "Source ref has advanced beyond the mapped revision."
 			}
 			if mapping.Status == "stale" {
