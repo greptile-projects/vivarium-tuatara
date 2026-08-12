@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net"
@@ -8,10 +9,97 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/federation"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
+
+func TestDuplicateFederatedRevisionRetryReturnsBeforeGitSideEffects(t *testing.T) {
+	local, err := federation.New(t.TempDir(), "Local", "https://local.example", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, err := federation.New(t.TempDir(), "Remote", "https://remote.example", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteDocument, err := remote.Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = local.Upsert("https://remote.example", remoteDocument); err != nil {
+		t.Fatal(err)
+	}
+	localDocument, err := local.Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const contributionID = "contribution-one"
+	revision := strings.Repeat("b", 40)
+	if err = local.BindContribution(contributionID, localDocument.InstanceID, remoteDocument.InstanceID); err != nil {
+		t.Fatal(err)
+	}
+	if err = local.BindContributionTarget(contributionID, "repository-one", "pull-one", revision); err != nil {
+		t.Fatal(err)
+	}
+	event := federation.CollaborationEvent{ID: "revision-one", ContributionID: contributionID, Sequence: 1, Kind: "revision", Actor: remoteDocument.InstanceID + ":agent:one", Revision: revision, CreatedAt: time.Date(2026, 8, 12, 18, 0, 0, 0, time.UTC), OriginInstanceID: remoteDocument.InstanceID, Verification: "verified"}
+	version, key, signature, err := remote.SignPayload(collaborationEventBytes(event))
+	if err != nil {
+		t.Fatal(err)
+	}
+	event.DocumentVersion, event.SigningKeyID, event.Signature = version, key, signature
+	if _, err = local.AppendCollaborationEvent(event); err != nil {
+		t.Fatal(err)
+	}
+	identities, err := users.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := auth.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(newPlatformHandlerWithChecks(nil, identities, credentials, nil, nil, nil, nil, nil, nil, local))
+	defer server.Close()
+	body, _ := json.Marshal(signedCollaborationEvent{Event: event})
+	response, err := http.Post(server.URL+"/federation/contributions/"+contributionID+"/events", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("duplicate revision retry status = %d", response.StatusCode)
+	}
+	var returned federation.CollaborationEvent
+	if err = json.NewDecoder(response.Body).Decode(&returned); err != nil || !sameCollaborationEvent(returned, event) {
+		t.Fatalf("returned event = %#v, %v", returned, err)
+	}
+	boundary, err := local.Contribution(contributionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if boundary.SourceRevision != revision {
+		t.Fatalf("contribution revision changed during retry: %q", boundary.SourceRevision)
+	}
+}
+
+func TestSameCollaborationEventIgnoresLocalProjectionOnly(t *testing.T) {
+	created := time.Date(2026, 8, 12, 18, 0, 0, 0, time.UTC)
+	event := federation.CollaborationEvent{ID: "revision-one", ContributionID: "contribution-one", Sequence: 1, Kind: "revision", Actor: "remote:agent:one", Revision: strings.Repeat("a", 40), CreatedAt: created, OriginInstanceID: strings.Repeat("b", 32), DocumentVersion: 2, SigningKeyID: "key", Signature: "signature"}
+	retained := event
+	retained.Verification, retained.Stale = "verified", true
+	if !sameCollaborationEvent(retained, event) {
+		t.Fatal("local verification and staleness projection changed immutable event identity")
+	}
+	changed := event
+	changed.Revision = strings.Repeat("c", 40)
+	if sameCollaborationEvent(retained, changed) {
+		t.Fatal("different immutable event content was accepted as a retry")
+	}
+}
 
 func TestVisibleFederationBranchesExcludeSecurityNamespace(t *testing.T) {
 	mainRevision := strings.Repeat("1", 40)
