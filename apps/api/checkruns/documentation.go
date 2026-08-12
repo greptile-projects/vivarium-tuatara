@@ -55,19 +55,24 @@ func ParseDocumentationConfig(data []byte, executedRevision string, readPath fun
 		if strings.TrimSpace(check.Name) == "" || len(check.Name) > 70 || len(check.CollectionID) != 32 || len(check.Selectors) == 0 || len(check.Selectors) > 100 || len(check.DependencyPaths) == 0 || len(check.DependencyPaths) > 100 || len(check.Targets) == 0 || len(check.Targets) > 20 {
 			return DocumentationConfig{}, nil, errors.New("invalid documentation check")
 		}
-		paths := append([]string(nil), check.DependencyPaths...)
+		paths := make([]string, 0, len(check.DependencyPaths))
+		canonical := map[string]bool{}
+		for _, dependency := range check.DependencyPaths {
+			clean := filepath.ToSlash(filepath.Clean(dependency))
+			if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, "../") || canonical[clean] {
+				return DocumentationConfig{}, nil, errors.New("invalid documentation dependency path")
+			}
+			canonical[clean] = true
+			paths = append(paths, clean)
+		}
 		sort.Strings(paths)
 		hash := sha256.New()
 		for _, dependency := range paths {
-			clean := filepath.Clean(dependency)
-			if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-				return DocumentationConfig{}, nil, errors.New("invalid documentation dependency path")
-			}
-			body, err := readPath(filepath.ToSlash(clean))
+			body, err := readPath(dependency)
 			if err != nil {
-				return DocumentationConfig{}, nil, fmt.Errorf("read documentation dependency %s: %w", clean, err)
+				return DocumentationConfig{}, nil, fmt.Errorf("read documentation dependency %s: %w", dependency, err)
 			}
-			hash.Write([]byte(filepath.ToSlash(clean)))
+			hash.Write([]byte(dependency))
 			hash.Write([]byte{0})
 			hash.Write(body)
 			hash.Write([]byte{0})

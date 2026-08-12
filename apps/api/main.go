@@ -1129,7 +1129,8 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		created, err := store.CreateFrom(r.PathValue("id"), sourceRepositoryID, actor.UserID, *input.Title, *input.Body, *input.SourceBranch, *input.TargetBranch, input.ProposalID)
 		location := "/repositories/" + r.PathValue("id") + "/pulls/" + created.ID
 		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
-			startCheckRuns(gitStore, checkRunStore, created)
+			required, _ := repositoriesStore.RequiredChecks(created.RepositoryID, created.TargetBranch)
+			startCheckRuns(gitStore, checkRunStore, created, required...)
 			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.created", ActorID: actor.UserID, RepositoryID: created.RepositoryID, ResourceType: "pull_request", ResourceID: created.ID, ResourceTitle: created.Title})
 			recordMentions(activityStore, repositoriesStore, userStore, actor.UserID, created.RepositoryID, "pull_request", created.ID, created.Title, created.Title+"\n"+created.Body)
 			w.Header().Set("Location", location)
@@ -1139,7 +1140,8 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		if writePullRequestError(w, err) {
 			return
 		}
-		startCheckRuns(gitStore, checkRunStore, created)
+		required, _ := repositoriesStore.RequiredChecks(created.RepositoryID, created.TargetBranch)
+		startCheckRuns(gitStore, checkRunStore, created, required...)
 		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.created", ActorID: actor.UserID, RepositoryID: created.RepositoryID, ResourceType: "pull_request", ResourceID: created.ID, ResourceTitle: created.Title})
 		recordMentions(activityStore, repositoriesStore, userStore, actor.UserID, created.RepositoryID, "pull_request", created.ID, created.Title, created.Title+"\n"+created.Body)
 		w.Header().Set("Location", location)

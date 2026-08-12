@@ -2,6 +2,8 @@ package checkruns
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -46,5 +48,21 @@ func TestParseDocumentationConfigRejectsUnexecutedTarget(t *testing.T) {
 	data := []byte(`{"version":1,"checks":[{"name":"guide","collection_id":"0123456789abcdef0123456789abcdef","image":"alpine:3.22","command":"verify","selectors":["links"],"dependency_paths":["docs/guide.md"],"targets":[{"version":"v1","revision":"2222222222222222222222222222222222222222","source":"release"}]}]}`)
 	if _, _, err := ParseDocumentationConfig(data, "1111111111111111111111111111111111111111", func(string) ([]byte, error) { return []byte("guide"), nil }); err == nil {
 		t.Fatal("expected unexecuted target rejection")
+	}
+}
+
+func TestParseDocumentationConfigCanonicalizesAndDeduplicatesDependencies(t *testing.T) {
+	base := `{"version":1,"checks":[{"name":"guide","collection_id":"0123456789abcdef0123456789abcdef","image":"alpine:3.22","command":"verify","selectors":["links"],"dependency_paths":%s,"targets":[{"version":"v1","revision":"1111111111111111111111111111111111111111","source":"source"}]}]}`
+	_, definitions, err := ParseDocumentationConfig([]byte(fmt.Sprintf(base, `["./docs/guide.md"]`)), strings.Repeat("1", 40), func(path string) ([]byte, error) {
+		if path != "docs/guide.md" {
+			t.Fatalf("read path = %q", path)
+		}
+		return []byte("guide"), nil
+	})
+	if err != nil || definitions[0].Documentation.DependencyPaths[0] != "docs/guide.md" {
+		t.Fatalf("definitions=%#v err=%v", definitions, err)
+	}
+	if _, _, err = ParseDocumentationConfig([]byte(fmt.Sprintf(base, `["./docs/guide.md","docs//guide.md"]`)), strings.Repeat("1", 40), func(string) ([]byte, error) { return []byte("guide"), nil }); err == nil {
+		t.Fatal("expected duplicate canonical dependency rejection")
 	}
 }
