@@ -188,7 +188,7 @@ type CollaborationEvent struct {
 }
 
 func validCollaborationEvent(v CollaborationEvent) bool {
-	if v.ID == "" || v.ContributionID == "" || v.Sequence < 1 || v.Actor == "" || v.OriginInstanceID == "" || v.CreatedAt.IsZero() {
+	if !validOpaqueID(v.ID) || !validOpaqueID(v.ContributionID) || v.Sequence < 1 || v.Actor == "" || !validInstanceID(v.OriginInstanceID) || v.CreatedAt.IsZero() {
 		return false
 	}
 	switch v.Kind {
@@ -212,6 +212,148 @@ func validCollaborationEvent(v CollaborationEvent) bool {
 		return false
 	}
 	return true
+}
+
+func validOpaqueID(v string) bool {
+	if len(v) < 1 || len(v) > 128 {
+		return false
+	}
+	for _, r := range v {
+		if !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') && r != '-' && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+type ContributionAuthority struct {
+	ContributionID string   `json:"contribution_id"`
+	InstanceIDs    []string `json:"instance_ids"`
+}
+
+func (s *Store) BindContribution(id string, instances ...string) error {
+	if !validOpaqueID(id) {
+		return ErrInvalid
+	}
+	for _, v := range instances {
+		if !validInstanceID(v) {
+			return ErrInvalid
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	path := filepath.Join(s.root, "contribution-authority", id+".json")
+	existing := ContributionAuthority{ContributionID: id}
+	if raw, e := os.ReadFile(path); e == nil {
+		if json.Unmarshal(raw, &existing) != nil {
+			return ErrInvalid
+		}
+	} else if !errors.Is(e, os.ErrNotExist) {
+		return e
+	}
+	seen := map[string]bool{}
+	for _, v := range existing.InstanceIDs {
+		seen[v] = true
+	}
+	for _, v := range instances {
+		if !seen[v] {
+			existing.InstanceIDs = append(existing.InstanceIDs, v)
+			seen[v] = true
+		}
+	}
+	sort.Strings(existing.InstanceIDs)
+	return writeJSON(path, existing)
+}
+
+func (s *Store) ContributionAllows(id, instance string) bool {
+	if !validOpaqueID(id) || !validInstanceID(instance) {
+		return false
+	}
+	raw, err := os.ReadFile(filepath.Join(s.root, "contribution-authority", id+".json"))
+	if err != nil {
+		return false
+	}
+	var v ContributionAuthority
+	if json.Unmarshal(raw, &v) != nil {
+		return false
+	}
+	for _, candidate := range v.InstanceIDs {
+		if candidate == instance {
+			return true
+		}
+	}
+	return false
+}
+
+type CollaborationDelivery struct {
+	PeerID    string             `json:"peer_id"`
+	Event     CollaborationEvent `json:"event"`
+	Attempts  int                `json:"attempts"`
+	LastError string             `json:"last_error,omitempty"`
+	UpdatedAt time.Time          `json:"updated_at"`
+}
+
+func (s *Store) RetainCollaborationDelivery(peer string, event CollaborationEvent, failure string) error {
+	if !validInstanceID(peer) || !validCollaborationEvent(event) {
+		return ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	path := filepath.Join(s.root, "collaboration-outbox", peer+"-"+event.ID+".json")
+	v := CollaborationDelivery{PeerID: peer, Event: event}
+	if raw, e := os.ReadFile(path); e == nil {
+		if json.Unmarshal(raw, &v) != nil {
+			return ErrInvalid
+		}
+	} else if !errors.Is(e, os.ErrNotExist) {
+		return e
+	}
+	v.Attempts++
+	v.LastError = failure
+	v.UpdatedAt = s.now().UTC().Truncate(time.Microsecond)
+	return writeJSON(path, v)
+}
+func (s *Store) PendingCollaborationDeliveries() ([]CollaborationDelivery, error) {
+	entries, err := os.ReadDir(filepath.Join(s.root, "collaboration-outbox"))
+	if errors.Is(err, os.ErrNotExist) {
+		return []CollaborationDelivery{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := []CollaborationDelivery{}
+	for _, e := range entries {
+		raw, x := os.ReadFile(filepath.Join(s.root, "collaboration-outbox", e.Name()))
+		if x != nil {
+			return nil, x
+		}
+		var v CollaborationDelivery
+		if json.Unmarshal(raw, &v) != nil {
+			return nil, ErrInvalid
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+func (s *Store) CompleteCollaborationDelivery(peer, event string) error {
+	if !validInstanceID(peer) || !validOpaqueID(event) {
+		return ErrInvalid
+	}
+	err := os.Remove(filepath.Join(s.root, "collaboration-outbox", peer+"-"+event+".json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 // AppendCollaborationEvent idempotently retains a verified event. The same

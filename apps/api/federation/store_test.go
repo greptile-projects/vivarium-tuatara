@@ -208,3 +208,40 @@ func TestCollaborationEventsAreIdempotentAndRevisionStale(t *testing.T) {
 		t.Fatalf("items = %#v, %v", items, err)
 	}
 }
+
+func TestCollaborationRejectsTraversalAndBindsAuthority(t *testing.T) {
+	s, _ := New(t.TempDir(), "Local", "https://local.example", nil)
+	v := CollaborationEvent{ID: "event-1", ContributionID: "../escaped", Sequence: 1, Kind: "comment", Actor: "peer:user:author", Body: "hello", CreatedAt: time.Now().UTC(), OriginInstanceID: strings.Repeat("b", 32), DocumentVersion: 1, SigningKeyID: "key", Signature: "signature", Verification: "verified"}
+	if _, err := s.AppendCollaborationEvent(v); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("traversal append = %v", err)
+	}
+	local, peer, unrelated := strings.Repeat("a", 32), strings.Repeat("b", 32), strings.Repeat("c", 32)
+	if err := s.BindContribution("contribution-1", local, peer); err != nil {
+		t.Fatal(err)
+	}
+	if !s.ContributionAllows("contribution-1", peer) || s.ContributionAllows("contribution-1", unrelated) {
+		t.Fatal("contribution authority was not scoped to bound instances")
+	}
+}
+
+func TestCollaborationDeliveryOutboxIsDurable(t *testing.T) {
+	root := t.TempDir()
+	s, _ := New(root, "Local", "https://local.example", nil)
+	peer := strings.Repeat("b", 32)
+	v := CollaborationEvent{ID: "event-1", ContributionID: "contribution-1", Sequence: 1, Kind: "comment", Actor: "local:user:author", Body: "hello", CreatedAt: time.Now().UTC(), OriginInstanceID: strings.Repeat("a", 32), DocumentVersion: 1, SigningKeyID: "key", Signature: "signature", Verification: "verified"}
+	if err := s.RetainCollaborationDelivery(peer, v, "offline"); err != nil {
+		t.Fatal(err)
+	}
+	reopened, _ := New(root, "Local", "https://local.example", nil)
+	items, err := reopened.PendingCollaborationDeliveries()
+	if err != nil || len(items) != 1 || items[0].Attempts != 1 || items[0].LastError != "offline" {
+		t.Fatalf("pending = %#v, %v", items, err)
+	}
+	if err = reopened.CompleteCollaborationDelivery(peer, v.ID); err != nil {
+		t.Fatal(err)
+	}
+	items, _ = reopened.PendingCollaborationDeliveries()
+	if len(items) != 0 {
+		t.Fatalf("completed = %#v", items)
+	}
+}

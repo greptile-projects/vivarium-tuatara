@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -513,6 +514,10 @@ func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userS
 			writeAPIError(w, 422, "federated_proposal_failed", err.Error())
 			return
 		}
+		if err = store.BindContribution(payload.ID, document.InstanceID, cache.PeerID); err != nil {
+			writeAPIError(w, 503, "federation_unavailable", "contribution authority could not be retained")
+			return
+		}
 		writeJSON(w, 201, response)
 	})
 	mux.HandleFunc("POST /federation/contributions", func(w http.ResponseWriter, r *http.Request) {
@@ -556,6 +561,11 @@ func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userS
 		if writePullRequestError(w, err) {
 			return
 		}
+		document, _ := store.Identity()
+		if err = store.BindContribution(in.Payload.ID, in.Payload.SourceInstanceID, document.InstanceID); err != nil {
+			writeAPIError(w, 503, "federation_unavailable", "contribution authority could not be retained")
+			return
+		}
 		writeJSON(w, 201, pull)
 	})
 	// Peer delivery accepts only signed immutable collaboration claims. The
@@ -570,6 +580,10 @@ func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userS
 		peer, err := store.Get(in.Event.OriginInstanceID)
 		if err != nil || peer.Status != "trusted" || !contains(peer.Document.Capabilities, "repository-contribution.v1") {
 			writeAPIError(w, 403, "federated_source_untrusted", "event origin is not trusted")
+			return
+		}
+		if !store.ContributionAllows(in.Event.ContributionID, in.Event.OriginInstanceID) {
+			writeAPIError(w, 403, "federated_contribution_forbidden", "event origin is not authorized for this contribution")
 			return
 		}
 		if federation.VerifyPayload(collaborationEventBytes(in.Event), in.Event.DocumentVersion, in.Event.SigningKeyID, in.Event.Signature, peer.Document) != nil {
@@ -653,10 +667,12 @@ func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userS
 		}
 		peerID := strings.SplitN(pull.FederatedAuthor, ":", 2)[0]
 		if err = sendCollaborationEvent(store, peerID, event); err != nil {
+			_ = store.RetainCollaborationDelivery(peerID, event, err.Error())
 			w.Header().Set("Vivarium-Federation-Delivery", "pending")
 			writeJSON(w, 202, map[string]any{"event": event, "delivery": "pending", "error": err.Error()})
 			return
 		}
+		_ = store.CompleteCollaborationDelivery(peerID, event.ID)
 		writeJSON(w, 201, event)
 	})
 	mux.HandleFunc("GET /federation/repositories/{peer}/{repository}", func(w http.ResponseWriter, r *http.Request) {
@@ -966,6 +982,42 @@ func sendCollaborationEvent(store *federation.Store, peerID string, event federa
 		return fmt.Errorf("peer rejected event (%s): %s", resp.Status, strings.TrimSpace(string(b)))
 	}
 	return nil
+}
+
+func recoverFederationDeliveries(store *federation.Store) error {
+	items, err := store.PendingCollaborationDeliveries()
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if err = sendCollaborationEvent(store, item.PeerID, item.Event); err != nil {
+			_ = store.RetainCollaborationDelivery(item.PeerID, item.Event, err.Error())
+			continue
+		}
+		if err = store.CompleteCollaborationDelivery(item.PeerID, item.Event.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func startFederationDeliveryRecovery(store *federation.Store) {
+	if store == nil {
+		return
+	}
+	recover := func() {
+		if err := recoverFederationDeliveries(store); err != nil {
+			log.Printf("recover federation deliveries: %v", err)
+		}
+	}
+	recover()
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			recover()
+		}
+	}()
 }
 
 func fetchFederationDocument(raw string) (federation.Document, error) {

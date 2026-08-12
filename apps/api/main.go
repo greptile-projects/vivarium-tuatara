@@ -508,6 +508,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if federationStore != nil && userStore != nil && authStore != nil {
 		registerFederationRoutes(mux, federationStore, userStore, organizationStore, authStore, store, repositoryCatalog, pullRequestStore, releaseStore, issueStore, contributorPathwayStore, contributorOpportunityStore)
+		startFederationDeliveryRecovery(federationStore)
 	}
 	if authStore != nil {
 		registerAuthRoutes(mux, authStore)
