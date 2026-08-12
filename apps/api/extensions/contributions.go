@@ -1,6 +1,7 @@
 package extensions
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/url"
@@ -271,7 +272,8 @@ func validContribution(v ContributionInput) bool {
 	}
 	for _, artifact := range v.Artifacts {
 		parsed, err := url.Parse(artifact.URL)
-		if artifact.Name == "" || len(artifact.Name) > 200 || err != nil || parsed.Scheme != "https" || parsed.Host == "" || len(artifact.SHA256) != 64 {
+		checksum, checksumErr := hex.DecodeString(artifact.SHA256)
+		if artifact.Name == "" || len(artifact.Name) > 200 || err != nil || parsed.Scheme != "https" || parsed.Host == "" || checksumErr != nil || len(checksum) != 32 {
 			return false
 		}
 	}
