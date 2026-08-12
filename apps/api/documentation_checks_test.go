@@ -18,3 +18,12 @@ func TestDocumentationDefinitionAffectedUsesDeclaredInputs(t *testing.T) {
 		t.Fatal("configuration change must affect every matrix cell")
 	}
 }
+
+func TestRequiredDocumentationDefinitionRunsForUnrelatedChange(t *testing.T) {
+	definition := checkruns.Definition{Name: "docs/guide [v1]", Documentation: &checkruns.DocumentationEvidence{DependencyPaths: []string{"docs/guide.md"}}}
+	changed := map[string]bool{"src/app.go": true}
+	required := map[string]bool{"docs/guide [v1]": true}
+	if documentationDefinitionAffected(definition, changed) || !documentationDefinitionSelected(definition, changed, required) {
+		t.Fatal("required unchanged documentation evidence was omitted")
+	}
+}
