@@ -818,6 +818,21 @@ func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userS
 			return
 		}
 		in.Event.Verification = "verified"
+		// Detect an exact retry before applying revision side effects. Revision
+		// import advances both the pull and contribution boundary, so discovering
+		// the duplicate afterwards would incorrectly turn an acknowledged network
+		// retry into a revision conflict.
+		if retained, getErr := store.CollaborationEvent(in.Event.ContributionID, in.Event.OriginInstanceID, in.Event.ID); getErr == nil {
+			if !sameCollaborationEvent(retained, in.Event) {
+				writeAPIError(w, 409, "federated_event_conflict", "event id was already used for different content")
+				return
+			}
+			writeJSON(w, 201, retained)
+			return
+		} else if !errors.Is(getErr, federation.ErrNotFound) {
+			writeAPIError(w, 503, "federated_collaboration_unavailable", "collaboration history is unavailable")
+			return
+		}
 		if in.Event.Kind == "revision" {
 			boundary, boundaryErr := store.Contribution(in.Event.ContributionID)
 			if boundaryErr != nil || boundary.TargetRepositoryID == "" || in.Bundle == "" {
@@ -990,6 +1005,14 @@ func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userS
 		}
 		writeJSON(w, 200, map[string]any{"repositories": items})
 	})
+}
+
+func sameCollaborationEvent(left, right federation.CollaborationEvent) bool {
+	left.Verification, left.Stale = "", false
+	right.Verification, right.Stale = "", false
+	a, _ := json.Marshal(left)
+	b, _ := json.Marshal(right)
+	return bytes.Equal(a, b)
 }
 
 func visibleFederationBranches(refs []storage.Reference, defaultBranch string) ([]federation.RepositoryBranch, string) {

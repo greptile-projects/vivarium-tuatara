@@ -8,10 +8,26 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/federation"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
+
+func TestSameCollaborationEventIgnoresLocalProjectionOnly(t *testing.T) {
+	created := time.Date(2026, 8, 12, 18, 0, 0, 0, time.UTC)
+	event := federation.CollaborationEvent{ID: "revision-one", ContributionID: "contribution-one", Sequence: 1, Kind: "revision", Actor: "remote:agent:one", Revision: strings.Repeat("a", 40), CreatedAt: created, OriginInstanceID: strings.Repeat("b", 32), DocumentVersion: 2, SigningKeyID: "key", Signature: "signature"}
+	retained := event
+	retained.Verification, retained.Stale = "verified", true
+	if !sameCollaborationEvent(retained, event) {
+		t.Fatal("local verification and staleness projection changed immutable event identity")
+	}
+	changed := event
+	changed.Revision = strings.Repeat("c", 40)
+	if sameCollaborationEvent(retained, changed) {
+		t.Fatal("different immutable event content was accepted as a retry")
+	}
+}
 
 func TestVisibleFederationBranchesExcludeSecurityNamespace(t *testing.T) {
 	mainRevision := strings.Repeat("1", 40)

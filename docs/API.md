@@ -692,6 +692,11 @@ is `409 federated_event_conflict`, and an unavailable peer returns `202` with
 Imported evidence never counts as a local required check, review identity,
 credential, or merge permission.
 
+Duplicate recognition occurs after live peer trust, contribution authority,
+and signature verification but before revision bundle import. Consequently an
+exact retry of an already adopted revision is acknowledged without advancing
+Git twice, while revocation and changed signed content still fail closed.
+
 Merging an open federated pull uses the ordinary `POST
 /repositories/{id}/pulls/{pull-id}/merge` endpoint and its live ownership,
 review, required-check, integration-policy, conflict, and exact-revision rules.
