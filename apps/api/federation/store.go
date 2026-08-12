@@ -1,0 +1,460 @@
+// Package federation publishes a signed instance identity and retains explicit
+// trust in independently administered peers. Federated identities are
+// attribution references; they never authenticate as local principals.
+package federation
+
+import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+)
+
+var (
+	ErrNotFound = errors.New("federation peer not found")
+	ErrConflict = errors.New("federation peer changed")
+	ErrInvalid  = errors.New("invalid federation identity")
+)
+
+type Endpoint struct {
+	Kind string `json:"kind"`
+	URL  string `json:"url"`
+}
+type Key struct {
+	ID        string     `json:"id"`
+	Algorithm string     `json:"algorithm"`
+	PublicKey string     `json:"public_key"`
+	CreatedAt time.Time  `json:"created_at"`
+	RetiredAt *time.Time `json:"retired_at,omitempty"`
+}
+type Document struct {
+	Protocol          string     `json:"protocol"`
+	InstanceID        string     `json:"instance_id"`
+	Name              string     `json:"name"`
+	Version           int        `json:"version"`
+	IssuedAt          time.Time  `json:"issued_at"`
+	Endpoints         []Endpoint `json:"endpoints"`
+	Capabilities      []string   `json:"capabilities"`
+	Operators         []string   `json:"operators"`
+	Keys              []Key      `json:"keys"`
+	SigningKeyID      string     `json:"signing_key_id"`
+	RotationSignature string     `json:"rotation_signature,omitempty"`
+	Signature         string     `json:"signature"`
+}
+type Peer struct {
+	InstanceID     string     `json:"instance_id"`
+	DiscoveryURL   string     `json:"discovery_url"`
+	Status         string     `json:"status"`
+	TrustVersion   int        `json:"trust_version"`
+	Document       Document   `json:"document"`
+	FirstSeenAt    time.Time  `json:"first_seen_at"`
+	LastCheckedAt  time.Time  `json:"last_checked_at"`
+	LastVerifiedAt time.Time  `json:"last_verified_at"`
+	ChangedAt      *time.Time `json:"changed_at,omitempty"`
+	RevokedAt      *time.Time `json:"revoked_at,omitempty"`
+	LastError      string     `json:"last_error,omitempty"`
+}
+type persistedIdentity struct {
+	Document   Document `json:"document"`
+	PrivateKey string   `json:"private_key"`
+}
+type Store struct {
+	root, name, publicURL string
+	operators             []string
+	mu                    sync.Mutex
+	now                   func() time.Time
+}
+
+func New(root, name, publicURL string, operators []string) (*Store, error) {
+	if strings.TrimSpace(root) == "" {
+		return nil, fmt.Errorf("federation storage root is empty")
+	}
+	if err := os.MkdirAll(root, 0700); err != nil {
+		return nil, fmt.Errorf("create federation storage: %w", err)
+	}
+	s := &Store{root: root, name: strings.TrimSpace(name), publicURL: strings.TrimRight(strings.TrimSpace(publicURL), "/"), operators: clean(operators), now: func() time.Time { return time.Now().UTC() }}
+	if s.name == "" {
+		s.name = "Vivarium"
+	}
+	if s.publicURL == "" {
+		s.publicURL = "http://127.0.0.1:8080"
+	}
+	if _, err := s.Identity(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+func clean(in []string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, v := range in {
+		v = strings.TrimSpace(v)
+		if v != "" && !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+func (s *Store) Identity() (Document, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Document{}, err
+	}
+	defer unlock()
+	p := filepath.Join(s.root, "identity.json")
+	raw, err := os.ReadFile(p)
+	if err == nil {
+		var v persistedIdentity
+		if json.Unmarshal(raw, &v) == nil {
+			return v.Document, nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return Document{}, err
+	}
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return Document{}, err
+	}
+	now := s.now().Truncate(time.Microsecond)
+	sum := sha256.Sum256(pub)
+	id := "ed25519:" + hex.EncodeToString(sum[:8])
+	instanceSum := sha256.Sum256(pub)
+	d := Document{Protocol: "vivarium-federation/v1", InstanceID: hex.EncodeToString(instanceSum[:16]), Name: s.name, Version: 1, IssuedAt: now, Endpoints: []Endpoint{{Kind: "api", URL: s.publicURL}, {Kind: "actors", URL: s.publicURL + "/federation/actors/{type}/{id}"}}, Capabilities: []string{"identity.v1", "actor-resolution.v1", "signed-attribution.v1"}, Operators: s.operators, Keys: []Key{{ID: id, Algorithm: "Ed25519", PublicKey: base64.RawURLEncoding.EncodeToString(pub), CreatedAt: now}}, SigningKeyID: id}
+	d.Signature = sign(d, priv)
+	v := persistedIdentity{Document: d, PrivateKey: base64.RawURLEncoding.EncodeToString(priv)}
+	if err = writeJSON(p, v); err != nil {
+		return Document{}, err
+	}
+	return d, nil
+}
+func (s *Store) IsOperator(id string) bool {
+	for _, v := range s.operators {
+		if v == id {
+			return true
+		}
+	}
+	return false
+}
+func (s *Store) Rotate() (Document, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Document{}, err
+	}
+	defer unlock()
+	path := filepath.Join(s.root, "identity.json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return Document{}, err
+	}
+	var v persistedIdentity
+	if err = json.Unmarshal(b, &v); err != nil {
+		return Document{}, err
+	}
+	previousPrivate, err := base64.RawURLEncoding.DecodeString(v.PrivateKey)
+	if err != nil || len(previousPrivate) != ed25519.PrivateKeySize {
+		return Document{}, ErrInvalid
+	}
+	now := s.now().Truncate(time.Microsecond)
+	for i := range v.Document.Keys {
+		if v.Document.Keys[i].ID == v.Document.SigningKeyID {
+			v.Document.Keys[i].RetiredAt = &now
+		}
+	}
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return Document{}, err
+	}
+	sum := sha256.Sum256(pub)
+	id := "ed25519:" + hex.EncodeToString(sum[:8])
+	v.Document.Keys = append(v.Document.Keys, Key{ID: id, Algorithm: "Ed25519", PublicKey: base64.RawURLEncoding.EncodeToString(pub), CreatedAt: now})
+	v.Document.Version++
+	v.Document.IssuedAt = now
+	v.Document.SigningKeyID = id
+	v.Document.RotationSignature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(ed25519.PrivateKey(previousPrivate), unsigned(v.Document)))
+	v.Document.Signature = sign(v.Document, priv)
+	v.PrivateKey = base64.RawURLEncoding.EncodeToString(priv)
+	if err = writeJSON(path, v); err != nil {
+		return Document{}, err
+	}
+	return v.Document, nil
+}
+func unsigned(d Document) []byte {
+	d.Signature = ""
+	d.RotationSignature = ""
+	b, _ := json.Marshal(d)
+	return b
+}
+func sign(d Document, k ed25519.PrivateKey) string {
+	return base64.RawURLEncoding.EncodeToString(ed25519.Sign(k, unsigned(d)))
+}
+func Verify(d Document) error {
+	if d.Protocol != "vivarium-federation/v1" || !validInstanceID(d.InstanceID) || d.Version < 1 || d.SigningKeyID == "" {
+		return ErrInvalid
+	}
+	var key *Key
+	for i := range d.Keys {
+		if d.Keys[i].ID == d.SigningKeyID {
+			key = &d.Keys[i]
+			break
+		}
+	}
+	if key == nil || key.Algorithm != "Ed25519" || key.RetiredAt != nil {
+		return ErrInvalid
+	}
+	pub, e := base64.RawURLEncoding.DecodeString(key.PublicKey)
+	if e != nil || len(pub) != ed25519.PublicKeySize {
+		return ErrInvalid
+	}
+	if len(d.Keys) == 0 {
+		return ErrInvalid
+	}
+	rootPublic, e := base64.RawURLEncoding.DecodeString(d.Keys[0].PublicKey)
+	if e != nil || len(rootPublic) != ed25519.PublicKeySize {
+		return ErrInvalid
+	}
+	rootSum := sha256.Sum256(rootPublic)
+	if d.InstanceID != hex.EncodeToString(rootSum[:16]) {
+		return ErrInvalid
+	}
+	sig, e := base64.RawURLEncoding.DecodeString(d.Signature)
+	if e != nil || !ed25519.Verify(pub, unsigned(d), sig) {
+		return ErrInvalid
+	}
+	return nil
+}
+func validInstanceID(id string) bool {
+	if len(id) != 32 || id != strings.ToLower(id) {
+		return false
+	}
+	b, e := hex.DecodeString(id)
+	return e == nil && len(b) == 16
+}
+func verifyContinuity(previous, next Document) error {
+	if len(previous.Keys) == 0 || len(next.Keys) == 0 || previous.Keys[0].ID != next.Keys[0].ID || previous.Keys[0].PublicKey != next.Keys[0].PublicKey {
+		return ErrInvalid
+	}
+	sig, e := base64.RawURLEncoding.DecodeString(next.RotationSignature)
+	if e != nil {
+		return ErrInvalid
+	}
+	for _, key := range previous.Keys {
+		if key.RetiredAt != nil {
+			continue
+		}
+		raw, x := base64.RawURLEncoding.DecodeString(key.PublicKey)
+		if x == nil && len(raw) == ed25519.PublicKeySize && ed25519.Verify(ed25519.PublicKey(raw), unsigned(next), sig) {
+			return nil
+		}
+	}
+	return ErrInvalid
+}
+func (s *Store) Upsert(url string, d Document) (Peer, error) {
+	if err := Verify(d); err != nil {
+		return Peer{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Peer{}, err
+	}
+	defer unlock()
+	now := s.now().Truncate(time.Microsecond)
+	p, err := s.readPeer(d.InstanceID)
+	if errors.Is(err, ErrNotFound) {
+		p = Peer{InstanceID: d.InstanceID, DiscoveryURL: url, Status: "trusted", TrustVersion: 1, Document: d, FirstSeenAt: now, LastCheckedAt: now, LastVerifiedAt: now}
+	} else if err != nil {
+		return Peer{}, err
+	} else {
+		p.LastCheckedAt = now
+		if p.Status == "revoked" {
+			return Peer{}, ErrConflict
+		}
+		if d.Version < p.Document.Version {
+			return Peer{}, ErrConflict
+		}
+		if d.Version == p.Document.Version && d.Signature != p.Document.Signature {
+			return Peer{}, ErrConflict
+		}
+		if d.Version > p.Document.Version {
+			if verifyContinuity(p.Document, d) != nil {
+				return Peer{}, ErrConflict
+			}
+			p.Status = "changed"
+			p.ChangedAt = &now
+		}
+		p.Document = d
+		p.DiscoveryURL = url
+		p.LastVerifiedAt = now
+		p.LastError = ""
+		p.TrustVersion++
+	}
+	peerPath, err := s.peerPath(p.InstanceID)
+	if err != nil {
+		return Peer{}, err
+	}
+	if err = writeJSON(peerPath, p); err != nil {
+		return Peer{}, err
+	}
+	return p, nil
+}
+func (s *Store) RecordFailure(id, msg string) (Peer, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, e := s.lock()
+	if e != nil {
+		return Peer{}, e
+	}
+	defer unlock()
+	p, e := s.readPeer(id)
+	if e != nil {
+		return Peer{}, e
+	}
+	p.LastCheckedAt = s.now().Truncate(time.Microsecond)
+	p.LastError = msg
+	if p.Status != "revoked" {
+		p.Status = "unreachable"
+	}
+	p.TrustVersion++
+	peerPath, pathErr := s.peerPath(id)
+	if pathErr != nil {
+		return Peer{}, pathErr
+	}
+	e = writeJSON(peerPath, p)
+	return p, e
+}
+func (s *Store) Decide(id string, version int, action string) (Peer, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, e := s.lock()
+	if e != nil {
+		return Peer{}, e
+	}
+	defer unlock()
+	p, e := s.readPeer(id)
+	if e != nil {
+		return Peer{}, e
+	}
+	if p.TrustVersion != version {
+		return Peer{}, ErrConflict
+	}
+	now := s.now().Truncate(time.Microsecond)
+	switch action {
+	case "trust":
+		p.Status = "trusted"
+		p.ChangedAt = nil
+		p.LastError = ""
+	case "revoke":
+		p.Status = "revoked"
+		p.RevokedAt = &now
+	default:
+		return Peer{}, ErrInvalid
+	}
+	p.TrustVersion++
+	peerPath, pathErr := s.peerPath(id)
+	if pathErr != nil {
+		return Peer{}, pathErr
+	}
+	e = writeJSON(peerPath, p)
+	return p, e
+}
+func (s *Store) Get(id string) (Peer, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.readPeer(id) }
+func (s *Store) List() ([]Peer, error) {
+	files, e := filepath.Glob(filepath.Join(s.root, "peers", "*.json"))
+	if e != nil {
+		return nil, e
+	}
+	out := []Peer{}
+	for _, f := range files {
+		var p Peer
+		b, e := os.ReadFile(f)
+		if e != nil {
+			return nil, e
+		}
+		if e = json.Unmarshal(b, &p); e != nil {
+			return nil, e
+		}
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].InstanceID < out[j].InstanceID })
+	return out, nil
+}
+func (s *Store) readPeer(id string) (Peer, error) {
+	peerPath, e := s.peerPath(id)
+	if e != nil {
+		return Peer{}, ErrNotFound
+	}
+	b, e := os.ReadFile(peerPath)
+	if errors.Is(e, os.ErrNotExist) {
+		return Peer{}, ErrNotFound
+	}
+	if e != nil {
+		return Peer{}, e
+	}
+	var p Peer
+	if e = json.Unmarshal(b, &p); e != nil {
+		return Peer{}, e
+	}
+	return p, nil
+}
+func (s *Store) peerPath(id string) (string, error) {
+	if !validInstanceID(id) {
+		return "", ErrNotFound
+	}
+	return filepath.Join(s.root, "peers", id+".json"), nil
+}
+func (s *Store) lock() (func(), error) {
+	f, e := os.OpenFile(filepath.Join(s.root, ".lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if e != nil {
+		return nil, e
+	}
+	if e = syscall.Flock(int(f.Fd()), syscall.LOCK_EX); e != nil {
+		f.Close()
+		return nil, e
+	}
+	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil
+}
+func writeJSON(p string, v any) error {
+	if e := os.MkdirAll(filepath.Dir(p), 0700); e != nil {
+		return e
+	}
+	b, e := json.MarshalIndent(v, "", "  ")
+	if e != nil {
+		return e
+	}
+	tmp, e := os.CreateTemp(filepath.Dir(p), ".tmp-")
+	if e != nil {
+		return e
+	}
+	defer os.Remove(tmp.Name())
+	if e = tmp.Chmod(0600); e == nil {
+		_, e = tmp.Write(b)
+	}
+	if e == nil {
+		e = tmp.Sync()
+	}
+	if c := tmp.Close(); e == nil {
+		e = c
+	}
+	if e == nil {
+		e = os.Rename(tmp.Name(), p)
+	}
+	return e
+}
