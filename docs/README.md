@@ -14,6 +14,20 @@ The supported consumer contract, including authentication, stable error
 shapes, validation, and collection pagination, is documented in [API.md](API.md).
 Consumers should use that HTTP boundary rather than reading storage roots.
 
+## Governed community decisions
+
+The `/governance` workspace turns an active repository or organization charter decision class
+into a reviewable community proposal. A proposal publishes its source, alternatives, citations,
+affected resources, disclosures, discussion window, and implementation effects, and freezes the
+charter version with its eligible roles, quorum, and approval threshold.
+
+Humans must remain eligible when casting and when the deadline is tallied. Ballots are final and
+unique; abstention and conflict recusal are explicit. Approved organization agents can publish
+cited analysis but never vote. Attributable ballots retain dissent. A secret ballot exposes each
+voter only their own receipt, while others see aggregate counts and a verification digest.
+Contests and eligibility changes remain attached to the final tally. Records default beneath
+`$GOVERNANCE_STORAGE_ROOT` (`governance`).
+
 ## Federation identity
 
 Every instance publishes a signed, versioned identity document at

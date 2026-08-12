@@ -1,5 +1,27 @@
 # HTTP API contract
 
+## Governed community proposals
+
+`POST /governance/proposals` opens a proposal beneath an active repository or organization
+charter. It supplies the source, public scope, at least two alternatives, cited evidence,
+affected resources, disclosure requirements, implementation effects, and a `rule` naming the
+active decision class and voting window. The server freezes the active charter version and its
+authoritative eligible roles, quorum, and threshold; the opener must belong to that electorate.
+
+`GET /governance/proposals` lists currently visible proposals and `GET
+/governance/proposals/{id}` returns one record. `POST .../{id}/analysis` appends required-citation
+human or approved-agent analysis. Agent analysis requires a current operator and grants no vote.
+`POST .../{id}/ballots` accepts one final alternative, `abstain`, or `recuse` choice per eligible
+human. Changed charters, lost eligibility, duplicates, and out-of-window ballots fail closed.
+Secret responses show the caller's own receipt while redacting every other voter, choice, reason,
+and ballot audit identity.
+
+After the deadline, `POST .../{id}/tally` re-resolves the exact allowed roles, excludes ballots
+whose eligibility was lost, and computes participation, abstentions, recusals, counts, quorum,
+threshold, and result. Optional `contest_reasons` and charter drift mark a result contested. The
+tally exposes a SHA-256 digest over the proposal, charter version, current electorate, receipts,
+and aggregate counts for verification.
+
 ## Federated repository discovery
 
 `GET /federation/repositories/{id}` is the authoritative public metadata
