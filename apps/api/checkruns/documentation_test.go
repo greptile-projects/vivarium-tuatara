@@ -51,6 +51,15 @@ func TestParseDocumentationConfigRejectsUnexecutedTarget(t *testing.T) {
 	}
 }
 
+func TestParseDocumentationConfigFreezesOmittedTargetToExecutedRevision(t *testing.T) {
+	revision := strings.Repeat("1", 40)
+	data := []byte(`{"version":1,"checks":[{"name":"guide","collection_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","image":"alpine:3.22","command":"true","selectors":["commands"],"dependency_paths":["docs/guide.md"],"targets":[{"version":"v1","source":"release"}]}]}`)
+	_, definitions, err := ParseDocumentationConfig(data, revision, func(string) ([]byte, error) { return []byte("guide"), nil })
+	if err != nil || len(definitions) != 1 || definitions[0].Documentation.Revision != revision {
+		t.Fatalf("definitions = %#v, err = %v", definitions, err)
+	}
+}
+
 func TestParseDocumentationConfigCanonicalizesAndDeduplicatesDependencies(t *testing.T) {
 	base := `{"version":1,"checks":[{"name":"guide","collection_id":"0123456789abcdef0123456789abcdef","image":"alpine:3.22","command":"verify","selectors":["links"],"dependency_paths":%s,"targets":[{"version":"v1","revision":"1111111111111111111111111111111111111111","source":"source"}]}]}`
 	_, definitions, err := ParseDocumentationConfig([]byte(fmt.Sprintf(base, `["./docs/guide.md"]`)), strings.Repeat("1", 40), func(path string) ([]byte, error) {
