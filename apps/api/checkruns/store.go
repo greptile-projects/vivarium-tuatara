@@ -31,18 +31,31 @@ var (
 
 const ConfigPath = ".vivarium/checks.json"
 const ReleaseConfigPath = ".vivarium/release.json"
+const DocumentationConfigPath = ".vivarium/documentation-checks.json"
+
+type DocumentationEvidence struct {
+	Check            string   `json:"check"`
+	CollectionID     string   `json:"collection_id"`
+	Version          string   `json:"version"`
+	Revision         string   `json:"revision"`
+	Source           string   `json:"source"`
+	Selectors        []string `json:"selectors"`
+	DependencyPaths  []string `json:"dependency_paths"`
+	DependencySHA256 string   `json:"dependency_sha256"`
+}
 
 type Definition struct {
-	Name             string            `json:"name"`
-	Image            string            `json:"image"`
-	Command          string            `json:"command"`
-	WorkingDirectory string            `json:"working_directory,omitempty"`
-	Environment      map[string]string `json:"environment,omitempty"`
-	TimeoutSeconds   int               `json:"timeout_seconds,omitempty"`
-	CPUs             float64           `json:"cpus,omitempty"`
-	MemoryMB         int               `json:"memory_mb,omitempty"`
-	StorageMB        int               `json:"storage_mb,omitempty"`
-	Inputs           []InputFile       `json:"inputs,omitempty"`
+	Name             string                 `json:"name"`
+	Image            string                 `json:"image"`
+	Command          string                 `json:"command"`
+	WorkingDirectory string                 `json:"working_directory,omitempty"`
+	Environment      map[string]string      `json:"environment,omitempty"`
+	TimeoutSeconds   int                    `json:"timeout_seconds,omitempty"`
+	CPUs             float64                `json:"cpus,omitempty"`
+	MemoryMB         int                    `json:"memory_mb,omitempty"`
+	StorageMB        int                    `json:"storage_mb,omitempty"`
+	Inputs           []InputFile            `json:"inputs,omitempty"`
+	Documentation    *DocumentationEvidence `json:"documentation,omitempty"`
 }
 
 // InputFile is server-frozen verification input. Repository check
@@ -198,6 +211,9 @@ func ParseConfig(data []byte) (Config, error) {
 		x := &c.Checks[i]
 		if len(x.Inputs) != 0 {
 			return Config{}, errors.New("check configuration cannot embed inputs")
+		}
+		if x.Documentation != nil && (x.Documentation.Check == "" || len(x.Documentation.CollectionID) != 32 || len(x.Documentation.Revision) != 40 || len(x.Documentation.Selectors) == 0 || len(x.Documentation.DependencySHA256) != 64) {
+			return Config{}, errors.New("invalid documentation evidence")
 		}
 		if strings.TrimSpace(x.Name) == "" || len(x.Name) > 100 || strings.TrimSpace(x.Command) == "" || len(x.Command) > 4000 || seen[x.Name] || x.TimeoutSeconds < 0 || x.TimeoutSeconds > 3600 || x.CPUs < 0 || x.CPUs > 2 || x.MemoryMB < 0 || x.MemoryMB > 2048 || x.StorageMB < 0 || x.StorageMB > 1024 {
 			return Config{}, errors.New("invalid check definition")

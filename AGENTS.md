@@ -392,6 +392,13 @@ whenever dependencies change or the web job fails before it starts.
   references, attributable discussion and suggestions, and identified agent
   assistance with explicit sources and uncertainty; tasks grant no additional
   Git, workspace, review, or publication authority.
+  Repository `.vivarium/documentation-checks.json` definitions expand selected
+  link, symbol, build, sample, command, and tutorial verification across exact
+  source/package/release revision matrices in the ordinary bounded check
+  executor. Pull checks retain logs, artifacts, coverage/output-difference
+  files, selectors, targets, and dependency digests; generated `docs/*` check
+  names can be required through normal branch merge readiness, while changed
+  declared paths invalidate only the checks whose evidence names them.
   Exact-revision code navigation at `/repositories/{id}/code` and
   `GET /repositories/{id}/code-navigation` performs bounded lexical search
   across supported source files, classifies definitions, references, callers,

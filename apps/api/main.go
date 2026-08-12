@@ -823,15 +823,20 @@ func startCheckRunsForCommit(gitStore *storage.Store, runStore *checkruns.Store,
 	}
 	command := exec.Command("git", "--git-dir="+repository.Path(), "show", commitID+":"+checkruns.ConfigPath)
 	data, err := command.Output()
+	definitions := []checkruns.Definition{}
 	if err != nil {
 		// A repository opts in by versioning the configuration at the candidate commit.
 		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 128 {
-			return nil
+			data = nil
+		} else {
+			return fmt.Errorf("read check configuration: %w", err)
 		}
-		return fmt.Errorf("read check configuration: %w", err)
 	}
-	config, err := checkruns.ParseConfig(data)
-	if err != nil {
+	config := checkruns.Config{}
+	if data != nil {
+		config, err = checkruns.ParseConfig(data)
+	}
+	if data != nil && err != nil {
 		log.Printf("invalid check configuration for %s: %v", commitID, err)
 		runs, createErr := runStore.Create(repositoryID, pullRequestID, commitID, []checkruns.Definition{{Name: "configuration", Image: "invalid", Command: "invalid configuration", TimeoutSeconds: 1, WorkingDirectory: "."}})
 		if createErr != nil {
@@ -844,20 +849,41 @@ func startCheckRunsForCommit(gitStore *storage.Store, runStore *checkruns.Store,
 		}
 		return nil
 	}
-	if required != nil {
-		wanted := map[string]bool{}
-		for _, name := range required {
-			wanted[name] = true
+	definitions = append(definitions, config.Checks...)
+	docsCommand := exec.Command("git", "--git-dir="+repository.Path(), "show", commitID+":"+checkruns.DocumentationConfigPath)
+	if docsData, docsErr := docsCommand.Output(); docsErr == nil {
+		_, docsDefinitions, parseErr := checkruns.ParseDocumentationConfig(docsData, func(name string) ([]byte, error) {
+			return exec.Command("git", "--git-dir="+repository.Path(), "show", commitID+":"+name).Output()
+		})
+		if parseErr != nil {
+			runs, createErr := runStore.Create(repositoryID, pullRequestID, commitID, []checkruns.Definition{{Name: "documentation/configuration", Image: "invalid", Command: "invalid configuration", TimeoutSeconds: 1, WorkingDirectory: "."}})
+			if createErr != nil {
+				return fmt.Errorf("create invalid documentation configuration check: %w", createErr)
+			}
+			if len(runs) == 1 {
+				if recordErr := runStore.RecordFailure(runs[0], parseErr.Error()); recordErr != nil {
+					return fmt.Errorf("record invalid documentation configuration: %w", recordErr)
+				}
+			}
+			return nil
 		}
-		definitions := make([]checkruns.Definition, 0, len(required))
-		for _, definition := range config.Checks {
-			if wanted[definition.Name] {
-				definitions = append(definitions, definition)
+		definitions = append(definitions, docsDefinitions...)
+	} else if exit, ok := docsErr.(*exec.ExitError); !ok || exit.ExitCode() != 128 {
+		return fmt.Errorf("read documentation check configuration: %w", docsErr)
+	}
+	if required != nil {
+		all := definitions
+		definitions = make([]checkruns.Definition, 0, len(required))
+		for _, name := range required {
+			for _, definition := range all {
+				if definition.Name == name {
+					definitions = append(definitions, definition)
+					break
+				}
 			}
 		}
-		config.Checks = definitions
 	}
-	runs, err := runStore.Create(repositoryID, pullRequestID, commitID, config.Checks)
+	runs, err := runStore.Create(repositoryID, pullRequestID, commitID, definitions)
 	if err != nil {
 		return fmt.Errorf("create check runs: %w", err)
 	}
