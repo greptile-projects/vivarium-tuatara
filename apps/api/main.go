@@ -30,6 +30,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/explanations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/extensions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/federation"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/governance"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/impacts"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
@@ -265,6 +266,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	governanceRoot := os.Getenv("GOVERNANCE_STORAGE_ROOT")
+	if governanceRoot == "" {
+		governanceRoot = "governance"
+	}
+	governanceStore, err := governance.New(governanceRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	workspaceRoot := os.Getenv("WORKSPACE_STORAGE_ROOT")
 	if workspaceRoot == "" {
 		workspaceRoot = "workspaces"
@@ -326,7 +335,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -448,6 +457,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var packageStore *packages.Store
 	var organizationStore *organizations.Store
 	var charterStore *charters.Store
+	var governanceStore *governance.Store
 	var workspaceStore *workspaces.Store
 	var explanationStore *explanations.Store
 	var impactStore *impacts.Store
@@ -479,6 +489,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			organizationStore = value
 		case *charters.Store:
 			charterStore = value
+		case *governance.Store:
+			governanceStore = value
 		case *workspaces.Store:
 			workspaceStore = value
 		case *explanations.Store:
@@ -605,6 +617,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && charterStore != nil {
 		registerCharterRoutes(mux, charterStore, repositoryCatalog, organizationStore, authStore)
+		if governanceStore != nil {
+			registerGovernanceRoutes(mux, governanceStore, charterStore, repositoryCatalog, organizationStore, authStore)
+		}
 	}
 	if authStore != nil && repositoryCatalog != nil && workspaceStore != nil {
 		registerWorkspaceRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, incidentStore, issueStore, releaseStore, workspaceStore, authStore, organizationStore, checkRunStore, changeSessionStore)

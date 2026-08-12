@@ -82,6 +82,56 @@ func TestIndependentStoresSerializeApprovals(t *testing.T) {
 	}
 }
 
+func TestGovernanceAdmissionExcludesStandingMutationUntilCommit(t *testing.T) {
+	root := t.TempDir()
+	seed, _ := New(root)
+	now := time.Now()
+	if _, err := seed.Publish("repository", "repo1", "owner", 0, validRevision()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.Approve("repository", "repo1", "owner", 1, "approved", "adopt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.Activate("repository", "repo1", "owner", 1); err != nil {
+		t.Fatal(err)
+	}
+	record, err := seed.Invite("repository", "repo1", "owner", 0, 1, "human", "alice", "maintainer", "Represent contributors", []Evidence{{Kind: "contribution", ResourceID: "pull-1", Summary: "Evidence"}}, now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	standingID := record.Standings[0].ID
+	if _, err = seed.ActOnStanding("repository", "repo1", standingID, "alice", "accept", "Accept", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	entered, release, mutationDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		admission, _ := New(root)
+		_ = admission.WithGovernanceAdmission("repository", "repo1", 1, func(current Record) error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+	go func() {
+		mutator, _ := New(root)
+		_, _ = mutator.ActOnStanding("repository", "repo1", standingID, "owner", "suspend", "Conflict", "")
+		close(mutationDone)
+	}()
+	select {
+	case <-mutationDone:
+		t.Fatal("standing mutation entered governance admission")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-mutationDone:
+	case <-time.After(time.Second):
+		t.Fatal("standing mutation did not resume")
+	}
+}
+
 func TestRevisionApprovalActivationAndHistory(t *testing.T) {
 	s, err := New(t.TempDir())
 	if err != nil {

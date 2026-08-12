@@ -1,5 +1,33 @@
 # HTTP API contract
 
+## Governed community proposals
+
+`POST /governance/proposals` opens a proposal beneath an active repository or organization
+charter. It supplies the source, public scope, at least two alternatives, cited evidence,
+affected resources, disclosure requirements, implementation effects, and a `rule` naming the
+active decision class and voting window. The server freezes the active charter version and its
+authoritative eligible roles, quorum, and threshold; the opener must hold active, unexpired
+standing for an eligible role under that exact revision. Repository or organization membership
+alone is not governance standing.
+Creation, ballot admission, and final tally hold the charter mutation boundary from exact
+standing validation through governance persistence; a concurrent standing or active-revision
+change therefore commits wholly before or after the governed write, never between them.
+
+`GET /governance/proposals` lists currently visible proposals and `GET
+/governance/proposals/{id}` returns one record. `POST .../{id}/analysis` appends required-citation
+human or approved-agent analysis. Agent analysis requires a current operator and grants no vote.
+`POST .../{id}/ballots` accepts one final alternative, `abstain`, or `recuse` choice per eligible
+human. Changed charters, lost eligibility, duplicates, and out-of-window ballots fail closed.
+Secret responses show only the caller's own ballot and receipt; every other ballot and ballot
+audit event is omitted, including its existence, voter, choice, reason, cast time, and receipt.
+
+After the deadline, `POST .../{id}/tally` re-resolves the exact allowed roles, excludes ballots
+whose eligibility was lost, and computes participation, abstentions, recusals, counts, quorum,
+threshold, and result. Optional `contest_reasons` and charter drift mark a result contested. The
+tally exposes a SHA-256 digest over the proposal, charter version, current electorate, receipts,
+and aggregate counts for verification. The first completed tally is immutable; later finalization
+attempts conflict instead of replacing its electorate, contest evidence, result, or digest.
+
 ## Federated repository discovery
 
 `GET /federation/repositories/{id}` is the authoritative public metadata

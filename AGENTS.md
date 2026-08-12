@@ -257,6 +257,21 @@ whenever dependencies change or the web job fails before it starts.
   Reads derive expiry and lost local identity/membership and project nominations plus operational
   access separately. Standing and votes never mint credentials or grant code, secret, merge,
   deployment, or repository authority.
+  Governed community proposals at `/governance` freeze an active charter decision class and
+  may originate from technical decisions, initiatives, policy exceptions, funding/resource
+  requests, leadership nominations, or charter amendments. They retain public scope,
+  alternatives, cited evidence, affected resources, disclosures, discussion/voting deadlines,
+  implementation effects, and the declared electorate/quorum/threshold. Eligibility is
+  revalidated for every human ballot and again at tally; duplicate ballots, abstentions,
+  recusals, changed eligibility, missed deadlines, and contests remain deterministic evidence.
+  Approved agents may add cited analysis but never vote. Secret ballots reveal only each
+  voter's own ballot/receipt plus aggregate results and a verification digest; other ballots and
+  ballot audit events are omitted. Ballot reasons remain retained dissent, the first tally is
+  immutable, and every elector must hold active, unexpired standing for the exact charter
+  revision and role; source membership alone never suffices. Charter standing validation and
+  proposal, ballot, or tally persistence share the charter mutation admission boundary, so a
+  concurrent suspension or other standing mutation cannot commit between authorization and the governance write.
+  `$GOVERNANCE_STORAGE_ROOT` defaults to `governance`.
   team maintainers request attributable expiring exceptions, whose approved
   projection retains both the baseline and adjusted effective value. Public
   directory reads omit organization-only structure, private-repository
