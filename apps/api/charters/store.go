@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -88,6 +89,14 @@ type Store struct {
 	now  func() time.Time
 }
 
+// Eligibility entries are intentionally closed identity-source rules. Free-form
+// descriptions cannot safely confer governance eligibility.
+var eligibilityRules = map[string]bool{
+	"repository_owner": true, "repository_collaborator": true,
+	"organization_owner": true, "organization_member": true,
+	"team_maintainer": true, "approved_agent": true,
+}
+
 func New(root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
@@ -102,6 +111,11 @@ func (s *Store) Get(kind, id string) (Record, error) {
 func (s *Store) Publish(kind, id, actor string, expected int, in Revision) (Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Record{}, err
+	}
+	defer unlock()
 	r, err := s.readOrEmpty(kind, id)
 	if err != nil {
 		return r, err
@@ -120,6 +134,11 @@ func (s *Store) Publish(kind, id, actor string, expected int, in Revision) (Reco
 func (s *Store) Approve(kind, id, actor string, version int, decision, reason string) (Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Record{}, err
+	}
+	defer unlock()
 	r, err := s.read(kind, id)
 	if err != nil {
 		return r, err
@@ -138,6 +157,11 @@ func (s *Store) Approve(kind, id, actor string, version int, decision, reason st
 func (s *Store) Activate(kind, id, actor string, version int) (Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Record{}, err
+	}
+	defer unlock()
 	r, err := s.read(kind, id)
 	if err != nil {
 		return r, err
@@ -164,11 +188,26 @@ func (s *Store) Activate(kind, id, actor string, version int) (Record, error) {
 func (s *Store) Except(kind, id, actor string, version int, class, resource, reason string, expires time.Time) (Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Record{}, err
+	}
+	defer unlock()
 	r, err := s.read(kind, id)
 	if err != nil {
 		return r, err
 	}
-	if version < 1 || version > len(r.Revisions) || strings.TrimSpace(class) == "" || strings.TrimSpace(resource) == "" || strings.TrimSpace(reason) == "" || !expires.After(s.now()) {
+	if version < 1 || version != r.ActiveVersion || version > len(r.Revisions) || r.Revisions[version-1].Status != "active" || strings.TrimSpace(class) == "" || strings.TrimSpace(resource) == "" || strings.TrimSpace(reason) == "" || !expires.After(s.now()) {
+		return r, ErrInvalid
+	}
+	declared := false
+	for _, decision := range r.Revisions[version-1].DecisionClasses {
+		if decision.Name == class && slicesContains(decision.ProtectedResources, resource) {
+			declared = true
+			break
+		}
+	}
+	if !declared {
 		return r, ErrInvalid
 	}
 	r.Exceptions = append(r.Exceptions, Exception{ID: randomID(), Version: version, DecisionClass: class, Resource: resource, Reason: reason, ExpiresAt: expires.UTC(), CreatedBy: actor, CreatedAt: s.now().UTC()})
@@ -182,6 +221,11 @@ func valid(v Revision) bool {
 	for _, x := range v.Roles {
 		if x.Name == "" || x.Description == "" || len(x.Eligibility) == 0 || names[x.Name] {
 			return false
+		}
+		for _, rule := range x.Eligibility {
+			if !eligibilityRules[rule] || strings.HasPrefix(rule, "repository_") && v.ScopeType != "repository" || strings.HasPrefix(rule, "organization_") && v.ScopeType != "organization" {
+				return false
+			}
 		}
 		names[x.Name] = true
 	}
@@ -228,9 +272,14 @@ func (s *Store) write(r Record) error {
 		return e
 	}
 	p := s.path(r.ScopeType, r.ScopeID)
-	tmp := p + ".tmp"
-	f, e := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	f, e := os.CreateTemp(s.root, filepath.Base(p)+"-*.tmp")
 	if e != nil {
+		return e
+	}
+	tmp := f.Name()
+	if e = f.Chmod(0600); e != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
 		return e
 	}
 	if _, e = f.Write(b); e == nil {
@@ -261,6 +310,25 @@ func (s *Store) write(r Record) error {
 }
 func safe(v string) bool { return v != "" && !strings.ContainsAny(v, "/\\.") }
 func randomID() string   { b := make([]byte, 16); _, _ = rand.Read(b); return hex.EncodeToString(b) }
+func slicesContains(values []string, value string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
+}
+func (s *Store) lock() (func(), error) {
+	f, err := os.OpenFile(filepath.Join(s.root, ".lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil
+}
 func SortExceptions(v []Exception) {
 	sort.Slice(v, func(i, j int) bool { return v[i].CreatedAt.Before(v[j].CreatedAt) })
 }

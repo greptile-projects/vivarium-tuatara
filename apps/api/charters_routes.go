@@ -13,10 +13,11 @@ import (
 )
 
 type charterPreview struct {
-	Valid                bool     `json:"valid"`
-	Blockers             []string `json:"blockers"`
-	Relationships        []string `json:"relationships"`
-	EligibleParticipants int      `json:"eligible_participants"`
+	Valid                bool           `json:"valid"`
+	Blockers             []string       `json:"blockers"`
+	Relationships        []string       `json:"relationships"`
+	EligibleParticipants int            `json:"eligible_participants"`
+	DecisionEligibility  map[string]int `json:"decision_eligibility"`
 }
 
 func registerCharterRoutes(mux *http.ServeMux, store *charters.Store, repos *repositories.Store, orgs *organizations.Store, credentials *auth.Store) {
@@ -66,15 +67,24 @@ func registerCharterRoutes(mux *http.ServeMux, store *charters.Store, repos *rep
 		return actor, true
 	}
 	preview := func(kind, id string, v charters.Revision) charterPreview {
-		p := charterPreview{Valid: true, Blockers: []string{}, Relationships: []string{}}
-		eligible := 1
+		p := charterPreview{Valid: true, Blockers: []string{}, Relationships: []string{}, DecisionEligibility: map[string]int{}}
+		identitySources := map[string]map[string]bool{}
+		add := func(source, identity string) {
+			if identitySources[source] == nil {
+				identitySources[source] = map[string]bool{}
+			}
+			identitySources[source][identity] = true
+		}
 		if kind == "repository" {
 			repo, err := repos.GetByID(id)
 			if err != nil {
 				p.Blockers = append(p.Blockers, "Repository ownership is unavailable.")
 			} else {
+				add("repository_owner", repo.OwnerID)
 				collabs, _ := repos.ListCollaborators(repo.OwnerID, id)
-				eligible += len(collabs)
+				for _, collaborator := range collabs {
+					add("repository_collaborator", collaborator.UserID)
+				}
 				p.Relationships = append(p.Relationships, "Repository owner and current collaborators are eligible identity sources.")
 				checks, _ := repos.RequiredChecks(id, repo.DefaultBranch)
 				if len(checks) > 0 {
@@ -89,15 +99,45 @@ func registerCharterRoutes(mux *http.ServeMux, store *charters.Store, repos *rep
 			if err != nil {
 				p.Blockers = append(p.Blockers, "Organization ownership is unavailable.")
 			} else {
-				eligible = len(o.Members)
-				if eligible < 1 {
-					eligible = 1
+				add("organization_owner", o.CreatedBy)
+				for _, member := range o.Members {
+					add("organization_member", member.UserID)
+				}
+				for _, team := range o.Teams {
+					for _, member := range team.Members {
+						if member.Role == "maintainer" {
+							add("team_maintainer", member.UserID)
+						}
+					}
+				}
+				for _, agent := range o.Agents {
+					add("approved_agent", "agent:"+agent.ID)
 				}
 				p.Relationships = append(p.Relationships, "Organization ownership, team responsibility, agent grants, and active policy remain independently enforced.")
 			}
 		}
-		p.EligibleParticipants = eligible
+		roleEligibility := map[string]map[string]bool{}
+		for _, role := range v.Roles {
+			identities := map[string]bool{}
+			for _, source := range role.Eligibility {
+				for identity := range identitySources[source] {
+					identities[identity] = true
+				}
+			}
+			roleEligibility[role.Name] = identities
+		}
 		for _, d := range v.DecisionClasses {
+			identities := map[string]bool{}
+			for _, role := range d.EligibleRoles {
+				for identity := range roleEligibility[role] {
+					identities[identity] = true
+				}
+			}
+			eligible := len(identities)
+			p.DecisionEligibility[d.Name] = eligible
+			if eligible > p.EligibleParticipants {
+				p.EligibleParticipants = eligible
+			}
 			if d.Participation > eligible || d.Quorum > eligible {
 				p.Blockers = append(p.Blockers, "Decision class "+d.Name+" requires more participants than are currently eligible.")
 			}

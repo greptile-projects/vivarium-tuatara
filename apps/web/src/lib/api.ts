@@ -6,7 +6,7 @@ export type User = {
   updated_at: string;
 };
 export type CharterRevision = { id:string; scope_type:"repository"|"organization"; scope_id:string; version:number; status:"draft"|"active"; title:string; summary:string; roles:{name:string;description:string;eligibility:string[]}[]; decision_classes:{name:string;description:string;eligible_roles:string[];participation:number;quorum:number;approval:"majority"|"consensus"|"supermajority";protected_resources:string[]}[]; procedures:{terms:string;removal:string;succession:string;amendments:string}; created_by:string;created_at:string;activated_by?:string;activated_at?:string };
-export type CharterResponse = { charter:{scope_type:string;scope_id:string;active_version:number;revisions:CharterRevision[];approvals:{id:string;version:number;actor_id:string;decision:string;reason:string;created_at:string}[];exceptions:{id:string;version:number;decision_class:string;resource:string;reason:string;expires_at:string;created_by:string;created_at:string}[]};preview:{valid:boolean;blockers:string[];relationships:string[];eligible_participants:number} };
+export type CharterResponse = { charter:{scope_type:string;scope_id:string;active_version:number;revisions:CharterRevision[];approvals:{id:string;version:number;actor_id:string;decision:string;reason:string;created_at:string}[];exceptions:{id:string;version:number;decision_class:string;resource:string;reason:string;expires_at:string;created_by:string;created_at:string}[]};preview:{valid:boolean;blockers:string[];relationships:string[];eligible_participants:number;decision_eligibility:Record<string,number>} };
 export type ContributorPathway = {
   id: string;
   repository_id: string;

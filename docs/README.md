@@ -195,7 +195,9 @@ Every read projects the current charter against live ownership, collaborators, o
 teams and policy, required checks, and agent authority. Activation repeats that preview and
 rejects impossible quorum or unsupported protected-resource rules. Activation affects future
 decisions only: earlier revisions, approvals, exceptions, and completed work remain historical
-evidence. The web surfaces live at `/repositories/{id}/charter` and
+evidence. Eligibility is derived per decision class from closed live identity sources rather
+than descriptive text, and exceptions must target a declared resource in the active revision.
+The web surfaces live at `/repositories/{id}/charter` and
 `/organizations/{id}/charter`.
 
 ## Contributor pathways
