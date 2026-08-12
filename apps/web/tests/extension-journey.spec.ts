@@ -17,10 +17,11 @@ test("a developer extension carries a pull event through governed repair and rev
   test.setTimeout(240_000);
   const suffix=Date.now().toString(36),root=await mkdtemp(join(tmpdir(),"vivarium-extension-")),copy=join(root,"repository");let service:ChildProcess|undefined;
   try{
-    const serviceFile=join(root,"sample-extension.ts"),port=19_000+Math.floor(Math.random()*1000);
-    await writeFile(serviceFile,`Bun.serve({port:${port},fetch(request){const challenge=request.headers.get("Vivarium-Extension-Challenge");return new Response(null,{status:204,headers:challenge?{"Vivarium-Extension-Challenge":challenge}:{}})}});`);
-    service=spawn("bun",["run",serviceFile],{stdio:"ignore"});
-    await expect.poll(async()=>run("curl",["-sS",`http://127.0.0.1:${port}/health`]).then(()=>true,()=>false)).toBe(true);
+    const serviceFile=join(root,"sample-extension.ts"),serviceToken=`repair-lens-${suffix}`;
+    await writeFile(serviceFile,`const token=${JSON.stringify(serviceToken)};const server=Bun.serve({hostname:"127.0.0.1",port:0,fetch(request){const challenge=request.headers.get("Vivarium-Extension-Challenge");return new Response(request.url.endsWith("/health")?token:null,{status:request.url.endsWith("/health")?200:204,headers:{"Vivarium-Sample-Extension":token,...(challenge?{"Vivarium-Extension-Challenge":challenge}:{})}})}});console.log("EXTENSION_READY "+server.port);`);
+    service=spawn("bun",["run",serviceFile],{stdio:["ignore","pipe","pipe"]});
+    const port=await new Promise<number>((resolve,reject)=>{let stdout="",stderr="";const fail=(message:string)=>reject(new Error(`${message}${stderr?`: ${stderr}`:""}`));service!.stderr!.on("data",chunk=>{stderr+=String(chunk)});service!.stdout!.on("data",chunk=>{stdout+=String(chunk);const match=stdout.match(/EXTENSION_READY (\d+)/);if(match)resolve(Number(match[1]))});service!.once("error",error=>fail(`sample extension failed to start: ${error.message}`));service!.once("exit",code=>fail(`sample extension exited before readiness with code ${code}`))});
+    await expect.poll(async()=>fetch(`http://127.0.0.1:${port}/health`).then(async response=>response.headers.get("Vivarium-Sample-Extension")===serviceToken&&(await response.text())===serviceToken,()=>false)).toBe(true);
 
     const developerPage=await(await browser.newContext()).newPage(),ownerPage=await(await browser.newContext()).newPage(),contributorPage=await(await browser.newContext()).newPage();
     const developer=await account(developerPage,"Extension Developer",`extension-dev-${suffix}`),owner=await account(ownerPage,"Extension Owner",`extension-owner-${suffix}`),contributor=await account(contributorPage,"Extension Contributor",`extension-contributor-${suffix}`);

@@ -163,7 +163,10 @@ func verifyExtensionEndpointsWithNetwork(ctx context.Context, lookup lookupIPFun
 			return time.Time{}, errors.New("endpoint hostname could not be resolved")
 		}
 		for _, address := range addresses {
-			if !publicEndpointIP(address) && !developmentLoopback {
+			if developmentLoopback && !address.IsLoopback() {
+				return time.Time{}, errors.New("development endpoint must resolve only to loopback addresses")
+			}
+			if !developmentLoopback && !publicEndpointIP(address) {
 				return time.Time{}, errors.New("endpoint must resolve only to publicly routable addresses")
 			}
 		}

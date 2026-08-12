@@ -134,6 +134,23 @@ func TestExtensionEndpointVerificationAllowsOnlyOptInDevelopmentLoopback(t *test
 	}
 }
 
+func TestExtensionEndpointVerificationRejectsDevelopmentLocalhostResolvingOutsideLoopback(t *testing.T) {
+	t.Setenv("EXTENSION_DEVELOPMENT_ENDPOINTS", "1")
+	dialed := false
+	_, err := verifyExtensionEndpointsWithNetwork(context.Background(), func(context.Context, string, string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("10.23.45.67")}, nil
+	}, func(context.Context, string, string) (net.Conn, error) {
+		dialed = true
+		return nil, errors.New("unexpected dial")
+	}, "http://localhost:18080/ownership")
+	if err == nil || !strings.Contains(err.Error(), "loopback") {
+		t.Fatalf("error = %v", err)
+	}
+	if dialed {
+		t.Fatal("verifier dialed a non-loopback development resolution")
+	}
+}
+
 func TestExtensionEndpointVerificationRejectsMixedPublicAndPrivateResolution(t *testing.T) {
 	_, err := verifyExtensionEndpointsWithNetwork(context.Background(), func(context.Context, string, string) ([]net.IP, error) {
 		return []net.IP{net.ParseIP("93.184.216.34"), net.ParseIP("127.0.0.1")}, nil

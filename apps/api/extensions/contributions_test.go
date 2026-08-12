@@ -57,6 +57,17 @@ func TestContributionBudgetIncludesEveryPersistedInputField(t *testing.T) {
 	}
 }
 
+func TestContributionRejectsMalformedArtifactChecksum(t *testing.T) {
+	in := ContributionInput{IdempotencyKey: "delivery-123", RepositoryID: testID("3"), ResourceType: "pull_requests", ResourceID: testID("4"), Revision: strings.Repeat("a", 40), Kind: "artifact", Title: "Report", Artifacts: []Artifact{{Name: "report.json", URL: "https://example.test/report.json", SHA256: strings.Repeat("z", 64)}}}
+	if validContribution(in) {
+		t.Fatal("accepted a non-hex SHA-256 checksum")
+	}
+	in.Artifacts[0].SHA256 = strings.Repeat("a", 64)
+	if !validContribution(in) {
+		t.Fatal("rejected a valid SHA-256 checksum")
+	}
+}
+
 func TestContributionRequiresLiveExactAuthority(t *testing.T) {
 	s, _ := New(t.TempDir())
 	s.now = func() time.Time { return time.Unix(1, 0).UTC() }
