@@ -9,6 +9,9 @@ active decision class and voting window. The server freezes the active charter v
 authoritative eligible roles, quorum, and threshold; the opener must hold active, unexpired
 standing for an eligible role under that exact revision. Repository or organization membership
 alone is not governance standing.
+Creation, ballot admission, and final tally hold the charter mutation boundary from exact
+standing validation through governance persistence; a concurrent standing or active-revision
+change therefore commits wholly before or after the governed write, never between them.
 
 `GET /governance/proposals` lists currently visible proposals and `GET
 /governance/proposals/{id}` returns one record. `POST .../{id}/analysis` appends required-citation

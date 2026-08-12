@@ -231,6 +231,28 @@ func (s *Store) Get(kind, id string) (Record, error) {
 	defer s.mu.Unlock()
 	return s.read(kind, id)
 }
+
+// WithGovernanceAdmission holds the same in-process and cross-process boundary
+// used by standing mutations from exact active-charter validation through fn.
+// Governance stores may commit inside fn; callers must not call back into this
+// charter store while the admission is held.
+func (s *Store) WithGovernanceAdmission(kind, id string, version int, fn func(Record) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	record, err := s.read(kind, id)
+	if err != nil {
+		return err
+	}
+	if version < 1 || record.ActiveVersion != version || version > len(record.Revisions) || record.Revisions[version-1].Status != "active" {
+		return ErrConflict
+	}
+	return fn(record)
+}
 func (s *Store) Publish(kind, id, actor string, expected int, in Revision) (Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

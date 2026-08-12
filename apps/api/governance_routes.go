@@ -14,7 +14,7 @@ import (
 )
 
 func registerGovernanceRoutes(mux *http.ServeMux, votes *governance.Store, charterStore *charters.Store, repos *repositories.Store, orgs *organizations.Store, credentials *auth.Store) {
-	electorate := func(kind, scopeID string, revision charters.Revision) []governance.Elector {
+	electorate := func(kind, scopeID string, revision charters.Revision, record charters.Record) []governance.Elector {
 		sources := map[string]map[string]bool{}
 		add := func(source, id string) {
 			if sources[source] == nil {
@@ -53,10 +53,6 @@ func registerGovernanceRoutes(mux *http.ServeMux, votes *governance.Store, chart
 					roles[user] = append(roles[user], role.Name)
 				}
 			}
-		}
-		record, err := charterStore.Get(kind, scopeID)
-		if err != nil {
-			return []governance.Elector{}
 		}
 		roles = activeGovernanceStandingRoles(record, revision.Version, roles, time.Now())
 		out := make([]governance.Elector, 0, len(roles))
@@ -123,7 +119,7 @@ func registerGovernanceRoutes(mux *http.ServeMux, votes *governance.Store, chart
 			writeAPIError(w, 422, "decision_class_required", "decision class is not active")
 			return
 		}
-		live := electorate(in.ScopeType, in.ScopeID, revision)
+		live := electorate(in.ScopeType, in.ScopeID, revision, record)
 		eligibleRoles := map[string]bool{}
 		for _, x := range rule.EligibleRoles {
 			eligibleRoles[x] = true
@@ -153,7 +149,28 @@ func registerGovernanceRoutes(mux *http.ServeMux, votes *governance.Store, chart
 		in.Rule.EligibleRoles = rule.EligibleRoles
 		in.Rule.Quorum = rule.Quorum
 		in.Rule.Threshold = rule.Approval
-		p, e := votes.Create(in)
+		var p governance.Proposal
+		e = charterStore.WithGovernanceAdmission(in.ScopeType, in.ScopeID, in.CharterVersion, func(current charters.Record) error {
+			currentRevision := current.Revisions[in.CharterVersion-1]
+			currentElectorate := electorate(in.ScopeType, in.ScopeID, currentRevision, current)
+			currentlyEligible := false
+			for _, elector := range currentElectorate {
+				if elector.UserID == actor.UserID {
+					for _, role := range elector.Roles {
+						if eligibleRoles[role] {
+							currentlyEligible = true
+						}
+					}
+				}
+			}
+			if !currentlyEligible {
+				return governance.ErrIneligible
+			}
+			in.Electorate = currentElectorate
+			var createErr error
+			p, createErr = votes.Create(in)
+			return createErr
+		})
 		if e != nil {
 			governanceError(w, e)
 			return
@@ -259,7 +276,7 @@ func registerGovernanceRoutes(mux *http.ServeMux, votes *governance.Store, chart
 			return
 		}
 		eligible := false
-		for _, x := range electorate(p.ScopeType, p.ScopeID, record.Revisions[p.CharterVersion-1]) {
+		for _, x := range electorate(p.ScopeType, p.ScopeID, record.Revisions[p.CharterVersion-1], record) {
 			if x.UserID == actor.UserID {
 				for _, role := range x.Roles {
 					for _, allowed := range p.Rule.EligibleRoles {
@@ -278,7 +295,23 @@ func registerGovernanceRoutes(mux *http.ServeMux, votes *governance.Store, chart
 			governanceError(w, governance.ErrInvalid)
 			return
 		}
-		p, e = votes.Cast(p.ID, actor.UserID, in.Choice, in.Reason, eligible, "eligible under active charter revision")
+		e = charterStore.WithGovernanceAdmission(p.ScopeType, p.ScopeID, p.CharterVersion, func(current charters.Record) error {
+			eligible = false
+			for _, x := range electorate(p.ScopeType, p.ScopeID, current.Revisions[p.CharterVersion-1], current) {
+				if x.UserID == actor.UserID {
+					for _, role := range x.Roles {
+						for _, allowed := range p.Rule.EligibleRoles {
+							if role == allowed {
+								eligible = true
+							}
+						}
+					}
+				}
+			}
+			var castErr error
+			p, castErr = votes.Cast(p.ID, actor.UserID, in.Choice, in.Reason, eligible, "eligible under active charter revision")
+			return castErr
+		})
 		if e != nil {
 			governanceError(w, e)
 			return
@@ -305,7 +338,7 @@ func registerGovernanceRoutes(mux *http.ServeMux, votes *governance.Store, chart
 			for _, role := range p.Rule.EligibleRoles {
 				allowed[role] = true
 			}
-			for _, candidate := range electorate(p.ScopeType, p.ScopeID, record.Revisions[p.CharterVersion-1]) {
+			for _, candidate := range electorate(p.ScopeType, p.ScopeID, record.Revisions[p.CharterVersion-1], record) {
 				for _, role := range candidate.Roles {
 					if allowed[role] {
 						current = append(current, candidate)
@@ -319,7 +352,24 @@ func registerGovernanceRoutes(mux *http.ServeMux, votes *governance.Store, chart
 		}
 		_ = decodeJSON(r, &in)
 		contest = append(contest, in.ContestReasons...)
-		p, e = votes.Finalize(p.ID, actor.UserID, current, contest)
+		e = charterStore.WithGovernanceAdmission(p.ScopeType, p.ScopeID, p.CharterVersion, func(latest charters.Record) error {
+			current = []governance.Elector{}
+			allowed := map[string]bool{}
+			for _, role := range p.Rule.EligibleRoles {
+				allowed[role] = true
+			}
+			for _, candidate := range electorate(p.ScopeType, p.ScopeID, latest.Revisions[p.CharterVersion-1], latest) {
+				for _, role := range candidate.Roles {
+					if allowed[role] {
+						current = append(current, candidate)
+						break
+					}
+				}
+			}
+			var finalizeErr error
+			p, finalizeErr = votes.Finalize(p.ID, actor.UserID, current, contest)
+			return finalizeErr
+		})
 		if e != nil {
 			governanceError(w, e)
 			return
@@ -408,6 +458,8 @@ func governanceError(w http.ResponseWriter, e error) {
 		writeAPIError(w, 409, "voting_closed", "the voting deadline does not admit this action")
 	case errors.Is(e, governance.ErrIneligible):
 		writeAPIError(w, 403, "electorate_changed", "current charter eligibility is required")
+	case errors.Is(e, charters.ErrConflict):
+		writeAPIError(w, 409, "charter_changed", "the active charter changed before governance commit")
 	case errors.Is(e, governance.ErrInvalid):
 		writeAPIError(w, 422, "invalid_governed_proposal", "governed proposal content is invalid")
 	default:

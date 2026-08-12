@@ -268,8 +268,10 @@ whenever dependencies change or the web job fails before it starts.
   voter's own ballot/receipt plus aggregate results and a verification digest; other ballots and
   ballot audit events are omitted. Ballot reasons remain retained dissent, the first tally is
   immutable, and every elector must hold active, unexpired standing for the exact charter
-  revision and role; source membership alone never suffices. `$GOVERNANCE_STORAGE_ROOT`
-  defaults to `governance`.
+  revision and role; source membership alone never suffices. Charter standing validation and
+  proposal, ballot, or tally persistence share the charter mutation admission boundary, so a
+  concurrent suspension or other standing mutation cannot commit between authorization and the governance write.
+  `$GOVERNANCE_STORAGE_ROOT` defaults to `governance`.
   team maintainers request attributable expiring exceptions, whose approved
   projection retains both the baseline and adjusted effective value. Public
   directory reads omit organization-only structure, private-repository
