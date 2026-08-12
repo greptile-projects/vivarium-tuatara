@@ -103,6 +103,15 @@ func TestCollaboratorCreatesGroundedDocumentationTask(t *testing.T) {
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/documentation-tasks/"+task.ID+"/entries", badRange, owner.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
 	missing := fmt.Sprintf(`{"expected_version":%d,"body":"Missing source.","references":[{"path":"missing.md","start_line":1,"end_line":1,"revision":"%s","label":"Missing"}]}`, task.Version, commit)
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/documentation-tasks/"+task.ID+"/drafts", missing, owner.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
+	sourceDraft := fmt.Sprintf(`{"expected_version":%d,"body":"Proposal-grounded guidance.","references":[{"resource_kind":"proposal","resource_id":"11111111111111111111111111111111","revision":"%s","label":"Originating proposal"}]}`, task.Version, commit)
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/documentation-tasks/"+task.ID+"/drafts", sourceDraft, owner.Credential.Token, http.StatusCreated)
+	decodeResponse(t, response, &task)
+	sourceEntry := fmt.Sprintf(`{"expected_version":%d,"kind":"suggestion","body":"Clarify the proposal outcome.","references":[{"resource_kind":"proposal","resource_id":"11111111111111111111111111111111","revision":"%s","label":"Originating proposal"}]}`, task.Version, commit)
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/documentation-tasks/"+task.ID+"/entries", sourceEntry, owner.Credential.Token, http.StatusCreated)
+	decodeResponse(t, response, &task)
+	if len(task.Drafts) != 2 || len(task.Entries) != 1 || task.Entries[0].References[0].ResourceID != task.Source.ResourceID {
+		t.Fatalf("source citations = drafts %#v entries %#v", task.Drafts, task.Entries)
+	}
 }
 
 func TestDocumentationHistoryFiltersEveryRevisionAudience(t *testing.T) {
