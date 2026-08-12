@@ -98,11 +98,11 @@ func TestCollaboratorCreatesGroundedDocumentationTask(t *testing.T) {
 		t.Fatalf("draft = %#v", task.Drafts)
 	}
 	entry := fmt.Sprintf(`{"expected_version":%d,"kind":"agent_assistance","body":"The exact error behavior is uncertain.","agent_id":"docs-agent","uncertain":true,"references":[{"path":"api.md","revision":"%s","label":"Current source"}]}`, task.Version, commit)
-	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/documentation-tasks/"+task.ID+"/entries", entry, owner.Credential.Token, http.StatusCreated)
-	decodeResponse(t, response, &task)
-	if len(task.Entries) != 1 || !task.Entries[0].Uncertain || task.Entries[0].AgentID != "docs-agent" {
-		t.Fatalf("entries = %#v", task.Entries)
-	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/documentation-tasks/"+task.ID+"/entries", entry, owner.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
+	badRange := fmt.Sprintf(`{"expected_version":%d,"kind":"suggestion","body":"Bad citation.","references":[{"path":"api.md","start_line":9,"end_line":8,"revision":"%s","label":"Invalid range"}]}`, task.Version, commit)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/documentation-tasks/"+task.ID+"/entries", badRange, owner.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
+	missing := fmt.Sprintf(`{"expected_version":%d,"body":"Missing source.","references":[{"path":"missing.md","start_line":1,"end_line":1,"revision":"%s","label":"Missing"}]}`, task.Version, commit)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/documentation-tasks/"+task.ID+"/drafts", missing, owner.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
 }
 
 func TestDocumentationHistoryFiltersEveryRevisionAudience(t *testing.T) {
