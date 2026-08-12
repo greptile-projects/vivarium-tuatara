@@ -200,6 +200,19 @@ than descriptive text, and exceptions must target a declared resource in the act
 The web surfaces live at `/repositories/{id}/charter` and
 `/organizations/{id}/charter`.
 
+An active charter can admit time-bounded human governance standing through the scope's
+`/charter/standing` API. Each invitation names an exact charter role and responsibilities and
+retains reviewed contribution, review, support, ownership, or membership evidence. The invited
+person alone accepts, declines, recuses with a disclosed conflict, or appeals a suspension or
+revocation; the scope owner alone suspends, reinstates, or revokes. Every transition is an
+actor-stamped append-only event.
+
+Charter reads project stored standing together with expiry and current local identity or
+membership loss, available nominations or appeals, and independently derived operational
+access. Governance standing never mints credentials or grants code, secret, merge, deployment,
+or repository access. Standing remains attached to the charter revision that admitted it, so a
+later amendment cannot rewrite its evidence or history.
+
 ## Contributor pathways
 
 Repository owners publish the project's participation contract before a

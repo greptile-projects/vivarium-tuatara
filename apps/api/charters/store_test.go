@@ -144,3 +144,82 @@ func TestOrganizationAcceptsEveryResolvableEligibilitySource(t *testing.T) {
 		}
 	}
 }
+
+func TestStandingLifecycleRetainsEvidenceConflictAndAppeal(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	if _, err := s.Publish("repository", "repo1", "owner", 0, validRevision()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Approve("repository", "repo1", "owner", 1, "approved", "adopt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Activate("repository", "repo1", "owner", 1); err != nil {
+		t.Fatal(err)
+	}
+	record, err := s.Invite("repository", "repo1", "owner", 0, 1, "human", "contributor", "maintainer", "Represent contributor experience", []Evidence{{Kind: "contribution", ResourceID: "pull-7", Summary: "Merged accessibility work"}}, now.Add(30*24*time.Hour))
+	if err != nil || record.Standings[0].Status != "invited" {
+		t.Fatalf("invite = %#v, %v", record, err)
+	}
+	id := record.Standings[0].ID
+	if _, err = s.ActOnStanding("repository", "repo1", id, "intruder", "accept", "accept", ""); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("foreign acceptance = %v", err)
+	}
+	if record, err = s.ActOnStanding("repository", "repo1", id, "contributor", "accept", "I accept the duties", ""); err != nil || record.Standings[0].Status != "active" {
+		t.Fatalf("accept = %#v, %v", record, err)
+	}
+	if record, err = s.ActOnStanding("repository", "repo1", id, "contributor", "recuse", "I authored the proposal", "proposal-9"); err != nil || record.Standings[0].Status != "recused" || record.Standings[0].ConflictOfInterest == "" {
+		t.Fatalf("recuse = %#v, %v", record, err)
+	}
+	if record, err = s.ActOnStanding("repository", "repo1", id, "owner", "suspend", "identity under review", ""); err != nil || record.Standings[0].Status != "suspended" {
+		t.Fatalf("suspend = %#v, %v", record, err)
+	}
+	if record, err = s.ActOnStanding("repository", "repo1", id, "contributor", "appeal", "identity restored", ""); err != nil || len(record.Standings[0].Events) != 5 || record.Standings[0].Status != "suspended" {
+		t.Fatalf("appeal = %#v, %v", record, err)
+	}
+}
+
+func TestStandingRequiresActiveCharterRoleBoundedTermAndClosedEvidence(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Now()
+	s.now = func() time.Time { return now }
+	if _, err := s.Publish("repository", "repo1", "owner", 0, validRevision()); err != nil {
+		t.Fatal(err)
+	}
+	inputs := []struct {
+		role     string
+		evidence []Evidence
+		expiry   time.Time
+	}{{"missing", []Evidence{{Kind: "review", ResourceID: "r", Summary: "s"}}, now.Add(time.Hour)}, {"maintainer", []Evidence{{Kind: "commit", ResourceID: "r", Summary: "s"}}, now.Add(time.Hour)}, {"maintainer", []Evidence{{Kind: "review", ResourceID: "r", Summary: "s"}}, now.Add(-time.Hour)}}
+	for _, in := range inputs {
+		if _, err := s.Invite("repository", "repo1", "owner", 0, 1, "human", "person", in.role, "duties", in.evidence, in.expiry); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("invalid invite = %v", err)
+		}
+	}
+}
+
+func TestStandingPersistsAcrossStoreReopen(t *testing.T) {
+	root := t.TempDir()
+	s, _ := New(root)
+	now := time.Now()
+	s.now = func() time.Time { return now }
+	if _, err := s.Publish("repository", "repo1", "owner", 0, validRevision()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Approve("repository", "repo1", "owner", 1, "approved", "adopt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Activate("repository", "repo1", "owner", 1); err != nil {
+		t.Fatal(err)
+	}
+	created, err := s.Invite("repository", "repo1", "owner", 0, 1, "human", "person", "maintainer", "Review changes", []Evidence{{Kind: "review", ResourceID: "pull-1", Summary: "Sustained review"}}, now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, _ := New(root)
+	loaded, err := reopened.Get("repository", "repo1")
+	if err != nil || len(loaded.Standings) != 1 || loaded.Standings[0].ID != created.Standings[0].ID || len(loaded.Standings[0].Events) != 1 {
+		t.Fatalf("reopened = %#v, %v", loaded, err)
+	}
+}

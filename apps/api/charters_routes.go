@@ -19,6 +19,14 @@ type charterPreview struct {
 	EligibleParticipants int            `json:"eligible_participants"`
 	DecisionEligibility  map[string]int `json:"decision_eligibility"`
 }
+type charterStandingView struct {
+	charters.Standing
+	EffectiveStatus   string   `json:"effective_status"`
+	Eligibility       string   `json:"eligibility"`
+	AvailableActions  []string `json:"available_actions"`
+	OperationalAccess []string `json:"operational_access"`
+	AuthorityNote     string   `json:"authority_note"`
+}
 
 func registerCharterRoutes(mux *http.ServeMux, store *charters.Store, repos *repositories.Store, orgs *organizations.Store, credentials *auth.Store) {
 	authorize := func(w http.ResponseWriter, r *http.Request, kind, id, scope string, write bool) (auth.Credential, bool) {
@@ -151,6 +159,59 @@ func registerCharterRoutes(mux *http.ServeMux, store *charters.Store, repos *rep
 		p.Valid = len(p.Blockers) == 0
 		return p
 	}
+	standingViews := func(kind, id, actorID string, record charters.Record) []charterStandingView {
+		live := map[string]bool{}
+		access := map[string][]string{}
+		if kind == "repository" {
+			if repo, err := repos.GetByID(id); err == nil {
+				live[repo.OwnerID] = true
+				access[repo.OwnerID] = []string{"repository owner access (independent of charter)"}
+				if collaborators, err := repos.ListCollaborators(repo.OwnerID, id); err == nil {
+					for _, c := range collaborators {
+						live[c.UserID] = true
+						access[c.UserID] = []string{"repository collaborator access (independent of charter)"}
+					}
+				}
+			}
+		} else if orgs != nil {
+			if org, err := orgs.Get(id); err == nil {
+				live[org.CreatedBy] = true
+				access[org.CreatedBy] = []string{"organization owner access (independent of charter)"}
+				for _, m := range org.Members {
+					live[m.UserID] = true
+					access[m.UserID] = []string{"organization membership (independent of charter)"}
+				}
+			}
+		}
+		now := time.Now()
+		out := make([]charterStandingView, 0, len(record.Standings))
+		for _, st := range record.Standings {
+			effective := st.Status
+			eligibility := "evidence approved under charter revision"
+			if !st.ExpiresAt.After(now) {
+				effective = "expired"
+				eligibility = "term expired"
+			} else if !live[st.PrincipalID] && len(st.Evidence) > 0 && allRelationshipEvidence(st.Evidence) {
+				effective = "identity_revoked"
+				eligibility = "the ownership or membership evidence that established standing is no longer live"
+			}
+			actions := []string{}
+			if actorID == st.PrincipalID {
+				if st.Status == "invited" {
+					actions = []string{"accept", "decline"}
+				}
+				if effective == "active" {
+					actions = append(actions, "recuse")
+					actions = append(actions, "nominate")
+				}
+				if st.Status == "suspended" || st.Status == "revoked" {
+					actions = append(actions, "appeal")
+				}
+			}
+			out = append(out, charterStandingView{Standing: st, EffectiveStatus: effective, Eligibility: eligibility, AvailableActions: actions, OperationalAccess: access[st.PrincipalID], AuthorityNote: "Governance standing and votes grant no code, secret, merge, deployment, or credential authority."})
+		}
+		return out
+	}
 	for _, kind := range []string{"repository", "organization"} {
 		prefix := "/repositories/{id}/charter"
 		if kind == "organization" {
@@ -172,7 +233,7 @@ func registerCharterRoutes(mux *http.ServeMux, store *charters.Store, repos *rep
 				return
 			}
 			current := record.Revisions[len(record.Revisions)-1]
-			writeJSON(w, 200, map[string]any{"charter": record, "preview": preview(kind, r.PathValue("id"), current)})
+			writeJSON(w, 200, map[string]any{"charter": record, "preview": preview(kind, r.PathValue("id"), current), "standing": standingViews(kind, r.PathValue("id"), actor.UserID, record)})
 		})
 		mux.HandleFunc("POST "+prefix+"/revisions", func(w http.ResponseWriter, r *http.Request) {
 			actor, ok := authorize(w, r, kind, r.PathValue("id"), "repositories:write", true)
@@ -264,7 +325,83 @@ func registerCharterRoutes(mux *http.ServeMux, store *charters.Store, repos *rep
 				writeJSON(w, 201, record)
 			}
 		})
+		mux.HandleFunc("POST "+prefix+"/standing", func(w http.ResponseWriter, r *http.Request) {
+			actor, ok := authorize(w, r, kind, r.PathValue("id"), "repositories:write", true)
+			if !ok {
+				return
+			}
+			var in struct {
+				ExpectedVersion  int                 `json:"expected_version"`
+				CharterVersion   int                 `json:"charter_version"`
+				PrincipalType    string              `json:"principal_type"`
+				PrincipalID      string              `json:"principal_id"`
+				Role             string              `json:"role"`
+				Responsibilities string              `json:"responsibilities"`
+				Evidence         []charters.Evidence `json:"evidence"`
+				ExpiresAt        time.Time           `json:"expires_at"`
+			}
+			if decodeJSON(r, &in) != nil {
+				writeAPIError(w, 400, "invalid_standing", "standing invitation is required")
+				return
+			}
+			record, err := store.Invite(kind, r.PathValue("id"), actor.UserID, in.ExpectedVersion, in.CharterVersion, in.PrincipalType, in.PrincipalID, in.Role, in.Responsibilities, in.Evidence, in.ExpiresAt)
+			if !writeCharterError(w, err) {
+				writeJSON(w, 201, map[string]any{"charter": record, "standing": standingViews(kind, r.PathValue("id"), actor.UserID, record)})
+			}
+		})
+		mux.HandleFunc("POST "+prefix+"/standing/{standingID}/actions", func(w http.ResponseWriter, r *http.Request) {
+			actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+			if !ok {
+				return
+			}
+			var in struct {
+				Action             string `json:"action"`
+				Reason             string `json:"reason"`
+				ConflictOfInterest string `json:"conflict_of_interest"`
+			}
+			if decodeJSON(r, &in) != nil {
+				writeAPIError(w, 400, "invalid_standing_action", "standing action is required")
+				return
+			}
+			selfAction := map[string]bool{"accept": true, "decline": true, "recuse": true, "appeal": true}[in.Action]
+			if !selfAction {
+				if _, ok := authorize(w, r, kind, r.PathValue("id"), "repositories:write", true); !ok {
+					return
+				}
+			}
+			record, err := store.ActOnStanding(kind, r.PathValue("id"), r.PathValue("standingID"), actor.UserID, in.Action, in.Reason, in.ConflictOfInterest)
+			if !writeCharterError(w, err) {
+				writeJSON(w, 200, map[string]any{"charter": record, "standing": standingViews(kind, r.PathValue("id"), actor.UserID, record)})
+			}
+		})
+		mux.HandleFunc("GET "+prefix+"/standing/{standingID}", func(w http.ResponseWriter, r *http.Request) {
+			actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+			if !ok {
+				return
+			}
+			record, err := store.Get(kind, r.PathValue("id"))
+			if err != nil {
+				writeCharterError(w, err)
+				return
+			}
+			views := standingViews(kind, r.PathValue("id"), actor.UserID, record)
+			for _, view := range views {
+				if view.ID == r.PathValue("standingID") && view.PrincipalID == actor.UserID {
+					writeJSON(w, 200, view)
+					return
+				}
+			}
+			writeAPIError(w, 404, "standing_not_found", "governance standing not found")
+		})
 	}
+}
+func allRelationshipEvidence(evidence []charters.Evidence) bool {
+	for _, item := range evidence {
+		if item.Kind != "ownership" && item.Kind != "membership" {
+			return false
+		}
+	}
+	return true
 }
 func writeCharterError(w http.ResponseWriter, err error) bool {
 	if err == nil {
