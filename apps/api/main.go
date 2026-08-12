@@ -441,7 +441,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerRepositoryRoutes(mux, store, repositoryCatalog, userStore, authStore, activityStore)
 		registerCodeNavigationRoutes(mux, store, repositoryCatalog, authStore, relationshipStore)
 		if documentationStore != nil {
-			registerDocumentationRoutes(mux, store, repositoryCatalog, documentationStore, releaseStore, authStore)
+			registerDocumentationRoutes(mux, store, repositoryCatalog, documentationStore, releaseStore, issueStore, proposalStore, authStore)
 		}
 	}
 	if authStore != nil && repositoryCatalog != nil && proposalStore != nil {
@@ -1054,8 +1054,13 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		if err := finalizeQueuedMerge(merged, repositoriesStore, proposalStore, activityStore); err != nil {
 			return err
 		}
-		_, err := reconcileTaskState(merged)
-		return err
+		if _, err := reconcileTaskState(merged); err != nil {
+			return err
+		}
+		if documentationStore != nil && merged.MergedBy != nil {
+			return publishMergedDocumentation(gitStore, documentationStore, merged, *merged.MergedBy)
+		}
+		return nil
 	})
 	mux.HandleFunc("GET /repositories/{id}/pulls", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {

@@ -15,6 +15,8 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	docscollections "github.com/greptile-projects/vivarium-tuatara/apps/api/docscollections"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
@@ -102,7 +104,7 @@ func documentationRandomID() string {
 	return hex.EncodeToString(b)
 }
 
-func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, docs *docscollections.Store, releaseStore *releases.Store, credentials *auth.Store) {
+func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, docs *docscollections.Store, releaseStore *releases.Store, issueStore *issues.Store, proposalStore *proposals.Store, credentials *auth.Store) {
 	authorize := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool, bool) {
 		actor, authenticated, ok := authorizeRepositoryRead(w, r, repos, credentials, r.PathValue("id"))
 		if !ok {
@@ -198,6 +200,27 @@ func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *
 		}
 		collaborator, _ := repos.HasCollaborator(actor.UserID, repositoryID)
 		return v.Audience == "repository" && collaborator
+	}
+	selectRevision := func(repositoryID, collectionID, selector string, actor auth.Credential, authenticated bool) (docscollections.Revision, []docscollections.Revision, error) {
+		history, err := docs.List(repositoryID, collectionID)
+		if err != nil {
+			return docscollections.Revision{}, nil, err
+		}
+		for i := len(history) - 1; i >= 0; i-- {
+			candidate := history[i]
+			if !visible(repositoryID, candidate, actor, authenticated) {
+				continue
+			}
+			if selector == "" || candidate.ID == selector {
+				return candidate, history, nil
+			}
+			for _, mapping := range candidate.SupportedVersions {
+				if mapping.Label == selector {
+					return candidate, history, nil
+				}
+			}
+		}
+		return docscollections.Revision{}, history, docscollections.ErrNotFound
 	}
 	participant := func(w http.ResponseWriter, r *http.Request) (auth.Credential, *repositories.Repository, bool) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")
@@ -443,37 +466,8 @@ func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *
 		if !ok {
 			return
 		}
-		history, err := docs.List(r.PathValue("id"), r.PathValue("collectionID"))
+		selected, history, err := selectRevision(r.PathValue("id"), r.PathValue("collectionID"), r.URL.Query().Get("version"), actor, authenticated)
 		if err != nil {
-			writeAPIError(w, 404, "documentation_not_found", "documentation collection not found")
-			return
-		}
-		version := r.URL.Query().Get("version")
-		var selected docscollections.Revision
-		for i := len(history) - 1; i >= 0; i-- {
-			candidate := history[i]
-			if !visible(r.PathValue("id"), candidate, actor, authenticated) {
-				continue
-			}
-			if version == "" {
-				selected = candidate
-				break
-			}
-			if candidate.ID == version {
-				selected = candidate
-				break
-			}
-			for _, m := range candidate.SupportedVersions {
-				if m.Label == version {
-					selected = candidate
-					break
-				}
-			}
-			if selected.ID != "" {
-				break
-			}
-		}
-		if selected.ID == "" {
 			writeAPIError(w, 404, "documentation_version_not_found", "documentation version is not published or visible")
 			return
 		}
@@ -540,9 +534,9 @@ func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *
 			writeAPIError(w, 401, "authentication_required", "sign in to report documentation outcomes")
 			return
 		}
-		current, e := docs.Current(r.PathValue("id"), r.PathValue("collectionID"))
-		if e != nil || !visible(r.PathValue("id"), current, actor, true) {
-			writeAPIError(w, 404, "documentation_not_found", "documentation collection not found")
+		selected, _, e := selectRevision(r.PathValue("id"), r.PathValue("collectionID"), r.URL.Query().Get("version"), actor, true)
+		if e != nil {
+			writeAPIError(w, 404, "documentation_version_not_found", "documentation version is not published or visible")
 			return
 		}
 		var in docscollections.Feedback
@@ -551,9 +545,22 @@ func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *
 			return
 		}
 		in.RepositoryID = r.PathValue("id")
-		in.CollectionID = current.CollectionID
-		in.RevisionID = current.ID
+		in.CollectionID = selected.CollectionID
+		in.RevisionID = selected.ID
 		in.ReporterID = actor.UserID
+		if in.Kind != "search_miss" {
+			found := false
+			for _, page := range selected.Pages {
+				if page.Slug == in.PageSlug {
+					found = true
+					break
+				}
+			}
+			if !found {
+				writeAPIError(w, 422, "invalid_documentation_feedback", "page does not exist in the selected publication")
+				return
+			}
+		}
 		created, e := docs.AddFeedback(in)
 		if e != nil {
 			writeAPIError(w, 422, "invalid_documentation_feedback", "kind, bounded detail, page context, and permitted evidence are required")
@@ -592,6 +599,26 @@ func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *
 		}
 		if decodeJSON(r, &in) != nil {
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		validTarget := false
+		switch in.Kind {
+		case "issue":
+			if issueStore != nil {
+				_, e := issueStore.Get(r.PathValue("id"), in.ResourceID)
+				validTarget = e == nil
+			}
+		case "proposal":
+			if proposalStore != nil {
+				_, e := proposalStore.Get(r.PathValue("id"), in.ResourceID)
+				validTarget = e == nil
+			}
+		case "documentation_task":
+			_, e := docs.GetTask(r.PathValue("id"), in.ResourceID)
+			validTarget = e == nil
+		}
+		if !validTarget {
+			writeAPIError(w, 422, "invalid_documentation_triage", "link an existing issue, proposal, or documentation task in this repository")
 			return
 		}
 		v, e := docs.TriageFeedback(r.PathValue("id"), r.PathValue("collectionID"), r.PathValue("feedbackID"), actor.UserID, in.Kind, in.ResourceID)
