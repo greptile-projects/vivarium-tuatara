@@ -60,6 +60,7 @@ type Installation struct {
 	ExtensionID          string               `json:"extension_id"`
 	ExtensionName        string               `json:"extension_name"`
 	ExtensionVerifiedAt  time.Time            `json:"extension_verified_at"`
+	ContractVersion      int                  `json:"contract_version"`
 	OwnerType            string               `json:"owner_type"`
 	OwnerID              string               `json:"owner_id"`
 	RepositoryIDs        []string             `json:"repository_ids"`
@@ -101,8 +102,16 @@ type Extension struct {
 	CredentialRotation   RotationPolicy   `json:"credential_rotation"`
 	AuthorityPreview     AuthorityPreview `json:"authority_preview"`
 	Status               string           `json:"status"`
+	ContractVersion      int              `json:"contract_version"`
+	ContractHistory      []ContractEvent  `json:"contract_history"`
 	CreatedAt            time.Time        `json:"created_at"`
 	UpdatedAt            time.Time        `json:"updated_at"`
+}
+type ContractEvent struct {
+	Version int       `json:"version"`
+	ActorID string    `json:"actor_id"`
+	At      time.Time `json:"at"`
+	Summary string    `json:"summary"`
 }
 
 type Registration struct {
@@ -186,11 +195,43 @@ func (s *Store) Create(owner string, in Registration, verified time.Time) (Exten
 	for i, p := range in.RequestedPermissions {
 		items[i] = AuthorityItem{Resource: p.Resource, RequestedActions: p.Actions, EffectiveActions: []string{}, Decision: "not_installed", Reason: "registration declares requested authority; a resource owner must approve a future installation"}
 	}
-	v := Extension{ID: id, PrincipalType: "extension", Name: strings.TrimSpace(in.Name), Description: strings.TrimSpace(in.Description), OwnerID: owner, OperatorContact: strings.TrimSpace(in.OperatorContact), Capabilities: in.Capabilities, CallbackEndpoint: Endpoint{URL: in.CallbackURL, VerifiedAt: verified}, ActionEndpoint: Endpoint{URL: in.ActionURL, VerifiedAt: verified}, RequestedPermissions: in.RequestedPermissions, SupportedEvents: in.SupportedEvents, CredentialRotation: in.CredentialRotation, AuthorityPreview: AuthorityPreview{Installed: false, Items: items, Summary: "No collaborative context or resource authority is granted before an owner-approved installation."}, Status: "registered", CreatedAt: now, UpdatedAt: now}
+	v := Extension{ID: id, PrincipalType: "extension", Name: strings.TrimSpace(in.Name), Description: strings.TrimSpace(in.Description), OwnerID: owner, OperatorContact: strings.TrimSpace(in.OperatorContact), Capabilities: in.Capabilities, CallbackEndpoint: Endpoint{URL: in.CallbackURL, VerifiedAt: verified}, ActionEndpoint: Endpoint{URL: in.ActionURL, VerifiedAt: verified}, RequestedPermissions: in.RequestedPermissions, SupportedEvents: in.SupportedEvents, CredentialRotation: in.CredentialRotation, AuthorityPreview: AuthorityPreview{Installed: false, Items: items, Summary: "No collaborative context or resource authority is granted before an owner-approved installation."}, Status: "registered", ContractVersion: 1, ContractHistory: []ContractEvent{{Version: 1, ActorID: owner, At: now, Summary: "initial contract verified"}}, CreatedAt: now, UpdatedAt: now}
 	if err = writeAtomic(filepath.Join(s.root, id+".json"), v); err != nil {
 		return Extension{}, err
 	}
 	return v, nil
+}
+func (s *Store) UpdateContract(id, actor string, expected int, in Registration, verified time.Time) (Extension, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Extension{}, err
+	}
+	defer unlock()
+	v, err := s.readExtension(id)
+	if err != nil || v.OwnerID != actor {
+		return v, ErrNotFound
+	}
+	if v.ContractVersion == 0 {
+		v.ContractVersion = 1
+	}
+	if v.ContractVersion != expected {
+		return v, ErrConflict
+	}
+	in.Capabilities, in.SupportedEvents = clean(in.Capabilities), clean(in.SupportedEvents)
+	if err = validate(actor, in); err != nil {
+		return v, err
+	}
+	now := s.now().Truncate(time.Microsecond)
+	v.Name, v.Description, v.OperatorContact = strings.TrimSpace(in.Name), strings.TrimSpace(in.Description), strings.TrimSpace(in.OperatorContact)
+	v.Capabilities, v.RequestedPermissions, v.SupportedEvents, v.CredentialRotation = in.Capabilities, in.RequestedPermissions, in.SupportedEvents, in.CredentialRotation
+	v.CallbackEndpoint, v.ActionEndpoint = Endpoint{URL: in.CallbackURL, VerifiedAt: verified}, Endpoint{URL: in.ActionURL, VerifiedAt: verified}
+	v.ContractVersion++
+	v.UpdatedAt = now
+	v.ContractHistory = append(v.ContractHistory, ContractEvent{Version: v.ContractVersion, ActorID: actor, At: now, Summary: "verified contract update; installations require renewed consent"})
+	err = writeAtomic(filepath.Join(s.root, id+".json"), v)
+	return v, err
 }
 func (s *Store) Get(id string) (Extension, error) {
 	if len(id) != 32 {
@@ -257,7 +298,7 @@ func (s *Store) CreateInstallation(extensionID, actor string, in InstallationInp
 		return Installation{}, err
 	}
 	now := s.now().Truncate(time.Microsecond)
-	v := Installation{ID: id, ExtensionID: extension.ID, ExtensionName: extension.Name, ExtensionVerifiedAt: minTime(extension.CallbackEndpoint.VerifiedAt, extension.ActionEndpoint.VerifiedAt), OwnerType: in.OwnerType, OwnerID: in.OwnerID, RepositoryIDs: clean(in.RepositoryIDs), ResourceTypes: clean(in.ResourceTypes), CapabilityDecisions: in.CapabilityDecisions, Settings: copySettings(in.Settings), EffectiveAccess: effective(extension, in), DerivedCredentialIDs: []string{}, Status: "active", Version: 1, CreatedBy: actor, CreatedAt: now, UpdatedAt: now, Events: []InstallationEvent{{Type: "installation.created", ActorID: actor, At: now}}}
+	v := Installation{ID: id, ExtensionID: extension.ID, ExtensionName: extension.Name, ExtensionVerifiedAt: minTime(extension.CallbackEndpoint.VerifiedAt, extension.ActionEndpoint.VerifiedAt), ContractVersion: extension.ContractVersion, OwnerType: in.OwnerType, OwnerID: in.OwnerID, RepositoryIDs: clean(in.RepositoryIDs), ResourceTypes: clean(in.ResourceTypes), CapabilityDecisions: in.CapabilityDecisions, Settings: copySettings(in.Settings), EffectiveAccess: effective(extension, in), DerivedCredentialIDs: []string{}, Status: "active", Version: 1, CreatedBy: actor, CreatedAt: now, UpdatedAt: now, Events: []InstallationEvent{{Type: "installation.created", ActorID: actor, At: now}}}
 	v.AuthorityEffectiveAt = authorityBoundaries(nil, v.RepositoryIDs, v.EffectiveAccess, now, false)
 	if err = writeAtomic(filepath.Join(s.root, "installation-"+id+".json"), v); err != nil {
 		return Installation{}, err
@@ -302,6 +343,67 @@ func (s *Store) RecordDerivedCredential(id, credentialID string, expected int) (
 		return Installation{}, err
 	}
 	return v, nil
+}
+
+// RotateDerivedCredential atomically publishes the successor at the
+// installation authority boundary. Zero-overlap rotation simultaneously
+// detaches predecessors; positive overlap retains them until auth expiry.
+func (s *Store) RotateDerivedCredential(id, credentialID string, expected int, retainPredecessors bool) (Installation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Installation{}, err
+	}
+	defer unlock()
+	v, err := s.readInstallation(id)
+	if err != nil {
+		return v, err
+	}
+	if v.Version != expected {
+		return v, ErrConflict
+	}
+	if len(credentialID) != 32 || v.Status != "active" {
+		return v, ErrInvalid
+	}
+	if retainPredecessors {
+		v.DerivedCredentialIDs = append(v.DerivedCredentialIDs, credentialID)
+	} else {
+		v.DerivedCredentialIDs = []string{credentialID}
+	}
+	v.Version++
+	v.UpdatedAt = s.now().Truncate(time.Microsecond)
+	if err = writeAtomic(filepath.Join(s.root, "installation-"+id+".json"), v); err != nil {
+		return Installation{}, err
+	}
+	return v, nil
+}
+
+// DetachDerivedCredential removes authority without deleting credential or
+// contribution history. It is safe to retry after a failed overlap update.
+func (s *Store) DetachDerivedCredential(id, credentialID string) (Installation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Installation{}, err
+	}
+	defer unlock()
+	v, err := s.readInstallation(id)
+	if err != nil {
+		return v, err
+	}
+	ids := make([]string, 0, len(v.DerivedCredentialIDs))
+	for _, existing := range v.DerivedCredentialIDs {
+		if existing != credentialID {
+			ids = append(ids, existing)
+		}
+	}
+	v.DerivedCredentialIDs = ids
+	v.Version++
+	v.UpdatedAt = s.now().Truncate(time.Microsecond)
+	err = writeAtomic(filepath.Join(s.root, "installation-"+id+".json"), v)
+	return v, err
 }
 func (s *Store) ListInstallations(actor string) ([]Installation, error) {
 	s.mu.Lock()
@@ -361,6 +463,16 @@ func (s *Store) ChangeInstallation(id, actor, action string, expected int, in *I
 		} else {
 			v.Status = "removed"
 		}
+	case "quarantine":
+		for _, cid := range v.DerivedCredentialIDs {
+			if revoke != nil {
+				if err = revoke(cid); err != nil {
+					return v, err
+				}
+			}
+		}
+		v.DerivedCredentialIDs = []string{}
+		v.Status = "quarantined"
 	case "resume":
 		if v.Status != "suspended" {
 			return v, ErrInvalid
@@ -386,6 +498,7 @@ func (s *Store) ChangeInstallation(id, actor, action string, expected int, in *I
 		v.AuthorityEffectiveAt = authorityBoundaries(v.AuthorityEffectiveAt, v.RepositoryIDs, v.EffectiveAccess, now, false)
 		v.ExtensionName = ext.Name
 		v.ExtensionVerifiedAt = minTime(ext.CallbackEndpoint.VerifiedAt, ext.ActionEndpoint.VerifiedAt)
+		v.ContractVersion = ext.ContractVersion
 	case "transfer":
 		if in == nil || !((in.OwnerType == "repository" || in.OwnerType == "organization") && len(in.OwnerID) == 32) {
 			return v, ErrInvalid

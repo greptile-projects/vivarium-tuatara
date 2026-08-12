@@ -40,11 +40,25 @@ Secret-, token-, or password-named settings are rejected.
 `GET /extension-installations` lists installations the actor currently owns;
 `GET /extension-installations/{id}` returns effective access and actor history.
 `POST /extension-installations/{id}/{action}` supports `upgrade`, `suspend`,
-`resume`, `transfer`, and `remove` with the current `version`; upgrade and
+`resume`, `quarantine`, `transfer`, and `remove` with the current `version`; upgrade and
 transfer also include an `installation` object. Stale writes return `409`, and
 every mutation revalidates current ownership. Suspension and removal revoke
 only derived credentials before publishing status, without deleting retained
 events or attributed evidence.
+
+Extension operators publish a newly endpoint-verified declaration with `POST
+/extensions/{id}/contract` and the current contract `version`. Installations
+remain pinned until each resource owner explicitly submits an `upgrade`.
+`GET /extension-installations/{id}/operations` projects requests, actions,
+delivery failures/latency, consumption, permission use, credential health,
+contract drift, and notices. The `/credentials/rotate` action replaces and
+retires credentials; quarantine revokes future authority without deleting evidence.
+Rotation durably shortens predecessor expiry to the configured overlap deadline
+(or revokes immediately for zero overlap), never extending original lifetime.
+The installation atomically publishes its successor and, at zero overlap,
+detaches predecessors before retiring their auth records. Positive-overlap
+retirement failures detach the affected predecessor, preserving successor
+continuity without retaining unintended contribution authority.
 
 ### Extension contributions and actions
 

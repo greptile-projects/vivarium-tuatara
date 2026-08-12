@@ -351,6 +351,31 @@ func (s *Store) Revoke(userID, id string) (Credential, error) {
 	return credential, nil
 }
 
+// ExpireAt durably narrows a credential lifetime. It is used for rotation
+// overlap: authentication continues until the earlier of its original expiry
+// and the owner-configured overlap deadline, including across process restarts.
+func (s *Store) ExpireAt(userID, id string, deadline time.Time) (Credential, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return Credential{}, err
+	}
+	defer unlock()
+	credential, err := s.read(id)
+	if err != nil || credential.UserID != userID {
+		return Credential{}, ErrNotFound
+	}
+	deadline = deadline.UTC().Truncate(time.Microsecond)
+	if deadline.Before(credential.ExpiresAt) {
+		credential.ExpiresAt = deadline
+		if err = s.write(credential); err != nil {
+			return Credential{}, err
+		}
+	}
+	return credential, nil
+}
+
 func hasScope(scopes []string, required string) bool {
 	for _, scope := range scopes {
 		if scope == required {

@@ -1845,6 +1845,12 @@ removal are version-guarded and retain actor history. Current ownership is
 revalidated; suspension and removal clear only credentials derived from that
 installation, leaving unrelated installations and attribution intact.
 
+Ongoing operations project attributed requests and actions, delivery health and
+latency, consumption, permission use, credential health, configuration history,
+and actionable notices. Reverified contract updates never change an installation
+until renewed owner consent. Owners can rotate, narrow, pause, quarantine, or
+uninstall without erasing prior attribution.
+
 Active installations receive meaningful repository, pull request, check,
 release, deployment, incident, issue, and proposal-task changes from the
 durable collaboration activity ledger. Delivery uses an installation-scoped
