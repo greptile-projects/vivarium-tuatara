@@ -171,7 +171,10 @@ func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *
 				if reference.StartLine > lineCount || reference.EndLine > lineCount {
 					return docscollections.ErrInvalid
 				}
-			} else if reference.ResourceKind == "" || reference.ResourceKind != task.Source.Kind || reference.ResourceID != task.Source.ResourceID {
+			} else {
+				// Resource stores have distinct visibility and revision semantics. Until
+				// this route is wired to each owning store, accept only repository paths
+				// that can be resolved authoritatively at the frozen commit.
 				return docscollections.ErrInvalid
 			}
 		}
