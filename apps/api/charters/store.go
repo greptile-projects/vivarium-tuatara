@@ -205,7 +205,7 @@ func (s *Store) ActOnContinuity(kind, id, actionID, actor, action, reason string
 		if strings.TrimSpace(reason) == "" {
 			return r, ErrInvalid
 		}
-		if (action == "approve" || action == "complete") && !continuityEndpointsValid(r, *x, now) {
+		if (action == "approve" || action == "complete") && (x.CharterVersion != r.ActiveVersion || !continuityEndpointsValid(r, *x, now)) {
 			return r, ErrConflict
 		}
 		next := ""

@@ -375,3 +375,24 @@ func TestContinuityRevalidatesEndpointsAtEveryFinalizingTransition(t *testing.T)
 		})
 	}
 }
+
+func TestContinuityCannotFinalizeAfterCharterIsSuperseded(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	_, _ = s.Publish("repository", "repo1", "owner", 0, validRevision())
+	_, _ = s.Approve("repository", "repo1", "owner", 1, "approved", "adopt")
+	_, _ = s.Activate("repository", "repo1", "owner", 1)
+	r, _ := s.Invite("repository", "repo1", "owner", 0, 1, "human", "person", "maintainer", "Steward", []Evidence{{Kind: "review", ResourceID: "r", Summary: "s"}}, now.Add(24*time.Hour))
+	sid := r.Standings[0].ID
+	_, _ = s.ActOnStanding("repository", "repo1", sid, "person", "accept", "accept", "")
+	in := ContinuityAction{Kind: "election", Role: "maintainer", ToStandingID: sid, GovernanceProposalID: "p", GovernanceTallySHA256: "t", Reason: "vote", Resources: []string{"branch:main"}, ReviewAt: now.Add(10 * time.Hour), ExpiresAt: now.Add(12 * time.Hour)}
+	r, _ = s.CreateContinuity("repository", "repo1", "owner", 0, 1, in)
+	actionID := r.Continuity[0].ID
+	_, _ = s.Publish("repository", "repo1", "owner", 1, validRevision())
+	_, _ = s.Approve("repository", "repo1", "owner", 2, "approved", "replace")
+	_, _ = s.Activate("repository", "repo1", "owner", 2)
+	if _, err := s.ActOnContinuity("repository", "repo1", actionID, "owner", "approve", "finalize"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("superseded approval=%v", err)
+	}
+}
