@@ -1373,22 +1373,36 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 		for _, change := range changes {
 			paths = append(paths, change.Path)
 		}
-		risks := []string{}
-		for _, decision := range decisions {
-			if decision.Revision == p.SourceCommitID {
-				risks = append(risks, decision.RiskClasses...)
-			}
-		}
 		findings := []acceptance.Finding{}
+		activeStakeholders := map[string]bool{}
 		if s.previews != nil {
 			attempts, listErr := s.previews.List(repositoryID, pullRequestID, p.SourceCommitID)
 			if listErr != nil {
 				return MergeReadiness{}, listErr
 			}
 			for _, attempt := range attempts {
+				if attempt.Revision == p.SourceCommitID {
+					for _, invitation := range attempt.Invitations {
+						if invitation.Role == "feedback" && invitation.RevokedAt == nil && invitation.ExpiresAt.After(s.now()) {
+							activeStakeholders[invitation.UserID] = true
+						}
+					}
+				}
 				for _, finding := range attempt.Findings {
 					findings = append(findings, acceptance.Finding{ID: finding.ID, PreviewID: attempt.ID, Revision: finding.Revision, Title: finding.Title, Severity: finding.Severity, Status: finding.Status, AuthorID: finding.AuthorID})
 				}
+			}
+		}
+		risks := []string{}
+		for i := range decisions {
+			if decisions[i].Role == "stakeholder" && !activeStakeholders[decisions[i].ActorID] {
+				// Preserve the decision as stale evidence while making it ineligible
+				// to satisfy the live gate after invitation expiry or revocation.
+				decisions[i].PolicyVersion = 0
+				continue
+			}
+			if decisions[i].Revision == p.SourceCommitID {
+				risks = append(risks, decisions[i].RiskClasses...)
 			}
 		}
 		evaluation := acceptance.Evaluate(policy, p.SourceCommitID, paths, risks, decisions, findings)

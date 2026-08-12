@@ -37,6 +37,8 @@ The `stakeholder` role requires a live `feedback` invitation to a preview of
 the pull's exact current revision. Expiry, revocation, or source movement
 removes decision authority immediately; retained earlier decisions become stale
 evidence and grant no source, log, credential, or repository access.
+Merge readiness revalidates that invitation on every read and again through the
+ordinary direct-merge or queue-landing readiness boundary.
 
 ## Change preview audiences
 

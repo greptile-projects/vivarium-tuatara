@@ -726,3 +726,14 @@ func gitOutput(t *testing.T, args ...string) string {
 	}
 	return string(out[:len(out)-1])
 }
+
+func TestDirectorySizeMeasuresImmutableSourceReservation(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "source.bin"), make([]byte, 65<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	size, err := directorySize(root)
+	if err != nil || size != 65<<20 {
+		t.Fatalf("size=%d err=%v", size, err)
+	}
+}

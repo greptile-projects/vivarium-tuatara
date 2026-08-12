@@ -1018,6 +1018,15 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 			if run.Definition.StorageMB > tmpMB {
 				tmpMB = run.Definition.StorageMB
 			}
+			// The immutable source snapshot is platform-provided input, not build
+			// scratch. Reserve its measured size separately so a preview can make
+			// a writable copy without consuming its declared storage allowance.
+			if sourceBytes, sizeErr := directorySize(workspace); sizeErr == nil {
+				tmpMB += int((sourceBytes + 1024*1024 - 1) / (1024 * 1024))
+			} else {
+				err = sizeErr
+				goto executionDone
+			}
 			args := []string{"run", "--name", containerName, "--pull=never", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory", fmt.Sprintf("%dm", memoryMB), "--cpus", fmt.Sprintf("%g", cpus), "--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "--mount", "type=bind,src=" + workspace + ",dst=/workspace,readonly", "--mount", "type=bind,src=" + outputDirectory + ",dst=/output", "--tmpfs", fmt.Sprintf("/tmp:rw,nosuid,nodev,noexec,size=%dm,mode=1777", tmpMB), "--workdir", "/workspace/" + run.Definition.WorkingDirectory, "--env", "HOME=/tmp", "--env", "VIVARIUM_OUTPUT=/output", "--env", "CI=true", "--env", "VIVARIUM_COMMIT_SHA=" + run.CommitID}
 			for k, v := range run.Definition.Environment {
 				args = append(args, "--env", k+"="+v)
@@ -1097,6 +1106,25 @@ executionDone:
 	last := &run.Attempts[len(run.Attempts)-1]
 	last.State, last.CompletedAt, last.ExitCode, last.Failure = run.State, &done, run.ExitCode, run.Failure
 	s.publishTerminal(run, attemptNumber, done)
+}
+
+func directorySize(root string) (int64, error) {
+	var total int64
+	err := filepath.WalkDir(root, func(_ string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.Type().IsRegular() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		total += info.Size()
+		return nil
+	})
+	return total, err
 }
 
 // writeVerificationInput walks the disposable checkout through held directory

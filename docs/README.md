@@ -716,6 +716,9 @@ retain creator, revision, definition SHA-256, lifecycle, logs, and failures.
 The executor copies the immutable Git archive into a disposable bounded tmpfs
 before building, so source evidence stays read-only while ordinary compilers
 can create the declared, separately size-checked artifact output.
+The platform measures and reserves the immutable source copy separately from
+the preview's declared scratch allowance, so repository size cannot consume the
+build's promised writable capacity.
 Pull synchronization marks older previews stale without replacing their URL or
 evidence. Each definition fails closed with network `none`, artifact-only data,
 named identity, and explicit view, test, or feedback actions. A repository owner
