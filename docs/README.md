@@ -36,6 +36,25 @@ Each freezes an exact revision, reserves a scoped documentation branch, and
 retains rendered drafts, citations, attributable collaboration, and sourced
 agent assistance with explicit uncertainty without granting new authority.
 
+Repositories verify those promises with versioned
+`.vivarium/documentation-checks.json` configuration. Each declared check names
+a documentation collection, selectors such as links, symbols, builds, samples,
+commands, or tutorials, the repository paths that affect its evidence, and an
+exact source, package, or release revision matrix. Every matrix cell runs as an
+ordinary bounded check in a network-disabled, read-only repository snapshot;
+`VIVARIUM_OUTPUT` retains generated pages, coverage, and expected/actual output
+differences as downloadable artifacts. Pull surfaces retain the logs, artifacts,
+target revision, selectors, and dependency digest. Generated names such as
+`docs/guide [v1.0.0]` can be selected by the existing target-branch required
+check policy, so documentation failures participate in normal merge readiness.
+
+Changing a declared dependency changes only the evidence digest and runs for
+checks that name it. A target must always carry the exact 40-character
+candidate Git revision that is archived and executed, including when its label
+represents a package or release version;
+unreadable dependencies or malformed matrices fail closed as
+`documentation/configuration`.
+
 ## Contributor pathways
 
 Repository owners publish the project's participation contract before a

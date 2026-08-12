@@ -1,5 +1,20 @@
 # HTTP API contract
 
+## Documentation verification
+
+Pull creation and synchronization read optional
+`.vivarium/documentation-checks.json` version 1 at the exact candidate commit.
+Its `checks` contain `name`, `collection_id`, bounded executor fields (`image`,
+`command`, optional working directory/environment/resources), non-empty
+`selectors`, `dependency_paths`, and `targets`. Each target has a display
+`version`, exact 40-character candidate `revision`, and `source` of `source`, `package`, or
+`release`. The API expands targets into normal check runs named
+`docs/{name} [{version}]`; `definition.documentation` exposes collection,
+matrix target, selectors, dependency paths, and their deterministic SHA-256.
+Existing pull check event and artifact endpoints retain execution evidence, and
+existing required-check configuration and merge-readiness endpoints govern a
+generated documentation check name without special authority.
+
 ## Documentation collections
 
 - `GET /repositories/{id}/documentation` lists current visible collections.

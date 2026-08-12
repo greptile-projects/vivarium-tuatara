@@ -2305,7 +2305,7 @@ export type CheckRun = {
   repository_id: string;
   pull_request_id: string;
   commit_id: string;
-  definition: { name: string; image: string; command: string };
+  definition: { name: string; image: string; command: string; documentation?: { check: string; collection_id: string; version: string; revision: string; source: "source" | "package" | "release"; selectors: string[]; dependency_paths: string[]; dependency_sha256: string } };
   state: string;
   failure?: string;
   created_at: string;

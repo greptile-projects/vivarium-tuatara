@@ -806,15 +806,19 @@ type reviewInput struct {
 	Decision *string `json:"decision"`
 }
 
-func startCheckRuns(gitStore *storage.Store, runStore *checkruns.Store, pull pullrequests.PullRequest) error {
-	return startCheckRunsForCommit(gitStore, runStore, pull.RepositoryID, pull.ID, pull.SourceCommitID, nil)
+func startCheckRuns(gitStore *storage.Store, runStore *checkruns.Store, pull pullrequests.PullRequest, requiredDocumentation ...string) error {
+	return startCheckRunsWithRequiredDocumentation(gitStore, runStore, pull.RepositoryID, pull.ID, pull.SourceCommitID, nil, requiredDocumentation)
 }
 
 func startCheckRunsForCommit(gitStore *storage.Store, runStore *checkruns.Store, repositoryID, pullRequestID, commitID string, required []string) error {
+	return startCheckRunsWithRequiredDocumentation(gitStore, runStore, repositoryID, pullRequestID, commitID, required, required)
+}
+
+func startCheckRunsWithRequiredDocumentation(gitStore *storage.Store, runStore *checkruns.Store, repositoryID, pullRequestID, commitID string, requiredOnly, requiredDocumentation []string) error {
 	if gitStore == nil || runStore == nil {
 		return errors.New("check run storage is unavailable")
 	}
-	if required != nil && len(required) == 0 {
+	if requiredOnly != nil && len(requiredOnly) == 0 {
 		return nil
 	}
 	repository, err := gitStore.Open(repositoryID)
@@ -823,15 +827,20 @@ func startCheckRunsForCommit(gitStore *storage.Store, runStore *checkruns.Store,
 	}
 	command := exec.Command("git", "--git-dir="+repository.Path(), "show", commitID+":"+checkruns.ConfigPath)
 	data, err := command.Output()
+	definitions := []checkruns.Definition{}
 	if err != nil {
 		// A repository opts in by versioning the configuration at the candidate commit.
 		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 128 {
-			return nil
+			data = nil
+		} else {
+			return fmt.Errorf("read check configuration: %w", err)
 		}
-		return fmt.Errorf("read check configuration: %w", err)
 	}
-	config, err := checkruns.ParseConfig(data)
-	if err != nil {
+	config := checkruns.Config{}
+	if data != nil {
+		config, err = checkruns.ParseConfig(data)
+	}
+	if data != nil && err != nil {
 		log.Printf("invalid check configuration for %s: %v", commitID, err)
 		runs, createErr := runStore.Create(repositoryID, pullRequestID, commitID, []checkruns.Definition{{Name: "configuration", Image: "invalid", Command: "invalid configuration", TimeoutSeconds: 1, WorkingDirectory: "."}})
 		if createErr != nil {
@@ -844,20 +853,53 @@ func startCheckRunsForCommit(gitStore *storage.Store, runStore *checkruns.Store,
 		}
 		return nil
 	}
-	if required != nil {
-		wanted := map[string]bool{}
-		for _, name := range required {
-			wanted[name] = true
+	definitions = append(definitions, config.Checks...)
+	docsCommand := exec.Command("git", "--git-dir="+repository.Path(), "show", commitID+":"+checkruns.DocumentationConfigPath)
+	if docsData, docsErr := docsCommand.Output(); docsErr == nil {
+		_, docsDefinitions, parseErr := checkruns.ParseDocumentationConfig(docsData, commitID, func(name string) ([]byte, error) {
+			return exec.Command("git", "--git-dir="+repository.Path(), "show", commitID+":"+name).Output()
+		})
+		if parseErr != nil {
+			runs, createErr := runStore.Create(repositoryID, pullRequestID, commitID, []checkruns.Definition{{Name: "documentation/configuration", Image: "invalid", Command: "invalid configuration", TimeoutSeconds: 1, WorkingDirectory: "."}})
+			if createErr != nil {
+				return fmt.Errorf("create invalid documentation configuration check: %w", createErr)
+			}
+			if len(runs) == 1 {
+				if recordErr := runStore.RecordFailure(runs[0], parseErr.Error()); recordErr != nil {
+					return fmt.Errorf("record invalid documentation configuration: %w", recordErr)
+				}
+			}
+			return nil
 		}
-		definitions := make([]checkruns.Definition, 0, len(required))
-		for _, definition := range config.Checks {
-			if wanted[definition.Name] {
+		changed, changedErr := documentationChangedPaths(repository, commitID)
+		if changedErr != nil {
+			return fmt.Errorf("resolve documentation check changes: %w", changedErr)
+		}
+		requiredNames := map[string]bool{}
+		for _, name := range requiredDocumentation {
+			requiredNames[name] = true
+		}
+		for _, definition := range docsDefinitions {
+			if documentationDefinitionSelected(definition, changed, requiredNames) {
 				definitions = append(definitions, definition)
 			}
 		}
-		config.Checks = definitions
+	} else if exit, ok := docsErr.(*exec.ExitError); !ok || exit.ExitCode() != 128 {
+		return fmt.Errorf("read documentation check configuration: %w", docsErr)
 	}
-	runs, err := runStore.Create(repositoryID, pullRequestID, commitID, config.Checks)
+	if requiredOnly != nil {
+		all := definitions
+		definitions = make([]checkruns.Definition, 0, len(requiredOnly))
+		for _, name := range requiredOnly {
+			for _, definition := range all {
+				if definition.Name == name {
+					definitions = append(definitions, definition)
+					break
+				}
+			}
+		}
+	}
+	runs, err := runStore.Create(repositoryID, pullRequestID, commitID, definitions)
 	if err != nil {
 		return fmt.Errorf("create check runs: %w", err)
 	}
@@ -865,6 +907,43 @@ func startCheckRunsForCommit(gitStore *storage.Store, runStore *checkruns.Store,
 		go runStore.Execute(run, repository.Path())
 	}
 	return nil
+}
+
+func documentationChangedPaths(repository *storage.Repository, commitID string) (map[string]bool, error) {
+	commit, err := repository.ReadCommit(storage.ObjectID(commitID))
+	if err != nil {
+		return nil, err
+	}
+	if len(commit.Parents) == 0 {
+		return map[string]bool{checkruns.DocumentationConfigPath: true}, nil
+	}
+	output, err := exec.Command("git", "--git-dir="+repository.Path(), "diff", "--name-only", string(commit.Parents[0]), commitID, "--").Output()
+	if err != nil {
+		return nil, err
+	}
+	changed := map[string]bool{}
+	for _, name := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if name != "" {
+			changed[name] = true
+		}
+	}
+	return changed, nil
+}
+
+func documentationDefinitionAffected(definition checkruns.Definition, changed map[string]bool) bool {
+	if definition.Documentation == nil || changed[checkruns.DocumentationConfigPath] {
+		return true
+	}
+	for _, dependency := range definition.Documentation.DependencyPaths {
+		if changed[dependency] {
+			return true
+		}
+	}
+	return false
+}
+
+func documentationDefinitionSelected(definition checkruns.Definition, changed, required map[string]bool) bool {
+	return documentationDefinitionAffected(definition, changed) || required[definition.Name]
 }
 
 func startBoundCheckRuns(gitStore *storage.Store, runStore *checkruns.Store, repositoryID, pullRequestID, commitID string, definitions []checkruns.Definition) {
@@ -1050,7 +1129,8 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		created, err := store.CreateFrom(r.PathValue("id"), sourceRepositoryID, actor.UserID, *input.Title, *input.Body, *input.SourceBranch, *input.TargetBranch, input.ProposalID)
 		location := "/repositories/" + r.PathValue("id") + "/pulls/" + created.ID
 		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
-			startCheckRuns(gitStore, checkRunStore, created)
+			required, _ := repositoriesStore.RequiredChecks(created.RepositoryID, created.TargetBranch)
+			startCheckRuns(gitStore, checkRunStore, created, required...)
 			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.created", ActorID: actor.UserID, RepositoryID: created.RepositoryID, ResourceType: "pull_request", ResourceID: created.ID, ResourceTitle: created.Title})
 			recordMentions(activityStore, repositoriesStore, userStore, actor.UserID, created.RepositoryID, "pull_request", created.ID, created.Title, created.Title+"\n"+created.Body)
 			w.Header().Set("Location", location)
@@ -1060,7 +1140,8 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		if writePullRequestError(w, err) {
 			return
 		}
-		startCheckRuns(gitStore, checkRunStore, created)
+		required, _ := repositoriesStore.RequiredChecks(created.RepositoryID, created.TargetBranch)
+		startCheckRuns(gitStore, checkRunStore, created, required...)
 		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.created", ActorID: actor.UserID, RepositoryID: created.RepositoryID, ResourceType: "pull_request", ResourceID: created.ID, ResourceTitle: created.Title})
 		recordMentions(activityStore, repositoriesStore, userStore, actor.UserID, created.RepositoryID, "pull_request", created.ID, created.Title, created.Title+"\n"+created.Body)
 		w.Header().Set("Location", location)
@@ -1343,7 +1424,8 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 			return
 		}
 		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
-			startCheckRuns(gitStore, checkRunStore, updated)
+			required, _ := repositoriesStore.RequiredChecks(updated.RepositoryID, updated.TargetBranch)
+			startCheckRuns(gitStore, checkRunStore, updated, required...)
 			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.synchronized", ActorID: actor.UserID, RepositoryID: updated.RepositoryID, ResourceType: "pull_request", ResourceID: updated.ID, ResourceTitle: updated.Title})
 			writeUncertainMutation(w, updated)
 			return
@@ -1351,7 +1433,8 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		if writePullRequestError(w, err) {
 			return
 		}
-		startCheckRuns(gitStore, checkRunStore, updated)
+		required, _ := repositoriesStore.RequiredChecks(updated.RepositoryID, updated.TargetBranch)
+		startCheckRuns(gitStore, checkRunStore, updated, required...)
 		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.synchronized", ActorID: actor.UserID, RepositoryID: updated.RepositoryID, ResourceType: "pull_request", ResourceID: updated.ID, ResourceTitle: updated.Title})
 		writeJSON(w, http.StatusOK, updated)
 	})
@@ -2169,7 +2252,8 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 		}
 		err = repository.WithReferenceTarget("refs/heads/"+run.WorkingBranch, input.CommitID, complete)
 		if completed.ID != "" && synchronized {
-			startCheckRuns(gitStore, checkRunStore, synchronizedPull)
+			required, _ := repositoriesStore.RequiredChecks(synchronizedPull.RepositoryID, synchronizedPull.TargetBranch)
+			startCheckRuns(gitStore, checkRunStore, synchronizedPull, required...)
 			if _, revokeErr := authStore.Revoke(run.InitiatorID, credential.ID); revokeErr != nil && !errors.Is(revokeErr, auth.ErrNotFound) {
 				writeAPIError(w, 500, "internal_error", "work was published but agent access revocation must be retried")
 				return
