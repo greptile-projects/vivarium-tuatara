@@ -34,6 +34,24 @@ import (
 )
 
 const maxFederatedRepositoryResponseBytes = 16 << 20
+const maxFederatedContributionEnvelopeBytes = (maxFederatedRepositoryResponseBytes*4)/3 + (64 << 10)
+
+type boundedBuffer struct {
+	bytes.Buffer
+	limit int
+}
+
+func (w *boundedBuffer) Write(p []byte) (int, error) {
+	remaining := w.limit - w.Len()
+	if remaining <= 0 {
+		return 0, fmt.Errorf("transfer exceeds the federation limit")
+	}
+	if len(p) > remaining {
+		_, _ = w.Buffer.Write(p[:remaining])
+		return remaining, fmt.Errorf("transfer exceeds the federation limit")
+	}
+	return w.Buffer.Write(p)
+}
 
 func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userStore *users.Store, organizationStore *organizations.Store, credentials *auth.Store, gitStore *storage.Store, repositoryStore *repositories.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, issueStore *issues.Store, pathwayStore *contributorpathways.Store, opportunityStore *contributoropportunities.Store) {
 	mux.HandleFunc("GET /.well-known/vivarium-federation", func(w http.ResponseWriter, _ *http.Request) {
@@ -173,25 +191,22 @@ func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userS
 			writeAPIError(w, 409, "federated_revision_changed", "the advertised branch revision is no longer current")
 			return
 		}
-		temp, err := os.CreateTemp("", "vivarium-transfer-*.bundle")
-		if err != nil {
-			writeAPIError(w, 503, "federation_unavailable", "transfer could not be prepared")
+		bundle := &boundedBuffer{limit: maxFederatedRepositoryResponseBytes}
+		var stderr bytes.Buffer
+		command := exec.CommandContext(r.Context(), "git", "--git-dir="+git.Path(), "bundle", "create", "-", "refs/heads/"+r.PathValue("branch"))
+		command.Stdout, command.Stderr = bundle, &stderr
+		if err := command.Run(); err != nil {
+			if r.Context().Err() != nil {
+				return
+			}
+			if bundle.Len() >= maxFederatedRepositoryResponseBytes {
+				writeAPIError(w, 413, "federated_transfer_too_large", "transfer exceeds the federation limit")
+				return
+			}
+			writeAPIError(w, 503, "federation_transfer_failed", strings.TrimSpace(stderr.String()))
 			return
 		}
-		path := temp.Name()
-		_ = temp.Close()
-		defer os.Remove(path)
-		command := exec.Command("git", "--git-dir="+git.Path(), "bundle", "create", path, "refs/heads/"+r.PathValue("branch"))
-		if output, err := command.CombinedOutput(); err != nil {
-			writeAPIError(w, 503, "federation_transfer_failed", strings.TrimSpace(string(output)))
-			return
-		}
-		data, err := os.ReadFile(path)
-		if err != nil || len(data) > maxFederatedRepositoryResponseBytes {
-			writeAPIError(w, 413, "federated_transfer_too_large", "transfer exceeds the federation limit")
-			return
-		}
-		writeJSON(w, 200, map[string]any{"repository_id": repository.ID, "branch": r.PathValue("branch"), "revision": ref.Target, "bundle": base64.RawStdEncoding.EncodeToString(data)})
+		writeJSON(w, 200, map[string]any{"repository_id": repository.ID, "branch": r.PathValue("branch"), "revision": ref.Target, "bundle": base64.RawStdEncoding.EncodeToString(bundle.Bytes())})
 	})
 	require := func(w http.ResponseWriter, r *http.Request) bool {
 		actor, ok := authenticateRequest(w, r, credentials, "", false)
@@ -489,7 +504,7 @@ func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userS
 	})
 	mux.HandleFunc("POST /federation/contributions", func(w http.ResponseWriter, r *http.Request) {
 		var in signedContribution
-		if decodeJSON(r, &in) != nil {
+		if decodeJSONLimit(r, &in, maxFederatedContributionEnvelopeBytes) != nil {
 			writeAPIError(w, 400, "invalid_federated_contribution", "invalid contribution envelope")
 			return
 		}
@@ -507,7 +522,11 @@ func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userS
 			writeAPIError(w, 404, "federated_repository_not_found", "target is unavailable")
 			return
 		}
-		targetGit, _ := gitStore.Open(target.ID)
+		targetGit, err := gitStore.Open(target.ID)
+		if err != nil {
+			writeAPIError(w, 503, "federation_unavailable", "target repository storage is unavailable")
+			return
+		}
 		targetRef, err := targetGit.ReadReference("refs/heads/" + in.Payload.TargetBranch)
 		if err != nil || targetRef.Target != in.Payload.TargetRevision {
 			writeAPIError(w, 409, "federated_target_changed", "target branch changed; negotiate a fresh proposal")
