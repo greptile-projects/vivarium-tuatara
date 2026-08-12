@@ -96,6 +96,8 @@ func (s *Store) Create(owner string, in Registration, verified time.Time) (Exten
 		return Extension{}, err
 	}
 	defer unlock()
+	in.Capabilities = clean(in.Capabilities)
+	in.SupportedEvents = clean(in.SupportedEvents)
 	if err = validate(owner, in); err != nil {
 		return Extension{}, err
 	}
@@ -108,7 +110,7 @@ func (s *Store) Create(owner string, in Registration, verified time.Time) (Exten
 	for i, p := range in.RequestedPermissions {
 		items[i] = AuthorityItem{Resource: p.Resource, RequestedActions: p.Actions, EffectiveActions: []string{}, Decision: "not_installed", Reason: "registration declares requested authority; a resource owner must approve a future installation"}
 	}
-	v := Extension{ID: id, PrincipalType: "extension", Name: strings.TrimSpace(in.Name), Description: strings.TrimSpace(in.Description), OwnerID: owner, OperatorContact: strings.TrimSpace(in.OperatorContact), Capabilities: clean(in.Capabilities), CallbackEndpoint: Endpoint{URL: in.CallbackURL, VerifiedAt: verified}, ActionEndpoint: Endpoint{URL: in.ActionURL, VerifiedAt: verified}, RequestedPermissions: in.RequestedPermissions, SupportedEvents: clean(in.SupportedEvents), CredentialRotation: in.CredentialRotation, AuthorityPreview: AuthorityPreview{Installed: false, Items: items, Summary: "No collaborative context or resource authority is granted before an owner-approved installation."}, Status: "registered", CreatedAt: now, UpdatedAt: now}
+	v := Extension{ID: id, PrincipalType: "extension", Name: strings.TrimSpace(in.Name), Description: strings.TrimSpace(in.Description), OwnerID: owner, OperatorContact: strings.TrimSpace(in.OperatorContact), Capabilities: in.Capabilities, CallbackEndpoint: Endpoint{URL: in.CallbackURL, VerifiedAt: verified}, ActionEndpoint: Endpoint{URL: in.ActionURL, VerifiedAt: verified}, RequestedPermissions: in.RequestedPermissions, SupportedEvents: in.SupportedEvents, CredentialRotation: in.CredentialRotation, AuthorityPreview: AuthorityPreview{Installed: false, Items: items, Summary: "No collaborative context or resource authority is granted before an owner-approved installation."}, Status: "registered", CreatedAt: now, UpdatedAt: now}
 	if err = writeAtomic(filepath.Join(s.root, id+".json"), v); err != nil {
 		return Extension{}, err
 	}
@@ -225,6 +227,17 @@ func writeAtomic(name string, v any) error {
 	}
 	if e == nil {
 		e = os.Rename(tmp.Name(), name)
+	}
+	if e == nil {
+		directory, openErr := os.Open(filepath.Dir(name))
+		if openErr != nil {
+			e = openErr
+		} else {
+			e = directory.Sync()
+			if closeErr := directory.Close(); e == nil {
+				e = closeErr
+			}
+		}
 	}
 	return e
 }

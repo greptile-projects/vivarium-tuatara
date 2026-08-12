@@ -71,3 +71,34 @@ func TestExtensionRegistrationRejectsUnverifiedEndpoint(t *testing.T) {
 		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
 	}
 }
+
+func TestExtensionRegistrationRejectsRedirectedEndpoint(t *testing.T) {
+	targetRequests := 0
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetRequests++
+		w.Header().Set("Vivarium-Extension-Challenge", r.Header.Get("Vivarium-Extension-Challenge"))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer redirect.Close()
+
+	credentials, _ := auth.New(t.TempDir())
+	token, _ := credentials.Issue("0123456789abcdef0123456789abcdef", auth.Session, "owner", []string{"profile:write"}, time.Hour)
+	store, _ := extensions.New(t.TempDir())
+	mux := http.NewServeMux()
+	registerExtensionRoutes(mux, store, credentials)
+	body := `{"name":"Review lens","operator_contact":"ops@example.test","capabilities":["review"],"callback_endpoint":"` + redirect.URL + `","action_endpoint":"` + redirect.URL + `","requested_permissions":[{"resource":"pull_requests","actions":["read"]}],"supported_events":["pull_request.opened"],"credential_rotation":{"interval_days":30}}`
+	req := httptest.NewRequest("POST", "/extensions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token.Token)
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if targetRequests != 0 {
+		t.Fatalf("redirect target received %d challenge request(s)", targetRequests)
+	}
+}

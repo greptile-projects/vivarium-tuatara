@@ -99,7 +99,14 @@ func verifyExtensionEndpoints(ctx context.Context, raw ...string) (time.Time, er
 			return time.Time{}, errors.New("endpoint URL is invalid")
 		}
 		req.Header.Set("Vivarium-Extension-Challenge", challenge)
-		client := http.Client{Timeout: 5 * time.Second}
+		client := http.Client{
+			Timeout: 5 * time.Second,
+			// The proof belongs to the declared endpoint, not a destination it
+			// selects after receiving the challenge. Never forward the header.
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
 		res, e := client.Do(req)
 		if e != nil {
 			return time.Time{}, errors.New("endpoint did not answer its ownership challenge")
