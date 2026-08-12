@@ -162,8 +162,10 @@ func registerCharterRoutes(mux *http.ServeMux, store *charters.Store, repos *rep
 	standingViews := func(kind, id, actorID string, record charters.Record) []charterStandingView {
 		live := map[string]bool{}
 		access := map[string][]string{}
+		ownerID := ""
 		if kind == "repository" {
 			if repo, err := repos.GetByID(id); err == nil {
+				ownerID = repo.OwnerID
 				live[repo.OwnerID] = true
 				access[repo.OwnerID] = []string{"repository owner access (independent of charter)"}
 				if collaborators, err := repos.ListCollaborators(repo.OwnerID, id); err == nil {
@@ -175,6 +177,7 @@ func registerCharterRoutes(mux *http.ServeMux, store *charters.Store, repos *rep
 			}
 		} else if orgs != nil {
 			if org, err := orgs.Get(id); err == nil {
+				ownerID = org.CreatedBy
 				live[org.CreatedBy] = true
 				access[org.CreatedBy] = []string{"organization owner access (independent of charter)"}
 				for _, m := range org.Members {
@@ -206,6 +209,17 @@ func registerCharterRoutes(mux *http.ServeMux, store *charters.Store, repos *rep
 				}
 				if st.Status == "suspended" || st.Status == "revoked" {
 					actions = append(actions, "appeal")
+				}
+			}
+			if actorID == ownerID && actorID != st.PrincipalID && st.ExpiresAt.After(now) {
+				if st.Status == "active" || st.Status == "recused" {
+					actions = append(actions, "suspend")
+				}
+				if st.Status == "suspended" {
+					actions = append(actions, "reinstate")
+				}
+				if st.Status != "revoked" {
+					actions = append(actions, "revoke")
 				}
 			}
 			out = append(out, charterStandingView{Standing: st, EffectiveStatus: effective, Eligibility: eligibility, AvailableActions: actions, OperationalAccess: access[st.PrincipalID], AuthorityNote: "Governance standing and votes grant no code, secret, merge, deployment, or credential authority."})
