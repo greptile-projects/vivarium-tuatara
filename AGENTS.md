@@ -265,8 +265,10 @@ whenever dependencies change or the web job fails before it starts.
   revalidated for every human ballot and again at tally; duplicate ballots, abstentions,
   recusals, changed eligibility, missed deadlines, and contests remain deterministic evidence.
   Approved agents may add cited analysis but never vote. Secret ballots reveal only each
-  voter's own receipt plus aggregate results and a verification digest; ballot reasons remain
-  retained dissent. `$GOVERNANCE_STORAGE_ROOT` defaults to `governance`.
+  voter's own ballot/receipt plus aggregate results and a verification digest; other ballots and
+  ballot audit events are omitted. Ballot reasons remain retained dissent, the first tally is
+  immutable, and suspended or otherwise non-active standing no longer satisfies its charter
+  role. `$GOVERNANCE_STORAGE_ROOT` defaults to `governance`.
   team maintainers request attributable expiring exceptions, whose approved
   projection retains both the baseline and adjusted effective value. Public
   directory reads omit organization-only structure, private-repository

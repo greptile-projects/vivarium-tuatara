@@ -214,6 +214,9 @@ func (s *Store) Finalize(pid, actor string, current []Elector, contest []string)
 		if now.Before(p.Rule.ClosesAt) {
 			return ErrClosed
 		}
+		if p.Status == "closed" || p.Tally != nil {
+			return ErrConflict
+		}
 		live := map[string]bool{}
 		for _, e := range current {
 			if e.Eligible {

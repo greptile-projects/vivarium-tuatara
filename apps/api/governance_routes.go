@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/charters"
@@ -53,6 +54,32 @@ func registerGovernanceRoutes(mux *http.ServeMux, votes *governance.Store, chart
 				}
 			}
 		}
+		if record, err := charterStore.Get(kind, scopeID); err == nil {
+			now := time.Now()
+			for user, userRoles := range roles {
+				eligibleRoles := userRoles[:0]
+				for _, role := range userRoles {
+					hasStanding, activeStanding := false, false
+					for _, standing := range record.Standings {
+						if standing.PrincipalType != "human" || standing.PrincipalID != user || standing.Role != role || standing.CharterVersion != revision.Version {
+							continue
+						}
+						hasStanding = true
+						if standing.Status == "active" && standing.ExpiresAt.After(now) {
+							activeStanding = true
+						}
+					}
+					if !hasStanding || activeStanding {
+						eligibleRoles = append(eligibleRoles, role)
+					}
+				}
+				if len(eligibleRoles) == 0 {
+					delete(roles, user)
+				} else {
+					roles[user] = eligibleRoles
+				}
+			}
+		}
 		out := make([]governance.Elector, 0, len(roles))
 		for user, rs := range roles {
 			out = append(out, governance.Elector{UserID: user, Roles: rs, Eligible: true})
@@ -90,23 +117,7 @@ func registerGovernanceRoutes(mux *http.ServeMux, votes *governance.Store, chart
 		writeAPIError(w, 404, "governed_proposal_not_found", "governed proposal not found")
 		return a, false
 	}
-	project := func(p governance.Proposal, actor string) governance.Proposal {
-		if p.Rule.SecretBallot {
-			for i := range p.Ballots {
-				if p.Ballots[i].ActorID != actor {
-					p.Ballots[i].ActorID = ""
-					p.Ballots[i].Choice = ""
-					p.Ballots[i].Reason = ""
-				}
-			}
-			for i := range p.Events {
-				if p.Events[i].Kind == "ballot.cast" && p.Events[i].ActorID != actor {
-					p.Events[i].ActorID = "secret-elector"
-				}
-			}
-		}
-		return p
-	}
+	project := governedProposalProjection
 	mux.HandleFunc("POST /governance/proposals", func(w http.ResponseWriter, r *http.Request) {
 		var in governance.Proposal
 		if decodeJSON(r, &in) != nil {
@@ -367,6 +378,28 @@ func authorizeScopeSilent(user, kind, id string, repos *repositories.Store, orgs
 	}
 	return "", false
 }
+
+func governedProposalProjection(p governance.Proposal, actor string) governance.Proposal {
+	if !p.Rule.SecretBallot {
+		return p
+	}
+	ballots := make([]governance.Ballot, 0, 1)
+	for _, ballot := range p.Ballots {
+		if ballot.ActorID == actor {
+			ballots = append(ballots, ballot)
+		}
+	}
+	p.Ballots = ballots
+	events := p.Events[:0]
+	for _, event := range p.Events {
+		if event.Kind != "ballot.cast" || event.ActorID == actor {
+			events = append(events, event)
+		}
+	}
+	p.Events = events
+	return p
+}
+
 func governanceError(w http.ResponseWriter, e error) {
 	switch {
 	case errors.Is(e, governance.ErrNotFound):

@@ -2,6 +2,7 @@ package governance
 
 import (
 	"errors"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -88,5 +89,26 @@ func TestSecretBallotDataPersistsForVerifiableTally(t *testing.T) {
 	}
 	if !p.Tally.Contested || p.Tally.VerificationSHA256 == "" || p.Tally.Counts["yes"] != 1 || p.Tally.Counts["no"] != 1 || p.Ballots[1].Reason != "minority" {
 		t.Fatalf("proposal=%#v", p)
+	}
+}
+
+func TestFinalizedTallyCannotBeReplaced(t *testing.T) {
+	now := time.Now()
+	s, _ := New(t.TempDir())
+	s.now = func() time.Time { return now }
+	p, _ := s.Create(proposal(now))
+	p, _ = s.Cast(p.ID, "a", "yes", "", true, "live")
+	now = now.Add(2 * time.Hour)
+	p, err := s.Finalize(p.ID, "a", []Elector{{UserID: "a", Eligible: true}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := *p.Tally
+	if _, err = s.Finalize(p.ID, "a", nil, []string{"replace result"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("second finalize = %v", err)
+	}
+	p, _ = s.Get(p.ID)
+	if !reflect.DeepEqual(*p.Tally, first) || len(p.Events) != 3 {
+		t.Fatalf("final tally changed = %#v, events = %#v", p.Tally, p.Events)
 	}
 }
