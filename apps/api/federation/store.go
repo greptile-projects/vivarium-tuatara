@@ -192,7 +192,7 @@ func validCollaborationEvent(v CollaborationEvent) bool {
 		return false
 	}
 	switch v.Kind {
-	case "comment", "review", "revision", "checks", "preview", "closure", "agent_session":
+	case "comment", "review", "revision", "checks", "preview", "closure", "agent_session", "receipt":
 	default:
 		return false
 	}
@@ -209,6 +209,9 @@ func validCollaborationEvent(v CollaborationEvent) bool {
 		return false
 	}
 	if v.Kind == "closure" && v.State != "open" && v.State != "closed" {
+		return false
+	}
+	if v.Kind == "receipt" && (len(v.Revision) != 40 || len(v.Evidence) == 0) {
 		return false
 	}
 	return true
@@ -528,6 +531,24 @@ func (s *Store) ListCollaborationEvents(contributionID, currentRevision string) 
 		return out[i].CreatedAt.Before(out[j].CreatedAt)
 	})
 	return out, nil
+}
+
+// CollaborationEvent returns one immutable retained event by its origin and
+// ID. Receipt retries use this to preserve the original signing identity across
+// local key rotation instead of reconstructing an event under a newer key.
+func (s *Store) CollaborationEvent(contributionID, originInstanceID, id string) (CollaborationEvent, error) {
+	if !validOpaqueID(contributionID) || !validInstanceID(originInstanceID) || !validOpaqueID(id) {
+		return CollaborationEvent{}, ErrNotFound
+	}
+	raw, err := os.ReadFile(filepath.Join(s.root, "collaboration", contributionID, originInstanceID+"-"+id+".json"))
+	if err != nil {
+		return CollaborationEvent{}, ErrNotFound
+	}
+	var v CollaborationEvent
+	if json.Unmarshal(raw, &v) != nil || !validCollaborationEvent(v) || v.ContributionID != contributionID || v.OriginInstanceID != originInstanceID || v.ID != id {
+		return CollaborationEvent{}, ErrInvalid
+	}
+	return v, nil
 }
 
 func New(root, name, publicURL string, operators []string) (*Store, error) {

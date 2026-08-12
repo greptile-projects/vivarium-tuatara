@@ -253,6 +253,22 @@ func TestAgentSessionCollaborationEvidenceIsRevisionBound(t *testing.T) {
 	}
 }
 
+func TestMergeReceiptRequiresImmutableRevisionAndEvidence(t *testing.T) {
+	s, _ := New(t.TempDir(), "Local", "https://local.example", nil)
+	v := CollaborationEvent{ID: "merge-pull-1", ContributionID: "contribution-1", Sequence: 1, Kind: "receipt", Actor: "local:user:maintainer", Revision: strings.Repeat("a", 40), Evidence: json.RawMessage(`{"merge_commit_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`), CreatedAt: time.Now().UTC(), OriginInstanceID: strings.Repeat("b", 32), DocumentVersion: 1, SigningKeyID: "key", Signature: "signature", Verification: "verified"}
+	if _, err := s.AppendCollaborationEvent(v); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := s.CollaborationEvent(v.ContributionID, v.OriginInstanceID, v.ID)
+	if err != nil || !jsonEqual(loaded.Evidence, v.Evidence) || loaded.Signature != v.Signature {
+		t.Fatalf("loaded receipt = %#v, %v", loaded, err)
+	}
+	v.Evidence = nil
+	if _, err := s.AppendCollaborationEvent(v); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("receipt without evidence = %v", err)
+	}
+}
+
 func jsonEqual(a, b []byte) bool {
 	var left, right any
 	return json.Unmarshal(a, &left) == nil && json.Unmarshal(b, &right) == nil && fmt.Sprint(left) == fmt.Sprint(right)

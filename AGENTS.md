@@ -126,7 +126,11 @@ whenever dependencies change or the web job fails before it starts.
   idempotent with explicit pending/conflict recovery; revision movement derives
   stale evidence normally. Imported claims remain verified remote evidence and
   never become local users, required checks, credentials, review authority, or
-  merge permission. Source-instance participants may delegate a federated
+  merge permission. Accepted federated pulls use the ordinary atomic local
+  merge boundary, retain their reachable Git objects and verified collaboration
+  evidence, and publish a locally retained signed receipt through a durable
+  outbox; peer deletion, revocation, or outage cannot undo accepted history or
+  remain authorization. Source-instance participants may delegate a federated
   contribution to an approved agent they operate. Delegation freezes the
   current contribution revision and selected existing paths, issues only a
   short-lived local credential bound to the fork, source branch, and

@@ -86,6 +86,14 @@ event identity with different content conflicts. Shared check and preview claims
 are evidence only: upstream required checks, embargo filtering, repository
 visibility, review permission, closure, and merge authority remain local.
 
+After those local rules pass, the repository owner merges the immutable adopted
+revision through the ordinary atomic pull boundary. The target retains the
+source objects and authorship in its own Git history, then freezes the signed
+collaboration events, source identity/revision, maintainer, and merge commit in
+a locally signed `receipt`. Receipt delivery uses a durable outbox: an offline,
+deleted, or later-untrusted source cannot undo accepted history or remain a
+live authorization dependency, while identical retries cannot merge twice.
+
 An authorized source-instance participant can delegate the contribution to an
 approved agent they operate with `POST
 /federation/contributions/{id}/agent-sessions`. The mandate freezes the current
