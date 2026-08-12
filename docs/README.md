@@ -1869,3 +1869,19 @@ delivery, or replay its event as a new ordered delivery. Five failed attempts
 move a delivery to the visible dead letter state; replay preserves the source
 event identity while assigning a fresh delivery ID and sequence. Consumers
 reject an unknown newer `schema_version` without acknowledging the delivery.
+
+Local extension development may set `EXTENSION_DEVELOPMENT_ENDPOINTS=1` on the
+API process to verify sample services over HTTP at `localhost`, `127.0.0.1`, or
+`::1`. The exception is deliberately limited to loopback and is disabled by
+default; every other endpoint remains HTTPS-only and must resolve exclusively
+to publicly routable addresses.
+
+The connected extension journey registers a live sample service, installs it
+for one repository, verifies a signed pull event, publishes an exact-revision
+check with annotations, artifact, and a declared repair action, and takes the
+updated Git change through ordinary review and merge. It also retains a failed
+delivery and replay, requires an explicit installation upgrade after a new
+capability is declared, and proves uninstall revokes the derived credential
+without deleting the contribution, invocation, delivery, or installation
+history. Playwright isolates extension records beneath
+`$EXTENSION_STORAGE_ROOT` with its other temporary API stores.

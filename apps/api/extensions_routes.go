@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -153,7 +154,8 @@ func verifyExtensionEndpointsWithNetwork(ctx context.Context, lookup lookupIPFun
 	challenge := hex.EncodeToString(challengeBytes)
 	for _, value := range raw {
 		u, e := url.Parse(value)
-		if e != nil || u.Host == "" || u.User != nil || u.Scheme != "https" {
+		developmentLoopback := os.Getenv("EXTENSION_DEVELOPMENT_ENDPOINTS") == "1" && u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost" || u.Hostname() == "::1")
+		if e != nil || u.Host == "" || u.User != nil || u.Scheme != "https" && !developmentLoopback {
 			return time.Time{}, errors.New("endpoints must use HTTPS")
 		}
 		addresses, e := lookup(ctx, "ip", u.Hostname())
@@ -161,7 +163,7 @@ func verifyExtensionEndpointsWithNetwork(ctx context.Context, lookup lookupIPFun
 			return time.Time{}, errors.New("endpoint hostname could not be resolved")
 		}
 		for _, address := range addresses {
-			if !publicEndpointIP(address) {
+			if !publicEndpointIP(address) && !developmentLoopback {
 				return time.Time{}, errors.New("endpoint must resolve only to publicly routable addresses")
 			}
 		}

@@ -113,6 +113,27 @@ func TestPublicEndpointIPAcceptsOrdinaryPublicAddresses(t *testing.T) {
 	}
 }
 
+func TestExtensionEndpointVerificationAllowsOnlyOptInDevelopmentLoopback(t *testing.T) {
+	t.Setenv("EXTENSION_DEVELOPMENT_ENDPOINTS", "1")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Vivarium-Extension-Challenge", r.Header.Get("Vivarium-Extension-Challenge"))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	if _, err := verifyExtensionEndpoints(context.Background(), server.URL); err != nil {
+		t.Fatalf("development loopback verification: %v", err)
+	}
+	_, err := verifyExtensionEndpointsWithNetwork(context.Background(), func(context.Context, string, string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("10.0.0.1")}, nil
+	}, func(context.Context, string, string) (net.Conn, error) {
+		t.Fatal("non-loopback development endpoint must fail before dialing")
+		return nil, nil
+	}, "http://extension.example/events")
+	if err == nil || !strings.Contains(err.Error(), "HTTPS") {
+		t.Fatalf("non-loopback HTTP error = %v", err)
+	}
+}
+
 func TestExtensionEndpointVerificationRejectsMixedPublicAndPrivateResolution(t *testing.T) {
 	_, err := verifyExtensionEndpointsWithNetwork(context.Background(), func(context.Context, string, string) ([]net.IP, error) {
 		return []net.IP{net.ParseIP("93.184.216.34"), net.ParseIP("127.0.0.1")}, nil

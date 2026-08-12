@@ -101,6 +101,12 @@ whenever dependencies change or the web job fails before it starts.
   surfaces expose redacted payloads, attempts, retry, replay, and dead letters;
   duplicate source events are idempotent and inactive, unsubscribed, or
   resource-inaccessible installations receive no delivery.
+  Local sample endpoint verification is available only when
+  `$EXTENSION_DEVELOPMENT_ENDPOINTS=1`, and then only for HTTP loopback hosts;
+  production/default verification remains HTTPS and public-address-only. The
+  connected extension browser journey covers signed pull delivery, replay,
+  revision-bound annotations/artifacts/actions, renewed capability consent,
+  ordinary review/merge, and uninstall with retained evidence.
   Installation owners mint short-lived `extensions:contribute` credentials
   derived from the exact installation. Extensions publish append-only,
   attributed pull evidence at the current revision with idempotency, scope,
