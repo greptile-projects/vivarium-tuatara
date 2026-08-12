@@ -32,11 +32,11 @@ func TestMaintainerPublishesReviewedDocumentationAndHealthTracksSource(t *testin
 	commit := writeTestCommit(t, gr, tree, nil, 1, "review docs")
 	_ = gr.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(commit)})
 	_ = gr.CreateReference(storage.Reference{Name: "refs/heads/docs", Target: string(commit)})
-	body := `{"expected_version":0,"collection":{"name":"User guide","description":"Reviewed guidance","root_path":"guide.md","source_ref":"docs","audience":"public","owners":[{"actor_id":"` + owner.User.ID + `","role":"maintainer"}],"supported_versions":[{"label":"next","source_ref":"docs"}],"rendering":{"format":"markdown","syntax_highlighting":true,"table_of_contents":true},"publication_policy":{"review_required":true,"source_branch":"docs","publish_on_merge":true}}}`
+	body := `{"expected_version":0,"collection":{"name":"User guide","description":"Reviewed guidance","root_path":"guide.md","source_ref":"docs","audience":"public","owners":[{"actor_id":"` + owner.User.ID + `","role":"maintainer"}],"supported_versions":[{"label":"next","source_ref":"docs"},{"label":"stable","source_ref":"main"}],"rendering":{"format":"markdown","syntax_highlighting":true,"table_of_contents":true},"publication_policy":{"review_required":true,"source_branch":"docs","publish_on_merge":true}}}`
 	response := authenticatedRequest(t, http.MethodPut, server.URL+"/repositories/"+repository.ID+"/documentation/new", body, owner.Credential.Token, http.StatusCreated)
 	var published docscollections.Revision
 	decodeResponse(t, response, &published)
-	if published.SourceRevision != string(commit) || published.SupportedVersions[0].Revision != string(commit) || len(published.Pages) != 1 || published.Pages[0].Authors[0] != "Test" || published.Pages[0].Status != "current" {
+	if published.SourceRevision != string(commit) || published.SupportedVersions[0].Revision != string(commit) || published.SupportedVersions[1].Revision != string(commit) || len(published.Pages) != 1 || published.Pages[0].Authors[0] != "Test" || published.Pages[0].Status != "current" {
 		t.Fatalf("published = %#v", published)
 	}
 	public := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/documentation/"+published.CollectionID, "", owner.Credential.Token, http.StatusOK)
@@ -52,6 +52,7 @@ func TestMaintainerPublishesReviewedDocumentationAndHealthTracksSource(t *testin
 	newTree := writeTestTree(t, gr, testTreeEntry{mode: "100644", name: "guide.md", id: newBlob})
 	next := writeTestCommit(t, gr, newTree, []storage.ObjectID{commit}, 2, "change docs")
 	_ = gr.UpdateReference(storage.Reference{Name: "refs/heads/docs", Target: string(next)})
+	_ = gr.UpdateReference(storage.Reference{Name: "refs/heads/main", Target: string(next)})
 	stale := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/documentation/"+published.CollectionID, "", owner.Credential.Token, http.StatusOK)
 	decodeResponse(t, stale, &projection)
 	codes := []string{}

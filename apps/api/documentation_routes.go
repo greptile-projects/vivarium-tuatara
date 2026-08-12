@@ -242,8 +242,17 @@ func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *
 		input.Collection.SourceRevision = ref.Target
 		for i := range input.Collection.SupportedVersions {
 			mapping := &input.Collection.SupportedVersions[i]
-			if mapping.ReleaseID == "" && mapping.SourceRef == sourceRef && mapping.Revision == "" {
-				mapping.Revision = ref.Target
+			if mapping.ReleaseID == "" && mapping.Revision == "" {
+				mappingRef, mappingErr := gr.ReadReference("refs/heads/" + mapping.SourceRef)
+				if mappingErr != nil {
+					writeAPIError(w, 422, "invalid_documentation_version_source", "supported version source ref does not exist")
+					return
+				}
+				if _, mappingErr = gr.ReadCommit(storage.ObjectID(mappingRef.Target)); mappingErr != nil {
+					writeAPIError(w, 422, "invalid_documentation_version_source", "supported version source revision is unreadable")
+					return
+				}
+				mapping.Revision = mappingRef.Target
 			}
 		}
 		input.Collection.Pages = pages
