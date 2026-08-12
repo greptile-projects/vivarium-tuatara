@@ -111,23 +111,24 @@ type Standing struct {
 // Resource authority is referenced, never minted here; its owning subsystem must
 // approve and revoke the corresponding access independently.
 type ContinuityAction struct {
-	ID                   string          `json:"id"`
-	CharterVersion       int             `json:"charter_version"`
-	Kind                 string          `json:"kind"`
-	Role                 string          `json:"role"`
-	FromStandingID       string          `json:"from_standing_id,omitempty"`
-	ToStandingID         string          `json:"to_standing_id,omitempty"`
-	GovernanceProposalID string          `json:"governance_proposal_id"`
-	Reason               string          `json:"reason"`
-	Resources            []string        `json:"resources"`
-	Status               string          `json:"status"`
-	ExpiresAt            time.Time       `json:"expires_at"`
-	ReviewAt             time.Time       `json:"review_at"`
-	CreatedBy            string          `json:"created_by"`
-	CreatedAt            time.Time       `json:"created_at"`
-	ResolvedBy           string          `json:"resolved_by,omitempty"`
-	ResolvedAt           *time.Time      `json:"resolved_at,omitempty"`
-	Events               []StandingEvent `json:"events"`
+	ID                    string          `json:"id"`
+	CharterVersion        int             `json:"charter_version"`
+	Kind                  string          `json:"kind"`
+	Role                  string          `json:"role"`
+	FromStandingID        string          `json:"from_standing_id,omitempty"`
+	ToStandingID          string          `json:"to_standing_id,omitempty"`
+	GovernanceProposalID  string          `json:"governance_proposal_id"`
+	GovernanceTallySHA256 string          `json:"governance_tally_sha256"`
+	Reason                string          `json:"reason"`
+	Resources             []string        `json:"resources"`
+	Status                string          `json:"status"`
+	ExpiresAt             time.Time       `json:"expires_at"`
+	ReviewAt              time.Time       `json:"review_at"`
+	CreatedBy             string          `json:"created_by"`
+	CreatedAt             time.Time       `json:"created_at"`
+	ResolvedBy            string          `json:"resolved_by,omitempty"`
+	ResolvedAt            *time.Time      `json:"resolved_at,omitempty"`
+	Events                []StandingEvent `json:"events"`
 }
 type Record struct {
 	ScopeType     string             `json:"scope_type"`
@@ -155,7 +156,7 @@ func (s *Store) CreateContinuity(kind, id, actor string, expected, version int, 
 	now := s.now().UTC()
 	if len(r.Continuity) != expected || version != r.ActiveVersion || version < 1 ||
 		!map[string]bool{"nomination": true, "election": true, "recall": true, "succession": true, "emergency": true}[in.Kind] ||
-		strings.TrimSpace(in.Role) == "" || strings.TrimSpace(in.GovernanceProposalID) == "" || strings.TrimSpace(in.Reason) == "" || len(in.Resources) == 0 ||
+		strings.TrimSpace(in.Role) == "" || strings.TrimSpace(in.GovernanceProposalID) == "" || strings.TrimSpace(in.GovernanceTallySHA256) == "" || strings.TrimSpace(in.Reason) == "" || len(in.Resources) == 0 ||
 		!in.ExpiresAt.After(now) || !in.ReviewAt.After(now) || in.ReviewAt.After(in.ExpiresAt) {
 		return r, ErrInvalid
 	}
@@ -170,7 +171,7 @@ func (s *Store) CreateContinuity(kind, id, actor string, expected, version int, 
 			return false
 		}
 		for _, st := range r.Standings {
-			if st.ID == sid && st.CharterVersion == version && st.ExpiresAt.After(now) {
+			if st.ID == sid && st.CharterVersion == version && st.ExpiresAt.After(now) && st.Status == "active" && st.Role == in.Role {
 				return true
 			}
 		}
@@ -234,7 +235,7 @@ func (s *Store) ActOnContinuity(kind, id, actionID, actor, action, reason string
 				next = x.Status
 			}
 		}
-		if next == "" || (!x.ExpiresAt.After(now) && action != "relinquish") {
+		if next == "" || ((!x.ExpiresAt.After(now) || !x.ReviewAt.After(now)) && action != "relinquish") {
 			return r, ErrConflict
 		}
 		x.Status = next

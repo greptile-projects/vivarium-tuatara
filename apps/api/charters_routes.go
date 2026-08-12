@@ -8,6 +8,7 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/charters"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/governance"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 )
@@ -35,7 +36,7 @@ type charterContinuityView struct {
 	AuthorityNote   string `json:"authority_note"`
 }
 
-func registerCharterRoutes(mux *http.ServeMux, store *charters.Store, repos *repositories.Store, orgs *organizations.Store, credentials *auth.Store) {
+func registerCharterRoutes(mux *http.ServeMux, store *charters.Store, governed *governance.Store, repos *repositories.Store, orgs *organizations.Store, credentials *auth.Store) {
 	authorize := func(w http.ResponseWriter, r *http.Request, kind, id, scope string, write bool) (auth.Credential, bool) {
 		if kind == "repository" {
 			if !write {
@@ -246,6 +247,20 @@ func registerCharterRoutes(mux *http.ServeMux, store *charters.Store, repos *rep
 		}
 		return out
 	}
+	verifyGovernance := func(scopeType, scopeID string, version int, action *charters.ContinuityAction) bool {
+		if governed == nil {
+			return false
+		}
+		proposal, err := governed.Get(action.GovernanceProposalID)
+		if err != nil || proposal.ScopeType != scopeType || proposal.ScopeID != scopeID || proposal.CharterVersion != version || proposal.Tally == nil || proposal.Tally.Status != "accepted" || proposal.Tally.Contested || proposal.Tally.Result == "" {
+			return false
+		}
+		if action.GovernanceTallySHA256 != "" && action.GovernanceTallySHA256 != proposal.Tally.VerificationSHA256 {
+			return false
+		}
+		action.GovernanceTallySHA256 = proposal.Tally.VerificationSHA256
+		return action.GovernanceTallySHA256 != ""
+	}
 	for _, kind := range []string{"repository", "organization"} {
 		prefix := "/repositories/{id}/charter"
 		if kind == "organization" {
@@ -441,6 +456,10 @@ func registerCharterRoutes(mux *http.ServeMux, store *charters.Store, repos *rep
 				writeAPIError(w, 400, "invalid_continuity", "continuity action is required")
 				return
 			}
+			if !verifyGovernance(kind, r.PathValue("id"), in.CharterVersion, &in.Action) {
+				writeAPIError(w, 422, "invalid_governance_result", "continuity requires an accepted, uncontested result for this active charter revision")
+				return
+			}
 			record, err := store.CreateContinuity(kind, r.PathValue("id"), actor.UserID, in.ExpectedVersion, in.CharterVersion, in.Action)
 			if !writeCharterError(w, err) {
 				writeJSON(w, 201, map[string]any{"charter": record, "continuity": continuityViews(record)})
@@ -458,6 +477,24 @@ func registerCharterRoutes(mux *http.ServeMux, store *charters.Store, repos *rep
 			if decodeJSON(r, &in) != nil {
 				writeAPIError(w, 400, "invalid_continuity_action", "action and reason are required")
 				return
+			}
+			if in.Action == "approve" {
+				record, err := store.Get(kind, r.PathValue("id"))
+				if err != nil {
+					writeCharterError(w, err)
+					return
+				}
+				var continuity *charters.ContinuityAction
+				for i := range record.Continuity {
+					if record.Continuity[i].ID == r.PathValue("actionID") {
+						continuity = &record.Continuity[i]
+						break
+					}
+				}
+				if continuity == nil || !verifyGovernance(kind, r.PathValue("id"), continuity.CharterVersion, continuity) {
+					writeAPIError(w, 409, "governance_result_changed", "the governed result is unavailable or no longer matches this continuity action")
+					return
+				}
 			}
 			record, err := store.ActOnContinuity(kind, r.PathValue("id"), r.PathValue("actionID"), actor.UserID, in.Action, in.Reason)
 			if !writeCharterError(w, err) {

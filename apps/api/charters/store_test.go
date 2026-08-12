@@ -293,7 +293,7 @@ func TestContinuityIsGovernedBoundedAndAuditable(t *testing.T) {
 	newID := r.Standings[1].ID
 	_, _ = s.ActOnStanding("repository", "repo1", oldID, "old", "accept", "accept", "")
 	_, _ = s.ActOnStanding("repository", "repo1", newID, "new", "accept", "accept", "")
-	in := ContinuityAction{Kind: "succession", Role: "maintainer", FromStandingID: oldID, ToStandingID: newID, GovernanceProposalID: "vote-1", Reason: "elected successor", Resources: []string{"branch:main"}, ReviewAt: now.Add(time.Hour), ExpiresAt: now.Add(2 * time.Hour)}
+	in := ContinuityAction{Kind: "succession", Role: "maintainer", FromStandingID: oldID, ToStandingID: newID, GovernanceProposalID: "vote-1", GovernanceTallySHA256: "tally-1", Reason: "elected successor", Resources: []string{"branch:main"}, ReviewAt: now.Add(time.Hour), ExpiresAt: now.Add(2 * time.Hour)}
 	r, err = s.CreateContinuity("repository", "repo1", "owner", 0, 1, in)
 	if err != nil {
 		t.Fatal(err)
@@ -318,9 +318,33 @@ func TestContinuityRejectsUnboundedOrUndeclaredRecovery(t *testing.T) {
 	_, _ = s.Publish("repository", "repo1", "owner", 0, validRevision())
 	_, _ = s.Approve("repository", "repo1", "owner", 1, "approved", "adopt")
 	_, _ = s.Activate("repository", "repo1", "owner", 1)
-	for _, in := range []ContinuityAction{{Kind: "emergency", Role: "maintainer", GovernanceProposalID: "p", Reason: "deadlock", Resources: []string{"branch:other"}, ReviewAt: now.Add(time.Hour), ExpiresAt: now.Add(2 * time.Hour)}, {Kind: "emergency", Role: "maintainer", GovernanceProposalID: "p", Reason: "deadlock", Resources: []string{"branch:main"}, ReviewAt: now.Add(3 * time.Hour), ExpiresAt: now.Add(2 * time.Hour)}} {
+	for _, in := range []ContinuityAction{{Kind: "emergency", Role: "maintainer", GovernanceProposalID: "p", GovernanceTallySHA256: "t", Reason: "deadlock", Resources: []string{"branch:other"}, ReviewAt: now.Add(time.Hour), ExpiresAt: now.Add(2 * time.Hour)}, {Kind: "emergency", Role: "maintainer", GovernanceProposalID: "p", GovernanceTallySHA256: "t", Reason: "deadlock", Resources: []string{"branch:main"}, ReviewAt: now.Add(3 * time.Hour), ExpiresAt: now.Add(2 * time.Hour)}} {
 		if _, err := s.CreateContinuity("repository", "repo1", "owner", 0, 1, in); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("create=%v", err)
 		}
+	}
+}
+
+func TestContinuityRequiresActiveMatchingRoleAndStopsAtReview(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	_, _ = s.Publish("repository", "repo1", "owner", 0, validRevision())
+	_, _ = s.Approve("repository", "repo1", "owner", 1, "approved", "adopt")
+	_, _ = s.Activate("repository", "repo1", "owner", 1)
+	r, _ := s.Invite("repository", "repo1", "owner", 0, 1, "human", "person", "maintainer", "Steward", []Evidence{{Kind: "review", ResourceID: "r", Summary: "s"}}, now.Add(4*time.Hour))
+	sid := r.Standings[0].ID
+	in := ContinuityAction{Kind: "election", Role: "maintainer", ToStandingID: sid, GovernanceProposalID: "p", GovernanceTallySHA256: "t", Reason: "vote", Resources: []string{"branch:main"}, ReviewAt: now.Add(time.Hour), ExpiresAt: now.Add(3 * time.Hour)}
+	if _, err := s.CreateContinuity("repository", "repo1", "owner", 0, 1, in); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invited endpoint=%v", err)
+	}
+	_, _ = s.ActOnStanding("repository", "repo1", sid, "person", "accept", "accept", "")
+	r, err := s.CreateContinuity("repository", "repo1", "owner", 0, 1, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Hour)
+	if _, err = s.ActOnContinuity("repository", "repo1", r.Continuity[0].ID, "owner", "approve", "late"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("late approval=%v", err)
 	}
 }

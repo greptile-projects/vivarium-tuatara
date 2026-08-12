@@ -74,6 +74,7 @@ export type CharterContinuity = {
   from_standing_id?: string;
   to_standing_id?: string;
   governance_proposal_id: string;
+  governance_tally_sha256: string;
   reason: string;
   resources: string[];
   status: string;
