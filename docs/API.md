@@ -678,6 +678,20 @@ and `target_branch`, freezes both tips, and negotiates a signed idempotent
 proposal. Trust, target movement, divergence, signature, and transfer failures
 use explicit `federated_*` errors and publish no partial refs or credentials.
 
+Federated pull activity is read at `GET
+/repositories/{id}/pulls/{pull-id}/federation-events`. Current target-repository
+participants publish a bounded event with `POST` to the same path. Supported
+`kind` values are `comment`, `review`, `revision`, `checks`, `preview`, and
+`closure`; revision-bound events default to the pull's exact adopted source
+commit. The instance signs the immutable event, retains it locally, and sends it
+to `POST /federation/contributions/{contribution-id}/events`. A successful
+duplicate is idempotent, different content under the same origin/event identity
+is `409 federated_event_conflict`, and an unavailable peer returns `202` with
+`Vivarium-Federation-Delivery: pending`. Reads retain `actor`,
+`origin_instance_id`, `verification`, signature metadata, and derived `stale`.
+Imported evidence never counts as a local required check, review identity,
+credential, or merge permission.
+
 Owners manage limited access with `GET` and `POST
 /repositories/{id}/collaborators` and `DELETE
 /repositories/{id}/collaborators/{user_id}`. A grant request contains an

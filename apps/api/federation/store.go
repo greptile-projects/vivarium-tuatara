@@ -164,6 +164,270 @@ type Store struct {
 	now                   func() time.Time
 }
 
+// CollaborationEvent is an immutable, signed cross-instance claim about one
+// federated contribution. Imported claims retain their remote actor and
+// verification boundary; they are never converted into local users or grants.
+type CollaborationEvent struct {
+	ID               string          `json:"id"`
+	ContributionID   string          `json:"contribution_id"`
+	Sequence         int64           `json:"sequence"`
+	Kind             string          `json:"kind"`
+	Actor            string          `json:"actor"`
+	Revision         string          `json:"revision,omitempty"`
+	Body             string          `json:"body,omitempty"`
+	Decision         string          `json:"decision,omitempty"`
+	State            string          `json:"state,omitempty"`
+	Evidence         json.RawMessage `json:"evidence,omitempty"`
+	CreatedAt        time.Time       `json:"created_at"`
+	OriginInstanceID string          `json:"origin_instance_id"`
+	DocumentVersion  int             `json:"document_version"`
+	SigningKeyID     string          `json:"signing_key_id"`
+	Signature        string          `json:"signature"`
+	Verification     string          `json:"verification"`
+	Stale            bool            `json:"stale"`
+}
+
+func validCollaborationEvent(v CollaborationEvent) bool {
+	if !validOpaqueID(v.ID) || !validOpaqueID(v.ContributionID) || v.Sequence < 1 || v.Actor == "" || !validInstanceID(v.OriginInstanceID) || v.CreatedAt.IsZero() {
+		return false
+	}
+	switch v.Kind {
+	case "comment", "review", "revision", "checks", "preview", "closure":
+	default:
+		return false
+	}
+	if len(v.Body) > 20000 || len(v.Evidence) > 256<<10 {
+		return false
+	}
+	if v.Kind == "comment" && strings.TrimSpace(v.Body) == "" {
+		return false
+	}
+	if v.Kind == "review" && v.Decision != "approved" && v.Decision != "changes_requested" && v.Decision != "withdrawn" {
+		return false
+	}
+	if (v.Kind == "revision" || v.Kind == "review" || v.Kind == "checks" || v.Kind == "preview") && len(v.Revision) != 40 {
+		return false
+	}
+	if v.Kind == "closure" && v.State != "open" && v.State != "closed" {
+		return false
+	}
+	return true
+}
+
+func validOpaqueID(v string) bool {
+	if len(v) < 1 || len(v) > 128 {
+		return false
+	}
+	for _, r := range v {
+		if !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') && r != '-' && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+type ContributionAuthority struct {
+	ContributionID string   `json:"contribution_id"`
+	InstanceIDs    []string `json:"instance_ids"`
+}
+
+func (s *Store) BindContribution(id string, instances ...string) error {
+	if !validOpaqueID(id) {
+		return ErrInvalid
+	}
+	for _, v := range instances {
+		if !validInstanceID(v) {
+			return ErrInvalid
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	path := filepath.Join(s.root, "contribution-authority", id+".json")
+	existing := ContributionAuthority{ContributionID: id}
+	if raw, e := os.ReadFile(path); e == nil {
+		if json.Unmarshal(raw, &existing) != nil {
+			return ErrInvalid
+		}
+	} else if !errors.Is(e, os.ErrNotExist) {
+		return e
+	}
+	seen := map[string]bool{}
+	for _, v := range existing.InstanceIDs {
+		seen[v] = true
+	}
+	for _, v := range instances {
+		if !seen[v] {
+			existing.InstanceIDs = append(existing.InstanceIDs, v)
+			seen[v] = true
+		}
+	}
+	sort.Strings(existing.InstanceIDs)
+	return writeJSON(path, existing)
+}
+
+func (s *Store) ContributionAllows(id, instance string) bool {
+	if !validOpaqueID(id) || !validInstanceID(instance) {
+		return false
+	}
+	raw, err := os.ReadFile(filepath.Join(s.root, "contribution-authority", id+".json"))
+	if err != nil {
+		return false
+	}
+	var v ContributionAuthority
+	if json.Unmarshal(raw, &v) != nil {
+		return false
+	}
+	for _, candidate := range v.InstanceIDs {
+		if candidate == instance {
+			return true
+		}
+	}
+	return false
+}
+
+type CollaborationDelivery struct {
+	PeerID    string             `json:"peer_id"`
+	Event     CollaborationEvent `json:"event"`
+	Attempts  int                `json:"attempts"`
+	LastError string             `json:"last_error,omitempty"`
+	UpdatedAt time.Time          `json:"updated_at"`
+}
+
+func (s *Store) RetainCollaborationDelivery(peer string, event CollaborationEvent, failure string) error {
+	if !validInstanceID(peer) || !validCollaborationEvent(event) {
+		return ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	path := filepath.Join(s.root, "collaboration-outbox", peer+"-"+event.ID+".json")
+	v := CollaborationDelivery{PeerID: peer, Event: event}
+	if raw, e := os.ReadFile(path); e == nil {
+		if json.Unmarshal(raw, &v) != nil {
+			return ErrInvalid
+		}
+	} else if !errors.Is(e, os.ErrNotExist) {
+		return e
+	}
+	v.Attempts++
+	v.LastError = failure
+	v.UpdatedAt = s.now().UTC().Truncate(time.Microsecond)
+	return writeJSON(path, v)
+}
+func (s *Store) PendingCollaborationDeliveries() ([]CollaborationDelivery, error) {
+	entries, err := os.ReadDir(filepath.Join(s.root, "collaboration-outbox"))
+	if errors.Is(err, os.ErrNotExist) {
+		return []CollaborationDelivery{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := []CollaborationDelivery{}
+	for _, e := range entries {
+		raw, x := os.ReadFile(filepath.Join(s.root, "collaboration-outbox", e.Name()))
+		if x != nil {
+			return nil, x
+		}
+		var v CollaborationDelivery
+		if json.Unmarshal(raw, &v) != nil {
+			return nil, ErrInvalid
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+func (s *Store) CompleteCollaborationDelivery(peer, event string) error {
+	if !validInstanceID(peer) || !validOpaqueID(event) {
+		return ErrInvalid
+	}
+	err := os.Remove(filepath.Join(s.root, "collaboration-outbox", peer+"-"+event+".json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+// AppendCollaborationEvent idempotently retains a verified event. The same
+// origin/ID may be retried only with byte-for-byte identical signed content.
+func (s *Store) AppendCollaborationEvent(v CollaborationEvent) (CollaborationEvent, error) {
+	if !validCollaborationEvent(v) {
+		return CollaborationEvent{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return CollaborationEvent{}, err
+	}
+	defer unlock()
+	dir := filepath.Join(s.root, "collaboration", v.ContributionID)
+	if err = os.MkdirAll(dir, 0o700); err != nil {
+		return CollaborationEvent{}, err
+	}
+	path := filepath.Join(dir, v.OriginInstanceID+"-"+v.ID+".json")
+	if raw, readErr := os.ReadFile(path); readErr == nil {
+		var prior CollaborationEvent
+		if json.Unmarshal(raw, &prior) != nil {
+			return CollaborationEvent{}, ErrInvalid
+		}
+		a, _ := json.Marshal(prior)
+		b, _ := json.Marshal(v)
+		if string(a) != string(b) {
+			return CollaborationEvent{}, ErrConflict
+		}
+		return prior, nil
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		return CollaborationEvent{}, readErr
+	}
+	if err = writeJSON(path, v); err != nil {
+		return CollaborationEvent{}, err
+	}
+	return v, nil
+}
+
+func (s *Store) ListCollaborationEvents(contributionID, currentRevision string) ([]CollaborationEvent, error) {
+	dir := filepath.Join(s.root, "collaboration", contributionID)
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return []CollaborationEvent{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := []CollaborationEvent{}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		raw, e := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if e != nil {
+			return nil, e
+		}
+		var v CollaborationEvent
+		if json.Unmarshal(raw, &v) != nil || !validCollaborationEvent(v) {
+			return nil, ErrInvalid
+		}
+		v.Stale = v.Revision != "" && currentRevision != "" && v.Revision != currentRevision
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
 func New(root, name, publicURL string, operators []string) (*Store, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, fmt.Errorf("federation storage root is empty")

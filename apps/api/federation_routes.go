@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -39,6 +40,17 @@ const maxFederatedContributionEnvelopeBytes = (maxFederatedRepositoryResponseByt
 type boundedBuffer struct {
 	bytes.Buffer
 	limit int
+}
+
+type signedCollaborationEvent struct {
+	Event federation.CollaborationEvent `json:"event"`
+}
+
+func collaborationEventBytes(v federation.CollaborationEvent) []byte {
+	v.Signature, v.Verification, v.SigningKeyID = "", "", ""
+	v.DocumentVersion = 0
+	b, _ := json.Marshal(v)
+	return b
 }
 
 func (w *boundedBuffer) Write(p []byte) (int, error) {
@@ -502,6 +514,10 @@ func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userS
 			writeAPIError(w, 422, "federated_proposal_failed", err.Error())
 			return
 		}
+		if err = store.BindContribution(payload.ID, document.InstanceID, cache.PeerID); err != nil {
+			writeAPIError(w, 503, "federation_unavailable", "contribution authority could not be retained")
+			return
+		}
 		writeJSON(w, 201, response)
 	})
 	mux.HandleFunc("POST /federation/contributions", func(w http.ResponseWriter, r *http.Request) {
@@ -545,7 +561,119 @@ func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userS
 		if writePullRequestError(w, err) {
 			return
 		}
+		document, _ := store.Identity()
+		if err = store.BindContribution(in.Payload.ID, in.Payload.SourceInstanceID, document.InstanceID); err != nil {
+			writeAPIError(w, 503, "federation_unavailable", "contribution authority could not be retained")
+			return
+		}
 		writeJSON(w, 201, pull)
+	})
+	// Peer delivery accepts only signed immutable collaboration claims. The
+	// receiving instance decides what it may retain and never treats the actor
+	// string as a local principal.
+	mux.HandleFunc("POST /federation/contributions/{contribution}/events", func(w http.ResponseWriter, r *http.Request) {
+		var in signedCollaborationEvent
+		if decodeJSONLimit(r, &in, 300<<10) != nil || in.Event.ContributionID != r.PathValue("contribution") {
+			writeAPIError(w, 400, "invalid_federated_event", "invalid collaboration event")
+			return
+		}
+		peer, err := store.Get(in.Event.OriginInstanceID)
+		if err != nil || peer.Status != "trusted" || !contains(peer.Document.Capabilities, "repository-contribution.v1") {
+			writeAPIError(w, 403, "federated_source_untrusted", "event origin is not trusted")
+			return
+		}
+		if !store.ContributionAllows(in.Event.ContributionID, in.Event.OriginInstanceID) {
+			writeAPIError(w, 403, "federated_contribution_forbidden", "event origin is not authorized for this contribution")
+			return
+		}
+		if federation.VerifyPayload(collaborationEventBytes(in.Event), in.Event.DocumentVersion, in.Event.SigningKeyID, in.Event.Signature, peer.Document) != nil {
+			writeAPIError(w, 422, "invalid_federated_signature", "collaboration event signature is invalid")
+			return
+		}
+		in.Event.Verification = "verified"
+		retained, err := store.AppendCollaborationEvent(in.Event)
+		if errors.Is(err, federation.ErrConflict) {
+			writeAPIError(w, 409, "federated_event_conflict", "event id was already used for different content")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 422, "invalid_federated_event", "event could not be retained")
+			return
+		}
+		writeJSON(w, 201, retained)
+	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull}/federation-events", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoryStore, credentials, r.PathValue("id")); !ok {
+			return
+		}
+		pull, err := pullStore.Get(r.PathValue("id"), r.PathValue("pull"))
+		if err != nil || pull.FederatedContributionID == "" {
+			writeAPIError(w, 404, "federated_contribution_not_found", "federated contribution not found")
+			return
+		}
+		items, err := store.ListCollaborationEvents(pull.FederatedContributionID, pull.SourceCommitID)
+		if err != nil {
+			writeAPIError(w, 503, "federated_collaboration_unavailable", "collaboration history is unavailable")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"events": items})
+	})
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull}/federation-events", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repositoryStore, credentials, r.PathValue("id"), "repositories:read")
+		if !ok {
+			return
+		}
+		pull, err := pullStore.Get(r.PathValue("id"), r.PathValue("pull"))
+		if err != nil || pull.FederatedContributionID == "" {
+			writeAPIError(w, 404, "federated_contribution_not_found", "federated contribution not found")
+			return
+		}
+		var in struct {
+			ID       string          `json:"id"`
+			Sequence int64           `json:"sequence"`
+			Kind     string          `json:"kind"`
+			Body     string          `json:"body"`
+			Decision string          `json:"decision"`
+			State    string          `json:"state"`
+			Revision string          `json:"revision"`
+			Evidence json.RawMessage `json:"evidence"`
+		}
+		if decodeJSONLimit(r, &in, 280<<10) != nil {
+			writeAPIError(w, 400, "invalid_federated_event", "invalid collaboration event")
+			return
+		}
+		document, _ := store.Identity()
+		if in.ID == "" {
+			b := make([]byte, 16)
+			_, _ = rand.Read(b)
+			in.ID = hex.EncodeToString(b)
+		}
+		if in.Sequence < 1 {
+			in.Sequence = time.Now().UTC().UnixMicro()
+		}
+		if in.Revision == "" && in.Kind != "comment" && in.Kind != "closure" {
+			in.Revision = pull.SourceCommitID
+		}
+		event := federation.CollaborationEvent{ID: in.ID, ContributionID: pull.FederatedContributionID, Sequence: in.Sequence, Kind: in.Kind, Actor: document.InstanceID + ":user:" + actor.UserID, Revision: in.Revision, Body: in.Body, Decision: in.Decision, State: in.State, Evidence: in.Evidence, CreatedAt: time.Now().UTC().Truncate(time.Microsecond), OriginInstanceID: document.InstanceID, Verification: "verified"}
+		version, key, signature, signErr := store.SignPayload(collaborationEventBytes(event))
+		if signErr != nil {
+			writeAPIError(w, 503, "federation_unavailable", "event could not be signed")
+			return
+		}
+		event.DocumentVersion, event.SigningKeyID, event.Signature = version, key, signature
+		if _, err = store.AppendCollaborationEvent(event); err != nil {
+			writeAPIError(w, 422, "invalid_federated_event", "event could not be retained")
+			return
+		}
+		peerID := strings.SplitN(pull.FederatedAuthor, ":", 2)[0]
+		if err = sendCollaborationEvent(store, peerID, event); err != nil {
+			_ = store.RetainCollaborationDelivery(peerID, event, err.Error())
+			w.Header().Set("Vivarium-Federation-Delivery", "pending")
+			writeJSON(w, 202, map[string]any{"event": event, "delivery": "pending", "error": err.Error()})
+			return
+		}
+		_ = store.CompleteCollaborationDelivery(peerID, event.ID)
+		writeJSON(w, 201, event)
 	})
 	mux.HandleFunc("GET /federation/repositories/{peer}/{repository}", func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := authenticateRequest(w, r, credentials, "", false); !ok {
@@ -828,6 +956,68 @@ func sendContribution(store *federation.Store, peerID string, envelope signedCon
 		return nil, fmt.Errorf("peer returned invalid proposal response")
 	}
 	return result, nil
+}
+
+func sendCollaborationEvent(store *federation.Store, peerID string, event federation.CollaborationEvent) error {
+	peer, err := store.Get(peerID)
+	if err != nil || peer.Status != "trusted" {
+		return federation.ErrConflict
+	}
+	u, err := url.Parse(peer.DiscoveryURL)
+	if err != nil {
+		return err
+	}
+	u.Path = "/federation/contributions/" + url.PathEscape(event.ContributionID) + "/events"
+	u.RawQuery = ""
+	body, _ := json.Marshal(signedCollaborationEvent{Event: event})
+	transport := &http.Transport{Proxy: nil, DialContext: safeFederationDialer(u.Scheme == "http" && isLoopbackHost(u.Hostname()))}
+	client := &http.Client{Transport: transport, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Post(u.String(), "application/json", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 201 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return fmt.Errorf("peer rejected event (%s): %s", resp.Status, strings.TrimSpace(string(b)))
+	}
+	return nil
+}
+
+func recoverFederationDeliveries(store *federation.Store) error {
+	items, err := store.PendingCollaborationDeliveries()
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if err = sendCollaborationEvent(store, item.PeerID, item.Event); err != nil {
+			_ = store.RetainCollaborationDelivery(item.PeerID, item.Event, err.Error())
+			continue
+		}
+		if err = store.CompleteCollaborationDelivery(item.PeerID, item.Event.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func startFederationDeliveryRecovery(store *federation.Store) {
+	if store == nil {
+		return
+	}
+	recover := func() {
+		if err := recoverFederationDeliveries(store); err != nil {
+			log.Printf("recover federation deliveries: %v", err)
+		}
+	}
+	recover()
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			recover()
+		}
+	}()
 }
 
 func fetchFederationDocument(raw string) (federation.Document, error) {
