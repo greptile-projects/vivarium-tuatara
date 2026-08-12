@@ -46,6 +46,15 @@ func TestCharterOwnerStandingProjectionAdvertisesLifecycleActions(t *testing.T) 
 	if _, err = charterStore.ActOnStanding("repository", repository.ID, standingID, participant.User.ID, "accept", "Accept", ""); err != nil {
 		t.Fatal(err)
 	}
+	participantResponse := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repository.ID+"/charter/standing/"+standingID, "", participant.Credential.Token, http.StatusOK)
+	var participantView charterStandingView
+	if err := json.NewDecoder(participantResponse.Body).Decode(&participantView); err != nil {
+		t.Fatal(err)
+	}
+	participantResponse.Body.Close()
+	if !participantView.NominationAvailable || !sameStandingActions(participantView.AvailableActions, []string{"recuse"}) {
+		t.Fatalf("participant actions = %#v", participantView)
+	}
 	assertOwnerStandingActions(t, server.URL+"/repositories/"+repository.ID+"/charter", owner.Credential.Token, []string{"suspend", "revoke"})
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/charter/standing/"+standingID+"/actions", `{"action":"suspend","reason":"Review standing"}`, owner.Credential.Token, http.StatusOK).Body.Close()
 	assertOwnerStandingActions(t, server.URL+"/repositories/"+repository.ID+"/charter", owner.Credential.Token, []string{"reinstate", "revoke"})

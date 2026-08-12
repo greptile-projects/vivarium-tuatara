@@ -21,11 +21,12 @@ type charterPreview struct {
 }
 type charterStandingView struct {
 	charters.Standing
-	EffectiveStatus   string   `json:"effective_status"`
-	Eligibility       string   `json:"eligibility"`
-	AvailableActions  []string `json:"available_actions"`
-	OperationalAccess []string `json:"operational_access"`
-	AuthorityNote     string   `json:"authority_note"`
+	EffectiveStatus     string   `json:"effective_status"`
+	Eligibility         string   `json:"eligibility"`
+	AvailableActions    []string `json:"available_actions"`
+	NominationAvailable bool     `json:"nomination_available"`
+	OperationalAccess   []string `json:"operational_access"`
+	AuthorityNote       string   `json:"authority_note"`
 }
 
 func registerCharterRoutes(mux *http.ServeMux, store *charters.Store, repos *repositories.Store, orgs *organizations.Store, credentials *auth.Store) {
@@ -199,13 +200,14 @@ func registerCharterRoutes(mux *http.ServeMux, store *charters.Store, repos *rep
 				eligibility = "the ownership or membership evidence that established standing is no longer live"
 			}
 			actions := []string{}
+			nominationAvailable := false
 			if actorID == st.PrincipalID {
 				if st.Status == "invited" {
 					actions = []string{"accept", "decline"}
 				}
 				if effective == "active" {
 					actions = append(actions, "recuse")
-					actions = append(actions, "nominate")
+					nominationAvailable = true
 				}
 				if st.Status == "suspended" || st.Status == "revoked" {
 					actions = append(actions, "appeal")
@@ -222,7 +224,7 @@ func registerCharterRoutes(mux *http.ServeMux, store *charters.Store, repos *rep
 					actions = append(actions, "revoke")
 				}
 			}
-			out = append(out, charterStandingView{Standing: st, EffectiveStatus: effective, Eligibility: eligibility, AvailableActions: actions, OperationalAccess: access[st.PrincipalID], AuthorityNote: "Governance standing and votes grant no code, secret, merge, deployment, or credential authority."})
+			out = append(out, charterStandingView{Standing: st, EffectiveStatus: effective, Eligibility: eligibility, AvailableActions: actions, NominationAvailable: nominationAvailable, OperationalAccess: access[st.PrincipalID], AuthorityNote: "Governance standing and votes grant no code, secret, merge, deployment, or credential authority."})
 		}
 		return out
 	}
