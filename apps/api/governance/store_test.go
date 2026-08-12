@@ -23,7 +23,7 @@ func TestBallotsAreUniqueAndEligibilityChangesAtTally(t *testing.T) {
 	if _, e = s.Cast(p.ID, "a", "yes", "because", true, "live"); e != nil {
 		t.Fatal(e)
 	}
-	if _, e = s.Cast(p.ID, "a", "no", "again", true, "live"); !errors.Is(e, ErrConflict) {
+	if _, e = s.Cast(p.ID, "a", "no", "again", true, "live"); !errors.Is(e, ErrDuplicateBallot) {
 		t.Fatalf("duplicate=%v", e)
 	}
 	if _, e = s.Cast(p.ID, "b", "abstain", "", true, "live"); e != nil {
@@ -64,7 +64,7 @@ func TestConcurrentStoresAdmitOnlyOneBallot(t *testing.T) {
 	for e := range errs {
 		if e == nil {
 			success++
-		} else if errors.Is(e, ErrConflict) {
+		} else if errors.Is(e, ErrDuplicateBallot) {
 			conflict++
 		}
 	}
@@ -104,7 +104,7 @@ func TestFinalizedTallyCannotBeReplaced(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := *p.Tally
-	if _, err = s.Finalize(p.ID, "a", nil, []string{"replace result"}); !errors.Is(err, ErrConflict) {
+	if _, err = s.Finalize(p.ID, "a", nil, []string{"replace result"}); !errors.Is(err, ErrFinalized) {
 		t.Fatalf("second finalize = %v", err)
 	}
 	p, _ = s.Get(p.ID)

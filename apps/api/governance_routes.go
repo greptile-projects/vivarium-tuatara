@@ -54,32 +54,11 @@ func registerGovernanceRoutes(mux *http.ServeMux, votes *governance.Store, chart
 				}
 			}
 		}
-		if record, err := charterStore.Get(kind, scopeID); err == nil {
-			now := time.Now()
-			for user, userRoles := range roles {
-				eligibleRoles := userRoles[:0]
-				for _, role := range userRoles {
-					hasStanding, activeStanding := false, false
-					for _, standing := range record.Standings {
-						if standing.PrincipalType != "human" || standing.PrincipalID != user || standing.Role != role || standing.CharterVersion != revision.Version {
-							continue
-						}
-						hasStanding = true
-						if standing.Status == "active" && standing.ExpiresAt.After(now) {
-							activeStanding = true
-						}
-					}
-					if !hasStanding || activeStanding {
-						eligibleRoles = append(eligibleRoles, role)
-					}
-				}
-				if len(eligibleRoles) == 0 {
-					delete(roles, user)
-				} else {
-					roles[user] = eligibleRoles
-				}
-			}
+		record, err := charterStore.Get(kind, scopeID)
+		if err != nil {
+			return []governance.Elector{}
 		}
+		roles = activeGovernanceStandingRoles(record, revision.Version, roles, time.Now())
 		out := make([]governance.Elector, 0, len(roles))
 		for user, rs := range roles {
 			out = append(out, governance.Elector{UserID: user, Roles: rs, Eligible: true})
@@ -400,12 +379,31 @@ func governedProposalProjection(p governance.Proposal, actor string) governance.
 	return p
 }
 
+func activeGovernanceStandingRoles(record charters.Record, charterVersion int, roles map[string][]string, now time.Time) map[string][]string {
+	eligible := map[string][]string{}
+	for user, userRoles := range roles {
+		for _, role := range userRoles {
+			for _, standing := range record.Standings {
+				if standing.PrincipalType == "human" && standing.PrincipalID == user && standing.Role == role && standing.CharterVersion == charterVersion && standing.Status == "active" && standing.ExpiresAt.After(now) {
+					eligible[user] = append(eligible[user], role)
+					break
+				}
+			}
+		}
+	}
+	return eligible
+}
+
 func governanceError(w http.ResponseWriter, e error) {
 	switch {
 	case errors.Is(e, governance.ErrNotFound):
 		writeAPIError(w, 404, "governed_proposal_not_found", "governed proposal not found")
 	case errors.Is(e, governance.ErrConflict):
+		writeAPIError(w, 409, "governance_conflict", "the governance record changed")
+	case errors.Is(e, governance.ErrDuplicateBallot):
 		writeAPIError(w, 409, "duplicate_ballot", "this participant already cast a ballot")
+	case errors.Is(e, governance.ErrFinalized):
+		writeAPIError(w, 409, "tally_finalized", "the authoritative tally is already finalized")
 	case errors.Is(e, governance.ErrClosed):
 		writeAPIError(w, 409, "voting_closed", "the voting deadline does not admit this action")
 	case errors.Is(e, governance.ErrIneligible):

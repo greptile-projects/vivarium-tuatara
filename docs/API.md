@@ -6,7 +6,9 @@
 charter. It supplies the source, public scope, at least two alternatives, cited evidence,
 affected resources, disclosure requirements, implementation effects, and a `rule` naming the
 active decision class and voting window. The server freezes the active charter version and its
-authoritative eligible roles, quorum, and threshold; the opener must belong to that electorate.
+authoritative eligible roles, quorum, and threshold; the opener must hold active, unexpired
+standing for an eligible role under that exact revision. Repository or organization membership
+alone is not governance standing.
 
 `GET /governance/proposals` lists currently visible proposals and `GET
 /governance/proposals/{id}` returns one record. `POST .../{id}/analysis` appends required-citation

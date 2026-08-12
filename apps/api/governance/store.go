@@ -19,6 +19,8 @@ import (
 var ErrNotFound = errors.New("governed proposal not found")
 var ErrInvalid = errors.New("invalid governed proposal")
 var ErrConflict = errors.New("governed proposal changed")
+var ErrDuplicateBallot = errors.New("duplicate ballot")
+var ErrFinalized = errors.New("tally already finalized")
 var ErrClosed = errors.New("voting is closed")
 var ErrIneligible = errors.New("actor is not eligible")
 
@@ -198,7 +200,7 @@ func (s *Store) Cast(pid, actor, choice, reason string, eligible bool, eligibili
 		}
 		for _, b := range p.Ballots {
 			if b.ActorID == actor {
-				return ErrConflict
+				return ErrDuplicateBallot
 			}
 		}
 		sum := sha256.Sum256([]byte(p.ID + "\x00" + actor + "\x00" + choice + "\x00" + now.Format(time.RFC3339Nano)))
@@ -215,7 +217,7 @@ func (s *Store) Finalize(pid, actor string, current []Elector, contest []string)
 			return ErrClosed
 		}
 		if p.Status == "closed" || p.Tally != nil {
-			return ErrConflict
+			return ErrFinalized
 		}
 		live := map[string]bool{}
 		for _, e := range current {

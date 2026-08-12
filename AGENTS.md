@@ -267,8 +267,9 @@ whenever dependencies change or the web job fails before it starts.
   Approved agents may add cited analysis but never vote. Secret ballots reveal only each
   voter's own ballot/receipt plus aggregate results and a verification digest; other ballots and
   ballot audit events are omitted. Ballot reasons remain retained dissent, the first tally is
-  immutable, and suspended or otherwise non-active standing no longer satisfies its charter
-  role. `$GOVERNANCE_STORAGE_ROOT` defaults to `governance`.
+  immutable, and every elector must hold active, unexpired standing for the exact charter
+  revision and role; source membership alone never suffices. `$GOVERNANCE_STORAGE_ROOT`
+  defaults to `governance`.
   team maintainers request attributable expiring exceptions, whose approved
   projection retains both the baseline and adjusted effective value. Public
   directory reads omit organization-only structure, private-repository
