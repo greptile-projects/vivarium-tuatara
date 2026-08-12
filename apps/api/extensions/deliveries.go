@@ -73,6 +73,13 @@ type DeliveryInspection struct {
 }
 
 func (s *Store) DeliveryPublicKey() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, lockErr := s.lock()
+	if lockErr != nil {
+		return ""
+	}
+	defer unlock()
 	_, public, err := s.signingKey()
 	if err != nil {
 		return ""
@@ -177,7 +184,13 @@ func (s *Store) RecordDeliveryAttempt(installationID, id, status string, respons
 	}
 	d.Attempts = append(d.Attempts, DeliveryAttempt{Number: len(d.Attempts) + 1, Status: status, ResponseCode: response, Error: message, At: now})
 	d.Status = status
-	if status == "failed" && len(d.Attempts) >= 5 {
+	failedAttempts := 0
+	for _, attempt := range d.Attempts {
+		if attempt.Status == "failed" {
+			failedAttempts++
+		}
+	}
+	if status == "failed" && failedAttempts >= 5 {
 		d.Status = "dead_letter"
 	}
 	d.UpdatedAt = now
