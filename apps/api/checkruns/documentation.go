@@ -79,6 +79,13 @@ func ParseDocumentationConfig(data []byte, executedRevision string, readPath fun
 		}
 		for _, target := range check.Targets {
 			name := fmt.Sprintf("docs/%s [%s]", check.Name, target.Version)
+			// A repository configuration cannot contain the SHA of the commit
+			// that contains that configuration. Omission asks the server to
+			// freeze the exact candidate it actually archives and executes;
+			// an explicit revision remains a fail-closed assertion.
+			if target.Revision == "" {
+				target.Revision = executedRevision
+			}
 			if target.Version == "" || len(target.Version) > 40 || len(target.Revision) != 40 || target.Revision != executedRevision || !map[string]bool{"source": true, "package": true, "release": true}[target.Source] || seen[name] {
 				return DocumentationConfig{}, nil, errors.New("invalid documentation target")
 			}

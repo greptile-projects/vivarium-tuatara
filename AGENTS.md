@@ -411,6 +411,14 @@ whenever dependencies change or the web job fails before it starts.
   files, selectors, targets, and dependency digests; generated `docs/*` check
   names can be required through normal branch merge readiness, while changed
   declared paths invalidate only the checks whose evidence names them.
+  Matrix target revisions may be omitted so the server freezes the exact
+  candidate it archives and executes; an explicit revision must equal that
+  candidate. The connected living-documentation browser journey carries a
+  contributor-authored code-and-guide proposal through grounded agent evidence,
+  version checks, rendered review, ordinary merge and publication, then turns
+  an archived-release reader failure into a retained version-specific task,
+  repair pull, review, release, and corrected immutable publication. Playwright
+  isolates documentation records beneath `$DOCUMENTATION_STORAGE_ROOT`.
   Exact-revision code navigation at `/repositories/{id}/code` and
   `GET /repositories/{id}/code-navigation` performs bounded lexical search
   across supported source files, classifies definitions, references, callers,

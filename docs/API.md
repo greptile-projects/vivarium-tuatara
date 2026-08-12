@@ -7,8 +7,10 @@ Pull creation and synchronization read optional
 Its `checks` contain `name`, `collection_id`, bounded executor fields (`image`,
 `command`, optional working directory/environment/resources), non-empty
 `selectors`, `dependency_paths`, and `targets`. Each target has a display
-`version`, exact 40-character candidate `revision`, and `source` of `source`, `package`, or
-`release`. The API expands targets into normal check runs named
+`version`, optional exact 40-character candidate `revision`, and `source` of
+`source`, `package`, or `release`. When `revision` is omitted the API freezes
+the exact candidate it archives and executes; when supplied it must equal that
+candidate. The API expands targets into normal check runs named
 `docs/{name} [{version}]`; `definition.documentation` exposes collection,
 matrix target, selectors, dependency paths, and their deterministic SHA-256.
 Existing pull check event and artifact endpoints retain execution evidence, and

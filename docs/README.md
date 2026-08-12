@@ -47,6 +47,10 @@ differences as downloadable artifacts. Pull surfaces retain the logs, artifacts,
 target revision, selectors, and dependency digest. Generated names such as
 `docs/guide [v1.0.0]` can be selected by the existing target-branch required
 check policy, so documentation failures participate in normal merge readiness.
+Matrix targets may omit `revision`; the server then freezes the exact candidate
+commit it archives and executes. An explicitly supplied revision remains an
+assertion and must equal that candidate, avoiding an impossible requirement for
+a Git commit to contain its own SHA while preserving exact evidence.
 
 Pull requests can additionally freeze a documentation experience review at
 `/repositories/{id}/pulls/{pull-id}/documentation-review`. The review renders
@@ -75,6 +79,17 @@ page feedback, failed examples, search misses, and version mismatches to the
 exact publication with bounded evidence. Owners triage each retained signal
 once by linking an existing issue, proposal, or human/agent documentation task;
 triage grants no authority to the reporter.
+
+The connected living-documentation journey proves this as one governed loop:
+a contributor proposes behavior and guidance together, a grounded task-session
+agent retains exact command evidence, an owner reviews rendered pages and
+required version checks, and merge publishes an immutable revision. A reader
+then reports a failed instruction against the archived release; maintainers
+retain and reproduce that attributed outcome, link it to a release-frozen
+documentation task, and publish corrected version-specific guidance through a
+second ordinary pull, review, check, merge, and release. Playwright isolates
+documentation records beneath `$DOCUMENTATION_STORAGE_ROOT` with its other
+temporary API stores.
 
 ## Contributor pathways
 
