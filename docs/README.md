@@ -48,6 +48,16 @@ target revision, selectors, and dependency digest. Generated names such as
 `docs/guide [v1.0.0]` can be selected by the existing target-branch required
 check policy, so documentation failures participate in normal merge readiness.
 
+Pull requests can additionally freeze a documentation experience review at
+`/repositories/{id}/pulls/{pull-id}/documentation-review`. The review renders
+changed pages from the exact candidate commit, compares reader navigation with
+the target commit, joins retained documentation-check evidence, lists affected
+versions, and retains explicit gaps. Comments, change requests, bounded
+stakeholder feedback, and technical or audience decisions bind to a page
+content SHA-256 and review area. Synchronization makes only changed-page
+evidence stale. Expiring owner invitations scope non-participant access to
+named review areas and grant no repository or publication authority.
+
 Changing a declared dependency changes only the evidence digest and runs for
 checks that name it. A target must always carry the exact 40-character
 candidate Git revision that is archived and executed, including when its label

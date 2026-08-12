@@ -2240,6 +2240,15 @@ export type PullRequestReview = {
   created_at: string;
   updated_at: string;
 };
+export type DocumentationPullReview = {
+  repository_id:string; pull_request_id:string; revision:string; base_revision:string; root_path:string;
+  pages:{path:string;slug:string;title:string;source_sha256:string;rendered_html:string;status:"current"|"stale"}[];
+  navigation_changes:{kind:string;path:string;before?:string;after?:string}[];
+  verified_examples:{run_id:string;name:string;state:string;version:string;revision:string;selectors:string[];artifact_ids?:string[]}[];
+  affected_versions:string[]; gaps:{id:string;path?:string;area:string;detail:string;identified_by:string}[];
+  entries:{id:string;kind:string;path:string;area:string;body:string;actor_id:string;stale:boolean}[];
+  decisions:{id:string;path:string;area:string;outcome:string;body?:string;actor_id:string;stale:boolean}[];
+};
 export type PullRequestBranchState = {
   branch: string;
   snapshot_commit_id: string;
