@@ -131,6 +131,40 @@ func (s *Store) SavePullReview(v PullReview) (PullReview, error) {
 	}
 	return v, nil
 }
+
+// CreatePullReview publishes the first review for a pull atomically across
+// Store instances and API processes. Callers must not use a separate read as
+// an existence guard because that would permit two successful creators.
+func (s *Store) CreatePullReview(v PullReview) (PullReview, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !validID(v.RepositoryID) || !validID(v.PullRequestID) || len(v.Revision) != 40 || len(v.BaseRevision) != 40 {
+		return v, ErrInvalid
+	}
+	unlock, err := s.lock()
+	if err != nil {
+		return v, err
+	}
+	defer unlock()
+	name := s.reviewPath(v.RepositoryID, v.PullRequestID)
+	if _, err = os.Stat(name); err == nil {
+		return v, ErrConflict
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return v, err
+	}
+	now := s.now().UTC()
+	if v.CreatedAt.IsZero() {
+		v.CreatedAt = now
+	}
+	v.UpdatedAt = now
+	if err = os.MkdirAll(filepath.Dir(name), 0700); err != nil {
+		return v, err
+	}
+	if err = writeJSON(name, v); err != nil {
+		return v, err
+	}
+	return v, nil
+}
 func (s *Store) UpdatePullReview(repo, pull string, mutate func(*PullReview) error) (PullReview, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

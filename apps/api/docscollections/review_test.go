@@ -1,9 +1,52 @@
 package docscollections
 
 import (
+	"errors"
+	"sync"
 	"testing"
 	"time"
 )
+
+func TestCreatePullReviewIsAtomicAcrossStores(t *testing.T) {
+	root := t.TempDir()
+	first, _ := New(root)
+	second, _ := New(root)
+	base := PullReview{RepositoryID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", PullRequestID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Revision: "1111111111111111111111111111111111111111", BaseRevision: "2222222222222222222222222222222222222222", RootPath: "docs", Pages: []ReviewPage{}, Entries: []ReviewEntry{}, Decisions: []ReviewDecision{}, Invitations: []ReviewInvitation{}}
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var ready sync.WaitGroup
+	ready.Add(2)
+	for index, store := range []*Store{first, second} {
+		go func(index int, store *Store) {
+			ready.Done()
+			<-start
+			candidate := base
+			candidate.Gaps = []ReviewGap{{ID: reviewID(), Area: "technical", Detail: string(rune('A' + index))}}
+			_, err := store.CreatePullReview(candidate)
+			errs <- err
+		}(index, store)
+	}
+	ready.Wait()
+	close(start)
+	successes, conflicts := 0, 0
+	for range 2 {
+		switch err := <-errs; {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrConflict):
+			conflicts++
+		default:
+			t.Fatalf("create error = %v", err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("successes = %d, conflicts = %d", successes, conflicts)
+	}
+	stored, err := first.GetPullReview(base.RepositoryID, base.PullRequestID)
+	if err != nil || len(stored.Gaps) != 1 {
+		t.Fatalf("stored review = %#v, error = %v", stored, err)
+	}
+}
 
 func TestPullReviewRetainsContentExactFeedback(t *testing.T) {
 	store, err := New(t.TempDir())

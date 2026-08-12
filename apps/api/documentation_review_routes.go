@@ -155,13 +155,6 @@ func registerDocumentationReviewRoutes(mux *http.ServeMux, git *storage.Store, r
 			writeAPIError(w, 400, "invalid_documentation_review", "review input is invalid")
 			return
 		}
-		if _, existingErr := docs.GetPullReview(pull.RepositoryID, pull.ID); existingErr == nil {
-			writeAPIError(w, 409, "documentation_review_exists", "documentation review already exists")
-			return
-		} else if !errors.Is(existingErr, docscollections.ErrNotFound) {
-			writeAPIError(w, 500, "documentation_review_read_failed", "documentation review could not be read")
-			return
-		}
 		root := strings.Trim(strings.TrimSpace(in.RootPath), "/")
 		affected := []string{}
 		collectionID := in.CollectionID
@@ -243,7 +236,11 @@ func registerDocumentationReviewRoutes(mux *http.ServeMux, git *storage.Store, r
 		}
 		sort.Strings(affected)
 		affected = uniqueReviewStrings(affected)
-		created, e := docs.SavePullReview(docscollections.PullReview{RepositoryID: pull.RepositoryID, PullRequestID: pull.ID, Revision: pull.SourceCommitID, BaseRevision: pull.TargetCommitID, CollectionID: collectionID, RootPath: root, Pages: changed, NavigationChanges: nav, Checks: evidence, AffectedVersions: affected, Gaps: gaps, Entries: []docscollections.ReviewEntry{}, Decisions: []docscollections.ReviewDecision{}, Invitations: []docscollections.ReviewInvitation{}})
+		created, e := docs.CreatePullReview(docscollections.PullReview{RepositoryID: pull.RepositoryID, PullRequestID: pull.ID, Revision: pull.SourceCommitID, BaseRevision: pull.TargetCommitID, CollectionID: collectionID, RootPath: root, Pages: changed, NavigationChanges: nav, Checks: evidence, AffectedVersions: affected, Gaps: gaps, Entries: []docscollections.ReviewEntry{}, Decisions: []docscollections.ReviewDecision{}, Invitations: []docscollections.ReviewInvitation{}})
+		if errors.Is(e, docscollections.ErrConflict) {
+			writeAPIError(w, 409, "documentation_review_exists", "documentation review already exists")
+			return
+		}
 		if e != nil {
 			writeAPIError(w, 500, "documentation_review_write_failed", "documentation review could not be retained")
 			return
