@@ -745,6 +745,11 @@ blocking scenarios or unresolved blocking preview findings, and reuses that
 same decision for merge and integration-queue admission. Synchronizing a newer
 commit therefore preserves the earlier evaluation as history while requiring
 the affected behavior to be evaluated again.
+Decision publication uses a stable caller idempotency key and synced atomic
+storage, making an ambiguous retry converge on the original evidence. A
+rejection remains a veto until an owner records a reasoned override. Queue
+landing revalidates current readiness and pauses retained admitted work when
+policy, decisions, findings, reviews, checks, or branch state changed.
 The API derives the source-only commit set and recursive changed-file summary
 from the fixed target snapshot and explicitly synchronized source revision.
 Immutable pull request comments retain stable author IDs; owners, contributors,

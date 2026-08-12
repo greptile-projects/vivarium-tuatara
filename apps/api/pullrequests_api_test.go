@@ -657,7 +657,7 @@ func TestPreviewAcceptanceDecisionIsInvalidatedByPullRevision(t *testing.T) {
 	if blocked.Mergeable || blocked.PreviewAcceptance == nil || len(blocked.PreviewAcceptance.Missing) != 1 {
 		t.Fatalf("blocked=%#v", blocked)
 	}
-	decision := `{"revision":"` + string(head) + `","requirement_id":"checkout","scenario":"guest checkout","role":"contributor","outcome":"accepted","risk_classes":["customer-facing"]}`
+	decision := `{"idempotency_key":"accept-checkout-head","revision":"` + string(head) + `","requirement_id":"checkout","scenario":"guest checkout","role":"contributor","outcome":"accepted","risk_classes":["customer-facing"]}`
 	authenticatedRequest(t, http.MethodPost, baseURL+"/preview-acceptance/decisions", decision, contributor.Credential.Token, http.StatusCreated).Body.Close()
 	var ready pullrequests.MergeReadiness
 	decodeResponse(t, authenticatedRequest(t, http.MethodGet, baseURL+"/merge-readiness", "", owner.Credential.Token, http.StatusOK), &ready)

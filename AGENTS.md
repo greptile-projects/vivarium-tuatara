@@ -898,6 +898,11 @@ whenever dependencies change or the web job fails before it starts.
   while merge readiness and integration-queue admission block on missing
   current blocking scenarios, current rejection, or unresolved blocking preview
   findings alongside ordinary reviews and checks.
+  Decision writes use caller idempotency keys plus synced atomic publication;
+  rejection is sticky until an owner-only justified override. Integration queue
+  landing revalidates the entire current readiness report and durably pauses an
+  admitted entry when later policy, evidence, review, check, or branch changes
+  invalidate it.
   Current write collaborators can convert a current-revision finding into a
   retry-safe ordinary pull change session with frozen acceptance criteria,
   redacted permitted evidence, discussion, reproduction, and authorship. The

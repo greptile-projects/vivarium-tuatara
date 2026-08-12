@@ -1952,6 +1952,21 @@ func (s *Store) advanceIntegrationQueue(repositoryID, branch string) error {
 			queued = queued[1:]
 			continue
 		}
+		// Admission freezes a candidate, not future authority. Re-evaluate every
+		// live review, check, acceptance, finding, and branch gate immediately
+		// before landing so policy or evidence changes pause the durable entry.
+		readiness, readinessErr := s.Readiness(repositoryID, head.ID, true)
+		if readinessErr != nil {
+			return readinessErr
+		}
+		if !readiness.Mergeable {
+			head.QueuePaused = true
+			head.UpdatedAt = s.now().Truncate(time.Microsecond)
+			if _, err := s.write(*head); err != nil {
+				return err
+			}
+			return errors.Join(finalizationFailures...)
+		}
 		merger := ""
 		if head.QueuedBy != nil {
 			merger = *head.QueuedBy

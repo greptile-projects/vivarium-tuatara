@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -17,6 +18,9 @@ import (
 
 var ErrInvalid = errors.New("invalid preview acceptance")
 var ErrNotFound = errors.New("preview acceptance not found")
+var ErrConflict = errors.New("preview acceptance idempotency key conflict")
+var ErrRejected = errors.New("preview acceptance rejection requires owner override")
+var ErrDurabilityUncertain = errors.New("preview acceptance is visible but durability is uncertain")
 
 type Scenario struct {
 	Name     string `json:"name"`
@@ -38,19 +42,20 @@ type Policy struct {
 	UpdatedAt    time.Time     `json:"updated_at"`
 }
 type Decision struct {
-	ID            string    `json:"id"`
-	RepositoryID  string    `json:"repository_id"`
-	PullRequestID string    `json:"pull_request_id"`
-	Revision      string    `json:"revision"`
-	PolicyVersion int       `json:"policy_version"`
-	RequirementID string    `json:"requirement_id"`
-	Scenario      string    `json:"scenario"`
-	Role          string    `json:"role"`
-	Outcome       string    `json:"outcome"`
-	RiskClasses   []string  `json:"risk_classes,omitempty"`
-	Rationale     string    `json:"rationale,omitempty"`
-	ActorID       string    `json:"actor_id"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID             string    `json:"id"`
+	RepositoryID   string    `json:"repository_id"`
+	PullRequestID  string    `json:"pull_request_id"`
+	Revision       string    `json:"revision"`
+	PolicyVersion  int       `json:"policy_version"`
+	IdempotencyKey string    `json:"idempotency_key"`
+	RequirementID  string    `json:"requirement_id"`
+	Scenario       string    `json:"scenario"`
+	Role           string    `json:"role"`
+	Outcome        string    `json:"outcome"`
+	RiskClasses    []string  `json:"risk_classes,omitempty"`
+	Rationale      string    `json:"rationale,omitempty"`
+	ActorID        string    `json:"actor_id"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 type Finding struct {
 	ID        string `json:"id"`
@@ -159,19 +164,49 @@ func read[T any](path string) (T, error) {
 	e = json.Unmarshal(b, &v)
 	return v, e
 }
-func write(path string, v any) error {
+func write(path string, v any) (bool, error) {
 	if e := os.MkdirAll(filepath.Dir(path), 0700); e != nil {
-		return e
+		return false, e
 	}
 	b, e := json.MarshalIndent(v, "", "  ")
 	if e != nil {
-		return e
+		return false, e
 	}
-	tmp := path + ".tmp"
-	if e = os.WriteFile(tmp, b, 0600); e != nil {
-		return e
+	tmp, e := os.CreateTemp(filepath.Dir(path), ".acceptance-*.tmp")
+	if e != nil {
+		return false, e
 	}
-	return os.Rename(tmp, path)
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if e = tmp.Chmod(0600); e == nil {
+		_, e = tmp.Write(b)
+	}
+	if e == nil {
+		e = tmp.Sync()
+	}
+	closeErr := tmp.Close()
+	if e == nil {
+		e = closeErr
+	}
+	if e != nil {
+		return false, e
+	}
+	if e = os.Rename(tmpName, path); e != nil {
+		return false, e
+	}
+	directory, e := os.Open(filepath.Dir(path))
+	if e != nil {
+		return true, e
+	}
+	e = directory.Sync()
+	closeErr = directory.Close()
+	if e == nil {
+		e = closeErr
+	}
+	if e != nil {
+		return true, e
+	}
+	return true, nil
 }
 func (s *Store) Policy(repo, branch string) (Policy, error) {
 	p, e := read[Policy](s.policyPath(repo, branch))
@@ -196,7 +231,11 @@ func (s *Store) SetPolicy(repo, branch, actor string, requirements []Requirement
 	if !validPolicy(p) || !clean(actor) {
 		return Policy{}, ErrInvalid
 	}
-	return p, write(s.policyPath(repo, branch), p)
+	committed, writeErr := write(s.policyPath(repo, branch), p)
+	if committed && writeErr != nil {
+		return p, errors.Join(ErrDurabilityUncertain, writeErr)
+	}
+	return p, writeErr
 }
 func (s *Store) decisionsPath(repo, pull string) string {
 	return filepath.Join(s.root, "decisions", repo, pull+".json")
@@ -209,7 +248,7 @@ func (s *Store) Decisions(repo, pull string) ([]Decision, error) {
 	return v, e
 }
 func (s *Store) Decide(d Decision) (Decision, error) {
-	if !clean(d.RepositoryID) || !clean(d.PullRequestID) || len(d.Revision) != 40 || d.PolicyVersion < 1 || !clean(d.RequirementID) || !clean(d.Scenario) || !clean(d.Role) || (d.Outcome != "accepted" && d.Outcome != "rejected" && d.Outcome != "overridden") || !clean(d.ActorID) || (d.Outcome != "accepted" && strings.TrimSpace(d.Rationale) == "") || len(d.Rationale) > 2000 {
+	if !clean(d.RepositoryID) || !clean(d.PullRequestID) || len(d.Revision) != 40 || d.PolicyVersion < 1 || !clean(d.IdempotencyKey) || !clean(d.RequirementID) || !clean(d.Scenario) || !clean(d.Role) || (d.Outcome != "accepted" && d.Outcome != "rejected" && d.Outcome != "overridden") || !clean(d.ActorID) || (d.Outcome != "accepted" && strings.TrimSpace(d.Rationale) == "") || len(d.Rationale) > 2000 {
 		return Decision{}, ErrInvalid
 	}
 	s.mu.Lock()
@@ -223,12 +262,39 @@ func (s *Store) Decide(d Decision) (Decision, error) {
 	if e != nil {
 		return Decision{}, e
 	}
+	for _, existing := range all {
+		if existing.IdempotencyKey != d.IdempotencyKey {
+			continue
+		}
+		if existing.RepositoryID == d.RepositoryID && existing.PullRequestID == d.PullRequestID && existing.Revision == d.Revision && existing.PolicyVersion == d.PolicyVersion && existing.RequirementID == d.RequirementID && existing.Scenario == d.Scenario && existing.Role == d.Role && existing.Outcome == d.Outcome && existing.ActorID == d.ActorID && existing.Rationale == d.Rationale && slices.Equal(existing.RiskClasses, d.RiskClasses) {
+			return existing, nil
+		}
+		return Decision{}, ErrConflict
+	}
+	if d.Outcome == "accepted" {
+		for i := len(all) - 1; i >= 0; i-- {
+			existing := all[i]
+			if existing.Revision != d.Revision || existing.PolicyVersion != d.PolicyVersion || existing.RequirementID != d.RequirementID || existing.Scenario != d.Scenario || existing.Role != d.Role {
+				continue
+			}
+			if existing.Outcome == "overridden" {
+				break
+			}
+			if existing.Outcome == "rejected" {
+				return Decision{}, ErrRejected
+			}
+		}
+	}
 	raw := make([]byte, 16)
 	_, _ = rand.Read(raw)
 	d.ID = hex.EncodeToString(raw)
 	d.CreatedAt = s.now()
 	all = append(all, d)
-	return d, write(s.decisionsPath(d.RepositoryID, d.PullRequestID), all)
+	committed, writeErr := write(s.decisionsPath(d.RepositoryID, d.PullRequestID), all)
+	if committed && writeErr != nil {
+		return d, errors.Join(ErrDurabilityUncertain, writeErr)
+	}
+	return d, writeErr
 }
 func Matches(q Requirement, paths, risks []string) bool {
 	if len(q.Paths) == 0 && len(q.RiskClasses) == 0 {
@@ -270,11 +336,18 @@ func Evaluate(policy Policy, revision string, paths, risks []string, decisions [
 			for i := len(e.Decisions) - 1; i >= 0; i-- {
 				d := e.Decisions[i]
 				if d.RequirementID == q.ID && d.Scenario == s.Name && d.Role == s.Role {
-					resolved = d.Outcome == "accepted" || d.Outcome == "overridden"
-					if d.Outcome == "rejected" {
-						e.Blocking = true
+					if d.Outcome == "overridden" {
+						resolved = true
+						break
 					}
-					break
+					if d.Outcome == "rejected" {
+						resolved = false
+						e.Blocking = true
+						break
+					}
+					if d.Outcome == "accepted" {
+						resolved = true
+					}
 				}
 			}
 			if !resolved {

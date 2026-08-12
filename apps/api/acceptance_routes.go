@@ -44,6 +44,11 @@ func registerAcceptanceRoutes(mux *http.ServeMux, catalog *repositories.Store, p
 			writeAPIError(w, 400, "invalid_preview_acceptance", "requirements need unique ids, bounded path/risk selectors, and scenarios with owner, contributor, or author roles")
 			return
 		}
+		if errors.Is(err, acceptance.ErrDurabilityUncertain) {
+			w.Header().Set("Vivarium-Durability", "uncertain")
+			writeJSON(w, http.StatusAccepted, policy)
+			return
+		}
 		if err != nil {
 			writeAPIError(w, 500, "preview_acceptance_unavailable", "preview acceptance policy unavailable")
 			return
@@ -76,13 +81,14 @@ func registerAcceptanceRoutes(mux *http.ServeMux, catalog *repositories.Store, p
 			return
 		}
 		var input struct {
-			Revision      string   `json:"revision"`
-			RequirementID string   `json:"requirement_id"`
-			Scenario      string   `json:"scenario"`
-			Role          string   `json:"role"`
-			Outcome       string   `json:"outcome"`
-			RiskClasses   []string `json:"risk_classes"`
-			Rationale     string   `json:"rationale"`
+			IdempotencyKey string   `json:"idempotency_key"`
+			Revision       string   `json:"revision"`
+			RequirementID  string   `json:"requirement_id"`
+			Scenario       string   `json:"scenario"`
+			Role           string   `json:"role"`
+			Outcome        string   `json:"outcome"`
+			RiskClasses    []string `json:"risk_classes"`
+			Rationale      string   `json:"rationale"`
 		}
 		if decodeJSON(r, &input) != nil || input.Revision != pull.SourceCommitID {
 			writeAPIError(w, 409, "preview_revision_changed", "decision must name the pull request's exact current revision")
@@ -117,9 +123,22 @@ func registerAcceptanceRoutes(mux *http.ServeMux, catalog *repositories.Store, p
 			writeAPIError(w, 422, "acceptance_scenario_not_required", "scenario and role are not in the target branch policy")
 			return
 		}
-		decision, e := store.Decide(acceptance.Decision{RepositoryID: pull.RepositoryID, PullRequestID: pull.ID, Revision: input.Revision, PolicyVersion: policy.Version, RequirementID: input.RequirementID, Scenario: input.Scenario, Role: input.Role, Outcome: input.Outcome, RiskClasses: input.RiskClasses, Rationale: strings.TrimSpace(input.Rationale), ActorID: actor.UserID})
+		decision, e := store.Decide(acceptance.Decision{RepositoryID: pull.RepositoryID, PullRequestID: pull.ID, Revision: input.Revision, PolicyVersion: policy.Version, IdempotencyKey: input.IdempotencyKey, RequirementID: input.RequirementID, Scenario: input.Scenario, Role: input.Role, Outcome: input.Outcome, RiskClasses: input.RiskClasses, Rationale: strings.TrimSpace(input.Rationale), ActorID: actor.UserID})
 		if errors.Is(e, acceptance.ErrInvalid) {
-			writeAPIError(w, 400, "invalid_preview_acceptance", "decision is invalid; rejection and override require rationale")
+			writeAPIError(w, 400, "invalid_preview_acceptance", "decision requires an idempotency key; rejection and override also require rationale")
+			return
+		}
+		if errors.Is(e, acceptance.ErrRejected) {
+			writeAPIError(w, 409, "preview_acceptance_rejected", "a rejection remains blocking until the repository owner records a justified override")
+			return
+		}
+		if errors.Is(e, acceptance.ErrConflict) {
+			writeAPIError(w, 409, "preview_acceptance_idempotency_conflict", "idempotency key already identifies a different decision")
+			return
+		}
+		if errors.Is(e, acceptance.ErrDurabilityUncertain) {
+			w.Header().Set("Vivarium-Durability", "uncertain")
+			writeJSON(w, http.StatusAccepted, decision)
 			return
 		}
 		if e != nil {
