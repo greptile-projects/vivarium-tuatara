@@ -159,6 +159,9 @@ func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *
 				return docscollections.ErrInvalid
 			}
 			if reference.Path != "" {
+				if reference.ResourceKind != "" || reference.ResourceID != "" {
+					return docscollections.ErrInvalid
+				}
 				item, exists := paths[reference.Path]
 				if !exists || item.Type != storage.BlobObject {
 					return docscollections.ErrInvalid
@@ -171,7 +174,7 @@ func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *
 				if reference.StartLine > lineCount || reference.EndLine > lineCount {
 					return docscollections.ErrInvalid
 				}
-			} else if reference.ResourceKind != task.Source.Kind || reference.ResourceID != task.Source.ResourceID {
+			} else if reference.StartLine != 0 || reference.EndLine != 0 || reference.ResourceKind != task.Source.Kind || reference.ResourceID != task.Source.ResourceID {
 				// The task's source tuple was frozen when the task was opened. Other
 				// resource citations require their owning store and fail closed here.
 				return docscollections.ErrInvalid
