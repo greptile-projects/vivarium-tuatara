@@ -23,6 +23,58 @@ var (
 	ErrDurabilityUncertain = errors.New("documentation mutation is visible but durability is uncertain")
 )
 
+type TaskSource struct {
+	Kind       string `json:"kind"`
+	ResourceID string `json:"resource_id"`
+	Revision   string `json:"revision"`
+	Label      string `json:"label"`
+}
+type Reference struct {
+	Path         string `json:"path,omitempty"`
+	StartLine    int    `json:"start_line,omitempty"`
+	EndLine      int    `json:"end_line,omitempty"`
+	Revision     string `json:"revision"`
+	ResourceKind string `json:"resource_kind,omitempty"`
+	ResourceID   string `json:"resource_id,omitempty"`
+	Label        string `json:"label"`
+}
+type DraftRevision struct {
+	ID           string      `json:"id"`
+	Version      int         `json:"version"`
+	Body         string      `json:"body"`
+	RenderedHTML string      `json:"rendered_html"`
+	AuthorID     string      `json:"author_id"`
+	References   []Reference `json:"references"`
+	CreatedAt    time.Time   `json:"created_at"`
+}
+type TaskEntry struct {
+	ID           string      `json:"id"`
+	Kind         string      `json:"kind"`
+	Body         string      `json:"body"`
+	ActorID      string      `json:"actor_id"`
+	AgentID      string      `json:"agent_id,omitempty"`
+	DraftVersion int         `json:"draft_version"`
+	References   []Reference `json:"references,omitempty"`
+	Uncertain    bool        `json:"uncertain,omitempty"`
+	CreatedAt    time.Time   `json:"created_at"`
+}
+type Task struct {
+	ID                    string          `json:"id"`
+	RepositoryID          string          `json:"repository_id"`
+	Title                 string          `json:"title"`
+	Path                  string          `json:"path"`
+	Branch                string          `json:"branch"`
+	BaseRevision          string          `json:"base_revision"`
+	Source                TaskSource      `json:"source"`
+	CreatedBy             string          `json:"created_by"`
+	CreatedAt             time.Time       `json:"created_at"`
+	Version               int             `json:"version"`
+	Drafts                []DraftRevision `json:"drafts"`
+	Entries               []TaskEntry     `json:"entries"`
+	WorkspaceID           string          `json:"workspace_id,omitempty"`
+	PublishedCollectionID string          `json:"published_collection_id,omitempty"`
+}
+
 type Owner struct {
 	ActorID string `json:"actor_id"`
 	Role    string `json:"role"`
@@ -224,6 +276,75 @@ func (s *Store) Collections(repositoryID string) ([]Revision, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+func (s *Store) CreateTask(v Task) (Task, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Task{}, err
+	}
+	defer unlock()
+	if !validID(v.RepositoryID) || !validID(v.CreatedBy) || strings.TrimSpace(v.Title) == "" || len(v.Title) > 160 || !cleanPath(v.Path) || !cleanRef(v.Branch) || len(v.BaseRevision) != 40 || !oneOf(v.Source.Kind, "proposal", "issue", "pull_request", "release", "investigation", "stewardship_opportunity") || !validID(v.Source.ResourceID) || strings.TrimSpace(v.Source.Label) == "" || v.Source.Revision != v.BaseRevision {
+		return Task{}, ErrInvalid
+	}
+	if v.ID == "" {
+		v.ID, err = randomID()
+		if err != nil {
+			return Task{}, err
+		}
+	} else if !validID(v.ID) {
+		return Task{}, ErrInvalid
+	}
+	v.CreatedAt = s.now().UTC()
+	v.Version = 1
+	v.Drafts = []DraftRevision{}
+	v.Entries = []TaskEntry{}
+	dir := filepath.Join(s.root, v.RepositoryID, "tasks")
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		return Task{}, err
+	}
+	if err = writeJSON(filepath.Join(dir, v.ID+".json"), v); err != nil {
+		return Task{}, err
+	}
+	return v, nil
+}
+func (s *Store) GetTask(repositoryID, id string) (Task, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !validID(repositoryID) || !validID(id) {
+		return Task{}, ErrNotFound
+	}
+	var v Task
+	if readJSON(filepath.Join(s.root, repositoryID, "tasks", id+".json"), &v) != nil || v.RepositoryID != repositoryID {
+		return Task{}, ErrNotFound
+	}
+	return v, nil
+}
+func (s *Store) UpdateTask(repositoryID, id string, expected int, mutate func(*Task) error) (Task, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Task{}, err
+	}
+	defer unlock()
+	var v Task
+	if readJSON(filepath.Join(s.root, repositoryID, "tasks", id+".json"), &v) != nil {
+		return Task{}, ErrNotFound
+	}
+	if v.Version != expected {
+		return Task{}, ErrConflict
+	}
+	if err = mutate(&v); err != nil {
+		return Task{}, err
+	}
+	v.Version++
+	if err = writeJSON(filepath.Join(s.root, repositoryID, "tasks", id+".json"), v); err != nil {
+		return Task{}, err
+	}
+	return v, nil
 }
 func validate(v Revision) error {
 	if !validID(v.RepositoryID) || !validID(v.PublishedBy) || v.CollectionID != "" && !validID(v.CollectionID) || strings.TrimSpace(v.Name) == "" || len(v.Name) > 120 || !cleanPath(v.RootPath) || v.SourceRef == "" || len(v.SourceRevision) != 40 || !oneOf(v.Audience, "public", "repository", "maintainers") || len(v.Owners) > 50 || len(v.SupportedVersions) == 0 || len(v.Pages) == 0 || !oneOf(v.Rendering.Format, "markdown", "mdx", "asciidoc") || !cleanRef(v.PublicationPolicy.SourceBranch) {

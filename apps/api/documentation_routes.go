@@ -1,13 +1,17 @@
 package main
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"html"
 	"net/http"
 	"path"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	docscollections "github.com/greptile-projects/vivarium-tuatara/apps/api/docscollections"
@@ -15,6 +19,14 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
+
+func documentationRandomID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b)
+}
 
 func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, docs *docscollections.Store, releaseStore *releases.Store, credentials *auth.Store) {
 	authorize := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool, bool) {
@@ -113,6 +125,204 @@ func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *
 		collaborator, _ := repos.HasCollaborator(actor.UserID, repositoryID)
 		return v.Audience == "repository" && collaborator
 	}
+	participant := func(w http.ResponseWriter, r *http.Request) (auth.Credential, *repositories.Repository, bool) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return auth.Credential{}, nil, false
+		}
+		repo, e := repos.GetByID(r.PathValue("id"))
+		if e != nil {
+			writeRepositoryError(w, e)
+			return auth.Credential{}, nil, false
+		}
+		return actor, &repo, true
+	}
+	validateReferences := func(repositoryID string, task docscollections.Task, references []docscollections.Reference) error {
+		gr, err := git.Open(repositoryID)
+		if err != nil {
+			return err
+		}
+		commit, err := gr.ReadCommit(storage.ObjectID(task.BaseRevision))
+		if err != nil {
+			return err
+		}
+		tree, err := gr.WalkTree(commit.Tree)
+		if err != nil {
+			return err
+		}
+		paths := map[string]storage.TreePath{}
+		for _, item := range tree {
+			paths[item.Path] = item
+		}
+		for _, reference := range references {
+			if reference.Revision != task.BaseRevision || strings.TrimSpace(reference.Label) == "" || reference.StartLine < 0 || reference.EndLine < reference.StartLine {
+				return docscollections.ErrInvalid
+			}
+			if reference.Path != "" {
+				if reference.ResourceKind != "" || reference.ResourceID != "" {
+					return docscollections.ErrInvalid
+				}
+				item, exists := paths[reference.Path]
+				if !exists || item.Type != storage.BlobObject {
+					return docscollections.ErrInvalid
+				}
+				object, readErr := gr.ReadObject(item.ID)
+				if readErr != nil {
+					return readErr
+				}
+				lineCount := len(strings.Split(strings.TrimSuffix(string(object.Content), "\n"), "\n"))
+				if reference.StartLine > lineCount || reference.EndLine > lineCount {
+					return docscollections.ErrInvalid
+				}
+			} else if reference.StartLine != 0 || reference.EndLine != 0 || reference.ResourceKind != task.Source.Kind || reference.ResourceID != task.Source.ResourceID {
+				// The task's source tuple was frozen when the task was opened. Other
+				// resource citations require their owning store and fail closed here.
+				return docscollections.ErrInvalid
+			}
+		}
+		return nil
+	}
+	mux.HandleFunc("POST /repositories/{id}/documentation-tasks", func(w http.ResponseWriter, r *http.Request) {
+		actor, repo, ok := participant(w, r)
+		if !ok {
+			return
+		}
+		var in struct {
+			Title  string                     `json:"title"`
+			Path   string                     `json:"path"`
+			Source docscollections.TaskSource `json:"source"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		gr, e := git.Open(repo.ID)
+		if e != nil {
+			writeAPIError(w, 404, "repository_not_found", "repository not found")
+			return
+		}
+		if _, e = gr.ReadCommit(storage.ObjectID(in.Source.Revision)); e != nil {
+			writeAPIError(w, 422, "documentation_task_revision_invalid", "source revision must be an exact repository commit")
+			return
+		}
+		id := documentationRandomID()
+		if id == "" {
+			writeAPIError(w, 500, "documentation_task_create_failed", "documentation task identity could not be created")
+			return
+		}
+		branch := "docs/tasks/" + id
+		candidate := docscollections.Task{ID: id, RepositoryID: repo.ID, Title: in.Title, Path: in.Path, Branch: branch, BaseRevision: in.Source.Revision, Source: in.Source, CreatedBy: actor.UserID}
+		if strings.TrimSpace(in.Title) == "" || in.Path == "" || !map[string]bool{"proposal": true, "issue": true, "pull_request": true, "release": true, "investigation": true, "stewardship_opportunity": true}[in.Source.Kind] || len(in.Source.ResourceID) != 32 || strings.TrimSpace(in.Source.Label) == "" {
+			writeAPIError(w, 422, "documentation_task_invalid", "title, path, source, and exact revision are required")
+			return
+		}
+		if e = gr.CreateReference(storage.Reference{Name: "refs/heads/" + branch, Target: candidate.BaseRevision}); e != nil {
+			writeAPIError(w, 409, "documentation_task_branch_conflict", "scoped documentation branch could not be created")
+			return
+		}
+		created, e := docs.CreateTask(candidate)
+		if e != nil {
+			_ = gr.DeleteReferenceIfTarget("refs/heads/"+branch, candidate.BaseRevision)
+			writeAPIError(w, 500, "documentation_task_create_failed", "documentation task could not be persisted")
+			return
+		}
+		w.Header().Set("Location", "/repositories/"+repo.ID+"/documentation-tasks/"+created.ID)
+		writeJSON(w, 201, created)
+	})
+	mux.HandleFunc("GET /repositories/{id}/documentation-tasks/{taskID}", func(w http.ResponseWriter, r *http.Request) {
+		_, _, ok := participant(w, r)
+		if !ok {
+			return
+		}
+		v, e := docs.GetTask(r.PathValue("id"), r.PathValue("taskID"))
+		if e != nil {
+			writeAPIError(w, 404, "documentation_task_not_found", "documentation task not found")
+			return
+		}
+		writeJSON(w, 200, v)
+	})
+	mux.HandleFunc("POST /repositories/{id}/documentation-tasks/{taskID}/drafts", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := participant(w, r)
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int                         `json:"expected_version"`
+			Body            string                      `json:"body"`
+			References      []docscollections.Reference `json:"references"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		body := strings.TrimSpace(in.Body)
+		if body == "" || len(body) > 200000 {
+			writeAPIError(w, 422, "documentation_draft_invalid", "draft body is required and bounded")
+			return
+		}
+		current, e := docs.GetTask(r.PathValue("id"), r.PathValue("taskID"))
+		if e != nil || validateReferences(r.PathValue("id"), current, in.References) != nil {
+			writeAPIError(w, 422, "documentation_draft_invalid", "references must resolve at the task's exact revision")
+			return
+		}
+		v, e := docs.UpdateTask(r.PathValue("id"), r.PathValue("taskID"), in.ExpectedVersion, func(v *docscollections.Task) error {
+			rendered := "<article><pre>" + html.EscapeString(body) + "</pre></article>"
+			v.Drafts = append(v.Drafts, docscollections.DraftRevision{ID: documentationRandomID(), Version: len(v.Drafts) + 1, Body: body, RenderedHTML: rendered, AuthorID: actor.UserID, References: in.References, CreatedAt: time.Now().UTC()})
+			return nil
+		})
+		if errors.Is(e, docscollections.ErrConflict) {
+			writeAPIError(w, 409, "documentation_task_changed", "documentation task changed")
+			return
+		}
+		if e != nil {
+			writeAPIError(w, 422, "documentation_draft_invalid", "references must cite the task's exact revision")
+			return
+		}
+		writeJSON(w, 201, v)
+	})
+	mux.HandleFunc("POST /repositories/{id}/documentation-tasks/{taskID}/entries", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := participant(w, r)
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int                         `json:"expected_version"`
+			Kind            string                      `json:"kind"`
+			Body            string                      `json:"body"`
+			AgentID         string                      `json:"agent_id"`
+			Uncertain       bool                        `json:"uncertain"`
+			References      []docscollections.Reference `json:"references"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		current, e := docs.GetTask(r.PathValue("id"), r.PathValue("taskID"))
+		if e != nil || validateReferences(r.PathValue("id"), current, in.References) != nil {
+			writeAPIError(w, 422, "documentation_entry_invalid", "references must resolve at the task's exact revision")
+			return
+		}
+		v, e := docs.UpdateTask(r.PathValue("id"), r.PathValue("taskID"), in.ExpectedVersion, func(v *docscollections.Task) error {
+			if !map[string]bool{"discussion": true, "suggestion": true, "agent_assistance": true}[in.Kind] || strings.TrimSpace(in.Body) == "" || len(in.Body) > 10000 {
+				return docscollections.ErrInvalid
+			}
+			if in.Kind == "agent_assistance" && (actor.AgentID == "" || len(in.References) == 0) {
+				return docscollections.ErrInvalid
+			}
+			draft := len(v.Drafts)
+			v.Entries = append(v.Entries, docscollections.TaskEntry{ID: documentationRandomID(), Kind: in.Kind, Body: strings.TrimSpace(in.Body), ActorID: actor.UserID, AgentID: actor.AgentID, DraftVersion: draft, References: in.References, Uncertain: in.Uncertain, CreatedAt: time.Now().UTC()})
+			return nil
+		})
+		if errors.Is(e, docscollections.ErrConflict) {
+			writeAPIError(w, 409, "documentation_task_changed", "documentation task changed")
+			return
+		}
+		if e != nil {
+			writeAPIError(w, 422, "documentation_entry_invalid", "agent assistance requires identity and revision-grounded sources")
+			return
+		}
+		writeJSON(w, 201, v)
+	})
 	mux.HandleFunc("GET /repositories/{id}/documentation", func(w http.ResponseWriter, r *http.Request) {
 		actor, authenticated, ok := authorize(w, r)
 		if !ok {

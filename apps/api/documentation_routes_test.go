@@ -64,6 +64,60 @@ func TestMaintainerPublishesReviewedDocumentationAndHealthTracksSource(t *testin
 	}
 }
 
+func TestCollaboratorCreatesGroundedDocumentationTask(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	docs, _ := docscollections.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, nil, docs))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "task-owner")
+	created := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"task-docs"}`, owner.Credential.Token, http.StatusCreated)
+	var repository repositories.Repository
+	decodeResponse(t, created, &repository)
+	gr, _ := gitStore.Open(repository.ID)
+	blob, _ := gr.WriteObject(storage.BlobObject, []byte("# API\nGrounded behavior."))
+	tree := writeTestTree(t, gr, testTreeEntry{mode: "100644", name: "api.md", id: blob})
+	commit := writeTestCommit(t, gr, tree, nil, 1, "source")
+	_ = gr.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(commit)})
+	createBody := `{"title":"Explain API behavior","path":"docs/api.md","source":{"kind":"proposal","resource_id":"11111111111111111111111111111111","revision":"` + string(commit) + `","label":"Proposal discussion"}}`
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/documentation-tasks", createBody, owner.Credential.Token, http.StatusCreated)
+	var task docscollections.Task
+	decodeResponse(t, response, &task)
+	if task.Branch != "docs/tasks/"+task.ID {
+		t.Fatalf("task = %#v", task)
+	}
+	if ref, e := gr.ReadReference("refs/heads/" + task.Branch); e != nil || ref.Target != string(commit) {
+		t.Fatalf("branch = %#v, %v", ref, e)
+	}
+	draft := fmt.Sprintf(`{"expected_version":%d,"body":"# API behavior\nThe handler returns JSON.","references":[{"path":"api.md","start_line":1,"end_line":2,"revision":"%s","label":"API source"}]}`, task.Version, commit)
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/documentation-tasks/"+task.ID+"/drafts", draft, owner.Credential.Token, http.StatusCreated)
+	decodeResponse(t, response, &task)
+	if len(task.Drafts) != 1 || !strings.Contains(task.Drafts[0].RenderedHTML, "API behavior") {
+		t.Fatalf("draft = %#v", task.Drafts)
+	}
+	entry := fmt.Sprintf(`{"expected_version":%d,"kind":"agent_assistance","body":"The exact error behavior is uncertain.","agent_id":"docs-agent","uncertain":true,"references":[{"path":"api.md","revision":"%s","label":"Current source"}]}`, task.Version, commit)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/documentation-tasks/"+task.ID+"/entries", entry, owner.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
+	badRange := fmt.Sprintf(`{"expected_version":%d,"kind":"suggestion","body":"Bad citation.","references":[{"path":"api.md","start_line":9,"end_line":8,"revision":"%s","label":"Invalid range"}]}`, task.Version, commit)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/documentation-tasks/"+task.ID+"/entries", badRange, owner.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
+	missing := fmt.Sprintf(`{"expected_version":%d,"body":"Missing source.","references":[{"path":"missing.md","start_line":1,"end_line":1,"revision":"%s","label":"Missing"}]}`, task.Version, commit)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/documentation-tasks/"+task.ID+"/drafts", missing, owner.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
+	mixedDraft := fmt.Sprintf(`{"expected_version":%d,"body":"Mixed source.","references":[{"path":"api.md","start_line":1,"end_line":1,"resource_kind":"issue","resource_id":"22222222222222222222222222222222","revision":"%s","label":"Conflicting evidence"}]}`, task.Version, commit)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/documentation-tasks/"+task.ID+"/drafts", mixedDraft, owner.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
+	mixedEntry := fmt.Sprintf(`{"expected_version":%d,"kind":"suggestion","body":"Mixed source.","references":[{"path":"api.md","start_line":1,"end_line":1,"resource_kind":"issue","resource_id":"22222222222222222222222222222222","revision":"%s","label":"Conflicting evidence"}]}`, task.Version, commit)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/documentation-tasks/"+task.ID+"/entries", mixedEntry, owner.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
+	sourceDraft := fmt.Sprintf(`{"expected_version":%d,"body":"Proposal-grounded guidance.","references":[{"resource_kind":"proposal","resource_id":"11111111111111111111111111111111","revision":"%s","label":"Originating proposal"}]}`, task.Version, commit)
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/documentation-tasks/"+task.ID+"/drafts", sourceDraft, owner.Credential.Token, http.StatusCreated)
+	decodeResponse(t, response, &task)
+	sourceEntry := fmt.Sprintf(`{"expected_version":%d,"kind":"suggestion","body":"Clarify the proposal outcome.","references":[{"resource_kind":"proposal","resource_id":"11111111111111111111111111111111","revision":"%s","label":"Originating proposal"}]}`, task.Version, commit)
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/documentation-tasks/"+task.ID+"/entries", sourceEntry, owner.Credential.Token, http.StatusCreated)
+	decodeResponse(t, response, &task)
+	if len(task.Drafts) != 2 || len(task.Entries) != 1 || task.Entries[0].References[0].ResourceID != task.Source.ResourceID {
+		t.Fatalf("source citations = drafts %#v entries %#v", task.Drafts, task.Entries)
+	}
+}
+
 func TestDocumentationHistoryFiltersEveryRevisionAudience(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	identities, _ := users.New(t.TempDir())

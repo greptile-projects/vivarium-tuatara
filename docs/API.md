@@ -13,6 +13,16 @@ and `.adoc` pages beneath `root_path`. Responses retain source object, hash, and
 authorship evidence and report `missing_owner`, `broken_source`, `stale_source`,
 and `stale_version_mapping` diagnostics.
 
+Authorized repository participants open evidence-bound writing work with `POST
+/repositories/{id}/documentation-tasks`. A task freezes a proposal, issue, pull
+request, release, investigation, or stewardship opportunity to an exact commit
+and reserves `docs/tasks/{task-id}` without granting new Git authority. Draft
+and entry endpoints retain compare-and-swap rendered revisions, exact-revision
+references, attributable discussion and suggestions, and identified agent
+assistance that must cite sources and explicitly marks uncertainty. Ordinary
+repository permissions govern all operations; collection publication remains
+owner-controlled.
+
 ## Preview acceptance requirements
 
 Repository owners define the acceptance gate for a target branch with `GET`

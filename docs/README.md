@@ -30,6 +30,12 @@ diagnostics while history is retained. Records default beneath
 `$DOCUMENTATION_STORAGE_ROOT` (`documentation`); the web workspace lives at
 `/repositories/{id}/documentation`.
 
+Repository participants can open evidence-bound documentation tasks from
+proposals, issues, pulls, releases, investigations, or stewardship findings.
+Each freezes an exact revision, reserves a scoped documentation branch, and
+retains rendered drafts, citations, attributable collaboration, and sourced
+agent assistance with explicit uncertainty without granting new authority.
+
 ## Contributor pathways
 
 Repository owners publish the project's participation contract before a
