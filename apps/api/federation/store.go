@@ -39,17 +39,18 @@ type Key struct {
 	RetiredAt *time.Time `json:"retired_at,omitempty"`
 }
 type Document struct {
-	Protocol     string     `json:"protocol"`
-	InstanceID   string     `json:"instance_id"`
-	Name         string     `json:"name"`
-	Version      int        `json:"version"`
-	IssuedAt     time.Time  `json:"issued_at"`
-	Endpoints    []Endpoint `json:"endpoints"`
-	Capabilities []string   `json:"capabilities"`
-	Operators    []string   `json:"operators"`
-	Keys         []Key      `json:"keys"`
-	SigningKeyID string     `json:"signing_key_id"`
-	Signature    string     `json:"signature"`
+	Protocol          string     `json:"protocol"`
+	InstanceID        string     `json:"instance_id"`
+	Name              string     `json:"name"`
+	Version           int        `json:"version"`
+	IssuedAt          time.Time  `json:"issued_at"`
+	Endpoints         []Endpoint `json:"endpoints"`
+	Capabilities      []string   `json:"capabilities"`
+	Operators         []string   `json:"operators"`
+	Keys              []Key      `json:"keys"`
+	SigningKeyID      string     `json:"signing_key_id"`
+	RotationSignature string     `json:"rotation_signature,omitempty"`
+	Signature         string     `json:"signature"`
 }
 type Peer struct {
 	InstanceID     string     `json:"instance_id"`
@@ -141,6 +142,14 @@ func (s *Store) Identity() (Document, error) {
 	}
 	return d, nil
 }
+func (s *Store) IsOperator(id string) bool {
+	for _, v := range s.operators {
+		if v == id {
+			return true
+		}
+	}
+	return false
+}
 func (s *Store) Rotate() (Document, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -158,6 +167,10 @@ func (s *Store) Rotate() (Document, error) {
 	if err = json.Unmarshal(b, &v); err != nil {
 		return Document{}, err
 	}
+	previousPrivate, err := base64.RawURLEncoding.DecodeString(v.PrivateKey)
+	if err != nil || len(previousPrivate) != ed25519.PrivateKeySize {
+		return Document{}, ErrInvalid
+	}
 	now := s.now().Truncate(time.Microsecond)
 	for i := range v.Document.Keys {
 		if v.Document.Keys[i].ID == v.Document.SigningKeyID {
@@ -174,6 +187,7 @@ func (s *Store) Rotate() (Document, error) {
 	v.Document.Version++
 	v.Document.IssuedAt = now
 	v.Document.SigningKeyID = id
+	v.Document.RotationSignature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(ed25519.PrivateKey(previousPrivate), unsigned(v.Document)))
 	v.Document.Signature = sign(v.Document, priv)
 	v.PrivateKey = base64.RawURLEncoding.EncodeToString(priv)
 	if err = writeJSON(path, v); err != nil {
@@ -181,12 +195,17 @@ func (s *Store) Rotate() (Document, error) {
 	}
 	return v.Document, nil
 }
-func unsigned(d Document) []byte { d.Signature = ""; b, _ := json.Marshal(d); return b }
+func unsigned(d Document) []byte {
+	d.Signature = ""
+	d.RotationSignature = ""
+	b, _ := json.Marshal(d)
+	return b
+}
 func sign(d Document, k ed25519.PrivateKey) string {
 	return base64.RawURLEncoding.EncodeToString(ed25519.Sign(k, unsigned(d)))
 }
 func Verify(d Document) error {
-	if d.Protocol != "vivarium-federation/v1" || d.InstanceID == "" || d.Version < 1 || d.SigningKeyID == "" {
+	if d.Protocol != "vivarium-federation/v1" || !validInstanceID(d.InstanceID) || d.Version < 1 || d.SigningKeyID == "" {
 		return ErrInvalid
 	}
 	var key *Key
@@ -208,6 +227,29 @@ func Verify(d Document) error {
 		return ErrInvalid
 	}
 	return nil
+}
+func validInstanceID(id string) bool {
+	if len(id) != 32 || id != strings.ToLower(id) {
+		return false
+	}
+	b, e := hex.DecodeString(id)
+	return e == nil && len(b) == 16
+}
+func verifyContinuity(previous, next Document) error {
+	sig, e := base64.RawURLEncoding.DecodeString(next.RotationSignature)
+	if e != nil {
+		return ErrInvalid
+	}
+	for _, key := range previous.Keys {
+		if key.RetiredAt != nil {
+			continue
+		}
+		raw, x := base64.RawURLEncoding.DecodeString(key.PublicKey)
+		if x == nil && len(raw) == ed25519.PublicKeySize && ed25519.Verify(ed25519.PublicKey(raw), unsigned(next), sig) {
+			return nil
+		}
+	}
+	return ErrInvalid
 }
 func (s *Store) Upsert(url string, d Document) (Peer, error) {
 	if err := Verify(d); err != nil {
@@ -238,6 +280,9 @@ func (s *Store) Upsert(url string, d Document) (Peer, error) {
 			return Peer{}, ErrConflict
 		}
 		if d.Version > p.Document.Version {
+			if verifyContinuity(p.Document, d) != nil {
+				return Peer{}, ErrConflict
+			}
 			p.Status = "changed"
 			p.ChangedAt = &now
 		}

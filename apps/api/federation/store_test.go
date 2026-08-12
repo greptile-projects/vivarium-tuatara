@@ -57,18 +57,10 @@ func TestPeerChangesRequireTrustAndRevocationIsSticky(t *testing.T) {
 	if peer.Status != "trusted" {
 		t.Fatalf("status %q", peer.Status)
 	}
-	identityPath := remote.root + "/identity.json"
-	remote.mu.Lock()
-	var p persistedIdentity
-	readJSONForTest(t, identityPath, &p)
-	privateRaw, _ := base64.RawURLEncoding.DecodeString(p.PrivateKey)
-	p.Document.Version++
-	p.Document.Signature = sign(p.Document, ed25519.PrivateKey(privateRaw))
-	if err := writeJSON(identityPath, p); err != nil {
+	changed, err := remote.Rotate()
+	if err != nil {
 		t.Fatal(err)
 	}
-	remote.mu.Unlock()
-	changed, _ := remote.Identity()
 	peer, err = local.Upsert("https://remote.example", changed)
 	if err != nil {
 		t.Fatal(err)
@@ -86,6 +78,38 @@ func TestPeerChangesRequireTrustAndRevocationIsSticky(t *testing.T) {
 	}
 	if _, err = local.Upsert("https://remote.example", changed); err != ErrConflict {
 		t.Fatalf("revoked peer update = %v", err)
+	}
+}
+
+func TestRejectsTraversalAndUnrelatedKeyUpdate(t *testing.T) {
+	local, _ := New(t.TempDir(), "Local", "https://local.example", nil)
+	remote, _ := New(t.TempDir(), "Remote", "https://remote.example", nil)
+	doc, _ := remote.Identity()
+	if _, err := local.Upsert("https://remote.example", doc); err != nil {
+		t.Fatal(err)
+	}
+	bad := doc
+	bad.InstanceID = "../../identity"
+	if err := Verify(bad); err != ErrInvalid {
+		t.Fatalf("traversal verify = %v", err)
+	}
+	attacker, _ := New(t.TempDir(), "Attacker", "https://attacker.example", nil)
+	replacement, _ := attacker.Identity()
+	replacement.InstanceID = doc.InstanceID
+	replacement.Version = doc.Version + 1
+	var attackerIdentity persistedIdentity
+	readJSONForTest(t, attacker.root+"/identity.json", &attackerIdentity)
+	privateRaw, _ := base64.RawURLEncoding.DecodeString(attackerIdentity.PrivateKey)
+	replacement.Signature = sign(replacement, ed25519.PrivateKey(privateRaw))
+	if err := Verify(replacement); err != nil {
+		t.Fatalf("replacement must be self-signed for continuity regression: %v", err)
+	}
+	if _, err := local.Upsert("https://attacker.example", replacement); err == nil {
+		t.Fatal("unrelated key update accepted")
+	}
+	retained, _ := local.Get(doc.InstanceID)
+	if retained.Document.SigningKeyID != doc.SigningKeyID || retained.DiscoveryURL != "https://remote.example" {
+		t.Fatal("trusted peer was replaced")
 	}
 }
 

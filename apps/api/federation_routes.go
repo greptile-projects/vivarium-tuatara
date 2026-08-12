@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,7 +57,11 @@ func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userS
 		writeAPIError(w, 404, "federated_actor_not_found", "actor not found")
 	})
 	require := func(w http.ResponseWriter, r *http.Request) bool {
-		_, ok := authenticateRequest(w, r, credentials, "profile:write", false)
+		actor, ok := authenticateRequest(w, r, credentials, "", false)
+		if ok && !store.IsOperator(actor.UserID) {
+			writeAPIError(w, 403, "federation_administration_forbidden", "only a configured federation operator may administer federation")
+			return false
+		}
 		return ok
 	}
 	mux.HandleFunc("GET /federation/peers", func(w http.ResponseWriter, r *http.Request) {
@@ -163,7 +168,8 @@ func fetchFederationDocument(raw string) (federation.Document, error) {
 	u.Path = "/.well-known/vivarium-federation"
 	u.RawQuery = ""
 	u.Fragment = ""
-	c := &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }}
+	transport := &http.Transport{Proxy: nil, DialContext: safeFederationDialer(u.Scheme == "http" && isLoopbackHost(u.Hostname()))}
+	c := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := c.Get(u.String())
 	if err != nil {
 		return federation.Document{}, fmt.Errorf("peer unreachable: %w", err)
@@ -184,6 +190,31 @@ func fetchFederationDocument(raw string) (federation.Document, error) {
 		return d, fmt.Errorf("peer signature is invalid")
 	}
 	return d, nil
+}
+func safeFederationDialer(allowLoopback bool) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, err
+		}
+		resolved, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		if len(resolved) == 0 {
+			return nil, fmt.Errorf("discovery host has no addresses")
+		}
+		for _, candidate := range resolved {
+			if !publicFederationIP(candidate.IP) && !(allowLoopback && candidate.IP.IsLoopback()) {
+				return nil, fmt.Errorf("discovery address is not public")
+			}
+		}
+		dialer := net.Dialer{Timeout: 5 * time.Second}
+		return dialer.DialContext(ctx, network, net.JoinHostPort(resolved[0].IP.String(), port))
+	}
+}
+func publicFederationIP(ip net.IP) bool {
+	return ip != nil && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsUnspecified() && !ip.IsMulticast()
 }
 func isLoopbackHost(host string) bool {
 	if strings.EqualFold(host, "localhost") {

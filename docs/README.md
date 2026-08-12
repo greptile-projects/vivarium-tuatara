@@ -21,17 +21,20 @@ Every instance publishes a signed, versioned identity document at
 initial Ed25519 key and the signed document declares public endpoints,
 capabilities, operators, and current/retired verification keys. Configuration
 uses `FEDERATION_PUBLIC_URL`, `FEDERATION_INSTANCE_NAME`, and
-`FEDERATION_OPERATORS`; durable identity and peer trust default to
+`FEDERATION_OPERATORS` (comma-separated local user IDs with exclusive
+administrative authority; empty fails closed); durable identity and peer trust default to
 `FEDERATION_STORAGE_ROOT=federation`.
 Authenticated operators rotate the instance signing key through
 `POST /federation/identity/rotate`; rotation increments the signed document
-version and retains the predecessor as explicitly retired verification history.
+version, retains the predecessor as explicitly retired verification history,
+and has that predecessor authorize the successor document for trust continuity.
 
 Authenticated users manage peer discovery at `/federation`. First contact
 verifies the document signature, while later version/key changes enter a
 visible `changed` state until accepted. Failed refreshes retain `unreachable`,
 and revoked trust cannot be silently restored by refresh. Discovery permits
-HTTP only for loopback development and otherwise requires HTTPS.
+HTTP only for loopback development and otherwise requires HTTPS to exclusively
+public IP addresses, validated both after DNS resolution and again at dial time.
 
 Public actor cards resolve exact stable identities as
 `{instance-id}:user:{user-id}` and

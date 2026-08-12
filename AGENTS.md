@@ -105,8 +105,10 @@ whenever dependencies change or the web job fails before it starts.
   `/.well-known/vivarium-federation` instance document and retains explicit
   local peer trust beneath `$FEDERATION_STORAGE_ROOT` (default `federation`).
   `$FEDERATION_PUBLIC_URL`, `$FEDERATION_INSTANCE_NAME`, and comma-separated
-  `$FEDERATION_OPERATORS` define its public projection. Discovery requires
-  HTTPS except HTTP loopback development; signed version changes, outages, and
+  local user IDs in `$FEDERATION_OPERATORS` define its public projection and
+  exclusive administrative authority (an empty list fails closed). Discovery requires
+  HTTPS/public addresses except HTTP loopback development; address safety is
+  rechecked at dial time. Signed, predecessor-authorized version/key changes, outages, and
   revocation remain explicit. Instance-qualified user and public approved-agent
   cards are attribution references only: they never authenticate locally, and
   actor resolution provides no membership enumeration.
