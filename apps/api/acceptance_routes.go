@@ -4,14 +4,16 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/acceptance"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 )
 
-func registerAcceptanceRoutes(mux *http.ServeMux, catalog *repositories.Store, pulls *pullrequests.Store, store *acceptance.Store, authStore *auth.Store) {
+func registerAcceptanceRoutes(mux *http.ServeMux, catalog *repositories.Store, pulls *pullrequests.Store, store *acceptance.Store, previewStore *previews.Store, authStore *auth.Store) {
 	mux.HandleFunc("GET /repositories/{id}/branches/{branch}/preview-acceptance", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, catalog, authStore, r.PathValue("id")); !ok {
 			return
@@ -41,7 +43,7 @@ func registerAcceptanceRoutes(mux *http.ServeMux, catalog *repositories.Store, p
 		}
 		policy, err := store.SetPolicy(r.PathValue("id"), r.PathValue("branch"), actor.UserID, input.Requirements)
 		if errors.Is(err, acceptance.ErrInvalid) {
-			writeAPIError(w, 400, "invalid_preview_acceptance", "requirements need unique ids, bounded path/risk selectors, and scenarios with owner, contributor, or author roles")
+			writeAPIError(w, 400, "invalid_preview_acceptance", "requirements need unique ids, bounded path/risk selectors, and scenarios with owner, contributor, author, or stakeholder roles")
 			return
 		}
 		if errors.Is(err, acceptance.ErrDurabilityUncertain) {
@@ -72,10 +74,17 @@ func registerAcceptanceRoutes(mux *http.ServeMux, catalog *repositories.Store, p
 		writeJSON(w, 200, report.PreviewAcceptance)
 	})
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/preview-acceptance/decisions", func(w http.ResponseWriter, r *http.Request) {
-		actor, owner, ok := authorizeRepositoryParticipant(w, r, catalog, authStore, r.PathValue("id"), "repositories:write")
+		actor, ok := authenticateRequest(w, r, authStore, "repositories:read", false)
 		if !ok {
 			return
 		}
+		repository, repoErr := catalog.GetByID(r.PathValue("id"))
+		if repoErr != nil {
+			writeRepositoryError(w, repoErr)
+			return
+		}
+		collaborator, _ := catalog.HasCollaborator(actor.UserID, repository.ID)
+		owner := actor.UserID == repository.OwnerID
 		pull, err := pulls.Get(r.PathValue("id"), r.PathValue("pull_id"))
 		if writePullRequestError(w, err) {
 			return
@@ -94,7 +103,26 @@ func registerAcceptanceRoutes(mux *http.ServeMux, catalog *repositories.Store, p
 			writeAPIError(w, 409, "preview_revision_changed", "decision must name the pull request's exact current revision")
 			return
 		}
-		roleOK := input.Role == "owner" && owner || input.Role == "author" && actor.UserID == pull.AuthorID || input.Role == "contributor" && !owner
+		participant := owner || collaborator
+		stakeholder := false
+		if input.Role == "stakeholder" && previewStore != nil {
+			all, listErr := previewStore.List(pull.RepositoryID, pull.ID, pull.SourceCommitID)
+			if listErr != nil {
+				writeAPIError(w, 503, "preview_acceptance_unavailable", "preview audience unavailable")
+				return
+			}
+			for _, preview := range all {
+				if preview.Revision != pull.SourceCommitID {
+					continue
+				}
+				for _, invitation := range preview.Invitations {
+					if invitation.UserID == actor.UserID && invitation.Role == "feedback" && invitation.RevokedAt == nil && invitation.ExpiresAt.After(time.Now().UTC()) {
+						stakeholder = true
+					}
+				}
+			}
+		}
+		roleOK := input.Role == "owner" && owner || input.Role == "author" && participant && actor.UserID == pull.AuthorID || input.Role == "contributor" && collaborator || input.Role == "stakeholder" && stakeholder
 		if !roleOK {
 			writeAPIError(w, 403, "acceptance_role_required", "actor does not hold the stated participant role")
 			return

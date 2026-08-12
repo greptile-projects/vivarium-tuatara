@@ -1014,7 +1014,11 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 			if memoryMB == 0 {
 				memoryMB = 1024
 			}
-			args := []string{"run", "--name", containerName, "--pull=never", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory", fmt.Sprintf("%dm", memoryMB), "--cpus", fmt.Sprintf("%g", cpus), "--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "--mount", "type=bind,src=" + workspace + ",dst=/workspace,readonly", "--mount", "type=bind,src=" + outputDirectory + ",dst=/output", "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777", "--workdir", "/workspace/" + run.Definition.WorkingDirectory, "--env", "HOME=/tmp", "--env", "VIVARIUM_OUTPUT=/output", "--env", "CI=true", "--env", "VIVARIUM_COMMIT_SHA=" + run.CommitID}
+			tmpMB := 64
+			if run.Definition.StorageMB > tmpMB {
+				tmpMB = run.Definition.StorageMB
+			}
+			args := []string{"run", "--name", containerName, "--pull=never", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory", fmt.Sprintf("%dm", memoryMB), "--cpus", fmt.Sprintf("%g", cpus), "--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "--mount", "type=bind,src=" + workspace + ",dst=/workspace,readonly", "--mount", "type=bind,src=" + outputDirectory + ",dst=/output", "--tmpfs", fmt.Sprintf("/tmp:rw,nosuid,nodev,noexec,size=%dm,mode=1777", tmpMB), "--workdir", "/workspace/" + run.Definition.WorkingDirectory, "--env", "HOME=/tmp", "--env", "VIVARIUM_OUTPUT=/output", "--env", "CI=true", "--env", "VIVARIUM_COMMIT_SHA=" + run.CommitID}
 			for k, v := range run.Definition.Environment {
 				args = append(args, "--env", k+"="+v)
 			}

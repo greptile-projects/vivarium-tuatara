@@ -487,7 +487,7 @@ func (s *Store) AddFinding(repo, pull, id, actor, route, title, description, cla
 	title, _ = RedactSensitive(strings.TrimSpace(title))
 	description, _ = RedactSensitive(strings.TrimSpace(description))
 	now := s.now()
-	f := Finding{ID: newID(), PreviewID: p.ID, Revision: p.Revision, Route: route, Title: title, Description: description, Classification: classification, Severity: severity, Status: "open", DuplicateOf: duplicateOf, ReproductionSteps: steps, Evidence: evidence, AuthorID: actor, Version: 1, CreatedAt: now, UpdatedAt: now}
+	f := Finding{ID: newID(), PreviewID: p.ID, Revision: p.Revision, Route: route, Title: title, Description: description, Classification: classification, Severity: severity, Status: "open", DuplicateOf: duplicateOf, ReproductionSteps: steps, Evidence: evidence, Comments: []FindingComment{}, Events: []FindingEvent{}, AuthorID: actor, Version: 1, CreatedAt: now, UpdatedAt: now}
 	f.Events = append(f.Events, FindingEvent{ID: newID(), Kind: "created", ActorID: actor, CreatedAt: now})
 	if duplicateOf != "" {
 		f.Events = append(f.Events, FindingEvent{ID: newID(), Kind: "related_as_duplicate", ActorID: actor, To: duplicateOf, CreatedAt: now})

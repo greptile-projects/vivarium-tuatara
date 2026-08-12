@@ -455,19 +455,26 @@ func registerPreviewRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 			writeAPIError(w, 422, "invalid_preview_definition", e.Error())
 			return
 		}
-		quoted := strings.ReplaceAll(config.OutputPath, "'", "'\\''")
-		command := config.Build + " && test -d '" + quoted + "' && cp -R '" + quoted + "'/. \"$VIVARIUM_OUTPUT\"/"
-		createdRuns, e := runs.CreateRequested(pull.RepositoryID, pull.ID, pull.SourceCommitID, []checkruns.Definition{{Name: "preview-" + hash[:12], Image: config.Image, Command: command, WorkingDirectory: config.WorkingDirectory, Environment: config.Environment, TimeoutSeconds: config.Resources.TimeoutSeconds, CPUs: config.Resources.CPUs, MemoryMB: config.Resources.MemoryMB, StorageMB: config.Resources.StorageMB}}, actor.UserID)
-		if e != nil || len(createdRuns) != 1 {
+		command := previewBuildCommand(config)
+		definitionName := "preview-" + hash[:12]
+		createdRuns, e := runs.CreateRequested(pull.RepositoryID, pull.ID, pull.SourceCommitID, []checkruns.Definition{{Name: definitionName, Image: config.Image, Command: command, WorkingDirectory: config.WorkingDirectory, Environment: config.Environment, TimeoutSeconds: config.Resources.TimeoutSeconds, CPUs: config.Resources.CPUs, MemoryMB: config.Resources.MemoryMB, StorageMB: config.Resources.StorageMB}}, actor.UserID)
+		var buildRun *checkruns.Run
+		for i := range createdRuns {
+			if createdRuns[i].Definition.Name == definitionName {
+				buildRun = &createdRuns[i]
+				break
+			}
+		}
+		if e != nil || buildRun == nil {
 			writeAPIError(w, 503, "preview_build_unavailable", "preview build unavailable")
 			return
 		}
-		p, e := store.Create(pull.RepositoryID, pull.ID, pull.SourceCommitID, actor.UserID, hash, createdRuns[0].ID, config)
+		p, e := store.Create(pull.RepositoryID, pull.ID, pull.SourceCommitID, actor.UserID, hash, buildRun.ID, config)
 		if e != nil {
 			writeAPIError(w, 503, "preview_storage_unavailable", "preview storage unavailable")
 			return
 		}
-		go runs.Execute(createdRuns[0], repository.Path())
+		go runs.Execute(*buildRun, repository.Path())
 		writeJSON(w, 201, p)
 	})
 	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/previews/{preview_id}/events", func(w http.ResponseWriter, r *http.Request) {
@@ -637,8 +644,7 @@ func createRepairPreviewAttempt(git *storage.Store, runs *checkruns.Store, store
 	if err != nil {
 		return previews.Preview{}, err
 	}
-	quoted := strings.ReplaceAll(config.OutputPath, "'", "'\\''")
-	command := config.Build + " && test -d '" + quoted + "' && cp -R '" + quoted + "'/. \"$VIVARIUM_OUTPUT\"/"
+	command := previewBuildCommand(config)
 	p, err := store.ReserveRepairAttempt(pull.RepositoryID, pull.ID, pull.SourceCommitID, actorID, hash, sessionID, findingID, config)
 	if err != nil {
 		return previews.Preview{}, err
@@ -681,4 +687,13 @@ func createRepairPreviewAttempt(git *storage.Store, runs *checkruns.Store, store
 		go runs.Execute(run, repository.Path())
 	}
 	return p, nil
+}
+
+func previewBuildCommand(config previews.Config) string {
+	quotedWorking := strings.ReplaceAll(config.WorkingDirectory, "'", "'\\''")
+	quotedOutput := strings.ReplaceAll(config.OutputPath, "'", "'\\''")
+	// Check execution deliberately mounts the exact Git archive read-only. A
+	// preview gets a disposable, storage-bounded /tmp copy for compilation; only
+	// the declared output is copied into the separately bounded artifact mount.
+	return "rm -rf /tmp/vivarium-preview && mkdir -p /tmp/vivarium-preview && cp -R /workspace/. /tmp/vivarium-preview/ && cd '/tmp/vivarium-preview/" + quotedWorking + "' && " + config.Build + " && test -d '" + quotedOutput + "' && cp -R '" + quotedOutput + "'/. \"$VIVARIUM_OUTPUT\"/"
 }
