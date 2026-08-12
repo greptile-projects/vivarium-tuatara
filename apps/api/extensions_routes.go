@@ -22,6 +22,22 @@ func registerExtensionRoutes(mux *http.ServeMux, store *extensions.Store, creden
 }
 
 func registerExtensionRoutesWithVerifier(mux *http.ServeMux, store *extensions.Store, credentials *auth.Store, verify func(context.Context, ...string) (time.Time, error)) {
+	decodeRegistration := func(r *http.Request) (extensions.Registration, int, error) {
+		var in struct {
+			Version              int                       `json:"version"`
+			Name                 string                    `json:"name"`
+			Description          string                    `json:"description"`
+			OperatorContact      string                    `json:"operator_contact"`
+			Capabilities         []string                  `json:"capabilities"`
+			CallbackEndpoint     string                    `json:"callback_endpoint"`
+			ActionEndpoint       string                    `json:"action_endpoint"`
+			RequestedPermissions []extensions.Permission   `json:"requested_permissions"`
+			SupportedEvents      []string                  `json:"supported_events"`
+			CredentialRotation   extensions.RotationPolicy `json:"credential_rotation"`
+		}
+		err := decodeJSON(r, &in)
+		return extensions.Registration{Name: in.Name, Description: in.Description, OperatorContact: in.OperatorContact, Capabilities: in.Capabilities, CallbackURL: in.CallbackEndpoint, ActionURL: in.ActionEndpoint, RequestedPermissions: in.RequestedPermissions, SupportedEvents: in.SupportedEvents, CredentialRotation: in.CredentialRotation}, in.Version, err
+	}
 	mux.HandleFunc("POST /extensions", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, credentials, "profile:write", false)
 		if !ok {
@@ -82,6 +98,40 @@ func registerExtensionRoutesWithVerifier(mux *http.ServeMux, store *extensions.S
 		}
 		if e != nil {
 			writeAPIError(w, 500, "extension_storage_unavailable", "extension could not be loaded")
+			return
+		}
+		writeJSON(w, 200, v)
+	})
+	mux.HandleFunc("POST /extensions/{id}/contract", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "profile:write", false)
+		if !ok {
+			return
+		}
+		in, version, err := decodeRegistration(r)
+		if err != nil {
+			writeAPIError(w, 400, "invalid_extension", "request body must be valid JSON")
+			return
+		}
+		verified, err := verify(r.Context(), in.CallbackURL, in.ActionURL)
+		if err != nil {
+			writeAPIError(w, 422, "endpoint_verification_failed", err.Error())
+			return
+		}
+		v, err := store.UpdateContract(r.PathValue("id"), actor.UserID, version, in, verified)
+		if errors.Is(err, extensions.ErrConflict) {
+			writeAPIError(w, 409, "extension_changed", "extension contract changed; reload before retrying")
+			return
+		}
+		if errors.Is(err, extensions.ErrInvalid) {
+			writeAPIError(w, 422, "invalid_extension", "complete contract is required")
+			return
+		}
+		if errors.Is(err, extensions.ErrNotFound) {
+			writeAPIError(w, 404, "extension_not_found", "extension not found")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 500, "extension_storage_unavailable", "extension could not be updated")
 			return
 		}
 		writeJSON(w, 200, v)

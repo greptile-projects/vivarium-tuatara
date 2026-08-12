@@ -206,6 +206,34 @@ func (s *Store) readContributions(repo, kind, resource string) ([]Contribution, 
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out, nil
 }
+func (s *Store) readInstallationContributions(installationID string) ([]Contribution, error) {
+	out := []Contribution{}
+	root := filepath.Join(s.root, "contributions")
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			return nil
+		}
+		var v Contribution
+		b, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if json.Unmarshal(b, &v) != nil {
+			return ErrInvalid
+		}
+		if v.InstallationID == installationID {
+			out = append(out, v)
+		}
+		return nil
+	})
+	if os.IsNotExist(err) {
+		return out, nil
+	}
+	return out, err
+}
 func installationAllows(v Installation, repo, resource, action string) bool {
 	found := false
 	for _, id := range v.RepositoryIDs {

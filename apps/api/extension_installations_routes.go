@@ -194,6 +194,69 @@ func registerExtensionInstallationRoutes(mux *http.ServeMux, store *extensions.S
 		}
 		writeJSON(w, 200, map[string]any{"contract": map[string]any{"schema_version": extensions.DeliverySchemaVersion, "signature_algorithm": "Ed25519", "public_key": store.DeliveryPublicKey(), "signature_input": "exact JSON payload bytes"}, "deliveries": deliveries})
 	})
+	mux.HandleFunc("GET /extension-installations/{id}/operations", func(w http.ResponseWriter, r *http.Request) {
+		installation, ok := loadAuthorized(w, r, "repositories:read")
+		if !ok {
+			return
+		}
+		v, e := store.InspectOperations(r.PathValue("id"))
+		if e != nil {
+			writeAPIError(w, 500, "extension_storage_unavailable", "operations could not be loaded")
+			return
+		}
+		allCredentials, credentialErr := credentials.List(installation.ExtensionID)
+		if credentialErr != nil {
+			writeAPIError(w, 500, "credential_storage_unavailable", "credential health could not be loaded")
+			return
+		}
+		byID := map[string]auth.Credential{}
+		for _, credential := range allCredentials {
+			byID[credential.ID] = credential
+		}
+		for _, id := range installation.DerivedCredentialIDs {
+			if credential, found := byID[id]; found {
+				v.Credentials = append(v.Credentials, extensions.CredentialHealth{ID: credential.ID, CreatedAt: credential.CreatedAt, ExpiresAt: credential.ExpiresAt, LastUsedAt: credential.LastUsedAt, RevokedAt: credential.RevokedAt})
+				if credential.RevokedAt == nil && time.Until(credential.ExpiresAt) < 24*time.Hour {
+					v.Notices = append(v.Notices, extensions.OperationalNotice{Code: "credential_expiring", Severity: "warning", Message: "An installation credential expires within 24 hours.", Action: "Rotate it now and retire the prior credential after overlap."})
+				}
+			}
+		}
+		writeJSON(w, 200, v)
+	})
+	mux.HandleFunc("POST /extension-installations/{id}/credentials/rotate", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:write", false)
+		if !ok {
+			return
+		}
+		v, e := store.GetInstallation(r.PathValue("id"))
+		if e != nil || !authorize(actor.UserID, v.OwnerType, v.OwnerID, v.RepositoryIDs) {
+			writeAPIError(w, 404, "installation_not_found", "installation not found")
+			return
+		}
+		var in struct {
+			Version   int `json:"version"`
+			ExpiresIn int `json:"expires_in"`
+		}
+		if decodeJSON(r, &in) != nil || v.Status != "active" || v.Version != in.Version || in.ExpiresIn < 60 || in.ExpiresIn > 86400 {
+			writeAPIError(w, 409, "installation_changed", "active installation, current version, and lifetime from 60 to 86400 seconds are required")
+			return
+		}
+		issued, e := credentials.Issue(v.ExtensionID, auth.API, "Rotated extension installation "+v.ID, []string{"extensions:contribute"}, time.Duration(in.ExpiresIn)*time.Second)
+		if e != nil {
+			writeAPIError(w, 500, "credential_unavailable", "credential could not be issued")
+			return
+		}
+		updated, e := store.RecordDerivedCredential(v.ID, issued.ID, v.Version)
+		if e != nil {
+			_, _ = credentials.Revoke(v.ExtensionID, issued.ID)
+			writeAPIError(w, 409, "installation_changed", "installation changed before credential publication")
+			return
+		}
+		for _, old := range v.DerivedCredentialIDs {
+			_, _ = credentials.Revoke(v.ExtensionID, old)
+		}
+		writeJSON(w, 201, map[string]any{"credential": issued, "installation": updated})
+	})
 	mux.HandleFunc("GET /extension-installations/{id}/deliveries/{delivery_id}", func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := loadAuthorized(w, r, "repositories:read"); !ok {
 			return
