@@ -111,3 +111,19 @@ func TestContractUpdateRequiresInstallationOwnerConsent(t *testing.T) {
 		t.Fatalf("contract version=%d", consented.ContractVersion)
 	}
 }
+
+func TestRotateDerivedCredentialAtomicallyPreservesSuccessor(t *testing.T) {
+	store, _ := New(t.TempDir())
+	owner, repository := strings.Repeat("a", 32), strings.Repeat("b", 32)
+	extension, _ := store.Create(owner, Registration{Name: "Review lens", OperatorContact: "ops@example.test", Capabilities: []string{"review"}, CallbackURL: "https://example.test/events", ActionURL: "https://example.test/actions", RequestedPermissions: []Permission{{Resource: "pull_requests", Actions: []string{"write"}}}, SupportedEvents: []string{"pull_request.opened"}, CredentialRotation: RotationPolicy{IntervalDays: 30}}, time.Now())
+	installation, _ := store.CreateInstallation(extension.ID, owner, InstallationInput{OwnerType: "repository", OwnerID: repository, RepositoryIDs: []string{repository}, ResourceTypes: []string{"pull_requests"}, CapabilityDecisions: []CapabilityDecision{{Capability: "review", Decision: "approved"}}, Settings: map[string]string{}})
+	oldID, newID := strings.Repeat("c", 32), strings.Repeat("d", 32)
+	installation, _ = store.RecordDerivedCredential(installation.ID, oldID, installation.Version)
+	rotated, err := store.RotateDerivedCredential(installation.ID, newID, installation.Version, false)
+	if err != nil || len(rotated.DerivedCredentialIDs) != 1 || rotated.DerivedCredentialIDs[0] != newID {
+		t.Fatalf("rotation=%#v error=%v", rotated, err)
+	}
+	if _, err = store.RotateDerivedCredential(installation.ID, strings.Repeat("e", 32), installation.Version, false); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale retry error=%v", err)
+	}
+}

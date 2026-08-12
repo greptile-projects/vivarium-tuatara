@@ -344,6 +344,67 @@ func (s *Store) RecordDerivedCredential(id, credentialID string, expected int) (
 	}
 	return v, nil
 }
+
+// RotateDerivedCredential atomically publishes the successor at the
+// installation authority boundary. Zero-overlap rotation simultaneously
+// detaches predecessors; positive overlap retains them until auth expiry.
+func (s *Store) RotateDerivedCredential(id, credentialID string, expected int, retainPredecessors bool) (Installation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Installation{}, err
+	}
+	defer unlock()
+	v, err := s.readInstallation(id)
+	if err != nil {
+		return v, err
+	}
+	if v.Version != expected {
+		return v, ErrConflict
+	}
+	if len(credentialID) != 32 || v.Status != "active" {
+		return v, ErrInvalid
+	}
+	if retainPredecessors {
+		v.DerivedCredentialIDs = append(v.DerivedCredentialIDs, credentialID)
+	} else {
+		v.DerivedCredentialIDs = []string{credentialID}
+	}
+	v.Version++
+	v.UpdatedAt = s.now().Truncate(time.Microsecond)
+	if err = writeAtomic(filepath.Join(s.root, "installation-"+id+".json"), v); err != nil {
+		return Installation{}, err
+	}
+	return v, nil
+}
+
+// DetachDerivedCredential removes authority without deleting credential or
+// contribution history. It is safe to retry after a failed overlap update.
+func (s *Store) DetachDerivedCredential(id, credentialID string) (Installation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Installation{}, err
+	}
+	defer unlock()
+	v, err := s.readInstallation(id)
+	if err != nil {
+		return v, err
+	}
+	ids := make([]string, 0, len(v.DerivedCredentialIDs))
+	for _, existing := range v.DerivedCredentialIDs {
+		if existing != credentialID {
+			ids = append(ids, existing)
+		}
+	}
+	v.DerivedCredentialIDs = ids
+	v.Version++
+	v.UpdatedAt = s.now().Truncate(time.Microsecond)
+	err = writeAtomic(filepath.Join(s.root, "installation-"+id+".json"), v)
+	return v, err
+}
 func (s *Store) ListInstallations(actor string) ([]Installation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

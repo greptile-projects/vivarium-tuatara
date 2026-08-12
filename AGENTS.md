@@ -92,9 +92,9 @@ whenever dependencies change or the web job fails before it starts.
   rotation, narrowing, pause, quarantine, and removal preserve prior evidence.
   Rotation durably shortens predecessor expiry to the configured overlap
   deadline; hourly notices use the rolling hour while totals remain lifetime.
-  Rotation attaches its successor only after every predecessor retirement
-  succeeds; failed attempts revoke the unreturned, unattached successor so
-  retries cannot amplify effective credentials.
+  Rotation atomically publishes its successor and, at zero overlap, detaches
+  predecessors at the installation authority boundary before best-effort auth
+  retirement; positive overlap failures detach the affected predecessor.
   Active installations subscribe to permitted project events through durable
   v1 Ed25519-signed envelopes with stable event/delivery identities, monotonic
   per-installation sequence and repository ordering keys. Owner delivery

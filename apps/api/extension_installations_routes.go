@@ -252,6 +252,13 @@ func registerExtensionInstallationRoutes(mux *http.ServeMux, store *extensions.S
 			writeAPIError(w, 500, "extension_storage_unavailable", "rotation policy could not be loaded")
 			return
 		}
+		retainPredecessors := extension.CredentialRotation.OverlapHours > 0
+		updated, e := store.RotateDerivedCredential(v.ID, issued.ID, v.Version, retainPredecessors)
+		if e != nil {
+			_, _ = credentials.Revoke(v.ExtensionID, issued.ID)
+			writeAPIError(w, 409, "installation_changed", "installation changed before credential publication")
+			return
+		}
 		deadline := time.Now().UTC().Add(time.Duration(extension.CredentialRotation.OverlapHours) * time.Hour)
 		for _, old := range v.DerivedCredentialIDs {
 			if extension.CredentialRotation.OverlapHours == 0 {
@@ -260,19 +267,14 @@ func registerExtensionInstallationRoutes(mux *http.ServeMux, store *extensions.S
 				_, e = credentials.ExpireAt(v.ExtensionID, old, deadline)
 			}
 			if e != nil {
-				_, _ = credentials.Revoke(v.ExtensionID, issued.ID)
-				writeAPIError(w, 500, "credential_unavailable", "predecessor credential retirement could not be scheduled")
-				return
+				// The successor is already authoritative. If overlap scheduling
+				// fails, detach the predecessor so it cannot retain excess access.
+				updated, e = store.DetachDerivedCredential(v.ID, old)
+				if e != nil {
+					writeAPIError(w, 500, "credential_unavailable", "credential authority could not be reconciled")
+					return
+				}
 			}
-		}
-		// Only attachment makes an extension credential usable at the
-		// contribution boundary. Publish it after every predecessor retirement
-		// succeeds, so an error cannot expose concurrent retry-amplifiable access.
-		updated, e := store.RecordDerivedCredential(v.ID, issued.ID, v.Version)
-		if e != nil {
-			_, _ = credentials.Revoke(v.ExtensionID, issued.ID)
-			writeAPIError(w, 409, "installation_changed", "installation changed before credential publication")
-			return
 		}
 		writeJSON(w, 201, map[string]any{"credential": issued, "installation": updated})
 	})
