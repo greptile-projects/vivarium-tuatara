@@ -44,6 +44,23 @@ is attributable remote identity, never a local login, credential, permission,
 or proof of current authorization; later collaboration protocols must verify
 signed messages against the retained peer document and their own live policy.
 
+Trusted peers advertise `repository-discovery.v1` and publish bounded signed
+repository projections at `/federation/repositories/{id}`. Public projections
+name the authoritative instance-qualified reference and exact default revision,
+and may include branches, immutable releases, contributor guidance, public
+issues, and open contribution opportunities. They contain metadata only: no Git
+objects, private discussion, credentials, membership, or implied local control.
+
+Authenticated developers resolve `{instance-id}:{repository-id}` through their
+home instance. The home verifies the response against the exact retained peer
+identity-document version and active Ed25519 key before caching it. Refreshes
+retain explicit `current`, `unreachable`, `inaccessible`, `unsupported`, or
+`invalid-signature` state; a prior permitted snapshot may remain visible with a
+stale timestamp and error, but inaccessible content is never newly copied.
+Following a reference is local account metadata used by `/federation/follows`;
+it grants no remote or local repository authority. The `/federation` workspace
+labels cached context as remote and links to its authoritative endpoint.
+
 ## Living documentation
 
 Repository owners define documentation collections through

@@ -8,6 +8,37 @@ import (
 	"testing"
 )
 
+func TestSignedRepositoryCacheAndFollow(t *testing.T) {
+	s, err := New(t.TempDir(), "remote", "https://remote.example", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := s.Identity()
+	signed, err := s.SignRepository(RepositorySnapshot{RepositoryID: "0123456789abcdef0123456789abcdef", Name: "garden", Visibility: "public", DefaultBranch: "main", Revision: "0123456789abcdef0123456789abcdef01234567", Branches: []RepositoryBranch{{Name: "main", Revision: "0123456789abcdef0123456789abcdef01234567"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = VerifyRepository(signed, d); err != nil {
+		t.Fatalf("verify signed repository: %v", err)
+	}
+	signed.Snapshot.Name = "forged"
+	if VerifyRepository(signed, d) == nil {
+		t.Fatal("accepted altered signed repository")
+	}
+	reference := d.InstanceID + ":" + signed.Snapshot.RepositoryID
+	cache, err := s.PutRepositoryCache(RepositoryCache{Reference: reference, PeerID: d.InstanceID, RepositoryID: signed.Snapshot.RepositoryID, Status: "current", RemoteRevision: signed.Snapshot.Revision, Snapshot: &signed.Snapshot, SignatureVerified: true})
+	if err != nil || cache.Reference != reference {
+		t.Fatalf("cache: %#v %v", cache, err)
+	}
+	if _, err = s.Follow("0123456789abcdef0123456789abcdef", reference, true); err != nil {
+		t.Fatal(err)
+	}
+	follows, err := s.ListFollows("0123456789abcdef0123456789abcdef")
+	if err != nil || len(follows) != 1 {
+		t.Fatalf("follows %#v %v", follows, err)
+	}
+}
+
 func TestIdentityIsStableSignedAndTamperEvident(t *testing.T) {
 	s, err := New(t.TempDir(), "North", "https://north.example", []string{"ops@north.example"})
 	if err != nil {

@@ -112,6 +112,13 @@ whenever dependencies change or the web job fails before it starts.
   revocation remain explicit. Instance-qualified user and public approved-agent
   cards are attribution references only: they never authenticate locally, and
   actor resolution provides no membership enumeration.
+  Trusted peers may also advertise `repository-discovery.v1`. Public remote
+  repository projections are bounded signed metadata carrying exact revisions,
+  branches, releases, contributor guidance, public issues, and open contribution
+  opportunities. Home-instance resolution verifies the retained peer document
+  and caches only permitted metadata; follow state is local, while unsupported
+  capabilities, visibility loss, invalid signatures, stale caches, and outages
+  remain explicit and never imply local repository control.
   Local sample endpoint verification is available only when
   `$EXTENSION_DEVELOPMENT_ENDPOINTS=1`, and then only for HTTP loopback hosts;
   production/default verification remains HTTPS and public-address-only. The
