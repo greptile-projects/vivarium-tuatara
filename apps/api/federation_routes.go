@@ -481,20 +481,22 @@ func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userS
 			writeAPIError(w, 503, "federation_unavailable", "proposal could not be signed")
 			return
 		}
-		temp, err := os.CreateTemp("", "vivarium-contribution-*.bundle")
-		if err != nil {
+		bundle := &boundedBuffer{limit: maxFederatedRepositoryResponseBytes}
+		var stderr bytes.Buffer
+		cmd := exec.CommandContext(r.Context(), "git", "--git-dir="+sourceGit.Path(), "bundle", "create", "-", "refs/heads/"+in.SourceBranch)
+		cmd.Stdout, cmd.Stderr = bundle, &stderr
+		if err := cmd.Run(); err != nil {
+			if r.Context().Err() != nil {
+				return
+			}
+			if bundle.Len() >= maxFederatedRepositoryResponseBytes {
+				writeAPIError(w, 422, "federated_transfer_too_large", "contribution exceeds the federation transfer limit")
+				return
+			}
+			writeAPIError(w, 422, "federated_transfer_failed", strings.TrimSpace(stderr.String()))
 			return
 		}
-		path := temp.Name()
-		temp.Close()
-		defer os.Remove(path)
-		cmd := exec.Command("git", "--git-dir="+sourceGit.Path(), "bundle", "create", path, "refs/heads/"+in.SourceBranch)
-		if output, err := cmd.CombinedOutput(); err != nil {
-			writeAPIError(w, 422, "federated_transfer_failed", string(output))
-			return
-		}
-		data, _ := os.ReadFile(path)
-		envelope := signedContribution{Payload: payload, DocumentVersion: version, SigningKeyID: key, Signature: signature, Bundle: base64.RawStdEncoding.EncodeToString(data)}
+		envelope := signedContribution{Payload: payload, DocumentVersion: version, SigningKeyID: key, Signature: signature, Bundle: base64.RawStdEncoding.EncodeToString(bundle.Bytes())}
 		response, err := sendContribution(store, cache.PeerID, envelope)
 		if err != nil {
 			writeAPIError(w, 422, "federated_proposal_failed", err.Error())
