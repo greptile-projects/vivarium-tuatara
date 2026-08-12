@@ -681,8 +681,8 @@ use explicit `federated_*` errors and publish no partial refs or credentials.
 Federated pull activity is read at `GET
 /repositories/{id}/pulls/{pull-id}/federation-events`. Current target-repository
 participants publish a bounded event with `POST` to the same path. Supported
-`kind` values are `comment`, `review`, `revision`, `checks`, `preview`, and
-`closure`; revision-bound events default to the pull's exact adopted source
+`kind` values are `comment`, `review`, `revision`, `checks`, `preview`,
+`agent_session`, and `closure`; revision-bound events default to the pull's exact adopted source
 commit. The instance signs the immutable event, retains it locally, and sends it
 to `POST /federation/contributions/{contribution-id}/events`. A successful
 duplicate is idempotent, different content under the same origin/event identity
@@ -691,6 +691,18 @@ is `409 federated_event_conflict`, and an unavailable peer returns `202` with
 `origin_instance_id`, `verification`, signature metadata, and derived `stale`.
 Imported evidence never counts as a local required check, review identity,
 credential, or merge permission.
+
+On the source instance, `POST
+/federation/contributions/{contribution-id}/agent-sessions` accepts an
+`organization_id`, approved `agent_id`, bounded `instructions`, `context_paths`,
+and optional `expires_in`. The caller must own the linked fork and operate that
+approved agent; every path must exist at the frozen revision. Completion at the
+nested `/{session-id}/runs/{run-id}/completion` endpoint accepts the branch-tip
+`commit_id`, `summary`, bounded `commands`, `evidence`, `residual_concerns`,
+`agent_minutes`, and `cost_units`. The server derives commits/files, transfers
+the exact bounded bundle as a signed revision, and sends a signed redacted
+`agent_session` event. Local guidance/control is never federated, and this
+credential or evidence grants no target-instance authority.
 
 Owners manage limited access with `GET` and `POST
 /repositories/{id}/collaborators` and `DELETE

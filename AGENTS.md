@@ -126,7 +126,14 @@ whenever dependencies change or the web job fails before it starts.
   idempotent with explicit pending/conflict recovery; revision movement derives
   stale evidence normally. Imported claims remain verified remote evidence and
   never become local users, required checks, credentials, review authority, or
-  merge permission.
+  merge permission. Source-instance participants may delegate a federated
+  contribution to an approved agent they operate. Delegation freezes the
+  current contribution revision and selected existing paths, issues only a
+  short-lived local credential bound to the fork, source branch, and
+  contribution identity, and completion transfers only descendant commits plus
+  a signed redacted `agent_session` summary. Guidance and revocation stay
+  local; remote secrets, checks, credentials, review, and merge authority never
+  enter the mandate.
   repository projections are bounded signed metadata carrying exact revisions,
   branches, releases, contributor guidance, public issues, and open contribution
   opportunities. Home-instance resolution verifies the retained peer document
