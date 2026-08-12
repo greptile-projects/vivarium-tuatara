@@ -68,7 +68,16 @@ func registerExtensionContributionRoutes(mux *http.ServeMux, store *extensions.S
 			writeAPIError(w, 409, "resource_revision_changed", "resource does not exist at the supplied current revision")
 			return
 		}
-		created, e := store.PublishContribution(v, in)
+		var created extensions.Contribution
+		e = pulls.WithSourceRevision(in.RepositoryID, in.ResourceID, in.Revision, func(_ pullrequests.PullRequest) error {
+			var publishErr error
+			created, publishErr = store.PublishContribution(v, in)
+			return publishErr
+		})
+		if errors.Is(e, pullrequests.ErrSourceChanged) || errors.Is(e, pullrequests.ErrNotReady) {
+			writeAPIError(w, 409, "resource_revision_changed", "resource changed before contribution publication")
+			return
+		}
 		if errors.Is(e, extensions.ErrConflict) {
 			writeAPIError(w, 409, "idempotency_conflict", "idempotency key was already used with different content")
 			return
