@@ -1,6 +1,7 @@
 package extensions
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -27,6 +28,14 @@ func TestCreateRejectsContractsEmptyAfterNormalization(t *testing.T) {
 	}
 }
 
+func TestInstallationInputBindsPublicJSONContract(t *testing.T) {
+	var input InstallationInput
+	err := json.Unmarshal([]byte(`{"owner_type":"repository","owner_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository_ids":["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],"resource_types":["pull_requests"],"capability_decisions":[{"capability":"review","decision":"approved"}],"settings":{"label":"review"}}`), &input)
+	if err != nil || input.OwnerType != "repository" || len(input.RepositoryIDs) != 1 || len(input.CapabilityDecisions) != 1 || input.Settings["label"] != "review" {
+		t.Fatalf("input = %#v, error = %v", input, err)
+	}
+}
+
 func TestInstallationScopesDecisionsAndRetainsLifecycleHistory(t *testing.T) {
 	store, _ := New(t.TempDir())
 	extension, err := store.Create(strings.Repeat("a", 32), Registration{Name: "Review lens", OperatorContact: "ops@example.test", Capabilities: []string{"review", "summarize"}, CallbackURL: "https://example.test/events", ActionURL: "https://example.test/actions", RequestedPermissions: []Permission{{Resource: "pull_requests", Actions: []string{"read", "comment"}}, {Resource: "issues", Actions: []string{"read"}}}, SupportedEvents: []string{"pull_request.opened"}, CredentialRotation: RotationPolicy{IntervalDays: 30}}, time.Now())
@@ -50,5 +59,29 @@ func TestInstallationScopesDecisionsAndRetainsLifecycleHistory(t *testing.T) {
 	}
 	if _, err = store.CreateInstallation(extension.ID, strings.Repeat("a", 32), InstallationInput{OwnerType: "repository", OwnerID: strings.Repeat("b", 32), RepositoryIDs: []string{strings.Repeat("b", 32)}, ResourceTypes: []string{"pull_requests"}, CapabilityDecisions: in.CapabilityDecisions, Settings: map[string]string{"api_token": "nope"}}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("secret setting error=%v", err)
+	}
+}
+
+func TestInstallationWithAllCapabilitiesDeniedHasNoEffectiveAccess(t *testing.T) {
+	store, _ := New(t.TempDir())
+	extension, err := store.Create(strings.Repeat("a", 32), Registration{Name: "Review lens", OperatorContact: "ops@example.test", Capabilities: []string{"review"}, CallbackURL: "https://example.test/events", ActionURL: "https://example.test/actions", RequestedPermissions: []Permission{{Resource: "pull_requests", Actions: []string{"read"}}}, SupportedEvents: []string{"pull_request.opened"}, CredentialRotation: RotationPolicy{IntervalDays: 30}}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := store.CreateInstallation(extension.ID, strings.Repeat("a", 32), InstallationInput{OwnerType: "repository", OwnerID: strings.Repeat("b", 32), RepositoryIDs: []string{strings.Repeat("b", 32)}, ResourceTypes: []string{"pull_requests"}, CapabilityDecisions: []CapabilityDecision{{Capability: "review", Decision: "denied"}}, Settings: map[string]string{}})
+	if err != nil || len(installed.EffectiveAccess) != 0 {
+		t.Fatalf("installation = %#v, error = %v", installed, err)
+	}
+}
+
+func TestInstallationTransferSynchronizesRepositoryScope(t *testing.T) {
+	store, _ := New(t.TempDir())
+	extension, _ := store.Create(strings.Repeat("a", 32), Registration{Name: "Review lens", OperatorContact: "ops@example.test", Capabilities: []string{"review"}, CallbackURL: "https://example.test/events", ActionURL: "https://example.test/actions", RequestedPermissions: []Permission{{Resource: "pull_requests", Actions: []string{"read"}}}, SupportedEvents: []string{"pull_request.opened"}, CredentialRotation: RotationPolicy{IntervalDays: 30}}, time.Now())
+	input := InstallationInput{OwnerType: "repository", OwnerID: strings.Repeat("b", 32), RepositoryIDs: []string{strings.Repeat("b", 32)}, ResourceTypes: []string{"pull_requests"}, CapabilityDecisions: []CapabilityDecision{{Capability: "review", Decision: "approved"}}, Settings: map[string]string{}}
+	installed, _ := store.CreateInstallation(extension.ID, strings.Repeat("a", 32), input)
+	newOwner := strings.Repeat("c", 32)
+	transferred, err := store.ChangeInstallation(installed.ID, strings.Repeat("a", 32), "transfer", installed.Version, &InstallationInput{OwnerType: "repository", OwnerID: newOwner}, nil)
+	if err != nil || transferred.OwnerID != newOwner || len(transferred.RepositoryIDs) != 1 || transferred.RepositoryIDs[0] != newOwner {
+		t.Fatalf("installation = %#v, error = %v", transferred, err)
 	}
 }

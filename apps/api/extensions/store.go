@@ -76,10 +76,12 @@ type Installation struct {
 	Events               []InstallationEvent  `json:"events"`
 }
 type InstallationInput struct {
-	OwnerType, OwnerID           string
-	RepositoryIDs, ResourceTypes []string
-	CapabilityDecisions          []CapabilityDecision
-	Settings                     map[string]string
+	OwnerType           string               `json:"owner_type"`
+	OwnerID             string               `json:"owner_id"`
+	RepositoryIDs       []string             `json:"repository_ids"`
+	ResourceTypes       []string             `json:"resource_types"`
+	CapabilityDecisions []CapabilityDecision `json:"capability_decisions"`
+	Settings            map[string]string    `json:"settings"`
 }
 
 // Extension is a platform principal separate from its human owner and operator.
@@ -350,6 +352,14 @@ func (s *Store) ChangeInstallation(id, actor, action string, expected int, in *I
 			return v, ErrInvalid
 		}
 		v.OwnerType, v.OwnerID = in.OwnerType, in.OwnerID
+		if in.OwnerType == "repository" {
+			v.RepositoryIDs = []string{in.OwnerID}
+		} else {
+			if len(in.RepositoryIDs) == 0 {
+				return v, ErrInvalid
+			}
+			v.RepositoryIDs = clean(in.RepositoryIDs)
+		}
 	default:
 		return v, ErrInvalid
 	}
@@ -417,12 +427,12 @@ func validInstallation(in InstallationInput, e Extension) bool {
 	return true
 }
 func effective(e Extension, in InstallationInput) []Permission {
-	approved := map[string]bool{}
+	approved := false
 	for _, d := range in.CapabilityDecisions {
-		approved[d.Capability] = d.Decision == "approved"
+		approved = approved || d.Decision == "approved"
 	}
 	out := []Permission{}
-	if len(approved) == 0 {
+	if !approved {
 		return out
 	}
 	for _, p := range e.RequestedPermissions {
