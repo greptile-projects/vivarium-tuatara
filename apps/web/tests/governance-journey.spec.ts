@@ -30,7 +30,21 @@ async function json(page: Page, method: "get" | "post" | "put", path: string, he
   expect(response.status(), `${method.toUpperCase()} ${path}: ${body}`).toBeLessThan(300);
   return body ? JSON.parse(body) : undefined;
 }
-const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+async function tallyWhenClosed(page: Page, proposalID: string, headers: Record<string, string>) {
+  let tally: any;
+  await expect.poll(async () => {
+    const response = await page.request.post(`/api/governance/proposals/${proposalID}/tally`, { headers, data: {} });
+    const body = await response.text();
+    if (response.status() === 409) {
+      expect(JSON.parse(body)).toMatchObject({ error: { code: "voting_closed" } });
+      return false;
+    }
+    expect(response.status(), `POST governance tally: ${body}`).toBe(200);
+    tally = JSON.parse(body);
+    return true;
+  }, { timeout: 15_000 }).toBe(true);
+  return tally;
+}
 
 test("a community governs delivery and renews stewardship without inheriting repository authority", async ({ browser }) => {
   test.setTimeout(300_000);
@@ -82,13 +96,12 @@ test("a community governs delivery and renews stewardship without inheriting rep
     await json(contributorPage, "post", `/repositories/${repository.id}/charter/standing/${contributorStanding.id}/actions`, contributor.headers, { action: "accept", reason: "Accept standing earned through reviewed contribution." });
     await json(successorPage, "post", `/repositories/${repository.id}/charter/standing/${successorStanding.id}/actions`, successor.headers, { action: "accept", reason: "Accept bounded governance standing." });
     async function proposal(page: Page, headers: Record<string, string>, title: string) {
-      const closes = new Date(Date.now() + 900).toISOString();
+      const closes = new Date(Date.now() + 5000).toISOString();
       return json(page, "post", "/governance/proposals", headers, { scope_type: "repository", scope_id: repository.id, source: { kind: "initiative", resource_id: `initiative-${title}`, label: title }, title, summary: "Evaluate a bounded community change from retained project evidence.", scope: "The runtime and stewardship workflow only.", alternatives: [{ id: "adopt", title: "Adopt", summary: "Proceed through ordinary repository controls.", effects: ["Create a reviewed implementation"] }, { id: "defer", title: "Defer", summary: "Retain the current implementation.", effects: ["No repository change"] }], evidence: [{ kind: "usage", resource_id: "runtime-trace-2026-08", label: "Exact runtime usage trace" }], affected_resources: [{ kind: "branch", resource_id: "main", label: "Protected main branch" }], disclosure_requirements: ["Disclose operational risk and conflicts"], implementation_effects: ["Human and agent tasks require review and checks"], rule: { decision_class: "community initiative", opens_at: new Date(Date.now() - 100).toISOString(), closes_at: closes } });
     }
     let failed = await proposal(ownerPage, owner.headers, "Quorum recovery rehearsal") as any;
     failed = await json(ownerPage, "post", `/governance/proposals/${failed.id}/ballots`, owner.headers, { choice: "adopt", reason: "Availability should not rewrite quorum." });
-    await pause(1000);
-    failed = await json(ownerPage, "post", `/governance/proposals/${failed.id}/tally`, owner.headers, {}) as any;
+    failed = await tallyWhenClosed(ownerPage, failed.id, owner.headers);
     expect(failed.tally).toMatchObject({ status: "not_accepted", quorum_met: false });
 
     let initiative = await proposal(contributorPage, contributor.headers, "Community runtime initiative") as any;
@@ -97,8 +110,7 @@ test("a community governs delivery and renews stewardship without inheriting rep
     await json(ownerPage, "post", `/governance/proposals/${initiative.id}/ballots`, owner.headers, { choice: "adopt", reason: "Approve only with ordinary controls." });
     await json(contributorPage, "post", `/governance/proposals/${initiative.id}/ballots`, contributor.headers, { choice: "adopt", reason: "The evidence and bounded path are sufficient." });
     await json(successorPage, "post", `/governance/proposals/${initiative.id}/ballots`, successor.headers, { choice: "recuse", reason: "I helped prepare the cited support rotation." });
-    await pause(1000);
-    initiative = await json(ownerPage, "post", `/governance/proposals/${initiative.id}/tally`, owner.headers, {}) as any;
+    initiative = await tallyWhenClosed(ownerPage, initiative.id, owner.headers);
     expect(initiative.tally).toMatchObject({ status: "accepted", quorum_met: true, recusals: 1, contested: false });
     expect(initiative.analyses).toEqual(expect.arrayContaining([expect.objectContaining({ position: "oppose", body: expect.stringContaining("Recorded dissent") })]));
 
@@ -142,7 +154,7 @@ test("a community governs delivery and renews stewardship without inheriting rep
     let election = await proposal(ownerPage, owner.headers, "Successor maintainer election") as any;
     await json(ownerPage, "post", `/governance/proposals/${election.id}/ballots`, owner.headers, { choice: "adopt", reason: "Transfer governance stewardship transparently." });
     await json(contributorPage, "post", `/governance/proposals/${election.id}/ballots`, contributor.headers, { choice: "adopt", reason: "The nominee has proven support work." });
-    await pause(1000); election = await json(ownerPage, "post", `/governance/proposals/${election.id}/tally`, owner.headers, {}) as any;
+    election = await tallyWhenClosed(ownerPage, election.id, owner.headers);
     const charterView = await json(ownerPage, "get", `/repositories/${repository.id}/charter`, owner.headers) as any;
     const continuity = await json(ownerPage, "post", `/repositories/${repository.id}/charter/continuity`, owner.headers, { expected_version: charterView.continuity.length, charter_version: 1, action: { kind: "election", role: "maintainer", from_standing_id: ownerStanding.id, to_standing_id: successorStanding.id, governance_proposal_id: election.id, reason: "Elect and hand off community stewardship.", resources: ["branch:main", "release:stable"], expires_at: new Date(Date.now() + 86400000).toISOString(), review_at: new Date(Date.now() + 43200000).toISOString() } }) as any;
     const electionAction = continuity.charter.continuity.at(-1);
@@ -152,7 +164,7 @@ test("a community governs delivery and renews stewardship without inheriting rep
     let emergency = await proposal(ownerPage, owner.headers, "Emergency availability recovery") as any;
     await json(ownerPage, "post", `/governance/proposals/${emergency.id}/ballots`, owner.headers, { choice: "adopt", reason: "Authorize bounded recovery without rewriting the charter." });
     await json(successorPage, "post", `/governance/proposals/${emergency.id}/ballots`, successor.headers, { choice: "adopt", reason: "Keep the project available under explicit review." });
-    await pause(1000); emergency = await json(successorPage, "post", `/governance/proposals/${emergency.id}/tally`, successor.headers, {}) as any;
+    emergency = await tallyWhenClosed(successorPage, emergency.id, successor.headers);
     const beforeEmergency = await json(successorPage, "get", `/repositories/${repository.id}/charter`, successor.headers) as any;
     const recovery = await json(ownerPage, "post", `/repositories/${repository.id}/charter/continuity`, owner.headers, { expected_version: beforeEmergency.continuity.length, charter_version: 1, action: { kind: "emergency", role: "maintainer", governance_proposal_id: emergency.id, reason: "Time-bound availability recovery while ordinary stewardship is unavailable.", resources: ["branch:main"], expires_at: new Date(Date.now() + 3600000).toISOString(), review_at: new Date(Date.now() + 1800000).toISOString() } }) as any;
     const recoveryAction = recovery.charter.continuity.at(-1);
