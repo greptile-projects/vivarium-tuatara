@@ -28,6 +28,7 @@ const defaultBranch = "main"
 const MaxObjectSize int64 = 100 << 20
 
 const maxObjectHeaderSize = 64
+const maxFederatedBundleExpandedSize int64 = 128 << 20
 
 var (
 	// ErrInvalidID indicates that an identifier cannot safely name a repository.
@@ -151,6 +152,10 @@ func OpenBundle(bundlePath string) (*Repository, func(), error) {
 		cleanup()
 		return nil, nil, fmt.Errorf("open Git bundle: %w: %s", err, strings.TrimSpace(string(output)))
 	}
+	if err := verifyPackExpansionBudget(staging, maxFederatedBundleExpandedSize); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
 	if err := unpackCloneObjects(staging); err != nil {
 		cleanup()
 		return nil, nil, err
@@ -167,6 +172,39 @@ func OpenBundle(bundlePath string) (*Repository, func(), error) {
 	}
 	stat := info.Sys().(*syscall.Stat_t)
 	return &Repository{id: "federated-transfer", path: staging, device: uint64(stat.Dev), inode: stat.Ino}, cleanup, nil
+}
+
+// verifyPackExpansionBudget inspects Git's verified pack index before loose
+// objects are materialized. Each object remains under MaxObjectSize and the
+// complete expanded graph must fit the federation import budget.
+func verifyPackExpansionBudget(repositoryPath string, budget int64) error {
+	indexes, err := filepath.Glob(filepath.Join(repositoryPath, "objects", "pack", "*.idx"))
+	if err != nil {
+		return fmt.Errorf("list bundle pack indexes: %w", err)
+	}
+	var expanded int64
+	for _, index := range indexes {
+		command := exec.Command("git", "verify-pack", "-v", index)
+		output, err := command.Output()
+		if err != nil {
+			return fmt.Errorf("verify bundle pack: %w", err)
+		}
+		for _, line := range strings.Split(string(output), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 5 || !isLowerHex(fields[0], 40) {
+				continue
+			}
+			size, err := strconv.ParseInt(fields[2], 10, 64)
+			if err != nil || size < 0 || size > MaxObjectSize {
+				return fmt.Errorf("bundle object exceeds import limit: %w", ErrInvalidObject)
+			}
+			if size > budget-expanded {
+				return fmt.Errorf("bundle expands beyond federation import budget: %w", ErrInvalidObject)
+			}
+			expanded += size
+		}
+	}
+	return nil
 }
 
 // Info is a validated snapshot of repository metadata.
