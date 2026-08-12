@@ -122,3 +122,25 @@ func TestRejectsImpossibleInternalRules(t *testing.T) {
 		t.Fatalf("publish = %v", err)
 	}
 }
+
+func TestRepositoryRejectsUnresolvableEligibilitySources(t *testing.T) {
+	for _, source := range []string{"organization_owner", "organization_member", "team_maintainer", "approved_agent"} {
+		s, _ := New(t.TempDir())
+		v := validRevision()
+		v.Roles[0].Eligibility = []string{source}
+		if _, err := s.Publish("repository", "repo1", "owner", 0, v); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("source %q publish = %v", source, err)
+		}
+	}
+}
+
+func TestOrganizationAcceptsEveryResolvableEligibilitySource(t *testing.T) {
+	for _, source := range []string{"organization_owner", "organization_member", "team_maintainer", "approved_agent"} {
+		s, _ := New(t.TempDir())
+		v := validRevision()
+		v.Roles[0].Eligibility = []string{source}
+		if _, err := s.Publish("organization", "org1", "owner", 0, v); err != nil {
+			t.Fatalf("source %q publish = %v", source, err)
+		}
+	}
+}

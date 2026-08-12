@@ -247,7 +247,9 @@ whenever dependencies change or the web job fails before it starts.
   never rewrites an earlier active revision or completed decision. Role eligibility uses closed
   identity sources (`repository_owner`, `repository_collaborator`, `organization_owner`,
   `organization_member`, `team_maintainer`, `approved_agent`) and is resolved separately for
-  every decision class. Exceptions can name only a class/resource in the current active revision.
+  every decision class. Repository scope accepts only repository owner/collaborator sources;
+  organization scope accepts only organization owner/member, team maintainer, and approved-agent
+  sources. Exceptions can name only a class/resource in the current active revision.
   team maintainers request attributable expiring exceptions, whose approved
   projection retains both the baseline and adjusted effective value. Public
   directory reads omit organization-only structure, private-repository

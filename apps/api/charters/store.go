@@ -91,10 +91,14 @@ type Store struct {
 
 // Eligibility entries are intentionally closed identity-source rules. Free-form
 // descriptions cannot safely confer governance eligibility.
-var eligibilityRules = map[string]bool{
-	"repository_owner": true, "repository_collaborator": true,
-	"organization_owner": true, "organization_member": true,
-	"team_maintainer": true, "approved_agent": true,
+var eligibilityRules = map[string]map[string]bool{
+	"repository": {
+		"repository_owner": true, "repository_collaborator": true,
+	},
+	"organization": {
+		"organization_owner": true, "organization_member": true,
+		"team_maintainer": true, "approved_agent": true,
+	},
 }
 
 func New(root string) (*Store, error) {
@@ -223,7 +227,7 @@ func valid(v Revision) bool {
 			return false
 		}
 		for _, rule := range x.Eligibility {
-			if !eligibilityRules[rule] || strings.HasPrefix(rule, "repository_") && v.ScopeType != "repository" || strings.HasPrefix(rule, "organization_") && v.ScopeType != "organization" {
+			if !eligibilityRules[v.ScopeType][rule] {
 				return false
 			}
 		}
