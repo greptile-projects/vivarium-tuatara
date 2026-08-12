@@ -1844,3 +1844,22 @@ and projects resulting actions. Create, upgrade, suspend, resume, transfer, and
 removal are version-guarded and retain actor history. Current ownership is
 revalidated; suspension and removal clear only credentials derived from that
 installation, leaving unrelated installations and attribution intact.
+
+Active installations receive meaningful repository, pull request, check,
+release, deployment, incident, issue, and proposal-task changes from the
+durable collaboration activity ledger. Delivery uses an installation-scoped
+v1 JSON envelope containing stable event/delivery IDs, a monotonic sequence,
+repository ordering key, exact resource and actor identifiers, and occurrence
+time. The exact envelope bytes are SHA-256 identified and Ed25519 signed; the
+installation delivery API publishes the verification key and never projects a
+resource lacking both repository scope and effective read access. Duplicate
+source events are idempotent, unsupported event kinds are ignored, suspended
+or removed installations receive nothing, and delayed events retain their
+original occurrence time.
+
+Owners inspect redacted payloads and attempt history beneath
+`/extension-installations/{id}/deliveries`, record outcomes, retry the same
+delivery, or replay its event as a new ordered delivery. Five failed attempts
+move a delivery to the visible dead letter state; replay preserves the source
+event identity while assigning a fresh delivery ID and sequence. Consumers
+reject an unknown newer `schema_version` without acknowledging the delivery.

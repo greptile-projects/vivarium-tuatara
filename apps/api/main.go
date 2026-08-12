@@ -439,6 +439,18 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		}
 	}
 	mux := http.NewServeMux()
+	if activityStore != nil && extensionStore != nil {
+		activityStore.SetObserver(func(event activities.Event) {
+			resourceType := event.ResourceType
+			if strings.HasPrefix(event.Kind, "check.") {
+				resourceType = "check"
+			}
+			_, err := extensionStore.EnqueueProjectEvent(extensions.ProjectEvent{ID: event.ID, Type: event.Kind, RepositoryID: event.RepositoryID, ResourceType: resourceType, ResourceID: event.ResourceID, ActorID: event.ActorID, Title: event.ResourceTitle, OccurredAt: event.CreatedAt})
+			if err != nil {
+				log.Printf("project activity into extension deliveries: %v", err)
+			}
+		})
+	}
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))

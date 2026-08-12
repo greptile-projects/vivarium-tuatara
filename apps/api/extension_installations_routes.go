@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/extensions"
@@ -133,5 +134,86 @@ func registerExtensionInstallationRoutes(mux *http.ServeMux, store *extensions.S
 			return
 		}
 		writeJSON(w, 200, v)
+	})
+	loadAuthorized := func(w http.ResponseWriter, r *http.Request, scope string) (extensions.Installation, bool) {
+		actor, ok := authenticateRequest(w, r, credentials, scope, false)
+		if !ok {
+			return extensions.Installation{}, false
+		}
+		v, e := store.GetInstallation(r.PathValue("id"))
+		if e != nil || !authorize(actor.UserID, v.OwnerType, v.OwnerID, v.RepositoryIDs) {
+			writeAPIError(w, 404, "installation_not_found", "installation not found")
+			return extensions.Installation{}, false
+		}
+		return v, true
+	}
+	mux.HandleFunc("GET /extension-installations/{id}/deliveries", func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := loadAuthorized(w, r, "repositories:read"); !ok {
+			return
+		}
+		deliveries, e := store.ListDeliveries(r.PathValue("id"))
+		if e != nil {
+			writeAPIError(w, 500, "delivery_storage_unavailable", "deliveries could not be loaded")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"contract": map[string]any{"schema_version": extensions.DeliverySchemaVersion, "signature_algorithm": "Ed25519", "public_key": store.DeliveryPublicKey(), "signature_input": "exact JSON payload bytes"}, "deliveries": deliveries})
+	})
+	mux.HandleFunc("GET /extension-installations/{id}/deliveries/{delivery_id}", func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := loadAuthorized(w, r, "repositories:read"); !ok {
+			return
+		}
+		d, e := store.GetDelivery(r.PathValue("id"), r.PathValue("delivery_id"))
+		if e != nil {
+			writeAPIError(w, 404, "delivery_not_found", "delivery not found")
+			return
+		}
+		writeJSON(w, 200, d)
+	})
+	mux.HandleFunc("POST /extension-installations/{id}/deliveries/{delivery_id}/attempts", func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := loadAuthorized(w, r, "repositories:write"); !ok {
+			return
+		}
+		var in struct {
+			Status       string `json:"status"`
+			ResponseCode int    `json:"response_code"`
+			Error        string `json:"error"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_attempt", "request body must be valid JSON")
+			return
+		}
+		d, e := store.RecordDeliveryAttempt(r.PathValue("id"), r.PathValue("delivery_id"), in.Status, in.ResponseCode, in.Error)
+		if errors.Is(e, extensions.ErrInvalid) {
+			writeAPIError(w, 422, "invalid_attempt", "status must be delivered or failed")
+			return
+		}
+		if e != nil {
+			writeAPIError(w, 404, "delivery_not_found", "delivery not found")
+			return
+		}
+		writeJSON(w, 200, d)
+	})
+	mux.HandleFunc("POST /extension-installations/{id}/deliveries/{delivery_id}/retry", func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := loadAuthorized(w, r, "repositories:write"); !ok {
+			return
+		}
+		d, e := store.RecordDeliveryAttempt(r.PathValue("id"), r.PathValue("delivery_id"), "pending", 0, "manual retry queued")
+		if e != nil {
+			writeAPIError(w, 404, "delivery_not_found", "delivery not found")
+			return
+		}
+		writeJSON(w, 202, d)
+	})
+	mux.HandleFunc("POST /extension-installations/{id}/deliveries/{delivery_id}/replay", func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := loadAuthorized(w, r, "repositories:write"); !ok {
+			return
+		}
+		d, e := store.ReplayDelivery(r.PathValue("id"), r.PathValue("delivery_id"))
+		if e != nil {
+			writeAPIError(w, 404, "delivery_not_found", "delivery not found")
+			return
+		}
+		w.Header().Set("Vivarium-Delivery-Sequence", strconv.FormatInt(d.Sequence, 10))
+		writeJSON(w, 201, d)
 	})
 }

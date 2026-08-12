@@ -34,9 +34,18 @@ type Event struct {
 }
 
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root     string
+	mu       sync.Mutex
+	now      func() time.Time
+	observer func(Event)
+}
+
+// SetObserver projects newly durable events into an optional downstream
+// delivery ledger. The immutable activity write remains the source of truth.
+func (s *Store) SetObserver(observer func(Event)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.observer = observer
 }
 
 func New(root string) (*Store, error) {
@@ -199,6 +208,9 @@ func (s *Store) append(event Event) (Event, error) {
 	}
 	if err != nil {
 		return Event{}, err
+	}
+	if s.observer != nil {
+		go s.observer(event)
 	}
 	return event, nil
 }

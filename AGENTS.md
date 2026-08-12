@@ -86,6 +86,12 @@ whenever dependencies change or the web job fails before it starts.
   resource types, per-capability decisions, non-secret settings, effective
   access, and actor history. Lifecycle changes revalidate current ownership;
   suspension and removal revoke only credentials derived from that installation.
+  Active installations subscribe to permitted project events through durable
+  v1 Ed25519-signed envelopes with stable event/delivery identities, monotonic
+  per-installation sequence and repository ordering keys. Owner delivery
+  surfaces expose redacted payloads, attempts, retry, replay, and dead letters;
+  duplicate source events are idempotent and inactive, unsubscribed, or
+  resource-inaccessible installations receive no delivery.
   Portfolio initiatives retain an existing proposal, evolution, incident, or
   authorized security source plus ordered cross-repository contributions,
   dependencies, and accountable team/human/approved-agent ownership. Portfolio
