@@ -65,6 +65,17 @@ represents a package or release version;
 unreadable dependencies or malformed matrices fail closed as
 `documentation/configuration`.
 
+When an owner merges an ordinary authorized pull into a collection's configured
+publication branch, changed pages are frozen as a new immutable collection
+revision and linked to that pull. Exact retries reuse the publication. Readers
+open stable page slugs, select retained source/release labels, search only
+currently visible collections, follow policy-owned permanent redirects, and
+see older publications explicitly marked archived. Signed-in readers can bind
+page feedback, failed examples, search misses, and version mismatches to the
+exact publication with bounded evidence. Owners triage each retained signal
+once by linking an existing issue, proposal, or human/agent documentation task;
+triage grants no authority to the reporter.
+
 ## Contributor pathways
 
 Repository owners publish the project's participation contract before a

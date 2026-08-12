@@ -118,9 +118,14 @@ type Rendering struct {
 	TableOfContents    bool   `json:"table_of_contents"`
 }
 type PublicationPolicy struct {
-	ReviewRequired bool   `json:"review_required"`
-	SourceBranch   string `json:"source_branch"`
-	PublishOnMerge bool   `json:"publish_on_merge"`
+	ReviewRequired bool       `json:"review_required"`
+	SourceBranch   string     `json:"source_branch"`
+	PublishOnMerge bool       `json:"publish_on_merge"`
+	Redirects      []Redirect `json:"redirects,omitempty"`
+}
+type Redirect struct {
+	From string `json:"from"`
+	To   string `json:"to"`
 }
 type Diagnostic struct {
 	Code         string `json:"code"`
@@ -149,6 +154,28 @@ type Revision struct {
 	PublishedBy       string            `json:"published_by"`
 	PublishedAt       time.Time         `json:"published_at"`
 	Diagnostics       []Diagnostic      `json:"diagnostics,omitempty"`
+	PublishedPullID   string            `json:"published_pull_id,omitempty"`
+	SupersededBy      string            `json:"superseded_by,omitempty"`
+}
+
+type Feedback struct {
+	ID               string      `json:"id"`
+	RepositoryID     string      `json:"repository_id"`
+	CollectionID     string      `json:"collection_id"`
+	RevisionID       string      `json:"revision_id"`
+	PageSlug         string      `json:"page_slug,omitempty"`
+	Kind             string      `json:"kind"`
+	Body             string      `json:"body"`
+	VersionLabel     string      `json:"version_label,omitempty"`
+	Query            string      `json:"query,omitempty"`
+	Evidence         []Reference `json:"evidence,omitempty"`
+	ReporterID       string      `json:"reporter_id"`
+	CreatedAt        time.Time   `json:"created_at"`
+	Status           string      `json:"status"`
+	TriageKind       string      `json:"triage_kind,omitempty"`
+	LinkedResourceID string      `json:"linked_resource_id,omitempty"`
+	TriagedBy        string      `json:"triaged_by,omitempty"`
+	TriagedAt        *time.Time  `json:"triaged_at,omitempty"`
 }
 
 type Store struct {
@@ -278,6 +305,98 @@ func (s *Store) Collections(repositoryID string) ([]Revision, error) {
 	return out, nil
 }
 
+func (s *Store) AddFeedback(v Feedback) (Feedback, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Feedback{}, err
+	}
+	defer unlock()
+	if !validID(v.RepositoryID) || !validID(v.CollectionID) || !validID(v.RevisionID) || !validID(v.ReporterID) || !oneOf(v.Kind, "page_feedback", "failed_example", "search_miss", "version_mismatch") || len(strings.TrimSpace(v.Body)) < 1 || len(v.Body) > 4000 {
+		return Feedback{}, ErrInvalid
+	}
+	if v.Kind != "search_miss" && strings.TrimSpace(v.PageSlug) == "" {
+		return Feedback{}, ErrInvalid
+	}
+	if len(v.Evidence) > 20 {
+		return Feedback{}, ErrInvalid
+	}
+	for _, evidence := range v.Evidence {
+		if strings.TrimSpace(evidence.Label) == "" || len(evidence.Revision) != 40 || evidence.Path != "" && !cleanPath(evidence.Path) {
+			return Feedback{}, ErrInvalid
+		}
+	}
+	v.ID, err = randomID()
+	if err != nil {
+		return Feedback{}, err
+	}
+	v.CreatedAt = s.now().UTC()
+	v.Status = "open"
+	dir := filepath.Join(s.root, v.RepositoryID, v.CollectionID, "feedback")
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		return Feedback{}, err
+	}
+	if err = writeJSON(filepath.Join(dir, v.ID+".json"), v); err != nil {
+		return Feedback{}, err
+	}
+	return v, nil
+}
+func (s *Store) Feedback(repositoryID, collectionID string) ([]Feedback, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dir := filepath.Join(s.root, repositoryID, collectionID, "feedback")
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return []Feedback{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := []Feedback{}
+	for _, e := range entries {
+		var v Feedback
+		if !e.IsDir() && readJSON(filepath.Join(dir, e.Name()), &v) == nil && v.RepositoryID == repositoryID && v.CollectionID == collectionID {
+			out = append(out, v)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
+}
+func (s *Store) TriageFeedback(repositoryID, collectionID, id, actor, kind, resource string) (Feedback, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Feedback{}, err
+	}
+	defer unlock()
+	if !validID(repositoryID) || !validID(collectionID) || !validID(id) || !validID(actor) || !validID(resource) || !oneOf(kind, "issue", "proposal", "documentation_task") {
+		return Feedback{}, ErrInvalid
+	}
+	name := filepath.Join(s.root, repositoryID, collectionID, "feedback", id+".json")
+	var v Feedback
+	if readJSON(name, &v) != nil {
+		return Feedback{}, ErrNotFound
+	}
+	if v.Status != "open" {
+		if v.TriageKind == kind && v.LinkedResourceID == resource {
+			return v, nil
+		}
+		return Feedback{}, ErrConflict
+	}
+	now := s.now().UTC()
+	v.Status = "triaged"
+	v.TriageKind = kind
+	v.LinkedResourceID = resource
+	v.TriagedBy = actor
+	v.TriagedAt = &now
+	if err = writeJSON(name, v); err != nil {
+		return Feedback{}, err
+	}
+	return v, nil
+}
+
 func (s *Store) CreateTask(v Task) (Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -365,6 +484,11 @@ func validate(v Revision) error {
 			if !oneOf(l.Kind, "symbol", "package", "release", "decision", "issue", "contributor_guidance") || strings.TrimSpace(l.Label) == "" {
 				return ErrInvalid
 			}
+		}
+	}
+	for _, r := range v.PublicationPolicy.Redirects {
+		if r.From == r.To || strings.TrimSpace(r.From) == "" || strings.TrimSpace(r.To) == "" || strings.Contains(r.From, "..") || strings.Contains(r.To, "..") || seen[r.From] || !seen[r.To] {
+			return ErrInvalid
 		}
 	}
 	return nil

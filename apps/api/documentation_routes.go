@@ -15,10 +15,86 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	docscollections "github.com/greptile-projects/vivarium-tuatara/apps/api/docscollections"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
+
+func publishMergedDocumentation(git *storage.Store, docs *docscollections.Store, pull pullrequests.PullRequest, actorID string) error {
+	if pull.MergeCommitID == nil {
+		return nil
+	}
+	gr, err := git.Open(pull.RepositoryID)
+	if err != nil {
+		return err
+	}
+	commit, err := gr.ReadCommit(storage.ObjectID(*pull.MergeCommitID))
+	if err != nil {
+		return err
+	}
+	tree, err := gr.WalkTree(commit.Tree)
+	if err != nil {
+		return err
+	}
+	byPath := map[string]storage.TreePath{}
+	for _, entry := range tree {
+		byPath[entry.Path] = entry
+	}
+	collections, err := docs.Collections(pull.RepositoryID)
+	if err != nil {
+		return err
+	}
+	for _, current := range collections {
+		if !current.PublicationPolicy.PublishOnMerge || current.PublicationPolicy.SourceBranch != pull.TargetBranch || current.PublishedPullID == pull.ID {
+			continue
+		}
+		pages := []docscollections.Page{}
+		changed := false
+		for _, old := range current.Pages {
+			entry, ok := byPath[old.Path]
+			if !ok || entry.Type != storage.BlobObject {
+				continue
+			}
+			object, e := gr.ReadObject(entry.ID)
+			if e != nil {
+				return e
+			}
+			sum := sha256.Sum256(object.Content)
+			next := old
+			next.SourceObjectID = string(entry.ID)
+			next.SourceSHA256 = fmt.Sprintf("%x", sum)
+			next.Authors = commitAuthors(commit)
+			next.Title = titleFromDocument(object.Content, path.Base(strings.TrimSuffix(old.Path, path.Ext(old.Path))))
+			next.NavigationTitle = next.Title
+			pages = append(pages, next)
+			changed = changed || next.SourceObjectID != old.SourceObjectID
+		}
+		changed = changed || len(pages) != len(current.Pages)
+		if !changed {
+			continue
+		}
+		next := current
+		next.ID = ""
+		next.Version = 0
+		next.SourceRevision = *pull.MergeCommitID
+		next.Pages = pages
+		next.PublishedBy = actorID
+		next.PublishedPullID = pull.ID
+		next.Diagnostics = nil
+		for i := range next.SupportedVersions {
+			if next.SupportedVersions[i].SourceRef == pull.TargetBranch && next.SupportedVersions[i].ReleaseID == "" {
+				next.SupportedVersions[i].Revision = *pull.MergeCommitID
+			}
+		}
+		if _, e := docs.Publish(next, current.Version); e != nil && !errors.Is(e, docscollections.ErrDurabilityUncertain) {
+			return e
+		}
+	}
+	return nil
+}
 
 func documentationRandomID() string {
 	b := make([]byte, 16)
@@ -28,7 +104,7 @@ func documentationRandomID() string {
 	return hex.EncodeToString(b)
 }
 
-func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, docs *docscollections.Store, releaseStore *releases.Store, credentials *auth.Store) {
+func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, docs *docscollections.Store, releaseStore *releases.Store, issueStore *issues.Store, proposalStore *proposals.Store, credentials *auth.Store) {
 	authorize := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool, bool) {
 		actor, authenticated, ok := authorizeRepositoryRead(w, r, repos, credentials, r.PathValue("id"))
 		if !ok {
@@ -124,6 +200,27 @@ func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *
 		}
 		collaborator, _ := repos.HasCollaborator(actor.UserID, repositoryID)
 		return v.Audience == "repository" && collaborator
+	}
+	selectRevision := func(repositoryID, collectionID, selector string, actor auth.Credential, authenticated bool) (docscollections.Revision, []docscollections.Revision, error) {
+		history, err := docs.List(repositoryID, collectionID)
+		if err != nil {
+			return docscollections.Revision{}, nil, err
+		}
+		for i := len(history) - 1; i >= 0; i-- {
+			candidate := history[i]
+			if !visible(repositoryID, candidate, actor, authenticated) {
+				continue
+			}
+			if selector == "" || candidate.ID == selector {
+				return candidate, history, nil
+			}
+			for _, mapping := range candidate.SupportedVersions {
+				if mapping.Label == selector {
+					return candidate, history, nil
+				}
+			}
+		}
+		return docscollections.Revision{}, history, docscollections.ErrNotFound
 	}
 	participant := func(w http.ResponseWriter, r *http.Request) (auth.Credential, *repositories.Repository, bool) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")
@@ -363,6 +460,177 @@ func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *
 			}
 		}
 		writeJSON(w, 200, map[string]any{"collection": present(r.PathValue("id"), v), "history": visibleHistory})
+	})
+	mux.HandleFunc("GET /repositories/{id}/documentation/{collectionID}/pages/{slug...}", func(w http.ResponseWriter, r *http.Request) {
+		actor, authenticated, ok := authorize(w, r)
+		if !ok {
+			return
+		}
+		selected, history, err := selectRevision(r.PathValue("id"), r.PathValue("collectionID"), r.URL.Query().Get("version"), actor, authenticated)
+		if err != nil {
+			writeAPIError(w, 404, "documentation_version_not_found", "documentation version is not published or visible")
+			return
+		}
+		slug := r.PathValue("slug")
+		for _, redirect := range selected.PublicationPolicy.Redirects {
+			if redirect.From == slug {
+				w.Header().Set("Location", "/repositories/"+r.PathValue("id")+"/documentation/"+selected.CollectionID+"/pages/"+redirect.To)
+				w.WriteHeader(http.StatusPermanentRedirect)
+				return
+			}
+		}
+		var page docscollections.Page
+		found := false
+		for _, p := range selected.Pages {
+			if p.Slug == slug {
+				page = p
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeAPIError(w, 404, "documentation_page_not_found", "documentation page not found")
+			return
+		}
+		gr, e := git.Open(r.PathValue("id"))
+		if e != nil {
+			writeAPIError(w, 500, "documentation_source_unavailable", "published source is unavailable")
+			return
+		}
+		object, e := gr.ReadObject(storage.ObjectID(page.SourceObjectID))
+		if e != nil {
+			writeAPIError(w, 500, "documentation_source_unavailable", "published source is unavailable")
+			return
+		}
+		archived := selected.ID != history[len(history)-1].ID
+		writeJSON(w, 200, map[string]any{"collection": selected, "page": page, "body": string(object.Content), "archived": archived, "canonical_path": "/repositories/" + r.PathValue("id") + "/documentation/" + selected.CollectionID + "/pages/" + page.Slug})
+	})
+	mux.HandleFunc("GET /repositories/{id}/documentation/search", func(w http.ResponseWriter, r *http.Request) {
+		actor, authenticated, ok := authorize(w, r)
+		if !ok {
+			return
+		}
+		q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+		items, _ := docs.Collections(r.PathValue("id"))
+		results := []map[string]any{}
+		for _, v := range items {
+			if !visible(r.PathValue("id"), v, actor, authenticated) {
+				continue
+			}
+			for _, p := range v.Pages {
+				if q == "" || strings.Contains(strings.ToLower(p.Title+" "+p.Path), q) {
+					results = append(results, map[string]any{"collection_id": v.CollectionID, "collection": v.Name, "version": v.Version, "page": p, "url": "/repositories/" + v.RepositoryID + "/documentation/" + v.CollectionID + "/pages/" + p.Slug})
+				}
+			}
+		}
+		writeJSON(w, 200, map[string]any{"query": q, "results": results})
+	})
+	mux.HandleFunc("POST /repositories/{id}/documentation/{collectionID}/feedback", func(w http.ResponseWriter, r *http.Request) {
+		actor, authenticated, ok := authorize(w, r)
+		if !ok {
+			return
+		}
+		if !authenticated {
+			writeAPIError(w, 401, "authentication_required", "sign in to report documentation outcomes")
+			return
+		}
+		selected, _, e := selectRevision(r.PathValue("id"), r.PathValue("collectionID"), r.URL.Query().Get("version"), actor, true)
+		if e != nil {
+			writeAPIError(w, 404, "documentation_version_not_found", "documentation version is not published or visible")
+			return
+		}
+		var in docscollections.Feedback
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		in.RepositoryID = r.PathValue("id")
+		in.CollectionID = selected.CollectionID
+		in.RevisionID = selected.ID
+		in.ReporterID = actor.UserID
+		if in.Kind != "search_miss" {
+			found := false
+			for _, page := range selected.Pages {
+				if page.Slug == in.PageSlug {
+					found = true
+					break
+				}
+			}
+			if !found {
+				writeAPIError(w, 422, "invalid_documentation_feedback", "page does not exist in the selected publication")
+				return
+			}
+		}
+		created, e := docs.AddFeedback(in)
+		if e != nil {
+			writeAPIError(w, 422, "invalid_documentation_feedback", "kind, bounded detail, page context, and permitted evidence are required")
+			return
+		}
+		writeJSON(w, 201, created)
+	})
+	mux.HandleFunc("GET /repositories/{id}/documentation/{collectionID}/feedback", func(w http.ResponseWriter, r *http.Request) {
+		_, owner, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if !owner {
+			writeAPIError(w, 403, "owner_required", "only repository maintainers can triage reader outcomes")
+			return
+		}
+		items, e := docs.Feedback(r.PathValue("id"), r.PathValue("collectionID"))
+		if e != nil {
+			writeAPIError(w, 500, "documentation_feedback_unavailable", "reader outcomes are unavailable")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"feedback": items})
+	})
+	mux.HandleFunc("POST /repositories/{id}/documentation/{collectionID}/feedback/{feedbackID}/triage", func(w http.ResponseWriter, r *http.Request) {
+		actor, owner, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if !owner {
+			writeAPIError(w, 403, "owner_required", "only repository maintainers can triage reader outcomes")
+			return
+		}
+		var in struct {
+			Kind       string `json:"kind"`
+			ResourceID string `json:"resource_id"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		validTarget := false
+		switch in.Kind {
+		case "issue":
+			if issueStore != nil {
+				_, e := issueStore.Get(r.PathValue("id"), in.ResourceID)
+				validTarget = e == nil
+			}
+		case "proposal":
+			if proposalStore != nil {
+				_, e := proposalStore.Get(r.PathValue("id"), in.ResourceID)
+				validTarget = e == nil
+			}
+		case "documentation_task":
+			_, e := docs.GetTask(r.PathValue("id"), in.ResourceID)
+			validTarget = e == nil
+		}
+		if !validTarget {
+			writeAPIError(w, 422, "invalid_documentation_triage", "link an existing issue, proposal, or documentation task in this repository")
+			return
+		}
+		v, e := docs.TriageFeedback(r.PathValue("id"), r.PathValue("collectionID"), r.PathValue("feedbackID"), actor.UserID, in.Kind, in.ResourceID)
+		if errors.Is(e, docscollections.ErrConflict) {
+			writeAPIError(w, 409, "documentation_feedback_triaged", "reader outcome was already triaged")
+			return
+		}
+		if e != nil {
+			writeAPIError(w, 422, "invalid_documentation_triage", "link an issue, proposal, or documentation task")
+			return
+		}
+		writeJSON(w, 200, v)
 	})
 	mux.HandleFunc("PUT /repositories/{id}/documentation/{collectionID}", func(w http.ResponseWriter, r *http.Request) {
 		actor, owner, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")

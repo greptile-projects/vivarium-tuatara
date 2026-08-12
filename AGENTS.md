@@ -380,6 +380,12 @@ whenever dependencies change or the web job fails before it starts.
   journey uses Alpine); capture reads the live tmpfs from inside the container,
   not the image layer exposed by `docker cp`.
   Living documentation at `/repositories/{id}/documentation` retains
+  merge-published immutable revisions linked to the authorizing pull, stable
+  page slugs, visibility-filtered search and version selection, policy-owned
+  redirects, explicit archives, and exact-publication reader outcomes. Owners
+  triage retained feedback into existing issues, proposals, or accountable
+  human/agent documentation tasks without granting reporters authority.
+  It also retains
   versioned owner-published collections backed by exact repository paths and
   commits. Collections freeze page blob/hash/authorship evidence, supported
   source or release mappings, audience, navigation, rendering, publication
