@@ -563,6 +563,9 @@ func (s *Store) lock() (func(), error) {
 	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil
 }
 func writeAtomic(name string, v any) error {
+	if e := os.MkdirAll(filepath.Dir(name), 0700); e != nil {
+		return e
+	}
 	b, e := json.MarshalIndent(v, "", "  ")
 	if e != nil {
 		return e

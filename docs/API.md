@@ -46,6 +46,31 @@ every mutation revalidates current ownership. Suspension and removal revoke
 only derived credentials before publishing status, without deleting retained
 events or attributed evidence.
 
+### Extension contributions and actions
+
+An installation owner mints a one-day-or-shorter credential with `POST
+/extension-installations/{id}/credentials`, supplying the current installation
+`version` and `expires_in`. The returned `extensions:contribute` bearer secret
+is recorded as derived from that exact installation and is revoked by its
+suspension or removal.
+
+The extension publishes to `POST /extension-contributions` with that bearer
+credential and `Vivarium-Installation-ID`. A contribution names an exact
+repository, supported resource type and ID, current 40-character revision,
+stable `idempotency_key`, and one of `status`, `check`, `annotation`, `artifact`,
+`link`, `comment`, or `action`. The API validates installation status,
+credential derivation, resource scope, the live pull revision, bounded payload
+and rate budgets, and declared action inputs/effects. Exact retries return the
+original record; conflicting keys and stale revisions fail closed. These
+records do not write privileged check, comment, merge, release, deployment,
+environment, or policy stores.
+
+Collaborators read pull contributions at `GET
+/repositories/{id}/extension-contributions/pull_requests/{pull-id}` and invoke a
+declared `/actions/{action-id}` child with the current `revision` and declared
+inputs. The durable request retains its human actor and previewed effects but
+queues no privileged operation.
+
 ## Documentation verification
 
 Pull creation and synchronization read optional

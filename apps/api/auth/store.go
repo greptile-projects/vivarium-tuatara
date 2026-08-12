@@ -35,7 +35,7 @@ const (
 
 var allowedScopes = map[Kind]map[string]bool{
 	Session: {"profile:write": true, "credentials:write": true, "repositories:read": true, "repositories:write": true},
-	API:     {"profile:write": true, "repositories:read": true, "repositories:write": true, "packages:read": true, "incidents:investigate": true, "issues:investigate": true, "security:investigate": true, "evolutions:analyze": true, "decisions:research": true},
+	API:     {"profile:write": true, "repositories:read": true, "repositories:write": true, "packages:read": true, "extensions:contribute": true, "incidents:investigate": true, "issues:investigate": true, "security:investigate": true, "evolutions:analyze": true, "decisions:research": true},
 	Git:     {"git:read": true, "git:write": true},
 }
 
