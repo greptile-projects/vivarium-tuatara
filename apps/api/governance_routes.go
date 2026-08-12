@@ -10,10 +10,11 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/charters"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/governance"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 )
 
-func registerGovernanceRoutes(mux *http.ServeMux, votes *governance.Store, charterStore *charters.Store, repos *repositories.Store, orgs *organizations.Store, credentials *auth.Store) {
+func registerGovernanceRoutes(mux *http.ServeMux, votes *governance.Store, charterStore *charters.Store, repos *repositories.Store, orgs *organizations.Store, plans *proposals.Store, credentials *auth.Store) {
 	electorate := func(kind, scopeID string, revision charters.Revision, record charters.Record) []governance.Elector {
 		sources := map[string]map[string]bool{}
 		add := func(source, id string) {
@@ -376,6 +377,73 @@ func registerGovernanceRoutes(mux *http.ServeMux, votes *governance.Store, chart
 		}
 		writeJSON(w, 200, project(p, actor.UserID))
 	})
+	mux.HandleFunc("POST /governance/proposals/{id}/implementation", func(w http.ResponseWriter, r *http.Request) {
+		p, e := votes.Get(r.PathValue("id"))
+		if e != nil {
+			governanceError(w, e)
+			return
+		}
+		var in struct {
+			RepositoryID     string   `json:"repository_id"`
+			Revision         string   `json:"revision"`
+			Scope            string   `json:"scope"`
+			Cost             string   `json:"cost"`
+			Title            string   `json:"title"`
+			Body             string   `json:"body"`
+			Assumptions      []string `json:"assumptions"`
+			ProtectedEffects []string `json:"protected_effects"`
+			Tasks            []struct {
+				Title             string `json:"title"`
+				Outcome           string `json:"outcome"`
+				Risk              string `json:"risk"`
+				VerificationPlan  string `json:"verification_plan"`
+				AssigneeType      string `json:"assignee_type"`
+				AssigneeID        string `json:"assignee_id"`
+				DependsOnPrevious bool   `json:"depends_on_previous"`
+			} `json:"tasks"`
+		}
+		if decodeJSON(r, &in) != nil || plans == nil {
+			writeAPIError(w, 400, "invalid_implementation", "a bounded task plan is required")
+			return
+		}
+		actor, owner, ok := authorizeRepositoryParticipant(w, r, repos, credentials, in.RepositoryID, "repositories:write")
+		if !ok {
+			return
+		}
+		repo, e := repos.GetByID(in.RepositoryID)
+		if e != nil {
+			return
+		}
+		if !owner {
+			writeAPIError(w, 403, "repository_owner_required", "the community mandate still requires repository-owner publication")
+			return
+		}
+		if p.ScopeType == "repository" && p.ScopeID != repo.ID {
+			writeAPIError(w, 422, "implementation_scope_mismatch", "the task plan must use the governed repository")
+			return
+		}
+		p, e = votes.BeginImplementation(p.ID, actor.UserID, governance.Implementation{Kind: "task_plan", RepositoryID: repo.ID, Scope: in.Scope, Cost: in.Cost, Assumptions: in.Assumptions, ProtectedEffects: in.ProtectedEffects})
+		if e != nil {
+			governanceError(w, e)
+			return
+		}
+		items := []proposals.ReasoningItem{{ID: p.Implementation.Receipt.ID, Kind: "community_mandate", Summary: p.Implementation.Receipt.Result.Title, Status: "accepted"}}
+		tasks := make([]proposals.ImplementationTaskInput, len(in.Tasks))
+		for i, t := range in.Tasks {
+			tasks[i] = proposals.ImplementationTaskInput{Title: t.Title, Outcome: t.Outcome, Risk: t.Risk, VerificationPlan: t.VerificationPlan, AssigneeType: t.AssigneeType, AssigneeID: t.AssigneeID, DependsOnPrevious: t.DependsOnPrevious}
+		}
+		created, _, e := plans.CreateImplementation(proposals.ImplementationInput{RepositoryID: repo.ID, ActorID: actor.UserID, Title: in.Title, Body: in.Body, Origin: proposals.ReasoningOrigin{GovernanceProposalID: p.ID, GovernanceReceiptID: p.Implementation.Receipt.ID, Revision: in.Revision, SelectedItemIDs: []string{p.Implementation.Receipt.ID}, Items: items, AnalysisStatus: "community_mandate_requires_resource_controls"}, Tasks: tasks})
+		if e != nil {
+			writeAPIError(w, 422, "implementation_plan_invalid", "the ordinary task plan could not be published; the receipt remains pending for an exact retry")
+			return
+		}
+		p, e = votes.LinkImplementation(p.ID, actor.UserID, created.ID)
+		if e != nil {
+			governanceError(w, e)
+			return
+		}
+		writeJSON(w, 201, project(p, actor.UserID))
+	})
 }
 
 func authorizeScopeSilent(user, kind, id string, repos *repositories.Store, orgs *organizations.Store) (string, bool) {
@@ -458,6 +526,10 @@ func governanceError(w http.ResponseWriter, e error) {
 		writeAPIError(w, 409, "voting_closed", "the voting deadline does not admit this action")
 	case errors.Is(e, governance.ErrIneligible):
 		writeAPIError(w, 403, "electorate_changed", "current charter eligibility is required")
+	case errors.Is(e, governance.ErrNotAccepted):
+		writeAPIError(w, 409, "community_mandate_required", "an accepted, uncontested result is required")
+	case errors.Is(e, governance.ErrMaterialChange):
+		writeAPIError(w, 409, "governance_amendment_required", "scope, cost, assumptions, or protected effects changed; open a new or amended decision")
 	case errors.Is(e, charters.ErrConflict):
 		writeAPIError(w, 409, "charter_changed", "the active charter changed before governance commit")
 	case errors.Is(e, governance.ErrInvalid):

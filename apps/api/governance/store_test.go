@@ -112,3 +112,41 @@ func TestFinalizedTallyCannotBeReplaced(t *testing.T) {
 		t.Fatalf("final tally changed = %#v, events = %#v", p.Tally, p.Events)
 	}
 }
+
+func TestAcceptedDecisionReceiptFreezesImplementationAuthority(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Now()
+	s.now = func() time.Time { return now }
+	created, err := s.Create(proposal(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err = s.change(created.ID, func(v *Proposal) error {
+		v.Tally = &Tally{Status: "accepted", Result: "yes", VerificationSHA256: "tally"}
+		v.Status = "closed"
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := Implementation{Kind: "task_plan", RepositoryID: "repo", Scope: "main branch", Cost: "two engineer days", Assumptions: []string{"dependency remains supported"}, ProtectedEffects: []string{"branch:main"}}
+	got, err := s.BeginImplementation(created.ID, "owner", in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Implementation == nil || got.Implementation.Receipt.AuthorizationSHA256 == "" || got.Implementation.Steps[0].RequiredApproval == "" {
+		t.Fatalf("implementation = %#v", got.Implementation)
+	}
+	retry, err := s.BeginImplementation(created.ID, "owner", in)
+	if err != nil || retry.Implementation.Receipt.ID != got.Implementation.Receipt.ID {
+		t.Fatalf("retry = %#v, %v", retry.Implementation, err)
+	}
+	in.Cost = "unbounded"
+	if _, err = s.BeginImplementation(created.ID, "owner", in); !errors.Is(err, ErrMaterialChange) {
+		t.Fatalf("material change = %v", err)
+	}
+	linked, err := s.LinkImplementation(created.ID, "owner", "ordinary-proposal")
+	if err != nil || linked.Implementation.Steps[0].Status != "in_progress" {
+		t.Fatalf("linked = %#v, %v", linked.Implementation, err)
+	}
+}

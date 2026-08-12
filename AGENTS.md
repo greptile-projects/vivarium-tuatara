@@ -272,6 +272,10 @@ whenever dependencies change or the web job fails before it starts.
   proposal, ballot, or tally persistence share the charter mutation admission boundary, so a
   concurrent suspension or other standing mutation cannot commit between authorization and the governance write.
   `$GOVERNANCE_STORAGE_ROOT` defaults to `governance`.
+  Accepted uncontested results can issue one immutable decision receipt and a repository-owner-
+  published ordinary proposal/task plan. The receipt binds charter, result, tally, scope, cost,
+  assumptions, and protected effects; it grants no operational authority and materially changed
+  bounds require a new or amended decision.
   team maintainers request attributable expiring exceptions, whose approved
   projection retains both the baseline and adjusted effective value. Public
   directory reads omit organization-only structure, private-repository

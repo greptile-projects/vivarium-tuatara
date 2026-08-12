@@ -52,23 +52,25 @@ type Proposal struct {
 // ReasoningOrigin is an immutable, revision-exact handoff from collaborative
 // investigation and impact analysis into implementation and review.
 type ReasoningOrigin struct {
-	IssueID           string                     `json:"issue_id,omitempty"`
-	IssueVersion      int                        `json:"issue_version,omitempty"`
-	ReproductionID    string                     `json:"reproduction_attempt_id,omitempty"`
-	DecisionID        string                     `json:"decision_id,omitempty"`
-	CommitmentVersion int                        `json:"commitment_version,omitempty"`
-	AssessmentID      string                     `json:"assessment_id"`
-	AssessmentVersion int                        `json:"assessment_version"`
-	Revision          string                     `json:"revision"`
-	ExplanationID     string                     `json:"explanation_id,omitempty"`
-	ConclusionEntryID string                     `json:"conclusion_entry_id,omitempty"`
-	SelectedItemIDs   []string                   `json:"selected_item_ids"`
-	Items             []ReasoningItem            `json:"items"`
-	Acknowledgements  []ReasoningAcknowledgement `json:"acknowledgements,omitempty"`
-	AnalysisStatus    string                     `json:"analysis_status"`
-	OrganizationID    string                     `json:"organization_id,omitempty"`
-	MandateID         string                     `json:"mandate_id,omitempty"`
-	OpportunityID     string                     `json:"opportunity_id,omitempty"`
+	GovernanceProposalID string                     `json:"governance_proposal_id,omitempty"`
+	GovernanceReceiptID  string                     `json:"governance_receipt_id,omitempty"`
+	IssueID              string                     `json:"issue_id,omitempty"`
+	IssueVersion         int                        `json:"issue_version,omitempty"`
+	ReproductionID       string                     `json:"reproduction_attempt_id,omitempty"`
+	DecisionID           string                     `json:"decision_id,omitempty"`
+	CommitmentVersion    int                        `json:"commitment_version,omitempty"`
+	AssessmentID         string                     `json:"assessment_id"`
+	AssessmentVersion    int                        `json:"assessment_version"`
+	Revision             string                     `json:"revision"`
+	ExplanationID        string                     `json:"explanation_id,omitempty"`
+	ConclusionEntryID    string                     `json:"conclusion_entry_id,omitempty"`
+	SelectedItemIDs      []string                   `json:"selected_item_ids"`
+	Items                []ReasoningItem            `json:"items"`
+	Acknowledgements     []ReasoningAcknowledgement `json:"acknowledgements,omitempty"`
+	AnalysisStatus       string                     `json:"analysis_status"`
+	OrganizationID       string                     `json:"organization_id,omitempty"`
+	MandateID            string                     `json:"mandate_id,omitempty"`
+	OpportunityID        string                     `json:"opportunity_id,omitempty"`
 }
 
 type ReasoningItem struct {
@@ -366,8 +368,9 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 	isAssessment := validID(input.Origin.AssessmentID) && input.Origin.AssessmentVersion > 0
 	isDecision := validID(input.Origin.DecisionID) && input.Origin.CommitmentVersion > 0
 	isIssue := validID(input.Origin.IssueID) && input.Origin.IssueVersion > 0 && validID(input.Origin.ReproductionID)
+	isGovernance := validID(input.Origin.GovernanceProposalID) && validID(input.Origin.GovernanceReceiptID)
 	originCount := 0
-	for _, present := range []bool{isAssessment, isDecision, isIssue} {
+	for _, present := range []bool{isAssessment, isDecision, isIssue, isGovernance} {
 		if present {
 			originCount++
 		}
@@ -399,7 +402,7 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 		if readErr != nil {
 			return Proposal{}, nil, readErr
 		}
-		if r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && ((isAssessment && r.Proposal.Reasoning.AssessmentID == input.Origin.AssessmentID) || (isDecision && r.Proposal.Reasoning.DecisionID == input.Origin.DecisionID && r.Proposal.Reasoning.CommitmentVersion == input.Origin.CommitmentVersion) || (isIssue && r.Proposal.Reasoning.IssueID == input.Origin.IssueID && r.Proposal.Reasoning.ReproductionID == input.Origin.ReproductionID)) {
+		if r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && ((isAssessment && r.Proposal.Reasoning.AssessmentID == input.Origin.AssessmentID) || (isDecision && r.Proposal.Reasoning.DecisionID == input.Origin.DecisionID && r.Proposal.Reasoning.CommitmentVersion == input.Origin.CommitmentVersion) || (isIssue && r.Proposal.Reasoning.IssueID == input.Origin.IssueID && r.Proposal.Reasoning.ReproductionID == input.Origin.ReproductionID) || (isGovernance && r.Proposal.Reasoning.GovernanceProposalID == input.Origin.GovernanceProposalID)) {
 			if (isIssue && !reflect.DeepEqual(*r.Proposal.Reasoning, input.Origin)) || r.Proposal.Title != title || r.Proposal.Body != body || len(r.Tasks) != len(input.Tasks) {
 				return Proposal{}, nil, ErrImplementationConflict
 			}
