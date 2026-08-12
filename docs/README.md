@@ -14,6 +14,33 @@ The supported consumer contract, including authentication, stable error
 shapes, validation, and collection pagination, is documented in [API.md](API.md).
 Consumers should use that HTTP boundary rather than reading storage roots.
 
+## Federation identity
+
+Every instance publishes a signed, versioned identity document at
+`/.well-known/vivarium-federation`. Its stable instance ID is derived from the
+initial Ed25519 key and the signed document declares public endpoints,
+capabilities, operators, and current/retired verification keys. Configuration
+uses `FEDERATION_PUBLIC_URL`, `FEDERATION_INSTANCE_NAME`, and
+`FEDERATION_OPERATORS`; durable identity and peer trust default to
+`FEDERATION_STORAGE_ROOT=federation`.
+Authenticated operators rotate the instance signing key through
+`POST /federation/identity/rotate`; rotation increments the signed document
+version and retains the predecessor as explicitly retired verification history.
+
+Authenticated users manage peer discovery at `/federation`. First contact
+verifies the document signature, while later version/key changes enter a
+visible `changed` state until accepted. Failed refreshes retain `unreachable`,
+and revoked trust cannot be silently restored by refresh. Discovery permits
+HTTP only for loopback development and otherwise requires HTTPS.
+
+Public actor cards resolve exact stable identities as
+`{instance-id}:user:{user-id}` and
+`{instance-id}:agent:{organization-id}:{agent-id}`. They intentionally expose
+no actor directory or private organization/team membership. A federated actor
+is attributable remote identity, never a local login, credential, permission,
+or proof of current authorization; later collaboration protocols must verify
+signed messages against the retained peer document and their own live policy.
+
 ## Living documentation
 
 Repository owners define documentation collections through

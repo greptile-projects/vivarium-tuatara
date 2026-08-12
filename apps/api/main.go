@@ -28,6 +28,7 @@ import (
 	docscollections "github.com/greptile-projects/vivarium-tuatara/apps/api/docscollections"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/explanations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/extensions"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/federation"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/impacts"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
@@ -303,12 +304,20 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	federationRoot := os.Getenv("FEDERATION_STORAGE_ROOT")
+	if federationRoot == "" {
+		federationRoot = "federation"
+	}
+	federationStore, err := federation.New(federationRoot, os.Getenv("FEDERATION_INSTANCE_NAME"), os.Getenv("FEDERATION_PUBLIC_URL"), strings.Split(os.Getenv("FEDERATION_OPERATORS"), ","))
+	if err != nil {
+		log.Fatal(err)
+	}
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -441,6 +450,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var acceptanceStore *acceptance.Store
 	var documentationStore *docscollections.Store
 	var extensionStore *extensions.Store
+	var federationStore *federation.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -481,6 +491,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			documentationStore = value
 		case *extensions.Store:
 			extensionStore = value
+		case *federation.Store:
+			federationStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -493,6 +505,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	})
 	if userStore != nil {
 		registerUserRoutes(mux, userStore, authStore)
+	}
+	if federationStore != nil && userStore != nil && authStore != nil {
+		registerFederationRoutes(mux, federationStore, userStore, organizationStore, authStore)
 	}
 	if authStore != nil {
 		registerAuthRoutes(mux, authStore)
@@ -514,7 +529,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerProposalRoutes(mux, store, repositoryCatalog, proposalStore, authStore, activityStore, userStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil {
-		if extensionStore != nil { registerExtensionContributionRoutes(mux, extensionStore, authStore, repositoryCatalog, pullRequestStore) }
+		if extensionStore != nil {
+			registerExtensionContributionRoutes(mux, extensionStore, authStore, repositoryCatalog, pullRequestStore)
+		}
 		if acceptanceStore != nil {
 			pullRequestStore.ConfigurePreviewAcceptance(acceptanceStore, previewStore)
 			registerAcceptanceRoutes(mux, repositoryCatalog, pullRequestStore, acceptanceStore, previewStore, authStore)

@@ -101,6 +101,15 @@ whenever dependencies change or the web job fails before it starts.
   surfaces expose redacted payloads, attempts, retry, replay, and dead letters;
   duplicate source events are idempotent and inactive, unsubscribed, or
   resource-inaccessible installations receive no delivery.
+  Federation at `/federation` publishes a stable Ed25519-signed
+  `/.well-known/vivarium-federation` instance document and retains explicit
+  local peer trust beneath `$FEDERATION_STORAGE_ROOT` (default `federation`).
+  `$FEDERATION_PUBLIC_URL`, `$FEDERATION_INSTANCE_NAME`, and comma-separated
+  `$FEDERATION_OPERATORS` define its public projection. Discovery requires
+  HTTPS except HTTP loopback development; signed version changes, outages, and
+  revocation remain explicit. Instance-qualified user and public approved-agent
+  cards are attribution references only: they never authenticate locally, and
+  actor resolution provides no membership enumeration.
   Local sample endpoint verification is available only when
   `$EXTENSION_DEVELOPMENT_ENDPOINTS=1`, and then only for HTTP loopback hosts;
   production/default verification remains HTTPS and public-address-only. The
