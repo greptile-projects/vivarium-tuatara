@@ -452,7 +452,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			pullRequestStore.ConfigurePreviewAcceptance(acceptanceStore, previewStore)
 			registerAcceptanceRoutes(mux, repositoryCatalog, pullRequestStore, acceptanceStore, previewStore, authStore)
 		}
-		registerPullRequestRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, authStore, activityStore, userStore, checkRunStore, changeSessionStore)
+		registerPullRequestRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, authStore, activityStore, userStore, checkRunStore, changeSessionStore, documentationStore)
 		if documentationStore != nil {
 			registerDocumentationReviewRoutes(mux, store, repositoryCatalog, pullRequestStore, documentationStore, checkRunStore, authStore)
 		}
@@ -1016,7 +1016,7 @@ func repairEvidence(run checkruns.Run, events []checkruns.Event) *changesessions
 	return evidence
 }
 
-func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoriesStore *repositories.Store, proposalStore *proposals.Store, store *pullrequests.Store, authStore *auth.Store, activityStore *activities.Store, userStore *users.Store, checkRunStore *checkruns.Store, sessionStore *changesessions.Store) {
+func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoriesStore *repositories.Store, proposalStore *proposals.Store, store *pullrequests.Store, authStore *auth.Store, activityStore *activities.Store, userStore *users.Store, checkRunStore *checkruns.Store, sessionStore *changesessions.Store, documentationStore *docscollections.Store) {
 	store.ConfigureRequiredChecks(repositoriesStore, checkRunStore)
 	reconcileTaskState := func(pull pullrequests.PullRequest) (pullrequests.PullRequest, error) {
 		if pull.TaskStatePending == "" || pull.ProposalID == nil || pull.TaskID == nil || proposalStore == nil {
@@ -1694,6 +1694,13 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		if taskErr != nil {
 			writeUncertainMutation(w, merged)
 			return
+		}
+		if documentationStore != nil {
+			if publicationErr := publishMergedDocumentation(gitStore, documentationStore, merged, actor.UserID); publicationErr != nil {
+				log.Printf("publish merged documentation: %v", publicationErr)
+				writeUncertainMutation(w, merged)
+				return
+			}
 		}
 		if merged.ProposalID != nil && merged.TaskID == nil && proposalStore != nil {
 			proposal, proposalErr := proposalStore.Get(r.PathValue("id"), *merged.ProposalID)
