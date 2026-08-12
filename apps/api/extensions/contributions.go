@@ -115,7 +115,7 @@ func (s *Store) ListContributions(repositoryID, resourceType, resourceID string)
 	defer s.mu.Unlock()
 	return s.readContributions(repositoryID, resourceType, resourceID)
 }
-func (s *Store) Invoke(repositoryID, resourceType, resourceID, contributionID, actionID, actor string, inputs map[string]string) (Contribution, error) {
+func (s *Store) Invoke(repositoryID, resourceType, resourceID, contributionID, actionID, actor, expectedRevision string, inputs map[string]string) (Contribution, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	unlock, err := s.lock()
@@ -134,6 +134,9 @@ func (s *Store) Invoke(repositoryID, resourceType, resourceID, contributionID, a
 	}
 	if json.Unmarshal(b, &v) != nil {
 		return v, ErrInvalid
+	}
+	if v.Revision != expectedRevision {
+		return v, ErrConflict
 	}
 	installation, e := s.readInstallation(v.InstallationID)
 	if e != nil || installation.Status != "active" || !installationAllows(installation, repositoryID, resourceType, "write") {
@@ -223,7 +226,7 @@ func installationAllows(v Installation, repo, resource, action string) bool {
 	return false
 }
 func validContribution(v ContributionInput) bool {
-	if len(v.IdempotencyKey) < 8 || len(v.IdempotencyKey) > 200 || len(v.RepositoryID) != 32 || len(v.ResourceID) != 32 || len(v.Revision) != 40 || !oneOf(v.ResourceType, "pull_requests", "proposals", "issues", "releases", "deployments") || !oneOf(v.Kind, "status", "check", "annotation", "artifact", "link", "comment", "action") || strings.TrimSpace(v.Title) == "" || len(v.Title) > 200 || len(v.Body) > 10000 || len(v.Annotations) > 50 || len(v.Artifacts) > 20 || len(v.Links) > 20 || len(v.Actions) > 10 {
+	if len(v.IdempotencyKey) < 8 || len(v.IdempotencyKey) > 200 || len(v.RepositoryID) != 32 || len(v.ResourceID) != 32 || len(v.Revision) != 40 || !oneOf(v.ResourceType, "pull_requests", "proposals", "issues", "releases", "deployments") || !oneOf(v.Kind, "status", "check", "annotation", "artifact", "link", "comment", "action") || len(v.State) > 100 || strings.TrimSpace(v.Title) == "" || len(v.Title) > 200 || len(v.Body) > 10000 || len(v.Annotations) > 50 || len(v.Artifacts) > 20 || len(v.Links) > 20 || len(v.Actions) > 10 {
 		return false
 	}
 	seen := map[string]bool{}
@@ -265,14 +268,11 @@ func validContribution(v ContributionInput) bool {
 	return true
 }
 func contributionWeight(v ContributionInput) int {
-	n := len(v.Title) + len(v.Body)
-	for _, x := range v.Annotations {
-		n += len(x)
+	b, err := json.Marshal(v)
+	if err != nil {
+		return 20001
 	}
-	for _, x := range v.Links {
-		n += len(x)
-	}
-	return n
+	return len(b)
 }
 func sameContribution(a, b ContributionInput) bool {
 	x, _ := json.Marshal(a)

@@ -107,7 +107,11 @@ func registerExtensionContributionRoutes(mux *http.ServeMux, store *extensions.S
 		if !ok {
 			return
 		}
-		v, e := store.Invoke(r.PathValue("id"), r.PathValue("resource_type"), r.PathValue("resource_id"), r.PathValue("contribution_id"), r.PathValue("action_id"), actor.UserID, in.Inputs)
+		v, e := store.Invoke(r.PathValue("id"), r.PathValue("resource_type"), r.PathValue("resource_id"), r.PathValue("contribution_id"), r.PathValue("action_id"), actor.UserID, in.Revision, in.Inputs)
+		if errors.Is(e, extensions.ErrConflict) {
+			writeAPIError(w, 409, "resource_revision_changed", "action was declared for a different resource revision")
+			return
+		}
 		if errors.Is(e, extensions.ErrLimit) {
 			writeAPIError(w, 429, "action_budget_exceeded", "action invocation budget exceeded")
 			return

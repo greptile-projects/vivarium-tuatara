@@ -3,6 +3,7 @@ package extensions
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -29,9 +30,30 @@ func TestContributionIsRevisionBoundIdempotentAndAttributed(t *testing.T) {
 	if _, err = s.PublishContribution(installation, changed); !errors.Is(err, ErrConflict) {
 		t.Fatalf("conflict=%v", err)
 	}
-	invoked, err := s.Invoke(in.RepositoryID, in.ResourceType, in.ResourceID, first.ID, "explain", testID("5"), map[string]string{"focus": "licenses", "undeclared": "ignored"})
+	if _, err = s.Invoke(in.RepositoryID, in.ResourceType, in.ResourceID, first.ID, "explain", testID("5"), strings.Repeat("b", 40), map[string]string{"focus": "licenses"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale invocation = %v", err)
+	}
+	invoked, err := s.Invoke(in.RepositoryID, in.ResourceType, in.ResourceID, first.ID, "explain", testID("5"), in.Revision, map[string]string{"focus": "licenses", "undeclared": "ignored"})
 	if err != nil || len(invoked.Invocations) != 1 || invoked.Invocations[0].ActorID != testID("5") || invoked.Invocations[0].Inputs["undeclared"] != "" || len(invoked.Invocations[0].PreviewedEffects) != 1 {
 		t.Fatalf("invocation=%#v err=%v", invoked, err)
+	}
+}
+
+func TestContributionBudgetIncludesEveryPersistedInputField(t *testing.T) {
+	base := ContributionInput{IdempotencyKey: "delivery-123", RepositoryID: testID("3"), ResourceType: "pull_requests", ResourceID: testID("4"), Revision: strings.Repeat("a", 40), Kind: "status", Title: "Status"}
+	state := base
+	state.State = strings.Repeat("x", 101)
+	if validContribution(state) {
+		t.Fatal("accepted oversized state")
+	}
+	metadata := base
+	metadata.Actions = []Action{{ID: "run", Label: "Run", Description: strings.Repeat("x", 2000), Inputs: []ActionInput{{Name: "focus", Label: strings.Repeat("y", 200), Default: strings.Repeat("z", 1000)}}, Effects: []string{strings.Repeat("e", 1000)}}}
+	metadata.Artifacts = make([]Artifact, 20)
+	for i := range metadata.Artifacts {
+		metadata.Artifacts[i] = Artifact{Name: strings.Repeat("n", 200), URL: "https://example.test/" + strings.Repeat("u", 1900), SHA256: strings.Repeat("a", 64)}
+	}
+	if !validContribution(metadata) || contributionWeight(metadata) <= 20000 {
+		t.Fatalf("metadata validation=%v weight=%d", validContribution(metadata), contributionWeight(metadata))
 	}
 }
 
