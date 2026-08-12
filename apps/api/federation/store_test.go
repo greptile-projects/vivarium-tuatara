@@ -101,8 +101,8 @@ func TestRejectsTraversalAndUnrelatedKeyUpdate(t *testing.T) {
 	readJSONForTest(t, attacker.root+"/identity.json", &attackerIdentity)
 	privateRaw, _ := base64.RawURLEncoding.DecodeString(attackerIdentity.PrivateKey)
 	replacement.Signature = sign(replacement, ed25519.PrivateKey(privateRaw))
-	if err := Verify(replacement); err != nil {
-		t.Fatalf("replacement must be self-signed for continuity regression: %v", err)
+	if err := Verify(replacement); err != ErrInvalid {
+		t.Fatalf("unrelated root identity verify = %v", err)
 	}
 	if _, err := local.Upsert("https://attacker.example", replacement); err == nil {
 		t.Fatal("unrelated key update accepted")
@@ -110,6 +110,33 @@ func TestRejectsTraversalAndUnrelatedKeyUpdate(t *testing.T) {
 	retained, _ := local.Get(doc.InstanceID)
 	if retained.Document.SigningKeyID != doc.SigningKeyID || retained.DiscoveryURL != "https://remote.example" {
 		t.Fatal("trusted peer was replaced")
+	}
+}
+
+func TestRejectsCanonicalButKeyUnboundInstanceIDAndPeerPathTraversal(t *testing.T) {
+	remote, _ := New(t.TempDir(), "Remote", "https://remote.example", nil)
+	doc, _ := remote.Identity()
+	var identity persistedIdentity
+	readJSONForTest(t, remote.root+"/identity.json", &identity)
+	privateRaw, _ := base64.RawURLEncoding.DecodeString(identity.PrivateKey)
+	doc.InstanceID = "0123456789abcdef0123456789abcdef"
+	doc.Signature = sign(doc, ed25519.PrivateKey(privateRaw))
+	if err := Verify(doc); err != ErrInvalid {
+		t.Fatalf("key-unbound ID verify = %v", err)
+	}
+	local, _ := New(t.TempDir(), "Local", "https://local.example", nil)
+	if _, err := local.Upsert("https://remote.example", doc); err != ErrInvalid {
+		t.Fatalf("key-unbound upsert = %v", err)
+	}
+	traversal := "../../aaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if len(traversal) != 32 {
+		t.Fatal("test traversal must exercise prior length-only boundary")
+	}
+	if _, err := local.Get(traversal); err != ErrNotFound {
+		t.Fatalf("traversal get = %v", err)
+	}
+	if _, err := local.Decide(traversal, 1, "revoke"); err != ErrNotFound {
+		t.Fatalf("traversal decide = %v", err)
 	}
 }
 

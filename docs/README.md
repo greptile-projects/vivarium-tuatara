@@ -17,8 +17,8 @@ Consumers should use that HTTP boundary rather than reading storage roots.
 ## Federation identity
 
 Every instance publishes a signed, versioned identity document at
-`/.well-known/vivarium-federation`. Its stable instance ID is derived from the
-initial Ed25519 key and the signed document declares public endpoints,
+`/.well-known/vivarium-federation`. Its stable instance ID is verified against
+the retained immutable root Ed25519 key (the first key), and the signed document declares public endpoints,
 capabilities, operators, and current/retired verification keys. Configuration
 uses `FEDERATION_PUBLIC_URL`, `FEDERATION_INSTANCE_NAME`, and
 `FEDERATION_OPERATORS` (comma-separated local user IDs with exclusive

@@ -222,6 +222,17 @@ func Verify(d Document) error {
 	if e != nil || len(pub) != ed25519.PublicKeySize {
 		return ErrInvalid
 	}
+	if len(d.Keys) == 0 {
+		return ErrInvalid
+	}
+	rootPublic, e := base64.RawURLEncoding.DecodeString(d.Keys[0].PublicKey)
+	if e != nil || len(rootPublic) != ed25519.PublicKeySize {
+		return ErrInvalid
+	}
+	rootSum := sha256.Sum256(rootPublic)
+	if d.InstanceID != hex.EncodeToString(rootSum[:16]) {
+		return ErrInvalid
+	}
 	sig, e := base64.RawURLEncoding.DecodeString(d.Signature)
 	if e != nil || !ed25519.Verify(pub, unsigned(d), sig) {
 		return ErrInvalid
@@ -236,6 +247,9 @@ func validInstanceID(id string) bool {
 	return e == nil && len(b) == 16
 }
 func verifyContinuity(previous, next Document) error {
+	if len(previous.Keys) == 0 || len(next.Keys) == 0 || previous.Keys[0].ID != next.Keys[0].ID || previous.Keys[0].PublicKey != next.Keys[0].PublicKey {
+		return ErrInvalid
+	}
 	sig, e := base64.RawURLEncoding.DecodeString(next.RotationSignature)
 	if e != nil {
 		return ErrInvalid
@@ -292,7 +306,11 @@ func (s *Store) Upsert(url string, d Document) (Peer, error) {
 		p.LastError = ""
 		p.TrustVersion++
 	}
-	if err = writeJSON(filepath.Join(s.root, "peers", p.InstanceID+".json"), p); err != nil {
+	peerPath, err := s.peerPath(p.InstanceID)
+	if err != nil {
+		return Peer{}, err
+	}
+	if err = writeJSON(peerPath, p); err != nil {
 		return Peer{}, err
 	}
 	return p, nil
@@ -315,7 +333,11 @@ func (s *Store) RecordFailure(id, msg string) (Peer, error) {
 		p.Status = "unreachable"
 	}
 	p.TrustVersion++
-	e = writeJSON(filepath.Join(s.root, "peers", id+".json"), p)
+	peerPath, pathErr := s.peerPath(id)
+	if pathErr != nil {
+		return Peer{}, pathErr
+	}
+	e = writeJSON(peerPath, p)
 	return p, e
 }
 func (s *Store) Decide(id string, version int, action string) (Peer, error) {
@@ -346,7 +368,11 @@ func (s *Store) Decide(id string, version int, action string) (Peer, error) {
 		return Peer{}, ErrInvalid
 	}
 	p.TrustVersion++
-	e = writeJSON(filepath.Join(s.root, "peers", id+".json"), p)
+	peerPath, pathErr := s.peerPath(id)
+	if pathErr != nil {
+		return Peer{}, pathErr
+	}
+	e = writeJSON(peerPath, p)
 	return p, e
 }
 func (s *Store) Get(id string) (Peer, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.readPeer(id) }
@@ -371,10 +397,11 @@ func (s *Store) List() ([]Peer, error) {
 	return out, nil
 }
 func (s *Store) readPeer(id string) (Peer, error) {
-	if len(id) != 32 {
+	peerPath, e := s.peerPath(id)
+	if e != nil {
 		return Peer{}, ErrNotFound
 	}
-	b, e := os.ReadFile(filepath.Join(s.root, "peers", id+".json"))
+	b, e := os.ReadFile(peerPath)
 	if errors.Is(e, os.ErrNotExist) {
 		return Peer{}, ErrNotFound
 	}
@@ -386,6 +413,12 @@ func (s *Store) readPeer(id string) (Peer, error) {
 		return Peer{}, e
 	}
 	return p, nil
+}
+func (s *Store) peerPath(id string) (string, error) {
+	if !validInstanceID(id) {
+		return "", ErrNotFound
+	}
+	return filepath.Join(s.root, "peers", id+".json"), nil
 }
 func (s *Store) lock() (func(), error) {
 	f, e := os.OpenFile(filepath.Join(s.root, ".lock"), os.O_CREATE|os.O_RDWR, 0600)
