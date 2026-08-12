@@ -259,6 +259,10 @@ func TestMergeReceiptRequiresImmutableRevisionAndEvidence(t *testing.T) {
 	if _, err := s.AppendCollaborationEvent(v); err != nil {
 		t.Fatal(err)
 	}
+	loaded, err := s.CollaborationEvent(v.ContributionID, v.OriginInstanceID, v.ID)
+	if err != nil || !jsonEqual(loaded.Evidence, v.Evidence) || loaded.Signature != v.Signature {
+		t.Fatalf("loaded receipt = %#v, %v", loaded, err)
+	}
 	v.Evidence = nil
 	if _, err := s.AppendCollaborationEvent(v); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("receipt without evidence = %v", err)

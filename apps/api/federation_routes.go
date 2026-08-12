@@ -1276,7 +1276,10 @@ func finalizeFederatedMerge(store *federation.Store, pull pullrequests.PullReque
 	}
 	verified := make([]retainedClaim, 0, len(events))
 	for _, event := range events {
-		if event.Kind != "receipt" {
+		// Revisionless discussion/closure remains contribution provenance. Claims
+		// bound to a superseded revision are retained in history but cannot attest
+		// to the exact candidate accepted by this merge.
+		if event.Kind != "receipt" && !event.Stale {
 			raw, _ := json.Marshal(event)
 			digest := sha256.Sum256(raw)
 			verified = append(verified, retainedClaim{ID: event.ID, Kind: event.Kind, OriginInstanceID: event.OriginInstanceID, SHA256: hex.EncodeToString(digest[:])})
@@ -1313,13 +1316,19 @@ func finalizeFederatedMerge(store *federation.Store, pull pullrequests.PullReque
 		Revision: *pull.MergeCommitID, Evidence: evidence, CreatedAt: pull.MergedAt.UTC().Truncate(time.Microsecond),
 		OriginInstanceID: document.InstanceID, Verification: "verified",
 	}
-	version, key, signature, err := store.SignPayload(collaborationEventBytes(receipt))
-	if err != nil {
-		return err
-	}
-	receipt.DocumentVersion, receipt.SigningKeyID, receipt.Signature = version, key, signature
-	if _, err = store.AppendCollaborationEvent(receipt); err != nil {
-		return err
+	if retained, getErr := store.CollaborationEvent(receipt.ContributionID, receipt.OriginInstanceID, receipt.ID); getErr == nil {
+		receipt = retained
+	} else if !errors.Is(getErr, federation.ErrNotFound) {
+		return getErr
+	} else {
+		version, key, signature, signErr := store.SignPayload(collaborationEventBytes(receipt))
+		if signErr != nil {
+			return signErr
+		}
+		receipt.DocumentVersion, receipt.SigningKeyID, receipt.Signature = version, key, signature
+		if _, err = store.AppendCollaborationEvent(receipt); err != nil {
+			return err
+		}
 	}
 	// Always publish an outbox record first. A crash, outage, or trust change can
 	// delay delivery, but cannot erase the upstream's accepted evidence.

@@ -533,6 +533,24 @@ func (s *Store) ListCollaborationEvents(contributionID, currentRevision string) 
 	return out, nil
 }
 
+// CollaborationEvent returns one immutable retained event by its origin and
+// ID. Receipt retries use this to preserve the original signing identity across
+// local key rotation instead of reconstructing an event under a newer key.
+func (s *Store) CollaborationEvent(contributionID, originInstanceID, id string) (CollaborationEvent, error) {
+	if !validOpaqueID(contributionID) || !validInstanceID(originInstanceID) || !validOpaqueID(id) {
+		return CollaborationEvent{}, ErrNotFound
+	}
+	raw, err := os.ReadFile(filepath.Join(s.root, "collaboration", contributionID, originInstanceID+"-"+id+".json"))
+	if err != nil {
+		return CollaborationEvent{}, ErrNotFound
+	}
+	var v CollaborationEvent
+	if json.Unmarshal(raw, &v) != nil || !validCollaborationEvent(v) || v.ContributionID != contributionID || v.OriginInstanceID != originInstanceID || v.ID != id {
+		return CollaborationEvent{}, ErrInvalid
+	}
+	return v, nil
+}
+
 func New(root, name, publicURL string, operators []string) (*Store, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, fmt.Errorf("federation storage root is empty")
