@@ -107,8 +107,13 @@ func registerExtensionContributionRoutes(mux *http.ServeMux, store *extensions.S
 		if !ok {
 			return
 		}
-		v, e := store.Invoke(r.PathValue("id"), r.PathValue("resource_type"), r.PathValue("resource_id"), r.PathValue("contribution_id"), r.PathValue("action_id"), actor.UserID, in.Revision, in.Inputs)
-		if errors.Is(e, extensions.ErrConflict) {
+		var v extensions.Contribution
+		e := pulls.WithSourceRevision(r.PathValue("id"), r.PathValue("resource_id"), in.Revision, func(_ pullrequests.PullRequest) error {
+			var invokeErr error
+			v, invokeErr = store.Invoke(r.PathValue("id"), r.PathValue("resource_type"), r.PathValue("resource_id"), r.PathValue("contribution_id"), r.PathValue("action_id"), actor.UserID, in.Revision, in.Inputs)
+			return invokeErr
+		})
+		if errors.Is(e, extensions.ErrConflict) || errors.Is(e, pullrequests.ErrSourceChanged) || errors.Is(e, pullrequests.ErrNotReady) {
 			writeAPIError(w, 409, "resource_revision_changed", "action was declared for a different resource revision")
 			return
 		}
