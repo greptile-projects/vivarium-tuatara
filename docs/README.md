@@ -28,6 +28,11 @@ voter only their own receipt, while others see aggregate counts and a verificati
 Contests and eligibility changes remain attached to the final tally. Records default beneath
 `$GOVERNANCE_STORAGE_ROOT` (`governance`).
 
+An accepted, uncontested result may issue one content-addressed decision receipt and
+repository-owner-published ordinary task plan. Its steps distinguish the community mandate from
+remaining resource approvals. Scope, cost, assumptions, and protected effects are frozen;
+material changes require a new or amended decision.
+
 ## Federation identity
 
 Every instance publishes a signed, versioned identity document at

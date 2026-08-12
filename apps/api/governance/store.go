@@ -23,6 +23,8 @@ var ErrDuplicateBallot = errors.New("duplicate ballot")
 var ErrFinalized = errors.New("tally already finalized")
 var ErrClosed = errors.New("voting is closed")
 var ErrIneligible = errors.New("actor is not eligible")
+var ErrNotAccepted = errors.New("governed proposal was not accepted")
+var ErrMaterialChange = errors.New("implementation materially changed")
 
 type Reference struct {
 	Kind       string `json:"kind"`
@@ -93,29 +95,134 @@ type Event struct {
 	Summary   string    `json:"summary"`
 	CreatedAt time.Time `json:"created_at"`
 }
+type DecisionReceipt struct {
+	ID                  string      `json:"id"`
+	ProposalID          string      `json:"proposal_id"`
+	CharterVersion      int         `json:"charter_version"`
+	DecisionClass       string      `json:"decision_class"`
+	Result              Alternative `json:"result"`
+	TallySHA256         string      `json:"tally_sha256"`
+	AuthorizationSHA256 string      `json:"authorization_sha256"`
+	IssuedAt            time.Time   `json:"issued_at"`
+}
+type ImplementationStep struct {
+	ID               string    `json:"id"`
+	Kind             string    `json:"kind"`
+	ResourceID       string    `json:"resource_id,omitempty"`
+	Status           string    `json:"status"`
+	Summary          string    `json:"summary"`
+	RequiredApproval string    `json:"required_approval,omitempty"`
+	Blocker          string    `json:"blocker,omitempty"`
+	ActorID          string    `json:"actor_id"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+type Implementation struct {
+	Receipt          DecisionReceipt      `json:"receipt"`
+	Kind             string               `json:"kind"`
+	RepositoryID     string               `json:"repository_id"`
+	Scope            string               `json:"scope"`
+	Cost             string               `json:"cost"`
+	Assumptions      []string             `json:"assumptions"`
+	ProtectedEffects []string             `json:"protected_effects"`
+	Steps            []ImplementationStep `json:"steps"`
+	CreatedBy        string               `json:"created_by"`
+	CreatedAt        time.Time            `json:"created_at"`
+}
 type Proposal struct {
-	ID                     string        `json:"id"`
-	ScopeType              string        `json:"scope_type"`
-	ScopeID                string        `json:"scope_id"`
-	CharterVersion         int           `json:"charter_version"`
-	Source                 Reference     `json:"source"`
-	Title                  string        `json:"title"`
-	Summary                string        `json:"summary"`
-	Scope                  string        `json:"scope"`
-	Alternatives           []Alternative `json:"alternatives"`
-	Evidence               []Reference   `json:"evidence"`
-	AffectedResources      []Reference   `json:"affected_resources"`
-	DisclosureRequirements []string      `json:"disclosure_requirements"`
-	ImplementationEffects  []string      `json:"implementation_effects"`
-	Rule                   Rule          `json:"rule"`
-	Electorate             []Elector     `json:"electorate"`
-	Analyses               []Analysis    `json:"analyses"`
-	Ballots                []Ballot      `json:"ballots"`
-	Tally                  *Tally        `json:"tally,omitempty"`
-	Status                 string        `json:"status"`
-	CreatedBy              string        `json:"created_by"`
-	CreatedAt              time.Time     `json:"created_at"`
-	Events                 []Event       `json:"events"`
+	ID                     string          `json:"id"`
+	ScopeType              string          `json:"scope_type"`
+	ScopeID                string          `json:"scope_id"`
+	CharterVersion         int             `json:"charter_version"`
+	Source                 Reference       `json:"source"`
+	Title                  string          `json:"title"`
+	Summary                string          `json:"summary"`
+	Scope                  string          `json:"scope"`
+	Alternatives           []Alternative   `json:"alternatives"`
+	Evidence               []Reference     `json:"evidence"`
+	AffectedResources      []Reference     `json:"affected_resources"`
+	DisclosureRequirements []string        `json:"disclosure_requirements"`
+	ImplementationEffects  []string        `json:"implementation_effects"`
+	Rule                   Rule            `json:"rule"`
+	Electorate             []Elector       `json:"electorate"`
+	Analyses               []Analysis      `json:"analyses"`
+	Ballots                []Ballot        `json:"ballots"`
+	Tally                  *Tally          `json:"tally,omitempty"`
+	Implementation         *Implementation `json:"implementation,omitempty"`
+	Status                 string          `json:"status"`
+	CreatedBy              string          `json:"created_by"`
+	CreatedAt              time.Time       `json:"created_at"`
+	Events                 []Event         `json:"events"`
+}
+
+// BeginImplementation freezes the accepted mandate before ordinary resource
+// owners route it through their existing controls. Exact retries converge;
+// changed scope, cost, assumptions, or protected effects require amendment.
+func (s *Store) BeginImplementation(pid, actor string, in Implementation) (Proposal, error) {
+	return s.change(pid, func(p *Proposal) error {
+		if p.Tally == nil || p.Tally.Status != "accepted" || p.Tally.Contested || p.Tally.Result == "" {
+			return ErrNotAccepted
+		}
+		var result Alternative
+		for _, a := range p.Alternatives {
+			if a.ID == p.Tally.Result {
+				result = a
+			}
+		}
+		if actor == "" || in.Kind != "task_plan" || in.RepositoryID == "" || strings.TrimSpace(in.Scope) == "" || strings.TrimSpace(in.Cost) == "" || len(in.Assumptions) == 0 || len(in.ProtectedEffects) == 0 || result.ID == "" {
+			return ErrInvalid
+		}
+		snapshot := struct {
+			ProposalID                    string
+			CharterVersion                int
+			DecisionClass                 string
+			Result                        Alternative
+			Tally                         string
+			Kind                          string
+			RepositoryID                  string
+			Scope                         string
+			Cost                          string
+			Assumptions, ProtectedEffects []string
+		}{p.ID, p.CharterVersion, p.Rule.DecisionClass, result, p.Tally.VerificationSHA256, in.Kind, in.RepositoryID, strings.TrimSpace(in.Scope), strings.TrimSpace(in.Cost), in.Assumptions, in.ProtectedEffects}
+		encoded, _ := json.Marshal(snapshot)
+		sum := sha256.Sum256(encoded)
+		authorization := hex.EncodeToString(sum[:])
+		if p.Implementation != nil {
+			if p.Implementation.Receipt.AuthorizationSHA256 != authorization {
+				return ErrMaterialChange
+			}
+			return nil
+		}
+		now := s.now().UTC()
+		in.Scope, in.Cost = snapshot.Scope, snapshot.Cost
+		in.Assumptions = append([]string(nil), in.Assumptions...)
+		in.ProtectedEffects = append([]string(nil), in.ProtectedEffects...)
+		in.Receipt = DecisionReceipt{ID: id(), ProposalID: p.ID, CharterVersion: p.CharterVersion, DecisionClass: p.Rule.DecisionClass, Result: result, TallySHA256: p.Tally.VerificationSHA256, AuthorizationSHA256: authorization, IssuedAt: now}
+		in.CreatedBy, in.CreatedAt = actor, now
+		in.Steps = []ImplementationStep{{ID: id(), Kind: "resource_owner_handoff", Status: "pending", Summary: "Community mandate awaits ordinary repository proposal and task-plan publication", RequiredApproval: "repository owner publication; later review, integration, release, environment, extension, and agent controls remain independent", ActorID: actor, UpdatedAt: now}}
+		p.Implementation = &in
+		p.Events = append(p.Events, Event{ID: id(), Kind: "implementation.receipt_issued", ActorID: actor, Summary: "Issued immutable decision receipt without granting operational authority", CreatedAt: now})
+		return nil
+	})
+}
+
+func (s *Store) LinkImplementation(pid, actor, resourceID string) (Proposal, error) {
+	return s.change(pid, func(p *Proposal) error {
+		if p.Implementation == nil || resourceID == "" {
+			return ErrInvalid
+		}
+		step := &p.Implementation.Steps[0]
+		if step.ResourceID != "" && step.ResourceID != resourceID {
+			return ErrConflict
+		}
+		if step.ResourceID == resourceID {
+			return nil
+		}
+		now := s.now().UTC()
+		step.ResourceID, step.Status, step.Blocker, step.ActorID, step.UpdatedAt = resourceID, "in_progress", "", actor, now
+		step.Summary = "Ordinary repository proposal and task plan published; implementation remains subject to its resource controls"
+		p.Events = append(p.Events, Event{ID: id(), Kind: "implementation.resource_linked", ActorID: actor, Summary: "Linked owner-approved implementation resource", CreatedAt: now})
+		return nil
+	})
 }
 
 type Store struct {

@@ -28,6 +28,14 @@ tally exposes a SHA-256 digest over the proposal, charter version, current elect
 and aggregate counts for verification. The first completed tally is immutable; later finalization
 attempts conflict instead of replacing its electorate, contest evidence, result, or digest.
 
+An accepted, uncontested result can be carried into accountable project work with `POST
+/governance/proposals/{id}/implementation`. A current repository owner supplies the exact base
+revision, bounded scope and cost, explicit assumptions and protected effects, and an ordinary
+ordered task plan. The immutable decision receipt binds those bounds to the charter, result, and
+tally. Publication creates a normal proposal and tasks; it grants no Git, review, integration,
+release, environment, extension, or agent authority. Exact retries converge, while changed scope,
+cost, assumptions, or protected effects return `governance_amendment_required`.
+
 ## Federated repository discovery
 
 `GET /federation/repositories/{id}` is the authoritative public metadata

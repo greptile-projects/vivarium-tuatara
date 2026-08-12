@@ -88,6 +88,30 @@ func TestIssueImplementationRecoveryRejectsChangedEvidence(t *testing.T) {
 	}
 }
 
+func TestGovernanceImplementationRecoveryRejectsChangedOrigin(t *testing.T) {
+	store, _ := New(t.TempDir())
+	origin := ReasoningOrigin{GovernanceProposalID: strings.Repeat("1", 32), GovernanceReceiptID: strings.Repeat("2", 32), Revision: strings.Repeat("a", 40), SelectedItemIDs: []string{strings.Repeat("2", 32)}, Items: []ReasoningItem{{ID: strings.Repeat("2", 32), Kind: "community_mandate", Summary: "Adopt", Status: "accepted"}}, AnalysisStatus: "community_mandate_requires_resource_controls"}
+	input := ImplementationInput{RepositoryID: repositoryID, ActorID: authorID, Title: "Implement mandate", Body: "Ordinary owner-controlled work", Origin: origin, Tasks: []ImplementationTaskInput{{Title: "Implement", Outcome: "Deliver accepted result", AssigneeType: "human", AssigneeID: commenterID}}}
+	first, _, err := store.CreateImplementation(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.Origin.Revision = strings.Repeat("b", 40)
+	if _, _, err = store.CreateImplementation(input); !errors.Is(err, ErrImplementationConflict) {
+		t.Fatalf("changed revision = %v", err)
+	}
+	input.Origin = origin
+	input.Origin.GovernanceReceiptID = strings.Repeat("3", 32)
+	if _, _, err = store.CreateImplementation(input); !errors.Is(err, ErrImplementationConflict) {
+		t.Fatalf("changed receipt = %v", err)
+	}
+	input.Origin = origin
+	retry, _, err := store.CreateImplementation(input)
+	if err != nil || retry.ID != first.ID {
+		t.Fatalf("exact retry = %#v, %v", retry, err)
+	}
+}
+
 func TestCorrectiveWorkPublishesAtomicallyAndDeduplicatesRetry(t *testing.T) {
 	root := t.TempDir()
 	store, _ := New(root)
