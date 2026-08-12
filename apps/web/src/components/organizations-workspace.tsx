@@ -302,6 +302,7 @@ export function OrganizationDetail({
         </p>
         <h1 className="mt-2 text-3xl font-bold">{group.name}</h1>
         <p className="mt-2 text-sm text-[var(--muted)]">{group.description}</p>
+        <Link href={`/organizations/${group.id}/charter`} className="mt-3 inline-flex text-sm font-semibold text-[var(--brand)] hover:underline">Governance charter</Link>
       </header>
       {error && (
         <p

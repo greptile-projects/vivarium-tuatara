@@ -19,6 +19,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/charters"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/contributoropportunities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/contributorpathways"
@@ -256,6 +257,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	charterRoot := os.Getenv("CHARTER_STORAGE_ROOT")
+	if charterRoot == "" {
+		charterRoot = "charters"
+	}
+	charterStore, err := charters.New(charterRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	workspaceRoot := os.Getenv("WORKSPACE_STORAGE_ROOT")
 	if workspaceRoot == "" {
 		workspaceRoot = "workspaces"
@@ -317,7 +326,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -438,6 +447,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var relationshipStore *relationships.Store
 	var packageStore *packages.Store
 	var organizationStore *organizations.Store
+	var charterStore *charters.Store
 	var workspaceStore *workspaces.Store
 	var explanationStore *explanations.Store
 	var impactStore *impacts.Store
@@ -467,6 +477,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			packageStore = value
 		case *organizations.Store:
 			organizationStore = value
+		case *charters.Store:
+			charterStore = value
 		case *workspaces.Store:
 			workspaceStore = value
 		case *explanations.Store:
@@ -590,6 +602,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && userStore != nil && organizationStore != nil {
 		registerOrganizationRoutes(mux, store, organizationStore, repositoryCatalog, userStore, authStore, activityStore, proposalStore, pullRequestStore, releaseStore, packageStore, incidentStore, relationshipStore, securityAdvisoryStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && charterStore != nil {
+		registerCharterRoutes(mux, charterStore, repositoryCatalog, organizationStore, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && workspaceStore != nil {
 		registerWorkspaceRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, incidentStore, issueStore, releaseStore, workspaceStore, authStore, organizationStore, checkRunStore, changeSessionStore)
