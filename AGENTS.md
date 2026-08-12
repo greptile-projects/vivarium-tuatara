@@ -236,6 +236,20 @@ whenever dependencies change or the web job fails before it starts.
   and agent authority, targeted to the organization, a team, or a repository.
   Repository previews merge the strictest matching rules before activation;
   activation governs new decisions without rewriting active work. Responsible
+
+  Repository and organization owners publish immutable governance charter revisions beneath
+  `$CHARTER_STORAGE_ROOT` (default `charters`). Charters explicitly name roles and eligibility,
+  decision classes, participation/quorum/approval rules, protected branch/release/environment/
+  security/agent resources, terms, removal, succession, and amendment procedures. Approval,
+  activation, and expiring exceptions remain separately attributed. Activation recomputes a
+  live relationship preview against ownership, collaborators, teams, policies, required checks,
+  and agent authority; impossible eligibility or resource rules fail closed, while an amendment
+  never rewrites an earlier active revision or completed decision. Role eligibility uses closed
+  identity sources (`repository_owner`, `repository_collaborator`, `organization_owner`,
+  `organization_member`, `team_maintainer`, `approved_agent`) and is resolved separately for
+  every decision class. Repository scope accepts only repository owner/collaborator sources;
+  organization scope accepts only organization owner/member, team maintainer, and approved-agent
+  sources. Exceptions can name only a class/resource in the current active revision.
   team maintainers request attributable expiring exceptions, whose approved
   projection retains both the baseline and adjusted effective value. Public
   directory reads omit organization-only structure, private-repository

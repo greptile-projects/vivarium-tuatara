@@ -182,6 +182,24 @@ second ordinary pull, review, check, merge, and release. Playwright isolates
 documentation records beneath `$DOCUMENTATION_STORAGE_ROOT` with its other
 temporary API stores.
 
+## Project governance charters
+
+Repository and organization owners publish append-only charter revisions at
+`/repositories/{id}/charter` and `/organizations/{id}/charter`. A revision defines named
+governance roles and eligibility, decision classes, participation and quorum, approval rules,
+protected branch/release/environment/security/agent resources, terms, removal and succession,
+and amendment policy. Draft approval, activation, and time-bounded resource exceptions retain
+their actor and time independently beneath `$CHARTER_STORAGE_ROOT` (`charters`).
+
+Every read projects the current charter against live ownership, collaborators, organization
+teams and policy, required checks, and agent authority. Activation repeats that preview and
+rejects impossible quorum or unsupported protected-resource rules. Activation affects future
+decisions only: earlier revisions, approvals, exceptions, and completed work remain historical
+evidence. Eligibility is derived per decision class from closed live identity sources rather
+than descriptive text, and exceptions must target a declared resource in the active revision.
+The web surfaces live at `/repositories/{id}/charter` and
+`/organizations/{id}/charter`.
+
 ## Contributor pathways
 
 Repository owners publish the project's participation contract before a
