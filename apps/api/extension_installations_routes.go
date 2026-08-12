@@ -252,8 +252,23 @@ func registerExtensionInstallationRoutes(mux *http.ServeMux, store *extensions.S
 			writeAPIError(w, 409, "installation_changed", "installation changed before credential publication")
 			return
 		}
+		extension, e := store.Get(v.ExtensionID)
+		if e != nil {
+			_, _ = credentials.Revoke(v.ExtensionID, issued.ID)
+			writeAPIError(w, 500, "extension_storage_unavailable", "rotation policy could not be loaded")
+			return
+		}
+		deadline := time.Now().UTC().Add(time.Duration(extension.CredentialRotation.OverlapHours) * time.Hour)
 		for _, old := range v.DerivedCredentialIDs {
-			_, _ = credentials.Revoke(v.ExtensionID, old)
+			if extension.CredentialRotation.OverlapHours == 0 {
+				_, e = credentials.Revoke(v.ExtensionID, old)
+			} else {
+				_, e = credentials.ExpireAt(v.ExtensionID, old, deadline)
+			}
+			if e != nil {
+				writeAPIError(w, 500, "credential_unavailable", "predecessor credential retirement could not be scheduled")
+				return
+			}
 		}
 		writeJSON(w, 201, map[string]any{"credential": issued, "installation": updated})
 	})

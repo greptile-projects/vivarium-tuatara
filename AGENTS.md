@@ -90,6 +90,8 @@ whenever dependencies change or the web job fails before it starts.
   Operations project attributed requests/actions, delivery health and latency,
   consumption, permission use, credential health, history, and notices;
   rotation, narrowing, pause, quarantine, and removal preserve prior evidence.
+  Rotation durably shortens predecessor expiry to the configured overlap
+  deadline; hourly notices use the rolling hour while totals remain lifetime.
   Active installations subscribe to permitted project events through durable
   v1 Ed25519-signed envelopes with stable event/delivery identities, monotonic
   per-installation sequence and repository ordering keys. Owner delivery

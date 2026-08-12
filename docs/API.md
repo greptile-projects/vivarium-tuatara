@@ -53,6 +53,8 @@ remain pinned until each resource owner explicitly submits an `upgrade`.
 delivery failures/latency, consumption, permission use, credential health,
 contract drift, and notices. The `/credentials/rotate` action replaces and
 retires credentials; quarantine revokes future authority without deleting evidence.
+Rotation durably shortens predecessor expiry to the configured overlap deadline
+(or revokes immediately for zero overlap), never extending original lifetime.
 
 ### Extension contributions and actions
 

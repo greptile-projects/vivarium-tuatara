@@ -74,8 +74,13 @@ func (s *Store) InspectOperations(installationID string) (Operations, error) {
 	if err != nil {
 		return Operations{}, err
 	}
+	recentRequests := 0
+	windowStart := o.GeneratedAt.Add(-time.Hour)
 	for _, c := range contributions {
 		o.Requests++
+		if !c.CreatedAt.Before(windowStart) && !c.CreatedAt.After(o.GeneratedAt) {
+			recentRequests++
+		}
 		o.PermissionUse[c.ResourceType+":write"]++
 		o.ActionInvocations += len(c.Invocations)
 	}
@@ -88,7 +93,7 @@ func (s *Store) InspectOperations(installationID string) (Operations, error) {
 	if o.Failures >= 3 {
 		o.Notices = append(o.Notices, OperationalNotice{Code: "delivery_failures", Severity: "warning", Message: "Repeated delivery failures were detected.", Action: "Inspect attempt history and endpoint health."})
 	}
-	if o.Requests >= 80 {
+	if recentRequests >= 80 {
 		o.Notices = append(o.Notices, OperationalNotice{Code: "anomalous_consumption", Severity: "warning", Message: "Contribution consumption is approaching the hourly limit.", Action: "Inspect requests and narrow access or quarantine."})
 	}
 	return o, nil
