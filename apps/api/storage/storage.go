@@ -28,6 +28,7 @@ const defaultBranch = "main"
 const MaxObjectSize int64 = 100 << 20
 
 const maxObjectHeaderSize = 64
+const maxFederatedBundleExpandedSize int64 = 128 << 20
 
 var (
 	// ErrInvalidID indicates that an identifier cannot safely name a repository.
@@ -131,6 +132,79 @@ type Repository struct {
 	path   string
 	device uint64
 	inode  uint64
+}
+
+// OpenBundle verifies a Git bundle in an isolated temporary bare repository.
+// The caller owns the returned cleanup function. No reference is published in
+// the platform repository namespace.
+func OpenBundle(bundlePath string) (*Repository, func(), error) {
+	staging, err := os.MkdirTemp("", "vivarium-federation-bundle-")
+	if err != nil {
+		return nil, nil, err
+	}
+	cleanup := func() { _ = os.RemoveAll(staging) }
+	if err := os.Remove(staging); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	command := exec.Command("git", "clone", "--bare", bundlePath, staging)
+	if output, err := command.CombinedOutput(); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("open Git bundle: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	if err := verifyPackExpansionBudget(staging, maxFederatedBundleExpandedSize); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	if err := unpackCloneObjects(staging); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	fsck := exec.Command("git", "--git-dir="+staging, "fsck", "--full")
+	if output, err := fsck.CombinedOutput(); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("verify Git bundle: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	info, err := os.Stat(staging)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	stat := info.Sys().(*syscall.Stat_t)
+	return &Repository{id: "federated-transfer", path: staging, device: uint64(stat.Dev), inode: stat.Ino}, cleanup, nil
+}
+
+// verifyPackExpansionBudget inspects Git's verified pack index before loose
+// objects are materialized. Each object remains under MaxObjectSize and the
+// complete expanded graph must fit the federation import budget.
+func verifyPackExpansionBudget(repositoryPath string, budget int64) error {
+	indexes, err := filepath.Glob(filepath.Join(repositoryPath, "objects", "pack", "*.idx"))
+	if err != nil {
+		return fmt.Errorf("list bundle pack indexes: %w", err)
+	}
+	var expanded int64
+	for _, index := range indexes {
+		command := exec.Command("git", "verify-pack", "-v", index)
+		output, err := command.Output()
+		if err != nil {
+			return fmt.Errorf("verify bundle pack: %w", err)
+		}
+		for _, line := range strings.Split(string(output), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 5 || !isLowerHex(fields[0], 40) {
+				continue
+			}
+			size, err := strconv.ParseInt(fields[2], 10, 64)
+			if err != nil || size < 0 || size > MaxObjectSize {
+				return fmt.Errorf("bundle object exceeds import limit: %w", ErrInvalidObject)
+			}
+			if size > budget-expanded {
+				return fmt.Errorf("bundle expands beyond federation import budget: %w", ErrInvalidObject)
+			}
+			expanded += size
+		}
+	}
+	return nil
 }
 
 // Info is a validated snapshot of repository metadata.

@@ -61,6 +61,20 @@ Following a reference is local account metadata used by `/federation/follows`;
 it grants no remote or local repository authority. The `/federation` workspace
 labels cached context as remote and links to its authoritative endpoint.
 
+Trusted peers advertising `repository-contribution.v1` support independently
+hosted contributions. A developer creates a private local fork from one exact
+advertised public branch revision; the home verifies and imports only that
+revision's reachable Git object closure. The fork uses ordinary local Git
+credentials and can fast-forward its selected upstream branch after refreshing
+and re-verifying the remote projection.
+
+Opening a remote pull freezes the local source and remote target revisions. The
+home signs an idempotent envelope with bounded purpose and instance-qualified
+author attribution, then transfers only the source revision's reachable bundle.
+The target verifies explicit peer trust, signature, target tip, bundle integrity,
+and exact commit before creating ordinary review. Neither instance receives a
+credential, collaborator grant, or repository write authority on the other.
+
 ## Living documentation
 
 Repository owners define documentation collections through

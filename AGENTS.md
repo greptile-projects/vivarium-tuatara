@@ -113,6 +113,13 @@ whenever dependencies change or the web job fails before it starts.
   cards are attribution references only: they never authenticate locally, and
   actor resolution provides no membership enumeration.
   Trusted peers may also advertise `repository-discovery.v1`. Public remote
+
+  Trusted peers advertising `repository-contribution.v1` exchange only bounded
+  exact-revision Git bundles and signed proposal envelopes. Local federated
+  forks retain instance-qualified upstream lineage while using ordinary local
+  Git credentials; synchronization is selected-branch fast-forward only.
+  Remote proposal negotiation freezes both tips and creates ordinary target
+  review without granting either instance credentials or repository authority.
   repository projections are bounded signed metadata carrying exact revisions,
   branches, releases, contributor guidance, public issues, and open contribution
   opportunities. Home-instance resolution verifies the retained peer document

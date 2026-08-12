@@ -3,6 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +15,8 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -20,6 +26,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/federation"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
@@ -27,8 +34,26 @@ import (
 )
 
 const maxFederatedRepositoryResponseBytes = 16 << 20
+const maxFederatedContributionEnvelopeBytes = (maxFederatedRepositoryResponseBytes*4)/3 + (64 << 10)
 
-func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userStore *users.Store, organizationStore *organizations.Store, credentials *auth.Store, gitStore *storage.Store, repositoryStore *repositories.Store, releaseStore *releases.Store, issueStore *issues.Store, pathwayStore *contributorpathways.Store, opportunityStore *contributoropportunities.Store) {
+type boundedBuffer struct {
+	bytes.Buffer
+	limit int
+}
+
+func (w *boundedBuffer) Write(p []byte) (int, error) {
+	remaining := w.limit - w.Len()
+	if remaining <= 0 {
+		return 0, fmt.Errorf("transfer exceeds the federation limit")
+	}
+	if len(p) > remaining {
+		_, _ = w.Buffer.Write(p[:remaining])
+		return remaining, fmt.Errorf("transfer exceeds the federation limit")
+	}
+	return w.Buffer.Write(p)
+}
+
+func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userStore *users.Store, organizationStore *organizations.Store, credentials *auth.Store, gitStore *storage.Store, repositoryStore *repositories.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, issueStore *issues.Store, pathwayStore *contributorpathways.Store, opportunityStore *contributoropportunities.Store) {
 	mux.HandleFunc("GET /.well-known/vivarium-federation", func(w http.ResponseWriter, _ *http.Request) {
 		d, err := store.Identity()
 		if err != nil {
@@ -147,6 +172,41 @@ func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userS
 		w.Header().Set("Content-Length", fmt.Sprint(len(body)))
 		w.WriteHeader(200)
 		_, _ = w.Write(body)
+	})
+	// Public transfers contain only the object closure reachable from one exact
+	// advertised branch revision. They are not Git credentials or write APIs.
+	mux.HandleFunc("GET /federation/repositories/{id}/transfers/{branch}/{revision}", func(w http.ResponseWriter, r *http.Request) {
+		repository, err := repositoryStore.GetByID(r.PathValue("id"))
+		if err != nil || repository.Visibility != repositories.Public {
+			writeAPIError(w, 404, "federated_repository_not_found", "repository is unavailable")
+			return
+		}
+		git, err := gitStore.Open(repository.ID)
+		if err != nil {
+			writeAPIError(w, 503, "federation_unavailable", "repository is unavailable")
+			return
+		}
+		ref, err := git.ReadReference("refs/heads/" + r.PathValue("branch"))
+		if err != nil || ref.Target != r.PathValue("revision") {
+			writeAPIError(w, 409, "federated_revision_changed", "the advertised branch revision is no longer current")
+			return
+		}
+		bundle := &boundedBuffer{limit: maxFederatedRepositoryResponseBytes}
+		var stderr bytes.Buffer
+		command := exec.CommandContext(r.Context(), "git", "--git-dir="+git.Path(), "bundle", "create", "-", "refs/heads/"+r.PathValue("branch"))
+		command.Stdout, command.Stderr = bundle, &stderr
+		if err := command.Run(); err != nil {
+			if r.Context().Err() != nil {
+				return
+			}
+			if bundle.Len() >= maxFederatedRepositoryResponseBytes {
+				writeAPIError(w, 413, "federated_transfer_too_large", "transfer exceeds the federation limit")
+				return
+			}
+			writeAPIError(w, 503, "federation_transfer_failed", strings.TrimSpace(stderr.String()))
+			return
+		}
+		writeJSON(w, 200, map[string]any{"repository_id": repository.ID, "branch": r.PathValue("branch"), "revision": ref.Target, "bundle": base64.RawStdEncoding.EncodeToString(bundle.Bytes())})
 	})
 	require := func(w http.ResponseWriter, r *http.Request) bool {
 		actor, ok := authenticateRequest(w, r, credentials, "", false)
@@ -268,6 +328,224 @@ func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userS
 			status = 202
 		}
 		writeJSON(w, status, cache)
+	})
+	mux.HandleFunc("POST /federation/repositories/{peer}/{repository}/forks", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:write", false)
+		if !ok {
+			return
+		}
+		reference := r.PathValue("peer") + ":" + r.PathValue("repository")
+		cache, err := refreshFederatedRepository(store, reference)
+		if err != nil || cache.Status != "current" || cache.Snapshot == nil {
+			writeAPIError(w, 409, "federated_repository_unavailable", "a current verified repository snapshot is required")
+			return
+		}
+		var in struct {
+			Name   string `json:"name"`
+			Branch string `json:"branch"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "name is required")
+			return
+		}
+		if in.Branch == "" {
+			in.Branch = cache.Snapshot.DefaultBranch
+		}
+		revision := ""
+		for _, b := range cache.Snapshot.Branches {
+			if b.Name == in.Branch {
+				revision = b.Revision
+			}
+		}
+		if revision == "" {
+			writeAPIError(w, 400, "invalid_branch", "branch is not advertised")
+			return
+		}
+		transfer, err := fetchFederatedTransfer(store, r.PathValue("peer"), r.PathValue("repository"), in.Branch, revision)
+		if err != nil {
+			writeAPIError(w, 422, "federated_transfer_failed", err.Error())
+			return
+		}
+		source, cleanup, err := openTransfer(transfer.Bundle)
+		if err != nil {
+			writeAPIError(w, 422, "federated_transfer_invalid", err.Error())
+			return
+		}
+		defer cleanup()
+		fork, err := repositoryStore.CreateFederatedFork(actor.UserID, reference, in.Branch, in.Name, source, revision)
+		if writeRepositoryError(w, err) {
+			return
+		}
+		w.Header().Set("Location", "/repositories/"+fork.ID)
+		writeJSON(w, 201, fork)
+	})
+	mux.HandleFunc("POST /federation/forks/{id}/synchronizations", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:write", false)
+		if !ok {
+			return
+		}
+		fork, err := repositoryStore.Get(actor.UserID, r.PathValue("id"))
+		if err != nil || fork.FederatedUpstream == "" {
+			writeAPIError(w, 404, "repository_not_found", "repository not found")
+			return
+		}
+		cache, err := refreshFederatedRepository(store, fork.FederatedUpstream)
+		if err != nil || cache.Snapshot == nil {
+			writeAPIError(w, 409, "federated_repository_unavailable", "upstream could not be verified")
+			return
+		}
+		revision := ""
+		for _, b := range cache.Snapshot.Branches {
+			if b.Name == fork.FederatedBranch {
+				revision = b.Revision
+			}
+		}
+		transfer, err := fetchFederatedTransfer(store, cache.PeerID, cache.RepositoryID, fork.FederatedBranch, revision)
+		if err != nil {
+			writeAPIError(w, 422, "federated_transfer_failed", err.Error())
+			return
+		}
+		source, cleanup, err := openTransfer(transfer.Bundle)
+		if err != nil {
+			writeAPIError(w, 422, "federated_transfer_invalid", err.Error())
+			return
+		}
+		defer cleanup()
+		result, err := repositoryStore.SynchronizeFederatedFork(actor.UserID, fork.ID, fork.FederatedBranch, source, revision)
+		if errors.Is(err, repositories.ErrForkDiverged) {
+			writeAPIError(w, 409, "fork_diverged", "fork branch contains independent work")
+			return
+		}
+		if writeRepositoryError(w, err) {
+			return
+		}
+		writeJSON(w, 200, result)
+	})
+	mux.HandleFunc("POST /federation/forks/{id}/pulls", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:write", false)
+		if !ok {
+			return
+		}
+		fork, err := repositoryStore.Get(actor.UserID, r.PathValue("id"))
+		if err != nil || fork.FederatedUpstream == "" {
+			writeAPIError(w, 404, "repository_not_found", "repository not found")
+			return
+		}
+		cache, err := refreshFederatedRepository(store, fork.FederatedUpstream)
+		if err != nil || cache.Snapshot == nil {
+			writeAPIError(w, 409, "federated_repository_unavailable", "target could not be verified")
+			return
+		}
+		var in struct {
+			Title        string `json:"title"`
+			Body         string `json:"body"`
+			SourceBranch string `json:"source_branch"`
+			TargetBranch string `json:"target_branch"`
+		}
+		if decodeJSON(r, &in) != nil || in.Title == "" {
+			writeAPIError(w, 400, "invalid_pull_request", "title and branches are required")
+			return
+		}
+		if in.SourceBranch == "" {
+			in.SourceBranch = fork.DefaultBranch
+		}
+		if in.TargetBranch == "" {
+			in.TargetBranch = cache.Snapshot.DefaultBranch
+		}
+		sourceGit, err := gitStore.Open(fork.ID)
+		if err != nil {
+			writeAPIError(w, 503, "federation_unavailable", "source is unavailable")
+			return
+		}
+		sourceRef, err := sourceGit.ReadReference("refs/heads/" + in.SourceBranch)
+		if err != nil {
+			writeAPIError(w, 400, "invalid_branch", "source branch is unavailable")
+			return
+		}
+		targetRevision := ""
+		for _, b := range cache.Snapshot.Branches {
+			if b.Name == in.TargetBranch {
+				targetRevision = b.Revision
+			}
+		}
+		if targetRevision == "" {
+			writeAPIError(w, 400, "invalid_branch", "target branch is unavailable")
+			return
+		}
+		idBytes := make([]byte, 16)
+		_, _ = rand.Read(idBytes)
+		document, _ := store.Identity()
+		payload := contributionPayload{ID: hex.EncodeToString(idBytes), SourceInstanceID: document.InstanceID, SourceRepositoryID: fork.ID, SourceBranch: in.SourceBranch, SourceRevision: sourceRef.Target, TargetRepositoryID: cache.RepositoryID, TargetBranch: in.TargetBranch, TargetRevision: targetRevision, Author: document.InstanceID + ":user:" + actor.UserID, Title: in.Title, Body: in.Body, CreatedAt: time.Now().UTC().Truncate(time.Microsecond)}
+		version, key, signature, err := store.SignPayload(contributionBytes(payload))
+		if err != nil {
+			writeAPIError(w, 503, "federation_unavailable", "proposal could not be signed")
+			return
+		}
+		bundle := &boundedBuffer{limit: maxFederatedRepositoryResponseBytes}
+		var stderr bytes.Buffer
+		cmd := exec.CommandContext(r.Context(), "git", "--git-dir="+sourceGit.Path(), "bundle", "create", "-", "refs/heads/"+in.SourceBranch)
+		cmd.Stdout, cmd.Stderr = bundle, &stderr
+		if err := cmd.Run(); err != nil {
+			if r.Context().Err() != nil {
+				return
+			}
+			if bundle.Len() >= maxFederatedRepositoryResponseBytes {
+				writeAPIError(w, 422, "federated_transfer_too_large", "contribution exceeds the federation transfer limit")
+				return
+			}
+			writeAPIError(w, 422, "federated_transfer_failed", strings.TrimSpace(stderr.String()))
+			return
+		}
+		envelope := signedContribution{Payload: payload, DocumentVersion: version, SigningKeyID: key, Signature: signature, Bundle: base64.RawStdEncoding.EncodeToString(bundle.Bytes())}
+		response, err := sendContribution(store, cache.PeerID, envelope)
+		if err != nil {
+			writeAPIError(w, 422, "federated_proposal_failed", err.Error())
+			return
+		}
+		writeJSON(w, 201, response)
+	})
+	mux.HandleFunc("POST /federation/contributions", func(w http.ResponseWriter, r *http.Request) {
+		var in signedContribution
+		if decodeJSONLimit(r, &in, maxFederatedContributionEnvelopeBytes) != nil {
+			writeAPIError(w, 400, "invalid_federated_contribution", "invalid contribution envelope")
+			return
+		}
+		peer, err := store.Get(in.Payload.SourceInstanceID)
+		if err != nil || peer.Status != "trusted" || !contains(peer.Document.Capabilities, "repository-contribution.v1") {
+			writeAPIError(w, 403, "federated_source_untrusted", "source instance is not trusted for contributions")
+			return
+		}
+		if federation.VerifyPayload(contributionBytes(in.Payload), in.DocumentVersion, in.SigningKeyID, in.Signature, peer.Document) != nil {
+			writeAPIError(w, 422, "invalid_federated_signature", "contribution signature is invalid")
+			return
+		}
+		target, err := repositoryStore.GetByID(in.Payload.TargetRepositoryID)
+		if err != nil || target.Visibility != repositories.Public {
+			writeAPIError(w, 404, "federated_repository_not_found", "target is unavailable")
+			return
+		}
+		targetGit, err := gitStore.Open(target.ID)
+		if err != nil {
+			writeAPIError(w, 503, "federation_unavailable", "target repository storage is unavailable")
+			return
+		}
+		targetRef, err := targetGit.ReadReference("refs/heads/" + in.Payload.TargetBranch)
+		if err != nil || targetRef.Target != in.Payload.TargetRevision {
+			writeAPIError(w, 409, "federated_target_changed", "target branch changed; negotiate a fresh proposal")
+			return
+		}
+		source, cleanup, err := openTransfer(in.Bundle)
+		if err != nil {
+			writeAPIError(w, 422, "federated_transfer_invalid", err.Error())
+			return
+		}
+		defer cleanup()
+		authorSum := sha256.Sum256([]byte(in.Payload.Author))
+		pull, err := pullStore.CreateFederated(target.ID, hex.EncodeToString(authorSum[:16]), in.Payload.Author, in.Payload.ID, in.Payload.Title, in.Payload.Body, in.Payload.SourceBranch, in.Payload.TargetBranch, in.Payload.SourceRevision, source)
+		if writePullRequestError(w, err) {
+			return
+		}
+		writeJSON(w, 201, pull)
 	})
 	mux.HandleFunc("GET /federation/repositories/{peer}/{repository}", func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := authenticateRequest(w, r, credentials, "", false); !ok {
@@ -443,6 +721,113 @@ func fetchFederatedRepository(peer federation.Peer, repositoryID string) (federa
 		return signed, fmt.Errorf("peer returned an invalid repository response")
 	}
 	return signed, nil
+}
+
+type federatedTransfer struct {
+	RepositoryID string `json:"repository_id"`
+	Branch       string `json:"branch"`
+	Revision     string `json:"revision"`
+	Bundle       string `json:"bundle"`
+}
+type contributionPayload struct {
+	ID                 string    `json:"id"`
+	SourceInstanceID   string    `json:"source_instance_id"`
+	SourceRepositoryID string    `json:"source_repository_id"`
+	SourceBranch       string    `json:"source_branch"`
+	SourceRevision     string    `json:"source_revision"`
+	TargetRepositoryID string    `json:"target_repository_id"`
+	TargetBranch       string    `json:"target_branch"`
+	TargetRevision     string    `json:"target_revision"`
+	Author             string    `json:"author"`
+	Title              string    `json:"title"`
+	Body               string    `json:"body"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+type signedContribution struct {
+	Payload         contributionPayload `json:"payload"`
+	DocumentVersion int                 `json:"identity_document_version"`
+	SigningKeyID    string              `json:"signing_key_id"`
+	Signature       string              `json:"signature"`
+	Bundle          string              `json:"bundle"`
+}
+
+func contributionBytes(v contributionPayload) []byte { b, _ := json.Marshal(v); return b }
+func fetchFederatedTransfer(store *federation.Store, peerID, repositoryID, branch, revision string) (federatedTransfer, error) {
+	peer, err := store.Get(peerID)
+	if err != nil || peer.Status != "trusted" {
+		return federatedTransfer{}, federation.ErrConflict
+	}
+	u, err := url.Parse(peer.DiscoveryURL)
+	if err != nil {
+		return federatedTransfer{}, err
+	}
+	u.Path = "/federation/repositories/" + url.PathEscape(repositoryID) + "/transfers/" + url.PathEscape(branch) + "/" + revision
+	u.RawQuery = ""
+	transport := &http.Transport{Proxy: nil, DialContext: safeFederationDialer(u.Scheme == "http" && isLoopbackHost(u.Hostname()))}
+	client := &http.Client{Transport: transport, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Get(u.String())
+	if err != nil {
+		return federatedTransfer{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return federatedTransfer{}, fmt.Errorf("peer returned %s", resp.Status)
+	}
+	var v federatedTransfer
+	decoder := json.NewDecoder(io.LimitReader(resp.Body, maxFederatedRepositoryResponseBytes*2))
+	if decoder.Decode(&v) != nil || v.RepositoryID != repositoryID || v.Branch != branch || v.Revision != revision {
+		return v, fmt.Errorf("peer returned an invalid transfer")
+	}
+	return v, nil
+}
+func openTransfer(encoded string) (*storage.Repository, func(), error) {
+	data, err := base64.RawStdEncoding.DecodeString(encoded)
+	if err != nil || len(data) > maxFederatedRepositoryResponseBytes {
+		return nil, nil, fmt.Errorf("invalid transfer encoding")
+	}
+	file, err := os.CreateTemp("", "vivarium-transfer-*.bundle")
+	if err != nil {
+		return nil, nil, err
+	}
+	path := file.Name()
+	if _, err = file.Write(data); err != nil {
+		file.Close()
+		os.Remove(path)
+		return nil, nil, err
+	}
+	file.Close()
+	repo, cleanup, err := storage.OpenBundle(path)
+	os.Remove(path)
+	return repo, cleanup, err
+}
+func sendContribution(store *federation.Store, peerID string, envelope signedContribution) (map[string]any, error) {
+	peer, err := store.Get(peerID)
+	if err != nil || peer.Status != "trusted" {
+		return nil, federation.ErrConflict
+	}
+	u, err := url.Parse(peer.DiscoveryURL)
+	if err != nil {
+		return nil, err
+	}
+	u.Path = "/federation/contributions"
+	u.RawQuery = ""
+	body, _ := json.Marshal(envelope)
+	transport := &http.Transport{Proxy: nil, DialContext: safeFederationDialer(u.Scheme == "http" && isLoopbackHost(u.Hostname()))}
+	client := &http.Client{Transport: transport, Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Post(u.String(), "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	resultBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != 201 {
+		return nil, fmt.Errorf("peer rejected proposal (%s): %s", resp.Status, strings.TrimSpace(string(resultBody)))
+	}
+	var result map[string]any
+	if json.Unmarshal(resultBody, &result) != nil {
+		return nil, fmt.Errorf("peer returned invalid proposal response")
+	}
+	return result, nil
 }
 
 func fetchFederationDocument(raw string) (federation.Document, error) {

@@ -52,6 +52,16 @@ func bytesOf(value byte, size int) []byte {
 	return result
 }
 
+func TestBoundedFederationBundleBufferStopsAtLimit(t *testing.T) {
+	buffer := &boundedBuffer{limit: 4}
+	if n, err := buffer.Write([]byte("abcdef")); err == nil || n != 4 || buffer.String() != "abcd" {
+		t.Fatalf("bounded write = %d, %q, %v", n, buffer.String(), err)
+	}
+	if n, err := buffer.Write([]byte("x")); err == nil || n != 0 || buffer.String() != "abcd" {
+		t.Fatalf("write after limit = %d, %q, %v", n, buffer.String(), err)
+	}
+}
+
 func TestFederationDialerRejectsNonPublicAddresses(t *testing.T) {
 	for _, address := range []string{"127.0.0.1:443", "10.1.2.3:443", "169.254.1.1:443", "[::1]:443"} {
 		_, err := safeFederationDialer(false)(context.Background(), "tcp", address)

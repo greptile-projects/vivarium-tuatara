@@ -667,6 +667,17 @@ a concurrent fork push returns `409 branch_changed`. The server imports the
 exact tip's missing content-addressed objects before compare-and-swap
 fast-forwarding only the selected reference.
 
+Federated repositories resolved through a trusted peer can be forked with
+`POST /federation/repositories/{instance-id}/{repository-id}/forks`, accepting
+`name` and an advertised `branch`. The private response retains
+`federated_upstream` and `federated_branch`; its `git_remote` uses ordinary
+local stock-Git credentials. `POST /federation/forks/{id}/synchronizations`
+refreshes signed metadata and fast-forwards the selected branch. `POST
+/federation/forks/{id}/pulls` accepts `title`, optional `body`, `source_branch`,
+and `target_branch`, freezes both tips, and negotiates a signed idempotent
+proposal. Trust, target movement, divergence, signature, and transfer failures
+use explicit `federated_*` errors and publish no partial refs or credentials.
+
 Owners manage limited access with `GET` and `POST
 /repositories/{id}/collaborators` and `DELETE
 /repositories/{id}/collaborators/{user_id}`. A grant request contains an

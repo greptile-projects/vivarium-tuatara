@@ -51,6 +51,8 @@ type PullRequest struct {
 	RepositoryID             string                 `json:"repository_id"`
 	SourceRepositoryID       string                 `json:"source_repository_id"`
 	AuthorID                 string                 `json:"author_id"`
+	FederatedAuthor          string                 `json:"federated_author,omitempty"`
+	FederatedContributionID  string                 `json:"federated_contribution_id,omitempty"`
 	Title                    string                 `json:"title"`
 	Body                     string                 `json:"body"`
 	SourceBranch             string                 `json:"source_branch"`
@@ -544,6 +546,61 @@ func (s *Store) Create(repositoryID, authorID, title, body, sourceBranch, target
 // keeping every later review and merge operation pinned to the adopted commit.
 func (s *Store) CreateFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, proposalID *string) (PullRequest, error) {
 	return s.createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, "", nil, proposalID, nil, nil, nil, nil, nil, nil)
+}
+
+// CreateFederated imports one verified exact revision into ordinary review.
+// The synthetic local author is an attribution anchor, never a local login.
+func (s *Store) CreateFederated(repositoryID, authorID, federatedAuthor, contributionID, title, body, sourceBranch, targetBranch, sourceCommit string, source *storage.Repository) (PullRequest, error) {
+	if source == nil || !validCommitID(sourceCommit) || federatedAuthor == "" || contributionID == "" {
+		return PullRequest{}, ErrInvalid
+	}
+	repository, err := s.git.Open(repositoryID)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	targetCommit, err := branchCommit(repository, targetBranch)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	if _, err = source.ReadCommit(storage.ObjectID(sourceCommit)); err != nil {
+		return PullRequest{}, ErrInvalid
+	}
+	if err = repository.ImportCommit(source, storage.ObjectID(sourceCommit)); err != nil {
+		return PullRequest{}, err
+	}
+	title, body, err = validatePurpose(title, body)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return PullRequest{}, err
+	}
+	defer unlock()
+	existing, _ := s.List(repositoryID)
+	for _, p := range existing {
+		if p.FederatedContributionID == contributionID {
+			return p, nil
+		}
+	}
+	id, err := newID()
+	if err != nil {
+		return PullRequest{}, err
+	}
+	now := s.now().Truncate(time.Microsecond)
+	p := PullRequest{ID: id, RepositoryID: repositoryID, SourceRepositoryID: repositoryID, AuthorID: authorID, FederatedAuthor: federatedAuthor, FederatedContributionID: contributionID, Title: title, Body: body, SourceBranch: sourceBranch, TargetBranch: targetBranch, SourceCommitID: sourceCommit, TargetCommitID: targetCommit, Status: Open, CreatedAt: now, UpdatedAt: now}
+	if err = s.ensureRepositoryDirectory(repositoryID); err != nil {
+		return PullRequest{}, err
+	}
+	if committed, err := s.write(p); err != nil {
+		if committed {
+			return p, ErrDurabilityUncertain
+		}
+		return PullRequest{}, err
+	}
+	return p, nil
 }
 
 func (s *Store) CreateGuidedContributionFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, guided GuidedContributionCreation) (PullRequest, error) {
