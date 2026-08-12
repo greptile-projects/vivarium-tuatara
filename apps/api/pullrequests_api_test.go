@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/acceptance"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
@@ -611,6 +612,64 @@ func TestPullRequestMergeReadinessReportsRequirementsConflictsAndPermission(t *t
 	objectsAfterReadiness, _ := gitRepository.ListObjects()
 	if len(objectsAfterReadiness) != len(objectsBeforeReadiness)+4 { // immutable candidate plus target blob, tree, and commit
 		t.Fatalf("readiness wrote repository objects: before=%d after=%d", len(objectsBeforeReadiness), len(objectsAfterReadiness))
+	}
+}
+
+func TestPreviewAcceptanceDecisionIsInvalidatedByPullRevision(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	pulls, _ := pullrequests.New(t.TempDir(), gitStore)
+	acceptances, _ := acceptance.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, pulls, nil, nil, nil, acceptances))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "accept-owner")
+	contributor := createTestAccount(t, server.URL, "accept-contributor")
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"acceptance"}`, owner.Credential.Token, http.StatusCreated)
+	var repository repositories.Repository
+	decodeResponse(t, response, &repository)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/collaborators", `{"user_id":"`+contributor.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	repo, _ := gitStore.Open(repository.ID)
+	oldBlob, _ := repo.WriteObject(storage.BlobObject, []byte("old\n"))
+	newBlob, _ := repo.WriteObject(storage.BlobObject, []byte("new\n"))
+	laterBlob, _ := repo.WriteObject(storage.BlobObject, []byte("later\n"))
+	oldWeb := writeTestTree(t, repo, testTreeEntry{mode: "100644", name: "page.tsx", id: oldBlob})
+	newWeb := writeTestTree(t, repo, testTreeEntry{mode: "100644", name: "page.tsx", id: newBlob})
+	laterWeb := writeTestTree(t, repo, testTreeEntry{mode: "100644", name: "page.tsx", id: laterBlob})
+	oldTree := writeTestTree(t, repo, testTreeEntry{mode: "40000", name: "web", id: oldWeb})
+	newTree := writeTestTree(t, repo, testTreeEntry{mode: "40000", name: "web", id: newWeb})
+	laterTree := writeTestTree(t, repo, testTreeEntry{mode: "40000", name: "web", id: laterWeb})
+	base := writeTestCommit(t, repo, oldTree, nil, 1700000000, "base")
+	head := writeTestCommit(t, repo, newTree, []storage.ObjectID{base}, 1700000001, "head")
+	later := writeTestCommit(t, repo, laterTree, []storage.ObjectID{head}, 1700000002, "later")
+	repo.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)})
+	repo.CreateReference(storage.Reference{Name: "refs/heads/feature", Target: string(head)})
+	policy := `{"requirements":[{"id":"checkout","paths":["web/**"],"risk_classes":["customer-facing"],"scenarios":[{"name":"guest checkout","role":"contributor","blocking":true}]}]}`
+	authenticatedRequest(t, http.MethodPut, server.URL+"/repositories/"+repository.ID+"/branches/main/preview-acceptance", policy, owner.Credential.Token, http.StatusOK).Body.Close()
+	created := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/pulls", `{"title":"Checkout","body":"Change the customer flow.","source_branch":"feature","target_branch":"main"}`, contributor.Credential.Token, http.StatusCreated)
+	var pull pullrequests.PullRequest
+	decodeResponse(t, created, &pull)
+	baseURL := server.URL + "/repositories/" + repository.ID + "/pulls/" + pull.ID
+	authenticatedRequest(t, http.MethodPost, baseURL+"/reviews", `{"decision":"approved"}`, owner.Credential.Token, http.StatusOK).Body.Close()
+	var blocked pullrequests.MergeReadiness
+	decodeResponse(t, authenticatedRequest(t, http.MethodGet, baseURL+"/merge-readiness", "", owner.Credential.Token, http.StatusOK), &blocked)
+	if blocked.Mergeable || blocked.PreviewAcceptance == nil || len(blocked.PreviewAcceptance.Missing) != 1 {
+		t.Fatalf("blocked=%#v", blocked)
+	}
+	decision := `{"idempotency_key":"accept-checkout-head","revision":"` + string(head) + `","requirement_id":"checkout","scenario":"guest checkout","role":"contributor","outcome":"accepted","risk_classes":["customer-facing"]}`
+	authenticatedRequest(t, http.MethodPost, baseURL+"/preview-acceptance/decisions", decision, contributor.Credential.Token, http.StatusCreated).Body.Close()
+	var ready pullrequests.MergeReadiness
+	decodeResponse(t, authenticatedRequest(t, http.MethodGet, baseURL+"/merge-readiness", "", owner.Credential.Token, http.StatusOK), &ready)
+	if !ready.Mergeable {
+		t.Fatalf("ready=%#v", ready)
+	}
+	repo.UpdateReference(storage.Reference{Name: "refs/heads/feature", Target: string(later)})
+	authenticatedRequest(t, http.MethodPost, baseURL+"/synchronize", "", contributor.Credential.Token, http.StatusOK).Body.Close()
+	var stale pullrequests.MergeReadiness
+	decodeResponse(t, authenticatedRequest(t, http.MethodGet, baseURL+"/merge-readiness", "", owner.Credential.Token, http.StatusOK), &stale)
+	if stale.Mergeable || stale.PreviewAcceptance == nil || len(stale.PreviewAcceptance.StaleDecisions) != 1 || len(stale.PreviewAcceptance.Missing) != 1 {
+		t.Fatalf("stale=%#v", stale)
 	}
 }
 

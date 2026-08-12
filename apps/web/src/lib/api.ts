@@ -2262,6 +2262,16 @@ export type MergeReadiness = {
   target: PullRequestBranchState;
   has_conflicts: boolean;
   blockers: { code: string; message: string }[];
+  preview_acceptance?: {
+    revision: string;
+    policy_version: number;
+    applicable: { id: string; paths: string[]; risk_classes: string[]; scenarios: { name: string; role: "owner" | "contributor" | "author"; blocking: boolean }[] }[];
+    decisions: { id: string; revision: string; policy_version: number; idempotency_key: string; requirement_id: string; scenario: string; role: string; outcome: "accepted" | "rejected" | "overridden"; rationale?: string; actor_id: string; created_at: string }[];
+    stale_decisions: { id: string; revision: string; policy_version: number; idempotency_key: string; requirement_id: string; scenario: string; role: string; outcome: string; rationale?: string; actor_id: string; created_at: string }[];
+    findings: { id: string; preview_id: string; revision: string; title: string; severity: string; status: string; author_id: string }[];
+    missing: { requirement_id: string; scenario: string; role: string }[];
+    blocking: boolean;
+  };
   integration_queue?: {
     branch: string;
     enabled: boolean;

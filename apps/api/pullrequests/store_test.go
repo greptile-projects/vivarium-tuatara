@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/acceptance"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
@@ -579,6 +580,12 @@ func TestIntegrationQueueRebuildsConcurrentCandidateBeforeLanding(t *testing.T) 
 	if _, err := store.write(second); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.SetReview(repository.ID(), first.ID, testID('f'), Approved); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetReview(repository.ID(), second.ID, testID('f'), Approved); err != nil {
+		t.Fatal(err)
+	}
 	corruptRepository := filepath.Join(store.root, testID('0'))
 	if err := os.MkdirAll(corruptRepository, 0o700); err != nil {
 		t.Fatal(err)
@@ -640,6 +647,39 @@ func TestIntegrationQueueRebuildsConcurrentCandidateBeforeLanding(t *testing.T) 
 	first, _ = store.Get(repository.ID(), first.ID)
 	if first.QueueFinalizationPending || first.QueueFinalizedAt == nil || attempts != 2 {
 		t.Fatalf("finalization did not recover: pull=%#v attempts=%d", first, attempts)
+	}
+}
+
+func TestIntegrationQueuePausesWhenAcceptanceChangesAfterAdmission(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	repository, _ := gitStore.Create(testID('1'))
+	baseTree, _ := repository.WriteObject(storage.TreeObject, nil)
+	base := writeCommit(t, repository, baseTree, "base")
+	changedBlob, _ := repository.WriteObject(storage.BlobObject, []byte("changed\n"))
+	changedTree, _ := repository.WriteObject(storage.TreeObject, testTree("web.txt", changedBlob))
+	head := writeCommitWithParents(t, repository, changedTree, []storage.ObjectID{base}, "head")
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)})
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/topic", Target: string(head)})
+	store, _ := New(t.TempDir(), gitStore)
+	store.ConfigureRequiredChecks(queueRequirements{repositories.IntegrationQueuePolicy{Branch: "main", Enabled: true, Concurrency: 1, FailureBehavior: repositories.QueueFailurePause, RequiredChecks: []string{}}}, nil)
+	acceptanceStore, _ := acceptance.New(t.TempDir())
+	store.ConfigurePreviewAcceptance(acceptanceStore, nil)
+	pull, _ := store.Create(repository.ID(), testID('a'), "Candidate", "", "topic", "main", nil)
+	_, _ = store.SetReview(repository.ID(), pull.ID, testID('b'), Approved)
+	queued, err := store.Enqueue(repository.ID(), pull.ID, testID('c'))
+	if err != nil || queued.QueuedAt == nil {
+		t.Fatalf("enqueue=%#v err=%v", queued, err)
+	}
+	_, err = acceptanceStore.SetPolicy(repository.ID(), "main", testID('d'), []acceptance.Requirement{{ID: "current-preview", Scenarios: []acceptance.Scenario{{Name: "customer path", Role: "contributor", Blocking: true}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.AdvanceIntegrationQueues(); err != nil {
+		t.Fatal(err)
+	}
+	blocked, _ := store.Get(repository.ID(), pull.ID)
+	if blocked.Status != Open || !blocked.QueuePaused || blocked.MergeCommitID != nil {
+		t.Fatalf("queue landed invalidated acceptance: %#v", blocked)
 	}
 }
 

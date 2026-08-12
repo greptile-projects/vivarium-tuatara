@@ -1,5 +1,37 @@
 # HTTP API contract
 
+## Preview acceptance requirements
+
+Repository owners define the acceptance gate for a target branch with `GET`
+and `PUT /repositories/{id}/branches/{branch}/preview-acceptance`. A complete
+replacement contains `requirements`; each requirement has a unique `id`,
+optional path globs and risk-class labels, and one or more named `scenarios`.
+Every scenario names the participant role (`owner`, `contributor`, or `author`)
+and whether it blocks merge. Risk-class requirements apply to the selected
+target branch and cannot be evaded by omitting a caller-supplied classification;
+path requirements apply only when the pull changes a matching path.
+
+`GET /repositories/{id}/pulls/{pull-id}/preview-acceptance` derives the policy
+and findings that apply to the adopted source revision. `POST .../preview-acceptance/decisions`
+appends an attributable `accepted`, `rejected`, or `overridden` decision naming
+the exact revision, requirement, scenario, actor's live role, and a stable
+`idempotency_key`. Exact retries return the original decision; conflicting reuse
+returns `409`, while post-publication directory-sync uncertainty returns the
+stable decision with `202` and `Vivarium-Durability: uncertain`. Rejection and
+override require a rationale; rejection remains blocking despite later ordinary
+acceptance, and only a repository-owner override can clear it. A source
+synchronization or policy replacement never rewrites evidence: prior decisions
+move to `stale_decisions` and the new revision or policy version requires fresh
+acceptance.
+
+The ordinary merge-readiness response includes `preview_acceptance`. Blocking
+scenarios without current acceptance, current rejection, and unresolved
+`blocking` preview findings add readiness blockers alongside reviews and
+required checks. Both direct merge and integration-queue admission recompute
+this same report. The queue also rechecks it immediately before landing and
+durably pauses an invalidated entry, so an older preview decision or newly
+blocking finding cannot authorize a queued commit.
+
 ## Change preview audiences
 
 Version 1 `.vivarium/preview.json` requires `access` with `network: "none"`,

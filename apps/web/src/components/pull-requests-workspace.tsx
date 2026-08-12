@@ -1266,6 +1266,16 @@ export function PullRequestDetail({
                   </p>
                 </div>
                 {readiness.required_checks.length > 0 && <div className="mt-4 space-y-2"><p className="text-xs font-semibold text-[var(--muted)]">Required checks</p>{readiness.required_checks.map((check) => <div key={check.name} className="flex items-center justify-between gap-3 text-xs"><span className="font-medium">{check.name}</span><Badge tone={check.status === "passed" ? "success" : check.status === "pending" ? "warning" : "neutral"}>{check.status}</Badge></div>)}</div>}
+                {readiness.preview_acceptance && (readiness.preview_acceptance.applicable.length > 0 || readiness.preview_acceptance.decisions.length > 0 || readiness.preview_acceptance.stale_decisions.length > 0 || readiness.preview_acceptance.findings.length > 0) && (
+                  <div className="mt-4 space-y-3 border-t border-[var(--line)] pt-4 text-xs">
+                    <div className="flex items-center justify-between gap-2"><p className="font-semibold">Stakeholder acceptance</p><Badge tone={readiness.preview_acceptance.blocking ? "warning" : "success"}>{readiness.preview_acceptance.blocking ? "Needs attention" : "Current"}</Badge></div>
+                    <p className="text-[var(--muted)]">Policy v{readiness.preview_acceptance.policy_version} evaluated against <code title={readiness.preview_acceptance.revision}>{short(readiness.preview_acceptance.revision)}</code>.</p>
+                    {readiness.preview_acceptance.missing.map((item) => <p key={`${item.requirement_id}-${item.scenario}-${item.role}`}><span className="font-medium">{item.scenario}</span> needs {item.role} acceptance.</p>)}
+                    {readiness.preview_acceptance.decisions.map((decision) => <p key={decision.id}><Badge tone={decision.outcome === "accepted" || decision.outcome === "overridden" ? "success" : "warning"}>{decision.outcome}</Badge> <span className="font-medium">{decision.scenario}</span> by {decision.role}{decision.rationale ? ` — ${decision.rationale}` : ""}</p>)}
+                    {readiness.preview_acceptance.findings.filter((finding) => finding.revision === readiness.evaluated_commit_id).map((finding) => <p key={finding.id}><Badge tone={finding.severity === "blocking" && finding.status !== "resolved" ? "warning" : "neutral"}>{finding.status}</Badge> {finding.title}</p>)}
+                    {readiness.preview_acceptance.stale_decisions.length > 0 && <p className="text-[var(--muted)]">{readiness.preview_acceptance.stale_decisions.length} earlier {readiness.preview_acceptance.stale_decisions.length === 1 ? "decision applies" : "decisions apply"} only to an older revision.</p>}
+                  </div>
+                )}
                 {readiness.integration_queue?.enabled && <div className="mt-4 rounded-lg bg-[var(--canvas)] p-3 text-xs leading-5"><p className="font-semibold">Ordered integration required</p><p className="text-[var(--muted)]">Up to {readiness.integration_queue.concurrency} candidate{readiness.integration_queue.concurrency === 1 ? "" : "s"}; failures {readiness.integration_queue.failure_behavior === "pause" ? "pause the queue" : "remove the failed entry"}. Admission uses the approval and checks shown above.</p></div>}
                 {isAuthor && readiness.source.state !== "current" && (
                   <Button
