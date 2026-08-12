@@ -386,6 +386,12 @@ whenever dependencies change or the web job fails before it starts.
   policy, and links to project resources; reads explicitly project missing
   owners, broken or changed source, and stale version mappings. Records default
   beneath `$DOCUMENTATION_STORAGE_ROOT` (`documentation`).
+  Documentation tasks freeze a proposal, issue, pull, release, investigation,
+  or stewardship opportunity to an exact revision and reserve a
+  `docs/tasks/*` branch. They retain rendered draft revisions, grounded
+  references, attributable discussion and suggestions, and identified agent
+  assistance with explicit sources and uncertainty; tasks grant no additional
+  Git, workspace, review, or publication authority.
   Exact-revision code navigation at `/repositories/{id}/code` and
   `GET /repositories/{id}/code-navigation` performs bounded lexical search
   across supported source files, classifies definitions, references, callers,
