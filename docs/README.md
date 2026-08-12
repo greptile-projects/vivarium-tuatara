@@ -49,8 +49,9 @@ target revision, selectors, and dependency digest. Generated names such as
 check policy, so documentation failures participate in normal merge readiness.
 
 Changing a declared dependency changes only the evidence digest and runs for
-checks that name it. A target must always carry an exact 40-character Git
-revision, including when its label represents a package or release version;
+checks that name it. A target must always carry the exact 40-character
+candidate Git revision that is archived and executed, including when its label
+represents a package or release version;
 unreadable dependencies or malformed matrices fail closed as
 `documentation/configuration`.
 

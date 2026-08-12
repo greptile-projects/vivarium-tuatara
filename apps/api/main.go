@@ -852,7 +852,7 @@ func startCheckRunsForCommit(gitStore *storage.Store, runStore *checkruns.Store,
 	definitions = append(definitions, config.Checks...)
 	docsCommand := exec.Command("git", "--git-dir="+repository.Path(), "show", commitID+":"+checkruns.DocumentationConfigPath)
 	if docsData, docsErr := docsCommand.Output(); docsErr == nil {
-		_, docsDefinitions, parseErr := checkruns.ParseDocumentationConfig(docsData, func(name string) ([]byte, error) {
+		_, docsDefinitions, parseErr := checkruns.ParseDocumentationConfig(docsData, commitID, func(name string) ([]byte, error) {
 			return exec.Command("git", "--git-dir="+repository.Path(), "show", commitID+":"+name).Output()
 		})
 		if parseErr != nil {
@@ -867,7 +867,15 @@ func startCheckRunsForCommit(gitStore *storage.Store, runStore *checkruns.Store,
 			}
 			return nil
 		}
-		definitions = append(definitions, docsDefinitions...)
+		changed, changedErr := documentationChangedPaths(repository, commitID)
+		if changedErr != nil {
+			return fmt.Errorf("resolve documentation check changes: %w", changedErr)
+		}
+		for _, definition := range docsDefinitions {
+			if documentationDefinitionAffected(definition, changed) {
+				definitions = append(definitions, definition)
+			}
+		}
 	} else if exit, ok := docsErr.(*exec.ExitError); !ok || exit.ExitCode() != 128 {
 		return fmt.Errorf("read documentation check configuration: %w", docsErr)
 	}
@@ -891,6 +899,39 @@ func startCheckRunsForCommit(gitStore *storage.Store, runStore *checkruns.Store,
 		go runStore.Execute(run, repository.Path())
 	}
 	return nil
+}
+
+func documentationChangedPaths(repository *storage.Repository, commitID string) (map[string]bool, error) {
+	commit, err := repository.ReadCommit(storage.ObjectID(commitID))
+	if err != nil {
+		return nil, err
+	}
+	if len(commit.Parents) == 0 {
+		return map[string]bool{checkruns.DocumentationConfigPath: true}, nil
+	}
+	output, err := exec.Command("git", "--git-dir="+repository.Path(), "diff", "--name-only", string(commit.Parents[0]), commitID, "--").Output()
+	if err != nil {
+		return nil, err
+	}
+	changed := map[string]bool{}
+	for _, name := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if name != "" {
+			changed[name] = true
+		}
+	}
+	return changed, nil
+}
+
+func documentationDefinitionAffected(definition checkruns.Definition, changed map[string]bool) bool {
+	if definition.Documentation == nil || changed[checkruns.DocumentationConfigPath] {
+		return true
+	}
+	for _, dependency := range definition.Documentation.DependencyPaths {
+		if changed[dependency] {
+			return true
+		}
+	}
+	return false
 }
 
 func startBoundCheckRuns(gitStore *storage.Store, runStore *checkruns.Store, repositoryID, pullRequestID, commitID string, definitions []checkruns.Definition) {
