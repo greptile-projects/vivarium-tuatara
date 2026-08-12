@@ -81,7 +81,11 @@ whenever dependencies change or the web job fails before it starts.
   policy beneath `$EXTENSION_STORAGE_ROOT` (default `extensions`). Registration
   performs a live challenge against both endpoints and previews zero effective
   authority: it issues no credential and cannot act as its owner, a user, or an
-  approved agent. Installation and scoped authority are separate later steps.
+  approved agent. Repository and organization owners install verified
+  extensions through version-guarded records naming exact repositories and
+  resource types, per-capability decisions, non-secret settings, effective
+  access, and actor history. Lifecycle changes revalidate current ownership;
+  suspension and removal revoke only credentials derived from that installation.
   Portfolio initiatives retain an existing proposal, evolution, incident, or
   authorized security source plus ordered cross-repository contributions,
   dependencies, and accountable team/human/approved-agent ownership. Portfolio

@@ -21,12 +21,30 @@ authority preview whose effective actions are empty and whose decisions are
 `not_installed`. Registration issues no bearer credential and never represents
 the extension as its installer, another user, or an approved agent.
 
-`GET /extensions` lists identities owned by the authenticated developer, and
-`GET /extensions/{id}` returns an owned identity or `404` without disclosing a
-different owner's registration. Records persist beneath
+`GET /extensions` lists identities owned by the authenticated developer, while
+`GET /extensions/{id}` lets an authenticated prospective installer inspect its
+verified identity and requested contract. Records persist beneath
 `$EXTENSION_STORAGE_ROOT` (`extensions` by default). A later scoped installation
 workflow is required before any collaborative context or resource authority is
 available.
+
+### Extension installations
+
+`POST /extensions/{id}/installations` accepts `owner_type`, `owner_id`, exact
+`repository_ids`, requested `resource_types`, an approved or denied decision
+for every declared capability, and optional non-secret string `settings`.
+Repository installations name exactly the owned repository; organization
+installations may name only repositories currently in that organization.
+Secret-, token-, or password-named settings are rejected.
+
+`GET /extension-installations` lists installations the actor currently owns;
+`GET /extension-installations/{id}` returns effective access and actor history.
+`POST /extension-installations/{id}/{action}` supports `upgrade`, `suspend`,
+`resume`, `transfer`, and `remove` with the current `version`; upgrade and
+transfer also include an `installation` object. Stale writes return `409`, and
+every mutation revalidates current ownership. Suspension and removal revoke
+only derived credentials before publishing status, without deleting retained
+events or attributed evidence.
 
 ## Documentation verification
 
