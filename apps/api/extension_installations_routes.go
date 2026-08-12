@@ -246,12 +246,6 @@ func registerExtensionInstallationRoutes(mux *http.ServeMux, store *extensions.S
 			writeAPIError(w, 500, "credential_unavailable", "credential could not be issued")
 			return
 		}
-		updated, e := store.RecordDerivedCredential(v.ID, issued.ID, v.Version)
-		if e != nil {
-			_, _ = credentials.Revoke(v.ExtensionID, issued.ID)
-			writeAPIError(w, 409, "installation_changed", "installation changed before credential publication")
-			return
-		}
 		extension, e := store.Get(v.ExtensionID)
 		if e != nil {
 			_, _ = credentials.Revoke(v.ExtensionID, issued.ID)
@@ -266,9 +260,19 @@ func registerExtensionInstallationRoutes(mux *http.ServeMux, store *extensions.S
 				_, e = credentials.ExpireAt(v.ExtensionID, old, deadline)
 			}
 			if e != nil {
+				_, _ = credentials.Revoke(v.ExtensionID, issued.ID)
 				writeAPIError(w, 500, "credential_unavailable", "predecessor credential retirement could not be scheduled")
 				return
 			}
+		}
+		// Only attachment makes an extension credential usable at the
+		// contribution boundary. Publish it after every predecessor retirement
+		// succeeds, so an error cannot expose concurrent retry-amplifiable access.
+		updated, e := store.RecordDerivedCredential(v.ID, issued.ID, v.Version)
+		if e != nil {
+			_, _ = credentials.Revoke(v.ExtensionID, issued.ID)
+			writeAPIError(w, 409, "installation_changed", "installation changed before credential publication")
+			return
 		}
 		writeJSON(w, 201, map[string]any{"credential": issued, "installation": updated})
 	})

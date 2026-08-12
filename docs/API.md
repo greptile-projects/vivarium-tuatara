@@ -55,6 +55,8 @@ contract drift, and notices. The `/credentials/rotate` action replaces and
 retires credentials; quarantine revokes future authority without deleting evidence.
 Rotation durably shortens predecessor expiry to the configured overlap deadline
 (or revokes immediately for zero overlap), never extending original lifetime.
+The successor is attached and returned only after every predecessor retirement
+succeeds; a failed attempt revokes its unreturned, unusable successor.
 
 ### Extension contributions and actions
 
