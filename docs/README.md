@@ -86,6 +86,17 @@ event identity with different content conflicts. Shared check and preview claims
 are evidence only: upstream required checks, embargo filtering, repository
 visibility, review permission, closure, and merge authority remain local.
 
+An authorized source-instance participant can delegate the contribution to an
+approved agent they operate with `POST
+/federation/contributions/{id}/agent-sessions`. The mandate freezes the current
+source revision and only selected paths that exist there. Its short-lived
+credential is bound to the local fork, exact branch, and contribution identity.
+Completion accepts only descendant branch-tip commits, derives file evidence
+locally, transfers the bounded exact revision, and shares a signed
+`agent_session` summary with attributed commands, evidence, costs, and residual
+concerns. Guidance, control, and revocation remain local; no peer credential,
+secret, check, review, or merge access is granted.
+
 ## Living documentation
 
 Repository owners define documentation collections through

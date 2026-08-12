@@ -603,6 +603,64 @@ func (s *Store) CreateFederated(repositoryID, authorID, federatedAuthor, contrib
 	return p, nil
 }
 
+// AdoptFederatedRevision imports an exact peer-provided descendant and moves
+// only the review snapshot. It never creates a local source ref or authority.
+func (s *Store) AdoptFederatedRevision(repositoryID, contributionID, prior, next string, source *storage.Repository) (PullRequest, error) {
+	if source == nil || !validCommitID(prior) || !validCommitID(next) {
+		return PullRequest{}, ErrInvalid
+	}
+	target, err := s.git.Open(repositoryID)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	ancestry, err := source.ListCommitAncestry(storage.ObjectID(next))
+	if err != nil {
+		return PullRequest{}, ErrInvalid
+	}
+	found := false
+	for _, commit := range ancestry {
+		if string(commit.ID) == prior {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return PullRequest{}, ErrInvalid
+	}
+	if err = target.ImportCommit(source, storage.ObjectID(next)); err != nil {
+		return PullRequest{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return PullRequest{}, err
+	}
+	defer unlock()
+	all, err := s.List(repositoryID)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	for _, p := range all {
+		if p.FederatedContributionID != contributionID {
+			continue
+		}
+		if p.Status != Open || (p.SourceCommitID != prior && p.SourceCommitID != next) {
+			return PullRequest{}, ErrSourceChanged
+		}
+		if p.SourceCommitID == next {
+			return p, nil
+		}
+		p.SourceCommitID, p.UpdatedAt = next, s.now().Truncate(time.Microsecond)
+		committed, writeErr := s.write(p)
+		if writeErr != nil && committed {
+			return p, ErrDurabilityUncertain
+		}
+		return p, writeErr
+	}
+	return PullRequest{}, ErrNotFound
+}
+
 func (s *Store) CreateGuidedContributionFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch string, guided GuidedContributionCreation) (PullRequest, error) {
 	return s.createFrom(repositoryID, sourceRepositoryID, authorID, title, body, sourceBranch, targetBranch, "", nil, nil, nil, nil, nil, nil, nil, &guided)
 }

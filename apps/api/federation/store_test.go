@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -222,6 +223,39 @@ func TestCollaborationRejectsTraversalAndBindsAuthority(t *testing.T) {
 	if !s.ContributionAllows("contribution-1", peer) || s.ContributionAllows("contribution-1", unrelated) {
 		t.Fatal("contribution authority was not scoped to bound instances")
 	}
+	revision := strings.Repeat("d", 40)
+	if err := s.BindContributionSource("contribution-1", "repository-1", "feature", revision); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.BindContributionTarget("contribution-1", "repository-2", "pull-1", revision); err != nil {
+		t.Fatal(err)
+	}
+	bound, err := s.Contribution("contribution-1")
+	if err != nil || bound.SourceRepositoryID != "repository-1" || bound.SourceBranch != "feature" || bound.TargetPullID != "pull-1" {
+		t.Fatalf("boundary = %#v, %v", bound, err)
+	}
+	if err = s.AdvanceContributionRevision("contribution-1", strings.Repeat("e", 40), strings.Repeat("f", 40)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale advance = %v", err)
+	}
+}
+
+func TestAgentSessionCollaborationEvidenceIsRevisionBound(t *testing.T) {
+	s, _ := New(t.TempDir(), "Local", "https://local.example", nil)
+	revision := strings.Repeat("a", 40)
+	evidence := json.RawMessage(`{"summary":"repaired","commands":[{"command":"go test ./...","exit_code":0}],"agent_minutes":4,"cost_units":2,"residual_concerns":["review semantics"]}`)
+	v := CollaborationEvent{ID: "session-summary", ContributionID: "contribution-1", Sequence: 1, Kind: "agent_session", Actor: "local:agent:org:agent", Revision: revision, Evidence: evidence, CreatedAt: time.Now().UTC(), OriginInstanceID: strings.Repeat("b", 32), DocumentVersion: 1, SigningKeyID: "key", Signature: "signature", Verification: "verified"}
+	if _, err := s.AppendCollaborationEvent(v); err != nil {
+		t.Fatal(err)
+	}
+	items, err := s.ListCollaborationEvents(v.ContributionID, revision)
+	if err != nil || len(items) != 1 || items[0].Stale || !jsonEqual(items[0].Evidence, evidence) {
+		t.Fatalf("items = %#v, %v", items, err)
+	}
+}
+
+func jsonEqual(a, b []byte) bool {
+	var left, right any
+	return json.Unmarshal(a, &left) == nil && json.Unmarshal(b, &right) == nil && fmt.Sprint(left) == fmt.Sprint(right)
 }
 
 func TestCollaborationDeliveryOutboxIsDurable(t *testing.T) {

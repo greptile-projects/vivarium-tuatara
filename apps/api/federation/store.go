@@ -192,7 +192,7 @@ func validCollaborationEvent(v CollaborationEvent) bool {
 		return false
 	}
 	switch v.Kind {
-	case "comment", "review", "revision", "checks", "preview", "closure":
+	case "comment", "review", "revision", "checks", "preview", "closure", "agent_session":
 	default:
 		return false
 	}
@@ -205,7 +205,7 @@ func validCollaborationEvent(v CollaborationEvent) bool {
 	if v.Kind == "review" && v.Decision != "approved" && v.Decision != "changes_requested" && v.Decision != "withdrawn" {
 		return false
 	}
-	if (v.Kind == "revision" || v.Kind == "review" || v.Kind == "checks" || v.Kind == "preview") && len(v.Revision) != 40 {
+	if (v.Kind == "revision" || v.Kind == "review" || v.Kind == "checks" || v.Kind == "preview" || v.Kind == "agent_session") && len(v.Revision) != 40 {
 		return false
 	}
 	if v.Kind == "closure" && v.State != "open" && v.State != "closed" {
@@ -227,8 +227,110 @@ func validOpaqueID(v string) bool {
 }
 
 type ContributionAuthority struct {
-	ContributionID string   `json:"contribution_id"`
-	InstanceIDs    []string `json:"instance_ids"`
+	ContributionID     string   `json:"contribution_id"`
+	InstanceIDs        []string `json:"instance_ids"`
+	SourceRepositoryID string   `json:"source_repository_id,omitempty"`
+	SourceBranch       string   `json:"source_branch,omitempty"`
+	SourceRevision     string   `json:"source_revision,omitempty"`
+	TargetRepositoryID string   `json:"target_repository_id,omitempty"`
+	TargetPullID       string   `json:"target_pull_id,omitempty"`
+}
+
+func (s *Store) BindContributionTarget(id, repository, pull, revision string) error {
+	if !validOpaqueID(id) || !validOpaqueID(repository) || !validOpaqueID(pull) || len(revision) != 40 {
+		return ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	path := filepath.Join(s.root, "contribution-authority", id+".json")
+	var v ContributionAuthority
+	raw, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(raw, &v) != nil || v.ContributionID != id {
+		return ErrNotFound
+	}
+	if v.TargetRepositoryID != "" && (v.TargetRepositoryID != repository || v.TargetPullID != pull) {
+		return ErrConflict
+	}
+	v.TargetRepositoryID, v.TargetPullID = repository, pull
+	v.SourceRevision = revision
+	return writeJSON(path, v)
+}
+
+func (s *Store) Contribution(id string) (ContributionAuthority, error) {
+	if !validOpaqueID(id) {
+		return ContributionAuthority{}, ErrNotFound
+	}
+	var v ContributionAuthority
+	raw, err := os.ReadFile(filepath.Join(s.root, "contribution-authority", id+".json"))
+	if err != nil || json.Unmarshal(raw, &v) != nil || v.ContributionID != id {
+		return v, ErrNotFound
+	}
+	return v, nil
+}
+
+func (s *Store) AdvanceContributionRevision(id, prior, next string) error {
+	if !validOpaqueID(id) || len(prior) != 40 || len(next) != 40 {
+		return ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	path := filepath.Join(s.root, "contribution-authority", id+".json")
+	var v ContributionAuthority
+	raw, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(raw, &v) != nil {
+		return ErrNotFound
+	}
+	if v.SourceRevision != prior && v.SourceRevision != next {
+		return ErrConflict
+	}
+	v.SourceRevision = next
+	return writeJSON(path, v)
+}
+
+func (s *Store) BindContributionSource(id, repository, branch, revision string) error {
+	if !validOpaqueID(id) || !validOpaqueID(repository) || strings.TrimSpace(branch) == "" || len(revision) != 40 {
+		return ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	path := filepath.Join(s.root, "contribution-authority", id+".json")
+	var v ContributionAuthority
+	raw, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(raw, &v) != nil || v.ContributionID != id {
+		return ErrNotFound
+	}
+	if v.SourceRepositoryID != "" && (v.SourceRepositoryID != repository || v.SourceBranch != branch) {
+		return ErrConflict
+	}
+	v.SourceRepositoryID, v.SourceBranch, v.SourceRevision = repository, branch, revision
+	return writeJSON(path, v)
+}
+
+func (s *Store) ContributionSource(id string) (ContributionAuthority, error) {
+	if !validOpaqueID(id) {
+		return ContributionAuthority{}, ErrNotFound
+	}
+	var v ContributionAuthority
+	raw, err := os.ReadFile(filepath.Join(s.root, "contribution-authority", id+".json"))
+	if err != nil || json.Unmarshal(raw, &v) != nil || v.ContributionID != id || v.SourceRepositoryID == "" {
+		return v, ErrNotFound
+	}
+	return v, nil
 }
 
 func (s *Store) BindContribution(id string, instances ...string) error {

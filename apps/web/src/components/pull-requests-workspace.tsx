@@ -35,7 +35,7 @@ import { Icons } from "./icons";
 import { Avatar, Badge, Button, Card } from "./ui";
 
 type PullRow = PullRequest & { repository: Repository };
-type FederationEvent = { id:string;kind:"comment"|"review"|"revision"|"checks"|"preview"|"closure";actor:string;revision?:string;body?:string;decision?:string;state?:string;evidence?:Record<string,unknown>;created_at:string;origin_instance_id:string;verification:string;stale:boolean };
+type FederationEvent = { id:string;kind:"comment"|"review"|"revision"|"checks"|"preview"|"closure"|"agent_session";actor:string;revision?:string;body?:string;decision?:string;state?:string;evidence?:Record<string,unknown>;created_at:string;origin_instance_id:string;verification:string;stale:boolean };
 
 async function allPages<T>(path: string, key: string, token?: string | null) {
   const items: T[] = [];

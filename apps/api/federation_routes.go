@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/contributoropportunities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/contributorpathways"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/federation"
@@ -43,7 +44,8 @@ type boundedBuffer struct {
 }
 
 type signedCollaborationEvent struct {
-	Event federation.CollaborationEvent `json:"event"`
+	Event  federation.CollaborationEvent `json:"event"`
+	Bundle string                        `json:"bundle,omitempty"`
 }
 
 func collaborationEventBytes(v federation.CollaborationEvent) []byte {
@@ -65,7 +67,7 @@ func (w *boundedBuffer) Write(p []byte) (int, error) {
 	return w.Buffer.Write(p)
 }
 
-func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userStore *users.Store, organizationStore *organizations.Store, credentials *auth.Store, gitStore *storage.Store, repositoryStore *repositories.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, issueStore *issues.Store, pathwayStore *contributorpathways.Store, opportunityStore *contributoropportunities.Store) {
+func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userStore *users.Store, organizationStore *organizations.Store, credentials *auth.Store, gitStore *storage.Store, repositoryStore *repositories.Store, pullStore *pullrequests.Store, sessionStore *changesessions.Store, releaseStore *releases.Store, issueStore *issues.Store, pathwayStore *contributorpathways.Store, opportunityStore *contributoropportunities.Store) {
 	mux.HandleFunc("GET /.well-known/vivarium-federation", func(w http.ResponseWriter, _ *http.Request) {
 		d, err := store.Identity()
 		if err != nil {
@@ -518,6 +520,10 @@ func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userS
 			writeAPIError(w, 503, "federation_unavailable", "contribution authority could not be retained")
 			return
 		}
+		if err = store.BindContributionSource(payload.ID, fork.ID, in.SourceBranch, sourceRef.Target); err != nil {
+			writeAPIError(w, 503, "federation_unavailable", "contribution publishing boundary could not be retained")
+			return
+		}
 		writeJSON(w, 201, response)
 	})
 	mux.HandleFunc("POST /federation/contributions", func(w http.ResponseWriter, r *http.Request) {
@@ -566,7 +572,228 @@ func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userS
 			writeAPIError(w, 503, "federation_unavailable", "contribution authority could not be retained")
 			return
 		}
+		if err = store.BindContributionTarget(in.Payload.ID, target.ID, pull.ID, in.Payload.SourceRevision); err != nil {
+			writeAPIError(w, 503, "federation_unavailable", "contribution review boundary could not be retained")
+			return
+		}
 		writeJSON(w, 201, pull)
+	})
+	// Source-instance participants may delegate only against their locally owned
+	// contribution branch. Remote context is limited to the already imported
+	// source revision and caller-selected repository paths.
+	mux.HandleFunc("POST /federation/contributions/{contribution}/agent-sessions", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:write", false)
+		if !ok {
+			return
+		}
+		if sessionStore == nil || organizationStore == nil {
+			writeAPIError(w, 503, "federated_agents_unavailable", "agent delegation is unavailable")
+			return
+		}
+		boundary, err := store.ContributionSource(r.PathValue("contribution"))
+		if err != nil {
+			writeAPIError(w, 404, "federated_contribution_not_found", "federated contribution not found")
+			return
+		}
+		repository, err := repositoryStore.Get(actor.UserID, boundary.SourceRepositoryID)
+		if err != nil {
+			writeAPIError(w, 404, "federated_contribution_not_found", "federated contribution not found")
+			return
+		}
+		var in struct {
+			OrganizationID string   `json:"organization_id"`
+			AgentID        string   `json:"agent_id"`
+			Instructions   string   `json:"instructions"`
+			ContextPaths   []string `json:"context_paths"`
+			ExpiresIn      int64    `json:"expires_in"`
+		}
+		if decodeJSON(r, &in) != nil || strings.TrimSpace(in.Instructions) == "" || len(in.ContextPaths) == 0 || len(in.ContextPaths) > 50 {
+			writeAPIError(w, 400, "invalid_agent_session", "approved agent, instructions, and bounded context paths are required")
+			return
+		}
+		organization, err := organizationStore.Get(in.OrganizationID)
+		if err != nil {
+			writeAPIError(w, 404, "approved_agent_not_found", "approved agent not found")
+			return
+		}
+		approved := false
+		for _, agent := range organization.Agents {
+			if agent.ID == in.AgentID && contains(agent.OperatorIDs, actor.UserID) {
+				approved = true
+				break
+			}
+		}
+		if !approved {
+			writeAPIError(w, 403, "approved_agent_operator_required", "the participant must operate the selected approved agent")
+			return
+		}
+		git, err := gitStore.Open(repository.ID)
+		if err != nil {
+			writeAPIError(w, 503, "federation_unavailable", "source repository is unavailable")
+			return
+		}
+		commit, err := git.ReadCommit(storage.ObjectID(boundary.SourceRevision))
+		if err != nil {
+			writeAPIError(w, 409, "federated_revision_changed", "contribution revision is unavailable")
+			return
+		}
+		entries, err := git.WalkTree(commit.Tree)
+		if err != nil {
+			writeAPIError(w, 503, "federation_unavailable", "context is unavailable")
+			return
+		}
+		available := map[string]bool{}
+		for _, entry := range entries {
+			available[entry.Path] = true
+		}
+		for _, path := range in.ContextPaths {
+			if !available[path] {
+				writeAPIError(w, 400, "invalid_agent_context", "context path is not present in the permitted contribution revision")
+				return
+			}
+		}
+		if in.ExpiresIn == 0 {
+			in.ExpiresIn = 3600
+		}
+		if in.ExpiresIn < 300 || in.ExpiresIn > 86400 {
+			writeAPIError(w, 400, "invalid_agent_session", "credential lifetime must be between five minutes and 24 hours")
+			return
+		}
+		issued, err := credentials.IssuePullRequestBound(actor.UserID, "federated contribution agent", []string{"git:read", "git:write"}, time.Duration(in.ExpiresIn)*time.Second, repository.ID, "refs/heads/"+boundary.SourceBranch, boundary.ContributionID)
+		if err != nil {
+			writeAPIError(w, 503, "federated_agents_unavailable", "bounded credential could not be issued")
+			return
+		}
+		session, err := sessionStore.Create(repository.ID, boundary.ContributionID, actor.UserID, boundary.SourceRevision)
+		if err != nil {
+			_, _ = credentials.Revoke(actor.UserID, issued.ID)
+			writeChangeSessionError(w, err)
+			return
+		}
+		run, err := sessionStore.LaunchRunForAgent(repository.ID, boundary.ContributionID, session.ID, actor.UserID, in.AgentID, strings.TrimSpace(in.Instructions), boundary.SourceRevision, in.ContextPaths, boundary.SourceBranch, issued.ID, issued.ExpiresAt)
+		if err != nil {
+			_, _ = credentials.Revoke(actor.UserID, issued.ID)
+			writeChangeSessionError(w, err)
+			return
+		}
+		writeJSON(w, 201, map[string]any{"session": session, "run": run, "credential": issued, "context_boundary": map[string]any{"revision": boundary.SourceRevision, "paths": in.ContextPaths, "remote_secrets": false, "remote_checks": false, "remote_repository_access": false}})
+	})
+	mux.HandleFunc("POST /federation/contributions/{contribution}/agent-sessions/{session}/runs/{run}/completion", func(w http.ResponseWriter, r *http.Request) {
+		credential, ok := authenticateRequest(w, r, credentials, "git:write", false)
+		if !ok {
+			return
+		}
+		boundary, err := store.ContributionSource(r.PathValue("contribution"))
+		if err != nil || credential.RepositoryID != boundary.SourceRepositoryID || credential.GitWriteBranch != "refs/heads/"+boundary.SourceBranch || credential.PullRequestID != boundary.ContributionID {
+			writeAPIError(w, 404, "agent_run_not_found", "agent run not found")
+			return
+		}
+		var in struct {
+			Summary      string                   `json:"summary"`
+			CommitID     string                   `json:"commit_id"`
+			Commands     []changesessions.Command `json:"commands"`
+			Checks       []changesessions.Check   `json:"evidence"`
+			Concerns     []string                 `json:"residual_concerns"`
+			AgentMinutes int                      `json:"agent_minutes"`
+			CostUnits    int                      `json:"cost_units"`
+		}
+		if decodeJSONLimit(r, &in, 256<<10) != nil || in.AgentMinutes < 0 || in.CostUnits < 0 {
+			writeAPIError(w, 400, "invalid_agent_completion", "completion evidence is invalid")
+			return
+		}
+		run, _, err := sessionStore.GetRunControl(boundary.SourceRepositoryID, boundary.ContributionID, r.PathValue("session"), r.PathValue("run"), credential.ID)
+		if err != nil {
+			writeAPIError(w, 404, "agent_run_not_found", "agent run not found")
+			return
+		}
+		git, err := gitStore.Open(boundary.SourceRepositoryID)
+		if err != nil {
+			writeAPIError(w, 503, "federation_unavailable", "source repository is unavailable")
+			return
+		}
+		ref, err := git.ReadReference("refs/heads/" + boundary.SourceBranch)
+		if err != nil || ref.Target != in.CommitID {
+			writeAPIError(w, 409, "branch_tip_changed", "completion must identify the contribution branch tip")
+			return
+		}
+		head, err := git.ListCommitAncestry(storage.ObjectID(in.CommitID))
+		if err != nil {
+			writeAPIError(w, 400, "invalid_agent_completion", "commit is invalid")
+			return
+		}
+		base, err := git.ListCommitAncestry(storage.ObjectID(run.SourceCommitID))
+		if err != nil {
+			writeAPIError(w, 409, "federated_revision_changed", "base revision is unavailable")
+			return
+		}
+		baseSet := map[storage.ObjectID]bool{}
+		for _, c := range base {
+			baseSet[c.ID] = true
+		}
+		commits := []string{}
+		descendant := false
+		for _, c := range head {
+			if string(c.ID) == run.SourceCommitID {
+				descendant = true
+			}
+			if !baseSet[c.ID] {
+				commits = append(commits, string(c.ID))
+			}
+		}
+		if !descendant || len(commits) == 0 {
+			writeAPIError(w, 400, "invalid_agent_completion", "completion must publish descendant commits")
+			return
+		}
+		changes, err := pullStore.CompareCommits(boundary.SourceRepositoryID, run.SourceCommitID, in.CommitID)
+		if err != nil {
+			writeAPIError(w, 400, "invalid_agent_completion", "changes could not be derived")
+			return
+		}
+		files := make([]changesessions.ChangedFile, len(changes))
+		for i, c := range changes {
+			files[i] = changesessions.ChangedFile{Path: c.Path, Status: c.Status}
+		}
+		completed, _, err := sessionStore.CompleteRunWithEvidence(boundary.SourceRepositoryID, boundary.ContributionID, r.PathValue("session"), run.ID, credential.ID, in.Summary, in.CommitID, commits, files, in.Checks, in.Concerns, in.Commands, nil)
+		if err != nil {
+			writeChangeSessionError(w, err)
+			return
+		}
+		bundle := &boundedBuffer{limit: maxFederatedRepositoryResponseBytes}
+		cmd := exec.CommandContext(r.Context(), "git", "--git-dir="+git.Path(), "bundle", "create", "-", "refs/heads/"+boundary.SourceBranch)
+		cmd.Stdout = bundle
+		if err = cmd.Run(); err != nil {
+			writeAPIError(w, 422, "federated_transfer_failed", "completed revision could not be transferred")
+			return
+		}
+		document, _ := store.Identity()
+		peerID := ""
+		for _, id := range boundary.InstanceIDs {
+			if id != document.InstanceID {
+				peerID = id
+				break
+			}
+		}
+		revision := federation.CollaborationEvent{ID: run.ID + "-revision", ContributionID: boundary.ContributionID, Sequence: time.Now().UnixMicro(), Kind: "revision", Actor: document.InstanceID + ":agent:" + run.AgentID, Revision: in.CommitID, CreatedAt: time.Now().UTC().Truncate(time.Microsecond), OriginInstanceID: document.InstanceID, Verification: "verified"}
+		version, key, signature, _ := store.SignPayload(collaborationEventBytes(revision))
+		revision.DocumentVersion, revision.SigningKeyID, revision.Signature = version, key, signature
+		body, _ := json.Marshal(map[string]any{"session_id": r.PathValue("session"), "run_id": run.ID, "initiator": document.InstanceID + ":user:" + run.InitiatorID, "agent": document.InstanceID + ":agent:" + run.AgentID, "summary": completed.Outcome.Summary, "commands": completed.Outcome.Commands, "evidence": completed.Outcome.Checks, "changed_files": completed.Outcome.ChangedFiles, "agent_minutes": in.AgentMinutes, "cost_units": in.CostUnits, "residual_concerns": completed.Outcome.Concerns})
+		summary := federation.CollaborationEvent{ID: run.ID + "-summary", ContributionID: boundary.ContributionID, Sequence: revision.Sequence + 1, Kind: "agent_session", Actor: revision.Actor, Revision: in.CommitID, Evidence: body, CreatedAt: revision.CreatedAt, OriginInstanceID: document.InstanceID, Verification: "verified"}
+		version, key, signature, _ = store.SignPayload(collaborationEventBytes(summary))
+		summary.DocumentVersion, summary.SigningKeyID, summary.Signature = version, key, signature
+		if err = sendCollaborationEventEnvelope(store, peerID, revision, base64.RawStdEncoding.EncodeToString(bundle.Bytes())); err != nil {
+			writeAPIError(w, 502, "federated_delivery_failed", "revision delivery failed; completion remains local and retryable")
+			return
+		}
+		if err = store.AdvanceContributionRevision(boundary.ContributionID, boundary.SourceRevision, in.CommitID); err != nil {
+			writeAPIError(w, 409, "federated_revision_conflict", "contribution advanced concurrently")
+			return
+		}
+		_, _ = credentials.Revoke(run.InitiatorID, credential.ID)
+		_, _ = sessionStore.RevokeRunAccess(boundary.SourceRepositoryID, boundary.ContributionID, r.PathValue("session"), run.ID)
+		_ = sendCollaborationEvent(store, peerID, summary)
+		_, _ = store.AppendCollaborationEvent(revision)
+		_, _ = store.AppendCollaborationEvent(summary)
+		writeJSON(w, 201, map[string]any{"run": completed, "revision_event": revision, "summary_event": summary})
 	})
 	// Peer delivery accepts only signed immutable collaboration claims. The
 	// receiving instance decides what it may retain and never treats the actor
@@ -591,6 +818,27 @@ func registerFederationRoutes(mux *http.ServeMux, store *federation.Store, userS
 			return
 		}
 		in.Event.Verification = "verified"
+		if in.Event.Kind == "revision" {
+			boundary, boundaryErr := store.Contribution(in.Event.ContributionID)
+			if boundaryErr != nil || boundary.TargetRepositoryID == "" || in.Bundle == "" {
+				writeAPIError(w, 422, "invalid_federated_revision", "revision event requires its exact bounded transfer")
+				return
+			}
+			source, cleanup, openErr := openTransfer(in.Bundle)
+			if openErr != nil {
+				writeAPIError(w, 422, "invalid_federated_revision", "revision transfer is invalid")
+				return
+			}
+			defer cleanup()
+			if _, openErr = pullStore.AdoptFederatedRevision(boundary.TargetRepositoryID, in.Event.ContributionID, boundary.SourceRevision, in.Event.Revision, source); openErr != nil {
+				writeAPIError(w, 409, "federated_revision_conflict", "revision is not an authorized descendant of the current contribution")
+				return
+			}
+			if openErr = store.AdvanceContributionRevision(in.Event.ContributionID, boundary.SourceRevision, in.Event.Revision); openErr != nil {
+				writeAPIError(w, 409, "federated_revision_conflict", "contribution advanced concurrently")
+				return
+			}
+		}
 		retained, err := store.AppendCollaborationEvent(in.Event)
 		if errors.Is(err, federation.ErrConflict) {
 			writeAPIError(w, 409, "federated_event_conflict", "event id was already used for different content")
@@ -959,6 +1207,10 @@ func sendContribution(store *federation.Store, peerID string, envelope signedCon
 }
 
 func sendCollaborationEvent(store *federation.Store, peerID string, event federation.CollaborationEvent) error {
+	return sendCollaborationEventEnvelope(store, peerID, event, "")
+}
+
+func sendCollaborationEventEnvelope(store *federation.Store, peerID string, event federation.CollaborationEvent, bundle string) error {
 	peer, err := store.Get(peerID)
 	if err != nil || peer.Status != "trusted" {
 		return federation.ErrConflict
@@ -969,7 +1221,7 @@ func sendCollaborationEvent(store *federation.Store, peerID string, event federa
 	}
 	u.Path = "/federation/contributions/" + url.PathEscape(event.ContributionID) + "/events"
 	u.RawQuery = ""
-	body, _ := json.Marshal(signedCollaborationEvent{Event: event})
+	body, _ := json.Marshal(signedCollaborationEvent{Event: event, Bundle: bundle})
 	transport := &http.Transport{Proxy: nil, DialContext: safeFederationDialer(u.Scheme == "http" && isLoopbackHost(u.Hostname()))}
 	client := &http.Client{Transport: transport, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Post(u.String(), "application/json", bytes.NewReader(body))
