@@ -12,9 +12,10 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
-func registerGovernanceRoutes(mux *http.ServeMux, votes *governance.Store, charterStore *charters.Store, repos *repositories.Store, orgs *organizations.Store, plans *proposals.Store, credentials *auth.Store) {
+func registerGovernanceRoutes(mux *http.ServeMux, gitStore *storage.Store, votes *governance.Store, charterStore *charters.Store, repos *repositories.Store, orgs *organizations.Store, plans *proposals.Store, credentials *auth.Store) {
 	electorate := func(kind, scopeID string, revision charters.Revision, record charters.Record) []governance.Elector {
 		sources := map[string]map[string]bool{}
 		add := func(source, id string) {
@@ -422,6 +423,21 @@ func registerGovernanceRoutes(mux *http.ServeMux, votes *governance.Store, chart
 			writeAPIError(w, 422, "implementation_scope_mismatch", "the task plan must use the governed repository")
 			return
 		}
+		if p.ScopeType == "organization" && repo.OrganizationID != p.ScopeID {
+			writeAPIError(w, 422, "implementation_scope_mismatch", "the task plan must use a repository governed by the organization")
+			return
+		}
+		gitRepository, e := gitStore.Open(repo.ID)
+		if e != nil {
+			writeAPIError(w, 409, "base_revision_unavailable", "the implementation repository is unavailable")
+			return
+		}
+		commit, e := gitRepository.ReadCommit(storage.ObjectID(strings.ToLower(in.Revision)))
+		if e != nil {
+			writeAPIError(w, 409, "base_revision_unavailable", "the exact implementation base revision is unavailable")
+			return
+		}
+		in.Revision = string(commit.ID)
 		p, e = votes.BeginImplementation(p.ID, actor.UserID, governance.Implementation{Kind: "task_plan", RepositoryID: repo.ID, Scope: in.Scope, Cost: in.Cost, Assumptions: in.Assumptions, ProtectedEffects: in.ProtectedEffects})
 		if e != nil {
 			governanceError(w, e)
