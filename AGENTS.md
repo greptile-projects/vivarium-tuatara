@@ -379,6 +379,13 @@ whenever dependencies change or the web job fails before it starts.
   runtime automation must remain compatible with declared minimal images (the
   journey uses Alpine); capture reads the live tmpfs from inside the container,
   not the image layer exposed by `docker cp`.
+  Living documentation at `/repositories/{id}/documentation` retains
+  versioned owner-published collections backed by exact repository paths and
+  commits. Collections freeze page blob/hash/authorship evidence, supported
+  source or release mappings, audience, navigation, rendering, publication
+  policy, and links to project resources; reads explicitly project missing
+  owners, broken or changed source, and stale version mappings. Records default
+  beneath `$DOCUMENTATION_STORAGE_ROOT` (`documentation`).
   Exact-revision code navigation at `/repositories/{id}/code` and
   `GET /repositories/{id}/code-navigation` performs bounded lexical search
   across supported source files, classifies definitions, references, callers,
