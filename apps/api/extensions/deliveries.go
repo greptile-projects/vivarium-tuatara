@@ -107,7 +107,7 @@ func (s *Store) EnqueueProjectEvent(event ProjectEvent) ([]Delivery, error) {
 	}
 	created := []Delivery{}
 	for _, installation := range installations {
-		if installation.Status != "active" || !contains(installation.RepositoryIDs, event.RepositoryID) || !subscribed(s.readExtensionUnchecked(installation.ExtensionID).SupportedEvents, event.Type) || !resourcePermitted(installation, event.ResourceType) {
+		if installation.Status != "active" || !contains(installation.RepositoryIDs, event.RepositoryID) || !subscribed(s.readExtensionUnchecked(installation.ExtensionID).SupportedEvents, event.Type) || !resourcePermittedAt(installation, event.RepositoryID, event.ResourceType, event.OccurredAt) {
 			continue
 		}
 		idSum := sha256.Sum256([]byte(installation.ID + ":" + event.ID))
@@ -361,7 +361,7 @@ func subscribed(v []string, event string) bool {
 	}
 	return false
 }
-func resourcePermitted(i Installation, resource string) bool {
+func resourcePermittedAt(i Installation, repositoryID, resource string, occurredAt time.Time) bool {
 	aliases := map[string]string{"pull_request": "pull_requests", "check": "checks", "release": "releases", "deployment": "deployments", "incident": "incidents", "issue": "issues", "task": "tasks", "repository": "repositories"}
 	wanted := aliases[resource]
 	if wanted == "" {
@@ -369,7 +369,8 @@ func resourcePermitted(i Installation, resource string) bool {
 	}
 	for _, p := range i.EffectiveAccess {
 		if p.Resource == wanted && contains(p.Actions, "read") {
-			return true
+			boundary := i.AuthorityEffectiveAt[repositoryID+":"+wanted]
+			return !boundary.IsZero() && !occurredAt.Before(boundary)
 		}
 	}
 	return false

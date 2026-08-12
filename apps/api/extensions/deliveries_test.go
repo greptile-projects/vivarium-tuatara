@@ -104,6 +104,23 @@ func TestConcurrentFirstUsePublishesPersistedSigningKey(t *testing.T) {
 	}
 }
 
+func TestRecoveryDoesNotBackfillBeforeAuthorityBecameEffective(t *testing.T) {
+	store, installation, _ := deliveryFixtureWithoutDelivery(t)
+	boundary := installation.AuthorityEffectiveAt[installation.RepositoryIDs[0]+":pull_requests"]
+	event := projectEvent(installation.RepositoryIDs[0])
+	event.OccurredAt = boundary.Add(-time.Microsecond)
+	created, err := store.EnqueueProjectEvent(event)
+	if err != nil || len(created) != 0 {
+		t.Fatalf("historical deliveries = %#v, error = %v", created, err)
+	}
+	event.ID = strings.Repeat("f", 32)
+	event.OccurredAt = boundary
+	created, err = store.EnqueueProjectEvent(event)
+	if err != nil || len(created) != 1 {
+		t.Fatalf("current deliveries = %#v, error = %v", created, err)
+	}
+}
+
 func deliveryFixtureWithoutDelivery(t *testing.T) (*Store, Installation, Extension) {
 	t.Helper()
 	store, _ := New(t.TempDir())
