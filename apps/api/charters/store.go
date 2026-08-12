@@ -106,14 +106,155 @@ type Standing struct {
 	InvitedAt          time.Time       `json:"invited_at"`
 	Events             []StandingEvent `json:"events"`
 }
+
+// ContinuityAction records a charter-bound transfer or narrowly scoped recovery.
+// Resource authority is referenced, never minted here; its owning subsystem must
+// approve and revoke the corresponding access independently.
+type ContinuityAction struct {
+	ID                   string          `json:"id"`
+	CharterVersion       int             `json:"charter_version"`
+	Kind                 string          `json:"kind"`
+	Role                 string          `json:"role"`
+	FromStandingID       string          `json:"from_standing_id,omitempty"`
+	ToStandingID         string          `json:"to_standing_id,omitempty"`
+	GovernanceProposalID string          `json:"governance_proposal_id"`
+	Reason               string          `json:"reason"`
+	Resources            []string        `json:"resources"`
+	Status               string          `json:"status"`
+	ExpiresAt            time.Time       `json:"expires_at"`
+	ReviewAt             time.Time       `json:"review_at"`
+	CreatedBy            string          `json:"created_by"`
+	CreatedAt            time.Time       `json:"created_at"`
+	ResolvedBy           string          `json:"resolved_by,omitempty"`
+	ResolvedAt           *time.Time      `json:"resolved_at,omitempty"`
+	Events               []StandingEvent `json:"events"`
+}
 type Record struct {
-	ScopeType     string      `json:"scope_type"`
-	ScopeID       string      `json:"scope_id"`
-	ActiveVersion int         `json:"active_version"`
-	Revisions     []Revision  `json:"revisions"`
-	Approvals     []Approval  `json:"approvals"`
-	Exceptions    []Exception `json:"exceptions"`
-	Standings     []Standing  `json:"standings"`
+	ScopeType     string             `json:"scope_type"`
+	ScopeID       string             `json:"scope_id"`
+	ActiveVersion int                `json:"active_version"`
+	Revisions     []Revision         `json:"revisions"`
+	Approvals     []Approval         `json:"approvals"`
+	Exceptions    []Exception        `json:"exceptions"`
+	Standings     []Standing         `json:"standings"`
+	Continuity    []ContinuityAction `json:"continuity"`
+}
+
+func (s *Store) CreateContinuity(kind, id, actor string, expected, version int, in ContinuityAction) (Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Record{}, err
+	}
+	defer unlock()
+	r, err := s.read(kind, id)
+	if err != nil {
+		return r, err
+	}
+	now := s.now().UTC()
+	if len(r.Continuity) != expected || version != r.ActiveVersion || version < 1 ||
+		!map[string]bool{"nomination": true, "election": true, "recall": true, "succession": true, "emergency": true}[in.Kind] ||
+		strings.TrimSpace(in.Role) == "" || strings.TrimSpace(in.GovernanceProposalID) == "" || strings.TrimSpace(in.Reason) == "" || len(in.Resources) == 0 ||
+		!in.ExpiresAt.After(now) || !in.ReviewAt.After(now) || in.ReviewAt.After(in.ExpiresAt) {
+		return r, ErrInvalid
+	}
+	roleFound := false
+	for _, role := range r.Revisions[version-1].Roles {
+		if role.Name == in.Role {
+			roleFound = true
+		}
+	}
+	standing := func(sid string) bool {
+		if sid == "" {
+			return false
+		}
+		for _, st := range r.Standings {
+			if st.ID == sid && st.CharterVersion == version && st.ExpiresAt.After(now) {
+				return true
+			}
+		}
+		return false
+	}
+	if !roleFound || (in.Kind != "emergency" && !standing(in.ToStandingID)) || ((in.Kind == "recall" || in.Kind == "succession") && !standing(in.FromStandingID)) {
+		return r, ErrInvalid
+	}
+	for _, resource := range in.Resources {
+		if !declaredResource(r.Revisions[version-1], resource) {
+			return r, ErrInvalid
+		}
+	}
+	in.ID = randomID()
+	in.CharterVersion = version
+	in.Status = "pending"
+	in.CreatedBy = actor
+	in.CreatedAt = now
+	in.Events = []StandingEvent{{ID: randomID(), Kind: "created", ActorID: actor, Reason: in.Reason, CreatedAt: now}}
+	r.Continuity = append(r.Continuity, in)
+	return r, s.write(r)
+}
+
+func (s *Store) ActOnContinuity(kind, id, actionID, actor, action, reason string) (Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Record{}, err
+	}
+	defer unlock()
+	r, err := s.read(kind, id)
+	if err != nil {
+		return r, err
+	}
+	now := s.now().UTC()
+	for i := range r.Continuity {
+		x := &r.Continuity[i]
+		if x.ID != actionID {
+			continue
+		}
+		if strings.TrimSpace(reason) == "" {
+			return r, ErrInvalid
+		}
+		next := ""
+		switch action {
+		case "approve":
+			if x.Status == "pending" {
+				next = "active"
+			}
+		case "complete":
+			if x.Status == "active" {
+				next = "completed"
+			}
+		case "relinquish":
+			if x.Status == "active" {
+				next = "relinquished"
+			}
+		case "appeal":
+			if x.Status == "pending" || x.Status == "active" {
+				next = x.Status
+			}
+		}
+		if next == "" || (!x.ExpiresAt.After(now) && action != "relinquish") {
+			return r, ErrConflict
+		}
+		x.Status = next
+		x.Events = append(x.Events, StandingEvent{ID: randomID(), Kind: action, ActorID: actor, Reason: reason, CreatedAt: now})
+		if next == "completed" || next == "relinquished" {
+			x.ResolvedBy = actor
+			x.ResolvedAt = &now
+		}
+		return r, s.write(r)
+	}
+	return r, ErrNotFound
+}
+
+func declaredResource(v Revision, resource string) bool {
+	for _, d := range v.DecisionClasses {
+		if slicesContains(d.ProtectedResources, resource) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) Invite(kind, id, actor string, expected, charterVersion int, principalType, principalID, role, responsibilities string, evidence []Evidence, expires time.Time) (Record, error) {
@@ -390,7 +531,7 @@ func (s *Store) path(k, id string) string { return filepath.Join(s.root, k+"-"+i
 func (s *Store) readOrEmpty(k, id string) (Record, error) {
 	r, e := s.read(k, id)
 	if errors.Is(e, ErrNotFound) {
-		return Record{ScopeType: k, ScopeID: id, Revisions: []Revision{}, Approvals: []Approval{}, Exceptions: []Exception{}, Standings: []Standing{}}, nil
+		return Record{ScopeType: k, ScopeID: id, Revisions: []Revision{}, Approvals: []Approval{}, Exceptions: []Exception{}, Standings: []Standing{}, Continuity: []ContinuityAction{}}, nil
 	}
 	return r, e
 }

@@ -273,3 +273,54 @@ func TestStandingPersistsAcrossStoreReopen(t *testing.T) {
 		t.Fatalf("reopened = %#v, %v", loaded, err)
 	}
 }
+
+func TestContinuityIsGovernedBoundedAndAuditable(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	_, _ = s.Publish("repository", "repo1", "owner", 0, validRevision())
+	_, _ = s.Approve("repository", "repo1", "owner", 1, "approved", "adopt")
+	_, _ = s.Activate("repository", "repo1", "owner", 1)
+	r, err := s.Invite("repository", "repo1", "owner", 0, 1, "human", "old", "maintainer", "Steward", []Evidence{{Kind: "review", ResourceID: "pull-1", Summary: "reviews"}}, now.Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldID := r.Standings[0].ID
+	r, err = s.Invite("repository", "repo1", "owner", 1, 1, "human", "new", "maintainer", "Successor", []Evidence{{Kind: "contribution", ResourceID: "pull-2", Summary: "work"}}, now.Add(48*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	newID := r.Standings[1].ID
+	_, _ = s.ActOnStanding("repository", "repo1", oldID, "old", "accept", "accept", "")
+	_, _ = s.ActOnStanding("repository", "repo1", newID, "new", "accept", "accept", "")
+	in := ContinuityAction{Kind: "succession", Role: "maintainer", FromStandingID: oldID, ToStandingID: newID, GovernanceProposalID: "vote-1", Reason: "elected successor", Resources: []string{"branch:main"}, ReviewAt: now.Add(time.Hour), ExpiresAt: now.Add(2 * time.Hour)}
+	r, err = s.CreateContinuity("repository", "repo1", "owner", 0, 1, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Continuity[0].Status != "pending" || len(r.Continuity[0].Events) != 1 {
+		t.Fatalf("continuity=%#v", r.Continuity[0])
+	}
+	r, err = s.ActOnContinuity("repository", "repo1", r.Continuity[0].ID, "owner", "approve", "receipt verified")
+	if err != nil || r.Continuity[0].Status != "active" {
+		t.Fatalf("approve=%#v %v", r, err)
+	}
+	r, err = s.ActOnContinuity("repository", "repo1", r.Continuity[0].ID, "owner", "complete", "independent access handed off")
+	if err != nil || r.Continuity[0].ResolvedAt == nil {
+		t.Fatalf("complete=%#v %v", r, err)
+	}
+}
+
+func TestContinuityRejectsUnboundedOrUndeclaredRecovery(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Now()
+	s.now = func() time.Time { return now }
+	_, _ = s.Publish("repository", "repo1", "owner", 0, validRevision())
+	_, _ = s.Approve("repository", "repo1", "owner", 1, "approved", "adopt")
+	_, _ = s.Activate("repository", "repo1", "owner", 1)
+	for _, in := range []ContinuityAction{{Kind: "emergency", Role: "maintainer", GovernanceProposalID: "p", Reason: "deadlock", Resources: []string{"branch:other"}, ReviewAt: now.Add(time.Hour), ExpiresAt: now.Add(2 * time.Hour)}, {Kind: "emergency", Role: "maintainer", GovernanceProposalID: "p", Reason: "deadlock", Resources: []string{"branch:main"}, ReviewAt: now.Add(3 * time.Hour), ExpiresAt: now.Add(2 * time.Hour)}} {
+		if _, err := s.CreateContinuity("repository", "repo1", "owner", 0, 1, in); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("create=%v", err)
+		}
+	}
+}

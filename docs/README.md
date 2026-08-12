@@ -219,6 +219,14 @@ than descriptive text, and exceptions must target a declared resource in the act
 The web surfaces live at `/repositories/{id}/charter` and
 `/organizations/{id}/charter`.
 
+Active charters also retain continuity actions for nomination, election, recall, succession,
+and emergency recovery. Each action names the exact charter role, governed proposal, protected
+resources, predecessor/successor standing where applicable, mandatory review, and automatic
+expiry. Pending, active, completed, relinquished, and expired projections expose unresolved
+handoffs and recovery review without changing repository identity or historical attribution.
+These records grant no resource authority: repository and organization owners must separately
+approve access and revoke any derived credentials at the owning authority boundary.
+
 An active charter can admit time-bounded human governance standing through the scope's
 `/charter/standing` API. Each invitation names an exact charter role and responsibilities and
 retains reviewed contribution, review, support, ownership, or membership evidence. The invited

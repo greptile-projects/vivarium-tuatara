@@ -28,6 +28,12 @@ type charterStandingView struct {
 	OperationalAccess   []string `json:"operational_access"`
 	AuthorityNote       string   `json:"authority_note"`
 }
+type charterContinuityView struct {
+	charters.ContinuityAction
+	EffectiveStatus string `json:"effective_status"`
+	ReviewRequired  bool   `json:"review_required"`
+	AuthorityNote   string `json:"authority_note"`
+}
 
 func registerCharterRoutes(mux *http.ServeMux, store *charters.Store, repos *repositories.Store, orgs *organizations.Store, credentials *auth.Store) {
 	authorize := func(w http.ResponseWriter, r *http.Request, kind, id, scope string, write bool) (auth.Credential, bool) {
@@ -228,6 +234,18 @@ func registerCharterRoutes(mux *http.ServeMux, store *charters.Store, repos *rep
 		}
 		return out
 	}
+	continuityViews := func(record charters.Record) []charterContinuityView {
+		now := time.Now()
+		out := make([]charterContinuityView, 0, len(record.Continuity))
+		for _, x := range record.Continuity {
+			status := x.Status
+			if x.Status == "active" && !x.ExpiresAt.After(now) {
+				status = "expired"
+			}
+			out = append(out, charterContinuityView{ContinuityAction: x, EffectiveStatus: status, ReviewRequired: (x.Status == "pending" || x.Status == "active") && !x.ReviewAt.After(now), AuthorityNote: "Continuity approval does not itself grant resource access; independent owners must approve and revoke derived credentials."})
+		}
+		return out
+	}
 	for _, kind := range []string{"repository", "organization"} {
 		prefix := "/repositories/{id}/charter"
 		if kind == "organization" {
@@ -249,7 +267,7 @@ func registerCharterRoutes(mux *http.ServeMux, store *charters.Store, repos *rep
 				return
 			}
 			current := record.Revisions[len(record.Revisions)-1]
-			writeJSON(w, 200, map[string]any{"charter": record, "preview": preview(kind, r.PathValue("id"), current), "standing": standingViews(kind, r.PathValue("id"), actor.UserID, record)})
+			writeJSON(w, 200, map[string]any{"charter": record, "preview": preview(kind, r.PathValue("id"), current), "standing": standingViews(kind, r.PathValue("id"), actor.UserID, record), "continuity": continuityViews(record)})
 		})
 		mux.HandleFunc("POST "+prefix+"/revisions", func(w http.ResponseWriter, r *http.Request) {
 			actor, ok := authorize(w, r, kind, r.PathValue("id"), "repositories:write", true)
@@ -408,6 +426,43 @@ func registerCharterRoutes(mux *http.ServeMux, store *charters.Store, repos *rep
 				}
 			}
 			writeAPIError(w, 404, "standing_not_found", "governance standing not found")
+		})
+		mux.HandleFunc("POST "+prefix+"/continuity", func(w http.ResponseWriter, r *http.Request) {
+			actor, ok := authorize(w, r, kind, r.PathValue("id"), "repositories:write", true)
+			if !ok {
+				return
+			}
+			var in struct {
+				ExpectedVersion int                       `json:"expected_version"`
+				CharterVersion  int                       `json:"charter_version"`
+				Action          charters.ContinuityAction `json:"action"`
+			}
+			if decodeJSON(r, &in) != nil {
+				writeAPIError(w, 400, "invalid_continuity", "continuity action is required")
+				return
+			}
+			record, err := store.CreateContinuity(kind, r.PathValue("id"), actor.UserID, in.ExpectedVersion, in.CharterVersion, in.Action)
+			if !writeCharterError(w, err) {
+				writeJSON(w, 201, map[string]any{"charter": record, "continuity": continuityViews(record)})
+			}
+		})
+		mux.HandleFunc("POST "+prefix+"/continuity/{actionID}/actions", func(w http.ResponseWriter, r *http.Request) {
+			actor, ok := authorize(w, r, kind, r.PathValue("id"), "repositories:write", true)
+			if !ok {
+				return
+			}
+			var in struct {
+				Action string `json:"action"`
+				Reason string `json:"reason"`
+			}
+			if decodeJSON(r, &in) != nil {
+				writeAPIError(w, 400, "invalid_continuity_action", "action and reason are required")
+				return
+			}
+			record, err := store.ActOnContinuity(kind, r.PathValue("id"), r.PathValue("actionID"), actor.UserID, in.Action, in.Reason)
+			if !writeCharterError(w, err) {
+				writeJSON(w, 200, map[string]any{"charter": record, "continuity": continuityViews(record)})
+			}
 		})
 	}
 }
