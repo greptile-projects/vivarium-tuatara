@@ -17,8 +17,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/acceptance"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
@@ -465,6 +467,7 @@ type MergeReadiness struct {
 	Blockers          []ReadinessBlocker                   `json:"blockers"`
 	IntegrationQueue  *repositories.IntegrationQueuePolicy `json:"integration_queue,omitempty"`
 	CanEnqueue        bool                                 `json:"can_enqueue"`
+	PreviewAcceptance *acceptance.Evaluation               `json:"preview_acceptance,omitempty"`
 }
 
 type commentRecord struct {
@@ -488,6 +491,17 @@ type Store struct {
 		RequiredChecks(string, string) ([]string, error)
 		LockRequiredChecks() (func(), error)
 		IntegrationQueuePolicy(string, string) (repositories.IntegrationQueuePolicy, error)
+	}
+	acceptance *acceptance.Store
+	previews   interface {
+		List(string, string, string) ([]previews.Preview, error)
+	}
+}
+
+func (s *Store) ConfigurePreviewAcceptance(a *acceptance.Store, p *previews.Store) {
+	s.acceptance = a
+	if p != nil {
+		s.previews = p
 	}
 }
 
@@ -1341,6 +1355,52 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 	}
 	if changesRequested {
 		addBlocker("changes_requested", "a current review requests changes")
+	}
+	if s.acceptance != nil {
+		policy, evaluationErr := s.acceptance.Policy(repositoryID, p.TargetBranch)
+		if evaluationErr != nil {
+			return MergeReadiness{}, evaluationErr
+		}
+		decisions, evaluationErr := s.acceptance.Decisions(repositoryID, pullRequestID)
+		if evaluationErr != nil {
+			return MergeReadiness{}, evaluationErr
+		}
+		changes, evaluationErr := s.Changes(repositoryID, pullRequestID)
+		if evaluationErr != nil {
+			return MergeReadiness{}, evaluationErr
+		}
+		paths := make([]string, 0, len(changes))
+		for _, change := range changes {
+			paths = append(paths, change.Path)
+		}
+		risks := []string{}
+		for _, decision := range decisions {
+			if decision.Revision == p.SourceCommitID {
+				risks = append(risks, decision.RiskClasses...)
+			}
+		}
+		findings := []acceptance.Finding{}
+		if s.previews != nil {
+			attempts, listErr := s.previews.List(repositoryID, pullRequestID, p.SourceCommitID)
+			if listErr != nil {
+				return MergeReadiness{}, listErr
+			}
+			for _, attempt := range attempts {
+				for _, finding := range attempt.Findings {
+					findings = append(findings, acceptance.Finding{ID: finding.ID, PreviewID: attempt.ID, Revision: finding.Revision, Title: finding.Title, Severity: finding.Severity, Status: finding.Status, AuthorID: finding.AuthorID})
+				}
+			}
+		}
+		evaluation := acceptance.Evaluate(policy, p.SourceCommitID, paths, risks, decisions, findings)
+		report.PreviewAcceptance = &evaluation
+		for _, missing := range evaluation.Missing {
+			addBlocker("preview_acceptance_required", fmt.Sprintf("preview scenario %q requires current %s acceptance", missing.Scenario, missing.Role))
+		}
+		for _, finding := range evaluation.Findings {
+			if finding.Revision == p.SourceCommitID && finding.Severity == "blocking" && finding.Status != "resolved" {
+				addBlocker("preview_finding_blocking", fmt.Sprintf("blocking preview finding %q is unresolved", finding.Title))
+			}
+		}
 	}
 	if s.requirements != nil {
 		names, requirementErr := s.requirements.RequiredChecks(repositoryID, p.TargetBranch)

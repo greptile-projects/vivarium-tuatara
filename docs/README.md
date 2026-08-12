@@ -734,6 +734,17 @@ The exact `/pulls/{repository-id}/{pull-id}/previews/{preview-id}` feedback
 workspace admits a non-repository guest through the active invitation and
 renders controls from its effective feedback role; it does not require or
 project repository participation.
+Repository owners can layer target-branch preview acceptance policy over this
+evidence. Requirements select changed paths or owner-authored risk classes and
+name promised scenarios plus the owner, contributor, or pull-author role that
+must evaluate them. Acceptance, rejection, and owner-only justified override
+records are append-only and pinned to the adopted source commit and policy
+version. Pull readiness
+shows current and stale decisions separately, blocks on missing current
+blocking scenarios or unresolved blocking preview findings, and reuses that
+same decision for merge and integration-queue admission. Synchronizing a newer
+commit therefore preserves the earlier evaluation as history while requiring
+the affected behavior to be evaluated again.
 The API derives the source-only commit set and recursive changed-file summary
 from the fixed target snapshot and explicitly synchronized source revision.
 Immutable pull request comments retain stable author IDs; owners, contributors,

@@ -889,6 +889,15 @@ whenever dependencies change or the web job fails before it starts.
   feedback invitees use the exact `/pulls/{repository-id}/{pull-id}/previews/{preview-id}`
   workspace, whose controls derive from the live invitation instead of catalog
   participation.
+  Repository owners define preview acceptance requirements per target branch,
+  optionally selecting changed paths or owner-authored risk classes and naming
+  required scenarios plus owner, contributor, or author roles. Attributable
+  acceptance, rejection, and owner-only justified override decisions freeze the
+  exact adopted revision and policy version. Synchronization or policy
+  replacement retains older decisions as stale,
+  while merge readiness and integration-queue admission block on missing
+  current blocking scenarios, current rejection, or unresolved blocking preview
+  findings alongside ordinary reviews and checks.
   Current write collaborators can convert a current-revision finding into a
   retry-safe ordinary pull change session with frozen acceptance criteria,
   redacted permitted evidence, discussion, reproduction, and authorship. The
