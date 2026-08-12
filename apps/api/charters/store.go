@@ -75,6 +75,37 @@ type Exception struct {
 	CreatedBy     string    `json:"created_by"`
 	CreatedAt     time.Time `json:"created_at"`
 }
+type Evidence struct {
+	Kind       string `json:"kind"`
+	ResourceID string `json:"resource_id"`
+	Summary    string `json:"summary"`
+}
+type StandingEvent struct {
+	ID        string    `json:"id"`
+	Kind      string    `json:"kind"`
+	ActorID   string    `json:"actor_id"`
+	Reason    string    `json:"reason"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Standing is governance participation only. It intentionally contains no
+// repository permission or credential material.
+type Standing struct {
+	ID                 string          `json:"id"`
+	CharterVersion     int             `json:"charter_version"`
+	PrincipalType      string          `json:"principal_type"`
+	PrincipalID        string          `json:"principal_id"`
+	Role               string          `json:"role"`
+	Responsibilities   string          `json:"responsibilities"`
+	Evidence           []Evidence      `json:"evidence"`
+	Status             string          `json:"status"`
+	ConflictOfInterest string          `json:"conflict_of_interest,omitempty"`
+	StartsAt           *time.Time      `json:"starts_at,omitempty"`
+	ExpiresAt          time.Time       `json:"expires_at"`
+	InvitedBy          string          `json:"invited_by"`
+	InvitedAt          time.Time       `json:"invited_at"`
+	Events             []StandingEvent `json:"events"`
+}
 type Record struct {
 	ScopeType     string      `json:"scope_type"`
 	ScopeID       string      `json:"scope_id"`
@@ -82,7 +113,95 @@ type Record struct {
 	Revisions     []Revision  `json:"revisions"`
 	Approvals     []Approval  `json:"approvals"`
 	Exceptions    []Exception `json:"exceptions"`
+	Standings     []Standing  `json:"standings"`
 }
+
+func (s *Store) Invite(kind, id, actor string, expected, charterVersion int, principalType, principalID, role, responsibilities string, evidence []Evidence, expires time.Time) (Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Record{}, err
+	}
+	defer unlock()
+	r, err := s.read(kind, id)
+	if err != nil {
+		return r, err
+	}
+	if len(r.Standings) != expected || charterVersion != r.ActiveVersion || charterVersion < 1 || !expires.After(s.now()) || principalType != "human" || strings.TrimSpace(principalID) == "" || len(evidence) == 0 {
+		return r, ErrInvalid
+	}
+	var description string
+	for _, candidate := range r.Revisions[charterVersion-1].Roles {
+		if candidate.Name == role {
+			description = candidate.Description
+		}
+	}
+	if description == "" || strings.TrimSpace(responsibilities) == "" {
+		return r, ErrInvalid
+	}
+	for _, item := range evidence {
+		if !map[string]bool{"contribution": true, "review": true, "support": true, "ownership": true, "membership": true}[item.Kind] || strings.TrimSpace(item.ResourceID) == "" || strings.TrimSpace(item.Summary) == "" {
+			return r, ErrInvalid
+		}
+	}
+	for _, standing := range r.Standings {
+		if standing.PrincipalID == principalID && standing.Role == role && (standing.Status == "invited" || standing.Status == "active" || standing.Status == "recused" || standing.Status == "suspended") {
+			return r, ErrConflict
+		}
+	}
+	now := s.now().UTC()
+	event := StandingEvent{ID: randomID(), Kind: "invited", ActorID: actor, Reason: "Governance standing invited from reviewed evidence", CreatedAt: now}
+	r.Standings = append(r.Standings, Standing{ID: randomID(), CharterVersion: charterVersion, PrincipalType: principalType, PrincipalID: principalID, Role: role, Responsibilities: responsibilities, Evidence: evidence, Status: "invited", ExpiresAt: expires.UTC(), InvitedBy: actor, InvitedAt: now, Events: []StandingEvent{event}})
+	return r, s.write(r)
+}
+
+func (s *Store) ActOnStanding(kind, id, standingID, actor, action, reason, conflict string) (Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Record{}, err
+	}
+	defer unlock()
+	r, err := s.read(kind, id)
+	if err != nil {
+		return r, err
+	}
+	for i := range r.Standings {
+		st := &r.Standings[i]
+		if st.ID != standingID {
+			continue
+		}
+		now := s.now().UTC()
+		if !st.ExpiresAt.After(now) {
+			return r, ErrConflict
+		}
+		self := actor == st.PrincipalID
+		allowed := (self && ((action == "accept" && st.Status == "invited") || (action == "decline" && st.Status == "invited") || (action == "recuse" && st.Status == "active") || (action == "appeal" && (st.Status == "suspended" || st.Status == "revoked")))) || (!self && ((action == "suspend" && (st.Status == "active" || st.Status == "recused")) || (action == "reinstate" && st.Status == "suspended") || (action == "revoke" && st.Status != "revoked")))
+		if !allowed || strings.TrimSpace(reason) == "" {
+			return r, ErrInvalid
+		}
+		next := map[string]string{"accept": "active", "decline": "declined", "recuse": "recused", "suspend": "suspended", "reinstate": "active", "revoke": "revoked"}[action]
+		if action == "appeal" {
+			next = st.Status
+		}
+		if action == "accept" {
+			st.StartsAt = &now
+		}
+		st.Status = next
+		if action == "recuse" {
+			st.ConflictOfInterest = strings.TrimSpace(conflict)
+			if st.ConflictOfInterest == "" {
+				return r, ErrInvalid
+			}
+		}
+		st.Events = append(st.Events, StandingEvent{ID: randomID(), Kind: action, ActorID: actor, Reason: reason, CreatedAt: now})
+		return r, s.write(r)
+	}
+	return r, ErrNotFound
+}
+
 type Store struct {
 	root string
 	mu   sync.Mutex
@@ -249,7 +368,7 @@ func (s *Store) path(k, id string) string { return filepath.Join(s.root, k+"-"+i
 func (s *Store) readOrEmpty(k, id string) (Record, error) {
 	r, e := s.read(k, id)
 	if errors.Is(e, ErrNotFound) {
-		return Record{ScopeType: k, ScopeID: id, Revisions: []Revision{}, Approvals: []Approval{}, Exceptions: []Exception{}}, nil
+		return Record{ScopeType: k, ScopeID: id, Revisions: []Revision{}, Approvals: []Approval{}, Exceptions: []Exception{}, Standings: []Standing{}}, nil
 	}
 	return r, e
 }

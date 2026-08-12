@@ -250,6 +250,13 @@ whenever dependencies change or the web job fails before it starts.
   every decision class. Repository scope accepts only repository owner/collaborator sources;
   organization scope accepts only organization owner/member, team maintainer, and approved-agent
   sources. Exceptions can name only a class/resource in the current active revision.
+  Active charters admit time-bounded human governance standing from closed contribution,
+  review, support, ownership, or membership evidence. Invitations bind an exact charter role,
+  responsibilities, term, and revision; participants control acceptance, decline, conflict
+  recusal, and appeals, while scope owners control suspension, reinstatement, and revocation.
+  Reads derive expiry and lost local identity/membership and project nominations plus operational
+  access separately. Standing and votes never mint credentials or grant code, secret, merge,
+  deployment, or repository authority.
   team maintainers request attributable expiring exceptions, whose approved
   projection retains both the baseline and adjusted effective value. Public
   directory reads omit organization-only structure, private-repository
