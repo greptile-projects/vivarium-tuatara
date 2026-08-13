@@ -43,6 +43,14 @@ back to the roadmap. Shipping alone leaves the item delivering. All success meas
 measurement evidence before value is achieved, while changed assumptions, unresolved needs, policy
 conflicts, or failed measures require an explicit decision revisit.
 
+After a decision, preview, delivery, rejection, or measured outcome, maintainers publish
+feedback-specific learning updates from the roadmap. Only the cited reporter and current repository
+participants receive the retained rationale and inspectable work link; private source membership is
+not exposed. Reporters can say improved, not improved, or unsure, append follow-up evidence, and leave
+future conversation. Maintainer reviews compare promised and observed outcomes, retain lessons and
+dissent, link resulting work, and continue, revise, or archive an opportunity as fulfilled or
+unsupported without erasing its evidence or credit.
+
 ## Product experiment plans
 
 Repository participants define versioned product-learning contracts at

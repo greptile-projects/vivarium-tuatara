@@ -92,14 +92,114 @@ type Implementation struct {
 	CreatedAt      time.Time          `json:"created_at"`
 	UpdatedAt      time.Time          `json:"updated_at"`
 }
+type LearningUpdate struct {
+	ID            string    `json:"id"`
+	OpportunityID string    `json:"opportunity_id"`
+	Kind          string    `json:"kind"`
+	Summary       string    `json:"summary"`
+	Rationale     string    `json:"rationale"`
+	FeedbackIDs   []string  `json:"feedback_ids,omitempty"`
+	ResourceKind  string    `json:"resource_kind"`
+	ResourceID    string    `json:"resource_id"`
+	CreatedBy     string    `json:"created_by"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+type LearningResponse struct {
+	ID                string    `json:"id"`
+	UpdateID          string    `json:"update_id"`
+	FeedbackID        string    `json:"feedback_id"`
+	ActorID           string    `json:"actor_id"`
+	Assessment        string    `json:"assessment"`
+	FollowUp          string    `json:"follow_up,omitempty"`
+	LeaveConversation bool      `json:"leave_conversation"`
+	CreatedAt         time.Time `json:"created_at"`
+}
+type LearningReview struct {
+	ID               string    `json:"id"`
+	OpportunityID    string    `json:"opportunity_id"`
+	Promised         []string  `json:"promised"`
+	Observed         []string  `json:"observed"`
+	Lessons          []string  `json:"lessons"`
+	Dissent          []string  `json:"dissent"`
+	Disposition      string    `json:"disposition"`
+	Rationale        string    `json:"rationale"`
+	ResultingWorkIDs []string  `json:"resulting_work_ids"`
+	CreatedBy        string    `json:"created_by"`
+	CreatedAt        time.Time `json:"created_at"`
+}
 type Roadmap struct {
-	RepositoryID    string           `json:"repository_id"`
-	Version         int              `json:"version"`
-	Revisions       []Revision       `json:"revisions"`
-	Scenarios       []Scenario       `json:"scenarios"`
-	Comments        []Comment        `json:"comments"`
-	Implementations []Implementation `json:"implementations"`
-	UpdatedAt       time.Time        `json:"updated_at"`
+	RepositoryID      string             `json:"repository_id"`
+	Version           int                `json:"version"`
+	Revisions         []Revision         `json:"revisions"`
+	Scenarios         []Scenario         `json:"scenarios"`
+	Comments          []Comment          `json:"comments"`
+	Implementations   []Implementation   `json:"implementations"`
+	LearningUpdates   []LearningUpdate   `json:"learning_updates"`
+	LearningResponses []LearningResponse `json:"learning_responses"`
+	LearningReviews   []LearningReview   `json:"learning_reviews"`
+	UpdatedAt         time.Time          `json:"updated_at"`
+}
+
+func (s *Store) PublishLearningUpdate(repo, actor string, expected int, x LearningUpdate) (Roadmap, error) {
+	if actor == "" || !one(x.Kind, "decision", "preview", "delivery", "rejection", "measured_outcome") || !text(x.OpportunityID, 200) || !text(x.Summary, 5000) || !text(x.Rationale, 5000) || !text(x.ResourceKind, 100) || !text(x.ResourceID, 300) || len(x.FeedbackIDs) == 0 || len(x.FeedbackIDs) > 100 {
+		return Roadmap{}, ErrInvalid
+	}
+	return s.mutate(repo, expected, func(v *Roadmap) error {
+		for _, response := range v.LearningResponses {
+			if response.LeaveConversation {
+				for _, feedbackID := range x.FeedbackIDs {
+					if response.FeedbackID == feedbackID {
+						return ErrInvalid
+					}
+				}
+			}
+		}
+		x.ID = id()
+		x.CreatedBy = actor
+		x.CreatedAt = s.now().UTC()
+		v.LearningUpdates = append(v.LearningUpdates, x)
+		return nil
+	})
+}
+func (s *Store) RespondToLearning(repo, actor string, expected int, x LearningResponse) (Roadmap, error) {
+	if actor == "" || !one(x.Assessment, "improved", "not_improved", "unsure") || !text(x.UpdateID, 200) || !text(x.FeedbackID, 200) || len(x.FollowUp) > 5000 {
+		return Roadmap{}, ErrInvalid
+	}
+	return s.mutate(repo, expected, func(v *Roadmap) error {
+		for _, prior := range v.LearningResponses {
+			if prior.FeedbackID == x.FeedbackID && prior.LeaveConversation {
+				return ErrInvalid
+			}
+		}
+		found := false
+		for _, u := range v.LearningUpdates {
+			if u.ID == x.UpdateID {
+				for _, f := range u.FeedbackIDs {
+					found = found || f == x.FeedbackID
+				}
+			}
+		}
+		if !found {
+			return ErrNotFound
+		}
+		x.ID = id()
+		x.ActorID = actor
+		x.CreatedAt = s.now().UTC()
+		v.LearningResponses = append(v.LearningResponses, x)
+		return nil
+	})
+}
+func (s *Store) RecordLearningReview(repo, actor string, expected int, x LearningReview) (Roadmap, error) {
+	if actor == "" || !text(x.OpportunityID, 200) || len(x.Promised) == 0 || len(x.Observed) == 0 || len(x.Lessons) == 0 || !one(x.Disposition, "continue", "revise_roadmap", "fulfilled", "unsupported") || !text(x.Rationale, 5000) {
+		return Roadmap{}, ErrInvalid
+	}
+	return s.mutate(repo, expected, func(v *Roadmap) error {
+		x.ID = id()
+		x.CreatedBy = actor
+		x.CreatedAt = s.now().UTC()
+		v.LearningReviews = append(v.LearningReviews, x)
+		return nil
+	})
 }
 
 func (s *Store) LinkImplementation(repo, actor string, expected, roadmapVersion int, itemID, opportunityID, proposalID, revision string, taskIDs []string) (Roadmap, error) {

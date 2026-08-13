@@ -6,11 +6,13 @@ import (
 	"log"
 	"net/http"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
+	productfeedback "github.com/greptile-projects/vivarium-tuatara/apps/api/feedback"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/productopportunities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
@@ -50,8 +52,84 @@ type roadmapOutcomeInput struct {
 	ResourceID      string `json:"resource_id"`
 	MeasureIndexes  []int  `json:"measure_indexes"`
 }
+type roadmapLearningInput struct {
+	ExpectedVersion   int      `json:"expected_version"`
+	OpportunityID     string   `json:"opportunity_id"`
+	Kind              string   `json:"kind"`
+	Summary           string   `json:"summary"`
+	Rationale         string   `json:"rationale"`
+	FeedbackIDs       []string `json:"feedback_ids"`
+	ResourceKind      string   `json:"resource_kind"`
+	ResourceID        string   `json:"resource_id"`
+	UpdateID          string   `json:"update_id"`
+	FeedbackID        string   `json:"feedback_id"`
+	Assessment        string   `json:"assessment"`
+	FollowUp          string   `json:"follow_up"`
+	LeaveConversation bool     `json:"leave_conversation"`
+	Promised          []string `json:"promised"`
+	Observed          []string `json:"observed"`
+	Lessons           []string `json:"lessons"`
+	Dissent           []string `json:"dissent"`
+	Disposition       string   `json:"disposition"`
+	ResultingWorkIDs  []string `json:"resulting_work_ids"`
+}
 
-func registerRoadmapRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, credentials *auth.Store, store *roadmaps.Store, opportunities *productopportunities.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, checkStore *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store) {
+func registerRoadmapRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, credentials *auth.Store, store *roadmaps.Store, opportunities *productopportunities.Store, feedbackStore *productfeedback.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, checkStore *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store) {
+	validOpportunity := func(repoID, opportunityID string) bool {
+		if opportunities == nil {
+			return false
+		}
+		_, err := opportunities.Get(repoID, opportunityID)
+		return err == nil
+	}
+	validLearningResource := func(repoID, kind, resourceID string) bool {
+		switch strings.TrimSpace(kind) {
+		case "roadmap":
+			if store == nil {
+				return false
+			}
+			version, err := strconv.Atoi(resourceID)
+			roadmap, getErr := store.Get(repoID)
+			if err != nil || getErr != nil {
+				return false
+			}
+			for _, revision := range roadmap.Revisions {
+				if revision.Version == version {
+					return true
+				}
+			}
+			return false
+		case "proposal":
+			if proposalStore == nil {
+				return false
+			}
+			_, err := proposalStore.Get(repoID, resourceID)
+			return err == nil
+		case "pull", "review", "integration":
+			if pullStore == nil {
+				return false
+			}
+			_, err := pullStore.Get(repoID, resourceID)
+			return err == nil
+		case "release":
+			if releaseStore == nil {
+				return false
+			}
+			_, err := releaseStore.Get(repoID, resourceID)
+			return err == nil
+		case "deployment":
+			if deploymentStore == nil {
+				return false
+			}
+			_, err := deploymentStore.GetPromotion(repoID, resourceID)
+			return err == nil
+		default:
+			return false
+		}
+	}
+	validResultingWork := func(repoID, resourceID string) bool {
+		return validLearningResource(repoID, "proposal", resourceID) || validLearningResource(repoID, "pull", resourceID) || validLearningResource(repoID, "release", resourceID) || validLearningResource(repoID, "deployment", resourceID)
+	}
 	authorize := func(w http.ResponseWriter, r *http.Request) (auth.Credential, repositories.Repository, bool, bool) {
 		actor, _, ok := authorizeRepositoryRead(w, r, repos, credentials, r.PathValue("id"))
 		if !ok {
@@ -100,11 +178,39 @@ func registerRoadmapRoutes(mux *http.ServeMux, git *storage.Store, repos *reposi
 		return true
 	}
 	mux.HandleFunc("GET /repositories/{id}/roadmap", func(w http.ResponseWriter, r *http.Request) {
-		_, repo, _, ok := authorize(w, r)
+		actor, repo, participant, ok := authorize(w, r)
 		if !ok {
 			return
 		}
 		v, e := store.Get(repo.ID)
+		if e == nil && !participant {
+			visible := map[string]bool{}
+			if actor.UserID != "" && feedbackStore != nil {
+				for _, f := range v.LearningUpdates {
+					for _, fid := range f.FeedbackIDs {
+						if x, err := feedbackStore.Get(fid); err == nil && x.ReporterID == actor.UserID {
+							visible[f.ID] = true
+						}
+					}
+				}
+			}
+			updates := v.LearningUpdates[:0]
+			for _, x := range v.LearningUpdates {
+				if visible[x.ID] {
+					x.FeedbackIDs = nil
+					updates = append(updates, x)
+				}
+			}
+			v.LearningUpdates = updates
+			responses := v.LearningResponses[:0]
+			for _, x := range v.LearningResponses {
+				if x.ActorID == actor.UserID && visible[x.UpdateID] {
+					responses = append(responses, x)
+				}
+			}
+			v.LearningResponses = responses
+			v.LearningReviews = nil
+		}
 		writeRoadmap(w, v, e, 200)
 	})
 	mux.HandleFunc("PUT /repositories/{id}/roadmap", func(w http.ResponseWriter, r *http.Request) {
@@ -283,6 +389,84 @@ func registerRoadmapRoutes(mux *http.ServeMux, git *storage.Store, repos *reposi
 			return
 		}
 		v, e := store.ReportOutcome(repo.ID, actor.UserID, in.ExpectedVersion, r.PathValue("proposal_id"), roadmaps.DeliveryEvidence{Kind: in.Kind, Summary: in.Summary, ResourceKind: in.ResourceKind, ResourceID: in.ResourceID, MeasureIndexes: in.MeasureIndexes})
+		writeRoadmap(w, v, e, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/roadmap/learning-updates", func(w http.ResponseWriter, r *http.Request) {
+		actor, repo, participant, ok := authorize(w, r)
+		if !ok {
+			return
+		}
+		if !participant || actor.AgentID != "" {
+			writeAPIError(w, 403, "learning_update_forbidden", "only repository participants may publish stakeholder updates")
+			return
+		}
+		if feedbackStore == nil {
+			writeAPIError(w, 503, "learning_feedback_unavailable", "feedback context is unavailable")
+			return
+		}
+		var in roadmapLearningInput
+		if decodeJSON(r, &in) != nil {
+			return
+		}
+		if !validOpportunity(repo.ID, in.OpportunityID) || !validLearningResource(repo.ID, in.ResourceKind, in.ResourceID) {
+			writeAPIError(w, 422, "learning_provenance_invalid", "the opportunity and inspectable resource must exist in this repository")
+			return
+		}
+		for _, fid := range in.FeedbackIDs {
+			x, e := feedbackStore.Get(fid)
+			if e != nil || x.RepositoryID != repo.ID {
+				writeAPIError(w, 422, "learning_audience_invalid", "updates may cite only feedback in this repository")
+				return
+			}
+		}
+		v, e := store.PublishLearningUpdate(repo.ID, actor.UserID, in.ExpectedVersion, roadmaps.LearningUpdate{OpportunityID: in.OpportunityID, Kind: in.Kind, Summary: in.Summary, Rationale: in.Rationale, FeedbackIDs: in.FeedbackIDs, ResourceKind: in.ResourceKind, ResourceID: in.ResourceID})
+		writeRoadmap(w, v, e, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/roadmap/learning-responses", func(w http.ResponseWriter, r *http.Request) {
+		actor, repo, _, ok := authorize(w, r)
+		if !ok || !requireIdentity(w, actor) {
+			return
+		}
+		if feedbackStore == nil {
+			writeAPIError(w, 503, "learning_feedback_unavailable", "feedback context is unavailable")
+			return
+		}
+		var in roadmapLearningInput
+		if decodeJSON(r, &in) != nil {
+			return
+		}
+		f, e := feedbackStore.Get(in.FeedbackID)
+		if e != nil || f.RepositoryID != repo.ID || f.ReporterID != actor.UserID {
+			writeAPIError(w, 403, "learning_response_forbidden", "only the cited feedback reporter may respond")
+			return
+		}
+		v, e := store.RespondToLearning(repo.ID, actor.UserID, in.ExpectedVersion, roadmaps.LearningResponse{UpdateID: in.UpdateID, FeedbackID: in.FeedbackID, Assessment: in.Assessment, FollowUp: in.FollowUp, LeaveConversation: in.LeaveConversation})
+		writeRoadmap(w, v, e, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/roadmap/learning-reviews", func(w http.ResponseWriter, r *http.Request) {
+		actor, repo, participant, ok := authorize(w, r)
+		if !ok {
+			return
+		}
+		if !participant || actor.AgentID != "" {
+			writeAPIError(w, 403, "learning_review_forbidden", "only repository participants may retain product lessons")
+			return
+		}
+		var in roadmapLearningInput
+		if decodeJSON(r, &in) != nil {
+			return
+		}
+		if !validOpportunity(repo.ID, in.OpportunityID) {
+			writeAPIError(w, 422, "learning_provenance_invalid", "the opportunity must exist in this repository")
+			return
+		}
+		for _, resourceID := range in.ResultingWorkIDs {
+			if !validResultingWork(repo.ID, resourceID) {
+				writeAPIError(w, 422, "learning_provenance_invalid", "resulting work must exist in this repository")
+				return
+			}
+		}
+		v, e := store.RecordLearningReview(repo.ID, actor.UserID, in.ExpectedVersion, roadmaps.LearningReview{OpportunityID: in.OpportunityID, Promised: in.Promised, Observed: in.Observed, Lessons: in.Lessons, Dissent: in.Dissent, Disposition: in.Disposition, Rationale: in.Rationale, ResultingWorkIDs: in.ResultingWorkIDs})
 		writeRoadmap(w, v, e, 201)
 	})
 }

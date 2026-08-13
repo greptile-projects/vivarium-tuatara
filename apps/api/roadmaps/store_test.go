@@ -66,3 +66,26 @@ func TestImplementationRequiresMeasuredValueBeforeAchievementAndReopensOnDrift(t
 		t.Fatalf("retained blocker overwritten=%#v %v", v, err)
 	}
 }
+
+func TestReciprocalLearningRetainsResponseExitAndLessons(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, err := s.Publish("repo", "owner", 0, revision())
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.PublishLearningUpdate("repo", "owner", v.Version, LearningUpdate{OpportunityID: "opp-1", Kind: "measured_outcome", Summary: "Review abandonment fell", Rationale: "The cited need shaped the shipped workflow", FeedbackIDs: []string{"feedback-1"}, ResourceKind: "release", ResourceID: "v1"})
+	if err != nil || len(v.LearningUpdates) != 1 {
+		t.Fatalf("update=%#v %v", v, err)
+	}
+	v, err = s.RespondToLearning("repo", "reporter", v.Version, LearningResponse{UpdateID: v.LearningUpdates[0].ID, FeedbackID: "feedback-1", Assessment: "not_improved", FollowUp: "Keyboard review still stalls", LeaveConversation: true})
+	if err != nil || v.LearningResponses[0].ActorID != "reporter" {
+		t.Fatalf("response=%#v %v", v, err)
+	}
+	if _, err = s.PublishLearningUpdate("repo", "owner", v.Version, LearningUpdate{OpportunityID: "opp-1", Kind: "decision", Summary: "Another update", Rationale: "Follow-up", FeedbackIDs: []string{"feedback-1"}, ResourceKind: "roadmap", ResourceID: "2"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("exit ignored: %v", err)
+	}
+	v, err = s.RecordLearningReview("repo", "owner", v.Version, LearningReview{OpportunityID: "opp-1", Promised: []string{"20% fewer abandoned reviews"}, Observed: []string{"aggregate improved; keyboard cohort did not"}, Lessons: []string{"segment outcomes explicitly"}, Dissent: []string{"reporter says not improved"}, Disposition: "revise_roadmap", Rationale: "The promise was not universal", ResultingWorkIDs: []string{"proposal-2"}})
+	if err != nil || v.LearningReviews[0].Disposition != "revise_roadmap" {
+		t.Fatalf("review=%#v %v", v, err)
+	}
+}
