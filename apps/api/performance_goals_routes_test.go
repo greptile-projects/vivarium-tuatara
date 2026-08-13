@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -49,4 +50,17 @@ func TestPerformanceGoalAPI(t *testing.T) {
 	url := server.URL + "/repositories/" + repo.ID + "/performance-goals/" + created.ID + "/revisions"
 	authenticatedRequest(t, http.MethodPost, url, string(payload), owner.Credential.Token, http.StatusOK).Body.Close()
 	authenticatedRequest(t, http.MethodPost, url, string(payload), owner.Credential.Token, http.StatusConflict).Body.Close()
+	readOnly, err := credentials.Issue(collaborator.User.ID, auth.API, "performance reader", []string{"repositories:read"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/performance-goals", string(payload), readOnly.Token, http.StatusUnauthorized).Body.Close()
+}
+
+func TestPerformanceGoalStorageFailureIsUnavailable(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writePerformanceGoal(recorder, performancegoals.Goal{}, errors.New("disk unavailable"), http.StatusCreated)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
 }

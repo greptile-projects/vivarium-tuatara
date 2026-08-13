@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -16,7 +17,7 @@ type performanceGoalInput struct {
 
 func registerPerformanceGoalRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *performancegoals.Store) {
 	mux.HandleFunc("POST /repositories/{id}/performance-goals", func(w http.ResponseWriter, r *http.Request) {
-		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
 		if !ok {
 			return
 		}
@@ -56,7 +57,7 @@ func registerPerformanceGoalRoutes(mux *http.ServeMux, catalog *repositories.Sto
 		writeJSON(w, 200, goal)
 	})
 	mux.HandleFunc("POST /repositories/{id}/performance-goals/{goal_id}/revisions", func(w http.ResponseWriter, r *http.Request) {
-		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
 		if !ok {
 			return
 		}
@@ -88,7 +89,10 @@ func writePerformanceGoal(w http.ResponseWriter, goal performancegoals.Goal, err
 		writeAPIError(w, 409, "performance_goal_conflict", "the goal changed; reload before publishing another revision")
 	case errors.Is(err, performancegoals.ErrInvalid):
 		writeAPIError(w, 400, "invalid_performance_goal", "the contract must include valid workloads, metrics, targets, constraints, environments, owners, and baseline policy")
-	default:
+	case errors.Is(err, repositories.ErrInvalidCollaborator), errors.Is(err, repositories.ErrNotFound):
 		writeAPIError(w, 403, "performance_goal_forbidden", "only a current repository participant may publish performance goals")
+	default:
+		log.Printf("performance goal storage: %v", err)
+		writeAPIError(w, 500, "performance_goals_unavailable", "performance goals could not be persisted")
 	}
 }
