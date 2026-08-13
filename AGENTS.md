@@ -276,6 +276,13 @@ whenever dependencies change or the web job fails before it starts.
   proposal, ballot, or tally persistence share the charter mutation admission boundary, so a
   concurrent suspension or other standing mutation cannot commit between authorization and the governance write.
   `$GOVERNANCE_STORAGE_ROOT` defaults to `governance`.
+  The connected governance browser journey carries a proven contributor from charter standing
+  through evidence-backed initiative deliberation, retained dissent and recusal, ordered human-
+  and agent-owned task delivery, required checks, independent review, integration, and release.
+  It also proves failed quorum, standing appeal/reinstatement, successor election and attributable
+  handoff, and relinquished emergency recovery without deriving Git authority from standing or a
+  vote. Playwright isolates charter and governance records beneath `$CHARTER_STORAGE_ROOT` and
+  `$GOVERNANCE_STORAGE_ROOT` with its other temporary API stores.
   Accepted uncontested results can issue one immutable decision receipt and a repository-owner-
   published ordinary proposal/task plan. The receipt binds charter, result, tally, scope, cost,
   assumptions, and protected effects; it grants no operational authority and materially changed

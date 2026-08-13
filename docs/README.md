@@ -219,6 +219,14 @@ than descriptive text, and exceptions must target a declared resource in the act
 The web surfaces live at `/repositories/{id}/charter` and
 `/organizations/{id}/charter`.
 
+The connected governance journey proves this as one collaboration loop: a repository adopts a
+charter, admits evidence-backed contributor standing, retains dissent and recusal in an accepted
+initiative, and routes human- and agent-owned tasks through ordinary Git, review, required checks,
+merge, and release. A failed quorum, standing appeal, successor election and handoff, and
+time-bounded relinquished emergency recovery preserve the active charter and history. Governance
+standing and accepted results remain legitimacy records only; repository participation,
+credentials, review, merge, and release authority are still approved and enforced independently.
+
 Active charters also retain continuity actions for nomination, election, recall, succession,
 and emergency recovery. Each action names the exact charter role, governed proposal, protected
 resources, predecessor/successor standing where applicable, mandatory review, and automatic
