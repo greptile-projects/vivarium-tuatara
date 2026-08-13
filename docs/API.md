@@ -1,5 +1,21 @@
 # HTTP API contract
 
+## Product feedback
+
+`POST /repositories/{id}/feedback` accepts an authenticated repository reader's project, release,
+documented-journey, or preview feedback. The body names `target`, `need`, `desired_outcome`,
+`frequency`, `impact`, `audience`, `identity_visibility`, `contact_preference`, optional contact,
+redacted evidence, and same-repository issue or experiment links. Evidence must explicitly set
+`redacted: true` and choose `audience`, `maintainers`, or `reporter_only` visibility. Release and
+related-resource ownership is validated before persistence.
+
+`GET /repositories/{id}/feedback` and `GET .../feedback/{feedback_id}` project records for the
+authenticated viewer. `organization_private` records require an organization repository and are
+limited to the reporter and current project participants. Identity, direct contact, reporter
+attribution in history/discussion, and every evidence item are independently redacted according to
+the submission's consent. The reporter or a current participant appends discussion through `POST
+.../feedback/{feedback_id}/comments`; feedback history is append-only.
+
 ## Product experiment contracts
 
 Repository participants use `POST /repositories/{id}/product-experiments` to open a plan from a
