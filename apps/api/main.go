@@ -4006,7 +4006,14 @@ func authorizeRepositoryRead(w http.ResponseWriter, r *http.Request, store *repo
 		presented = true
 	}
 	actor, authenticated, ok := auth.Credential{}, false, true
-	if presented || repository.Visibility != repositories.Public {
+	if repository.Visibility == repositories.Public && presented {
+		var authenticateErr error
+		actor, authenticated, authenticateErr = authenticateOptionalCredential(r, authStore, "repositories:read")
+		if authenticateErr != nil && !errors.Is(authenticateErr, auth.ErrNotFound) {
+			writeAPIError(w, http.StatusInternalServerError, "internal_error", "credential storage unavailable")
+			return auth.Credential{}, false, false
+		}
+	} else if repository.Visibility != repositories.Public {
 		actor, authenticated, ok = authenticateOptionalRequest(w, r, authStore, "repositories:read", false)
 	}
 	if !ok {
@@ -4445,6 +4452,19 @@ func authenticateRequest(w http.ResponseWriter, r *http.Request, store *auth.Sto
 }
 
 func authenticateOptionalRequest(w http.ResponseWriter, r *http.Request, store *auth.Store, scope string, git bool) (auth.Credential, bool, bool) {
+	credential, authenticated, err := authenticateOptionalCredential(r, store, scope)
+	if err != nil {
+		if !errors.Is(err, auth.ErrNotFound) {
+			writeAPIError(w, http.StatusInternalServerError, "internal_error", "credential storage unavailable")
+			return auth.Credential{}, false, false
+		}
+		writeAuthenticationRequired(w, git)
+		return auth.Credential{}, false, false
+	}
+	return credential, authenticated, true
+}
+
+func authenticateOptionalCredential(r *http.Request, store *auth.Store, scope string) (auth.Credential, bool, error) {
 	token := ""
 	if header := r.Header.Get("Authorization"); strings.HasPrefix(header, "Bearer ") {
 		token = strings.TrimPrefix(header, "Bearer ")
@@ -4454,18 +4474,13 @@ func authenticateOptionalRequest(w http.ResponseWriter, r *http.Request, store *
 		token = cookie.Value
 	}
 	if token == "" {
-		return auth.Credential{}, false, true
+		return auth.Credential{}, false, nil
 	}
 	credential, err := store.Authenticate(token, scope)
 	if err != nil {
-		if !errors.Is(err, auth.ErrNotFound) {
-			writeAPIError(w, http.StatusInternalServerError, "internal_error", "credential storage unavailable")
-			return auth.Credential{}, false, false
-		}
-		writeAuthenticationRequired(w, git)
-		return auth.Credential{}, false, false
+		return auth.Credential{}, false, err
 	}
-	return credential, true, true
+	return credential, true, nil
 }
 
 func writeAuthenticationRequired(w http.ResponseWriter, git bool) {
