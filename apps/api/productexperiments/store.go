@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -220,7 +221,9 @@ func (s *Store) LinkWork(id, actor string, expected int, input WorkLink) (Experi
 		}
 		for _, existing := range v.Work {
 			if existing.PullRequestID == input.PullRequestID {
-				if existing.CommitID == input.CommitID {
+				requested := input
+				requested.ID, requested.ExperimentVersion, requested.LinkedBy, requested.CreatedAt = existing.ID, existing.ExperimentVersion, existing.LinkedBy, existing.CreatedAt
+				if reflect.DeepEqual(existing, requested) {
 					return nil
 				}
 				return ErrConflict

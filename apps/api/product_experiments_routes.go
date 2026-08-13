@@ -169,12 +169,7 @@ func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.S
 			writeAPIError(w, 503, "experiment_checks_unavailable", "pull checks could not be verified")
 			return
 		}
-		available := map[string]bool{}
-		for _, run := range runs {
-			if run.CommitID == pull.SourceCommitID {
-				available[run.Definition.Name] = true
-			}
-		}
+		available := successfulExperimentChecks(runs, pull.SourceCommitID)
 		for _, name := range in.Work.CheckNames {
 			if !available[name] {
 				writeAPIError(w, 422, "experiment_check_missing", "every declared experiment check must exist on the exact pull commit")
@@ -193,6 +188,16 @@ func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.S
 		}
 		writeProjected(w, out, 201)
 	})
+}
+
+func successfulExperimentChecks(runs []checkruns.Run, commitID string) map[string]bool {
+	available := map[string]bool{}
+	for _, run := range runs {
+		if run.CommitID == commitID && run.State == "succeeded" {
+			available[run.Definition.Name] = true
+		}
+	}
+	return available
 }
 func mutateExperiment(w http.ResponseWriter, r *http.Request, catalog *repositories.Store, credentials *auth.Store, store *productexperiments.Store, fn func(string, productExperimentInput) (productexperiments.Experiment, error), write func(http.ResponseWriter, productexperiments.Experiment, int)) {
 	actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")

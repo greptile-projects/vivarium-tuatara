@@ -55,6 +55,11 @@ func TestWorkLinksFreezeReviewEvidenceAtPlanVersion(t *testing.T) {
 	if _, err = s.LinkWork(v.ID, "alice", 1, work); err != nil {
 		t.Fatalf("idempotent link: %v", err)
 	}
+	changed := work
+	changed.EventDefinitions = []string{"task.failed@9"}
+	if _, err = s.LinkWork(v.ID, "alice", 1, changed); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed evidence = %v", err)
+	}
 	work.CommitID = "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
 	if _, err = s.LinkWork(v.ID, "alice", 1, work); !errors.Is(err, ErrConflict) {
 		t.Fatalf("moved pull = %v", err)
