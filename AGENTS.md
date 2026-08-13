@@ -343,6 +343,13 @@ whenever dependencies change or the web job fails before it starts.
   human/agent plan through dependency-gated assignment, stock Git publication,
   guidance, task-run completion, exact-revision checks, review, ordered merges,
   proposal closure, and durable attribution assertions.
+  Repository collaborators define append-only performance contracts at
+  `/repositories/{id}/performance` and the public `/repositories/{id}/performance-goals`
+  API. Complete revisions name the measured surface, workloads, metric targets and baselines,
+  correctness constraints, supported environments, owners, budgets, and project links. Reads
+  derive attributable missing-measurement, incomparable-environment, stale-baseline, target-gap,
+  and conflicting-target diagnostics beneath `$PERFORMANCE_GOAL_STORAGE_ROOT` (default
+  `performance-goals`).
   Repository release candidates at `/repositories/{id}/releases` freeze a
   verified commit, version, notes, creator, optional prior-release boundary,
   and the server-derived merged pulls, proposals, tasks, and contributors in

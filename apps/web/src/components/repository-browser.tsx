@@ -236,6 +236,7 @@ export function RepositoryBrowser({ id }: { id: string }) {
             <Link href={`/repositories/${id}/code?ref=${immutableRevision}`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Search and navigate code</Link>
             <Link href={`/repositories/${id}/explanations?ref=${immutableRevision}${currentPath ? `&kind=file&path=${encodeURIComponent(currentPath)}` : ""}`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Ask about this revision</Link>
             <Link href={`/repositories/${id}/impact?ref=${immutableRevision}${currentPath ? `&path=${encodeURIComponent(currentPath)}` : ""}`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Assess prospective impact</Link>
+            <Link href={`/repositories/${id}/performance`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Performance goals</Link>
             <Link href={`/repositories/${id}/releases`} className="text-sm font-semibold text-[var(--brand)] hover:underline">View release candidates</Link>
             <Link href={`/repositories/${id}/relationships`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Interface dependency graph</Link>
             <Link href={`/repositories/${id}/dependencies`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Package dependency inventory</Link>

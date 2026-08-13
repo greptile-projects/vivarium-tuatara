@@ -14,6 +14,20 @@ The supported consumer contract, including authentication, stable error
 shapes, validation, and collection pagination, is documented in [API.md](API.md).
 Consumers should use that HTTP boundary rather than reading storage roots.
 
+## Collaborative performance goals
+
+Repository participants publish complete, append-only performance-contract revisions through
+`/repositories/{id}/performance-goals`; the web surface is `/repositories/{id}/performance`.
+A contract identifies a repository, release, user journey, API, command, or service and records
+workloads, metric target ranges and baselines, correctness constraints, supported environments,
+owners, budgets, and issue, incident, preview, release, or decision links.
+
+Successors use a compare-and-swap version and retain their author and rationale. Reads keep
+missing measurements, incomparable environments, stale baselines, current target gaps, and
+non-overlapping successor targets explicit and attributable. Goals are evidence context, not new
+authority or proof that a benchmark passed. Records default beneath
+`$PERFORMANCE_GOAL_STORAGE_ROOT` (`performance-goals`).
+
 ## Governed community decisions
 
 The `/governance` workspace turns an active repository or organization charter decision class

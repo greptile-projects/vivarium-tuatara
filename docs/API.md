@@ -2589,3 +2589,21 @@ Input files are created through descriptor-relative no-follow traversal, so
 candidate archive symlinks cannot redirect staging. The issue durably reserves
 a deterministic verification identity before creating checks; split-outcome
 retries reuse and link that reservation, and execute only its recorded run IDs.
+
+## Performance goals
+
+Current repository participants create a complete contract with `POST
+/repositories/{id}/performance-goals` and publish a successor with `POST
+/repositories/{id}/performance-goals/{goal-id}/revisions`. Successors require
+`expected_version`; a stale write returns `409 performance_goal_conflict`.
+Repository readers use the collection and detail `GET` endpoints.
+
+The `revision` object names a `repository`, `release`, `user_journey`, `api`,
+`command`, or `service` subject and includes workloads, metrics with target
+ranges and optional measured baselines, correctness constraints, supported
+environments, owner IDs, budgets, baseline age policy, rationale, and typed
+links to issues, incidents, previews, releases, or decisions. Responses retain
+every immutable revision and derive attributed diagnostics named
+`missing_measurement`, `incomparable_environment`, `stale_baseline`,
+`target_gap`, and `conflicting_target`. Storage defaults to
+`$PERFORMANCE_GOAL_STORAGE_ROOT` (`performance-goals`).
