@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
@@ -84,14 +85,20 @@ func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.S
 		}
 		return true, nil
 	})
-	store.ConfigureOutcomeEvidence(func(repositoryID, taskKind string, evidence productexperiments.TaskEvidence) bool {
+	store.ConfigureOutcomeEvidence(func(repositoryID, experimentID, decisionID, taskID, taskKind string, evidence productexperiments.TaskEvidence) bool {
+		if pulls == nil || strings.TrimSpace(evidence.PullRequestID) == "" {
+			return false
+		}
+		pull, err := pulls.Get(repositoryID, evidence.PullRequestID)
+		if err != nil || pull.Status != pullrequests.Merged || !outcomeEvidenceTrailers(pull.Body, experimentID, decisionID, taskID, taskKind) {
+			return false
+		}
 		switch evidence.Kind {
 		case "pull_request":
-			if pulls == nil || (taskKind != "follow_up" && taskKind != "remove_variants" && taskKind != "remove_targeting" && taskKind != "revoke_credentials" && taskKind != "stop_collection" && taskKind != "review") {
+			if evidence.ResourceID != evidence.PullRequestID || (taskKind != "follow_up" && taskKind != "remove_variants" && taskKind != "remove_targeting" && taskKind != "revoke_credentials" && taskKind != "stop_collection" && taskKind != "review") {
 				return false
 			}
-			pull, err := pulls.Get(repositoryID, evidence.ResourceID)
-			return err == nil && pull.Status == pullrequests.Merged
+			return true
 		case "release":
 			if releaseStore == nil || taskKind != "release" {
 				return false
@@ -508,6 +515,23 @@ func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.S
 		}
 		writeProjected(w, out, 200)
 	})
+}
+
+func outcomeEvidenceTrailers(body, experimentID, decisionID, taskID, action string) bool {
+	wanted := map[string]string{"Experiment": experimentID, "Outcome-Decision": decisionID, "Outcome-Task": taskID, "Outcome-Action": action}
+	found := map[string]string{}
+	for _, line := range strings.Split(body, "\n") {
+		key, value, ok := strings.Cut(line, ":")
+		if ok {
+			found[strings.TrimSpace(key)] = strings.TrimSpace(value)
+		}
+	}
+	for key, value := range wanted {
+		if found[key] != value {
+			return false
+		}
+	}
+	return true
 }
 
 func successfulExperimentChecks(runs []checkruns.Run, commitID string) map[string]bool {

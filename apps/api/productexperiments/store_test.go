@@ -32,8 +32,8 @@ func TestPlanDiagnosticsAndVersionBoundApproval(t *testing.T) {
 }
 func TestOutcomeRequiresThresholdAndRetiresExperimentResources(t *testing.T) {
 	s, _ := New(t.TempDir())
-	s.ConfigureOutcomeEvidence(func(_, _ string, evidence TaskEvidence) bool {
-		return evidence.Kind == "pull_request" && evidence.ResourceID == "p1"
+	s.ConfigureOutcomeEvidence(func(_, _, _, _, _ string, evidence TaskEvidence) bool {
+		return evidence.Kind == "pull_request" && evidence.PullRequestID == "p1" && evidence.ResourceID == "p1"
 	})
 	revision, signals := plan("available")
 	revision.MinimumEvidence = 2
@@ -68,7 +68,7 @@ func TestOutcomeRequiresThresholdAndRetiresExperimentResources(t *testing.T) {
 		if !task.Required {
 			continue
 		}
-		v, err = s.CompleteOutcomeTask(v.ID, d.ID, task.ID, "alice", TaskEvidence{Kind: "pull_request", ResourceID: "p1"}, d.Version)
+		v, err = s.CompleteOutcomeTask(v.ID, d.ID, task.ID, "alice", TaskEvidence{PullRequestID: "p1", Kind: "pull_request", ResourceID: "p1"}, d.Version)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -87,7 +87,7 @@ func TestFollowUpOutcomeAllowsRelaunchOnlyAfterCleanup(t *testing.T) {
 	revision, signals := plan("available")
 	v, _ := s.Create("repo", "alice", Source{Kind: "proposal", ResourceID: "p", Label: "test"}, revision, signals)
 	v.AudienceContracts = []AudienceContract{{ID: "contract", ExperimentVersion: 1, VariantKeys: []string{"control", "treatment"}, Allocation: []Allocation{{VariantKey: "control", BasisPoints: 5000}, {VariantKey: "treatment", BasisPoints: 5000}}}}
-	v.OutcomeDecisions = []OutcomeDecision{{Decision: "extend_test", CleanedUp: false}}
+	v.OutcomeDecisions = []OutcomeDecision{{Decision: "extend_test", ExperimentVersion: 1, CleanedUp: false}}
 	if err := s.write(v); err != nil {
 		t.Fatal(err)
 	}
@@ -100,8 +100,19 @@ func TestFollowUpOutcomeAllowsRelaunchOnlyAfterCleanup(t *testing.T) {
 	if err := s.write(raw); err != nil {
 		t.Fatal(err)
 	}
-	if launched, err := s.Launch(v.ID, "alice", "contract", []string{"deployment"}, []string{"production"}, allocation); err != nil || len(launched.RunAttempts) != 1 {
-		t.Fatalf("clean follow-up relaunch = %#v, %v", launched.RunAttempts, err)
+	if _, err := s.Launch(v.ID, "alice", "contract", []string{"deployment"}, []string{"production"}, allocation); !errors.Is(err, ErrConflict) {
+		t.Fatalf("retired plan relaunch = %v", err)
+	}
+	raw, _ = s.read(v.ID)
+	raw.CurrentVersion = 2
+	revision.Version, revision.CreatedBy, revision.CreatedAt = 2, "alice", s.now()
+	raw.Revisions = append(raw.Revisions, revision)
+	raw.AudienceContracts = append(raw.AudienceContracts, AudienceContract{ID: "successor", ExperimentVersion: 2, VariantKeys: []string{"control", "treatment"}, Allocation: []Allocation{{VariantKey: "control", BasisPoints: 5000}, {VariantKey: "treatment", BasisPoints: 5000}}})
+	if err := s.write(raw); err != nil {
+		t.Fatal(err)
+	}
+	if launched, err := s.Launch(v.ID, "alice", "successor", []string{"deployment"}, []string{"production"}, allocation); err != nil || len(launched.RunAttempts) != 1 {
+		t.Fatalf("successor follow-up relaunch = %#v, %v", launched.RunAttempts, err)
 	}
 }
 func TestOverlapRequiresSharedAudienceAndSignal(t *testing.T) {

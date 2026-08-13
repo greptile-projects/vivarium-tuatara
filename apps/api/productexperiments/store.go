@@ -134,6 +134,7 @@ type AudienceContract struct {
 	RetentionDays        int          `json:"retention_days"`
 	ApprovedBy           string       `json:"approved_by"`
 	ApprovedAt           time.Time    `json:"approved_at"`
+	RetiredAt            time.Time    `json:"retired_at,omitempty"`
 }
 type AssignmentReceipt struct {
 	ID            string    `json:"id"`
@@ -240,8 +241,9 @@ type OutcomeTask struct {
 	CompletedAt time.Time    `json:"completed_at,omitempty"`
 }
 type TaskEvidence struct {
-	Kind       string `json:"kind"`
-	ResourceID string `json:"resource_id"`
+	PullRequestID string `json:"pull_request_id"`
+	Kind          string `json:"kind"`
+	ResourceID    string `json:"resource_id"`
 }
 type OutcomeDecision struct {
 	ID                string        `json:"id"`
@@ -406,7 +408,7 @@ func (s *Store) CompleteOutcomeTask(id, decisionID, taskID, actor string, eviden
 			t := &decision.Tasks[i]
 			if t.ID == taskID {
 				found = true
-				if s.outcomeEvidenceValid == nil || !s.outcomeEvidenceValid(v.RepositoryID, t.Kind, evidence) {
+				if s.outcomeEvidenceValid == nil || !s.outcomeEvidenceValid(v.RepositoryID, v.ID, decision.ID, t.ID, t.Kind, evidence) {
 					return ErrInvalid
 				}
 				if t.Status == "completed" {
@@ -436,6 +438,11 @@ func (s *Store) CompleteOutcomeTask(id, decisionID, taskID, actor string, eviden
 			decision.CleanedUpAt = s.now()
 			v.AssignmentAudit = nil
 			v.ExclusionMemberships = nil
+			for i := range v.AudienceContracts {
+				if v.AudienceContracts[i].ExperimentVersion == decision.ExperimentVersion && v.AudienceContracts[i].RetiredAt.IsZero() {
+					v.AudienceContracts[i].RetiredAt = decision.CleanedUpAt
+				}
+			}
 		}
 		return nil
 	})
@@ -446,12 +453,12 @@ func (s *Store) Launch(id, actor, contractID string, deploymentIDs, environmentI
 		if len(v.OutcomeDecisions) > 0 {
 			latest := v.OutcomeDecisions[len(v.OutcomeDecisions)-1]
 			followUp := latest.Decision == "extend_test" || latest.Decision == "inconclusive"
-			if !followUp || !latest.CleanedUp {
+			if !followUp || !latest.CleanedUp || v.CurrentVersion <= latest.ExperimentVersion {
 				return ErrConflict
 			}
 		}
 		contract := audienceContract(v, contractID)
-		if contract == nil || contract.ExperimentVersion != v.CurrentVersion || len(deploymentIDs) == 0 || len(deploymentIDs) != len(environmentIDs) || !validRunAllocation(*contract, allocation) {
+		if contract == nil || !contract.RetiredAt.IsZero() || contract.ExperimentVersion != v.CurrentVersion || len(deploymentIDs) == 0 || len(deploymentIDs) != len(environmentIDs) || !validRunAllocation(*contract, allocation) {
 			return ErrInvalid
 		}
 		for _, run := range v.RunAttempts {
@@ -652,7 +659,7 @@ func (s *Store) Assign(id, contractID, subject string, context AssignmentContext
 				contract = &v.AudienceContracts[i]
 			}
 		}
-		if contract == nil || contract.ExperimentVersion != v.CurrentVersion || strings.TrimSpace(subject) == "" {
+		if contract == nil || !contract.RetiredAt.IsZero() || contract.ExperimentVersion != v.CurrentVersion || strings.TrimSpace(subject) == "" {
 			return ErrConflict
 		}
 		subjectDigest := s.subjectDigest(v.RepositoryID, subject)
@@ -958,7 +965,7 @@ type Store struct {
 	now                  func() time.Time
 	subjectKey           []byte
 	deploymentHealthy    func(repositoryID string, deploymentIDs []string) (bool, error)
-	outcomeEvidenceValid func(repositoryID, taskKind string, evidence TaskEvidence) bool
+	outcomeEvidenceValid func(repositoryID, experimentID, decisionID, taskID, taskKind string, evidence TaskEvidence) bool
 }
 
 func (s *Store) ConfigureDeploymentHealth(fn func(string, []string) (bool, error)) {
@@ -966,7 +973,7 @@ func (s *Store) ConfigureDeploymentHealth(fn func(string, []string) (bool, error
 	defer s.mu.Unlock()
 	s.deploymentHealthy = fn
 }
-func (s *Store) ConfigureOutcomeEvidence(fn func(string, string, TaskEvidence) bool) {
+func (s *Store) ConfigureOutcomeEvidence(fn func(string, string, string, string, string, TaskEvidence) bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.outcomeEvidenceValid = fn
