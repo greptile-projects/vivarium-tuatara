@@ -3,6 +3,7 @@ package productexperiments
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -109,20 +110,201 @@ type WorkLink struct {
 	LinkedBy          string    `json:"linked_by"`
 	CreatedAt         time.Time `json:"created_at"`
 }
-type Experiment struct {
-	ID             string       `json:"id"`
-	RepositoryID   string       `json:"repository_id"`
-	Source         Source       `json:"source"`
-	CurrentVersion int          `json:"current_version"`
-	Revisions      []Revision   `json:"revisions"`
-	Signals        []Signal     `json:"signals"`
-	Comments       []Comment    `json:"comments"`
-	Approvals      []Approval   `json:"approvals"`
-	Work           []WorkLink   `json:"work"`
-	Diagnostics    []Diagnostic `json:"diagnostics"`
-	CreatedAt      time.Time    `json:"created_at"`
-	UpdatedAt      time.Time    `json:"updated_at"`
+type Allocation struct {
+	VariantKey  string `json:"variant_key"`
+	BasisPoints int    `json:"basis_points"`
 }
+type AudienceContract struct {
+	ID                   string       `json:"id"`
+	ExperimentVersion    int          `json:"experiment_version"`
+	ReleaseID            string       `json:"release_id"`
+	ReleaseCommitID      string       `json:"release_commit_id"`
+	VariantKeys          []string     `json:"variant_keys"`
+	Eligibility          []string     `json:"eligibility"`
+	Exclusions           []string     `json:"exclusions"`
+	OrganizationIDs      []string     `json:"organization_ids,omitempty"`
+	Regions              []string     `json:"regions,omitempty"`
+	RandomizationUnit    string       `json:"randomization_unit"`
+	RandomizationSalt    string       `json:"-"`
+	MutualExclusionGroup string       `json:"mutual_exclusion_group"`
+	Allocation           []Allocation `json:"allocation"`
+	Consent              string       `json:"consent"`
+	DataFields           []string     `json:"data_fields"`
+	RetentionDays        int          `json:"retention_days"`
+	ApprovedBy           string       `json:"approved_by"`
+	ApprovedAt           time.Time    `json:"approved_at"`
+}
+type AssignmentReceipt struct {
+	ID            string    `json:"id"`
+	ContractID    string    `json:"contract_id"`
+	SubjectDigest string    `json:"subject_digest"`
+	VariantKey    string    `json:"variant_key,omitempty"`
+	Eligible      bool      `json:"eligible"`
+	Reason        string    `json:"reason"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+type AssignmentContext struct {
+	Eligibility    []string `json:"eligibility"`
+	Exclusions     []string `json:"exclusions"`
+	OrganizationID string   `json:"organization_id,omitempty"`
+	Region         string   `json:"region,omitempty"`
+	Consented      bool     `json:"consented"`
+}
+type Experiment struct {
+	ID                string              `json:"id"`
+	RepositoryID      string              `json:"repository_id"`
+	Source            Source              `json:"source"`
+	CurrentVersion    int                 `json:"current_version"`
+	Revisions         []Revision          `json:"revisions"`
+	Signals           []Signal            `json:"signals"`
+	Comments          []Comment           `json:"comments"`
+	Approvals         []Approval          `json:"approvals"`
+	Work              []WorkLink          `json:"work"`
+	AudienceContracts []AudienceContract  `json:"audience_contracts"`
+	AssignmentAudit   []AssignmentReceipt `json:"assignment_audit"`
+	Diagnostics       []Diagnostic        `json:"diagnostics"`
+	CreatedAt         time.Time           `json:"created_at"`
+	UpdatedAt         time.Time           `json:"updated_at"`
+}
+
+func (s *Store) ApproveAudience(id, actor string, expected int, input AudienceContract) (Experiment, error) {
+	return s.mutate(id, func(v *Experiment) error {
+		if expected != v.CurrentVersion {
+			return ErrConflict
+		}
+		if !validAudienceContract(*v, input) {
+			return ErrInvalid
+		}
+		for _, existing := range v.AudienceContracts {
+			if existing.ReleaseID == input.ReleaseID || (input.MutualExclusionGroup != "" && existing.MutualExclusionGroup == input.MutualExclusionGroup) {
+				return ErrConflict
+			}
+		}
+		input.ID, input.ExperimentVersion, input.ApprovedBy, input.ApprovedAt = idgen(), expected, actor, s.now()
+		input.RandomizationSalt = idgen()
+		v.AudienceContracts = append(v.AudienceContracts, input)
+		return nil
+	})
+}
+
+func (s *Store) Assign(id, contractID, subject string, context AssignmentContext) (Experiment, AssignmentReceipt, error) {
+	var receipt AssignmentReceipt
+	v, err := s.mutate(id, func(v *Experiment) error {
+		var contract *AudienceContract
+		for i := range v.AudienceContracts {
+			if v.AudienceContracts[i].ID == contractID {
+				contract = &v.AudienceContracts[i]
+			}
+		}
+		if contract == nil || contract.ExperimentVersion != v.CurrentVersion || strings.TrimSpace(subject) == "" {
+			return ErrConflict
+		}
+		digest := sha256.Sum256([]byte(contract.RandomizationSalt + ":" + subject))
+		subjectDigest := hex.EncodeToString(digest[:])
+		for _, prior := range v.AssignmentAudit {
+			if prior.ContractID == contractID && prior.SubjectDigest == subjectDigest {
+				receipt = prior
+				return nil
+			}
+		}
+		receipt = AssignmentReceipt{ID: idgen(), ContractID: contractID, SubjectDigest: subjectDigest, Eligible: true, CreatedAt: s.now()}
+		if !assignmentEligible(*contract, context) {
+			receipt.Eligible, receipt.Reason = false, "audience_ineligible"
+		} else if contract.Consent == "explicit" && !context.Consented {
+			receipt.Eligible, receipt.Reason = false, "consent_required"
+		} else {
+			bucket := int(digest[0])<<8 | int(digest[1])
+			bucket %= 10000
+			cumulative := 0
+			for _, allocation := range contract.Allocation {
+				cumulative += allocation.BasisPoints
+				if bucket < cumulative {
+					receipt.VariantKey = allocation.VariantKey
+					break
+				}
+			}
+			if receipt.VariantKey == "" {
+				receipt.Eligible, receipt.Reason = false, "unallocated"
+			} else {
+				receipt.Reason = "assigned"
+			}
+		}
+		v.AssignmentAudit = append(v.AssignmentAudit, receipt)
+		return nil
+	})
+	return v, receipt, err
+}
+
+func assignmentEligible(contract AudienceContract, context AssignmentContext) bool {
+	has := func(values []string, wanted string) bool {
+		for _, value := range values {
+			if value == wanted {
+				return true
+			}
+		}
+		return false
+	}
+	eligible := false
+	for _, rule := range contract.Eligibility {
+		if has(context.Eligibility, rule) {
+			eligible = true
+		}
+	}
+	for _, rule := range context.Exclusions {
+		if has(contract.Exclusions, rule) {
+			return false
+		}
+	}
+	if len(contract.Regions) > 0 && !has(contract.Regions, context.Region) {
+		return false
+	}
+	if len(contract.OrganizationIDs) > 0 && !has(contract.OrganizationIDs, context.OrganizationID) {
+		return false
+	}
+	return eligible
+}
+
+func validAudienceContract(v Experiment, x AudienceContract) bool {
+	if x.ReleaseID == "" || !isHexCommit(x.ReleaseCommitID) || len(x.VariantKeys) < 2 || len(x.Eligibility) == 0 || x.RandomizationUnit != "user" || x.MutualExclusionGroup == "" || (x.Consent != "none" && x.Consent != "explicit") || len(x.DataFields) == 0 || x.RetentionDays < 1 || x.RetentionDays > 730 {
+		return false
+	}
+	allowedData := map[string]bool{"assignment": true, "exposure": true, "metric": true, "region": true, "organization": true}
+	for _, field := range x.DataFields {
+		if !allowedData[field] {
+			return false
+		}
+	}
+	variants := map[string]bool{}
+	workCommit := false
+	for _, revision := range v.Revisions {
+		if revision.Version == v.CurrentVersion {
+			for _, variant := range revision.Variants {
+				variants[variant.Key] = true
+			}
+		}
+	}
+	for _, work := range v.Work {
+		if work.ExperimentVersion == v.CurrentVersion && work.CommitID == x.ReleaseCommitID {
+			workCommit = true
+		}
+	}
+	seen := map[string]bool{}
+	total := 0
+	for _, allocation := range x.Allocation {
+		if !variants[allocation.VariantKey] || seen[allocation.VariantKey] || allocation.BasisPoints < 0 {
+			return false
+		}
+		seen[allocation.VariantKey] = true
+		total += allocation.BasisPoints
+	}
+	for _, key := range x.VariantKeys {
+		if !variants[key] || !seen[key] {
+			return false
+		}
+	}
+	return workCommit && total > 0 && total <= 10000
+}
+
 type Store struct {
 	root string
 	mu   sync.Mutex

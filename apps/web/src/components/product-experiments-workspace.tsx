@@ -78,6 +78,14 @@ type Experiment = {
     note?: string;
   }[];
   work: Work[];
+  audience_contracts: AudienceContract[];
+  assignment_audit: {
+    id: string;
+    subject_digest: string;
+    variant_key?: string;
+    eligible: boolean;
+    reason: string;
+  }[];
   diagnostics: {
     kind: string;
     severity: string;
@@ -85,6 +93,24 @@ type Experiment = {
     attributed_to: string;
     related_experiment_id?: string;
   }[];
+};
+type AudienceContract = {
+  id: string;
+  experiment_version: number;
+  release_id: string;
+  release_commit_id: string;
+  variant_keys: string[];
+  eligibility: string[];
+  exclusions: string[];
+  organization_ids?: string[];
+  regions?: string[];
+  randomization_unit: string;
+  mutual_exclusion_group: string;
+  allocation: { variant_key: string; basis_points: number }[];
+  consent: string;
+  data_fields: string[];
+  retention_days: number;
+  approved_by: string;
 };
 const value = (f: FormData, n: string) => String(f.get(n) ?? "").trim();
 const lines = (v: string) =>
@@ -298,6 +324,53 @@ export function ProductExperimentsWorkspace({
       await load();
     } catch (x) {
       setError(x instanceof Error ? x.message : "Work could not be linked.");
+    }
+  }
+  async function approveAudience(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!selected || !token) return;
+    const f = new FormData(e.currentTarget);
+    const allocation = lines(value(f, "allocation")).map((line) => {
+      const [variant_key, percent] = line.split(":");
+      return {
+        variant_key: variant_key?.trim(),
+        basis_points: Math.round(Number(percent) * 100),
+      };
+    });
+    try {
+      await api(
+        `/repositories/${repositoryID}/product-experiments/${selected.id}/audience-contracts`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expected_version: selected.current_version,
+            contract: {
+              release_id: value(f, "release_id"),
+              release_commit_id: value(f, "release_commit_id"),
+              variant_keys: allocation.map((x) => x.variant_key),
+              eligibility: lines(value(f, "contract_eligibility")),
+              exclusions: lines(value(f, "contract_exclusions")),
+              organization_ids: lines(value(f, "organization_ids")),
+              regions: lines(value(f, "regions")),
+              randomization_unit: "user",
+              mutual_exclusion_group: value(f, "mutual_exclusion_group"),
+              allocation,
+              consent: value(f, "consent"),
+              data_fields: lines(value(f, "data_fields")),
+              retention_days: Number(value(f, "retention_days")),
+            },
+          }),
+        },
+        token,
+      );
+      e.currentTarget.reset();
+      await load();
+    } catch (x) {
+      setError(
+        x instanceof Error
+          ? x.message
+          : "Audience contract could not be approved.",
+      );
     }
   }
   const r = selected?.revisions.at(-1);
@@ -542,6 +615,9 @@ export function ProductExperimentsWorkspace({
           onSubmit={linkWork}
         />
       )}
+      {selected && (
+        <AudienceGovernance experiment={selected} onSubmit={approveAudience} />
+      )}
       <section>
         <h2 className="font-semibold">Repository experiments</h2>
         {items.map((x) => (
@@ -558,6 +634,89 @@ export function ProductExperimentsWorkspace({
         ))}
       </section>
     </div>
+  );
+}
+function AudienceGovernance({
+  experiment,
+  onSubmit,
+}: {
+  experiment: Experiment;
+  onSubmit: (e: FormEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <Card className="p-5">
+      <h2 className="font-semibold">Audience exposure and consent</h2>
+      <p className="mt-1 text-sm text-[var(--muted)]">
+        Owner approval freezes an exact release, deterministic allocation,
+        permitted audience, and minimal collection policy before rollout.
+      </p>
+      <form onSubmit={onSubmit} className="mt-4 grid gap-3 md:grid-cols-3">
+        <Field name="release_id" label="Exact release ID" />
+        <Field name="release_commit_id" label="Released commit" />
+        <Field name="mutual_exclusion_group" label="Mutually exclusive group" />
+        <Area
+          name="allocation"
+          label="Allocation: variant:percent (one per line)"
+        />
+        <Area name="contract_eligibility" label="Eligibility rules" />
+        <Area name="contract_exclusions" label="Exclusions" />
+        <Area name="organization_ids" label="Allowed organization IDs" />
+        <Area name="regions" label="Allowed regions" />
+        <Select
+          name="consent"
+          label="Consent"
+          initial="explicit"
+          options={["explicit", "none"]}
+        />
+        <Area
+          name="data_fields"
+          label="Minimal data (assignment, exposure, metric, region, organization)"
+        />
+        <Field
+          name="retention_days"
+          label="Retention days"
+          type="number"
+          initial="30"
+        />
+        <div className="md:col-span-3">
+          <Button>Approve released audience</Button>
+        </div>
+      </form>
+      <div className="mt-5 space-y-3">
+        {experiment.audience_contracts?.map((c) => (
+          <article key={c.id} className="rounded-lg border p-4">
+            <div className="flex flex-wrap gap-2">
+              <Badge>plan v{c.experiment_version}</Badge>
+              <Badge>{c.consent} consent</Badge>
+              <Badge>{c.retention_days} day retention</Badge>
+            </div>
+            <p className="mt-2 text-sm">
+              <b>Release:</b> {c.release_id} at{" "}
+              <code>{c.release_commit_id}</code>
+            </p>
+            <p className="mt-1 text-sm">
+              <b>Allocation:</b>{" "}
+              {c.allocation
+                .map((a) => `${a.variant_key} ${a.basis_points / 100}%`)
+                .join(" · ")}{" "}
+              · group {c.mutual_exclusion_group}
+            </p>
+            <p className="mt-1 text-sm">
+              <b>Eligible:</b> {c.eligibility.join(", ")} · regions{" "}
+              {c.regions?.join(", ") || "all"} · organizations{" "}
+              {c.organization_ids?.join(", ") || "all"}
+            </p>
+            <p className="mt-1 text-sm">
+              <b>Collected:</b> {c.data_fields.join(", ")}
+            </p>
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              Approved by {c.approved_by}; assignment audit retains only salted
+              subject digests.
+            </p>
+          </article>
+        ))}
+      </div>
+    </Card>
   );
 }
 function WorkReview({

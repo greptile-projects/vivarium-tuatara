@@ -16,6 +16,14 @@ versions return `409`. Missing instrumentation, ineligible audiences, overlappin
 and changed assumptions remain attributable diagnostics. Plans grant no exposure, collection,
 release, or deployment authority.
 
+Repository owners approve rollout admission at `POST
+/repositories/{id}/product-experiments/{experiment_id}/audience-contracts`. It binds the current
+plan and reviewed implementation to an exact release/commit and freezes eligibility, exclusions,
+regions/organizations, deterministic user randomization, mutual exclusion, basis-point allocation,
+consent, allowlisted minimal data, and 1–730 day retention. Stale, conflicting, over-allocated,
+unknown-data, or release-mismatched contracts fail before rollout. Assignment receipts are stable
+and audit only a contract-salted subject digest, variant or exclusion reason, and time.
+
 Collaborators attach completed implementation to the current plan with `POST
 /repositories/{id}/product-experiments/{experiment_id}/work`. The request freezes the plan
 version, declared variant keys, human or approved-agent task owner, optional ordinary

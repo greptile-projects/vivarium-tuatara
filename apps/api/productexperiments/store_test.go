@@ -86,3 +86,53 @@ func TestWorkLinksFreezeReviewEvidenceAtPlanVersion(t *testing.T) {
 		t.Fatalf("moved pull = %v", err)
 	}
 }
+
+func TestAudienceContractRequiresExactWorkAndKeepsAssignmentStableAndRedacted(t *testing.T) {
+	s, _ := New(t.TempDir())
+	revision, signals := plan("available")
+	v, _ := s.Create("repo", "alice", Source{Kind: "release", ResourceID: "release-1", Label: "one"}, revision, signals)
+	commit := "0123456789012345678901234567890123456789"
+	work := WorkLink{VariantKeys: []string{"control", "treatment"}, OwnerType: "human", OwnerID: "alice", ProposalID: "p1", TaskID: "t1", PullRequestID: "pull-1", CommitID: commit, EventDefinitions: []string{"task.completed@1"}, ExposureRules: []string{"approved contract"}, Privacy: "consented", RemovalPlan: "remove", CheckNames: []string{"experiment/verified"}}
+	v, _ = s.LinkWork(v.ID, "alice", 1, work)
+	contract := AudienceContract{ReleaseID: "release-1", ReleaseCommitID: commit, VariantKeys: []string{"control", "treatment"}, Eligibility: []string{"repository_collaborator"}, Regions: []string{"EU"}, OrganizationIDs: []string{"org-1"}, RandomizationUnit: "user", MutualExclusionGroup: "onboarding", Allocation: []Allocation{{VariantKey: "control", BasisPoints: 4000}, {VariantKey: "treatment", BasisPoints: 4000}}, Consent: "explicit", DataFields: []string{"assignment", "metric"}, RetentionDays: 30}
+	v, err := s.ApproveAudience(v.ID, "alice", 1, contract)
+	if err != nil || len(v.AudienceContracts) != 1 || v.AudienceContracts[0].RandomizationSalt == "" {
+		t.Fatalf("contract = %#v, %v", v.AudienceContracts, err)
+	}
+	context := AssignmentContext{Eligibility: []string{"repository_collaborator"}, Region: "EU", OrganizationID: "org-1"}
+	_, denied, err := s.Assign(v.ID, v.AudienceContracts[0].ID, "sensitive-user-id", context)
+	if err != nil || denied.Eligible || denied.Reason != "consent_required" || denied.SubjectDigest == "sensitive-user-id" {
+		t.Fatalf("denied = %#v, %v", denied, err)
+	}
+	_, outside, err := s.Assign(v.ID, v.AudienceContracts[0].ID, "outside", AssignmentContext{Eligibility: []string{"repository_collaborator"}, Region: "US", OrganizationID: "org-1", Consented: true})
+	if err != nil || outside.Eligible || outside.Reason != "audience_ineligible" {
+		t.Fatalf("outside audience = %#v, %v", outside, err)
+	}
+	context.Consented = true
+	_, repeat, err := s.Assign(v.ID, v.AudienceContracts[0].ID, "sensitive-user-id", context)
+	if err != nil || repeat.ID != denied.ID || repeat.VariantKey != denied.VariantKey {
+		t.Fatalf("stable = %#v, %v", repeat, err)
+	}
+	if _, err = s.ApproveAudience(v.ID, "alice", 1, contract); !errors.Is(err, ErrConflict) {
+		t.Fatalf("conflicting allocation = %v", err)
+	}
+	stale := revision
+	stale.Rationale = "changed"
+	v, _ = s.Revise(v.ID, 1, "alice", stale, signals)
+	if _, _, err = s.Assign(v.ID, v.AudienceContracts[0].ID, "other", context); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale assignment = %v", err)
+	}
+}
+
+func TestAudienceContractRejectsBiasedOrUnauthorizedCollection(t *testing.T) {
+	s, _ := New(t.TempDir())
+	revision, signals := plan("available")
+	v, _ := s.Create("repo", "alice", Source{Kind: "release", ResourceID: "r", Label: "r"}, revision, signals)
+	commit := "0123456789012345678901234567890123456789"
+	work := WorkLink{VariantKeys: []string{"control", "treatment"}, OwnerType: "human", OwnerID: "alice", ProposalID: "p", TaskID: "t", PullRequestID: "pull", CommitID: commit, EventDefinitions: []string{"e@1"}, ExposureRules: []string{"rule"}, Privacy: "aggregate", RemovalPlan: "remove", CheckNames: []string{"check"}}
+	v, _ = s.LinkWork(v.ID, "alice", 1, work)
+	bad := AudienceContract{ReleaseID: "r", ReleaseCommitID: commit, VariantKeys: []string{"control", "treatment"}, Eligibility: []string{"collaborator"}, RandomizationUnit: "user", MutualExclusionGroup: "g", Allocation: []Allocation{{VariantKey: "control", BasisPoints: 9000}, {VariantKey: "treatment", BasisPoints: 9000}}, Consent: "none", DataFields: []string{"email"}, RetentionDays: 30}
+	if _, err := s.ApproveAudience(v.ID, "alice", 1, bad); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("biased/private contract = %v", err)
+	}
+}
