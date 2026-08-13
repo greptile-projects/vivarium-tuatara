@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -110,7 +111,11 @@ func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.S
 				return false
 			}
 			promotion, err := deploymentStore.GetPromotion(repositoryID, evidence.ResourceID)
-			return err == nil && promotion.State == "succeeded"
+			if err != nil || promotion.State != "succeeded" {
+				return false
+			}
+			release, err := releaseStore.Get(repositoryID, promotion.ReleaseID)
+			return err == nil && experimentDeploymentContainsPull(release, promotion, pull.ID)
 		default:
 			return false
 		}
@@ -515,6 +520,10 @@ func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.S
 		}
 		writeProjected(w, out, 200)
 	})
+}
+
+func experimentDeploymentContainsPull(release releases.Candidate, promotion deployments.Promotion, pullID string) bool {
+	return release.ID == promotion.ReleaseID && release.CommitID == promotion.CommitID && slices.Contains(release.Inclusions.PullRequestIDs, pullID)
 }
 
 func outcomeEvidenceTrailers(body, experimentID, decisionID, taskID, action string) bool {
