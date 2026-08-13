@@ -33,7 +33,7 @@ Accepted roadmap items can be tested before delivery through revision-exact outc
 opportunity version, then opens a technical decision, prototype, documentation concept, or product
 experiment with representative success and guardrail measures traced to source evidence. Named
 participants may be invited to the exact preview or bounded research revision; invitations require
-explicit consent, expire, and grant no repository access. Findings retain accessibility needs, dissent,
+explicit consent, permit later consent withdrawal, expire, and grant no repository access. Findings retain accessibility needs, dissent,
 acceptance, and evidence quality. Conclusions can validate, revise, defer, or reject direction without
 changing earlier roadmap revisions. Records default beneath `$OUTCOME_VALIDATION_STORAGE_ROOT`
 (`outcome-validations`). An exact accepted roadmap item can also create an ordinary ordered proposal
@@ -1843,6 +1843,9 @@ the member organization and portfolio projections, revoke with an expected
 version at `/access-grants/{grant-id}`, and issue agent credentials beneath
 `/access-grants/{grant-id}/credentials`. Expired, revoked, and explicitly
 excepted resources never authorize credential issuance.
+The credential request may set `purpose` to `api_read` for repository-bound
+`repositories:read` agent work such as evidence synthesis; otherwise it mints
+the established Git credential appropriate to the grant role.
 
 Organization policies provide a versioned governance baseline across repository
 visibility, review count, named checks, queued integration, attested release

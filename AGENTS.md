@@ -400,6 +400,8 @@ whenever dependencies change or the web job fails before it starts.
   reporters can detach their own citation without rewriting the original submission. Repository-
   scoped read-only agent credentials may create attributed syntheses but receive no correction or
   revision authority from that capability.
+  Organization access grants mint that API credential with `purpose: api_read`; omitted purpose
+  retains the grant role's established Git credential behavior.
 
   Repository collaborators define append-only performance contracts at
   `/repositories/{id}/performance` and the public `/repositories/{id}/performance-goals`
@@ -1573,7 +1575,7 @@ whenever dependencies change or the web job fails before it starts.
   `/repositories/{id}/outcome-validations` as a technical decision, prototype,
   documentation concept, or product experiment. Representative success and
   guardrail measures trace to the frozen opportunity's cited evidence. Expiring
-  named preview/research invitations require consent and grant no repository
+  named preview/research invitations require consent, support later withdrawal, and grant no repository
   access; findings retain accessibility needs, dissent, acceptance, and evidence
   quality. Append-only validate/revise/defer/reject conclusions never erase prior
   roadmap plans. `$OUTCOME_VALIDATION_STORAGE_ROOT` defaults to

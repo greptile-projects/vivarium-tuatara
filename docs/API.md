@@ -2746,6 +2746,11 @@ readers may `POST .../{opportunity_id}/challenges`. A feedback reporter can call
 `POST .../{opportunity_id}/detach-feedback/{feedback_id}`. Mutations require `expected_version` and
 return `409 product_opportunity_changed` after concurrent changes.
 
+Organization agent grants mint that synthesis credential through
+`POST /organizations/{id}/access-grants/{grant_id}/credentials` with `purpose: "api_read"`;
+the result is API-scoped to `repositories:read` and the named repository. Omitting `purpose`
+retains the existing Git credential behavior derived from the grant role.
+
 ## Product roadmaps
 
 `GET /repositories/{id}/roadmap` returns the versioned roadmap, non-binding scenarios, and
@@ -2771,7 +2776,7 @@ success and guardrail measures whose `source_ids` belong to that opportunity rev
 
 Collaborators invite named users with `POST .../{validation_id}/invitations` to `preview` or `research`
 at the exact revision and an explicit expiry. Invitees can read only a validation naming them; this
-grants no repository access. They accept or decline at `POST .../consent`, and only an accepted, live,
+grants no repository access. They accept, decline, or withdraw prior acceptance at `POST .../consent`, and only an accepted, live,
 revision-matched invitation may append a finding at `POST .../findings`. Findings retain attributable
 accessibility needs, dissent, acceptance, and `valid`, `insufficient`, or `invalid` evidence quality.
 Collaborators append a `validated`, `revise`, `defer`, or `reject` conclusion at `POST .../conclusions`;

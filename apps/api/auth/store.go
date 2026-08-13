@@ -115,7 +115,11 @@ func (s *Store) IssuePackageBound(userID, name, repositoryID string, packageName
 // IssueOrganizationAgent creates an auditable, repository-bound credential
 // derived from one live organization access grant.
 func (s *Store) IssueOrganizationAgent(userID, name, organizationID, grantID, agentID, repositoryID string, scopes []string, lifetime time.Duration) (IssuedCredential, error) {
-	issued, err := s.issueBound(userID, Git, name, scopes, lifetime, repositoryID, "", "", nil)
+	kind := Git
+	if slices.Contains(scopes, "repositories:read") {
+		kind = API
+	}
+	issued, err := s.issueBound(userID, kind, name, scopes, lifetime, repositoryID, "", "", nil)
 	if err != nil {
 		return issued, err
 	}

@@ -62,6 +62,30 @@ func TestGuestAccessRequiresLiveAcceptance(t *testing.T) {
 	}
 }
 
+func TestAcceptedParticipantCanWithdrawConsent(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Now().UTC()
+	s.now = func() time.Time { return now }
+	draft := Draft{RoadmapVersion: 1, ItemID: "item", Kind: "prototype", Title: "Prototype", Question: "Does it work?", Revision: "r1", Measures: []Measure{{Name: "Success", Kind: "success", Target: "yes", SourceIDs: []string{"f1"}}}}
+	v, _ := s.Create("repo", "owner", "opportunity", 1, draft)
+	v, _ = s.Invite("repo", v.ID, "owner", "guest", "research", "r1", now.Add(time.Hour), v.Version)
+	invite := v.Invitations[0].ID
+	v, _ = s.Consent("repo", v.ID, invite, "guest", "accepted", v.Version)
+	v, err := s.Consent("repo", v.ID, invite, "guest", "withdrawn", v.Version)
+	if err != nil || v.Invitations[0].Status != "withdrawn" {
+		t.Fatalf("withdrawal = %#v, %v", v.Invitations[0], err)
+	}
+	if allowed, _ := s.GuestAccess("repo", v.ID, "guest"); allowed {
+		t.Fatal("withdrawn consent retained guest access")
+	}
+	if _, err := s.Find("repo", v.ID, invite, "guest", v.Version, Finding{Body: "late finding", Acceptance: "reject", EvidenceQuality: "valid"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("finding after withdrawal = %v", err)
+	}
+	if _, err := s.Consent("repo", v.ID, invite, "guest", "accepted", v.Version); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("withdrawn invitation was silently reaccepted = %v", err)
+	}
+}
+
 func TestFindingBoundsPersistedGrowth(t *testing.T) {
 	s, _ := New(t.TempDir())
 	now := time.Now().UTC()

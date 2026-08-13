@@ -563,19 +563,19 @@ export function ProductExperimentsWorkspace({
             <Badge>v{selected.current_version}</Badge>
             <Badge
               tone={
-                selected.diagnostics.some((x) => x.severity === "blocking")
+                (selected.diagnostics ?? []).some((x) => x.severity === "blocking")
                   ? "danger"
                   : "success"
               }
             >
-              {selected.diagnostics.length
-                ? `${selected.diagnostics.length} explicit states`
+              {(selected.diagnostics ?? []).length
+                ? `${(selected.diagnostics ?? []).length} explicit states`
                 : "ready for approval"}
             </Badge>
           </div>
           <p className="mt-3 text-sm">{r.hypothesis}</p>
           <div className="mt-4 grid gap-2 md:grid-cols-2">
-            {selected.diagnostics.map((d, i) => (
+            {(selected.diagnostics ?? []).map((d, i) => (
               <div className="rounded-lg border p-3" key={d.kind + i}>
                 <Badge tone={d.severity === "blocking" ? "danger" : "warning"}>
                   {d.kind.replaceAll("_", " ")}
@@ -612,7 +612,7 @@ export function ProductExperimentsWorkspace({
             />
             <Button>Comment</Button>
           </form>
-          {selected.comments.map((c) => (
+          {(selected.comments ?? []).map((c) => (
             <p
               key={c.id}
               className="mt-2 rounded-lg bg-[var(--surface-2)] p-3 text-sm"
@@ -647,7 +647,7 @@ export function ProductExperimentsWorkspace({
           >
             <b>{x.source.label}</b>
             <span className="block text-xs text-[var(--muted)]">
-              v{x.current_version} · {x.diagnostics.length} explicit state(s)
+              v{x.current_version} · {(x.diagnostics ?? []).length} explicit state(s)
             </span>
           </button>
         ))}
