@@ -75,6 +75,30 @@ func TestOptimizationEvaluationLeavesInvalidStatisticsUnavailable(t *testing.T) 
 	}
 }
 
+func TestOptimizationEvaluationLeavesZeroVarianceConfidenceUnavailable(t *testing.T) {
+	store, _ := New(t.TempDir())
+	base := trial()
+	base.GoalID, base.Source.Revision = "goal", strings.Repeat("a", 40)
+	base.Timings[0].Values = []float64{100, 100, 100}
+	baseline, _ := store.Create(base)
+	inv, _ := store.CreateInvestigation(Investigation{RepositoryID: "repo", Title: "hot path", TrialIDs: []string{baseline.ID}, CreatedBy: "owner"}, func(Reference) bool { return true })
+	for name, values := range map[string][]float64{"equal means": {100, 100, 100}, "unequal means": {200, 200, 200}} {
+		t.Run(name, func(t *testing.T) {
+			candidateInput := base
+			candidateInput.Source.Revision = strings.Repeat("b", 40)
+			candidateInput.Timings[0].Values = values
+			candidate, _ := store.Create(candidateInput)
+			evaluation, err := store.CreateEvaluation(Evaluation{RepositoryID: "repo", PullRequestID: name, Revision: candidate.Source.Revision, GoalID: "goal", InvestigationID: inv.ID, BaselineTrialID: baseline.ID, CandidateTrialID: candidate.ID, AffectedScenarios: []string{"search"}, Commands: []string{"bench"}, CorrectnessChecks: []CorrectnessCheck{{Name: "tests", Command: "test", Passed: true, Summary: "passed"}}, CreatedBy: "owner"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if evaluation.Confidence != nil {
+				t.Fatalf("zero-variance confidence must be unavailable: %v", *evaluation.Confidence)
+			}
+		})
+	}
+}
+
 func TestTrialSummaryComparisonAndSanitization(t *testing.T) {
 	s, e := New(t.TempDir())
 	if e != nil {

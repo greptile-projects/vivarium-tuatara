@@ -586,12 +586,7 @@ func confidence(a, b Trial) *float64 {
 	}
 	se := math.Sqrt(x.Variance/float64(len(x.Values)) + y.Variance/float64(len(y.Values)))
 	if se == 0 {
-		if x.Mean == y.Mean {
-			value := 0.0
-			return &value
-		}
-		value := 1.0
-		return &value
+		return nil
 	}
 	z := math.Abs(y.Mean-x.Mean) / se
 	value := math.Erf(z / math.Sqrt2)
