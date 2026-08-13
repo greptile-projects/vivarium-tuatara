@@ -122,7 +122,48 @@ func registerPerformanceEvidenceRoutes(mux *http.ServeMux, gitStore *storage.Sto
 		}
 		in.RepositoryID = r.PathValue("id")
 		in.CreatedBy = actor.UserID
-		created, e := trials.CreateInvestigation(in)
+		repo, openErr := gitStore.Open(in.RepositoryID)
+		if openErr != nil {
+			writeAPIError(w, 422, "performance_investigation_invalid", "the repository evidence could not be resolved")
+			return
+		}
+		for i := range in.References {
+			ref := &in.References[i]
+			switch ref.Kind {
+			case "commit":
+				ref.ID = ref.Revision
+			case "release":
+				// The release store owns this identity; retain its canonical ID.
+			case "symbol":
+				ref.ID = ref.Revision + ":" + ref.Path + "#" + ref.Symbol
+			case "dependency", "runtime_path":
+				ref.ID = ref.Revision + ":" + ref.Path
+			}
+		}
+		resolveReference := func(ref performanceevidence.Reference) bool {
+			if ref.Revision != "" && (len(ref.Revision) != 40 || exec.Command("git", "--git-dir="+repo.Path(), "cat-file", "-e", ref.Revision+"^{commit}").Run() != nil) {
+				return false
+			}
+			switch ref.Kind {
+			case "commit":
+				return ref.ID == ref.Revision && ref.Revision != ""
+			case "symbol", "dependency", "runtime_path":
+				path := strings.TrimSpace(ref.Path)
+				if ref.Revision == "" || path == "" || strings.HasPrefix(path, "/") || strings.Contains("/"+path+"/", "/../") || (ref.Kind == "symbol" && strings.TrimSpace(ref.Symbol) == "") {
+					return false
+				}
+				return exec.Command("git", "--git-dir="+repo.Path(), "cat-file", "-e", ref.Revision+":"+path).Run() == nil
+			case "release":
+				if releaseStore == nil || ref.Revision == "" {
+					return false
+				}
+				release, err := releaseStore.Get(in.RepositoryID, ref.ID)
+				return err == nil && release.CommitID == ref.Revision
+			default:
+				return false
+			}
+		}
+		created, e := trials.CreateInvestigation(in, resolveReference)
 		if errors.Is(e, performanceevidence.ErrInvalid) {
 			writeAPIError(w, 422, "performance_investigation_invalid", "select repository-visible trials and revision-aware references")
 			return
@@ -187,6 +228,11 @@ func registerPerformanceEvidenceRoutes(mux *http.ServeMux, gitStore *storage.Sto
 			}
 			if decodeJSON(r, &in) != nil || strings.TrimSpace(in.Body) == "" {
 				writeAPIError(w, 422, "invalid_response", "a response is required")
+				return
+			}
+			investigation, getErr := trials.GetInvestigation(r.PathValue("investigation_id"))
+			if getErr != nil || investigation.RepositoryID != r.PathValue("id") {
+				writeAPIError(w, 404, "performance_investigation_not_found", "investigation not found")
 				return
 			}
 			updated, e := trials.Respond(r.PathValue("investigation_id"), r.PathValue("finding_id"), actor.UserID, in.Body, confirm)

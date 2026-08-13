@@ -170,7 +170,7 @@ func newID() (string, error) {
 	}
 	return hex.EncodeToString(b[:]), nil
 }
-func (s *Store) CreateInvestigation(v Investigation) (Investigation, error) {
+func (s *Store) CreateInvestigation(v Investigation, resolveReference func(Reference) bool) (Investigation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if v.RepositoryID == "" || strings.TrimSpace(v.Title) == "" || v.CreatedBy == "" || len(v.TrialIDs) == 0 || len(v.TrialIDs) > 20 || len(v.References) > 100 || len(v.InviteeIDs) > 50 {
@@ -185,7 +185,7 @@ func (s *Store) CreateInvestigation(v Investigation) (Investigation, error) {
 		seen[id] = true
 	}
 	for _, ref := range v.References {
-		if ref.Kind == "" || ref.ID == "" || ref.Label == "" || (ref.Revision != "" && len(ref.Revision) != 40) {
+		if ref.Kind == "" || ref.ID == "" || ref.Label == "" || resolveReference == nil || !resolveReference(ref) {
 			return Investigation{}, ErrInvalid
 		}
 	}
