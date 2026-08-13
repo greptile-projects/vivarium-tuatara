@@ -2730,3 +2730,18 @@ checks, and residual risks. The server derives compatible metric deltas, statist
 CPU/memory/I/O and cost changes, and aggregate correctness. Source movement preserves earlier
 evidence as explicitly stale. These records are review evidence only and grant no operational
 authority.
+## Product opportunities
+
+`GET /repositories/{id}/product-opportunities` and
+`GET /repositories/{id}/product-opportunities/{opportunity_id}` return permitted opportunity
+syntheses with all retained versions, challenges, corrections, and citation freshness. Source kinds
+are `feedback`, `issue`, `preview_finding`, `support_signal`, `usage_evidence`, and
+`experiment_outcome`; relationships are `supports`, `contradicts`, `minority_need`, and `duplicate`.
+
+`POST /repositories/{id}/product-opportunities` accepts a complete synthesis revision. Repository
+participants and repository-scoped read-only agent credentials may create one, but every platform
+source must resolve to the repository and exact submitted revision. Participant-only mutations are
+`POST .../{opportunity_id}/revisions` and `POST .../{opportunity_id}/corrections`; all authorized
+readers may `POST .../{opportunity_id}/challenges`. A feedback reporter can call
+`POST .../{opportunity_id}/detach-feedback/{feedback_id}`. Mutations require `expected_version` and
+return `409 product_opportunity_changed` after concurrent changes.
