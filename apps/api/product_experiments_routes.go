@@ -56,6 +56,17 @@ type productExperimentControlInput struct {
 	Action          string `json:"action"`
 	Reason          string `json:"reason"`
 }
+type productExperimentAnalysisInput struct {
+	Analysis productexperiments.Analysis `json:"analysis"`
+}
+type productExperimentOutcomeInput struct {
+	ExpectedVersion int                                `json:"expected_version"`
+	Decision        productexperiments.OutcomeDecision `json:"decision"`
+}
+type productExperimentTaskInput struct {
+	ExpectedVersion int    `json:"expected_version"`
+	EvidenceURL     string `json:"evidence_url"`
+}
 
 func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *productexperiments.Store, proposals *proposals.Store, pulls *pullrequests.Store, checks *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store) {
 	store.ConfigureDeploymentHealth(func(repositoryID string, deploymentIDs []string) (bool, error) {
@@ -406,6 +417,72 @@ func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.S
 			return
 		}
 		writeProjected(w, out, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/product-experiments/{experiment_id}/analyses", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := store.Get(r.PathValue("experiment_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "product_experiment_not_found", "experiment not found")
+			return
+		}
+		var in productExperimentAnalysisInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "revision-bound analysis is required")
+			return
+		}
+		out, err := store.Analyze(current.ID, actor.UserID, in.Analysis)
+		if err != nil {
+			writeProductExperimentError(w, err)
+			return
+		}
+		writeProjected(w, out, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/product-experiments/{experiment_id}/outcomes", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := store.Get(r.PathValue("experiment_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "product_experiment_not_found", "experiment not found")
+			return
+		}
+		var in productExperimentOutcomeInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a versioned outcome decision is required")
+			return
+		}
+		out, err := store.DecideOutcome(current.ID, actor.UserID, in.ExpectedVersion, in.Decision)
+		if err != nil {
+			writeProductExperimentError(w, err)
+			return
+		}
+		writeProjected(w, out, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/product-experiments/{experiment_id}/outcomes/{decision_id}/tasks/{task_id}/complete", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := store.Get(r.PathValue("experiment_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "product_experiment_not_found", "experiment not found")
+			return
+		}
+		var in productExperimentTaskInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "completion evidence is required")
+			return
+		}
+		out, err := store.CompleteOutcomeTask(current.ID, r.PathValue("decision_id"), r.PathValue("task_id"), actor.UserID, in.EvidenceURL, in.ExpectedVersion)
+		if err != nil {
+			writeProductExperimentError(w, err)
+			return
+		}
+		writeProjected(w, out, 200)
 	})
 }
 

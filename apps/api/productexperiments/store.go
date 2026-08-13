@@ -206,6 +206,53 @@ type RunAttempt struct {
 	CreatedAt         time.Time        `json:"created_at"`
 	UpdatedAt         time.Time        `json:"updated_at"`
 }
+type SegmentEffect struct {
+	Segment      string             `json:"segment"`
+	Exposures    map[string]int     `json:"exposures"`
+	MetricValues map[string]float64 `json:"metric_values"`
+	Uncertainty  map[string]float64 `json:"uncertainty"`
+}
+type Analysis struct {
+	ID                string          `json:"id"`
+	ExperimentVersion int             `json:"experiment_version"`
+	RunID             string          `json:"run_id"`
+	RunVersion        int             `json:"run_version"`
+	ThresholdReason   string          `json:"threshold_reason"`
+	SegmentEffects    []SegmentEffect `json:"segment_effects"`
+	Exclusions        []string        `json:"exclusions"`
+	GuardrailOutcomes []string        `json:"guardrail_outcomes"`
+	Interpretation    string          `json:"interpretation"`
+	InterpretedByType string          `json:"interpreted_by_type"`
+	InterpretedByID   string          `json:"interpreted_by_id"`
+	Uncertainty       string          `json:"uncertainty"`
+	Dissent           []string        `json:"dissent"`
+	CreatedBy         string          `json:"created_by"`
+	CreatedAt         time.Time       `json:"created_at"`
+}
+type OutcomeTask struct {
+	ID          string    `json:"id"`
+	Kind        string    `json:"kind"`
+	Title       string    `json:"title"`
+	Required    bool      `json:"required"`
+	Status      string    `json:"status"`
+	EvidenceURL string    `json:"evidence_url,omitempty"`
+	CompletedBy string    `json:"completed_by,omitempty"`
+	CompletedAt time.Time `json:"completed_at,omitempty"`
+}
+type OutcomeDecision struct {
+	ID                string        `json:"id"`
+	Version           int           `json:"version"`
+	ExperimentVersion int           `json:"experiment_version"`
+	AnalysisID        string        `json:"analysis_id"`
+	Decision          string        `json:"decision"`
+	VariantKey        string        `json:"variant_key,omitempty"`
+	Rationale         string        `json:"rationale"`
+	CreatedBy         string        `json:"created_by"`
+	CreatedAt         time.Time     `json:"created_at"`
+	Tasks             []OutcomeTask `json:"tasks"`
+	CleanedUp         bool          `json:"cleaned_up"`
+	CleanedUpAt       time.Time     `json:"cleaned_up_at,omitempty"`
+}
 type Experiment struct {
 	ID                   string                `json:"id"`
 	RepositoryID         string                `json:"repository_id"`
@@ -220,13 +267,174 @@ type Experiment struct {
 	AssignmentAudit      []AssignmentReceipt   `json:"assignment_audit"`
 	ExclusionMemberships []ExclusionMembership `json:"exclusion_memberships"`
 	RunAttempts          []RunAttempt          `json:"run_attempts"`
+	Analyses             []Analysis            `json:"analyses"`
+	OutcomeDecisions     []OutcomeDecision     `json:"outcome_decisions"`
 	Diagnostics          []Diagnostic          `json:"diagnostics"`
 	CreatedAt            time.Time             `json:"created_at"`
 	UpdatedAt            time.Time             `json:"updated_at"`
 }
 
+func (s *Store) Analyze(id, actor string, input Analysis) (Experiment, error) {
+	return s.mutate(id, func(v *Experiment) error {
+		run := runAttempt(v, input.RunID)
+		if run == nil || run.ExperimentVersion != v.CurrentVersion || run.Version != input.RunVersion || strings.TrimSpace(input.Interpretation) == "" || strings.TrimSpace(input.Uncertainty) == "" || len(input.SegmentEffects) == 0 || len(input.GuardrailOutcomes) == 0 || (input.InterpretedByType != "human" && input.InterpretedByType != "agent") || strings.TrimSpace(input.InterpretedByID) == "" {
+			return ErrInvalid
+		}
+		revision, ok := revisionAt(v, run.ExperimentVersion)
+		if !ok {
+			return ErrInvalid
+		}
+		total := 0
+		for _, observation := range run.Observations {
+			observed := 0
+			for _, count := range observation.Exposures {
+				observed += count
+			}
+			if observed > total {
+				total = observed
+			}
+		}
+		reason := ""
+		if total >= revision.MinimumEvidence {
+			reason = "minimum_evidence_reached"
+		}
+		if run.Status == "contained" || run.Status == "stopped" {
+			reason = "stop_condition_reached"
+		}
+		if reason == "" {
+			return ErrConflict
+		}
+		for _, prior := range v.Analyses {
+			if prior.RunID == input.RunID && prior.RunVersion == input.RunVersion {
+				return ErrConflict
+			}
+		}
+		input.ID, input.ExperimentVersion, input.ThresholdReason, input.CreatedBy, input.CreatedAt = idgen(), v.CurrentVersion, reason, actor, s.now()
+		v.Analyses = append(v.Analyses, input)
+		return nil
+	})
+}
+
+func (s *Store) DecideOutcome(id, actor string, expected int, input OutcomeDecision) (Experiment, error) {
+	return s.mutate(id, func(v *Experiment) error {
+		if expected != len(v.OutcomeDecisions) || strings.TrimSpace(input.Rationale) == "" {
+			return ErrConflict
+		}
+		allowed := map[string]bool{"adopt_variant": true, "retain_control": true, "extend_test": true, "inconclusive": true}
+		if !allowed[input.Decision] {
+			return ErrInvalid
+		}
+		var analysis *Analysis
+		for i := range v.Analyses {
+			if v.Analyses[i].ID == input.AnalysisID {
+				analysis = &v.Analyses[i]
+			}
+		}
+		if analysis == nil || analysis.ExperimentVersion != v.CurrentVersion {
+			return ErrInvalid
+		}
+		if input.Decision == "adopt_variant" {
+			valid := false
+			for _, variant := range currentRevision(v).Variants {
+				if variant.Key == input.VariantKey && !variant.Control {
+					valid = true
+				}
+			}
+			if !valid {
+				return ErrInvalid
+			}
+		} else if input.VariantKey != "" {
+			return ErrInvalid
+		}
+		if len(input.Tasks) == 0 {
+			return ErrInvalid
+		}
+		required := map[string]bool{"rollout": input.Decision == "adopt_variant", "rollback": input.Decision == "retain_control", "follow_up": input.Decision == "extend_test" || input.Decision == "inconclusive", "remove_variants": true, "remove_targeting": true, "revoke_credentials": true, "stop_collection": true}
+		seen := map[string]bool{}
+		for i := range input.Tasks {
+			t := &input.Tasks[i]
+			if !required[t.Kind] && t.Kind != "review" && t.Kind != "release" && t.Kind != "deployment" {
+				return ErrInvalid
+			}
+			if strings.TrimSpace(t.Title) == "" || seen[t.Kind] {
+				return ErrInvalid
+			}
+			seen[t.Kind] = true
+			t.ID = idgen()
+			t.Required = required[t.Kind]
+			t.Status = "open"
+		}
+		for kind, needed := range required {
+			if needed && !seen[kind] {
+				return ErrInvalid
+			}
+		}
+		input.ID, input.Version, input.ExperimentVersion, input.CreatedBy, input.CreatedAt = idgen(), expected+1, v.CurrentVersion, actor, s.now()
+		v.OutcomeDecisions = append(v.OutcomeDecisions, input)
+		for i := range v.RunAttempts {
+			if v.RunAttempts[i].Status == "running" || v.RunAttempts[i].Status == "paused" {
+				v.RunAttempts[i].Status = "stopped"
+				v.RunAttempts[i].Version++
+				v.RunAttempts[i].Events = append(v.RunAttempts[i].Events, RunEvent{Kind: "stopped", ActorID: actor, Reason: "outcome_decided", CreatedAt: input.CreatedAt})
+			}
+		}
+		return nil
+	})
+}
+
+func (s *Store) CompleteOutcomeTask(id, decisionID, taskID, actor, evidenceURL string, expected int) (Experiment, error) {
+	return s.mutate(id, func(v *Experiment) error {
+		var decision *OutcomeDecision
+		for i := range v.OutcomeDecisions {
+			if v.OutcomeDecisions[i].ID == decisionID {
+				decision = &v.OutcomeDecisions[i]
+			}
+		}
+		if decision == nil || decision.Version != expected || strings.TrimSpace(evidenceURL) == "" {
+			return ErrConflict
+		}
+		found := false
+		for i := range decision.Tasks {
+			t := &decision.Tasks[i]
+			if t.ID == taskID {
+				found = true
+				if t.Status == "completed" {
+					if t.EvidenceURL == evidenceURL && t.CompletedBy == actor {
+						return nil
+					}
+					return ErrConflict
+				}
+				t.Status = "completed"
+				t.EvidenceURL = strings.TrimSpace(evidenceURL)
+				t.CompletedBy = actor
+				t.CompletedAt = s.now()
+			}
+		}
+		if !found {
+			return ErrInvalid
+		}
+		decision.Version++
+		clean := true
+		for _, t := range decision.Tasks {
+			if t.Required && t.Status != "completed" {
+				clean = false
+			}
+		}
+		if clean {
+			decision.CleanedUp = true
+			decision.CleanedUpAt = s.now()
+			v.AssignmentAudit = nil
+			v.ExclusionMemberships = nil
+		}
+		return nil
+	})
+}
+
 func (s *Store) Launch(id, actor, contractID string, deploymentIDs, environmentIDs []string, allocation []RunAllocation) (Experiment, error) {
 	return s.mutate(id, func(v *Experiment) error {
+		if len(v.OutcomeDecisions) > 0 {
+			return ErrConflict
+		}
 		contract := audienceContract(v, contractID)
 		if contract == nil || contract.ExperimentVersion != v.CurrentVersion || len(deploymentIDs) == 0 || len(deploymentIDs) != len(environmentIDs) || !validRunAllocation(*contract, allocation) {
 			return ErrInvalid

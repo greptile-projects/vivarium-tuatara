@@ -41,6 +41,14 @@ containment are retained as attempt history; containment stops new assignment wi
 any subject or deleting prior evidence. Guardrails use the launch-time plan revision, while every new
 assignment fails closed against current authoritative health for all launched deployments.
 
+When the plan's minimum evidence or a stop condition is reached, participants freeze analysis to
+the exact plan and run versions. The record retains segment effects, uncertainty, excluded evidence,
+guardrail outcomes, human- or agent-attributed interpretation, and dissent. A versioned outcome
+adopts a treatment, retains control, extends the test, or declares it inconclusive, then creates
+rollout, rollback, or follow-up work alongside required retirement tasks. Cleanup is complete only
+after evidence links prove obsolete variants, targeting, credentials, and collection are removed;
+aggregated observations and review, release, and deployment provenance remain durable.
+
 ## Collaborative performance goals
 
 Repository participants publish complete, append-only performance-contract revisions through

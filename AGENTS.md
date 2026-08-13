@@ -365,6 +365,11 @@ whenever dependencies change or the web job fails before it starts.
   assignment without changing stable prior receipts or discarding attempt evidence. Runs retain their
   launch-time plan revision for guardrail evaluation, and assignment rechecks authoritative deployment
   state under the experiment mutation boundary, failing closed when that state is unhealthy or unreadable.
+  Threshold- or stop-bound analyses freeze segment effects, uncertainty, exclusions, guardrails,
+  attributed human/agent interpretation, and dissent to an exact plan/run revision. Versioned
+  adopt/control/extend/inconclusive outcomes create rollout, rollback, or follow-up work plus
+  mandatory retirement of variants, targeting, credentials, and collection; cleanup completes only
+  when every required task has a durable evidence link, while aggregate evidence and provenance remain.
 
   Repository collaborators define append-only performance contracts at
   `/repositories/{id}/performance` and the public `/repositories/{id}/performance-goals`
