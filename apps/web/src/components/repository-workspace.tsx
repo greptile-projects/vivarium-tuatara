@@ -168,7 +168,15 @@ export function RepositoryWorkspace({
                         </Link>
                       </h3>
                       <Badge>{repository.visibility}</Badge>
-                      {repository.upstream_repository_id && <Badge tone="info">fork</Badge>}
+                      <Link
+                        href={`/repositories/${repository.id}/feedback`}
+                        className="text-xs font-medium text-[var(--brand)] hover:underline"
+                      >
+                        Feedback
+                      </Link>
+                      {repository.upstream_repository_id && (
+                        <Badge tone="info">fork</Badge>
+                      )}
                     </div>
                     <p className="mt-1 text-xs text-[var(--muted)]">
                       {repository.default_branch} · created{" "}

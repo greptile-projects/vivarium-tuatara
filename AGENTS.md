@@ -373,6 +373,14 @@ whenever dependencies change or the web job fails before it starts.
   Agent experiment interpretation is admitted only through a current operator of an
   organization-approved agent and retains the human operator as the authenticated writer.
 
+  Product feedback at `/repositories/{id}/feedback` is a distinct needs channel for a project,
+  release, documented journey, or preview. Authenticated repository readers submit need,
+  desired outcome, frequency, impact, redacted evidence, related issue/experiment links, and
+  explicit audience, identity, evidence, contact, and follow-up preferences beneath
+  `$FEEDBACK_STORAGE_ROOT` (default `feedback`). Repository participants may discuss submissions;
+  organization-private records remain limited to their reporter and current project participants,
+  while API projection independently redacts reporter identity, contact, and evidence before reads.
+
   Repository collaborators define append-only performance contracts at
   `/repositories/{id}/performance` and the public `/repositories/{id}/performance-goals`
   API. Complete revisions name the measured surface, workloads, metric targets and baselines,

@@ -1,5 +1,15 @@
 @import "tailwindcss";
 
+@layer components {
+  .input {
+    @apply min-h-11 w-full rounded-lg border bg-white px-3 py-2 text-sm outline-none;
+    border-color: var(--line-strong);
+  }
+  .input:focus {
+    border-color: var(--brand);
+  }
+}
+
 :root {
   --canvas: #f4f5f1;
   --surface: #fbfcf8;
@@ -19,7 +29,8 @@
   --info-soft: #e8eef8;
   --radius-sm: 0.5rem;
   --radius-md: 0.75rem;
-  --shadow-card: 0 1px 2px rgb(20 28 23 / 0.04), 0 8px 24px rgb(20 28 23 / 0.035);
+  --shadow-card:
+    0 1px 2px rgb(20 28 23 / 0.04), 0 8px 24px rgb(20 28 23 / 0.035);
 }
 
 @theme inline {
@@ -41,7 +52,11 @@ html {
 body {
   margin: 0;
   background:
-    radial-gradient(circle at 80% 0%, rgb(222 235 225 / 0.45), transparent 28rem),
+    radial-gradient(
+      circle at 80% 0%,
+      rgb(222 235 225 / 0.45),
+      transparent 28rem
+    ),
     var(--canvas);
   color: var(--ink);
   font-family: var(--font-geist-sans), system-ui, sans-serif;

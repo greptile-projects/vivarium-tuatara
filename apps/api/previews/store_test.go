@@ -133,6 +133,23 @@ func TestDefinitionAndStaleProjection(t *testing.T) {
 	}
 }
 
+func TestFindResolvesOnlyWithinRepository(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := store.Create("repo-a", "pull-a", strings.Repeat("a", 40), "owner", strings.Repeat("b", 64), "run", Config{Version: 1, Access: AccessPolicy{Actions: []string{"feedback"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found, err := store.Find("repo-a", preview.ID); err != nil || found.ID != preview.ID {
+		t.Fatalf("same-repository find = %#v, %v", found, err)
+	}
+	if _, err := store.Find("repo-b", preview.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("foreign repository find error = %v", err)
+	}
+}
+
 func TestRepairAttemptReservationRetainsExactPreviewAndBuildRun(t *testing.T) {
 	config, digest, err := ParseConfig([]byte(`{"version":1,"image":"alpine:3.22","build":"true","output_path":"dist","resources":{"cpus":1,"memory_mb":128,"storage_mb":32,"timeout_seconds":30},"access":{"network":"none","data":"preview_artifacts","identity":"named_users","actions":["feedback"]}}`))
 	if err != nil {

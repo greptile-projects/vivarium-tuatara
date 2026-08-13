@@ -52,6 +52,22 @@ Agent interpretation requires a current operator of an organization-approved age
 human operator separately as the authenticated writer; a client-supplied agent name alone is never
 accepted as attribution.
 
+## Product feedback
+
+Authenticated users who can read a repository can submit broader product needs through
+`/repositories/{id}/feedback`; the repository workspace links to the corresponding `/feedback`
+page. A submission targets the project, a release, a documented journey, or a preview and records
+the need, desired outcome, frequency, impact, audience, provenance, contact preference, discussion,
+and append-only history.
+
+Evidence is accepted only when the reporter explicitly marks the supplied summary as redacted and
+assigns it an audience (`audience`, `maintainers`, or `reporter_only`). Reporter identity and direct
+contact use separate projection controls. Organization-private submissions require an organization
+repository and are visible only to the reporter and current repository participants. Related issue
+and product-experiment links are resolved within the same repository, but linked protected content
+is never copied into feedback projections. Records default beneath `$FEEDBACK_STORAGE_ROOT`
+(`feedback`).
+
 ## Collaborative performance goals
 
 Repository participants publish complete, append-only performance-contract revisions through
