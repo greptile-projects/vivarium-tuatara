@@ -151,21 +151,27 @@ type AssignmentContext struct {
 	Region         string   `json:"region,omitempty"`
 	Consented      bool     `json:"consented"`
 }
+type ExclusionMembership struct {
+	GroupDigest  string    `json:"group_digest"`
+	SubjectToken string    `json:"subject_token"`
+	ExpiresAt    time.Time `json:"expires_at"`
+}
 type Experiment struct {
-	ID                string              `json:"id"`
-	RepositoryID      string              `json:"repository_id"`
-	Source            Source              `json:"source"`
-	CurrentVersion    int                 `json:"current_version"`
-	Revisions         []Revision          `json:"revisions"`
-	Signals           []Signal            `json:"signals"`
-	Comments          []Comment           `json:"comments"`
-	Approvals         []Approval          `json:"approvals"`
-	Work              []WorkLink          `json:"work"`
-	AudienceContracts []AudienceContract  `json:"audience_contracts"`
-	AssignmentAudit   []AssignmentReceipt `json:"assignment_audit"`
-	Diagnostics       []Diagnostic        `json:"diagnostics"`
-	CreatedAt         time.Time           `json:"created_at"`
-	UpdatedAt         time.Time           `json:"updated_at"`
+	ID                   string                `json:"id"`
+	RepositoryID         string                `json:"repository_id"`
+	Source               Source                `json:"source"`
+	CurrentVersion       int                   `json:"current_version"`
+	Revisions            []Revision            `json:"revisions"`
+	Signals              []Signal              `json:"signals"`
+	Comments             []Comment             `json:"comments"`
+	Approvals            []Approval            `json:"approvals"`
+	Work                 []WorkLink            `json:"work"`
+	AudienceContracts    []AudienceContract    `json:"audience_contracts"`
+	AssignmentAudit      []AssignmentReceipt   `json:"assignment_audit"`
+	ExclusionMemberships []ExclusionMembership `json:"exclusion_memberships"`
+	Diagnostics          []Diagnostic          `json:"diagnostics"`
+	CreatedAt            time.Time             `json:"created_at"`
+	UpdatedAt            time.Time             `json:"updated_at"`
 }
 
 func (s *Store) ApproveAudience(id, actor string, expected int, input AudienceContract) (Experiment, error) {
@@ -248,16 +254,42 @@ func (s *Store) Assign(id, contractID, subject string, context AssignmentContext
 				receipt.Eligible, receipt.Reason = false, "unallocated"
 			} else {
 				receipt.Reason = "assigned"
+				v.ExclusionMemberships = append(v.ExclusionMemberships, ExclusionMembership{GroupDigest: s.groupDigest(v.RepositoryID, contract.MutualExclusionGroup), SubjectToken: s.groupSubjectToken(v.RepositoryID, contract.MutualExclusionGroup, subjectDigest), ExpiresAt: contract.ApprovedAt.Add(time.Duration(currentRevision(&v).DurationDays) * 24 * time.Hour)})
 			}
 		}
 		v.AssignmentAudit = append(v.AssignmentAudit, receipt)
 		out = v
-		return s.write(v)
+		if err := s.write(v); err != nil {
+			return err
+		}
+		s.scheduleCleanupAt(receipt.CreatedAt.Add(time.Duration(contract.RetentionDays) * 24 * time.Hour))
+		return nil
 	})
 	if err != nil {
 		return Experiment{}, AssignmentReceipt{}, err
 	}
 	return s.project(out), receipt, nil
+}
+
+func currentRevision(v *Experiment) Revision {
+	for i := len(v.Revisions) - 1; i >= 0; i-- {
+		if v.Revisions[i].Version == v.CurrentVersion {
+			return v.Revisions[i]
+		}
+	}
+	return Revision{}
+}
+
+func (s *Store) groupDigest(repositoryID, group string) string {
+	return s.protectedToken(repositoryID + ":group:" + group)
+}
+func (s *Store) groupSubjectToken(repositoryID, group, subjectDigest string) string {
+	return s.protectedToken(repositoryID + ":member:" + group + ":" + subjectDigest)
+}
+func (s *Store) protectedToken(value string) string {
+	h := hmac.New(sha256.New, s.subjectKey)
+	_, _ = h.Write([]byte(value))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func (s *Store) subjectDigest(repositoryID, subject string) string {
@@ -267,6 +299,7 @@ func (s *Store) subjectDigest(repositoryID, subject string) string {
 }
 
 func (s *Store) hasGroupAssignment(repositoryID, experimentID, group, digest string) (bool, error) {
+	groupDigest, subjectToken := s.groupDigest(repositoryID, group), s.groupSubjectToken(repositoryID, group, digest)
 	entries, err := os.ReadDir(s.root)
 	if err != nil {
 		return false, err
@@ -287,12 +320,8 @@ func (s *Store) hasGroupAssignment(repositoryID, experimentID, group, digest str
 				return false, err
 			}
 		}
-		groups := map[string]string{}
-		for _, c := range v.AudienceContracts {
-			groups[c.ID] = c.MutualExclusionGroup
-		}
-		for _, receipt := range v.AssignmentAudit {
-			if receipt.Eligible && receipt.VariantKey != "" && receipt.SubjectDigest == digest && groups[receipt.ContractID] == group {
+		for _, membership := range v.ExclusionMemberships {
+			if membership.ExpiresAt.After(s.now()) && membership.GroupDigest == groupDigest && membership.SubjectToken == subjectToken {
 				return true, nil
 			}
 		}
@@ -315,7 +344,47 @@ func (s *Store) pruneAssignments(v *Experiment) bool {
 	}
 	changed := len(next) != len(v.AssignmentAudit)
 	v.AssignmentAudit = next
+	members := make([]ExclusionMembership, 0, len(v.ExclusionMemberships))
+	for _, membership := range v.ExclusionMemberships {
+		if membership.ExpiresAt.After(now) {
+			members = append(members, membership)
+		}
+	}
+	changed = changed || len(members) != len(v.ExclusionMemberships)
+	v.ExclusionMemberships = members
 	return changed
+}
+
+func (s *Store) CleanupExpired() error {
+	return s.lock(func() error {
+		entries, err := os.ReadDir(s.root)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			v, err := s.read(strings.TrimSuffix(entry.Name(), ".json"))
+			if err != nil {
+				return err
+			}
+			if s.pruneAssignments(&v) {
+				if err = s.write(v); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+}
+
+func (s *Store) scheduleCleanupAt(deadline time.Time) {
+	delay := deadline.Sub(s.now())
+	if delay < 0 {
+		delay = 0
+	}
+	time.AfterFunc(delay, func() { _ = s.CleanupExpired() })
 }
 
 func loadOrCreateSubjectKey(root string) ([]byte, error) {
@@ -428,7 +497,42 @@ func New(root string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{root: root, subjectKey: key, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }}, nil
+	s := &Store{root: root, subjectKey: key, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }}
+	if err := s.schedulePersistedCleanup(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *Store) schedulePersistedCleanup() error {
+	return s.lock(func() error {
+		entries, err := os.ReadDir(s.root)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			v, err := s.read(strings.TrimSuffix(entry.Name(), ".json"))
+			if err != nil {
+				return err
+			}
+			if s.pruneAssignments(&v) {
+				if err = s.write(v); err != nil {
+					return err
+				}
+			}
+			retention := map[string]int{}
+			for _, c := range v.AudienceContracts {
+				retention[c.ID] = c.RetentionDays
+			}
+			for _, receipt := range v.AssignmentAudit {
+				s.scheduleCleanupAt(receipt.CreatedAt.Add(time.Duration(retention[receipt.ContractID]) * 24 * time.Hour))
+			}
+		}
+		return nil
+	})
 }
 func (s *Store) Create(repo, actor string, source Source, revision Revision, signals []Signal) (Experiment, error) {
 	var out Experiment
@@ -655,6 +759,7 @@ func (s *Store) List(repo string) ([]Experiment, error) {
 }
 func (s *Store) project(v Experiment) Experiment {
 	v.Diagnostics = nil
+	v.ExclusionMemberships = nil
 	if len(v.Revisions) == 0 {
 		return v
 	}

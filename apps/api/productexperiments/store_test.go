@@ -160,6 +160,46 @@ func TestMutualExclusionSpansRepositoryExperiments(t *testing.T) {
 	if err != nil || second.Eligible || second.Reason != "mutually_excluded" {
 		t.Fatalf("second=%#v %v", second, err)
 	}
+	_, firstAfter, err := s.Assign(a.ID, a.AudienceContracts[0].ID, "after-prune", context)
+	if err != nil || !firstAfter.Eligible {
+		t.Fatalf("first after prune=%#v %v", firstAfter, err)
+	}
+	raw, _ := s.read(a.ID)
+	raw.AssignmentAudit = nil
+	if err = s.write(raw); err != nil {
+		t.Fatal(err)
+	}
+	_, blocked, err := s.Assign(b.ID, b.AudienceContracts[0].ID, "after-prune", context)
+	if err != nil || blocked.Eligible || blocked.Reason != "mutually_excluded" {
+		t.Fatalf("membership after audit prune=%#v %v", blocked, err)
+	}
+}
+
+func TestScheduledCleanupRemovesInactiveAuditAtRest(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Now().Add(-48 * time.Hour)
+	s.now = func() time.Time { return now }
+	revision, signals := plan("available")
+	v, _ := s.Create("repo", "alice", Source{Kind: "release", ResourceID: "r", Label: "r"}, revision, signals)
+	commit := "0123456789012345678901234567890123456789"
+	work := WorkLink{VariantKeys: []string{"control", "treatment"}, OwnerType: "human", OwnerID: "alice", ProposalID: "p", TaskID: "t", PullRequestID: "pull", CommitID: commit, EventDefinitions: []string{"e@1"}, ExposureRules: []string{"rule"}, Privacy: "aggregate", RemovalPlan: "remove", CheckNames: []string{"check"}}
+	v, _ = s.LinkWork(v.ID, "alice", 1, work)
+	contract := AudienceContract{ReleaseID: "r", ReleaseCommitID: commit, VariantKeys: []string{"control", "treatment"}, Eligibility: []string{"member"}, RandomizationUnit: "user", MutualExclusionGroup: "g", Allocation: []Allocation{{VariantKey: "control", BasisPoints: 5000}, {VariantKey: "treatment", BasisPoints: 5000}}, Consent: "none", DataFields: []string{"assignment"}, RetentionDays: 1}
+	v, _ = s.ApproveAudience(v.ID, "alice", 1, contract)
+	v, _, _ = s.Assign(v.ID, v.AudienceContracts[0].ID, "subject", AssignmentContext{Eligibility: []string{"member"}})
+	s.now = func() time.Time { return time.Now() }
+	s.scheduleCleanupAt(time.Now().Add(20 * time.Millisecond))
+	deadline := time.Now().Add(time.Second)
+	for {
+		raw, _ := s.read(v.ID)
+		if len(raw.AssignmentAudit) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("inactive audit remains at rest: %#v", raw.AssignmentAudit)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func TestAssignmentRetentionPrunesReadsAndPersistence(t *testing.T) {
