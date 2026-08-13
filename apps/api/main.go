@@ -36,18 +36,19 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/outcomevalidations"
 	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/performanceevidence"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/performancegoals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/productexperiments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/productopportunities"
-	"github.com/greptile-projects/vivarium-tuatara/apps/api/roadmaps"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/relationships"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/roadmaps"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/securityadvisories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
@@ -384,12 +385,20 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	outcomeValidationRoot := os.Getenv("OUTCOME_VALIDATION_STORAGE_ROOT")
+	if outcomeValidationRoot == "" {
+		outcomeValidationRoot = "outcome-validations"
+	}
+	outcomeValidationStore, err := outcomevalidations.New(outcomeValidationRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -531,6 +540,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var feedbackStore *productfeedback.Store
 	var productOpportunityStore *productopportunities.Store
 	var roadmapStore *roadmaps.Store
+	var outcomeValidationStore *outcomevalidations.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -589,6 +599,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			productOpportunityStore = value
 		case *roadmaps.Store:
 			roadmapStore = value
+		case *outcomevalidations.Store:
+			outcomeValidationStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -720,6 +732,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && roadmapStore != nil && productOpportunityStore != nil {
 		registerRoadmapRoutes(mux, repositoryCatalog, authStore, roadmapStore, productOpportunityStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && roadmapStore != nil && productOpportunityStore != nil && outcomeValidationStore != nil {
+		registerOutcomeValidationRoutes(mux, repositoryCatalog, authStore, outcomeValidationStore, roadmapStore, productOpportunityStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && decisionStore != nil {
 		registerDecisionRoutes(mux, store, repositoryCatalog, authStore, userStore, decisionStore, activityStore, proposalStore, explanationStore, incidentStore, relationshipStore, organizationStore, workspaceStore, pullRequestStore, checkRunStore, releaseStore, deploymentStore)

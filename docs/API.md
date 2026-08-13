@@ -2761,3 +2761,19 @@ retains an authorized reader's tradeoff discussion. All mutations compare `expec
 return `409 roadmap_changed` after concurrent activity. Every `PUT` after initial publication must
 include `change_reason`; `replan_triggers` retain why scope, commitments, ownership, sequence, or
 targets changed instead of silently replacing the prior promise.
+
+## Roadmap outcome validation
+
+`POST /repositories/{id}/outcome-validations` freezes an accepted roadmap item and exact cited
+product-opportunity revision. Human repository participants select `technical_decision`, `prototype`,
+`documentation_concept`, or `product_experiment`, name an exact concept/research revision, and provide
+success and guardrail measures whose `source_ids` belong to that opportunity revision.
+
+Collaborators invite named users with `POST .../{validation_id}/invitations` to `preview` or `research`
+at the exact revision and an explicit expiry. Invitees can read only a validation naming them; this
+grants no repository access. They accept or decline at `POST .../consent`, and only an accepted, live,
+revision-matched invitation may append a finding at `POST .../findings`. Findings retain attributable
+accessibility needs, dissent, acceptance, and `valid`, `insufficient`, or `invalid` evidence quality.
+Collaborators append a `validated`, `revise`, `defer`, or `reject` conclusion at `POST .../conclusions`;
+conclusions never rewrite the roadmap. Mutations compare `expected_version` and return
+`409 validation_changed` on concurrent activity.
