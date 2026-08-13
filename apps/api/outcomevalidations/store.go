@@ -18,6 +18,8 @@ var ErrNotFound = errors.New("outcome validation not found")
 var ErrInvalid = errors.New("invalid outcome validation")
 var ErrConflict = errors.New("outcome validation changed")
 
+const maxFindings = 250
+
 type Measure struct {
 	Name      string   `json:"name"`
 	Kind      string   `json:"kind"`
@@ -177,6 +179,24 @@ func (s *Store) Get(repo, id string) (Validation, error) {
 	defer s.mu.Unlock()
 	return s.read(repo, id)
 }
+
+// GuestAccess reports whether a named participant currently has accepted,
+// revision-exact access. Repository collaborators are authorized separately.
+func (s *Store) GuestAccess(repo, id, participant string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, id)
+	if err != nil {
+		return false, err
+	}
+	now := s.now().UTC()
+	for _, invitation := range v.Invitations {
+		if invitation.ParticipantID == participant && invitation.Status == "accepted" && invitation.Revision == v.Revision && invitation.ExpiresAt.After(now) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
 func (s *Store) List(repo string) ([]Validation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -254,10 +274,23 @@ func (s *Store) Consent(repo, id, invite, actor, status string, expected int) (V
 	})
 }
 func (s *Store) Find(repo, id, invite, actor string, expected int, f Finding) (Validation, error) {
-	if !text(f.Body, 5000) || !one(f.Acceptance, "accept", "reject", "uncertain") || !one(f.EvidenceQuality, "valid", "insufficient", "invalid") {
+	if !text(f.Body, 5000) || len(f.Dissent) > 5000 || len(f.AccessibilityNeeds) > 20 || !one(f.Acceptance, "accept", "reject", "uncertain") || !one(f.EvidenceQuality, "valid", "insufficient", "invalid") {
+		return Validation{}, ErrInvalid
+	}
+	accessibilityBytes := 0
+	for _, need := range f.AccessibilityNeeds {
+		if !text(need, 500) {
+			return Validation{}, ErrInvalid
+		}
+		accessibilityBytes += len(need)
+	}
+	if accessibilityBytes > 5000 {
 		return Validation{}, ErrInvalid
 	}
 	return s.mutate(repo, id, expected, func(v *Validation) error {
+		if len(v.Findings) >= maxFindings {
+			return ErrInvalid
+		}
 		ok := false
 		for _, p := range v.Invitations {
 			ok = ok || (p.ID == invite && p.ParticipantID == actor && p.Status == "accepted" && p.Revision == v.Revision && p.ExpiresAt.After(s.now().UTC()))

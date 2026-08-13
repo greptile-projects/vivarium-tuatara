@@ -153,8 +153,10 @@ func registerOutcomeValidationRoutes(mux *http.ServeMux, repos *repositories.Sto
 		}
 		allowed := participant(actor, repo)
 		if !allowed {
-			for _, p := range v.Invitations {
-				allowed = allowed || (p.ParticipantID == actor.UserID)
+			allowed, e = store.GuestAccess(repo.ID, v.ID, actor.UserID)
+			if e != nil {
+				writeValidation(w, v, e, 200)
+				return
 			}
 		}
 		if !allowed {
