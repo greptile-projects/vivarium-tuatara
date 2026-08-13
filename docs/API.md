@@ -16,6 +16,16 @@ versions return `409`. Missing instrumentation, ineligible audiences, overlappin
 and changed assumptions remain attributable diagnostics. Plans grant no exposure, collection,
 release, or deployment authority.
 
+Collaborators attach completed implementation to the current plan with `POST
+/repositories/{id}/product-experiments/{experiment_id}/work`. The request freezes the plan
+version, declared variant keys, human or approved-agent task owner, optional ordinary
+proposal/task/session/workspace identities, ordinary pull ID, and its exact source commit. It
+also retains versioned event definitions, exposure/assignment rules, privacy classification,
+disable/removal plan, and repository check names. Every named check must already exist for that
+exact pull commit, and every supplied execution identity must match the pull's ordinary
+provenance. The link is review evidence only: existing repository permissions, reviews,
+required checks, merge policy, credentials, and deployment authority remain unchanged.
+
 ## Governed community proposals
 
 `POST /repositories/{id}/charter/continuity` and the organization equivalent record a pending
