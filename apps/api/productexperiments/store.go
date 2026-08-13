@@ -2,6 +2,7 @@
 package productexperiments
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -189,7 +190,13 @@ func (s *Store) ApproveAudience(id, actor string, expected int, input AudienceCo
 
 func (s *Store) Assign(id, contractID, subject string, context AssignmentContext) (Experiment, AssignmentReceipt, error) {
 	var receipt AssignmentReceipt
-	v, err := s.mutate(id, func(v *Experiment) error {
+	var out Experiment
+	err := s.lock(func() error {
+		v, err := s.read(id)
+		if err != nil {
+			return err
+		}
+		changed := s.pruneAssignments(&v)
 		var contract *AudienceContract
 		for i := range v.AudienceContracts {
 			if v.AudienceContracts[i].ID == contractID {
@@ -199,11 +206,14 @@ func (s *Store) Assign(id, contractID, subject string, context AssignmentContext
 		if contract == nil || contract.ExperimentVersion != v.CurrentVersion || strings.TrimSpace(subject) == "" {
 			return ErrConflict
 		}
-		digest := sha256.Sum256([]byte(contract.RandomizationSalt + ":" + subject))
-		subjectDigest := hex.EncodeToString(digest[:])
+		subjectDigest := s.subjectDigest(v.RepositoryID, subject)
 		for _, prior := range v.AssignmentAudit {
 			if prior.ContractID == contractID && prior.SubjectDigest == subjectDigest {
 				receipt = prior
+				out = v
+				if changed {
+					return s.write(v)
+				}
 				return nil
 			}
 		}
@@ -213,6 +223,17 @@ func (s *Store) Assign(id, contractID, subject string, context AssignmentContext
 		} else if contract.Consent == "explicit" && !context.Consented {
 			receipt.Eligible, receipt.Reason = false, "consent_required"
 		} else {
+			conflict, err := s.hasGroupAssignment(v.RepositoryID, v.ID, contract.MutualExclusionGroup, subjectDigest)
+			if err != nil {
+				return err
+			}
+			if conflict {
+				receipt.Eligible, receipt.Reason = false, "mutually_excluded"
+				v.AssignmentAudit = append(v.AssignmentAudit, receipt)
+				out = v
+				return s.write(v)
+			}
+			digest := sha256.Sum256([]byte(contract.RandomizationSalt + ":" + subject))
 			bucket := int(digest[0])<<8 | int(digest[1])
 			bucket %= 10000
 			cumulative := 0
@@ -230,9 +251,93 @@ func (s *Store) Assign(id, contractID, subject string, context AssignmentContext
 			}
 		}
 		v.AssignmentAudit = append(v.AssignmentAudit, receipt)
-		return nil
+		out = v
+		return s.write(v)
 	})
-	return v, receipt, err
+	if err != nil {
+		return Experiment{}, AssignmentReceipt{}, err
+	}
+	return s.project(out), receipt, nil
+}
+
+func (s *Store) subjectDigest(repositoryID, subject string) string {
+	h := hmac.New(sha256.New, s.subjectKey)
+	_, _ = h.Write([]byte(repositoryID + ":" + subject))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func (s *Store) hasGroupAssignment(repositoryID, experimentID, group, digest string) (bool, error) {
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		v, err := s.read(strings.TrimSuffix(entry.Name(), ".json"))
+		if err != nil {
+			return false, err
+		}
+		if v.RepositoryID != repositoryID || v.ID == experimentID {
+			continue
+		}
+		if s.pruneAssignments(&v) {
+			if err := s.write(v); err != nil {
+				return false, err
+			}
+		}
+		groups := map[string]string{}
+		for _, c := range v.AudienceContracts {
+			groups[c.ID] = c.MutualExclusionGroup
+		}
+		for _, receipt := range v.AssignmentAudit {
+			if receipt.Eligible && receipt.VariantKey != "" && receipt.SubjectDigest == digest && groups[receipt.ContractID] == group {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func (s *Store) pruneAssignments(v *Experiment) bool {
+	retention := map[string]time.Duration{}
+	for _, c := range v.AudienceContracts {
+		retention[c.ID] = time.Duration(c.RetentionDays) * 24 * time.Hour
+	}
+	next := make([]AssignmentReceipt, 0, len(v.AssignmentAudit))
+	now := s.now()
+	for _, receipt := range v.AssignmentAudit {
+		duration, ok := retention[receipt.ContractID]
+		if ok && receipt.CreatedAt.Add(duration).After(now) {
+			next = append(next, receipt)
+		}
+	}
+	changed := len(next) != len(v.AssignmentAudit)
+	v.AssignmentAudit = next
+	return changed
+}
+
+func loadOrCreateSubjectKey(root string) ([]byte, error) {
+	path := filepath.Join(root, ".subject-key")
+	key, err := os.ReadFile(path)
+	if err == nil {
+		if len(key) != 32 {
+			return nil, ErrInvalid
+		}
+		return key, nil
+	}
+	if !os.IsNotExist(err) {
+		return nil, err
+	}
+	key = make([]byte, 32)
+	if _, err = rand.Read(key); err != nil {
+		return nil, err
+	}
+	if err = os.WriteFile(path, key, 0600); err != nil {
+		return nil, err
+	}
+	return key, nil
 }
 
 func assignmentEligible(contract AudienceContract, context AssignmentContext) bool {
@@ -306,9 +411,10 @@ func validAudienceContract(v Experiment, x AudienceContract) bool {
 }
 
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root       string
+	mu         sync.Mutex
+	now        func() time.Time
+	subjectKey []byte
 }
 
 func New(root string) (*Store, error) {
@@ -318,7 +424,11 @@ func New(root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
-	return &Store{root: root, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }}, nil
+	key, err := loadOrCreateSubjectKey(root)
+	if err != nil {
+		return nil, err
+	}
+	return &Store{root: root, subjectKey: key, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }}, nil
 }
 func (s *Store) Create(repo, actor string, source Source, revision Revision, signals []Signal) (Experiment, error) {
 	var out Experiment
@@ -486,6 +596,7 @@ func (s *Store) mutate(key string, f func(*Experiment) error) (Experiment, error
 		if e != nil {
 			return e
 		}
+		s.pruneAssignments(&v)
 		if e = f(&v); e != nil {
 			return e
 		}
@@ -500,7 +611,14 @@ func (s *Store) mutate(key string, f func(*Experiment) error) (Experiment, error
 }
 func (s *Store) Get(key string) (Experiment, error) {
 	var out Experiment
-	err := s.lock(func() error { var e error; out, e = s.read(key); return e })
+	err := s.lock(func() error {
+		var e error
+		out, e = s.read(key)
+		if e == nil && s.pruneAssignments(&out) {
+			e = s.write(out)
+		}
+		return e
+	})
 	if err != nil {
 		return Experiment{}, err
 	}
@@ -520,6 +638,11 @@ func (s *Store) List(repo string) ([]Experiment, error) {
 			v, e := s.read(strings.TrimSuffix(entry.Name(), ".json"))
 			if e != nil {
 				return e
+			}
+			if s.pruneAssignments(&v) {
+				if e = s.write(v); e != nil {
+					return e
+				}
 			}
 			if v.RepositoryID == repo {
 				out = append(out, s.project(v))

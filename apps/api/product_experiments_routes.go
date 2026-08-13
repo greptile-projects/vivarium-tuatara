@@ -252,12 +252,17 @@ func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.S
 			writeAPIError(w, 403, "experiment_assignment_forbidden", "only the repository owner may admit assignments")
 			return
 		}
+		current, err := store.Get(r.PathValue("experiment_id"))
+		if err != nil || current.RepositoryID != repository.ID {
+			writeAPIError(w, 404, "product_experiment_not_found", "experiment not found")
+			return
+		}
 		var in productExperimentAssignmentInput
 		if decodeJSON(r, &in) != nil {
 			writeAPIError(w, 400, "invalid_request", "subject and consent state are required")
 			return
 		}
-		_, receipt, err := store.Assign(r.PathValue("experiment_id"), r.PathValue("contract_id"), in.Subject, in.Context)
+		_, receipt, err := store.Assign(current.ID, r.PathValue("contract_id"), in.Subject, in.Context)
 		if err != nil {
 			writeProductExperimentError(w, err)
 			return

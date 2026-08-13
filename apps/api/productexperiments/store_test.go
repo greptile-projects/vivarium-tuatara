@@ -3,6 +3,7 @@ package productexperiments
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 func plan(signalStatus string) (Revision, []Signal) {
@@ -134,5 +135,55 @@ func TestAudienceContractRejectsBiasedOrUnauthorizedCollection(t *testing.T) {
 	bad := AudienceContract{ReleaseID: "r", ReleaseCommitID: commit, VariantKeys: []string{"control", "treatment"}, Eligibility: []string{"collaborator"}, RandomizationUnit: "user", MutualExclusionGroup: "g", Allocation: []Allocation{{VariantKey: "control", BasisPoints: 9000}, {VariantKey: "treatment", BasisPoints: 9000}}, Consent: "none", DataFields: []string{"email"}, RetentionDays: 30}
 	if _, err := s.ApproveAudience(v.ID, "alice", 1, bad); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("biased/private contract = %v", err)
+	}
+}
+
+func TestMutualExclusionSpansRepositoryExperiments(t *testing.T) {
+	s, _ := New(t.TempDir())
+	revision, signals := plan("available")
+	commit := "0123456789012345678901234567890123456789"
+	create := func(label string) Experiment {
+		v, _ := s.Create("repo", "alice", Source{Kind: "release", ResourceID: label, Label: label}, revision, signals)
+		work := WorkLink{VariantKeys: []string{"control", "treatment"}, OwnerType: "human", OwnerID: "alice", ProposalID: "p", TaskID: "t", PullRequestID: "pull-" + label, CommitID: commit, EventDefinitions: []string{"e@1"}, ExposureRules: []string{"rule"}, Privacy: "aggregate", RemovalPlan: "remove", CheckNames: []string{"check"}}
+		v, _ = s.LinkWork(v.ID, "alice", 1, work)
+		contract := AudienceContract{ReleaseID: label, ReleaseCommitID: commit, VariantKeys: []string{"control", "treatment"}, Eligibility: []string{"member"}, RandomizationUnit: "user", MutualExclusionGroup: "onboarding", Allocation: []Allocation{{VariantKey: "control", BasisPoints: 5000}, {VariantKey: "treatment", BasisPoints: 5000}}, Consent: "none", DataFields: []string{"assignment"}, RetentionDays: 30}
+		v, _ = s.ApproveAudience(v.ID, "alice", 1, contract)
+		return v
+	}
+	a, b := create("r1"), create("r2")
+	context := AssignmentContext{Eligibility: []string{"member"}, Consented: true}
+	_, first, err := s.Assign(a.ID, a.AudienceContracts[0].ID, "subject", context)
+	if err != nil || !first.Eligible {
+		t.Fatalf("first=%#v %v", first, err)
+	}
+	_, second, err := s.Assign(b.ID, b.AudienceContracts[0].ID, "subject", context)
+	if err != nil || second.Eligible || second.Reason != "mutually_excluded" {
+		t.Fatalf("second=%#v %v", second, err)
+	}
+}
+
+func TestAssignmentRetentionPrunesReadsAndPersistence(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	revision, signals := plan("available")
+	v, _ := s.Create("repo", "alice", Source{Kind: "release", ResourceID: "r", Label: "r"}, revision, signals)
+	commit := "0123456789012345678901234567890123456789"
+	work := WorkLink{VariantKeys: []string{"control", "treatment"}, OwnerType: "human", OwnerID: "alice", ProposalID: "p", TaskID: "t", PullRequestID: "pull", CommitID: commit, EventDefinitions: []string{"e@1"}, ExposureRules: []string{"rule"}, Privacy: "aggregate", RemovalPlan: "remove", CheckNames: []string{"check"}}
+	v, _ = s.LinkWork(v.ID, "alice", 1, work)
+	contract := AudienceContract{ReleaseID: "r", ReleaseCommitID: commit, VariantKeys: []string{"control", "treatment"}, Eligibility: []string{"member"}, RandomizationUnit: "user", MutualExclusionGroup: "g", Allocation: []Allocation{{VariantKey: "control", BasisPoints: 5000}, {VariantKey: "treatment", BasisPoints: 5000}}, Consent: "none", DataFields: []string{"assignment"}, RetentionDays: 1}
+	v, _ = s.ApproveAudience(v.ID, "alice", 1, contract)
+	v, _, _ = s.Assign(v.ID, v.AudienceContracts[0].ID, "subject", AssignmentContext{Eligibility: []string{"member"}})
+	if len(v.AssignmentAudit) != 1 {
+		t.Fatal("missing receipt")
+	}
+	now = now.Add(24 * time.Hour)
+	v, err := s.Get(v.ID)
+	if err != nil || len(v.AssignmentAudit) != 0 {
+		t.Fatalf("get=%#v %v", v.AssignmentAudit, err)
+	}
+	raw, err := s.read(v.ID)
+	if err != nil || len(raw.AssignmentAudit) != 0 {
+		t.Fatalf("persisted=%#v %v", raw.AssignmentAudit, err)
 	}
 }
