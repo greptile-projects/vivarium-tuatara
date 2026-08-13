@@ -358,6 +358,11 @@ whenever dependencies change or the web job fails before it starts.
   challenges, and confirmations. Newer same-context trials mark claims stale when the
   revision, workload, or environment changes. Short-lived `performance:investigate`
   credentials bind to one selected packet and may cite only its trials and references.
+  Ordinary pull optimization evaluations bind a supported investigation, goal, selected baseline,
+  and candidate trial to the pull's exact synchronized revision. Public pull reads derive
+  confidence, metric/resource/cost changes, and correctness while retaining commands, scenarios,
+  authorship, and residual risks; source movement marks earlier evidence stale and grants no
+  operational authority.
   Repository release candidates at `/repositories/{id}/releases` freeze a
   verified commit, version, notes, creator, optional prior-release boundary,
   and the server-derived merged pulls, proposals, tasks, and contributors in

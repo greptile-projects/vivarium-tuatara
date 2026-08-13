@@ -10,12 +10,13 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/performanceevidence"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/performancegoals"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
-func registerPerformanceEvidenceRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *repositories.Store, credentials *auth.Store, goals *performancegoals.Store, releaseStore *releases.Store, trials *performanceevidence.Store) {
+func registerPerformanceEvidenceRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *repositories.Store, credentials *auth.Store, goals *performancegoals.Store, releaseStore *releases.Store, pulls *pullrequests.Store, trials *performanceevidence.Store) {
 	mux.HandleFunc("POST /repositories/{id}/performance-trials", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
 		if !ok {
@@ -95,6 +96,57 @@ func registerPerformanceEvidenceRoutes(mux *http.ServeMux, gitStore *storage.Sto
 			return
 		}
 		writeJSON(w, 200, map[string]any{"baseline": baseline, "current": current, "comparisons": trials.Compare(baseline, current)})
+	})
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/performance-evaluations", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		pull, e := pulls.Get(r.PathValue("id"), r.PathValue("pull_id"))
+		if e != nil {
+			writeAPIError(w, 404, "pull_request_not_found", "pull request not found")
+			return
+		}
+		if pull.Status != pullrequests.Open {
+			writeAPIError(w, 409, "performance_evaluation_stale", "performance evaluation requires the open pull's current revision")
+			return
+		}
+		var in performanceevidence.Evaluation
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a complete performance evaluation is required")
+			return
+		}
+		in.RepositoryID, in.PullRequestID, in.Revision, in.CreatedBy = pull.RepositoryID, pull.ID, pull.SourceCommitID, actor.UserID
+		if goal, err := goals.Get(in.GoalID); err != nil || goal.RepositoryID != pull.RepositoryID {
+			writeAPIError(w, 422, "performance_evaluation_invalid", "the goal is unavailable in this repository")
+			return
+		}
+		created, e := trials.CreateEvaluation(in)
+		if errors.Is(e, performanceevidence.ErrInvalid) {
+			writeAPIError(w, 422, "performance_evaluation_invalid", "use a supported diagnosis, valid baseline, exact candidate trial, correctness checks, commands, scenarios, and risks")
+			return
+		}
+		if e != nil {
+			writeAPIError(w, 500, "performance_evidence_unavailable", "evaluation could not be persisted")
+			return
+		}
+		writeJSON(w, 201, created)
+	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/performance-evaluations", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
+			return
+		}
+		pull, e := pulls.Get(r.PathValue("id"), r.PathValue("pull_id"))
+		if e != nil {
+			writeAPIError(w, 404, "pull_request_not_found", "pull request not found")
+			return
+		}
+		items, e := trials.ListEvaluations(pull.RepositoryID, pull.ID, pull.SourceCommitID)
+		if e != nil {
+			writeAPIError(w, 500, "performance_evidence_unavailable", "evaluations could not be read")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"evaluations": items})
 	})
 	mux.HandleFunc("GET /repositories/{id}/performance-investigations", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {

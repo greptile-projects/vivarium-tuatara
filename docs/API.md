@@ -2638,3 +2638,15 @@ finding stale when revision, workload, or environment changes.
 `POST .../{investigation-id}/agent-access` issues a 5-minute to 24-hour
 `performance:investigate` credential bound to that investigation. Its read and finding endpoints
 revalidate the issuer's participation and expose only selected, sanitized trials and references.
+
+## Performance optimization evaluation
+
+Collaborators attach candidate evidence to an ordinary open pull with `POST
+/repositories/{id}/pulls/{pull-id}/performance-evaluations`; repository readers inspect retained
+revisions with `GET` on the same collection. The write binds a supported investigation and goal,
+one investigation-selected baseline trial, and a candidate trial at the pull's exact synchronized
+source commit. It retains affected scenarios, reproduction commands, attributable correctness
+checks, and residual risks. The server derives compatible metric deltas, statistical confidence,
+CPU/memory/I/O and cost changes, and aggregate correctness. Source movement preserves earlier
+evidence as explicitly stale. These records are review evidence only and grant no operational
+authority.
