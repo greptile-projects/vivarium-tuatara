@@ -343,6 +343,14 @@ whenever dependencies change or the web job fails before it starts.
   human/agent plan through dependency-gated assignment, stock Git publication,
   guidance, task-run completion, exact-revision checks, review, ordered merges,
   proposal closure, and durable attribution assertions.
+  Product experiments at `/repositories/{id}/experiments` retain append-only hypothesis-plan
+  revisions sourced from proposals, issues, decisions, pulls, previews, or releases. Success and
+  guardrail metrics bind exact permitted product-signal versions; audience eligibility,
+  instrumentation gaps, overlapping contracts, and approvals invalidated by changed assumptions
+  remain explicit. Discussion and approval are version-bound and grant no rollout, collection,
+  release, or deployment authority. `$PRODUCT_EXPERIMENT_STORAGE_ROOT` defaults to
+  `product-experiments`.
+
   Repository collaborators define append-only performance contracts at
   `/repositories/{id}/performance` and the public `/repositories/{id}/performance-goals`
   API. Complete revisions name the measured surface, workloads, metric targets and baselines,

@@ -1,5 +1,21 @@
 # HTTP API contract
 
+## Product experiment contracts
+
+Repository participants use `POST /repositories/{id}/product-experiments` to open a plan from a
+`proposal`, `issue`, `decision`, `pull_request`, `preview`, or `release`. The request contains
+`source`, a complete `revision`, and `signals`. Revisions require a hypothesis, at least two
+variants, target audience, success and guardrail metrics, minimum evidence, duration, owners, stop
+conditions, assumptions, and rationale. Metrics bind an exact signal ID/version; signals declare
+their event, unit, privacy boundary, and `available`, `planned`, or `retired` status.
+
+`GET /repositories/{id}/product-experiments` lists plans and live diagnostics. Successor revisions
+are posted at `/{experiment_id}/revisions` with `expected_version`; discussion is appended at
+`/comments`, and version-bound `approve` or `request_changes` decisions at `/approvals`. Stale
+versions return `409`. Missing instrumentation, ineligible audiences, overlapping experiments,
+and changed assumptions remain attributable diagnostics. Plans grant no exposure, collection,
+release, or deployment authority.
+
 ## Governed community proposals
 
 `POST /repositories/{id}/charter/continuity` and the organization equivalent record a pending
