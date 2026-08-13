@@ -249,7 +249,7 @@ func registerPackageRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 			return
 		}
 		var config packages.InventoryConfig
-		if json.Unmarshal(object.Content, &config) != nil || config.Version != 1 || len(config.Dependencies) == 0 || len(config.Dependencies) > 500 || len(config.Lock) > 2000 {
+		if json.Unmarshal(object.Content, &config) != nil || config.Version != 1 || len(config.Dependencies) > 500 || len(config.Lock) > 2000 {
 			writeAPIError(w, 422, "invalid_dependency_manifest", "the dependency manifest and exact lock state are invalid")
 			return
 		}

@@ -361,6 +361,12 @@ whenever dependencies change or the web job fails before it starts.
   observations bind the same candidate evaluation to its exact release and deployment and compare
   observed trials with the candidate; pause, known-good restore, repair, and decision-revisit
   recommendations grant no merge, agent, or environment authority.
+  The connected performance browser journey carries a production latency concern through a versioned goal,
+  sanitized reproduction, agent diagnosis with affected-owner confirmation, exact-revision optimization,
+  performance-gated review, ordered staging/production promotion, and production validation. It retains an
+  uncertain noisy attempt, a correctness-blocked attempt, and a missed production target with containment
+  recommendations before a successful retry. Playwright isolates performance goal and evidence records beneath
+  `$PERFORMANCE_GOAL_STORAGE_ROOT` and `$PERFORMANCE_EVIDENCE_STORAGE_ROOT`.
   revision-aware code/runtime references, invited owners, cited claims, flame stacks,
   challenges, and confirmations. Newer same-context trials mark claims stale when the
   revision, workload, or environment changes. Short-lived `performance:investigate`
