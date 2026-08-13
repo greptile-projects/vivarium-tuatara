@@ -10,6 +10,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/productexperiments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
@@ -70,7 +71,7 @@ type productExperimentTaskInput struct {
 	Evidence        productexperiments.TaskEvidence `json:"evidence"`
 }
 
-func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *productexperiments.Store, proposals *proposals.Store, pulls *pullrequests.Store, checks *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store) {
+func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *productexperiments.Store, proposals *proposals.Store, pulls *pullrequests.Store, checks *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, orgs *organizations.Store) {
 	store.ConfigureDeploymentHealth(func(repositoryID string, deploymentIDs []string) (bool, error) {
 		if deploymentStore == nil {
 			return false, errors.New("deployment store unavailable")
@@ -469,7 +470,22 @@ func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.S
 			writeAPIError(w, 400, "invalid_request", "revision-bound analysis is required")
 			return
 		}
-		out, err := store.Analyze(current.ID, actor.UserID, in.Analysis)
+		var out productexperiments.Experiment
+		if in.Analysis.InterpretedByType == "agent" {
+			err = orgs.WithCurrentAgentOperator(in.Analysis.InterpretedByID, actor.UserID, func(organizationID string) error {
+				return catalog.WithOrganization(current.RepositoryID, organizationID, func() error {
+					var analyzeErr error
+					out, analyzeErr = store.AnalyzeAsAgent(current.ID, actor.UserID, in.Analysis.InterpretedByID, in.Analysis)
+					return analyzeErr
+				})
+			})
+			if errors.Is(err, organizations.ErrNotFound) || errors.Is(err, organizations.ErrInvalid) || errors.Is(err, repositories.ErrNotFound) {
+				writeAPIError(w, 403, "experiment_agent_operator_required", "the participant must operate the selected approved agent")
+				return
+			}
+		} else {
+			out, err = store.Analyze(current.ID, actor.UserID, in.Analysis)
+		}
 		if err != nil {
 			writeProductExperimentError(w, err)
 			return

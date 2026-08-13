@@ -81,6 +81,21 @@ func TestOutcomeRequiresThresholdAndRetiresExperimentResources(t *testing.T) {
 		t.Fatal("aggregated outcome evidence was discarded")
 	}
 }
+
+func TestApprovedAgentAnalysisRetainsAgentAndOperatorAttribution(t *testing.T) {
+	s, _ := New(t.TempDir())
+	revision, signals := plan("available")
+	v, _ := s.Create("repo", "alice", Source{Kind: "proposal", ResourceID: "p1", Label: "test"}, revision, signals)
+	v.RunAttempts = []RunAttempt{{ID: "run", ExperimentVersion: 1, Status: "stopped", Version: 1}}
+	if err := s.write(v); err != nil {
+		t.Fatal(err)
+	}
+	analysis := Analysis{RunID: "run", RunVersion: 1, SegmentEffects: []SegmentEffect{{Segment: "new users", Exposures: map[string]int{"control": 1, "treatment": 1}}}, GuardrailOutcomes: []string{"errors stayed below 2%"}, Interpretation: "Treatment improves completion.", Uncertainty: "small neutral effect remains possible"}
+	v, err := s.AnalyzeAsAgent(v.ID, "alice", "approved-agent", analysis)
+	if err != nil || v.Analyses[0].InterpretedByType != "agent" || v.Analyses[0].InterpretedByID != "approved-agent" || v.Analyses[0].CreatedBy != "alice" {
+		t.Fatalf("agent analysis attribution=%#v %v", v.Analyses, err)
+	}
+}
 func TestFollowUpOutcomeAllowsRelaunchOnlyAfterCleanup(t *testing.T) {
 	s, _ := New(t.TempDir())
 	s.ConfigureDeploymentHealth(func(string, []string) (bool, error) { return true, nil })
