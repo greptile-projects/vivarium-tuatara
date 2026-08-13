@@ -60,6 +60,16 @@ func TestWorkLinksFreezeReviewEvidenceAtPlanVersion(t *testing.T) {
 	if _, err = s.LinkWork(v.ID, "alice", 1, changed); !errors.Is(err, ErrConflict) {
 		t.Fatalf("changed evidence = %v", err)
 	}
+	if _, err = s.LinkWork(v.ID, "mallory", 1, work); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed retry actor = %v", err)
+	}
+	revision.Rationale = "successor plan"
+	if _, err = s.Revise(v.ID, 1, "alice", revision, signals); err != nil {
+		t.Fatalf("revise = %v", err)
+	}
+	if retried, retryErr := s.LinkWork(v.ID, "alice", 1, work); retryErr != nil || len(retried.Work) != 1 {
+		t.Fatalf("historical exact retry = %#v, %v", retried.Work, retryErr)
+	}
 	work.CommitID = "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
 	if _, err = s.LinkWork(v.ID, "alice", 1, work); !errors.Is(err, ErrConflict) {
 		t.Fatalf("moved pull = %v", err)

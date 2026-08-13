@@ -213,21 +213,21 @@ func (s *Store) Approve(id, actor, decision, note string, expected int) (Experim
 }
 func (s *Store) LinkWork(id, actor string, expected int, input WorkLink) (Experiment, error) {
 	return s.mutate(id, func(v *Experiment) error {
-		if expected != v.CurrentVersion || !validWorkLink(*v, input) {
-			if expected != v.CurrentVersion {
-				return ErrConflict
-			}
-			return ErrInvalid
-		}
 		for _, existing := range v.Work {
 			if existing.PullRequestID == input.PullRequestID {
 				requested := input
-				requested.ID, requested.ExperimentVersion, requested.LinkedBy, requested.CreatedAt = existing.ID, existing.ExperimentVersion, existing.LinkedBy, existing.CreatedAt
+				requested.ID, requested.ExperimentVersion, requested.LinkedBy, requested.CreatedAt = existing.ID, expected, actor, existing.CreatedAt
 				if reflect.DeepEqual(existing, requested) {
 					return nil
 				}
 				return ErrConflict
 			}
+		}
+		if expected != v.CurrentVersion || !validWorkLink(*v, input) {
+			if expected != v.CurrentVersion {
+				return ErrConflict
+			}
+			return ErrInvalid
 		}
 		input.ID, input.ExperimentVersion, input.LinkedBy, input.CreatedAt = idgen(), expected, actor, s.now()
 		v.Work = append(v.Work, input)
