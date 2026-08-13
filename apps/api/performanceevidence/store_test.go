@@ -166,6 +166,15 @@ func TestTrialSummaryComparisonAndSanitization(t *testing.T) {
 	}
 }
 
+func TestTrialRejectsDuplicateMetricAndUnit(t *testing.T) {
+	s, _ := New(t.TempDir())
+	duplicate := trial()
+	duplicate.Timings = append(duplicate.Timings, Timing{Metric: "latency", Unit: "ms", Values: []float64{100, 110, 120}})
+	if _, err := s.Create(duplicate); err != ErrInvalid {
+		t.Fatalf("duplicate timing error = %v", err)
+	}
+}
+
 func TestIncomparableTrialsExplainNoise(t *testing.T) {
 	s, _ := New(t.TempDir())
 	a, _ := s.Create(trial())

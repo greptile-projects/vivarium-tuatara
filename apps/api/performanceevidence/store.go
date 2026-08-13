@@ -633,10 +633,16 @@ func valid(v Trial) bool {
 			return false
 		}
 	}
+	timingKeys := map[string]bool{}
 	for _, t := range v.Timings {
 		if t.Metric == "" || t.Unit == "" || len(t.Values) != v.Sampling.Samples {
 			return false
 		}
+		key := t.Metric + "\x00" + t.Unit
+		if timingKeys[key] {
+			return false
+		}
+		timingKeys[key] = true
 		for _, n := range t.Values {
 			if math.IsNaN(n) || math.IsInf(n, 0) || n < 0 {
 				return false
