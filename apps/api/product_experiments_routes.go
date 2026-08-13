@@ -150,6 +150,15 @@ func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.S
 			writeAPIError(w, 400, "invalid_request", "revision-exact experiment work is required")
 			return
 		}
+		replayed, exactReplay, replayErr := store.ExistingWorkReplay(current.ID, actor.UserID, in.ExpectedVersion, in.Work)
+		if replayErr != nil {
+			writeProductExperimentError(w, replayErr)
+			return
+		}
+		if exactReplay {
+			writeProjected(w, replayed, 200)
+			return
+		}
 		pull, pullErr := pulls.Get(r.PathValue("id"), in.Work.PullRequestID)
 		if pullErr != nil || pull.SourceCommitID != in.Work.CommitID || (in.Work.ProposalID != "" && (pull.ProposalID == nil || *pull.ProposalID != in.Work.ProposalID)) || (in.Work.TaskID != "" && (pull.TaskID == nil || *pull.TaskID != in.Work.TaskID)) || (in.Work.SessionID != "" && (pull.TaskSessionID == nil || *pull.TaskSessionID != in.Work.SessionID)) || (in.Work.WorkspaceID != "" && pull.WorkspaceID != in.Work.WorkspaceID) {
 			writeAPIError(w, 422, "invalid_experiment_work", "the ordinary pull and exact execution links must match the declared commit")

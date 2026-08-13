@@ -215,9 +215,7 @@ func (s *Store) LinkWork(id, actor string, expected int, input WorkLink) (Experi
 	return s.mutate(id, func(v *Experiment) error {
 		for _, existing := range v.Work {
 			if existing.PullRequestID == input.PullRequestID {
-				requested := input
-				requested.ID, requested.ExperimentVersion, requested.LinkedBy, requested.CreatedAt = existing.ID, expected, actor, existing.CreatedAt
-				if reflect.DeepEqual(existing, requested) {
+				if exactWorkReplay(existing, actor, expected, input) {
 					return nil
 				}
 				return ErrConflict
@@ -233,6 +231,32 @@ func (s *Store) LinkWork(id, actor string, expected int, input WorkLink) (Experi
 		v.Work = append(v.Work, input)
 		return nil
 	})
+}
+
+// ExistingWorkReplay recognizes an already-persisted immutable request without
+// consulting mutable pull, task, assignment, or check projections. New work is
+// never admitted here; a reused pull identity with changed evidence conflicts.
+func (s *Store) ExistingWorkReplay(id, actor string, expected int, input WorkLink) (Experiment, bool, error) {
+	v, err := s.Get(id)
+	if err != nil {
+		return Experiment{}, false, err
+	}
+	for _, existing := range v.Work {
+		if existing.PullRequestID != input.PullRequestID {
+			continue
+		}
+		if exactWorkReplay(existing, actor, expected, input) {
+			return v, true, nil
+		}
+		return Experiment{}, false, ErrConflict
+	}
+	return v, false, nil
+}
+
+func exactWorkReplay(existing WorkLink, actor string, expected int, input WorkLink) bool {
+	requested := input
+	requested.ID, requested.ExperimentVersion, requested.LinkedBy, requested.CreatedAt = existing.ID, expected, actor, existing.CreatedAt
+	return reflect.DeepEqual(existing, requested)
 }
 
 func validWorkLink(v Experiment, x WorkLink) bool {

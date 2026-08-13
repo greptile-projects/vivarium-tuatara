@@ -70,6 +70,17 @@ func TestWorkLinksFreezeReviewEvidenceAtPlanVersion(t *testing.T) {
 	if retried, retryErr := s.LinkWork(v.ID, "alice", 1, work); retryErr != nil || len(retried.Work) != 1 {
 		t.Fatalf("historical exact retry = %#v, %v", retried.Work, retryErr)
 	}
+	if replayed, exact, replayErr := s.ExistingWorkReplay(v.ID, "alice", 1, work); replayErr != nil || !exact || len(replayed.Work) != 1 {
+		t.Fatalf("external-state-independent replay = %#v, %t, %v", replayed.Work, exact, replayErr)
+	}
+	if _, exact, replayErr := s.ExistingWorkReplay(v.ID, "mallory", 1, work); exact || !errors.Is(replayErr, ErrConflict) {
+		t.Fatalf("changed replay actor = %t, %v", exact, replayErr)
+	}
+	newWork := work
+	newWork.PullRequestID = "pull-2"
+	if _, exact, replayErr := s.ExistingWorkReplay(v.ID, "alice", 2, newWork); replayErr != nil || exact {
+		t.Fatalf("new work classified as replay = %t, %v", exact, replayErr)
+	}
 	work.CommitID = "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
 	if _, err = s.LinkWork(v.ID, "alice", 1, work); !errors.Is(err, ErrConflict) {
 		t.Fatalf("moved pull = %v", err)
