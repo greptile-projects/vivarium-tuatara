@@ -265,7 +265,7 @@ func (s *Store) Consent(repo, id, invite, actor, status string, expected int) (V
 			p := &v.Invitations[i]
 			initialResponse := p.Status == "invited" && (status == "accepted" || status == "declined")
 			withdrawal := p.Status == "accepted" && status == "withdrawn"
-			if p.ID == invite && p.ParticipantID == actor && (initialResponse || withdrawal) && p.ExpiresAt.After(s.now().UTC()) {
+			if p.ID == invite && p.ParticipantID == actor && ((initialResponse && p.ExpiresAt.After(s.now().UTC())) || withdrawal) {
 				now := s.now().UTC()
 				p.Status = status
 				p.RespondedAt = &now

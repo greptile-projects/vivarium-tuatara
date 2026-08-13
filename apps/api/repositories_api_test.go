@@ -89,6 +89,29 @@ func TestPublicApplicationContractSupportsAccountAndPagination(t *testing.T) {
 	}
 }
 
+func TestRepositoryBoundAPIReadCannotCrossRepository(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	userID := "0123456789abcdef0123456789abcdef"
+	first, _ := catalog.Create(userID, "first-bound")
+	second, _ := catalog.Create(userID, "second-bound")
+	issued, err := credentials.IssueOrganizationAgent(userID, "bounded read", "11111111111111111111111111111111", "22222222222222222222222222222222", "33333333333333333333333333333333", first.ID, []string{"repositories:read"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repositories/{id}/bounded-read", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); ok {
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+first.ID+"/bounded-read", "", issued.Token, http.StatusNoContent).Body.Close()
+	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+second.ID+"/bounded-read", "", issued.Token, http.StatusNotFound).Body.Close()
+}
+
 func TestOwnedRepositoryLifecycleProvidesUsableGitRemote(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	identities, _ := users.New(t.TempDir())

@@ -71,6 +71,7 @@ func TestAcceptedParticipantCanWithdrawConsent(t *testing.T) {
 	v, _ = s.Invite("repo", v.ID, "owner", "guest", "research", "r1", now.Add(time.Hour), v.Version)
 	invite := v.Invitations[0].ID
 	v, _ = s.Consent("repo", v.ID, invite, "guest", "accepted", v.Version)
+	now = now.Add(2 * time.Hour)
 	v, err := s.Consent("repo", v.ID, invite, "guest", "withdrawn", v.Version)
 	if err != nil || v.Invitations[0].Status != "withdrawn" {
 		t.Fatalf("withdrawal = %#v, %v", v.Invitations[0], err)

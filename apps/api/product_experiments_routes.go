@@ -314,6 +314,7 @@ func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.S
 			writeAPIError(w, 422, "experiment_release_mismatch", "the contract must name an exact repository release")
 			return
 		}
+		in.Contract.ReleasePullRequestIDs = release.Inclusions.PullRequestIDs
 		out, err := store.ApproveAudience(current.ID, actor.UserID, in.ExpectedVersion, in.Contract)
 		if err != nil {
 			writeProductExperimentError(w, err)

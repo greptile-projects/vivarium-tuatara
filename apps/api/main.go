@@ -4001,12 +4001,23 @@ func authorizeRepositoryRead(w http.ResponseWriter, r *http.Request, store *repo
 	if writeRepositoryError(w, err) {
 		return auth.Credential{}, false, false
 	}
-	if repository.Visibility == repositories.Public {
-		return auth.Credential{}, false, true
+	presented := r.Header.Get("Authorization") != ""
+	if _, cookieErr := r.Cookie("vivarium_session"); cookieErr == nil {
+		presented = true
 	}
-	actor, authenticated, ok := authenticateOptionalRequest(w, r, authStore, "repositories:read", false)
+	actor, authenticated, ok := auth.Credential{}, false, true
+	if presented || repository.Visibility != repositories.Public {
+		actor, authenticated, ok = authenticateOptionalRequest(w, r, authStore, "repositories:read", false)
+	}
 	if !ok {
 		return auth.Credential{}, false, false
+	}
+	if authenticated && actor.RepositoryID != "" && actor.RepositoryID != id {
+		writeAPIError(w, 404, "repository_not_found", "repository not found")
+		return auth.Credential{}, false, false
+	}
+	if repository.Visibility == repositories.Public {
+		return actor, authenticated, true
 	}
 	if !authenticated {
 		writeAuthenticationRequired(w, false)

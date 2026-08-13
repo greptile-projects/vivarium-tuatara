@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -116,25 +117,26 @@ type Allocation struct {
 	BasisPoints int    `json:"basis_points"`
 }
 type AudienceContract struct {
-	ID                   string       `json:"id"`
-	ExperimentVersion    int          `json:"experiment_version"`
-	ReleaseID            string       `json:"release_id"`
-	ReleaseCommitID      string       `json:"release_commit_id"`
-	VariantKeys          []string     `json:"variant_keys"`
-	Eligibility          []string     `json:"eligibility"`
-	Exclusions           []string     `json:"exclusions"`
-	OrganizationIDs      []string     `json:"organization_ids,omitempty"`
-	Regions              []string     `json:"regions,omitempty"`
-	RandomizationUnit    string       `json:"randomization_unit"`
-	RandomizationSalt    string       `json:"-"`
-	MutualExclusionGroup string       `json:"mutual_exclusion_group"`
-	Allocation           []Allocation `json:"allocation"`
-	Consent              string       `json:"consent"`
-	DataFields           []string     `json:"data_fields"`
-	RetentionDays        int          `json:"retention_days"`
-	ApprovedBy           string       `json:"approved_by"`
-	ApprovedAt           time.Time    `json:"approved_at"`
-	RetiredAt            time.Time    `json:"retired_at,omitempty"`
+	ID                    string       `json:"id"`
+	ExperimentVersion     int          `json:"experiment_version"`
+	ReleaseID             string       `json:"release_id"`
+	ReleaseCommitID       string       `json:"release_commit_id"`
+	ReleasePullRequestIDs []string     `json:"-"`
+	VariantKeys           []string     `json:"variant_keys"`
+	Eligibility           []string     `json:"eligibility"`
+	Exclusions            []string     `json:"exclusions"`
+	OrganizationIDs       []string     `json:"organization_ids,omitempty"`
+	Regions               []string     `json:"regions,omitempty"`
+	RandomizationUnit     string       `json:"randomization_unit"`
+	RandomizationSalt     string       `json:"-"`
+	MutualExclusionGroup  string       `json:"mutual_exclusion_group"`
+	Allocation            []Allocation `json:"allocation"`
+	Consent               string       `json:"consent"`
+	DataFields            []string     `json:"data_fields"`
+	RetentionDays         int          `json:"retention_days"`
+	ApprovedBy            string       `json:"approved_by"`
+	ApprovedAt            time.Time    `json:"approved_at"`
+	RetiredAt             time.Time    `json:"retired_at,omitempty"`
 }
 type AssignmentReceipt struct {
 	ID            string    `json:"id"`
@@ -953,7 +955,7 @@ func validAudienceContract(v Experiment, x AudienceContract) bool {
 		}
 	}
 	for _, work := range v.Work {
-		if work.ExperimentVersion == v.CurrentVersion && work.CommitID == x.ReleaseCommitID {
+		if work.ExperimentVersion == v.CurrentVersion && (work.CommitID == x.ReleaseCommitID || slices.Contains(x.ReleasePullRequestIDs, work.PullRequestID)) {
 			workCommit = true
 		}
 	}
