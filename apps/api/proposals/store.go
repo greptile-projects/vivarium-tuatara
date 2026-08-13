@@ -71,6 +71,8 @@ type ReasoningOrigin struct {
 	OrganizationID       string                     `json:"organization_id,omitempty"`
 	MandateID            string                     `json:"mandate_id,omitempty"`
 	OpportunityID        string                     `json:"opportunity_id,omitempty"`
+	RoadmapItemID        string                     `json:"roadmap_item_id,omitempty"`
+	RoadmapVersion       int                        `json:"roadmap_version,omitempty"`
 }
 
 type ReasoningItem struct {
@@ -369,8 +371,9 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 	isDecision := validID(input.Origin.DecisionID) && input.Origin.CommitmentVersion > 0
 	isIssue := validID(input.Origin.IssueID) && input.Origin.IssueVersion > 0 && validID(input.Origin.ReproductionID)
 	isGovernance := validID(input.Origin.GovernanceProposalID) && validID(input.Origin.GovernanceReceiptID)
+	isRoadmap := strings.TrimSpace(input.Origin.RoadmapItemID) != "" && input.Origin.RoadmapVersion > 0 && strings.TrimSpace(input.Origin.OpportunityID) != ""
 	originCount := 0
-	for _, present := range []bool{isAssessment, isDecision, isIssue, isGovernance} {
+	for _, present := range []bool{isAssessment, isDecision, isIssue, isGovernance, isRoadmap} {
 		if present {
 			originCount++
 		}
@@ -402,8 +405,8 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 		if readErr != nil {
 			return Proposal{}, nil, readErr
 		}
-		if r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && ((isAssessment && r.Proposal.Reasoning.AssessmentID == input.Origin.AssessmentID) || (isDecision && r.Proposal.Reasoning.DecisionID == input.Origin.DecisionID && r.Proposal.Reasoning.CommitmentVersion == input.Origin.CommitmentVersion) || (isIssue && r.Proposal.Reasoning.IssueID == input.Origin.IssueID && r.Proposal.Reasoning.ReproductionID == input.Origin.ReproductionID) || (isGovernance && r.Proposal.Reasoning.GovernanceProposalID == input.Origin.GovernanceProposalID)) {
-			if ((isIssue || isGovernance) && !reflect.DeepEqual(*r.Proposal.Reasoning, input.Origin)) || r.Proposal.Title != title || r.Proposal.Body != body || len(r.Tasks) != len(input.Tasks) {
+		if r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && ((isAssessment && r.Proposal.Reasoning.AssessmentID == input.Origin.AssessmentID) || (isDecision && r.Proposal.Reasoning.DecisionID == input.Origin.DecisionID && r.Proposal.Reasoning.CommitmentVersion == input.Origin.CommitmentVersion) || (isIssue && r.Proposal.Reasoning.IssueID == input.Origin.IssueID && r.Proposal.Reasoning.ReproductionID == input.Origin.ReproductionID) || (isGovernance && r.Proposal.Reasoning.GovernanceProposalID == input.Origin.GovernanceProposalID) || (isRoadmap && r.Proposal.Reasoning.RoadmapItemID == input.Origin.RoadmapItemID && r.Proposal.Reasoning.RoadmapVersion == input.Origin.RoadmapVersion)) {
+			if ((isIssue || isGovernance || isRoadmap) && !reflect.DeepEqual(*r.Proposal.Reasoning, input.Origin)) || r.Proposal.Title != title || r.Proposal.Body != body || len(r.Tasks) != len(input.Tasks) {
 				return Proposal{}, nil, ErrImplementationConflict
 			}
 			for i, task := range r.Tasks {

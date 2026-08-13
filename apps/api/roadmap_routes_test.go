@@ -34,7 +34,7 @@ func TestRoadmapMutationsAcceptCookieOnlyIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	registerRoadmapRoutes(mux, repos, credentials, roadmapStore, opportunities)
+	registerRoadmapRoutes(mux, nil, repos, credentials, roadmapStore, opportunities, nil, nil, nil, nil, nil)
 	server := httptest.NewServer(mux)
 	defer server.Close()
 	revision := roadmaps.Revision{Goals: []string{"Continuous review"}, Capacity: "One team", Decisions: []roadmaps.OpportunityDecision{{OpportunityID: opportunity.ID, Version: 1, Outcome: "accepted", Reason: "High value", GoalFit: "Direct", Capacity: "Fits"}}, Items: []roadmaps.Item{{ID: "item-1", OpportunityID: opportunity.ID, Title: "Review continuity", OwnerIDs: []string{"0123456789abcdef0123456789abcdef"}, TargetHorizon: "Q4", SuccessMeasures: []string{"Fewer abandoned reviews"}, Position: 1, Status: "planned"}}}
@@ -59,5 +59,14 @@ func TestRoadmapMutationsAcceptCookieOnlyIdentity(t *testing.T) {
 	stored, _ := roadmapStore.Get(repo.ID)
 	if stored.Revisions[0].CreatedBy != "0123456789abcdef0123456789abcdef" || stored.Scenarios[0].ActorID != "0123456789abcdef0123456789abcdef" || stored.Comments[0].ActorID != "0123456789abcdef0123456789abcdef" {
 		t.Fatalf("cookie attribution = %#v", stored)
+	}
+}
+
+func TestRoadmapOutcomeValidationSeparatesDeliveryFromMeasuredCoverage(t *testing.T) {
+	if got := mapRoadmapEvidenceKind("delivery"); got == "coverage" {
+		t.Fatalf("delivery mapped to measurement coverage: %q", got)
+	}
+	if got := mapRoadmapEvidenceKind("measure_met"); got != "coverage" {
+		t.Fatalf("measure success mapping = %q", got)
 	}
 }

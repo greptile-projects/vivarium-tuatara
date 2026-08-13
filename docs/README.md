@@ -36,7 +36,12 @@ participants may be invited to the exact preview or bounded research revision; i
 explicit consent, expire, and grant no repository access. Findings retain accessibility needs, dissent,
 acceptance, and evidence quality. Conclusions can validate, revise, defer, or reject direction without
 changing earlier roadmap revisions. Records default beneath `$OUTCOME_VALIDATION_STORAGE_ROOT`
-(`outcome-validations`).
+(`outcome-validations`). An exact accepted roadmap item can also create an ordinary ordered proposal
+and human/agent task plan. Each task traces to its frozen user need and success measures; linked
+review, check, integration, release, and deployment evidence reports delivery
+back to the roadmap. Shipping alone leaves the item delivering. All success measures require retained
+measurement evidence before value is achieved, while changed assumptions, unresolved needs, policy
+conflicts, or failed measures require an explicit decision revisit.
 
 ## Product experiment plans
 
