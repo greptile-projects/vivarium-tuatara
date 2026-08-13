@@ -458,19 +458,20 @@ type CheckRequirement struct {
 // Git state. It is never persisted and computing it does not modify the
 // repository.
 type MergeReadiness struct {
-	Mergeable         bool                                 `json:"mergeable"`
-	CanMerge          bool                                 `json:"can_merge"`
-	RequiredApprovals int                                  `json:"required_approvals"`
-	Approvals         int                                  `json:"approvals"`
-	EvaluatedCommitID string                               `json:"evaluated_commit_id"`
-	RequiredChecks    []CheckRequirement                   `json:"required_checks"`
-	Source            BranchState                          `json:"source"`
-	Target            BranchState                          `json:"target"`
-	HasConflicts      bool                                 `json:"has_conflicts"`
-	Blockers          []ReadinessBlocker                   `json:"blockers"`
-	IntegrationQueue  *repositories.IntegrationQueuePolicy `json:"integration_queue,omitempty"`
-	CanEnqueue        bool                                 `json:"can_enqueue"`
-	PreviewAcceptance *acceptance.Evaluation               `json:"preview_acceptance,omitempty"`
+	Mergeable               bool                                   `json:"mergeable"`
+	CanMerge                bool                                   `json:"can_merge"`
+	RequiredApprovals       int                                    `json:"required_approvals"`
+	Approvals               int                                    `json:"approvals"`
+	EvaluatedCommitID       string                                 `json:"evaluated_commit_id"`
+	RequiredChecks          []CheckRequirement                     `json:"required_checks"`
+	Source                  BranchState                            `json:"source"`
+	Target                  BranchState                            `json:"target"`
+	HasConflicts            bool                                   `json:"has_conflicts"`
+	Blockers                []ReadinessBlocker                     `json:"blockers"`
+	IntegrationQueue        *repositories.IntegrationQueuePolicy   `json:"integration_queue,omitempty"`
+	CanEnqueue              bool                                   `json:"can_enqueue"`
+	PreviewAcceptance       *acceptance.Evaluation                 `json:"preview_acceptance,omitempty"`
+	PerformanceRequirements []performanceevidence.MergeRequirement `json:"performance_requirements"`
 }
 
 type commentRecord struct {
@@ -1606,6 +1607,7 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 		if performanceErr != nil {
 			return MergeReadiness{}, performanceErr
 		}
+		report.PerformanceRequirements = requirements
 		for _, requirement := range requirements {
 			if requirement.Status != "passed" {
 				addBlocker("performance_"+requirement.Status, fmt.Sprintf("performance goal %q: %s", requirement.GoalID, requirement.Message))

@@ -83,6 +83,32 @@ func registerPerformanceEvidenceRoutes(mux *http.ServeMux, gitStore *storage.Sto
 			writeAPIError(w, 422, "performance_release_invalid", "deployment must carry the same attested release candidate")
 			return
 		}
+		evaluation, e := trials.FindEvaluation(in.RepositoryID, in.CandidateEvaluationID)
+		if e != nil {
+			writeAPIError(w, 422, "performance_release_invalid", "candidate evaluation is unavailable")
+			return
+		}
+		repository, e := gitStore.Open(in.RepositoryID)
+		if e != nil {
+			writeAPIError(w, 503, "performance_release_unavailable", "release ancestry could not be verified")
+			return
+		}
+		ancestry, e := repository.ListCommitAncestry(storage.ObjectID(in.CommitID))
+		if e != nil {
+			writeAPIError(w, 422, "performance_release_invalid", "release ancestry could not be verified")
+			return
+		}
+		containsCandidate := false
+		for _, commit := range ancestry {
+			if string(commit.ID) == evaluation.Revision {
+				containsCandidate = true
+				break
+			}
+		}
+		if !containsCandidate {
+			writeAPIError(w, 422, "performance_release_invalid", "release must contain the evaluated candidate revision")
+			return
+		}
 		created, e := trials.CreateReleaseObservation(in)
 		if e != nil {
 			writeAPIError(w, 422, "performance_release_invalid", "observed evidence must match the attested candidate goal and revision")

@@ -247,6 +247,35 @@ func TestRecordedDependencyInventoryDerivesExactVisibleConsumer(t *testing.T) {
 	}
 }
 
+func TestRecordedDependencyInventoryAcceptsRepositoryWithoutPackages(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	packageStore, _ := packages.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, nil, nil, packageStore))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "empty-inventory-owner")
+	var repository repositories.Repository
+	decodeResponse(t, authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"standalone"}`, owner.Credential.Token, http.StatusCreated), &repository)
+	repo, _ := gitStore.Open(repository.ID)
+	manifest, _ := repo.WriteObject(storage.BlobObject, []byte(`{"version":1,"dependencies":[],"lock":[]}`))
+	configTree := writeTestTree(t, repo, testTreeEntry{mode: "100644", name: "packages.json", id: manifest})
+	root := writeTestTree(t, repo, testTreeEntry{mode: "40000", name: ".vivarium", id: configTree})
+	commit := writeTestCommit(t, repo, root, nil, 1700000000, "no external packages")
+	if err := repo.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(commit)}); err != nil {
+		t.Fatal(err)
+	}
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/dependency-inventories", `{"commit_id":"`+string(commit)+`"}`, owner.Credential.Token, http.StatusCreated)
+	var projection struct {
+		Inventory packages.Inventory `json:"inventory"`
+	}
+	decodeResponse(t, response, &projection)
+	if projection.Inventory.CommitID != string(commit) || len(projection.Inventory.Entries) != 0 {
+		t.Fatalf("projection = %#v", projection)
+	}
+}
+
 func TestPackageDeploymentProjectionMarksOnlyLatestSuccessfulEnvironmentCurrent(t *testing.T) {
 	now := time.Unix(1700000000, 0).UTC()
 	promotions := []deployments.Promotion{

@@ -277,7 +277,7 @@ func (s *Store) ListUpdates(repositoryID string) ([]Update, error) {
 }
 
 func (s *Store) RecordInventory(value Inventory) (Inventory, error) {
-	if len(value.RepositoryID) != 32 || len(value.CommitID) != 40 || len(value.RecordedBy) != 32 || len(value.Entries) == 0 {
+	if len(value.RepositoryID) != 32 || len(value.CommitID) != 40 || len(value.RecordedBy) != 32 {
 		return Inventory{}, ErrInventoryInvalid
 	}
 	for _, entry := range value.Entries {

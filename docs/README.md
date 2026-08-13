@@ -43,6 +43,12 @@ restoring a known-good release, opening ordinary repair work, or revisiting a de
 regress or remain uncertain; execution stays behind existing deployment, recovery, review, check,
 and merge authority.
 
+The connected browser journey proves the complete concern-to-outcome trail through public API and rendered
+performance/pull surfaces. It deliberately retains a noisy benchmark retry, a correctness-blocked evaluation,
+ordered staging and production promotion, a missed production target with containment recommendations, and a
+successful production remeasurement, all bound to the same goal, diagnosis, candidate revision, release, and
+deployment evidence.
+
 ## Governed community decisions
 
 The `/governance` workspace turns an active repository or organization charter decision class
