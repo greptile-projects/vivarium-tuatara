@@ -724,7 +724,7 @@ func (s *Store) CreateReleaseObservation(v ReleaseObservation) (ReleaseObservati
 		return v, ErrInvalid
 	}
 	observed, e := s.read(v.ObservedTrialID)
-	if e != nil || observed.RepositoryID != v.RepositoryID || observed.GoalID != ev.GoalID || v.CommitID != ev.Revision || v.GoalID != ev.GoalID || v.ReleaseID == "" || v.DeploymentID == "" || v.CreatedBy == "" {
+	if e != nil || observed.RepositoryID != v.RepositoryID || observed.GoalID != ev.GoalID || observed.Source.Revision != ev.Revision || v.CommitID != ev.Revision || v.GoalID != ev.GoalID || v.ReleaseID == "" || v.DeploymentID == "" || v.CreatedBy == "" {
 		return v, ErrInvalid
 	}
 	baseline, e := s.read(ev.CandidateTrialID)

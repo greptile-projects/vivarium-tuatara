@@ -299,4 +299,14 @@ func TestReleaseObservationPreservesCandidateChainAndRecommendsGovernedRecovery(
 	if err != nil || record.State != "regressed" || len(record.RecommendedActions) != 4 {
 		t.Fatalf("observation = %+v, %v", record, err)
 	}
+	unrelated := observed
+	unrelated.Source.Revision = "2234567890123456789012345678901234567890"
+	unrelatedTrial, err := s.Create(unrelated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.CreateReleaseObservation(ReleaseObservation{RepositoryID: "repo", ReleaseID: "release", DeploymentID: "deployment", GoalID: "goal", CandidateEvaluationID: ev.ID, ObservedTrialID: unrelatedTrial.ID, CommitID: candidate.Source.Revision, Assumptions: []string{"traffic mix unchanged"}, CreatedBy: "owner"})
+	if err != ErrInvalid {
+		t.Fatalf("unrelated observed revision error = %v", err)
+	}
 }
