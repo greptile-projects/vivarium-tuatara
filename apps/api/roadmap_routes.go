@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -74,6 +75,61 @@ type roadmapLearningInput struct {
 }
 
 func registerRoadmapRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, credentials *auth.Store, store *roadmaps.Store, opportunities *productopportunities.Store, feedbackStore *productfeedback.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, checkStore *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store) {
+	validOpportunity := func(repoID, opportunityID string) bool {
+		if opportunities == nil {
+			return false
+		}
+		_, err := opportunities.Get(repoID, opportunityID)
+		return err == nil
+	}
+	validLearningResource := func(repoID, kind, resourceID string) bool {
+		switch strings.TrimSpace(kind) {
+		case "roadmap":
+			if store == nil {
+				return false
+			}
+			version, err := strconv.Atoi(resourceID)
+			roadmap, getErr := store.Get(repoID)
+			if err != nil || getErr != nil {
+				return false
+			}
+			for _, revision := range roadmap.Revisions {
+				if revision.Version == version {
+					return true
+				}
+			}
+			return false
+		case "proposal":
+			if proposalStore == nil {
+				return false
+			}
+			_, err := proposalStore.Get(repoID, resourceID)
+			return err == nil
+		case "pull", "review", "integration":
+			if pullStore == nil {
+				return false
+			}
+			_, err := pullStore.Get(repoID, resourceID)
+			return err == nil
+		case "release":
+			if releaseStore == nil {
+				return false
+			}
+			_, err := releaseStore.Get(repoID, resourceID)
+			return err == nil
+		case "deployment":
+			if deploymentStore == nil {
+				return false
+			}
+			_, err := deploymentStore.GetPromotion(repoID, resourceID)
+			return err == nil
+		default:
+			return false
+		}
+	}
+	validResultingWork := func(repoID, resourceID string) bool {
+		return validLearningResource(repoID, "proposal", resourceID) || validLearningResource(repoID, "pull", resourceID) || validLearningResource(repoID, "release", resourceID) || validLearningResource(repoID, "deployment", resourceID)
+	}
 	authorize := func(w http.ResponseWriter, r *http.Request) (auth.Credential, repositories.Repository, bool, bool) {
 		actor, _, ok := authorizeRepositoryRead(w, r, repos, credentials, r.PathValue("id"))
 		if !ok {
@@ -344,8 +400,16 @@ func registerRoadmapRoutes(mux *http.ServeMux, git *storage.Store, repos *reposi
 			writeAPIError(w, 403, "learning_update_forbidden", "only repository participants may publish stakeholder updates")
 			return
 		}
+		if feedbackStore == nil {
+			writeAPIError(w, 503, "learning_feedback_unavailable", "feedback context is unavailable")
+			return
+		}
 		var in roadmapLearningInput
 		if decodeJSON(r, &in) != nil {
+			return
+		}
+		if !validOpportunity(repo.ID, in.OpportunityID) || !validLearningResource(repo.ID, in.ResourceKind, in.ResourceID) {
+			writeAPIError(w, 422, "learning_provenance_invalid", "the opportunity and inspectable resource must exist in this repository")
 			return
 		}
 		for _, fid := range in.FeedbackIDs {
@@ -361,6 +425,10 @@ func registerRoadmapRoutes(mux *http.ServeMux, git *storage.Store, repos *reposi
 	mux.HandleFunc("POST /repositories/{id}/roadmap/learning-responses", func(w http.ResponseWriter, r *http.Request) {
 		actor, repo, _, ok := authorize(w, r)
 		if !ok || !requireIdentity(w, actor) {
+			return
+		}
+		if feedbackStore == nil {
+			writeAPIError(w, 503, "learning_feedback_unavailable", "feedback context is unavailable")
 			return
 		}
 		var in roadmapLearningInput
@@ -387,6 +455,16 @@ func registerRoadmapRoutes(mux *http.ServeMux, git *storage.Store, repos *reposi
 		var in roadmapLearningInput
 		if decodeJSON(r, &in) != nil {
 			return
+		}
+		if !validOpportunity(repo.ID, in.OpportunityID) {
+			writeAPIError(w, 422, "learning_provenance_invalid", "the opportunity must exist in this repository")
+			return
+		}
+		for _, resourceID := range in.ResultingWorkIDs {
+			if !validResultingWork(repo.ID, resourceID) {
+				writeAPIError(w, 422, "learning_provenance_invalid", "resulting work must exist in this repository")
+				return
+			}
 		}
 		v, e := store.RecordLearningReview(repo.ID, actor.UserID, in.ExpectedVersion, roadmaps.LearningReview{OpportunityID: in.OpportunityID, Promised: in.Promised, Observed: in.Observed, Lessons: in.Lessons, Dissent: in.Dissent, Disposition: in.Disposition, Rationale: in.Rationale, ResultingWorkIDs: in.ResultingWorkIDs})
 		writeRoadmap(w, v, e, 201)
