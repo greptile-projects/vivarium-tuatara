@@ -31,6 +31,18 @@ revision or release-attested trials at `/repositories/{id}/performance-trials`, 
 workload, environment, sampling, timing variance, resource, trace/log/artifact, and cost evidence.
 Comparisons surface incompatible measurement conditions instead of presenting them as signal.
 
+Owners may publish merge-performance policies for a target branch, optionally narrowed by changed
+path or declared risk class. Each policy names current goals, an allowed regression percentage,
+minimum statistical confidence, and whether correctness must pass. Pull merge readiness evaluates
+the current exact-revision evaluation live, so missing, stale, incomparable, uncertain, incorrect,
+or regressed evidence blocks ordinary merge and queue admission.
+
+After integration, release observations bind that same evaluation revision to an immutable release,
+its exact deployment, and a release- or production-derived trial. The projection recommends pausing,
+restoring a known-good release, opening ordinary repair work, or revisiting a decision when results
+regress or remain uncertain; execution stays behind existing deployment, recovery, review, check,
+and merge authority.
+
 ## Governed community decisions
 
 The `/governance` workspace turns an active repository or organization charter decision class

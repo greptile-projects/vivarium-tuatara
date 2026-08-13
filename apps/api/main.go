@@ -657,7 +657,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	if authStore != nil && repositoryCatalog != nil && performanceGoalStore != nil {
 		registerPerformanceGoalRoutes(mux, repositoryCatalog, authStore, performanceGoalStore)
 		if performanceEvidenceStore != nil && store != nil {
-			registerPerformanceEvidenceRoutes(mux, store, repositoryCatalog, authStore, performanceGoalStore, releaseStore, pullRequestStore, performanceEvidenceStore)
+			pullRequestStore.ConfigurePerformanceEvidence(performanceEvidenceStore)
+			registerPerformanceEvidenceRoutes(mux, store, repositoryCatalog, authStore, performanceGoalStore, releaseStore, deploymentStore, pullRequestStore, performanceEvidenceStore)
 		}
 	}
 	if authStore != nil && repositoryCatalog != nil && decisionStore != nil {
