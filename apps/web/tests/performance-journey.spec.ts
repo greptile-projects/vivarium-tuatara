@@ -109,6 +109,11 @@ test("a team turns production slowness into a verified agent-assisted improvemen
     await git(copy, "add", "service.txt"); await git(copy, "commit", "-m", "Cache stable catalog projection with agent guidance"); await git(copy, "push", "origin", "agent/catalog-cache");
     const candidateRevision = await git(copy, "rev-parse", "HEAD");
     const pull = await json(engineerPage, "post", `/repositories/${repository.id}/pulls`, engineer.headers, { title: "Reduce catalog latency", body: `Agent-assisted optimization from investigation ${investigation.id}; preserves the complete catalog constraint.`, source_branch: "agent/catalog-cache", target_branch: "main" }) as any;
+    const integrationCopy = await mkdtemp(join(tmpdir(), "vivarium-performance-integration-")); copies.push(integrationCopy);
+    await git(tmpdir(), "clone", `http://git:${ownerGit.token}@localhost:3000/git/${repository.id}.git`, integrationCopy);
+    await git(integrationCopy, "config", "user.name", "Affected Service Owner"); await git(integrationCopy, "config", "user.email", "owner@example.test");
+    await writeFile(join(integrationCopy, "integration.txt"), "Independent target-side integration context.\n");
+    await git(integrationCopy, "add", "integration.txt"); await git(integrationCopy, "commit", "-m", "Advance integration context"); await git(integrationCopy, "push", "origin", "main");
     await json(ownerPage, "post", `/repositories/${repository.id}/performance-merge-policies`, owner.headers, { branch: "main", paths: ["service.txt"], risk_classes: [], goal_ids: [goal.id], maximum_regression_percent: 0, minimum_confidence: 0.95, require_correctness: true });
 
     const noisy = await json(engineerPage, "post", `/repositories/${repository.id}/performance-trials`, engineer.headers, trial(candidateRevision, "benchmark", [160, 340, 180, 320, 200], 10, 1.0)) as any;
@@ -129,8 +134,10 @@ test("a team turns production slowness into a verified agent-assisted improvemen
     await ownerPage.getByRole("button", { name: "Approve" }).click();
     const merged = await json(ownerPage, "post", `/repositories/${repository.id}/pulls/${pull.id}/merge`, owner.headers, {}) as any;
     expect(merged.merge_commit_id).toBeTruthy();
-    const release = await json(ownerPage, "post", `/repositories/${repository.id}/releases`, owner.headers, { version: "v1.1.0", notes: "Agent-assisted, exact-revision catalog latency improvement.", commit_id: candidateRevision }) as any;
-    await json(ownerPage, "post", `/repositories/${repository.id}/dependency-inventories`, owner.headers, { commit_id: candidateRevision });
+    const integratedRevision = merged.merge_commit_id as string;
+    expect(integratedRevision).not.toBe(candidateRevision);
+    const release = await json(ownerPage, "post", `/repositories/${repository.id}/releases`, owner.headers, { version: "v1.1.0", notes: "Agent-assisted, exact-revision catalog latency improvement.", commit_id: integratedRevision }) as any;
+    await json(ownerPage, "post", `/repositories/${repository.id}/dependency-inventories`, owner.headers, { commit_id: integratedRevision });
     await json(ownerPage, "post", `/repositories/${repository.id}/releases/${release.id}/builds`, owner.headers, {});
     const builds = await eventually(() => json(ownerPage, "get", `/repositories/${repository.id}/releases/${release.id}/builds`, owner.headers), (value: any) => value.builds?.some((item: any) => item.state === "succeeded"), "release build succeeds") as any;
     const build = builds.builds.find((item: any) => item.state === "succeeded");
@@ -144,11 +151,11 @@ test("a team turns production slowness into a verified agent-assisted improvemen
     await promote(staging);
     const deployment = await promote(production);
 
-    const missed = await json(ownerPage, "post", `/repositories/${repository.id}/performance-trials`, owner.headers, trial(candidateRevision, "production_capture", [205, 207, 206, 208, 204], 9, 0.9)) as any;
-    const contained = await json(ownerPage, "post", `/repositories/${repository.id}/performance-release-observations`, owner.headers, { release_id: release.id, deployment_id: deployment.id, goal_id: goal.id, candidate_evaluation_id: evaluation.id, observed_trial_id: missed.id, commit_id: candidateRevision, assumptions: ["Production traffic represents the declared catalog workload."] }) as any;
+    const missed = await json(ownerPage, "post", `/repositories/${repository.id}/performance-trials`, owner.headers, trial(integratedRevision, "production_capture", [205, 207, 206, 208, 204], 9, 0.9)) as any;
+    const contained = await json(ownerPage, "post", `/repositories/${repository.id}/performance-release-observations`, owner.headers, { release_id: release.id, deployment_id: deployment.id, goal_id: goal.id, candidate_evaluation_id: evaluation.id, observed_trial_id: missed.id, commit_id: integratedRevision, assumptions: ["Production traffic represents the declared catalog workload."] }) as any;
     expect(contained).toMatchObject({ state: "regressed", recommended_actions: ["pause_rollout", "restore_known_good", "open_repair", "revisit_decision"] });
-    const recovered = await json(ownerPage, "post", `/repositories/${repository.id}/performance-trials`, owner.headers, trial(candidateRevision, "production_capture", [174, 176, 175, 173, 177], 7.8, 0.78)) as any;
-    const outcome = await json(ownerPage, "post", `/repositories/${repository.id}/performance-release-observations`, owner.headers, { release_id: release.id, deployment_id: deployment.id, goal_id: goal.id, candidate_evaluation_id: evaluation.id, observed_trial_id: recovered.id, commit_id: candidateRevision, assumptions: ["The warmed production cohort now matches the declared catalog workload."] }) as any;
+    const recovered = await json(ownerPage, "post", `/repositories/${repository.id}/performance-trials`, owner.headers, trial(integratedRevision, "production_capture", [174, 176, 175, 173, 177], 7.8, 0.78)) as any;
+    const outcome = await json(ownerPage, "post", `/repositories/${repository.id}/performance-release-observations`, owner.headers, { release_id: release.id, deployment_id: deployment.id, goal_id: goal.id, candidate_evaluation_id: evaluation.id, observed_trial_id: recovered.id, commit_id: integratedRevision, assumptions: ["The warmed production cohort now matches the declared catalog workload."] }) as any;
     expect(outcome).toMatchObject({ state: "passed", recommended_actions: [] });
 
     await ownerPage.goto(`/repositories/${repository.id}/performance`);
