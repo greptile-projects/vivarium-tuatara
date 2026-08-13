@@ -562,6 +562,31 @@ func (s *Store) Get(repo, pull, id string) (Preview, error) {
 	}
 	return p, nil
 }
+
+// Find resolves a preview identity within one repository without requiring a
+// caller to trust or already know its parent pull request identity.
+func (s *Store) Find(repo, id string) (Preview, error) {
+	if filepath.Base(repo) != repo || filepath.Base(id) != id || repo == "" || id == "" {
+		return Preview{}, ErrNotFound
+	}
+	pulls, err := os.ReadDir(filepath.Join(s.root, repo))
+	if errors.Is(err, os.ErrNotExist) {
+		return Preview{}, ErrNotFound
+	}
+	if err != nil {
+		return Preview{}, err
+	}
+	for _, pull := range pulls {
+		if !pull.IsDir() {
+			continue
+		}
+		preview, getErr := s.Get(repo, pull.Name(), id)
+		if getErr == nil && preview.RepositoryID == repo {
+			return preview, nil
+		}
+	}
+	return Preview{}, ErrNotFound
+}
 func (s *Store) List(repo, pull, currentRevision string) ([]Preview, error) {
 	entries, e := os.ReadDir(filepath.Join(s.root, repo, pull))
 	if errors.Is(e, os.ErrNotExist) {

@@ -112,6 +112,9 @@ func validate(x Item) bool {
 	if x.ContactPreference == "direct" && !validText(x.Contact, 500) {
 		return false
 	}
+	if x.ContactPreference != "direct" && strings.TrimSpace(x.Contact) != "" {
+		return false
+	}
 	for _, e := range x.Evidence {
 		if !validText(e.Name, 200) || !validText(e.Kind, 100) || !validText(e.Summary, 5000) || !validVisibility(e.Visibility) || !e.Redacted || len(e.URL) > 2000 {
 			return false

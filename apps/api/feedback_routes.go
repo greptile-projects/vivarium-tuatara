@@ -6,8 +6,10 @@ import (
 	"net/http"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	docscollections "github.com/greptile-projects/vivarium-tuatara/apps/api/docscollections"
 	productfeedback "github.com/greptile-projects/vivarium-tuatara/apps/api/feedback"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/productexperiments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
@@ -17,14 +19,14 @@ type feedbackCommentInput struct {
 	Body string `json:"body"`
 }
 
-func registerFeedbackRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *productfeedback.Store, releaseStore *releases.Store, issueStore *issues.Store, experiments *productexperiments.Store) {
+func registerFeedbackRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *productfeedback.Store, releaseStore *releases.Store, documentation *docscollections.Store, previewStore *previews.Store, issueStore *issues.Store, experiments *productexperiments.Store) {
 	project := func(x productfeedback.Item, viewer string, participant bool) productfeedback.Item {
 		reporterID := x.ReporterID
 		identityAllowed := viewer == reporterID || (participant && x.IdentityVisibility == "maintainers") || x.IdentityVisibility == "audience"
 		if !identityAllowed {
 			x.ReporterID = ""
 		}
-		if viewer != reporterID && !(participant && x.IdentityVisibility == "maintainers") {
+		if x.ContactPreference != "direct" || (viewer != reporterID && !(participant && x.IdentityVisibility == "maintainers")) {
 			x.Contact = ""
 		}
 		visible := x.Evidence[:0]
@@ -109,6 +111,26 @@ func registerFeedbackRoutes(mux *http.ServeMux, catalog *repositories.Store, cre
 			}
 			if _, e := releaseStore.Get(repo.ID, in.Target.ResourceID); e != nil {
 				writeAPIError(w, 400, "invalid_feedback_target", "release does not belong to this project")
+				return
+			}
+		}
+		if in.Target.Kind == "journey" {
+			if documentation == nil {
+				writeAPIError(w, 400, "invalid_feedback_target", "documented journey target is unavailable")
+				return
+			}
+			if _, e := documentation.Current(repo.ID, in.Target.ResourceID); e != nil {
+				writeAPIError(w, 400, "invalid_feedback_target", "documented journey does not belong to this project")
+				return
+			}
+		}
+		if in.Target.Kind == "preview" {
+			if previewStore == nil {
+				writeAPIError(w, 400, "invalid_feedback_target", "preview target is unavailable")
+				return
+			}
+			if _, e := previewStore.Find(repo.ID, in.Target.ResourceID); e != nil {
+				writeAPIError(w, 400, "invalid_feedback_target", "preview does not belong to this project")
 				return
 			}
 		}

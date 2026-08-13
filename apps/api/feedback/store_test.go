@@ -37,3 +37,15 @@ func TestFeedbackDiscussionIsAppendOnly(t *testing.T) {
 		t.Fatalf("discussion = %#v", x)
 	}
 }
+
+func TestFeedbackRejectsContactWithoutDirectConsent(t *testing.T) {
+	s, _ := New(t.TempDir())
+	in := Item{RepositoryID: "22222222222222222222222222222222", Target: Target{Kind: "project", Label: "Checkout"}, Need: "Need help", DesiredOutcome: "Recover", Frequency: "weekly", Impact: "Abandonment", Audience: "project", IdentityVisibility: "maintainers", ContactPreference: "discussion", Contact: "reporter@example.test"}
+	if _, err := s.Create(in, "11111111111111111111111111111111"); err != ErrInvalid {
+		t.Fatalf("non-direct contact error = %v", err)
+	}
+	in.ContactPreference = "direct"
+	if _, err := s.Create(in, "11111111111111111111111111111111"); err != nil {
+		t.Fatalf("direct contact rejected: %v", err)
+	}
+}
