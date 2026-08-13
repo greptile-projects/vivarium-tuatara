@@ -220,6 +220,20 @@ func (s *Store) Correct(repo, key, actor string, expected int, c Correction) (En
 	if !one(c.Field, "severity", "reach", "confidence", "duplicate_of") || !text(c.To, 300) || !text(c.Reason, 5000) {
 		return Entry{}, ErrInvalid
 	}
+	switch c.Field {
+	case "severity":
+		if !one(c.To, "low", "medium", "high", "critical") {
+			return Entry{}, ErrInvalid
+		}
+	case "reach":
+		if !one(c.To, "individual", "segment", "broad", "unknown") {
+			return Entry{}, ErrInvalid
+		}
+	case "confidence":
+		if !one(c.To, "low", "medium", "high", "uncertain") {
+			return Entry{}, ErrInvalid
+		}
+	}
 	return s.Mutate(repo, key, expected, func(v *Entry) error {
 		latest := &v.Revisions[len(v.Revisions)-1]
 		switch c.Field {

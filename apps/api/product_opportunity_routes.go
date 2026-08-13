@@ -5,7 +5,6 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	productfeedback "github.com/greptile-projects/vivarium-tuatara/apps/api/feedback"
@@ -42,6 +41,59 @@ func registerProductOpportunityRoutes(mux *http.ServeMux, repos *repositories.St
 		}
 		return actor, repo, participant, true
 	}
+	feedbackRevision := func(x productfeedback.Item) string {
+		return x.UpdatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
+	}
+	feedbackPermitted := func(x productfeedback.Item, repo repositories.Repository, viewer string, participant bool) bool {
+		return x.RepositoryID == repo.ID && (x.Audience != "organization_private" || participant || x.ReporterID == viewer)
+	}
+	resolveFeedbackSource := func(src productopportunities.Source) (productfeedback.Item, bool) {
+		feedbackID := src.ResourceID
+		if src.Kind != "feedback" {
+			feedbackID = src.ParentID
+		}
+		x, e := feedback.Get(feedbackID)
+		if e != nil {
+			return productfeedback.Item{}, false
+		}
+		if src.Kind == "feedback" {
+			return x, true
+		}
+		for _, evidence := range x.Evidence {
+			if evidence.ID == src.ResourceID && evidence.Kind == src.Kind {
+				return x, true
+			}
+		}
+		return productfeedback.Item{}, false
+	}
+	sourcePermitted := func(src productopportunities.Source, x productfeedback.Item, repo repositories.Repository, viewer string, participant bool) bool {
+		if !feedbackPermitted(x, repo, viewer, participant) {
+			return false
+		}
+		if src.Kind == "feedback" {
+			return true
+		}
+		for _, evidence := range x.Evidence {
+			if evidence.ID == src.ResourceID {
+				return viewer == x.ReporterID || evidence.Visibility == "audience" || (participant && evidence.Visibility == "maintainers")
+			}
+		}
+		return false
+	}
+	visible := func(v productopportunities.Entry, repo repositories.Repository, viewer string, participant bool) bool {
+		for _, revision := range v.Revisions {
+			for _, src := range revision.Sources {
+				if src.Kind != "feedback" && src.Kind != "support_signal" && src.Kind != "usage_evidence" {
+					continue
+				}
+				x, found := resolveFeedbackSource(src)
+				if !found || !sourcePermitted(src, x, repo, viewer, participant) {
+					return false
+				}
+			}
+		}
+		return true
+	}
 	refresh := func(v productopportunities.Entry, repo repositories.Repository, participant bool) productopportunities.Entry {
 		for ri := range v.Revisions {
 			for si := range v.Revisions[ri].Sources {
@@ -49,14 +101,14 @@ func registerProductOpportunityRoutes(mux *http.ServeMux, repos *repositories.St
 				src.Stale = false
 				src.StaleReason = ""
 				switch src.Kind {
-				case "feedback":
-					x, e := feedback.Get(src.ResourceID)
-					if e != nil || x.RepositoryID != repo.ID || (x.Audience == "organization_private" && !participant) {
+				case "feedback", "support_signal", "usage_evidence":
+					x, found := resolveFeedbackSource(*src)
+					if !found || x.RepositoryID != repo.ID {
 						src.Stale = true
-						src.StaleReason = "source is no longer permitted"
-					} else if src.Revision != x.UpdatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00") {
+						src.StaleReason = "source is unavailable"
+					} else if src.Revision != feedbackRevision(x) {
 						src.Stale = true
-						src.StaleReason = "feedback changed"
+						src.StaleReason = "source changed"
 					}
 				case "issue":
 					x, e := issueStore.Get(repo.ID, src.ResourceID)
@@ -108,9 +160,9 @@ func registerProductOpportunityRoutes(mux *http.ServeMux, repos *repositories.St
 	validate := func(repo repositories.Repository, participant bool, r productopportunities.Revision) bool {
 		for _, src := range r.Sources {
 			switch src.Kind {
-			case "feedback":
-				x, e := feedback.Get(src.ResourceID)
-				if e != nil || x.RepositoryID != repo.ID || (x.Audience == "organization_private" && !participant) || src.Revision != x.UpdatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00") {
+			case "feedback", "support_signal", "usage_evidence":
+				x, found := resolveFeedbackSource(src)
+				if !found || !sourcePermitted(src, x, repo, "", participant) || src.Revision != feedbackRevision(x) {
 					return false
 				}
 			case "issue":
@@ -140,16 +192,12 @@ func registerProductOpportunityRoutes(mux *http.ServeMux, repos *repositories.St
 				if !ok {
 					return false
 				}
-			case "support_signal", "usage_evidence":
-				if !participant || !strings.HasPrefix(src.Revision, "v") {
-					return false
-				}
 			}
 		}
 		return true
 	}
 	mux.HandleFunc("GET /repositories/{id}/product-opportunities", func(w http.ResponseWriter, r *http.Request) {
-		_, repo, participant, ok := authorize(w, r)
+		actor, repo, participant, ok := authorize(w, r)
 		if !ok {
 			return
 		}
@@ -158,10 +206,13 @@ func registerProductOpportunityRoutes(mux *http.ServeMux, repos *repositories.St
 			writeOpportunity(w, productopportunities.Entry{}, e, 500)
 			return
 		}
+		permitted := all[:0]
 		for i := range all {
-			all[i] = refresh(all[i], repo, participant)
+			if visible(all[i], repo, actor.UserID, participant) {
+				permitted = append(permitted, refresh(all[i], repo, participant))
+			}
 		}
-		writeJSON(w, 200, map[string]any{"opportunities": all})
+		writeJSON(w, 200, map[string]any{"opportunities": permitted})
 	})
 	mux.HandleFunc("POST /repositories/{id}/product-opportunities", func(w http.ResponseWriter, r *http.Request) {
 		actor, repo, participant, ok := authorize(w, r)
@@ -185,11 +236,14 @@ func registerProductOpportunityRoutes(mux *http.ServeMux, repos *repositories.St
 		writeOpportunity(w, out, e, 201)
 	})
 	mux.HandleFunc("GET /repositories/{id}/product-opportunities/{opportunity_id}", func(w http.ResponseWriter, r *http.Request) {
-		_, repo, participant, ok := authorize(w, r)
+		actor, repo, participant, ok := authorize(w, r)
 		if !ok {
 			return
 		}
 		v, e := store.Get(repo.ID, r.PathValue("opportunity_id"))
+		if e == nil && !visible(v, repo, actor.UserID, participant) {
+			e = productopportunities.ErrNotFound
+		}
 		if e == nil {
 			v = refresh(v, repo, participant)
 		}

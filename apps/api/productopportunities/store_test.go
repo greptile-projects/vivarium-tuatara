@@ -31,6 +31,15 @@ func TestOpportunityRetainsVersionsChallengesCorrectionsAndDetachments(t *testin
 	if v.Revisions[0].Confidence != "low" || v.Corrections[0].From != "medium" {
 		t.Fatalf("correction = %#v", v)
 	}
+	for _, invalid := range []Correction{
+		{Field: "severity", To: "urgent", Reason: "unsupported"},
+		{Field: "reach", To: "everyone", Reason: "unsupported"},
+		{Field: "confidence", To: "certain", Reason: "unsupported"},
+	} {
+		if _, err = s.Correct("repo", v.ID, "maintainer", v.Version, invalid); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("invalid correction %#v = %v", invalid, err)
+		}
+	}
 	v, err = s.DetachFeedback("repo", v.ID, "feedback-1", "reporter", v.Version)
 	if err != nil || v.Revisions[0].Sources[0].DetachedAt == nil {
 		t.Fatalf("detach = %#v, %v", v, err)
