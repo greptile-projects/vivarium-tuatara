@@ -2052,6 +2052,12 @@ visibly stale after same-context evidence changes revision, workload, or environ
 agent access is short-lived and bound to one packet, preventing unrelated restricted evidence from
 propagating through its citations.
 
+Supported performance diagnoses carry into ordinary pull review through exact-revision
+optimization evaluations. Each compares a candidate trial to an investigation-selected compatible
+baseline and presents server-derived confidence, timing/resource/cost deltas, correctness commands
+and outcomes, affected scenarios, authorship, and residual risks. Advancing the pull retains the
+earlier evaluation as stale.
+
 Local extension development may set `EXTENSION_DEVELOPMENT_ENDPOINTS=1` on the
 API process to verify sample services over HTTP at `localhost`, `127.0.0.1`, or
 `::1`. The exception is deliberately limited to loopback and is disabled by

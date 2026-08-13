@@ -92,6 +92,34 @@ type Comparison struct {
 	Comparable    bool    `json:"comparable"`
 	Reason        string  `json:"reason,omitempty"`
 }
+type CorrectnessCheck struct {
+	Name    string `json:"name"`
+	Command string `json:"command"`
+	Passed  bool   `json:"passed"`
+	Summary string `json:"summary"`
+}
+type Evaluation struct {
+	ID                string             `json:"id"`
+	RepositoryID      string             `json:"repository_id"`
+	PullRequestID     string             `json:"pull_request_id"`
+	Revision          string             `json:"revision"`
+	GoalID            string             `json:"goal_id"`
+	InvestigationID   string             `json:"investigation_id"`
+	BaselineTrialID   string             `json:"baseline_trial_id"`
+	CandidateTrialID  string             `json:"candidate_trial_id"`
+	AffectedScenarios []string           `json:"affected_scenarios"`
+	Commands          []string           `json:"commands"`
+	CorrectnessChecks []CorrectnessCheck `json:"correctness_checks"`
+	ResidualRisks     []string           `json:"residual_risks"`
+	CreatedBy         string             `json:"created_by"`
+	CreatedAt         time.Time          `json:"created_at"`
+	Comparisons       []Comparison       `json:"comparisons"`
+	Confidence        float64            `json:"confidence"`
+	ResourceChanges   map[string]float64 `json:"resource_changes"`
+	CostChangePercent float64            `json:"cost_change_percent"`
+	CorrectnessPassed bool               `json:"correctness_passed"`
+	Stale             bool               `json:"stale"`
+}
 type Reference struct {
 	Kind     string `json:"kind"`
 	ID       string `json:"id"`
@@ -457,6 +485,99 @@ func (s *Store) Compare(a, b Trial) []Comparison {
 		out = append(out, x)
 	}
 	return out
+}
+
+func (s *Store) CreateEvaluation(v Evaluation) (Evaluation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	baseline, e1 := s.read(v.BaselineTrialID)
+	candidate, e2 := s.read(v.CandidateTrialID)
+	inv, e3 := s.readInvestigation(v.InvestigationID)
+	if e1 != nil || e2 != nil || e3 != nil || v.RepositoryID == "" || v.PullRequestID == "" || len(v.Revision) != 40 || v.CreatedBy == "" || v.GoalID == "" || baseline.RepositoryID != v.RepositoryID || candidate.RepositoryID != v.RepositoryID || inv.RepositoryID != v.RepositoryID || candidate.Source.Revision != v.Revision || baseline.GoalID != v.GoalID || candidate.GoalID != v.GoalID || !contains(inv.TrialIDs, baseline.ID) || len(v.AffectedScenarios) == 0 || len(v.AffectedScenarios) > 20 || len(v.Commands) == 0 || len(v.Commands) > 20 || len(v.CorrectnessChecks) == 0 || len(v.CorrectnessChecks) > 50 || len(v.ResidualRisks) > 50 {
+		return Evaluation{}, ErrInvalid
+	}
+	for _, x := range append(append([]string{}, v.AffectedScenarios...), append(v.Commands, v.ResidualRisks...)...) {
+		if strings.TrimSpace(x) == "" || len(x) > 2000 {
+			return Evaluation{}, ErrInvalid
+		}
+	}
+	v.CorrectnessPassed = true
+	for _, check := range v.CorrectnessChecks {
+		if strings.TrimSpace(check.Name) == "" || strings.TrimSpace(check.Command) == "" || strings.TrimSpace(check.Summary) == "" {
+			return Evaluation{}, ErrInvalid
+		}
+		v.CorrectnessPassed = v.CorrectnessPassed && check.Passed
+	}
+	v.ID, _ = newID()
+	v.CreatedAt = s.now()
+	v.Comparisons = s.Compare(baseline, candidate)
+	v.Confidence = confidence(baseline, candidate)
+	v.ResourceChanges = map[string]float64{"cpu_seconds_percent": percent(baseline.Resources.CPUSeconds, candidate.Resources.CPUSeconds), "peak_memory_mb_percent": percent(baseline.Resources.PeakMemoryMB, candidate.Resources.PeakMemoryMB), "read_bytes_percent": percent(float64(baseline.Resources.ReadBytes), float64(candidate.Resources.ReadBytes)), "write_bytes_percent": percent(float64(baseline.Resources.WriteBytes), float64(candidate.Resources.WriteBytes))}
+	if baseline.Cost.Unit == candidate.Cost.Unit {
+		v.CostChangePercent = percent(baseline.Cost.Amount, candidate.Cost.Amount)
+	}
+	dir := filepath.Join(s.root, "evaluations", v.RepositoryID, v.PullRequestID)
+	if e := os.MkdirAll(dir, 0700); e != nil {
+		return Evaluation{}, e
+	}
+	body, _ := json.Marshal(v)
+	if e := os.WriteFile(filepath.Join(dir, v.ID+".json"), body, 0600); e != nil {
+		return Evaluation{}, e
+	}
+	return v, nil
+}
+func (s *Store) ListEvaluations(repositoryID, pullID, revision string) ([]Evaluation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dir := filepath.Join(s.root, "evaluations", repositoryID, pullID)
+	entries, e := os.ReadDir(dir)
+	if os.IsNotExist(e) {
+		return []Evaluation{}, nil
+	}
+	if e != nil {
+		return nil, e
+	}
+	out := []Evaluation{}
+	for _, entry := range entries {
+		body, er := os.ReadFile(filepath.Join(dir, entry.Name()))
+		var v Evaluation
+		if er != nil || json.Unmarshal(body, &v) != nil {
+			return nil, ErrNotFound
+		}
+		v.Stale = v.Revision != revision
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+func contains(xs []string, wanted string) bool {
+	for _, x := range xs {
+		if x == wanted {
+			return true
+		}
+	}
+	return false
+}
+func percent(old, current float64) float64 {
+	if old == 0 {
+		return 0
+	}
+	return (current - old) / old * 100
+}
+func confidence(a, b Trial) float64 {
+	if a.Workload != b.Workload || a.Environment != b.Environment || a.Sampling != b.Sampling || len(a.Timings) == 0 || len(b.Timings) == 0 {
+		return 0
+	}
+	x, y := a.Timings[0], b.Timings[0]
+	se := math.Sqrt(x.Variance/float64(len(x.Values)) + y.Variance/float64(len(y.Values)))
+	if se == 0 {
+		if x.Mean == y.Mean {
+			return 0
+		}
+		return 1
+	}
+	z := math.Abs(y.Mean-x.Mean) / se
+	return math.Erf(z / math.Sqrt2)
 }
 func (s *Store) read(id string) (Trial, error) {
 	if len(id) != 32 {

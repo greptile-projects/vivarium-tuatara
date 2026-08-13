@@ -1,9 +1,55 @@
 package performanceevidence
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func trial() Trial {
 	return Trial{RepositoryID: "repo", CreatedBy: "user", Mode: "benchmark", Source: Source{Kind: "revision", Revision: "0123456789012345678901234567890123456789"}, Workload: "catalog", Inputs: "fixture-v1", Environment: Environment{Name: "linux", OS: "linux", Architecture: "amd64", Runtime: "go"}, Sampling: Sampling{Warmup: 2, Samples: 3, Method: "wall clock, sequential"}, Timings: []Timing{{Metric: "latency", Unit: "ms", Values: []float64{10, 20, 30}}}, Cost: Cost{Amount: 1, Unit: "minute"}}
+}
+
+func TestOptimizationEvaluationDerivesReviewEvidenceAndStaleness(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := trial()
+	base.RepositoryID = "repo"
+	base.GoalID = "goal"
+	base.Source.Revision = strings.Repeat("a", 40)
+	base.Timings[0].Values = []float64{100, 102, 98}
+	base.Sampling.Samples = 3
+	base.Resources = ResourceProfile{CPUSeconds: 10, PeakMemoryMB: 100}
+	base.Cost = Cost{Amount: 2, Unit: "usd"}
+	baseline, err := store.Create(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, err := store.CreateInvestigation(Investigation{RepositoryID: "repo", Title: "hot path", TrialIDs: []string{baseline.ID}, CreatedBy: "owner"}, func(Reference) bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateInput := base
+	candidateInput.Source.Revision = strings.Repeat("b", 40)
+	candidateInput.Timings[0].Values = []float64{70, 71, 69}
+	candidateInput.Resources = ResourceProfile{CPUSeconds: 8, PeakMemoryMB: 110}
+	candidateInput.Cost = Cost{Amount: 1.5, Unit: "usd"}
+	candidate, err := store.Create(candidateInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evaluation, err := store.CreateEvaluation(Evaluation{RepositoryID: "repo", PullRequestID: "pull", Revision: candidate.Source.Revision, GoalID: "goal", InvestigationID: inv.ID, BaselineTrialID: baseline.ID, CandidateTrialID: candidate.ID, AffectedScenarios: []string{"search"}, Commands: []string{"go test ./..."}, CorrectnessChecks: []CorrectnessCheck{{Name: "tests", Command: "go test ./...", Passed: true, Summary: "passed"}}, ResidualRisks: []string{"cache memory"}, CreatedBy: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evaluation.Confidence < .99 || evaluation.Comparisons[0].ChangePercent >= -25 || evaluation.ResourceChanges["cpu_seconds_percent"] != -20 || evaluation.CostChangePercent != -25 || !evaluation.CorrectnessPassed {
+		t.Fatalf("unexpected derived evidence: %+v", evaluation)
+	}
+	items, err := store.ListEvaluations("repo", "pull", strings.Repeat("c", 40))
+	if err != nil || len(items) != 1 || !items[0].Stale {
+		t.Fatalf("expected stale retained evaluation: %+v %v", items, err)
+	}
 }
 
 func TestTrialSummaryComparisonAndSanitization(t *testing.T) {
