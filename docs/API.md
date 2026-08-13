@@ -2625,3 +2625,16 @@ benchmark logs are rejected.
 Comparisons are numeric only when workload, every environment field, warmup/sample count and
 method, metric, and unit match.
 Records default beneath `$PERFORMANCE_EVIDENCE_STORAGE_ROOT` (`performance-evidence`).
+
+## Performance diagnosis
+
+Repository readers list and inspect diagnoses at `GET
+/repositories/{id}/performance-investigations`; collaborators create one with `POST` by selecting
+retained trials, revision-aware code or runtime references, and owners to invite. Findings posted
+beneath `.../{investigation-id}/findings` require selected citations and retain confidence,
+optional bounded flame stacks, challenges, and confirmations. Newer same-context evidence marks a
+finding stale when revision, workload, or environment changes.
+
+`POST .../{investigation-id}/agent-access` issues a 5-minute to 24-hour
+`performance:investigate` credential bound to that investigation. Its read and finding endpoints
+revalidate the issuer's participation and expose only selected, sanitized trials and references.

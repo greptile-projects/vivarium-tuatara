@@ -105,3 +105,26 @@ func TestComparisonRequiresCompleteMeasurementConditions(t *testing.T) {
 		t.Fatalf("comparison = %+v", comparison)
 	}
 }
+
+func TestCitedInvestigationProjectsStalenessAndReview(t *testing.T) {
+	s, _ := New(t.TempDir())
+	base := trial()
+	base.ContextKind, base.ContextID = "benchmark", "catalog-list"
+	evidence, _ := s.Create(base)
+	inv, err := s.CreateInvestigation(Investigation{RepositoryID: "repo", Title: "Why is catalog slow?", TrialIDs: []string{evidence.ID}, References: []Reference{{Kind: "symbol", ID: "catalog-list", Revision: base.Source.Revision, Symbol: "List", Label: "catalog List"}}, InviteeIDs: []string{"owner"}, CreatedBy: "user"})
+	if err != nil { t.Fatal(err) }
+	inv, err = s.AddFinding(inv.ID, "agent:reader", Finding{Kind: "hypothesis", Body: "serialization dominates", CitationIDs: []string{evidence.ID, "catalog-list"}, Confidence: "medium", Flamegraph: []FlameStack{{Frames: []FlameFrame{{Name: "List"}, {Name: "Marshal"}}, Value: 62, Unit: "samples"}}})
+	if err != nil || len(inv.Findings) != 1 { t.Fatalf("finding = %+v, %v", inv, err) }
+	inv, err = s.Respond(inv.ID, inv.Findings[0].ID, "owner", "confirmed by trace", true)
+	if err != nil || len(inv.Findings[0].Confirmations) != 1 { t.Fatalf("response = %+v, %v", inv, err) }
+	newer := base; newer.Source.Revision = "1123456789012345678901234567890123456789"; newer.Workload = "catalog-large"; newer.Environment.Name = "linux-new"
+	if _, err = s.Create(newer); err != nil { t.Fatal(err) }
+	projected := s.ProjectStaleness(inv)
+	if !projected.Findings[0].Stale || len(projected.Findings[0].StaleReasons) != 3 { t.Fatalf("staleness = %+v", projected.Findings[0]) }
+}
+
+func TestInvestigationRejectsUnselectedCitations(t *testing.T) {
+	s, _ := New(t.TempDir()); evidence, _ := s.Create(trial())
+	inv, _ := s.CreateInvestigation(Investigation{RepositoryID:"repo",Title:"bounded",TrialIDs:[]string{evidence.ID},CreatedBy:"user"})
+	if _, err := s.AddFinding(inv.ID,"agent",Finding{Kind:"hypothesis",Body:"claim",CitationIDs:[]string{"restricted-trace"},Confidence:"low"}); err != ErrInvalid { t.Fatalf("error = %v",err) }
+}

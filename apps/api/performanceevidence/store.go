@@ -92,6 +92,62 @@ type Comparison struct {
 	Comparable    bool    `json:"comparable"`
 	Reason        string  `json:"reason,omitempty"`
 }
+type Reference struct {
+	Kind     string `json:"kind"`
+	ID       string `json:"id"`
+	Revision string `json:"revision,omitempty"`
+	Symbol   string `json:"symbol,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Label    string `json:"label"`
+}
+type FlameFrame struct {
+	Name string `json:"name"`
+	File string `json:"file,omitempty"`
+	Line int    `json:"line,omitempty"`
+}
+type FlameStack struct {
+	Frames []FlameFrame `json:"frames"`
+	Value  float64      `json:"value"`
+	Unit   string       `json:"unit"`
+}
+type Finding struct {
+	ID            string         `json:"id"`
+	Kind          string         `json:"kind"`
+	Body          string         `json:"body"`
+	CitationIDs   []string       `json:"citation_ids"`
+	Flamegraph    []FlameStack   `json:"flamegraph,omitempty"`
+	Confidence    string         `json:"confidence"`
+	CreatedBy     string         `json:"created_by"`
+	CreatedAt     time.Time      `json:"created_at"`
+	Challenges    []Challenge    `json:"challenges"`
+	Confirmations []Confirmation `json:"confirmations"`
+	Stale         bool           `json:"stale"`
+	StaleReasons  []string       `json:"stale_reasons,omitempty"`
+}
+type Challenge struct {
+	ID        string    `json:"id"`
+	Body      string    `json:"body"`
+	CreatedBy string    `json:"created_by"`
+	CreatedAt time.Time `json:"created_at"`
+}
+type Confirmation struct {
+	ID        string    `json:"id"`
+	Body      string    `json:"body"`
+	CreatedBy string    `json:"created_by"`
+	CreatedAt time.Time `json:"created_at"`
+}
+type Investigation struct {
+	ID           string      `json:"id"`
+	RepositoryID string      `json:"repository_id"`
+	Title        string      `json:"title"`
+	TrialIDs     []string    `json:"trial_ids"`
+	References   []Reference `json:"references"`
+	InviteeIDs   []string    `json:"invitee_ids"`
+	CredentialID string      `json:"credential_id,omitempty"`
+	CreatedBy    string      `json:"created_by"`
+	CreatedAt    time.Time   `json:"created_at"`
+	Findings     []Finding   `json:"findings"`
+}
 type Store struct {
 	root string
 	mu   sync.Mutex
@@ -106,6 +162,213 @@ func New(root string) (*Store, error) {
 		return nil, err
 	}
 	return &Store{root: root, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }}, nil
+}
+func newID() (string, error) {
+	var b [16]byte
+	if _, e := rand.Read(b[:]); e != nil {
+		return "", e
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+func (s *Store) CreateInvestigation(v Investigation) (Investigation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if v.RepositoryID == "" || strings.TrimSpace(v.Title) == "" || v.CreatedBy == "" || len(v.TrialIDs) == 0 || len(v.TrialIDs) > 20 || len(v.References) > 100 || len(v.InviteeIDs) > 50 {
+		return Investigation{}, ErrInvalid
+	}
+	seen := map[string]bool{}
+	for _, id := range v.TrialIDs {
+		t, e := s.read(id)
+		if e != nil || t.RepositoryID != v.RepositoryID || seen[id] {
+			return Investigation{}, ErrInvalid
+		}
+		seen[id] = true
+	}
+	for _, ref := range v.References {
+		if ref.Kind == "" || ref.ID == "" || ref.Label == "" || (ref.Revision != "" && len(ref.Revision) != 40) {
+			return Investigation{}, ErrInvalid
+		}
+	}
+	id, e := newID()
+	if e != nil {
+		return Investigation{}, e
+	}
+	v.ID = id
+	v.Title = strings.TrimSpace(v.Title)
+	v.CreatedAt = s.now()
+	v.Findings = []Finding{}
+	return v, s.writeInvestigation(v)
+}
+func (s *Store) GetInvestigation(id string) (Investigation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.readInvestigation(id)
+}
+func (s *Store) ListInvestigations(repositoryID string) ([]Investigation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dir := filepath.Join(s.root, "investigations")
+	es, e := os.ReadDir(dir)
+	if os.IsNotExist(e) {
+		return []Investigation{}, nil
+	}
+	if e != nil {
+		return nil, e
+	}
+	out := []Investigation{}
+	for _, x := range es {
+		v, er := s.readInvestigation(strings.TrimSuffix(x.Name(), ".json"))
+		if er != nil {
+			return nil, er
+		}
+		if v.RepositoryID == repositoryID {
+			out = append(out, v)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+func (s *Store) AddFinding(investigationID, actor string, v Finding) (Investigation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	x, e := s.readInvestigation(investigationID)
+	if e != nil {
+		return x, e
+	}
+	if actor == "" || (v.Kind != "hypothesis" && v.Kind != "comparison" && v.Kind != "uncertainty" && v.Kind != "conclusion") || strings.TrimSpace(v.Body) == "" || len(v.CitationIDs) == 0 || len(v.CitationIDs) > 50 || (v.Confidence != "low" && v.Confidence != "medium" && v.Confidence != "high") {
+		return x, ErrInvalid
+	}
+	allowed := map[string]bool{}
+	for _, id := range x.TrialIDs {
+		allowed[id] = true
+	}
+	for _, r := range x.References {
+		allowed[r.ID] = true
+	}
+	for _, id := range v.CitationIDs {
+		if !allowed[id] {
+			return x, ErrInvalid
+		}
+	}
+	for _, stack := range v.Flamegraph {
+		if len(stack.Frames) == 0 || stack.Value < 0 || stack.Unit == "" || len(stack.Frames) > 256 {
+			return x, ErrInvalid
+		}
+	}
+	v.ID, _ = newID()
+	v.Body = strings.TrimSpace(v.Body)
+	v.CreatedBy = actor
+	v.CreatedAt = s.now()
+	v.Challenges = []Challenge{}
+	v.Confirmations = []Confirmation{}
+	x.Findings = append(x.Findings, v)
+	return x, s.writeInvestigation(x)
+}
+func (s *Store) BindCredential(investigationID, credentialID string) (Investigation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, e := s.readInvestigation(investigationID)
+	if e != nil {
+		return v, e
+	}
+	if credentialID == "" {
+		return v, ErrInvalid
+	}
+	v.CredentialID = credentialID
+	return v, s.writeInvestigation(v)
+}
+func (s *Store) Respond(investigationID, findingID, actor, body string, confirm bool) (Investigation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	x, e := s.readInvestigation(investigationID)
+	if e != nil {
+		return x, e
+	}
+	if actor == "" || strings.TrimSpace(body) == "" {
+		return x, ErrInvalid
+	}
+	for i := range x.Findings {
+		if x.Findings[i].ID == findingID {
+			id, _ := newID()
+			if confirm {
+				x.Findings[i].Confirmations = append(x.Findings[i].Confirmations, Confirmation{ID: id, Body: strings.TrimSpace(body), CreatedBy: actor, CreatedAt: s.now()})
+			} else {
+				x.Findings[i].Challenges = append(x.Findings[i].Challenges, Challenge{ID: id, Body: strings.TrimSpace(body), CreatedBy: actor, CreatedAt: s.now()})
+			}
+			return x, s.writeInvestigation(x)
+		}
+	}
+	return x, ErrNotFound
+}
+func (s *Store) ProjectStaleness(v Investigation) Investigation {
+	// Credential bindings are persistence-only authority and never part of a
+	// repository or delegated evidence projection.
+	v.CredentialID = ""
+	trials := []Trial{}
+	for _, id := range v.TrialIDs {
+		if t, e := s.Get(id); e == nil {
+			trials = append(trials, t)
+		}
+	}
+	all, _ := s.List(v.RepositoryID)
+	for fi := range v.Findings {
+		for _, old := range trials {
+			for _, now := range all {
+				if now.ContextKind == old.ContextKind && now.ContextID == old.ContextID && now.CreatedAt.After(old.CreatedAt) {
+					if now.Source.Revision != old.Source.Revision {
+						v.Findings[fi].StaleReasons = append(v.Findings[fi].StaleReasons, "revision changed")
+					}
+					if now.Workload != old.Workload {
+						v.Findings[fi].StaleReasons = append(v.Findings[fi].StaleReasons, "workload changed")
+					}
+					if now.Environment != old.Environment {
+						v.Findings[fi].StaleReasons = append(v.Findings[fi].StaleReasons, "environment changed")
+					}
+				}
+			}
+		}
+		v.Findings[fi].Stale = len(v.Findings[fi].StaleReasons) > 0
+	}
+	return v
+}
+func (s *Store) writeInvestigation(v Investigation) error {
+	dir := filepath.Join(s.root, "investigations")
+	if e := os.MkdirAll(dir, 0700); e != nil {
+		return e
+	}
+	body, _ := json.Marshal(v)
+	tmp, e := os.CreateTemp(dir, ".investigation-*")
+	if e != nil {
+		return e
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	_ = tmp.Chmod(0600)
+	_, e = tmp.Write(body)
+	if e == nil {
+		e = tmp.Sync()
+	}
+	if ce := tmp.Close(); e == nil {
+		e = ce
+	}
+	if e == nil {
+		e = os.Rename(name, filepath.Join(dir, v.ID+".json"))
+	}
+	return e
+}
+func (s *Store) readInvestigation(id string) (Investigation, error) {
+	if len(id) != 32 {
+		return Investigation{}, ErrNotFound
+	}
+	body, e := os.ReadFile(filepath.Join(s.root, "investigations", id+".json"))
+	if e != nil {
+		return Investigation{}, ErrNotFound
+	}
+	var v Investigation
+	if json.Unmarshal(body, &v) != nil || v.ID != id {
+		return Investigation{}, ErrNotFound
+	}
+	return v, nil
 }
 func (s *Store) Create(v Trial) (Trial, error) {
 	s.mu.Lock()
