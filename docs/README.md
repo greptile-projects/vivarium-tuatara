@@ -28,6 +28,16 @@ is append-only by revision and compare-and-swap protected; every revision after 
 state an attributed replan reason and triggers such as scope movement, conflicting commitments,
 owner unavailability, or target slip. Records default beneath `$ROADMAP_STORAGE_ROOT` (`roadmaps`).
 
+Accepted roadmap items can be tested before delivery through revision-exact outcome validations at
+`/repositories/{id}/outcome-validations`. A collaborator freezes the roadmap item and cited product-
+opportunity version, then opens a technical decision, prototype, documentation concept, or product
+experiment with representative success and guardrail measures traced to source evidence. Named
+participants may be invited to the exact preview or bounded research revision; invitations require
+explicit consent, expire, and grant no repository access. Findings retain accessibility needs, dissent,
+acceptance, and evidence quality. Conclusions can validate, revise, defer, or reject direction without
+changing earlier roadmap revisions. Records default beneath `$OUTCOME_VALIDATION_STORAGE_ROOT`
+(`outcome-validations`).
+
 ## Product experiment plans
 
 Repository participants define versioned product-learning contracts at

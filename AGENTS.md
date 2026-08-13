@@ -1558,6 +1558,16 @@ whenever dependencies change or the web job fails before it starts.
   horizons, measures, and sequencing, while every later revision requires an attributed replan
   reason under compare-and-swap. `$ROADMAP_STORAGE_ROOT` defaults to `roadmaps`.
 
+  Accepted roadmap items open revision-exact outcome validation at
+  `/repositories/{id}/outcome-validations` as a technical decision, prototype,
+  documentation concept, or product experiment. Representative success and
+  guardrail measures trace to the frozen opportunity's cited evidence. Expiring
+  named preview/research invitations require consent and grant no repository
+  access; findings retain accessibility needs, dissent, acceptance, and evidence
+  quality. Append-only validate/revise/defer/reject conclusions never erase prior
+  roadmap plans. `$OUTCOME_VALIDATION_STORAGE_ROOT` defaults to
+  `outcome-validations`.
+
   Update it when you change how the apps fit together, not for every change.
 
 ## LADDER.md
