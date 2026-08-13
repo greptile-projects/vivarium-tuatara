@@ -14,6 +14,21 @@ The supported consumer contract, including authentication, stable error
 shapes, validation, and collection pagination, is documented in [API.md](API.md).
 Consumers should use that HTTP boundary rather than reading storage roots.
 
+## Product experiment plans
+
+Repository participants define versioned product-learning contracts at
+`/repositories/{id}/product-experiments`; the web workspace is
+`/repositories/{id}/experiments`. Each plan starts from a proposal, issue, technical decision,
+pull request, preview, or release and names a hypothesis, variants, permitted audience, success
+and guardrail metrics, minimum evidence, duration, owners, assumptions, and stop conditions.
+
+Every metric binds an exact version of a declared product signal with its event, unit, privacy
+boundary, and instrumentation status. Missing instrumentation, ineligible audiences, overlapping
+audience/signal contracts, and approvals invalidated by successor assumptions remain explicit and
+attributable. Discussion and approval bind the current plan version and grant no rollout, data,
+release, or deployment authority. Records default beneath `$PRODUCT_EXPERIMENT_STORAGE_ROOT`
+(`product-experiments`).
+
 ## Collaborative performance goals
 
 Repository participants publish complete, append-only performance-contract revisions through
