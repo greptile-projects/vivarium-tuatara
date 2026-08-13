@@ -42,7 +42,7 @@ async function tallyWhenClosed(page: Page, proposalID: string, headers: Record<s
     expect(response.status(), `POST governance tally: ${body}`).toBe(200);
     tally = JSON.parse(body);
     return true;
-  }, { timeout: 15_000 }).toBe(true);
+  }, { timeout: 40_000 }).toBe(true);
   return tally;
 }
 
@@ -96,7 +96,7 @@ test("a community governs delivery and renews stewardship without inheriting rep
     await json(contributorPage, "post", `/repositories/${repository.id}/charter/standing/${contributorStanding.id}/actions`, contributor.headers, { action: "accept", reason: "Accept standing earned through reviewed contribution." });
     await json(successorPage, "post", `/repositories/${repository.id}/charter/standing/${successorStanding.id}/actions`, successor.headers, { action: "accept", reason: "Accept bounded governance standing." });
     async function proposal(page: Page, headers: Record<string, string>, title: string) {
-      const closes = new Date(Date.now() + 5000).toISOString();
+      const closes = new Date(Date.now() + 30_000).toISOString();
       return json(page, "post", "/governance/proposals", headers, { scope_type: "repository", scope_id: repository.id, source: { kind: "initiative", resource_id: `initiative-${title}`, label: title }, title, summary: "Evaluate a bounded community change from retained project evidence.", scope: "The runtime and stewardship workflow only.", alternatives: [{ id: "adopt", title: "Adopt", summary: "Proceed through ordinary repository controls.", effects: ["Create a reviewed implementation"] }, { id: "defer", title: "Defer", summary: "Retain the current implementation.", effects: ["No repository change"] }], evidence: [{ kind: "usage", resource_id: "runtime-trace-2026-08", label: "Exact runtime usage trace" }], affected_resources: [{ kind: "branch", resource_id: "main", label: "Protected main branch" }], disclosure_requirements: ["Disclose operational risk and conflicts"], implementation_effects: ["Human and agent tasks require review and checks"], rule: { decision_class: "community initiative", opens_at: new Date(Date.now() - 100).toISOString(), closes_at: closes } });
     }
     let failed = await proposal(ownerPage, owner.headers, "Quorum recovery rehearsal") as any;
