@@ -43,12 +43,35 @@ func TestOptimizationEvaluationDerivesReviewEvidenceAndStaleness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if evaluation.Confidence < .99 || evaluation.Comparisons[0].ChangePercent >= -25 || evaluation.ResourceChanges["cpu_seconds_percent"] != -20 || evaluation.CostChangePercent != -25 || !evaluation.CorrectnessPassed {
+	if evaluation.Confidence == nil || *evaluation.Confidence < .99 || evaluation.Comparisons[0].ChangePercent >= -25 || evaluation.ResourceChanges["cpu_seconds_percent"] != -20 || evaluation.CostChangePercent == nil || *evaluation.CostChangePercent != -25 || !evaluation.CorrectnessPassed {
 		t.Fatalf("unexpected derived evidence: %+v", evaluation)
 	}
 	items, err := store.ListEvaluations("repo", "pull", strings.Repeat("c", 40))
 	if err != nil || len(items) != 1 || !items[0].Stale {
 		t.Fatalf("expected stale retained evaluation: %+v %v", items, err)
+	}
+}
+
+func TestOptimizationEvaluationLeavesInvalidStatisticsUnavailable(t *testing.T) {
+	store, _ := New(t.TempDir())
+	base := trial()
+	base.GoalID, base.Source.Revision = "goal", strings.Repeat("a", 40)
+	base.Cost = Cost{Amount: 0, Unit: "usd"}
+	base.Timings = []Timing{{Metric: "latency", Unit: "ms", Values: []float64{10}}}
+	base.Sampling.Samples = 1
+	baseline, _ := store.Create(base)
+	inv, _ := store.CreateInvestigation(Investigation{RepositoryID: "repo", Title: "hot path", TrialIDs: []string{baseline.ID}, CreatedBy: "owner"}, func(Reference) bool { return true })
+	candidateInput := base
+	candidateInput.Source.Revision = strings.Repeat("b", 40)
+	candidateInput.Cost = Cost{Amount: 42, Unit: "eur"}
+	candidateInput.Timings = []Timing{{Metric: "throughput", Unit: "ops/s", Values: []float64{100}}}
+	candidate, _ := store.Create(candidateInput)
+	evaluation, err := store.CreateEvaluation(Evaluation{RepositoryID: "repo", PullRequestID: "pull", Revision: candidate.Source.Revision, GoalID: "goal", InvestigationID: inv.ID, BaselineTrialID: baseline.ID, CandidateTrialID: candidate.ID, AffectedScenarios: []string{"search"}, Commands: []string{"bench"}, CorrectnessChecks: []CorrectnessCheck{{Name: "tests", Command: "test", Passed: true, Summary: "passed"}}, CreatedBy: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evaluation.Confidence != nil || evaluation.CostChangePercent != nil {
+		t.Fatalf("incomparable evidence must be unavailable: %+v", evaluation)
 	}
 }
 

@@ -114,9 +114,9 @@ type Evaluation struct {
 	CreatedBy         string             `json:"created_by"`
 	CreatedAt         time.Time          `json:"created_at"`
 	Comparisons       []Comparison       `json:"comparisons"`
-	Confidence        float64            `json:"confidence"`
+	Confidence        *float64           `json:"confidence"`
 	ResourceChanges   map[string]float64 `json:"resource_changes"`
-	CostChangePercent float64            `json:"cost_change_percent"`
+	CostChangePercent *float64           `json:"cost_change_percent"`
 	CorrectnessPassed bool               `json:"correctness_passed"`
 	Stale             bool               `json:"stale"`
 }
@@ -513,8 +513,9 @@ func (s *Store) CreateEvaluation(v Evaluation) (Evaluation, error) {
 	v.Comparisons = s.Compare(baseline, candidate)
 	v.Confidence = confidence(baseline, candidate)
 	v.ResourceChanges = map[string]float64{"cpu_seconds_percent": percent(baseline.Resources.CPUSeconds, candidate.Resources.CPUSeconds), "peak_memory_mb_percent": percent(baseline.Resources.PeakMemoryMB, candidate.Resources.PeakMemoryMB), "read_bytes_percent": percent(float64(baseline.Resources.ReadBytes), float64(candidate.Resources.ReadBytes)), "write_bytes_percent": percent(float64(baseline.Resources.WriteBytes), float64(candidate.Resources.WriteBytes))}
-	if baseline.Cost.Unit == candidate.Cost.Unit {
-		v.CostChangePercent = percent(baseline.Cost.Amount, candidate.Cost.Amount)
+	if baseline.Cost.Unit == candidate.Cost.Unit && baseline.Cost.Amount != 0 {
+		change := percent(baseline.Cost.Amount, candidate.Cost.Amount)
+		v.CostChangePercent = &change
 	}
 	dir := filepath.Join(s.root, "evaluations", v.RepositoryID, v.PullRequestID)
 	if e := os.MkdirAll(dir, 0700); e != nil {
@@ -564,20 +565,37 @@ func percent(old, current float64) float64 {
 	}
 	return (current - old) / old * 100
 }
-func confidence(a, b Trial) float64 {
-	if a.Workload != b.Workload || a.Environment != b.Environment || a.Sampling != b.Sampling || len(a.Timings) == 0 || len(b.Timings) == 0 {
-		return 0
+func confidence(a, b Trial) *float64 {
+	if a.Workload != b.Workload || a.Environment != b.Environment || a.Sampling != b.Sampling {
+		return nil
 	}
-	x, y := a.Timings[0], b.Timings[0]
+	var x, y *Timing
+	for i := range a.Timings {
+		for j := range b.Timings {
+			if a.Timings[i].Metric == b.Timings[j].Metric && a.Timings[i].Unit == b.Timings[j].Unit {
+				x, y = &a.Timings[i], &b.Timings[j]
+				break
+			}
+		}
+		if x != nil {
+			break
+		}
+	}
+	if x == nil || len(x.Values) < 2 || len(y.Values) < 2 {
+		return nil
+	}
 	se := math.Sqrt(x.Variance/float64(len(x.Values)) + y.Variance/float64(len(y.Values)))
 	if se == 0 {
 		if x.Mean == y.Mean {
-			return 0
+			value := 0.0
+			return &value
 		}
-		return 1
+		value := 1.0
+		return &value
 	}
 	z := math.Abs(y.Mean-x.Mean) / se
-	return math.Erf(z / math.Sqrt2)
+	value := math.Erf(z / math.Sqrt2)
+	return &value
 }
 func (s *Store) read(id string) (Trial, error) {
 	if len(id) != 32 {
