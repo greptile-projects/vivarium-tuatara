@@ -253,8 +253,17 @@ func registerRoadmapRoutes(mux *http.ServeMux, git *storage.Store, repos *reposi
 			ids = append(ids, t.ID)
 		}
 		updated, e := store.LinkImplementation(repo.ID, actor.UserID, in.ExpectedVersion, in.RoadmapVersion, item.ID, item.OpportunityID, p.ID, revision, ids)
+		// Proposal creation commits before the cross-store roadmap link. Reconcile
+		// a concurrent roadmap mutation when this frozen historical item is still
+		// valid so otherwise valid work is not stranded.
+		if errors.Is(e, roadmaps.ErrConflict) {
+			if latest, getErr := store.Get(repo.ID); getErr == nil {
+				updated, e = store.LinkImplementation(repo.ID, actor.UserID, latest.Version, in.RoadmapVersion, item.ID, item.OpportunityID, p.ID, revision, ids)
+			}
+		}
 		if e != nil {
-			writeRoadmap(w, updated, e, 0)
+			w.Header().Set("Vivarium-Recovery-Implementation", "pending")
+			writeJSON(w, 202, map[string]any{"roadmap": updated, "proposal": p, "tasks": made, "recovery_pending": true})
 			return
 		}
 		writeJSON(w, 201, map[string]any{"roadmap": updated, "proposal": p, "tasks": made})
@@ -278,7 +287,7 @@ func registerRoadmapRoutes(mux *http.ServeMux, git *storage.Store, repos *reposi
 	})
 }
 func mapRoadmapEvidenceKind(kind string) string {
-	if kind == "delivery" || kind == "measure_met" {
+	if kind == "measure_met" {
 		return "coverage"
 	}
 	return "failed_measure"

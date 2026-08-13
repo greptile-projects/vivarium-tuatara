@@ -39,14 +39,30 @@ func TestRoadmapRequiresAttributedReplansAndSeparatesScenarios(t *testing.T) {
 func TestImplementationRequiresMeasuredValueBeforeAchievementAndReopensOnDrift(t *testing.T) {
 	s, _ := New(t.TempDir())
 	v, err := s.Publish("repo", "owner", 0, revision())
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	v, err = s.LinkImplementation("repo", "owner", v.Version, 1, "item-1", "opp-1", "proposal-1", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", []string{"task-1"})
-	if err != nil || v.Implementations[0].OutcomeState != "delivering" { t.Fatalf("link=%#v %v", v, err) }
-	if _, err = s.ReportOutcome("repo", "owner", v.Version, "proposal-1", DeliveryEvidence{Kind:"measure_met", Summary:"wrong measure", ResourceKind:"experiment", ResourceID:"run-1", MeasureIndexes:[]int{1}}); !errors.Is(err, ErrInvalid) { t.Fatalf("invalid measure=%v",err) }
-	v, err = s.ReportOutcome("repo", "owner", v.Version, "proposal-1", DeliveryEvidence{Kind:"delivery", Summary:"released", ResourceKind:"release", ResourceID:"release-1"})
-	if err != nil || v.Implementations[0].OutcomeState != "delivering" { t.Fatalf("shipping claimed value=%#v %v",v,err) }
-	v, err = s.ReportOutcome("repo", "researcher", v.Version, "proposal-1", DeliveryEvidence{Kind:"measure_met", Summary:"abandonment fell 23%", ResourceKind:"experiment", ResourceID:"run-1", MeasureIndexes:[]int{0}})
-	if err != nil || v.Implementations[0].OutcomeState != "achieved" { t.Fatalf("measure=%#v %v",v,err) }
-	v, err = s.ReportOutcome("repo", "reporter", v.Version, "proposal-1", DeliveryEvidence{Kind:"need_unresolved", Summary:"keyboard reviewers still cannot finish", ResourceKind:"experiment", ResourceID:"run-1"})
-	if err != nil || v.Implementations[0].OutcomeState != "revisit_required" || v.Implementations[0].RevisitReason == "" { t.Fatalf("revisit=%#v %v",v,err) }
+	if err != nil || v.Implementations[0].OutcomeState != "delivering" {
+		t.Fatalf("link=%#v %v", v, err)
+	}
+	if _, err = s.ReportOutcome("repo", "owner", v.Version, "proposal-1", DeliveryEvidence{Kind: "measure_met", Summary: "wrong measure", ResourceKind: "experiment", ResourceID: "run-1", MeasureIndexes: []int{1}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid measure=%v", err)
+	}
+	v, err = s.ReportOutcome("repo", "owner", v.Version, "proposal-1", DeliveryEvidence{Kind: "delivery", Summary: "released", ResourceKind: "release", ResourceID: "release-1"})
+	if err != nil || v.Implementations[0].OutcomeState != "delivering" {
+		t.Fatalf("shipping claimed value=%#v %v", v, err)
+	}
+	v, err = s.ReportOutcome("repo", "researcher", v.Version, "proposal-1", DeliveryEvidence{Kind: "measure_met", Summary: "abandonment fell 23%", ResourceKind: "experiment", ResourceID: "run-1", MeasureIndexes: []int{0}})
+	if err != nil || v.Implementations[0].OutcomeState != "achieved" {
+		t.Fatalf("measure=%#v %v", v, err)
+	}
+	v, err = s.ReportOutcome("repo", "reporter", v.Version, "proposal-1", DeliveryEvidence{Kind: "need_unresolved", Summary: "keyboard reviewers still cannot finish", ResourceKind: "experiment", ResourceID: "run-1"})
+	if err != nil || v.Implementations[0].OutcomeState != "revisit_required" || v.Implementations[0].RevisitReason == "" {
+		t.Fatalf("revisit=%#v %v", v, err)
+	}
+	v, err = s.ReportOutcome("repo", "researcher", v.Version, "proposal-1", DeliveryEvidence{Kind: "measure_met", Summary: "later aggregate still clears the threshold", ResourceKind: "experiment", ResourceID: "run-2", MeasureIndexes: []int{0}})
+	if err != nil || v.Implementations[0].OutcomeState != "revisit_required" {
+		t.Fatalf("retained blocker overwritten=%#v %v", v, err)
+	}
 }

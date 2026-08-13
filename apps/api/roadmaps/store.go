@@ -194,7 +194,7 @@ func (s *Store) ReportOutcome(repo, actor string, expected int, proposalID strin
 				}
 			}
 		}
-		if len(met) == len(item.SuccessMeasures) {
+		if len(met) == len(item.SuccessMeasures) && v.Implementations[idx].OutcomeState != "revisit_required" {
 			v.Implementations[idx].OutcomeState = "achieved"
 		}
 		return nil

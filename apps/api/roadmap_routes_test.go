@@ -61,3 +61,12 @@ func TestRoadmapMutationsAcceptCookieOnlyIdentity(t *testing.T) {
 		t.Fatalf("cookie attribution = %#v", stored)
 	}
 }
+
+func TestRoadmapOutcomeValidationSeparatesDeliveryFromMeasuredCoverage(t *testing.T) {
+	if got := mapRoadmapEvidenceKind("delivery"); got == "coverage" {
+		t.Fatalf("delivery mapped to measurement coverage: %q", got)
+	}
+	if got := mapRoadmapEvidenceKind("measure_met"); got != "coverage" {
+		t.Fatalf("measure success mapping = %q", got)
+	}
+}
