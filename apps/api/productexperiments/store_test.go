@@ -202,6 +202,45 @@ func TestScheduledCleanupRemovesInactiveAuditAtRest(t *testing.T) {
 	}
 }
 
+func TestMutuallyExcludedReceiptSchedulesInactiveCleanup(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Now().Add(-48 * time.Hour)
+	s.now = func() time.Time { return now }
+	revision, signals := plan("available")
+	commit := "0123456789012345678901234567890123456789"
+	create := func(label string) Experiment {
+		v, _ := s.Create("repo", "alice", Source{Kind: "release", ResourceID: label, Label: label}, revision, signals)
+		work := WorkLink{VariantKeys: []string{"control", "treatment"}, OwnerType: "human", OwnerID: "alice", ProposalID: "p", TaskID: "t", PullRequestID: "pull-" + label, CommitID: commit, EventDefinitions: []string{"e@1"}, ExposureRules: []string{"rule"}, Privacy: "aggregate", RemovalPlan: "remove", CheckNames: []string{"check"}}
+		v, _ = s.LinkWork(v.ID, "alice", 1, work)
+		contract := AudienceContract{ReleaseID: label, ReleaseCommitID: commit, VariantKeys: []string{"control", "treatment"}, Eligibility: []string{"member"}, RandomizationUnit: "user", MutualExclusionGroup: "g", Allocation: []Allocation{{VariantKey: "control", BasisPoints: 5000}, {VariantKey: "treatment", BasisPoints: 5000}}, Consent: "none", DataFields: []string{"assignment"}, RetentionDays: 1}
+		v, _ = s.ApproveAudience(v.ID, "alice", 1, contract)
+		return v
+	}
+	a, b := create("a"), create("b")
+	context := AssignmentContext{Eligibility: []string{"member"}}
+	_, first, err := s.Assign(a.ID, a.AudienceContracts[0].ID, "subject", context)
+	if err != nil || !first.Eligible {
+		t.Fatalf("first=%#v %v", first, err)
+	}
+	_, blocked, err := s.Assign(b.ID, b.AudienceContracts[0].ID, "subject", context)
+	if err != nil || blocked.Eligible || blocked.Reason != "mutually_excluded" {
+		t.Fatalf("blocked=%#v %v", blocked, err)
+	}
+	s.now = func() time.Time { return time.Now() }
+	s.scheduleCleanupAt(time.Now().Add(20 * time.Millisecond))
+	deadline := time.Now().Add(time.Second)
+	for {
+		raw, _ := s.read(b.ID)
+		if len(raw.AssignmentAudit) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("excluded audit remains at rest: %#v", raw.AssignmentAudit)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestAssignmentRetentionPrunesReadsAndPersistence(t *testing.T) {
 	s, _ := New(t.TempDir())
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)

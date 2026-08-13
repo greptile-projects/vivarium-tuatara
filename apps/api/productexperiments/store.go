@@ -235,26 +235,24 @@ func (s *Store) Assign(id, contractID, subject string, context AssignmentContext
 			}
 			if conflict {
 				receipt.Eligible, receipt.Reason = false, "mutually_excluded"
-				v.AssignmentAudit = append(v.AssignmentAudit, receipt)
-				out = v
-				return s.write(v)
-			}
-			digest := sha256.Sum256([]byte(contract.RandomizationSalt + ":" + subject))
-			bucket := int(digest[0])<<8 | int(digest[1])
-			bucket %= 10000
-			cumulative := 0
-			for _, allocation := range contract.Allocation {
-				cumulative += allocation.BasisPoints
-				if bucket < cumulative {
-					receipt.VariantKey = allocation.VariantKey
-					break
-				}
-			}
-			if receipt.VariantKey == "" {
-				receipt.Eligible, receipt.Reason = false, "unallocated"
 			} else {
-				receipt.Reason = "assigned"
-				v.ExclusionMemberships = append(v.ExclusionMemberships, ExclusionMembership{GroupDigest: s.groupDigest(v.RepositoryID, contract.MutualExclusionGroup), SubjectToken: s.groupSubjectToken(v.RepositoryID, contract.MutualExclusionGroup, subjectDigest), ExpiresAt: contract.ApprovedAt.Add(time.Duration(currentRevision(&v).DurationDays) * 24 * time.Hour)})
+				digest := sha256.Sum256([]byte(contract.RandomizationSalt + ":" + subject))
+				bucket := int(digest[0])<<8 | int(digest[1])
+				bucket %= 10000
+				cumulative := 0
+				for _, allocation := range contract.Allocation {
+					cumulative += allocation.BasisPoints
+					if bucket < cumulative {
+						receipt.VariantKey = allocation.VariantKey
+						break
+					}
+				}
+				if receipt.VariantKey == "" {
+					receipt.Eligible, receipt.Reason = false, "unallocated"
+				} else {
+					receipt.Reason = "assigned"
+					v.ExclusionMemberships = append(v.ExclusionMemberships, ExclusionMembership{GroupDigest: s.groupDigest(v.RepositoryID, contract.MutualExclusionGroup), SubjectToken: s.groupSubjectToken(v.RepositoryID, contract.MutualExclusionGroup, subjectDigest), ExpiresAt: contract.ApprovedAt.Add(time.Duration(currentRevision(&v).DurationDays) * 24 * time.Hour)})
+				}
 			}
 		}
 		v.AssignmentAudit = append(v.AssignmentAudit, receipt)
