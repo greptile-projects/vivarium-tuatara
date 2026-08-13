@@ -594,6 +594,30 @@ func (s *Store) ListFor(user string) ([]Organization, error) {
 	}
 	return out, nil
 }
+
+// WithCurrentAgentOperator holds the organization mutation boundary while
+// proving that agent is still approved and user is still one of its operators.
+// The callback may coordinate a dependent write; callers must acquire any
+// repository and dependent-store locks inside this boundary.
+func (s *Store) WithCurrentAgentOperator(agent, user string, fn func(organizationID string) error) error {
+	if !validID(agent) || !validID(user) || fn == nil {
+		return ErrInvalid
+	}
+	return s.locked(func() error {
+		items, err := s.list()
+		if err != nil {
+			return err
+		}
+		for _, organization := range items {
+			for _, approved := range organization.Agents {
+				if approved.ID == agent && slices.Contains(approved.OperatorIDs, user) {
+					return fn(organization.ID)
+				}
+			}
+		}
+		return ErrNotFound
+	})
+}
 func (s *Store) list() ([]Organization, error) {
 	entries, err := os.ReadDir(s.root)
 	if err != nil {

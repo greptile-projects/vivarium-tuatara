@@ -8,6 +8,50 @@ import (
 	"time"
 )
 
+func TestCurrentAgentOperatorBoundaryExcludesConcurrentRevocation(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := "0123456789abcdef0123456789abcdef"
+	operator := "abcdef0123456789abcdef0123456789"
+	v, _ := store.Create("Learning", "learning", "", owner)
+	v, _ = store.Invite(v.ID, owner, operator)
+	v, _ = store.AcceptInvitation(v.ID, v.Invitations[0].ID, operator)
+	v, _ = store.RegisterAgent(v.ID, owner, "Analyst", "analyst", "", "organization", []string{"analyze"}, []string{operator}, nil)
+	agent := v.Agents[0].ID
+	entered, release, boundaryDone, revokeDone := make(chan string), make(chan struct{}), make(chan error, 1), make(chan error, 1)
+	go func() {
+		boundaryDone <- store.WithCurrentAgentOperator(agent, operator, func(organizationID string) error {
+			entered <- organizationID
+			<-release
+			return nil
+		})
+	}()
+	if organizationID := <-entered; organizationID != v.ID {
+		t.Fatalf("organization = %s", organizationID)
+	}
+	go func() {
+		_, removeErr := store.RemoveMember(v.ID, owner, operator, func(Organization) error { return nil })
+		revokeDone <- removeErr
+	}()
+	select {
+	case err := <-revokeDone:
+		t.Fatalf("revocation crossed active authorization boundary: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-boundaryDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-revokeDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WithCurrentAgentOperator(agent, operator, func(string) error { return nil }); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("removed operator remained authorized: %v", err)
+	}
+}
+
 func TestStewardshipMandateRequiresCurrentOperatorAcceptanceAfterEveryRevision(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {

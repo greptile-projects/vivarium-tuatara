@@ -472,11 +472,17 @@ func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.S
 		}
 		var out productexperiments.Experiment
 		if in.Analysis.InterpretedByType == "agent" {
-			if !agentOperator(current.RepositoryID, in.Analysis.InterpretedByID, actor.UserID, orgs, catalog) {
+			err = orgs.WithCurrentAgentOperator(in.Analysis.InterpretedByID, actor.UserID, func(organizationID string) error {
+				return catalog.WithOrganization(current.RepositoryID, organizationID, func() error {
+					var analyzeErr error
+					out, analyzeErr = store.AnalyzeAsAgent(current.ID, actor.UserID, in.Analysis.InterpretedByID, in.Analysis)
+					return analyzeErr
+				})
+			})
+			if errors.Is(err, organizations.ErrNotFound) || errors.Is(err, organizations.ErrInvalid) || errors.Is(err, repositories.ErrNotFound) {
 				writeAPIError(w, 403, "experiment_agent_operator_required", "the participant must operate the selected approved agent")
 				return
 			}
-			out, err = store.AnalyzeAsAgent(current.ID, actor.UserID, in.Analysis.InterpretedByID, in.Analysis)
 		} else {
 			out, err = store.Analyze(current.ID, actor.UserID, in.Analysis)
 		}
