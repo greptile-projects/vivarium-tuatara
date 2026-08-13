@@ -68,14 +68,139 @@ type Comment struct {
 	ActorType string    `json:"actor_type"`
 	CreatedAt time.Time `json:"created_at"`
 }
-type Roadmap struct {
-	RepositoryID string     `json:"repository_id"`
-	Version      int        `json:"version"`
-	Revisions    []Revision `json:"revisions"`
-	Scenarios    []Scenario `json:"scenarios"`
-	Comments     []Comment  `json:"comments"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+type DeliveryEvidence struct {
+	ID             string    `json:"id"`
+	Kind           string    `json:"kind"`
+	Summary        string    `json:"summary"`
+	ResourceKind   string    `json:"resource_kind"`
+	ResourceID     string    `json:"resource_id"`
+	ActorID        string    `json:"actor_id"`
+	MeasureIndexes []int     `json:"measure_indexes,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
 }
+type Implementation struct {
+	RoadmapVersion int                `json:"roadmap_version"`
+	ItemID         string             `json:"item_id"`
+	OpportunityID  string             `json:"opportunity_id"`
+	ProposalID     string             `json:"proposal_id"`
+	Revision       string             `json:"revision"`
+	CreatedBy      string             `json:"created_by"`
+	TaskIDs        []string           `json:"task_ids"`
+	Evidence       []DeliveryEvidence `json:"evidence"`
+	OutcomeState   string             `json:"outcome_state"`
+	RevisitReason  string             `json:"revisit_reason,omitempty"`
+	CreatedAt      time.Time          `json:"created_at"`
+	UpdatedAt      time.Time          `json:"updated_at"`
+}
+type Roadmap struct {
+	RepositoryID    string           `json:"repository_id"`
+	Version         int              `json:"version"`
+	Revisions       []Revision       `json:"revisions"`
+	Scenarios       []Scenario       `json:"scenarios"`
+	Comments        []Comment        `json:"comments"`
+	Implementations []Implementation `json:"implementations"`
+	UpdatedAt       time.Time        `json:"updated_at"`
+}
+
+func (s *Store) LinkImplementation(repo, actor string, expected, roadmapVersion int, itemID, opportunityID, proposalID, revision string, taskIDs []string) (Roadmap, error) {
+	if actor == "" || roadmapVersion < 1 || itemID == "" || opportunityID == "" || proposalID == "" || len(revision) != 40 || len(taskIDs) == 0 {
+		return Roadmap{}, ErrInvalid
+	}
+	return s.mutate(repo, expected, func(v *Roadmap) error {
+		for _, x := range v.Implementations {
+			if x.RoadmapVersion == roadmapVersion && x.ItemID == itemID {
+				if x.ProposalID == proposalID {
+					return nil
+				}
+				return ErrConflict
+			}
+		}
+		var item *Item
+		for _, r := range v.Revisions {
+			if r.Version == roadmapVersion {
+				for i := range r.Items {
+					if r.Items[i].ID == itemID && r.Items[i].OpportunityID == opportunityID {
+						item = &r.Items[i]
+					}
+				}
+			}
+		}
+		if item == nil {
+			return ErrInvalid
+		}
+		now := s.now().UTC()
+		v.Implementations = append(v.Implementations, Implementation{RoadmapVersion: roadmapVersion, ItemID: itemID, OpportunityID: opportunityID, ProposalID: proposalID, Revision: revision, TaskIDs: append([]string(nil), taskIDs...), OutcomeState: "delivering", CreatedBy: actor, CreatedAt: now, UpdatedAt: now})
+		return nil
+	})
+}
+
+func (s *Store) ReportOutcome(repo, actor string, expected int, proposalID string, evidence DeliveryEvidence) (Roadmap, error) {
+	allowed := one(evidence.Kind, "delivery", "measure_met", "measure_failed", "assumption_changed", "need_unresolved", "policy_conflict", "decision_revisit")
+	if actor == "" || !allowed || !text(evidence.Summary, 2000) || evidence.ResourceKind == "" || evidence.ResourceID == "" {
+		return Roadmap{}, ErrInvalid
+	}
+	return s.mutate(repo, expected, func(v *Roadmap) error {
+		idx := -1
+		for i := range v.Implementations {
+			if v.Implementations[i].ProposalID == proposalID {
+				idx = i
+			}
+		}
+		if idx < 0 {
+			return ErrNotFound
+		}
+		var item *Item
+		for _, r := range v.Revisions {
+			if r.Version == v.Implementations[idx].RoadmapVersion {
+				for i := range r.Items {
+					if r.Items[i].ID == v.Implementations[idx].ItemID {
+						item = &r.Items[i]
+					}
+				}
+			}
+		}
+		if item == nil {
+			return ErrInvalid
+		}
+		seen := map[int]bool{}
+		for _, n := range evidence.MeasureIndexes {
+			if n < 0 || n >= len(item.SuccessMeasures) || seen[n] {
+				return ErrInvalid
+			}
+			seen[n] = true
+		}
+		if evidence.Kind == "measure_met" || evidence.Kind == "measure_failed" {
+			if len(seen) == 0 {
+				return ErrInvalid
+			}
+		}
+		now := s.now().UTC()
+		evidence.ID = id()
+		evidence.ActorID = actor
+		evidence.CreatedAt = now
+		v.Implementations[idx].Evidence = append(v.Implementations[idx].Evidence, evidence)
+		v.Implementations[idx].UpdatedAt = now
+		blocking := evidence.Kind == "measure_failed" || evidence.Kind == "assumption_changed" || evidence.Kind == "need_unresolved" || evidence.Kind == "policy_conflict" || evidence.Kind == "decision_revisit"
+		if blocking {
+			v.Implementations[idx].OutcomeState = "revisit_required"
+			v.Implementations[idx].RevisitReason = evidence.Kind + ": " + evidence.Summary
+			return nil
+		}
+		met := map[int]bool{}
+		for _, e := range v.Implementations[idx].Evidence {
+			if e.Kind == "measure_met" {
+				for _, n := range e.MeasureIndexes {
+					met[n] = true
+				}
+			}
+		}
+		if len(met) == len(item.SuccessMeasures) {
+			v.Implementations[idx].OutcomeState = "achieved"
+		}
+		return nil
+	})
+}
+
 type Store struct {
 	root string
 	mu   sync.Mutex

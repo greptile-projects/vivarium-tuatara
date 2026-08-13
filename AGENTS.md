@@ -374,6 +374,11 @@ whenever dependencies change or the web job fails before it starts.
   organization-approved agent and retains the human operator as the authenticated writer.
 
   Product feedback at `/repositories/{id}/feedback` is a distinct needs channel for a project,
+
+  Accepted roadmap outcomes create ordinary ordered human/agent proposal tasks with exact opportunity
+  and success-measure provenance. Linked delivery evidence does not imply value: every frozen measure
+  needs retained measured success, while failed measures, changed assumptions, unresolved user needs,
+  policy conflicts, or an explicit revisit keep completion blocked as `revisit_required`.
   release, documented journey, or preview. Authenticated repository readers submit need,
   desired outcome, frequency, impact, redacted evidence, related issue/experiment links, and
   explicit audience, identity, evidence, contact, and follow-up preferences beneath

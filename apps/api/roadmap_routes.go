@@ -2,13 +2,22 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"os/exec"
+	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/productopportunities"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/roadmaps"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
 type roadmapMutation struct {
@@ -18,7 +27,31 @@ type roadmapMutation struct {
 	Body            string            `json:"body"`
 }
 
-func registerRoadmapRoutes(mux *http.ServeMux, repos *repositories.Store, credentials *auth.Store, store *roadmaps.Store, opportunities *productopportunities.Store) {
+type roadmapTaskInput struct {
+	Title             string `json:"title"`
+	AssigneeType      string `json:"assignee_type"`
+	AssigneeID        string `json:"assignee_id"`
+	MeasureIndexes    []int  `json:"measure_indexes"`
+	DependsOnPrevious bool   `json:"depends_on_previous"`
+}
+type roadmapImplementationInput struct {
+	ExpectedVersion int                `json:"expected_version"`
+	RoadmapVersion  int                `json:"roadmap_version"`
+	ItemID          string             `json:"item_id"`
+	Title           string             `json:"title"`
+	Body            string             `json:"body"`
+	Tasks           []roadmapTaskInput `json:"tasks"`
+}
+type roadmapOutcomeInput struct {
+	ExpectedVersion int    `json:"expected_version"`
+	Kind            string `json:"kind"`
+	Summary         string `json:"summary"`
+	ResourceKind    string `json:"resource_kind"`
+	ResourceID      string `json:"resource_id"`
+	MeasureIndexes  []int  `json:"measure_indexes"`
+}
+
+func registerRoadmapRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, credentials *auth.Store, store *roadmaps.Store, opportunities *productopportunities.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, checkStore *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store) {
 	authorize := func(w http.ResponseWriter, r *http.Request) (auth.Credential, repositories.Repository, bool, bool) {
 		actor, _, ok := authorizeRepositoryRead(w, r, repos, credentials, r.PathValue("id"))
 		if !ok {
@@ -124,6 +157,131 @@ func registerRoadmapRoutes(mux *http.ServeMux, repos *repositories.Store, creden
 		v, e := store.Comment(repo.ID, id, kind, in.ExpectedVersion, in.Body)
 		writeRoadmap(w, v, e, 201)
 	})
+	mux.HandleFunc("POST /repositories/{id}/roadmap/implementations", func(w http.ResponseWriter, r *http.Request) {
+		actor, repo, participant, ok := authorize(w, r)
+		if !ok {
+			return
+		}
+		if !participant || actor.AgentID != "" {
+			writeAPIError(w, 403, "roadmap_implementation_forbidden", "only repository participants may plan accepted outcomes")
+			return
+		}
+		var in roadmapImplementationInput
+		if decodeJSON(r, &in) != nil || len(in.Tasks) == 0 || len(in.Tasks) > 20 || proposalStore == nil || git == nil {
+			writeAPIError(w, 400, "invalid_implementation", "an accepted roadmap item and ordered tasks are required")
+			return
+		}
+		v, e := store.Get(repo.ID)
+		if e != nil || v.Version != in.ExpectedVersion {
+			writeRoadmap(w, v, roadmaps.ErrConflict, 0)
+			return
+		}
+		var item *roadmaps.Item
+		for _, rev := range v.Revisions {
+			if rev.Version == in.RoadmapVersion {
+				for i := range rev.Items {
+					if rev.Items[i].ID == in.ItemID {
+						item = &rev.Items[i]
+					}
+				}
+			}
+		}
+		if item == nil {
+			writeAPIError(w, 409, "roadmap_item_changed", "implementation requires the exact accepted roadmap item")
+			return
+		}
+		bare, e := git.Open(repo.ID)
+		if e != nil {
+			writeAPIError(w, 503, "repository_unavailable", "repository context is unavailable")
+			return
+		}
+		out, e := exec.Command("git", "--git-dir="+bare.Path(), "rev-parse", "refs/heads/"+repo.DefaultBranch).Output()
+		revision := strings.TrimSpace(string(out))
+		if e != nil || len(revision) != 40 {
+			writeAPIError(w, 409, "implementation_base_unavailable", "the default branch has no exact implementation base")
+			return
+		}
+		covered := make([]bool, len(item.SuccessMeasures))
+		tasks := make([]proposals.ImplementationTaskInput, 0, len(in.Tasks))
+		participants := []string{actor.UserID}
+		reasoning := []proposals.ReasoningItem{{ID: "need", Kind: "product_need", Summary: "Opportunity " + item.OpportunityID + " earned roadmap priority", Status: "required"}}
+		for i, m := range item.SuccessMeasures {
+			reasoning = append(reasoning, proposals.ReasoningItem{ID: fmt.Sprintf("measure-%d", i), Kind: "roadmap_success_measure", Summary: m, Status: "required"})
+		}
+		for _, t := range in.Tasks {
+			measures := []string{}
+			for _, n := range t.MeasureIndexes {
+				if n < 0 || n >= len(covered) {
+					writeAPIError(w, 400, "invalid_measure_coverage", "task measure coverage is outside the accepted outcome")
+					return
+				}
+				covered[n] = true
+				measures = append(measures, item.SuccessMeasures[n])
+			}
+			if len(measures) == 0 {
+				writeAPIError(w, 400, "invalid_measure_coverage", "every task must trace to a success measure")
+				return
+			}
+			tasks = append(tasks, proposals.ImplementationTaskInput{Title: t.Title, Outcome: "Advance: " + item.Title, VerificationPlan: "Measure: " + strings.Join(measures, "; "), Risk: "Changed assumptions, unresolved needs, conflicts, or failed measures require decision revisit.", AssigneeType: t.AssigneeType, AssigneeID: t.AssigneeID, DependsOnPrevious: t.DependsOnPrevious})
+			if t.AssigneeType == "human" {
+				participants = append(participants, t.AssigneeID)
+			}
+		}
+		for _, x := range covered {
+			if !x {
+				writeAPIError(w, 400, "incomplete_measure_coverage", "the plan must cover every roadmap success measure")
+				return
+			}
+		}
+		origin := proposals.ReasoningOrigin{RoadmapItemID: item.ID, RoadmapVersion: in.RoadmapVersion, OpportunityID: item.OpportunityID, Revision: revision, Items: reasoning, AnalysisStatus: "accepted_roadmap_outcome"}
+		for _, x := range reasoning {
+			origin.SelectedItemIDs = append(origin.SelectedItemIDs, x.ID)
+		}
+		var p proposals.Proposal
+		var made []proposals.Task
+		create := func() error {
+			p, made, e = proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: repo.ID, ActorID: actor.UserID, Title: in.Title, Body: in.Body, Origin: origin, Tasks: tasks})
+			return e
+		}
+		e = repos.WithCurrentParticipants(participants, repo.ID, func() error { return bare.WithReferenceTarget("refs/heads/"+repo.DefaultBranch, revision, create) })
+		if e != nil {
+			writeAPIError(w, 422, "implementation_invalid", "owners and the exact implementation plan must remain valid")
+			return
+		}
+		ids := []string{}
+		for _, t := range made {
+			ids = append(ids, t.ID)
+		}
+		updated, e := store.LinkImplementation(repo.ID, actor.UserID, in.ExpectedVersion, in.RoadmapVersion, item.ID, item.OpportunityID, p.ID, revision, ids)
+		if e != nil {
+			writeRoadmap(w, updated, e, 0)
+			return
+		}
+		writeJSON(w, 201, map[string]any{"roadmap": updated, "proposal": p, "tasks": made})
+	})
+	mux.HandleFunc("POST /repositories/{id}/roadmap/implementations/{proposal_id}/outcomes", func(w http.ResponseWriter, r *http.Request) {
+		actor, repo, participant, ok := authorize(w, r)
+		if !ok {
+			return
+		}
+		if !participant || actor.AgentID != "" {
+			writeAPIError(w, 403, "roadmap_outcome_forbidden", "only repository participants may assess roadmap outcomes")
+			return
+		}
+		var in roadmapOutcomeInput
+		if decodeJSON(r, &in) != nil || !validDecisionDeliveryResource(repo.ID, r.PathValue("proposal_id"), mapRoadmapEvidenceKind(in.Kind), in.ResourceKind, in.ResourceID, proposalStore, pullStore, checkStore, releaseStore, deploymentStore) {
+			writeAPIError(w, 422, "roadmap_evidence_invalid", "outcome evidence must be retained delivery or measurement evidence linked to this implementation")
+			return
+		}
+		v, e := store.ReportOutcome(repo.ID, actor.UserID, in.ExpectedVersion, r.PathValue("proposal_id"), roadmaps.DeliveryEvidence{Kind: in.Kind, Summary: in.Summary, ResourceKind: in.ResourceKind, ResourceID: in.ResourceID, MeasureIndexes: in.MeasureIndexes})
+		writeRoadmap(w, v, e, 201)
+	})
+}
+func mapRoadmapEvidenceKind(kind string) string {
+	if kind == "delivery" || kind == "measure_met" {
+		return "coverage"
+	}
+	return "failed_measure"
 }
 func writeRoadmap(w http.ResponseWriter, v roadmaps.Roadmap, e error, status int) {
 	switch {

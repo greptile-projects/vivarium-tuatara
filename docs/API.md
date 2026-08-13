@@ -2777,3 +2777,14 @@ accessibility needs, dissent, acceptance, and `valid`, `insufficient`, or `inval
 Collaborators append a `validated`, `revise`, `defer`, or `reject` conclusion at `POST .../conclusions`;
 conclusions never rewrite the roadmap. Mutations compare `expected_version` and return
 `409 validation_changed` on concurrent activity.
+
+`POST /repositories/{id}/roadmap/implementations` converts one exact accepted roadmap item into an
+ordinary proposal with ordered human- or agent-owned tasks. Every task names the success-measure
+indexes it advances and the complete plan must cover every measure; the server freezes the current
+default-branch revision and retains the opportunity need and measures on the proposal and tasks.
+`POST /repositories/{id}/roadmap/implementations/{proposal_id}/outcomes` accepts only retained linked
+review, check, integration, release, or deployment evidence. Product experiments report through
+their release/deployment-linked evidence chain. `delivery` never
+means achieved; `measure_met` must cover every frozen success measure. `measure_failed`,
+`assumption_changed`, `need_unresolved`, `policy_conflict`, and `decision_revisit` move the projection
+to `revisit_required` with attributable evidence.

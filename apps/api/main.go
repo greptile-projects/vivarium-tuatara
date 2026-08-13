@@ -731,7 +731,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerProductOpportunityRoutes(mux, repositoryCatalog, authStore, productOpportunityStore, feedbackStore, issueStore, previewStore, productExperimentStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && roadmapStore != nil && productOpportunityStore != nil {
-		registerRoadmapRoutes(mux, repositoryCatalog, authStore, roadmapStore, productOpportunityStore)
+		registerRoadmapRoutes(mux, store, repositoryCatalog, authStore, roadmapStore, productOpportunityStore, proposalStore, pullRequestStore, checkRunStore, releaseStore, deploymentStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && roadmapStore != nil && productOpportunityStore != nil && outcomeValidationStore != nil {
 		registerOutcomeValidationRoutes(mux, repositoryCatalog, authStore, outcomeValidationStore, roadmapStore, productOpportunityStore)
