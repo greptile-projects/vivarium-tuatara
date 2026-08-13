@@ -119,6 +119,12 @@ func (s *Store) Create(v Trial) (Trial, error) {
 	}
 	v.ID = hex.EncodeToString(b[:])
 	v.CreatedAt = s.now()
+	// Production captures retain the declared recipe and sanitization policy, not
+	// producer-supplied operational input. A declaration alone cannot prove that
+	// an arbitrary value contains no private user data.
+	if v.Mode == "production_capture" {
+		v.Inputs = "[sanitized production-derived workload]"
+	}
 	for i := range v.Timings {
 		summarize(&v.Timings[i])
 	}
@@ -175,9 +181,9 @@ func (s *Store) Compare(a, b Trial) []Comparison {
 	for _, t := range b.Timings {
 		x := Comparison{Metric: t.Metric, Unit: t.Unit, CurrentMean: t.Mean}
 		o, ok := old[t.Metric+"\x00"+t.Unit]
-		x.Comparable = ok && a.Workload == b.Workload && a.Environment.Name == b.Environment.Name && a.Sampling.Method == b.Sampling.Method
+		x.Comparable = ok && a.Workload == b.Workload && a.Environment == b.Environment && a.Sampling == b.Sampling
 		if !x.Comparable {
-			x.Reason = "workload, environment, sampling method, and metric unit must match"
+			x.Reason = "workload, complete environment, warmup, sampling method/count, metric, and unit must match"
 		} else {
 			x.BaselineMean = o.Mean
 			if o.Mean != 0 {
@@ -210,7 +216,7 @@ func valid(v Trial) bool {
 		return false
 	}
 	for _, line := range v.Logs {
-		if len(line) > 4000 || secret(line) {
+		if len(line) > 4000 || containsCredential(line) {
 			return false
 		}
 	}
@@ -231,11 +237,37 @@ func valid(v Trial) bool {
 	}
 	return true
 }
-func secret(v string) bool {
+func containsCredential(v string) bool {
 	x := strings.ToLower(v)
-	for _, p := range []string{"authorization:", "bearer ", "password=", "token=", "secret=", "cookie:"} {
+	for _, p := range []string{"authorization:", "bearer ", "password=", "password:", "token=", "token:", "secret=", "secret:", "cookie:", "x-api-key", "api-key", "api_key", "apikey"} {
 		if strings.Contains(x, p) {
 			return true
+		}
+	}
+	var structured any
+	if json.Unmarshal([]byte(v), &structured) == nil && structuredCredential(structured) {
+		return true
+	}
+	return false
+}
+
+func structuredCredential(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			normalized := strings.NewReplacer("_", "", "-", "", " ", "").Replace(strings.ToLower(key))
+			if normalized == "token" || normalized == "accesstoken" || normalized == "refreshtoken" || normalized == "password" || normalized == "secret" || normalized == "apikey" || normalized == "authorization" || normalized == "cookie" {
+				return true
+			}
+			if structuredCredential(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if structuredCredential(child) {
+				return true
+			}
 		}
 	}
 	return false

@@ -33,10 +33,26 @@ func TestTrialSummaryComparisonAndSanitization(t *testing.T) {
 	if _, e = s.Create(bad); e != ErrInvalid {
 		t.Fatalf("secret error = %v", e)
 	}
+	for _, credential := range []string{"X-API-Key: private", "api_key=private", `{"token":"private"}`, `{"nested":{"access_token":"private"}}`} {
+		bad = trial()
+		bad.Logs = []string{credential}
+		if _, e = s.Create(bad); e != ErrInvalid {
+			t.Fatalf("credential %q error = %v", credential, e)
+		}
+	}
 	capture := trial()
 	capture.Mode = "production_capture"
 	if _, e = s.Create(capture); e != ErrInvalid {
 		t.Fatalf("unsanitized capture error = %v", e)
+	}
+	capture.Sanitization = []string{"remove user identifiers and replace values with shape buckets"}
+	capture.Inputs = "customer@example.com private production request"
+	createdCapture, e := s.Create(capture)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if createdCapture.Inputs != "[sanitized production-derived workload]" {
+		t.Fatalf("production inputs persisted = %q", createdCapture.Inputs)
 	}
 }
 
@@ -49,5 +65,26 @@ func TestIncomparableTrialsExplainNoise(t *testing.T) {
 	c := s.Compare(a, created)
 	if c[0].Comparable || c[0].Reason == "" {
 		t.Fatalf("comparison = %+v", c)
+	}
+}
+
+func TestComparisonRequiresCompleteMeasurementConditions(t *testing.T) {
+	s, _ := New(t.TempDir())
+	a := trial()
+	a.Environment.Hardware = "xeon"
+	a.Environment.ContainerImage = "benchmark:v1"
+	baseline, _ := s.Create(a)
+	b := trial()
+	b.Environment.Name = a.Environment.Name
+	b.Environment.OS = "darwin"
+	b.Environment.Architecture = "arm64"
+	b.Environment.Runtime = "go1.23"
+	b.Environment.Hardware = "apple-m3"
+	b.Environment.ContainerImage = "benchmark:v2"
+	b.Sampling.Warmup = 9
+	current, _ := s.Create(b)
+	comparison := s.Compare(baseline, current)
+	if comparison[0].Comparable || comparison[0].ChangePercent != 0 {
+		t.Fatalf("comparison = %+v", comparison)
 	}
 }

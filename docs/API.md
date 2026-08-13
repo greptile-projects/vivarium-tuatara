@@ -2616,8 +2616,10 @@ two retained trials with `GET
 /repositories/{id}/performance-trials/{trial-id}/compare/{baseline-id}`. Every trial freezes an
 exact Git commit; a `release` source must name a release attesting that commit.
 
-Trials retain sanitized workload inputs, environment, warmup/sample method, raw timings with
+Trials retain a fixed non-sensitive production-workload marker plus its sanitization recipe (or
+repository benchmark inputs), environment, warmup/sample method, raw timings with
 server-derived variance, resource profiles, content-addressed trace/artifact metadata, logs, and
 cost. Production captures require declared sanitization and credential-like logs are rejected.
-Comparisons are numeric only when workload, environment, sampling method, metric, and unit match.
+Comparisons are numeric only when workload, every environment field, warmup/sample count and
+method, metric, and unit match.
 Records default beneath `$PERFORMANCE_EVIDENCE_STORAGE_ROOT` (`performance-evidence`).
