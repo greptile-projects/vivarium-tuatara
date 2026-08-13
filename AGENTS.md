@@ -358,6 +358,11 @@ whenever dependencies change or the web job fails before it starts.
   eligibility, region/organization bounds, deterministic user randomization, mutual exclusion,
   allocation, consent, minimal data, and retention. Assignment retains only salted subject digests;
   stale, conflicting, biased, unauthorized, or release-mismatched admission fails before rollout.
+  Live attempts bind the contract to successful exact-release deployments in established environments.
+  Compare-and-swap allocation stages stay within its cap; idempotent observations retain exposure,
+  samples, uncertainty, cost, consent, data quality, and operational health. Pause, stop, guardrail
+  breach, deployment failure, instrumentation loss, sample imbalance, or revoked consent prevents new
+  assignment without changing stable prior receipts or discarding attempt evidence.
 
   Repository collaborators define append-only performance contracts at
   `/repositories/{id}/performance` and the public `/repositories/{id}/performance-goals`

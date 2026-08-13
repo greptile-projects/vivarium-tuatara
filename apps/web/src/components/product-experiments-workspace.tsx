@@ -86,6 +86,7 @@ type Experiment = {
     eligible: boolean;
     reason: string;
   }[];
+  run_attempts: RunAttempt[];
   diagnostics: {
     kind: string;
     severity: string;
@@ -93,6 +94,13 @@ type Experiment = {
     attributed_to: string;
     related_experiment_id?: string;
   }[];
+};
+type RunAttempt = {
+  id: string; contract_id: string; deployment_ids: string[]; environment_ids: string[];
+  status: string; containment_reason?: string; version: number;
+  stages: { version: number; allocation: { variant_key: string; basis_points: number }[]; reason: string; actor_id: string; created_at: string }[];
+  observations: { id: string; exposures: Record<string, number>; metric_values: Record<string, number>; metric_samples: Record<string, number>; uncertainty: Record<string, number>; cost: number; instrumentation_ok: boolean; consent_current: boolean; deployment_healthy: boolean; sample_balanced: boolean; note?: string; created_at: string }[];
+  events: { kind: string; actor_id: string; reason: string; created_at: string }[];
 };
 type AudienceContract = {
   id: string;
@@ -373,6 +381,11 @@ export function ProductExperimentsWorkspace({
       );
     }
   }
+  async function runAction(path: string, body: unknown) {
+    if (!selected || !token) return;
+    try { await api(`/repositories/${repositoryID}/product-experiments/${selected.id}/${path}`, {method:"POST", body:JSON.stringify(body)}, token); await load(); }
+    catch (x) { setError(x instanceof Error ? x.message : "Experiment run could not be changed."); }
+  }
   const r = selected?.revisions.at(-1);
   return (
     <div className="space-y-6">
@@ -618,6 +631,7 @@ export function ProductExperimentsWorkspace({
       {selected && (
         <AudienceGovernance experiment={selected} onSubmit={approveAudience} />
       )}
+      {selected && <LiveRuns experiment={selected} act={runAction} />}
       <section>
         <h2 className="font-semibold">Repository experiments</h2>
         {items.map((x) => (
@@ -635,6 +649,18 @@ export function ProductExperimentsWorkspace({
       </section>
     </div>
   );
+}
+function allocation(form: FormData) { return lines(value(form,"allocation")).map((line)=>{const [variant_key,percent]=line.split(":");return {variant_key:variant_key.trim(),basis_points:Math.round(Number(percent)*100)}}); }
+function LiveRuns({experiment,act}:{experiment:Experiment;act:(path:string,body:unknown)=>Promise<void>}) {
+  const latest=experiment.run_attempts?.at(-1);
+  return <Card className="p-5"><h2 className="font-semibold">Live delivery and evidence</h2><p className="mt-1 text-sm text-[var(--muted)]">Launch only through successful established deployments, steer within the approved audience cap, and contain unsafe evidence without moving existing assignments.</p>
+    <form className="mt-4 grid gap-3 md:grid-cols-3" onSubmit={(e)=>{e.preventDefault();const f=new FormData(e.currentTarget);void act("runs",{contract_id:value(f,"contract_id"),deployment_ids:lines(value(f,"deployment_ids")),allocation:allocation(f)})}}><Field name="contract_id" label="Approved audience contract"/><Area name="deployment_ids" label="Successful deployment IDs"/><Area name="allocation" label="Initial allocation: variant:percent"/><Button>Launch experiment</Button></form>
+    {latest&&<div className="mt-5 rounded-lg border p-4"><div className="flex flex-wrap gap-2"><Badge tone={latest.status==="running"?"success":latest.status==="contained"?"danger":"warning"}>{latest.status}</Badge><Badge>attempt {latest.id}</Badge><Badge>v{latest.version}</Badge>{latest.environment_ids.map(x=><Badge key={x}>{x}</Badge>)}</div>{latest.containment_reason&&<p className="mt-2 text-sm text-[var(--danger)]">Contained: {latest.containment_reason.replaceAll("_"," ")}</p>}
+      <form className="mt-4 grid gap-3 md:grid-cols-3" onSubmit={(e)=>{e.preventDefault();const f=new FormData(e.currentTarget);void act(`runs/${latest.id}/stages`,{expected_version:latest.version,allocation:allocation(f),reason:value(f,"reason")})}}><Area name="allocation" label="Next allocation: variant:percent"/><Field name="reason" label="Governance reason"/><Button disabled={latest.status!=="running"}>Publish stage</Button></form>
+      <div className="mt-3 flex flex-wrap gap-2">{["pause","resume","stop"].map(action=><Button key={action} variant="secondary" onClick={()=>void act(`runs/${latest.id}/controls`,{expected_version:latest.version,action,reason:`Collaborator requested ${action}`})}>{action}</Button>)}</div>
+      <form className="mt-4 grid gap-3 md:grid-cols-3" onSubmit={(e)=>{e.preventDefault();const f=new FormData(e.currentTarget);const pairs=(name:string)=>Object.fromEntries(lines(value(f,name)).map(x=>{const [k,v]=x.split(":");return [k.trim(),Number(v)]}));void act(`runs/${latest.id}/observations`,{idempotency_key:value(f,"key"),stage_version:Number(value(f,"stage")),exposures:pairs("exposures"),metric_values:pairs("metrics"),metric_samples:pairs("samples"),uncertainty:pairs("uncertainty"),cost:Number(value(f,"cost")),instrumentation_ok:f.get("instrumentation")!==null,consent_current:f.get("consent")!==null,deployment_healthy:f.get("deployment")!==null,sample_balanced:f.get("balanced")!==null,note:value(f,"note")})}}><Field name="key" label="Stable evidence key"/><Field name="stage" label="Stage version" type="number" initial={String(latest.stages.at(-1)?.version??1)}/><Area name="exposures" label="Exposure: variant:count"/><Area name="metrics" label="Metric: value"/><Area name="samples" label="Metric: sample count"/><Area name="uncertainty" label="Metric: uncertainty"/><Field name="cost" label="Cost" type="number" initial="0"/><Field name="note" label="Operational note"/><div className="text-sm"><label><input type="checkbox" name="instrumentation" defaultChecked/> Instrumentation healthy</label><br/><label><input type="checkbox" name="consent" defaultChecked/> Consent current</label><br/><label><input type="checkbox" name="deployment" defaultChecked/> Deployment healthy</label><br/><label><input type="checkbox" name="balanced" defaultChecked/> Sample balanced</label></div><Button>Record observation</Button></form>
+      <div className="mt-5 grid gap-3 md:grid-cols-2">{latest.observations.map(o=><article key={o.id} className="rounded-lg bg-[var(--surface-2)] p-3 text-sm"><b>{Object.entries(o.exposures).map(([k,v])=>`${k} ${v}`).join(" · ")||"No exposure"}</b><p>{Object.entries(o.metric_values).map(([k,v])=>`${k}: ${v} (n=${o.metric_samples[k]??0}, ±${o.uncertainty[k]??"?"})`).join(" · ")}</p><p className="text-xs text-[var(--muted)]">Cost {o.cost} · instrumentation {String(o.instrumentation_ok)} · consent {String(o.consent_current)} · deployment {String(o.deployment_healthy)} · balanced {String(o.sample_balanced)}</p></article>)}</div>
+    </div>}</Card>
 }
 function AudienceGovernance({
   experiment,
