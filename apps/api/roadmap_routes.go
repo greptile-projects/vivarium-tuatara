@@ -28,6 +28,15 @@ func registerRoadmapRoutes(mux *http.ServeMux, repos *repositories.Store, creden
 		if e != nil {
 			return actor, repo, false, false
 		}
+		// Public reads intentionally do not authenticate in the shared read helper.
+		// Recover an optional presented identity so mutations remain attributable.
+		if actor.UserID == "" && actor.AgentID == "" && r.Header.Get("Authorization") != "" {
+			var authenticated bool
+			actor, authenticated, ok = authenticateOptionalRequest(w, r, credentials, "repositories:read", false)
+			if !ok || !authenticated {
+				return auth.Credential{}, repo, false, false
+			}
+		}
 		participant := actor.UserID == repo.OwnerID
 		if !participant {
 			participant, _ = repos.HasCollaborator(actor.UserID, repo.ID)
@@ -37,9 +46,22 @@ func registerRoadmapRoutes(mux *http.ServeMux, repos *repositories.Store, creden
 	validate := func(repo string, r roadmaps.Revision) bool {
 		for _, d := range r.Decisions {
 			x, e := opportunities.Get(repo, d.OpportunityID)
-			if e != nil || x.CurrentVersion != d.Version {
+			found := false
+			if e == nil {
+				for _, revision := range x.Revisions {
+					found = found || revision.Version == d.Version
+				}
+			}
+			if !found {
 				return false
 			}
+		}
+		return true
+	}
+	requireIdentity := func(w http.ResponseWriter, actor auth.Credential) bool {
+		if actor.UserID == "" && actor.AgentID == "" {
+			writeAuthenticationRequired(w, false)
+			return false
 		}
 		return true
 	}
@@ -70,7 +92,7 @@ func registerRoadmapRoutes(mux *http.ServeMux, repos *repositories.Store, creden
 	})
 	mux.HandleFunc("POST /repositories/{id}/roadmap/scenarios", func(w http.ResponseWriter, r *http.Request) {
 		actor, repo, _, ok := authorize(w, r)
-		if !ok {
+		if !ok || !requireIdentity(w, actor) {
 			return
 		}
 		var in roadmapMutation
@@ -87,7 +109,7 @@ func registerRoadmapRoutes(mux *http.ServeMux, repos *repositories.Store, creden
 	})
 	mux.HandleFunc("POST /repositories/{id}/roadmap/comments", func(w http.ResponseWriter, r *http.Request) {
 		actor, repo, _, ok := authorize(w, r)
-		if !ok {
+		if !ok || !requireIdentity(w, actor) {
 			return
 		}
 		var in roadmapMutation
