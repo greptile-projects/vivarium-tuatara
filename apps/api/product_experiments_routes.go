@@ -4,6 +4,8 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"slices"
+	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
@@ -56,6 +58,17 @@ type productExperimentControlInput struct {
 	Action          string `json:"action"`
 	Reason          string `json:"reason"`
 }
+type productExperimentAnalysisInput struct {
+	Analysis productexperiments.Analysis `json:"analysis"`
+}
+type productExperimentOutcomeInput struct {
+	ExpectedVersion int                                `json:"expected_version"`
+	Decision        productexperiments.OutcomeDecision `json:"decision"`
+}
+type productExperimentTaskInput struct {
+	ExpectedVersion int                             `json:"expected_version"`
+	Evidence        productexperiments.TaskEvidence `json:"evidence"`
+}
 
 func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *productexperiments.Store, proposals *proposals.Store, pulls *pullrequests.Store, checks *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store) {
 	store.ConfigureDeploymentHealth(func(repositoryID string, deploymentIDs []string) (bool, error) {
@@ -72,6 +85,40 @@ func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.S
 			}
 		}
 		return true, nil
+	})
+	store.ConfigureOutcomeEvidence(func(repositoryID, experimentID, decisionID, taskID, taskKind string, evidence productexperiments.TaskEvidence) bool {
+		if pulls == nil || strings.TrimSpace(evidence.PullRequestID) == "" {
+			return false
+		}
+		pull, err := pulls.Get(repositoryID, evidence.PullRequestID)
+		if err != nil || pull.Status != pullrequests.Merged || !outcomeEvidenceTrailers(pull.Body, experimentID, decisionID, taskID, taskKind) {
+			return false
+		}
+		switch evidence.Kind {
+		case "pull_request":
+			if evidence.ResourceID != evidence.PullRequestID || (taskKind != "follow_up" && taskKind != "remove_variants" && taskKind != "remove_targeting" && taskKind != "revoke_credentials" && taskKind != "stop_collection" && taskKind != "review") {
+				return false
+			}
+			return true
+		case "release":
+			if releaseStore == nil || taskKind != "release" {
+				return false
+			}
+			candidate, err := releaseStore.Get(repositoryID, evidence.ResourceID)
+			return err == nil && candidate.ID != ""
+		case "deployment":
+			if deploymentStore == nil || (taskKind != "deployment" && taskKind != "rollout" && taskKind != "rollback") {
+				return false
+			}
+			promotion, err := deploymentStore.GetPromotion(repositoryID, evidence.ResourceID)
+			if err != nil || promotion.State != "succeeded" {
+				return false
+			}
+			release, err := releaseStore.Get(repositoryID, promotion.ReleaseID)
+			return err == nil && experimentDeploymentContainsPull(release, promotion, pull.ID)
+		default:
+			return false
+		}
 	})
 	writeProjected := func(w http.ResponseWriter, experiment productexperiments.Experiment, status int) {
 		all, err := store.List(experiment.RepositoryID)
@@ -407,6 +454,93 @@ func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.S
 		}
 		writeProjected(w, out, 201)
 	})
+	mux.HandleFunc("POST /repositories/{id}/product-experiments/{experiment_id}/analyses", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := store.Get(r.PathValue("experiment_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "product_experiment_not_found", "experiment not found")
+			return
+		}
+		var in productExperimentAnalysisInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "revision-bound analysis is required")
+			return
+		}
+		out, err := store.Analyze(current.ID, actor.UserID, in.Analysis)
+		if err != nil {
+			writeProductExperimentError(w, err)
+			return
+		}
+		writeProjected(w, out, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/product-experiments/{experiment_id}/outcomes", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := store.Get(r.PathValue("experiment_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "product_experiment_not_found", "experiment not found")
+			return
+		}
+		var in productExperimentOutcomeInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a versioned outcome decision is required")
+			return
+		}
+		out, err := store.DecideOutcome(current.ID, actor.UserID, in.ExpectedVersion, in.Decision)
+		if err != nil {
+			writeProductExperimentError(w, err)
+			return
+		}
+		writeProjected(w, out, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/product-experiments/{experiment_id}/outcomes/{decision_id}/tasks/{task_id}/complete", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := store.Get(r.PathValue("experiment_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "product_experiment_not_found", "experiment not found")
+			return
+		}
+		var in productExperimentTaskInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "completion evidence is required")
+			return
+		}
+		out, err := store.CompleteOutcomeTask(current.ID, r.PathValue("decision_id"), r.PathValue("task_id"), actor.UserID, in.Evidence, in.ExpectedVersion)
+		if err != nil {
+			writeProductExperimentError(w, err)
+			return
+		}
+		writeProjected(w, out, 200)
+	})
+}
+
+func experimentDeploymentContainsPull(release releases.Candidate, promotion deployments.Promotion, pullID string) bool {
+	return release.ID == promotion.ReleaseID && release.CommitID == promotion.CommitID && slices.Contains(release.Inclusions.PullRequestIDs, pullID)
+}
+
+func outcomeEvidenceTrailers(body, experimentID, decisionID, taskID, action string) bool {
+	wanted := map[string]string{"Experiment": experimentID, "Outcome-Decision": decisionID, "Outcome-Task": taskID, "Outcome-Action": action}
+	found := map[string]string{}
+	for _, line := range strings.Split(body, "\n") {
+		key, value, ok := strings.Cut(line, ":")
+		if ok {
+			found[strings.TrimSpace(key)] = strings.TrimSpace(value)
+		}
+	}
+	for key, value := range wanted {
+		if found[key] != value {
+			return false
+		}
+	}
+	return true
 }
 
 func successfulExperimentChecks(runs []checkruns.Run, commitID string) map[string]bool {

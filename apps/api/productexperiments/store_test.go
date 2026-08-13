@@ -30,6 +30,91 @@ func TestPlanDiagnosticsAndVersionBoundApproval(t *testing.T) {
 		t.Fatalf("diagnostics = %#v", v.Diagnostics)
 	}
 }
+func TestOutcomeRequiresThresholdAndRetiresExperimentResources(t *testing.T) {
+	s, _ := New(t.TempDir())
+	s.ConfigureOutcomeEvidence(func(_, _, _, _, _ string, evidence TaskEvidence) bool {
+		return evidence.Kind == "pull_request" && evidence.PullRequestID == "p1" && evidence.ResourceID == "p1"
+	})
+	revision, signals := plan("available")
+	revision.MinimumEvidence = 2
+	v, _ := s.Create("repo", "alice", Source{Kind: "proposal", ResourceID: "p1", Label: "test"}, revision, signals)
+	v.RunAttempts = []RunAttempt{{ID: "run", ExperimentVersion: 1, Status: "running", Version: 1}}
+	if err := s.write(v); err != nil {
+		t.Fatal(err)
+	}
+	analysis := Analysis{RunID: "run", RunVersion: 1, SegmentEffects: []SegmentEffect{{Segment: "new users", Exposures: map[string]int{"control": 1, "treatment": 1}, MetricValues: map[string]float64{"completion": 8}, Uncertainty: map[string]float64{"completion": 1.2}}}, GuardrailOutcomes: []string{"errors stayed below 2%"}, Interpretation: "Treatment improves completion.", InterpretedByType: "agent", InterpretedByID: "forged-agent", Uncertainty: "95% interval overlaps a small neutral effect", Exclusions: []string{"staff traffic"}, Dissent: []string{"Bob prefers another week"}}
+	if _, err := s.Analyze(v.ID, "alice", analysis); !errors.Is(err, ErrConflict) {
+		t.Fatalf("premature analysis = %v", err)
+	}
+	raw, _ := s.read(v.ID)
+	raw.RunAttempts[0].Observations = []RunObservation{{Exposures: map[string]int{"control": 1, "treatment": 1}}}
+	if err := s.write(raw); err != nil {
+		t.Fatal(err)
+	}
+	v, err := s.Analyze(v.ID, "alice", analysis)
+	if err != nil || len(v.Analyses) != 1 || v.Analyses[0].ThresholdReason != "minimum_evidence_reached" {
+		t.Fatalf("analysis=%#v %v", v.Analyses, err)
+	}
+	if v.Analyses[0].InterpretedByType != "human" || v.Analyses[0].InterpretedByID != "alice" {
+		t.Fatalf("forged interpreter retained: %#v", v.Analyses[0])
+	}
+	tasks := []OutcomeTask{{Kind: "rollout", Title: "Roll out treatment"}, {Kind: "remove_variants", Title: "Delete control path"}, {Kind: "remove_targeting", Title: "Delete targeting flag"}, {Kind: "revoke_credentials", Title: "Revoke experiment credential"}, {Kind: "stop_collection", Title: "Retire experiment event"}, {Kind: "release", Title: "Ship cleanup"}}
+	v, err = s.DecideOutcome(v.ID, "alice", 0, OutcomeDecision{AnalysisID: v.Analyses[0].ID, Decision: "adopt_variant", VariantKey: "treatment", Rationale: "Threshold met without guardrail harm", Tasks: tasks})
+	if err != nil || len(v.OutcomeDecisions) != 1 || v.RunAttempts[0].Status != "stopped" {
+		t.Fatalf("decision=%#v %v", v.OutcomeDecisions, err)
+	}
+	d := v.OutcomeDecisions[0]
+	for _, task := range d.Tasks {
+		if !task.Required {
+			continue
+		}
+		v, err = s.CompleteOutcomeTask(v.ID, d.ID, task.ID, "alice", TaskEvidence{PullRequestID: "p1", Kind: "pull_request", ResourceID: "p1"}, d.Version)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d = v.OutcomeDecisions[0]
+	}
+	if !d.CleanedUp {
+		t.Fatalf("cleanup=%#v", d)
+	}
+	if len(v.Analyses) != 1 || len(v.RunAttempts[0].Observations) != 1 {
+		t.Fatal("aggregated outcome evidence was discarded")
+	}
+}
+func TestFollowUpOutcomeAllowsRelaunchOnlyAfterCleanup(t *testing.T) {
+	s, _ := New(t.TempDir())
+	s.ConfigureDeploymentHealth(func(string, []string) (bool, error) { return true, nil })
+	revision, signals := plan("available")
+	v, _ := s.Create("repo", "alice", Source{Kind: "proposal", ResourceID: "p", Label: "test"}, revision, signals)
+	v.AudienceContracts = []AudienceContract{{ID: "contract", ExperimentVersion: 1, VariantKeys: []string{"control", "treatment"}, Allocation: []Allocation{{VariantKey: "control", BasisPoints: 5000}, {VariantKey: "treatment", BasisPoints: 5000}}}}
+	v.OutcomeDecisions = []OutcomeDecision{{Decision: "extend_test", ExperimentVersion: 1, CleanedUp: false}}
+	if err := s.write(v); err != nil {
+		t.Fatal(err)
+	}
+	allocation := []RunAllocation{{VariantKey: "control", BasisPoints: 5000}, {VariantKey: "treatment", BasisPoints: 5000}}
+	if _, err := s.Launch(v.ID, "alice", "contract", []string{"deployment"}, []string{"production"}, allocation); !errors.Is(err, ErrConflict) {
+		t.Fatalf("unclean relaunch = %v", err)
+	}
+	raw, _ := s.read(v.ID)
+	raw.OutcomeDecisions[0].CleanedUp = true
+	if err := s.write(raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Launch(v.ID, "alice", "contract", []string{"deployment"}, []string{"production"}, allocation); !errors.Is(err, ErrConflict) {
+		t.Fatalf("retired plan relaunch = %v", err)
+	}
+	raw, _ = s.read(v.ID)
+	raw.CurrentVersion = 2
+	revision.Version, revision.CreatedBy, revision.CreatedAt = 2, "alice", s.now()
+	raw.Revisions = append(raw.Revisions, revision)
+	raw.AudienceContracts = append(raw.AudienceContracts, AudienceContract{ID: "successor", ExperimentVersion: 2, VariantKeys: []string{"control", "treatment"}, Allocation: []Allocation{{VariantKey: "control", BasisPoints: 5000}, {VariantKey: "treatment", BasisPoints: 5000}}})
+	if err := s.write(raw); err != nil {
+		t.Fatal(err)
+	}
+	if launched, err := s.Launch(v.ID, "alice", "successor", []string{"deployment"}, []string{"production"}, allocation); err != nil || len(launched.RunAttempts) != 1 {
+		t.Fatalf("successor follow-up relaunch = %#v, %v", launched.RunAttempts, err)
+	}
+}
 func TestOverlapRequiresSharedAudienceAndSignal(t *testing.T) {
 	s, _ := New(t.TempDir())
 	revision, signals := plan("available")
