@@ -2044,6 +2044,14 @@ move a delivery to the visible dead letter state; replay preserves the source
 event identity while assigning a fresh delivery ID and sequence. Consumers
 reject an unknown newer `schema_version` without acknowledging the delivery.
 
+The repository performance workspace turns retained trials into collaborative diagnosis before
+optimization begins. A diagnosis selects exact evidence and revision-aware symbols, dependencies,
+commits, releases, and runtime paths; invites relevant owners; and retains cited hypotheses,
+comparisons, uncertainty, conclusions, flame stacks, challenges, and confirmations. Findings are
+visibly stale after same-context evidence changes revision, workload, or environment. Read-only
+agent access is short-lived and bound to one packet, preventing unrelated restricted evidence from
+propagating through its citations.
+
 Local extension development may set `EXTENSION_DEVELOPMENT_ENDPOINTS=1` on the
 API process to verify sample services over HTTP at `localhost`, `127.0.0.1`, or
 `::1`. The exception is deliberately limited to loopback and is disabled by

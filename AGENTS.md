@@ -353,6 +353,11 @@ whenever dependencies change or the web job fails before it starts.
   `performance-evidence`) freeze an exact revision or matching release and retain sanitized
   workload, environment, sampling, timing variance, resources, artifacts, logs, and cost;
   comparisons fail closed when measurement conditions differ.
+  Performance investigations reuse retained trials and preserve selected evidence,
+  revision-aware code/runtime references, invited owners, cited claims, flame stacks,
+  challenges, and confirmations. Newer same-context trials mark claims stale when the
+  revision, workload, or environment changes. Short-lived `performance:investigate`
+  credentials bind to one selected packet and may cite only its trials and references.
   Repository release candidates at `/repositories/{id}/releases` freeze a
   verified commit, version, notes, creator, optional prior-release boundary,
   and the server-derived merged pulls, proposals, tasks, and contributors in

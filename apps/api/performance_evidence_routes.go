@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"os/exec"
+	"strings"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/performanceevidence"
@@ -93,5 +95,243 @@ func registerPerformanceEvidenceRoutes(mux *http.ServeMux, gitStore *storage.Sto
 			return
 		}
 		writeJSON(w, 200, map[string]any{"baseline": baseline, "current": current, "comparisons": trials.Compare(baseline, current)})
+	})
+	mux.HandleFunc("GET /repositories/{id}/performance-investigations", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
+			return
+		}
+		items, e := trials.ListInvestigations(r.PathValue("id"))
+		if e != nil {
+			writeAPIError(w, 500, "performance_diagnosis_unavailable", "investigations could not be read")
+			return
+		}
+		for i := range items {
+			items[i] = trials.ProjectStaleness(items[i])
+		}
+		writeJSON(w, 200, map[string]any{"investigations": items})
+	})
+	mux.HandleFunc("POST /repositories/{id}/performance-investigations", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in performanceevidence.Investigation
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a bounded investigation is required")
+			return
+		}
+		in.RepositoryID = r.PathValue("id")
+		in.CreatedBy = actor.UserID
+		repo, openErr := gitStore.Open(in.RepositoryID)
+		if openErr != nil {
+			writeAPIError(w, 422, "performance_investigation_invalid", "the repository evidence could not be resolved")
+			return
+		}
+		for i := range in.References {
+			ref := &in.References[i]
+			switch ref.Kind {
+			case "commit":
+				ref.ID = ref.Revision
+			case "release":
+				// The release store owns this identity; retain its canonical ID.
+			case "symbol":
+				ref.ID = ref.Revision + ":" + ref.Path + "#" + ref.Symbol
+			case "dependency", "runtime_path":
+				ref.ID = ref.Revision + ":" + ref.Path
+			}
+		}
+		resolveReference := func(ref performanceevidence.Reference) bool {
+			if ref.Revision != "" {
+				visibleRevision, err := resolveRevision(repo, ref.Revision)
+				if err != nil || string(visibleRevision) != ref.Revision {
+					return false
+				}
+			}
+			switch ref.Kind {
+			case "commit":
+				return ref.ID == ref.Revision && ref.Revision != ""
+			case "symbol", "dependency", "runtime_path":
+				path := strings.TrimSpace(ref.Path)
+				if ref.Revision == "" || path == "" || strings.HasPrefix(path, "/") || strings.Contains("/"+path+"/", "/../") || (ref.Kind == "symbol" && strings.TrimSpace(ref.Symbol) == "") {
+					return false
+				}
+				return exec.Command("git", "--git-dir="+repo.Path(), "cat-file", "-e", ref.Revision+":"+path).Run() == nil
+			case "release":
+				if releaseStore == nil || ref.Revision == "" {
+					return false
+				}
+				release, err := releaseStore.Get(in.RepositoryID, ref.ID)
+				return err == nil && release.CommitID == ref.Revision
+			default:
+				return false
+			}
+		}
+		created, e := trials.CreateInvestigation(in, resolveReference)
+		if errors.Is(e, performanceevidence.ErrInvalid) {
+			writeAPIError(w, 422, "performance_investigation_invalid", "select repository-visible trials and revision-aware references")
+			return
+		}
+		if e != nil {
+			writeAPIError(w, 500, "performance_diagnosis_unavailable", "investigation could not be persisted")
+			return
+		}
+		writeJSON(w, 201, created)
+	})
+	readInvestigation := func(w http.ResponseWriter, r *http.Request) (performanceevidence.Investigation, bool) {
+		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
+			return performanceevidence.Investigation{}, false
+		}
+		v, e := trials.GetInvestigation(r.PathValue("investigation_id"))
+		if e != nil || v.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "performance_investigation_not_found", "investigation not found")
+			return v, false
+		}
+		return trials.ProjectStaleness(v), true
+	}
+	mux.HandleFunc("GET /repositories/{id}/performance-investigations/{investigation_id}", func(w http.ResponseWriter, r *http.Request) {
+		v, ok := readInvestigation(w, r)
+		if ok {
+			writeJSON(w, 200, v)
+		}
+	})
+	mux.HandleFunc("POST /repositories/{id}/performance-investigations/{investigation_id}/findings", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		v, e := trials.GetInvestigation(r.PathValue("investigation_id"))
+		if e != nil || v.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "performance_investigation_not_found", "investigation not found")
+			return
+		}
+		var in performanceevidence.Finding
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a cited finding is required")
+			return
+		}
+		updated, e := trials.AddFinding(v.ID, actor.UserID, in)
+		if errors.Is(e, performanceevidence.ErrInvalid) {
+			writeAPIError(w, 422, "performance_finding_invalid", "findings require selected citations, confidence, and bounded flame stacks")
+			return
+		}
+		if e != nil {
+			writeAPIError(w, 500, "performance_diagnosis_unavailable", "finding could not be persisted")
+			return
+		}
+		writeJSON(w, 201, trials.ProjectStaleness(updated))
+	})
+	respond := func(confirm bool) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+			if !ok {
+				return
+			}
+			var in struct {
+				Body string `json:"body"`
+			}
+			if decodeJSON(r, &in) != nil || strings.TrimSpace(in.Body) == "" {
+				writeAPIError(w, 422, "invalid_response", "a response is required")
+				return
+			}
+			investigation, getErr := trials.GetInvestigation(r.PathValue("investigation_id"))
+			if getErr != nil || investigation.RepositoryID != r.PathValue("id") {
+				writeAPIError(w, 404, "performance_investigation_not_found", "investigation not found")
+				return
+			}
+			updated, e := trials.Respond(r.PathValue("investigation_id"), r.PathValue("finding_id"), actor.UserID, in.Body, confirm)
+			if errors.Is(e, performanceevidence.ErrNotFound) {
+				writeAPIError(w, 404, "performance_finding_not_found", "finding not found")
+				return
+			}
+			if e != nil {
+				writeAPIError(w, 422, "invalid_response", "response could not be retained")
+				return
+			}
+			writeJSON(w, 201, trials.ProjectStaleness(updated))
+		}
+	}
+	mux.HandleFunc("POST /repositories/{id}/performance-investigations/{investigation_id}/findings/{finding_id}/challenges", respond(false))
+	mux.HandleFunc("POST /repositories/{id}/performance-investigations/{investigation_id}/findings/{finding_id}/confirmations", respond(true))
+	mux.HandleFunc("POST /repositories/{id}/performance-investigations/{investigation_id}/agent-access", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpiresIn int `json:"expires_in"`
+		}
+		if decodeJSON(r, &in) != nil || in.ExpiresIn < 300 || in.ExpiresIn > 86400 {
+			writeAPIError(w, 422, "invalid_investigation_access", "expiry must be 5 minutes to 24 hours")
+			return
+		}
+		v, e := trials.GetInvestigation(r.PathValue("investigation_id"))
+		if e != nil || v.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "performance_investigation_not_found", "investigation not found")
+			return
+		}
+		issued, e := credentials.Issue(actor.UserID, auth.API, "Performance investigation", []string{"performance:investigate"}, time.Duration(in.ExpiresIn)*time.Second)
+		if e != nil {
+			writeAPIError(w, 500, "investigation_failed", "credential could not be issued")
+			return
+		}
+		v, e = trials.BindCredential(v.ID, issued.ID)
+		if e != nil {
+			_, _ = credentials.Revoke(actor.UserID, issued.ID)
+			writeAPIError(w, 500, "investigation_failed", "credential binding could not be persisted")
+			return
+		}
+		writeJSON(w, 201, map[string]any{"credential": issued, "investigation": trials.ProjectStaleness(v)})
+	})
+	mux.HandleFunc("GET /performance-investigations/{investigation_id}", func(w http.ResponseWriter, r *http.Request) {
+		credential, ok := authenticateRequest(w, r, credentials, "performance:investigate", false)
+		if !ok {
+			return
+		}
+		v, e := trials.GetInvestigation(r.PathValue("investigation_id"))
+		if e != nil || v.CredentialID != credential.ID {
+			writeAPIError(w, 404, "performance_investigation_not_found", "investigation not found")
+			return
+		}
+		if e = catalog.WithCurrentParticipant(credential.UserID, v.RepositoryID, func() error { return nil }); e != nil {
+			writeAPIError(w, 403, "investigation_access_changed", "the credential owner lost repository access")
+			return
+		}
+		selected := []performanceevidence.Trial{}
+		for _, id := range v.TrialIDs {
+			if t, e := trials.Get(id); e == nil {
+				selected = append(selected, t)
+			}
+		}
+		writeJSON(w, 200, map[string]any{"investigation": trials.ProjectStaleness(v), "trials": selected})
+	})
+	mux.HandleFunc("POST /performance-investigations/{investigation_id}/findings", func(w http.ResponseWriter, r *http.Request) {
+		credential, ok := authenticateRequest(w, r, credentials, "performance:investigate", false)
+		if !ok {
+			return
+		}
+		v, e := trials.GetInvestigation(r.PathValue("investigation_id"))
+		if e != nil || v.CredentialID != credential.ID {
+			writeAPIError(w, 404, "performance_investigation_not_found", "investigation not found")
+			return
+		}
+		if e = catalog.WithCurrentParticipant(credential.UserID, v.RepositoryID, func() error { return nil }); e != nil {
+			writeAPIError(w, 403, "investigation_access_changed", "the credential owner lost repository access")
+			return
+		}
+		var in performanceevidence.Finding
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a cited finding is required")
+			return
+		}
+		updated, e := trials.AddFinding(v.ID, "agent:"+credential.ID, in)
+		if errors.Is(e, performanceevidence.ErrInvalid) {
+			writeAPIError(w, 422, "performance_finding_invalid", "findings require only selected citations, confidence, and bounded flame stacks")
+			return
+		}
+		if e != nil {
+			writeAPIError(w, 500, "performance_diagnosis_unavailable", "finding could not be persisted")
+			return
+		}
+		writeJSON(w, 201, trials.ProjectStaleness(updated))
 	})
 }
