@@ -2145,3 +2145,16 @@ capability is declared, and proves uninstall revokes the derived credential
 without deleting the contribution, invocation, delivery, or installation
 history. Playwright isolates extension records beneath
 `$EXTENSION_STORAGE_ROOT` with its other temporary API stores.
+## Evidence-backed product opportunities
+
+Repository readers can inspect `/repositories/{id}/opportunities` to see recurring needs as an
+auditable interpretation rather than a popularity score. Each version states its affected audiences,
+severity, reach, confidence, expected value, uncertainty, minority needs, contradictions, and exact
+source citations. Citations identify whether evidence supports, contradicts, represents a minority
+need, or duplicates another signal; moved and inaccessible sources are visibly stale.
+
+Project participants may publish new versions and attributable classification corrections. Any
+authorized reader may challenge a synthesis, and a feedback reporter may detach their feedback
+citation where the feedback policy permits, while the original source and earlier synthesis versions
+remain unchanged. Read-only repository agents may create cited syntheses, but cannot revise or
+correct them.

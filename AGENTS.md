@@ -380,6 +380,15 @@ whenever dependencies change or the web job fails before it starts.
   `$FEEDBACK_STORAGE_ROOT` (default `feedback`). Repository participants may discuss submissions;
   organization-private records remain limited to their reporter and current project participants,
   while API projection independently redacts reporter identity, contact, and evidence before reads.
+  Product opportunities at `/repositories/{id}/opportunities` retain versioned, explicit syntheses
+  of permitted feedback, issues, preview findings, support signals, usage evidence, and experiment
+  outcomes beneath `$PRODUCT_OPPORTUNITY_STORAGE_ROOT` (default `product-opportunities`). Exact
+  citations distinguish support, contradiction, minority need, and duplicate relationships; reads
+  revalidate authoritative source revisions and expose stale or unavailable evidence. Repository
+  participants can revise and correct classifications, readers can append challenges, and feedback
+  reporters can detach their own citation without rewriting the original submission. Repository-
+  scoped read-only agent credentials may create attributed syntheses but receive no correction or
+  revision authority from that capability.
 
   Repository collaborators define append-only performance contracts at
   `/repositories/{id}/performance` and the public `/repositories/{id}/performance-goals`

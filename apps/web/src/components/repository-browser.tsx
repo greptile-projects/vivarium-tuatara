@@ -238,6 +238,8 @@ export function RepositoryBrowser({ id }: { id: string }) {
             <Link href={`/repositories/${id}/impact?ref=${immutableRevision}${currentPath ? `&path=${encodeURIComponent(currentPath)}` : ""}`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Assess prospective impact</Link>
             <Link href={`/repositories/${id}/performance`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Performance goals</Link>
             <Link href={`/repositories/${id}/experiments`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Product experiments</Link>
+            <Link href={`/repositories/${id}/feedback`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Product feedback</Link>
+            <Link href={`/repositories/${id}/opportunities`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Product opportunities</Link>
             <Link href={`/repositories/${id}/releases`} className="text-sm font-semibold text-[var(--brand)] hover:underline">View release candidates</Link>
             <Link href={`/repositories/${id}/relationships`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Interface dependency graph</Link>
             <Link href={`/repositories/${id}/dependencies`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Package dependency inventory</Link>
