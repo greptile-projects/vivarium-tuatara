@@ -2788,3 +2788,13 @@ their release/deployment-linked evidence chain. `delivery` never
 means achieved; `measure_met` must cover every frozen success measure. `measure_failed`,
 `assumption_changed`, `need_unresolved`, `policy_conflict`, and `decision_revisit` move the projection
 to `revisit_required` with attributable evidence.
+
+`POST .../roadmap/learning-updates` publishes a `decision`, `preview`, `delivery`, `rejection`, or
+`measured_outcome` update with an exact opportunity, cited feedback IDs, audience-safe summary and
+rationale, and an inspectable resource link. Non-participant roadmap reads include only updates citing
+feedback reported by that viewer and omit the feedback audience list. The reporter answers through
+`POST .../roadmap/learning-responses` with `improved`, `not_improved`, or `unsure`, optional follow-up
+evidence, and `leave_conversation`; leaving prevents later updates citing that feedback.
+`POST .../roadmap/learning-reviews` lets a human repository participant retain promised and observed
+outcomes, lessons, dissent, resulting work, and a `continue`, `revise_roadmap`, `fulfilled`, or
+`unsupported` disposition. All three mutations require `expected_version` and are append-only.

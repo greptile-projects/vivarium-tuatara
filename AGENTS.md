@@ -375,6 +375,12 @@ whenever dependencies change or the web job fails before it starts.
 
   Product feedback at `/repositories/{id}/feedback` is a distinct needs channel for a project,
 
+  Reciprocal roadmap learning retains feedback-specific decision, preview, delivery, rejection, and
+  measured-outcome updates. Reporters see only updates citing their own feedback, can validate the
+  experience, add follow-up evidence, or leave future conversation. Maintainer reviews compare promises
+  and observations and retain lessons, dissent, resulting work, and continue/revise/fulfilled/unsupported
+  dispositions without erasing opportunity provenance.
+
   Accepted roadmap outcomes create ordinary ordered human/agent proposal tasks with exact opportunity
   and success-measure provenance. Linked delivery evidence does not imply value: every frozen measure
   needs retained measured success, while failed measures, changed assumptions, unresolved user needs,
