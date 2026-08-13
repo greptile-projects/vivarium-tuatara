@@ -157,12 +157,12 @@ func registerProductOpportunityRoutes(mux *http.ServeMux, repos *repositories.St
 		}
 		return v
 	}
-	validate := func(repo repositories.Repository, participant bool, r productopportunities.Revision) bool {
+	validate := func(repo repositories.Repository, viewer string, participant bool, r productopportunities.Revision) bool {
 		for _, src := range r.Sources {
 			switch src.Kind {
 			case "feedback", "support_signal", "usage_evidence":
 				x, found := resolveFeedbackSource(src)
-				if !found || !sourcePermitted(src, x, repo, "", participant) || src.Revision != feedbackRevision(x) {
+				if !found || !sourcePermitted(src, x, repo, viewer, participant) || src.Revision != feedbackRevision(x) {
 					return false
 				}
 			case "issue":
@@ -224,7 +224,7 @@ func registerProductOpportunityRoutes(mux *http.ServeMux, repos *repositories.St
 			return
 		}
 		var in productopportunities.Revision
-		if decodeJSON(r, &in) != nil || !validate(repo, participant, in) {
+		if decodeJSON(r, &in) != nil || !validate(repo, actor.UserID, participant, in) {
 			writeAPIError(w, 400, "invalid_opportunity_evidence", "every cited source must be current, permitted, and revision exact")
 			return
 		}
@@ -259,7 +259,7 @@ func registerProductOpportunityRoutes(mux *http.ServeMux, repos *repositories.St
 			return
 		}
 		var in opportunityMutation
-		if decodeJSON(r, &in) != nil || !validate(repo, participant, in.Revision) {
+		if decodeJSON(r, &in) != nil || !validate(repo, actor.UserID, participant, in.Revision) {
 			writeAPIError(w, 400, "invalid_opportunity_evidence", "a current evidence-backed revision is required")
 			return
 		}
