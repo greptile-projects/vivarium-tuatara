@@ -1550,6 +1550,14 @@ whenever dependencies change or the web job fails before it starts.
   idempotent.
 
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
+
+  Product direction at `/repositories/{id}/roadmap` compares exact product-opportunity versions
+  against goals, capacity, dependencies, risks, governance decisions, and existing commitments.
+  Only human repository participants commit versioned accepted/deferred/rejected outcomes; readers
+  discuss tradeoffs and agents propose non-binding scenarios. Accepted outcomes require owners,
+  horizons, measures, and sequencing, while every later revision requires an attributed replan
+  reason under compare-and-swap. `$ROADMAP_STORAGE_ROOT` defaults to `roadmaps`.
+
   Update it when you change how the apps fit together, not for every change.
 
 ## LADDER.md

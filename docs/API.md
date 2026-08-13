@@ -2745,3 +2745,19 @@ source must resolve to the repository and exact submitted revision. Participant-
 readers may `POST .../{opportunity_id}/challenges`. A feedback reporter can call
 `POST .../{opportunity_id}/detach-feedback/{feedback_id}`. Mutations require `expected_version` and
 return `409 product_opportunity_changed` after concurrent changes.
+
+## Product roadmaps
+
+`GET /repositories/{id}/roadmap` returns the versioned roadmap, non-binding scenarios, and
+attributed tradeoff comments. `PUT /repositories/{id}/roadmap` is limited to human repository
+participants and accepts `expected_version` plus a complete `revision`. Every opportunity decision
+must cite an existing exact `opportunity_version`, choose `accepted`, `deferred`, or `rejected`, and
+retain its reason, goal fit, and capacity assessment. Accepted decisions may be sequenced as roadmap
+items with stable IDs, owners, target horizons, success measures, dependencies, and status.
+
+`POST .../roadmap/scenarios` lets authorized humans and repository agents append a non-binding
+alternative with a rationale; it never publishes a roadmap revision. `POST .../roadmap/comments`
+retains an authorized reader's tradeoff discussion. All mutations compare `expected_version` and
+return `409 roadmap_changed` after concurrent activity. Every `PUT` after initial publication must
+include `change_reason`; `replan_triggers` retain why scope, commitments, ownership, sequence, or
+targets changed instead of silently replacing the prior promise.
