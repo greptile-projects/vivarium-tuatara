@@ -266,3 +266,110 @@ func TestAssignmentRetentionPrunesReadsAndPersistence(t *testing.T) {
 		t.Fatalf("persisted=%#v %v", raw.AssignmentAudit, err)
 	}
 }
+
+func TestRunStagesContainmentAndStableAssignments(t *testing.T) {
+	s, _ := New(t.TempDir())
+	s.ConfigureDeploymentHealth(func(string, []string) (bool, error) { return true, nil })
+	revision, signals := plan("available")
+	v, _ := s.Create("repo", "alice", Source{Kind: "release", ResourceID: "r", Label: "r"}, revision, signals)
+	commit := "0123456789012345678901234567890123456789"
+	v, _ = s.LinkWork(v.ID, "alice", 1, WorkLink{VariantKeys: []string{"control", "treatment"}, OwnerType: "human", OwnerID: "alice", ProposalID: "p", TaskID: "t", PullRequestID: "pull", CommitID: commit, EventDefinitions: []string{"e@1"}, ExposureRules: []string{"rule"}, Privacy: "aggregate", RemovalPlan: "remove", CheckNames: []string{"check"}})
+	v, _ = s.ApproveAudience(v.ID, "alice", 1, AudienceContract{ReleaseID: "r", ReleaseCommitID: commit, VariantKeys: []string{"control", "treatment"}, Eligibility: []string{"member"}, RandomizationUnit: "user", MutualExclusionGroup: "g", Allocation: []Allocation{{VariantKey: "control", BasisPoints: 5000}, {VariantKey: "treatment", BasisPoints: 5000}}, Consent: "explicit", DataFields: []string{"assignment", "metric"}, RetentionDays: 30})
+	contract := v.AudienceContracts[0]
+	v, err := s.Launch(v.ID, "alice", contract.ID, []string{"deployment-1"}, []string{"production"}, []RunAllocation{{VariantKey: "control", BasisPoints: 500}, {VariantKey: "treatment", BasisPoints: 500}})
+	if err != nil || v.RunAttempts[0].Status != "running" {
+		t.Fatalf("launch = %#v %v", v.RunAttempts, err)
+	}
+	run := v.RunAttempts[0]
+	v, err = s.Stage(v.ID, run.ID, "bob", 1, []RunAllocation{{VariantKey: "control", BasisPoints: 1000}, {VariantKey: "treatment", BasisPoints: 1000}}, "healthy canary")
+	if err != nil || v.RunAttempts[0].Version != 2 {
+		t.Fatalf("stage = %#v %v", v.RunAttempts, err)
+	}
+	_, prior, err := s.Assign(v.ID, contract.ID, "prior", AssignmentContext{Eligibility: []string{"member"}, Consented: true})
+	if err != nil || !prior.Eligible {
+		t.Fatalf("prior assignment = %#v %v", prior, err)
+	}
+	v, err = s.Observe(v.ID, run.ID, "bob", RunObservation{IdempotencyKey: "sample-1", StageVersion: 2, Exposures: map[string]int{"control": 50, "treatment": 50}, MetricValues: map[string]float64{"errors": 3}, MetricSamples: map[string]int{"errors": 100}, Uncertainty: map[string]float64{"errors": 0.2}, Cost: 4.5, InstrumentationOK: true, ConsentCurrent: true, DeploymentHealthy: true, SampleBalanced: true})
+	if err != nil || v.RunAttempts[0].Status != "contained" || v.RunAttempts[0].ContainmentReason != "guardrail_breach:errors" {
+		t.Fatalf("containment = %#v %v", v.RunAttempts, err)
+	}
+	if retried, retryErr := s.Observe(v.ID, run.ID, "bob", RunObservation{IdempotencyKey: "sample-1", StageVersion: 2, Exposures: map[string]int{"control": 50, "treatment": 50}, MetricValues: map[string]float64{"errors": 3}, MetricSamples: map[string]int{"errors": 100}, Uncertainty: map[string]float64{"errors": 0.2}, Cost: 4.5, InstrumentationOK: true, ConsentCurrent: true, DeploymentHealthy: true, SampleBalanced: true}); retryErr != nil || len(retried.RunAttempts[0].Observations) != 1 {
+		t.Fatalf("contained retry = %#v %v", retried.RunAttempts, retryErr)
+	}
+	_, repeat, _ := s.Assign(v.ID, contract.ID, "prior", AssignmentContext{Eligibility: []string{"member"}, Consented: true})
+	_, blocked, _ := s.Assign(v.ID, contract.ID, "new", AssignmentContext{Eligibility: []string{"member"}, Consented: true})
+	if repeat.ID != prior.ID || blocked.Eligible || blocked.Reason != "experiment_contained" {
+		t.Fatalf("stable=%#v blocked=%#v", repeat, blocked)
+	}
+}
+
+func TestRunRejectsAllocationAboveApprovedCapAndContainsQualityLoss(t *testing.T) {
+	s, _ := New(t.TempDir())
+	s.ConfigureDeploymentHealth(func(string, []string) (bool, error) { return true, nil })
+	revision, signals := plan("available")
+	v, _ := s.Create("repo", "alice", Source{Kind: "release", ResourceID: "r", Label: "r"}, revision, signals)
+	commit := "0123456789012345678901234567890123456789"
+	v, _ = s.LinkWork(v.ID, "alice", 1, WorkLink{VariantKeys: []string{"control", "treatment"}, OwnerType: "human", OwnerID: "alice", ProposalID: "p", TaskID: "t", PullRequestID: "pull", CommitID: commit, EventDefinitions: []string{"e@1"}, ExposureRules: []string{"rule"}, Privacy: "aggregate", RemovalPlan: "remove", CheckNames: []string{"check"}})
+	v, _ = s.ApproveAudience(v.ID, "alice", 1, AudienceContract{ReleaseID: "r", ReleaseCommitID: commit, VariantKeys: []string{"control", "treatment"}, Eligibility: []string{"member"}, RandomizationUnit: "user", MutualExclusionGroup: "g", Allocation: []Allocation{{VariantKey: "control", BasisPoints: 1000}, {VariantKey: "treatment", BasisPoints: 1000}}, Consent: "none", DataFields: []string{"assignment"}, RetentionDays: 30})
+	c := v.AudienceContracts[0]
+	if _, err := s.Launch(v.ID, "alice", c.ID, []string{"d"}, []string{"prod"}, []RunAllocation{{VariantKey: "control", BasisPoints: 1001}, {VariantKey: "treatment", BasisPoints: 1000}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("over cap = %v", err)
+	}
+	v, _ = s.Launch(v.ID, "alice", c.ID, []string{"d"}, []string{"prod"}, []RunAllocation{{VariantKey: "control", BasisPoints: 500}, {VariantKey: "treatment", BasisPoints: 500}})
+	run := v.RunAttempts[0]
+	v, err := s.Observe(v.ID, run.ID, "alice", RunObservation{IdempotencyKey: "quality", StageVersion: 1, InstrumentationOK: false, ConsentCurrent: true, DeploymentHealthy: true, SampleBalanced: true})
+	if err != nil || v.RunAttempts[0].ContainmentReason != "instrumentation_loss" {
+		t.Fatalf("quality containment=%#v %v", v.RunAttempts, err)
+	}
+}
+
+func TestRunUsesLaunchRevisionGuardrail(t *testing.T) {
+	s, _ := New(t.TempDir())
+	s.ConfigureDeploymentHealth(func(string, []string) (bool, error) { return true, nil })
+	revision, signals := plan("available")
+	v, _ := s.Create("repo", "alice", Source{Kind: "release", ResourceID: "r", Label: "r"}, revision, signals)
+	commit := "0123456789012345678901234567890123456789"
+	v, _ = s.LinkWork(v.ID, "alice", 1, WorkLink{VariantKeys: []string{"control", "treatment"}, OwnerType: "human", OwnerID: "alice", ProposalID: "p", TaskID: "t", PullRequestID: "pull", CommitID: commit, EventDefinitions: []string{"e@1"}, ExposureRules: []string{"rule"}, Privacy: "aggregate", RemovalPlan: "remove", CheckNames: []string{"check"}})
+	v, _ = s.ApproveAudience(v.ID, "alice", 1, AudienceContract{ReleaseID: "r", ReleaseCommitID: commit, VariantKeys: []string{"control", "treatment"}, Eligibility: []string{"member"}, RandomizationUnit: "user", MutualExclusionGroup: "g", Allocation: []Allocation{{VariantKey: "control", BasisPoints: 1000}, {VariantKey: "treatment", BasisPoints: 1000}}, Consent: "none", DataFields: []string{"assignment"}, RetentionDays: 30})
+	v, _ = s.Launch(v.ID, "alice", v.AudienceContracts[0].ID, []string{"d"}, []string{"prod"}, []RunAllocation{{VariantKey: "control", BasisPoints: 500}, {VariantKey: "treatment", BasisPoints: 500}})
+	revision.Metrics[1].Threshold = 10
+	v, _ = s.Revise(v.ID, 1, "alice", revision, signals)
+	v, err := s.Observe(v.ID, v.RunAttempts[0].ID, "alice", RunObservation{IdempotencyKey: "launch-guardrail", StageVersion: 1, MetricValues: map[string]float64{"errors": 3}, InstrumentationOK: true, ConsentCurrent: true, DeploymentHealthy: true, SampleBalanced: true})
+	if err != nil || v.RunAttempts[0].ContainmentReason != "guardrail_breach:errors" {
+		t.Fatalf("launch guardrail = %#v %v", v.RunAttempts, err)
+	}
+}
+
+func TestAssignmentContainsFailedOrUnreadableDeployment(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		healthy bool
+		err     error
+		reason  string
+	}{{"failed", false, nil, "deployment_failure"}, {"unreadable", false, errors.New("offline"), "deployment_health_unavailable"}} {
+		t.Run(test.name, func(t *testing.T) {
+			s, _ := New(t.TempDir())
+			s.ConfigureDeploymentHealth(func(string, []string) (bool, error) { return test.healthy, test.err })
+			revision, signals := plan("available")
+			v, _ := s.Create("repo", "alice", Source{Kind: "release", ResourceID: "r", Label: "r"}, revision, signals)
+			commit := "0123456789012345678901234567890123456789"
+			v, _ = s.LinkWork(v.ID, "alice", 1, WorkLink{VariantKeys: []string{"control", "treatment"}, OwnerType: "human", OwnerID: "alice", ProposalID: "p", TaskID: "t", PullRequestID: "pull", CommitID: commit, EventDefinitions: []string{"e@1"}, ExposureRules: []string{"rule"}, Privacy: "aggregate", RemovalPlan: "remove", CheckNames: []string{"check"}})
+			v, _ = s.ApproveAudience(v.ID, "alice", 1, AudienceContract{ReleaseID: "r", ReleaseCommitID: commit, VariantKeys: []string{"control", "treatment"}, Eligibility: []string{"member"}, RandomizationUnit: "user", MutualExclusionGroup: "g", Allocation: []Allocation{{VariantKey: "control", BasisPoints: 1000}, {VariantKey: "treatment", BasisPoints: 1000}}, Consent: "none", DataFields: []string{"assignment"}, RetentionDays: 30})
+			c := v.AudienceContracts[0]
+			v, _ = s.Launch(v.ID, "alice", c.ID, []string{"d"}, []string{"prod"}, []RunAllocation{{VariantKey: "control", BasisPoints: 500}, {VariantKey: "treatment", BasisPoints: 500}})
+			v, receipt, err := s.Assign(v.ID, c.ID, "new", AssignmentContext{Eligibility: []string{"member"}})
+			if err != nil || receipt.Eligible || receipt.Reason != "experiment_contained" || v.RunAttempts[0].ContainmentReason != test.reason {
+				t.Fatalf("assignment=%#v run=%#v err=%v", receipt, v.RunAttempts, err)
+			}
+		})
+	}
+}
+
+func TestPlanRejectsUnsupportedMetricDirection(t *testing.T) {
+	s, _ := New(t.TempDir())
+	revision, signals := plan("available")
+	revision.Metrics[1].Direction = "sideways"
+	if _, err := s.Create("repo", "alice", Source{Kind: "release", ResourceID: "r", Label: "r"}, revision, signals); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid direction = %v", err)
+	}
+}

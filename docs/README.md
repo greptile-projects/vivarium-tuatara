@@ -34,6 +34,13 @@ audience contract covering eligibility, region/organization bounds, deterministi
 mutual exclusion, allocation, consent, minimal data, and retention. Stable receipts retain salted
 subject digests; stale, conflicting, over-allocated, unauthorized, or mismatched admission fails closed.
 
+Live attempts bind that contract to successful established-environment deployments of the exact
+release. Participants append governed allocation stages and observe exposure, measures, samples,
+uncertainty, cost, data quality, consent, and operational health. Pause, resume, stop, and automatic
+containment are retained as attempt history; containment stops new assignment without reallocating
+any subject or deleting prior evidence. Guardrails use the launch-time plan revision, while every new
+assignment fails closed against current authoritative health for all launched deployments.
+
 ## Collaborative performance goals
 
 Repository participants publish complete, append-only performance-contract revisions through

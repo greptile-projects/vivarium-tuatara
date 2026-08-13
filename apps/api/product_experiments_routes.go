@@ -7,6 +7,7 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/productexperiments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
@@ -40,8 +41,38 @@ type productExperimentAssignmentInput struct {
 	Subject string                               `json:"subject"`
 	Context productexperiments.AssignmentContext `json:"context"`
 }
+type productExperimentRunInput struct {
+	ContractID    string                             `json:"contract_id"`
+	DeploymentIDs []string                           `json:"deployment_ids"`
+	Allocation    []productexperiments.RunAllocation `json:"allocation"`
+}
+type productExperimentStageInput struct {
+	ExpectedVersion int                                `json:"expected_version"`
+	Allocation      []productexperiments.RunAllocation `json:"allocation"`
+	Reason          string                             `json:"reason"`
+}
+type productExperimentControlInput struct {
+	ExpectedVersion int    `json:"expected_version"`
+	Action          string `json:"action"`
+	Reason          string `json:"reason"`
+}
 
-func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *productexperiments.Store, proposals *proposals.Store, pulls *pullrequests.Store, checks *checkruns.Store, releaseStore *releases.Store) {
+func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *productexperiments.Store, proposals *proposals.Store, pulls *pullrequests.Store, checks *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store) {
+	store.ConfigureDeploymentHealth(func(repositoryID string, deploymentIDs []string) (bool, error) {
+		if deploymentStore == nil {
+			return false, errors.New("deployment store unavailable")
+		}
+		for _, deploymentID := range deploymentIDs {
+			deployment, err := deploymentStore.GetPromotion(repositoryID, deploymentID)
+			if err != nil {
+				return false, err
+			}
+			if deployment.State != "succeeded" {
+				return false, nil
+			}
+		}
+		return true, nil
+	})
 	writeProjected := func(w http.ResponseWriter, experiment productexperiments.Experiment, status int) {
 		all, err := store.List(experiment.RepositoryID)
 		if err != nil {
@@ -268,6 +299,113 @@ func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.S
 			return
 		}
 		writeJSON(w, 201, receipt)
+	})
+	mux.HandleFunc("POST /repositories/{id}/product-experiments/{experiment_id}/runs", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := store.Get(r.PathValue("experiment_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "product_experiment_not_found", "experiment not found")
+			return
+		}
+		var in productExperimentRunInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an approved contract, deployments, and initial allocation are required")
+			return
+		}
+		environments := make([]string, 0, len(in.DeploymentIDs))
+		for _, id := range in.DeploymentIDs {
+			d, e := deploymentStore.GetPromotion(current.RepositoryID, id)
+			if e != nil || d.State != "succeeded" {
+				writeAPIError(w, 422, "experiment_deployment_unready", "every launch deployment must have succeeded")
+				return
+			}
+			found := false
+			for _, c := range current.AudienceContracts {
+				if c.ID == in.ContractID && c.ReleaseID == d.ReleaseID && c.ReleaseCommitID == d.CommitID {
+					found = true
+				}
+			}
+			if !found {
+				writeAPIError(w, 422, "experiment_deployment_mismatch", "deployments must carry the audience contract's exact release")
+				return
+			}
+			environments = append(environments, d.EnvironmentID)
+		}
+		out, err := store.Launch(current.ID, actor.UserID, in.ContractID, in.DeploymentIDs, environments, in.Allocation)
+		if err != nil {
+			writeProductExperimentError(w, err)
+			return
+		}
+		writeProjected(w, out, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/product-experiments/{experiment_id}/runs/{run_id}/stages", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := store.Get(r.PathValue("experiment_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "product_experiment_not_found", "experiment not found")
+			return
+		}
+		var in productExperimentStageInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a governed allocation stage is required")
+			return
+		}
+		out, err := store.Stage(current.ID, r.PathValue("run_id"), actor.UserID, in.ExpectedVersion, in.Allocation, in.Reason)
+		if err != nil {
+			writeProductExperimentError(w, err)
+			return
+		}
+		writeProjected(w, out, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/product-experiments/{experiment_id}/runs/{run_id}/controls", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := store.Get(r.PathValue("experiment_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "product_experiment_not_found", "experiment not found")
+			return
+		}
+		var in productExperimentControlInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a pause, resume, or stop control is required")
+			return
+		}
+		out, err := store.Control(current.ID, r.PathValue("run_id"), actor.UserID, in.Action, in.Reason, in.ExpectedVersion)
+		if err != nil {
+			writeProductExperimentError(w, err)
+			return
+		}
+		writeProjected(w, out, 200)
+	})
+	mux.HandleFunc("POST /repositories/{id}/product-experiments/{experiment_id}/runs/{run_id}/observations", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := store.Get(r.PathValue("experiment_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "product_experiment_not_found", "experiment not found")
+			return
+		}
+		var in productexperiments.RunObservation
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "bounded live evidence is required")
+			return
+		}
+		out, err := store.Observe(current.ID, r.PathValue("run_id"), actor.UserID, in)
+		if err != nil {
+			writeProductExperimentError(w, err)
+			return
+		}
+		writeProjected(w, out, 201)
 	})
 }
 

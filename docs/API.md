@@ -34,6 +34,17 @@ exact pull commit, and every supplied execution identity must match the pull's o
 provenance. The link is review evidence only: existing repository permissions, reviews,
 required checks, merge policy, credentials, and deployment authority remain unchanged.
 
+Authorized repository participants launch an approved contract with `POST
+.../{experiment_id}/runs`, naming successful deployment IDs for the contract's exact release and
+an initial allocation no larger than its approved cap. `POST .../runs/{run_id}/stages` appends a
+compare-and-swap allocation stage and reason; it never changes prior assignment receipts. Pause,
+resume, and stop use `/controls`. Bounded idempotent `/observations` retain per-variant exposure,
+metric values and sample counts, uncertainty, cost, instrumentation, consent, deployment health,
+sample balance, and operational notes. Unsafe evidence atomically contains the attempt and rejects
+new assignment while retaining earlier attempts and stable assignments. Guardrails remain frozen to
+the run's launch-time plan revision. Every new assignment rechecks all launched deployments and
+atomically contains the attempt if any is no longer successful or its health cannot be read.
+
 ## Governed community proposals
 
 `POST /repositories/{id}/charter/continuity` and the organization equivalent record a pending

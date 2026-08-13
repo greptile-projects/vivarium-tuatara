@@ -156,6 +156,56 @@ type ExclusionMembership struct {
 	SubjectToken string    `json:"subject_token"`
 	ExpiresAt    time.Time `json:"expires_at"`
 }
+type RunAllocation struct {
+	VariantKey  string `json:"variant_key"`
+	BasisPoints int    `json:"basis_points"`
+}
+type RunStage struct {
+	Version    int             `json:"version"`
+	Allocation []RunAllocation `json:"allocation"`
+	Reason     string          `json:"reason"`
+	ActorID    string          `json:"actor_id"`
+	CreatedAt  time.Time       `json:"created_at"`
+}
+type RunObservation struct {
+	ID                string             `json:"id"`
+	IdempotencyKey    string             `json:"idempotency_key"`
+	StageVersion      int                `json:"stage_version"`
+	Exposures         map[string]int     `json:"exposures"`
+	MetricValues      map[string]float64 `json:"metric_values"`
+	MetricSamples     map[string]int     `json:"metric_samples"`
+	Uncertainty       map[string]float64 `json:"uncertainty"`
+	Cost              float64            `json:"cost"`
+	InstrumentationOK bool               `json:"instrumentation_ok"`
+	ConsentCurrent    bool               `json:"consent_current"`
+	DeploymentHealthy bool               `json:"deployment_healthy"`
+	SampleBalanced    bool               `json:"sample_balanced"`
+	Note              string             `json:"note,omitempty"`
+	ActorID           string             `json:"actor_id"`
+	CreatedAt         time.Time          `json:"created_at"`
+}
+type RunEvent struct {
+	Kind      string    `json:"kind"`
+	ActorID   string    `json:"actor_id"`
+	Reason    string    `json:"reason"`
+	CreatedAt time.Time `json:"created_at"`
+}
+type RunAttempt struct {
+	ID                string           `json:"id"`
+	ContractID        string           `json:"contract_id"`
+	ExperimentVersion int              `json:"experiment_version"`
+	DeploymentIDs     []string         `json:"deployment_ids"`
+	EnvironmentIDs    []string         `json:"environment_ids"`
+	Status            string           `json:"status"`
+	ContainmentReason string           `json:"containment_reason,omitempty"`
+	Version           int              `json:"version"`
+	Stages            []RunStage       `json:"stages"`
+	Observations      []RunObservation `json:"observations"`
+	Events            []RunEvent       `json:"events"`
+	LaunchedBy        string           `json:"launched_by"`
+	CreatedAt         time.Time        `json:"created_at"`
+	UpdatedAt         time.Time        `json:"updated_at"`
+}
 type Experiment struct {
 	ID                   string                `json:"id"`
 	RepositoryID         string                `json:"repository_id"`
@@ -169,9 +219,179 @@ type Experiment struct {
 	AudienceContracts    []AudienceContract    `json:"audience_contracts"`
 	AssignmentAudit      []AssignmentReceipt   `json:"assignment_audit"`
 	ExclusionMemberships []ExclusionMembership `json:"exclusion_memberships"`
+	RunAttempts          []RunAttempt          `json:"run_attempts"`
 	Diagnostics          []Diagnostic          `json:"diagnostics"`
 	CreatedAt            time.Time             `json:"created_at"`
 	UpdatedAt            time.Time             `json:"updated_at"`
+}
+
+func (s *Store) Launch(id, actor, contractID string, deploymentIDs, environmentIDs []string, allocation []RunAllocation) (Experiment, error) {
+	return s.mutate(id, func(v *Experiment) error {
+		contract := audienceContract(v, contractID)
+		if contract == nil || contract.ExperimentVersion != v.CurrentVersion || len(deploymentIDs) == 0 || len(deploymentIDs) != len(environmentIDs) || !validRunAllocation(*contract, allocation) {
+			return ErrInvalid
+		}
+		for _, run := range v.RunAttempts {
+			if run.Status == "running" || run.Status == "paused" {
+				return ErrConflict
+			}
+		}
+		now := s.now()
+		runID := idgen()
+		v.RunAttempts = append(v.RunAttempts, RunAttempt{ID: runID, ContractID: contractID, ExperimentVersion: v.CurrentVersion, DeploymentIDs: deploymentIDs, EnvironmentIDs: environmentIDs, Status: "running", Version: 1, Stages: []RunStage{{Version: 1, Allocation: allocation, Reason: "launch", ActorID: actor, CreatedAt: now}}, Events: []RunEvent{{Kind: "launched", ActorID: actor, Reason: "approved release deployed", CreatedAt: now}}, LaunchedBy: actor, CreatedAt: now, UpdatedAt: now})
+		return nil
+	})
+}
+func (s *Store) Stage(id, runID, actor string, expected int, allocation []RunAllocation, reason string) (Experiment, error) {
+	return s.mutate(id, func(v *Experiment) error {
+		run := runAttempt(v, runID)
+		if run == nil || run.Version != expected || run.Status != "running" {
+			return ErrConflict
+		}
+		contract := audienceContract(v, run.ContractID)
+		if contract == nil || !validRunAllocation(*contract, allocation) || strings.TrimSpace(reason) == "" {
+			return ErrInvalid
+		}
+		run.Version++
+		now := s.now()
+		run.Stages = append(run.Stages, RunStage{Version: run.Version, Allocation: allocation, Reason: strings.TrimSpace(reason), ActorID: actor, CreatedAt: now})
+		run.Events = append(run.Events, RunEvent{Kind: "allocation_changed", ActorID: actor, Reason: strings.TrimSpace(reason), CreatedAt: now})
+		run.UpdatedAt = now
+		return nil
+	})
+}
+func (s *Store) Control(id, runID, actor, action, reason string, expected int) (Experiment, error) {
+	return s.mutate(id, func(v *Experiment) error {
+		run := runAttempt(v, runID)
+		if run == nil || run.Version != expected || strings.TrimSpace(reason) == "" {
+			return ErrConflict
+		}
+		allowed := (action == "pause" && run.Status == "running") || (action == "resume" && run.Status == "paused") || (action == "stop" && (run.Status == "running" || run.Status == "paused"))
+		if !allowed {
+			return ErrConflict
+		}
+		if action == "pause" {
+			run.Status = "paused"
+		} else if action == "resume" {
+			run.Status = "running"
+		} else {
+			run.Status = "stopped"
+		}
+		run.Version++
+		now := s.now()
+		run.Events = append(run.Events, RunEvent{Kind: action, ActorID: actor, Reason: strings.TrimSpace(reason), CreatedAt: now})
+		run.UpdatedAt = now
+		return nil
+	})
+}
+func (s *Store) Observe(id, runID, actor string, input RunObservation) (Experiment, error) {
+	return s.mutate(id, func(v *Experiment) error {
+		run := runAttempt(v, runID)
+		if run == nil || strings.TrimSpace(input.IdempotencyKey) == "" {
+			return ErrInvalid
+		}
+		for _, prior := range run.Observations {
+			if prior.IdempotencyKey == input.IdempotencyKey {
+				if reflect.DeepEqual(observationRequest(prior), observationRequest(input)) {
+					return nil
+				}
+				return ErrConflict
+			}
+		}
+		if (run.Status != "running" && run.Status != "paused") || input.StageVersion < 1 || input.StageVersion > run.Version || input.Cost < 0 {
+			return ErrInvalid
+		}
+		input.ID = idgen()
+		input.ActorID = actor
+		input.CreatedAt = s.now()
+		run.Observations = append(run.Observations, input)
+		run.Version++
+		run.UpdatedAt = input.CreatedAt
+		reason := ""
+		if !input.ConsentCurrent {
+			reason = "consent_revoked"
+		} else if !input.DeploymentHealthy {
+			reason = "deployment_failure"
+		} else if !input.InstrumentationOK {
+			reason = "instrumentation_loss"
+		} else if !input.SampleBalanced {
+			reason = "sample_imbalance"
+		} else {
+			revision, ok := revisionAt(v, run.ExperimentVersion)
+			if !ok {
+				reason = "plan_revision_unavailable"
+			}
+			for _, metric := range revision.Metrics {
+				if metric.Kind == "guardrail" {
+					if value, ok := input.MetricValues[metric.Name]; ok && thresholdBreached(metric, value) {
+						reason = "guardrail_breach:" + metric.Name
+						break
+					}
+				}
+			}
+		}
+		if reason != "" && run.Status != "contained" {
+			run.Status = "contained"
+			run.ContainmentReason = reason
+			run.Events = append(run.Events, RunEvent{Kind: "contained", ActorID: actor, Reason: reason, CreatedAt: input.CreatedAt})
+		}
+		return nil
+	})
+}
+func observationRequest(v RunObservation) RunObservation {
+	v.ID = ""
+	v.ActorID = ""
+	v.CreatedAt = time.Time{}
+	return v
+}
+func thresholdBreached(m Metric, value float64) bool {
+	switch m.Direction {
+	case "below", "decrease":
+		return value >= m.Threshold
+	case "above", "increase":
+		return value <= m.Threshold
+	}
+	return false
+}
+func runAttempt(v *Experiment, id string) *RunAttempt {
+	for i := range v.RunAttempts {
+		if v.RunAttempts[i].ID == id {
+			return &v.RunAttempts[i]
+		}
+	}
+	return nil
+}
+func audienceContract(v *Experiment, id string) *AudienceContract {
+	for i := range v.AudienceContracts {
+		if v.AudienceContracts[i].ID == id {
+			return &v.AudienceContracts[i]
+		}
+	}
+	return nil
+}
+func revisionAt(v *Experiment, version int) (Revision, bool) {
+	for _, revision := range v.Revisions {
+		if revision.Version == version {
+			return revision, true
+		}
+	}
+	return Revision{}, false
+}
+func validRunAllocation(c AudienceContract, values []RunAllocation) bool {
+	caps := map[string]int{}
+	for _, a := range c.Allocation {
+		caps[a.VariantKey] = a.BasisPoints
+	}
+	seen := map[string]bool{}
+	total := 0
+	for _, a := range values {
+		if seen[a.VariantKey] || a.BasisPoints < 0 || a.BasisPoints > caps[a.VariantKey] {
+			return false
+		}
+		seen[a.VariantKey] = true
+		total += a.BasisPoints
+	}
+	return len(values) == len(caps) && total > 0 && total <= 10000
 }
 
 func (s *Store) ApproveAudience(id, actor string, expected int, input AudienceContract) (Experiment, error) {
@@ -224,7 +444,39 @@ func (s *Store) Assign(id, contractID, subject string, context AssignmentContext
 			}
 		}
 		receipt = AssignmentReceipt{ID: idgen(), ContractID: contractID, SubjectDigest: subjectDigest, Eligible: true, CreatedAt: s.now()}
-		if !assignmentEligible(*contract, context) {
+		allocation := contract.Allocation
+		var activeRun *RunAttempt
+		for i := len(v.RunAttempts) - 1; i >= 0; i-- {
+			if v.RunAttempts[i].ContractID == contractID {
+				activeRun = &v.RunAttempts[i]
+				break
+			}
+		}
+		if activeRun != nil && activeRun.Status != "running" {
+			receipt.Eligible, receipt.Reason = false, "experiment_"+activeRun.Status
+		} else if activeRun != nil {
+			healthy, healthErr := false, errors.New("deployment health unavailable")
+			if s.deploymentHealthy != nil {
+				healthy, healthErr = s.deploymentHealthy(v.RepositoryID, activeRun.DeploymentIDs)
+			}
+			if healthErr != nil || !healthy {
+				activeRun.Status = "contained"
+				activeRun.ContainmentReason = "deployment_failure"
+				if healthErr != nil {
+					activeRun.ContainmentReason = "deployment_health_unavailable"
+				}
+				activeRun.Version++
+				activeRun.UpdatedAt = s.now()
+				activeRun.Events = append(activeRun.Events, RunEvent{Kind: "contained", Reason: activeRun.ContainmentReason, CreatedAt: activeRun.UpdatedAt})
+				receipt.Eligible, receipt.Reason = false, "experiment_contained"
+			}
+			allocation = make([]Allocation, 0, len(activeRun.Stages[len(activeRun.Stages)-1].Allocation))
+			for _, a := range activeRun.Stages[len(activeRun.Stages)-1].Allocation {
+				allocation = append(allocation, Allocation{VariantKey: a.VariantKey, BasisPoints: a.BasisPoints})
+			}
+		}
+		if receipt.Reason != "" {
+		} else if !assignmentEligible(*contract, context) {
 			receipt.Eligible, receipt.Reason = false, "audience_ineligible"
 		} else if contract.Consent == "explicit" && !context.Consented {
 			receipt.Eligible, receipt.Reason = false, "consent_required"
@@ -240,7 +492,7 @@ func (s *Store) Assign(id, contractID, subject string, context AssignmentContext
 				bucket := int(digest[0])<<8 | int(digest[1])
 				bucket %= 10000
 				cumulative := 0
-				for _, allocation := range contract.Allocation {
+				for _, allocation := range allocation {
 					cumulative += allocation.BasisPoints
 					if bucket < cumulative {
 						receipt.VariantKey = allocation.VariantKey
@@ -478,10 +730,17 @@ func validAudienceContract(v Experiment, x AudienceContract) bool {
 }
 
 type Store struct {
-	root       string
-	mu         sync.Mutex
-	now        func() time.Time
-	subjectKey []byte
+	root              string
+	mu                sync.Mutex
+	now               func() time.Time
+	subjectKey        []byte
+	deploymentHealthy func(repositoryID string, deploymentIDs []string) (bool, error)
+}
+
+func (s *Store) ConfigureDeploymentHealth(fn func(string, []string) (bool, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deploymentHealthy = fn
 }
 
 func New(root string) (*Store, error) {
@@ -826,7 +1085,7 @@ func validRevision(r Revision, signals []Signal) bool {
 		}
 	}
 	for _, m := range r.Metrics {
-		if m.Name == "" || (m.Kind != "success" && m.Kind != "guardrail") || m.SignalID == "" || m.SignalVersion < 1 {
+		if m.Name == "" || (m.Kind != "success" && m.Kind != "guardrail") || (m.Direction != "below" && m.Direction != "decrease" && m.Direction != "above" && m.Direction != "increase") || m.SignalID == "" || m.SignalVersion < 1 {
 			return false
 		}
 	}
