@@ -349,7 +349,11 @@ whenever dependencies change or the web job fails before it starts.
   instrumentation gaps, overlapping contracts, and approvals invalidated by changed assumptions
   remain explicit. Discussion and approval are version-bound and grant no rollout, collection,
   release, or deployment authority. `$PRODUCT_EXPERIMENT_STORAGE_ROOT` defaults to
-  `product-experiments`.
+  `product-experiments`. Experiment work links freeze a current plan version to an ordinary
+  pull's exact commit and optional proposal/task/session/workspace provenance. They expose
+  variant keys, versioned events, exposure rules, privacy classification, removal plan, and
+  exact-commit repository checks without granting the experiment or its human/agent owner any
+  new authority.
 
   Repository collaborators define append-only performance contracts at
   `/repositories/{id}/performance` and the public `/repositories/{id}/performance-goals`

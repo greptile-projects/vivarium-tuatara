@@ -6,7 +6,10 @@ import (
 	"net/http"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/productexperiments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 )
 
@@ -24,8 +27,12 @@ type productExperimentApprovalInput struct {
 	Decision        string `json:"decision"`
 	Note            string `json:"note"`
 }
+type productExperimentWorkInput struct {
+	ExpectedVersion int                         `json:"expected_version"`
+	Work            productexperiments.WorkLink `json:"work"`
+}
 
-func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *productexperiments.Store) {
+func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *productexperiments.Store, proposals *proposals.Store, pulls *pullrequests.Store, checks *checkruns.Store) {
 	writeProjected := func(w http.ResponseWriter, experiment productexperiments.Experiment, status int) {
 		all, err := store.List(experiment.RepositoryID)
 		if err != nil {
@@ -122,6 +129,64 @@ func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.S
 			return
 		}
 		out, err := store.Approve(current.ID, actor.UserID, in.Decision, in.Note, in.ExpectedVersion)
+		if err != nil {
+			writeProductExperimentError(w, err)
+			return
+		}
+		writeProjected(w, out, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/product-experiments/{experiment_id}/work", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := store.Get(r.PathValue("experiment_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "product_experiment_not_found", "experiment not found")
+			return
+		}
+		var in productExperimentWorkInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "revision-exact experiment work is required")
+			return
+		}
+		pull, pullErr := pulls.Get(r.PathValue("id"), in.Work.PullRequestID)
+		if pullErr != nil || pull.SourceCommitID != in.Work.CommitID || (in.Work.ProposalID != "" && (pull.ProposalID == nil || *pull.ProposalID != in.Work.ProposalID)) || (in.Work.TaskID != "" && (pull.TaskID == nil || *pull.TaskID != in.Work.TaskID)) || (in.Work.SessionID != "" && (pull.TaskSessionID == nil || *pull.TaskSessionID != in.Work.SessionID)) || (in.Work.WorkspaceID != "" && pull.WorkspaceID != in.Work.WorkspaceID) {
+			writeAPIError(w, 422, "invalid_experiment_work", "the ordinary pull and exact execution links must match the declared commit")
+			return
+		}
+		if in.Work.ProposalID == "" || in.Work.TaskID == "" {
+			writeAPIError(w, 422, "experiment_task_missing", "experiment work must retain its ordinary proposal task")
+			return
+		}
+		task, taskErr := proposals.GetTask(r.PathValue("id"), in.Work.ProposalID, in.Work.TaskID)
+		if taskErr != nil || task.Assignment == nil || task.Assignment.AssigneeType != in.Work.OwnerType || task.Assignment.AssigneeID != in.Work.OwnerID {
+			writeAPIError(w, 422, "experiment_assignment_mismatch", "the declared owner must match the linked task's current human or agent assignment")
+			return
+		}
+		runs, runErr := checks.List(r.PathValue("id"), pull.ID)
+		if runErr != nil {
+			writeAPIError(w, 503, "experiment_checks_unavailable", "pull checks could not be verified")
+			return
+		}
+		available := map[string]bool{}
+		for _, run := range runs {
+			if run.CommitID == pull.SourceCommitID {
+				available[run.Definition.Name] = true
+			}
+		}
+		for _, name := range in.Work.CheckNames {
+			if !available[name] {
+				writeAPIError(w, 422, "experiment_check_missing", "every declared experiment check must exist on the exact pull commit")
+				return
+			}
+		}
+		var out productexperiments.Experiment
+		err = catalog.WithCurrentParticipant(actor.UserID, r.PathValue("id"), func() error {
+			var e error
+			out, e = store.LinkWork(current.ID, actor.UserID, in.ExpectedVersion, in.Work)
+			return e
+		})
 		if err != nil {
 			writeProductExperimentError(w, err)
 			return

@@ -88,6 +88,26 @@ type Diagnostic struct {
 	AttributedTo        string `json:"attributed_to"`
 	RelatedExperimentID string `json:"related_experiment_id,omitempty"`
 }
+type WorkLink struct {
+	ID                string    `json:"id"`
+	ExperimentVersion int       `json:"experiment_version"`
+	VariantKeys       []string  `json:"variant_keys"`
+	OwnerType         string    `json:"owner_type"`
+	OwnerID           string    `json:"owner_id"`
+	ProposalID        string    `json:"proposal_id,omitempty"`
+	TaskID            string    `json:"task_id,omitempty"`
+	SessionID         string    `json:"session_id,omitempty"`
+	WorkspaceID       string    `json:"workspace_id,omitempty"`
+	PullRequestID     string    `json:"pull_request_id"`
+	CommitID          string    `json:"commit_id"`
+	EventDefinitions  []string  `json:"event_definitions"`
+	ExposureRules     []string  `json:"exposure_rules"`
+	Privacy           string    `json:"privacy_classification"`
+	RemovalPlan       string    `json:"removal_plan"`
+	CheckNames        []string  `json:"check_names"`
+	LinkedBy          string    `json:"linked_by"`
+	CreatedAt         time.Time `json:"created_at"`
+}
 type Experiment struct {
 	ID             string       `json:"id"`
 	RepositoryID   string       `json:"repository_id"`
@@ -97,6 +117,7 @@ type Experiment struct {
 	Signals        []Signal     `json:"signals"`
 	Comments       []Comment    `json:"comments"`
 	Approvals      []Approval   `json:"approvals"`
+	Work           []WorkLink   `json:"work"`
 	Diagnostics    []Diagnostic `json:"diagnostics"`
 	CreatedAt      time.Time    `json:"created_at"`
 	UpdatedAt      time.Time    `json:"updated_at"`
@@ -188,6 +209,66 @@ func (s *Store) Approve(id, actor, decision, note string, expected int) (Experim
 		v.Approvals = append(next, Approval{UserID: actor, Version: expected, Decision: decision, Note: strings.TrimSpace(note), CreatedAt: s.now()})
 		return nil
 	})
+}
+func (s *Store) LinkWork(id, actor string, expected int, input WorkLink) (Experiment, error) {
+	return s.mutate(id, func(v *Experiment) error {
+		if expected != v.CurrentVersion || !validWorkLink(*v, input) {
+			if expected != v.CurrentVersion {
+				return ErrConflict
+			}
+			return ErrInvalid
+		}
+		for _, existing := range v.Work {
+			if existing.PullRequestID == input.PullRequestID {
+				if existing.CommitID == input.CommitID {
+					return nil
+				}
+				return ErrConflict
+			}
+		}
+		input.ID, input.ExperimentVersion, input.LinkedBy, input.CreatedAt = idgen(), expected, actor, s.now()
+		v.Work = append(v.Work, input)
+		return nil
+	})
+}
+
+func validWorkLink(v Experiment, x WorkLink) bool {
+	if (x.OwnerType != "human" && x.OwnerType != "agent") || strings.TrimSpace(x.OwnerID) == "" || strings.TrimSpace(x.PullRequestID) == "" || !isHexCommit(x.CommitID) || len(x.VariantKeys) == 0 || len(x.EventDefinitions) == 0 || len(x.ExposureRules) == 0 || strings.TrimSpace(x.RemovalPlan) == "" || len(x.RemovalPlan) > 4000 || len(x.CheckNames) == 0 {
+		return false
+	}
+	if x.Privacy != "aggregate" && x.Privacy != "pseudonymous" && x.Privacy != "consented" {
+		return false
+	}
+	variants := map[string]bool{}
+	for _, revision := range v.Revisions {
+		if revision.Version == v.CurrentVersion {
+			for _, variant := range revision.Variants {
+				variants[variant.Key] = true
+			}
+		}
+	}
+	seen := map[string]bool{}
+	for _, key := range x.VariantKeys {
+		if !variants[key] || seen[key] {
+			return false
+		}
+		seen[key] = true
+	}
+	for _, values := range [][]string{x.EventDefinitions, x.ExposureRules, x.CheckNames} {
+		for _, value := range values {
+			if strings.TrimSpace(value) == "" || len(value) > 500 {
+				return false
+			}
+		}
+	}
+	return true
+}
+func isHexCommit(value string) bool {
+	if len(value) != 40 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 func (s *Store) mutate(key string, f func(*Experiment) error) (Experiment, error) {
 	var out Experiment

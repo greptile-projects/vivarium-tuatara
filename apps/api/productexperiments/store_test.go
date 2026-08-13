@@ -1,6 +1,9 @@
 package productexperiments
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func plan(signalStatus string) (Revision, []Signal) {
 	return Revision{Hypothesis: "A clearer action increases completed work", Variants: []Variant{{Key: "control", Name: "Current", Description: "existing", Control: true}, {Key: "treatment", Name: "Clearer", Description: "new"}}, Audience: Audience{Description: "active collaborators", Eligibility: []string{"repository_collaborator"}}, Metrics: []Metric{{Name: "completion", Kind: "success", Direction: "increase", Threshold: 5, SignalID: "completed", SignalVersion: 1}, {Name: "errors", Kind: "guardrail", Direction: "below", Threshold: 2, SignalID: "errors", SignalVersion: 1}}, MinimumEvidence: 100, DurationDays: 14, Owners: []string{"owner"}, StopConditions: []string{"errors exceed 2%"}, Assumptions: []string{"traffic is stable"}, Rationale: "initial contract"}, []Signal{{ID: "completed", Name: "Completed", Version: 1, Event: "task.completed", Unit: "percent", Privacy: "aggregate", Status: signalStatus}, {ID: "errors", Name: "Errors", Version: 1, Event: "task.failed", Unit: "percent", Privacy: "aggregate", Status: "available"}}
@@ -38,5 +41,22 @@ func TestOverlapRequiresSharedAudienceAndSignal(t *testing.T) {
 	c, _ := s.Create("repo", "carol", Source{Kind: "preview", ResourceID: "v1", Label: "three"}, revision, signals)
 	if Overlaps(a, c) {
 		t.Fatal("unexpected overlap")
+	}
+}
+func TestWorkLinksFreezeReviewEvidenceAtPlanVersion(t *testing.T) {
+	s, _ := New(t.TempDir())
+	revision, signals := plan("available")
+	v, _ := s.Create("repo", "alice", Source{Kind: "proposal", ResourceID: "p1", Label: "test"}, revision, signals)
+	work := WorkLink{VariantKeys: []string{"control", "treatment"}, OwnerType: "agent", OwnerID: "agent-1", ProposalID: "p1", TaskID: "t1", SessionID: "s1", WorkspaceID: "w1", PullRequestID: "pull-1", CommitID: "0123456789012345678901234567890123456789", EventDefinitions: []string{"task.completed@1"}, ExposureRules: []string{"repository collaborators, 50/50"}, Privacy: "aggregate", RemovalPlan: "Delete the flag and event after the decision.", CheckNames: []string{"experiment/assignment", "experiment/fallback"}}
+	v, err := s.LinkWork(v.ID, "alice", 1, work)
+	if err != nil || len(v.Work) != 1 || v.Work[0].ExperimentVersion != 1 || v.Work[0].LinkedBy != "alice" {
+		t.Fatalf("work = %#v, %v", v.Work, err)
+	}
+	if _, err = s.LinkWork(v.ID, "alice", 1, work); err != nil {
+		t.Fatalf("idempotent link: %v", err)
+	}
+	work.CommitID = "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
+	if _, err = s.LinkWork(v.ID, "alice", 1, work); !errors.Is(err, ErrConflict) {
+		t.Fatalf("moved pull = %v", err)
 	}
 }
