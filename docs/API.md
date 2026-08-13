@@ -2607,3 +2607,21 @@ every immutable revision and derive attributed diagnostics named
 `missing_measurement`, `incomparable_environment`, `stale_baseline`,
 `target_gap`, and `conflicting_target`. Storage defaults to
 `$PERFORMANCE_GOAL_STORAGE_ROOT` (`performance-goals`).
+
+## Performance evidence
+
+Repository collaborators publish a bounded completed trial with `POST
+/repositories/{id}/performance-trials`; readers use the collection/detail endpoints and compare
+two retained trials with `GET
+/repositories/{id}/performance-trials/{trial-id}/compare/{baseline-id}`. Every trial freezes an
+exact Git commit; a `release` source must name a release attesting that commit.
+
+Trials retain a fixed non-sensitive production-workload marker plus its sanitization recipe (or
+repository benchmark inputs), environment, warmup/sample method, raw timings with
+server-derived variance, resource profiles, content-addressed trace/artifact metadata, logs, and
+cost. Production captures require declared sanitization; their raw input and log entries are
+replaced with non-sensitive markers before persistence and again on reads, while credential-like
+benchmark logs are rejected.
+Comparisons are numeric only when workload, every environment field, warmup/sample count and
+method, metric, and unit match.
+Records default beneath `$PERFORMANCE_EVIDENCE_STORAGE_ROOT` (`performance-evidence`).

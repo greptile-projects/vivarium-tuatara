@@ -349,7 +349,10 @@ whenever dependencies change or the web job fails before it starts.
   correctness constraints, supported environments, owners, budgets, and project links. Reads
   derive attributable missing-measurement, incomparable-environment, stale-baseline, target-gap,
   and conflicting-target diagnostics beneath `$PERFORMANCE_GOAL_STORAGE_ROOT` (default
-  `performance-goals`).
+  `performance-goals`). Reproducible trials beneath `$PERFORMANCE_EVIDENCE_STORAGE_ROOT` (default
+  `performance-evidence`) freeze an exact revision or matching release and retain sanitized
+  workload, environment, sampling, timing variance, resources, artifacts, logs, and cost;
+  comparisons fail closed when measurement conditions differ.
   Repository release candidates at `/repositories/{id}/releases` freeze a
   verified commit, version, notes, creator, optional prior-release boundary,
   and the server-derived merged pulls, proposals, tasks, and contributors in
