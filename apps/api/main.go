@@ -36,6 +36,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/performancegoals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
@@ -330,12 +331,20 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	performanceGoalRoot := os.Getenv("PERFORMANCE_GOAL_STORAGE_ROOT")
+	if performanceGoalRoot == "" {
+		performanceGoalRoot = "performance-goals"
+	}
+	performanceGoalStore, err := performancegoals.New(performanceGoalRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -471,6 +480,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var documentationStore *docscollections.Store
 	var extensionStore *extensions.Store
 	var federationStore *federation.Store
+	var performanceGoalStore *performancegoals.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -517,6 +527,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			extensionStore = value
 		case *federation.Store:
 			federationStore = value
+		case *performancegoals.Store:
+			performanceGoalStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -629,6 +641,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && impactStore != nil {
 		registerImpactRoutes(mux, store, repositoryCatalog, authStore, impactStore, explanationStore, proposalStore, relationshipStore, releaseStore, packageStore, deploymentStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && performanceGoalStore != nil {
+		registerPerformanceGoalRoutes(mux, repositoryCatalog, authStore, performanceGoalStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && decisionStore != nil {
 		registerDecisionRoutes(mux, store, repositoryCatalog, authStore, userStore, decisionStore, activityStore, proposalStore, explanationStore, incidentStore, relationshipStore, organizationStore, workspaceStore, pullRequestStore, checkRunStore, releaseStore, deploymentStore)
