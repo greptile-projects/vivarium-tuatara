@@ -124,6 +124,7 @@ func (s *Store) Create(v Trial) (Trial, error) {
 	// an arbitrary value contains no private user data.
 	if v.Mode == "production_capture" {
 		v.Inputs = "[sanitized production-derived workload]"
+		v.Logs = sanitizedProductionLogs(v.Logs)
 	}
 	for i := range v.Timings {
 		summarize(&v.Timings[i])
@@ -206,7 +207,22 @@ func (s *Store) read(id string) (Trial, error) {
 	if e != nil || json.Unmarshal(body, &v) != nil || v.ID != id {
 		return Trial{}, ErrNotFound
 	}
+	if v.Mode == "production_capture" {
+		v.Inputs = "[sanitized production-derived workload]"
+		v.Logs = sanitizedProductionLogs(v.Logs)
+	}
 	return v, nil
+}
+
+func sanitizedProductionLogs(logs []string) []string {
+	if len(logs) == 0 {
+		return logs
+	}
+	result := make([]string, len(logs))
+	for i := range result {
+		result[i] = "[sanitized production log entry]"
+	}
+	return result
 }
 func valid(v Trial) bool {
 	if v.RepositoryID == "" || v.CreatedBy == "" || len(v.Source.Revision) != 40 || (v.Source.Kind != "revision" && v.Source.Kind != "release") || (v.Mode != "benchmark" && v.Mode != "production_capture") || v.Workload == "" || v.Inputs == "" || v.Environment.Name == "" || v.Sampling.Samples < 1 || v.Sampling.Samples > 10000 || v.Sampling.Warmup < 0 || v.Sampling.Method == "" || len(v.Timings) == 0 || len(v.Logs) > 200 {

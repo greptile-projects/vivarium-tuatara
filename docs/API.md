@@ -2619,7 +2619,9 @@ exact Git commit; a `release` source must name a release attesting that commit.
 Trials retain a fixed non-sensitive production-workload marker plus its sanitization recipe (or
 repository benchmark inputs), environment, warmup/sample method, raw timings with
 server-derived variance, resource profiles, content-addressed trace/artifact metadata, logs, and
-cost. Production captures require declared sanitization and credential-like logs are rejected.
+cost. Production captures require declared sanitization; their raw input and log entries are
+replaced with non-sensitive markers before persistence and again on reads, while credential-like
+benchmark logs are rejected.
 Comparisons are numeric only when workload, every environment field, warmup/sample count and
 method, metric, and unit match.
 Records default beneath `$PERFORMANCE_EVIDENCE_STORAGE_ROOT` (`performance-evidence`).

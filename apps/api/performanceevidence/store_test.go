@@ -47,12 +47,29 @@ func TestTrialSummaryComparisonAndSanitization(t *testing.T) {
 	}
 	capture.Sanitization = []string{"remove user identifiers and replace values with shape buckets"}
 	capture.Inputs = "customer@example.com private production request"
+	capture.Logs = []string{"email=alice.customer@example.com customer_id=cust-private request=/account/42"}
 	createdCapture, e := s.Create(capture)
 	if e != nil {
 		t.Fatal(e)
 	}
 	if createdCapture.Inputs != "[sanitized production-derived workload]" {
 		t.Fatalf("production inputs persisted = %q", createdCapture.Inputs)
+	}
+	if len(createdCapture.Logs) != 1 || createdCapture.Logs[0] != "[sanitized production log entry]" {
+		t.Fatalf("production logs persisted = %q", createdCapture.Logs)
+	}
+	storedCapture, e := s.Get(createdCapture.ID)
+	if e != nil || storedCapture.Logs[0] != "[sanitized production log entry]" {
+		t.Fatalf("production logs read = %q, %v", storedCapture.Logs, e)
+	}
+	listedCaptures, e := s.List(capture.RepositoryID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, listed := range listedCaptures {
+		if listed.ID == createdCapture.ID && listed.Logs[0] != "[sanitized production log entry]" {
+			t.Fatalf("production logs listed = %q", listed.Logs)
+		}
 	}
 }
 
