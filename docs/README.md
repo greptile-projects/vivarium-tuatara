@@ -26,7 +26,10 @@ Successors use a compare-and-swap version and retain their author and rationale.
 missing measurements, incomparable environments, stale baselines, current target gaps, and
 non-overlapping successor targets explicit and attributable. Goals are evidence context, not new
 authority or proof that a benchmark passed. Records default beneath
-`$PERFORMANCE_GOAL_STORAGE_ROOT` (`performance-goals`).
+`$PERFORMANCE_GOAL_STORAGE_ROOT` (`performance-goals`). Authorized collaborators attach exact-
+revision or release-attested trials at `/repositories/{id}/performance-trials`, retaining sanitized
+workload, environment, sampling, timing variance, resource, trace/log/artifact, and cost evidence.
+Comparisons surface incompatible measurement conditions instead of presenting them as signal.
 
 ## Governed community decisions
 
