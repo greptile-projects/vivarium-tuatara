@@ -14,6 +14,20 @@ The supported consumer contract, including authentication, stable error
 shapes, validation, and collection pagination, is documented in [API.md](API.md).
 Consumers should use that HTTP boundary rather than reading storage roots.
 
+## Accountable product direction
+
+The repository roadmap at `/repositories/{id}/roadmap` turns exact product-opportunity versions
+into visible accepted, deferred, or rejected decisions. Every comparison retains goal fit,
+capacity, dependencies, risks, governance decisions, existing commitments, and the reason for the
+outcome. Accepted outcomes additionally name accountable owners, target horizons, success
+measures, and explicit sequence.
+
+Human repository participants alone publish commitments. Readers and agents may discuss tradeoffs
+and propose visibly non-binding scenarios, but those scenarios cannot reserve resources. A roadmap
+is append-only by revision and compare-and-swap protected; every revision after publication must
+state an attributed replan reason and triggers such as scope movement, conflicting commitments,
+owner unavailability, or target slip. Records default beneath `$ROADMAP_STORAGE_ROOT` (`roadmaps`).
+
 ## Product experiment plans
 
 Repository participants define versioned product-learning contracts at
