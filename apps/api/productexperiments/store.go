@@ -2,7 +2,9 @@
 package productexperiments
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -109,24 +111,377 @@ type WorkLink struct {
 	LinkedBy          string    `json:"linked_by"`
 	CreatedAt         time.Time `json:"created_at"`
 }
-type Experiment struct {
-	ID             string       `json:"id"`
-	RepositoryID   string       `json:"repository_id"`
-	Source         Source       `json:"source"`
-	CurrentVersion int          `json:"current_version"`
-	Revisions      []Revision   `json:"revisions"`
-	Signals        []Signal     `json:"signals"`
-	Comments       []Comment    `json:"comments"`
-	Approvals      []Approval   `json:"approvals"`
-	Work           []WorkLink   `json:"work"`
-	Diagnostics    []Diagnostic `json:"diagnostics"`
-	CreatedAt      time.Time    `json:"created_at"`
-	UpdatedAt      time.Time    `json:"updated_at"`
+type Allocation struct {
+	VariantKey  string `json:"variant_key"`
+	BasisPoints int    `json:"basis_points"`
 }
+type AudienceContract struct {
+	ID                   string       `json:"id"`
+	ExperimentVersion    int          `json:"experiment_version"`
+	ReleaseID            string       `json:"release_id"`
+	ReleaseCommitID      string       `json:"release_commit_id"`
+	VariantKeys          []string     `json:"variant_keys"`
+	Eligibility          []string     `json:"eligibility"`
+	Exclusions           []string     `json:"exclusions"`
+	OrganizationIDs      []string     `json:"organization_ids,omitempty"`
+	Regions              []string     `json:"regions,omitempty"`
+	RandomizationUnit    string       `json:"randomization_unit"`
+	RandomizationSalt    string       `json:"-"`
+	MutualExclusionGroup string       `json:"mutual_exclusion_group"`
+	Allocation           []Allocation `json:"allocation"`
+	Consent              string       `json:"consent"`
+	DataFields           []string     `json:"data_fields"`
+	RetentionDays        int          `json:"retention_days"`
+	ApprovedBy           string       `json:"approved_by"`
+	ApprovedAt           time.Time    `json:"approved_at"`
+}
+type AssignmentReceipt struct {
+	ID            string    `json:"id"`
+	ContractID    string    `json:"contract_id"`
+	SubjectDigest string    `json:"subject_digest"`
+	VariantKey    string    `json:"variant_key,omitempty"`
+	Eligible      bool      `json:"eligible"`
+	Reason        string    `json:"reason"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+type AssignmentContext struct {
+	Eligibility    []string `json:"eligibility"`
+	Exclusions     []string `json:"exclusions"`
+	OrganizationID string   `json:"organization_id,omitempty"`
+	Region         string   `json:"region,omitempty"`
+	Consented      bool     `json:"consented"`
+}
+type ExclusionMembership struct {
+	GroupDigest  string    `json:"group_digest"`
+	SubjectToken string    `json:"subject_token"`
+	ExpiresAt    time.Time `json:"expires_at"`
+}
+type Experiment struct {
+	ID                   string                `json:"id"`
+	RepositoryID         string                `json:"repository_id"`
+	Source               Source                `json:"source"`
+	CurrentVersion       int                   `json:"current_version"`
+	Revisions            []Revision            `json:"revisions"`
+	Signals              []Signal              `json:"signals"`
+	Comments             []Comment             `json:"comments"`
+	Approvals            []Approval            `json:"approvals"`
+	Work                 []WorkLink            `json:"work"`
+	AudienceContracts    []AudienceContract    `json:"audience_contracts"`
+	AssignmentAudit      []AssignmentReceipt   `json:"assignment_audit"`
+	ExclusionMemberships []ExclusionMembership `json:"exclusion_memberships"`
+	Diagnostics          []Diagnostic          `json:"diagnostics"`
+	CreatedAt            time.Time             `json:"created_at"`
+	UpdatedAt            time.Time             `json:"updated_at"`
+}
+
+func (s *Store) ApproveAudience(id, actor string, expected int, input AudienceContract) (Experiment, error) {
+	return s.mutate(id, func(v *Experiment) error {
+		if expected != v.CurrentVersion {
+			return ErrConflict
+		}
+		if !validAudienceContract(*v, input) {
+			return ErrInvalid
+		}
+		for _, existing := range v.AudienceContracts {
+			if existing.ReleaseID == input.ReleaseID || (input.MutualExclusionGroup != "" && existing.MutualExclusionGroup == input.MutualExclusionGroup) {
+				return ErrConflict
+			}
+		}
+		input.ID, input.ExperimentVersion, input.ApprovedBy, input.ApprovedAt = idgen(), expected, actor, s.now()
+		input.RandomizationSalt = idgen()
+		v.AudienceContracts = append(v.AudienceContracts, input)
+		return nil
+	})
+}
+
+func (s *Store) Assign(id, contractID, subject string, context AssignmentContext) (Experiment, AssignmentReceipt, error) {
+	var receipt AssignmentReceipt
+	var out Experiment
+	err := s.lock(func() error {
+		v, err := s.read(id)
+		if err != nil {
+			return err
+		}
+		changed := s.pruneAssignments(&v)
+		var contract *AudienceContract
+		for i := range v.AudienceContracts {
+			if v.AudienceContracts[i].ID == contractID {
+				contract = &v.AudienceContracts[i]
+			}
+		}
+		if contract == nil || contract.ExperimentVersion != v.CurrentVersion || strings.TrimSpace(subject) == "" {
+			return ErrConflict
+		}
+		subjectDigest := s.subjectDigest(v.RepositoryID, subject)
+		for _, prior := range v.AssignmentAudit {
+			if prior.ContractID == contractID && prior.SubjectDigest == subjectDigest {
+				receipt = prior
+				out = v
+				if changed {
+					return s.write(v)
+				}
+				return nil
+			}
+		}
+		receipt = AssignmentReceipt{ID: idgen(), ContractID: contractID, SubjectDigest: subjectDigest, Eligible: true, CreatedAt: s.now()}
+		if !assignmentEligible(*contract, context) {
+			receipt.Eligible, receipt.Reason = false, "audience_ineligible"
+		} else if contract.Consent == "explicit" && !context.Consented {
+			receipt.Eligible, receipt.Reason = false, "consent_required"
+		} else {
+			conflict, err := s.hasGroupAssignment(v.RepositoryID, v.ID, contract.MutualExclusionGroup, subjectDigest)
+			if err != nil {
+				return err
+			}
+			if conflict {
+				receipt.Eligible, receipt.Reason = false, "mutually_excluded"
+			} else {
+				digest := sha256.Sum256([]byte(contract.RandomizationSalt + ":" + subject))
+				bucket := int(digest[0])<<8 | int(digest[1])
+				bucket %= 10000
+				cumulative := 0
+				for _, allocation := range contract.Allocation {
+					cumulative += allocation.BasisPoints
+					if bucket < cumulative {
+						receipt.VariantKey = allocation.VariantKey
+						break
+					}
+				}
+				if receipt.VariantKey == "" {
+					receipt.Eligible, receipt.Reason = false, "unallocated"
+				} else {
+					receipt.Reason = "assigned"
+					v.ExclusionMemberships = append(v.ExclusionMemberships, ExclusionMembership{GroupDigest: s.groupDigest(v.RepositoryID, contract.MutualExclusionGroup), SubjectToken: s.groupSubjectToken(v.RepositoryID, contract.MutualExclusionGroup, subjectDigest), ExpiresAt: contract.ApprovedAt.Add(time.Duration(currentRevision(&v).DurationDays) * 24 * time.Hour)})
+				}
+			}
+		}
+		v.AssignmentAudit = append(v.AssignmentAudit, receipt)
+		out = v
+		if err := s.write(v); err != nil {
+			return err
+		}
+		s.scheduleCleanupAt(receipt.CreatedAt.Add(time.Duration(contract.RetentionDays) * 24 * time.Hour))
+		return nil
+	})
+	if err != nil {
+		return Experiment{}, AssignmentReceipt{}, err
+	}
+	return s.project(out), receipt, nil
+}
+
+func currentRevision(v *Experiment) Revision {
+	for i := len(v.Revisions) - 1; i >= 0; i-- {
+		if v.Revisions[i].Version == v.CurrentVersion {
+			return v.Revisions[i]
+		}
+	}
+	return Revision{}
+}
+
+func (s *Store) groupDigest(repositoryID, group string) string {
+	return s.protectedToken(repositoryID + ":group:" + group)
+}
+func (s *Store) groupSubjectToken(repositoryID, group, subjectDigest string) string {
+	return s.protectedToken(repositoryID + ":member:" + group + ":" + subjectDigest)
+}
+func (s *Store) protectedToken(value string) string {
+	h := hmac.New(sha256.New, s.subjectKey)
+	_, _ = h.Write([]byte(value))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func (s *Store) subjectDigest(repositoryID, subject string) string {
+	h := hmac.New(sha256.New, s.subjectKey)
+	_, _ = h.Write([]byte(repositoryID + ":" + subject))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func (s *Store) hasGroupAssignment(repositoryID, experimentID, group, digest string) (bool, error) {
+	groupDigest, subjectToken := s.groupDigest(repositoryID, group), s.groupSubjectToken(repositoryID, group, digest)
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		v, err := s.read(strings.TrimSuffix(entry.Name(), ".json"))
+		if err != nil {
+			return false, err
+		}
+		if v.RepositoryID != repositoryID || v.ID == experimentID {
+			continue
+		}
+		if s.pruneAssignments(&v) {
+			if err := s.write(v); err != nil {
+				return false, err
+			}
+		}
+		for _, membership := range v.ExclusionMemberships {
+			if membership.ExpiresAt.After(s.now()) && membership.GroupDigest == groupDigest && membership.SubjectToken == subjectToken {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func (s *Store) pruneAssignments(v *Experiment) bool {
+	retention := map[string]time.Duration{}
+	for _, c := range v.AudienceContracts {
+		retention[c.ID] = time.Duration(c.RetentionDays) * 24 * time.Hour
+	}
+	next := make([]AssignmentReceipt, 0, len(v.AssignmentAudit))
+	now := s.now()
+	for _, receipt := range v.AssignmentAudit {
+		duration, ok := retention[receipt.ContractID]
+		if ok && receipt.CreatedAt.Add(duration).After(now) {
+			next = append(next, receipt)
+		}
+	}
+	changed := len(next) != len(v.AssignmentAudit)
+	v.AssignmentAudit = next
+	members := make([]ExclusionMembership, 0, len(v.ExclusionMemberships))
+	for _, membership := range v.ExclusionMemberships {
+		if membership.ExpiresAt.After(now) {
+			members = append(members, membership)
+		}
+	}
+	changed = changed || len(members) != len(v.ExclusionMemberships)
+	v.ExclusionMemberships = members
+	return changed
+}
+
+func (s *Store) CleanupExpired() error {
+	return s.lock(func() error {
+		entries, err := os.ReadDir(s.root)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			v, err := s.read(strings.TrimSuffix(entry.Name(), ".json"))
+			if err != nil {
+				return err
+			}
+			if s.pruneAssignments(&v) {
+				if err = s.write(v); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+}
+
+func (s *Store) scheduleCleanupAt(deadline time.Time) {
+	delay := deadline.Sub(s.now())
+	if delay < 0 {
+		delay = 0
+	}
+	time.AfterFunc(delay, func() { _ = s.CleanupExpired() })
+}
+
+func loadOrCreateSubjectKey(root string) ([]byte, error) {
+	path := filepath.Join(root, ".subject-key")
+	key, err := os.ReadFile(path)
+	if err == nil {
+		if len(key) != 32 {
+			return nil, ErrInvalid
+		}
+		return key, nil
+	}
+	if !os.IsNotExist(err) {
+		return nil, err
+	}
+	key = make([]byte, 32)
+	if _, err = rand.Read(key); err != nil {
+		return nil, err
+	}
+	if err = os.WriteFile(path, key, 0600); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
+func assignmentEligible(contract AudienceContract, context AssignmentContext) bool {
+	has := func(values []string, wanted string) bool {
+		for _, value := range values {
+			if value == wanted {
+				return true
+			}
+		}
+		return false
+	}
+	eligible := false
+	for _, rule := range contract.Eligibility {
+		if has(context.Eligibility, rule) {
+			eligible = true
+		}
+	}
+	for _, rule := range context.Exclusions {
+		if has(contract.Exclusions, rule) {
+			return false
+		}
+	}
+	if len(contract.Regions) > 0 && !has(contract.Regions, context.Region) {
+		return false
+	}
+	if len(contract.OrganizationIDs) > 0 && !has(contract.OrganizationIDs, context.OrganizationID) {
+		return false
+	}
+	return eligible
+}
+
+func validAudienceContract(v Experiment, x AudienceContract) bool {
+	if x.ReleaseID == "" || !isHexCommit(x.ReleaseCommitID) || len(x.VariantKeys) < 2 || len(x.Eligibility) == 0 || x.RandomizationUnit != "user" || x.MutualExclusionGroup == "" || (x.Consent != "none" && x.Consent != "explicit") || len(x.DataFields) == 0 || x.RetentionDays < 1 || x.RetentionDays > 730 {
+		return false
+	}
+	allowedData := map[string]bool{"assignment": true, "exposure": true, "metric": true, "region": true, "organization": true}
+	for _, field := range x.DataFields {
+		if !allowedData[field] {
+			return false
+		}
+	}
+	variants := map[string]bool{}
+	workCommit := false
+	for _, revision := range v.Revisions {
+		if revision.Version == v.CurrentVersion {
+			for _, variant := range revision.Variants {
+				variants[variant.Key] = true
+			}
+		}
+	}
+	for _, work := range v.Work {
+		if work.ExperimentVersion == v.CurrentVersion && work.CommitID == x.ReleaseCommitID {
+			workCommit = true
+		}
+	}
+	seen := map[string]bool{}
+	total := 0
+	for _, allocation := range x.Allocation {
+		if !variants[allocation.VariantKey] || seen[allocation.VariantKey] || allocation.BasisPoints < 0 {
+			return false
+		}
+		seen[allocation.VariantKey] = true
+		total += allocation.BasisPoints
+	}
+	for _, key := range x.VariantKeys {
+		if !variants[key] || !seen[key] {
+			return false
+		}
+	}
+	return workCommit && total > 0 && total <= 10000
+}
+
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root       string
+	mu         sync.Mutex
+	now        func() time.Time
+	subjectKey []byte
 }
 
 func New(root string) (*Store, error) {
@@ -136,7 +491,46 @@ func New(root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
-	return &Store{root: root, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }}, nil
+	key, err := loadOrCreateSubjectKey(root)
+	if err != nil {
+		return nil, err
+	}
+	s := &Store{root: root, subjectKey: key, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }}
+	if err := s.schedulePersistedCleanup(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *Store) schedulePersistedCleanup() error {
+	return s.lock(func() error {
+		entries, err := os.ReadDir(s.root)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			v, err := s.read(strings.TrimSuffix(entry.Name(), ".json"))
+			if err != nil {
+				return err
+			}
+			if s.pruneAssignments(&v) {
+				if err = s.write(v); err != nil {
+					return err
+				}
+			}
+			retention := map[string]int{}
+			for _, c := range v.AudienceContracts {
+				retention[c.ID] = c.RetentionDays
+			}
+			for _, receipt := range v.AssignmentAudit {
+				s.scheduleCleanupAt(receipt.CreatedAt.Add(time.Duration(retention[receipt.ContractID]) * 24 * time.Hour))
+			}
+		}
+		return nil
+	})
 }
 func (s *Store) Create(repo, actor string, source Source, revision Revision, signals []Signal) (Experiment, error) {
 	var out Experiment
@@ -304,6 +698,7 @@ func (s *Store) mutate(key string, f func(*Experiment) error) (Experiment, error
 		if e != nil {
 			return e
 		}
+		s.pruneAssignments(&v)
 		if e = f(&v); e != nil {
 			return e
 		}
@@ -318,7 +713,14 @@ func (s *Store) mutate(key string, f func(*Experiment) error) (Experiment, error
 }
 func (s *Store) Get(key string) (Experiment, error) {
 	var out Experiment
-	err := s.lock(func() error { var e error; out, e = s.read(key); return e })
+	err := s.lock(func() error {
+		var e error
+		out, e = s.read(key)
+		if e == nil && s.pruneAssignments(&out) {
+			e = s.write(out)
+		}
+		return e
+	})
 	if err != nil {
 		return Experiment{}, err
 	}
@@ -339,6 +741,11 @@ func (s *Store) List(repo string) ([]Experiment, error) {
 			if e != nil {
 				return e
 			}
+			if s.pruneAssignments(&v) {
+				if e = s.write(v); e != nil {
+					return e
+				}
+			}
 			if v.RepositoryID == repo {
 				out = append(out, s.project(v))
 			}
@@ -350,6 +757,7 @@ func (s *Store) List(repo string) ([]Experiment, error) {
 }
 func (s *Store) project(v Experiment) Experiment {
 	v.Diagnostics = nil
+	v.ExclusionMemberships = nil
 	if len(v.Revisions) == 0 {
 		return v
 	}

@@ -354,6 +354,10 @@ whenever dependencies change or the web job fails before it starts.
   variant keys, versioned events, exposure rules, privacy classification, removal plan, and
   exact-commit repository checks without granting the experiment or its human/agent owner any
   new authority.
+  Repository-owner audience contracts bind reviewed variants to an exact release and freeze
+  eligibility, region/organization bounds, deterministic user randomization, mutual exclusion,
+  allocation, consent, minimal data, and retention. Assignment retains only salted subject digests;
+  stale, conflicting, biased, unauthorized, or release-mismatched admission fails before rollout.
 
   Repository collaborators define append-only performance contracts at
   `/repositories/{id}/performance` and the public `/repositories/{id}/performance-goals`

@@ -10,6 +10,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/productexperiments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 )
 
@@ -31,8 +32,16 @@ type productExperimentWorkInput struct {
 	ExpectedVersion int                         `json:"expected_version"`
 	Work            productexperiments.WorkLink `json:"work"`
 }
+type productExperimentAudienceInput struct {
+	ExpectedVersion int                                 `json:"expected_version"`
+	Contract        productexperiments.AudienceContract `json:"contract"`
+}
+type productExperimentAssignmentInput struct {
+	Subject string                               `json:"subject"`
+	Context productexperiments.AssignmentContext `json:"context"`
+}
 
-func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *productexperiments.Store, proposals *proposals.Store, pulls *pullrequests.Store, checks *checkruns.Store) {
+func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *productexperiments.Store, proposals *proposals.Store, pulls *pullrequests.Store, checks *checkruns.Store, releaseStore *releases.Store) {
 	writeProjected := func(w http.ResponseWriter, experiment productexperiments.Experiment, status int) {
 		all, err := store.List(experiment.RepositoryID)
 		if err != nil {
@@ -196,6 +205,69 @@ func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.S
 			return
 		}
 		writeProjected(w, out, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/product-experiments/{experiment_id}/audience-contracts", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		repository, repositoryErr := catalog.Get(actor.UserID, r.PathValue("id"))
+		if repositoryErr != nil {
+			writeAPIError(w, 404, "repository_not_found", "repository not found")
+			return
+		}
+		if repository.OwnerID != actor.UserID {
+			writeAPIError(w, 403, "experiment_audience_forbidden", "only the repository owner may approve audience exposure")
+			return
+		}
+		current, err := store.Get(r.PathValue("experiment_id"))
+		if err != nil || current.RepositoryID != repository.ID {
+			writeAPIError(w, 404, "product_experiment_not_found", "experiment not found")
+			return
+		}
+		var in productExperimentAudienceInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a complete audience contract is required")
+			return
+		}
+		release, err := releaseStore.Get(repository.ID, in.Contract.ReleaseID)
+		if err != nil || release.CommitID != in.Contract.ReleaseCommitID {
+			writeAPIError(w, 422, "experiment_release_mismatch", "the contract must name an exact repository release")
+			return
+		}
+		out, err := store.ApproveAudience(current.ID, actor.UserID, in.ExpectedVersion, in.Contract)
+		if err != nil {
+			writeProductExperimentError(w, err)
+			return
+		}
+		writeProjected(w, out, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/product-experiments/{experiment_id}/audience-contracts/{contract_id}/assignments", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		repository, repositoryErr := catalog.Get(actor.UserID, r.PathValue("id"))
+		if repositoryErr != nil || repository.OwnerID != actor.UserID {
+			writeAPIError(w, 403, "experiment_assignment_forbidden", "only the repository owner may admit assignments")
+			return
+		}
+		current, err := store.Get(r.PathValue("experiment_id"))
+		if err != nil || current.RepositoryID != repository.ID {
+			writeAPIError(w, 404, "product_experiment_not_found", "experiment not found")
+			return
+		}
+		var in productExperimentAssignmentInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "subject and consent state are required")
+			return
+		}
+		_, receipt, err := store.Assign(current.ID, r.PathValue("contract_id"), in.Subject, in.Context)
+		if err != nil {
+			writeProductExperimentError(w, err)
+			return
+		}
+		writeJSON(w, 201, receipt)
 	})
 }
 

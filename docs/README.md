@@ -29,6 +29,11 @@ attributable. Discussion and approval bind the current plan version and grant no
 release, or deployment authority. Records default beneath `$PRODUCT_EXPERIMENT_STORAGE_ROOT`
 (`product-experiments`).
 
+Before rollout, the repository owner freezes reviewed variants to an exact release with a public
+audience contract covering eligibility, region/organization bounds, deterministic randomization,
+mutual exclusion, allocation, consent, minimal data, and retention. Stable receipts retain salted
+subject digests; stale, conflicting, over-allocated, unauthorized, or mismatched admission fails closed.
+
 ## Collaborative performance goals
 
 Repository participants publish complete, append-only performance-contract revisions through
