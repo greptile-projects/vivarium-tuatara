@@ -230,14 +230,18 @@ type Analysis struct {
 	CreatedAt         time.Time       `json:"created_at"`
 }
 type OutcomeTask struct {
-	ID          string    `json:"id"`
-	Kind        string    `json:"kind"`
-	Title       string    `json:"title"`
-	Required    bool      `json:"required"`
-	Status      string    `json:"status"`
-	EvidenceURL string    `json:"evidence_url,omitempty"`
-	CompletedBy string    `json:"completed_by,omitempty"`
-	CompletedAt time.Time `json:"completed_at,omitempty"`
+	ID          string       `json:"id"`
+	Kind        string       `json:"kind"`
+	Title       string       `json:"title"`
+	Required    bool         `json:"required"`
+	Status      string       `json:"status"`
+	Evidence    TaskEvidence `json:"evidence,omitempty"`
+	CompletedBy string       `json:"completed_by,omitempty"`
+	CompletedAt time.Time    `json:"completed_at,omitempty"`
+}
+type TaskEvidence struct {
+	Kind       string `json:"kind"`
+	ResourceID string `json:"resource_id"`
 }
 type OutcomeDecision struct {
 	ID                string        `json:"id"`
@@ -277,9 +281,13 @@ type Experiment struct {
 func (s *Store) Analyze(id, actor string, input Analysis) (Experiment, error) {
 	return s.mutate(id, func(v *Experiment) error {
 		run := runAttempt(v, input.RunID)
-		if run == nil || run.ExperimentVersion != v.CurrentVersion || run.Version != input.RunVersion || strings.TrimSpace(input.Interpretation) == "" || strings.TrimSpace(input.Uncertainty) == "" || len(input.SegmentEffects) == 0 || len(input.GuardrailOutcomes) == 0 || (input.InterpretedByType != "human" && input.InterpretedByType != "agent") || strings.TrimSpace(input.InterpretedByID) == "" {
+		if run == nil || run.ExperimentVersion != v.CurrentVersion || run.Version != input.RunVersion || strings.TrimSpace(input.Interpretation) == "" || strings.TrimSpace(input.Uncertainty) == "" || len(input.SegmentEffects) == 0 || len(input.GuardrailOutcomes) == 0 {
 			return ErrInvalid
 		}
+		// Agent interpretation needs a separate authorized-agent admission
+		// boundary. Until one is supplied here, analysis is attributable only to
+		// the authenticated human caller and request provenance is ignored.
+		input.InterpretedByType, input.InterpretedByID = "human", actor
 		revision, ok := revisionAt(v, run.ExperimentVersion)
 		if !ok {
 			return ErrInvalid
@@ -382,7 +390,7 @@ func (s *Store) DecideOutcome(id, actor string, expected int, input OutcomeDecis
 	})
 }
 
-func (s *Store) CompleteOutcomeTask(id, decisionID, taskID, actor, evidenceURL string, expected int) (Experiment, error) {
+func (s *Store) CompleteOutcomeTask(id, decisionID, taskID, actor string, evidence TaskEvidence, expected int) (Experiment, error) {
 	return s.mutate(id, func(v *Experiment) error {
 		var decision *OutcomeDecision
 		for i := range v.OutcomeDecisions {
@@ -390,7 +398,7 @@ func (s *Store) CompleteOutcomeTask(id, decisionID, taskID, actor, evidenceURL s
 				decision = &v.OutcomeDecisions[i]
 			}
 		}
-		if decision == nil || decision.Version != expected || strings.TrimSpace(evidenceURL) == "" {
+		if decision == nil || decision.Version != expected {
 			return ErrConflict
 		}
 		found := false
@@ -398,14 +406,17 @@ func (s *Store) CompleteOutcomeTask(id, decisionID, taskID, actor, evidenceURL s
 			t := &decision.Tasks[i]
 			if t.ID == taskID {
 				found = true
+				if s.outcomeEvidenceValid == nil || !s.outcomeEvidenceValid(v.RepositoryID, t.Kind, evidence) {
+					return ErrInvalid
+				}
 				if t.Status == "completed" {
-					if t.EvidenceURL == evidenceURL && t.CompletedBy == actor {
+					if reflect.DeepEqual(t.Evidence, evidence) && t.CompletedBy == actor {
 						return nil
 					}
 					return ErrConflict
 				}
 				t.Status = "completed"
-				t.EvidenceURL = strings.TrimSpace(evidenceURL)
+				t.Evidence = evidence
 				t.CompletedBy = actor
 				t.CompletedAt = s.now()
 			}
@@ -433,7 +444,11 @@ func (s *Store) CompleteOutcomeTask(id, decisionID, taskID, actor, evidenceURL s
 func (s *Store) Launch(id, actor, contractID string, deploymentIDs, environmentIDs []string, allocation []RunAllocation) (Experiment, error) {
 	return s.mutate(id, func(v *Experiment) error {
 		if len(v.OutcomeDecisions) > 0 {
-			return ErrConflict
+			latest := v.OutcomeDecisions[len(v.OutcomeDecisions)-1]
+			followUp := latest.Decision == "extend_test" || latest.Decision == "inconclusive"
+			if !followUp || !latest.CleanedUp {
+				return ErrConflict
+			}
 		}
 		contract := audienceContract(v, contractID)
 		if contract == nil || contract.ExperimentVersion != v.CurrentVersion || len(deploymentIDs) == 0 || len(deploymentIDs) != len(environmentIDs) || !validRunAllocation(*contract, allocation) {
@@ -938,17 +953,23 @@ func validAudienceContract(v Experiment, x AudienceContract) bool {
 }
 
 type Store struct {
-	root              string
-	mu                sync.Mutex
-	now               func() time.Time
-	subjectKey        []byte
-	deploymentHealthy func(repositoryID string, deploymentIDs []string) (bool, error)
+	root                 string
+	mu                   sync.Mutex
+	now                  func() time.Time
+	subjectKey           []byte
+	deploymentHealthy    func(repositoryID string, deploymentIDs []string) (bool, error)
+	outcomeEvidenceValid func(repositoryID, taskKind string, evidence TaskEvidence) bool
 }
 
 func (s *Store) ConfigureDeploymentHealth(fn func(string, []string) (bool, error)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.deploymentHealthy = fn
+}
+func (s *Store) ConfigureOutcomeEvidence(fn func(string, string, TaskEvidence) bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.outcomeEvidenceValid = fn
 }
 
 func New(root string) (*Store, error) {

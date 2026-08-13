@@ -64,8 +64,8 @@ type productExperimentOutcomeInput struct {
 	Decision        productexperiments.OutcomeDecision `json:"decision"`
 }
 type productExperimentTaskInput struct {
-	ExpectedVersion int    `json:"expected_version"`
-	EvidenceURL     string `json:"evidence_url"`
+	ExpectedVersion int                             `json:"expected_version"`
+	Evidence        productexperiments.TaskEvidence `json:"evidence"`
 }
 
 func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *productexperiments.Store, proposals *proposals.Store, pulls *pullrequests.Store, checks *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store) {
@@ -83,6 +83,30 @@ func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.S
 			}
 		}
 		return true, nil
+	})
+	store.ConfigureOutcomeEvidence(func(repositoryID, taskKind string, evidence productexperiments.TaskEvidence) bool {
+		switch evidence.Kind {
+		case "pull_request":
+			if pulls == nil || (taskKind != "follow_up" && taskKind != "remove_variants" && taskKind != "remove_targeting" && taskKind != "revoke_credentials" && taskKind != "stop_collection" && taskKind != "review") {
+				return false
+			}
+			pull, err := pulls.Get(repositoryID, evidence.ResourceID)
+			return err == nil && pull.Status == pullrequests.Merged
+		case "release":
+			if releaseStore == nil || taskKind != "release" {
+				return false
+			}
+			candidate, err := releaseStore.Get(repositoryID, evidence.ResourceID)
+			return err == nil && candidate.ID != ""
+		case "deployment":
+			if deploymentStore == nil || (taskKind != "deployment" && taskKind != "rollout" && taskKind != "rollback") {
+				return false
+			}
+			promotion, err := deploymentStore.GetPromotion(repositoryID, evidence.ResourceID)
+			return err == nil && promotion.State == "succeeded"
+		default:
+			return false
+		}
 	})
 	writeProjected := func(w http.ResponseWriter, experiment productexperiments.Experiment, status int) {
 		all, err := store.List(experiment.RepositoryID)
@@ -477,7 +501,7 @@ func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.S
 			writeAPIError(w, 400, "invalid_request", "completion evidence is required")
 			return
 		}
-		out, err := store.CompleteOutcomeTask(current.ID, r.PathValue("decision_id"), r.PathValue("task_id"), actor.UserID, in.EvidenceURL, in.ExpectedVersion)
+		out, err := store.CompleteOutcomeTask(current.ID, r.PathValue("decision_id"), r.PathValue("task_id"), actor.UserID, in.Evidence, in.ExpectedVersion)
 		if err != nil {
 			writeProductExperimentError(w, err)
 			return
