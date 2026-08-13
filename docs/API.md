@@ -45,6 +45,13 @@ new assignment while retaining earlier attempts and stable assignments. Guardrai
 the run's launch-time plan revision. Every new assignment rechecks all launched deployments and
 atomically contains the attempt if any is no longer successful or its health cannot be read.
 
+Analysis at `POST .../{experiment_id}/analyses` freezes a plan/run revision, segment effects,
+uncertainty, exclusions, guardrail outcomes, interpretation, and dissent after minimum evidence or
+a stop condition. Human interpretation is attributed to the authenticated participant. An
+`interpreted_by_type` of `agent` is accepted only when that participant currently operates the named
+organization-approved agent for the repository; the record retains both the agent interpreter and
+human mutation actor. Outcomes and cleanup remain human-authenticated decisions and ordinary work.
+
 ## Governed community proposals
 
 `POST /repositories/{id}/charter/continuity` and the organization equivalent record a pending

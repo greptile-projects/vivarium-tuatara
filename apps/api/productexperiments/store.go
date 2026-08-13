@@ -281,15 +281,30 @@ type Experiment struct {
 }
 
 func (s *Store) Analyze(id, actor string, input Analysis) (Experiment, error) {
+	return s.analyze(id, actor, "", input)
+}
+
+// AnalyzeAsAgent retains an approved agent as interpreter while the human
+// operator remains the authenticated mutation actor. The relationship is
+// admitted by the public API before this storage call.
+func (s *Store) AnalyzeAsAgent(id, actor, agent string, input Analysis) (Experiment, error) {
+	if strings.TrimSpace(agent) == "" {
+		return Experiment{}, ErrInvalid
+	}
+	return s.analyze(id, actor, agent, input)
+}
+
+func (s *Store) analyze(id, actor, agent string, input Analysis) (Experiment, error) {
 	return s.mutate(id, func(v *Experiment) error {
 		run := runAttempt(v, input.RunID)
 		if run == nil || run.ExperimentVersion != v.CurrentVersion || run.Version != input.RunVersion || strings.TrimSpace(input.Interpretation) == "" || strings.TrimSpace(input.Uncertainty) == "" || len(input.SegmentEffects) == 0 || len(input.GuardrailOutcomes) == 0 {
 			return ErrInvalid
 		}
-		// Agent interpretation needs a separate authorized-agent admission
-		// boundary. Until one is supplied here, analysis is attributable only to
-		// the authenticated human caller and request provenance is ignored.
-		input.InterpretedByType, input.InterpretedByID = "human", actor
+		if agent == "" {
+			input.InterpretedByType, input.InterpretedByID = "human", actor
+		} else {
+			input.InterpretedByType, input.InterpretedByID = "agent", agent
+		}
 		revision, ok := revisionAt(v, run.ExperimentVersion)
 		if !ok {
 			return ErrInvalid

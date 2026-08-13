@@ -370,6 +370,8 @@ whenever dependencies change or the web job fails before it starts.
   adopt/control/extend/inconclusive outcomes create rollout, rollback, or follow-up work plus
   mandatory retirement of variants, targeting, credentials, and collection; cleanup completes only
   when every required task has a durable evidence link, while aggregate evidence and provenance remain.
+  Agent experiment interpretation is admitted only through a current operator of an
+  organization-approved agent and retains the human operator as the authenticated writer.
 
   Repository collaborators define append-only performance contracts at
   `/repositories/{id}/performance` and the public `/repositories/{id}/performance-goals`

@@ -48,6 +48,9 @@ adopts a treatment, retains control, extends the test, or declares it inconclusi
 rollout, rollback, or follow-up work alongside required retirement tasks. Cleanup is complete only
 after evidence links prove obsolete variants, targeting, credentials, and collection are removed;
 aggregated observations and review, release, and deployment provenance remain durable.
+Agent interpretation requires a current operator of an organization-approved agent and retains the
+human operator separately as the authenticated writer; a client-supplied agent name alone is never
+accepted as attribution.
 
 ## Collaborative performance goals
 
