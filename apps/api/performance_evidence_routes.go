@@ -141,8 +141,11 @@ func registerPerformanceEvidenceRoutes(mux *http.ServeMux, gitStore *storage.Sto
 			}
 		}
 		resolveReference := func(ref performanceevidence.Reference) bool {
-			if ref.Revision != "" && (len(ref.Revision) != 40 || exec.Command("git", "--git-dir="+repo.Path(), "cat-file", "-e", ref.Revision+"^{commit}").Run() != nil) {
-				return false
+			if ref.Revision != "" {
+				visibleRevision, err := resolveRevision(repo, ref.Revision)
+				if err != nil || string(visibleRevision) != ref.Revision {
+					return false
+				}
 			}
 			switch ref.Kind {
 			case "commit":
