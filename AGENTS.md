@@ -354,6 +354,13 @@ whenever dependencies change or the web job fails before it starts.
   workload, environment, sampling, timing variance, resources, artifacts, logs, and cost;
   comparisons fail closed when measurement conditions differ.
   Performance investigations reuse retained trials and preserve selected evidence,
+
+  Repository owners can require current exact-revision performance evaluations by target branch,
+  changed path, or declared risk class. Merge readiness fails closed on missing, stale,
+  incomparable, uncertain, incorrect, or threshold-regressed evidence. Post-integration
+  observations bind the same candidate evaluation to its exact release and deployment and compare
+  observed trials with the candidate; pause, known-good restore, repair, and decision-revisit
+  recommendations grant no merge, agent, or environment authority.
   revision-aware code/runtime references, invited owners, cited claims, flame stacks,
   challenges, and confirmations. Newer same-context trials mark claims stale when the
   revision, workload, or environment changes. Short-lived `performance:investigate`

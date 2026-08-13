@@ -20,6 +20,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/acceptance"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/performanceevidence"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
@@ -499,7 +500,10 @@ type Store struct {
 		List(string, string, string) ([]previews.Preview, error)
 		WithAudienceAdmission(func() error) error
 	}
+	performance *performanceevidence.Store
 }
+
+func (s *Store) ConfigurePerformanceEvidence(store *performanceevidence.Store) { s.performance = store }
 
 func (s *Store) ConfigurePreviewAcceptance(a *acceptance.Store, p *previews.Store) {
 	s.acceptance = a
@@ -1580,6 +1584,31 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 			report.RequiredChecks = append(report.RequiredChecks, requirement)
 			if requirement.Status != "passed" {
 				addBlocker("required_check_"+requirement.Status, fmt.Sprintf("required check %q is %s for revision %s", name, requirement.Status, p.SourceCommitID))
+			}
+		}
+	}
+	if s.performance != nil {
+		changes, changeErr := s.Changes(repositoryID, pullRequestID)
+		if changeErr != nil {
+			return MergeReadiness{}, changeErr
+		}
+		paths := make([]string, 0, len(changes))
+		for _, change := range changes {
+			paths = append(paths, change.Path)
+		}
+		risks := []string{}
+		if report.PreviewAcceptance != nil {
+			for _, decision := range report.PreviewAcceptance.Decisions {
+				risks = append(risks, decision.RiskClasses...)
+			}
+		}
+		requirements, performanceErr := s.performance.EvaluateMerge(repositoryID, pullRequestID, p.SourceCommitID, p.TargetBranch, paths, risks)
+		if performanceErr != nil {
+			return MergeReadiness{}, performanceErr
+		}
+		for _, requirement := range requirements {
+			if requirement.Status != "passed" {
+				addBlocker("performance_"+requirement.Status, fmt.Sprintf("performance goal %q: %s", requirement.GoalID, requirement.Message))
 			}
 		}
 	}

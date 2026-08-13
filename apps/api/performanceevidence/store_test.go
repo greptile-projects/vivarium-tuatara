@@ -258,3 +258,55 @@ func TestInvestigationRequiresAuthoritativeReferenceResolver(t *testing.T) {
 		t.Fatalf("rejected reference error = %v", err)
 	}
 }
+
+func TestPerformancePolicyBlocksMissingUncertainAndRegressedEvidence(t *testing.T) {
+	s, _ := New(t.TempDir())
+	policy, err := s.PutMergePolicy(MergePolicy{RepositoryID: "repo", Branch: "main", Paths: []string{"src/**"}, RiskClasses: []string{"latency"}, GoalIDs: []string{"goal"}, MaximumRegressionPercent: 5, MinimumConfidence: .8, RequireCorrectness: true, CreatedBy: "owner"})
+	if err != nil || policy.ID == "" {
+		t.Fatal(err)
+	}
+	requirements, _ := s.EvaluateMerge("repo", "pull", trial().Source.Revision, "main", []string{"src/api.go"}, []string{"latency"})
+	if len(requirements) != 1 || requirements[0].Status != "missing" {
+		t.Fatalf("requirements = %+v", requirements)
+	}
+	requirements, _ = s.EvaluateMerge("repo", "pull", trial().Source.Revision, "develop", []string{"src/api.go"}, []string{"latency"})
+	if len(requirements) != 0 {
+		t.Fatalf("nonmatching requirements = %+v", requirements)
+	}
+}
+
+func TestReleaseObservationPreservesCandidateChainAndRecommendsGovernedRecovery(t *testing.T) {
+	s, _ := New(t.TempDir())
+	base := trial()
+	base.GoalID = "goal"
+	baseline, _ := s.Create(base)
+	candidate := base
+	candidate.Source.Revision = "1123456789012345678901234567890123456789"
+	candidate.Timings[0].Values = []float64{90, 91, 92}
+	candidateTrial, _ := s.Create(candidate)
+	inv, _ := s.CreateInvestigation(Investigation{RepositoryID: "repo", Title: "latency", TrialIDs: []string{baseline.ID}, CreatedBy: "user"}, func(Reference) bool { return true })
+	ev, err := s.CreateEvaluation(Evaluation{RepositoryID: "repo", PullRequestID: "pull", Revision: candidate.Source.Revision, GoalID: "goal", InvestigationID: inv.ID, BaselineTrialID: baseline.ID, CandidateTrialID: candidateTrial.ID, AffectedScenarios: []string{"catalog"}, Commands: []string{"bench"}, CorrectnessChecks: []CorrectnessCheck{{Name: "result", Command: "test", Passed: true, Summary: "ok"}}, CreatedBy: "user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := candidate
+	observed.Source.Kind = "release"
+	observed.ContextKind = "production"
+	observed.ContextID = "canary"
+	observed.Timings[0].Values = []float64{120, 121, 122}
+	observedTrial, _ := s.Create(observed)
+	record, err := s.CreateReleaseObservation(ReleaseObservation{RepositoryID: "repo", ReleaseID: "release", DeploymentID: "deployment", GoalID: "goal", CandidateEvaluationID: ev.ID, ObservedTrialID: observedTrial.ID, CommitID: candidate.Source.Revision, Assumptions: []string{"traffic mix unchanged"}, CreatedBy: "owner"})
+	if err != nil || record.State != "regressed" || len(record.RecommendedActions) != 4 {
+		t.Fatalf("observation = %+v, %v", record, err)
+	}
+	unrelated := observed
+	unrelated.Source.Revision = "2234567890123456789012345678901234567890"
+	unrelatedTrial, err := s.Create(unrelated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.CreateReleaseObservation(ReleaseObservation{RepositoryID: "repo", ReleaseID: "release", DeploymentID: "deployment", GoalID: "goal", CandidateEvaluationID: ev.ID, ObservedTrialID: unrelatedTrial.ID, CommitID: candidate.Source.Revision, Assumptions: []string{"traffic mix unchanged"}, CreatedBy: "owner"})
+	if err != ErrInvalid {
+		t.Fatalf("unrelated observed revision error = %v", err)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/performanceevidence"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/performancegoals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
@@ -16,7 +17,79 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
-func registerPerformanceEvidenceRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *repositories.Store, credentials *auth.Store, goals *performancegoals.Store, releaseStore *releases.Store, pulls *pullrequests.Store, trials *performanceevidence.Store) {
+func registerPerformanceEvidenceRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *repositories.Store, credentials *auth.Store, goals *performancegoals.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, pulls *pullrequests.Store, trials *performanceevidence.Store) {
+	mux.HandleFunc("POST /repositories/{id}/performance-merge-policies", func(w http.ResponseWriter, r *http.Request) {
+		actor, owner, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if !owner {
+			writeAPIError(w, 403, "owner_required", "only repository owners can govern merge performance")
+			return
+		}
+		var in performanceevidence.MergePolicy
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a performance merge policy is required")
+			return
+		}
+		in.RepositoryID, in.CreatedBy = r.PathValue("id"), actor.UserID
+		for _, goalID := range in.GoalIDs {
+			goal, e := goals.Get(goalID)
+			if e != nil || goal.RepositoryID != in.RepositoryID {
+				writeAPIError(w, 422, "performance_policy_invalid", "every goal must belong to this repository")
+				return
+			}
+		}
+		created, e := trials.PutMergePolicy(in)
+		if e != nil {
+			writeAPIError(w, 422, "performance_policy_invalid", "branch, selectors, goals, regression threshold, and confidence are required")
+			return
+		}
+		writeJSON(w, 201, created)
+	})
+	mux.HandleFunc("GET /repositories/{id}/performance-merge-policies", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
+			return
+		}
+		items, e := trials.ListMergePolicies(r.PathValue("id"))
+		if e != nil {
+			writeAPIError(w, 500, "performance_evidence_unavailable", "performance policy could not be read")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"policies": items})
+	})
+	mux.HandleFunc("POST /repositories/{id}/performance-release-observations", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in performanceevidence.ReleaseObservation
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "release performance evidence is required")
+			return
+		}
+		in.RepositoryID, in.CreatedBy = r.PathValue("id"), actor.UserID
+		if releaseStore == nil || deploymentStore == nil {
+			writeAPIError(w, 503, "performance_release_unavailable", "release and deployment evidence are unavailable")
+			return
+		}
+		release, e := releaseStore.Get(in.RepositoryID, in.ReleaseID)
+		if e != nil || release.CommitID != in.CommitID {
+			writeAPIError(w, 422, "performance_release_invalid", "release must attest the evaluated candidate")
+			return
+		}
+		deployment, e := deploymentStore.GetPromotion(in.RepositoryID, in.DeploymentID)
+		if e != nil || deployment.ReleaseID != in.ReleaseID || deployment.CommitID != in.CommitID {
+			writeAPIError(w, 422, "performance_release_invalid", "deployment must carry the same attested release candidate")
+			return
+		}
+		created, e := trials.CreateReleaseObservation(in)
+		if e != nil {
+			writeAPIError(w, 422, "performance_release_invalid", "observed evidence must match the attested candidate goal and revision")
+			return
+		}
+		writeJSON(w, 201, created)
+	})
 	mux.HandleFunc("POST /repositories/{id}/performance-trials", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
 		if !ok {

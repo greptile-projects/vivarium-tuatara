@@ -120,6 +120,42 @@ type Evaluation struct {
 	CorrectnessPassed bool               `json:"correctness_passed"`
 	Stale             bool               `json:"stale"`
 }
+type MergePolicy struct {
+	ID                       string    `json:"id"`
+	RepositoryID             string    `json:"repository_id"`
+	Branch                   string    `json:"branch"`
+	Paths                    []string  `json:"paths"`
+	RiskClasses              []string  `json:"risk_classes"`
+	GoalIDs                  []string  `json:"goal_ids"`
+	MaximumRegressionPercent float64   `json:"maximum_regression_percent"`
+	MinimumConfidence        float64   `json:"minimum_confidence"`
+	RequireCorrectness       bool      `json:"require_correctness"`
+	CreatedBy                string    `json:"created_by"`
+	CreatedAt                time.Time `json:"created_at"`
+}
+type MergeRequirement struct {
+	PolicyID     string `json:"policy_id"`
+	GoalID       string `json:"goal_id"`
+	Status       string `json:"status"`
+	EvaluationID string `json:"evaluation_id,omitempty"`
+	Message      string `json:"message"`
+}
+type ReleaseObservation struct {
+	ID                    string       `json:"id"`
+	RepositoryID          string       `json:"repository_id"`
+	ReleaseID             string       `json:"release_id"`
+	DeploymentID          string       `json:"deployment_id"`
+	GoalID                string       `json:"goal_id"`
+	CandidateEvaluationID string       `json:"candidate_evaluation_id"`
+	ObservedTrialID       string       `json:"observed_trial_id"`
+	CommitID              string       `json:"commit_id"`
+	Assumptions           []string     `json:"assumptions"`
+	Comparisons           []Comparison `json:"comparisons"`
+	State                 string       `json:"state"`
+	RecommendedActions    []string     `json:"recommended_actions"`
+	CreatedBy             string       `json:"created_by"`
+	CreatedAt             time.Time    `json:"created_at"`
+}
 type Reference struct {
 	Kind     string `json:"kind"`
 	ID       string `json:"id"`
@@ -550,6 +586,197 @@ func (s *Store) ListEvaluations(repositoryID, pullID, revision string) ([]Evalua
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out, nil
+}
+
+func (s *Store) PutMergePolicy(v MergePolicy) (MergePolicy, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if v.RepositoryID == "" || v.CreatedBy == "" || strings.TrimSpace(v.Branch) == "" || len(v.GoalIDs) == 0 || len(v.GoalIDs) > 50 || v.MaximumRegressionPercent < 0 || v.MinimumConfidence < 0 || v.MinimumConfidence > 1 {
+		return v, ErrInvalid
+	}
+	for _, values := range [][]string{v.Paths, v.RiskClasses, v.GoalIDs} {
+		for _, x := range values {
+			if strings.TrimSpace(x) == "" {
+				return v, ErrInvalid
+			}
+		}
+	}
+	v.ID, _ = newID()
+	v.CreatedAt = s.now()
+	dir := filepath.Join(s.root, "merge-policies", v.RepositoryID)
+	if e := os.MkdirAll(dir, 0700); e != nil {
+		return v, e
+	}
+	body, _ := json.Marshal(v)
+	return v, os.WriteFile(filepath.Join(dir, v.ID+".json"), body, 0600)
+}
+func (s *Store) ListMergePolicies(repositoryID string) ([]MergePolicy, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dir := filepath.Join(s.root, "merge-policies", repositoryID)
+	es, e := os.ReadDir(dir)
+	if os.IsNotExist(e) {
+		return []MergePolicy{}, nil
+	}
+	if e != nil {
+		return nil, e
+	}
+	out := []MergePolicy{}
+	for _, entry := range es {
+		body, er := os.ReadFile(filepath.Join(dir, entry.Name()))
+		var v MergePolicy
+		if er != nil || json.Unmarshal(body, &v) != nil {
+			return nil, ErrNotFound
+		}
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+func (s *Store) EvaluateMerge(repositoryID, pullID, revision, branch string, paths, risks []string) ([]MergeRequirement, error) {
+	policies, e := s.ListMergePolicies(repositoryID)
+	if e != nil {
+		return nil, e
+	}
+	evaluations, e := s.ListEvaluations(repositoryID, pullID, revision)
+	if e != nil {
+		return nil, e
+	}
+	out := []MergeRequirement{}
+	for _, p := range policies {
+		if p.Branch != branch || !selectorMatches(p.Paths, paths) || !selectorMatches(p.RiskClasses, risks) {
+			continue
+		}
+		for _, goal := range p.GoalIDs {
+			r := MergeRequirement{PolicyID: p.ID, GoalID: goal, Status: "missing", Message: "current performance evaluation is required"}
+			for _, ev := range evaluations {
+				if ev.GoalID != goal || ev.Stale {
+					continue
+				}
+				r.EvaluationID = ev.ID
+				r.Status = "passed"
+				r.Message = "current performance contract passed"
+				if p.RequireCorrectness && !ev.CorrectnessPassed {
+					r.Status = "failed"
+					r.Message = "correctness assumptions failed"
+				}
+				if p.MinimumConfidence > 0 && (ev.Confidence == nil || *ev.Confidence < p.MinimumConfidence) {
+					r.Status = "uncertain"
+					r.Message = "statistical confidence is below policy"
+				}
+				for _, c := range ev.Comparisons {
+					if !c.Comparable {
+						r.Status = "uncertain"
+						r.Message = "candidate and baseline are not comparable"
+					} else if c.ChangePercent > p.MaximumRegressionPercent {
+						r.Status = "failed"
+						r.Message = "regression threshold exceeded"
+					}
+				}
+				break
+			}
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+func selectorMatches(selectors, values []string) bool {
+	if len(selectors) == 0 {
+		return true
+	}
+	for _, s := range selectors {
+		for _, v := range values {
+			if s == v || (strings.HasSuffix(s, "/**") && strings.HasPrefix(v, strings.TrimSuffix(s, "**"))) {
+				return true
+			}
+		}
+	}
+	return false
+}
+func (s *Store) FindEvaluation(repositoryID, id string) (Evaluation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	root := filepath.Join(s.root, "evaluations", repositoryID)
+	var found Evaluation
+	e := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && info.Name() == id+".json" {
+			body, er := os.ReadFile(path)
+			if er != nil {
+				return er
+			}
+			return json.Unmarshal(body, &found)
+		}
+		return nil
+	})
+	if e != nil || found.ID == "" {
+		return found, ErrNotFound
+	}
+	return found, nil
+}
+func (s *Store) CreateReleaseObservation(v ReleaseObservation) (ReleaseObservation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ev, e := s.findEvaluationUnlocked(v.RepositoryID, v.CandidateEvaluationID)
+	if e != nil {
+		return v, ErrInvalid
+	}
+	observed, e := s.read(v.ObservedTrialID)
+	if e != nil || observed.RepositoryID != v.RepositoryID || observed.GoalID != ev.GoalID || observed.Source.Revision != ev.Revision || v.CommitID != ev.Revision || v.GoalID != ev.GoalID || v.ReleaseID == "" || v.DeploymentID == "" || v.CreatedBy == "" {
+		return v, ErrInvalid
+	}
+	baseline, e := s.read(ev.CandidateTrialID)
+	if e != nil {
+		return v, ErrInvalid
+	}
+	v.Comparisons = s.Compare(baseline, observed)
+	v.State = "passed"
+	for _, c := range v.Comparisons {
+		if !c.Comparable {
+			v.State = "uncertain"
+		} else if c.ChangePercent > 0 {
+			v.State = "regressed"
+		}
+	}
+	if len(v.Assumptions) == 0 {
+		v.State = "uncertain"
+	}
+	if v.State != "passed" {
+		v.RecommendedActions = []string{"pause_rollout", "restore_known_good", "open_repair", "revisit_decision"}
+	} else {
+		v.RecommendedActions = []string{}
+	}
+	v.ID, _ = newID()
+	v.CreatedAt = s.now()
+	dir := filepath.Join(s.root, "release-observations", v.RepositoryID)
+	if e = os.MkdirAll(dir, 0700); e != nil {
+		return v, e
+	}
+	body, _ := json.Marshal(v)
+	return v, os.WriteFile(filepath.Join(dir, v.ID+".json"), body, 0600)
+}
+func (s *Store) findEvaluationUnlocked(repo, id string) (Evaluation, error) {
+	root := filepath.Join(s.root, "evaluations", repo)
+	var found Evaluation
+	e := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && info.Name() == id+".json" {
+			b, er := os.ReadFile(path)
+			if er != nil {
+				return er
+			}
+			return json.Unmarshal(b, &found)
+		}
+		return nil
+	})
+	if e != nil || found.ID == "" {
+		return found, ErrNotFound
+	}
+	return found, nil
 }
 func contains(xs []string, wanted string) bool {
 	for _, x := range xs {

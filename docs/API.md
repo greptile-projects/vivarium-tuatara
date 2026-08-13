@@ -2626,6 +2626,18 @@ Comparisons are numeric only when workload, every environment field, warmup/samp
 method, metric, and unit match.
 Records default beneath `$PERFORMANCE_EVIDENCE_STORAGE_ROOT` (`performance-evidence`).
 
+## Performance merge and release policy
+
+Repository owners create append-only merge gates with `POST
+/repositories/{id}/performance-merge-policies`; repository readers list them with `GET` on the same
+collection. Policies name a branch, optional path and risk selectors, goals, allowed regression,
+minimum confidence, and correctness requirements. Ordinary merge readiness returns
+`performance_missing`, `performance_failed`, or `performance_uncertain` blockers against the exact
+current revision. Post-integration `POST /repositories/{id}/performance-release-observations` binds
+the candidate evaluation to its exact release, deployment, commit, goal, and observed trial, then
+projects passed, regressed, or uncertain state and recovery recommendations. These records grant no
+merge, agent, deployment, or environment authority.
+
 ## Performance diagnosis
 
 Repository readers list and inspect diagnoses at `GET
