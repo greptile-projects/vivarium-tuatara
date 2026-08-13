@@ -30,7 +30,8 @@ func registerRoadmapRoutes(mux *http.ServeMux, repos *repositories.Store, creden
 		}
 		// Public reads intentionally do not authenticate in the shared read helper.
 		// Recover an optional presented identity so mutations remain attributable.
-		if actor.UserID == "" && actor.AgentID == "" && r.Header.Get("Authorization") != "" {
+		_, cookieErr := r.Cookie("vivarium_session")
+		if actor.UserID == "" && actor.AgentID == "" && (r.Header.Get("Authorization") != "" || cookieErr == nil) {
 			var authenticated bool
 			actor, authenticated, ok = authenticateOptionalRequest(w, r, credentials, "repositories:read", false)
 			if !ok || !authenticated {
