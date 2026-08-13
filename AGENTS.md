@@ -362,7 +362,9 @@ whenever dependencies change or the web job fails before it starts.
   Compare-and-swap allocation stages stay within its cap; idempotent observations retain exposure,
   samples, uncertainty, cost, consent, data quality, and operational health. Pause, stop, guardrail
   breach, deployment failure, instrumentation loss, sample imbalance, or revoked consent prevents new
-  assignment without changing stable prior receipts or discarding attempt evidence.
+  assignment without changing stable prior receipts or discarding attempt evidence. Runs retain their
+  launch-time plan revision for guardrail evaluation, and assignment rechecks authoritative deployment
+  state under the experiment mutation boundary, failing closed when that state is unhealthy or unreadable.
 
   Repository collaborators define append-only performance contracts at
   `/repositories/{id}/performance` and the public `/repositories/{id}/performance-goals`

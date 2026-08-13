@@ -269,6 +269,7 @@ func TestAssignmentRetentionPrunesReadsAndPersistence(t *testing.T) {
 
 func TestRunStagesContainmentAndStableAssignments(t *testing.T) {
 	s, _ := New(t.TempDir())
+	s.ConfigureDeploymentHealth(func(string, []string) (bool, error) { return true, nil })
 	revision, signals := plan("available")
 	v, _ := s.Create("repo", "alice", Source{Kind: "release", ResourceID: "r", Label: "r"}, revision, signals)
 	commit := "0123456789012345678901234567890123456789"
@@ -304,6 +305,7 @@ func TestRunStagesContainmentAndStableAssignments(t *testing.T) {
 
 func TestRunRejectsAllocationAboveApprovedCapAndContainsQualityLoss(t *testing.T) {
 	s, _ := New(t.TempDir())
+	s.ConfigureDeploymentHealth(func(string, []string) (bool, error) { return true, nil })
 	revision, signals := plan("available")
 	v, _ := s.Create("repo", "alice", Source{Kind: "release", ResourceID: "r", Label: "r"}, revision, signals)
 	commit := "0123456789012345678901234567890123456789"
@@ -318,5 +320,56 @@ func TestRunRejectsAllocationAboveApprovedCapAndContainsQualityLoss(t *testing.T
 	v, err := s.Observe(v.ID, run.ID, "alice", RunObservation{IdempotencyKey: "quality", StageVersion: 1, InstrumentationOK: false, ConsentCurrent: true, DeploymentHealthy: true, SampleBalanced: true})
 	if err != nil || v.RunAttempts[0].ContainmentReason != "instrumentation_loss" {
 		t.Fatalf("quality containment=%#v %v", v.RunAttempts, err)
+	}
+}
+
+func TestRunUsesLaunchRevisionGuardrail(t *testing.T) {
+	s, _ := New(t.TempDir())
+	s.ConfigureDeploymentHealth(func(string, []string) (bool, error) { return true, nil })
+	revision, signals := plan("available")
+	v, _ := s.Create("repo", "alice", Source{Kind: "release", ResourceID: "r", Label: "r"}, revision, signals)
+	commit := "0123456789012345678901234567890123456789"
+	v, _ = s.LinkWork(v.ID, "alice", 1, WorkLink{VariantKeys: []string{"control", "treatment"}, OwnerType: "human", OwnerID: "alice", ProposalID: "p", TaskID: "t", PullRequestID: "pull", CommitID: commit, EventDefinitions: []string{"e@1"}, ExposureRules: []string{"rule"}, Privacy: "aggregate", RemovalPlan: "remove", CheckNames: []string{"check"}})
+	v, _ = s.ApproveAudience(v.ID, "alice", 1, AudienceContract{ReleaseID: "r", ReleaseCommitID: commit, VariantKeys: []string{"control", "treatment"}, Eligibility: []string{"member"}, RandomizationUnit: "user", MutualExclusionGroup: "g", Allocation: []Allocation{{VariantKey: "control", BasisPoints: 1000}, {VariantKey: "treatment", BasisPoints: 1000}}, Consent: "none", DataFields: []string{"assignment"}, RetentionDays: 30})
+	v, _ = s.Launch(v.ID, "alice", v.AudienceContracts[0].ID, []string{"d"}, []string{"prod"}, []RunAllocation{{VariantKey: "control", BasisPoints: 500}, {VariantKey: "treatment", BasisPoints: 500}})
+	revision.Metrics[1].Threshold = 10
+	v, _ = s.Revise(v.ID, 1, "alice", revision, signals)
+	v, err := s.Observe(v.ID, v.RunAttempts[0].ID, "alice", RunObservation{IdempotencyKey: "launch-guardrail", StageVersion: 1, MetricValues: map[string]float64{"errors": 3}, InstrumentationOK: true, ConsentCurrent: true, DeploymentHealthy: true, SampleBalanced: true})
+	if err != nil || v.RunAttempts[0].ContainmentReason != "guardrail_breach:errors" {
+		t.Fatalf("launch guardrail = %#v %v", v.RunAttempts, err)
+	}
+}
+
+func TestAssignmentContainsFailedOrUnreadableDeployment(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		healthy bool
+		err     error
+		reason  string
+	}{{"failed", false, nil, "deployment_failure"}, {"unreadable", false, errors.New("offline"), "deployment_health_unavailable"}} {
+		t.Run(test.name, func(t *testing.T) {
+			s, _ := New(t.TempDir())
+			s.ConfigureDeploymentHealth(func(string, []string) (bool, error) { return test.healthy, test.err })
+			revision, signals := plan("available")
+			v, _ := s.Create("repo", "alice", Source{Kind: "release", ResourceID: "r", Label: "r"}, revision, signals)
+			commit := "0123456789012345678901234567890123456789"
+			v, _ = s.LinkWork(v.ID, "alice", 1, WorkLink{VariantKeys: []string{"control", "treatment"}, OwnerType: "human", OwnerID: "alice", ProposalID: "p", TaskID: "t", PullRequestID: "pull", CommitID: commit, EventDefinitions: []string{"e@1"}, ExposureRules: []string{"rule"}, Privacy: "aggregate", RemovalPlan: "remove", CheckNames: []string{"check"}})
+			v, _ = s.ApproveAudience(v.ID, "alice", 1, AudienceContract{ReleaseID: "r", ReleaseCommitID: commit, VariantKeys: []string{"control", "treatment"}, Eligibility: []string{"member"}, RandomizationUnit: "user", MutualExclusionGroup: "g", Allocation: []Allocation{{VariantKey: "control", BasisPoints: 1000}, {VariantKey: "treatment", BasisPoints: 1000}}, Consent: "none", DataFields: []string{"assignment"}, RetentionDays: 30})
+			c := v.AudienceContracts[0]
+			v, _ = s.Launch(v.ID, "alice", c.ID, []string{"d"}, []string{"prod"}, []RunAllocation{{VariantKey: "control", BasisPoints: 500}, {VariantKey: "treatment", BasisPoints: 500}})
+			v, receipt, err := s.Assign(v.ID, c.ID, "new", AssignmentContext{Eligibility: []string{"member"}})
+			if err != nil || receipt.Eligible || receipt.Reason != "experiment_contained" || v.RunAttempts[0].ContainmentReason != test.reason {
+				t.Fatalf("assignment=%#v run=%#v err=%v", receipt, v.RunAttempts, err)
+			}
+		})
+	}
+}
+
+func TestPlanRejectsUnsupportedMetricDirection(t *testing.T) {
+	s, _ := New(t.TempDir())
+	revision, signals := plan("available")
+	revision.Metrics[1].Direction = "sideways"
+	if _, err := s.Create("repo", "alice", Source{Kind: "release", ResourceID: "r", Label: "r"}, revision, signals); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid direction = %v", err)
 	}
 }

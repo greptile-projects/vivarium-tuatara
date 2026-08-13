@@ -41,7 +41,9 @@ compare-and-swap allocation stage and reason; it never changes prior assignment 
 resume, and stop use `/controls`. Bounded idempotent `/observations` retain per-variant exposure,
 metric values and sample counts, uncertainty, cost, instrumentation, consent, deployment health,
 sample balance, and operational notes. Unsafe evidence atomically contains the attempt and rejects
-new assignment while retaining earlier attempts and stable assignments.
+new assignment while retaining earlier attempts and stable assignments. Guardrails remain frozen to
+the run's launch-time plan revision. Every new assignment rechecks all launched deployments and
+atomically contains the attempt if any is no longer successful or its health cannot be read.
 
 ## Governed community proposals
 

@@ -38,7 +38,8 @@ Live attempts bind that contract to successful established-environment deploymen
 release. Participants append governed allocation stages and observe exposure, measures, samples,
 uncertainty, cost, data quality, consent, and operational health. Pause, resume, stop, and automatic
 containment are retained as attempt history; containment stops new assignment without reallocating
-any subject or deleting prior evidence.
+any subject or deleting prior evidence. Guardrails use the launch-time plan revision, while every new
+assignment fails closed against current authoritative health for all launched deployments.
 
 ## Collaborative performance goals
 

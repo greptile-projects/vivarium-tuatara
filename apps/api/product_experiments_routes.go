@@ -58,6 +58,21 @@ type productExperimentControlInput struct {
 }
 
 func registerProductExperimentRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *productexperiments.Store, proposals *proposals.Store, pulls *pullrequests.Store, checks *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store) {
+	store.ConfigureDeploymentHealth(func(repositoryID string, deploymentIDs []string) (bool, error) {
+		if deploymentStore == nil {
+			return false, errors.New("deployment store unavailable")
+		}
+		for _, deploymentID := range deploymentIDs {
+			deployment, err := deploymentStore.GetPromotion(repositoryID, deploymentID)
+			if err != nil {
+				return false, err
+			}
+			if deployment.State != "succeeded" {
+				return false, nil
+			}
+		}
+		return true, nil
+	})
 	writeProjected := func(w http.ResponseWriter, experiment productexperiments.Experiment, status int) {
 		all, err := store.List(experiment.RepositoryID)
 		if err != nil {

@@ -317,7 +317,10 @@ func (s *Store) Observe(id, runID, actor string, input RunObservation) (Experime
 		} else if !input.SampleBalanced {
 			reason = "sample_imbalance"
 		} else {
-			revision := currentRevision(v)
+			revision, ok := revisionAt(v, run.ExperimentVersion)
+			if !ok {
+				reason = "plan_revision_unavailable"
+			}
 			for _, metric := range revision.Metrics {
 				if metric.Kind == "guardrail" {
 					if value, ok := input.MetricValues[metric.Name]; ok && thresholdBreached(metric, value) {
@@ -365,6 +368,14 @@ func audienceContract(v *Experiment, id string) *AudienceContract {
 		}
 	}
 	return nil
+}
+func revisionAt(v *Experiment, version int) (Revision, bool) {
+	for _, revision := range v.Revisions {
+		if revision.Version == version {
+			return revision, true
+		}
+	}
+	return Revision{}, false
 }
 func validRunAllocation(c AudienceContract, values []RunAllocation) bool {
 	caps := map[string]int{}
@@ -444,6 +455,21 @@ func (s *Store) Assign(id, contractID, subject string, context AssignmentContext
 		if activeRun != nil && activeRun.Status != "running" {
 			receipt.Eligible, receipt.Reason = false, "experiment_"+activeRun.Status
 		} else if activeRun != nil {
+			healthy, healthErr := false, errors.New("deployment health unavailable")
+			if s.deploymentHealthy != nil {
+				healthy, healthErr = s.deploymentHealthy(v.RepositoryID, activeRun.DeploymentIDs)
+			}
+			if healthErr != nil || !healthy {
+				activeRun.Status = "contained"
+				activeRun.ContainmentReason = "deployment_failure"
+				if healthErr != nil {
+					activeRun.ContainmentReason = "deployment_health_unavailable"
+				}
+				activeRun.Version++
+				activeRun.UpdatedAt = s.now()
+				activeRun.Events = append(activeRun.Events, RunEvent{Kind: "contained", Reason: activeRun.ContainmentReason, CreatedAt: activeRun.UpdatedAt})
+				receipt.Eligible, receipt.Reason = false, "experiment_contained"
+			}
 			allocation = make([]Allocation, 0, len(activeRun.Stages[len(activeRun.Stages)-1].Allocation))
 			for _, a := range activeRun.Stages[len(activeRun.Stages)-1].Allocation {
 				allocation = append(allocation, Allocation{VariantKey: a.VariantKey, BasisPoints: a.BasisPoints})
@@ -704,10 +730,17 @@ func validAudienceContract(v Experiment, x AudienceContract) bool {
 }
 
 type Store struct {
-	root       string
-	mu         sync.Mutex
-	now        func() time.Time
-	subjectKey []byte
+	root              string
+	mu                sync.Mutex
+	now               func() time.Time
+	subjectKey        []byte
+	deploymentHealthy func(repositoryID string, deploymentIDs []string) (bool, error)
+}
+
+func (s *Store) ConfigureDeploymentHealth(fn func(string, []string) (bool, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deploymentHealthy = fn
 }
 
 func New(root string) (*Store, error) {
@@ -1052,7 +1085,7 @@ func validRevision(r Revision, signals []Signal) bool {
 		}
 	}
 	for _, m := range r.Metrics {
-		if m.Name == "" || (m.Kind != "success" && m.Kind != "guardrail") || m.SignalID == "" || m.SignalVersion < 1 {
+		if m.Name == "" || (m.Kind != "success" && m.Kind != "guardrail") || (m.Direction != "below" && m.Direction != "decrease" && m.Direction != "above" && m.Direction != "increase") || m.SignalID == "" || m.SignalVersion < 1 {
 			return false
 		}
 	}
