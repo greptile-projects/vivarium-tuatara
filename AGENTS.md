@@ -1763,6 +1763,13 @@ whenever dependencies change or the web job fails before it starts.
   unsupported formats, conflicting preferred terminology, and coverage stale against the current
   default branch; plans document support but grant no repository or release authority.
 
+  Pull localization reviews retain repository-defined extraction maps and exact-source snapshots
+  beneath `$LOCALIZATION_STORAGE_ROOT` (default `localization`). Server-derived stable units carry
+  context, screenshots, variables, plural rules, and source locations; pull reads project added,
+  changed, removed, reused, and untranslated work per locale. Authenticated repository readers may
+  propose translations without repository write access, while source changes supersede only affected
+  proposals and preserve all attribution and history.
+
   Update it when you change how the apps fit together, not for every change.
 
 ## LADDER.md

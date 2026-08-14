@@ -29,6 +29,15 @@ explicit diagnostics. Successors preserve prior revisions and require the curren
 contract documents intended support and does not grant repository, review, or release authority.
 Records default beneath `$LOCALE_PLAN_STORAGE_ROOT` (`locale-plans`).
 
+Pull localization reviews at `/repositories/{id}/pulls/{pull_id}/localization` turn those contracts
+into attributable work. A participant publishes a repository-defined extraction map and complete
+message snapshot for the pull's exact source revision. The server derives stable unit identities and
+source hashes from message keys, context, screenshots, variables, plural rules, and locations, then
+projects added, changed, removed, reused, and untranslated counts per locale. Any authenticated
+repository reader may propose a translation for a current unit without repository write access.
+Proposals are append-only; a changed source hash supersedes only affected work and retains its author
+and history. Records default beneath `$LOCALIZATION_STORAGE_ROOT` (`localization`).
+
 ## Permitted data handling
 
 Repository collaborators publish complete, compare-and-swap data commitment revisions at
