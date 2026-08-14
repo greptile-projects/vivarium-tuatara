@@ -311,6 +311,9 @@ func (s *Store) projectOutcome(v *FundedOutcome) error {
 	v.Pledged = 0
 	v.MilestonePledged = map[string]int64{}
 	v.Diagnostics = nil
+	for i := range v.DeliverySelections {
+		projectDeliveryExecution(&v.DeliverySelections[i], s.now())
+	}
 	for _, p := range v.Pledges {
 		if p.Status == "active" {
 			v.Pledged += p.Amount

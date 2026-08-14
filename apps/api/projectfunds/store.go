@@ -91,11 +91,13 @@ type Fund struct {
 	AuthorityNote string    `json:"authority_note"`
 }
 type Store struct {
-	root                          string
-	trustedSourceKeys             map[string]string
-	mu                            sync.Mutex
-	now                           func() time.Time
-	afterDeliveryReservationWrite func() error
+	root                             string
+	trustedSourceKeys                map[string]string
+	mu                               sync.Mutex
+	now                              func() time.Time
+	afterDeliveryReservationWrite    func() error
+	afterDeliveryExpenseFundWrite    func() error
+	afterDeliveryExpenseOutcomeWrite func() error
 }
 
 func New(root string, trustedSources ...map[string]string) (*Store, error) {
@@ -289,6 +291,18 @@ func derive(terms Terms, es []Entry) Balances {
 			b.Available -= e.Amount
 			b.Reserved += e.Amount
 		}
+		if e.Kind == "delivery_budget_increase" && e.Status == "reserved" {
+			b.Available -= e.Amount
+			b.Reserved += e.Amount
+		}
+		if e.Kind == "delivery_expense" && e.Status == "approved" {
+			b.Reserved -= e.Amount
+			b.Spent += e.Amount
+		}
+		if e.Kind == "delivery_reservation_release" && e.Status == "released" {
+			b.Reserved -= e.Amount
+			b.Available += e.Amount
+		}
 	}
 	return b
 }
@@ -391,5 +405,8 @@ func (s *Store) lock(fn func() error) error {
 		return e
 	}
 	defer syscall.Flock(int(lf.Fd()), syscall.LOCK_UN)
+	if e = s.recoverDeliveryTransactions(); e != nil {
+		return e
+	}
 	return fn()
 }
