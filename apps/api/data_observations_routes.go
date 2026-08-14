@@ -177,7 +177,7 @@ func registerDataObservationRoutes(mux *http.ServeMux, git *storage.Store, repos
 				return
 			}
 		}
-		if in.AssigneeType == "agent" && (in.AssigneeID == "" || organizationStore == nil || !validContributionAgent(organizationStore, repos, r.PathValue("id"), in.AssigneeID, actor.UserID)) {
+		if in.AssigneeType == "agent" && (in.AssigneeID == "" || organizationStore == nil) {
 			writeAPIError(w, 422, "invalid_data_observation_assignee", "an existing approved agent identity is required")
 			return
 		}
@@ -190,7 +190,28 @@ func registerDataObservationRoutes(mux *http.ServeMux, git *storage.Store, repos
 			items[i] = proposals.ReasoningItem{ID: evidence.Digest, Kind: v.SignalKind, Summary: "Sanitized " + evidence.Kind + " evidence (" + evidence.Digest + ")", Status: "confirmed"}
 		}
 		origin := proposals.ReasoningOrigin{DataObservationID: v.ID, DataObservationVersion: v.Version, Revision: v.Scope.Revision, Items: items, AnalysisStatus: "production_data_gap"}
-		p, tasks, e := proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: v.RepositoryID, ActorID: actor.UserID, Title: in.Title, Body: in.Body, Origin: origin, Tasks: []proposals.ImplementationTaskInput{{Title: in.TaskTitle, Outcome: in.Outcome, Risk: v.Severity + " production data-use gap", VerificationPlan: in.VerificationPlan, AssigneeType: in.AssigneeType, AssigneeID: strings.TrimSpace(in.AssigneeID)}}})
+		var p proposals.Proposal
+		var tasks []proposals.Task
+		publish := func() error {
+			var publishErr error
+			p, tasks, publishErr = proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: v.RepositoryID, ActorID: actor.UserID, Title: in.Title, Body: in.Body, Origin: origin, Tasks: []proposals.ImplementationTaskInput{{Title: in.TaskTitle, Outcome: in.Outcome, Risk: v.Severity + " production data-use gap", VerificationPlan: in.VerificationPlan, AssigneeType: in.AssigneeType, AssigneeID: strings.TrimSpace(in.AssigneeID)}}})
+			return publishErr
+		}
+		if in.AssigneeType == "agent" {
+			e = organizationStore.WithCurrentAgentOperator(in.AssigneeID, actor.UserID, func(organizationID string) error {
+				return repos.WithCurrentDeliveryAuthority([]string{actor.UserID}, v.RepositoryID, organizationID, publish)
+			})
+			if errors.Is(e, organizations.ErrNotFound) || errors.Is(e, organizations.ErrInvalid) || errors.Is(e, repositories.ErrNotFound) || errors.Is(e, repositories.ErrInvalidCollaborator) {
+				writeAPIError(w, 409, "data_observation_assignment_authority_changed", "the approved-agent operator or repository authority changed before repair publication")
+				return
+			}
+		} else {
+			e = repos.WithCurrentParticipants([]string{actor.UserID, in.AssigneeID}, v.RepositoryID, publish)
+			if errors.Is(e, repositories.ErrNotFound) || errors.Is(e, repositories.ErrInvalidCollaborator) {
+				writeAPIError(w, 409, "data_observation_assignment_authority_changed", "the collaborator or assignee authority changed before repair publication")
+				return
+			}
+		}
 		if e != nil && !errors.Is(e, proposals.ErrDurabilityUncertain) {
 			writeProposalError(w, e)
 			return
@@ -207,6 +228,9 @@ func registerDataObservationRoutes(mux *http.ServeMux, git *storage.Store, repos
 func resolveDataObservationScope(repo string, s dataobservations.Scope, commitments *datacommitments.Store, flows *dataflows.Store, releasesStore *releases.Store, deploymentsStore *deployments.Store, extensionsStore *extensions.Store) ([]string, bool) {
 	f, e := flows.Get(repo, s.DataFlowID)
 	if e != nil || s.DataFlowVersion < 1 || s.DataFlowVersion > len(f.Revisions) || f.Revisions[s.DataFlowVersion-1].CodeRevision != s.Revision {
+		return nil, false
+	}
+	if !dataFlowRevisionReferencesUse(f.Revisions[s.DataFlowVersion-1], s.CommitmentID, s.CommitmentVersion, s.DataUseID) {
 		return nil, false
 	}
 	c, e := commitments.Get(s.CommitmentID)
@@ -243,6 +267,15 @@ func resolveDataObservationScope(repo string, s dataobservations.Scope, commitme
 		}
 	}
 	return owners, true
+}
+
+func dataFlowRevisionReferencesUse(revision dataflows.Revision, commitmentID string, commitmentVersion int, dataUseID string) bool {
+	for _, ref := range revision.CommitmentRefs {
+		if ref.CommitmentID == commitmentID && ref.Version == commitmentVersion && slices.Contains(ref.DataUseIDs, dataUseID) {
+			return true
+		}
+	}
+	return false
 }
 func writeDataObservationError(w http.ResponseWriter, e error) {
 	switch {
