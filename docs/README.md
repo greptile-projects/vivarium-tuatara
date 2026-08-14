@@ -105,6 +105,24 @@ and product-experiment links are resolved within the same repository, but linked
 is never copied into feedback projections. Records default beneath `$FEEDBACK_STORAGE_ROOT`
 (`feedback`).
 
+## Collaborative accessibility commitments
+
+Repository participants publish complete, append-only accessibility contracts
+through `/repositories/{id}/accessibility-commitments`; the web workspace is
+`/repositories/{id}/accessibility`. Contracts cover repositories, documented
+journeys, components, and releases, retaining applicable standards, assistive
+technology/version/environment support, audiences and access needs, required
+scenarios and observable outcomes, severity response policy, owners, testable
+requirements, and narrowly scoped expiring exceptions. Roadmap outcome,
+documentation, preview, and release-policy links retain their publisher.
+
+Successors use compare-and-swap versions and preserve their author and rationale.
+Reads keep missing scenario coverage, declared requirement conflicts, unsupported
+environments, and expiring or expired exceptions explicit and attributable; the
+contract grants no repository authority and is not itself evidence of
+conformance. Records default beneath `$ACCESSIBILITY_COMMITMENT_STORAGE_ROOT`
+(`accessibility-commitments`).
+
 ## Collaborative performance goals
 
 Repository participants publish complete, append-only performance-contract revisions through

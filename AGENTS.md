@@ -343,6 +343,14 @@ whenever dependencies change or the web job fails before it starts.
   human/agent plan through dependency-gated assignment, stock Git publication,
   guidance, task-run completion, exact-revision checks, review, ordered merges,
   proposal closure, and durable attribution assertions.
+  Accessibility commitments at `/repositories/{id}/accessibility` retain immutable
+  repository, documented-journey, component, and release contract revisions beneath
+  `$ACCESSIBILITY_COMMITMENT_STORAGE_ROOT` (default `accessibility-commitments`).
+  They define standards, assistive technology and environment support, audiences,
+  required scenarios, severity response, owners, and expiring exceptions while
+  projecting missing coverage, conflicts, unsupported environments, and exception
+  expiry explicitly; commitment records grant no repository authority or proof of
+  conformance.
   Product experiments at `/repositories/{id}/experiments` retain append-only hypothesis-plan
   revisions sourced from proposals, issues, decisions, pulls, previews, or releases. Success and
   guardrail metrics bind exact permitted product-signal versions; audience eligibility,
