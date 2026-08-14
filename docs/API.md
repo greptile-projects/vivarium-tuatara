@@ -2834,6 +2834,24 @@ grant no repository, credential, preview, or deployment authority. Records defau
 cross-process mutations use a shared lock and atomically published files so concurrent attempts are
 not lost and corruption in another repository cannot deny this collection.
 
+## Accessibility assessments
+
+Current repository participants publish repository-defined exact-revision check evidence with
+`POST /repositories/{id}/accessibility-assessments`. Checks cover `semantics`, `keyboard`, `focus`,
+`contrast`, `motion`, `captions`, or a declared `journey`, report `passed`, `failed`, or
+`unevaluated`, and retain audiences, source locations, a bounded summary, and whether human
+evaluation remains required. An optional `pull_request_id` projects the same assessment on the
+matching pull. Readers filter collection `GET` requests by `revision` and/or `pull_request_id`.
+
+Participants and repository-bound read-only agent credentials append findings through `POST
+.../{assessment-id}/findings`. Each finding is revision-bound through one or more permitted
+`preview` or `reproduction` citations, and retains severity, audiences, source/journey locations,
+uncertainty, duplicate identity, and human-evaluation need. Only current human participants may
+record `accepted` or `false_positive` decisions through `POST .../findings/{finding-id}/decision`.
+`POST .../{assessment-id}/invalidate` names changed source locations or journey IDs and invalidates
+only intersecting checks/findings, clearing only their affected acceptance. Records default beneath
+`$ACCESSIBILITY_ASSESSMENT_STORAGE_ROOT` (`accessibility-assessments`).
+
 ## Performance goals
 
 Current repository participants create a complete contract with `POST

@@ -359,6 +359,13 @@ whenever dependencies change or the web job fails before it starts.
   consent. Current repository participants retain append-only bounded workspace/preview attempts as
   reproducible, intermittent, environment-specific, or unconfirmed; reports grant no execution or
   repository authority.
+  Revision-exact accessibility assessments beneath `$ACCESSIBILITY_ASSESSMENT_STORAGE_ROOT`
+  (default `accessibility-assessments`) combine repository-defined semantics, keyboard, focus,
+  contrast, motion, captions, and journey checks with cited human or repository-bound read-only
+  agent findings. The accessibility workspace and matching pull expose coverage, severity,
+  audiences, sources, uncertainty, duplicates, false-positive/acceptance decisions, and remaining
+  human evaluation. Source/journey changes invalidate only intersecting evidence and decisions;
+  agents cannot make acceptance decisions and assessment records grant no operational authority.
   Product experiments at `/repositories/{id}/experiments` retain append-only hypothesis-plan
   revisions sourced from proposals, issues, decisions, pulls, previews, or releases. Success and
   guardrail metrics bind exact permitted product-signal versions; audience eligibility,

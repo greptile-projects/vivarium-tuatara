@@ -28,6 +28,7 @@ import {
 import { useAuth } from "./auth";
 import { ChangeSessionsCard } from "./change-sessions";
 import { PullRequestChecks } from "./pull-request-checks";
+import { AccessibilityAssessmentsWorkspace } from "./accessibility-assessments-workspace";
 import { PullPerformanceEvaluations } from "./pull-performance-evaluations";
 import { PullRequestPreviews } from "./pull-request-previews";
 import { DocumentationPullReviewCard } from "./documentation-pull-review";
@@ -1106,6 +1107,7 @@ export function PullRequestDetail({
             participant={participant}
             sourceCommitID={pull.source_commit_id}
           />
+          <AccessibilityAssessmentsWorkspace repositoryID={repositoryID} pullRequestID={pullRequestID} revision={pull.source_commit_id} participant={participant} />
           <ExtensionContributions repositoryID={repositoryID} pullRequestID={pullRequestID} revision={pull.source_commit_id} />
           <DocumentationPullReviewCard repositoryID={repositoryID} pullRequestID={pullRequestID} participant={participant} />
           <PullRequestPreviews repositoryID={repositoryID} pullRequestID={pullRequestID} participant={participant} owner={isOwner} />
