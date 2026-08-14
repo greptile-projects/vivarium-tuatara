@@ -1,6 +1,8 @@
 package localization
 
 import (
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -116,5 +118,32 @@ func TestGetDoesNotProjectOldRevisionAsActionable(t *testing.T) {
 	}
 	if persisted.Translations[0].Status != "proposed" {
 		t.Fatalf("read projection mutated history: %q", persisted.Translations[0].Status)
+	}
+}
+
+func TestProposalRejectsPersistedReviewWithoutExtractions(t *testing.T) {
+	root := t.TempDir()
+	s, _ := New(root)
+	if err := os.MkdirAll(filepath.Join(root, "repo"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	review := Review{RepositoryID: "repo", PullID: "pull", CurrentRevision: "1111111111111111111111111111111111111111", Extractions: []Extraction{}, Translations: []Translation{}}
+	encoded, err := json.Marshal(review)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "repo", "pull.json")
+	if err = os.WriteFile(path, encoded, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Propose("repo", "pull", review.CurrentRevision, "unit", "es", "Inicio", "", "translator"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("empty extraction proposal error = %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(encoded) {
+		t.Fatal("invalid review was rewritten")
 	}
 }

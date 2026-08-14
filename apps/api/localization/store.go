@@ -169,7 +169,7 @@ func (s *Store) Propose(repo, pull, revision, unitID, locale, text, note, actor 
 	if e != nil {
 		return v, e
 	}
-	if v.CurrentRevision != revision || strings.TrimSpace(text) == "" {
+	if v.CurrentRevision != revision || strings.TrimSpace(text) == "" || len(v.Extractions) == 0 {
 		return v, ErrInvalid
 	}
 	var unit *Unit
@@ -284,8 +284,18 @@ func (s *Store) read(repo, pull string) (Review, error) {
 	if e != nil {
 		return v, e
 	}
-	e = json.Unmarshal(b, &v)
-	return v, e
+	if e = json.Unmarshal(b, &v); e != nil {
+		return v, e
+	}
+	if v.RepositoryID != repo || v.PullID != pull || len(v.CurrentRevision) != 40 || len(v.Extractions) == 0 {
+		return Review{}, ErrInvalid
+	}
+	for _, extraction := range v.Extractions {
+		if extraction.ID == "" || extraction.PullID != pull || len(extraction.SourceRevision) != 40 || extraction.Map.ID == "" || extraction.Map.Version < 1 || len(extraction.Locales) == 0 || len(extraction.Units) == 0 {
+			return Review{}, ErrInvalid
+		}
+	}
+	return v, nil
 }
 func (s *Store) write(v Review) error {
 	d := filepath.Join(s.root, v.RepositoryID)
