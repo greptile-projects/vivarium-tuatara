@@ -63,9 +63,40 @@ func TestReliabilityEvidenceRetainsExactMappingHistoryAndDerivesAttainment(t *te
 func TestReliabilityEvidenceRejectsCredentials(t *testing.T) {
 	s, _ := New(t.TempDir())
 	contract, _ := s.Create("repo", "owner", completeRevision())
-	_, err := s.PublishMapping(contract.ID, "owner", SignalMappingRevision{ContractVersion: 1, ObjectiveID: "availability", InstrumentationRevision: "v1", Calculation: "ratio", Unit: "percent", Rationale: "connect", Sources: []SignalSource{{Kind: "metric", Name: "requests", Reference: "https://metrics/?api_key=leak", Visibility: "public", Sanitization: "aggregate"}}})
-	if !errors.Is(err, ErrInvalid) {
-		t.Fatalf("credential-bearing mapping error = %v", err)
+	for _, reference := range []string{"https://metrics/?api_key=leak", "https://metrics/?access_token=leak", "https://metrics/?token=leak", "Authorization: Basic leak", "Cookie: session=leak", "X-API-Key: leak"} {
+		_, err := s.PublishMapping(contract.ID, "owner", SignalMappingRevision{ContractVersion: 1, ObjectiveID: "availability", InstrumentationRevision: "v1", Calculation: "ratio", Unit: "percent", Rationale: "connect", Sources: []SignalSource{{Kind: "metric", Name: "requests", Reference: reference, Visibility: "public", Sanitization: "aggregate"}}})
+		if !errors.Is(err, ErrInvalid) {
+			t.Errorf("credential-bearing reference %q error = %v", reference, err)
+		}
+	}
+	contract.SignalMappings = []SignalMapping{{ID: "legacy", CurrentVersion: 1, Revisions: []SignalMappingRevision{{Version: 1, Sources: []SignalSource{{Kind: "metric", Name: "requests", Reference: "https://metrics/?access_token=legacy", Visibility: "public", Sanitization: "aggregate"}}}}}}
+	if got := s.ProjectForReader(contract, false).SignalMappings[0].Revisions[0].Sources[0].Reference; got != "redacted_unsafe_reference" {
+		t.Fatalf("legacy credential projection = %q", got)
+	}
+}
+
+func TestNativeUnitObservationUsesDirectionalBudget(t *testing.T) {
+	s, _ := New(t.TempDir())
+	revision := completeRevision()
+	revision.Indicators[0].Calculation, revision.Indicators[0].Unit = "count", "requests"
+	revision.Objectives[0].Target, revision.Objectives[0].Comparator = 10, "at_most"
+	revision.ErrorBudgets[0].AllowedFailure, revision.ErrorBudgets[0].Unit = 2, "requests"
+	contract, err := s.Create("repo", "owner", revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract, err = s.PublishMapping(contract.ID, "owner", SignalMappingRevision{ContractVersion: 1, ObjectiveID: "availability", InstrumentationRevision: "counter-v1", Calculation: "count", Unit: "requests", Rationale: "Count failed requests", Sources: []SignalSource{{Kind: "metric", Name: "Failed requests", Reference: "metrics://failed", Visibility: "public", Sanitization: "aggregate count"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	contract, err = s.RecordObservation(contract.ID, "owner", Observation{MappingID: contract.SignalMappings[0].ID, MappingVersion: 1, ContractVersion: 1, ObjectiveID: "availability", WindowStart: now.Add(-time.Hour), WindowEnd: now, GoodEvents: 15, TotalEvents: 1000, Summary: "Failure count", Uncertainty: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := contract.Observations[0]
+	if got.Attainment == nil || *got.Attainment != 15 || got.TargetMet == nil || *got.TargetMet || got.ErrorBudgetConsumed == nil || *got.ErrorBudgetConsumed != 250 {
+		t.Fatalf("native-unit projection = %#v", got)
 	}
 }
 

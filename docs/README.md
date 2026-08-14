@@ -36,9 +36,12 @@ packages, and dependent services. Every source declares how it was sanitized and
 reference is public or participant-only; public reads replace restricted references with an explicit
 marker. Evidence windows bind the mapping version and delivered-software revisions, retain uncertainty
 and known gaps, and derive current/historical attainment, target status, and error-budget consumption
-from aggregate good/total counts. A changed mapping version or window duration is projected as
+from aggregate good/total counts for ratio/availability, native counts, or an explicit native value
+for percentile/custom indicators. Directional native-unit budgets use target deviation rather than
+availability math. A changed mapping version or window duration is projected as
 incomparable instead of silently extending the earlier series. Credential-shaped source or evidence
-text is rejected before persistence; the records inventory evidence but grant no observability access.
+text is rejected before persistence, and unsafe legacy references are redacted on every projection;
+the records inventory evidence but grant no observability access.
 
 ## Locale coverage contracts
 

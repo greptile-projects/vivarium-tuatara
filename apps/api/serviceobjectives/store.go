@@ -147,6 +147,7 @@ type Observation struct {
 	WindowEnd            time.Time           `json:"window_end"`
 	GoodEvents           float64             `json:"good_events"`
 	TotalEvents          float64             `json:"total_events"`
+	ObservedValue        *float64            `json:"observed_value,omitempty"`
 	Uncertainty          float64             `json:"uncertainty"`
 	Gaps                 []EvidenceGap       `json:"gaps"`
 	Software             []SoftwareReference `json:"software"`
@@ -346,14 +347,14 @@ func (s *Store) RecordObservation(contractID string, actor string, observation O
 
 func (s *Store) ProjectForReader(v Contract, participant bool) Contract {
 	v = s.project(v)
-	if participant {
-		return v
-	}
 	for mi := range v.SignalMappings {
 		for ri := range v.SignalMappings[mi].Revisions {
 			for si := range v.SignalMappings[mi].Revisions[ri].Sources {
 				source := &v.SignalMappings[mi].Revisions[ri].Sources[si]
-				if source.Visibility == "participants" {
+				if unsafe(source.Reference) {
+					source.Reference = "redacted_unsafe_reference"
+					source.Sanitization = "credential-shaped legacy source reference removed"
+				} else if source.Visibility == "participants" && !participant {
 					source.Reference = "restricted"
 					source.Sanitization = "restricted source detail omitted"
 				}
@@ -401,6 +402,9 @@ func validObservation(o Observation) bool {
 	if o.MappingID == "" || o.MappingVersion < 1 || o.ContractVersion < 1 || o.ObjectiveID == "" || o.WindowStart.IsZero() || !o.WindowEnd.After(o.WindowStart) || o.TotalEvents < 0 || o.GoodEvents < 0 || o.GoodEvents > o.TotalEvents || o.Uncertainty < 0 || o.Uncertainty > 100 || o.Summary == "" || unsafe(o.Summary) {
 		return false
 	}
+	if o.ObservedValue != nil && (math.IsNaN(*o.ObservedValue) || math.IsInf(*o.ObservedValue, 0)) {
+		return false
+	}
 	kinds := map[string]bool{"deployment": true, "release": true, "commit": true, "pull_request": true, "package": true, "dependent_service": true}
 	for _, x := range o.Software {
 		if !kinds[x.Kind] || x.ID == "" || x.Revision == "" || x.Label == "" || unsafe(x.ID+x.Revision+x.Label) {
@@ -416,7 +420,7 @@ func validObservation(o Observation) bool {
 }
 func unsafe(v string) bool {
 	l := strings.ToLower(v)
-	for _, x := range []string{"bearer ", "api_key", "apikey", "password=", "secret=", "-----begin"} {
+	for _, x := range []string{"bearer ", "api_key", "apikey", "api-key", "access_token=", "access-token=", "token=", "password=", "passwd=", "secret=", "authorization:", "proxy-authorization:", "cookie:", "set-cookie:", "x-api-key", "-----begin"} {
 		if strings.Contains(l, x) {
 			return true
 		}
@@ -573,6 +577,17 @@ func (s *Store) project(v Contract) Contract {
 	if len(v.Revisions) == 0 {
 		return v
 	}
+	for i := range v.Revisions {
+		if v.Revisions[i].Dependencies == nil {
+			v.Revisions[i].Dependencies = []Dependency{}
+		}
+		if v.Revisions[i].CommitmentLinks == nil {
+			v.Revisions[i].CommitmentLinks = []CommitmentLink{}
+		}
+		if v.Revisions[i].Exceptions == nil {
+			v.Revisions[i].Exceptions = []Exception{}
+		}
+	}
 	r := v.Revisions[len(v.Revisions)-1]
 	d := []Diagnostic{}
 	add := func(k, severity, msg, id, actor string) { d = append(d, Diagnostic{k, severity, msg, id, actor}) }
@@ -629,19 +644,51 @@ func (s *Store) project(v Contract) Contract {
 		if o.Software == nil {
 			o.Software = []SoftwareReference{}
 		}
-		if o.TotalEvents > 0 {
-			value := o.GoodEvents / o.TotalEvents * 100
-			o.Attainment = &value
-		}
 		revision := revisionAt(v, o.ContractVersion)
-		if revision != nil && o.Attainment != nil {
+		if revision != nil {
 			for _, objective := range revision.Objectives {
 				if objective.ID == o.ObjectiveID {
+					var indicator *Indicator
+					for j := range revision.Indicators {
+						if revision.Indicators[j].ID == objective.IndicatorID {
+							indicator = &revision.Indicators[j]
+							break
+						}
+					}
+					if indicator == nil {
+						continue
+					}
+					var value *float64
+					switch indicator.Calculation {
+					case "ratio", "availability":
+						if o.TotalEvents > 0 {
+							derived := o.GoodEvents / o.TotalEvents * 100
+							value = &derived
+						}
+					case "count":
+						derived := o.GoodEvents
+						value = &derived
+					case "latency_percentile":
+						value = o.ObservedValue
+					default:
+						value = o.ObservedValue
+					}
+					o.Attainment = value
+					if value == nil {
+						continue
+					}
 					met := (*o.Attainment >= objective.Target && objective.Comparator == "at_least") || (*o.Attainment <= objective.Target && objective.Comparator == "at_most")
 					o.TargetMet = &met
 					for _, budget := range revision.ErrorBudgets {
 						if budget.ObjectiveID == objective.ID && budget.AllowedFailure > 0 {
-							consumed := math.Max(0, (100-*o.Attainment)/budget.AllowedFailure*100)
+							consumed := 0.0
+							if (indicator.Calculation == "ratio" || indicator.Calculation == "availability") && indicator.Unit == "percent" && objective.Comparator == "at_least" {
+								consumed = math.Max(0, (100-*value)/budget.AllowedFailure*100)
+							} else if objective.Comparator == "at_most" {
+								consumed = math.Max(0, (*value-objective.Target)/budget.AllowedFailure*100)
+							} else {
+								consumed = math.Max(0, (objective.Target-*value)/budget.AllowedFailure*100)
+							}
 							o.ErrorBudgetConsumed = &consumed
 						}
 					}

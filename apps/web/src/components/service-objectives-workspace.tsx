@@ -101,7 +101,13 @@ type Contract = {
       contract_version: number;
       objective_id: string;
       instrumentation_revision: string;
-      sources: { kind: string; name: string; reference: string; visibility: string; sanitization: string }[];
+      sources: {
+        kind: string;
+        name: string;
+        reference: string;
+        visibility: string;
+        sanitization: string;
+      }[];
       calculation: string;
       unit: string;
       rationale: string;
@@ -116,6 +122,7 @@ type Contract = {
     objective_id: string;
     window_start: string;
     window_end: string;
+    observed_value?: number;
     attainment?: number;
     target_met?: boolean;
     error_budget_consumed_percent?: number;
@@ -289,16 +296,16 @@ function build(f: FormData, current?: Revision) {
     dependencies: next.dependencies.length
       ? [
           {
-            ...current.dependencies[0],
+            ...current.dependencies?.[0],
             ...next.dependencies[0],
-            id: current.dependencies[0]?.id ?? next.dependencies[0].id,
-            objective_ids: current.dependencies[0]?.objective_ids ?? [
+            id: current.dependencies?.[0]?.id ?? next.dependencies[0].id,
+            objective_ids: current.dependencies?.[0]?.objective_ids ?? [
               objectiveID,
             ],
           },
-          ...current.dependencies.slice(1),
+          ...(current.dependencies?.slice(1) ?? []),
         ]
-      : current.dependencies,
+      : (current.dependencies ?? []),
     error_budgets: [
       {
         ...current.error_budgets[0],
@@ -327,6 +334,8 @@ export function ServiceObjectivesWorkspace({
   const { token, user } = useAuth(),
     [items, setItems] = useState<Contract[]>([]),
     [selected, setSelected] = useState<Contract>(),
+    [mappingID, setMappingID] = useState(""),
+    [objectiveID, setObjectiveID] = useState(""),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   const load = useCallback(async () => {
@@ -355,7 +364,20 @@ export function ServiceObjectivesWorkspace({
   useEffect(() => {
     void Promise.resolve().then(load);
   }, [load]);
-  const current = selected?.revisions.at(-1);
+  const current = selected?.revisions.at(-1),
+    selectedMapping =
+      mappingID === "__new"
+        ? undefined
+        : (selected?.signal_mappings.find((x) => x.id === mappingID) ??
+          selected?.signal_mappings[0]),
+    selectedMappingRevision = selectedMapping?.revisions.at(-1),
+    selectedObjective =
+      current?.objectives.find(
+        (x) => x.id === (objectiveID || selectedMappingRevision?.objective_id),
+      ) ?? current?.objectives[0],
+    selectedIndicator = current?.indicators.find(
+      (x) => x.id === selectedObjective?.indicator_id,
+    );
   async function publish(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!token) return;
@@ -387,26 +409,112 @@ export function ServiceObjectivesWorkspace({
     }
   }
   async function publishMapping(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault(); if (!token || !selected || !current) return;
-    const f = new FormData(e.currentTarget), existing = selected.signal_mappings[0], revision = {
-      contract_version: current.version,
-      objective_id: current.objectives[0].id,
-      instrumentation_revision: value(f,"instrumentation_revision"),
-      calculation: current.indicators[0].calculation,
-      unit: current.indicators[0].unit,
-      rationale: value(f,"mapping_rationale"),
-      sources: value(f,"sources").split(";").map((entry) => { const [kind,name,reference,visibility,sanitization]=entry.split("|").map((x)=>x.trim()); return {kind,name,reference,visibility,sanitization}; }),
-    };
-    const path = existing ? `/repositories/${repositoryID}/service-objectives/${selected.id}/signal-mappings/${existing.id}/revisions` : `/repositories/${repositoryID}/service-objectives/${selected.id}/signal-mappings`;
-    try { const out=await api<Contract>(path,{method:"POST",body:JSON.stringify({revision,...(existing?{expected_version:existing.current_version}:{})})},token); setSelected(out); setItems((xs)=>[out,...xs.filter((x)=>x.id!==out.id)]); setError(""); }
-    catch(x){setError(x instanceof Error?x.message:"Signal mapping could not be published.");}
+    e.preventDefault();
+    if (!token || !selected || !current) return;
+    const f = new FormData(e.currentTarget),
+      existing = selectedMapping,
+      revision = {
+        contract_version: current.version,
+        objective_id: selectedObjective?.id,
+        instrumentation_revision: value(f, "instrumentation_revision"),
+        calculation: selectedIndicator?.calculation,
+        unit: selectedIndicator?.unit,
+        rationale: value(f, "mapping_rationale"),
+        sources: value(f, "sources")
+          .split(";")
+          .map((entry) => {
+            const [kind, name, reference, visibility, sanitization] = entry
+              .split("|")
+              .map((x) => x.trim());
+            return { kind, name, reference, visibility, sanitization };
+          }),
+      };
+    const path = existing
+      ? `/repositories/${repositoryID}/service-objectives/${selected.id}/signal-mappings/${existing.id}/revisions`
+      : `/repositories/${repositoryID}/service-objectives/${selected.id}/signal-mappings`;
+    try {
+      const out = await api<Contract>(
+        path,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            revision,
+            ...(existing ? { expected_version: existing.current_version } : {}),
+          }),
+        },
+        token,
+      );
+      setSelected(out);
+      setMappingID(existing?.id ?? out.signal_mappings.at(-1)?.id ?? "");
+      setItems((xs) => [out, ...xs.filter((x) => x.id !== out.id)]);
+      setError("");
+    } catch (x) {
+      setError(
+        x instanceof Error
+          ? x.message
+          : "Signal mapping could not be published.",
+      );
+    }
   }
   async function recordObservation(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault(); if (!token || !selected || !current || !selected.signal_mappings[0]) return;
-    const f=new FormData(e.currentTarget), mapping=selected.signal_mappings[0], software=value(f,"software").split(";").filter(Boolean).map((entry)=>{const [kind,id,revision,label]=entry.split("|").map((x)=>x.trim());return {kind,id,revision,label};}), gaps=value(f,"gaps").split(";").filter(Boolean).map((entry)=>{const [kind,detail]=entry.split("|").map((x)=>x.trim());return {kind,detail};});
-    const observation={mapping_id:mapping.id,mapping_version:mapping.current_version,contract_version:current.version,objective_id:current.objectives[0].id,window_start:new Date(value(f,"window_start")).toISOString(),window_end:new Date(value(f,"window_end")).toISOString(),good_events:Number(value(f,"good_events")),total_events:Number(value(f,"total_events")),uncertainty:Number(value(f,"uncertainty")),summary:value(f,"evidence_summary"),software,gaps};
-    try { const out=await api<Contract>(`/repositories/${repositoryID}/service-objectives/${selected.id}/observations`,{method:"POST",body:JSON.stringify({observation})},token); setSelected(out); setItems((xs)=>[out,...xs.filter((x)=>x.id!==out.id)]); setError(""); }
-    catch(x){setError(x instanceof Error?x.message:"Reliability observation could not be recorded.");}
+    e.preventDefault();
+    if (
+      !token ||
+      !selected ||
+      !current ||
+      !selectedMapping ||
+      !selectedMappingRevision
+    )
+      return;
+    const f = new FormData(e.currentTarget),
+      software = value(f, "software")
+        .split(";")
+        .filter(Boolean)
+        .map((entry) => {
+          const [kind, id, revision, label] = entry
+            .split("|")
+            .map((x) => x.trim());
+          return { kind, id, revision, label };
+        }),
+      gaps = value(f, "gaps")
+        .split(";")
+        .filter(Boolean)
+        .map((entry) => {
+          const [kind, detail] = entry.split("|").map((x) => x.trim());
+          return { kind, detail };
+        }),
+      observedValue = value(f, "observed_value");
+    const observation = {
+      mapping_id: selectedMapping.id,
+      mapping_version: selectedMapping.current_version,
+      contract_version: selectedMappingRevision.contract_version,
+      objective_id: selectedMappingRevision.objective_id,
+      window_start: new Date(value(f, "window_start")).toISOString(),
+      window_end: new Date(value(f, "window_end")).toISOString(),
+      good_events: Number(value(f, "good_events")),
+      total_events: Number(value(f, "total_events")),
+      ...(observedValue ? { observed_value: Number(observedValue) } : {}),
+      uncertainty: Number(value(f, "uncertainty")),
+      summary: value(f, "evidence_summary"),
+      software,
+      gaps,
+    };
+    try {
+      const out = await api<Contract>(
+        `/repositories/${repositoryID}/service-objectives/${selected.id}/observations`,
+        { method: "POST", body: JSON.stringify({ observation }) },
+        token,
+      );
+      setSelected(out);
+      setItems((xs) => [out, ...xs.filter((x) => x.id !== out.id)]);
+      setError("");
+    } catch (x) {
+      setError(
+        x instanceof Error
+          ? x.message
+          : "Reliability observation could not be recorded.",
+      );
+    }
   }
   return (
     <div className="space-y-8">
@@ -614,25 +722,25 @@ export function ServiceObjectivesWorkspace({
           <Field
             n="dependency_name"
             l="Dependency name (optional)"
-            v={current?.dependencies[0]?.name}
+            v={current?.dependencies?.[0]?.name}
             required={false}
           />
           <Select
             n="dependency_kind"
             l="Dependency kind"
-            v={current?.dependencies[0]?.kind ?? "service"}
+            v={current?.dependencies?.[0]?.kind ?? "service"}
             options={["repository", "service", "external"]}
           />
           <Field
             n="dependency_id"
             l="Dependency resource ID"
-            v={current?.dependencies[0]?.resource_id}
+            v={current?.dependencies?.[0]?.resource_id}
             required={false}
           />
           <Field
             n="dependency_owners"
             l="Dependency owner IDs"
-            v={current?.dependencies[0]?.owner_ids.join(", ")}
+            v={current?.dependencies?.[0]?.owner_ids.join(", ")}
             required={false}
           />
           <Field
@@ -659,31 +767,196 @@ export function ServiceObjectivesWorkspace({
           </div>
         </form>
       </Card>
-      {selected && current && <Card className="p-5">
-        <h2 className="font-semibold">Operational evidence mapping</h2>
-        <p className="mt-1 text-sm text-[var(--muted)]">Connect sanitized observability and delivery sources to {current.objectives[0]?.name}. Prior instrumentation stays visible.</p>
-        <form onSubmit={publishMapping} className="mt-4 grid gap-4 md:grid-cols-2">
-          <Field n="instrumentation_revision" l="Instrumentation revision" v={selected.signal_mappings[0]?.revisions.at(-1)?.instrumentation_revision}/>
-          <Area n="mapping_rationale" l="Mapping rationale" v={selected.signal_mappings[0]?.revisions.at(-1)?.rationale}/>
-          <div className="md:col-span-2"><Area n="sources" l="Sources: kind | name | sanitized reference | public/participants | sanitization (semicolon separated)" v={selected.signal_mappings[0]?.revisions.at(-1)?.sources.map((x)=>`${x.kind} | ${x.name} | ${x.reference} | ${x.visibility} | ${x.sanitization}`).join("; ")}/></div>
-          <div className="md:col-span-2"><Button>{selected.signal_mappings[0]?`Publish mapping v${selected.signal_mappings[0].current_version+1}`:"Publish signal mapping"}</Button></div>
-        </form>
-        {selected.signal_mappings[0] && <form onSubmit={recordObservation} className="mt-6 grid gap-4 border-t pt-5 md:grid-cols-2">
-          <Field n="window_start" l="Window start" type="datetime-local"/><Field n="window_end" l="Window end" type="datetime-local"/>
-          <Field n="good_events" l="Good events" type="number" step="any"/><Field n="total_events" l="Total events" type="number" step="any"/>
-          <Field n="uncertainty" l="Uncertainty %" type="number" step="any" v="0"/><Area n="evidence_summary" l="Sanitized evidence summary"/>
-          <div className="md:col-span-2"><Area n="software" l="Delivered software: kind | id | exact revision | label (semicolon separated)"/></div>
-          <div className="md:col-span-2"><Area n="gaps" l="Evidence gaps: kind | detail (semicolon separated)"/></div>
-          <div className="md:col-span-2"><Button>Record evidence window</Button></div>
-        </form>}
-      </Card>}
-      {selected?.observations.length ? <section><h2 className="text-lg font-semibold">Attainment history</h2><div className="mt-3 space-y-3">{[...selected.observations].reverse().map((o)=><Card key={o.id} className="p-4">
-        <div className="flex flex-wrap gap-2"><strong>{o.attainment?.toFixed(3) ?? "Unavailable"}% attainment</strong><Badge tone={o.target_met?"success":"danger"}>{o.target_met?"target met":"target missed"}</Badge><Badge>{o.error_budget_consumed_percent?.toFixed(1) ?? "—"}% budget consumed</Badge>{!o.comparable_to_previous&&<Badge tone="warning">incomparable window</Badge>}</div>
-        <p className="mt-2 text-sm">{o.summary}</p><p className="mt-1 text-xs text-[var(--muted)]">{new Date(o.window_start).toLocaleString()} – {new Date(o.window_end).toLocaleString()} · uncertainty {o.uncertainty}% · mapping v{o.mapping_version} · recorded by {o.recorded_by}</p>
-        {o.comparison_reason&&<p className="mt-1 text-xs text-[var(--muted)]">{o.comparison_reason}</p>}
-        <p className="mt-2 text-xs text-[var(--muted)]">Provenance: {o.software.map((x)=>`${x.kind} ${x.label} @ ${x.revision}`).join(" · ")||"No delivered-software references"}</p>
-        {o.gaps.map((x)=><p key={`${x.kind}-${x.detail}`} className="mt-1 text-xs text-[var(--warning)]">Gap: {x.kind.replaceAll("_"," ")} — {x.detail}</p>)}
-      </Card>)}</div></section>:null}
+      {selected && current && (
+        <Card className="p-5">
+          <h2 className="font-semibold">Operational evidence mapping</h2>
+          <p className="mt-1 text-sm text-[var(--muted)]">
+            Connect sanitized observability and delivery sources to a selected
+            objective. Prior instrumentation stays visible.
+          </p>
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <label className="text-sm font-medium">
+              Objective
+              <select
+                value={selectedObjective?.id ?? ""}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setObjectiveID(id);
+                  setMappingID(
+                    selected.signal_mappings.find(
+                      (m) => m.revisions.at(-1)?.objective_id === id,
+                    )?.id ?? "__new",
+                  );
+                }}
+                className="mt-1 w-full rounded-lg border bg-transparent px-3 py-2 font-normal"
+              >
+                {current.objectives.map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm font-medium">
+              Signal mapping
+              <select
+                value={selectedMapping?.id ?? ""}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setMappingID(id || "__new");
+                  const objective = selected.signal_mappings
+                    .find((m) => m.id === id)
+                    ?.revisions.at(-1)?.objective_id;
+                  if (objective) setObjectiveID(objective);
+                }}
+                className="mt-1 w-full rounded-lg border bg-transparent px-3 py-2 font-normal"
+              >
+                <option value="">New mapping</option>
+                {selected.signal_mappings.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.revisions.at(-1)?.instrumentation_revision} · v
+                    {m.current_version}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <form
+            key={`${selectedObjective?.id}-${selectedMapping?.id ?? "new"}`}
+            onSubmit={publishMapping}
+            className="mt-4 grid gap-4 md:grid-cols-2"
+          >
+            <Field
+              n="instrumentation_revision"
+              l="Instrumentation revision"
+              v={selectedMappingRevision?.instrumentation_revision}
+            />
+            <Area
+              n="mapping_rationale"
+              l="Mapping rationale"
+              v={selectedMappingRevision?.rationale}
+            />
+            <div className="md:col-span-2">
+              <Area
+                n="sources"
+                l="Sources: kind | name | sanitized reference | public/participants | sanitization (semicolon separated)"
+                v={selectedMappingRevision?.sources
+                  .map(
+                    (x) =>
+                      `${x.kind} | ${x.name} | ${x.reference} | ${x.visibility} | ${x.sanitization}`,
+                  )
+                  .join("; ")}
+              />
+            </div>
+            <div className="md:col-span-2">
+              <Button>
+                {selectedMapping
+                  ? `Publish mapping v${selectedMapping.current_version + 1}`
+                  : "Publish signal mapping"}
+              </Button>
+            </div>
+          </form>
+          {selectedMapping && (
+            <form
+              key={`observation-${selectedMapping.id}`}
+              onSubmit={recordObservation}
+              className="mt-6 grid gap-4 border-t pt-5 md:grid-cols-2"
+            >
+              <Field n="window_start" l="Window start" type="datetime-local" />
+              <Field n="window_end" l="Window end" type="datetime-local" />
+              <Field n="good_events" l="Good events" type="number" step="any" />
+              <Field
+                n="total_events"
+                l="Total events"
+                type="number"
+                step="any"
+              />
+              <Field
+                n="observed_value"
+                l="Native observed value (latency/custom)"
+                type="number"
+                step="any"
+                required={false}
+              />
+              <Field
+                n="uncertainty"
+                l="Uncertainty %"
+                type="number"
+                step="any"
+                v="0"
+              />
+              <Area n="evidence_summary" l="Sanitized evidence summary" />
+              <div className="md:col-span-2">
+                <Area
+                  n="software"
+                  l="Delivered software: kind | id | exact revision | label (semicolon separated)"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <Area
+                  n="gaps"
+                  l="Evidence gaps: kind | detail (semicolon separated)"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <Button>Record evidence window</Button>
+              </div>
+            </form>
+          )}
+        </Card>
+      )}
+      {selected?.observations.length ? (
+        <section>
+          <h2 className="text-lg font-semibold">Attainment history</h2>
+          <div className="mt-3 space-y-3">
+            {[...selected.observations].reverse().map((o) => (
+              <Card key={o.id} className="p-4">
+                <div className="flex flex-wrap gap-2">
+                  <strong>
+                    {o.attainment?.toFixed(3) ?? "Unavailable"}% attainment
+                  </strong>
+                  <Badge tone={o.target_met ? "success" : "danger"}>
+                    {o.target_met ? "target met" : "target missed"}
+                  </Badge>
+                  <Badge>
+                    {o.error_budget_consumed_percent?.toFixed(1) ?? "—"}% budget
+                    consumed
+                  </Badge>
+                  {!o.comparable_to_previous && (
+                    <Badge tone="warning">incomparable window</Badge>
+                  )}
+                </div>
+                <p className="mt-2 text-sm">{o.summary}</p>
+                <p className="mt-1 text-xs text-[var(--muted)]">
+                  {new Date(o.window_start).toLocaleString()} –{" "}
+                  {new Date(o.window_end).toLocaleString()} · uncertainty{" "}
+                  {o.uncertainty}% · mapping v{o.mapping_version} · recorded by{" "}
+                  {o.recorded_by}
+                </p>
+                {o.comparison_reason && (
+                  <p className="mt-1 text-xs text-[var(--muted)]">
+                    {o.comparison_reason}
+                  </p>
+                )}
+                <p className="mt-2 text-xs text-[var(--muted)]">
+                  Provenance:{" "}
+                  {o.software
+                    .map((x) => `${x.kind} ${x.label} @ ${x.revision}`)
+                    .join(" · ") || "No delivered-software references"}
+                </p>
+                {o.gaps.map((x) => (
+                  <p
+                    key={`${x.kind}-${x.detail}`}
+                    className="mt-1 text-xs text-[var(--warning)]"
+                  >
+                    Gap: {x.kind.replaceAll("_", " ")} — {x.detail}
+                  </p>
+                ))}
+              </Card>
+            ))}
+          </div>
+        </section>
+      ) : null}
       {error && (
         <p role="alert" className="text-sm text-[var(--danger)]">
           {error}
@@ -698,7 +971,11 @@ export function ServiceObjectivesWorkspace({
               <button
                 type="button"
                 key={x.id}
-                onClick={() => setSelected(x)}
+                onClick={() => {
+                  setSelected(x);
+                  setMappingID("");
+                  setObjectiveID("");
+                }}
                 className="w-full rounded-xl border bg-white p-4 text-left hover:border-[var(--brand)]"
               >
                 <span className="flex flex-wrap items-center gap-2">
