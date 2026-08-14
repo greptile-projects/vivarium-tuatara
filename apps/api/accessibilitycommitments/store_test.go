@@ -2,6 +2,8 @@ package accessibilitycommitments
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -49,5 +51,35 @@ func TestRejectsIncompleteContract(t *testing.T) {
 	r.Standards = nil
 	if _, err := s.Create("repo", "alice", r); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("expected invalid, got %v", err)
+	}
+}
+
+func TestRejectsInvalidOrUndeclaredStandardCriteria(t *testing.T) {
+	s, _ := New(t.TempDir())
+	r := validRevision(time.Now())
+	r.Standards[0] = Standard{Name: " ", Criteria: []string{" "}}
+	if _, err := s.Create("repo", "alice", r); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("expected blank standard to be invalid, got %v", err)
+	}
+	r = validRevision(time.Now())
+	r.Scenarios[0].StandardCriteria = []string{"9.9.9"}
+	if _, err := s.Create("repo", "alice", r); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("expected undeclared criterion to be invalid, got %v", err)
+	}
+}
+
+func TestListIsolatesCorruptRecords(t *testing.T) {
+	root := t.TempDir()
+	s, _ := New(root)
+	want, err := s.Create("repo-target", "alice", validRevision(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(root, "unrelated.json"), []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	values, err := s.List("repo-target")
+	if err != nil || len(values) != 1 || values[0].ID != want.ID {
+		t.Fatalf("healthy repository list = %+v, %v", values, err)
 	}
 }

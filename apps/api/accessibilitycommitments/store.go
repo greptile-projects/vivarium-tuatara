@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -190,7 +191,10 @@ func (s *Store) List(repo string) ([]Commitment, error) {
 			}
 			v, e := s.read(strings.TrimSuffix(x.Name(), ".json"))
 			if e != nil {
-				return e
+				// Collection reads isolate corrupt records so one damaged commitment
+				// cannot deny access to every healthy repository in this store.
+				log.Printf("accessibility commitments: skipping corrupt record %q: %v", x.Name(), e)
+				continue
 			}
 			if v.RepositoryID == repo {
 				values = append(values, s.project(v))
@@ -215,12 +219,25 @@ func validate(r Revision) error {
 		return ErrInvalid
 	}
 	ids := map[string]bool{}
+	criteria := map[string]bool{}
 	add := func(id string) bool {
 		if strings.TrimSpace(id) == "" || ids[id] {
 			return false
 		}
 		ids[id] = true
 		return true
+	}
+	for _, x := range r.Standards {
+		if strings.TrimSpace(x.Name) == "" || strings.TrimSpace(x.Version) == "" || strings.TrimSpace(x.Level) == "" || len(x.Criteria) == 0 {
+			return ErrInvalid
+		}
+		for _, criterion := range x.Criteria {
+			criterion = strings.TrimSpace(criterion)
+			if criterion == "" {
+				return ErrInvalid
+			}
+			criteria[criterion] = true
+		}
 	}
 	for _, x := range r.AssistiveTechnologies {
 		if !add("at:"+x.ID) || strings.TrimSpace(x.Name) == "" {
@@ -240,6 +257,11 @@ func validate(r Revision) error {
 	for _, x := range r.Scenarios {
 		if !add("scenario:"+x.ID) || strings.TrimSpace(x.Name) == "" || len(x.Steps) == 0 || strings.TrimSpace(x.ExpectedOutcome) == "" {
 			return ErrInvalid
+		}
+		for _, criterion := range x.StandardCriteria {
+			if !criteria[strings.TrimSpace(criterion)] {
+				return ErrInvalid
+			}
 		}
 	}
 	validSeverity := map[string]bool{"critical": true, "major": true, "minor": true, "advisory": true}
