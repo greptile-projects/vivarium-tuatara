@@ -2148,6 +2148,8 @@ expense accounting uses a durable roll-forward journal so interrupted fund/outco
 is recovered under the same mutation boundary.
 Recipient replacement must select a distinct principal, so reassignment to the revoked identity
 cannot masquerade as access restoration.
+Revoked principals cannot mutate retained completed-task history after unfinished work is assigned
+to a distinct, live-validated replacement.
 
 # Trusted external extensions
 

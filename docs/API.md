@@ -2765,6 +2765,9 @@ rolled forward under the fund mutation lock after interruption so their durable 
 reconverge.
 A replacement must differ in principal kind or identity from the currently assigned recipient;
 same-principal reassignment is rejected and cannot clear revoked-access protection.
+Access revocation freezes later delivery-record mutations by every then-assigned principal.
+Completed tasks retain attribution after a distinct replacement, but that retained identity is
+history rather than continuing update authority.
 
 ## Performance goals
 

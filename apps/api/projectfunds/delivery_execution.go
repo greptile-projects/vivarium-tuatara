@@ -53,13 +53,18 @@ type DeliveryExpense struct {
 	DecidedAt      *time.Time         `json:"decided_at,omitempty"`
 }
 type DeliveryControl struct {
-	Kind          string    `json:"kind"`
-	ActorID       string    `json:"actor_id"`
-	Reason        string    `json:"reason"`
-	RecipientKind string    `json:"recipient_kind,omitempty"`
-	RecipientID   string    `json:"recipient_id,omitempty"`
-	Amount        int64     `json:"amount,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
+	Kind          string              `json:"kind"`
+	ActorID       string              `json:"actor_id"`
+	Reason        string              `json:"reason"`
+	RecipientKind string              `json:"recipient_kind,omitempty"`
+	RecipientID   string              `json:"recipient_id,omitempty"`
+	Amount        int64               `json:"amount,omitempty"`
+	Recipients    []DeliveryPrincipal `json:"recipients,omitempty"`
+	CreatedAt     time.Time           `json:"created_at"`
+}
+type DeliveryPrincipal struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
 }
 type DeliveryExecution struct {
 	Status           string            `json:"status"`
@@ -111,6 +116,9 @@ func (s *Store) RecordDeliveryUpdate(outcomeID, selectionID string, recipient De
 		if !selectionHasRecipient(*sel, recipient) || !validDeliveryUpdate(*sel, recipient, in) {
 			return ErrInvalid
 		}
+		if deliveryRecipientRevoked(sel.Execution, recipient) {
+			return ErrForbidden
+		}
 		now := s.now()
 		v.Version++
 		v.UpdatedAt = now
@@ -147,6 +155,9 @@ func (s *Store) RequestDeliveryExpense(outcomeID, selectionID string, recipient 
 		}
 		if !selectionHasRecipient(*sel, recipient) || !validDeliveryExpense(*sel, recipient, in) {
 			return ErrInvalid
+		}
+		if deliveryRecipientRevoked(sel.Execution, recipient) {
+			return ErrForbidden
 		}
 		now := s.now()
 		v.Version++
@@ -268,6 +279,7 @@ func (s *Store) ControlDelivery(outcomeID, selectionID, steward, action, reason 
 		projectDeliveryExecution(sel, now)
 		ledgerAmount := int64(0)
 		ledgerKind := ""
+		controlRecipients := []DeliveryPrincipal{}
 		switch action {
 		case "pause":
 			if sel.Execution.Status == "cancelled" {
@@ -279,6 +291,14 @@ func (s *Store) ControlDelivery(outcomeID, selectionID, steward, action, reason 
 				return ErrConflict
 			}
 			sel.Execution.Status = "paused"
+			revoked := map[string]bool{}
+			for _, task := range sel.Tasks {
+				revoked[task.RecipientKind+"\x00"+task.RecipientID] = true
+			}
+			for key := range revoked {
+				parts := strings.SplitN(key, "\x00", 2)
+				controlRecipients = append(controlRecipients, DeliveryPrincipal{Kind: parts[0], ID: parts[1]})
+			}
 		case "resume":
 			if sel.Execution.Status != "paused" {
 				return ErrConflict
@@ -338,7 +358,7 @@ func (s *Store) ControlDelivery(outcomeID, selectionID, steward, action, reason 
 		}
 		v.Version++
 		v.UpdatedAt = now
-		sel.Execution.Controls = append(sel.Execution.Controls, DeliveryControl{Kind: action, ActorID: steward, Reason: strings.TrimSpace(reason), RecipientKind: func() string {
+		sel.Execution.Controls = append(sel.Execution.Controls, DeliveryControl{Kind: action, ActorID: steward, Reason: strings.TrimSpace(reason), Recipients: controlRecipients, RecipientKind: func() string {
 			if replacement != nil {
 				return replacement.Kind
 			}
@@ -492,19 +512,51 @@ func projectDeliveryExecution(s *DeliverySelection, now time.Time) {
 	if e.Status == "paused" || e.Status == "cancelled" {
 		e.SpendingBlockers = append(e.SpendingBlockers, e.Status)
 	}
-	accessRevoked := false
+	revokedRecipients := map[string]bool{}
+	legacyAccessRevoked := false
 	for _, control := range e.Controls {
 		if control.Kind == "access_revoked" {
-			accessRevoked = true
+			if len(control.Recipients) == 0 {
+				legacyAccessRevoked = true
+			}
+			for _, recipient := range control.Recipients {
+				revokedRecipients[recipient.Kind+"\x00"+recipient.ID] = true
+			}
 		}
-		if control.Kind == "replace_recipient" {
-			accessRevoked = false
+		if control.Kind == "recipient_access_revoked" {
+			for _, recipient := range control.Recipients {
+				revokedRecipients[recipient.Kind+"\x00"+recipient.ID] = true
+			}
 		}
 	}
-	if accessRevoked {
+	activeRevoked := legacyAccessRevoked
+	if !activeRevoked {
+		for _, task := range s.Tasks {
+			if task.Status != "completed" && revokedRecipients[task.RecipientKind+"\x00"+task.RecipientID] {
+				activeRevoked = true
+			}
+		}
+	}
+	if activeRevoked {
 		e.SpendingBlockers = append(e.SpendingBlockers, "revoked_access")
 	}
 	e.SpendingBlocked = len(e.SpendingBlockers) > 0
+}
+func deliveryRecipientRevoked(e DeliveryExecution, recipient DeliveryApplicant) bool {
+	key := recipient.Kind + "\x00" + recipient.ID
+	for _, control := range e.Controls {
+		if control.Kind == "access_revoked" && len(control.Recipients) == 0 {
+			return true
+		}
+		if control.Kind == "access_revoked" || control.Kind == "recipient_access_revoked" {
+			for _, revoked := range control.Recipients {
+				if revoked.Kind+"\x00"+revoked.ID == key {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 type deliveryTransaction struct {

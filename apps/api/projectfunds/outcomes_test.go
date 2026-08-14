@@ -278,7 +278,11 @@ func TestDeliverySpendingStopsWithoutInitialActivityAndRevocationSurvivesResume(
 		t.Fatalf("inactive expense err = %v", err)
 	}
 	s.now = func() time.Time { return selectedAt.Add(time.Hour) }
-	out, err := s.ControlDelivery(out.ID, selection.ID, "owner", "access_revoked", "Repository access was removed.", 0, nil, out.Version)
+	out, err := s.RecordDeliveryUpdate(out.ID, selection.ID, recipient, "contributor", out.Version, DeliveryUpdateInput{TaskID: task.ID, Status: "completed", Progress: 100, Summary: "First milestone retained.", Resources: []DeliveryResource{{Kind: "pull", ID: "completed-pull", Status: "merged"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.ControlDelivery(out.ID, selection.ID, "owner", "access_revoked", "Repository access was removed.", 0, nil, out.Version)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +304,15 @@ func TestDeliverySpendingStopsWithoutInitialActivityAndRevocationSurvivesResume(
 	if !current.DeliverySelections[0].Execution.SpendingBlocked {
 		t.Fatal("same-recipient replacement cleared revoked access")
 	}
-	if _, err = s.RequestDeliveryExpense(out.ID, selection.ID, recipient, "contributor", out.Version, input); !errors.Is(err, ErrConflict) {
+	replacement := DeliveryApplicant{Kind: "human", ID: "replacement", SubmittedBy: "owner"}
+	out, err = s.ControlDelivery(out.ID, selection.ID, "owner", "replace_recipient", "Move unfinished work to a distinct principal.", 0, &replacement, out.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RecordDeliveryUpdate(out.ID, selection.ID, recipient, "contributor", out.Version, DeliveryUpdateInput{TaskID: task.ID, Status: "completed", Progress: 100, Summary: "Attempt to mutate retained completed work.", Resources: []DeliveryResource{{Kind: "pull", ID: "completed-pull", Status: "merged"}}}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("revoked former-recipient update err = %v", err)
+	}
+	if _, err = s.RequestDeliveryExpense(out.ID, selection.ID, recipient, "contributor", out.Version, input); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("revoked expense err = %v", err)
 	}
 	_ = fund
@@ -374,7 +386,7 @@ func selectedDelivery(t *testing.T) (*Store, Fund, FundedOutcome, DeliveryApplic
 		t.Fatal(err)
 	}
 	recipient := DeliveryApplicant{Kind: "human", ID: "contributor", SubmittedBy: "contributor"}
-	out, err = s.SubmitDeliveryProposal(out.ID, recipient, DeliveryProposalTerms{Approach: "Deliver and verify.", Milestones: []string{"repair"}, Cost: 9000, Availability: "Now", RelevantWork: []AttributedWork{{Kind: "pull", ID: "prior", Note: "Prior work"}}})
+	out, err = s.SubmitDeliveryProposal(out.ID, recipient, DeliveryProposalTerms{Approach: "Deliver and verify.", Milestones: []string{"diagnose", "repair"}, Cost: 9000, Availability: "Now", RelevantWork: []AttributedWork{{Kind: "pull", ID: "prior", Note: "Prior work"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

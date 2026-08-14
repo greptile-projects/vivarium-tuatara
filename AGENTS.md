@@ -418,6 +418,8 @@ whenever dependencies change or the web job fails before it starts.
   while a live-eligibility-validated replacement can. Approved-expense fund/outcome publication
   uses a durable roll-forward journal recovered under the fund lock after interrupted writes.
   Replacement must name a different principal; a no-op reassignment cannot clear revoked access.
+  Revocation records the assigned principals, preventing a former recipient from mutating retained
+  completed-task history after unfinished work moves to a live validated replacement.
 
   Reciprocal roadmap learning retains feedback-specific decision, preview, delivery, rejection, and
   measured-outcome updates. Reporters see only updates citing their own feedback, can validate the
