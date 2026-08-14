@@ -397,6 +397,12 @@ whenever dependencies change or the web job fails before it starts.
   Release candidates freeze their default-branch and release-range changed-path context; missing
   selection context fails closed. Owner overrides are expiring, preserve dissent, and require
   concrete follow-up work.
+  The connected accessibility browser journey carries a privacy-bounded released-journey report
+  through safe reproduction, false-positive correction, specialist judgment, assignment-scoped
+  agent repair, exact-candidate automation and assistive-technology preview confirmation, stale
+  acknowledgement recovery, expiring exception, independent review, merge, release, and retained
+  regression evidence. Release readiness re-evaluates its merge revision and keeps pull-candidate
+  evidence explicitly stale rather than promoting it implicitly.
   Product experiments at `/repositories/{id}/experiments` retain append-only hypothesis-plan
   revisions sourced from proposals, issues, decisions, pulls, previews, or releases. Success and
   guardrail metrics bind exact permitted product-signal versions; audience eligibility,

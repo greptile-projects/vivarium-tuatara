@@ -161,6 +161,16 @@ guest access and retain a revision-bound confirmation or rejection; dissent rema
 Expiring owner overrides require rationale and concrete follow-up work and never rewrite the result.
 Records default beneath `$ACCESSIBILITY_DELIVERY_STORAGE_ROOT` (`accessibility-delivery`).
 
+The connected accessibility browser journey starts with a privacy-bounded report against a released
+journey and carries its retained reproduction through specialist classification, a corrected false
+positive, an assignment-scoped agent repair, stock Git, exact-revision automation, and bounded
+keyboard/screen-reader preview confirmation by the reporter. Advancing the candidate proves that an
+earlier acknowledgement becomes stale; an expiring owner exception disappears without erasing its
+follow-up. Ordinary independent review, merge, and release retain the accepted finding, authored
+tradeoffs, current candidate assessment, and scenario as regression evidence. Release readiness
+re-evaluates the merge revision independently and therefore reports pull-candidate evidence as stale
+rather than silently treating it as release evidence.
+
 ## Collaborative performance goals
 
 Repository participants publish complete, append-only performance-contract revisions through
