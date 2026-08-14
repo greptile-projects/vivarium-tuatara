@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -309,6 +310,37 @@ func (s *Store) GetInstallation(id string) (Installation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.readInstallation(id)
+}
+
+// WithInstallationsRepository holds the installation mutation boundary while
+// fn persists a dependent record. Repository removal therefore commits wholly
+// before or after that record's scope validation and write.
+func (s *Store) WithInstallationsRepository(ids []string, repositoryID string, fn func() error) error {
+	if len(ids) == 0 || repositoryID == "" || fn == nil {
+		return ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		installation, readErr := s.readInstallation(id)
+		if readErr != nil {
+			return readErr
+		}
+		if !slices.Contains(installation.RepositoryIDs, repositoryID) {
+			return ErrInvalid
+		}
+	}
+	return fn()
 }
 
 // RecordDerivedCredential attaches only a credential minted for this exact

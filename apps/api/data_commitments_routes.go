@@ -59,8 +59,10 @@ func registerDataCommitmentRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			if e = validateDataCommitmentScopes(r.PathValue("id"), in.Revision.Scopes, releaseStore, extensionStore, experimentStore, deploymentStore); e != nil {
 				return e
 			}
-			out, e = store.Create(r.PathValue("id"), actor.UserID, in.Revision)
-			return e
+			return withDataCommitmentExtensionScopes(r.PathValue("id"), in.Revision.Scopes, extensionStore, func() error {
+				out, e = store.Create(r.PathValue("id"), actor.UserID, in.Revision)
+				return e
+			})
 		})
 		writeDataCommitment(w, out, err, 201)
 	})
@@ -86,8 +88,10 @@ func registerDataCommitmentRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			if e = validateDataCommitmentScopes(current.RepositoryID, in.Revision.Scopes, releaseStore, extensionStore, experimentStore, deploymentStore); e != nil {
 				return e
 			}
-			out, e = store.Revise(current.ID, in.ExpectedVersion, actor.UserID, in.Revision)
-			return e
+			return withDataCommitmentExtensionScopes(current.RepositoryID, in.Revision.Scopes, extensionStore, func() error {
+				out, e = store.Revise(current.ID, in.ExpectedVersion, actor.UserID, in.Revision)
+				return e
+			})
 		})
 		writeDataCommitment(w, out, err, 200)
 	})
@@ -111,7 +115,30 @@ func dataCommitmentOwners(actor string, revision datacommitments.Revision) []str
 			add(id)
 		}
 	}
+	for _, exception := range revision.Exceptions {
+		add(exception.ApprovedBy)
+	}
 	return out
+}
+
+func withDataCommitmentExtensionScopes(repositoryID string, scopes []datacommitments.Scope, extensionStore *extensions.Store, fn func() error) error {
+	ids := []string{}
+	for _, scope := range scopes {
+		if scope.Kind == "extension" {
+			ids = append(ids, scope.ResourceID)
+		}
+	}
+	if len(ids) == 0 {
+		return fn()
+	}
+	if extensionStore == nil {
+		return datacommitments.ErrInvalid
+	}
+	err := extensionStore.WithInstallationsRepository(ids, repositoryID, fn)
+	if errors.Is(err, extensions.ErrInvalid) || errors.Is(err, extensions.ErrNotFound) {
+		return datacommitments.ErrInvalid
+	}
+	return err
 }
 
 func validateDataCommitmentScopes(repositoryID string, scopes []datacommitments.Scope, releaseStore *releases.Store, extensionStore *extensions.Store, experimentStore *productexperiments.Store, deploymentStore *deployments.Store) error {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/datacommitments"
@@ -41,6 +42,10 @@ func TestDataCommitmentAPI(t *testing.T) {
 	invalidRevision["data_uses"] = []any{invalidUse}
 	invalidPayload, _ := json.Marshal(map[string]any{"revision": invalidRevision})
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/data-commitments", string(invalidPayload), owner.Credential.Token, http.StatusForbidden).Body.Close()
+	invalidApproverRevision := mapsClone(revision)
+	invalidApproverRevision["exceptions"] = []any{map[string]any{"id": "temporary", "data_use_id": "events", "reason": "migration", "mitigation": "manual deletion", "approved_by": "ffffffffffffffffffffffffffffffff", "expires_at": time.Now().UTC().Add(24 * time.Hour)}}
+	invalidApproverPayload, _ := json.Marshal(map[string]any{"revision": invalidApproverRevision})
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/data-commitments", string(invalidApproverPayload), owner.Credential.Token, http.StatusForbidden).Body.Close()
 	createdResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/data-commitments", string(payload), owner.Credential.Token, http.StatusCreated)
 	var created datacommitments.Commitment
 	json.NewDecoder(createdResponse.Body).Decode(&created)
@@ -56,6 +61,8 @@ func TestDataCommitmentAPI(t *testing.T) {
 	}
 	payload, _ = json.Marshal(map[string]any{"expected_version": 1, "revision": revision})
 	url := server.URL + "/repositories/" + repo.ID + "/data-commitments/" + created.ID + "/revisions"
+	invalidApproverPayload, _ = json.Marshal(map[string]any{"expected_version": 1, "revision": invalidApproverRevision})
+	authenticatedRequest(t, http.MethodPost, url, string(invalidApproverPayload), owner.Credential.Token, http.StatusForbidden).Body.Close()
 	authenticatedRequest(t, http.MethodPost, url, string(payload), owner.Credential.Token, http.StatusOK).Body.Close()
 	authenticatedRequest(t, http.MethodPost, url, string(payload), owner.Credential.Token, http.StatusConflict).Body.Close()
 }

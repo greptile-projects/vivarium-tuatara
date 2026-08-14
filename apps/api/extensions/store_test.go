@@ -3,6 +3,7 @@ package extensions
 import (
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,32 @@ func TestInstallationInputBindsPublicJSONContract(t *testing.T) {
 	err := json.Unmarshal([]byte(`{"owner_type":"repository","owner_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository_ids":["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],"resource_types":["pull_requests"],"capability_decisions":[{"capability":"review","decision":"approved"}],"settings":{"label":"review"}}`), &input)
 	if err != nil || input.OwnerType != "repository" || len(input.RepositoryIDs) != 1 || len(input.CapabilityDecisions) != 1 || input.Settings["label"] != "review" {
 		t.Fatalf("input = %#v, error = %v", input, err)
+	}
+}
+
+func TestWithInstallationsRepositoryHoldsMutationBoundary(t *testing.T) {
+	store, _ := New(t.TempDir())
+	installation := Installation{ID: strings.Repeat("a", 32), RepositoryIDs: []string{strings.Repeat("b", 32)}, Version: 1}
+	if err := writeAtomic(filepath.Join(store.root, "installation-"+installation.ID+".json"), installation); err != nil {
+		t.Fatal(err)
+	}
+	readFinished := make(chan struct{})
+	err := store.WithInstallationsRepository([]string{installation.ID}, installation.RepositoryIDs[0], func() error {
+		go func() { _, _ = store.GetInstallation(installation.ID); close(readFinished) }()
+		select {
+		case <-readFinished:
+			t.Fatal("installation read crossed dependent write boundary")
+		case <-time.After(20 * time.Millisecond):
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-readFinished:
+	case <-time.After(time.Second):
+		t.Fatal("installation boundary was not released")
 	}
 }
 
