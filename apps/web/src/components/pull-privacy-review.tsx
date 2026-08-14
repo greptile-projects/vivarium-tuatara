@@ -44,6 +44,13 @@ type Review = {
     accepted_by?: string;
   }[];
 };
+type RuntimeReadiness = {
+  ready: boolean;
+  revision: string;
+  requirements: { policy_id: string; kind: string; name: string; status: string; message: string }[];
+  runs: { id: string; journey: string; revision: string; results: { rule: string; outcome: string }[]; artifacts: { kind: string; name: string; digest: string; summary: string }[] }[];
+  active_exceptions: { id: string; rules: string[]; rationale: string; follow_up_work: string; expires_at: string }[];
+};
 const short = (v: string) => v.slice(0, 12);
 
 export function PullPrivacyReview({
@@ -62,22 +69,29 @@ export function PullPrivacyReview({
   const { token } = useAuth();
   const [flows, setFlows] = useState<Flow[]>([]);
   const [review, setReview] = useState<Review>();
+  const [runtime, setRuntime] = useState<RuntimeReadiness>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const base = `/repositories/${repositoryID}/pulls/${pullRequestID}/privacy-review`;
   const load = useCallback(async () => {
     if (!token) return;
-    const [f, r] = await Promise.all([
+    const [f, r, evidence] = await Promise.all([
       api<{ data_flows: Flow[] }>(
         `/repositories/${repositoryID}/data-flows`,
         {},
         token,
       ),
       api<Review>(base, {}, token).catch(() => undefined),
+      api<RuntimeReadiness>(
+        `/repositories/${repositoryID}/pulls/${pullRequestID}/privacy-readiness`,
+        {},
+        token,
+      ).catch(() => undefined),
     ]);
     setFlows(f.data_flows);
     setReview(r);
-  }, [base, repositoryID, token]);
+    setRuntime(evidence);
+  }, [base, pullRequestID, repositoryID, token]);
   useEffect(() => {
     void Promise.resolve()
       .then(load)
@@ -229,6 +243,36 @@ export function PullPrivacyReview({
             </Badge>
           )}
         </div>
+        {runtime && (
+          <div className="mt-4 rounded-lg border p-4">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold">Runtime privacy proof</h3>
+              <Badge tone={runtime.ready ? "success" : "warning"}>
+                {runtime.ready ? "current evidence" : "evidence required"}
+              </Badge>
+            </div>
+            <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
+              Synthetic journeys run without network or production personal data. Sanitized logs,
+              traces, coverage, failures, owner acknowledgement, and bounded exceptions are pinned
+              to <code>{short(runtime.revision)}</code>.
+            </p>
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              {runtime.requirements.map((requirement) => (
+                <div key={`${requirement.policy_id}-${requirement.kind}-${requirement.name}`} className="rounded-lg bg-[var(--surface-soft)] p-3 text-xs">
+                  <Badge tone={requirement.status === "passed" ? "success" : "warning"}>{requirement.status}</Badge>
+                  <b className="ml-2">{requirement.name.replaceAll("_", " ")}</b>
+                  <p className="mt-1 text-[var(--muted)]">{requirement.message}</p>
+                </div>
+              ))}
+            </div>
+            {runtime.runs.map((run) => (
+              <div key={run.id} className="mt-3 border-l-2 border-[var(--brand)] pl-3 text-xs">
+                <b>{run.journey}</b> · {run.results.map((result) => `${result.rule}: ${result.outcome}`).join(", ")}
+                {run.artifacts.map((artifact) => <p key={artifact.digest} className="mt-1 text-[var(--muted)]">{artifact.kind}: {artifact.name} — {artifact.summary}</p>)}
+              </div>
+            ))}
+          </div>
+        )}
       {(!review || stale) && participant && (
           <form onSubmit={compare} className="mt-4 grid gap-3 md:grid-cols-2">
             <label className="text-xs font-semibold">
