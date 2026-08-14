@@ -1,6 +1,7 @@
 package projectfunds
 
 import (
+	"errors"
 	"strings"
 	"time"
 )
@@ -167,6 +168,7 @@ func (s *Store) SelectDeliveryProposals(outcomeID, steward string, expected int,
 				tasks = append(tasks, DeliveryTask{ID: randomID(), Title: milestone, RecipientKind: p.Applicant.Kind, RecipientID: p.Applicant.ID, MilestoneIndex: mi, Dependencies: append([]string(nil), p.Terms.Dependencies...), Status: "planned"})
 			}
 		}
+		originalFund := fund
 		fund.Balances = derive(fund.Terms, fund.Ledger)
 		if total > fund.Balances.Available {
 			return ErrConflict
@@ -195,8 +197,18 @@ func (s *Store) SelectDeliveryProposals(outcomeID, steward string, expected int,
 		if err := s.write(fund); err != nil {
 			return err
 		}
-		if err := s.writeOutcome(v); err != nil {
-			return err
+		var outcomeWriteErr error
+		if s.afterDeliveryReservationWrite != nil {
+			outcomeWriteErr = s.afterDeliveryReservationWrite()
+		}
+		if outcomeWriteErr == nil {
+			outcomeWriteErr = s.writeOutcome(v)
+		}
+		if outcomeWriteErr != nil {
+			if rollbackErr := s.write(originalFund); rollbackErr != nil {
+				return errors.Join(outcomeWriteErr, rollbackErr)
+			}
+			return outcomeWriteErr
 		}
 		out = v
 		return s.projectOutcome(&out)

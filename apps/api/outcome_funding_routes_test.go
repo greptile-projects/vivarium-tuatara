@@ -124,3 +124,57 @@ func TestHumanDeliveryProposalIsSelfSubmittedAndAcceptanceGated(t *testing.T) {
 		t.Fatalf("accepted proposal = %+v", outcome.DeliveryProposals[0])
 	}
 }
+
+func TestFormerParticipantStewardCannotSelectDeliveryRecipients(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	publicKey, _, _ := ed25519.GenerateKey(rand.Reader)
+	funds, _ := projectfunds.New(t.TempDir(), map[string]string{"card": base64.StdEncoding.EncodeToString(publicKey)})
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, nil, funds))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "former-steward-owner")
+	steward := createTestAccount(t, server.URL, "former-steward")
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"former-steward-selection"}`, owner.Credential.Token, http.StatusCreated)
+	var repository repositories.Repository
+	if err := json.NewDecoder(response.Body).Decode(&repository); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if _, err := catalog.AddCollaborator(owner.User.ID, repository.ID, steward.User.ID); err != nil {
+		t.Fatal(err)
+	}
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+repository.ID, `{"visibility":"public"}`, owner.Credential.Token, http.StatusOK).Body.Close()
+	fund, err := funds.Create(repository.ID, owner.User.ID, projectfunds.Terms{Name: "Fund", Purpose: "Delivery", Stewards: []string{steward.User.ID}, FundingSources: []string{"card"}, Unit: "USD", Precision: 2, SpendingLimits: []projectfunds.Limit{{Period: "monthly", Amount: 1000}}, ApprovalRules: []projectfunds.ApprovalRule{{RequiredApprovals: 1, EligibleApprovers: []string{steward.User.ID}}}, EligibleRecipients: []string{"contributors"}, RefundPolicy: "Return unallocated backing", LedgerVisibility: "public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	terms := projectfunds.OutcomeTerms{Title: "Commission repair", Source: projectfunds.OutcomeSource{Kind: "issue", ID: "issue-1", Revision: "1", Visibility: "public"}, Scope: "Repair the endpoint", AcceptanceCriteria: []string{"checks pass"}, EvidenceRequirements: []string{"reviewed pull"}, Budget: 100, Deadline: time.Now().UTC().Add(time.Hour), ContributorEligibility: []string{"repository participants"}, AllocationMethod: "maintainer_selection", CancellationTerms: "Return unallocated value"}
+	outcome, err := funds.CreateOutcome(repository.ID, fund.ID, owner.User.ID, terms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposalTerms := projectfunds.DeliveryProposalTerms{Approach: "Repair and verify.", Milestones: []string{"deliver"}, Cost: 90, Availability: "This week", RelevantWork: []projectfunds.AttributedWork{{Kind: "pull", ID: "prior", Note: "Related repair"}}}
+	outcome, err = funds.SubmitDeliveryProposal(outcome.ID, projectfunds.DeliveryApplicant{Kind: "human", ID: owner.User.ID, SubmittedBy: owner.User.ID}, proposalTerms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome, err = funds.AcceptDeliveryProposal(outcome.ID, outcome.DeliveryProposals[0].ID, owner.User.ID, outcome.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.RemoveCollaborator(owner.User.ID, repository.ID, steward.User.ID); err != nil {
+		t.Fatal(err)
+	}
+	selectionURL := server.URL + "/repositories/" + repository.ID + "/funded-outcomes/" + outcome.ID + "/delivery-selections"
+	body := `{"expected_version":` + strconv.Itoa(outcome.Version) + `,"proposal_ids":["` + outcome.DeliveryProposals[0].ID + `"],"conflict_disclosure":"None.","rationale":"Best fit."}`
+	authenticatedRequest(t, http.MethodPost, selectionURL, body, steward.Credential.Token, http.StatusForbidden).Body.Close()
+	fund, err = funds.Get(fund.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fund.Balances.Reserved != 0 {
+		t.Fatalf("former steward reserved funds: %+v", fund.Balances)
+	}
+}

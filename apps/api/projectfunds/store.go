@@ -91,10 +91,11 @@ type Fund struct {
 	AuthorityNote string    `json:"authority_note"`
 }
 type Store struct {
-	root              string
-	trustedSourceKeys map[string]string
-	mu                sync.Mutex
-	now               func() time.Time
+	root                          string
+	trustedSourceKeys             map[string]string
+	mu                            sync.Mutex
+	now                           func() time.Time
+	afterDeliveryReservationWrite func() error
 }
 
 func New(root string, trustedSources ...map[string]string) (*Store, error) {

@@ -362,7 +362,16 @@ func (s *Store) WithCurrentParticipant(userID, repositoryID string, fn func() er
 // still participates in the repository. It is used when a collaboration
 // mutation names both its actor and another authority-bearing participant.
 func (s *Store) WithCurrentParticipants(userIDs []string, repositoryID string, fn func() error) error {
-	if len(userIDs) == 0 || !validID(repositoryID) || fn == nil {
+	if len(userIDs) == 0 {
+		return ErrInvalidCollaborator
+	}
+	return s.WithCurrentDeliveryAuthority(userIDs, repositoryID, "", fn)
+}
+
+// WithCurrentDeliveryAuthority additionally freezes an optional organization
+// association while a dependent delivery mutation commits.
+func (s *Store) WithCurrentDeliveryAuthority(userIDs []string, repositoryID, organizationID string, fn func() error) error {
+	if !validID(repositoryID) || fn == nil {
 		return ErrInvalidCollaborator
 	}
 	for _, userID := range userIDs {
@@ -383,6 +392,9 @@ func (s *Store) WithCurrentParticipants(userIDs []string, repositoryID string, f
 	}
 	if _, err := s.git.Open(repositoryID); err != nil {
 		return ErrNotFound
+	}
+	if organizationID != "" && repository.OrganizationID != organizationID {
+		return ErrInvalidCollaborator
 	}
 	for _, userID := range userIDs {
 		if repository.OwnerID != userID && !slices.Contains(collaboratorIDs(repository), userID) {

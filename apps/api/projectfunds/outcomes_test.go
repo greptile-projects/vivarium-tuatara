@@ -143,6 +143,58 @@ func TestDeliverySelectionRequiresRecipientAcceptanceAndReservesOnlyCompensation
 	}
 }
 
+func TestDeliverySelectionCompensatesFailedOutcomePersistence(t *testing.T) {
+	s, fund := outcomeStore(t)
+	fund, err := s.Commit(fund.ID, "backer", "card", "compensated-backing", 10000, "compensated-backing-key", "commission")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := proof("card", "compensated-backing", "settled", 10000)
+	p.Nonce = "compensated-selection-proof"
+	p.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(testPrivateKey, transferProofMessage(*p)))
+	fund, err = s.Reconcile(fund.ID, fund.Ledger[0].ID, "owner", "settled", 10000, p, "verified", fund.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.CreateOutcome("repo", fund.ID, "owner", outcomeTerms())
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposalTerms := DeliveryProposalTerms{Approach: "Repair and verify.", Milestones: []string{"deliver"}, Cost: 9000, Availability: "This week", RelevantWork: []AttributedWork{{Kind: "pull", ID: "prior", Note: "Related repair"}}}
+	out, err = s.SubmitDeliveryProposal(out.ID, DeliveryApplicant{Kind: "human", ID: "contributor", SubmittedBy: "contributor"}, proposalTerms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.AcceptDeliveryProposal(out.ID, out.DeliveryProposals[0].ID, "contributor", out.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("outcome disk unavailable")
+	s.afterDeliveryReservationWrite = func() error { return injected }
+	if _, err = s.SelectDeliveryProposals(out.ID, "owner", out.Version, []string{out.DeliveryProposals[0].ID}, "No conflicts.", "Best proposal."); !errors.Is(err, injected) {
+		t.Fatalf("selection error = %v", err)
+	}
+	fund, err = s.Get(fund.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fund.Balances.Reserved != 0 || fund.Balances.Available != 10000 {
+		t.Fatalf("failed selection stranded reservation: %+v", fund.Balances)
+	}
+	current, err := s.GetOutcome(out.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Version != out.Version || current.DeliveryProposals[0].Status != "accepted" {
+		t.Fatalf("failed selection changed outcome: %+v", current)
+	}
+	s.afterDeliveryReservationWrite = nil
+	current, err = s.SelectDeliveryProposals(out.ID, "owner", current.Version, []string{current.DeliveryProposals[0].ID}, "No conflicts.", "Best proposal.")
+	if err != nil || len(current.DeliverySelections) != 1 {
+		t.Fatalf("retry = %+v, %v", current, err)
+	}
+}
+
 func TestOutcomeFundingProjectsOverlappingAndEmbargoedWork(t *testing.T) {
 	s, fund := outcomeStore(t)
 	terms := outcomeTerms()

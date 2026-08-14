@@ -226,7 +226,7 @@ func registerOutcomeFundingRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			return
 		}
 		in.Applicant.SubmittedBy = actor.UserID
-		if !deliveryApplicantControlled(in.Applicant, actor.UserID, r.PathValue("id"), catalog, organizationStore) {
+		if in.Applicant.Kind == "human" && in.Applicant.ID != actor.UserID {
 			writeAPIError(w, 403, "delivery_proposal_forbidden", "the applicant must be the human, a current team member, or a current approved-agent operator")
 			return
 		}
@@ -241,11 +241,19 @@ func registerOutcomeFundingRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			return
 		}
 		visibility := out.Revisions[len(out.Revisions)-1].Terms.Source.Visibility
+		requiredParticipant := ""
 		if visibility != "public" && catalog.WithCurrentParticipant(actor.UserID, r.PathValue("id"), func() error { return nil }) != nil {
 			writeAPIError(w, 403, "funded_outcome_forbidden", "permission-bounded work accepts proposals only from project participants")
 			return
 		}
-		out, err = store.SubmitDeliveryProposal(out.ID, in.Applicant, in.Terms)
+		if visibility != "public" {
+			requiredParticipant = actor.UserID
+		}
+		err = withCurrentDeliveryApplicants([]projectfunds.DeliveryApplicant{in.Applicant}, actor.UserID, requiredParticipant, r.PathValue("id"), catalog, organizationStore, func() error {
+			var mutationErr error
+			out, mutationErr = store.SubmitDeliveryProposal(out.ID, in.Applicant, in.Terms)
+			return mutationErr
+		})
 		writeFundedOutcome(w, out, err, 201)
 	})
 	mux.HandleFunc("POST /repositories/{id}/funded-outcomes/{outcome_id}/delivery-proposals/{proposal_id}/accept", func(w http.ResponseWriter, r *http.Request) {
@@ -278,11 +286,19 @@ func registerOutcomeFundingRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			writeAPIError(w, 404, "delivery_proposal_not_found", "delivery proposal not found")
 			return
 		}
-		if !deliveryApplicantControlled(*applicant, actor.UserID, r.PathValue("id"), catalog, organizationStore) {
+		if applicant.Kind == "human" && applicant.ID != actor.UserID {
 			writeAPIError(w, 403, "delivery_proposal_forbidden", "only the proposed human, team member, or approved-agent operator may accept delivery")
 			return
 		}
-		out, err = store.AcceptDeliveryProposal(out.ID, out.DeliveryProposals[deliveryProposalPosition(out, r.PathValue("proposal_id"))].ID, actor.UserID, in.ExpectedVersion)
+		requiredParticipant := ""
+		if out.Revisions[len(out.Revisions)-1].Terms.Source.Visibility != "public" {
+			requiredParticipant = actor.UserID
+		}
+		err = withCurrentDeliveryApplicants([]projectfunds.DeliveryApplicant{*applicant}, actor.UserID, requiredParticipant, r.PathValue("id"), catalog, organizationStore, func() error {
+			var mutationErr error
+			out, mutationErr = store.AcceptDeliveryProposal(out.ID, r.PathValue("proposal_id"), actor.UserID, in.ExpectedVersion)
+			return mutationErr
+		})
 		writeFundedOutcome(w, out, err, 200)
 	})
 	mux.HandleFunc("POST /repositories/{id}/funded-outcomes/{outcome_id}/delivery-selections", func(w http.ResponseWriter, r *http.Request) {
@@ -304,14 +320,20 @@ func registerOutcomeFundingRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			writeAPIError(w, 404, "funded_outcome_not_found", "funded outcome not found")
 			return
 		}
+		applicants := make([]projectfunds.DeliveryApplicant, 0, len(in.ProposalIDs))
 		for _, id := range in.ProposalIDs {
 			pos := deliveryProposalPosition(out, id)
-			if pos < 0 || !deliveryApplicantExists(out.DeliveryProposals[pos].Applicant, r.PathValue("id"), catalog, organizationStore) {
+			if pos < 0 {
 				writeAPIError(w, 409, "delivery_eligibility_changed", "a selected recipient is no longer an eligible human, team, or approved agent")
 				return
 			}
+			applicants = append(applicants, out.DeliveryProposals[pos].Applicant)
 		}
-		out, err = store.SelectDeliveryProposals(out.ID, actor.UserID, in.ExpectedVersion, in.ProposalIDs, in.ConflictDisclosure, in.Rationale)
+		err = withCurrentDeliveryApplicants(applicants, "", actor.UserID, r.PathValue("id"), catalog, organizationStore, func() error {
+			var mutationErr error
+			out, mutationErr = store.SelectDeliveryProposals(out.ID, actor.UserID, in.ExpectedVersion, in.ProposalIDs, in.ConflictDisclosure, in.Rationale)
+			return mutationErr
+		})
 		writeFundedOutcome(w, out, err, 201)
 	})
 }
@@ -324,70 +346,43 @@ func deliveryProposalPosition(out projectfunds.FundedOutcome, id string) int {
 	}
 	return -1
 }
-func deliveryApplicantControlled(a projectfunds.DeliveryApplicant, actor, repositoryID string, catalog *repositories.Store, orgs *organizations.Store) bool {
-	if a.Kind == "human" {
-		return a.ID == actor && catalog.WithCurrentParticipant(actor, repositoryID, func() error { return nil }) == nil
-	}
+func withCurrentDeliveryApplicants(applicants []projectfunds.DeliveryApplicant, controller, requiredParticipant, repositoryID string, catalog *repositories.Store, orgs *organizations.Store, fn func() error) error {
 	repo, err := catalog.GetByID(repositoryID)
-	if err != nil || repo.OrganizationID == "" || orgs == nil {
-		return false
+	if err != nil || fn == nil {
+		return projectfunds.ErrForbidden
 	}
-	org, err := orgs.Get(repo.OrganizationID)
-	if err != nil {
-		return false
+	humans := []string{}
+	if requiredParticipant != "" {
+		humans = append(humans, requiredParticipant)
 	}
-	a.OrganizationID = org.ID
-	if a.Kind == "team" {
-		for _, t := range org.Teams {
-			if t.ID == a.ID {
-				for _, m := range t.Members {
-					if m.UserID == actor {
-						return true
-					}
-				}
+	requirements := []organizations.DeliveryPrincipalRequirement{}
+	for _, applicant := range applicants {
+		switch applicant.Kind {
+		case "human":
+			humans = append(humans, applicant.ID)
+		case "team", "approved_agent":
+			if repo.OrganizationID == "" || orgs == nil || (applicant.OrganizationID != "" && applicant.OrganizationID != repo.OrganizationID) {
+				return projectfunds.ErrForbidden
 			}
+			requirements = append(requirements, organizations.DeliveryPrincipalRequirement{Kind: applicant.Kind, ID: applicant.ID, ControllerID: controller})
+		default:
+			return projectfunds.ErrInvalid
 		}
 	}
-	if a.Kind == "approved_agent" {
-		for _, agent := range org.Agents {
-			if agent.ID == a.ID {
-				for _, operator := range agent.OperatorIDs {
-					if operator == actor {
-						return true
-					}
-				}
-			}
-		}
+	commit := func() error {
+		return catalog.WithCurrentDeliveryAuthority(humans, repositoryID, repo.OrganizationID, fn)
 	}
-	return false
+	if len(requirements) == 0 {
+		return deliveryAuthorityError(commit())
+	}
+	return deliveryAuthorityError(orgs.WithCurrentDeliveryPrincipals(repo.OrganizationID, requirements, commit))
 }
-func deliveryApplicantExists(a projectfunds.DeliveryApplicant, repositoryID string, catalog *repositories.Store, orgs *organizations.Store) bool {
-	if a.Kind == "human" {
-		return catalog.WithCurrentParticipant(a.ID, repositoryID, func() error { return nil }) == nil
+
+func deliveryAuthorityError(err error) error {
+	if err == nil || errors.Is(err, projectfunds.ErrInvalid) || errors.Is(err, projectfunds.ErrConflict) || errors.Is(err, projectfunds.ErrForbidden) || errors.Is(err, projectfunds.ErrNotFound) {
+		return err
 	}
-	repo, err := catalog.GetByID(repositoryID)
-	if err != nil || repo.OrganizationID == "" || orgs == nil {
-		return false
-	}
-	org, err := orgs.Get(repo.OrganizationID)
-	if err != nil {
-		return false
-	}
-	if a.Kind == "team" {
-		for _, t := range org.Teams {
-			if t.ID == a.ID && len(t.Members) > 0 {
-				return true
-			}
-		}
-	}
-	if a.Kind == "approved_agent" {
-		for _, agent := range org.Agents {
-			if agent.ID == a.ID && len(agent.OperatorIDs) > 0 {
-				return true
-			}
-		}
-	}
-	return false
+	return projectfunds.ErrForbidden
 }
 
 func writeFundedOutcome(w http.ResponseWriter, out projectfunds.FundedOutcome, err error, status int) {
