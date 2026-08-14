@@ -369,6 +369,8 @@ whenever dependencies change or the web job fails before it starts.
   Unattached assessment revisions must be branch-reachable, pull-bound revisions must match the
   live pull source, and every finding citation resolves an associated non-stale preview artifact or
   redacted reproduction-attempt artifact before persistence.
+  Branch visibility excludes `vivarium-security/*`; preview freshness is recomputed from the
+  authoritative current pull source rather than trusting a stored stale flag.
   Product experiments at `/repositories/{id}/experiments` retain append-only hypothesis-plan
   revisions sourced from proposals, issues, decisions, pulls, previews, or releases. Success and
   guardrail metrics bind exact permitted product-signal versions; audience eligibility,

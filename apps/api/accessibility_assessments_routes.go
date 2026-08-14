@@ -98,7 +98,7 @@ func registerAccessibilityAssessmentRoutes(mux *http.ServeMux, git *storage.Stor
 			return
 		}
 		for _, citation := range in.Citations {
-			if !accessibilityCitationResolves(r.PathValue("id"), assessment.Revision, citation, previewStore, reportStore) {
+			if !accessibilityCitationResolves(r.PathValue("id"), assessment.Revision, citation, pulls, previewStore, reportStore) {
 				writeAPIError(w, 400, "invalid_accessibility_citation", "each citation must resolve to evidence on a repository preview or reproduction at the assessment revision")
 				return
 			}
@@ -168,7 +168,7 @@ func accessibilityRevisionIsVisible(git *storage.Store, repositoryID, revision s
 		return false
 	}
 	for _, ref := range refs {
-		if !strings.HasPrefix(ref.Name, "refs/heads/") {
+		if !strings.HasPrefix(ref.Name, "refs/heads/") || strings.HasPrefix(ref.Name, "refs/heads/vivarium-security/") {
 			continue
 		}
 		ancestry, ancestryErr := repository.ListCommitAncestry(storage.ObjectID(ref.Target))
@@ -184,23 +184,21 @@ func accessibilityRevisionIsVisible(git *storage.Store, repositoryID, revision s
 	return false
 }
 
-func accessibilityCitationResolves(repositoryID, revision string, citation accessibilityassessments.Citation, previewStore *previews.Store, reportStore *accessibilityreports.Store) bool {
+func accessibilityCitationResolves(repositoryID, revision string, citation accessibilityassessments.Citation, pulls *pullrequests.Store, previewStore *previews.Store, reportStore *accessibilityreports.Store) bool {
 	switch citation.Kind {
 	case "preview":
 		if previewStore == nil {
 			return false
 		}
 		preview, err := previewStore.Find(repositoryID, citation.ResourceID)
-		if err != nil || preview.Revision != revision || preview.Stale {
+		if err != nil || preview.Revision != revision || pulls == nil {
 			return false
 		}
-		for _, finding := range preview.Findings {
-			for _, evidence := range finding.Evidence {
-				if citation.EvidenceRef == "artifact://"+evidence.ID {
-					return true
-				}
-			}
+		pull, err := pulls.Get(repositoryID, preview.PullRequestID)
+		if err != nil || !accessibilityPreviewMatchesCurrentRevision(preview, pull.SourceCommitID) {
+			return false
 		}
+		return accessibilityPreviewArtifactResolves(preview, citation.EvidenceRef)
 	case "reproduction":
 		if reportStore == nil {
 			return false
@@ -222,6 +220,21 @@ func accessibilityCitationResolves(repositoryID, revision string, citation acces
 						return true
 					}
 				}
+			}
+		}
+	}
+	return false
+}
+
+func accessibilityPreviewMatchesCurrentRevision(preview previews.Preview, currentRevision string) bool {
+	return currentRevision != "" && preview.Revision == currentRevision
+}
+
+func accessibilityPreviewArtifactResolves(preview previews.Preview, evidenceRef string) bool {
+	for _, finding := range preview.Findings {
+		for _, evidence := range finding.Evidence {
+			if evidenceRef == "artifact://"+evidence.ID {
+				return true
 			}
 		}
 	}

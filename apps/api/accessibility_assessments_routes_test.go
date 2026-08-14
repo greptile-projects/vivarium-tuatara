@@ -43,6 +43,12 @@ func TestAccessibilityAssessmentAPIRejectsUnknownRevisionAndCitation(t *testing.
 	if err := repository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(commit)}); err != nil {
 		t.Fatal(err)
 	}
+	hidden, _ := repository.WriteObject(storage.CommitObject, []byte("tree "+string(tree)+"\nparent "+string(commit)+"\nauthor Test <test@example.com> 1 +0000\ncommitter Test <test@example.com> 1 +0000\n\nhidden\n"))
+	if err := repository.CreateReference(storage.Reference{Name: "refs/heads/vivarium-security/incident-42", Target: string(hidden)}); err != nil {
+		t.Fatal(err)
+	}
+	hiddenPayload := strings.Replace(payload, unknown, string(hidden), 1)
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+catalogRepository.ID+"/accessibility-assessments", hiddenPayload, owner.Credential.Token, http.StatusBadRequest).Body.Close()
 	payload = strings.Replace(payload, unknown, string(commit), 1)
 	createdResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+catalogRepository.ID+"/accessibility-assessments", payload, owner.Credential.Token, http.StatusCreated)
 	var assessment accessibilityassessments.Assessment
@@ -80,6 +86,16 @@ func TestAccessibilityRevisionMustBeReachableFromBranch(t *testing.T) {
 	if !accessibilityRevisionIsVisible(git, "repo", string(commit)) {
 		t.Fatal("reachable commit was rejected")
 	}
+	hidden, err := repository.WriteObject(storage.CommitObject, []byte("tree "+string(tree)+"\nparent "+string(commit)+"\nauthor Test <test@example.com> 1 +0000\ncommitter Test <test@example.com> 1 +0000\n\nhidden\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = repository.CreateReference(storage.Reference{Name: "refs/heads/vivarium-security/incident-42", Target: string(hidden)}); err != nil {
+		t.Fatal(err)
+	}
+	if accessibilityRevisionIsVisible(git, "repo", string(hidden)) {
+		t.Fatal("hidden security commit was visible")
+	}
 	if accessibilityRevisionIsVisible(git, "repo", strings.Repeat("d", 40)) {
 		t.Fatal("nonexistent commit was visible")
 	}
@@ -103,12 +119,15 @@ func TestAccessibilityCitationsResolveAssociatedEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	validPreview := accessibilityassessments.Citation{Kind: "preview", ResourceID: preview.ID, Revision: revision, EvidenceRef: "artifact://" + finding.Evidence[0].ID}
-	if !accessibilityCitationResolves(repositoryID, revision, validPreview, previewStore, nil) {
+	if !accessibilityPreviewMatchesCurrentRevision(preview, revision) || !accessibilityPreviewArtifactResolves(findingPreview(t, previewStore, repositoryID, preview.ID), validPreview.EvidenceRef) {
 		t.Fatal("associated preview evidence was rejected")
+	}
+	if accessibilityPreviewMatchesCurrentRevision(preview, strings.Repeat("b", 40)) {
+		t.Fatal("stale preview matched an advanced pull revision")
 	}
 	fabricated := validPreview
 	fabricated.EvidenceRef = "artifact://invented"
-	if accessibilityCitationResolves(repositoryID, revision, fabricated, previewStore, nil) {
+	if accessibilityPreviewArtifactResolves(findingPreview(t, previewStore, repositoryID, preview.ID), fabricated.EvidenceRef) {
 		t.Fatal("fabricated preview evidence resolved")
 	}
 
@@ -122,7 +141,16 @@ func TestAccessibilityCitationsResolveAssociatedEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	validAttempt := accessibilityassessments.Citation{Kind: "reproduction", ResourceID: report.Attempts[0].ID, Revision: revision, EvidenceRef: "artifact://attempt"}
-	if !accessibilityCitationResolves(repositoryID, revision, validAttempt, nil, reportStore) {
+	if !accessibilityCitationResolves(repositoryID, revision, validAttempt, nil, nil, reportStore) {
 		t.Fatal("associated reproduction evidence was rejected")
 	}
+}
+
+func findingPreview(t *testing.T, store *previews.Store, repositoryID, previewID string) previews.Preview {
+	t.Helper()
+	preview, err := store.Find(repositoryID, previewID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return preview
 }
