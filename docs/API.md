@@ -2872,6 +2872,11 @@ commitment context, and collaborator-authored guidance; it does not copy reporte
 unconsented device detail and grants no new authority. Retries converge on the finding-specific
 proposal/task identity. `GET .../repair` reports the live task, linked ordinary pull request, and
 only previews matching that pull's current exact source revision back to the original finding.
+The finding-side repair reservation is persisted before proposal creation and exposes a stable
+`recovery_id` with `state: pending`; an exact retry completes the link even if source invalidation
+arrived after reservation, while a mismatched retry conflicts. Responses depending on a proposal
+whose atomic rename committed but directory durability is uncertain include
+`Vivarium-Durability: uncertain`, including pending-recovery responses.
 
 Publishing an accessibility-repair task through the ordinary task contribution endpoint additionally
 requires structured design changes, code changes, interaction tradeoffs, and content tradeoffs. The

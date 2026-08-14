@@ -1,6 +1,9 @@
 package accessibilityassessments
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestAssessmentLifecycleInvalidatesOnlyAffectedEvidence(t *testing.T) {
 	s, err := New(t.TempDir())
@@ -41,5 +44,37 @@ func TestFindingRequiresExactCitedRevision(t *testing.T) {
 	_, err := s.AddFinding("repo", a.ID, "agent", "agent-1", Finding{Title: "Missing name", Detail: "Button has no name.", Severity: "major", AudienceIDs: []string{"screen_reader"}, Uncertainty: "Low", Citations: []Citation{{Kind: "preview", ResourceID: "p", Revision: "old", EvidenceRef: "artifact://tree"}}})
 	if err != ErrInvalid {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestRepairReservationSurvivesFindingInvalidation(t *testing.T) {
+	s, _ := New(t.TempDir())
+	revision := strings.Repeat("a", 40)
+	a, err := s.Create("repo", "owner", Assessment{Revision: revision, Checks: []Check{{Name: "Keyboard", Category: "keyboard", Outcome: "failed", SourceLocations: []string{"form.tsx"}, AudienceIDs: []string{"keyboard"}, Summary: "Save is skipped"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err = s.AddFinding("repo", a.ID, "human", "specialist", Finding{Title: "Save skipped", Detail: "Focus skips Save", Severity: "major", AudienceIDs: []string{"keyboard"}, SourceLocations: []string{"form.tsx"}, Uncertainty: "none", Citations: []Citation{{Kind: "reproduction", ResourceID: "attempt", Revision: revision, EvidenceRef: "artifact://attempt"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	findingID := a.Findings[0].ID
+	if _, err = s.Decide("repo", a.ID, findingID, "owner", "accepted", "reproduced"); err != nil {
+		t.Fatal(err)
+	}
+	request := Repair{BaseRevision: revision, AcceptanceCriteria: []string{"Save receives focus"}, CommitmentID: "commitment", CommitmentVersion: 1, CommitmentTitle: "Keyboard form", ComponentGuidance: []string{"Use shared focus styles"}, PermittedEvidence: []RepairEvidence{{Kind: "reproduction", ResourceID: "attempt", EvidenceRef: "artifact://attempt", Summary: "Press Tab"}}, AssigneeType: "human", AssigneeID: "collaborator"}
+	_, reservation, err := s.ReserveRepair("repo", a.ID, findingID, "owner", request)
+	if err != nil || reservation.State != "pending" || reservation.RecoveryID == "" {
+		t.Fatalf("reservation = %+v, %v", reservation, err)
+	}
+	if _, err = s.Invalidate("repo", a.ID, "owner", []string{"form.tsx"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, retry, retryErr := s.ReserveRepair("repo", a.ID, findingID, "owner", request); retryErr != nil || retry.RecoveryID != reservation.RecoveryID {
+		t.Fatalf("retry = %+v, %v", retry, retryErr)
+	}
+	linked, err := s.FinalizeRepair("repo", a.ID, findingID, reservation.RecoveryID, "proposal", "task")
+	if err != nil || linked.Findings[0].Repair.State != "linked" || linked.Findings[0].Repair.ProposalID != "proposal" {
+		t.Fatalf("linked = %+v, %v", linked, err)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -70,6 +71,8 @@ type RepairEvidence struct {
 	Summary     string `json:"summary"`
 }
 type Repair struct {
+	RecoveryID         string           `json:"recovery_id"`
+	State              string           `json:"state"`
 	ProposalID         string           `json:"proposal_id"`
 	TaskID             string           `json:"task_id"`
 	BaseRevision       string           `json:"base_revision"`
@@ -79,6 +82,8 @@ type Repair struct {
 	CommitmentTitle    string           `json:"commitment_title"`
 	ComponentGuidance  []string         `json:"component_guidance"`
 	PermittedEvidence  []RepairEvidence `json:"permitted_reproduction_evidence"`
+	AssigneeType       string           `json:"assignee_type"`
+	AssigneeID         string           `json:"assignee_id"`
 	CreatedBy          string           `json:"created_by"`
 	CreatedAt          time.Time        `json:"created_at"`
 }
@@ -186,7 +191,49 @@ func (s *Store) Decide(repo, id, findingID, actor, classification, reason string
 	}
 	return v, ErrNotFound
 }
-func (s *Store) AttachRepair(repo, id, findingID, actor string, repair Repair) (Assessment, error) {
+
+// ReserveRepair persists a recovery identity before implementation work is
+// created. Exact retries converge on it, including after finding invalidation.
+func (s *Store) ReserveRepair(repo, id, findingID, actor string, repair Repair) (Assessment, Repair, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, e := s.lock(syscall.LOCK_EX)
+	if e != nil {
+		return Assessment{}, Repair{}, e
+	}
+	defer u()
+	v, e := s.get(repo, id)
+	if e != nil {
+		return v, Repair{}, e
+	}
+	for i := range v.Findings {
+		f := &v.Findings[i]
+		if f.ID != findingID {
+			continue
+		}
+		if f.Repair != nil {
+			if sameRepairRequest(*f.Repair, repair) {
+				return v, *f.Repair, nil
+			}
+			return v, Repair{}, ErrInvalid
+		}
+		if f.InvalidatedAt != nil || f.Decision == nil || f.Decision.Classification != "accepted" {
+			return v, Repair{}, ErrInvalid
+		}
+		if repair.AssigneeType == "agent" && strings.TrimSpace(repair.AssigneeID) == "" {
+			repair.AssigneeID = newID()
+		}
+		repair.RecoveryID, repair.State, repair.CreatedBy, repair.CreatedAt = newID(), "pending", actor, s.now()
+		if !validRepair(repair, v.Revision, f.Citations) {
+			return v, Repair{}, ErrInvalid
+		}
+		f.Repair = &repair
+		v.UpdatedAt = repair.CreatedAt
+		return v, repair, s.write(v)
+	}
+	return v, Repair{}, ErrNotFound
+}
+func (s *Store) FinalizeRepair(repo, id, findingID, recoveryID, proposalID, taskID string) (Assessment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	u, e := s.lock(syscall.LOCK_EX)
@@ -203,24 +250,45 @@ func (s *Store) AttachRepair(repo, id, findingID, actor string, repair Repair) (
 		if f.ID != findingID {
 			continue
 		}
-		if f.InvalidatedAt != nil || f.Decision == nil || f.Decision.Classification != "accepted" {
+		if f.Repair == nil || f.Repair.RecoveryID != recoveryID {
 			return v, ErrInvalid
 		}
-		if f.Repair != nil {
-			if f.Repair.ProposalID == repair.ProposalID && f.Repair.TaskID == repair.TaskID {
+		if f.Repair.State == "linked" {
+			if f.Repair.ProposalID == proposalID && f.Repair.TaskID == taskID {
 				return v, nil
 			}
 			return v, ErrInvalid
 		}
-		repair.CreatedBy, repair.CreatedAt = actor, s.now()
-		if !validRepair(repair, v.Revision, f.Citations) {
+		if f.Repair.State != "pending" || !bounded(proposalID, 64) || !bounded(taskID, 64) {
 			return v, ErrInvalid
 		}
-		f.Repair = &repair
-		v.UpdatedAt = repair.CreatedAt
+		f.Repair.State, f.Repair.ProposalID, f.Repair.TaskID = "linked", proposalID, taskID
+		v.UpdatedAt = s.now()
 		return v, s.write(v)
 	}
 	return v, ErrNotFound
+}
+func (s *Store) CancelRepair(repo, id, findingID, recoveryID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, e := s.lock(syscall.LOCK_EX)
+	if e != nil {
+		return e
+	}
+	defer u()
+	v, e := s.get(repo, id)
+	if e != nil {
+		return e
+	}
+	for i := range v.Findings {
+		f := &v.Findings[i]
+		if f.ID == findingID && f.Repair != nil && f.Repair.RecoveryID == recoveryID && f.Repair.State == "pending" {
+			f.Repair = nil
+			v.UpdatedAt = s.now()
+			return s.write(v)
+		}
+	}
+	return ErrNotFound
 }
 func (s *Store) Invalidate(repo, id, actor string, paths, journeys []string) (Assessment, error) {
 	s.mu.Lock()
@@ -327,7 +395,7 @@ func validFinding(x Finding, revision string, existing []Finding) bool {
 	return true
 }
 func validRepair(x Repair, revision string, citations []Citation) bool {
-	if !bounded(x.ProposalID, 64) || !bounded(x.TaskID, 64) || x.BaseRevision != revision || !bounded(x.CommitmentID, 64) || x.CommitmentVersion < 1 || !bounded(x.CommitmentTitle, 300) || len(x.AcceptanceCriteria) == 0 || len(x.AcceptanceCriteria) > 20 || len(x.ComponentGuidance) == 0 || len(x.ComponentGuidance) > 20 || len(x.PermittedEvidence) == 0 || len(x.PermittedEvidence) > 12 || !boundedList(x.AcceptanceCriteria, 1000) || !boundedList(x.ComponentGuidance, 1000) {
+	if !bounded(x.RecoveryID, 64) || x.State != "pending" || x.ProposalID != "" || x.TaskID != "" || x.BaseRevision != revision || !bounded(x.CommitmentID, 64) || x.CommitmentVersion < 1 || !bounded(x.CommitmentTitle, 300) || len(x.AcceptanceCriteria) == 0 || len(x.AcceptanceCriteria) > 20 || len(x.ComponentGuidance) == 0 || len(x.ComponentGuidance) > 20 || len(x.PermittedEvidence) == 0 || len(x.PermittedEvidence) > 12 || !boundedList(x.AcceptanceCriteria, 1000) || !boundedList(x.ComponentGuidance, 1000) || !contains([]string{"human", "agent"}, x.AssigneeType) || !bounded(x.AssigneeID, 64) {
 		return false
 	}
 	allowed := map[string]bool{}
@@ -340,6 +408,14 @@ func validRepair(x Repair, revision string, citations []Citation) bool {
 		}
 	}
 	return true
+}
+func sameRepairRequest(a, b Repair) bool {
+	if a.AssigneeType == "agent" && b.AssigneeType == "agent" && strings.TrimSpace(b.AssigneeID) == "" {
+		b.AssigneeID = a.AssigneeID
+	}
+	a.RecoveryID, a.State, a.ProposalID, a.TaskID, a.CreatedBy, a.CreatedAt = "", "", "", "", "", time.Time{}
+	b.RecoveryID, b.State, b.ProposalID, b.TaskID, b.CreatedBy, b.CreatedAt = "", "", "", "", "", time.Time{}
+	return reflect.DeepEqual(a, b)
 }
 func bounded(v string, n int) bool { v = strings.TrimSpace(v); return v != "" && len(v) <= n }
 func boundedList(values []string, n int) bool {

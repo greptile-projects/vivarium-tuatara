@@ -382,6 +382,10 @@ whenever dependencies change or the web job fails before it starts.
   interaction/content tradeoff sections; the finding repair projection reports the connected task,
   pull, and only current-source-revision previews without exposing reporter identity or unconsented
   device context.
+  Repair creation reserves a stable finding-side recovery identity before proposal publication;
+  exact retries finish a pending link after process failure or concurrent post-reservation
+  invalidation, and GET retains pending state instead of losing the work association. Proposal
+  directory-sync uncertainty propagates through both linked and recovery HTTP responses.
   Product experiments at `/repositories/{id}/experiments` retain append-only hypothesis-plan
   revisions sourced from proposals, issues, decisions, pulls, previews, or releases. Success and
   guardrail metrics bind exact permitted product-signal versions; audience eligibility,

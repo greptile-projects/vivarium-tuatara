@@ -288,7 +288,7 @@ func registerAccessibilityAssessmentRoutes(mux *http.ServeMux, git *storage.Stor
 			writeAPIError(w, 404, "accessibility_finding_not_found", "accessibility finding not found")
 			return
 		}
-		if finding.InvalidatedAt != nil || finding.Decision == nil || finding.Decision.Classification != "accepted" {
+		if finding.Repair == nil && (finding.InvalidatedAt != nil || finding.Decision == nil || finding.Decision.Classification != "accepted") {
 			writeAPIError(w, 409, "accessibility_finding_not_confirmed", "only a current accepted finding can enter implementation")
 			return
 		}
@@ -314,23 +314,37 @@ func registerAccessibilityAssessmentRoutes(mux *http.ServeMux, git *storage.Stor
 		for index, guidance := range in.ComponentGuidance {
 			items = append(items, proposals.ReasoningItem{ID: "component-guidance-" + strconv.Itoa(index+1), Kind: "component_guidance", Summary: guidance, Status: "required"})
 		}
+		requestedRepair := accessibilityassessments.Repair{BaseRevision: assessment.Revision, AcceptanceCriteria: append([]string(nil), in.AcceptanceCriteria...), CommitmentID: commitment.ID, CommitmentVersion: in.CommitmentVersion, CommitmentTitle: commitmentRevision.Title, ComponentGuidance: append([]string(nil), in.ComponentGuidance...), PermittedEvidence: evidence, AssigneeType: in.AssigneeType, AssigneeID: strings.TrimSpace(in.AssigneeID)}
+		newReservation := finding.Repair == nil
+		reservedAssessment, reservedRepair, reserveErr := assessments.ReserveRepair(assessment.RepositoryID, assessment.ID, finding.ID, actor.UserID, requestedRepair)
+		if reserveErr != nil {
+			writeAPIError(w, 409, "accessibility_repair_changed", "the finding or its frozen repair request changed before work was reserved")
+			return
+		}
 		criteria := strings.Join(in.AcceptanceCriteria, "\n- ")
 		guidance := strings.Join(in.ComponentGuidance, "\n- ")
 		origin := proposals.ReasoningOrigin{AssessmentID: assessment.ID, AssessmentVersion: 1, AccessibilityFindingID: finding.ID, AccessibilityCommitmentID: commitment.ID, AccessibilityCommitmentVersion: in.CommitmentVersion, Revision: assessment.Revision, SelectedItemIDs: []string{finding.ID}, Items: items, AnalysisStatus: "accessibility_repair"}
-		proposal, tasks, createErr := proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: assessment.RepositoryID, ActorID: actor.UserID, Title: "Accessible repair: " + finding.Title, Body: "Governed repair for accepted accessibility finding " + finding.ID + ". The affected user remains the author of their evidence; this implementation does not speak for them.\n\nAcceptance criteria:\n- " + criteria + "\n\nComponent guidance:\n- " + guidance + "\n\nPull requests must document design and code changes, interaction and content tradeoffs, and attach an exact-revision preview.", Origin: origin, Tasks: []proposals.ImplementationTaskInput{{Title: "Repair " + finding.Title, Outcome: "Meet every acceptance criterion at the exact repair revision while preserving contributor authorship and ordinary review.", Risk: finding.Severity + " accessibility barrier at " + assessment.Revision, VerificationPlan: criteria + "\n\nPreview the interaction and record design, code, interaction, and content tradeoffs.", AssigneeType: in.AssigneeType, AssigneeID: strings.TrimSpace(in.AssigneeID)}}})
+		proposal, tasks, createErr := proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: assessment.RepositoryID, ActorID: reservedRepair.CreatedBy, Title: "Accessible repair: " + finding.Title, Body: "Governed repair for accepted accessibility finding " + finding.ID + ". The affected user remains the author of their evidence; this implementation does not speak for them.\n\nAcceptance criteria:\n- " + criteria + "\n\nComponent guidance:\n- " + guidance + "\n\nPull requests must document design and code changes, interaction and content tradeoffs, and attach an exact-revision preview.", Origin: origin, Tasks: []proposals.ImplementationTaskInput{{Title: "Repair " + finding.Title, Outcome: "Meet every acceptance criterion at the exact repair revision while preserving contributor authorship and ordinary review.", Risk: finding.Severity + " accessibility barrier at " + assessment.Revision, VerificationPlan: criteria + "\n\nPreview the interaction and record design, code, interaction, and content tradeoffs.", AssigneeType: reservedRepair.AssigneeType, AssigneeID: reservedRepair.AssigneeID}}})
 		if createErr != nil && !errors.Is(createErr, proposals.ErrDurabilityUncertain) {
+			if newReservation && !errors.Is(createErr, proposals.ErrImplementationConflict) {
+				_ = assessments.CancelRepair(assessment.RepositoryID, assessment.ID, finding.ID, reservedRepair.RecoveryID)
+			}
 			if errors.Is(createErr, proposals.ErrImplementationConflict) {
-				writeAPIError(w, 409, "accessibility_repair_changed", "the frozen repair handoff differs from the existing work")
+				w.Header().Set("Location", "/repositories/"+assessment.RepositoryID+"/accessibility-assessments/"+assessment.ID+"/findings/"+finding.ID+"/repair")
+				writeJSON(w, 409, map[string]any{"assessment": reservedAssessment, "finding": finding, "recovery_id": reservedRepair.RecoveryID, "recovery_pending": true, "error": map[string]string{"code": "accessibility_repair_changed", "message": "the frozen repair handoff differs from the existing work"}})
 				return
 			}
 			writeAPIError(w, 500, "accessibility_repair_failed", "governed repair could not be created")
 			return
 		}
-		repair := accessibilityassessments.Repair{ProposalID: proposal.ID, TaskID: tasks[0].ID, BaseRevision: assessment.Revision, AcceptanceCriteria: append([]string(nil), in.AcceptanceCriteria...), CommitmentID: commitment.ID, CommitmentVersion: in.CommitmentVersion, CommitmentTitle: commitmentRevision.Title, ComponentGuidance: append([]string(nil), in.ComponentGuidance...), PermittedEvidence: evidence}
-		updated, attachErr := assessments.AttachRepair(assessment.RepositoryID, assessment.ID, finding.ID, actor.UserID, repair)
+		uncertain := errors.Is(createErr, proposals.ErrDurabilityUncertain)
+		if uncertain {
+			w.Header().Set("Vivarium-Durability", "uncertain")
+		}
+		updated, attachErr := assessments.FinalizeRepair(assessment.RepositoryID, assessment.ID, finding.ID, reservedRepair.RecoveryID, proposal.ID, tasks[0].ID)
 		if attachErr != nil {
-			w.Header().Set("Location", "/proposals/"+assessment.RepositoryID+"/"+proposal.ID)
-			writeJSON(w, 202, map[string]any{"assessment": assessment, "finding": finding, "proposal": proposal, "task": tasks[0], "recovery_pending": true})
+			w.Header().Set("Location", "/repositories/"+assessment.RepositoryID+"/accessibility-assessments/"+assessment.ID+"/findings/"+finding.ID+"/repair")
+			writeJSON(w, 202, map[string]any{"assessment": reservedAssessment, "finding": finding, "proposal": proposal, "task": tasks[0], "recovery_id": reservedRepair.RecoveryID, "recovery_pending": true})
 			return
 		}
 		for _, value := range updated.Findings {

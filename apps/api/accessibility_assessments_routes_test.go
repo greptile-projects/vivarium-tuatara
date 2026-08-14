@@ -106,6 +106,14 @@ func TestAcceptedAccessibilityFindingCreatesGovernedRepair(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	reservedRequest := accessibilityassessments.Repair{BaseRevision: revision, AcceptanceCriteria: []string{"Save receives visible keyboard focus"}, CommitmentID: commitment.ID, CommitmentVersion: 1, CommitmentTitle: "Keyboard settings", ComponentGuidance: []string{"Use the shared focus-ring primitive"}, PermittedEvidence: []accessibilityassessments.RepairEvidence{{Kind: "reproduction", ResourceID: report.Attempts[0].ID, EvidenceRef: "artifact://attempt", Summary: "Expected: Save receives focus. Steps: Press Tab. Reproduction reproducible: Focus skips Save. Redacted input_trace: Redacted reproduction (artifact://attempt)"}}, AssigneeType: "human", AssigneeID: owner.User.ID}
+	_, reservation, err := assessmentStore.ReserveRepair(repo.ID, assessment.ID, findingID, owner.User.ID, reservedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = assessmentStore.Invalidate(repo.ID, assessment.ID, owner.User.ID, []string{"settings.tsx"}, nil); err != nil {
+		t.Fatal(err)
+	}
 	body := `{"commitment_id":"` + commitment.ID + `","commitment_version":1,"acceptance_criteria":["Save receives visible keyboard focus"],"component_guidance":["Use the shared focus-ring primitive"],"assignee_type":"human","assignee_id":"` + owner.User.ID + `"}`
 	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/accessibility-assessments/"+assessment.ID+"/findings/"+findingID+"/repair", body, owner.Credential.Token, http.StatusCreated)
 	var projection struct {
@@ -119,6 +127,9 @@ func TestAcceptedAccessibilityFindingCreatesGovernedRepair(t *testing.T) {
 	response.Body.Close()
 	if projection.Task.Assignment == nil || projection.Task.Assignment.Access.BaseRevision != revision || projection.Proposal.Reasoning == nil || projection.Proposal.Reasoning.AccessibilityFindingID != findingID {
 		t.Fatalf("repair did not freeze governed context: %+v", projection)
+	}
+	if projection.Assessment.Findings[0].Repair == nil || projection.Assessment.Findings[0].Repair.RecoveryID != reservation.RecoveryID || projection.Assessment.Findings[0].Repair.State != "linked" {
+		t.Fatalf("reserved repair did not recover after invalidation: %+v", projection.Assessment.Findings[0].Repair)
 	}
 	stored, _ := assessmentStore.Get(repo.ID, assessment.ID)
 	if stored.Findings[0].Repair == nil || stored.Findings[0].Repair.CreatedBy != owner.User.ID || len(stored.Findings[0].Repair.PermittedEvidence) != 1 {
