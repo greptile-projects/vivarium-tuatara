@@ -433,7 +433,10 @@ func unsafe(v string) bool {
 			}
 		}
 		decoded, err := url.PathUnescape(canonical)
-		if err != nil || decoded == canonical {
+		if err != nil {
+			return true
+		}
+		if decoded == canonical {
 			return false
 		}
 		canonical = decoded

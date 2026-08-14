@@ -63,13 +63,13 @@ func TestReliabilityEvidenceRetainsExactMappingHistoryAndDerivesAttainment(t *te
 func TestReliabilityEvidenceRejectsCredentials(t *testing.T) {
 	s, _ := New(t.TempDir())
 	contract, _ := s.Create("repo", "owner", completeRevision())
-	for _, reference := range []string{"https://metrics/?api_key=leak", "https://metrics/?access_token=leak", "https://metrics/?access_token%3dleak", "https://metrics/?access%5ftoken%253dleak", "https://metrics/?token=leak", "Authorization: Basic leak", "Cookie: session=leak", "X-API-Key: leak"} {
+	for _, reference := range []string{"https://metrics/?api_key=leak", "https://metrics/?access_token=leak", "https://metrics/?access_token%3dleak", "https://metrics/?access_token%3dleak%zz", "https://metrics/?access%5ftoken%253dleak", "https://metrics/?token=leak", "Authorization: Basic leak", "Cookie: session=leak", "X-API-Key: leak"} {
 		_, err := s.PublishMapping(contract.ID, "owner", SignalMappingRevision{ContractVersion: 1, ObjectiveID: "availability", InstrumentationRevision: "v1", Calculation: "ratio", Unit: "percent", Rationale: "connect", Sources: []SignalSource{{Kind: "metric", Name: "requests", Reference: reference, Visibility: "public", Sanitization: "aggregate"}}})
 		if !errors.Is(err, ErrInvalid) {
 			t.Errorf("credential-bearing reference %q error = %v", reference, err)
 		}
 	}
-	contract.SignalMappings = []SignalMapping{{ID: "legacy", CurrentVersion: 1, Revisions: []SignalMappingRevision{{Version: 1, Sources: []SignalSource{{Kind: "metric", Name: "requests", Reference: "https://metrics/?access_token%253dlegacy", Visibility: "public", Sanitization: "aggregate"}}}}}}
+	contract.SignalMappings = []SignalMapping{{ID: "legacy", CurrentVersion: 1, Revisions: []SignalMappingRevision{{Version: 1, Sources: []SignalSource{{Kind: "metric", Name: "requests", Reference: "https://metrics/?access_token%3dlegacy%zz", Visibility: "public", Sanitization: "aggregate"}}}}}}
 	if got := s.ProjectForReader(contract, false).SignalMappings[0].Revisions[0].Sources[0].Reference; got != "redacted_unsafe_reference" {
 		t.Fatalf("legacy credential projection = %q", got)
 	}
