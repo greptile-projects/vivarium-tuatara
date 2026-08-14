@@ -2118,8 +2118,8 @@ roadmap outcome, proposal, stewardship opportunity, incident follow-up, or secur
 declares scope, acceptance criteria, evidence requirements, budget, deadline, contributor
 eligibility, allocation and cancellation rules, dependencies, risks, conflicts, and optional
 budget-balanced milestones. Backers can support the whole result or one milestone. Scope changes
-require explicit pledge reconfirmation, while insufficient or unsettled backing, overlapping
-awards, embargoes, withdrawals, and cancellation remain visible as attributable replanning.
+require explicit pledge reconfirmation, while insufficient or aggregate shared-fund unsettled
+backing, overlapping awards, embargoes, withdrawals, and cancellation remain visible as attributable replanning.
 The repository workspace is `/repositories/{id}/funding`; funding never grants contribution,
 acceptance, Git, review, merge, deployment, credential, or security authority.
 

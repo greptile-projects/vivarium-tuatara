@@ -334,28 +334,49 @@ func (s *Store) projectOutcome(v *FundedOutcome) error {
 			break
 		}
 	}
-	if fund, err := s.read(v.FundID); err == nil && fund.Balances.Available < v.Pledged {
-		v.Diagnostics = append(v.Diagnostics, Diagnostic{Kind: "unsettled_backing", Message: "Active pledges exceed cryptographically settled fund value."})
-	}
 	entries, err := os.ReadDir(s.outcomeRoot())
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	fund, fundErr := s.read(v.FundID)
+	overallocated := false
+	overlapping := false
+	allocated := int64(0)
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || strings.TrimSuffix(entry.Name(), ".json") == v.ID {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
 		other, err := s.readOutcome(strings.TrimSuffix(entry.Name(), ".json"))
 		if err != nil {
 			return err
 		}
+		if other.FundID == v.FundID && other.Status == "open" && fundErr == nil {
+			for _, pledge := range other.Pledges {
+				if pledge.Status != "active" {
+					continue
+				}
+				if pledge.Amount > fund.Balances.Available-allocated {
+					overallocated = true
+				} else {
+					allocated += pledge.Amount
+				}
+			}
+		}
+		if other.ID == v.ID {
+			continue
+		}
 		if other.RepositoryID == v.RepositoryID && other.Status == "open" && len(other.Revisions) > 0 {
 			a, b := terms.Source, other.Revisions[len(other.Revisions)-1].Terms.Source
 			if a.Kind == b.Kind && a.ID == b.ID {
-				v.Diagnostics = append(v.Diagnostics, Diagnostic{Kind: "overlapping_award", Message: "Another open funding contract targets this outcome; allocation must be reconciled."})
-				break
+				overlapping = true
 			}
 		}
+	}
+	if overlapping {
+		v.Diagnostics = append(v.Diagnostics, Diagnostic{Kind: "overlapping_award", Message: "Another open funding contract targets this outcome; allocation must be reconciled."})
+	}
+	if overallocated {
+		v.Diagnostics = append(v.Diagnostics, Diagnostic{Kind: "unsettled_backing", Message: "Active pledges across open outcomes exceed cryptographically settled fund value."})
 	}
 	return nil
 }

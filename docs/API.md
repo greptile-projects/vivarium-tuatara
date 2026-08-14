@@ -2697,14 +2697,17 @@ milestone independently declares acceptance and evidence.
 
 Repository readers use `GET /repositories/{id}/funded-outcomes` and `GET
 /repositories/{id}/funded-outcomes/{outcome_id}`. Participant and embargoed contracts require
-current repository participation. Projections show active whole/milestone backing and derive
+current repository participation. Projections show active whole/milestone backing, aggregate all
+active pledges across open outcomes sharing a fund, and derive
 `insufficient_funds`, `unsettled_backing`, `overlapping_award`, `embargoed_work`,
 `changed_scope`, and `withdrawn_backing` diagnostics instead of presenting an ambiguous promise.
 
 Authenticated permitted readers pledge through `POST .../{outcome_id}/pledges` with
 `expected_version`, a positive amount, optional `milestone_id`, idempotency key, and rationale.
 The backer alone may `withdraw` or `reconfirm` through `POST
-.../{outcome_id}/pledges/{pledge_id}`. Current participants publish a successor through `POST
+.../{outcome_id}/pledges/{pledge_id}`. A former public backer may withdraw after visibility is
+restricted, but receives only the changed pledge identity/status and cannot reconfirm or read the
+current contract. Current participants publish a successor through `POST
 .../{outcome_id}/revisions`; it retains the prior revision and an attributable reason, and every
 active pledge becomes `reconfirmation_required`. `POST .../{outcome_id}/cancel` retains the
 cancellation reason. All mutations compare-and-swap the outcome version. Funding and backing do

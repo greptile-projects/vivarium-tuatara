@@ -128,3 +128,49 @@ func TestOutcomeFundingRejectsStorageTraversalIdentifiers(t *testing.T) {
 		t.Fatalf("traversal fund err = %v", err)
 	}
 }
+
+func TestOutcomeFundingDiagnosesAggregateSharedFundOvercommitment(t *testing.T) {
+	s, fund := outcomeStore(t)
+	fund, err := s.Commit(fund.ID, "backer", "card", "shared-backing", 100, "shared-key", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fund, err = s.Reconcile(fund.ID, fund.Ledger[0].ID, "owner", "settled", 100, proof("card", "shared-backing", "settled", 100), "", fund.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstTerms := outcomeTerms()
+	firstTerms.Budget = 60
+	firstTerms.Milestones = nil
+	first, err := s.CreateOutcome("repo", fund.ID, "owner", firstTerms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err = s.PledgeOutcome(first.ID, "backer", "", 60, "first-allocation", "", first.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondTerms := firstTerms
+	secondTerms.Source.ID = "issue-2"
+	second, err := s.CreateOutcome("repo", fund.ID, "owner", secondTerms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err = s.PledgeOutcome(second.ID, "backer", "", 60, "second-allocation", "", second.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err = s.GetOutcome(first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, outcome := range []FundedOutcome{first, second} {
+		kinds := map[string]bool{}
+		for _, diagnostic := range outcome.Diagnostics {
+			kinds[diagnostic.Kind] = true
+		}
+		if !kinds["unsettled_backing"] || kinds["overlapping_award"] {
+			t.Fatalf("shared-fund diagnostics = %+v", outcome.Diagnostics)
+		}
+	}
+}

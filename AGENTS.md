@@ -392,8 +392,8 @@ whenever dependencies change or the web job fails before it starts.
   contributor eligibility, allocation method, cancellation terms, dependencies, risks,
   conflicts, and budget-balanced milestones. Authenticated permitted readers pledge to the whole
   outcome or a milestone. Scope revisions invalidate active pledges until each backer explicitly
-  reconfirms; withdrawal, cancellation, insufficient or unsettled backing, overlapping awards,
-  and embargoed work remain attributable replanning diagnostics. Funding never grants task, Git,
+  reconfirms; withdrawal, cancellation, insufficient or aggregate shared-fund unsettled backing,
+  overlapping awards, and embargoed work remain attributable replanning diagnostics. Funding never grants task, Git,
   credential, review, acceptance, merge, deployment, or security authority.
 
   Reciprocal roadmap learning retains feedback-specific decision, preview, delivery, rejection, and

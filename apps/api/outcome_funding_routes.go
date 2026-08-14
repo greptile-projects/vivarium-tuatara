@@ -151,6 +151,27 @@ func registerOutcomeFundingRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			writeAPIError(w, 404, "funded_outcome_not_found", "funded outcome not found")
 			return
 		}
+		visibility := out.Revisions[len(out.Revisions)-1].Terms.Source.Visibility
+		participant := catalog.WithCurrentParticipant(actor.UserID, r.PathValue("id"), func() error { return nil }) == nil
+		if visibility != "public" && !participant {
+			if in.Action != "withdraw" {
+				writeAPIError(w, 403, "funded_outcome_forbidden", "current outcome terms are limited to project participants")
+				return
+			}
+			out, err = store.ChangePledge(out.ID, r.PathValue("pledge_id"), actor.UserID, in.Action, in.Reason, in.ExpectedVersion)
+			if err != nil {
+				writeFundedOutcome(w, out, err, 200)
+				return
+			}
+			for _, pledge := range out.Pledges {
+				if pledge.ID == r.PathValue("pledge_id") {
+					writeJSON(w, 200, map[string]any{"outcome_id": out.ID, "pledge": map[string]any{"id": pledge.ID, "status": pledge.Status, "updated_at": pledge.UpdatedAt}})
+					return
+				}
+			}
+			writeAPIError(w, 500, "outcome_funding_unavailable", "updated pledge could not be projected")
+			return
+		}
 		out, err = store.ChangePledge(out.ID, r.PathValue("pledge_id"), actor.UserID, in.Action, in.Reason, in.ExpectedVersion)
 		writeFundedOutcome(w, out, err, 200)
 	})
