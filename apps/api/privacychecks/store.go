@@ -147,6 +147,11 @@ func (s *Store) CreatePolicy(repo, actor string, p Policy) (Policy, error) {
 			return p, ErrInvalid
 		}
 	}
+	for _, journey := range p.RequiredJourneys {
+		if !safeIdentifier(journey) {
+			return p, ErrInvalid
+		}
+	}
 	r.Policies = append(r.Policies, p)
 	return p, s.write(repo, r)
 }
@@ -167,24 +172,32 @@ func (s *Store) AddRun(repo, actor string, v Run) (Run, error) {
 	v.RepositoryID = repo
 	v.CreatedBy = actor
 	v.CreatedAt = s.now()
-	clean(&v.Coverage)
 	if !validCommit(v.Revision) || v.PullRequestID == "" || v.PreviewID == "" || !safeIdentifier(v.Journey) || v.DataFlowID == "" || v.DataFlowVersion < 1 || v.Isolation != "ephemeral_network_none" || v.ProductionData || len(v.Results) == 0 {
 		return v, ErrInvalid
 	}
-	for _, label := range v.Coverage {
-		if !safeIdentifier(label) {
-			return v, ErrInvalid
+	journeyDeclared := false
+	for _, policy := range r.Policies {
+		for _, journey := range policy.RequiredJourneys {
+			if journey == v.Journey {
+				journeyDeclared = true
+			}
 		}
 	}
+	if !journeyDeclared {
+		return v, ErrInvalid
+	}
 	seen := map[string]bool{}
+	v.Coverage = []string{}
 	for i := range v.Results {
 		x := &v.Results[i]
 		if !allowedRules[x.Rule] || (x.Outcome != "passed" && x.Outcome != "failed") || seen[x.Rule] {
 			return v, ErrInvalid
 		}
 		seen[x.Rule] = true
+		v.Coverage = append(v.Coverage, x.Rule)
 		x.Summary = fmt.Sprintf("%s %s in isolated synthetic journey", x.Rule, x.Outcome)
 	}
+	sort.Strings(v.Coverage)
 	var totalBytes int64
 	for i := range v.Artifacts {
 		a := &v.Artifacts[i]

@@ -461,6 +461,8 @@ whenever dependencies change or the web job fails before it starts.
   log/trace/artifact metadata, digests, coverage, and failures remain on the pull. Current runtime
   result summaries and artifact display text are deterministic server-generated projections rather
   than retained caller prose; journey, coverage, and other retained labels use bounded identifiers.
+  Runs may name only owner-published policy journeys, and coverage is derived from validated rule
+  results rather than retained from callers.
   Current evidence and privacy-owner acknowledgement govern merge and release readiness. Owner exceptions
   are exact-rule scoped, expire within 90 days, retain rationale, and require follow-up work; they
   cannot waive the owner acknowledgement. Pull runs, acknowledgements, and exceptions bind the

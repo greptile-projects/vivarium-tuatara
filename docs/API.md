@@ -9,8 +9,9 @@
   declares `isolation: "ephemeral_network_none"` and `production_data: false`; results cover the
   closed rule set `collection`, `consent`, `minimization`, `access`, `retention`, `export`,
   `deletion`, `telemetry`, and `recipient`. Caller-provided result summaries and artifact display
-  text are replaced with deterministic server-generated descriptions before persistence; journey,
-  coverage, and retained labels use bounded identifier syntax. Artifact metadata is digest-addressed
+  text are replaced with deterministic server-generated descriptions before persistence. A run can
+  name only an owner-published policy journey, and coverage is derived from its validated rule results
+  rather than accepted from the caller. Retained labels use bounded identifier syntax. Artifact metadata is digest-addressed
   and limited to 5 MiB per declared log, trace, or artifact; payload contents are never accepted.
 - `POST /repositories/{id}/privacy-check-acknowledgements` records a named privacy owner's rationale
   for an exact policy, revision, and pull context (or the revision-wide release context).
