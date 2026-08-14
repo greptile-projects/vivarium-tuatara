@@ -17,6 +17,7 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/acceptance"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/accessibilitycommitments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/accessibilityreports"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
@@ -355,6 +356,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	accessibilityReportRoot := os.Getenv("ACCESSIBILITY_REPORT_STORAGE_ROOT")
+	if accessibilityReportRoot == "" {
+		accessibilityReportRoot = "accessibility-reports"
+	}
+	accessibilityReportStore, err := accessibilityreports.New(accessibilityReportRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	performanceEvidenceRoot := os.Getenv("PERFORMANCE_EVIDENCE_STORAGE_ROOT")
 	if performanceEvidenceRoot == "" {
 		performanceEvidenceRoot = "performance-evidence"
@@ -422,7 +431,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -567,6 +576,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var outcomeValidationStore *outcomevalidations.Store
 	var projectFundStore *projectfunds.Store
 	var accessibilityCommitmentStore *accessibilitycommitments.Store
+	var accessibilityReportStore *accessibilityreports.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -631,6 +641,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			projectFundStore = value
 		case *accessibilitycommitments.Store:
 			accessibilityCommitmentStore = value
+		case *accessibilityreports.Store:
+			accessibilityReportStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -753,6 +765,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && accessibilityCommitmentStore != nil {
 		registerAccessibilityCommitmentRoutes(mux, repositoryCatalog, authStore, accessibilityCommitmentStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && accessibilityReportStore != nil {
+		registerAccessibilityReportRoutes(mux, repositoryCatalog, authStore, accessibilityReportStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && productExperimentStore != nil {
 		registerProductExperimentRoutes(mux, repositoryCatalog, authStore, productExperimentStore, proposalStore, pullRequestStore, checkRunStore, releaseStore, deploymentStore, organizationStore)

@@ -2808,6 +2808,32 @@ diagnostics. Records default beneath `$ACCESSIBILITY_COMMITMENT_STORAGE_ROOT`
 one repository cannot hide or deny another repository's commitments; corruption
 inside the requested repository fails the collection read explicitly.
 
+## Accessibility barrier reports
+
+Any authenticated user permitted to read a repository can submit a lived barrier with `POST
+/repositories/{id}/accessibility-reports`. A report targets a `release`, `page`,
+`documentation_journey`, or `preview` by resource ID and exact revision, and includes functional
+access needs, an expected observable outcome, ordered interaction steps, the reporter's browser,
+device, and assistive-technology environment, explicit consent, and up to twelve artifacts.
+Artifacts are typed as a screenshot, recording, accessibility tree, speech output, or input trace;
+each must be explicitly redacted and carry only a bounded description and safe content reference.
+
+Repository readers use the collection and detail `GET` endpoints. Reporter identity is hidden from
+other readers unless the reporter consents to share it with maintainers. Device, OS, version, and
+input-mode detail is independently suppressed outside the reporter's own projection unless the
+reporter consents; the functional browser and assistive-technology names remain so the scenario is
+actionable without medical context.
+
+Current repository participants append reproduction evidence with `POST
+/repositories/{id}/accessibility-reports/{report-id}/attempts`. Every attempt is server-bound to the
+report's frozen revision, declares a bounded `workspace` or `preview`, browser, device, and assistive
+technology, and classifies the observation as `reproducible`, `intermittent`,
+`environment_specific`, or `unconfirmed`. Attempts and their redacted artifacts are append-only and
+grant no repository, credential, preview, or deployment authority. Records default beneath
+`$ACCESSIBILITY_REPORT_STORAGE_ROOT` (`accessibility-reports`) in repository-scoped directories;
+cross-process mutations use a shared lock and atomically published files so concurrent attempts are
+not lost and corruption in another repository cannot deny this collection.
+
 ## Performance goals
 
 Current repository participants create a complete contract with `POST

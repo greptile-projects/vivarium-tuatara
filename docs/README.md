@@ -125,6 +125,16 @@ conformance. Records default beneath `$ACCESSIBILITY_COMMITMENT_STORAGE_ROOT`
 corruption is isolated, while corruption in the requested collection is
 reported rather than silently returning an incomplete contract.
 
+Lived accessibility barriers are retained separately at
+`/repositories/{id}/accessibility-reports` and rendered in the same accessibility workspace. A
+permitted reporter freezes a release, page, documentation journey, or preview revision and shares
+functional access needs, steps, expected behavior, and explicitly redacted visual, audio, tree, or
+input evidence. Identity and sensitive device detail have independent consent controls. Current
+repository participants can retain revision-exact bounded workspace/preview attempts classified as
+reproducible, intermittent, environment-specific, or unconfirmed; the record supplies evidence, not
+execution authority or proof of conformance. Storage defaults beneath
+`$ACCESSIBILITY_REPORT_STORAGE_ROOT` (`accessibility-reports`).
+
 ## Collaborative performance goals
 
 Repository participants publish complete, append-only performance-contract revisions through
