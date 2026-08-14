@@ -2841,13 +2841,18 @@ Current repository participants publish repository-defined exact-revision check 
 `contrast`, `motion`, `captions`, or a declared `journey`, report `passed`, `failed`, or
 `unevaluated`, and retain audiences, source locations, a bounded summary, and whether human
 evaluation remains required. An optional `pull_request_id` projects the same assessment on the
-matching pull. Readers filter collection `GET` requests by `revision` and/or `pull_request_id`.
+matching pull. Without a pull identity, the revision must resolve to a commit reachable from a
+repository branch; pull-bound evidence must match the pull's authoritative source revision.
+Readers filter collection `GET` requests by `revision` and/or `pull_request_id`.
 
 Participants and repository-bound read-only agent credentials append findings through `POST
 .../{assessment-id}/findings`. Each finding is revision-bound through one or more permitted
 `preview` or `reproduction` citations, and retains severity, audiences, source/journey locations,
 uncertainty, duplicate identity, and human-evaluation need. Only current human participants may
 record `accepted` or `false_positive` decisions through `POST .../findings/{finding-id}/decision`.
+Preview citations must resolve to a non-stale exact-revision preview and one of its retained
+artifacts. Reproduction citations must resolve to an exact-revision retained attempt and one of its
+redacted artifacts; invented or cross-revision resource/evidence pairs fail before persistence.
 `POST .../{assessment-id}/invalidate` names changed source locations or journey IDs and invalidates
 only intersecting checks/findings, clearing only their affected acceptance. Records default beneath
 `$ACCESSIBILITY_ASSESSMENT_STORAGE_ROOT` (`accessibility-assessments`).

@@ -366,6 +366,9 @@ whenever dependencies change or the web job fails before it starts.
   audiences, sources, uncertainty, duplicates, false-positive/acceptance decisions, and remaining
   human evaluation. Source/journey changes invalidate only intersecting evidence and decisions;
   agents cannot make acceptance decisions and assessment records grant no operational authority.
+  Unattached assessment revisions must be branch-reachable, pull-bound revisions must match the
+  live pull source, and every finding citation resolves an associated non-stale preview artifact or
+  redacted reproduction-attempt artifact before persistence.
   Product experiments at `/repositories/{id}/experiments` retain append-only hypothesis-plan
   revisions sourced from proposals, issues, decisions, pulls, previews, or releases. Success and
   guardrail metrics bind exact permitted product-signal versions; audience eligibility,

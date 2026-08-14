@@ -782,7 +782,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerAccessibilityReportRoutes(mux, repositoryCatalog, authStore, accessibilityReportStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && accessibilityAssessmentStore != nil {
-		registerAccessibilityAssessmentRoutes(mux, repositoryCatalog, authStore, pullRequestStore, accessibilityAssessmentStore)
+		registerAccessibilityAssessmentRoutes(mux, store, repositoryCatalog, authStore, pullRequestStore, previewStore, accessibilityReportStore, accessibilityAssessmentStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && productExperimentStore != nil {
 		registerProductExperimentRoutes(mux, repositoryCatalog, authStore, productExperimentStore, proposalStore, pullRequestStore, checkRunStore, releaseStore, deploymentStore, organizationStore)

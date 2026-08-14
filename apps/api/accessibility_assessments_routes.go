@@ -3,14 +3,18 @@ package main
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/accessibilityassessments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/accessibilityreports"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
-func registerAccessibilityAssessmentRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, pulls *pullrequests.Store, assessments *accessibilityassessments.Store) {
+func registerAccessibilityAssessmentRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, pulls *pullrequests.Store, previewStore *previews.Store, reportStore *accessibilityreports.Store, assessments *accessibilityassessments.Store) {
 	authorize := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool, bool) {
 		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
 		if !ok {
@@ -55,6 +59,9 @@ func registerAccessibilityAssessmentRoutes(mux *http.ServeMux, catalog *reposito
 				writeAPIError(w, 400, "invalid_accessibility_pull_revision", "the pull request must exist in this repository at the assessment revision")
 				return
 			}
+		} else if !accessibilityRevisionIsVisible(git, r.PathValue("id"), in.Revision) {
+			writeAPIError(w, 400, "invalid_accessibility_revision", "the assessment revision must be a commit reachable from a visible repository branch")
+			return
 		}
 		out, err := assessments.Create(r.PathValue("id"), actor.UserID, in)
 		writeAccessibilityAssessment(w, out, err, 201)
@@ -84,6 +91,17 @@ func registerAccessibilityAssessmentRoutes(mux *http.ServeMux, catalog *reposito
 		if decodeJSON(r, &in) != nil {
 			writeAPIError(w, 400, "invalid_request", "a cited accessibility finding is required")
 			return
+		}
+		assessment, err := assessments.Get(r.PathValue("id"), r.PathValue("assessment_id"))
+		if err != nil {
+			writeAccessibilityAssessment(w, accessibilityassessments.Assessment{}, err, 0)
+			return
+		}
+		for _, citation := range in.Citations {
+			if !accessibilityCitationResolves(r.PathValue("id"), assessment.Revision, citation, previewStore, reportStore) {
+				writeAPIError(w, 400, "invalid_accessibility_citation", "each citation must resolve to evidence on a repository preview or reproduction at the assessment revision")
+				return
+			}
 		}
 		kind, id := "human", actor.UserID
 		if actor.AgentID != "" {
@@ -132,6 +150,82 @@ func registerAccessibilityAssessmentRoutes(mux *http.ServeMux, catalog *reposito
 		out, err := assessments.Invalidate(r.PathValue("id"), r.PathValue("assessment_id"), actor.UserID, in.SourceLocations, in.JourneyIDs)
 		writeAccessibilityAssessment(w, out, err, 200)
 	})
+}
+
+func accessibilityRevisionIsVisible(git *storage.Store, repositoryID, revision string) bool {
+	if git == nil || len(revision) != 40 || revision != strings.ToLower(revision) {
+		return false
+	}
+	repository, err := git.Open(repositoryID)
+	if err != nil {
+		return false
+	}
+	if _, err = repository.ReadCommit(storage.ObjectID(revision)); err != nil {
+		return false
+	}
+	refs, err := repository.ListReferences()
+	if err != nil {
+		return false
+	}
+	for _, ref := range refs {
+		if !strings.HasPrefix(ref.Name, "refs/heads/") {
+			continue
+		}
+		ancestry, ancestryErr := repository.ListCommitAncestry(storage.ObjectID(ref.Target))
+		if ancestryErr != nil {
+			continue
+		}
+		for _, commit := range ancestry {
+			if string(commit.ID) == revision {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func accessibilityCitationResolves(repositoryID, revision string, citation accessibilityassessments.Citation, previewStore *previews.Store, reportStore *accessibilityreports.Store) bool {
+	switch citation.Kind {
+	case "preview":
+		if previewStore == nil {
+			return false
+		}
+		preview, err := previewStore.Find(repositoryID, citation.ResourceID)
+		if err != nil || preview.Revision != revision || preview.Stale {
+			return false
+		}
+		for _, finding := range preview.Findings {
+			for _, evidence := range finding.Evidence {
+				if citation.EvidenceRef == "artifact://"+evidence.ID {
+					return true
+				}
+			}
+		}
+	case "reproduction":
+		if reportStore == nil {
+			return false
+		}
+		reports, err := reportStore.List(repositoryID)
+		if err != nil {
+			return false
+		}
+		for _, report := range reports {
+			if report.Target.Revision != revision {
+				continue
+			}
+			for _, attempt := range report.Attempts {
+				if attempt.ID != citation.ResourceID {
+					continue
+				}
+				for _, evidence := range attempt.Evidence {
+					if evidence.ContentRef == citation.EvidenceRef && evidence.Redacted {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 func writeAccessibilityAssessment(w http.ResponseWriter, out accessibilityassessments.Assessment, err error, status int) {
