@@ -91,11 +91,13 @@ type Fund struct {
 	AuthorityNote string    `json:"authority_note"`
 }
 type Store struct {
-	root                          string
-	trustedSourceKeys             map[string]string
-	mu                            sync.Mutex
-	now                           func() time.Time
-	afterDeliveryReservationWrite func() error
+	root                             string
+	trustedSourceKeys                map[string]string
+	mu                               sync.Mutex
+	now                              func() time.Time
+	afterDeliveryReservationWrite    func() error
+	afterDeliveryExpenseFundWrite    func() error
+	afterDeliveryExpenseOutcomeWrite func() error
 }
 
 func New(root string, trustedSources ...map[string]string) (*Store, error) {
@@ -403,5 +405,8 @@ func (s *Store) lock(fn func() error) error {
 		return e
 	}
 	defer syscall.Flock(int(lf.Fd()), syscall.LOCK_UN)
+	if e = s.recoverDeliveryTransactions(); e != nil {
+		return e
+	}
 	return fn()
 }

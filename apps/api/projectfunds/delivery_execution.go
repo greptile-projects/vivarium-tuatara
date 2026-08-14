@@ -1,6 +1,9 @@
 package projectfunds
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -102,7 +105,7 @@ func (s *Store) RecordDeliveryUpdate(outcomeID, selectionID string, recipient De
 			return err
 		}
 		sel := deliverySelection(v, selectionID)
-		if v.Version != expected || v.Status != "open" || sel == nil || sel.Execution.Status == "cancelled" || sel.Execution.Status == "paused" {
+		if v.Version != expected || v.Status != "open" || sel == nil || sel.Execution.Status == "cancelled" {
 			return ErrConflict
 		}
 		if !selectionHasRecipient(*sel, recipient) || !validDeliveryUpdate(*sel, recipient, in) {
@@ -170,7 +173,6 @@ func (s *Store) DecideDeliveryExpense(outcomeID, selectionID, expenseID, steward
 		if err != nil {
 			return err
 		}
-		original := fund
 		sel := deliverySelection(v, selectionID)
 		if v.Version != expected || v.Status != "open" || sel == nil {
 			return ErrConflict
@@ -202,6 +204,7 @@ func (s *Store) DecideDeliveryExpense(outcomeID, selectionID, expenseID, steward
 		exp.DecidedAt = &now
 		v.Version++
 		v.UpdatedAt = now
+		projectDeliveryExecution(sel, now)
 		if decision == "approved" {
 			fund.Version++
 			fund.UpdatedAt = now
@@ -210,16 +213,31 @@ func (s *Store) DecideDeliveryExpense(outcomeID, selectionID, expenseID, steward
 			if fund.Balances.Reserved < 0 {
 				return ErrConflict
 			}
+			tx := deliveryTransaction{ID: fund.Ledger[len(fund.Ledger)-1].ID, Fund: fund, Outcome: v}
+			if err = s.writeDeliveryTransaction(tx); err != nil {
+				return err
+			}
 			if err = s.write(fund); err != nil {
 				return err
 			}
-		}
-		projectDeliveryExecution(sel, now)
-		if err = s.writeOutcome(v); err != nil {
-			if decision == "approved" {
-				_ = s.write(original)
+			if s.afterDeliveryExpenseFundWrite != nil {
+				if err = s.afterDeliveryExpenseFundWrite(); err != nil {
+					return err
+				}
 			}
+		}
+		if s.afterDeliveryExpenseOutcomeWrite != nil && decision == "approved" {
+			if err = s.afterDeliveryExpenseOutcomeWrite(); err != nil {
+				return err
+			}
+		}
+		if err = s.writeOutcome(v); err != nil {
 			return err
+		}
+		if decision == "approved" {
+			if err = s.removeDeliveryTransactionsForExpense(fund.Ledger[len(fund.Ledger)-1].ID); err != nil {
+				return err
+			}
 		}
 		out = v
 		return s.projectOutcome(&out)
@@ -449,7 +467,11 @@ func projectDeliveryExecution(s *DeliverySelection, now time.Time) {
 	if len(s.Tasks) > 0 {
 		e.Progress /= len(s.Tasks)
 	}
-	e.LastActivityAt = latest
+	activityBaseline := s.SelectedAt
+	if latest != nil {
+		activityBaseline = *latest
+	}
+	e.LastActivityAt = &activityBaseline
 	for _, x := range e.Expenses {
 		if x.Status == "approved" {
 			e.Spent += x.Amount
@@ -461,7 +483,7 @@ func projectDeliveryExecution(s *DeliverySelection, now time.Time) {
 	if e.Spent+e.PendingExpenses > e.Budget {
 		e.SpendingBlockers = append(e.SpendingBlockers, "budget_overrun")
 	}
-	if latest != nil && now.Sub(*latest) > 14*24*time.Hour {
+	if now.Sub(activityBaseline) > 14*24*time.Hour {
 		e.SpendingBlockers = append(e.SpendingBlockers, "inactivity")
 	}
 	if e.Status == "paused" || e.Status == "cancelled" {
@@ -472,7 +494,7 @@ func projectDeliveryExecution(s *DeliverySelection, now time.Time) {
 		if control.Kind == "access_revoked" {
 			accessRevoked = true
 		}
-		if control.Kind == "resume" {
+		if control.Kind == "replace_recipient" {
 			accessRevoked = false
 		}
 	}
@@ -480,4 +502,78 @@ func projectDeliveryExecution(s *DeliverySelection, now time.Time) {
 		e.SpendingBlockers = append(e.SpendingBlockers, "revoked_access")
 	}
 	e.SpendingBlocked = len(e.SpendingBlockers) > 0
+}
+
+type deliveryTransaction struct {
+	ID      string        `json:"id"`
+	Fund    Fund          `json:"fund"`
+	Outcome FundedOutcome `json:"outcome"`
+}
+
+func (s *Store) deliveryTransactionRoot() string {
+	return filepath.Join(s.root, "delivery-transactions")
+}
+func (s *Store) writeDeliveryTransaction(tx deliveryTransaction) error {
+	if err := os.MkdirAll(s.deliveryTransactionRoot(), 0700); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(tx, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(s.deliveryTransactionRoot(), "transaction-*.tmp")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if err = tmp.Chmod(0600); err == nil {
+		_, err = tmp.Write(b)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	closeErr := tmp.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(name, filepath.Join(s.deliveryTransactionRoot(), tx.ID+".json"))
+	}
+	return err
+}
+func (s *Store) recoverDeliveryTransactions() error {
+	entries, err := os.ReadDir(s.deliveryTransactionRoot())
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(s.deliveryTransactionRoot(), entry.Name()))
+		if err != nil {
+			return err
+		}
+		var tx deliveryTransaction
+		if err = json.Unmarshal(b, &tx); err != nil {
+			return err
+		}
+		if err = s.write(tx.Fund); err != nil {
+			return err
+		}
+		if err = s.writeOutcome(tx.Outcome); err != nil {
+			return err
+		}
+		if err = os.Remove(filepath.Join(s.deliveryTransactionRoot(), entry.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (s *Store) removeDeliveryTransactionsForExpense(id string) error {
+	return os.Remove(filepath.Join(s.deliveryTransactionRoot(), id+".json"))
 }

@@ -413,6 +413,10 @@ whenever dependencies change or the web job fails before it starts.
   Overrun, fourteen-day inactivity, failed handoff, revoked access, pause, and cancellation stop
   new spending without deleting prior updates, evidence, expenses, compute, or contributions;
   none of these funding records expands the authority of linked resources or a replacement.
+  Inactivity starts at selection even before a first update; paused recipients may continue
+  publishing retained work and handoff evidence. A generic resume never clears revoked access,
+  while a live-eligibility-validated replacement can. Approved-expense fund/outcome publication
+  uses a durable roll-forward journal recovered under the fund lock after interrupted writes.
 
   Reciprocal roadmap learning retains feedback-specific decision, preview, delivery, rejection, and
   measured-outcome updates. Reporters see only updates citing their own feedback, can validate the

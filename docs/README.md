@@ -2142,6 +2142,10 @@ unfinished work after live eligibility checks, or cancel and return the unspent 
 Overrun, inactivity, failed handoff, revoked access, pause, and cancellation stop new spending but
 retain prior evidence and legitimate contributions; funding controls never inherit or expand the
 authority of the linked collaboration resources.
+The initial inactivity deadline begins at selection, paused work can still report retained
+progress and handoff evidence, and resume alone cannot clear an access-loss block. Approved
+expense accounting uses a durable roll-forward journal so interrupted fund/outcome publication
+is recovered under the same mutation boundary.
 
 # Trusted external extensions
 

@@ -269,6 +269,116 @@ func TestFundedDeliveryProjectsWorkSpendAndStewardIntervention(t *testing.T) {
 	}
 }
 
+func TestDeliverySpendingStopsWithoutInitialActivityAndRevocationSurvivesResume(t *testing.T) {
+	s, fund, out, recipient, selection, task := selectedDelivery(t)
+	selectedAt := selection.SelectedAt
+	s.now = func() time.Time { return selectedAt.Add(15 * 24 * time.Hour) }
+	input := DeliveryExpenseInput{TaskID: task.ID, Amount: 1, Category: "labor", Description: "late expense", Evidence: []DeliveryResource{{Kind: "task", ID: task.ID, Status: "active"}}}
+	if _, err := s.RequestDeliveryExpense(out.ID, selection.ID, recipient, "contributor", out.Version, input); !errors.Is(err, ErrConflict) {
+		t.Fatalf("inactive expense err = %v", err)
+	}
+	s.now = func() time.Time { return selectedAt.Add(time.Hour) }
+	out, err := s.ControlDelivery(out.ID, selection.ID, "owner", "access_revoked", "Repository access was removed.", 0, nil, out.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.ControlDelivery(out.ID, selection.ID, "owner", "resume", "Resume reporting only.", 0, nil, out.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.DeliverySelections[0].Execution.SpendingBlocked {
+		t.Fatal("resume cleared revoked access")
+	}
+	if _, err = s.RequestDeliveryExpense(out.ID, selection.ID, recipient, "contributor", out.Version, input); !errors.Is(err, ErrConflict) {
+		t.Fatalf("revoked expense err = %v", err)
+	}
+	_ = fund
+}
+
+func TestPausedDeliveryRetainsReportingAndExpenseApprovalRecoversFromInterruptedPublication(t *testing.T) {
+	s, _, out, recipient, selection, task := selectedDelivery(t)
+	var err error
+	out, err = s.ControlDelivery(out.ID, selection.ID, "owner", "pause", "Inspect the current handoff.", 0, nil, out.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.RecordDeliveryUpdate(out.ID, selection.ID, recipient, "contributor", out.Version, DeliveryUpdateInput{TaskID: task.ID, Status: "handoff_failed", Progress: 60, Summary: "Retain work completed before pause.", Resources: []DeliveryResource{{Kind: "pull", ID: "42", Revision: "abc", Status: "open"}}, Evidence: []DeliveryEvidence{{Kind: "handoff", Summary: "The handoff failed after the pull was published.", Resource: DeliveryResource{Kind: "pull", ID: "42", Revision: "abc", Status: "open"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.DeliverySelections[0].Execution.Updates) != 1 {
+		t.Fatal("paused update was discarded")
+	}
+	out, err = s.ControlDelivery(out.ID, selection.ID, "owner", "resume", "Continue after inspecting evidence.", 0, nil, out.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.RecordDeliveryUpdate(out.ID, selection.ID, recipient, "contributor", out.Version, DeliveryUpdateInput{TaskID: task.ID, Status: "active", Progress: 65, Summary: "Handoff recovered with the retained pull.", Resources: []DeliveryResource{{Kind: "pull", ID: "42", Revision: "abc", Status: "open"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.RequestDeliveryExpense(out.ID, selection.ID, recipient, "contributor", out.Version, DeliveryExpenseInput{TaskID: task.ID, Amount: 100, Category: "labor", Description: "Retained implementation.", Evidence: []DeliveryResource{{Kind: "pull", ID: "42", Revision: "abc", Status: "open"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expense := out.DeliverySelections[0].Execution.Expenses[0]
+	injected := errors.New("outcome publication interrupted")
+	s.afterDeliveryExpenseOutcomeWrite = func() error { return injected }
+	if _, err = s.DecideDeliveryExpense(out.ID, selection.ID, expense.ID, "owner", "approved", "Evidence is bounded.", out.Version); !errors.Is(err, injected) {
+		t.Fatalf("approval err = %v", err)
+	}
+	s.afterDeliveryExpenseOutcomeWrite = nil
+	recovered, err := s.GetOutcome(out.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.DeliverySelections[0].Execution.Expenses[0].Status != "approved" {
+		t.Fatalf("recovered outcome = %+v", recovered.DeliverySelections[0].Execution)
+	}
+	fund, err := s.Get(recovered.FundID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fund.Balances.Spent != 100 {
+		t.Fatalf("recovered fund = %+v", fund.Balances)
+	}
+}
+
+func selectedDelivery(t *testing.T) (*Store, Fund, FundedOutcome, DeliveryApplicant, DeliverySelection, DeliveryTask) {
+	t.Helper()
+	s, fund := outcomeStore(t)
+	fund, err := s.Commit(fund.ID, "backer", "card", "selected-delivery-backing", 10000, "selected-delivery-key", "commission")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := proof("card", "selected-delivery-backing", "settled", 10000)
+	p.Nonce = "selected-delivery-proof"
+	p.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(testPrivateKey, transferProofMessage(*p)))
+	fund, err = s.Reconcile(fund.ID, fund.Ledger[0].ID, "owner", "settled", 10000, p, "verified", fund.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.CreateOutcome("repo", fund.ID, "owner", outcomeTerms())
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipient := DeliveryApplicant{Kind: "human", ID: "contributor", SubmittedBy: "contributor"}
+	out, err = s.SubmitDeliveryProposal(out.ID, recipient, DeliveryProposalTerms{Approach: "Deliver and verify.", Milestones: []string{"repair"}, Cost: 9000, Availability: "Now", RelevantWork: []AttributedWork{{Kind: "pull", ID: "prior", Note: "Prior work"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.AcceptDeliveryProposal(out.ID, out.DeliveryProposals[0].ID, "contributor", out.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.SelectDeliveryProposals(out.ID, "owner", out.Version, []string{out.DeliveryProposals[0].ID}, "None.", "Best fit.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection := out.DeliverySelections[0]
+	return s, fund, out, recipient, selection, selection.Tasks[0]
+}
+
 func TestOutcomeFundingProjectsOverlappingAndEmbargoedWork(t *testing.T) {
 	s, fund := outcomeStore(t)
 	terms := outcomeTerms()

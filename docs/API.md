@@ -2757,6 +2757,12 @@ Overrun, fourteen-day inactivity, failed handoff, revoked access, pause, or canc
 expense requests and approvals while preserving legitimate work and spend. Controls and
 replacement never grant repository, task, credential, Git, review, merge, deployment, or fund
 authority.
+The inactivity clock begins at selection when no update exists. Pause stops expenses but not
+progress or handoff reporting. `resume` does not assert that revoked access was restored; that
+block remains until a replacement is admitted through live eligibility validation. Approved
+expense publication is journaled before either fund or outcome publication, and the journal is
+rolled forward under the fund mutation lock after interruption so their durable projections
+reconverge.
 
 ## Performance goals
 
