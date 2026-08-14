@@ -453,6 +453,16 @@ whenever dependencies change or the web job fails before it starts.
   analyses, citations, attribution, and analysis-derived diagnostics remain limited to current
   participants and repository-bound read-only agents.
 
+  Permitted production-derived observations beneath `$DATA_OBSERVATION_STORAGE_ROOT` (default
+  `data-observations`) privately connect digest-addressed aggregate/audit metadata to an exact data
+  flow, commitment/use, release, environment, deployment, optional extension installation, and
+  derived accountable owners. Closed findings cover undeclared flow, excessive retention, failed
+  deletion, consent mismatch, and unexpected recipient; raw values, subject identifiers, payloads,
+  and caller-authored evidence summaries are not accepted. Current human collaborators can contain
+  use, notify participants, retain a private incident or expiring governed exception, and delegate
+  ordinary human- or approved-agent-owned proposal tasks carrying only permitted evidence. These
+  records grant no data, extension, environment, review, release, deployment, or repository authority.
+
   Runtime privacy policies beneath `$PRIVACY_CHECK_STORAGE_ROOT` (default `privacy-checks`) select
   branches/paths, required collection, consent, minimization, access, retention, export, deletion,
   telemetry, and recipient rules, synthetic journeys, and named current human privacy owners.

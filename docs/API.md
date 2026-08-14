@@ -62,6 +62,23 @@ Anonymous and nonparticipant readers of public repositories receive declarations
 diagnostics only. Complete analyses, citations, actor attribution, and analysis-derived diagnostics
 are projected only to current repository participants and repository-bound read-only agents.
 
+### Production data-use observations
+
+- `POST /repositories/{id}/data-observations` accepts a permitted production-derived signal from a
+  current participant or repository-bound read-only agent. Closed signal kinds are `undeclared_flow`,
+  `excessive_retention`, `failed_deletion`, `consent_mismatch`, and `unexpected_recipient`.
+- `GET /repositories/{id}/data-observations` and `GET .../{observation_id}` are private to current
+  repository participants. `POST .../{observation_id}/actions` retains containment, notification,
+  private-incident coordination, or an expiring governed exception with compare-and-swap protection.
+- `POST .../{observation_id}/repair` freezes current sanitized evidence into one ordinary proposal
+  task assigned to a current human participant or an approved agent operated by the collaborator.
+
+Evidence contains only a closed kind, SHA-256 digest, at-most-31-day window, and aggregate sample count.
+Captured values, subject identifiers, raw payload, and caller-authored evidence summaries are not
+accepted. Exact flow, commitment/use, release, environment, deployment, optional extension installation,
+and derived owners must resolve together. Records grant no operational authority and default beneath
+`$DATA_OBSERVATION_STORAGE_ROOT` (`data-observations`).
+
 ### Pull privacy review
 
 - `GET /repositories/{id}/pulls/{pull_id}/privacy-review` returns the exact-revision comparison,

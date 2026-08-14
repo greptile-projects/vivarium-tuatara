@@ -66,6 +66,15 @@ sibling pull at the same commit from reusing its proof; release evaluation uses 
 revision-wide context.
 Records default beneath `$PRIVACY_CHECK_STORAGE_ROOT` (`privacy-checks`).
 
+Permitted production observations close the loop after deployment without retaining the people or
+captured values that exposed a gap. Private records at `/repositories/{id}/data-observations` accept
+only digest-addressed aggregate/audit metadata and connect it to the exact flow, commitment/use,
+release, environment, deployment, optional extension, and accountable owners. Human collaborators can
+contain use, notify participants, retain a private incident or expiring governed exception, and create
+a human- or approved-agent-owned ordinary proposal task carrying only sanitized evidence. Existing
+review, verification, release, and deployment boundaries remain authoritative. Records default beneath
+`$DATA_OBSERVATION_STORAGE_ROOT` (`data-observations`).
+
 ## Accountable product direction
 
 The repository roadmap at `/repositories/{id}/roadmap` turns exact product-opportunity versions
