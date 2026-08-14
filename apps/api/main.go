@@ -42,6 +42,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/impacts"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/localeplans"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/outcomevalidations"
 	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
@@ -387,6 +388,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	localePlanRoot := os.Getenv("LOCALE_PLAN_STORAGE_ROOT")
+	if localePlanRoot == "" {
+		localePlanRoot = "locale-plans"
+	}
+	localePlanStore, err := localeplans.New(localePlanRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	privacyReviewRoot := os.Getenv("PRIVACY_REVIEW_STORAGE_ROOT")
 	if privacyReviewRoot == "" {
 		privacyReviewRoot = "privacy-reviews"
@@ -494,7 +503,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -647,6 +656,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var privacyReviewStore *privacyreviews.Store
 	var privacyCheckStore *privacychecks.Store
 	var dataObservationStore *dataobservations.Store
+	var localePlanStore *localeplans.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -727,6 +737,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			privacyCheckStore = value
 		case *dataobservations.Store:
 			dataObservationStore = value
+		case *localeplans.Store:
+			localePlanStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -849,6 +861,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && accessibilityCommitmentStore != nil {
 		registerAccessibilityCommitmentRoutes(mux, repositoryCatalog, authStore, accessibilityCommitmentStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && localePlanStore != nil && store != nil {
+		registerLocalePlanRoutes(mux, store, repositoryCatalog, authStore, localePlanStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && dataCommitmentStore != nil {
 		registerDataCommitmentRoutes(mux, repositoryCatalog, authStore, dataCommitmentStore, releaseStore, extensionStore, productExperimentStore, deploymentStore)

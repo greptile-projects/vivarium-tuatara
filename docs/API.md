@@ -3151,3 +3151,19 @@ evidence, and `leave_conversation`; leaving prevents later updates citing that f
 `POST .../roadmap/learning-reviews` lets a human repository participant retain promised and observed
 outcomes, lessons, dissent, resulting work, and a `continue`, `revise_roadmap`, `fulfilled`, or
 `unsupported` disposition. All three mutations require `expected_version` and are append-only.
+
+## Locale plans
+
+`POST /repositories/{id}/locale-plans` publishes a complete localization support contract. The
+revision includes a `repository`, `product`, `documentation_collection`, or `release` subject;
+locales and regional fallbacks; terminology and formatting requirements; covered journeys;
+translatable resources with exact 40-character source commit IDs; owners and reviewers; and release
+thresholds. Each source commit must resolve in the target repository. Participants publish a
+successor with `POST /repositories/{id}/locale-plans/{plan_id}/revisions` and the current
+`expected_version`; stale writers receive `409 locale_plan_conflict`.
+
+`GET /repositories/{id}/locale-plans` and `GET /repositories/{id}/locale-plans/{plan_id}` are
+repository-readable and return the full immutable revision history plus derived `diagnostics` for
+`missing_ownership`, `missing_reviewers`, `unsupported_format`, `conflicting_terminology`, and
+`stale_coverage` against the current default branch. A locale plan is an inspectable support promise,
+not release approval or operational authority.

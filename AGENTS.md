@@ -1755,6 +1755,14 @@ whenever dependencies change or the web job fails before it starts.
   roadmap plans. `$OUTCOME_VALIDATION_STORAGE_ROOT` defaults to
   `outcome-validations`.
 
+  Locale coverage at `/repositories/{id}/locales` retains complete versioned plans beneath
+  `$LOCALE_PLAN_STORAGE_ROOT` (default `locale-plans`) for repository, product, documentation
+  collection, and release scopes. Plans name target languages/regions, fallback, terminology,
+  formatting, covered journeys, owners/reviewers, release thresholds, and translatable resources
+  bound to exact existing repository commits. Reads derive missing ownership/reviewers,
+  unsupported formats, conflicting preferred terminology, and coverage stale against the current
+  default branch; plans document support but grant no repository or release authority.
+
   Update it when you change how the apps fit together, not for every change.
 
 ## LADDER.md
