@@ -319,7 +319,7 @@ func TestDeliverySpendingStopsWithoutInitialActivityAndRevocationSurvivesResume(
 }
 
 func TestDeliveryReplacementPreservesTerminalMilestoneOwnership(t *testing.T) {
-	for _, status := range []string{"completed", "accepted", "partially_accepted", "withdrawn", "timed_out", "refunded"} {
+	for _, status := range []string{"completed", "accepted", "partially_accepted", "payment_failed", "withdrawn", "timed_out", "refunded"} {
 		if !deliveryTaskTerminal(DeliveryTask{Status: status}) {
 			t.Fatalf("status %q should retain its recipient during replacement", status)
 		}
@@ -435,6 +435,15 @@ func TestMilestoneCorrectionAppealAndPaymentRecoveryAreDeterministic(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	replacement := DeliveryApplicant{Kind: "human", ID: "replacement", SubmittedBy: "owner"}
+	out, err = s.ControlDelivery(out.ID, selection.ID, "owner", "replace_recipient", "Reassign only the unfinished sibling milestone.", 0, &replacement, out.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedTask := deliveryTask(&out.DeliverySelections[0], task.ID)
+	if failedTask == nil || failedTask.RecipientID != recipient.ID {
+		t.Fatalf("payment-failed award recipient changed = %+v", failedTask)
+	}
 	fund, _ = s.Get(fund.ID)
 	if fund.Balances.Spent != 0 || fund.Balances.Reserved != 9000 {
 		t.Fatalf("failed payment balances = %+v", fund.Balances)
@@ -442,6 +451,10 @@ func TestMilestoneCorrectionAppealAndPaymentRecoveryAreDeterministic(t *testing.
 	out, err = s.RecoverMilestone(out.ID, selection.ID, task.ID, "owner", "retry_payment", "Recipient details were corrected.", out.Version)
 	if err != nil {
 		t.Fatal(err)
+	}
+	fund, _ = s.Get(fund.ID)
+	if entry := fund.Ledger[len(fund.Ledger)-1]; entry.Kind != "milestone_award" || entry.ContributorID != recipient.ID {
+		t.Fatalf("retried award attribution = %+v", entry)
 	}
 	out, err = s.RecoverMilestone(out.ID, selection.ID, task.ID, "owner", "refund", "Accepted refund under the original fund policy.", out.Version)
 	if err != nil {

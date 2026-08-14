@@ -424,7 +424,7 @@ func selectionTask(s DeliverySelection, id string, a DeliveryApplicant) bool {
 	return false
 }
 func deliveryTaskTerminal(task DeliveryTask) bool {
-	return contains([]string{"completed", "accepted", "partially_accepted", "withdrawn", "timed_out", "refunded"}, task.Status)
+	return contains([]string{"completed", "accepted", "partially_accepted", "payment_failed", "withdrawn", "timed_out", "refunded"}, task.Status)
 }
 func validDeliveryResource(r DeliveryResource) bool {
 	return contains([]string{"task", "session", "workspace", "fork", "pull", "check", "preview", "delivery_team", "commit", "release", "deployment"}, r.Kind) && validOutcomeText(r.ID, 500) && len(r.Revision) <= 500 && len(r.URL) <= 2000 && validOutcomeText(r.Status, 100)

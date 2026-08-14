@@ -427,8 +427,8 @@ whenever dependencies change or the web job fails before it starts.
   never supplies code review, merge, release, deployment, credential, or repository authority.
   A paid review ID is the settlement receipt shown in the funding workspace; its matching
   `milestone_award` ledger reference connects recipient credit to the frozen update, authorship,
-  delivery evidence, measures, reviewer, and later payment recovery. Terminal milestone ownership
-  remains intact when a separate unfinished human or agent task is reassigned.
+  delivery evidence, measures, reviewer, and later payment recovery. Terminal and payment-failed
+  milestone ownership remains intact when a separate unfinished human or agent task is reassigned.
 
   Reciprocal roadmap learning retains feedback-specific decision, preview, delivery, rejection, and
   measured-outcome updates. Reporters see only updates citing their own feedback, can validate the

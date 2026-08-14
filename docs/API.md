@@ -2779,9 +2779,10 @@ frozen update, authorship, resources, and measures. It grants no authority over 
 
 Eligible recipients, reviewers, and stewards use `POST .../{task_id}/recoveries` for appeal,
 withdrawal, timeout, payment failure/retry, or refund. These append evidence and move only the
-task's remaining reservation or prior award. Terminal completed, accepted, partially accepted,
-withdrawn, timed-out, and refunded tasks retain their recipient when a steward uses
-`replace_recipient`; only unfinished work moves to the distinct, live-validated replacement.
+task's remaining reservation or prior award. Completed, accepted, partially accepted,
+payment-failed, withdrawn, timed-out, and refunded tasks retain their recipient when a steward
+uses `replace_recipient`; only unfinished work moves to the distinct, live-validated replacement.
+Payment retry therefore credits the originally accepted recipient.
 
 ## Performance goals
 
