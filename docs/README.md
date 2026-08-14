@@ -2131,6 +2131,18 @@ disclosure and rationale, reserve only cryptographically settled available value
 connected planned milestone tasks. Selection and compensation remain evidence—not repository,
 secret, review, merge, environment, deployment, withdrawal, or agent authority.
 
+Once selected, contributors can make the promise inspectable before the reservation is exhausted.
+They report milestone progress and forecasts with exact task, session, workspace, fork, pull,
+check, preview, delivery-team, release, and deployment evidence; agent compute and blockers remain
+attributed beside the work. Evidence-backed expenses wait for a current fund steward, then move
+only the approved amount from reserved to spent. The same workspace exposes pending spend,
+remaining reservation, forecast completion, and failed handoffs. Stewards may pause or resume,
+record revoked access, approve a policy-bounded budget increase, replace the recipient for
+unfinished work after live eligibility checks, or cancel and return the unspent reservation.
+Overrun, inactivity, failed handoff, revoked access, pause, and cancellation stop new spending but
+retain prior evidence and legitimate contributions; funding controls never inherit or expand the
+authority of the linked collaboration resources.
+
 # Trusted external extensions
 
 Developers can register independently operated tools at `/extensions` before a

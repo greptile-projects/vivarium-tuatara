@@ -289,6 +289,18 @@ func derive(terms Terms, es []Entry) Balances {
 			b.Available -= e.Amount
 			b.Reserved += e.Amount
 		}
+		if e.Kind == "delivery_budget_increase" && e.Status == "reserved" {
+			b.Available -= e.Amount
+			b.Reserved += e.Amount
+		}
+		if e.Kind == "delivery_expense" && e.Status == "approved" {
+			b.Reserved -= e.Amount
+			b.Spent += e.Amount
+		}
+		if e.Kind == "delivery_reservation_release" && e.Status == "released" {
+			b.Reserved -= e.Amount
+			b.Available += e.Amount
+		}
 	}
 	return b
 }

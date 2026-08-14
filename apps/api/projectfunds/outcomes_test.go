@@ -195,6 +195,80 @@ func TestDeliverySelectionCompensatesFailedOutcomePersistence(t *testing.T) {
 	}
 }
 
+func TestFundedDeliveryProjectsWorkSpendAndStewardIntervention(t *testing.T) {
+	s, fund := outcomeStore(t)
+	fund, err := s.Commit(fund.ID, "backer", "card", "execution-backing", 10000, "execution-key", "commission")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := proof("card", "execution-backing", "settled", 10000)
+	p.Nonce = "execution-proof"
+	p.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(testPrivateKey, transferProofMessage(*p)))
+	fund, err = s.Reconcile(fund.ID, fund.Ledger[0].ID, "owner", "settled", 10000, p, "verified", fund.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.CreateOutcome("repo", fund.ID, "owner", outcomeTerms())
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipient := DeliveryApplicant{Kind: "human", ID: "contributor", SubmittedBy: "contributor"}
+	out, err = s.SubmitDeliveryProposal(out.ID, recipient, DeliveryProposalTerms{Approach: "Deliver and verify.", Milestones: []string{"repair"}, Cost: 9000, Availability: "Now", RelevantWork: []AttributedWork{{Kind: "pull", ID: "prior", Note: "Prior work"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.AcceptDeliveryProposal(out.ID, out.DeliveryProposals[0].ID, "contributor", out.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.SelectDeliveryProposals(out.ID, "owner", out.Version, []string{out.DeliveryProposals[0].ID}, "None.", "Best fit.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection := out.DeliverySelections[0]
+	task := selection.Tasks[0]
+	forecast := time.Now().UTC().Add(48 * time.Hour)
+	out, err = s.RecordDeliveryUpdate(out.ID, selection.ID, recipient, "contributor", out.Version, DeliveryUpdateInput{TaskID: task.ID, Status: "active", Progress: 50, Summary: "Pull is ready for checks.", Resources: []DeliveryResource{{Kind: "pull", ID: "42", Revision: "abc", Status: "open"}, {Kind: "check", ID: "ci", Revision: "abc", Status: "passed"}}, Evidence: []DeliveryEvidence{{Kind: "check", Summary: "CI passed.", Resource: DeliveryResource{Kind: "check", ID: "ci", Revision: "abc", Status: "passed"}}}, ForecastAt: &forecast, AgentMinutes: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.RequestDeliveryExpense(out.ID, selection.ID, recipient, "contributor", out.Version, DeliveryExpenseInput{TaskID: task.ID, Amount: 2000, Category: "agent_compute", Description: "Bounded implementation compute.", Evidence: []DeliveryResource{{Kind: "session", ID: "session-1", Revision: "abc", Status: "completed"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expense := out.DeliverySelections[0].Execution.Expenses[0]
+	out, err = s.DecideDeliveryExpense(out.ID, selection.ID, expense.ID, "owner", "approved", "Evidence matches the selected milestone.", out.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec := out.DeliverySelections[0].Execution
+	if exec.Progress != 50 || exec.AgentMinutes != 30 || exec.Spent != 2000 || exec.ForecastAt == nil {
+		t.Fatalf("execution projection = %+v", exec)
+	}
+	fund, _ = s.Get(fund.ID)
+	if fund.Balances.Spent != 2000 || fund.Balances.Reserved != 7000 {
+		t.Fatalf("expense balances = %+v", fund.Balances)
+	}
+	out, err = s.ControlDelivery(out.ID, selection.ID, "owner", "pause", "Recipient handoff needs review.", 0, nil, out.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.DeliverySelections[0].Execution.SpendingBlocked {
+		t.Fatal("paused work did not stop spending")
+	}
+	if _, err = s.RequestDeliveryExpense(out.ID, selection.ID, recipient, "contributor", out.Version, DeliveryExpenseInput{TaskID: task.ID, Amount: 1, Category: "labor", Description: "late spend", Evidence: []DeliveryResource{{Kind: "task", ID: task.ID, Status: "active"}}}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("paused expense err = %v", err)
+	}
+	out, err = s.ControlDelivery(out.ID, selection.ID, "owner", "cancel_remaining", "Return unused reservation.", 0, nil, out.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fund, _ = s.Get(fund.ID)
+	if fund.Balances.Reserved != 0 || fund.Balances.Available != 8000 || fund.Balances.Spent != 2000 {
+		t.Fatalf("cancel balances = %+v", fund.Balances)
+	}
+}
+
 func TestOutcomeFundingProjectsOverlappingAndEmbargoedWork(t *testing.T) {
 	s, fund := outcomeStore(t)
 	terms := outcomeTerms()

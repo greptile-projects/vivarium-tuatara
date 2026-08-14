@@ -44,15 +44,16 @@ type DeliveryTask struct {
 }
 
 type DeliverySelection struct {
-	ID             string         `json:"id"`
-	ProposalIDs    []string       `json:"proposal_ids"`
-	Disclosure     string         `json:"conflict_disclosure"`
-	Rationale      string         `json:"rationale"`
-	ReservedAmount int64          `json:"reserved_amount"`
-	ReservationID  string         `json:"reservation_id"`
-	Tasks          []DeliveryTask `json:"tasks"`
-	SelectedBy     string         `json:"selected_by"`
-	SelectedAt     time.Time      `json:"selected_at"`
+	ID             string            `json:"id"`
+	ProposalIDs    []string          `json:"proposal_ids"`
+	Disclosure     string            `json:"conflict_disclosure"`
+	Rationale      string            `json:"rationale"`
+	ReservedAmount int64             `json:"reserved_amount"`
+	ReservationID  string            `json:"reservation_id"`
+	Tasks          []DeliveryTask    `json:"tasks"`
+	SelectedBy     string            `json:"selected_by"`
+	SelectedAt     time.Time         `json:"selected_at"`
+	Execution      DeliveryExecution `json:"execution"`
 }
 
 type DeliveryProposal struct {
@@ -178,7 +179,7 @@ func (s *Store) SelectDeliveryProposals(outcomeID, steward string, expected int,
 		}
 		now := s.now()
 		selectionID, reservationID := randomID(), randomID()
-		selection := DeliverySelection{ID: selectionID, ProposalIDs: append([]string(nil), proposalIDs...), Disclosure: strings.TrimSpace(disclosure), Rationale: strings.TrimSpace(rationale), ReservedAmount: total, ReservationID: reservationID, Tasks: tasks, SelectedBy: steward, SelectedAt: now}
+		selection := DeliverySelection{ID: selectionID, ProposalIDs: append([]string(nil), proposalIDs...), Disclosure: strings.TrimSpace(disclosure), Rationale: strings.TrimSpace(rationale), ReservedAmount: total, ReservationID: reservationID, Tasks: tasks, SelectedBy: steward, SelectedAt: now, Execution: DeliveryExecution{Status: "active", Budget: total, Updates: []DeliveryUpdate{}, Expenses: []DeliveryExpense{}, Controls: []DeliveryControl{}, Blockers: []string{}, SpendingBlockers: []string{}}}
 		for i := range v.DeliveryProposals {
 			if seen[v.DeliveryProposals[i].ID] {
 				v.DeliveryProposals[i].Status = "selected"

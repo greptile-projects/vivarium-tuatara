@@ -2736,6 +2736,28 @@ reservation, acceptance, requested access, and planned tasks grant no repository
 secret, credential, task-execution, review, merge, environment, deployment, fund-withdrawal, or
 recipient-acceptance authority; those scopes remain independently governed.
 
+Selected contributors report execution through `POST
+.../{outcome_id}/delivery-selections/{selection_id}/updates`. The compare-and-swap request names
+one connected task and retains status, percent progress, summary, blockers, forecast, agent
+minutes, and bounded exact references to existing tasks, sessions, workspaces, forks, pulls,
+checks, previews, delivery teams, commits, releases, or deployments. Evidence stays attributed to
+the authenticated human, team member, or approved-agent operator and does not alter authority in
+the referenced system.
+
+Contributors request evidence-backed costs through `POST .../{selection_id}/expenses`; they do
+not spend automatically. A current repository-participant fund steward approves or rejects a
+pending request at `POST .../{selection_id}/expenses/{expense_id}`. Approval atomically moves the
+amount from the selection's reserved balance to spent and retains the decision and evidence.
+`POST .../{selection_id}/controls` lets a current steward `pause`, `resume`, record
+`access_revoked`, `increase_budget` within live fund availability and single-steward spending
+rules, `replace_recipient` for unfinished tasks after live applicant validation, or
+`cancel_remaining`. Cancellation releases only unspent reserved value. Projections derive total
+progress, approved and pending expense, agent compute, last activity, forecast, and blockers.
+Overrun, fourteen-day inactivity, failed handoff, revoked access, pause, or cancellation stops new
+expense requests and approvals while preserving legitimate work and spend. Controls and
+replacement never grant repository, task, credential, Git, review, merge, deployment, or fund
+authority.
+
 ## Performance goals
 
 Current repository participants create a complete contract with `POST

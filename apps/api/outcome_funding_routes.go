@@ -44,6 +44,28 @@ type deliverySelectionInput struct {
 	ConflictDisclosure string   `json:"conflict_disclosure"`
 	Rationale          string   `json:"rationale"`
 }
+type deliveryUpdateRequest struct {
+	ExpectedVersion int                              `json:"expected_version"`
+	Recipient       projectfunds.DeliveryApplicant   `json:"recipient"`
+	Update          projectfunds.DeliveryUpdateInput `json:"update"`
+}
+type deliveryExpenseRequest struct {
+	ExpectedVersion int                               `json:"expected_version"`
+	Recipient       projectfunds.DeliveryApplicant    `json:"recipient"`
+	Expense         projectfunds.DeliveryExpenseInput `json:"expense"`
+}
+type deliveryExpenseDecisionRequest struct {
+	ExpectedVersion int    `json:"expected_version"`
+	Decision        string `json:"decision"`
+	Reason          string `json:"reason"`
+}
+type deliveryControlRequest struct {
+	ExpectedVersion int                             `json:"expected_version"`
+	Action          string                          `json:"action"`
+	Reason          string                          `json:"reason"`
+	Amount          int64                           `json:"amount"`
+	Replacement     *projectfunds.DeliveryApplicant `json:"replacement"`
+}
 
 func registerOutcomeFundingRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *projectfunds.Store, orgs ...*organizations.Store) {
 	var organizationStore *organizations.Store
@@ -335,6 +357,131 @@ func registerOutcomeFundingRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			return mutationErr
 		})
 		writeFundedOutcome(w, out, err, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/funded-outcomes/{outcome_id}/delivery-selections/{selection_id}/updates", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok {
+			return
+		}
+		if actor.UserID == "" {
+			writeAPIError(w, 401, "authentication_required", "an attributable selected contributor is required")
+			return
+		}
+		var in deliveryUpdateRequest
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a versioned task progress update with exact resources is required")
+			return
+		}
+		in.Recipient.SubmittedBy = actor.UserID
+		if in.Recipient.Kind == "human" && in.Recipient.ID != actor.UserID {
+			writeAPIError(w, 403, "delivery_execution_forbidden", "only the selected human, team member, or approved-agent operator may report delivery")
+			return
+		}
+		out, err := store.GetOutcome(r.PathValue("outcome_id"))
+		if err != nil || out.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "funded_outcome_not_found", "funded outcome not found")
+			return
+		}
+		err = withCurrentDeliveryApplicants([]projectfunds.DeliveryApplicant{in.Recipient}, actor.UserID, "", r.PathValue("id"), catalog, organizationStore, func() error {
+			var e error
+			out, e = store.RecordDeliveryUpdate(out.ID, r.PathValue("selection_id"), in.Recipient, actor.UserID, in.ExpectedVersion, in.Update)
+			return e
+		})
+		writeFundedOutcome(w, out, err, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/funded-outcomes/{outcome_id}/delivery-selections/{selection_id}/expenses", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok {
+			return
+		}
+		if actor.UserID == "" {
+			writeAPIError(w, 401, "authentication_required", "an attributable selected contributor is required")
+			return
+		}
+		var in deliveryExpenseRequest
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a bounded evidence-backed expense is required")
+			return
+		}
+		in.Recipient.SubmittedBy = actor.UserID
+		if in.Recipient.Kind == "human" && in.Recipient.ID != actor.UserID {
+			writeAPIError(w, 403, "delivery_execution_forbidden", "only the selected human, team member, or approved-agent operator may request an expense")
+			return
+		}
+		out, err := store.GetOutcome(r.PathValue("outcome_id"))
+		if err != nil || out.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "funded_outcome_not_found", "funded outcome not found")
+			return
+		}
+		err = withCurrentDeliveryApplicants([]projectfunds.DeliveryApplicant{in.Recipient}, actor.UserID, "", r.PathValue("id"), catalog, organizationStore, func() error {
+			var e error
+			out, e = store.RequestDeliveryExpense(out.ID, r.PathValue("selection_id"), in.Recipient, actor.UserID, in.ExpectedVersion, in.Expense)
+			return e
+		})
+		writeFundedOutcome(w, out, err, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/funded-outcomes/{outcome_id}/delivery-selections/{selection_id}/expenses/{expense_id}", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in deliveryExpenseDecisionRequest
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an attributed expense decision is required")
+			return
+		}
+		out, err := store.GetOutcome(r.PathValue("outcome_id"))
+		if err != nil || out.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "funded_outcome_not_found", "funded outcome not found")
+			return
+		}
+		var recipient *projectfunds.DeliveryApplicant
+		for _, selection := range out.DeliverySelections {
+			if selection.ID == r.PathValue("selection_id") {
+				for _, expense := range selection.Execution.Expenses {
+					if expense.ID == r.PathValue("expense_id") {
+						recipient = &projectfunds.DeliveryApplicant{Kind: expense.RecipientKind, ID: expense.RecipientID, SubmittedBy: actor.UserID}
+					}
+				}
+			}
+		}
+		if recipient == nil {
+			writeAPIError(w, 404, "delivery_expense_not_found", "delivery expense not found")
+			return
+		}
+		err = withCurrentDeliveryApplicants([]projectfunds.DeliveryApplicant{*recipient}, "", "", r.PathValue("id"), catalog, organizationStore, func() error {
+			var e error
+			out, e = store.DecideDeliveryExpense(out.ID, r.PathValue("selection_id"), r.PathValue("expense_id"), actor.UserID, in.Decision, in.Reason, in.ExpectedVersion)
+			return e
+		})
+		writeFundedOutcome(w, out, err, 200)
+	})
+	mux.HandleFunc("POST /repositories/{id}/funded-outcomes/{outcome_id}/delivery-selections/{selection_id}/controls", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in deliveryControlRequest
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a bounded attributed delivery control is required")
+			return
+		}
+		out, err := store.GetOutcome(r.PathValue("outcome_id"))
+		if err != nil || out.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "funded_outcome_not_found", "funded outcome not found")
+			return
+		}
+		if in.Replacement != nil {
+			in.Replacement.SubmittedBy = actor.UserID
+			err = withCurrentDeliveryApplicants([]projectfunds.DeliveryApplicant{*in.Replacement}, actor.UserID, "", r.PathValue("id"), catalog, organizationStore, func() error {
+				var e error
+				out, e = store.ControlDelivery(out.ID, r.PathValue("selection_id"), actor.UserID, in.Action, in.Reason, in.Amount, in.Replacement, in.ExpectedVersion)
+				return e
+			})
+		} else {
+			out, err = store.ControlDelivery(out.ID, r.PathValue("selection_id"), actor.UserID, in.Action, in.Reason, in.Amount, nil, in.ExpectedVersion)
+		}
+		writeFundedOutcome(w, out, err, 200)
 	})
 }
 

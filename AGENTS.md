@@ -404,6 +404,15 @@ whenever dependencies change or the web job fails before it starts.
   connected planned milestone tasks. The reservation governs compensation only: selection,
   acceptance, and tasks grant no repository, secret, credential, execution, review, merge,
   environment, deployment, withdrawal, or agent authority.
+  Selected delivery execution retains milestone progress, forecast, blockers, agent compute,
+  and exact links to established tasks, sessions, workspaces, forks, pulls, checks, previews,
+  releases, deployments, and delivery teams. Evidence-backed expenses remain pending until a
+  current fund steward approves them against the selection reservation. Stewards can pause,
+  resume, record revoked access, approve a bounded budget increase, replace unfinished work's
+  recipient after live eligibility validation, or cancel and release only the unspent reservation.
+  Overrun, fourteen-day inactivity, failed handoff, revoked access, pause, and cancellation stop
+  new spending without deleting prior updates, evidence, expenses, compute, or contributions;
+  none of these funding records expands the authority of linked resources or a replacement.
 
   Reciprocal roadmap learning retains feedback-specific decision, preview, delivery, rejection, and
   measured-outcome updates. Reporters see only updates citing their own feedback, can validate the
