@@ -2151,6 +2151,18 @@ cannot masquerade as access restoration.
 Revoked principals cannot mutate retained completed-task history after unfinished work is assigned
 to a distinct, live-validated replacement.
 
+Every selected milestone also freezes a deterministic share of the original recipient allocation
+and names current project participants as compensation reviewers. Reviewers inspect the latest
+completed update's authorship, commits, handoffs, checks, previews, releases, deployments, and
+recipient-declared outcome measures before accepting it, requesting correction, rejecting it,
+approving a bounded partial award, or opening a dispute. Decisions retain rationale and dissent;
+accepted and partial results atomically move only that milestone's allocation from reserved to
+spent, and a partial award releases its unawarded remainder. Rejection and correction remain
+appealable, while deadline timeout, recipient withdrawal, payment failure and retry, and policy
+refunds have explicit attributed ledger transitions. These decisions recognize compensation
+evidence only: they never merge a pull, publish a release, deploy an artifact, mint access, or
+replace the authority of any linked project resource.
+
 # Trusted external extensions
 
 Developers can register independently operated tools at `/extensions` before a

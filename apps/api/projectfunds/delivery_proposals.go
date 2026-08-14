@@ -34,13 +34,17 @@ type DeliveryProposalTerms struct {
 }
 
 type DeliveryTask struct {
-	ID             string   `json:"id"`
-	Title          string   `json:"title"`
-	RecipientKind  string   `json:"recipient_kind"`
-	RecipientID    string   `json:"recipient_id"`
-	MilestoneIndex int      `json:"milestone_index"`
-	Dependencies   []string `json:"dependencies"`
-	Status         string   `json:"status"`
+	ID             string              `json:"id"`
+	Title          string              `json:"title"`
+	RecipientKind  string              `json:"recipient_kind"`
+	RecipientID    string              `json:"recipient_id"`
+	MilestoneIndex int                 `json:"milestone_index"`
+	Dependencies   []string            `json:"dependencies"`
+	Status         string              `json:"status"`
+	ReviewerIDs    []string            `json:"reviewer_ids"`
+	AwardAmount    int64               `json:"award_amount"`
+	Reviews        []MilestoneReview   `json:"reviews"`
+	Recoveries     []MilestoneRecovery `json:"recoveries"`
 }
 
 type DeliverySelection struct {
@@ -128,7 +132,7 @@ func (s *Store) AcceptDeliveryProposal(outcomeID, proposalID, actor string, expe
 	return out, err
 }
 
-func (s *Store) SelectDeliveryProposals(outcomeID, steward string, expected int, proposalIDs []string, disclosure, rationale string) (FundedOutcome, error) {
+func (s *Store) SelectDeliveryProposals(outcomeID, steward string, expected int, proposalIDs, reviewerIDs []string, disclosure, rationale string) (FundedOutcome, error) {
 	var out FundedOutcome
 	err := s.lock(func() error {
 		v, err := s.readOutcome(outcomeID)
@@ -145,7 +149,7 @@ func (s *Store) SelectDeliveryProposals(outcomeID, steward string, expected int,
 		if !contains(fund.Terms.Stewards, steward) {
 			return ErrForbidden
 		}
-		if len(proposalIDs) == 0 || len(proposalIDs) > 20 || !validOutcomeText(disclosure, 5000) || !validOutcomeText(rationale, 5000) {
+		if len(proposalIDs) == 0 || len(proposalIDs) > 20 || len(reviewerIDs) == 0 || len(reviewerIDs) > 20 || !validOutcomeTexts(reviewerIDs, 20, 300) || !validOutcomeText(disclosure, 5000) || !validOutcomeText(rationale, 5000) {
 			return ErrInvalid
 		}
 		seen := map[string]bool{}
@@ -166,7 +170,11 @@ func (s *Store) SelectDeliveryProposals(outcomeID, steward string, expected int,
 				return ErrInvalid
 			}
 			for mi, milestone := range p.Terms.Milestones {
-				tasks = append(tasks, DeliveryTask{ID: randomID(), Title: milestone, RecipientKind: p.Applicant.Kind, RecipientID: p.Applicant.ID, MilestoneIndex: mi, Dependencies: append([]string(nil), p.Terms.Dependencies...), Status: "planned"})
+				award := p.Terms.Cost / int64(len(p.Terms.Milestones))
+				if mi == len(p.Terms.Milestones)-1 {
+					award += p.Terms.Cost % int64(len(p.Terms.Milestones))
+				}
+				tasks = append(tasks, DeliveryTask{ID: randomID(), Title: milestone, RecipientKind: p.Applicant.Kind, RecipientID: p.Applicant.ID, MilestoneIndex: mi, Dependencies: append([]string(nil), p.Terms.Dependencies...), Status: "planned", ReviewerIDs: append([]string(nil), reviewerIDs...), AwardAmount: award, Reviews: []MilestoneReview{}, Recoveries: []MilestoneRecovery{}})
 			}
 		}
 		originalFund := fund
