@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -419,13 +420,24 @@ func validObservation(o Observation) bool {
 	return true
 }
 func unsafe(v string) bool {
-	l := strings.ToLower(v)
-	for _, x := range []string{"bearer ", "api_key", "apikey", "api-key", "access_token=", "access-token=", "token=", "password=", "passwd=", "secret=", "authorization:", "proxy-authorization:", "cookie:", "set-cookie:", "x-api-key", "-----begin"} {
-		if strings.Contains(l, x) {
-			return true
-		}
+	if len(v) > 4000 {
+		return true
 	}
-	return len(v) > 4000
+	markers := []string{"bearer ", "api_key", "apikey", "api-key", "access_token=", "access-token=", "token=", "password=", "passwd=", "secret=", "authorization:", "proxy-authorization:", "cookie:", "set-cookie:", "x-api-key", "-----begin"}
+	canonical := v
+	for {
+		lower := strings.ToLower(canonical)
+		for _, marker := range markers {
+			if strings.Contains(lower, marker) {
+				return true
+			}
+		}
+		decoded, err := url.PathUnescape(canonical)
+		if err != nil || decoded == canonical {
+			return false
+		}
+		canonical = decoded
+	}
 }
 func mappingByID(v *Contract, id string) *SignalMapping {
 	for i := range v.SignalMappings {
