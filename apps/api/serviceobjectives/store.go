@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,6 +20,7 @@ import (
 var ErrNotFound = errors.New("service objective not found")
 var ErrInvalid = errors.New("invalid service objective")
 var ErrConflict = errors.New("service objective version conflict")
+var ErrMappingNotFound = errors.New("signal mapping not found")
 
 type Scope struct {
 	Kind       string `json:"kind"`
@@ -101,6 +104,63 @@ type Diagnostic struct {
 	ResourceID   string `json:"resource_id,omitempty"`
 	AttributedTo string `json:"attributed_to"`
 }
+type SignalSource struct {
+	Kind         string `json:"kind"`
+	Name         string `json:"name"`
+	Reference    string `json:"reference"`
+	Visibility   string `json:"visibility"`
+	Sanitization string `json:"sanitization"`
+}
+type SignalMappingRevision struct {
+	Version                 int            `json:"version"`
+	ContractVersion         int            `json:"contract_version"`
+	ObjectiveID             string         `json:"objective_id"`
+	InstrumentationRevision string         `json:"instrumentation_revision"`
+	Sources                 []SignalSource `json:"sources"`
+	Calculation             string         `json:"calculation"`
+	Unit                    string         `json:"unit"`
+	Rationale               string         `json:"rationale"`
+	CreatedBy               string         `json:"created_by"`
+	CreatedAt               time.Time      `json:"created_at"`
+}
+type SignalMapping struct {
+	ID             string                  `json:"id"`
+	CurrentVersion int                     `json:"current_version"`
+	Revisions      []SignalMappingRevision `json:"revisions"`
+}
+type SoftwareReference struct {
+	Kind     string `json:"kind"`
+	ID       string `json:"id"`
+	Revision string `json:"revision"`
+	Label    string `json:"label"`
+}
+type EvidenceGap struct {
+	Kind   string `json:"kind"`
+	Detail string `json:"detail"`
+}
+type Observation struct {
+	ID                   string              `json:"id"`
+	MappingID            string              `json:"mapping_id"`
+	MappingVersion       int                 `json:"mapping_version"`
+	ContractVersion      int                 `json:"contract_version"`
+	ObjectiveID          string              `json:"objective_id"`
+	WindowStart          time.Time           `json:"window_start"`
+	WindowEnd            time.Time           `json:"window_end"`
+	GoodEvents           float64             `json:"good_events"`
+	TotalEvents          float64             `json:"total_events"`
+	ObservedValue        *float64            `json:"observed_value,omitempty"`
+	Uncertainty          float64             `json:"uncertainty"`
+	Gaps                 []EvidenceGap       `json:"gaps"`
+	Software             []SoftwareReference `json:"software"`
+	Summary              string              `json:"summary"`
+	Attainment           *float64            `json:"attainment,omitempty"`
+	TargetMet            *bool               `json:"target_met,omitempty"`
+	ErrorBudgetConsumed  *float64            `json:"error_budget_consumed_percent,omitempty"`
+	ComparableToPrevious bool                `json:"comparable_to_previous"`
+	ComparisonReason     string              `json:"comparison_reason,omitempty"`
+	RecordedBy           string              `json:"recorded_by"`
+	RecordedAt           time.Time           `json:"recorded_at"`
+}
 type Revision struct {
 	Version         int              `json:"version"`
 	Title           string           `json:"title"`
@@ -122,13 +182,15 @@ type Revision struct {
 	CreatedAt       time.Time        `json:"created_at"`
 }
 type Contract struct {
-	ID             string       `json:"id"`
-	RepositoryID   string       `json:"repository_id"`
-	CurrentVersion int          `json:"current_version"`
-	Revisions      []Revision   `json:"revisions"`
-	Diagnostics    []Diagnostic `json:"diagnostics"`
-	CreatedAt      time.Time    `json:"created_at"`
-	UpdatedAt      time.Time    `json:"updated_at"`
+	ID             string          `json:"id"`
+	RepositoryID   string          `json:"repository_id"`
+	CurrentVersion int             `json:"current_version"`
+	Revisions      []Revision      `json:"revisions"`
+	SignalMappings []SignalMapping `json:"signal_mappings"`
+	Observations   []Observation   `json:"observations"`
+	Diagnostics    []Diagnostic    `json:"diagnostics"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
 }
 type Store struct {
 	root string
@@ -210,6 +272,199 @@ func (s *Store) List(repo string) ([]Contract, error) {
 	})
 	sort.Slice(values, func(i, j int) bool { return values[i].UpdatedAt.After(values[j].UpdatedAt) })
 	return values, err
+}
+func (s *Store) PublishMapping(contractID string, actor string, revision SignalMappingRevision) (Contract, error) {
+	var out Contract
+	err := s.lock(func() error {
+		v, e := s.read(contractID)
+		if e != nil {
+			return e
+		}
+		if revision.ContractVersion < 1 || revision.ContractVersion > v.CurrentVersion || !validMapping(v, revision) {
+			return ErrInvalid
+		}
+		now := s.now()
+		revision.Version, revision.CreatedBy, revision.CreatedAt = 1, actor, now
+		v.SignalMappings = append(v.SignalMappings, SignalMapping{ID: id(), CurrentVersion: 1, Revisions: []SignalMappingRevision{revision}})
+		v.UpdatedAt, out = now, v
+		return s.write(v)
+	})
+	return s.project(out), err
+}
+
+// ReviseMapping preserves every prior instrumentation definition and uses the mapping version as a CAS token.
+func (s *Store) ReviseMapping(contractID, mappingID string, expected int, actor string, revision SignalMappingRevision) (Contract, error) {
+	var out Contract
+	err := s.lock(func() error {
+		v, e := s.read(contractID)
+		if e != nil {
+			return e
+		}
+		m := mappingByID(&v, mappingID)
+		if m == nil {
+			return ErrMappingNotFound
+		}
+		if m.CurrentVersion != expected {
+			return ErrConflict
+		}
+		if latest := mappingRevision(*m, m.CurrentVersion); latest == nil || latest.ObjectiveID != revision.ObjectiveID {
+			return ErrInvalid
+		}
+		if revision.ContractVersion < 1 || revision.ContractVersion > v.CurrentVersion || !validMapping(v, revision) {
+			return ErrInvalid
+		}
+		now := s.now()
+		revision.Version, revision.CreatedBy, revision.CreatedAt = expected+1, actor, now
+		m.CurrentVersion = revision.Version
+		m.Revisions = append(m.Revisions, revision)
+		v.UpdatedAt, out = now, v
+		return s.write(v)
+	})
+	return s.project(out), err
+}
+
+func (s *Store) RecordObservation(contractID string, actor string, observation Observation) (Contract, error) {
+	var out Contract
+	err := s.lock(func() error {
+		v, e := s.read(contractID)
+		if e != nil {
+			return e
+		}
+		m := mappingByID(&v, observation.MappingID)
+		if m == nil {
+			return ErrMappingNotFound
+		}
+		mr := mappingRevision(*m, observation.MappingVersion)
+		if mr == nil || observation.ContractVersion != mr.ContractVersion || observation.ObjectiveID != mr.ObjectiveID || !validObservation(observation) {
+			return ErrInvalid
+		}
+		observation.ID, observation.RecordedBy, observation.RecordedAt = id(), actor, s.now()
+		v.Observations = append(v.Observations, observation)
+		v.UpdatedAt, out = observation.RecordedAt, v
+		return s.write(v)
+	})
+	return s.project(out), err
+}
+
+func (s *Store) ProjectForReader(v Contract, participant bool) Contract {
+	v = s.project(v)
+	for mi := range v.SignalMappings {
+		for ri := range v.SignalMappings[mi].Revisions {
+			for si := range v.SignalMappings[mi].Revisions[ri].Sources {
+				source := &v.SignalMappings[mi].Revisions[ri].Sources[si]
+				if unsafe(source.Reference) {
+					source.Reference = "redacted_unsafe_reference"
+					source.Sanitization = "credential-shaped legacy source reference removed"
+				} else if source.Visibility == "participants" && !participant {
+					source.Reference = "restricted"
+					source.Sanitization = "restricted source detail omitted"
+				}
+			}
+		}
+	}
+	return v
+}
+
+func validMapping(v Contract, r SignalMappingRevision) bool {
+	if r.ObjectiveID == "" || r.InstrumentationRevision == "" || len(r.Sources) == 0 || r.Calculation == "" || r.Unit == "" || r.Rationale == "" || unsafe(r.InstrumentationRevision+r.Rationale) {
+		return false
+	}
+	revision := revisionAt(v, r.ContractVersion)
+	if revision == nil {
+		return false
+	}
+	indicatorID := ""
+	for _, o := range revision.Objectives {
+		if o.ID == r.ObjectiveID {
+			indicatorID = o.IndicatorID
+		}
+	}
+	if indicatorID == "" {
+		return false
+	}
+	matchedIndicator := false
+	for _, indicator := range revision.Indicators {
+		if indicator.ID == indicatorID && indicator.Calculation == r.Calculation && indicator.Unit == r.Unit {
+			matchedIndicator = true
+		}
+	}
+	if !matchedIndicator {
+		return false
+	}
+	kinds := map[string]bool{"metric": true, "log": true, "trace": true, "health_check": true, "support_report": true, "deployment": true, "release": true, "commit": true, "pull_request": true, "package": true, "dependent_service": true}
+	for _, source := range r.Sources {
+		if !kinds[source.Kind] || source.Name == "" || source.Reference == "" || !oneOf(source.Visibility, "public", "participants") || source.Sanitization == "" || unsafe(source.Name+source.Reference+source.Sanitization) {
+			return false
+		}
+	}
+	return true
+}
+func validObservation(o Observation) bool {
+	if o.MappingID == "" || o.MappingVersion < 1 || o.ContractVersion < 1 || o.ObjectiveID == "" || o.WindowStart.IsZero() || !o.WindowEnd.After(o.WindowStart) || o.TotalEvents < 0 || o.GoodEvents < 0 || o.GoodEvents > o.TotalEvents || o.Uncertainty < 0 || o.Uncertainty > 100 || o.Summary == "" || unsafe(o.Summary) {
+		return false
+	}
+	if o.ObservedValue != nil && (math.IsNaN(*o.ObservedValue) || math.IsInf(*o.ObservedValue, 0)) {
+		return false
+	}
+	kinds := map[string]bool{"deployment": true, "release": true, "commit": true, "pull_request": true, "package": true, "dependent_service": true}
+	for _, x := range o.Software {
+		if !kinds[x.Kind] || x.ID == "" || x.Revision == "" || x.Label == "" || unsafe(x.ID+x.Revision+x.Label) {
+			return false
+		}
+	}
+	for _, x := range o.Gaps {
+		if x.Kind == "" || x.Detail == "" || unsafe(x.Kind+x.Detail) {
+			return false
+		}
+	}
+	return true
+}
+func unsafe(v string) bool {
+	if len(v) > 4000 {
+		return true
+	}
+	markers := []string{"bearer ", "api_key", "apikey", "api-key", "access_token=", "access-token=", "token=", "password=", "passwd=", "secret=", "authorization:", "proxy-authorization:", "cookie:", "set-cookie:", "x-api-key", "-----begin"}
+	canonical := v
+	for {
+		lower := strings.ToLower(canonical)
+		for _, marker := range markers {
+			if strings.Contains(lower, marker) {
+				return true
+			}
+		}
+		decoded, err := url.PathUnescape(canonical)
+		if err != nil {
+			return true
+		}
+		if decoded == canonical {
+			return false
+		}
+		canonical = decoded
+	}
+}
+func mappingByID(v *Contract, id string) *SignalMapping {
+	for i := range v.SignalMappings {
+		if v.SignalMappings[i].ID == id {
+			return &v.SignalMappings[i]
+		}
+	}
+	return nil
+}
+func mappingRevision(v SignalMapping, version int) *SignalMappingRevision {
+	for i := range v.Revisions {
+		if v.Revisions[i].Version == version {
+			return &v.Revisions[i]
+		}
+	}
+	return nil
+}
+func revisionAt(v Contract, version int) *Revision {
+	for i := range v.Revisions {
+		if v.Revisions[i].Version == version {
+			return &v.Revisions[i]
+		}
+	}
+	return nil
 }
 func stamp(r *Revision, v int, actor string, now time.Time) {
 	r.Version = v
@@ -328,8 +583,25 @@ func validateAt(r Revision, now time.Time) error {
 	return nil
 }
 func (s *Store) project(v Contract) Contract {
+	if v.SignalMappings == nil {
+		v.SignalMappings = []SignalMapping{}
+	}
+	if v.Observations == nil {
+		v.Observations = []Observation{}
+	}
 	if len(v.Revisions) == 0 {
 		return v
+	}
+	for i := range v.Revisions {
+		if v.Revisions[i].Dependencies == nil {
+			v.Revisions[i].Dependencies = []Dependency{}
+		}
+		if v.Revisions[i].CommitmentLinks == nil {
+			v.Revisions[i].CommitmentLinks = []CommitmentLink{}
+		}
+		if v.Revisions[i].Exceptions == nil {
+			v.Revisions[i].Exceptions = []Exception{}
+		}
 	}
 	r := v.Revisions[len(v.Revisions)-1]
 	d := []Diagnostic{}
@@ -379,6 +651,77 @@ func (s *Store) project(v Contract) Contract {
 		}
 	}
 	v.Diagnostics = d
+	for i := range v.Observations {
+		o := &v.Observations[i]
+		if o.Gaps == nil {
+			o.Gaps = []EvidenceGap{}
+		}
+		if o.Software == nil {
+			o.Software = []SoftwareReference{}
+		}
+		revision := revisionAt(v, o.ContractVersion)
+		if revision != nil {
+			for _, objective := range revision.Objectives {
+				if objective.ID == o.ObjectiveID {
+					var indicator *Indicator
+					for j := range revision.Indicators {
+						if revision.Indicators[j].ID == objective.IndicatorID {
+							indicator = &revision.Indicators[j]
+							break
+						}
+					}
+					if indicator == nil {
+						continue
+					}
+					var value *float64
+					switch indicator.Calculation {
+					case "ratio", "availability":
+						if o.TotalEvents > 0 {
+							derived := o.GoodEvents / o.TotalEvents * 100
+							value = &derived
+						}
+					case "count":
+						derived := o.GoodEvents
+						value = &derived
+					case "latency_percentile":
+						value = o.ObservedValue
+					default:
+						value = o.ObservedValue
+					}
+					o.Attainment = value
+					if value == nil {
+						continue
+					}
+					met := (*o.Attainment >= objective.Target && objective.Comparator == "at_least") || (*o.Attainment <= objective.Target && objective.Comparator == "at_most")
+					o.TargetMet = &met
+					for _, budget := range revision.ErrorBudgets {
+						if budget.ObjectiveID == objective.ID && budget.AllowedFailure > 0 {
+							consumed := 0.0
+							if (indicator.Calculation == "ratio" || indicator.Calculation == "availability") && indicator.Unit == "percent" && objective.Comparator == "at_least" {
+								consumed = math.Max(0, (100-*value)/budget.AllowedFailure*100)
+							} else if objective.Comparator == "at_most" {
+								consumed = math.Max(0, (*value-objective.Target)/budget.AllowedFailure*100)
+							} else {
+								consumed = math.Max(0, (objective.Target-*value)/budget.AllowedFailure*100)
+							}
+							o.ErrorBudgetConsumed = &consumed
+						}
+					}
+				}
+			}
+		}
+		o.ComparableToPrevious = true
+		for previous := i - 1; previous >= 0; previous-- {
+			p := v.Observations[previous]
+			if p.ObjectiveID == o.ObjectiveID {
+				if p.MappingID != o.MappingID || p.MappingVersion != o.MappingVersion || p.WindowEnd.Sub(p.WindowStart) != o.WindowEnd.Sub(o.WindowStart) {
+					o.ComparableToPrevious = false
+					o.ComparisonReason = "instrumentation revision or measurement window changed"
+				}
+				break
+			}
+		}
+	}
 	return v
 }
 func oneOf(v string, vs ...string) bool {

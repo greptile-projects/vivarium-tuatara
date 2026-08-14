@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
@@ -26,6 +27,7 @@ func TestServiceObjectivePublicAPI(t *testing.T) {
 	var repo repositories.Repository
 	_ = json.NewDecoder(response.Body).Decode(&repo)
 	response.Body.Close()
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+repo.ID, `{"visibility":"public"}`, owner.Credential.Token, http.StatusOK).Body.Close()
 	revision := completeServiceObjectiveAPIRevision(owner.User.ID)
 	payload, _ := json.Marshal(map[string]any{"revision": revision})
 	createdResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/service-objectives", string(payload), owner.Credential.Token, http.StatusCreated)
@@ -43,6 +45,25 @@ func TestServiceObjectivePublicAPI(t *testing.T) {
 	}
 	payload, _ = json.Marshal(map[string]any{"expected_version": 0, "revision": revision})
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/service-objectives/"+created.ID+"/revisions", string(payload), owner.Credential.Token, http.StatusConflict).Body.Close()
+	mapping := serviceobjectives.SignalMappingRevision{ContractVersion: 1, ObjectiveID: "slo", InstrumentationRevision: "otel-v1", Calculation: "availability", Unit: "percent", Rationale: "Connect sanitized production signals", Sources: []serviceobjectives.SignalSource{{Kind: "health_check", Name: "Journey probe", Reference: "health://critical", Visibility: "public", Sanitization: "status only"}, {Kind: "support_report", Name: "Support trend", Reference: "support://restricted/aggregate", Visibility: "participants", Sanitization: "identity and message removed"}}}
+	payload, _ = json.Marshal(map[string]any{"revision": mapping})
+	mappedResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/service-objectives/"+created.ID+"/signal-mappings", string(payload), owner.Credential.Token, http.StatusCreated)
+	var mapped serviceobjectives.Contract
+	_ = json.NewDecoder(mappedResponse.Body).Decode(&mapped)
+	mappedResponse.Body.Close()
+	observation := serviceobjectives.Observation{MappingID: mapped.SignalMappings[0].ID, MappingVersion: 1, ContractVersion: 1, ObjectiveID: "slo", WindowStart: time.Now().UTC().Add(-time.Hour), WindowEnd: time.Now().UTC(), GoodEvents: 999, TotalEvents: 1000, Uncertainty: .1, Summary: "Exact release aggregate", Software: []serviceobjectives.SoftwareReference{{Kind: "release", ID: "release-1", Revision: "deadbeef", Label: "v1"}}}
+	payload, _ = json.Marshal(map[string]any{"observation": observation})
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/service-objectives/"+created.ID+"/observations", string(payload), owner.Credential.Token, http.StatusCreated).Body.Close()
+	publicResponse, err := http.Get(server.URL + "/repositories/" + repo.ID + "/service-objectives/" + created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer publicResponse.Body.Close()
+	var public serviceobjectives.Contract
+	_ = json.NewDecoder(publicResponse.Body).Decode(&public)
+	if publicResponse.StatusCode != http.StatusOK || public.SignalMappings[0].Revisions[0].Sources[1].Reference != "restricted" || len(public.Observations) != 1 || public.Observations[0].Attainment == nil {
+		t.Fatalf("public evidence = status %d, %#v", publicResponse.StatusCode, public)
+	}
 }
 
 func completeServiceObjectiveAPIRevision(owner string) serviceobjectives.Revision {

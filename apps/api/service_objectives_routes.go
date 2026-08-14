@@ -14,6 +14,13 @@ type serviceObjectiveInput struct {
 	ExpectedVersion int                        `json:"expected_version"`
 	Revision        serviceobjectives.Revision `json:"revision"`
 }
+type signalMappingInput struct {
+	ExpectedVersion int                                     `json:"expected_version"`
+	Revision        serviceobjectives.SignalMappingRevision `json:"revision"`
+}
+type observationInput struct {
+	Observation serviceobjectives.Observation `json:"observation"`
+}
 
 func registerServiceObjectiveRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, contracts *serviceobjectives.Store) {
 	mux.HandleFunc("GET /repositories/{id}/service-objectives", func(w http.ResponseWriter, r *http.Request) {
@@ -24,6 +31,10 @@ func registerServiceObjectiveRoutes(mux *http.ServeMux, catalog *repositories.St
 		if err != nil {
 			writeAPIError(w, 500, "service_objectives_unavailable", "service objectives could not be read")
 			return
+		}
+		participant := serviceObjectiveReaderParticipant(r, catalog, credentials, r.PathValue("id"))
+		for i := range values {
+			values[i] = contracts.ProjectForReader(values[i], participant)
 		}
 		writeJSON(w, 200, map[string]any{"service_objectives": values})
 	})
@@ -36,7 +47,7 @@ func registerServiceObjectiveRoutes(mux *http.ServeMux, catalog *repositories.St
 			writeAPIError(w, 404, "service_objective_not_found", "service objective not found")
 			return
 		}
-		writeJSON(w, 200, out)
+		writeJSON(w, 200, contracts.ProjectForReader(out, serviceObjectiveReaderParticipant(r, catalog, credentials, out.RepositoryID)))
 	})
 	mux.HandleFunc("POST /repositories/{id}/service-objectives", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
@@ -79,6 +90,106 @@ func registerServiceObjectiveRoutes(mux *http.ServeMux, catalog *repositories.St
 		})
 		writeServiceObjective(w, out, err, 200)
 	})
+	mux.HandleFunc("POST /repositories/{id}/service-objectives/{objective_id}/signal-mappings", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := contracts.Get(r.PathValue("objective_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "service_objective_not_found", "service objective not found")
+			return
+		}
+		var in signalMappingInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a complete sanitized signal mapping is required")
+			return
+		}
+		var out serviceobjectives.Contract
+		err = catalog.WithCurrentParticipant(actor.UserID, current.RepositoryID, func() error {
+			var e error
+			out, e = contracts.PublishMapping(current.ID, actor.UserID, in.Revision)
+			return e
+		})
+		writeReliabilityEvidence(w, out, err, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/service-objectives/{objective_id}/signal-mappings/{mapping_id}/revisions", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := contracts.Get(r.PathValue("objective_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "service_objective_not_found", "service objective not found")
+			return
+		}
+		var in signalMappingInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "expected_version and a complete sanitized signal mapping are required")
+			return
+		}
+		var out serviceobjectives.Contract
+		err = catalog.WithCurrentParticipant(actor.UserID, current.RepositoryID, func() error {
+			var e error
+			out, e = contracts.ReviseMapping(current.ID, r.PathValue("mapping_id"), in.ExpectedVersion, actor.UserID, in.Revision)
+			return e
+		})
+		writeReliabilityEvidence(w, out, err, 200)
+	})
+	mux.HandleFunc("POST /repositories/{id}/service-objectives/{objective_id}/observations", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := contracts.Get(r.PathValue("objective_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "service_objective_not_found", "service objective not found")
+			return
+		}
+		var in observationInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a complete sanitized observation is required")
+			return
+		}
+		var out serviceobjectives.Contract
+		err = catalog.WithCurrentParticipant(actor.UserID, current.RepositoryID, func() error {
+			var e error
+			out, e = contracts.RecordObservation(current.ID, actor.UserID, in.Observation)
+			return e
+		})
+		writeReliabilityEvidence(w, out, err, 201)
+	})
+}
+
+func serviceObjectiveReaderParticipant(r *http.Request, catalog *repositories.Store, credentials *auth.Store, repositoryID string) bool {
+	actor, authenticated, err := authenticateOptionalCredential(r, credentials, "repositories:read")
+	if err != nil || !authenticated {
+		return false
+	}
+	repo, err := catalog.GetByID(repositoryID)
+	if err != nil {
+		return false
+	}
+	if repo.OwnerID == actor.UserID {
+		return true
+	}
+	ok, err := catalog.HasCollaborator(actor.UserID, repositoryID)
+	return err == nil && ok
+}
+func writeReliabilityEvidence(w http.ResponseWriter, v serviceobjectives.Contract, err error, status int) {
+	switch {
+	case err == nil:
+		writeJSON(w, status, v)
+	case errors.Is(err, serviceobjectives.ErrConflict):
+		writeAPIError(w, 409, "signal_mapping_conflict", "the signal mapping changed; reload before publishing")
+	case errors.Is(err, serviceobjectives.ErrMappingNotFound):
+		writeAPIError(w, 404, "signal_mapping_not_found", "signal mapping not found")
+	case errors.Is(err, serviceobjectives.ErrInvalid):
+		writeAPIError(w, 400, "invalid_reliability_evidence", "evidence must bind an exact objective and mapping revision, sanitized sources, a measurement window, counts, uncertainty, gaps, and delivered-software provenance")
+	default:
+		log.Printf("reliability evidence storage: %v", err)
+		writeAPIError(w, 500, "reliability_evidence_unavailable", "reliability evidence could not be persisted")
+	}
 }
 func serviceObjectiveParticipants(actor string, r serviceobjectives.Revision) []string {
 	seen := map[string]bool{}
