@@ -22,6 +22,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/accessibilitydelivery"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/localization"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/performanceevidence"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/privacychecks"
@@ -477,6 +478,7 @@ type MergeReadiness struct {
 	PerformanceRequirements []performanceevidence.MergeRequirement `json:"performance_requirements"`
 	AccessibilityReadiness  *accessibilitydelivery.Readiness       `json:"accessibility_readiness,omitempty"`
 	PrivacyReadiness        *privacychecks.Readiness               `json:"privacy_readiness,omitempty"`
+	LocalizationReadiness   *localization.LocaleReadiness          `json:"localization_readiness,omitempty"`
 }
 
 type commentRecord struct {
@@ -510,6 +512,7 @@ type Store struct {
 	accessibilityDelivery    *accessibilitydelivery.Store
 	accessibilityAssessments *accessibilityassessments.Store
 	privacyChecks            *privacychecks.Store
+	localization             *localization.Store
 }
 
 func (s *Store) ConfigurePerformanceEvidence(store *performanceevidence.Store) { s.performance = store }
@@ -517,6 +520,7 @@ func (s *Store) ConfigureAccessibilityDelivery(delivery *accessibilitydelivery.S
 	s.accessibilityDelivery, s.accessibilityAssessments = delivery, assessments
 }
 func (s *Store) ConfigurePrivacyChecks(store *privacychecks.Store) { s.privacyChecks = store }
+func (s *Store) ConfigureLocalization(store *localization.Store)   { s.localization = store }
 
 func (s *Store) ConfigurePreviewAcceptance(a *acceptance.Store, p *previews.Store) {
 	s.acceptance = a
@@ -1726,6 +1730,37 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 			}
 		}
 	}
+	if s.localization != nil {
+		statuses := map[string]string{}
+		risks := acceptedLocalizationRisks(report.PreviewAcceptance)
+		if s.checkRuns != nil {
+			runs, runErr := s.checkRuns.List(repositoryID, pullRequestID)
+			if runErr != nil {
+				return MergeReadiness{}, runErr
+			}
+			for _, run := range runs {
+				status := "pending"
+				if run.CommitID != p.SourceCommitID {
+					status = "stale"
+				} else if run.State == "succeeded" {
+					status = "passed"
+				} else if run.State == "failed" {
+					status = "failed"
+				}
+				statuses[run.Definition.Name] = status
+			}
+		}
+		localeReadiness, evaluationErr := s.localization.EvaluateDelivery(repositoryID, pullRequestID, "", p.SourceCommitID, p.TargetBranch, nil, risks, statuses)
+		if evaluationErr != nil {
+			return MergeReadiness{}, evaluationErr
+		}
+		report.LocalizationReadiness = &localeReadiness
+		for _, requirement := range localeReadiness.Requirements {
+			if requirement.Status != "passed" {
+				addBlocker("localization_"+requirement.Kind+"_"+requirement.Status, requirement.Locale+": "+requirement.Name)
+			}
+		}
+	}
 
 	if sourceID != nil && targetID != nil && *sourceID == p.SourceCommitID {
 		merged, err := commitReachable(repository, *sourceID, *targetID)
@@ -1758,6 +1793,19 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 		}
 	}
 	return report, nil
+}
+
+func acceptedLocalizationRisks(evaluation *acceptance.Evaluation) []string {
+	if evaluation == nil {
+		return nil
+	}
+	risks := []string{}
+	for _, decision := range evaluation.Decisions {
+		if decision.Outcome == "accepted" {
+			risks = append(risks, decision.RiskClasses...)
+		}
+	}
+	return risks
 }
 
 func containsPrivacyRule(values []string, want string) bool {

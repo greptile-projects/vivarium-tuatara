@@ -1,0 +1,497 @@
+"use client";
+
+import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { api } from "@/lib/api";
+import { useAuth } from "./auth";
+import { Badge, Button, Card } from "./ui";
+
+type Policy = {
+  id: string;
+  branch: string;
+  locale_plan_id: string;
+  locale_plan_version: number;
+  locales: string[];
+  required_checks: string[];
+  minimum_reviews: number;
+};
+type Disposition = {
+  id: string;
+  policy_id: string;
+  locale: string;
+  revision: string;
+  state: string;
+  reason: string;
+};
+type Publication = {
+  id: string;
+  kind: string;
+  resource_id: string;
+  version: string;
+  revision: string;
+  locale: string;
+  locale_plan_id: string;
+  locale_plan_version: number;
+  source_locale: string;
+  fallback_locale?: string;
+  fallback_state: string;
+  url: string;
+  status: string;
+};
+type Finding = {
+  id: string;
+  publication_id: string;
+  locale: string;
+  category: string;
+  route: string;
+  expected: string;
+  observed: string;
+  status: string;
+  validation_reason?: string;
+  repair?: { owner_type: string; owner_id: string; work_url: string };
+};
+type Delivery = {
+  policies?: Policy[];
+  dispositions?: Disposition[];
+  publications?: Publication[];
+  findings?: Finding[];
+};
+const value = (f: FormData, n: string) => String(f.get(n) ?? "").trim();
+const list = (v: string) =>
+  v
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+export function LocalizationDeliveryWorkspace({
+  repositoryID,
+}: {
+  repositoryID: string;
+}) {
+  const { token } = useAuth(),
+    [data, setData] = useState<Delivery>({}),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false);
+  const load = useCallback(async () => {
+    if (!token) return;
+    try {
+      setData(
+        await api<Delivery>(
+          `/repositories/${repositoryID}/localization-delivery`,
+          {},
+          token,
+        ),
+      );
+      setError("");
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Delivery evidence could not be loaded.",
+      );
+    }
+  }, [repositoryID, token]);
+  useEffect(() => {
+    void Promise.resolve().then(load);
+  }, [load]);
+  async function submit(
+    e: FormEvent<HTMLFormElement>,
+    path: string,
+    body: (f: FormData) => unknown,
+  ) {
+    e.preventDefault();
+    if (!token) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api(
+        path,
+        {
+          method: "POST",
+          body: JSON.stringify(body(new FormData(e.currentTarget))),
+        },
+        token,
+      );
+      e.currentTarget.reset();
+      await load();
+    } catch (x) {
+      setError(
+        x instanceof Error ? x.message : "Change could not be retained.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="space-y-5">
+      <header>
+        <h2 className="text-xl font-semibold">
+          Delivery and published experience
+        </h2>
+        <p className="mt-1 max-w-3xl text-sm text-[var(--muted)]">
+          Govern current checks and reviews per audience and locale. Deferred or
+          withdrawn locales stay explicit without blocking locales that are
+          ready.
+        </p>
+      </header>
+      {error && (
+        <p role="alert" className="text-sm text-[var(--danger)]">
+          {error}
+        </p>
+      )}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card className="p-5">
+          <h3 className="font-semibold">Add delivery policy</h3>
+          <form
+            className="mt-3 grid gap-3"
+            onSubmit={(e) =>
+              submit(
+                e,
+                `/repositories/${repositoryID}/localization-delivery-policies`,
+                (f) => ({
+                  branch: value(f, "branch"),
+                  locale_plan_id: value(f, "plan"),
+                  locale_plan_version: Number(value(f, "plan_version")),
+                  locales: list(value(f, "locales")),
+                  audiences: list(value(f, "audiences")),
+                  risk_classes: list(value(f, "risks")),
+                  required_checks: list(value(f, "checks")),
+                  minimum_reviews: Number(value(f, "reviews")),
+                }),
+              )
+            }
+          >
+            <Field n="branch" label="Target branch" placeholder="main" />
+            <Field n="plan" label="Current locale plan ID" />
+            <Field n="plan_version" label="Plan version" type="number" />
+            <Field n="locales" label="Locales" placeholder="fr-CA, ja-JP" />
+            <Field
+              n="audiences"
+              label="Audiences (optional)"
+              placeholder="customers, contributors"
+              required={false}
+            />
+            <Field
+              n="risks"
+              label="Risk classes (optional)"
+              placeholder="checkout, legal"
+              required={false}
+            />
+            <Field
+              n="checks"
+              label="Required check names"
+              placeholder="locale-format, locale-journey"
+            />
+            <Field
+              n="reviews"
+              label="Required regional reviews"
+              type="number"
+            />
+            <Button disabled={busy}>Publish policy</Button>
+          </form>
+        </Card>
+        <Card className="p-5">
+          <h3 className="font-semibold">
+            Stage, defer, or withdraw one locale
+          </h3>
+          <form
+            className="mt-3 grid gap-3"
+            onSubmit={(e) =>
+              submit(
+                e,
+                `/repositories/${repositoryID}/localization-dispositions`,
+                (f) => ({
+                  policy_id: value(f, "policy"),
+                  release_id: value(f, "release"),
+                  revision: value(f, "revision"),
+                  locale: value(f, "locale"),
+                  state: value(f, "state"),
+                  reason: value(f, "reason"),
+                }),
+              )
+            }
+          >
+            <Field n="policy" label="Policy ID" />
+            <Field n="release" label="Release ID (optional)" required={false} />
+            <Field n="revision" label="Exact revision" />
+            <Field n="locale" label="Locale" />
+            <label className="text-xs font-semibold">
+              State
+              <select
+                name="state"
+                className="mt-1 min-h-10 w-full rounded-lg border bg-white px-3 font-normal"
+              >
+                <option>staged</option>
+                <option>deferred</option>
+                <option>withdrawn</option>
+              </select>
+            </label>
+            <Field n="reason" label="Attributed reason" />
+            <Button disabled={busy}>Record locale state</Button>
+          </form>
+        </Card>
+      </div>
+      <Card className="p-5">
+        <h3 className="font-semibold">Publish locale provenance</h3>
+        <form
+          className="mt-3 grid gap-3 md:grid-cols-3"
+          onSubmit={(e) =>
+            submit(
+              e,
+              `/repositories/${repositoryID}/localized-publications`,
+              (f) => ({
+                kind: value(f, "kind"),
+                resource_id: value(f, "resource"),
+                release_id: value(f, "release"),
+                version: value(f, "version"),
+                revision: value(f, "revision"),
+                locale: value(f, "locale"),
+                locale_plan_id: value(f, "plan"),
+                locale_plan_version: Number(value(f, "plan_version")),
+                source_locale: value(f, "source"),
+                fallback_locale: value(f, "fallback"),
+                fallback_state: value(f, "fallback_state"),
+                url: value(f, "url"),
+                status: value(f, "status"),
+              }),
+            )
+          }
+        >
+          <Select
+            n="kind"
+            label="Experience"
+            values={["application", "documentation"]}
+          />
+          <Field n="resource" label="Resource ID" />
+          <Field n="release" label="Release ID (optional)" required={false} />
+          <Field n="version" label="Published version" />
+          <Field n="revision" label="Exact revision" />
+          <Field n="locale" label="Locale" />
+          <Field n="plan" label="Locale plan ID" />
+          <Field n="plan_version" label="Plan version" type="number" />
+          <Field n="source" label="Source locale" />
+          <Field n="fallback" label="Fallback locale" required={false} />
+          <Select
+            n="fallback_state"
+            label="Fallback state"
+            values={["complete", "partial", "fallback"]}
+          />
+          <Field n="url" label="Published URL" />
+          <Select
+            n="status"
+            label="Publication state"
+            values={["published", "staged", "withdrawn"]}
+          />
+          <Button disabled={busy}>Publish provenance</Button>
+        </form>
+      </Card>
+      <div className="grid gap-3">
+        {(data.publications ?? []).map((p) => (
+          <Card className="p-4" key={p.id}>
+            <div className="flex flex-wrap gap-2">
+              <strong>
+                {p.locale} · {p.version}
+              </strong>
+              <Badge tone={p.status === "published" ? "success" : "warning"}>
+                {p.status}
+              </Badge>
+              <Badge>{p.fallback_state}</Badge>
+            </div>
+            <p className="mt-2 text-xs text-[var(--muted)]">
+              {p.kind} {p.resource_id} · plan {p.locale_plan_id} v
+              {p.locale_plan_version} · revision {p.revision}
+            </p>
+            <a className="mt-1 block text-sm text-[var(--brand)]" href={p.url}>
+              {p.url}
+            </a>
+            <details className="mt-3">
+              <summary className="cursor-pointer text-sm font-semibold">
+                Report an in-context problem
+              </summary>
+              <form
+                className="mt-3 grid gap-2 md:grid-cols-2"
+                onSubmit={(e) =>
+                  submit(
+                    e,
+                    `/repositories/${repositoryID}/localized-publications/${p.id}/findings`,
+                    (f) => ({
+                      locale: p.locale,
+                      category: value(f, "category"),
+                      route: value(f, "route"),
+                      unit_key: value(f, "unit"),
+                      expected: value(f, "expected"),
+                      observed: value(f, "observed"),
+                      evidence_url: value(f, "evidence"),
+                    }),
+                  )
+                }
+              >
+                <Select
+                  n="category"
+                  label="Problem"
+                  values={[
+                    "mistranslation",
+                    "cultural_mismatch",
+                    "broken_formatting",
+                    "missing_content",
+                  ]}
+                />
+                <Field n="route" label="Route or document anchor" />
+                <Field
+                  n="unit"
+                  label="Message key (optional)"
+                  required={false}
+                />
+                <Field
+                  n="evidence"
+                  label="Redacted evidence URL (optional)"
+                  required={false}
+                />
+                <Field n="expected" label="Expected experience" />
+                <Field n="observed" label="Observed experience" />
+                <Button disabled={busy}>Report finding</Button>
+              </form>
+            </details>
+          </Card>
+        ))}
+      </div>
+      {(data.findings ?? []).length > 0 && (
+        <Card className="p-5">
+          <h3 className="font-semibold">Published findings and repair links</h3>
+          <div className="mt-3 space-y-3">
+            {data.findings!.map((f) => (
+              <div className="rounded-lg border p-3" key={f.id}>
+                <Badge
+                  tone={
+                    f.status === "validated"
+                      ? "danger"
+                      : f.status === "dismissed"
+                        ? "success"
+                        : "warning"
+                  }
+                >
+                  {f.status}
+                </Badge>
+                <strong className="ml-2">
+                  {f.locale} · {f.category.replaceAll("_", " ")}
+                </strong>
+                <p className="mt-2 text-sm">
+                  {f.route}: {f.observed}
+                </p>
+                {f.repair && (
+                  <a
+                    className="text-sm text-[var(--brand)]"
+                    href={f.repair.work_url}
+                  >
+                    Repair owned by {f.repair.owner_type} {f.repair.owner_id}
+                  </a>
+                )}
+                {f.status === "reported" && (
+                  <details className="mt-2">
+                    <summary className="cursor-pointer text-sm font-semibold">
+                      Validate and link repair work
+                    </summary>
+                    <form
+                      className="mt-2 grid gap-2 md:grid-cols-2"
+                      onSubmit={(e) =>
+                        submit(
+                          e,
+                          `/repositories/${repositoryID}/localization-findings/${f.id}/decision`,
+                          (form) => {
+                            const status = value(form, "status");
+                            return {
+                              status,
+                              reason: value(form, "reason"),
+                              repair:
+                                status === "validated"
+                                  ? {
+                                      owner_type: value(form, "owner_type"),
+                                      owner_id: value(form, "owner_id"),
+                                      work_url: value(form, "work_url"),
+                                      acceptance_criteria: value(
+                                        form,
+                                        "criteria",
+                                      ),
+                                    }
+                                  : undefined,
+                            };
+                          },
+                        )
+                      }
+                    >
+                      <Select
+                        n="status"
+                        label="Decision"
+                        values={["validated", "dismissed"]}
+                      />
+                      <Field n="reason" label="Validation rationale" />
+                      <Select
+                        n="owner_type"
+                        label="Repair owner type"
+                        values={["human", "agent"]}
+                      />
+                      <Field n="owner_id" label="Repair owner ID" />
+                      <Field n="work_url" label="Linked proposal or task URL" />
+                      <Field n="criteria" label="Acceptance criteria" />
+                      <Button disabled={busy}>Retain decision</Button>
+                    </form>
+                  </details>
+                )}
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+    </section>
+  );
+}
+function Field({
+  n,
+  label,
+  type = "text",
+  required = true,
+  placeholder,
+}: {
+  n: string;
+  label: string;
+  type?: string;
+  required?: boolean;
+  placeholder?: string;
+}) {
+  return (
+    <label className="text-xs font-semibold">
+      {label}
+      <input
+        name={n}
+        type={type}
+        required={required}
+        placeholder={placeholder}
+        className="mt-1 min-h-10 w-full rounded-lg border px-3 font-normal"
+      />
+    </label>
+  );
+}
+function Select({
+  n,
+  label,
+  values,
+}: {
+  n: string;
+  label: string;
+  values: string[];
+}) {
+  return (
+    <label className="text-xs font-semibold">
+      {label}
+      <select
+        name={n}
+        className="mt-1 min-h-10 w-full rounded-lg border bg-white px-3 font-normal"
+      >
+        {values.map((v) => (
+          <option value={v} key={v}>
+            {v.replaceAll("_", " ")}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
