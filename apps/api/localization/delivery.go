@@ -267,8 +267,19 @@ func (s *Store) EvaluateDelivery(repo, pullID, releaseID, revision, branch strin
 				}
 			}
 			reviews := 0
+			currentCandidates := map[string]bool{}
+			for _, projection := range review.Verification {
+				if !projection.Current {
+					continue
+				}
+				for _, candidate := range review.VerificationCandidates {
+					if candidate.ID == projection.CandidateID && candidate.Locale == locale && candidate.LocalePlanID == p.LocalePlanID && candidate.LocalePlanVersion == p.LocalePlanVersion {
+						currentCandidates[candidate.ID] = true
+					}
+				}
+			}
 			for _, x := range review.LocaleReviewDecisions {
-				if x.Locale == locale && x.Kind == "approve" {
+				if x.Locale == locale && x.Kind == "approve" && currentCandidates[x.CandidateID] {
 					reviews++
 				}
 			}

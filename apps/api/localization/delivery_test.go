@@ -56,6 +56,14 @@ func TestLocaleDeliveryCountsCurrentPreviewApproval(t *testing.T) {
 	if err != nil || !readiness.Ready || readiness.Requirements[0].Status != "passed" {
 		t.Fatalf("readiness = %#v, %v", readiness, err)
 	}
+	v, err = s.Propose("repo", "pull", revision, v.Extractions[0].Units[0].ID, "fr-CA", "Bienvenue à nouveau", "updated regional wording", "translator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	readiness, err = s.EvaluateDelivery("repo", "pull", "", revision, "main", nil, nil, nil)
+	if err != nil || readiness.Ready || readiness.Requirements[0].Status != "missing" {
+		t.Fatalf("stale approval readiness = %#v, %v", readiness, err)
+	}
 }
 
 func TestScopedLocaleDeliveryDoesNotSelectAbsentContext(t *testing.T) {

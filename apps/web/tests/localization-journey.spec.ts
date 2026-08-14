@@ -860,23 +860,199 @@ test("a product change reaches readers through attributable locale delivery and 
         },
       },
     );
-    for (const locale of ["fr-CA", "ar-EG"])
-      await json(
-        ownerPage,
-        "post",
-        `/repositories/${repository.id}/localization-dispositions`,
-        owner.headers,
-        {
-          policy_id: policy.id,
-          revision: repairRevision,
-          locale,
-          state: "deferred",
-          reason:
-            locale === "fr-CA"
-              ? "Publish the validated focused correction after ordinary review."
-              : "Keep the independently withdrawn RTL locale contained.",
+    const repairBase = `/repositories/${repository.id}/pulls/${repairPull.id}`;
+    let repairReview = await json(
+      ownerPage,
+      "post",
+      `${repairBase}/localization/extractions`,
+      owner.headers,
+      {
+        source_revision: repairRevision,
+        map: {
+          id: "welcome-map",
+          version: 1,
+          name: "Welcome messages",
+          include: ["welcome.txt"],
+          formats: ["text"],
         },
-      );
+        locales: ["fr-CA", "ar-EG"],
+        units: [
+          {
+            key: "welcome.start",
+            message: "Start free trial — familiar French Canadian tone",
+            context: "Primary welcome action corrected from regional feedback",
+            screenshot: "artifact://welcome-action-repair",
+            variables: [],
+            plural_rule: "",
+            source_locations: [
+              { path: "welcome.txt", line: 1, component: "WelcomeAction" },
+            ],
+          },
+        ],
+      },
+    );
+    const repairUnit = repairReview.extractions.at(-1).units[0];
+    repairReview = await json(
+      translatorPage,
+      "post",
+      `${repairBase}/localization/translations`,
+      translator.headers,
+      {
+        source_revision: repairRevision,
+        unit_id: repairUnit.id,
+        locale: "fr-CA",
+        text: "Démarrez votre essai gratuit",
+        note: `Corrects validated reader finding ${finding.id}`,
+      },
+    );
+    let repairReadiness = await json(
+      ownerPage,
+      "get",
+      `${repairBase}/localization-readiness`,
+      owner.headers,
+    );
+    expect(repairReadiness).toMatchObject({ ready: false });
+    expect(repairReadiness.requirements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          locale: "fr-CA",
+          kind: "review",
+          status: "missing",
+        }),
+      ]),
+    );
+    const repairPreview = await json(
+      ownerPage,
+      "post",
+      `${repairBase}/previews`,
+      owner.headers,
+    );
+    await eventually(
+      () => json(ownerPage, "get", `${repairBase}/previews`, owner.headers),
+      (value: any) =>
+        value.previews.some(
+          (candidate: any) =>
+            candidate.id === repairPreview.id &&
+            candidate.state === "succeeded",
+        ),
+      "repair preview succeeds",
+    );
+    await json(
+      ownerPage,
+      "post",
+      `${repairBase}/previews/${repairPreview.id}/invitations`,
+      owner.headers,
+      {
+        source_kind: "user",
+        user_id: french.user.id,
+        role: "feedback",
+        expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+      },
+    );
+    repairReview = await json(
+      ownerPage,
+      "post",
+      `${repairBase}/localization/verification`,
+      owner.headers,
+      {
+        source_revision: repairRevision,
+        expected_version: repairReview.workspace_version,
+        mutation: "publish_candidate",
+        payload: {
+          locale: "fr-CA",
+          preview_id: repairPreview.id,
+          locale_plan_id: plan.id,
+          locale_plan_version: 1,
+          routes: [
+            {
+              journey_id: "welcome",
+              route: "/fr-CA/welcome",
+              interface_hash: "c".repeat(64),
+            },
+          ],
+        },
+      },
+    );
+    const repairCandidate = repairReview.verification_candidates.at(-1);
+    repairReview = await json(
+      ownerPage,
+      "post",
+      `${repairBase}/localization/verification`,
+      owner.headers,
+      {
+        source_revision: repairRevision,
+        expected_version: repairReview.workspace_version,
+        mutation: "record_checks",
+        payload: {
+          candidate_id: repairCandidate.id,
+          results: [
+            "variables",
+            "pluralization",
+            "formatting",
+            "terminology",
+            "links",
+            "layout_expansion",
+            "bidirectional_text",
+            "fallback_behavior",
+            "localized_journey",
+          ].map((kind) => ({
+            kind,
+            route: "/fr-CA/welcome",
+            unit_ids: [repairUnit.id],
+            status: "passed",
+            summary: `${kind} verified on the exact repair preview`,
+            artifact: `preview://${repairPreview.id}/fr-CA/${kind}`,
+          })),
+        },
+      },
+    );
+    repairReview = await json(
+      frenchPage,
+      "post",
+      `${repairBase}/localization/previews/${repairPreview.id}/review`,
+      french.headers,
+      {
+        source_revision: repairRevision,
+        expected_version: repairReview.workspace_version,
+        mutation: "review",
+        payload: {
+          candidate_id: repairCandidate.id,
+          route: "/fr-CA/welcome",
+          unit_ids: [repairUnit.id],
+          kind: "approve",
+          reason:
+            "The repair uses familiar French Canadian action wording in the exact current preview.",
+        },
+      },
+    );
+    await json(
+      ownerPage,
+      "post",
+      `/repositories/${repository.id}/localization-dispositions`,
+      owner.headers,
+      {
+        policy_id: policy.id,
+        revision: repairRevision,
+        locale: "ar-EG",
+        state: "withdrawn",
+        reason: "Keep the independently withdrawn RTL locale contained.",
+      },
+    );
+    repairReadiness = await eventually(
+      () =>
+        json(
+          ownerPage,
+          "get",
+          `${repairBase}/localization-readiness`,
+          owner.headers,
+        ),
+      (value: any) => value.ready,
+      "repair localization evidence becomes current",
+    );
+    expect(repairReadiness.locales).toMatchObject({
+      "fr-CA": "required",
+      "ar-EG": "withdrawn",
+    });
     await json(
       ownerPage,
       "post",
