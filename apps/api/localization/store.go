@@ -221,9 +221,10 @@ type Review struct {
 	Verification           []VerificationProjection  `json:"verification"`
 }
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root                string
+	mu                  sync.Mutex
+	now                 func() time.Time
+	resolvePlanVersions func(repositoryID string, planIDs []string) (map[string]int, error)
 }
 
 func New(root string) (*Store, error) {
@@ -234,6 +235,13 @@ func New(root string) (*Store, error) {
 		return nil, err
 	}
 	return &Store{root: root, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }}, nil
+}
+
+// ConfigureLocalePlanVersions connects delivery evaluation to the external
+// locale-plan store. Production configures this once at startup; keeping the
+// dependency as a resolver avoids making localization persistence own plans.
+func (s *Store) ConfigureLocalePlanVersions(resolve func(string, []string) (map[string]int, error)) {
+	s.resolvePlanVersions = resolve
 }
 
 func (s *Store) Extract(repo, pull, revision, actor string, m ExtractionMap, locales []string, units []Unit) (Review, error) {

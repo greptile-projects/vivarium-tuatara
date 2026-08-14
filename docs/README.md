@@ -57,7 +57,10 @@ target branch, governed locales, exact check names, and minimum regional review 
 revision-exact projection participates in ordinary pull merge readiness and is available for release
 candidates at `/repositories/{id}/releases/{release_id}/localization-readiness`. An attributed
 per-locale disposition may stage, defer, or withdraw one locale; deferred and withdrawn locales stay
-visible but do not block unaffected locale delivery.
+visible but do not block unaffected locale delivery. They also cannot be published until an owner
+records a later staging decision. When the locale plan advances, the prior policy fails closed until
+a current-version successor is published, then retires from aggregate readiness so it cannot block
+fresh current-plan evidence.
 
 Applications and documentation publish locale/version/source-revision/plan provenance and explicit
 complete, partial, or fallback state through `/repositories/{id}/localized-publications`. Current
@@ -65,6 +68,15 @@ repository readers can report a mistranslation, cultural mismatch, broken format
 content against the exact published route and locale. Repository participants validate or dismiss
 the report and may bind a validated finding to a human- or approved-agent-owned proposal/task URL
 with acceptance criteria. Reports and repair references grant no repository authority.
+
+The connected browser journey proves this as one trail: a product-string revision stales only its
+earlier translation, a repository-bound agent cites the current source and locale plan while a human
+retains the language decision, and exact French Canadian and Arabic previews retain regional
+authorship. Missing review blocks delivery; a confirmed right-to-left failure remains visible while
+Arabic is withdrawn and unaffected French delivery passes ordinary checks, review, merge, and
+publication. A post-release reader finding links to an ordinary reviewed repair and corrected locale
+publication without erasing the prior release, withdrawal, or dissent. Playwright assigns locale-plan
+and localization records per-run temporary roots.
 
 ## Permitted data handling
 

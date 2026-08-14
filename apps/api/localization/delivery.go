@@ -241,8 +241,45 @@ func (s *Store) EvaluateDelivery(repo, pullID, releaseID, revision, branch strin
 		return r, e
 	}
 	review, _ := s.Get(repo, pullID, revision)
+	var currentPlanVersions map[string]int
+	if s.resolvePlanVersions != nil {
+		seen, planIDs := map[string]bool{}, []string{}
+		for _, policy := range d.Policies {
+			if policy.LocalePlanID != "" && !seen[policy.LocalePlanID] {
+				seen[policy.LocalePlanID] = true
+				planIDs = append(planIDs, policy.LocalePlanID)
+			}
+		}
+		for _, candidate := range review.VerificationCandidates {
+			if candidate.LocalePlanID != "" && !seen[candidate.LocalePlanID] {
+				seen[candidate.LocalePlanID] = true
+				planIDs = append(planIDs, candidate.LocalePlanID)
+			}
+		}
+		versions, resolveErr := s.resolvePlanVersions(repo, planIDs)
+		if resolveErr != nil {
+			return r, resolveErr
+		}
+		currentPlanVersions = versions
+		ApplyLocalePlanVersions(&review, versions)
+	}
 	for _, p := range d.Policies {
 		if p.Branch != branch || !deliverySelected(p.Audiences, audiences) || !deliverySelected(p.RiskClasses, risks) {
+			continue
+		}
+		if currentPlanVersions != nil && currentPlanVersions[p.LocalePlanID] != p.LocalePlanVersion {
+			hasSuccessor := false
+			for _, candidatePolicy := range d.Policies {
+				hasSuccessor = hasSuccessor || (candidatePolicy.LocalePlanID == p.LocalePlanID && candidatePolicy.LocalePlanVersion == currentPlanVersions[p.LocalePlanID] && candidatePolicy.Branch == branch && deliverySelected(candidatePolicy.Audiences, audiences) && deliverySelected(candidatePolicy.RiskClasses, risks))
+			}
+			if hasSuccessor {
+				continue
+			}
+			for _, locale := range p.Locales {
+				r.Locales[locale] = "policy_stale"
+				r.Requirements = append(r.Requirements, LocaleRequirement{PolicyID: p.ID, Locale: locale, Audiences: p.Audiences, RiskClasses: p.RiskClasses, Kind: "policy", Name: "current locale delivery policy", Status: "stale"})
+			}
+			r.Ready = false
 			continue
 		}
 		for _, locale := range p.Locales {
@@ -267,8 +304,19 @@ func (s *Store) EvaluateDelivery(repo, pullID, releaseID, revision, branch strin
 				}
 			}
 			reviews := 0
+			currentCandidates := map[string]bool{}
+			for _, projection := range review.Verification {
+				if !projection.Current {
+					continue
+				}
+				for _, candidate := range review.VerificationCandidates {
+					if candidate.ID == projection.CandidateID && candidate.Locale == locale && candidate.LocalePlanID == p.LocalePlanID && candidate.LocalePlanVersion == p.LocalePlanVersion {
+						currentCandidates[candidate.ID] = true
+					}
+				}
+			}
 			for _, x := range review.LocaleReviewDecisions {
-				if x.Locale == locale && x.Kind == "approved" {
+				if x.Locale == locale && x.Kind == "approve" && currentCandidates[x.CandidateID] {
 					reviews++
 				}
 			}
@@ -313,6 +361,20 @@ func (s *Store) Publish(repo, actor string, p Publication) (Publication, error) 
 	d, e := s.readDelivery(repo)
 	if e != nil {
 		return p, e
+	}
+	latestState := ""
+	for _, disposition := range d.Dispositions {
+		if disposition.Locale != p.Locale {
+			continue
+		}
+		for _, policy := range d.Policies {
+			if policy.ID == disposition.PolicyID && policy.LocalePlanID == p.LocalePlanID {
+				latestState = disposition.State
+			}
+		}
+	}
+	if p.Status == "published" && (latestState == "deferred" || latestState == "withdrawn") {
+		return p, ErrConflict
 	}
 	p.ID = id()
 	p.RepositoryID = repo

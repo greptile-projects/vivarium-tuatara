@@ -878,6 +878,24 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerLocalePlanRoutes(mux, store, repositoryCatalog, authStore, localePlanStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil && localizationStore != nil {
+		if localePlanStore != nil {
+			localizationStore.ConfigureLocalePlanVersions(func(repositoryID string, planIDs []string) (map[string]int, error) {
+				versions := map[string]int{}
+				for _, planID := range planIDs {
+					plan, planErr := localePlanStore.Get(planID, "")
+					if errors.Is(planErr, localeplans.ErrNotFound) {
+						continue
+					}
+					if planErr != nil {
+						return nil, planErr
+					}
+					if plan.RepositoryID == repositoryID {
+						versions[planID] = plan.CurrentVersion
+					}
+				}
+				return versions, nil
+			})
+		}
 		pullRequestStore.ConfigureLocalization(localizationStore)
 		registerLocalizationRoutes(mux, repositoryCatalog, authStore, pullRequestStore, localePlanStore, previewStore, releaseStore, checkRunStore, localizationStore)
 	}
