@@ -351,6 +351,14 @@ whenever dependencies change or the web job fails before it starts.
   projecting missing coverage, conflicts, unsupported environments, and exception
   expiry explicitly; commitment records grant no repository authority or proof of
   conformance.
+  The same workspace accepts privacy-bounded lived barrier reports beneath
+  `$ACCESSIBILITY_REPORT_STORAGE_ROOT` (default `accessibility-reports`). Reports freeze a release,
+  page, documentation journey, or preview revision with functional access needs, steps, expected
+  behavior, and explicitly redacted screenshots, recordings, accessibility trees, speech output,
+  or input traces. Reporter identity and detailed device settings are projected only by independent
+  consent. Current repository participants retain append-only bounded workspace/preview attempts as
+  reproducible, intermittent, environment-specific, or unconfirmed; reports grant no execution or
+  repository authority.
   Product experiments at `/repositories/{id}/experiments` retain append-only hypothesis-plan
   revisions sourced from proposals, issues, decisions, pulls, previews, or releases. Success and
   guardrail metrics bind exact permitted product-signal versions; audience eligibility,
