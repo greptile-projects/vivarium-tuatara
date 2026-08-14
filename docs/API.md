@@ -2769,6 +2769,23 @@ Access revocation freezes later delivery-record mutations by every then-assigned
 Completed tasks retain attribution after a distinct replacement, but that retained identity is
 history rather than continuing update authority.
 
+Designated reviewers decide a task through `POST
+.../{selection_id}/tasks/{task_id}/reviews` with the current outcome version, an `accepted`,
+`rejected`, `correction_requested`, `partial_award`, or `disputed` decision, rationale, dissent,
+and measured outcomes. An award requires the latest task update to be completed with linked work
+and every accepted measure met. The paid review ID is its settlement receipt: the matching
+`milestone_award` ledger entry ends in that ID and attributes recipient credit to the reviewer,
+frozen update, authorship, resources, and measures. It grants no authority over those resources.
+
+Eligible recipients, reviewers, and stewards use `POST .../{task_id}/recoveries` for appeal,
+withdrawal, timeout, payment failure/retry, or refund. These append evidence and move only the
+task's remaining reservation or prior award. Completed, accepted, partially accepted,
+payment-failed, withdrawn, timed-out, and refunded tasks retain their recipient when a steward
+uses `replace_recipient`; only unfinished work moves to the distinct, live-validated replacement.
+Payment retry therefore credits the originally accepted recipient.
+Delivery updates against any terminal task conflict instead of replacing its status, so they cannot
+disable a payment retry or make retained ownership eligible for reassignment.
+
 ## Performance goals
 
 Current repository participants create a complete contract with `POST

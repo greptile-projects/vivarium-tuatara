@@ -318,6 +318,19 @@ func TestDeliverySpendingStopsWithoutInitialActivityAndRevocationSurvivesResume(
 	_ = fund
 }
 
+func TestDeliveryReplacementPreservesTerminalMilestoneOwnership(t *testing.T) {
+	for _, status := range []string{"completed", "accepted", "partially_accepted", "payment_failed", "withdrawn", "timed_out", "refunded"} {
+		if !deliveryTaskTerminal(DeliveryTask{Status: status}) {
+			t.Fatalf("status %q should retain its recipient during replacement", status)
+		}
+	}
+	for _, status := range []string{"planned", "active", "blocked", "handoff_failed", "correction_requested", "rejected", "disputed", "appealed"} {
+		if deliveryTaskTerminal(DeliveryTask{Status: status}) {
+			t.Fatalf("status %q should remain replaceable", status)
+		}
+	}
+}
+
 func TestPausedDeliveryRetainsReportingAndExpenseApprovalRecoversFromInterruptedPublication(t *testing.T) {
 	s, _, out, recipient, selection, task := selectedDelivery(t)
 	var err error
@@ -422,6 +435,18 @@ func TestMilestoneCorrectionAppealAndPaymentRecoveryAreDeterministic(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err = s.RecordDeliveryUpdate(out.ID, selection.ID, recipient, "contributor", out.Version, DeliveryUpdateInput{TaskID: task.ID, Status: "active", Progress: 100, Summary: "Attempt to reopen accepted work after payment failure.", Resources: []DeliveryResource{{Kind: "check", ID: "ci", Revision: "abc", Status: "passed"}}}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("payment-failed reopen err = %v", err)
+	}
+	replacement := DeliveryApplicant{Kind: "human", ID: "replacement", SubmittedBy: "owner"}
+	out, err = s.ControlDelivery(out.ID, selection.ID, "owner", "replace_recipient", "Reassign only the unfinished sibling milestone.", 0, &replacement, out.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedTask := deliveryTask(&out.DeliverySelections[0], task.ID)
+	if failedTask == nil || failedTask.RecipientID != recipient.ID {
+		t.Fatalf("payment-failed award recipient changed = %+v", failedTask)
+	}
 	fund, _ = s.Get(fund.ID)
 	if fund.Balances.Spent != 0 || fund.Balances.Reserved != 9000 {
 		t.Fatalf("failed payment balances = %+v", fund.Balances)
@@ -429,6 +454,10 @@ func TestMilestoneCorrectionAppealAndPaymentRecoveryAreDeterministic(t *testing.
 	out, err = s.RecoverMilestone(out.ID, selection.ID, task.ID, "owner", "retry_payment", "Recipient details were corrected.", out.Version)
 	if err != nil {
 		t.Fatal(err)
+	}
+	fund, _ = s.Get(fund.ID)
+	if entry := fund.Ledger[len(fund.Ledger)-1]; entry.Kind != "milestone_award" || entry.ContributorID != recipient.ID {
+		t.Fatalf("retried award attribution = %+v", entry)
 	}
 	out, err = s.RecoverMilestone(out.ID, selection.ID, task.ID, "owner", "refund", "Accepted refund under the original fund policy.", out.Version)
 	if err != nil {
