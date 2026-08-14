@@ -803,7 +803,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerAccessibilityCommitmentRoutes(mux, repositoryCatalog, authStore, accessibilityCommitmentStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && dataCommitmentStore != nil {
-		registerDataCommitmentRoutes(mux, repositoryCatalog, authStore, dataCommitmentStore)
+		registerDataCommitmentRoutes(mux, repositoryCatalog, authStore, dataCommitmentStore, releaseStore, extensionStore, productExperimentStore, deploymentStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && accessibilityReportStore != nil {
 		registerAccessibilityReportRoutes(mux, repositoryCatalog, authStore, accessibilityReportStore)

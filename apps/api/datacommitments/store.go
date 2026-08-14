@@ -226,11 +226,6 @@ func (s *Store) project(v Commitment) Commitment {
 		if !x.Supported {
 			add("unsupported_guarantee", "blocking", "The declared data handling guarantee is not currently supported.", x.ID, r.CreatedBy)
 		}
-		for _, other := range x.ConflictsWith {
-			if ids[other] {
-				add("conflicting_commitment", "warning", "Current data uses declare an unresolved conflict.", x.ID, r.CreatedBy)
-			}
-		}
 	}
 	for _, x := range r.DataUses {
 		for _, other := range x.ConflictsWith {

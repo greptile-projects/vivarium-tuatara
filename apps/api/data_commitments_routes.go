@@ -7,6 +7,10 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/datacommitments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/extensions"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/productexperiments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 )
 
@@ -15,7 +19,7 @@ type dataCommitmentInput struct {
 	Revision        datacommitments.Revision `json:"revision"`
 }
 
-func registerDataCommitmentRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *datacommitments.Store) {
+func registerDataCommitmentRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *datacommitments.Store, releaseStore *releases.Store, extensionStore *extensions.Store, experimentStore *productexperiments.Store, deploymentStore *deployments.Store) {
 	mux.HandleFunc("GET /repositories/{id}/data-commitments", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
 			return
@@ -49,8 +53,12 @@ func registerDataCommitmentRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			return
 		}
 		var out datacommitments.Commitment
-		err := catalog.WithCurrentParticipant(actor.UserID, r.PathValue("id"), func() error {
+		owners := dataCommitmentOwners(actor.UserID, in.Revision)
+		err := catalog.WithCurrentParticipants(owners, r.PathValue("id"), func() error {
 			var e error
+			if e = validateDataCommitmentScopes(r.PathValue("id"), in.Revision.Scopes, releaseStore, extensionStore, experimentStore, deploymentStore); e != nil {
+				return e
+			}
 			out, e = store.Create(r.PathValue("id"), actor.UserID, in.Revision)
 			return e
 		})
@@ -72,13 +80,91 @@ func registerDataCommitmentRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			return
 		}
 		var out datacommitments.Commitment
-		err = catalog.WithCurrentParticipant(actor.UserID, current.RepositoryID, func() error {
+		owners := dataCommitmentOwners(actor.UserID, in.Revision)
+		err = catalog.WithCurrentParticipants(owners, current.RepositoryID, func() error {
 			var e error
+			if e = validateDataCommitmentScopes(current.RepositoryID, in.Revision.Scopes, releaseStore, extensionStore, experimentStore, deploymentStore); e != nil {
+				return e
+			}
 			out, e = store.Revise(current.ID, in.ExpectedVersion, actor.UserID, in.Revision)
 			return e
 		})
 		writeDataCommitment(w, out, err, 200)
 	})
+}
+
+func dataCommitmentOwners(actor string, revision datacommitments.Revision) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	add := func(id string) {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	add(actor)
+	for _, id := range revision.OwnerIDs {
+		add(id)
+	}
+	for _, use := range revision.DataUses {
+		for _, id := range use.OwnerIDs {
+			add(id)
+		}
+	}
+	return out
+}
+
+func validateDataCommitmentScopes(repositoryID string, scopes []datacommitments.Scope, releaseStore *releases.Store, extensionStore *extensions.Store, experimentStore *productexperiments.Store, deploymentStore *deployments.Store) error {
+	for _, scope := range scopes {
+		switch scope.Kind {
+		case "repository":
+			if scope.ResourceID != "" && scope.ResourceID != repositoryID {
+				return datacommitments.ErrInvalid
+			}
+		case "release":
+			if releaseStore == nil {
+				return datacommitments.ErrInvalid
+			}
+			if _, err := releaseStore.Get(repositoryID, scope.ResourceID); err != nil {
+				return datacommitments.ErrInvalid
+			}
+		case "extension":
+			if extensionStore == nil {
+				return datacommitments.ErrInvalid
+			}
+			installation, err := extensionStore.GetInstallation(scope.ResourceID)
+			if err != nil || !dataCommitmentContains(installation.RepositoryIDs, repositoryID) {
+				return datacommitments.ErrInvalid
+			}
+		case "experiment":
+			if experimentStore == nil {
+				return datacommitments.ErrInvalid
+			}
+			experiment, err := experimentStore.Get(scope.ResourceID)
+			if err != nil || experiment.RepositoryID != repositoryID {
+				return datacommitments.ErrInvalid
+			}
+		case "environment":
+			if deploymentStore == nil {
+				return datacommitments.ErrInvalid
+			}
+			if _, err := deploymentStore.GetEnvironment(repositoryID, scope.ResourceID); err != nil {
+				return datacommitments.ErrInvalid
+			}
+		default:
+			return datacommitments.ErrInvalid
+		}
+	}
+	return nil
+}
+
+func dataCommitmentContains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 func writeDataCommitment(w http.ResponseWriter, value datacommitments.Commitment, err error, success int) {
 	switch {

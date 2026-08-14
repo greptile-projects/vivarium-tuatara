@@ -21,13 +21,20 @@ func TestVersionedCommitmentDiagnostics(t *testing.T) {
 		t.Fatal(err)
 	}
 	kinds := map[string]bool{}
+	conflicts := 0
 	for _, d := range created.Diagnostics {
 		kinds[d.Kind] = true
+		if d.Kind == "conflicting_commitment" {
+			conflicts++
+		}
 	}
 	for _, want := range []string{"missing_ownership", "unsupported_guarantee", "conflicting_commitment", "expiring_exception"} {
 		if !kinds[want] {
 			t.Fatalf("missing %s in %+v", want, created.Diagnostics)
 		}
+	}
+	if conflicts != 1 {
+		t.Fatalf("conflict diagnostics = %d, want 1: %+v", conflicts, created.Diagnostics)
 	}
 	next := revision("owner")
 	revised, err := s.Revise(created.ID, 1, "owner", next)
