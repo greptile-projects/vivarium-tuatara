@@ -2163,6 +2163,14 @@ refunds have explicit attributed ledger transitions. These decisions recognize c
 evidence only: they never merge a pull, publish a release, deploy an artifact, mint access, or
 replace the authority of any linked project resource.
 
+Each paid review is displayed as a settlement receipt. Its stable ID is also the suffix of the
+fund's `milestone_award` ledger reference, connecting recipient credit and reviewer attribution to
+the frozen update, delivery chain, and outcome measures. Reassigning unfinished agent or human
+work preserves already completed, accepted, withdrawn, timed-out, or refunded milestone ownership.
+The connected browser journey proves scope reconfirmation, mixed developer/approved-agent
+selection, overrun containment, replacement, dispute, rejection, appeal, award, and refund through
+the public contract while the ordinary work links retain independent authority.
+
 # Trusted external extensions
 
 Developers can register independently operated tools at `/extensions` before a

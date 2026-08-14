@@ -332,7 +332,7 @@ func (s *Store) ControlDelivery(outcomeID, selectionID, steward, action, reason 
 			}
 			oldKind, oldID := "", ""
 			for i := range sel.Tasks {
-				if sel.Tasks[i].Status != "completed" {
+				if !deliveryTaskTerminal(sel.Tasks[i]) {
 					if oldID == "" {
 						oldKind, oldID = sel.Tasks[i].RecipientKind, sel.Tasks[i].RecipientID
 					}
@@ -422,6 +422,9 @@ func selectionTask(s DeliverySelection, id string, a DeliveryApplicant) bool {
 		}
 	}
 	return false
+}
+func deliveryTaskTerminal(task DeliveryTask) bool {
+	return contains([]string{"completed", "accepted", "partially_accepted", "withdrawn", "timed_out", "refunded"}, task.Status)
 }
 func validDeliveryResource(r DeliveryResource) bool {
 	return contains([]string{"task", "session", "workspace", "fork", "pull", "check", "preview", "delivery_team", "commit", "release", "deployment"}, r.Kind) && validOutcomeText(r.ID, 500) && len(r.Revision) <= 500 && len(r.URL) <= 2000 && validOutcomeText(r.Status, 100)

@@ -318,6 +318,19 @@ func TestDeliverySpendingStopsWithoutInitialActivityAndRevocationSurvivesResume(
 	_ = fund
 }
 
+func TestDeliveryReplacementPreservesTerminalMilestoneOwnership(t *testing.T) {
+	for _, status := range []string{"completed", "accepted", "partially_accepted", "withdrawn", "timed_out", "refunded"} {
+		if !deliveryTaskTerminal(DeliveryTask{Status: status}) {
+			t.Fatalf("status %q should retain its recipient during replacement", status)
+		}
+	}
+	for _, status := range []string{"planned", "active", "blocked", "handoff_failed", "correction_requested", "rejected", "disputed", "appealed"} {
+		if deliveryTaskTerminal(DeliveryTask{Status: status}) {
+			t.Fatalf("status %q should remain replaceable", status)
+		}
+	}
+}
+
 func TestPausedDeliveryRetainsReportingAndExpenseApprovalRecoversFromInterruptedPublication(t *testing.T) {
 	s, _, out, recipient, selection, task := selectedDelivery(t)
 	var err error
