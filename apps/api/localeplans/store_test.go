@@ -7,7 +7,7 @@ import (
 
 func completeRevision() Revision {
 	return Revision{Title: "French support", Summary: "Core checkout works in Canadian French.", Subject: Subject{Kind: "product", ResourceID: "web", Name: "Web product"},
-		Locales:     []Locale{{ID: "fr-CA", Language: "French", Regions: []string{"CA"}, FallbackLocale: "fr", OwnerIDs: []string{"owner"}, ReviewerIDs: []string{"reviewer"}}},
+		Locales:     []Locale{{ID: "fr-CA", Language: "French", Regions: []string{"CA"}, OwnerIDs: []string{"owner"}, ReviewerIDs: []string{"reviewer"}}},
 		Terminology: []Term{{ID: "checkout", Source: "Checkout", Locale: "fr-CA", Preferred: "Paiement", Context: "Purchase action"}},
 		Formatting:  []Formatting{{Locale: "fr-CA", Date: "yyyy-MM-dd", Time: "24h", Number: "1 234,5", Currency: "CAD after value", Units: "metric", Direction: "ltr"}},
 		Journeys:    []Journey{{ID: "buy", Name: "Buy a product", LocaleIDs: []string{"fr-CA"}, OwnerIDs: []string{"owner"}, Required: true}},
@@ -55,9 +55,32 @@ func TestVersioningAndExplicitDiagnostics(t *testing.T) {
 
 func TestRejectsIncompleteAndBrokenReferences(t *testing.T) {
 	s, _ := New(t.TempDir())
-	r := completeRevision()
-	r.Thresholds[0].RequiredJourneyIDs = []string{"unknown"}
-	if _, err := s.Create("repo", "maintainer", r); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("error = %v", err)
+	cases := map[string]func(*Revision){
+		"unknown journey":               func(r *Revision) { r.Thresholds[0].RequiredJourneyIDs = []string{"unknown"} },
+		"undeclared fallback":           func(r *Revision) { r.Locales[0].FallbackLocale = "zz-ZZ" },
+		"undeclared terminology locale": func(r *Revision) { r.Terminology[0].Locale = "zz-ZZ" },
+		"duplicate formatting":          func(r *Revision) { r.Formatting = append(r.Formatting, r.Formatting[0]) },
+		"duplicate threshold":           func(r *Revision) { r.Thresholds = append(r.Thresholds, r.Thresholds[0]) },
+		"missing formatting":            func(r *Revision) { r.Locales = append(r.Locales, Locale{ID: "es-MX", Language: "Spanish"}) },
+		"missing threshold": func(r *Revision) {
+			r.Locales = append(r.Locales, Locale{ID: "es-MX", Language: "Spanish"})
+			r.Formatting = append(r.Formatting, Formatting{Locale: "es-MX", Date: "date", Time: "time", Number: "number", Currency: "MXN", Units: "metric", Direction: "ltr"})
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := completeRevision()
+			mutate(&r)
+			if _, err := s.Create("repo", "maintainer", r); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Create error = %v", err)
+			}
+			valid, err := s.Create("repo", "maintainer", completeRevision())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = s.Revise(valid.ID, 1, "maintainer", r); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Revise error = %v", err)
+			}
+		})
 	}
 }

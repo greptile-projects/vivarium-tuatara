@@ -201,8 +201,25 @@ func validate(r Revision) error {
 		}
 		locales[l.ID] = true
 	}
+	for _, l := range r.Locales {
+		if l.FallbackLocale != "" && !locales[l.FallbackLocale] {
+			return ErrInvalid
+		}
+	}
+	formattingLocales := map[string]bool{}
 	for _, f := range r.Formatting {
-		if !locales[f.Locale] || f.Date == "" || f.Time == "" || f.Number == "" || f.Currency == "" || f.Units == "" || !oneOf(f.Direction, "ltr", "rtl") {
+		if !locales[f.Locale] || formattingLocales[f.Locale] || f.Date == "" || f.Time == "" || f.Number == "" || f.Currency == "" || f.Units == "" || !oneOf(f.Direction, "ltr", "rtl") {
+			return ErrInvalid
+		}
+		formattingLocales[f.Locale] = true
+	}
+	for locale := range locales {
+		if !formattingLocales[locale] {
+			return ErrInvalid
+		}
+	}
+	for _, term := range r.Terminology {
+		if !locales[term.Locale] {
 			return ErrInvalid
 		}
 	}
@@ -228,14 +245,21 @@ func validate(r Revision) error {
 			}
 		}
 	}
+	thresholdLocales := map[string]bool{}
 	for _, t := range r.Thresholds {
-		if !locales[t.Locale] || t.MinimumPercent < 0 || t.MinimumPercent > 100 {
+		if !locales[t.Locale] || thresholdLocales[t.Locale] || t.MinimumPercent < 0 || t.MinimumPercent > 100 {
 			return ErrInvalid
 		}
+		thresholdLocales[t.Locale] = true
 		for _, j := range t.RequiredJourneyIDs {
 			if !journeys[j] {
 				return ErrInvalid
 			}
+		}
+	}
+	for locale := range locales {
+		if !thresholdLocales[locale] {
+			return ErrInvalid
 		}
 	}
 	return nil
