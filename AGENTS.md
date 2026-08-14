@@ -359,6 +359,21 @@ whenever dependencies change or the web job fails before it starts.
   consent. Current repository participants retain append-only bounded workspace/preview attempts as
   reproducible, intermittent, environment-specific, or unconfirmed; reports grant no execution or
   repository authority.
+  Revision-exact accessibility assessments beneath `$ACCESSIBILITY_ASSESSMENT_STORAGE_ROOT`
+  (default `accessibility-assessments`) combine repository-defined semantics, keyboard, focus,
+  contrast, motion, captions, and journey checks with cited human or repository-bound read-only
+  agent findings. The accessibility workspace and matching pull expose coverage, severity,
+  audiences, sources, uncertainty, duplicates, false-positive/acceptance decisions, and remaining
+  human evaluation. Source/journey changes invalidate only intersecting evidence and decisions;
+  agents cannot make acceptance decisions and assessment records grant no operational authority.
+  Unattached assessment revisions must be branch-reachable, pull-bound revisions must match the
+  live pull source, and every finding citation resolves an associated non-stale preview artifact or
+  redacted reproduction-attempt artifact before persistence.
+  Branch visibility excludes `vivarium-security/*`; preview freshness is recomputed from the
+  authoritative current pull source rather than trusting a stored stale flag.
+  Pull-bound assessment creation and preview-cited finding persistence hold
+  `pullrequests.WithSourceRevision` across the cross-store write; concurrent synchronization returns
+  a conflict, and one finding cannot span preview artifacts from different pulls.
   Product experiments at `/repositories/{id}/experiments` retain append-only hypothesis-plan
   revisions sourced from proposals, issues, decisions, pulls, previews, or releases. Success and
   guardrail metrics bind exact permitted product-signal versions; audience eligibility,

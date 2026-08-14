@@ -135,6 +135,16 @@ reproducible, intermittent, environment-specific, or unconfirmed; the record sup
 execution authority or proof of conformance. Storage defaults beneath
 `$ACCESSIBILITY_REPORT_STORAGE_ROOT` (`accessibility-reports`).
 
+Revision-exact assessment evidence is retained at
+`/repositories/{id}/accessibility-assessments` and appears in both the accessibility workspace and
+matching pull request. Repository-defined checks classify semantics, keyboard, focus, contrast,
+motion, captions, and declared journeys as passed, failed, or unevaluated with audience and source
+coverage. Participants and repository-bound read-only agents add exact-revision preview or
+reproduction citations, severity, uncertainty, duplicate links, and human-evaluation needs; only a
+human participant can accept or mark a false positive. Explicit source/journey invalidation clears
+only affected evidence and acceptance. Storage defaults beneath
+`$ACCESSIBILITY_ASSESSMENT_STORAGE_ROOT` (`accessibility-assessments`).
+
 ## Collaborative performance goals
 
 Repository participants publish complete, append-only performance-contract revisions through
