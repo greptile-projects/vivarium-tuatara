@@ -139,19 +139,86 @@ type Decision struct {
 	ActorID       string    `json:"actor_id"`
 	CreatedAt     time.Time `json:"created_at"`
 }
+type VerificationRoute struct {
+	JourneyID     string `json:"journey_id"`
+	Route         string `json:"route"`
+	InterfaceHash string `json:"interface_hash"`
+}
+type VerificationCandidate struct {
+	ID                  string              `json:"id"`
+	Locale              string              `json:"locale"`
+	PreviewID           string              `json:"preview_id"`
+	PreviewURL          string              `json:"preview_url"`
+	SourceRevision      string              `json:"source_revision"`
+	LocalePlanID        string              `json:"locale_plan_id"`
+	LocalePlanVersion   int                 `json:"locale_plan_version"`
+	Routes              []VerificationRoute `json:"routes"`
+	TranslationVersions map[string]string   `json:"translation_versions"`
+	CreatedBy           string              `json:"created_by"`
+	CreatedAt           time.Time           `json:"created_at"`
+}
+type VerificationResult struct {
+	Kind     string   `json:"kind"`
+	Route    string   `json:"route"`
+	UnitIDs  []string `json:"unit_ids"`
+	Status   string   `json:"status"`
+	Summary  string   `json:"summary"`
+	Artifact string   `json:"artifact,omitempty"`
+}
+type VerificationRun struct {
+	ID          string               `json:"id"`
+	CandidateID string               `json:"candidate_id"`
+	Results     []VerificationResult `json:"results"`
+	CreatedBy   string               `json:"created_by"`
+	CreatedAt   time.Time            `json:"created_at"`
+}
+type LocaleFinding struct {
+	ID          string    `json:"id"`
+	CandidateID string    `json:"candidate_id"`
+	Locale      string    `json:"locale"`
+	Route       string    `json:"route"`
+	UnitIDs     []string  `json:"unit_ids"`
+	Category    string    `json:"category"`
+	Severity    string    `json:"severity"`
+	Body        string    `json:"body"`
+	AuthorID    string    `json:"author_id"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+type LocaleReviewDecision struct {
+	ID          string    `json:"id"`
+	CandidateID string    `json:"candidate_id"`
+	Locale      string    `json:"locale"`
+	Route       string    `json:"route"`
+	UnitIDs     []string  `json:"unit_ids"`
+	Kind        string    `json:"kind"`
+	Reason      string    `json:"reason"`
+	ActorID     string    `json:"actor_id"`
+	ActorRole   string    `json:"actor_role"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+type VerificationProjection struct {
+	CandidateID string   `json:"candidate_id"`
+	Current     bool     `json:"current"`
+	StaleScopes []string `json:"stale_scopes"`
+}
 type Review struct {
-	RepositoryID       string                    `json:"repository_id"`
-	PullID             string                    `json:"pull_id"`
-	CurrentRevision    string                    `json:"current_revision"`
-	Extractions        []Extraction              `json:"extractions"`
-	Translations       []Translation             `json:"translations"`
-	Counts             map[string]map[string]int `json:"counts"`
-	WorkspaceVersion   int                       `json:"workspace_version"`
-	Claims             []Claim                   `json:"claims"`
-	Comments           []Comment                 `json:"comments"`
-	SuggestionRequests []SuggestionRequest       `json:"suggestion_requests"`
-	Suggestions        []Suggestion              `json:"suggestions"`
-	Decisions          []Decision                `json:"decisions"`
+	RepositoryID           string                    `json:"repository_id"`
+	PullID                 string                    `json:"pull_id"`
+	CurrentRevision        string                    `json:"current_revision"`
+	Extractions            []Extraction              `json:"extractions"`
+	Translations           []Translation             `json:"translations"`
+	Counts                 map[string]map[string]int `json:"counts"`
+	WorkspaceVersion       int                       `json:"workspace_version"`
+	Claims                 []Claim                   `json:"claims"`
+	Comments               []Comment                 `json:"comments"`
+	SuggestionRequests     []SuggestionRequest       `json:"suggestion_requests"`
+	Suggestions            []Suggestion              `json:"suggestions"`
+	Decisions              []Decision                `json:"decisions"`
+	VerificationCandidates []VerificationCandidate   `json:"verification_candidates"`
+	VerificationRuns       []VerificationRun         `json:"verification_runs"`
+	LocaleFindings         []LocaleFinding           `json:"locale_findings"`
+	LocaleReviewDecisions  []LocaleReviewDecision    `json:"locale_review_decisions"`
+	Verification           []VerificationProjection  `json:"verification"`
 }
 type Store struct {
 	root string
@@ -398,6 +465,165 @@ func (s *Store) Mutate(repo, pull, revision string, expected int, mutation strin
 	return v, nil
 }
 
+// Verify appends locale-preview evidence under the same revision and CAS boundary
+// as translation work. Preview, plan, and reviewer admission are revalidated by
+// the HTTP boundary while this method validates the retained evidence graph.
+func (s *Store) Verify(repo, pull, revision string, expected int, mutation, actorID, actorRole string, payload map[string]any) (Review, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, pull)
+	if err != nil {
+		return v, err
+	}
+	if v.CurrentRevision != revision || v.WorkspaceVersion != expected || actorID == "" {
+		return v, ErrConflict
+	}
+	now := s.now()
+	switch mutation {
+	case "publish_candidate":
+		var candidate VerificationCandidate
+		if !decode(payload, &candidate) || candidate.Locale == "" || candidate.PreviewID == "" || candidate.PreviewURL == "" || candidate.LocalePlanID == "" || candidate.LocalePlanVersion < 1 || len(candidate.Routes) == 0 {
+			return v, ErrInvalid
+		}
+		if currentUnit(&v, v.Extractions[len(v.Extractions)-1].Units[0].ID, candidate.Locale) == nil {
+			return v, ErrInvalid
+		}
+		seen := map[string]bool{}
+		for _, route := range candidate.Routes {
+			if route.JourneyID == "" || !validRoute(route.Route) || len(route.InterfaceHash) != 64 || seen[route.Route] {
+				return v, ErrInvalid
+			}
+			seen[route.Route] = true
+		}
+		candidate.ID, candidate.SourceRevision, candidate.CreatedBy, candidate.CreatedAt = id(), revision, actorID, now
+		candidate.TranslationVersions = currentTranslations(v, candidate.Locale)
+		if len(candidate.TranslationVersions) != len(v.Extractions[len(v.Extractions)-1].Units) {
+			return v, ErrInvalid
+		}
+		v.VerificationCandidates = append(v.VerificationCandidates, candidate)
+	case "record_checks":
+		candidateID, _ := payload["candidate_id"].(string)
+		candidate := findCandidate(v.VerificationCandidates, candidateID)
+		var results []VerificationResult
+		if candidate == nil || !candidateIsCurrent(v, candidateID) || !decode(payload["results"], &results) || !validResults(*candidate, v, results) {
+			return v, ErrInvalid
+		}
+		v.VerificationRuns = append(v.VerificationRuns, VerificationRun{ID: id(), CandidateID: candidateID, Results: results, CreatedBy: actorID, CreatedAt: now})
+	case "finding":
+		var finding LocaleFinding
+		if !decode(payload, &finding) {
+			return v, ErrInvalid
+		}
+		candidate := findCandidate(v.VerificationCandidates, finding.CandidateID)
+		if candidate == nil || !candidateIsCurrent(v, finding.CandidateID) || candidate.Locale != finding.Locale || !candidateRoute(*candidate, finding.Route) || !validUnits(v, finding.UnitIDs) || !contains(verificationKinds(), finding.Category) || !contains([]string{"low", "medium", "high", "blocking"}, finding.Severity) || strings.TrimSpace(finding.Body) == "" || len(finding.Body) > 4000 {
+			return v, ErrInvalid
+		}
+		finding.ID, finding.AuthorID, finding.CreatedAt = id(), actorID, now
+		v.LocaleFindings = append(v.LocaleFindings, finding)
+	case "review":
+		var decision LocaleReviewDecision
+		if !decode(payload, &decision) {
+			return v, ErrInvalid
+		}
+		candidate := findCandidate(v.VerificationCandidates, decision.CandidateID)
+		if candidate == nil || !candidateIsCurrent(v, decision.CandidateID) || candidate.Locale != decision.Locale || !candidateRoute(*candidate, decision.Route) || !validUnits(v, decision.UnitIDs) || !contains([]string{"approve", "reject"}, decision.Kind) || strings.TrimSpace(decision.Reason) == "" || len(decision.Reason) > 2000 || !contains([]string{"translator", "regional_reviewer"}, actorRole) {
+			return v, ErrInvalid
+		}
+		decision.ID, decision.ActorID, decision.ActorRole, decision.CreatedAt = id(), actorID, actorRole, now
+		v.LocaleReviewDecisions = append(v.LocaleReviewDecisions, decision)
+	default:
+		return v, ErrInvalid
+	}
+	v.WorkspaceVersion++
+	s.project(&v)
+	if err := s.write(v); err != nil {
+		return Review{}, err
+	}
+	return v, nil
+}
+
+func decode(value any, out any) bool {
+	b, err := json.Marshal(value)
+	return err == nil && json.Unmarshal(b, out) == nil
+}
+func validRoute(route string) bool {
+	return strings.HasPrefix(route, "/") && len(route) <= 500 && !strings.ContainsAny(route, "\r\n")
+}
+func verificationKinds() []string {
+	return []string{"variables", "pluralization", "formatting", "terminology", "links", "layout_expansion", "bidirectional_text", "fallback_behavior", "localized_journey"}
+}
+func findCandidate(values []VerificationCandidate, candidateID string) *VerificationCandidate {
+	for i := range values {
+		if values[i].ID == candidateID {
+			return &values[i]
+		}
+	}
+	return nil
+}
+func candidateIsCurrent(v Review, candidateID string) bool {
+	for _, projection := range v.Verification {
+		if projection.CandidateID == candidateID {
+			return projection.Current
+		}
+	}
+	return false
+}
+func candidateRoute(candidate VerificationCandidate, route string) bool {
+	for _, value := range candidate.Routes {
+		if value.Route == route {
+			return true
+		}
+	}
+	return false
+}
+func validUnits(v Review, ids []string) bool {
+	if len(ids) == 0 {
+		return false
+	}
+	known := map[string]bool{}
+	for _, unit := range v.Extractions[len(v.Extractions)-1].Units {
+		known[unit.ID] = true
+	}
+	seen := map[string]bool{}
+	for _, unitID := range ids {
+		if seen[unitID] || !known[unitID] {
+			return false
+		}
+		seen[unitID] = true
+	}
+	return true
+}
+func validResults(candidate VerificationCandidate, v Review, results []VerificationResult) bool {
+	if len(results) < len(verificationKinds())*len(candidate.Routes) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, result := range results {
+		key := result.Route + "\x00" + result.Kind
+		if !contains(verificationKinds(), result.Kind) || seen[key] || !candidateRoute(candidate, result.Route) || !validUnits(v, result.UnitIDs) || !contains([]string{"passed", "failed"}, result.Status) || strings.TrimSpace(result.Summary) == "" || len(result.Summary) > 2000 {
+			return false
+		}
+		seen[key] = true
+	}
+	for _, route := range candidate.Routes {
+		for _, kind := range verificationKinds() {
+			if !seen[route.Route+"\x00"+kind] {
+				return false
+			}
+		}
+	}
+	return true
+}
+func currentTranslations(v Review, locale string) map[string]string {
+	out := map[string]string{}
+	for _, translation := range v.Translations {
+		if translation.Locale == locale && translation.Status == "proposed" {
+			out[translation.UnitID] = translation.ID
+		}
+	}
+	return out
+}
+
 func currentUnit(v *Review, unitID, locale string) *Unit {
 	if len(v.Extractions) == 0 {
 		return nil
@@ -543,6 +769,51 @@ func (s *Store) project(v *Review) {
 			}
 			v.Counts[l][u.Change]++
 		}
+	}
+	projectVerification(v)
+}
+
+func projectVerification(v *Review) {
+	v.Verification = nil
+	if len(v.Extractions) == 0 {
+		return
+	}
+	currentRevision := v.CurrentRevision
+	latestRoutes := map[string]map[string]string{}
+	for _, candidate := range v.VerificationCandidates {
+		if candidate.SourceRevision != currentRevision {
+			continue
+		}
+		if latestRoutes[candidate.Locale] == nil {
+			latestRoutes[candidate.Locale] = map[string]string{}
+		}
+		for _, route := range candidate.Routes {
+			latestRoutes[candidate.Locale][route.Route] = route.InterfaceHash
+		}
+	}
+	for _, candidate := range v.VerificationCandidates {
+		stale := []string{}
+		if candidate.SourceRevision != currentRevision {
+			stale = append(stale, "source_revision")
+		}
+		current := currentTranslations(*v, candidate.Locale)
+		for unitID, translationID := range candidate.TranslationVersions {
+			if current[unitID] != translationID {
+				stale = append(stale, "translation:"+unitID)
+			}
+		}
+		for unitID, translationID := range current {
+			if candidate.TranslationVersions[unitID] != translationID && !contains(stale, "translation:"+unitID) {
+				stale = append(stale, "translation:"+unitID)
+			}
+		}
+		for _, route := range candidate.Routes {
+			if hash := latestRoutes[candidate.Locale][route.Route]; hash != "" && hash != route.InterfaceHash {
+				stale = append(stale, "interface:"+route.Route)
+			}
+		}
+		sort.Strings(stale)
+		v.Verification = append(v.Verification, VerificationProjection{CandidateID: candidate.ID, Current: len(stale) == 0, StaleScopes: stale})
 	}
 }
 func (s *Store) read(repo, pull string) (Review, error) {
