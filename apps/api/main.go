@@ -878,7 +878,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerLocalePlanRoutes(mux, store, repositoryCatalog, authStore, localePlanStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil && localizationStore != nil {
-		registerLocalizationRoutes(mux, repositoryCatalog, authStore, pullRequestStore, localePlanStore, previewStore, localizationStore)
+		pullRequestStore.ConfigureLocalization(localizationStore)
+		registerLocalizationRoutes(mux, repositoryCatalog, authStore, pullRequestStore, localePlanStore, previewStore, releaseStore, checkRunStore, localizationStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && dataCommitmentStore != nil {
 		registerDataCommitmentRoutes(mux, repositoryCatalog, authStore, dataCommitmentStore, releaseStore, extensionStore, productExperimentStore, deploymentStore)

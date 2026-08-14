@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/localeplans"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/localization"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"net/http"
 )
@@ -34,7 +36,7 @@ type localizationMutationInput struct {
 
 var errLocalizationReviewerRequired = errors.New("current locale reviewer required")
 
-func registerLocalizationRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, pulls *pullrequests.Store, plans *localeplans.Store, previewStore *previews.Store, store *localization.Store) {
+func registerLocalizationRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, pulls *pullrequests.Store, plans *localeplans.Store, previewStore *previews.Store, releasesStore *releases.Store, checks *checkruns.Store, store *localization.Store) {
 	pull := func(w http.ResponseWriter, r *http.Request) (pullrequests.PullRequest, bool) {
 		p, e := pulls.Get(r.PathValue("id"), r.PathValue("pull_id"))
 		if e != nil {
@@ -417,6 +419,194 @@ func registerLocalizationRoutes(mux *http.ServeMux, catalog *repositories.Store,
 		applyLocalizationPlanVersions(plans, &out)
 		writeLocalizationVerification(w, err, out)
 	})
+	mux.HandleFunc("POST /repositories/{id}/localization-delivery-policies", func(w http.ResponseWriter, r *http.Request) {
+		actor, owner, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if !owner {
+			writeAPIError(w, 403, "localization_policy_forbidden", "only the repository owner may govern locale delivery")
+			return
+		}
+		var in localization.DeliveryPolicy
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		plan, err := plans.Get(in.LocalePlanID, "")
+		if err != nil || plan.RepositoryID != r.PathValue("id") || plan.CurrentVersion != in.LocalePlanVersion {
+			writeAPIError(w, 409, "locale_plan_changed", "delivery policy must bind the current locale plan")
+			return
+		}
+		declared := map[string]bool{}
+		for _, locale := range plan.Revisions[len(plan.Revisions)-1].Locales {
+			declared[locale.ID] = true
+		}
+		for _, locale := range in.Locales {
+			if !declared[locale] {
+				writeAPIError(w, 422, "invalid_localization_policy", "every governed locale must be declared by the plan")
+				return
+			}
+		}
+		out, err := store.CreateDeliveryPolicy(r.PathValue("id"), actor.UserID, in)
+		writeLocalizationDelivery(w, out, err, 201)
+	})
+	mux.HandleFunc("GET /repositories/{id}/localization-delivery", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
+			return
+		}
+		out, err := store.Delivery(r.PathValue("id"))
+		writeLocalizationDelivery(w, out, err, 200)
+	})
+	mux.HandleFunc("POST /repositories/{id}/localization-dispositions", func(w http.ResponseWriter, r *http.Request) {
+		actor, owner, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if !owner {
+			writeAPIError(w, 403, "localization_disposition_forbidden", "only the repository owner may stage, defer, or withdraw a locale")
+			return
+		}
+		var in localization.LocaleDisposition
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		out, err := store.SetLocaleDisposition(r.PathValue("id"), actor.UserID, in)
+		writeLocalizationDelivery(w, out, err, 201)
+	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/localization-readiness", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
+			return
+		}
+		p, err := pulls.Get(r.PathValue("id"), r.PathValue("pull_id"))
+		if err != nil {
+			writeAPIError(w, 404, "pull_request_not_found", "pull request not found")
+			return
+		}
+		status := localizationCheckStatus(checks, p.RepositoryID, p.ID, p.SourceCommitID)
+		out, err := store.EvaluateDelivery(p.RepositoryID, p.ID, "", p.SourceCommitID, p.TargetBranch, r.URL.Query()["audience"], r.URL.Query()["risk_class"], status)
+		writeLocalizationDelivery(w, out, err, 200)
+	})
+	if releasesStore != nil {
+		mux.HandleFunc("GET /repositories/{id}/releases/{release_id}/localization-readiness", func(w http.ResponseWriter, r *http.Request) {
+			if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
+				return
+			}
+			release, err := releasesStore.Get(r.PathValue("id"), r.PathValue("release_id"))
+			if err != nil {
+				writeAPIError(w, 404, "release_not_found", "release not found")
+				return
+			}
+			status := localizationCheckStatus(checks, release.RepositoryID, release.ID, release.CommitID)
+			out, err := store.EvaluateDelivery(release.RepositoryID, "", release.ID, release.CommitID, release.TargetBranch, r.URL.Query()["audience"], r.URL.Query()["risk_class"], status)
+			writeLocalizationDelivery(w, out, err, 200)
+		})
+	}
+	mux.HandleFunc("POST /repositories/{id}/localized-publications", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in localization.Publication
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		plan, err := plans.Get(in.LocalePlanID, "")
+		if err != nil || plan.RepositoryID != r.PathValue("id") || plan.CurrentVersion != in.LocalePlanVersion {
+			writeAPIError(w, 409, "locale_plan_changed", "publication must expose current locale-plan provenance")
+			return
+		}
+		declared := map[string]bool{}
+		for _, locale := range plan.Revisions[len(plan.Revisions)-1].Locales {
+			declared[locale.ID] = true
+		}
+		if !declared[in.Locale] || (in.FallbackLocale != "" && !declared[in.FallbackLocale]) {
+			writeAPIError(w, 422, "invalid_localized_publication", "published and fallback locales must be declared by the current plan")
+			return
+		}
+		if in.ReleaseID != "" && releasesStore != nil {
+			release, e := releasesStore.Get(r.PathValue("id"), in.ReleaseID)
+			if e != nil || release.CommitID != in.Revision || release.Version != in.Version {
+				writeAPIError(w, 422, "invalid_localized_publication", "release version and revision must resolve exactly")
+				return
+			}
+		}
+		out, err := store.Publish(r.PathValue("id"), actor.UserID, in)
+		writeLocalizationDelivery(w, out, err, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/localized-publications/{publication_id}/findings", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+		if !ok {
+			return
+		}
+		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
+			return
+		}
+		var in localization.PublishedFinding
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		in.PublicationID = r.PathValue("publication_id")
+		out, err := store.ReportPublished(r.PathValue("id"), actor.UserID, in)
+		writeLocalizationDelivery(w, out, err, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/localization-findings/{finding_id}/decision", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			Status string                     `json:"status"`
+			Reason string                     `json:"reason"`
+			Repair *localization.LocaleRepair `json:"repair"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		out, err := store.DecidePublishedFinding(r.PathValue("id"), r.PathValue("finding_id"), actor.UserID, in.Status, in.Reason, in.Repair)
+		writeLocalizationDelivery(w, out, err, 200)
+	})
+}
+
+func localizationCheckStatus(checks *checkruns.Store, repo, context, revision string) map[string]string {
+	out := map[string]string{}
+	if checks == nil {
+		return out
+	}
+	runs, err := checks.List(repo, context)
+	if err != nil {
+		return out
+	}
+	for _, run := range runs {
+		state := "pending"
+		if run.CommitID != revision {
+			state = "stale"
+		} else if run.State == "succeeded" {
+			state = "passed"
+		} else if run.State == "failed" {
+			state = "failed"
+		}
+		out[run.Definition.Name] = state
+	}
+	return out
+}
+func writeLocalizationDelivery(w http.ResponseWriter, out any, err error, status int) {
+	switch {
+	case err == nil:
+		writeJSON(w, status, out)
+	case errors.Is(err, localization.ErrNotFound):
+		writeAPIError(w, 404, "localization_delivery_not_found", "localization delivery record not found")
+	case errors.Is(err, localization.ErrConflict):
+		writeAPIError(w, 409, "localization_delivery_conflict", "localization evidence changed; reload before deciding")
+	case errors.Is(err, localization.ErrInvalid):
+		writeAPIError(w, 422, "invalid_localization_delivery", "locale delivery policy, disposition, publication, finding, or repair is incomplete")
+	default:
+		writeAPIError(w, 500, "localization_delivery_unavailable", "localization delivery records could not be persisted")
+	}
 }
 
 func applyLocalizationPlanVersions(plans *localeplans.Store, review *localization.Review) {

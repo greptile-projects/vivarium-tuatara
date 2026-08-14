@@ -51,6 +51,21 @@ projects stale locale-plan, source, translation-unit, and interface-route depend
 and later checks or human evidence revalidate the candidate's bound plan version.
 Records default beneath `$LOCALIZATION_STORAGE_ROOT` (`localization`).
 
+Repository owners publish audience- and risk-aware delivery policies at
+`/repositories/{id}/localization-delivery-policies`. Policies bind the current locale-plan version,
+target branch, governed locales, exact check names, and minimum regional review count. Their
+revision-exact projection participates in ordinary pull merge readiness and is available for release
+candidates at `/repositories/{id}/releases/{release_id}/localization-readiness`. An attributed
+per-locale disposition may stage, defer, or withdraw one locale; deferred and withdrawn locales stay
+visible but do not block unaffected locale delivery.
+
+Applications and documentation publish locale/version/source-revision/plan provenance and explicit
+complete, partial, or fallback state through `/repositories/{id}/localized-publications`. Current
+repository readers can report a mistranslation, cultural mismatch, broken formatting, or missing
+content against the exact published route and locale. Repository participants validate or dismiss
+the report and may bind a validated finding to a human- or approved-agent-owned proposal/task URL
+with acceptance criteria. Reports and repair references grant no repository authority.
+
 ## Permitted data handling
 
 Repository collaborators publish complete, compare-and-swap data commitment revisions at

@@ -3201,3 +3201,21 @@ separate `locale_plan`, `source_revision`, `translation:{unit_id}`, and `interfa
 scopes. Check, finding, and decision writes revalidate the candidate's plan through the current-plan
 mutation boundary, so a successor cannot receive evidence for superseded journeys. These
 records and preview access grant no Git, merge, release, or repository authority.
+
+Locale delivery uses `POST /repositories/{id}/localization-delivery-policies` (owner only) and
+`POST /repositories/{id}/localization-dispositions` (owner only). A policy binds the current locale
+plan/version, branch, locales, audience/risk selectors, exact named checks, and a minimum regional
+review count. A disposition records `staged`, `deferred`, or `withdrawn` for one policy/locale at an
+exact revision and optional release. `GET .../pulls/{pull_id}/localization-readiness` and
+`GET .../releases/{release_id}/localization-readiness` project current requirements; pull results are
+also included in ordinary merge readiness. Deferred and withdrawn locales remain visible but do not
+block required locales.
+
+`POST /repositories/{id}/localized-publications` retains an application or documentation resource's
+locale, public version/URL, exact revision, current plan provenance, source/fallback locale, fallback
+state (`complete`, `partial`, or `fallback`), and publication state. Readers use
+`POST .../localized-publications/{publication_id}/findings` for exact-locale mistranslation, cultural
+mismatch, broken formatting, or missing-content evidence. Participants validate or dismiss through
+`POST .../localization-findings/{finding_id}/decision`; validated findings may name a human or agent
+owner, linked proposal/task URL, and acceptance criteria. `GET /repositories/{id}/localization-delivery`
+returns the repository-readable policy, disposition, publication, finding, and repair projection.
