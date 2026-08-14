@@ -284,6 +284,10 @@ func derive(terms Terms, es []Entry) Balances {
 			b.Available += e.SpendableDelta
 			consumedProofs[proofID] = true
 		}
+		if e.Kind == "delivery_reservation" && e.Status == "reserved" {
+			b.Available -= e.Amount
+			b.Reserved += e.Amount
+		}
 	}
 	return b
 }

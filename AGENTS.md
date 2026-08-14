@@ -395,6 +395,15 @@ whenever dependencies change or the web job fails before it starts.
   reconfirms; withdrawal, cancellation, insufficient or aggregate shared-fund unsettled backing,
   overlapping awards, and embargoed work remain attributable replanning diagnostics. Funding never grants task, Git,
   credential, review, acceptance, merge, deployment, or security authority.
+  Eligible humans, organization teams, and current operators of organization-approved agents
+  submit attributable delivery proposals against an exact funded outcome with approach,
+  milestones, cost, dependencies, availability, separately requested access, and relevant work.
+  Recipient acceptance is version-bound. Named fund stewards may select one or complementary
+  accepted proposals only after eligibility revalidation and an explicit conflict disclosure;
+  selection records a durable `delivery_reservation` under the fund mutation boundary against settled available value and
+  connected planned milestone tasks. The reservation governs compensation only: selection,
+  acceptance, and tasks grant no repository, secret, credential, execution, review, merge,
+  environment, deployment, withdrawal, or agent authority.
 
   Reciprocal roadmap learning retains feedback-specific decision, preview, delivery, rejection, and
   measured-outcome updates. Reporters see only updates citing their own feedback, can validate the

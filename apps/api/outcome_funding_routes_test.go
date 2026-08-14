@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,5 +74,53 @@ func TestFormerPublicBackerCanWithdrawWithoutReadingRestrictedOutcome(t *testing
 	pledge := body["pledge"].(map[string]any)
 	if pledge["status"] != "withdrawn" || len(pledge) != 3 {
 		t.Fatalf("minimal withdrawal = %+v", body)
+	}
+}
+
+func TestHumanDeliveryProposalIsSelfSubmittedAndAcceptanceGated(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	publicKey, _, _ := ed25519.GenerateKey(rand.Reader)
+	funds, _ := projectfunds.New(t.TempDir(), map[string]string{"card": base64.StdEncoding.EncodeToString(publicKey)})
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, nil, funds))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "delivery-owner")
+	other := createTestAccount(t, server.URL, "delivery-other")
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"delivery-selection"}`, owner.Credential.Token, http.StatusCreated)
+	var repository repositories.Repository
+	if err := json.NewDecoder(response.Body).Decode(&repository); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	fund, err := funds.Create(repository.ID, owner.User.ID, projectfunds.Terms{Name: "Fund", Purpose: "Delivery", Stewards: []string{owner.User.ID}, FundingSources: []string{"card"}, Unit: "USD", Precision: 2, SpendingLimits: []projectfunds.Limit{{Period: "monthly", Amount: 1000}}, ApprovalRules: []projectfunds.ApprovalRule{{RequiredApprovals: 1, EligibleApprovers: []string{owner.User.ID}}}, EligibleRecipients: []string{"contributors"}, RefundPolicy: "Return unallocated backing", LedgerVisibility: "public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	terms := projectfunds.OutcomeTerms{Title: "Commission repair", Source: projectfunds.OutcomeSource{Kind: "issue", ID: "issue-1", Revision: "1", Visibility: "participants"}, Scope: "Repair the endpoint", AcceptanceCriteria: []string{"checks pass"}, EvidenceRequirements: []string{"reviewed pull"}, Budget: 100, Deadline: time.Now().UTC().Add(time.Hour), ContributorEligibility: []string{"repository participants"}, AllocationMethod: "maintainer_selection", CancellationTerms: "Return unallocated value"}
+	outcome, err := funds.CreateOutcome(repository.ID, fund.ID, owner.User.ID, terms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := server.URL + "/repositories/" + repository.ID + "/funded-outcomes/" + outcome.ID + "/delivery-proposals"
+	body := `{"applicant":{"kind":"human","id":"` + other.User.ID + `"},"terms":{"approach":"Repair and verify.","milestones":["deliver"],"cost":90,"dependencies":[],"availability":"This week","required_access":["task branch"],"relevant_work":[{"kind":"pull","id":"prior","note":"Related repair"}]}}`
+	authenticatedRequest(t, http.MethodPost, endpoint, body, owner.Credential.Token, http.StatusForbidden).Body.Close()
+	body = strings.Replace(body, other.User.ID, owner.User.ID, 1)
+	response = authenticatedRequest(t, http.MethodPost, endpoint, body, owner.Credential.Token, http.StatusCreated)
+	if err := json.NewDecoder(response.Body).Decode(&outcome); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	proposal := outcome.DeliveryProposals[0]
+	acceptURL := endpoint + "/" + proposal.ID + "/accept"
+	authenticatedRequest(t, http.MethodPost, acceptURL, `{"expected_version":`+strconv.Itoa(outcome.Version)+`}`, other.Credential.Token, http.StatusNotFound).Body.Close()
+	response = authenticatedRequest(t, http.MethodPost, acceptURL, `{"expected_version":`+strconv.Itoa(outcome.Version)+`}`, owner.Credential.Token, http.StatusOK)
+	if err := json.NewDecoder(response.Body).Decode(&outcome); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if outcome.DeliveryProposals[0].Status != "accepted" || outcome.DeliveryProposals[0].AcceptedBy != owner.User.ID {
+		t.Fatalf("accepted proposal = %+v", outcome.DeliveryProposals[0])
 	}
 }

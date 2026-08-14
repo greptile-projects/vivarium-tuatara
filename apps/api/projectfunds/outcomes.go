@@ -77,21 +77,23 @@ type Diagnostic struct {
 }
 
 type FundedOutcome struct {
-	ID               string            `json:"id"`
-	RepositoryID     string            `json:"repository_id"`
-	FundID           string            `json:"fund_id"`
-	Version          int               `json:"version"`
-	Status           string            `json:"status"`
-	Revisions        []OutcomeRevision `json:"revisions"`
-	Pledges          []Pledge          `json:"pledges"`
-	Replans          []Replan          `json:"replans"`
-	Pledged          int64             `json:"pledged"`
-	MilestonePledged map[string]int64  `json:"milestone_pledged"`
-	Diagnostics      []Diagnostic      `json:"diagnostics"`
-	CreatedBy        string            `json:"created_by"`
-	CreatedAt        time.Time         `json:"created_at"`
-	UpdatedAt        time.Time         `json:"updated_at"`
-	AuthorityNote    string            `json:"authority_note"`
+	ID                 string              `json:"id"`
+	RepositoryID       string              `json:"repository_id"`
+	FundID             string              `json:"fund_id"`
+	Version            int                 `json:"version"`
+	Status             string              `json:"status"`
+	Revisions          []OutcomeRevision   `json:"revisions"`
+	Pledges            []Pledge            `json:"pledges"`
+	Replans            []Replan            `json:"replans"`
+	Pledged            int64               `json:"pledged"`
+	MilestonePledged   map[string]int64    `json:"milestone_pledged"`
+	Diagnostics        []Diagnostic        `json:"diagnostics"`
+	CreatedBy          string              `json:"created_by"`
+	CreatedAt          time.Time           `json:"created_at"`
+	UpdatedAt          time.Time           `json:"updated_at"`
+	AuthorityNote      string              `json:"authority_note"`
+	DeliveryProposals  []DeliveryProposal  `json:"delivery_proposals"`
+	DeliverySelections []DeliverySelection `json:"delivery_selections"`
 }
 
 func (s *Store) CreateOutcome(repositoryID, fundID, actor string, terms OutcomeTerms) (FundedOutcome, error) {
