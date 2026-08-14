@@ -179,7 +179,7 @@ func (s *Store) RecoverMilestone(outcomeID, selectionID, taskID, actor, action, 
 			}
 			task.Status = "appealed"
 		case "withdraw":
-			if !isRecipient || taskPaid(task) || task.Status == "withdrawn" || task.Status == "timed_out" {
+			if !isRecipient || !taskReleaseEligible(task) {
 				return ErrForbidden
 			}
 			amount = releasableTaskAmount(task)
@@ -188,7 +188,7 @@ func (s *Store) RecoverMilestone(outcomeID, selectionID, taskID, actor, action, 
 			}
 			kind, status, task.Status = "milestone_withdrawal", "released", "withdrawn"
 		case "timeout":
-			if !isReviewer || now.Before(v.Revisions[len(v.Revisions)-1].Terms.Deadline) || taskPaid(task) || task.Status == "withdrawn" || task.Status == "timed_out" {
+			if !isReviewer || now.Before(v.Revisions[len(v.Revisions)-1].Terms.Deadline) || !taskReleaseEligible(task) {
 				return ErrForbidden
 			}
 			amount = releasableTaskAmount(task)
@@ -304,4 +304,11 @@ func releasableTaskAmount(t *DeliveryTask) int64 {
 		return award.AwardAmount
 	}
 	return t.AwardAmount
+}
+func taskReleaseEligible(t *DeliveryTask) bool {
+	if t.Status == "withdrawn" || t.Status == "timed_out" || t.Status == "refunded" {
+		return false
+	}
+	award := lastAward(t)
+	return award == nil || award.PaymentStatus == "failed"
 }

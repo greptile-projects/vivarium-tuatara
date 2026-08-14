@@ -438,6 +438,9 @@ func TestMilestoneCorrectionAppealAndPaymentRecoveryAreDeterministic(t *testing.
 	if fund.Balances.Spent != 0 || fund.Balances.Refunded != 4500 || fund.Balances.Available != 5500 {
 		t.Fatalf("refund balances = %+v", fund.Balances)
 	}
+	if _, err = s.RecoverMilestone(out.ID, selection.ID, task.ID, "contributor", "withdraw", "Attempt a second release after refund.", out.Version); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("post-refund withdrawal err = %v", err)
+	}
 }
 
 func TestMilestoneWithdrawalAndTimeoutReleaseOnlyTheirAllocation(t *testing.T) {
