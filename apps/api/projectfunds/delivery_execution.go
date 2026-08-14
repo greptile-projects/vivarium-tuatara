@@ -70,6 +70,7 @@ type DeliveryExecution struct {
 	Status           string            `json:"status"`
 	Budget           int64             `json:"budget"`
 	Spent            int64             `json:"spent"`
+	Released         int64             `json:"released"`
 	PendingExpenses  int64             `json:"pending_expenses"`
 	AgentMinutes     int64             `json:"agent_minutes"`
 	Progress         int               `json:"progress"`
@@ -308,7 +309,7 @@ func (s *Store) ControlDelivery(outcomeID, selectionID, steward, action, reason 
 			if sel.Execution.Status == "cancelled" {
 				return ErrConflict
 			}
-			ledgerAmount = sel.Execution.Budget - sel.Execution.Spent
+			ledgerAmount = sel.Execution.Budget - sel.Execution.Spent - sel.Execution.Released
 			if ledgerAmount < 0 {
 				return ErrConflict
 			}
@@ -461,6 +462,7 @@ func projectDeliveryExecution(s *DeliverySelection, now time.Time) {
 		e.Budget = s.ReservedAmount
 	}
 	e.Spent = 0
+	e.Released = 0
 	e.PendingExpenses = 0
 	e.AgentMinutes = 0
 	e.Progress = 0
@@ -501,6 +503,23 @@ func projectDeliveryExecution(s *DeliverySelection, now time.Time) {
 		}
 		if x.Status == "pending" {
 			e.PendingExpenses += x.Amount
+		}
+	}
+	for i := range s.Tasks {
+		task := &s.Tasks[i]
+		if award := lastAward(task); award != nil {
+			e.Released += award.ReleasedAmount
+			if award.PaymentStatus == "paid" {
+				e.Spent += award.AwardAmount
+			}
+			if award.PaymentStatus == "refunded" {
+				e.Released += award.AwardAmount
+			}
+		}
+		for _, recovery := range task.Recoveries {
+			if recovery.Kind == "withdraw" || recovery.Kind == "timeout" {
+				e.Released += recovery.Amount
+			}
 		}
 	}
 	if e.Spent+e.PendingExpenses > e.Budget {

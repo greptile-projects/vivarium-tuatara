@@ -451,6 +451,13 @@ func TestMilestoneWithdrawalAndTimeoutReleaseOnlyTheirAllocation(t *testing.T) {
 	if fund.Balances.Available != 5500 || fund.Balances.Reserved != 4500 {
 		t.Fatalf("withdrawal balances = %+v", fund.Balances)
 	}
+	if _, err = s.RecoverMilestone(out.ID, selection.ID, task.ID, "contributor", "withdraw", "Duplicate withdrawal.", out.Version); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("duplicate withdrawal err = %v", err)
+	}
+	fund, _ = s.Get(fund.ID)
+	if fund.Balances.Available != 5500 || fund.Balances.Reserved != 4500 {
+		t.Fatalf("duplicate withdrawal changed balances = %+v", fund.Balances)
+	}
 
 	s2, fund2, out2, _, selection2, task2 := selectedDelivery(t)
 	deadline := out2.Revisions[len(out2.Revisions)-1].Terms.Deadline
@@ -462,6 +469,74 @@ func TestMilestoneWithdrawalAndTimeoutReleaseOnlyTheirAllocation(t *testing.T) {
 	fund2, _ = s2.Get(fund2.ID)
 	if fund2.Balances.Available != 5500 || out2.DeliverySelections[0].Tasks[0].Status != "timed_out" {
 		t.Fatalf("timeout = %+v %+v", fund2.Balances, out2.DeliverySelections[0].Tasks[0])
+	}
+	if _, err = s2.RecoverMilestone(out2.ID, selection2.ID, task2.ID, "owner", "timeout", "Duplicate timeout.", out2.Version); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("duplicate timeout err = %v", err)
+	}
+	fund2, _ = s2.Get(fund2.ID)
+	if fund2.Balances.Available != 5500 || fund2.Balances.Reserved != 4500 {
+		t.Fatalf("duplicate timeout changed balances = %+v", fund2.Balances)
+	}
+}
+
+func TestPartialAwardFailureRecoveryPreservesSiblingReservation(t *testing.T) {
+	for _, action := range []string{"withdraw", "timeout"} {
+		t.Run(action, func(t *testing.T) {
+			s, fund, out, recipient, selection, task := selectedDelivery(t)
+			var err error
+			out, err = s.RecordDeliveryUpdate(out.ID, selection.ID, recipient, "contributor", out.Version, DeliveryUpdateInput{TaskID: task.ID, Status: "completed", Progress: 100, Summary: "Measured partial result.", Resources: []DeliveryResource{{Kind: "check", ID: "ci", Revision: "abc", Status: "passed"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			measure := OutcomeMeasure{Name: "result", Status: "met", Value: "bounded result", Evidence: DeliveryResource{Kind: "check", ID: "ci", Revision: "abc", Status: "passed"}}
+			out, err = s.ReviewMilestone(out.ID, selection.ID, task.ID, "owner", out.Version, MilestoneReviewInput{Decision: "partial_award", AwardAmount: 4000, Rationale: "Accept the bounded portion.", OutcomeMeasures: []OutcomeMeasure{measure}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, err = s.RecoverMilestone(out.ID, selection.ID, task.ID, "owner", "payment_failed", "Processor rejected payment.", out.Version)
+			if err != nil {
+				t.Fatal(err)
+			}
+			actor := "contributor"
+			if action == "timeout" {
+				actor = "owner"
+				deadline := out.Revisions[len(out.Revisions)-1].Terms.Deadline
+				s.now = func() time.Time { return deadline.Add(time.Second) }
+			}
+			out, err = s.RecoverMilestone(out.ID, selection.ID, task.ID, actor, action, "Close the failed award through its declared recovery.", out.Version)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fund, _ = s.Get(fund.ID)
+			if fund.Balances.Available != 5500 || fund.Balances.Reserved != 4500 || fund.Balances.Spent != 0 {
+				t.Fatalf("%s balances = %+v", action, fund.Balances)
+			}
+		})
+	}
+}
+
+func TestCancelRemainingUsesAwardAndReleaseProjection(t *testing.T) {
+	s, fund, out, recipient, selection, task := selectedDelivery(t)
+	var err error
+	out, err = s.RecordDeliveryUpdate(out.ID, selection.ID, recipient, "contributor", out.Version, DeliveryUpdateInput{TaskID: task.ID, Status: "completed", Progress: 100, Summary: "Accepted result.", Resources: []DeliveryResource{{Kind: "release", ID: "release-1", Revision: "abc", Status: "published"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	measure := OutcomeMeasure{Name: "result", Status: "met", Value: "released", Evidence: DeliveryResource{Kind: "release", ID: "release-1", Revision: "abc", Status: "published"}}
+	out, err = s.ReviewMilestone(out.ID, selection.ID, task.ID, "owner", out.Version, MilestoneReviewInput{Decision: "accepted", Rationale: "The exact released result meets the contract.", OutcomeMeasures: []OutcomeMeasure{measure}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.DeliverySelections[0].Execution.Spent != 4500 {
+		t.Fatalf("award projection = %+v", out.DeliverySelections[0].Execution)
+	}
+	out, err = s.ControlDelivery(out.ID, selection.ID, "owner", "cancel_remaining", "Release only the unspent sibling allocation.", 0, nil, out.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fund, _ = s.Get(fund.ID)
+	if fund.Balances.Reserved != 0 || fund.Balances.Available != 5500 || fund.Balances.Spent != 4500 {
+		t.Fatalf("award cancellation balances = %+v", fund.Balances)
 	}
 }
 

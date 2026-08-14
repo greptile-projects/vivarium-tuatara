@@ -179,15 +179,23 @@ func (s *Store) RecoverMilestone(outcomeID, selectionID, taskID, actor, action, 
 			}
 			task.Status = "appealed"
 		case "withdraw":
-			if !isRecipient || taskPaid(task) {
+			if !isRecipient || taskPaid(task) || task.Status == "withdrawn" || task.Status == "timed_out" {
 				return ErrForbidden
 			}
-			amount, kind, status, task.Status = task.AwardAmount, "milestone_withdrawal", "released", "withdrawn"
+			amount = releasableTaskAmount(task)
+			if amount <= 0 {
+				return ErrConflict
+			}
+			kind, status, task.Status = "milestone_withdrawal", "released", "withdrawn"
 		case "timeout":
-			if !isReviewer || now.Before(v.Revisions[len(v.Revisions)-1].Terms.Deadline) || taskPaid(task) {
+			if !isReviewer || now.Before(v.Revisions[len(v.Revisions)-1].Terms.Deadline) || taskPaid(task) || task.Status == "withdrawn" || task.Status == "timed_out" {
 				return ErrForbidden
 			}
-			amount, kind, status, task.Status = task.AwardAmount, "milestone_timeout", "released", "timed_out"
+			amount = releasableTaskAmount(task)
+			if amount <= 0 {
+				return ErrConflict
+			}
+			kind, status, task.Status = "milestone_timeout", "released", "timed_out"
 		case "payment_failed":
 			if !isSteward || !taskPaid(task) {
 				return ErrForbidden
@@ -291,3 +299,9 @@ func lastAward(t *DeliveryTask) *MilestoneReview {
 	return nil
 }
 func taskPaid(t *DeliveryTask) bool { a := lastAward(t); return a != nil && a.PaymentStatus == "paid" }
+func releasableTaskAmount(t *DeliveryTask) int64 {
+	if award := lastAward(t); award != nil && award.PaymentStatus == "failed" {
+		return award.AwardAmount
+	}
+	return t.AwardAmount
+}
