@@ -3152,6 +3152,23 @@ evidence, and `leave_conversation`; leaving prevents later updates citing that f
 outcomes, lessons, dissent, resulting work, and a `continue`, `revise_roadmap`, `fulfilled`, or
 `unsupported` disposition. All three mutations require `expected_version` and are append-only.
 
+## Service objectives
+
+`POST /repositories/{id}/service-objectives` publishes a complete reliability contract. A revision
+defines repository, release, or environment scopes; service indicators and supported calculations;
+objectives with measurement windows and user journeys; dependencies; error budgets; ordered
+severity responses and owners; exception policy and time-bounded exceptions; and version-pinned
+links to product, performance, accessibility, privacy, or release commitments. Current repository
+participants may publish; a named owner must also remain a current participant.
+
+`POST /repositories/{id}/service-objectives/{objective_id}/revisions` publishes a complete
+successor using `expected_version`; stale writers receive `409 service_objective_conflict`.
+Repository readers use collection and detail `GET` endpoints. Responses preserve every immutable
+revision and derive `missing_signal`, `unsupported_calculation`, `conflicting_target`,
+`missing_ownership`, `expiring_exception`, and `expired_exception` diagnostics with attribution.
+The contract grants no operational authority. Storage defaults beneath
+`$SERVICE_OBJECTIVE_STORAGE_ROOT` (`service-objectives`).
+
 ## Locale plans
 
 `POST /repositories/{id}/locale-plans` publishes a complete localization support contract. The

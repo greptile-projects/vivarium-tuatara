@@ -1795,6 +1795,16 @@ whenever dependencies change or the web job fails before it starts.
   repair and successor locale publication. Playwright isolates `$LOCALE_PLAN_STORAGE_ROOT` and
   `$LOCALIZATION_STORAGE_ROOT` with its other temporary API stores.
 
+  Reliability contracts at `/repositories/{id}/reliability` retain complete append-only service
+  objective revisions beneath `$SERVICE_OBJECTIVE_STORAGE_ROOT` (default `service-objectives`).
+  Repository participants define repository, release, and environment scopes; user journeys;
+  indicators and calculations; measurement windows and targets; dependencies; error budgets;
+  severity responses and accountable owners; version-pinned product, performance, accessibility,
+  privacy, and release commitment links; and bounded exception policy. Reads keep missing signals
+  or ownership, unsupported calculations, conflicting targets, and expiring/expired exceptions
+  explicit and attributed. Reliability contracts document expected behavior and response, but grant
+  no repository, observability, incident, release, deployment, or environment authority.
+
   Update it when you change how the apps fit together, not for every change.
 
 ## LADDER.md

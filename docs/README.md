@@ -14,6 +14,21 @@ The supported consumer contract, including authentication, stable error
 shapes, validation, and collection pagination, is documented in [API.md](API.md).
 Consumers should use that HTTP boundary rather than reading storage roots.
 
+## Reliability contracts
+
+Repository participants publish complete, compare-and-swap service-objective contracts through
+`/repositories/{id}/service-objectives`; the web workspace is `/repositories/{id}/reliability`.
+Each immutable revision scopes repository, release, or environment behavior and connects named
+user journeys to indicators, calculations, measurement windows, targets, dependencies, error
+budgets, ordered severity responses, accountable owners, and an exception policy. Links retain the
+exact version of related product, performance, accessibility, privacy, and release commitments.
+
+Reads derive attributable diagnostics for missing signals or ownership, unsupported calculations,
+conflicting targets, and exceptions that are expired or within seven days of expiry. These records
+declare expected dependability and response responsibility; they do not confer repository,
+deployment, release, incident, or observability authority. Records default beneath
+`$SERVICE_OBJECTIVE_STORAGE_ROOT` (`service-objectives`).
+
 ## Locale coverage contracts
 
 Repository participants publish complete, compare-and-swap locale plans through
