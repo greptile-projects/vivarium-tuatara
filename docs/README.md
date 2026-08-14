@@ -26,7 +26,8 @@ Records default beneath `$DATA_COMMITMENT_STORAGE_ROOT` (`data-commitments`) and
 handling without granting access or operational authority.
 
 Repository-defined data-flow maps on the same workspace bind an exact visible code revision and
-exact commitment/data-use versions to a directed path. Typed nodes cover user interactions,
+exact affected source paths and commitment/data-use versions to a directed path. Privacy review
+rejects a candidate map unless that scope covers every path changed by the pull. Typed nodes cover user interactions,
 interfaces, packages, stores, extensions, releases, environments, audiences, and external
 recipients; edges declare the categories, purpose, operation, and whether another retained copy is
 created. Inaccessible dependencies and uncertainty remain explicit without copying their protected
@@ -34,6 +35,17 @@ contents. Current participants publish declarations, while participants and repo
 read-only agents may add bounded code citations and findings. Successor declarations make earlier
 analysis stale, and projections keep undeclared flows and declared/observed differences visible.
 Records default beneath `$DATA_FLOW_STORAGE_ROOT` (`data-flows`) and grant no data or repository
+authority.
+
+Pull requests compare a candidate data-flow revision and its exact commitment/data-use versions
+with a target-revision flow at `/repositories/{id}/pulls/{pull_id}/privacy-review`. The server
+classifies changed collection, purposes, recipients, retention, access, and user controls, then
+derives required owner acknowledgement, notice, consent, migration, test, and exception work.
+Current collaborators and repository-bound read-only agents may retain bounded challenges,
+mitigations, residual-risk analysis, and source citations; only a human collaborator can acknowledge
+every required action. Acceptance binds the exact pull source revision. Synchronization makes it
+stale, and the next comparison retains the complete earlier review in history. Records default
+beneath `$PRIVACY_REVIEW_STORAGE_ROOT` (`privacy-reviews`) and grant no data, review, or merge
 authority.
 
 ## Accountable product direction

@@ -21,7 +21,7 @@ expiring or expired exceptions.
   immutable declaration history, bounded analyses, and derived diagnostics.
 - `POST /repositories/{id}/data-flows` publishes a participant-defined map at a 40-character commit
   reachable from a visible branch. Every map and edge references exact same-repository commitment
-  versions and existing data-use IDs.
+  versions and existing data-use IDs; `affected_paths` declares its exact source coverage.
 - `POST .../data-flows/{flow_id}/revisions` publishes a complete successor with
   `expected_version`; stale writers receive `409 data_flow_conflict`.
 - `POST .../data-flows/{flow_id}/analyses` lets current participants and repository-bound read-only
@@ -37,6 +37,18 @@ behavior, and analyses made stale by a successor declaration; they never broaden
 Anonymous and nonparticipant readers of public repositories receive declarations and declaration
 diagnostics only. Complete analyses, citations, actor attribution, and analysis-derived diagnostics
 are projected only to current repository participants and repository-bound read-only agents.
+
+### Pull privacy review
+
+- `GET /repositories/{id}/pulls/{pull_id}/privacy-review` returns the exact-revision comparison,
+  required actions, attributed discussion, acceptance state, and superseded history.
+- `POST .../privacy-review` compares source and target data-flow versions that match the current pull
+  commits. The candidate flow must cover every changed pull path. Classifications and follow-up
+  requirements are derived from flow and commitment differences rather than accepted from the client.
+- `POST .../privacy-review/comments` retains collaborator or repository-bound agent challenges,
+  mitigations, and residual risk with optional citations into the reviewed source revision.
+- `POST .../privacy-review/acceptance` is human-collaborator-only, requires every derived action and
+  a residual-risk statement, and conflicts after the pull source revision moves.
 
 ## Product feedback
 
