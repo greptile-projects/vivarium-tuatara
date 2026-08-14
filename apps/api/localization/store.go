@@ -17,6 +17,7 @@ import (
 
 var ErrNotFound = errors.New("localization review not found")
 var ErrInvalid = errors.New("invalid localization review")
+var ErrConflict = errors.New("localization workspace version conflict")
 
 type ExtractionMap struct {
 	ID      string   `json:"id"`
@@ -46,6 +47,8 @@ type Unit struct {
 	SourceHash   string            `json:"source_hash"`
 	Change       string            `json:"change"`
 	LocaleStatus map[string]string `json:"locale_status"`
+	Protected    bool              `json:"protected,omitempty"`
+	Embargoed    bool              `json:"embargoed,omitempty"`
 }
 type Extraction struct {
 	ID             string        `json:"id"`
@@ -69,13 +72,86 @@ type Translation struct {
 	ProposedBy string    `json:"proposed_by"`
 	CreatedAt  time.Time `json:"created_at"`
 }
+type Evidence struct {
+	Kind      string `json:"kind"`
+	Reference string `json:"reference"`
+	Excerpt   string `json:"excerpt,omitempty"`
+}
+type Claim struct {
+	ID                 string    `json:"id"`
+	UnitID             string    `json:"unit_id"`
+	Locale             string    `json:"locale"`
+	AssigneeID         string    `json:"assignee_id"`
+	State              string    `json:"state"`
+	Note               string    `json:"note,omitempty"`
+	PreviousAssigneeID string    `json:"previous_assignee_id,omitempty"`
+	CreatedBy          string    `json:"created_by"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+type Comment struct {
+	ID        string    `json:"id"`
+	UnitID    string    `json:"unit_id"`
+	Locale    string    `json:"locale"`
+	Body      string    `json:"body"`
+	ActorType string    `json:"actor_type"`
+	ActorID   string    `json:"actor_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+type SuggestionRequest struct {
+	ID                string    `json:"id"`
+	UnitID            string    `json:"unit_id"`
+	Locale            string    `json:"locale"`
+	AgentID           string    `json:"agent_id"`
+	ProductContext    string    `json:"product_context"`
+	LocalePlanID      string    `json:"locale_plan_id"`
+	LocalePlanVersion int       `json:"locale_plan_version"`
+	Protected         bool      `json:"protected"`
+	Embargoed         bool      `json:"embargoed"`
+	State             string    `json:"state"`
+	RequestedBy       string    `json:"requested_by"`
+	CreatedAt         time.Time `json:"created_at"`
+}
+type Suggestion struct {
+	ID                string     `json:"id"`
+	RequestID         string     `json:"request_id"`
+	UnitID            string     `json:"unit_id"`
+	Locale            string     `json:"locale"`
+	Text              string     `json:"text"`
+	Rationale         string     `json:"rationale"`
+	Uncertainty       string     `json:"uncertainty"`
+	Evidence          []Evidence `json:"evidence"`
+	AgentID           string     `json:"agent_id"`
+	SourceRevision    string     `json:"source_revision"`
+	SourceHash        string     `json:"source_hash"`
+	LocalePlanID      string     `json:"locale_plan_id"`
+	LocalePlanVersion int        `json:"locale_plan_version"`
+	Status            string     `json:"status"`
+	CreatedAt         time.Time  `json:"created_at"`
+}
+type Decision struct {
+	ID            string    `json:"id"`
+	UnitID        string    `json:"unit_id"`
+	Locale        string    `json:"locale"`
+	SuggestionID  string    `json:"suggestion_id,omitempty"`
+	TranslationID string    `json:"translation_id,omitempty"`
+	Kind          string    `json:"kind"`
+	Reason        string    `json:"reason"`
+	ActorID       string    `json:"actor_id"`
+	CreatedAt     time.Time `json:"created_at"`
+}
 type Review struct {
-	RepositoryID    string                    `json:"repository_id"`
-	PullID          string                    `json:"pull_id"`
-	CurrentRevision string                    `json:"current_revision"`
-	Extractions     []Extraction              `json:"extractions"`
-	Translations    []Translation             `json:"translations"`
-	Counts          map[string]map[string]int `json:"counts"`
+	RepositoryID       string                    `json:"repository_id"`
+	PullID             string                    `json:"pull_id"`
+	CurrentRevision    string                    `json:"current_revision"`
+	Extractions        []Extraction              `json:"extractions"`
+	Translations       []Translation             `json:"translations"`
+	Counts             map[string]map[string]int `json:"counts"`
+	WorkspaceVersion   int                       `json:"workspace_version"`
+	Claims             []Claim                   `json:"claims"`
+	Comments           []Comment                 `json:"comments"`
+	SuggestionRequests []SuggestionRequest       `json:"suggestion_requests"`
+	Suggestions        []Suggestion              `json:"suggestions"`
+	Decisions          []Decision                `json:"decisions"`
 }
 type Store struct {
 	root string
@@ -156,6 +232,7 @@ func (s *Store) Extract(repo, pull, revision, actor string, m ExtractionMap, loc
 	v.PullID = pull
 	v.CurrentRevision = revision
 	v.Extractions = append(v.Extractions, e)
+	v.WorkspaceVersion++
 	s.project(&v)
 	if err := s.write(v); err != nil {
 		return Review{}, err
@@ -192,11 +269,204 @@ func (s *Store) Propose(repo, pull, revision, unitID, locale, text, note, actor 
 		}
 	}
 	v.Translations = append(v.Translations, Translation{ID: id(), UnitID: unitID, Locale: locale, SourceHash: unit.SourceHash, Text: text, Note: note, Status: "proposed", ProposedBy: actor, CreatedAt: s.now()})
+	v.WorkspaceVersion++
 	s.project(&v)
 	if e = s.write(v); e != nil {
 		return Review{}, e
 	}
 	return v, nil
+}
+
+func (s *Store) Mutate(repo, pull, revision string, expected int, mutation string, actorType, actorID string, payload map[string]any) (Review, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, pull)
+	if err != nil {
+		return v, err
+	}
+	if v.CurrentRevision != revision || v.WorkspaceVersion != expected || actorID == "" {
+		return v, ErrConflict
+	}
+	unitID, _ := payload["unit_id"].(string)
+	locale, _ := payload["locale"].(string)
+	unit := currentUnit(&v, unitID, locale)
+	if unit == nil {
+		return v, ErrInvalid
+	}
+	now := s.now()
+	switch mutation {
+	case "claim", "handoff", "release":
+		if actorType != "user" {
+			return v, ErrInvalid
+		}
+		assignee, _ := payload["assignee_id"].(string)
+		note, _ := payload["note"].(string)
+		active := activeClaim(v.Claims, unitID, locale)
+		if mutation == "claim" {
+			if active != nil || assignee != actorID {
+				return v, ErrConflict
+			}
+		}
+		if mutation != "claim" && (active == nil || active.AssigneeID != actorID) {
+			return v, ErrConflict
+		}
+		if mutation == "release" {
+			assignee = ""
+		} else if assignee == "" {
+			return v, ErrInvalid
+		}
+		previous := ""
+		if active != nil {
+			previous = active.AssigneeID
+		}
+		v.Claims = append(v.Claims, Claim{ID: id(), UnitID: unitID, Locale: locale, AssigneeID: assignee, State: mutation, Note: note, PreviousAssigneeID: previous, CreatedBy: actorID, CreatedAt: now})
+	case "comment":
+		body, _ := payload["body"].(string)
+		if strings.TrimSpace(body) == "" || len(body) > 4000 {
+			return v, ErrInvalid
+		}
+		v.Comments = append(v.Comments, Comment{ID: id(), UnitID: unitID, Locale: locale, Body: body, ActorType: actorType, ActorID: actorID, CreatedAt: now})
+	case "request_suggestion":
+		if actorType != "user" {
+			return v, ErrInvalid
+		}
+		agent, _ := payload["agent_id"].(string)
+		context, _ := payload["product_context"].(string)
+		plan, _ := payload["locale_plan_id"].(string)
+		version := number(payload["locale_plan_version"])
+		protected, _ := payload["protected"].(bool)
+		embargoed, _ := payload["embargoed"].(bool)
+		if agent == "" || context == "" || plan == "" || version < 1 || protected || embargoed || unit.Protected || unit.Embargoed {
+			return v, ErrInvalid
+		}
+		v.SuggestionRequests = append(v.SuggestionRequests, SuggestionRequest{ID: id(), UnitID: unitID, Locale: locale, AgentID: agent, ProductContext: context, LocalePlanID: plan, LocalePlanVersion: version, Protected: protected, Embargoed: embargoed, State: "requested", RequestedBy: actorID, CreatedAt: now})
+	case "suggest":
+		if actorType != "agent" {
+			return v, ErrInvalid
+		}
+		requestID, _ := payload["request_id"].(string)
+		textValue, _ := payload["text"].(string)
+		rationale, _ := payload["rationale"].(string)
+		uncertainty, _ := payload["uncertainty"].(string)
+		request := findRequest(v.SuggestionRequests, requestID)
+		if request == nil || request.AgentID != actorID || request.State != "requested" || textValue == "" || rationale == "" || !validUncertainty(uncertainty) {
+			return v, ErrInvalid
+		}
+		evidence := decodeEvidence(payload["evidence"])
+		hasSource, hasPlan := false, false
+		for _, item := range evidence {
+			hasSource = hasSource || item.Kind == "source_context"
+			hasPlan = hasPlan || item.Kind == "locale_plan" || item.Kind == "terminology"
+		}
+		if len(evidence) == 0 || !hasSource || !hasPlan {
+			return v, ErrInvalid
+		}
+		v.Suggestions = append(v.Suggestions, Suggestion{ID: id(), RequestID: request.ID, UnitID: unitID, Locale: locale, Text: textValue, Rationale: rationale, Uncertainty: uncertainty, Evidence: evidence, AgentID: actorID, SourceRevision: revision, SourceHash: unit.SourceHash, LocalePlanID: request.LocalePlanID, LocalePlanVersion: request.LocalePlanVersion, Status: "suggested", CreatedAt: now})
+		request.State = "completed"
+	case "decide":
+		if actorType != "user" {
+			return v, ErrInvalid
+		}
+		kind, _ := payload["kind"].(string)
+		reason, _ := payload["reason"].(string)
+		suggestionID, _ := payload["suggestion_id"].(string)
+		translationID, _ := payload["translation_id"].(string)
+		if !contains([]string{"approve", "reject", "escalate"}, kind) || reason == "" || (suggestionID == "" && translationID == "") {
+			return v, ErrInvalid
+		}
+		if suggestionID != "" {
+			found := false
+			for i := range v.Suggestions {
+				if v.Suggestions[i].ID == suggestionID && v.Suggestions[i].UnitID == unitID && v.Suggestions[i].Locale == locale {
+					v.Suggestions[i].Status = map[string]string{"approve": "approved", "reject": "rejected", "escalate": "escalated"}[kind]
+					found = true
+				}
+			}
+			if !found {
+				return v, ErrInvalid
+			}
+		}
+		v.Decisions = append(v.Decisions, Decision{ID: id(), UnitID: unitID, Locale: locale, SuggestionID: suggestionID, TranslationID: translationID, Kind: kind, Reason: reason, ActorID: actorID, CreatedAt: now})
+	default:
+		return v, ErrInvalid
+	}
+	v.WorkspaceVersion++
+	s.project(&v)
+	if err = s.write(v); err != nil {
+		return Review{}, err
+	}
+	return v, nil
+}
+
+func currentUnit(v *Review, unitID, locale string) *Unit {
+	if len(v.Extractions) == 0 {
+		return nil
+	}
+	x := &v.Extractions[len(v.Extractions)-1]
+	valid := false
+	for _, l := range x.Locales {
+		valid = valid || l == locale
+	}
+	if !valid {
+		return nil
+	}
+	for i := range x.Units {
+		if x.Units[i].ID == unitID {
+			return &x.Units[i]
+		}
+	}
+	return nil
+}
+func activeClaim(values []Claim, u, l string) *Claim {
+	for i := len(values) - 1; i >= 0; i-- {
+		x := &values[i]
+		if x.UnitID == u && x.Locale == l {
+			if x.AssigneeID == "" {
+				return nil
+			}
+			return x
+		}
+	}
+	return nil
+}
+func findRequest(values []SuggestionRequest, id string) *SuggestionRequest {
+	for i := range values {
+		if values[i].ID == id {
+			return &values[i]
+		}
+	}
+	return nil
+}
+func number(v any) int {
+	if x, ok := v.(float64); ok {
+		return int(x)
+	}
+	return 0
+}
+func validUncertainty(v string) bool { return contains([]string{"low", "medium", "high"}, v) }
+func contains(v []string, x string) bool {
+	for _, y := range v {
+		if x == y {
+			return true
+		}
+	}
+	return false
+}
+func decodeEvidence(v any) []Evidence {
+	b, e := json.Marshal(v)
+	if e != nil {
+		return nil
+	}
+	var out []Evidence
+	if json.Unmarshal(b, &out) != nil {
+		return nil
+	}
+	for _, x := range out {
+		if !contains([]string{"terminology", "prior_translation", "source_context", "locale_plan"}, x.Kind) || x.Reference == "" {
+			return nil
+		}
+	}
+	return out
 }
 func (s *Store) Get(repo, pull, current string) (Review, error) {
 	s.mu.Lock()
