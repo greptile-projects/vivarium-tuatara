@@ -47,6 +47,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/performanceevidence"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/performancegoals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/privacychecks"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/privacyreviews"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/productexperiments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/productopportunities"
@@ -385,6 +386,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	privacyCheckRoot := os.Getenv("PRIVACY_CHECK_STORAGE_ROOT")
+	if privacyCheckRoot == "" {
+		privacyCheckRoot = "privacy-checks"
+	}
+	privacyCheckStore, err := privacychecks.New(privacyCheckRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	accessibilityReportRoot := os.Getenv("ACCESSIBILITY_REPORT_STORAGE_ROOT")
 	if accessibilityReportRoot == "" {
 		accessibilityReportRoot = "accessibility-reports"
@@ -476,7 +485,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -627,6 +636,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var dataCommitmentStore *datacommitments.Store
 	var dataFlowStore *dataflows.Store
 	var privacyReviewStore *privacyreviews.Store
+	var privacyCheckStore *privacychecks.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -703,6 +713,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			dataFlowStore = value
 		case *privacyreviews.Store:
 			privacyReviewStore = value
+		case *privacychecks.Store:
+			privacyCheckStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -832,6 +844,10 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			registerDataFlowRoutes(mux, store, repositoryCatalog, authStore, dataCommitmentStore, dataFlowStore)
 			if pullRequestStore != nil && privacyReviewStore != nil {
 				registerPrivacyReviewRoutes(mux, store, repositoryCatalog, authStore, pullRequestStore, dataCommitmentStore, dataFlowStore, privacyReviewStore)
+				if previewStore != nil && releaseStore != nil && privacyCheckStore != nil {
+					pullRequestStore.ConfigurePrivacyChecks(privacyCheckStore)
+					registerPrivacyCheckRoutes(mux, repositoryCatalog, authStore, pullRequestStore, releaseStore, previewStore, dataFlowStore, privacyCheckStore)
+				}
 			}
 		}
 	}

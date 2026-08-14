@@ -1,5 +1,24 @@
 # HTTP API contract
 
+## Runtime privacy checks
+
+- `POST|GET /repositories/{id}/privacy-check-policies` lets repository owners define and readers
+  inspect branch/path-selected runtime requirements, synthetic journeys, and named privacy owners.
+- `POST /repositories/{id}/pulls/{pull_id}/privacy-check-runs` retains a current-revision run only
+  when it names the pull's existing network-none preview and matching data-flow version. The run
+  declares `isolation: "ephemeral_network_none"` and `production_data: false`; results cover the
+  closed rule set `collection`, `consent`, `minimization`, `access`, `retention`, `export`,
+  `deletion`, `telemetry`, and `recipient`. Artifact metadata is sanitized, digest-addressed, and
+  limited to 5 MiB per declared log, trace, or artifact; payload contents are never accepted.
+- `POST /repositories/{id}/privacy-check-acknowledgements` records a named privacy owner's rationale
+  for an exact policy and revision. `POST /repositories/{id}/privacy-check-exceptions` is owner-only
+  and requires exact rules, rationale, follow-up work, and an expiry no more than 90 days away.
+- `GET /repositories/{id}/pulls/{pull_id}/privacy-readiness` and
+  `GET /repositories/{id}/releases/{release_id}/privacy-readiness` distinguish missing, stale,
+  failed, and passed current evidence. Pull merge readiness includes the same `privacy_readiness`
+  projection and blockers. Exceptions waive only their named runtime rules and do not waive a
+  missing owner acknowledgement. Records default beneath `$PRIVACY_CHECK_STORAGE_ROOT`.
+
 ## Data commitments
 
 - `GET /repositories/{id}/data-commitments` lists readable repository commitments.

@@ -24,6 +24,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/performanceevidence"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/privacychecks"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
@@ -475,6 +476,7 @@ type MergeReadiness struct {
 	PreviewAcceptance       *acceptance.Evaluation                 `json:"preview_acceptance,omitempty"`
 	PerformanceRequirements []performanceevidence.MergeRequirement `json:"performance_requirements"`
 	AccessibilityReadiness  *accessibilitydelivery.Readiness       `json:"accessibility_readiness,omitempty"`
+	PrivacyReadiness        *privacychecks.Readiness               `json:"privacy_readiness,omitempty"`
 }
 
 type commentRecord struct {
@@ -507,12 +509,14 @@ type Store struct {
 	performance              *performanceevidence.Store
 	accessibilityDelivery    *accessibilitydelivery.Store
 	accessibilityAssessments *accessibilityassessments.Store
+	privacyChecks            *privacychecks.Store
 }
 
 func (s *Store) ConfigurePerformanceEvidence(store *performanceevidence.Store) { s.performance = store }
 func (s *Store) ConfigureAccessibilityDelivery(delivery *accessibilitydelivery.Store, assessments *accessibilityassessments.Store) {
 	s.accessibilityDelivery, s.accessibilityAssessments = delivery, assessments
 }
+func (s *Store) ConfigurePrivacyChecks(store *privacychecks.Store) { s.privacyChecks = store }
 
 func (s *Store) ConfigurePreviewAcceptance(a *acceptance.Store, p *previews.Store) {
 	s.acceptance = a
@@ -1693,6 +1697,35 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 			}
 		}
 	}
+	if s.privacyChecks != nil {
+		changes, changeErr := s.Changes(repositoryID, pullRequestID)
+		if changeErr != nil {
+			return MergeReadiness{}, changeErr
+		}
+		paths := make([]string, 0, len(changes))
+		for _, change := range changes {
+			paths = append(paths, change.Path)
+		}
+		privacy, evaluationErr := s.privacyChecks.Evaluate(repositoryID, p.SourceCommitID, p.TargetBranch, paths)
+		if evaluationErr != nil {
+			return MergeReadiness{}, evaluationErr
+		}
+		report.PrivacyReadiness = &privacy
+		for _, requirement := range privacy.Requirements {
+			if requirement.Status == "passed" {
+				continue
+			}
+			overridden := false
+			for _, exception := range privacy.ActiveExceptions {
+				if exception.PolicyID == requirement.PolicyID && requirement.Kind == "runtime_rule" && containsPrivacyRule(exception.Rules, requirement.Name) {
+					overridden = true
+				}
+			}
+			if !overridden {
+				addBlocker("privacy_"+requirement.Kind+"_"+requirement.Status, requirement.Message+": "+requirement.Name)
+			}
+		}
+	}
 
 	if sourceID != nil && targetID != nil && *sourceID == p.SourceCommitID {
 		merged, err := commitReachable(repository, *sourceID, *targetID)
@@ -1725,6 +1758,15 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 		}
 	}
 	return report, nil
+}
+
+func containsPrivacyRule(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
 }
 
 // Enqueue admits a currently mergeable pull request and freezes the exact

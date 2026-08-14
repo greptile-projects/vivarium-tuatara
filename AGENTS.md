@@ -453,6 +453,16 @@ whenever dependencies change or the web job fails before it starts.
   analyses, citations, attribution, and analysis-derived diagnostics remain limited to current
   participants and repository-bound read-only agents.
 
+  Runtime privacy policies beneath `$PRIVACY_CHECK_STORAGE_ROOT` (default `privacy-checks`) select
+  branches/paths, required collection, consent, minimization, access, retention, export, deletion,
+  telemetry, and recipient rules, synthetic journeys, and named current human privacy owners.
+  Evidence binds the exact pull revision, matching data-flow version, and existing network-isolated
+  preview; production personal data and artifact payloads are rejected, while bounded sanitized
+  log/trace/artifact metadata, digests, coverage, and failures remain on the pull. Current runtime
+  evidence and privacy-owner acknowledgement govern merge and release readiness. Owner exceptions
+  are exact-rule scoped, expire within 90 days, retain rationale, and require follow-up work; they
+  cannot waive the owner acknowledgement.
+
   Product feedback at `/repositories/{id}/feedback` is a distinct needs channel for a project,
 
   Governed project funds at `/repositories/{id}/funds` retain named stewards, accepted sources,

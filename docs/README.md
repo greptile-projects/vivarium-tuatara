@@ -48,6 +48,17 @@ stale, and the next comparison retains the complete earlier review in history. R
 beneath `$PRIVACY_REVIEW_STORAGE_ROOT` (`privacy-reviews`) and grant no data, review, or merge
 authority.
 
+Repository owners add runtime privacy gates with privacy-check policies. A policy selects target
+branches and paths, the required collection, consent, minimization, access, retention, export,
+deletion, telemetry, and recipient rules, synthetic journeys, and current human privacy owners.
+Each retained run must bind the pull's exact source revision, a matching data-flow version, and an
+existing ephemeral network-isolated preview; production data is rejected. Pull evidence contains
+only bounded sanitized log/trace/artifact metadata, content digests, rule outcomes, and coverage.
+Current evidence plus a named privacy-owner acknowledgement governs ordinary merge readiness and
+the same exact revision/path context governs release readiness. Repository-owner exceptions name
+only affected rules, expire within 90 days, preserve rationale, and require linked follow-up work.
+Records default beneath `$PRIVACY_CHECK_STORAGE_ROOT` (`privacy-checks`).
+
 ## Accountable product direction
 
 The repository roadmap at `/repositories/{id}/roadmap` turns exact product-opportunity versions
