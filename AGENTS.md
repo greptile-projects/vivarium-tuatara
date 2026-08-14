@@ -1778,7 +1778,8 @@ whenever dependencies change or the web job fails before it starts.
   versions. Complete repository-defined suites cover variables, pluralization, formatting,
   terminology, links, layout expansion, bidirectional text, fallback, and localized journeys.
   Translators and preview-invited regional reviewers retain route/unit findings and decisions;
-  projections distinguish source, per-unit translation, and per-route interface invalidation.
+  projections distinguish locale-plan, source, per-unit translation, and per-route interface
+  invalidation; every later evidence write revalidates the bound current plan version.
 
   Update it when you change how the apps fit together, not for every change.
 

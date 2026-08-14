@@ -237,7 +237,7 @@ func TestLocaleVerificationRetainsCompleteChecksAndInvalidatesOnlyAffectedEviden
 	welcome, items := v.Extractions[0].Units[0].ID, v.Extractions[0].Units[1].ID
 	v, _ = s.Propose("repo", "pull", revision, welcome, "ar", "مرحبًا {name}", "", "translator")
 	v, _ = s.Propose("repo", "pull", revision, items, "ar", "{count} عناصر", "", "translator")
-	v, err = s.Verify("repo", "pull", revision, v.WorkspaceVersion, "publish_candidate", "owner", "translator", map[string]any{
+	v, err = s.Verify("repo", "pull", revision, v.WorkspaceVersion, "publish_candidate", "owner", "translator", 2, map[string]any{
 		"locale": "ar", "preview_id": "preview", "preview_url": "/bounded/preview", "locale_plan_id": "plan", "locale_plan_version": float64(2),
 		"routes": []map[string]any{{"journey_id": "home", "route": "/ar/home", "interface_hash": strings.Repeat("a", 64)}},
 	})
@@ -249,15 +249,15 @@ func TestLocaleVerificationRetainsCompleteChecksAndInvalidatesOnlyAffectedEviden
 	for _, kind := range verificationKinds() {
 		results = append(results, map[string]any{"kind": kind, "route": "/ar/home", "unit_ids": []string{welcome, items}, "status": "passed", "summary": kind + " passed"})
 	}
-	v, err = s.Verify("repo", "pull", revision, v.WorkspaceVersion, "record_checks", "owner", "translator", map[string]any{"candidate_id": candidate.ID, "results": results})
+	v, err = s.Verify("repo", "pull", revision, v.WorkspaceVersion, "record_checks", "owner", "translator", 2, map[string]any{"candidate_id": candidate.ID, "results": results})
 	if err != nil || len(v.VerificationRuns) != 1 || !v.Verification[0].Current {
 		t.Fatalf("verification run = %#v, %v", v.Verification, err)
 	}
-	v, err = s.Verify("repo", "pull", revision, v.WorkspaceVersion, "finding", "regional", "regional_reviewer", map[string]any{"candidate_id": candidate.ID, "locale": "ar", "route": "/ar/home", "unit_ids": []string{welcome}, "category": "bidirectional_text", "severity": "high", "body": "The name interrupts reading order."})
+	v, err = s.Verify("repo", "pull", revision, v.WorkspaceVersion, "finding", "regional", "regional_reviewer", 2, map[string]any{"candidate_id": candidate.ID, "locale": "ar", "route": "/ar/home", "unit_ids": []string{welcome}, "category": "bidirectional_text", "severity": "high", "body": "The name interrupts reading order."})
 	if err != nil {
 		t.Fatal(err)
 	}
-	v, err = s.Verify("repo", "pull", revision, v.WorkspaceVersion, "review", "regional", "regional_reviewer", map[string]any{"candidate_id": candidate.ID, "locale": "ar", "route": "/ar/home", "unit_ids": []string{items}, "kind": "approve", "reason": "Plural forms read naturally in the cart."})
+	v, err = s.Verify("repo", "pull", revision, v.WorkspaceVersion, "review", "regional", "regional_reviewer", 2, map[string]any{"candidate_id": candidate.ID, "locale": "ar", "route": "/ar/home", "unit_ids": []string{items}, "kind": "approve", "reason": "Plural forms read naturally in the cart."})
 	if err != nil || v.LocaleReviewDecisions[0].ActorRole != "regional_reviewer" {
 		t.Fatalf("regional review = %#v, %v", v.LocaleReviewDecisions, err)
 	}
@@ -276,9 +276,33 @@ func TestLocaleVerificationRequiresEveryDefinedExperienceCheck(t *testing.T) {
 	v, _ := s.Extract("repo", "pull", revision, "owner", ExtractionMap{ID: "web", Version: 1, Name: "Web", Include: []string{"src/**"}, Formats: []string{"typescript"}}, []string{"fr"}, []Unit{{Key: "welcome", Message: "Welcome", Context: "Home", Locations: []Location{{Path: "src/home.tsx", Line: 2}}}})
 	unit := v.Extractions[0].Units[0].ID
 	v, _ = s.Propose("repo", "pull", revision, unit, "fr", "Bienvenue", "", "translator")
-	v, _ = s.Verify("repo", "pull", revision, v.WorkspaceVersion, "publish_candidate", "owner", "translator", map[string]any{"locale": "fr", "preview_id": "preview", "preview_url": "/bounded", "locale_plan_id": "plan", "locale_plan_version": float64(1), "routes": []map[string]any{{"journey_id": "home", "route": "/fr", "interface_hash": strings.Repeat("a", 64)}}})
-	_, err := s.Verify("repo", "pull", revision, v.WorkspaceVersion, "record_checks", "owner", "translator", map[string]any{"candidate_id": v.VerificationCandidates[0].ID, "results": []map[string]any{{"kind": "variables", "route": "/fr", "unit_ids": []string{unit}, "status": "passed", "summary": "passed"}}})
+	v, _ = s.Verify("repo", "pull", revision, v.WorkspaceVersion, "publish_candidate", "owner", "translator", 1, map[string]any{"locale": "fr", "preview_id": "preview", "preview_url": "/bounded", "locale_plan_id": "plan", "locale_plan_version": float64(1), "routes": []map[string]any{{"journey_id": "home", "route": "/fr", "interface_hash": strings.Repeat("a", 64)}}})
+	_, err := s.Verify("repo", "pull", revision, v.WorkspaceVersion, "record_checks", "owner", "translator", 1, map[string]any{"candidate_id": v.VerificationCandidates[0].ID, "results": []map[string]any{{"kind": "variables", "route": "/fr", "unit_ids": []string{unit}, "status": "passed", "summary": "passed"}}})
 	if !errors.Is(err, ErrInvalid) {
 		t.Fatalf("incomplete check suite error = %v", err)
+	}
+}
+
+func TestLocalePlanSuccessorStalesCandidateAndRejectsNewEvidence(t *testing.T) {
+	s, _ := New(t.TempDir())
+	revision := "1111111111111111111111111111111111111111"
+	v, _ := s.Extract("repo", "pull", revision, "owner", ExtractionMap{ID: "web", Version: 1, Name: "Web", Include: []string{"src/**"}, Formats: []string{"typescript"}}, []string{"fr"}, []Unit{{Key: "welcome", Message: "Welcome", Context: "Home", Locations: []Location{{Path: "src/home.tsx", Line: 2}}}})
+	unit := v.Extractions[0].Units[0].ID
+	v, _ = s.Propose("repo", "pull", revision, unit, "fr", "Bienvenue", "", "translator")
+	v, err := s.Verify("repo", "pull", revision, v.WorkspaceVersion, "publish_candidate", "owner", "translator", 1, map[string]any{"locale": "fr", "preview_id": "preview", "preview_url": "/bounded", "locale_plan_id": "plan", "locale_plan_version": float64(1), "routes": []map[string]any{{"journey_id": "home", "route": "/fr", "interface_hash": strings.Repeat("a", 64)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ApplyLocalePlanVersions(&v, map[string]int{"plan": 2})
+	if v.Verification[0].Current || !contains(v.Verification[0].StaleScopes, "locale_plan") {
+		t.Fatalf("plan successor projection = %#v", v.Verification[0])
+	}
+	results := []map[string]any{}
+	for _, kind := range verificationKinds() {
+		results = append(results, map[string]any{"kind": kind, "route": "/fr", "unit_ids": []string{unit}, "status": "passed", "summary": "passed"})
+	}
+	_, err = s.Verify("repo", "pull", revision, v.WorkspaceVersion, "record_checks", "owner", "translator", 2, map[string]any{"candidate_id": v.VerificationCandidates[0].ID, "results": results})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("superseded plan check error = %v", err)
 	}
 }

@@ -60,6 +60,7 @@ func registerLocalizationRoutes(mux *http.ServeMux, catalog *repositories.Store,
 			writeAPIError(w, 500, "localization_unavailable", "localization review could not be read")
 			return
 		}
+		applyLocalizationPlanVersions(plans, &v)
 		writeJSON(w, 200, v)
 	})
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/localization/extractions", func(w http.ResponseWriter, r *http.Request) {
@@ -311,12 +312,28 @@ func registerLocalizationRoutes(mux *http.ServeMux, catalog *repositories.Store,
 			}
 			in.Payload["preview_url"] = preview.URL
 			candidatePlanID, candidatePlanVersion = planID, planVersion
+		} else {
+			candidateID, _ := in.Payload["candidate_id"].(string)
+			current, readErr := store.Get(p.RepositoryID, p.ID, p.SourceCommitID)
+			if readErr != nil {
+				writeAPIError(w, 404, "localization_candidate_not_found", "locale candidate is not available")
+				return
+			}
+			for _, candidate := range current.VerificationCandidates {
+				if candidate.ID == candidateID {
+					candidatePlanID, candidatePlanVersion = candidate.LocalePlanID, candidate.LocalePlanVersion
+				}
+			}
+			if candidatePlanID == "" {
+				writeAPIError(w, 404, "localization_candidate_not_found", "locale candidate is not available")
+				return
+			}
 		}
 		var out localization.Review
 		persist := func() error {
 			return pulls.WithSourceRevision(p.RepositoryID, p.ID, in.SourceRevision, func(current pullrequests.PullRequest) error {
 				var mutationErr error
-				out, mutationErr = store.Verify(current.RepositoryID, current.ID, in.SourceRevision, in.ExpectedVersion, in.Mutation, actor.UserID, "translator", in.Payload)
+				out, mutationErr = store.Verify(current.RepositoryID, current.ID, in.SourceRevision, in.ExpectedVersion, in.Mutation, actor.UserID, "translator", candidatePlanVersion, in.Payload)
 				return mutationErr
 			})
 		}
@@ -331,6 +348,7 @@ func registerLocalizationRoutes(mux *http.ServeMux, catalog *repositories.Store,
 		} else {
 			err = persist()
 		}
+		applyLocalizationPlanVersions(plans, &out)
 		writeLocalizationVerification(w, err, out)
 	})
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/localization/previews/{preview_id}/review", func(w http.ResponseWriter, r *http.Request) {
@@ -349,12 +367,15 @@ func registerLocalizationRoutes(mux *http.ServeMux, catalog *repositories.Store,
 		}
 		candidateID, _ := in.Payload["candidate_id"].(string)
 		current, readErr := store.Get(p.RepositoryID, p.ID, p.SourceCommitID)
+		applyLocalizationPlanVersions(plans, &current)
 		candidateMatches := false
 		candidateCurrent := false
 		locale := ""
+		candidatePlanID, candidatePlanVersion := "", 0
 		for _, candidate := range current.VerificationCandidates {
 			if candidate.ID == candidateID && candidate.PreviewID == preview.ID {
 				candidateMatches, locale = true, candidate.Locale
+				candidatePlanID, candidatePlanVersion = candidate.LocalePlanID, candidate.LocalePlanVersion
 			}
 		}
 		for _, projection := range current.Verification {
@@ -382,14 +403,34 @@ func registerLocalizationRoutes(mux *http.ServeMux, catalog *repositories.Store,
 		}
 		var out localization.Review
 		err := previewStore.WithAudienceAdmission(func() error {
-			return pulls.WithSourceRevision(p.RepositoryID, p.ID, in.SourceRevision, func(current pullrequests.PullRequest) error {
-				var mutationErr error
-				out, mutationErr = store.Verify(current.RepositoryID, current.ID, in.SourceRevision, in.ExpectedVersion, in.Mutation, actor.UserID, role, in.Payload)
-				return mutationErr
+			return plans.WithCurrentVersion(candidatePlanID, candidatePlanVersion, func(plan localeplans.Plan) error {
+				if plan.RepositoryID != p.RepositoryID {
+					return localeplans.ErrInvalid
+				}
+				return pulls.WithSourceRevision(p.RepositoryID, p.ID, in.SourceRevision, func(current pullrequests.PullRequest) error {
+					var mutationErr error
+					out, mutationErr = store.Verify(current.RepositoryID, current.ID, in.SourceRevision, in.ExpectedVersion, in.Mutation, actor.UserID, role, candidatePlanVersion, in.Payload)
+					return mutationErr
+				})
 			})
 		})
+		applyLocalizationPlanVersions(plans, &out)
 		writeLocalizationVerification(w, err, out)
 	})
+}
+
+func applyLocalizationPlanVersions(plans *localeplans.Store, review *localization.Review) {
+	versions := map[string]int{}
+	for _, candidate := range review.VerificationCandidates {
+		if _, seen := versions[candidate.LocalePlanID]; seen {
+			continue
+		}
+		plan, err := plans.Get(candidate.LocalePlanID, "")
+		if err == nil && plan.RepositoryID == review.RepositoryID {
+			versions[candidate.LocalePlanID] = plan.CurrentVersion
+		}
+	}
+	localization.ApplyLocalePlanVersions(review, versions)
 }
 
 func decodePayload(value any, out any) bool {

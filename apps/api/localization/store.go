@@ -468,7 +468,7 @@ func (s *Store) Mutate(repo, pull, revision string, expected int, mutation strin
 // Verify appends locale-preview evidence under the same revision and CAS boundary
 // as translation work. Preview, plan, and reviewer admission are revalidated by
 // the HTTP boundary while this method validates the retained evidence graph.
-func (s *Store) Verify(repo, pull, revision string, expected int, mutation, actorID, actorRole string, payload map[string]any) (Review, error) {
+func (s *Store) Verify(repo, pull, revision string, expected int, mutation, actorID, actorRole string, currentPlanVersion int, payload map[string]any) (Review, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v, err := s.read(repo, pull)
@@ -482,7 +482,7 @@ func (s *Store) Verify(repo, pull, revision string, expected int, mutation, acto
 	switch mutation {
 	case "publish_candidate":
 		var candidate VerificationCandidate
-		if !decode(payload, &candidate) || candidate.Locale == "" || candidate.PreviewID == "" || candidate.PreviewURL == "" || candidate.LocalePlanID == "" || candidate.LocalePlanVersion < 1 || len(candidate.Routes) == 0 {
+		if !decode(payload, &candidate) || candidate.Locale == "" || candidate.PreviewID == "" || candidate.PreviewURL == "" || candidate.LocalePlanID == "" || candidate.LocalePlanVersion < 1 || candidate.LocalePlanVersion != currentPlanVersion || len(candidate.Routes) == 0 {
 			return v, ErrInvalid
 		}
 		if currentUnit(&v, v.Extractions[len(v.Extractions)-1].Units[0].ID, candidate.Locale) == nil {
@@ -505,7 +505,7 @@ func (s *Store) Verify(repo, pull, revision string, expected int, mutation, acto
 		candidateID, _ := payload["candidate_id"].(string)
 		candidate := findCandidate(v.VerificationCandidates, candidateID)
 		var results []VerificationResult
-		if candidate == nil || !candidateIsCurrent(v, candidateID) || !decode(payload["results"], &results) || !validResults(*candidate, v, results) {
+		if candidate == nil || candidate.LocalePlanVersion != currentPlanVersion || !candidateIsCurrent(v, candidateID) || !decode(payload["results"], &results) || !validResults(*candidate, v, results) {
 			return v, ErrInvalid
 		}
 		v.VerificationRuns = append(v.VerificationRuns, VerificationRun{ID: id(), CandidateID: candidateID, Results: results, CreatedBy: actorID, CreatedAt: now})
@@ -515,7 +515,7 @@ func (s *Store) Verify(repo, pull, revision string, expected int, mutation, acto
 			return v, ErrInvalid
 		}
 		candidate := findCandidate(v.VerificationCandidates, finding.CandidateID)
-		if candidate == nil || !candidateIsCurrent(v, finding.CandidateID) || candidate.Locale != finding.Locale || !candidateRoute(*candidate, finding.Route) || !validUnits(v, finding.UnitIDs) || !contains(verificationKinds(), finding.Category) || !contains([]string{"low", "medium", "high", "blocking"}, finding.Severity) || strings.TrimSpace(finding.Body) == "" || len(finding.Body) > 4000 {
+		if candidate == nil || candidate.LocalePlanVersion != currentPlanVersion || !candidateIsCurrent(v, finding.CandidateID) || candidate.Locale != finding.Locale || !candidateRoute(*candidate, finding.Route) || !validUnits(v, finding.UnitIDs) || !contains(verificationKinds(), finding.Category) || !contains([]string{"low", "medium", "high", "blocking"}, finding.Severity) || strings.TrimSpace(finding.Body) == "" || len(finding.Body) > 4000 {
 			return v, ErrInvalid
 		}
 		finding.ID, finding.AuthorID, finding.CreatedAt = id(), actorID, now
@@ -526,7 +526,7 @@ func (s *Store) Verify(repo, pull, revision string, expected int, mutation, acto
 			return v, ErrInvalid
 		}
 		candidate := findCandidate(v.VerificationCandidates, decision.CandidateID)
-		if candidate == nil || !candidateIsCurrent(v, decision.CandidateID) || candidate.Locale != decision.Locale || !candidateRoute(*candidate, decision.Route) || !validUnits(v, decision.UnitIDs) || !contains([]string{"approve", "reject"}, decision.Kind) || strings.TrimSpace(decision.Reason) == "" || len(decision.Reason) > 2000 || !contains([]string{"translator", "regional_reviewer"}, actorRole) {
+		if candidate == nil || candidate.LocalePlanVersion != currentPlanVersion || !candidateIsCurrent(v, decision.CandidateID) || candidate.Locale != decision.Locale || !candidateRoute(*candidate, decision.Route) || !validUnits(v, decision.UnitIDs) || !contains([]string{"approve", "reject"}, decision.Kind) || strings.TrimSpace(decision.Reason) == "" || len(decision.Reason) > 2000 || !contains([]string{"translator", "regional_reviewer"}, actorRole) {
 			return v, ErrInvalid
 		}
 		decision.ID, decision.ActorID, decision.ActorRole, decision.CreatedAt = id(), actorID, actorRole, now
@@ -814,6 +814,25 @@ func projectVerification(v *Review) {
 		}
 		sort.Strings(stale)
 		v.Verification = append(v.Verification, VerificationProjection{CandidateID: candidate.ID, Current: len(stale) == 0, StaleScopes: stale})
+	}
+}
+
+// ApplyLocalePlanVersions adds the external locale-plan dependency to the
+// otherwise self-contained localization projection. Callers obtain these
+// versions from the locale-plan store at read time, so a plan successor makes
+// old experience evidence visibly stale without rewriting retained history.
+func ApplyLocalePlanVersions(v *Review, current map[string]int) {
+	for i := range v.Verification {
+		projection := &v.Verification[i]
+		candidate := findCandidate(v.VerificationCandidates, projection.CandidateID)
+		if candidate == nil || current[candidate.LocalePlanID] == candidate.LocalePlanVersion {
+			continue
+		}
+		if !contains(projection.StaleScopes, "locale_plan") {
+			projection.StaleScopes = append(projection.StaleScopes, "locale_plan")
+			sort.Strings(projection.StaleScopes)
+		}
+		projection.Current = false
 	}
 }
 func (s *Store) read(repo, pull string) (Review, error) {

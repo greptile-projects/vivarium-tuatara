@@ -3197,5 +3197,7 @@ and `review` mutations from repository translators or named preview guests whose
 permits testing or feedback. Findings retain locale, route, units, category, severity, and rationale;
 reviews approve or reject only their named content and retain the translator or regional-reviewer
 role. Both surfaces require the current `source_revision` and `expected_version`. Reads expose
-separate `source_revision`, `translation:{unit_id}`, and `interface:{route}` stale scopes. These
+separate `locale_plan`, `source_revision`, `translation:{unit_id}`, and `interface:{route}` stale
+scopes. Check, finding, and decision writes revalidate the candidate's plan through the current-plan
+mutation boundary, so a successor cannot receive evidence for superseded journeys. These
 records and preview access grant no Git, merge, release, or repository authority.

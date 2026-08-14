@@ -47,7 +47,8 @@ Participants also bind the pull revision to an existing named-user preview, curr
 declared localized journey routes. Complete check suites retain variable, plural, formatting,
 terminology, link, expansion, bidirectional-text, fallback, and journey results. Translators and
 preview-invited regional reviewers attach findings and decisions to exact routes and units. Evidence
-projects stale source, translation-unit, and interface-route dependencies independently.
+projects stale locale-plan, source, translation-unit, and interface-route dependencies independently,
+and later checks or human evidence revalidate the candidate's bound plan version.
 Records default beneath `$LOCALIZATION_STORAGE_ROOT` (`localization`).
 
 ## Permitted data handling
