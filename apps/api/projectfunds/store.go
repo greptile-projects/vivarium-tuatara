@@ -229,10 +229,12 @@ func (s *Store) Reconcile(id, entryID, steward, status string, completed int64, 
 			return ErrInvalid
 		}
 		if proof != nil {
-			for _, entry := range f.Ledger {
-				if entry.TransferProof != nil && entry.TransferProof.Source == proof.Source && entry.TransferProof.Nonce == proof.Nonce {
-					return ErrConflict
-				}
+			consumed, err := s.proofConsumed(proof.Source, proof.ExternalReference, proof.Nonce)
+			if err != nil {
+				return err
+			}
+			if consumed {
+				return ErrConflict
 			}
 		}
 		now := s.now()
@@ -245,6 +247,27 @@ func (s *Store) Reconcile(id, entryID, steward, status string, completed int64, 
 		return s.write(f)
 	})
 	return out, err
+}
+func (s *Store) proofConsumed(source, externalReference, nonce string) (bool, error) {
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return false, err
+	}
+	for _, file := range entries {
+		if file.IsDir() || !strings.HasSuffix(file.Name(), ".json") {
+			continue
+		}
+		fund, err := s.read(strings.TrimSuffix(file.Name(), ".json"))
+		if err != nil {
+			return false, err
+		}
+		for _, entry := range fund.Ledger {
+			if entry.TransferProof != nil && entry.TransferProof.Source == source && (entry.TransferProof.ExternalReference == externalReference || entry.TransferProof.Nonce == nonce) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 func derive(terms Terms, es []Entry) Balances {
 	var b Balances

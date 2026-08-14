@@ -2678,7 +2678,8 @@ steward who remains a repository participant reconciles one through
 `partial`, `failed`, or `revoked` result. Spendable outcomes require the source's Ed25519 signature
 over the source, original reference, completed amount, status, verification time, and nonce. Only
 the cryptographically verified completed amount becomes available. Source/reference pairs and
-signed proof nonces are single-use, with balance projection independently deduplicating proof identities;
+signed proof references and nonces are single-use across every fund in the store under one atomic
+admission lock, with balance projection independently deduplicating proof identities;
 duplicate, stale, failed, revoked, repeated, or invalid partial transfers cannot do so. Fund roles
 and balances grant no repository or operational authority.
 

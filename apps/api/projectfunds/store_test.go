@@ -108,3 +108,22 @@ func TestTransferReferenceAndProofCannotBeReused(t *testing.T) {
 		t.Fatalf("replayed proof credited %d", got)
 	}
 }
+func TestTransferProofCannotBeReusedAcrossFunds(t *testing.T) {
+	s := newStore(t)
+	a, _ := s.Create("repo-a", "owner", terms())
+	b, _ := s.Create("repo-b", "owner", terms())
+	a, _ = s.Commit(a.ID, "backer", "card", "global-transfer", 1000, "a-key", "")
+	b, _ = s.Commit(b.ID, "backer", "card", "global-transfer", 1000, "b-key", "")
+	p := proof("card", "global-transfer", "settled", 1000)
+	a, err := s.Reconcile(a.ID, a.Ledger[0].ID, "steward", "settled", 1000, p, "", a.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Reconcile(b.ID, b.Ledger[0].ID, "steward", "settled", 1000, p, "", b.Version); !errors.Is(err, ErrConflict) {
+		t.Fatalf("cross-fund replay=%v", err)
+	}
+	b, _ = s.Get(b.ID)
+	if b.Balances.Available != 0 || b.Balances.Pending != 1000 {
+		t.Fatalf("replay changed second fund: %+v", b.Balances)
+	}
+}

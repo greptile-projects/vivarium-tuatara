@@ -380,7 +380,8 @@ whenever dependencies change or the web job fails before it starts.
   policy, and public or participant-bounded append-only ledgers beneath `$PROJECT_FUND_STORAGE_ROOT`
   (default `project-funds`). `$PROJECT_FUND_TRUSTED_SOURCES` is an operator-controlled JSON object
   mapping accepted source names to base64 Ed25519 public keys; fund authors cannot define proof
-  authorities. Commitments are idempotent pending evidence; only a named steward who
+  authorities. Commitments are idempotent pending evidence, and source transfer references and
+  proof nonces are consumed atomically across the whole fund store; only a named steward who
   remains a project participant can reconcile verified full or partial completion into available
   value. Failed, revoked, duplicate, stale, or repeated transfers remain non-spendable, and fund
   roles grant no repository or operational authority.

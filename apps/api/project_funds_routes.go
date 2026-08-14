@@ -88,6 +88,10 @@ func registerProjectFundRoutes(mux *http.ServeMux, catalog *repositories.Store, 
 			writeAPIError(w, 404, "fund_not_found", "project fund not found")
 			return
 		}
+		if f.Terms.LedgerVisibility == "participants" && catalog.WithCurrentParticipant(actor.UserID, r.PathValue("id"), func() error { return nil }) != nil {
+			writeAPIError(w, 403, "fund_ledger_forbidden", "only project participants may commit to this permission-bounded fund")
+			return
+		}
 		var in fundCommitInput
 		if decodeJSON(r, &in) != nil {
 			writeAPIError(w, 400, "invalid_request", "a valid commitment is required")
