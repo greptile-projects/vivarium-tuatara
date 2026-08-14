@@ -1282,6 +1282,15 @@ export function PullRequestDetail({
                   </p>
                 </div>
                 {readiness.required_checks.length > 0 && <div className="mt-4 space-y-2"><p className="text-xs font-semibold text-[var(--muted)]">Required checks</p>{readiness.required_checks.map((check) => <div key={check.name} className="flex items-center justify-between gap-3 text-xs"><span className="font-medium">{check.name}</span><Badge tone={check.status === "passed" ? "success" : check.status === "pending" ? "warning" : "neutral"}>{check.status}</Badge></div>)}</div>}
+                {readiness.accessibility_readiness && readiness.accessibility_readiness.requirements.length > 0 && (
+                  <div className="mt-4 space-y-3 border-t border-[var(--line)] pt-4 text-xs">
+                    <div className="flex items-center justify-between gap-2"><p className="font-semibold">Accessibility delivery bar</p><Badge tone={readiness.accessibility_readiness.ready ? "success" : "warning"}>{readiness.accessibility_readiness.ready ? "Current" : "Unresolved"}</Badge></div>
+                    <p className="text-[var(--muted)]">Evidence and acknowledgement apply only to <code title={readiness.accessibility_readiness.revision}>{short(readiness.accessibility_readiness.revision)}</code>.</p>
+                    {readiness.accessibility_readiness.requirements.map((requirement) => <div key={`${requirement.policy_id}-${requirement.kind}-${requirement.name}`} className="flex items-start justify-between gap-3"><span><span className="font-medium">{requirement.name}</span><span className="ml-1 text-[var(--muted)]">({requirement.kind.replaceAll("_", " ")})</span></span><Badge tone={requirement.status === "passed" ? "success" : "warning"}>{requirement.status}</Badge></div>)}
+                    {readiness.accessibility_readiness.dissent.map((outcome) => <p key={`${outcome.actor_id}-${outcome.created_at}`}><Badge tone="warning">rejected</Badge> {outcome.rationale}</p>)}
+                    {readiness.accessibility_readiness.active_exceptions.map((exception) => <div key={exception.id} className="rounded-lg bg-[var(--canvas)] p-3"><p className="font-semibold">Active justified exception</p><p>{exception.rationale}</p><p className="mt-1 text-[var(--muted)]">Follow-up: {exception.follow_up_work}</p></div>)}
+                  </div>
+                )}
                 {readiness.preview_acceptance && (readiness.preview_acceptance.applicable.length > 0 || readiness.preview_acceptance.decisions.length > 0 || readiness.preview_acceptance.stale_decisions.length > 0 || readiness.preview_acceptance.findings.length > 0) && (
                   <div className="mt-4 space-y-3 border-t border-[var(--line)] pt-4 text-xs">
                     <div className="flex items-center justify-between gap-2"><p className="font-semibold">Stakeholder acceptance</p><Badge tone={readiness.preview_acceptance.blocking ? "warning" : "success"}>{readiness.preview_acceptance.blocking ? "Needs attention" : "Current"}</Badge></div>

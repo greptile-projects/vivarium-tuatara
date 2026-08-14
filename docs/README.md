@@ -153,6 +153,14 @@ requests must separate design and code changes from interaction and content trad
 previews and task/pull status project back onto the original finding while established repository,
 agent, review, check, and merge authority remains in force.
 
+Accessibility delivery policies turn those contracts into exact-candidate gates. Owners select
+branches, paths, journeys, or risk classes and require current automated checks, scenario coverage,
+and named-role acknowledgements. Pull merge readiness and release readiness distinguish missing,
+stale, unevaluated, failed, and unresolved barrier evidence. Evaluators use existing bounded preview
+guest access and retain a revision-bound confirmation or rejection; dissent remains visible.
+Expiring owner overrides require rationale and concrete follow-up work and never rewrite the result.
+Records default beneath `$ACCESSIBILITY_DELIVERY_STORAGE_ROOT` (`accessibility-delivery`).
+
 ## Collaborative performance goals
 
 Repository participants publish complete, append-only performance-contract revisions through

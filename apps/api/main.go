@@ -18,6 +18,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/acceptance"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/accessibilityassessments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/accessibilitycommitments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/accessibilitydelivery"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/accessibilityreports"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -373,6 +374,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	accessibilityDeliveryRoot := os.Getenv("ACCESSIBILITY_DELIVERY_STORAGE_ROOT")
+	if accessibilityDeliveryRoot == "" {
+		accessibilityDeliveryRoot = "accessibility-delivery"
+	}
+	accessibilityDeliveryStore, err := accessibilitydelivery.New(accessibilityDeliveryRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	performanceEvidenceRoot := os.Getenv("PERFORMANCE_EVIDENCE_STORAGE_ROOT")
 	if performanceEvidenceRoot == "" {
 		performanceEvidenceRoot = "performance-evidence"
@@ -440,7 +449,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -587,6 +596,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var accessibilityCommitmentStore *accessibilitycommitments.Store
 	var accessibilityReportStore *accessibilityreports.Store
 	var accessibilityAssessmentStore *accessibilityassessments.Store
+	var accessibilityDeliveryStore *accessibilitydelivery.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -655,6 +665,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			accessibilityReportStore = value
 		case *accessibilityassessments.Store:
 			accessibilityAssessmentStore = value
+		case *accessibilitydelivery.Store:
+			accessibilityDeliveryStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -783,6 +795,10 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && accessibilityAssessmentStore != nil {
 		registerAccessibilityAssessmentRoutes(mux, store, repositoryCatalog, authStore, pullRequestStore, previewStore, accessibilityReportStore, accessibilityCommitmentStore, proposalStore, accessibilityAssessmentStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && accessibilityDeliveryStore != nil && accessibilityAssessmentStore != nil && pullRequestStore != nil && releaseStore != nil {
+		pullRequestStore.ConfigureAccessibilityDelivery(accessibilityDeliveryStore, accessibilityAssessmentStore)
+		registerAccessibilityDeliveryRoutes(mux, repositoryCatalog, authStore, pullRequestStore, releaseStore, previewStore, checkRunStore, accessibilityAssessmentStore, accessibilityDeliveryStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && productExperimentStore != nil {
 		registerProductExperimentRoutes(mux, repositoryCatalog, authStore, productExperimentStore, proposalStore, pullRequestStore, checkRunStore, releaseStore, deploymentStore, organizationStore)
@@ -3792,6 +3808,17 @@ func registerReleaseRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 			}
 			candidate.PreviousCommitID = &previous.CommitID
 		}
+		info, inspectErr := repository.Inspect()
+		if inspectErr != nil {
+			writeAPIError(w, 500, "release_context_unavailable", "release branch context could not be determined")
+			return
+		}
+		candidate.TargetBranch = info.DefaultBranch
+		candidate.ChangedPaths, err = deriveReleaseChangedPaths(repository, candidate.CommitID, candidate.PreviousCommitID)
+		if err != nil {
+			writeAPIError(w, 422, "invalid_release_range", err.Error())
+			return
+		}
 		candidate.Inclusions, err = deriveReleaseInclusions(repository, candidate.CommitID, candidate.PreviousCommitID, proposalStore, pullStore, candidate.RepositoryID)
 		if err != nil {
 			writeAPIError(w, 422, "invalid_release_range", err.Error())
@@ -3999,6 +4026,26 @@ func registerReleaseRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 		go buildStore.Execute(run, repository.Path())
 		writeJSON(w, http.StatusAccepted, run)
 	})
+}
+
+func deriveReleaseChangedPaths(repository *storage.Repository, commitID string, previousCommitID *string) ([]string, error) {
+	// With no predecessor, every path in the candidate snapshot is part of the
+	// first release context, not merely the paths changed by its final commit.
+	args := []string{"--git-dir=" + repository.Path(), "ls-tree", "-r", "--name-only", commitID, "--"}
+	if previousCommitID != nil {
+		args = []string{"--git-dir=" + repository.Path(), "diff", "--name-only", *previousCommitID, commitID, "--"}
+	}
+	output, err := exec.Command("git", args...).Output()
+	if err != nil {
+		return nil, errors.New("release changed paths could not be derived from the exact release range")
+	}
+	paths := []string{}
+	for _, value := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if value != "" {
+			paths = append(paths, value)
+		}
+	}
+	return paths, nil
 }
 
 func deriveReleaseInclusions(repository *storage.Repository, commitID string, previousCommitID *string, proposalStore *proposals.Store, pullStore *pullrequests.Store, repositoryID string) (releases.Inclusion, error) {

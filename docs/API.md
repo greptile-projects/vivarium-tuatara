@@ -2878,6 +2878,37 @@ arrived after reservation, while a mismatched retry conflicts. Responses dependi
 whose atomic rename committed but directory durability is uncertain include
 `Vivarium-Durability: uncertain`, including pending-recovery responses.
 
+## Accessibility delivery readiness
+
+Repository owners publish immutable accessibility delivery gates with
+`POST /repositories/{id}/accessibility-delivery-policies`; selectors can narrow a gate to a target
+branch, changed path (with an explicit trailing `*` wildcard), declared journey, or risk class. A
+gate names exact automated check runs, assessed scenario coverage, and a minimum number of named
+`reviewer`, `participant`, or `accessibility_reviewer` acknowledgements. Collection `GET` lists the
+retained policies.
+
+An evaluator must first receive ordinary bounded guest access to a revision-exact preview. A
+participant then creates the matching policy invitation at
+`POST /repositories/{id}/accessibility-evaluations/invitations`; the user, preview revision, and
+expiry must match. The invited user alone confirms or rejects at `POST
+.../invitations/{invitation_id}/outcome`. Outcomes are final and bound to the exact revision plus
+pull-or-release delivery context; a rejection remains attributed dissent and never represents other
+access needs.
+
+`GET /repositories/{id}/pulls/{pull_id}/accessibility-readiness` and
+`GET /repositories/{id}/releases/{release_id}/accessibility-readiness` report applicable evidence
+as passed, failed, pending, unevaluated, missing, or stale. Ordinary pull merge readiness includes
+the same result and blocks merge/queue admission. Owners may retain a bounded exception with
+rationale, expiry, and mandatory follow-up work at
+`POST /repositories/{id}/accessibility-delivery-overrides`; exceptions do not remove prior dissent
+or evidence. Records default beneath `$ACCESSIBILITY_DELIVERY_STORAGE_ROOT`
+(`accessibility-delivery`).
+Release creation freezes the repository default branch and the exact changed paths from the
+previous release (or the root candidate), so path-scoped gates cannot disappear during later
+readiness evaluation. Missing pull or release selection context fails closed. Any current invited
+rejection blocks its role even when the numerical confirmation minimum is otherwise met; only the
+explicit owner exception can permit delivery while preserving that dissent.
+
 Publishing an accessibility-repair task through the ordinary task contribution endpoint additionally
 requires structured design changes, code changes, interaction tradeoffs, and content tradeoffs. The
 server appends those sections to the pull body. Contributors then attach previews through the normal
