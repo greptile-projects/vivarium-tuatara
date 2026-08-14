@@ -289,6 +289,17 @@ func TestDeliverySpendingStopsWithoutInitialActivityAndRevocationSurvivesResume(
 	if !out.DeliverySelections[0].Execution.SpendingBlocked {
 		t.Fatal("resume cleared revoked access")
 	}
+	sameRecipient := recipient
+	if _, err = s.ControlDelivery(out.ID, selection.ID, "owner", "replace_recipient", "Reassign to the same principal.", 0, &sameRecipient, out.Version); !errors.Is(err, ErrConflict) {
+		t.Fatalf("same-recipient replacement err = %v", err)
+	}
+	current, err := s.GetOutcome(out.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !current.DeliverySelections[0].Execution.SpendingBlocked {
+		t.Fatal("same-recipient replacement cleared revoked access")
+	}
 	if _, err = s.RequestDeliveryExpense(out.ID, selection.ID, recipient, "contributor", out.Version, input); !errors.Is(err, ErrConflict) {
 		t.Fatalf("revoked expense err = %v", err)
 	}

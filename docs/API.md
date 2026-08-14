@@ -2763,6 +2763,8 @@ block remains until a replacement is admitted through live eligibility validatio
 expense publication is journaled before either fund or outcome publication, and the journal is
 rolled forward under the fund mutation lock after interruption so their durable projections
 reconverge.
+A replacement must differ in principal kind or identity from the currently assigned recipient;
+same-principal reassignment is rejected and cannot clear revoked-access protection.
 
 ## Performance goals
 

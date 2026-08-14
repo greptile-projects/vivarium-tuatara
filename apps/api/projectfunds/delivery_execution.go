@@ -325,6 +325,9 @@ func (s *Store) ControlDelivery(outcomeID, selectionID, steward, action, reason 
 			if oldID == "" {
 				return ErrConflict
 			}
+			if replacement.Kind == oldKind && replacement.ID == oldID {
+				return ErrConflict
+			}
 			for i := range v.DeliveryProposals {
 				if v.DeliveryProposals[i].Applicant.Kind == oldKind && v.DeliveryProposals[i].Applicant.ID == oldID {
 					v.DeliveryProposals[i].Status = "replaced"

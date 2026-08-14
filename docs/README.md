@@ -2146,6 +2146,8 @@ The initial inactivity deadline begins at selection, paused work can still repor
 progress and handoff evidence, and resume alone cannot clear an access-loss block. Approved
 expense accounting uses a durable roll-forward journal so interrupted fund/outcome publication
 is recovered under the same mutation boundary.
+Recipient replacement must select a distinct principal, so reassignment to the revoked identity
+cannot masquerade as access restoration.
 
 # Trusted external extensions
 
