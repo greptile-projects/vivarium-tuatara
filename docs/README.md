@@ -2123,6 +2123,14 @@ backing, overlapping awards, embargoes, withdrawals, and cancellation remain vis
 The repository workspace is `/repositories/{id}/funding`; funding never grants contribution,
 acceptance, Git, review, merge, deployment, credential, or security authority.
 
+That workspace also separates contributor choice from privilege. Eligible humans, organization
+teams, and approved-agent operators can offer an approach, milestones, cost, dependencies,
+availability, requested access, and attributed prior work. Recipients explicitly accept their
+offer before a named fund steward can compare one or a complementary mix, retain a conflict
+disclosure and rationale, reserve only cryptographically settled available value, and create
+connected planned milestone tasks. Selection and compensation remain evidence—not repository,
+secret, review, merge, environment, deployment, withdrawal, or agent authority.
+
 # Trusted external extensions
 
 Developers can register independently operated tools at `/extensions` before a

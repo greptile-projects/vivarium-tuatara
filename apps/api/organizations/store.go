@@ -618,6 +618,66 @@ func (s *Store) WithCurrentAgentOperator(agent, user string, fn func(organizatio
 		return ErrNotFound
 	})
 }
+
+type DeliveryPrincipalRequirement struct {
+	Kind         string
+	ID           string
+	ControllerID string
+}
+
+// WithCurrentDeliveryPrincipals freezes team membership and approved-agent
+// operation while a dependent delivery mutation commits. A blank controller
+// checks that the principal still has at least one eligible human controller.
+func (s *Store) WithCurrentDeliveryPrincipals(organizationID string, requirements []DeliveryPrincipalRequirement, fn func() error) error {
+	if !validID(organizationID) || len(requirements) == 0 || fn == nil {
+		return ErrInvalid
+	}
+	return s.locked(func() error {
+		organization, err := s.Get(organizationID)
+		if err != nil {
+			return err
+		}
+		for _, requirement := range requirements {
+			switch requirement.Kind {
+			case "team":
+				found := false
+				for _, team := range organization.Teams {
+					if team.ID != requirement.ID {
+						continue
+					}
+					for _, member := range team.Members {
+						if requirement.ControllerID == "" || member.UserID == requirement.ControllerID {
+							found = true
+							break
+						}
+					}
+				}
+				if !found {
+					return ErrNotFound
+				}
+			case "approved_agent":
+				found := false
+				for _, agent := range organization.Agents {
+					if agent.ID != requirement.ID {
+						continue
+					}
+					for _, operator := range agent.OperatorIDs {
+						if requirement.ControllerID == "" || operator == requirement.ControllerID {
+							found = true
+							break
+						}
+					}
+				}
+				if !found {
+					return ErrNotFound
+				}
+			default:
+				return ErrInvalid
+			}
+		}
+		return fn()
+	})
+}
 func (s *Store) list() ([]Organization, error) {
 	entries, err := os.ReadDir(s.root)
 	if err != nil {

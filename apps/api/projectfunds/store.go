@@ -91,10 +91,11 @@ type Fund struct {
 	AuthorityNote string    `json:"authority_note"`
 }
 type Store struct {
-	root              string
-	trustedSourceKeys map[string]string
-	mu                sync.Mutex
-	now               func() time.Time
+	root                          string
+	trustedSourceKeys             map[string]string
+	mu                            sync.Mutex
+	now                           func() time.Time
+	afterDeliveryReservationWrite func() error
 }
 
 func New(root string, trustedSources ...map[string]string) (*Store, error) {
@@ -283,6 +284,10 @@ func derive(terms Terms, es []Entry) Balances {
 		if e.Kind == "transfer_reconciliation" && (e.Status == "settled" || e.Status == "partial") && proofID != "" && !consumedProofs[proofID] && verifyTransferProof(terms, e, e.Status, e.Amount, e.TransferProof) {
 			b.Available += e.SpendableDelta
 			consumedProofs[proofID] = true
+		}
+		if e.Kind == "delivery_reservation" && e.Status == "reserved" {
+			b.Available -= e.Amount
+			b.Reserved += e.Amount
 		}
 	}
 	return b

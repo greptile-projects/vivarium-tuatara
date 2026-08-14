@@ -1,6 +1,7 @@
 package projectfunds
 
 import (
+	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
 	"testing"
@@ -91,6 +92,106 @@ func TestOutcomeFundingRejectsAmbiguousMilestonesAndStaleWrites(t *testing.T) {
 	}
 	if _, err := s.PledgeOutcome(out.ID, "backer", "", 10, "key", "", out.Version+1); !errors.Is(err, ErrConflict) {
 		t.Fatalf("stale pledge err = %v", err)
+	}
+}
+
+func TestDeliverySelectionRequiresRecipientAcceptanceAndReservesOnlyCompensation(t *testing.T) {
+	s, fund := outcomeStore(t)
+	fund, err := s.Commit(fund.ID, "backer", "card", "delivery-backing", 10000, "delivery-backing-key", "commission")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := proof("card", "delivery-backing", "settled", 10000)
+	p.Nonce = "delivery-selection-proof"
+	p.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(testPrivateKey, transferProofMessage(*p)))
+	fund, err = s.Reconcile(fund.ID, fund.Ledger[0].ID, "owner", "settled", 10000, p, "verified", fund.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.CreateOutcome("repo", fund.ID, "owner", outcomeTerms())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.SubmitDeliveryProposal(out.ID, DeliveryApplicant{Kind: "human", ID: "contributor", SubmittedBy: "contributor"}, DeliveryProposalTerms{Approach: "Profile, repair, and verify the critical path.", Milestones: []string{"Reproduce latency", "Deliver verified repair"}, Cost: 9000, Dependencies: []string{"benchmark environment"}, Availability: "Available for the next two weeks.", RequiredAccess: []string{"repository read", "task branch write"}, RelevantWork: []AttributedWork{{Kind: "pull", ID: "prior-optimization", Note: "Previously reduced allocation pressure."}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposalID := out.DeliveryProposals[0].ID
+	if _, err = s.SelectDeliveryProposals(out.ID, "owner", out.Version, []string{proposalID}, "No conflicts known.", "Best evidence and availability."); !errors.Is(err, ErrConflict) {
+		t.Fatalf("unaccepted selection err = %v", err)
+	}
+	out, err = s.AcceptDeliveryProposal(out.ID, proposalID, "contributor", out.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.SelectDeliveryProposals(out.ID, "owner", out.Version, []string{proposalID}, "No financial or review conflicts known.", "Approach covers both milestones within budget.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.DeliveryProposals[0].Status != "selected" || len(out.DeliverySelections) != 1 || len(out.DeliverySelections[0].Tasks) != 2 {
+		t.Fatalf("selection = %+v", out)
+	}
+	fund, err = s.Get(fund.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fund.Balances.Reserved != 9000 || fund.Balances.Available != 1000 {
+		t.Fatalf("reserved balance = %+v", fund.Balances)
+	}
+	if out.DeliveryProposals[0].AuthorityNote == "" || out.DeliverySelections[0].Tasks[0].Status != "planned" {
+		t.Fatalf("authority/task projection = %+v", out)
+	}
+}
+
+func TestDeliverySelectionCompensatesFailedOutcomePersistence(t *testing.T) {
+	s, fund := outcomeStore(t)
+	fund, err := s.Commit(fund.ID, "backer", "card", "compensated-backing", 10000, "compensated-backing-key", "commission")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := proof("card", "compensated-backing", "settled", 10000)
+	p.Nonce = "compensated-selection-proof"
+	p.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(testPrivateKey, transferProofMessage(*p)))
+	fund, err = s.Reconcile(fund.ID, fund.Ledger[0].ID, "owner", "settled", 10000, p, "verified", fund.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.CreateOutcome("repo", fund.ID, "owner", outcomeTerms())
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposalTerms := DeliveryProposalTerms{Approach: "Repair and verify.", Milestones: []string{"deliver"}, Cost: 9000, Availability: "This week", RelevantWork: []AttributedWork{{Kind: "pull", ID: "prior", Note: "Related repair"}}}
+	out, err = s.SubmitDeliveryProposal(out.ID, DeliveryApplicant{Kind: "human", ID: "contributor", SubmittedBy: "contributor"}, proposalTerms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.AcceptDeliveryProposal(out.ID, out.DeliveryProposals[0].ID, "contributor", out.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("outcome disk unavailable")
+	s.afterDeliveryReservationWrite = func() error { return injected }
+	if _, err = s.SelectDeliveryProposals(out.ID, "owner", out.Version, []string{out.DeliveryProposals[0].ID}, "No conflicts.", "Best proposal."); !errors.Is(err, injected) {
+		t.Fatalf("selection error = %v", err)
+	}
+	fund, err = s.Get(fund.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fund.Balances.Reserved != 0 || fund.Balances.Available != 10000 {
+		t.Fatalf("failed selection stranded reservation: %+v", fund.Balances)
+	}
+	current, err := s.GetOutcome(out.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Version != out.Version || current.DeliveryProposals[0].Status != "accepted" {
+		t.Fatalf("failed selection changed outcome: %+v", current)
+	}
+	s.afterDeliveryReservationWrite = nil
+	current, err = s.SelectDeliveryProposals(out.ID, "owner", current.Version, []string{current.DeliveryProposals[0].ID}, "No conflicts.", "Best proposal.")
+	if err != nil || len(current.DeliverySelections) != 1 {
+		t.Fatalf("retry = %+v, %v", current, err)
 	}
 }
 

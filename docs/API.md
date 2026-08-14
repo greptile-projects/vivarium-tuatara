@@ -2711,9 +2711,30 @@ current contract. Current participants publish a successor through `POST
 .../{outcome_id}/revisions`; it retains the prior revision and an attributable reason, and every
 active pledge becomes `reconfirmation_required`. `POST .../{outcome_id}/cancel` retains the
 cancellation reason. All mutations compare-and-swap the outcome version. Funding and backing do
-not reserve project-fund value or grant task, Git, credential, review, acceptance, merge,
+not by themselves reserve project-fund value or grant task, Git, credential, review, acceptance, merge,
 deployment, or security authority; cryptographically settled fund value remains a separately
 derived custody fact.
+
+Eligible contributors submit a delivery offer through `POST
+.../{outcome_id}/delivery-proposals`. Each request names a `human`, organization `team`, or
+`approved_agent`, and declares its approach, ordered milestones, minor-unit cost, dependencies,
+availability, requested access, and attributed relevant work. A human submits for themself, a
+current team member submits for the team, and a current operator submits for an organization-
+approved agent; permission-bounded outcomes remain participant-only. The proposed recipient must
+then explicitly accept through `POST .../delivery-proposals/{proposal_id}/accept` at the current
+outcome version.
+
+A named fund steward compares accepted offers and calls `POST
+.../{outcome_id}/delivery-selections` with one or several complementary proposal IDs, an explicit
+conflict disclosure, comparative rationale, and the current version. Recipient eligibility is
+revalidated, selected costs must fit cryptographically settled available value, and one durable
+`delivery_reservation` ledger entry moves that value from available to reserved. The selection
+also creates connected milestone-shaped `planned` tasks attributed to each recipient. Selection
+cannot bypass the fund's spending limits or eligible-approver rule; a rule requiring more than one
+approval fails closed until a multi-approval reservation workflow is established. Selection,
+reservation, acceptance, requested access, and planned tasks grant no repository,
+secret, credential, task-execution, review, merge, environment, deployment, fund-withdrawal, or
+recipient-acceptance authority; those scopes remain independently governed.
 
 ## Performance goals
 
