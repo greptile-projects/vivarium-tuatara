@@ -2658,6 +2658,31 @@ candidate archive symlinks cannot redirect staging. The issue durably reserves
 a deterministic verification identity before creating checks; split-outcome
 retries reuse and link that reservation, and execute only its recorded run IDs.
 
+## Governed project funds
+
+`POST /repositories/{id}/funds` lets a current repository participant establish immutable fund
+terms: named stewards, accepted funding sources, fixed-point currency or credit units, spending
+limits, approval thresholds and approvers, eligible recipient classes, refund policy, and `public`
+or `participants` ledger visibility. `GET /repositories/{id}/funds` and
+`GET /repositories/{id}/funds/{fund_id}` project the declared rules, authority disclaimer,
+append-only transfer evidence, and available, reserved, spent, refunded, disputed, and pending
+balances subject to repository and ledger visibility.
+
+Authenticated repository readers commit backing through `POST
+/repositories/{id}/funds/{fund_id}/commitments` with an accepted source, external transfer
+reference, positive minor-unit amount, and idempotency key. Accepted source keys come only from the
+operator-controlled `$PROJECT_FUND_TRUSTED_SOURCES` JSON object; fund authors select registered
+source names and cannot supply trust keys. Commitments are pending and contribute no available value. A named
+steward who remains a repository participant reconciles one through
+`POST .../commitments/{entry_id}/reconcile`, providing the current fund version and a `settled`,
+`partial`, `failed`, or `revoked` result. Spendable outcomes require the source's Ed25519 signature
+over the source, original reference, completed amount, status, verification time, and nonce. Only
+the cryptographically verified completed amount becomes available. Source/reference pairs and
+signed proof references and nonces are single-use across every fund in the store under one atomic
+admission lock, with balance projection independently deduplicating proof identities;
+duplicate, stale, failed, revoked, repeated, or invalid partial transfers cannot do so. Fund roles
+and balances grant no repository or operational authority.
+
 ## Performance goals
 
 Current repository participants create a complete contract with `POST
