@@ -3169,6 +3169,28 @@ revision and derive `missing_signal`, `unsupported_calculation`, `conflicting_ta
 The contract grants no operational authority. Storage defaults beneath
 `$SERVICE_OBJECTIVE_STORAGE_ROOT` (`service-objectives`).
 
+Signal mappings and append-only operational windows are published beneath a contract through
+`.../signal-mappings`, mapping `.../revisions`, and `.../observations`. Each binds exact contract,
+objective, instrumentation, window, and delivered-software revisions; projections derive attainment,
+target status, budget consumption, uncertainty, gaps, and comparability.
+
+`POST /repositories/{id}/service-objectives/{objective_id}/investigations` opens an authenticated,
+revision-bound investigation. `contract_version`, `objective_id`, and one exact `objective`,
+`pull_request`, `deployment`, or `budget_consumption` trigger must resolve through retained contract
+or observation provenance. Baseline and affected observations must belong to that objective revision;
+journeys must belong to its contract. Evidence declares a bounded kind, stable ID, exact revision,
+label, and `public` or `participants` visibility.
+
+Participants and repository-bound read-only agents append cited `hypothesis`, `comparison`,
+`uncertainty`, or `conclusion` entries through `.../investigations/{investigation_id}/findings`.
+Each states confidence and uncertainty and cites the closed evidence/observation set. `.../responses`
+retains `confirm` or `dispute`; `.../input-requests` addresses only a frozen objective/dependency
+owner, who answers through `.../input-responses`. `.../outcomes` retains an `issue`, `incident`,
+`decision`, or `planned_improvement` reference without creating it or granting authority. Mutations
+require `expected_version`; conflicts return `409 reliability_investigation_conflict`. Reads expose
+stale evidence, dependencies without owners, and inconclusive state caused by absent/disputed
+conclusions or stale evidence. Anonymous contract reads omit investigations.
+
 ## Locale plans
 
 `POST /repositories/{id}/locale-plans` publishes a complete localization support contract. The

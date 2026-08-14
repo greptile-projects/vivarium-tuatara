@@ -134,6 +134,17 @@ type Contract = {
     comparison_reason?: string;
     recorded_by: string;
   }[];
+  investigations: {
+    id: string; version: number; contract_version: number; objective_id: string;
+    title: string; trigger: { kind: string; id: string; revision: string };
+    baseline_observation_ids: string[]; affected_observation_ids: string[]; journey_ids: string[];
+    evidence: { kind: string; resource_id: string; revision: string; label: string; visibility: string }[];
+    findings: { id: string; kind: string; statement: string; uncertainty: string; confidence: string; citation_ids: string[]; created_by: string; actor_type: string }[];
+    responses: { id: string; finding_id: string; kind: string; body: string; created_by: string }[];
+    input_requests: { id: string; owner_id: string; dependency_id?: string; question: string; status: string; response?: string }[];
+    outcome?: { kind: string; resource_id: string; summary: string };
+    status: string; stale_evidence_ids: string[]; hidden_dependency_ids: string[]; inconclusive: boolean;
+  }[];
 };
 const value = (f: FormData, n: string) => String(f.get(n) ?? "").trim(),
   list = (v: string) =>
@@ -515,6 +526,17 @@ export function ServiceObjectivesWorkspace({
           : "Reliability observation could not be recorded.",
       );
     }
+  }
+  async function openInvestigation(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); if(!token||!selected||!current||!selectedObjective)return; const f=new FormData(e.currentTarget);
+    const parseEvidence=(raw:string)=>raw.split(";").filter(Boolean).map((entry)=>{const [kind,resource_id,revision,label,visibility]=entry.split("|").map((x)=>x.trim());return {kind,resource_id,revision,label,visibility}});
+    try{const out=await api<Contract>(`/repositories/${repositoryID}/service-objectives/${selected.id}/investigations`,{method:"POST",body:JSON.stringify({contract_version:current.version,objective_id:selectedObjective.id,title:value(f,"investigation_title"),trigger:{kind:value(f,"trigger_kind"),id:value(f,"trigger_id"),revision:value(f,"trigger_revision")},baseline_observation_ids:list(value(f,"baseline_ids")),affected_observation_ids:list(value(f,"affected_ids")),journey_ids:selectedObjective.journey_ids,evidence:parseEvidence(value(f,"investigation_evidence"))})},token);setSelected(out);setItems((xs)=>[out,...xs.filter((x)=>x.id!==out.id)]);setError("");e.currentTarget.reset()}catch(x){setError(x instanceof Error?x.message:"Investigation could not be opened.")}
+  }
+  async function addFinding(e: FormEvent<HTMLFormElement>, investigation: Contract["investigations"][number]) {
+    e.preventDefault();if(!token||!selected)return;const f=new FormData(e.currentTarget);try{const out=await api<Contract>(`/repositories/${repositoryID}/service-objectives/${selected.id}/investigations/${investigation.id}/findings`,{method:"POST",body:JSON.stringify({expected_version:investigation.version,finding:{kind:value(f,"kind"),statement:value(f,"statement"),uncertainty:value(f,"finding_uncertainty"),confidence:value(f,"confidence"),citation_ids:list(value(f,"citations"))}})},token);setSelected(out);setItems((xs)=>[out,...xs.filter((x)=>x.id!==out.id)]);setError("")}catch(x){setError(x instanceof Error?x.message:"Finding could not be recorded.")}
+  }
+  async function mutateInvestigation(e: FormEvent<HTMLFormElement>, investigation: Contract["investigations"][number], action: "responses"|"input-requests"|"input-responses"|"outcomes", payload: (f:FormData)=>object) {
+    e.preventDefault();if(!token||!selected)return;const f=new FormData(e.currentTarget);try{const out=await api<Contract>(`/repositories/${repositoryID}/service-objectives/${selected.id}/investigations/${investigation.id}/${action}`,{method:"POST",body:JSON.stringify({expected_version:investigation.version,...payload(f)})},token);setSelected(out);setItems((xs)=>[out,...xs.filter((x)=>x.id!==out.id)]);setError("")}catch(x){setError(x instanceof Error?x.message:"Investigation contribution could not be recorded.")}
   }
   return (
     <div className="space-y-8">
@@ -904,6 +926,38 @@ export function ServiceObjectivesWorkspace({
             </form>
           )}
         </Card>
+      )}
+      {selected && current && selectedObjective && (
+        <section className="space-y-3">
+          <Card className="p-5">
+            <h2 className="font-semibold">Open a reliability investigation</h2>
+            <p className="mt-1 text-sm text-[var(--muted)]">Freeze the change or budget event, baseline and affected windows, journeys, and permitted operational or code evidence before drawing a conclusion.</p>
+            <form onSubmit={openInvestigation} className="mt-4 grid gap-4 md:grid-cols-2">
+              <Field n="investigation_title" l="Investigation title" />
+              <Select n="trigger_kind" l="Started from" v="objective" options={["objective","pull_request","deployment","budget_consumption"]}/>
+              <Field n="trigger_id" l="Trigger resource ID" />
+              <Field n="trigger_revision" l="Exact trigger revision" />
+              <Field n="baseline_ids" l="Baseline observation IDs (comma separated)" />
+              <Field n="affected_ids" l="Affected observation IDs (comma separated)" />
+              <div className="md:col-span-2"><Area n="investigation_evidence" l="Evidence: kind | resource ID | exact revision | label | public/participants (semicolon separated)" /></div>
+              <div className="md:col-span-2"><Button>Open revision-bound investigation</Button></div>
+            </form>
+          </Card>
+          {[...(selected.investigations ?? [])].reverse().map((x)=>(
+            <Card key={x.id} className="p-5">
+              <div className="flex flex-wrap items-center gap-2"><h3 className="font-semibold">{x.title}</h3><Badge>{x.trigger.kind.replaceAll("_"," ")} @ {x.trigger.revision}</Badge>{x.inconclusive&&<Badge tone="warning">inconclusive</Badge>}{x.stale_evidence_ids.length>0&&<Badge tone="danger">stale evidence</Badge>}</div>
+              <p className="mt-2 text-xs text-[var(--muted)]">Contract v{x.contract_version} · investigation v{x.version} · journeys {x.journey_ids.join(", ")}</p>
+              {x.hidden_dependency_ids.map((id)=><p key={id} className="mt-2 text-sm text-[var(--warning)]">Hidden dependency ownership: {id}</p>)}
+              {x.findings.map((finding)=><div key={finding.id} className="mt-3 border-l-2 pl-3 text-sm"><strong>{finding.kind}</strong> · {finding.confidence} confidence · {finding.statement}<p className="text-xs text-[var(--muted)]">Uncertainty: {finding.uncertainty} · citations {finding.citation_ids.join(", ")} · {finding.actor_type} {finding.created_by}</p>{x.responses.filter((r)=>r.finding_id===finding.id).map((r)=><p key={r.id} className="mt-1 text-xs"><strong>{r.kind}:</strong> {r.body} — {r.created_by}</p>)}<form className="mt-2 flex gap-2" onSubmit={(e)=>mutateInvestigation(e,x,"responses",(f)=>({response:{finding_id:finding.id,kind:value(f,"response_kind"),body:value(f,"response_body")}}))}><select name="response_kind" className="rounded border bg-transparent px-2"><option value="confirm">Confirm</option><option value="dispute">Dispute</option></select><input name="response_body" required aria-label="Response rationale" className="min-w-0 flex-1 rounded border bg-transparent px-2"/><Button>Respond</Button></form></div>)}
+              {x.input_requests.map((q)=><div key={q.id} className="mt-3 text-sm"><strong>Owner input · {q.status}:</strong> {q.question}{q.response?` — ${q.response}`:""}{q.status==="requested"&&<form className="mt-2 flex gap-2" onSubmit={(e)=>mutateInvestigation(e,x,"input-responses",(f)=>({request:{id:q.id,response:value(f,"owner_response")}}))}><input name="owner_response" required aria-label="Owner response" className="min-w-0 flex-1 rounded border bg-transparent px-2"/><Button>Answer</Button></form>}</div>)}
+              <form onSubmit={(e)=>addFinding(e,x)} className="mt-4 grid gap-3 border-t pt-4 md:grid-cols-2">
+                <Select n="kind" l="Evidence entry" v="hypothesis" options={["hypothesis","comparison","uncertainty","conclusion"]}/><Select n="confidence" l="Confidence" v="low" options={["low","medium","high"]}/><Area n="statement" l="Cited statement"/><Area n="finding_uncertainty" l="What remains uncertain"/><div className="md:col-span-2"><Field n="citations" l="Observation or evidence IDs (comma separated)"/><Button>Record cited finding</Button></div>
+              </form>
+              <form onSubmit={(e)=>mutateInvestigation(e,x,"input-requests",(f)=>({request:{owner_id:value(f,"owner_id"),dependency_id:value(f,"dependency_id")||undefined,question:value(f,"question")}}))} className="mt-4 grid gap-3 border-t pt-4 md:grid-cols-3"><Field n="owner_id" l="Service/dependency owner ID"/><Field n="dependency_id" l="Dependency ID (optional)" required={false}/><Area n="question" l="Input requested"/><div className="md:col-span-3"><Button>Request owner input</Button></div></form>
+              <form onSubmit={(e)=>mutateInvestigation(e,x,"outcomes",(f)=>({outcome:{kind:value(f,"outcome_kind"),resource_id:value(f,"outcome_id"),summary:value(f,"outcome_summary")}}))} className="mt-4 grid gap-3 border-t pt-4 md:grid-cols-3"><Select n="outcome_kind" l="Resulting work" v="issue" options={["issue","incident","decision","planned_improvement"]}/><Field n="outcome_id" l="Existing resource ID"/><Area n="outcome_summary" l="Why it follows"/><div className="md:col-span-3"><Button>Link resulting work</Button></div></form>
+            </Card>
+          ))}
+        </section>
       )}
       {selected?.observations.length ? (
         <section>

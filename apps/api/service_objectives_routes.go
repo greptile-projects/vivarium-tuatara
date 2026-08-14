@@ -21,8 +21,40 @@ type signalMappingInput struct {
 type observationInput struct {
 	Observation serviceobjectives.Observation `json:"observation"`
 }
+type investigationMutationInput struct {
+	ExpectedVersion int                                     `json:"expected_version"`
+	Finding         serviceobjectives.InvestigationFinding  `json:"finding"`
+	Response        serviceobjectives.InvestigationResponse `json:"response"`
+	Request         serviceobjectives.InputRequest          `json:"request"`
+	Outcome         *serviceobjectives.InvestigationOutcome `json:"outcome"`
+}
 
 func registerServiceObjectiveRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, contracts *serviceobjectives.Store) {
+	investigator := func(w http.ResponseWriter, r *http.Request) (auth.Credential, string, bool) {
+		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok {
+			return actor, "", false
+		}
+		if actor.UserID == "" && actor.AgentID == "" {
+			writeAuthenticationRequired(w, false)
+			return actor, "", false
+		}
+		typ := "human"
+		if actor.AgentID != "" {
+			typ = "agent"
+		} else {
+			repo, err := catalog.GetByID(r.PathValue("id"))
+			participant := err == nil && repo.OwnerID == actor.UserID
+			if !participant && err == nil {
+				participant, _ = catalog.HasCollaborator(actor.UserID, repo.ID)
+			}
+			if !participant {
+				writeAPIError(w, 403, "reliability_investigation_forbidden", "only repository participants and repository-bound read-only agents may investigate reliability")
+				return actor, "", false
+			}
+		}
+		return actor, typ, true
+	}
 	mux.HandleFunc("GET /repositories/{id}/service-objectives", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
 			return
@@ -159,12 +191,81 @@ func registerServiceObjectiveRoutes(mux *http.ServeMux, catalog *repositories.St
 		})
 		writeReliabilityEvidence(w, out, err, 201)
 	})
+	mux.HandleFunc("POST /repositories/{id}/service-objectives/{objective_id}/investigations", func(w http.ResponseWriter, r *http.Request) {
+		actor, typ, ok := investigator(w, r)
+		if !ok {
+			return
+		}
+		current, err := contracts.Get(r.PathValue("objective_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "service_objective_not_found", "service objective not found")
+			return
+		}
+		var in serviceobjectives.Investigation
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a revision-bound investigation is required")
+			return
+		}
+		id := actor.UserID
+		if typ == "agent" {
+			id = actor.AgentID
+		}
+		out, err := contracts.OpenInvestigation(current.ID, id, in)
+		writeReliabilityInvestigation(w, out, err, 201)
+	})
+	for path, action := range map[string]string{"/findings": "finding", "/responses": "response", "/input-requests": "request", "/input-responses": "reply", "/outcomes": "outcome"} {
+		mux.HandleFunc("POST /repositories/{id}/service-objectives/{objective_id}/investigations/{investigation_id}"+path, func(w http.ResponseWriter, r *http.Request) {
+			actor, typ, ok := investigator(w, r)
+			if !ok {
+				return
+			}
+			current, err := contracts.Get(r.PathValue("objective_id"))
+			if err != nil || current.RepositoryID != r.PathValue("id") {
+				writeAPIError(w, 404, "service_objective_not_found", "service objective not found")
+				return
+			}
+			var in investigationMutationInput
+			if decodeJSON(r, &in) != nil {
+				writeAPIError(w, 400, "invalid_request", "expected_version and a complete investigation entry are required")
+				return
+			}
+			id := actor.UserID
+			if typ == "agent" {
+				id = actor.AgentID
+			}
+			if action == "reply" && typ == "agent" {
+				writeAPIError(w, 403, "reliability_input_forbidden", "only the requested human owner may answer")
+				return
+			}
+			out, err := contracts.MutateInvestigation(current.ID, r.PathValue("investigation_id"), id, typ, action, in.ExpectedVersion, in.Finding, in.Response, in.Request, in.Outcome)
+			writeReliabilityInvestigation(w, out, err, 201)
+		})
+	}
+}
+
+func writeReliabilityInvestigation(w http.ResponseWriter, v serviceobjectives.Contract, err error, status int) {
+	switch {
+	case err == nil:
+		writeJSON(w, status, v)
+	case errors.Is(err, serviceobjectives.ErrConflict):
+		writeAPIError(w, 409, "reliability_investigation_conflict", "the investigation changed; reload before contributing")
+	case errors.Is(err, serviceobjectives.ErrNotFound):
+		writeAPIError(w, 404, "reliability_investigation_not_found", "reliability investigation not found")
+	case errors.Is(err, serviceobjectives.ErrInvalid):
+		writeAPIError(w, 400, "invalid_reliability_investigation", "the investigation must remain revision-bound, evidence-cited, uncertainty-aware, and owner-addressed")
+	default:
+		log.Printf("reliability investigation storage: %v", err)
+		writeAPIError(w, 500, "reliability_investigation_unavailable", "reliability investigation could not be persisted")
+	}
 }
 
 func serviceObjectiveReaderParticipant(r *http.Request, catalog *repositories.Store, credentials *auth.Store, repositoryID string) bool {
 	actor, authenticated, err := authenticateOptionalCredential(r, credentials, "repositories:read")
 	if err != nil || !authenticated {
 		return false
+	}
+	if actor.AgentID != "" {
+		return true
 	}
 	repo, err := catalog.GetByID(repositoryID)
 	if err != nil {

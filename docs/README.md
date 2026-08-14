@@ -43,6 +43,17 @@ incomparable instead of silently extending the earlier series. Credential-shaped
 text is rejected before persistence, and unsafe legacy references are redacted on every projection;
 the records inventory evidence but grant no observability access.
 
+Participants and repository-bound read-only agents can open a reliability investigation from an
+exact objective revision, pull, deployment, or recorded budget-consumption window. The record freezes
+baseline and affected observations, selected user journeys, and sanitized operational/code evidence.
+Human and agent findings must cite that closed evidence set and state confidence and uncertainty;
+participants may retain confirmations or disputes, and questions can be addressed only to the exact
+service or dependency owners declared by the frozen contract. Successor contracts and missing evidence
+project as stale, dependencies without owners remain explicit, and a missing or disputed conclusion is
+inconclusive. An investigation can retain a reference to an issue, incident, decision, or planned
+improvement without creating authority in that workflow. Investigations are omitted from anonymous
+contract reads.
+
 ## Locale coverage contracts
 
 Repository participants publish complete, compare-and-swap locale plans through
