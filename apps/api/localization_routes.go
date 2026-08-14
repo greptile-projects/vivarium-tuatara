@@ -65,9 +65,22 @@ func registerLocalizationRoutes(mux *http.ServeMux, catalog *repositories.Store,
 			writeAPIError(w, 409, "localization_revision_changed", "extraction must match the current pull source revision")
 			return
 		}
-		v, e := store.Extract(p.RepositoryID, p.ID, in.SourceRevision, actor.UserID, in.Map, in.Locales, in.Units)
-		if e != nil {
+		var v localization.Review
+		e := pulls.WithSourceRevision(p.RepositoryID, p.ID, in.SourceRevision, func(current pullrequests.PullRequest) error {
+			var storeErr error
+			v, storeErr = store.Extract(current.RepositoryID, current.ID, in.SourceRevision, actor.UserID, in.Map, in.Locales, in.Units)
+			return storeErr
+		})
+		if errors.Is(e, pullrequests.ErrSourceChanged) || errors.Is(e, pullrequests.ErrNotReady) {
+			writeAPIError(w, 409, "localization_revision_changed", "extraction must match the current open pull source revision")
+			return
+		}
+		if errors.Is(e, localization.ErrInvalid) {
 			writeAPIError(w, 400, "invalid_localization_extraction", "a complete repository-defined map and contextual units are required")
+			return
+		}
+		if e != nil {
+			writeAPIError(w, 500, "localization_unavailable", "localization extraction could not be persisted")
 			return
 		}
 		writeJSON(w, 201, v)
@@ -90,9 +103,22 @@ func registerLocalizationRoutes(mux *http.ServeMux, catalog *repositories.Store,
 			writeAPIError(w, 409, "localization_revision_changed", "translation must match the current pull source revision")
 			return
 		}
-		v, e := store.Propose(p.RepositoryID, p.ID, in.SourceRevision, in.UnitID, in.Locale, in.Text, in.Note, actor.UserID)
-		if e != nil {
+		var v localization.Review
+		e := pulls.WithSourceRevision(p.RepositoryID, p.ID, in.SourceRevision, func(current pullrequests.PullRequest) error {
+			var storeErr error
+			v, storeErr = store.Propose(current.RepositoryID, current.ID, in.SourceRevision, in.UnitID, in.Locale, in.Text, in.Note, actor.UserID)
+			return storeErr
+		})
+		if errors.Is(e, pullrequests.ErrSourceChanged) || errors.Is(e, pullrequests.ErrNotReady) {
+			writeAPIError(w, 409, "localization_revision_changed", "translation must match the current open pull source revision")
+			return
+		}
+		if errors.Is(e, localization.ErrInvalid) || errors.Is(e, localization.ErrNotFound) {
 			writeAPIError(w, 400, "invalid_translation", "the unit, locale, source revision, and translation must match the current extraction")
+			return
+		}
+		if e != nil {
+			writeAPIError(w, 500, "localization_unavailable", "translation proposal could not be persisted")
 			return
 		}
 		writeJSON(w, 201, v)

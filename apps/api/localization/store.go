@@ -96,7 +96,10 @@ func New(root string) (*Store, error) {
 func (s *Store) Extract(repo, pull, revision, actor string, m ExtractionMap, locales []string, units []Unit) (Review, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	v, _ := s.read(repo, pull)
+	v, err := s.read(repo, pull)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return Review{}, err
+	}
 	if len(revision) != 40 || strings.TrimSpace(m.ID) == "" || m.Version < 1 || strings.TrimSpace(m.Name) == "" || len(m.Include) == 0 || len(m.Formats) == 0 || len(locales) == 0 || len(units) == 0 {
 		return Review{}, ErrInvalid
 	}

@@ -1,6 +1,10 @@
 package localization
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestExtractionRetainsHistoryAndSupersedesOnlyChangedUnits(t *testing.T) {
 	s, err := New(t.TempDir())
@@ -52,5 +56,30 @@ func TestTranslationRequiresCurrentKnownUnitAndLocale(t *testing.T) {
 	}
 	if _, err = s.Propose("repo", "pull", v.CurrentRevision, v.Extractions[0].Units[0].ID, "xx", "Start", "", "translator"); err != ErrInvalid {
 		t.Fatalf("unknown locale error = %v", err)
+	}
+}
+
+func TestExtractionPreservesUnreadableReview(t *testing.T) {
+	root := t.TempDir()
+	s, _ := New(root)
+	if err := os.MkdirAll(filepath.Join(root, "repo"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "repo", "pull.json")
+	corrupt := []byte("CORRUPT-REVIEW-MUST-NOT-BE-REPLACED{")
+	if err := os.WriteFile(path, corrupt, 0600); err != nil {
+		t.Fatal(err)
+	}
+	m := ExtractionMap{ID: "docs", Version: 1, Name: "Docs", Include: []string{"docs/**"}, Formats: []string{"markdown"}}
+	_, err := s.Extract("repo", "pull", "1111111111111111111111111111111111111111", "owner", m, []string{"es"}, []Unit{{Key: "intro", Message: "Start", Context: "Introduction", Locations: []Location{{Path: "docs/start.md", Line: 1}}}})
+	if err == nil {
+		t.Fatal("Extract accepted corrupt persisted review")
+	}
+	after, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(after) != string(corrupt) {
+		t.Fatalf("corrupt review was replaced: %q", after)
 	}
 }
