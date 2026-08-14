@@ -349,7 +349,7 @@ func (s *Store) Mutate(repo, pull, revision string, expected int, mutation strin
 		rationale, _ := payload["rationale"].(string)
 		uncertainty, _ := payload["uncertainty"].(string)
 		request := findRequest(v.SuggestionRequests, requestID)
-		if request == nil || request.AgentID != actorID || request.State != "requested" || textValue == "" || rationale == "" || !validUncertainty(uncertainty) {
+		if request == nil || request.AgentID != actorID || request.State != "requested" || request.UnitID != unitID || request.Locale != locale || unit.Protected || unit.Embargoed || textValue == "" || rationale == "" || !validUncertainty(uncertainty) {
 			return v, ErrInvalid
 		}
 		evidence := decodeEvidence(payload["evidence"])

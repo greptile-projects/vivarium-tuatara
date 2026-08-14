@@ -157,6 +157,25 @@ func (s *Store) Get(id, current string) (Plan, error) {
 	err := s.lock(func() error { var e error; v, e = s.read(id); return e })
 	return project(v, current), err
 }
+
+// WithCurrentVersion runs fn while holding the locale-plan mutation lock,
+// provided the plan still has the expected version. Cross-store decisions use
+// this boundary so reviewer removal cannot race dependent persistence.
+func (s *Store) WithCurrentVersion(id string, expected int, fn func(Plan) error) error {
+	if strings.TrimSpace(id) == "" || expected < 1 || fn == nil {
+		return ErrInvalid
+	}
+	return s.lock(func() error {
+		v, err := s.read(id)
+		if err != nil {
+			return err
+		}
+		if v.CurrentVersion != expected {
+			return ErrConflict
+		}
+		return fn(project(v, ""))
+	})
+}
 func (s *Store) List(repo, current string) ([]Plan, error) {
 	values := []Plan{}
 	err := s.lock(func() error {

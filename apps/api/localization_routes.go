@@ -30,6 +30,8 @@ type localizationMutationInput struct {
 	Payload         map[string]any `json:"payload"`
 }
 
+var errLocalizationReviewerRequired = errors.New("current locale reviewer required")
+
 func registerLocalizationRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, pulls *pullrequests.Store, plans *localeplans.Store, store *localization.Store) {
 	pull := func(w http.ResponseWriter, r *http.Request) (pullrequests.PullRequest, bool) {
 		p, e := pulls.Get(r.PathValue("id"), r.PathValue("pull_id"))
@@ -170,6 +172,8 @@ func registerLocalizationRoutes(mux *http.ServeMux, catalog *repositories.Store,
 				return
 			}
 		}
+		decisionPlanID, decisionPlanVersion, decisionLocale := "", 0, ""
+		decisionNeedsReviewer := false
 		if in.Mutation == "decide" {
 			kind, _ := in.Payload["kind"].(string)
 			if actor.UserID == "" {
@@ -177,29 +181,18 @@ func registerLocalizationRoutes(mux *http.ServeMux, catalog *repositories.Store,
 				return
 			}
 			if kind == "approve" || kind == "reject" {
+				decisionNeedsReviewer = true
 				current, readErr := store.Get(p.RepositoryID, p.ID, p.SourceCommitID)
 				suggestionID, _ := in.Payload["suggestion_id"].(string)
-				locale, _ := in.Payload["locale"].(string)
-				planID, planVersion := "", 0
+				decisionLocale, _ = in.Payload["locale"].(string)
 				if readErr == nil {
 					for _, suggestion := range current.Suggestions {
-						if suggestion.ID == suggestionID && suggestion.Locale == locale {
-							planID, planVersion = suggestion.LocalePlanID, suggestion.LocalePlanVersion
+						if suggestion.ID == suggestionID && suggestion.Locale == decisionLocale {
+							decisionPlanID, decisionPlanVersion = suggestion.LocalePlanID, suggestion.LocalePlanVersion
 						}
 					}
 				}
-				plan, planErr := plans.Get(planID, "")
-				reviewer := false
-				if planErr == nil && plan.CurrentVersion == planVersion {
-					for _, declared := range plan.Revisions[len(plan.Revisions)-1].Locales {
-						if declared.ID == locale {
-							for _, id := range declared.ReviewerIDs {
-								reviewer = reviewer || id == actor.UserID
-							}
-						}
-					}
-				}
-				if !reviewer {
+				if decisionPlanID == "" || decisionPlanVersion < 1 {
 					writeAPIError(w, 403, "localization_reviewer_required", "the current locale plan requires a declared human reviewer for approval or rejection")
 					return
 				}
@@ -210,16 +203,44 @@ func registerLocalizationRoutes(mux *http.ServeMux, catalog *repositories.Store,
 			actorType, actorID = "agent", actor.AgentID
 		}
 		var v localization.Review
-		e := pulls.WithSourceRevision(p.RepositoryID, p.ID, in.SourceRevision, func(current pullrequests.PullRequest) error {
-			var mutationErr error
-			v, mutationErr = store.Mutate(current.RepositoryID, current.ID, in.SourceRevision, in.ExpectedVersion, in.Mutation, actorType, actorID, in.Payload)
-			return mutationErr
-		})
+		persist := func() error {
+			return pulls.WithSourceRevision(p.RepositoryID, p.ID, in.SourceRevision, func(current pullrequests.PullRequest) error {
+				var mutationErr error
+				v, mutationErr = store.Mutate(current.RepositoryID, current.ID, in.SourceRevision, in.ExpectedVersion, in.Mutation, actorType, actorID, in.Payload)
+				return mutationErr
+			})
+		}
+		var e error
+		if decisionNeedsReviewer {
+			e = plans.WithCurrentVersion(decisionPlanID, decisionPlanVersion, func(plan localeplans.Plan) error {
+				if plan.RepositoryID != p.RepositoryID {
+					return errLocalizationReviewerRequired
+				}
+				reviewer := false
+				for _, declared := range plan.Revisions[len(plan.Revisions)-1].Locales {
+					if declared.ID == decisionLocale {
+						for _, id := range declared.ReviewerIDs {
+							reviewer = reviewer || id == actor.UserID
+						}
+					}
+				}
+				if !reviewer {
+					return errLocalizationReviewerRequired
+				}
+				return persist()
+			})
+		} else {
+			e = persist()
+		}
 		switch {
 		case errors.Is(e, pullrequests.ErrSourceChanged) || errors.Is(e, pullrequests.ErrNotReady):
 			writeAPIError(w, 409, "localization_revision_changed", "the pull source changed; reload before continuing")
 		case errors.Is(e, localization.ErrConflict):
 			writeAPIError(w, 409, "localization_workspace_conflict", "the workspace changed; reload before continuing")
+		case errors.Is(e, localeplans.ErrConflict):
+			writeAPIError(w, 409, "locale_plan_changed", "the locale plan changed; reload before deciding")
+		case errors.Is(e, errLocalizationReviewerRequired):
+			writeAPIError(w, 403, "localization_reviewer_required", "the current locale plan requires a declared human reviewer for approval or rejection")
 		case errors.Is(e, localization.ErrInvalid):
 			writeAPIError(w, 400, "invalid_localization_workspace_change", "the change is incomplete, unauthorized for this actor type, protected, embargoed, or not grounded in current evidence")
 		case e != nil:

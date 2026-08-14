@@ -197,3 +197,28 @@ func TestCollaborativeWorkspaceRejectsConcurrencyAndSensitiveSuggestionRequests(
 		t.Fatalf("stale version error = %v", err)
 	}
 }
+
+func TestSuggestionCannotRedirectRequestToAnotherProtectedUnitOrLocale(t *testing.T) {
+	s, _ := New(t.TempDir())
+	revision := "1111111111111111111111111111111111111111"
+	v, _ := s.Extract("repo", "pull", revision, "owner", ExtractionMap{ID: "web", Version: 1, Name: "Web", Include: []string{"src/**"}, Formats: []string{"typescript"}}, []string{"fr", "de"}, []Unit{
+		{Key: "normal", Message: "Welcome", Context: "Public hero", Locations: []Location{{Path: "src/a.tsx", Line: 1}}},
+		{Key: "secret", Message: "Unreleased launch", Context: "Embargoed launch", Protected: true, Locations: []Location{{Path: "src/b.tsx", Line: 1}}},
+	})
+	normal, secret := v.Extractions[0].Units[0].ID, v.Extractions[0].Units[1].ID
+	v, err := s.Mutate("repo", "pull", revision, v.WorkspaceVersion, "request_suggestion", "user", "translator", map[string]any{"unit_id": normal, "locale": "fr", "agent_id": "agent", "product_context": "Public hero", "locale_plan_id": "plan", "locale_plan_version": float64(1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Mutate("repo", "pull", revision, v.WorkspaceVersion, "suggest", "agent", "agent", map[string]any{"unit_id": secret, "locale": "de", "request_id": v.SuggestionRequests[0].ID, "text": "Geheimer Start", "rationale": "redirected", "uncertainty": "low", "evidence": []map[string]any{{"kind": "locale_plan", "reference": "plan:1"}, {"kind": "source_context", "reference": "unit:secret"}}})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("cross-scope protected suggestion error = %v", err)
+	}
+	stored, readErr := s.Get("repo", "pull", revision)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(stored.Suggestions) != 0 || stored.SuggestionRequests[0].State != "requested" {
+		t.Fatalf("redirect persisted: %#v", stored.Suggestions)
+	}
+}
