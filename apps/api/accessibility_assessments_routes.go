@@ -54,11 +54,22 @@ func registerAccessibilityAssessmentRoutes(mux *http.ServeMux, git *storage.Stor
 				writeAPIError(w, 503, "pull_requests_unavailable", "pull request evidence could not be verified")
 				return
 			}
-			pull, err := pulls.Get(r.PathValue("id"), in.PullRequestID)
-			if err != nil || pull.SourceCommitID != in.Revision {
+			var out accessibilityassessments.Assessment
+			err := pulls.WithSourceRevision(r.PathValue("id"), in.PullRequestID, in.Revision, func(_ pullrequests.PullRequest) error {
+				var createErr error
+				out, createErr = assessments.Create(r.PathValue("id"), actor.UserID, in)
+				return createErr
+			})
+			if errors.Is(err, pullrequests.ErrSourceChanged) || errors.Is(err, pullrequests.ErrNotReady) {
+				writeAPIError(w, 409, "accessibility_pull_changed", "the pull request changed while accessibility evidence was published")
+				return
+			}
+			if errors.Is(err, pullrequests.ErrNotFound) || errors.Is(err, pullrequests.ErrInvalid) {
 				writeAPIError(w, 400, "invalid_accessibility_pull_revision", "the pull request must exist in this repository at the assessment revision")
 				return
 			}
+			writeAccessibilityAssessment(w, out, err, 201)
+			return
 		} else if !accessibilityRevisionIsVisible(git, r.PathValue("id"), in.Revision) {
 			writeAPIError(w, 400, "invalid_accessibility_revision", "the assessment revision must be a commit reachable from a visible repository branch")
 			return
@@ -97,17 +108,46 @@ func registerAccessibilityAssessmentRoutes(mux *http.ServeMux, git *storage.Stor
 			writeAccessibilityAssessment(w, accessibilityassessments.Assessment{}, err, 0)
 			return
 		}
-		for _, citation := range in.Citations {
-			if !accessibilityCitationResolves(r.PathValue("id"), assessment.Revision, citation, pulls, previewStore, reportStore) {
-				writeAPIError(w, 400, "invalid_accessibility_citation", "each citation must resolve to evidence on a repository preview or reproduction at the assessment revision")
-				return
-			}
-		}
 		kind, id := "human", actor.UserID
 		if actor.AgentID != "" {
 			kind, id = "agent", actor.AgentID
 		}
-		out, err := assessments.AddFinding(r.PathValue("id"), r.PathValue("assessment_id"), kind, id, in)
+		guardPullID := assessment.PullRequestID
+		for _, citation := range in.Citations {
+			if citation.Kind != "preview" || previewStore == nil {
+				continue
+			}
+			preview, previewErr := previewStore.Find(r.PathValue("id"), citation.ResourceID)
+			if previewErr != nil || (guardPullID != "" && guardPullID != preview.PullRequestID) {
+				writeAPIError(w, 400, "invalid_accessibility_citation", "preview citations must resolve to the assessment's single guarded pull request")
+				return
+			}
+			guardPullID = preview.PullRequestID
+		}
+		var out accessibilityassessments.Assessment
+		persist := func(current *pullrequests.PullRequest) error {
+			for _, citation := range in.Citations {
+				if !accessibilityCitationResolves(r.PathValue("id"), assessment.Revision, citation, current, previewStore, reportStore) {
+					return accessibilityassessments.ErrInvalid
+				}
+			}
+			var addErr error
+			out, addErr = assessments.AddFinding(r.PathValue("id"), r.PathValue("assessment_id"), kind, id, in)
+			return addErr
+		}
+		if guardPullID != "" {
+			if pulls == nil {
+				writeAPIError(w, 503, "pull_requests_unavailable", "preview evidence freshness could not be verified")
+				return
+			}
+			err = pulls.WithSourceRevision(r.PathValue("id"), guardPullID, assessment.Revision, func(current pullrequests.PullRequest) error { return persist(&current) })
+		} else {
+			err = persist(nil)
+		}
+		if errors.Is(err, pullrequests.ErrSourceChanged) || errors.Is(err, pullrequests.ErrNotReady) {
+			writeAPIError(w, 409, "accessibility_citation_stale", "the pull request changed while cited accessibility evidence was published")
+			return
+		}
 		writeAccessibilityAssessment(w, out, err, 201)
 	})
 	mux.HandleFunc("POST /repositories/{id}/accessibility-assessments/{assessment_id}/findings/{finding_id}/decision", func(w http.ResponseWriter, r *http.Request) {
@@ -184,18 +224,17 @@ func accessibilityRevisionIsVisible(git *storage.Store, repositoryID, revision s
 	return false
 }
 
-func accessibilityCitationResolves(repositoryID, revision string, citation accessibilityassessments.Citation, pulls *pullrequests.Store, previewStore *previews.Store, reportStore *accessibilityreports.Store) bool {
+func accessibilityCitationResolves(repositoryID, revision string, citation accessibilityassessments.Citation, currentPull *pullrequests.PullRequest, previewStore *previews.Store, reportStore *accessibilityreports.Store) bool {
 	switch citation.Kind {
 	case "preview":
 		if previewStore == nil {
 			return false
 		}
 		preview, err := previewStore.Find(repositoryID, citation.ResourceID)
-		if err != nil || preview.Revision != revision || pulls == nil {
+		if err != nil || preview.Revision != revision || currentPull == nil || currentPull.ID != preview.PullRequestID {
 			return false
 		}
-		pull, err := pulls.Get(repositoryID, preview.PullRequestID)
-		if err != nil || !accessibilityPreviewMatchesCurrentRevision(preview, pull.SourceCommitID) {
+		if !accessibilityPreviewMatchesCurrentRevision(preview, currentPull.SourceCommitID) {
 			return false
 		}
 		return accessibilityPreviewArtifactResolves(preview, citation.EvidenceRef)

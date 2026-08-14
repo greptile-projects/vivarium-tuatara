@@ -371,6 +371,9 @@ whenever dependencies change or the web job fails before it starts.
   redacted reproduction-attempt artifact before persistence.
   Branch visibility excludes `vivarium-security/*`; preview freshness is recomputed from the
   authoritative current pull source rather than trusting a stored stale flag.
+  Pull-bound assessment creation and preview-cited finding persistence hold
+  `pullrequests.WithSourceRevision` across the cross-store write; concurrent synchronization returns
+  a conflict, and one finding cannot span preview artifacts from different pulls.
   Product experiments at `/repositories/{id}/experiments` retain append-only hypothesis-plan
   revisions sourced from proposals, issues, decisions, pulls, previews, or releases. Success and
   guardrail metrics bind exact permitted product-signal versions; audience eligibility,

@@ -2855,6 +2855,10 @@ Preview citations must resolve to an exact-revision preview whose parent pull st
 revision, and one of its retained
 artifacts. Reproduction citations must resolve to an exact-revision retained attempt and one of its
 redacted artifacts; invented or cross-revision resource/evidence pairs fail before persistence.
+Pull-bound assessment creation and preview-cited finding publication hold the pull mutation boundary
+through final evidence persistence. Concurrent synchronization therefore returns `409` without
+publishing stale assessment or citation records; all preview citations in one finding must share the
+assessment's guarded pull (or one shared pull for a standalone assessment).
 `POST .../{assessment-id}/invalidate` names changed source locations or journey IDs and invalidates
 only intersecting checks/findings, clearing only their affected acceptance. Records default beneath
 `$ACCESSIBILITY_ASSESSMENT_STORAGE_ROOT` (`accessibility-assessments`).
