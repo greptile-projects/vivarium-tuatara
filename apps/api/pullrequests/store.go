@@ -1706,7 +1706,7 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 		for _, change := range changes {
 			paths = append(paths, change.Path)
 		}
-		privacy, evaluationErr := s.privacyChecks.Evaluate(repositoryID, p.SourceCommitID, p.TargetBranch, paths)
+		privacy, evaluationErr := s.privacyChecks.Evaluate(repositoryID, p.SourceCommitID, p.TargetBranch, pullRequestID, paths)
 		if evaluationErr != nil {
 			return MergeReadiness{}, evaluationErr
 		}

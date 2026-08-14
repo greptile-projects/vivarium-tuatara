@@ -11,13 +11,15 @@
   `deletion`, `telemetry`, and `recipient`. Artifact metadata is sanitized, digest-addressed, and
   limited to 5 MiB per declared log, trace, or artifact; payload contents are never accepted.
 - `POST /repositories/{id}/privacy-check-acknowledgements` records a named privacy owner's rationale
-  for an exact policy and revision. `POST /repositories/{id}/privacy-check-exceptions` is owner-only
+  for an exact policy, revision, and pull context (or the revision-wide release context).
+  `POST /repositories/{id}/privacy-check-exceptions` is owner-only
   and requires exact rules, rationale, follow-up work, and an expiry no more than 90 days away.
 - `GET /repositories/{id}/pulls/{pull_id}/privacy-readiness` and
   `GET /repositories/{id}/releases/{release_id}/privacy-readiness` distinguish missing, stale,
   failed, and passed current evidence. Pull merge readiness includes the same `privacy_readiness`
-  projection and blockers. Exceptions waive only their named runtime rules and do not waive a
-  missing owner acknowledgement. Records default beneath `$PRIVACY_CHECK_STORAGE_ROOT`.
+  projection and blockers. Pull runs, acknowledgements, and exceptions cannot satisfy a sibling
+  pull that happens to share its commit. Exceptions waive only their named runtime rules and do not
+  waive a missing owner acknowledgement. Records default beneath `$PRIVACY_CHECK_STORAGE_ROOT`.
 
 ## Data commitments
 

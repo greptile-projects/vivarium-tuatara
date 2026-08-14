@@ -16,7 +16,7 @@ func TestExactEvidenceAcknowledgementAndScopedExceptionGovernReadiness(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, e := s.Evaluate("repo", rev, "main", []string{"src/app.go"})
+	r, e := s.Evaluate("repo", rev, "main", "pull", []string{"src/app.go"})
 	if e != nil || r.Ready {
 		t.Fatalf("missing evidence must block: %#v %v", r, e)
 	}
@@ -24,23 +24,23 @@ func TestExactEvidenceAcknowledgementAndScopedExceptionGovernReadiness(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = s.Acknowledge("repo", "privacy", p.ID, rev, "Reviewed sanitized trace and residual deletion risk")
+	_, err = s.Acknowledge("repo", "privacy", p.ID, rev, "pull", "Reviewed sanitized trace and residual deletion risk")
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, _ = s.Evaluate("repo", rev, "main", []string{"src/app.go"})
+	r, _ = s.Evaluate("repo", rev, "main", "pull", []string{"src/app.go"})
 	if r.Ready {
 		t.Fatal("failed deletion must still block after owner acknowledgement")
 	}
-	_, err = s.AddException("repo", "owner", Exception{PolicyID: p.ID, Revision: rev, Rules: []string{"deletion"}, Rationale: "Migration overlap", FollowUpWork: "issue-42", ExpiresAt: time.Now().UTC().Add(24 * time.Hour)})
+	_, err = s.AddException("repo", "owner", Exception{PolicyID: p.ID, Revision: rev, PullRequestID: "pull", Rules: []string{"deletion"}, Rationale: "Migration overlap", FollowUpWork: "issue-42", ExpiresAt: time.Now().UTC().Add(24 * time.Hour)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, _ = s.Evaluate("repo", rev, "main", []string{"src/app.go"})
+	r, _ = s.Evaluate("repo", rev, "main", "pull", []string{"src/app.go"})
 	if !r.Ready {
 		t.Fatalf("scoped exception should unblock only failed rule: %#v", r.Requirements)
 	}
-	stale, _ := s.Evaluate("repo", strings.Repeat("c", 40), "main", []string{"src/app.go"})
+	stale, _ := s.Evaluate("repo", strings.Repeat("c", 40), "main", "pull", []string{"src/app.go"})
 	if stale.Ready {
 		t.Fatal("evidence, acknowledgement, and exception must not cross revisions")
 	}
@@ -57,5 +57,35 @@ func TestRejectsProductionDataAndSensitiveArtifactSummaries(t *testing.T) {
 	base.Artifacts = []Artifact{{Kind: "log", Name: "x", Digest: strings.Repeat("b", 64), Summary: "Authorization: Bearer secret", SizeBytes: 1}}
 	if _, e := s.AddRun("r", "u", base); e != ErrInvalid {
 		t.Fatalf("secret-like summary accepted: %v", e)
+	}
+	base.Artifacts = nil
+	base.Results[0].Summary = "Customer name: Ada Lovelace, ada@example.com, +1 (415) 555-0100, 123 Main Street"
+	if _, e := s.AddRun("r", "u", base); e != ErrInvalid {
+		t.Fatalf("personal data in result summary accepted: %v", e)
+	}
+}
+
+func TestPullReadinessDoesNotReuseSiblingPullEvidenceAtSameRevision(t *testing.T) {
+	s, _ := New(t.TempDir())
+	revision := strings.Repeat("a", 40)
+	policy, err := s.CreatePolicy("repo", "owner", Policy{Branch: "main", RequiredRules: []string{"consent"}, PrivacyOwnerIDs: []string{"privacy"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.AddRun("repo", "author", Run{PullRequestID: "pull-a", PreviewID: "preview-a", Revision: revision, Journey: "signup", DataFlowID: "flow", DataFlowVersion: 1, Isolation: "ephemeral_network_none", Results: []Result{{Rule: "consent", Outcome: "passed", Summary: "Synthetic subject consent was observed"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Acknowledge("repo", "privacy", policy.ID, revision, "pull-a", "Reviewed the current sanitized evidence")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pullA, _ := s.Evaluate("repo", revision, "main", "pull-a", nil)
+	pullB, _ := s.Evaluate("repo", revision, "main", "pull-b", nil)
+	if !pullA.Ready {
+		t.Fatalf("source pull should be ready: %#v", pullA.Requirements)
+	}
+	if pullB.Ready || len(pullB.Runs) != 0 {
+		t.Fatalf("sibling pull reused evidence: %#v", pullB)
 	}
 }

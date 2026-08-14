@@ -461,7 +461,9 @@ whenever dependencies change or the web job fails before it starts.
   log/trace/artifact metadata, digests, coverage, and failures remain on the pull. Current runtime
   evidence and privacy-owner acknowledgement govern merge and release readiness. Owner exceptions
   are exact-rule scoped, expire within 90 days, retain rationale, and require follow-up work; they
-  cannot waive the owner acknowledgement.
+  cannot waive the owner acknowledgement. Pull runs, acknowledgements, and exceptions bind the
+  pull identity as well as its revision; release evaluation alone uses the explicit revision-wide
+  context.
 
   Product feedback at `/repositories/{id}/feedback` is a distinct needs channel for a project,
 

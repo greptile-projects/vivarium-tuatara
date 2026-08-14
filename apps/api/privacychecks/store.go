@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -60,22 +61,24 @@ type Run struct {
 	CreatedAt       time.Time  `json:"created_at"`
 }
 type Acknowledgement struct {
-	PolicyID  string    `json:"policy_id"`
-	Revision  string    `json:"revision"`
-	ActorID   string    `json:"actor_id"`
-	Rationale string    `json:"rationale"`
-	CreatedAt time.Time `json:"created_at"`
+	PolicyID      string    `json:"policy_id"`
+	Revision      string    `json:"revision"`
+	PullRequestID string    `json:"pull_request_id,omitempty"`
+	ActorID       string    `json:"actor_id"`
+	Rationale     string    `json:"rationale"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 type Exception struct {
-	ID           string    `json:"id"`
-	PolicyID     string    `json:"policy_id"`
-	Revision     string    `json:"revision"`
-	Rules        []string  `json:"rules"`
-	Rationale    string    `json:"rationale"`
-	FollowUpWork string    `json:"follow_up_work"`
-	ExpiresAt    time.Time `json:"expires_at"`
-	CreatedBy    string    `json:"created_by"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID            string    `json:"id"`
+	PolicyID      string    `json:"policy_id"`
+	Revision      string    `json:"revision"`
+	PullRequestID string    `json:"pull_request_id,omitempty"`
+	Rules         []string  `json:"rules"`
+	Rationale     string    `json:"rationale"`
+	FollowUpWork  string    `json:"follow_up_work"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	CreatedBy     string    `json:"created_by"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 type Requirement struct {
 	PolicyID string `json:"policy_id"`
@@ -168,7 +171,7 @@ func (s *Store) AddRun(repo, actor string, v Run) (Run, error) {
 	}
 	seen := map[string]bool{}
 	for _, x := range v.Results {
-		if !allowedRules[x.Rule] || (x.Outcome != "passed" && x.Outcome != "failed") || x.Summary == "" || seen[x.Rule] {
+		if !allowedRules[x.Rule] || (x.Outcome != "passed" && x.Outcome != "failed") || x.Summary == "" || len(x.Summary) > 1000 || looksSensitive(x.Summary) || seen[x.Rule] {
 			return v, ErrInvalid
 		}
 		seen[x.Rule] = true
@@ -184,7 +187,7 @@ func (s *Store) AddRun(repo, actor string, v Run) (Run, error) {
 	r.Runs = append(r.Runs, v)
 	return v, s.write(repo, r)
 }
-func (s *Store) Acknowledge(repo, actor, policy, revision, rationale string) (Acknowledgement, error) {
+func (s *Store) Acknowledge(repo, actor, policy, revision, pullRequestID, rationale string) (Acknowledgement, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, e := s.read(repo)
@@ -199,7 +202,7 @@ func (s *Store) Acknowledge(repo, actor, policy, revision, rationale string) (Ac
 			}
 		}
 	}
-	v := Acknowledgement{policy, revision, actor, strings.TrimSpace(rationale), s.now()}
+	v := Acknowledgement{PolicyID: policy, Revision: revision, PullRequestID: pullRequestID, ActorID: actor, Rationale: strings.TrimSpace(rationale), CreatedAt: s.now()}
 	if !found || !validCommit(revision) || v.Rationale == "" {
 		return v, ErrInvalid
 	}
@@ -232,7 +235,7 @@ func (s *Store) AddException(repo, actor string, v Exception) (Exception, error)
 	r.Exceptions = append(r.Exceptions, v)
 	return v, s.write(repo, r)
 }
-func (s *Store) Evaluate(repo, revision, branch string, paths []string) (Readiness, error) {
+func (s *Store) Evaluate(repo, revision, branch, pullRequestID string, paths []string) (Readiness, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	x, e := s.read(repo)
@@ -242,7 +245,7 @@ func (s *Store) Evaluate(repo, revision, branch string, paths []string) (Readine
 	out := Readiness{true, revision, []Requirement{}, []Run{}, []Exception{}}
 	now := s.now()
 	for _, run := range x.Runs {
-		if run.Revision == revision {
+		if run.Revision == revision && (pullRequestID == "" || run.PullRequestID == pullRequestID) {
 			out.Runs = append(out.Runs, run)
 		}
 	}
@@ -252,7 +255,7 @@ func (s *Store) Evaluate(repo, revision, branch string, paths []string) (Readine
 		}
 		except := map[string]bool{}
 		for _, v := range x.Exceptions {
-			if v.PolicyID == p.ID && v.Revision == revision && v.ExpiresAt.After(now) {
+			if v.PolicyID == p.ID && v.Revision == revision && v.PullRequestID == pullRequestID && v.ExpiresAt.After(now) {
 				out.ActiveExceptions = append(out.ActiveExceptions, v)
 				for _, q := range v.Rules {
 					except[q] = true
@@ -269,7 +272,7 @@ func (s *Store) Evaluate(repo, revision, branch string, paths []string) (Readine
 			status := "missing"
 			for _, run := range x.Runs {
 				for _, z := range run.Results {
-					if z.Rule == rule {
+					if z.Rule == rule && (pullRequestID == "" || run.PullRequestID == pullRequestID) {
 						if run.Revision != revision && status == "missing" {
 							status = "stale"
 						} else if run.Revision == revision && z.Outcome == "passed" {
@@ -285,7 +288,7 @@ func (s *Store) Evaluate(repo, revision, branch string, paths []string) (Readine
 		for _, journey := range p.RequiredJourneys {
 			status := "missing"
 			for _, run := range x.Runs {
-				if run.Journey == journey {
+				if run.Journey == journey && (pullRequestID == "" || run.PullRequestID == pullRequestID) {
 					if run.Revision != revision && status == "missing" {
 						status = "stale"
 					} else if run.Revision == revision {
@@ -302,7 +305,7 @@ func (s *Store) Evaluate(repo, revision, branch string, paths []string) (Readine
 		}
 		status := "missing"
 		for _, a := range x.Acknowledgements {
-			if a.PolicyID == p.ID {
+			if a.PolicyID == p.ID && a.PullRequestID == pullRequestID {
 				if a.Revision == revision {
 					status = "passed"
 				} else {
@@ -382,6 +385,12 @@ func selected(patterns, paths []string) bool {
 	}
 	return false
 }
+
+var emailPattern = regexp.MustCompile(`(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b`)
+var phonePattern = regexp.MustCompile(`\b(?:\+?\d[\d ()-]{7,}\d)\b`)
+var streetPattern = regexp.MustCompile(`(?i)\b\d{1,6}\s+[a-z0-9.' -]{2,40}\s(?:street|st|road|rd|avenue|ave|lane|ln|drive|dr|boulevard|blvd)\b`)
+var namedPersonPattern = regexp.MustCompile(`(?i)\b(?:customer|user|person|full[ _-]?name|name)\s*[:=]\s*[a-z][a-z.' -]{1,80}`)
+
 func looksSensitive(v string) bool {
 	v = strings.ToLower(v)
 	for _, x := range []string{"authorization:", "bearer ", "cookie:", "password=", "email="} {
@@ -389,6 +398,6 @@ func looksSensitive(v string) bool {
 			return true
 		}
 	}
-	return false
+	return emailPattern.MatchString(v) || phonePattern.MatchString(v) || streetPattern.MatchString(v) || namedPersonPattern.MatchString(v)
 }
 func id() string { b := make([]byte, 12); _, _ = rand.Read(b); return hex.EncodeToString(b) }

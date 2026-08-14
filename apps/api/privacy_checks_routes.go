@@ -92,15 +92,16 @@ func registerPrivacyCheckRoutes(mux *http.ServeMux, catalog *repositories.Store,
 			return
 		}
 		var in struct {
-			PolicyID  string `json:"policy_id"`
-			Revision  string `json:"revision"`
-			Rationale string `json:"rationale"`
+			PolicyID      string `json:"policy_id"`
+			Revision      string `json:"revision"`
+			PullRequestID string `json:"pull_request_id,omitempty"`
+			Rationale     string `json:"rationale"`
 		}
 		if decodeJSON(r, &in) != nil {
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
-		out, e := checks.Acknowledge(r.PathValue("id"), actor.UserID, in.PolicyID, in.Revision, in.Rationale)
+		out, e := checks.Acknowledge(r.PathValue("id"), actor.UserID, in.PolicyID, in.Revision, in.PullRequestID, in.Rationale)
 		writePrivacyCheck(w, out, e, 201)
 	})
 	mux.HandleFunc("POST /repositories/{id}/privacy-check-exceptions", func(w http.ResponseWriter, r *http.Request) {
@@ -138,7 +139,7 @@ func registerPrivacyCheckRoutes(mux *http.ServeMux, catalog *repositories.Store,
 		for _, c := range changes {
 			paths = append(paths, c.Path)
 		}
-		out, e := checks.Evaluate(p.RepositoryID, p.SourceCommitID, p.TargetBranch, paths)
+		out, e := checks.Evaluate(p.RepositoryID, p.SourceCommitID, p.TargetBranch, p.ID, paths)
 		writePrivacyCheck(w, out, e, 200)
 	})
 	mux.HandleFunc("GET /repositories/{id}/releases/{release_id}/privacy-readiness", func(w http.ResponseWriter, r *http.Request) {
@@ -154,7 +155,7 @@ func registerPrivacyCheckRoutes(mux *http.ServeMux, catalog *repositories.Store,
 			writeAPIError(w, 500, "privacy_readiness_unavailable", "release candidate path context is unavailable")
 			return
 		}
-		out, e := checks.Evaluate(v.RepositoryID, v.CommitID, v.TargetBranch, v.ChangedPaths)
+		out, e := checks.Evaluate(v.RepositoryID, v.CommitID, v.TargetBranch, "", v.ChangedPaths)
 		writePrivacyCheck(w, out, e, 200)
 	})
 }

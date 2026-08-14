@@ -57,6 +57,9 @@ only bounded sanitized log/trace/artifact metadata, content digests, rule outcom
 Current evidence plus a named privacy-owner acknowledgement governs ordinary merge readiness and
 the same exact revision/path context governs release readiness. Repository-owner exceptions name
 only affected rules, expire within 90 days, preserve rationale, and require linked follow-up work.
+Pull evidence, acknowledgement, and exceptions additionally bind the pull identity, preventing a
+sibling pull at the same commit from reusing its proof; release evaluation uses an explicit
+revision-wide context.
 Records default beneath `$PRIVACY_CHECK_STORAGE_ROOT` (`privacy-checks`).
 
 ## Accountable product direction
