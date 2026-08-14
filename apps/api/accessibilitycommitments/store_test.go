@@ -75,11 +75,29 @@ func TestListIsolatesCorruptRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(filepath.Join(root, "unrelated.json"), []byte("{"), 0600); err != nil {
+	other, err := s.Create("repo-other", "alice", validRevision(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(s.repositoryDir("repo-other"), other.ID+".json"), []byte("{"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	values, err := s.List("repo-target")
 	if err != nil || len(values) != 1 || values[0].ID != want.ID {
 		t.Fatalf("healthy repository list = %+v, %v", values, err)
+	}
+}
+
+func TestListSurfacesCorruptRecordForRequestedRepository(t *testing.T) {
+	s, _ := New(t.TempDir())
+	value, err := s.Create("repo-target", "alice", validRevision(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(s.repositoryDir("repo-target"), value.ID+".json"), []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.List("repo-target"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("expected target corruption to be explicit, got %v", err)
 	}
 }

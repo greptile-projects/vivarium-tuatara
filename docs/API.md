@@ -2804,7 +2804,9 @@ roadmap outcomes, documentation, previews, and release policy. Reads derive
 attributed `missing_coverage`, `conflicting_requirement`,
 `unsupported_environment`, `expiring_exception`, and `expired_exception`
 diagnostics. Records default beneath `$ACCESSIBILITY_COMMITMENT_STORAGE_ROOT`
-(`accessibility-commitments`).
+(`accessibility-commitments`) in repository-scoped directories so corruption in
+one repository cannot hide or deny another repository's commitments; corruption
+inside the requested repository fails the collection read explicitly.
 
 ## Performance goals
 

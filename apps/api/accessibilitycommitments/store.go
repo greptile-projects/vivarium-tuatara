@@ -3,10 +3,10 @@ package accessibilitycommitments
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -181,7 +181,14 @@ func (s *Store) Get(id string) (Commitment, error) {
 func (s *Store) List(repo string) ([]Commitment, error) {
 	values := []Commitment{}
 	err := s.lock(func() error {
-		entries, e := os.ReadDir(s.root)
+		// New records are repository-scoped so corruption ownership remains
+		// knowable without decoding the record itself.
+		dir := s.repositoryDir(repo)
+		entries, e := os.ReadDir(dir)
+		if os.IsNotExist(e) {
+			entries = nil
+			e = nil
+		}
 		if e != nil {
 			return e
 		}
@@ -189,12 +196,27 @@ func (s *Store) List(repo string) ([]Commitment, error) {
 			if x.IsDir() || !strings.HasSuffix(x.Name(), ".json") {
 				continue
 			}
-			v, e := s.read(strings.TrimSuffix(x.Name(), ".json"))
+			v, e := s.readFile(filepath.Join(dir, x.Name()))
 			if e != nil {
-				// Collection reads isolate corrupt records so one damaged commitment
-				// cannot deny access to every healthy repository in this store.
-				log.Printf("accessibility commitments: skipping corrupt record %q: %v", x.Name(), e)
+				return e
+			}
+			if v.RepositoryID == repo {
+				values = append(values, s.project(v))
+			}
+		}
+		// Read legacy flat records for compatibility. A corrupt legacy record
+		// fails closed because its repository ownership cannot be established.
+		legacy, e := os.ReadDir(s.root)
+		if e != nil {
+			return e
+		}
+		for _, x := range legacy {
+			if x.IsDir() || !strings.HasSuffix(x.Name(), ".json") {
 				continue
+			}
+			v, readErr := s.readFile(filepath.Join(s.root, x.Name()))
+			if readErr != nil {
+				return readErr
 			}
 			if v.RepositoryID == repo {
 				values = append(values, s.project(v))
@@ -356,8 +378,26 @@ func containsEnvironment(values []Environment, id string, supported bool) bool {
 	return false
 }
 func (s *Store) read(id string) (Commitment, error) {
+	if v, e := s.readFile(filepath.Join(s.root, id+".json")); !errors.Is(e, ErrNotFound) {
+		return v, e
+	}
+	entries, e := os.ReadDir(s.root)
+	if e != nil {
+		return Commitment{}, e
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if v, readErr := s.readFile(filepath.Join(s.root, entry.Name(), id+".json")); !errors.Is(readErr, ErrNotFound) {
+			return v, readErr
+		}
+	}
+	return Commitment{}, ErrNotFound
+}
+func (s *Store) readFile(name string) (Commitment, error) {
 	var v Commitment
-	b, e := os.ReadFile(filepath.Join(s.root, id+".json"))
+	b, e := os.ReadFile(name)
 	if os.IsNotExist(e) {
 		return v, ErrNotFound
 	}
@@ -374,7 +414,11 @@ func (s *Store) write(v Commitment) error {
 	if e != nil {
 		return e
 	}
-	f, e := os.CreateTemp(s.root, ".commitment-")
+	dir := s.repositoryDir(v.RepositoryID)
+	if e = os.MkdirAll(dir, 0700); e != nil {
+		return e
+	}
+	f, e := os.CreateTemp(dir, ".commitment-")
 	if e != nil {
 		return e
 	}
@@ -391,9 +435,12 @@ func (s *Store) write(v Commitment) error {
 		e = ce
 	}
 	if e == nil {
-		e = os.Rename(name, filepath.Join(s.root, v.ID+".json"))
+		e = os.Rename(name, filepath.Join(dir, v.ID+".json"))
 	}
 	return e
+}
+func (s *Store) repositoryDir(repositoryID string) string {
+	return filepath.Join(s.root, "repo-"+base64.RawURLEncoding.EncodeToString([]byte(repositoryID)))
 }
 func (s *Store) lock(fn func() error) error {
 	s.mu.Lock()

@@ -121,7 +121,9 @@ Reads keep missing scenario coverage, declared requirement conflicts, unsupporte
 environments, and expiring or expired exceptions explicit and attributable; the
 contract grants no repository authority and is not itself evidence of
 conformance. Records default beneath `$ACCESSIBILITY_COMMITMENT_STORAGE_ROOT`
-(`accessibility-commitments`).
+(`accessibility-commitments`) with repository-scoped records: unrelated
+corruption is isolated, while corruption in the requested collection is
+reported rather than silently returning an incomplete contract.
 
 ## Collaborative performance goals
 
