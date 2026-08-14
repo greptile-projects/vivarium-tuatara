@@ -30,6 +30,7 @@ import { ChangeSessionsCard } from "./change-sessions";
 import { PullRequestChecks } from "./pull-request-checks";
 import { AccessibilityAssessmentsWorkspace } from "./accessibility-assessments-workspace";
 import { PullPerformanceEvaluations } from "./pull-performance-evaluations";
+import { PullPrivacyReview } from "./pull-privacy-review";
 import { PullRequestPreviews } from "./pull-request-previews";
 import { DocumentationPullReviewCard } from "./documentation-pull-review";
 import { ExtensionContributions } from "./extension-contributions";
@@ -862,6 +863,7 @@ export function PullRequestDetail({
           Checks
         </a>
         <a href="#performance" className="px-3 py-3 text-sm font-semibold text-[var(--muted)] hover:text-[var(--ink)]">Performance</a>
+        <a href="#privacy" className="px-3 py-3 text-sm font-semibold text-[var(--muted)] hover:text-[var(--ink)]">Privacy</a>
         <a
           href="#files"
           className="px-3 py-3 text-sm font-semibold text-[var(--muted)] hover:text-[var(--ink)]"
@@ -871,6 +873,7 @@ export function PullRequestDetail({
       </nav>
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_19rem]">
         <main className="min-w-0 space-y-6">
+          <PullPrivacyReview repositoryID={repositoryID} pullRequestID={pullRequestID} sourceRevision={pull.source_commit_id} targetRevision={pull.target_commit_id} participant={participant} />
           <PullPerformanceEvaluations repositoryID={repositoryID} pullRequestID={pullRequestID} />
           <section
             id="conversation"

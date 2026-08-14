@@ -1700,6 +1700,15 @@ whenever dependencies change or the web job fails before it starts.
 
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
 
+  Pull privacy review at `/repositories/{id}/pulls/{pull_id}/privacy-review` compares exact source
+  and target data-flow/commitment revisions and derives collection, purpose, recipient, retention,
+  access, and user-control changes plus owner acknowledgement, notice, consent, migration, test,
+  and exception requirements. Collaborators and repository-bound read-only agents retain cited
+  challenges and mitigations; only human collaborators acknowledge all actions and residual risk.
+  Pull synchronization invalidates acceptance, while successor comparison retains earlier review
+  history beneath `$PRIVACY_REVIEW_STORAGE_ROOT` (default `privacy-reviews`). Review evidence grants
+  no data, repository, approval, or merge authority.
+
   Product direction at `/repositories/{id}/roadmap` compares exact product-opportunity versions
   against goals, capacity, dependencies, risks, governance decisions, and existing commitments.
   Only human repository participants commit versioned accepted/deferred/rejected outcomes; readers

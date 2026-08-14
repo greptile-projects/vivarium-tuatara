@@ -38,6 +38,18 @@ Anonymous and nonparticipant readers of public repositories receive declarations
 diagnostics only. Complete analyses, citations, actor attribution, and analysis-derived diagnostics
 are projected only to current repository participants and repository-bound read-only agents.
 
+### Pull privacy review
+
+- `GET /repositories/{id}/pulls/{pull_id}/privacy-review` returns the exact-revision comparison,
+  required actions, attributed discussion, acceptance state, and superseded history.
+- `POST .../privacy-review` compares source and target data-flow versions that match the current pull
+  commits. Classifications and follow-up requirements are derived from their flow and commitment
+  differences rather than accepted from the client.
+- `POST .../privacy-review/comments` retains collaborator or repository-bound agent challenges,
+  mitigations, and residual risk with optional citations into the reviewed source revision.
+- `POST .../privacy-review/acceptance` is human-collaborator-only, requires every derived action and
+  a residual-risk statement, and conflicts after the pull source revision moves.
+
 ## Product feedback
 
 `POST /repositories/{id}/feedback` accepts an authenticated repository reader's project, release,

@@ -36,6 +36,17 @@ analysis stale, and projections keep undeclared flows and declared/observed diff
 Records default beneath `$DATA_FLOW_STORAGE_ROOT` (`data-flows`) and grant no data or repository
 authority.
 
+Pull requests compare a candidate data-flow revision and its exact commitment/data-use versions
+with a target-revision flow at `/repositories/{id}/pulls/{pull_id}/privacy-review`. The server
+classifies changed collection, purposes, recipients, retention, access, and user controls, then
+derives required owner acknowledgement, notice, consent, migration, test, and exception work.
+Current collaborators and repository-bound read-only agents may retain bounded challenges,
+mitigations, residual-risk analysis, and source citations; only a human collaborator can acknowledge
+every required action. Acceptance binds the exact pull source revision. Synchronization makes it
+stale, and the next comparison retains the complete earlier review in history. Records default
+beneath `$PRIVACY_REVIEW_STORAGE_ROOT` (`privacy-reviews`) and grant no data, review, or merge
+authority.
+
 ## Accountable product direction
 
 The repository roadmap at `/repositories/{id}/roadmap` turns exact product-opportunity versions
