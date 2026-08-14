@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/acceptance"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/accessibilitycommitments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
@@ -346,6 +347,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	accessibilityCommitmentRoot := os.Getenv("ACCESSIBILITY_COMMITMENT_STORAGE_ROOT")
+	if accessibilityCommitmentRoot == "" {
+		accessibilityCommitmentRoot = "accessibility-commitments"
+	}
+	accessibilityCommitmentStore, err := accessibilitycommitments.New(accessibilityCommitmentRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	performanceEvidenceRoot := os.Getenv("PERFORMANCE_EVIDENCE_STORAGE_ROOT")
 	if performanceEvidenceRoot == "" {
 		performanceEvidenceRoot = "performance-evidence"
@@ -413,7 +422,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -557,6 +566,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var roadmapStore *roadmaps.Store
 	var outcomeValidationStore *outcomevalidations.Store
 	var projectFundStore *projectfunds.Store
+	var accessibilityCommitmentStore *accessibilitycommitments.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -619,6 +629,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			outcomeValidationStore = value
 		case *projectfunds.Store:
 			projectFundStore = value
+		case *accessibilitycommitments.Store:
+			accessibilityCommitmentStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -738,6 +750,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			pullRequestStore.ConfigurePerformanceEvidence(performanceEvidenceStore)
 			registerPerformanceEvidenceRoutes(mux, store, repositoryCatalog, authStore, performanceGoalStore, releaseStore, deploymentStore, pullRequestStore, performanceEvidenceStore)
 		}
+	}
+	if authStore != nil && repositoryCatalog != nil && accessibilityCommitmentStore != nil {
+		registerAccessibilityCommitmentRoutes(mux, repositoryCatalog, authStore, accessibilityCommitmentStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && productExperimentStore != nil {
 		registerProductExperimentRoutes(mux, repositoryCatalog, authStore, productExperimentStore, proposalStore, pullRequestStore, checkRunStore, releaseStore, deploymentStore, organizationStore)

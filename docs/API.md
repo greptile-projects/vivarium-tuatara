@@ -2786,6 +2786,28 @@ Payment retry therefore credits the originally accepted recipient.
 Delivery updates against any terminal task conflict instead of replacing its status, so they cannot
 disable a payment retry or make retained ownership eligible for reassignment.
 
+## Accessibility commitments
+
+Current repository participants publish a complete contract with `POST
+/repositories/{id}/accessibility-commitments` and a successor with `POST
+/repositories/{id}/accessibility-commitments/{commitment-id}/revisions`. The
+successor requires `expected_version`; stale writes return `409
+accessibility_commitment_conflict`. Repository readers use collection and detail
+`GET` endpoints.
+
+Each immutable revision targets a repository, documented journey, component, or
+release and defines standards and criteria, supported assistive technologies,
+target audiences and access needs, supported or explicitly unsupported
+environments, required test scenarios, a severity/response policy, accountable
+owners, testable requirements, expiring permitted exceptions, and typed links to
+roadmap outcomes, documentation, previews, and release policy. Reads derive
+attributed `missing_coverage`, `conflicting_requirement`,
+`unsupported_environment`, `expiring_exception`, and `expired_exception`
+diagnostics. Records default beneath `$ACCESSIBILITY_COMMITMENT_STORAGE_ROOT`
+(`accessibility-commitments`) in repository-scoped directories so corruption in
+one repository cannot hide or deny another repository's commitments; corruption
+inside the requested repository fails the collection read explicitly.
+
 ## Performance goals
 
 Current repository participants create a complete contract with `POST
