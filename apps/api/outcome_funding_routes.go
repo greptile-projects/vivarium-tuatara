@@ -41,6 +41,7 @@ type deliveryProposalAcceptanceInput struct {
 type deliverySelectionInput struct {
 	ExpectedVersion    int      `json:"expected_version"`
 	ProposalIDs        []string `json:"proposal_ids"`
+	ReviewerIDs        []string `json:"reviewer_ids"`
 	ConflictDisclosure string   `json:"conflict_disclosure"`
 	Rationale          string   `json:"rationale"`
 }
@@ -65,6 +66,15 @@ type deliveryControlRequest struct {
 	Reason          string                          `json:"reason"`
 	Amount          int64                           `json:"amount"`
 	Replacement     *projectfunds.DeliveryApplicant `json:"replacement"`
+}
+type milestoneReviewRequest struct {
+	ExpectedVersion int                               `json:"expected_version"`
+	Review          projectfunds.MilestoneReviewInput `json:"review"`
+}
+type milestoneRecoveryRequest struct {
+	ExpectedVersion int    `json:"expected_version"`
+	Action          string `json:"action"`
+	Reason          string `json:"reason"`
 }
 
 func registerOutcomeFundingRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *projectfunds.Store, orgs ...*organizations.Store) {
@@ -351,9 +361,16 @@ func registerOutcomeFundingRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			}
 			applicants = append(applicants, out.DeliveryProposals[pos].Applicant)
 		}
-		err = withCurrentDeliveryApplicants(applicants, "", actor.UserID, r.PathValue("id"), catalog, organizationStore, func() error {
+		if len(in.ReviewerIDs) == 0 {
+			in.ReviewerIDs = []string{actor.UserID}
+		}
+		authorityApplicants := append([]projectfunds.DeliveryApplicant(nil), applicants...)
+		for _, reviewerID := range in.ReviewerIDs {
+			authorityApplicants = append(authorityApplicants, projectfunds.DeliveryApplicant{Kind: "human", ID: reviewerID, SubmittedBy: actor.UserID})
+		}
+		err = withCurrentDeliveryApplicants(authorityApplicants, "", actor.UserID, r.PathValue("id"), catalog, organizationStore, func() error {
 			var mutationErr error
-			out, mutationErr = store.SelectDeliveryProposals(out.ID, actor.UserID, in.ExpectedVersion, in.ProposalIDs, in.ConflictDisclosure, in.Rationale)
+			out, mutationErr = store.SelectDeliveryProposals(out.ID, actor.UserID, in.ExpectedVersion, in.ProposalIDs, in.ReviewerIDs, in.ConflictDisclosure, in.Rationale)
 			return mutationErr
 		})
 		writeFundedOutcome(w, out, err, 201)
@@ -454,6 +471,54 @@ func registerOutcomeFundingRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			out, e = store.DecideDeliveryExpense(out.ID, r.PathValue("selection_id"), r.PathValue("expense_id"), actor.UserID, in.Decision, in.Reason, in.ExpectedVersion)
 			return e
 		})
+		writeFundedOutcome(w, out, err, 200)
+	})
+	mux.HandleFunc("POST /repositories/{id}/funded-outcomes/{outcome_id}/delivery-selections/{selection_id}/tasks/{task_id}/reviews", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok {
+			return
+		}
+		if actor.UserID == "" {
+			writeAPIError(w, 401, "authentication_required", "an attributable designated reviewer is required")
+			return
+		}
+		var in milestoneReviewRequest
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a versioned milestone decision, rationale, and outcome measures are required")
+			return
+		}
+		out, err := store.GetOutcome(r.PathValue("outcome_id"))
+		if err != nil || out.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "funded_outcome_not_found", "funded outcome not found")
+			return
+		}
+		err = catalog.WithCurrentDeliveryAuthority([]string{actor.UserID}, r.PathValue("id"), "", func() error {
+			var e error
+			out, e = store.ReviewMilestone(out.ID, r.PathValue("selection_id"), r.PathValue("task_id"), actor.UserID, in.ExpectedVersion, in.Review)
+			return e
+		})
+		writeFundedOutcome(w, out, deliveryAuthorityError(err), 200)
+	})
+	mux.HandleFunc("POST /repositories/{id}/funded-outcomes/{outcome_id}/delivery-selections/{selection_id}/tasks/{task_id}/recoveries", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok {
+			return
+		}
+		if actor.UserID == "" {
+			writeAPIError(w, 401, "authentication_required", "an attributable recovery actor is required")
+			return
+		}
+		var in milestoneRecoveryRequest
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a versioned recovery action and retained reason are required")
+			return
+		}
+		out, err := store.GetOutcome(r.PathValue("outcome_id"))
+		if err != nil || out.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "funded_outcome_not_found", "funded outcome not found")
+			return
+		}
+		out, err = store.RecoverMilestone(out.ID, r.PathValue("selection_id"), r.PathValue("task_id"), actor.UserID, in.Action, in.Reason, in.ExpectedVersion)
 		writeFundedOutcome(w, out, err, 200)
 	})
 	mux.HandleFunc("POST /repositories/{id}/funded-outcomes/{outcome_id}/delivery-selections/{selection_id}/controls", func(w http.ResponseWriter, r *http.Request) {

@@ -299,6 +299,23 @@ func derive(terms Terms, es []Entry) Balances {
 			b.Reserved -= e.Amount
 			b.Spent += e.Amount
 		}
+		if e.Kind == "milestone_award" && e.Status == "paid" {
+			b.Reserved -= e.Amount
+			b.Spent += e.Amount
+		}
+		if e.Kind == "milestone_payment_failure" && e.Status == "failed" {
+			b.Spent -= e.Amount
+			b.Reserved += e.Amount
+		}
+		if e.Kind == "milestone_refund" && e.Status == "refunded" {
+			b.Spent -= e.Amount
+			b.Available += e.Amount
+			b.Refunded += e.Amount
+		}
+		if (e.Kind == "milestone_withdrawal" || e.Kind == "milestone_timeout") && e.Status == "released" {
+			b.Reserved -= e.Amount
+			b.Available += e.Amount
+		}
 		if e.Kind == "delivery_reservation_release" && e.Status == "released" {
 			b.Reserved -= e.Amount
 			b.Available += e.Amount

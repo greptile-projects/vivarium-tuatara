@@ -117,14 +117,14 @@ func TestDeliverySelectionRequiresRecipientAcceptanceAndReservesOnlyCompensation
 		t.Fatal(err)
 	}
 	proposalID := out.DeliveryProposals[0].ID
-	if _, err = s.SelectDeliveryProposals(out.ID, "owner", out.Version, []string{proposalID}, "No conflicts known.", "Best evidence and availability."); !errors.Is(err, ErrConflict) {
+	if _, err = s.SelectDeliveryProposals(out.ID, "owner", out.Version, []string{proposalID}, []string{"owner"}, "No conflicts known.", "Best evidence and availability."); !errors.Is(err, ErrConflict) {
 		t.Fatalf("unaccepted selection err = %v", err)
 	}
 	out, err = s.AcceptDeliveryProposal(out.ID, proposalID, "contributor", out.Version)
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err = s.SelectDeliveryProposals(out.ID, "owner", out.Version, []string{proposalID}, "No financial or review conflicts known.", "Approach covers both milestones within budget.")
+	out, err = s.SelectDeliveryProposals(out.ID, "owner", out.Version, []string{proposalID}, []string{"owner"}, "No financial or review conflicts known.", "Approach covers both milestones within budget.")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestDeliverySelectionCompensatesFailedOutcomePersistence(t *testing.T) {
 	}
 	injected := errors.New("outcome disk unavailable")
 	s.afterDeliveryReservationWrite = func() error { return injected }
-	if _, err = s.SelectDeliveryProposals(out.ID, "owner", out.Version, []string{out.DeliveryProposals[0].ID}, "No conflicts.", "Best proposal."); !errors.Is(err, injected) {
+	if _, err = s.SelectDeliveryProposals(out.ID, "owner", out.Version, []string{out.DeliveryProposals[0].ID}, []string{"owner"}, "No conflicts.", "Best proposal."); !errors.Is(err, injected) {
 		t.Fatalf("selection error = %v", err)
 	}
 	fund, err = s.Get(fund.ID)
@@ -189,7 +189,7 @@ func TestDeliverySelectionCompensatesFailedOutcomePersistence(t *testing.T) {
 		t.Fatalf("failed selection changed outcome: %+v", current)
 	}
 	s.afterDeliveryReservationWrite = nil
-	current, err = s.SelectDeliveryProposals(out.ID, "owner", current.Version, []string{current.DeliveryProposals[0].ID}, "No conflicts.", "Best proposal.")
+	current, err = s.SelectDeliveryProposals(out.ID, "owner", current.Version, []string{current.DeliveryProposals[0].ID}, []string{"owner"}, "No conflicts.", "Best proposal.")
 	if err != nil || len(current.DeliverySelections) != 1 {
 		t.Fatalf("retry = %+v, %v", current, err)
 	}
@@ -221,7 +221,7 @@ func TestFundedDeliveryProjectsWorkSpendAndStewardIntervention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err = s.SelectDeliveryProposals(out.ID, "owner", out.Version, []string{out.DeliveryProposals[0].ID}, "None.", "Best fit.")
+	out, err = s.SelectDeliveryProposals(out.ID, "owner", out.Version, []string{out.DeliveryProposals[0].ID}, []string{"owner"}, "None.", "Best fit.")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,6 +367,104 @@ func TestPausedDeliveryRetainsReportingAndExpenseApprovalRecoversFromInterrupted
 	}
 }
 
+func TestMilestoneAcceptancePaysOnlyDesignatedEvidenceBackedResults(t *testing.T) {
+	s, fund, out, recipient, selection, task := selectedDelivery(t)
+	measure := OutcomeMeasure{Name: "p95 latency", Status: "met", Value: "184ms", Evidence: DeliveryResource{Kind: "release", ID: "release-1", Revision: "abc", Status: "published"}}
+	if _, err := s.ReviewMilestone(out.ID, selection.ID, task.ID, "outsider", out.Version, MilestoneReviewInput{Decision: "accepted", Rationale: "Looks good.", OutcomeMeasures: []OutcomeMeasure{measure}}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("undesignated review err = %v", err)
+	}
+	out, err := s.RecordDeliveryUpdate(out.ID, selection.ID, recipient, "contributor", out.Version, DeliveryUpdateInput{TaskID: task.ID, Status: "completed", Progress: 100, Summary: "Merged and released with the declared result measured.", Resources: []DeliveryResource{{Kind: "commit", ID: "abc", Revision: "abc", Status: "authored"}, {Kind: "pull", ID: "42", Revision: "abc", Status: "merged"}, {Kind: "check", ID: "ci", Revision: "abc", Status: "passed"}, {Kind: "preview", ID: "preview-1", Revision: "abc", Status: "approved"}, {Kind: "release", ID: "release-1", Revision: "abc", Status: "published"}, {Kind: "deployment", ID: "prod-1", Revision: "abc", Status: "successful"}}, Evidence: []DeliveryEvidence{{Kind: "handoff", Summary: "Maintainer received the exact commit.", Resource: DeliveryResource{Kind: "commit", ID: "abc", Revision: "abc", Status: "authored"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.ReviewMilestone(out.ID, selection.ID, task.ID, "owner", out.Version, MilestoneReviewInput{Decision: "partial_award", AwardAmount: 4000, Rationale: "The accepted contribution met the result; residual documentation was out of scope for this award.", Dissent: []string{"One reviewer preferred another benchmark window."}, OutcomeMeasures: []OutcomeMeasure{measure}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.DeliverySelections[0].Tasks[0]
+	if got.Status != "partially_accepted" || len(got.Reviews) != 1 || got.Reviews[0].Authorship[0] != "contributor" || got.Reviews[0].ReleasedAmount != 500 {
+		t.Fatalf("milestone review = %+v", got)
+	}
+	fund, err = s.Get(fund.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fund.Balances.Spent != 4000 || fund.Balances.Reserved != 4500 || fund.Balances.Available != 1500 {
+		t.Fatalf("partial award balances = %+v", fund.Balances)
+	}
+	if _, err = s.ReviewMilestone(out.ID, selection.ID, task.ID, "owner", out.Version, MilestoneReviewInput{Decision: "accepted", Rationale: "Duplicate.", OutcomeMeasures: []OutcomeMeasure{measure}}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate award err = %v", err)
+	}
+	_ = recipient
+}
+
+func TestMilestoneCorrectionAppealAndPaymentRecoveryAreDeterministic(t *testing.T) {
+	s, fund, out, recipient, selection, task := selectedDelivery(t)
+	var err error
+	out, err = s.RecordDeliveryUpdate(out.ID, selection.ID, recipient, "contributor", out.Version, DeliveryUpdateInput{TaskID: task.ID, Status: "completed", Progress: 100, Summary: "Candidate result.", Resources: []DeliveryResource{{Kind: "commit", ID: "abc", Revision: "abc", Status: "authored"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.ReviewMilestone(out.ID, selection.ID, task.ID, "owner", out.Version, MilestoneReviewInput{Decision: "correction_requested", Rationale: "The release observation is missing.", Dissent: []string{"Implementation checks did pass."}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.RecoverMilestone(out.ID, selection.ID, task.ID, "contributor", "appeal", "The release was delayed independently of the merged contribution.", out.Version)
+	if err != nil || out.DeliverySelections[0].Tasks[0].Status != "appealed" {
+		t.Fatalf("appeal = %+v, %v", out, err)
+	}
+	measure := OutcomeMeasure{Name: "correctness", Status: "met", Value: "all checks passed", Evidence: DeliveryResource{Kind: "check", ID: "ci", Revision: "abc", Status: "passed"}}
+	out, err = s.ReviewMilestone(out.ID, selection.ID, task.ID, "owner", out.Version, MilestoneReviewInput{Decision: "accepted", Rationale: "Appeal resolved from exact release evidence.", OutcomeMeasures: []OutcomeMeasure{measure}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.RecoverMilestone(out.ID, selection.ID, task.ID, "owner", "payment_failed", "Payment processor rejected the transfer.", out.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fund, _ = s.Get(fund.ID)
+	if fund.Balances.Spent != 0 || fund.Balances.Reserved != 9000 {
+		t.Fatalf("failed payment balances = %+v", fund.Balances)
+	}
+	out, err = s.RecoverMilestone(out.ID, selection.ID, task.ID, "owner", "retry_payment", "Recipient details were corrected.", out.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.RecoverMilestone(out.ID, selection.ID, task.ID, "owner", "refund", "Accepted refund under the original fund policy.", out.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fund, _ = s.Get(fund.ID)
+	if fund.Balances.Spent != 0 || fund.Balances.Refunded != 4500 || fund.Balances.Available != 5500 {
+		t.Fatalf("refund balances = %+v", fund.Balances)
+	}
+}
+
+func TestMilestoneWithdrawalAndTimeoutReleaseOnlyTheirAllocation(t *testing.T) {
+	s, fund, out, _, selection, task := selectedDelivery(t)
+	var err error
+	out, err = s.RecoverMilestone(out.ID, selection.ID, task.ID, "contributor", "withdraw", "Recipient cannot complete this milestone.", out.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fund, _ = s.Get(fund.ID)
+	if fund.Balances.Available != 5500 || fund.Balances.Reserved != 4500 {
+		t.Fatalf("withdrawal balances = %+v", fund.Balances)
+	}
+
+	s2, fund2, out2, _, selection2, task2 := selectedDelivery(t)
+	deadline := out2.Revisions[len(out2.Revisions)-1].Terms.Deadline
+	s2.now = func() time.Time { return deadline.Add(time.Second) }
+	out2, err = s2.RecoverMilestone(out2.ID, selection2.ID, task2.ID, "owner", "timeout", "The original acceptance window expired.", out2.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fund2, _ = s2.Get(fund2.ID)
+	if fund2.Balances.Available != 5500 || out2.DeliverySelections[0].Tasks[0].Status != "timed_out" {
+		t.Fatalf("timeout = %+v %+v", fund2.Balances, out2.DeliverySelections[0].Tasks[0])
+	}
+}
+
 func selectedDelivery(t *testing.T) (*Store, Fund, FundedOutcome, DeliveryApplicant, DeliverySelection, DeliveryTask) {
 	t.Helper()
 	s, fund := outcomeStore(t)
@@ -394,7 +492,7 @@ func selectedDelivery(t *testing.T) (*Store, Fund, FundedOutcome, DeliveryApplic
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err = s.SelectDeliveryProposals(out.ID, "owner", out.Version, []string{out.DeliveryProposals[0].ID}, "None.", "Best fit.")
+	out, err = s.SelectDeliveryProposals(out.ID, "owner", out.Version, []string{out.DeliveryProposals[0].ID}, []string{"owner"}, "None.", "Best fit.")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -420,6 +420,11 @@ whenever dependencies change or the web job fails before it starts.
   Replacement must name a different principal; a no-op reassignment cannot clear revoked access.
   Revocation records the assigned principals, preventing a former recipient from mutating retained
   completed-task history after unfinished work moves to a live validated replacement.
+  Selected milestones bind deterministic shares of the original allocation and current project
+  participant reviewers. Evidence-bound acceptance, correction, rejection, partial award, dispute,
+  dissent, appeal, timeout, withdrawal, payment failure/retry, and refund records move or release
+  only the milestone reservation through durable fund/outcome publication. Compensation acceptance
+  never supplies code review, merge, release, deployment, credential, or repository authority.
 
   Reciprocal roadmap learning retains feedback-specific decision, preview, delivery, rejection, and
   measured-outcome updates. Reporters see only updates citing their own feedback, can validate the

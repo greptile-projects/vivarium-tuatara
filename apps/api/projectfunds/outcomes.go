@@ -110,7 +110,7 @@ func (s *Store) CreateOutcome(repositoryID, fundID, actor string, terms OutcomeT
 			return ErrInvalid
 		}
 		now := s.now()
-		out = FundedOutcome{ID: randomID(), RepositoryID: repositoryID, FundID: fundID, Version: 1, Status: "open", CreatedBy: actor, CreatedAt: now, UpdatedAt: now, AuthorityNote: "Funding and pledges grant no repository, Git, task, credential, review, acceptance, merge, deployment, or security authority."}
+		out = FundedOutcome{ID: randomID(), RepositoryID: repositoryID, FundID: fundID, Version: 1, Status: "open", CreatedBy: actor, CreatedAt: now, UpdatedAt: now, AuthorityNote: "Funding and compensation acceptance grant no repository, Git, task, credential, code review, merge, release, deployment, or security authority."}
 		out.Revisions = []OutcomeRevision{{Version: 1, Terms: normalizeOutcomeTerms(terms), ActorID: actor, Reason: "initial funding contract", CreatedAt: now}}
 		out.Replans = []Replan{{Kind: "insufficient_funds", ActorID: actor, Reason: "Funding opened below its declared budget.", CreatedAt: now}}
 		if err := s.writeOutcome(out); err != nil {
@@ -313,6 +313,15 @@ func (s *Store) projectOutcome(v *FundedOutcome) error {
 	v.Diagnostics = nil
 	for i := range v.DeliverySelections {
 		projectDeliveryExecution(&v.DeliverySelections[i], s.now())
+		for j := range v.DeliverySelections[i].Tasks {
+			task := &v.DeliverySelections[i].Tasks[j]
+			if task.Reviews == nil {
+				task.Reviews = []MilestoneReview{}
+			}
+			if task.Recoveries == nil {
+				task.Recoveries = []MilestoneRecovery{}
+			}
+		}
 	}
 	for _, p := range v.Pledges {
 		if p.Status == "active" {
