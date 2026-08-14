@@ -64,7 +64,7 @@ func registerAccessibilityReportRoutes(mux *http.ServeMux, catalog *repositories
 		if !ok {
 			return
 		}
-		out, err := reports.Get(r.PathValue("report_id"))
+		out, err := reports.Get(r.PathValue("id"), r.PathValue("report_id"))
 		if err != nil || out.RepositoryID != r.PathValue("id") {
 			writeAPIError(w, 404, "accessibility_report_not_found", "accessibility report not found")
 			return
@@ -80,7 +80,7 @@ func registerAccessibilityReportRoutes(mux *http.ServeMux, catalog *repositories
 			writeAPIError(w, 403, "accessibility_attempt_forbidden", "only a current repository participant may run a reproduction scenario")
 			return
 		}
-		current, err := reports.Get(r.PathValue("report_id"))
+		current, err := reports.Get(r.PathValue("id"), r.PathValue("report_id"))
 		if err != nil || current.RepositoryID != r.PathValue("id") {
 			writeAPIError(w, 404, "accessibility_report_not_found", "accessibility report not found")
 			return
@@ -90,7 +90,7 @@ func registerAccessibilityReportRoutes(mux *http.ServeMux, catalog *repositories
 			writeAPIError(w, 400, "invalid_request", "a bounded environment and classified result are required")
 			return
 		}
-		out, err := reports.AddAttempt(current.ID, actor.UserID, in)
+		out, err := reports.AddAttempt(current.RepositoryID, current.ID, actor.UserID, in)
 		writeAccessibilityReport(w, accessibilityreports.Project(out, actor.UserID, true), err, 201)
 	})
 }

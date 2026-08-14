@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -86,6 +87,11 @@ func New(root string) (*Store, error) {
 func (s *Store) Create(repo, reporter string, x Report) (Report, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lock(syscall.LOCK_EX)
+	if err != nil {
+		return Report{}, err
+	}
+	defer unlock()
 	x.RepositoryID = repo
 	x.ReporterID = reporter
 	x.ID = id()
@@ -97,10 +103,15 @@ func (s *Store) Create(repo, reporter string, x Report) (Report, error) {
 	}
 	return x, s.write(x)
 }
-func (s *Store) AddAttempt(reportID, runner string, x Attempt) (Report, error) {
+func (s *Store) AddAttempt(repo, reportID, runner string, x Attempt) (Report, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	v, e := s.get(reportID)
+	unlock, err := s.lock(syscall.LOCK_EX)
+	if err != nil {
+		return Report{}, err
+	}
+	defer unlock()
+	v, e := s.get(repo, reportID)
 	if e != nil {
 		return Report{}, e
 	}
@@ -115,11 +126,28 @@ func (s *Store) AddAttempt(reportID, runner string, x Attempt) (Report, error) {
 	v.UpdatedAt = x.CreatedAt
 	return v, s.write(v)
 }
-func (s *Store) Get(id string) (Report, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.get(id) }
+func (s *Store) Get(repo, id string) (Report, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock(syscall.LOCK_SH)
+	if err != nil {
+		return Report{}, err
+	}
+	defer unlock()
+	return s.get(repo, id)
+}
 func (s *Store) List(repo string) ([]Report, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	es, e := os.ReadDir(s.root)
+	unlock, err := s.lock(syscall.LOCK_SH)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	es, e := os.ReadDir(s.repositoryDir(repo))
+	if errors.Is(e, os.ErrNotExist) {
+		return []Report{}, nil
+	}
 	if e != nil {
 		return nil, e
 	}
@@ -128,7 +156,7 @@ func (s *Store) List(repo string) ([]Report, error) {
 		if f.IsDir() || filepath.Ext(f.Name()) != ".json" {
 			continue
 		}
-		v, e := s.get(strings.TrimSuffix(f.Name(), ".json"))
+		v, e := s.get(repo, strings.TrimSuffix(f.Name(), ".json"))
 		if e != nil {
 			return nil, e
 		}
@@ -155,7 +183,7 @@ func Project(x Report, viewer string, participant bool) Report {
 
 func validReport(x Report) bool {
 	kinds := map[string]bool{"release": true, "page": true, "documentation_journey": true, "preview": true}
-	if !kinds[x.Target.Kind] || !bounded(x.Target.ResourceID, 256) || !bounded(x.Target.Revision, 256) || len(x.AccessNeeds) == 0 || len(x.AccessNeeds) > 20 || len(x.Steps) == 0 || len(x.Steps) > 50 || !bounded(x.ExpectedOutcome, 4000) || len(x.Evidence) > 12 {
+	if !kinds[x.Target.Kind] || !bounded(x.Target.ResourceID, 256) || !bounded(x.Target.Revision, 256) || len(x.AccessNeeds) == 0 || len(x.AccessNeeds) > 20 || len(x.Steps) == 0 || len(x.Steps) > 50 || !bounded(x.ExpectedOutcome, 4000) || len(x.Evidence) == 0 || len(x.Evidence) > 12 {
 		return false
 	}
 	for _, value := range append(append([]string{}, x.AccessNeeds...), x.Steps...) {
@@ -183,11 +211,11 @@ func bounded(value string, limit int) bool {
 	value = strings.TrimSpace(value)
 	return value != "" && len(value) <= limit
 }
-func (s *Store) get(id string) (Report, error) {
-	if len(id) != 32 {
+func (s *Store) get(repo, id string) (Report, error) {
+	if !validID(repo) || !validID(id) {
 		return Report{}, ErrNotFound
 	}
-	b, e := os.ReadFile(filepath.Join(s.root, id+".json"))
+	b, e := os.ReadFile(filepath.Join(s.repositoryDir(repo), id+".json"))
 	if errors.Is(e, os.ErrNotExist) {
 		return Report{}, ErrNotFound
 	}
@@ -202,6 +230,47 @@ func (s *Store) write(x Report) error {
 	if e != nil {
 		return e
 	}
-	return os.WriteFile(filepath.Join(s.root, x.ID+".json"), b, 0600)
+	dir := s.repositoryDir(x.RepositoryID)
+	if e = os.MkdirAll(dir, 0700); e != nil {
+		return e
+	}
+	tmp, e := os.CreateTemp(dir, ".report-*.tmp")
+	if e != nil {
+		return e
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if e = tmp.Chmod(0600); e == nil {
+		_, e = tmp.Write(b)
+	}
+	if e == nil {
+		e = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); e == nil {
+		e = closeErr
+	}
+	if e != nil {
+		return e
+	}
+	return os.Rename(name, filepath.Join(dir, x.ID+".json"))
+}
+func (s *Store) repositoryDir(repo string) string { return filepath.Join(s.root, repo) }
+func validID(value string) bool {
+	if len(value) != 32 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+func (s *Store) lock(mode int) (func(), error) {
+	f, err := os.OpenFile(filepath.Join(s.root, ".lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err = syscall.Flock(int(f.Fd()), mode); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil
 }
 func id() string { b := make([]byte, 16); _, _ = rand.Read(b); return hex.EncodeToString(b) }

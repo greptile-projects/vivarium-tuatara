@@ -2830,7 +2830,9 @@ report's frozen revision, declares a bounded `workspace` or `preview`, browser, 
 technology, and classifies the observation as `reproducible`, `intermittent`,
 `environment_specific`, or `unconfirmed`. Attempts and their redacted artifacts are append-only and
 grant no repository, credential, preview, or deployment authority. Records default beneath
-`$ACCESSIBILITY_REPORT_STORAGE_ROOT` (`accessibility-reports`).
+`$ACCESSIBILITY_REPORT_STORAGE_ROOT` (`accessibility-reports`) in repository-scoped directories;
+cross-process mutations use a shared lock and atomically published files so concurrent attempts are
+not lost and corruption in another repository cannot deny this collection.
 
 ## Performance goals
 
