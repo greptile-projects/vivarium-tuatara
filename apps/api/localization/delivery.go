@@ -241,6 +241,20 @@ func (s *Store) EvaluateDelivery(repo, pullID, releaseID, revision, branch strin
 		return r, e
 	}
 	review, _ := s.Get(repo, pullID, revision)
+	if s.resolvePlanVersions != nil && len(review.VerificationCandidates) > 0 {
+		seen, planIDs := map[string]bool{}, []string{}
+		for _, candidate := range review.VerificationCandidates {
+			if candidate.LocalePlanID != "" && !seen[candidate.LocalePlanID] {
+				seen[candidate.LocalePlanID] = true
+				planIDs = append(planIDs, candidate.LocalePlanID)
+			}
+		}
+		versions, resolveErr := s.resolvePlanVersions(repo, planIDs)
+		if resolveErr != nil {
+			return r, resolveErr
+		}
+		ApplyLocalePlanVersions(&review, versions)
+	}
 	for _, p := range d.Policies {
 		if p.Branch != branch || !deliverySelected(p.Audiences, audiences) || !deliverySelected(p.RiskClasses, risks) {
 			continue
