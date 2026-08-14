@@ -2783,6 +2783,8 @@ task's remaining reservation or prior award. Completed, accepted, partially acce
 payment-failed, withdrawn, timed-out, and refunded tasks retain their recipient when a steward
 uses `replace_recipient`; only unfinished work moves to the distinct, live-validated replacement.
 Payment retry therefore credits the originally accepted recipient.
+Delivery updates against any terminal task conflict instead of replacing its status, so they cannot
+disable a payment retry or make retained ownership eligible for reassignment.
 
 ## Performance goals
 

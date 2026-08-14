@@ -435,6 +435,9 @@ func TestMilestoneCorrectionAppealAndPaymentRecoveryAreDeterministic(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err = s.RecordDeliveryUpdate(out.ID, selection.ID, recipient, "contributor", out.Version, DeliveryUpdateInput{TaskID: task.ID, Status: "active", Progress: 100, Summary: "Attempt to reopen accepted work after payment failure.", Resources: []DeliveryResource{{Kind: "check", ID: "ci", Revision: "abc", Status: "passed"}}}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("payment-failed reopen err = %v", err)
+	}
 	replacement := DeliveryApplicant{Kind: "human", ID: "replacement", SubmittedBy: "owner"}
 	out, err = s.ControlDelivery(out.ID, selection.ID, "owner", "replace_recipient", "Reassign only the unfinished sibling milestone.", 0, &replacement, out.Version)
 	if err != nil {

@@ -120,15 +120,15 @@ func (s *Store) RecordDeliveryUpdate(outcomeID, selectionID string, recipient De
 		if deliveryRecipientRevoked(sel.Execution, recipient) {
 			return ErrForbidden
 		}
+		task := deliveryTask(sel, in.TaskID)
+		if task == nil || deliveryTaskTerminal(*task) {
+			return ErrConflict
+		}
 		now := s.now()
 		v.Version++
 		v.UpdatedAt = now
 		sel.Execution.Updates = append(sel.Execution.Updates, DeliveryUpdate{ID: randomID(), TaskID: in.TaskID, RecipientKind: recipient.Kind, RecipientID: recipient.ID, ActorID: actor, Status: in.Status, Progress: in.Progress, Summary: strings.TrimSpace(in.Summary), Blockers: in.Blockers, Resources: in.Resources, Evidence: in.Evidence, ForecastAt: in.ForecastAt, AgentMinutes: in.AgentMinutes, CreatedAt: now})
-		for i := range sel.Tasks {
-			if sel.Tasks[i].ID == in.TaskID {
-				sel.Tasks[i].Status = in.Status
-			}
-		}
+		task.Status = in.Status
 		projectDeliveryExecution(sel, now)
 		if err := s.writeOutcome(v); err != nil {
 			return err
