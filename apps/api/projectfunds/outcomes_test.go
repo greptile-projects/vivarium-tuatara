@@ -444,8 +444,12 @@ func TestMilestoneCorrectionAppealAndPaymentRecoveryAreDeterministic(t *testing.
 }
 
 func TestMilestoneWithdrawalAndTimeoutReleaseOnlyTheirAllocation(t *testing.T) {
-	s, fund, out, _, selection, task := selectedDelivery(t)
+	s, fund, out, recipient, selection, task := selectedDelivery(t)
 	var err error
+	out, err = s.RecordDeliveryUpdate(out.ID, selection.ID, recipient, "contributor", out.Version, DeliveryUpdateInput{TaskID: task.ID, Status: "completed", Progress: 100, Summary: "Completed result awaiting compensation review.", Resources: []DeliveryResource{{Kind: "check", ID: "ci", Revision: "abc", Status: "passed"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	out, err = s.RecoverMilestone(out.ID, selection.ID, task.ID, "contributor", "withdraw", "Recipient cannot complete this milestone.", out.Version)
 	if err != nil {
 		t.Fatal(err)
@@ -456,6 +460,10 @@ func TestMilestoneWithdrawalAndTimeoutReleaseOnlyTheirAllocation(t *testing.T) {
 	}
 	if _, err = s.RecoverMilestone(out.ID, selection.ID, task.ID, "contributor", "withdraw", "Duplicate withdrawal.", out.Version); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("duplicate withdrawal err = %v", err)
+	}
+	measure := OutcomeMeasure{Name: "result", Status: "met", Value: "passed", Evidence: DeliveryResource{Kind: "check", ID: "ci", Revision: "abc", Status: "passed"}}
+	if _, err = s.ReviewMilestone(out.ID, selection.ID, task.ID, "owner", out.Version, MilestoneReviewInput{Decision: "accepted", Rationale: "A terminal release cannot be reopened by a later award.", OutcomeMeasures: []OutcomeMeasure{measure}}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("post-withdrawal award err = %v", err)
 	}
 	fund, _ = s.Get(fund.ID)
 	if fund.Balances.Available != 5500 || fund.Balances.Reserved != 4500 {
@@ -540,6 +548,74 @@ func TestCancelRemainingUsesAwardAndReleaseProjection(t *testing.T) {
 	fund, _ = s.Get(fund.ID)
 	if fund.Balances.Reserved != 0 || fund.Balances.Available != 5500 || fund.Balances.Spent != 4500 {
 		t.Fatalf("award cancellation balances = %+v", fund.Balances)
+	}
+}
+
+func TestCancelRemainingAggregatesEveryRetainedAwardHistory(t *testing.T) {
+	s, fund, out, recipient, selection, task := selectedDelivery(t)
+	var err error
+	out, err = s.RecordDeliveryUpdate(out.ID, selection.ID, recipient, "contributor", out.Version, DeliveryUpdateInput{TaskID: task.ID, Status: "completed", Progress: 100, Summary: "Measured partial result.", Resources: []DeliveryResource{{Kind: "check", ID: "ci", Revision: "abc", Status: "passed"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	measure := OutcomeMeasure{Name: "result", Status: "met", Value: "bounded result", Evidence: DeliveryResource{Kind: "check", ID: "ci", Revision: "abc", Status: "passed"}}
+	out, err = s.ReviewMilestone(out.ID, selection.ID, task.ID, "owner", out.Version, MilestoneReviewInput{Decision: "partial_award", AwardAmount: 4000, Rationale: "Accept the bounded portion.", OutcomeMeasures: []OutcomeMeasure{measure}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.RecoverMilestone(out.ID, selection.ID, task.ID, "owner", "payment_failed", "Processor rejected the first payment.", out.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ReviewMilestone(out.ID, selection.ID, task.ID, "owner", out.Version, MilestoneReviewInput{Decision: "partial_award", AwardAmount: 4000, Rationale: "Do not create a second award; retry the retained one.", OutcomeMeasures: []OutcomeMeasure{measure}}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("second award err = %v", err)
+	}
+
+	// Retained records from before the single-award invariant can contain more
+	// than one award history. Cancellation must still match their complete ledger.
+	err = s.lock(func() error {
+		stored, readErr := s.readOutcome(out.ID)
+		if readErr != nil {
+			return readErr
+		}
+		sel := deliverySelection(stored, selection.ID)
+		retainedTask := deliveryTask(sel, task.ID)
+		now := s.now()
+		retainedTask.Reviews = append(retainedTask.Reviews, MilestoneReview{ID: randomID(), Decision: "partial_award", ReviewerID: "owner", Rationale: "Retained successor award.", AwardAmount: 4000, PaymentStatus: "paid", CreatedAt: now})
+		retainedTask.Status = "partially_accepted"
+		stored.Version++
+		stored.UpdatedAt = now
+		storedFund, readErr := s.read(stored.FundID)
+		if readErr != nil {
+			return readErr
+		}
+		storedFund.Ledger = append(storedFund.Ledger, Entry{ID: randomID(), Kind: "milestone_award", Amount: 4000, Status: "paid", ExternalReference: stored.ID + ":retained-award", ContributorID: task.RecipientID, ActorID: "owner", Note: "Retained successor award.", CreatedAt: now})
+		storedFund.Version++
+		storedFund.UpdatedAt = now
+		storedFund.Balances = derive(storedFund.Terms, storedFund.Ledger)
+		if writeErr := s.write(storedFund); writeErr != nil {
+			return writeErr
+		}
+		return s.writeOutcome(stored)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.GetOutcome(out.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution := out.DeliverySelections[0].Execution
+	if execution.Spent != 4000 || execution.Released != 500 {
+		t.Fatalf("retained projection = %+v", execution)
+	}
+	out, err = s.ControlDelivery(out.ID, selection.ID, "owner", "cancel_remaining", "Release the exact retained remainder.", 0, nil, out.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fund, _ = s.Get(fund.ID)
+	if fund.Balances.Reserved != 0 || fund.Balances.Available != 6000 || fund.Balances.Spent != 4000 {
+		t.Fatalf("retained cancellation balances = %+v", fund.Balances)
 	}
 }
 

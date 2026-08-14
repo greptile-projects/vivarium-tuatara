@@ -507,7 +507,8 @@ func projectDeliveryExecution(s *DeliverySelection, now time.Time) {
 	}
 	for i := range s.Tasks {
 		task := &s.Tasks[i]
-		if award := lastAward(task); award != nil {
+		for j := range task.Reviews {
+			award := &task.Reviews[j]
 			e.Released += award.ReleasedAmount
 			if award.PaymentStatus == "paid" {
 				e.Spent += award.AwardAmount

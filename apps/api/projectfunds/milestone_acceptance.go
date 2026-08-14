@@ -74,7 +74,7 @@ func (s *Store) ReviewMilestone(outcomeID, selectionID, taskID, reviewer string,
 		if update == nil {
 			return ErrConflict
 		}
-		if taskPaid(task) {
+		if lastAward(task) != nil || task.Status == "withdrawn" || task.Status == "timed_out" || task.Status == "refunded" {
 			return ErrConflict
 		}
 		amount := int64(0)
