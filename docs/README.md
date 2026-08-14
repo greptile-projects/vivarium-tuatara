@@ -54,6 +54,8 @@ deletion, telemetry, and recipient rules, synthetic journeys, and current human 
 Each retained run must bind the pull's exact source revision, a matching data-flow version, and an
 existing ephemeral network-isolated preview; production data is rejected. Pull evidence contains
 only bounded sanitized log/trace/artifact metadata, content digests, rule outcomes, and coverage.
+Caller-authored result summaries and artifact display text are never retained: the server replaces
+them with deterministic descriptions and restricts remaining labels to bounded identifier syntax.
 Current evidence plus a named privacy-owner acknowledgement governs ordinary merge readiness and
 the same exact revision/path context governs release readiness. Repository-owner exceptions name
 only affected rules, expire within 90 days, preserve rationale, and require linked follow-up work.

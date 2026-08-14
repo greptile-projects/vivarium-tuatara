@@ -46,22 +46,34 @@ func TestExactEvidenceAcknowledgementAndScopedExceptionGovernReadiness(t *testin
 	}
 }
 
-func TestRejectsProductionDataAndSensitiveArtifactSummaries(t *testing.T) {
-	s, _ := New(t.TempDir())
+func TestRejectsProductionDataAndCanonicalizesAllCallerDisplayText(t *testing.T) {
+	root := t.TempDir()
+	s, _ := New(root)
 	base := Run{PullRequestID: "p", PreviewID: "v", Revision: strings.Repeat("a", 40), Journey: "j", DataFlowID: "f", DataFlowVersion: 1, Isolation: "ephemeral_network_none", Results: []Result{{Rule: "consent", Outcome: "passed", Summary: "synthetic"}}}
 	base.ProductionData = true
 	if _, e := s.AddRun("r", "u", base); e != ErrInvalid {
 		t.Fatalf("production data accepted: %v", e)
 	}
 	base.ProductionData = false
-	base.Artifacts = []Artifact{{Kind: "log", Name: "x", Digest: strings.Repeat("b", 64), Summary: "Authorization: Bearer secret", SizeBytes: 1}}
-	if _, e := s.AddRun("r", "u", base); e != ErrInvalid {
-		t.Fatalf("secret-like summary accepted: %v", e)
+	base.Artifacts = []Artifact{{Kind: "log", Name: "token: abc123", Digest: strings.Repeat("b", 64), Summary: "Authorization: Bearer secret for Ada Lovelace", SizeBytes: 1}}
+	base.Results[0].Summary = "token: abc123; Ada Lovelace; ada@example.com; +1 (415) 555-0100; 123 Main Street"
+	created, e := s.AddRun("r", "u", base)
+	if e != nil {
+		t.Fatal(e)
 	}
-	base.Artifacts = nil
-	base.Results[0].Summary = "Customer name: Ada Lovelace, ada@example.com, +1 (415) 555-0100, 123 Main Street"
-	if _, e := s.AddRun("r", "u", base); e != ErrInvalid {
-		t.Fatalf("personal data in result summary accepted: %v", e)
+	if created.Results[0].Summary != "consent passed in isolated synthetic journey" || created.Artifacts[0].Name != "log-1" || created.Artifacts[0].Summary != "sanitized log metadata retained; payload omitted" {
+		t.Fatalf("caller display text was retained: %#v", created)
+	}
+	reopened, _ := New(root)
+	readiness, e := reopened.Evaluate("r", base.Revision, "main", "p", nil)
+	if e != nil || len(readiness.Runs) != 1 {
+		t.Fatalf("durable evidence missing: %#v %v", readiness, e)
+	}
+	encoded := readiness.Runs[0].Results[0].Summary + readiness.Runs[0].Artifacts[0].Name + readiness.Runs[0].Artifacts[0].Summary
+	for _, sensitive := range []string{"abc123", "Ada Lovelace", "example.com", "555-0100", "Main Street", "Bearer"} {
+		if strings.Contains(encoded, sensitive) {
+			t.Fatalf("sensitive caller text persisted in readiness: %q", encoded)
+		}
 	}
 }
 

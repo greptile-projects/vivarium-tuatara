@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,6 +20,7 @@ var ErrInvalid = errors.New("invalid privacy check record")
 var ErrNotFound = errors.New("privacy check record not found")
 
 var allowedRules = map[string]bool{"collection": true, "consent": true, "minimization": true, "access": true, "retention": true, "export": true, "deletion": true, "telemetry": true, "recipient": true}
+var safeIdentifierPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]{0,127}$`)
 
 type Policy struct {
 	ID               string    `json:"id"`
@@ -166,23 +168,33 @@ func (s *Store) AddRun(repo, actor string, v Run) (Run, error) {
 	v.CreatedBy = actor
 	v.CreatedAt = s.now()
 	clean(&v.Coverage)
-	if !validCommit(v.Revision) || v.PullRequestID == "" || v.PreviewID == "" || v.Journey == "" || v.DataFlowID == "" || v.DataFlowVersion < 1 || v.Isolation != "ephemeral_network_none" || v.ProductionData || len(v.Results) == 0 {
+	if !validCommit(v.Revision) || v.PullRequestID == "" || v.PreviewID == "" || !safeIdentifier(v.Journey) || v.DataFlowID == "" || v.DataFlowVersion < 1 || v.Isolation != "ephemeral_network_none" || v.ProductionData || len(v.Results) == 0 {
 		return v, ErrInvalid
 	}
+	for _, label := range v.Coverage {
+		if !safeIdentifier(label) {
+			return v, ErrInvalid
+		}
+	}
 	seen := map[string]bool{}
-	for _, x := range v.Results {
-		if !allowedRules[x.Rule] || (x.Outcome != "passed" && x.Outcome != "failed") || x.Summary == "" || len(x.Summary) > 1000 || looksSensitive(x.Summary) || seen[x.Rule] {
+	for i := range v.Results {
+		x := &v.Results[i]
+		if !allowedRules[x.Rule] || (x.Outcome != "passed" && x.Outcome != "failed") || seen[x.Rule] {
 			return v, ErrInvalid
 		}
 		seen[x.Rule] = true
+		x.Summary = fmt.Sprintf("%s %s in isolated synthetic journey", x.Rule, x.Outcome)
 	}
 	var totalBytes int64
-	for _, a := range v.Artifacts {
+	for i := range v.Artifacts {
+		a := &v.Artifacts[i]
 		_, digestErr := hex.DecodeString(a.Digest)
 		totalBytes += a.SizeBytes
-		if !map[string]bool{"log": true, "trace": true, "artifact": true}[a.Kind] || a.Name == "" || len(a.Digest) != 64 || digestErr != nil || a.Summary == "" || a.SizeBytes < 0 || a.SizeBytes > 5<<20 || totalBytes > 12<<20 || looksSensitive(a.Summary) {
+		if !map[string]bool{"log": true, "trace": true, "artifact": true}[a.Kind] || len(a.Digest) != 64 || digestErr != nil || a.SizeBytes < 0 || a.SizeBytes > 5<<20 || totalBytes > 12<<20 {
 			return v, ErrInvalid
 		}
+		a.Name = fmt.Sprintf("%s-%d", a.Kind, i+1)
+		a.Summary = fmt.Sprintf("sanitized %s metadata retained; payload omitted", a.Kind)
 	}
 	r.Runs = append(r.Runs, v)
 	return v, s.write(repo, r)
@@ -386,18 +398,7 @@ func selected(patterns, paths []string) bool {
 	return false
 }
 
-var emailPattern = regexp.MustCompile(`(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b`)
-var phonePattern = regexp.MustCompile(`\b(?:\+?\d[\d ()-]{7,}\d)\b`)
-var streetPattern = regexp.MustCompile(`(?i)\b\d{1,6}\s+[a-z0-9.' -]{2,40}\s(?:street|st|road|rd|avenue|ave|lane|ln|drive|dr|boulevard|blvd)\b`)
-var namedPersonPattern = regexp.MustCompile(`(?i)\b(?:customer|user|person|full[ _-]?name|name)\s*[:=]\s*[a-z][a-z.' -]{1,80}`)
-
-func looksSensitive(v string) bool {
-	v = strings.ToLower(v)
-	for _, x := range []string{"authorization:", "bearer ", "cookie:", "password=", "email="} {
-		if strings.Contains(v, x) {
-			return true
-		}
-	}
-	return emailPattern.MatchString(v) || phonePattern.MatchString(v) || streetPattern.MatchString(v) || namedPersonPattern.MatchString(v)
+func safeIdentifier(v string) bool {
+	return safeIdentifierPattern.MatchString(v) && !strings.Contains(v, "..")
 }
 func id() string { b := make([]byte, 12); _, _ = rand.Read(b); return hex.EncodeToString(b) }
