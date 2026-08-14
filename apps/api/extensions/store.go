@@ -343,6 +343,30 @@ func (s *Store) WithInstallationsRepository(ids []string, repositoryID string, f
 	return fn()
 }
 
+// WithActiveInstallationRepository holds the installation lifecycle mutation
+// boundary while fn validates and persists a dependent record. Revocation
+// therefore commits wholly before or after the dependent write.
+func (s *Store) WithActiveInstallationRepository(id, repositoryID string, fn func(Installation) error) error {
+	if id == "" || repositoryID == "" || fn == nil {
+		return ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	installation, err := s.readInstallation(id)
+	if err != nil {
+		return err
+	}
+	if installation.Status != "active" || !slices.Contains(installation.RepositoryIDs, repositoryID) {
+		return ErrInvalid
+	}
+	return fn(installation)
+}
+
 // RecordDerivedCredential attaches only a credential minted for this exact
 // installation, allowing later suspension/removal to revoke it independently.
 func (s *Store) RecordDerivedCredential(id, credentialID string, expected int) (Installation, error) {

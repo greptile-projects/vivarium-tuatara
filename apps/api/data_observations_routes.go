@@ -85,17 +85,33 @@ func registerDataObservationRoutes(mux *http.ServeMux, git *storage.Store, repos
 			writeAPIError(w, 400, "invalid_request", "a bounded sanitized production observation is required")
 			return
 		}
-		owners, valid := resolveDataObservationScope(r.PathValue("id"), in.Scope, commitments, flows, releaseStore, deploymentStore, extensionStore)
-		if !valid {
-			writeAPIError(w, 422, "invalid_data_observation_scope", "flow, commitment, release, environment, deployment, and extension scope must resolve together")
-			return
-		}
-		in.OwnerIDs = owners
 		actorType, actorID := "human", actor.UserID
 		if actor.AgentID != "" {
 			actorType, actorID = "agent", actor.AgentID
 		}
-		v, e := observations.Create(r.PathValue("id"), actorType, actorID, in)
+		var v dataobservations.Observation
+		create := func(installation *extensions.Installation) error {
+			owners, valid := resolveDataObservationScope(r.PathValue("id"), in.Scope, commitments, flows, releaseStore, deploymentStore, installation)
+			if !valid {
+				return dataobservations.ErrInvalid
+			}
+			in.OwnerIDs = owners
+			var createErr error
+			v, createErr = observations.Create(r.PathValue("id"), actorType, actorID, in)
+			return createErr
+		}
+		var e error
+		if in.Scope.ExtensionInstallationID == "" {
+			e = create(nil)
+		} else {
+			e = extensionStore.WithActiveInstallationRepository(in.Scope.ExtensionInstallationID, r.PathValue("id"), func(installation extensions.Installation) error {
+				return create(&installation)
+			})
+		}
+		if errors.Is(e, extensions.ErrInvalid) || errors.Is(e, extensions.ErrNotFound) || errors.Is(e, dataobservations.ErrInvalid) {
+			writeAPIError(w, 422, "invalid_data_observation_scope", "flow, commitment, release, environment, deployment, and extension scope must resolve together")
+			return
+		}
 		if e != nil {
 			writeDataObservationError(w, e)
 			return
@@ -225,7 +241,7 @@ func registerDataObservationRoutes(mux *http.ServeMux, git *storage.Store, repos
 	})
 }
 
-func resolveDataObservationScope(repo string, s dataobservations.Scope, commitments *datacommitments.Store, flows *dataflows.Store, releasesStore *releases.Store, deploymentsStore *deployments.Store, extensionsStore *extensions.Store) ([]string, bool) {
+func resolveDataObservationScope(repo string, s dataobservations.Scope, commitments *datacommitments.Store, flows *dataflows.Store, releasesStore *releases.Store, deploymentsStore *deployments.Store, installation *extensions.Installation) ([]string, bool) {
 	f, e := flows.Get(repo, s.DataFlowID)
 	if e != nil || s.DataFlowVersion < 1 || s.DataFlowVersion > len(f.Revisions) || f.Revisions[s.DataFlowVersion-1].CodeRevision != s.Revision {
 		return nil, false
@@ -261,10 +277,7 @@ func resolveDataObservationScope(repo string, s dataobservations.Scope, commitme
 		return nil, false
 	}
 	if s.ExtensionInstallationID != "" {
-		ins, e := extensionsStore.GetInstallation(s.ExtensionInstallationID)
-		// The installation is a live permission boundary, not merely historical
-		// provenance. Revocation retains earlier evidence but admits no new signal.
-		if !dataObservationInstallationActive(repo, ins, e) {
+		if installation == nil || installation.ID != s.ExtensionInstallationID || !dataObservationInstallationActive(repo, *installation, nil) {
 			return nil, false
 		}
 	}
