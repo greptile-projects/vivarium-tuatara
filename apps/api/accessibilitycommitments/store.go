@@ -204,24 +204,6 @@ func (s *Store) List(repo string) ([]Commitment, error) {
 				values = append(values, s.project(v))
 			}
 		}
-		// Read legacy flat records for compatibility. A corrupt legacy record
-		// fails closed because its repository ownership cannot be established.
-		legacy, e := os.ReadDir(s.root)
-		if e != nil {
-			return e
-		}
-		for _, x := range legacy {
-			if x.IsDir() || !strings.HasSuffix(x.Name(), ".json") {
-				continue
-			}
-			v, readErr := s.readFile(filepath.Join(s.root, x.Name()))
-			if readErr != nil {
-				return readErr
-			}
-			if v.RepositoryID == repo {
-				values = append(values, s.project(v))
-			}
-		}
 		return nil
 	})
 	sort.Slice(values, func(i, j int) bool { return values[i].UpdatedAt.After(values[j].UpdatedAt) })
@@ -378,9 +360,6 @@ func containsEnvironment(values []Environment, id string, supported bool) bool {
 	return false
 }
 func (s *Store) read(id string) (Commitment, error) {
-	if v, e := s.readFile(filepath.Join(s.root, id+".json")); !errors.Is(e, ErrNotFound) {
-		return v, e
-	}
 	entries, e := os.ReadDir(s.root)
 	if e != nil {
 		return Commitment{}, e

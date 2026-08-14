@@ -82,6 +82,9 @@ func TestListIsolatesCorruptRecords(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(s.repositoryDir("repo-other"), other.ID+".json"), []byte("{"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err = os.WriteFile(filepath.Join(root, "unrelated-legacy.json"), []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	values, err := s.List("repo-target")
 	if err != nil || len(values) != 1 || values[0].ID != want.ID {
 		t.Fatalf("healthy repository list = %+v, %v", values, err)
