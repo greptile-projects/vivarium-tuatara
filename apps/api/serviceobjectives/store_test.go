@@ -49,7 +49,7 @@ func TestVersioningAndExplicitDiagnostics(t *testing.T) {
 
 func TestRejectsBrokenReferences(t *testing.T) {
 	s, _ := New(t.TempDir())
-	cases := []func(*Revision){func(r *Revision) { r.Objectives[0].IndicatorID = "missing" }, func(r *Revision) { r.ErrorBudgets = nil }, func(r *Revision) { r.Severities[1].BudgetConsumedPercent = 25 }, func(r *Revision) { r.CommitmentLinks[0].Kind = "operations" }, func(r *Revision) { r.Scopes[0].ResourceID = "" }}
+	cases := []func(*Revision){func(r *Revision) { r.Objectives[0].IndicatorID = "missing" }, func(r *Revision) { r.ErrorBudgets = nil }, func(r *Revision) { r.Severities[1].BudgetConsumedPercent = 25 }, func(r *Revision) { r.CommitmentLinks[0].Kind = "operations" }, func(r *Revision) { r.Scopes[0].ResourceID = "" }, func(r *Revision) { r.Windows[0].Duration = "0s" }, func(r *Revision) { r.Windows[0].Duration = "-1s" }, func(r *Revision) { r.ExceptionPolicy.MaximumDuration = "0s" }, func(r *Revision) { r.ExceptionPolicy.MaximumDuration = "-1s" }}
 	for i, mutate := range cases {
 		r := completeRevision()
 		mutate(&r)

@@ -238,7 +238,7 @@ func validate(r Revision) error {
 		if x.ID == "" || x.Name == "" || x.Duration == "" || windows[x.ID] {
 			return ErrInvalid
 		}
-		if _, e := time.ParseDuration(x.Duration); e != nil {
+		if duration, e := time.ParseDuration(x.Duration); e != nil || duration <= 0 {
 			return ErrInvalid
 		}
 		windows[x.ID] = true
@@ -291,7 +291,7 @@ func validate(r Revision) error {
 			}
 		}
 	}
-	if _, err := time.ParseDuration(r.ExceptionPolicy.MaximumDuration); err != nil {
+	if duration, err := time.ParseDuration(r.ExceptionPolicy.MaximumDuration); err != nil || duration <= 0 {
 		return ErrInvalid
 	}
 	for _, x := range r.CommitmentLinks {
