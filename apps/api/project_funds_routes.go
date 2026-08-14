@@ -17,10 +17,11 @@ type fundCommitInput struct {
 	Note              string `json:"note"`
 }
 type fundReconcileInput struct {
-	ExpectedVersion int    `json:"expected_version"`
-	Status          string `json:"status"`
-	CompletedAmount int64  `json:"completed_amount"`
-	Note            string `json:"note"`
+	ExpectedVersion int                         `json:"expected_version"`
+	Status          string                      `json:"status"`
+	CompletedAmount int64                       `json:"completed_amount"`
+	Note            string                      `json:"note"`
+	TransferProof   *projectfunds.TransferProof `json:"transfer_proof"`
 }
 
 func registerProjectFundRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *projectfunds.Store) {
@@ -49,8 +50,9 @@ func registerProjectFundRoutes(mux *http.ServeMux, catalog *repositories.Store, 
 			return
 		}
 		visible := fs[:0]
+		participant := actor.UserID != "" && catalog.WithCurrentParticipant(actor.UserID, r.PathValue("id"), func() error { return nil }) == nil
 		for _, f := range fs {
-			if f.Terms.LedgerVisibility == "public" || actor.UserID != "" {
+			if f.Terms.LedgerVisibility == "public" || participant {
 				visible = append(visible, f)
 			}
 		}
@@ -66,7 +68,8 @@ func registerProjectFundRoutes(mux *http.ServeMux, catalog *repositories.Store, 
 			writeAPIError(w, 404, "fund_not_found", "project fund not found")
 			return
 		}
-		if f.Terms.LedgerVisibility == "participants" && actor.UserID == "" {
+		participant := actor.UserID != "" && catalog.WithCurrentParticipant(actor.UserID, r.PathValue("id"), func() error { return nil }) == nil
+		if f.Terms.LedgerVisibility == "participants" && !participant {
 			writeAPIError(w, 403, "fund_ledger_forbidden", "this ledger is limited to project participants")
 			return
 		}
@@ -108,7 +111,7 @@ func registerProjectFundRoutes(mux *http.ServeMux, catalog *repositories.Store, 
 			writeAPIError(w, 400, "invalid_request", "a reconciliation decision is required")
 			return
 		}
-		f, e = store.Reconcile(f.ID, r.PathValue("entry_id"), actor.UserID, in.Status, in.CompletedAmount, in.Note, in.ExpectedVersion)
+		f, e = store.Reconcile(f.ID, r.PathValue("entry_id"), actor.UserID, in.Status, in.CompletedAmount, in.TransferProof, in.Note, in.ExpectedVersion)
 		writeFund(w, f, e, 200)
 	})
 }

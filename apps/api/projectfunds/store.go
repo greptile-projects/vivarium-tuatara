@@ -2,13 +2,16 @@
 package projectfunds
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -30,17 +33,18 @@ type ApprovalRule struct {
 	EligibleApprovers []string `json:"eligible_approvers"`
 }
 type Terms struct {
-	Name               string         `json:"name"`
-	Purpose            string         `json:"purpose"`
-	Stewards           []string       `json:"stewards"`
-	FundingSources     []string       `json:"accepted_funding_sources"`
-	Unit               string         `json:"unit"`
-	Precision          int            `json:"precision"`
-	SpendingLimits     []Limit        `json:"spending_limits"`
-	ApprovalRules      []ApprovalRule `json:"approval_rules"`
-	EligibleRecipients []string       `json:"eligible_recipients"`
-	RefundPolicy       string         `json:"refund_policy"`
-	LedgerVisibility   string         `json:"ledger_visibility"`
+	Name                   string            `json:"name"`
+	Purpose                string            `json:"purpose"`
+	Stewards               []string          `json:"stewards"`
+	FundingSources         []string          `json:"accepted_funding_sources"`
+	SourceVerificationKeys map[string]string `json:"source_verification_keys"`
+	Unit                   string            `json:"unit"`
+	Precision              int               `json:"precision"`
+	SpendingLimits         []Limit           `json:"spending_limits"`
+	ApprovalRules          []ApprovalRule    `json:"approval_rules"`
+	EligibleRecipients     []string          `json:"eligible_recipients"`
+	RefundPolicy           string            `json:"refund_policy"`
+	LedgerVisibility       string            `json:"ledger_visibility"`
 }
 type Balances struct {
 	Available int64 `json:"available"`
@@ -51,18 +55,28 @@ type Balances struct {
 	Pending   int64 `json:"pending"`
 }
 type Entry struct {
-	ID                string    `json:"id"`
-	Kind              string    `json:"kind"`
-	Amount            int64     `json:"amount"`
-	SpendableDelta    int64     `json:"spendable_delta"`
-	Status            string    `json:"status"`
+	ID                string         `json:"id"`
+	Kind              string         `json:"kind"`
+	Amount            int64          `json:"amount"`
+	SpendableDelta    int64          `json:"spendable_delta"`
+	Status            string         `json:"status"`
+	Source            string         `json:"source"`
+	ExternalReference string         `json:"external_reference"`
+	IdempotencyKey    string         `json:"idempotency_key"`
+	ContributorID     string         `json:"contributor_id"`
+	ActorID           string         `json:"actor_id"`
+	Note              string         `json:"note"`
+	CreatedAt         time.Time      `json:"created_at"`
+	TransferProof     *TransferProof `json:"transfer_proof,omitempty"`
+}
+type TransferProof struct {
 	Source            string    `json:"source"`
 	ExternalReference string    `json:"external_reference"`
-	IdempotencyKey    string    `json:"idempotency_key"`
-	ContributorID     string    `json:"contributor_id"`
-	ActorID           string    `json:"actor_id"`
-	Note              string    `json:"note"`
-	CreatedAt         time.Time `json:"created_at"`
+	CompletedAmount   int64     `json:"completed_amount"`
+	Status            string    `json:"status"`
+	VerifiedAt        time.Time `json:"verified_at"`
+	Nonce             string    `json:"nonce"`
+	Signature         string    `json:"signature"`
 }
 type Fund struct {
 	ID            string    `json:"id"`
@@ -153,13 +167,13 @@ func (s *Store) Commit(id, contributor, source, external string, amount int64, k
 		f.Version++
 		f.UpdatedAt = now
 		f.Ledger = append(f.Ledger, Entry{ID: randomID(), Kind: "commitment", Amount: amount, Status: "pending", Source: source, ExternalReference: external, IdempotencyKey: key, ContributorID: contributor, ActorID: contributor, Note: note, CreatedAt: now})
-		f.Balances = derive(f.Ledger)
+		f.Balances = derive(f.Terms, f.Ledger)
 		out = f
 		return s.write(f)
 	})
 	return out, err
 }
-func (s *Store) Reconcile(id, entryID, steward, status string, completed int64, note string, expected int) (Fund, error) {
+func (s *Store) Reconcile(id, entryID, steward, status string, completed int64, proof *TransferProof, note string, expected int) (Fund, error) {
 	var out Fund
 	err := s.lock(func() error {
 		f, e := s.read(id)
@@ -189,31 +203,57 @@ func (s *Store) Reconcile(id, entryID, steward, status string, completed int64, 
 		if !contains([]string{"settled", "partial", "failed", "revoked"}, status) || completed < 0 || completed > original.Amount || (status == "settled" && completed != original.Amount) || (status == "partial" && (completed == 0 || completed == original.Amount)) || ((status == "failed" || status == "revoked") && completed != 0) {
 			return ErrInvalid
 		}
+		if (status == "settled" || status == "partial") && !verifyTransferProof(f.Terms, original, status, completed, proof) {
+			return ErrInvalid
+		}
 		now := s.now()
 		f.Ledger[idx].Status = status
-		f.Ledger = append(f.Ledger, Entry{ID: randomID(), Kind: "transfer_reconciliation", Amount: completed, SpendableDelta: completed, Status: status, Source: original.Source, ExternalReference: original.ExternalReference, ContributorID: original.ContributorID, ActorID: steward, Note: note, CreatedAt: now})
+		f.Ledger = append(f.Ledger, Entry{ID: randomID(), Kind: "transfer_reconciliation", Amount: completed, SpendableDelta: completed, Status: status, Source: original.Source, ExternalReference: original.ExternalReference, ContributorID: original.ContributorID, ActorID: steward, Note: note, CreatedAt: now, TransferProof: proof})
 		f.Version++
 		f.UpdatedAt = now
-		f.Balances = derive(f.Ledger)
+		f.Balances = derive(f.Terms, f.Ledger)
 		out = f
 		return s.write(f)
 	})
 	return out, err
 }
-func derive(es []Entry) Balances {
+func derive(terms Terms, es []Entry) Balances {
 	var b Balances
 	for _, e := range es {
 		if e.Kind == "commitment" && e.Status == "pending" {
 			b.Pending += e.Amount
 		}
-		if e.Kind == "transfer_reconciliation" {
+		if e.Kind == "transfer_reconciliation" && (e.Status == "settled" || e.Status == "partial") && verifyTransferProof(terms, e, e.Status, e.Amount, e.TransferProof) {
 			b.Available += e.SpendableDelta
 		}
 	}
 	return b
 }
 func validTerms(t Terms) bool {
-	return strings.TrimSpace(t.Name) != "" && strings.TrimSpace(t.Purpose) != "" && len(t.Stewards) > 0 && len(t.FundingSources) > 0 && strings.TrimSpace(t.Unit) != "" && t.Precision >= 0 && t.Precision <= 8 && len(t.SpendingLimits) > 0 && len(t.ApprovalRules) > 0 && len(t.EligibleRecipients) > 0 && strings.TrimSpace(t.RefundPolicy) != "" && contains([]string{"public", "participants"}, t.LedgerVisibility) && allPositive(t.SpendingLimits, t.ApprovalRules)
+	if strings.TrimSpace(t.Name) == "" || strings.TrimSpace(t.Purpose) == "" || len(t.Stewards) == 0 || len(t.FundingSources) == 0 || strings.TrimSpace(t.Unit) == "" || t.Precision < 0 || t.Precision > 8 || len(t.SpendingLimits) == 0 || len(t.ApprovalRules) == 0 || len(t.EligibleRecipients) == 0 || strings.TrimSpace(t.RefundPolicy) == "" || !contains([]string{"public", "participants"}, t.LedgerVisibility) || !allPositive(t.SpendingLimits, t.ApprovalRules) {
+		return false
+	}
+	for _, source := range t.FundingSources {
+		key, err := base64.StdEncoding.DecodeString(t.SourceVerificationKeys[source])
+		if err != nil || len(key) != ed25519.PublicKeySize {
+			return false
+		}
+	}
+	return true
+}
+func transferProofMessage(p TransferProof) []byte {
+	return []byte(p.Source + "\n" + p.ExternalReference + "\n" + strconv.FormatInt(p.CompletedAmount, 10) + "\n" + p.Status + "\n" + p.VerifiedAt.UTC().Format(time.RFC3339Nano) + "\n" + p.Nonce)
+}
+func verifyTransferProof(terms Terms, entry Entry, status string, completed int64, proof *TransferProof) bool {
+	if proof == nil || proof.Source != entry.Source || proof.ExternalReference != entry.ExternalReference || proof.CompletedAmount != completed || proof.Status != status || proof.VerifiedAt.IsZero() || strings.TrimSpace(proof.Nonce) == "" {
+		return false
+	}
+	pub, err := base64.StdEncoding.DecodeString(terms.SourceVerificationKeys[entry.Source])
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return false
+	}
+	sig, err := base64.StdEncoding.DecodeString(proof.Signature)
+	return err == nil && ed25519.Verify(ed25519.PublicKey(pub), transferProofMessage(*proof), sig)
 }
 func allPositive(ls []Limit, rs []ApprovalRule) bool {
 	for _, v := range ls {
