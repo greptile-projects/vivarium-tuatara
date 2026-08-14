@@ -257,13 +257,15 @@ func (s *Store) Invite(repo, id, actor, participant, activity, revision string, 
 	})
 }
 func (s *Store) Consent(repo, id, invite, actor, status string, expected int) (Validation, error) {
-	if !one(status, "accepted", "declined") {
+	if !one(status, "accepted", "declined", "withdrawn") {
 		return Validation{}, ErrInvalid
 	}
 	return s.mutate(repo, id, expected, func(v *Validation) error {
 		for i := range v.Invitations {
 			p := &v.Invitations[i]
-			if p.ID == invite && p.ParticipantID == actor && p.Status == "invited" && p.ExpiresAt.After(s.now().UTC()) {
+			initialResponse := p.Status == "invited" && (status == "accepted" || status == "declined")
+			withdrawal := p.Status == "accepted" && status == "withdrawn"
+			if p.ID == invite && p.ParticipantID == actor && ((initialResponse && p.ExpiresAt.After(s.now().UTC())) || withdrawal) {
 				now := s.now().UTC()
 				p.Status = status
 				p.RespondedAt = &now

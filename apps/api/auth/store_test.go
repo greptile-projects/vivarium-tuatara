@@ -100,6 +100,23 @@ func TestCredentialKindLimitsScopesAndLifetime(t *testing.T) {
 	}
 }
 
+func TestOrganizationAgentCanUseRepositoryBoundReadAPI(t *testing.T) {
+	store, _ := New(t.TempDir())
+	issued, err := store.IssueOrganizationAgent(
+		"0123456789abcdef0123456789abcdef", "discovery synthesis",
+		"11111111111111111111111111111111", "22222222222222222222222222222222",
+		"33333333333333333333333333333333", "44444444444444444444444444444444",
+		[]string{"repositories:read"}, time.Hour,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticated, err := store.Authenticate(issued.Token, "repositories:read")
+	if err != nil || authenticated.Kind != API || authenticated.AgentID != "33333333333333333333333333333333" || authenticated.RepositoryID != "44444444444444444444444444444444" {
+		t.Fatalf("agent API credential = %#v, %v", authenticated, err)
+	}
+}
+
 func TestIssueReconcilesPostRenameFailure(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {

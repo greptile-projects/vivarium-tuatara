@@ -1052,6 +1052,7 @@ func registerOrganizationRoutes(mux *http.ServeMux, gitStore *storage.Store, org
 			AgentID      string `json:"agent_id"`
 			RepositoryID string `json:"repository_id"`
 			ExpiresIn    int    `json:"expires_in"`
+			Purpose      string `json:"purpose"`
 		}
 		if decodeJSON(r, &in) != nil || in.ExpiresIn < 60 {
 			writeAPIError(w, 400, "invalid_access_credential", "agent_id, repository_id, and expires_in of at least 60 seconds are required")
@@ -1081,7 +1082,9 @@ func registerOrganizationRoutes(mux *http.ServeMux, gitStore *storage.Store, org
 			lifetime = time.Until(*grant.ExpiresAt)
 		}
 		scopes := []string{"git:read"}
-		if grant.Role != "viewer" {
+		if in.Purpose == "api_read" {
+			scopes = []string{"repositories:read"}
+		} else if grant.Role != "viewer" {
 			scopes = append(scopes, "git:write")
 		}
 		issued, err := credentials.IssueOrganizationAgent(actor.UserID, "Organization agent "+in.AgentID, v.ID, grant.ID, in.AgentID, in.RepositoryID, scopes, lifetime)

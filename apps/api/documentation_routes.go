@@ -110,13 +110,6 @@ func registerDocumentationRoutes(mux *http.ServeMux, git *storage.Store, repos *
 		if !ok {
 			return auth.Credential{}, false, false
 		}
-		if !authenticated {
-			if optional, found, allowed := authenticateOptionalRequest(w, r, credentials, "repositories:read", false); !allowed {
-				return auth.Credential{}, false, false
-			} else if found {
-				actor, authenticated = optional, true
-			}
-		}
 		return actor, authenticated, true
 	}
 	present := func(repositoryID string, v docscollections.Revision) docscollections.Revision {

@@ -93,13 +93,6 @@ func registerContributorPathwayRoutes(mux *http.ServeMux, git *storage.Store, re
 		if !ok {
 			return
 		}
-		if !authenticated {
-			if optionalActor, found, allowed := authenticateOptionalRequest(w, r, credentials, "repositories:read", false); !allowed {
-				return
-			} else if found {
-				actor, authenticated = optionalActor, true
-			}
-		}
 		actorID := ""
 		if authenticated {
 			actorID = actor.UserID

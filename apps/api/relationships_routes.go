@@ -38,15 +38,6 @@ func registerRelationshipRoutes(mux *http.ServeMux, git *storage.Store, repos *r
 		if !ok {
 			return
 		}
-		if !authenticated {
-			optionalActor, present, authOK := authenticateOptionalRequest(w, r, credentials, "repositories:read", false)
-			if !authOK {
-				return
-			}
-			if present {
-				actor, authenticated = optionalActor, true
-			}
-		}
 		readable := func(id string) (repositories.Repository, bool) {
 			repo, err := repos.GetByID(id)
 			if err != nil {

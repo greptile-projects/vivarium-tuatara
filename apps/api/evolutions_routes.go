@@ -337,18 +337,9 @@ func registerEvolutionRoutes(mux *http.ServeMux, gitStore *storage.Store, repos 
 		return v
 	}
 	readActor := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
-		actor, authenticated, ok := authorizeRepositoryRead(w, r, repos, credentials, r.PathValue("id"))
+		actor, _, ok := authorizeRepositoryRead(w, r, repos, credentials, r.PathValue("id"))
 		if !ok {
 			return actor, false
-		}
-		if !authenticated {
-			optional, present, authOK := authenticateOptionalRequest(w, r, credentials, "repositories:read", false)
-			if !authOK {
-				return actor, false
-			}
-			if present {
-				actor = optional
-			}
 		}
 		return actor, true
 	}
