@@ -1773,6 +1773,13 @@ whenever dependencies change or the web job fails before it starts.
   current locale plan and bounded product context. Suggestions must cite source plus plan/terminology
   evidence and uncertainty; agents cannot decide them, and approve/reject remains with the plan's
   declared human reviewers. Protected or embargoed requests fail closed.
+  Locale verification candidates bind an existing named-user preview, current locale-plan version,
+  declared journey routes, interface hashes, exact source revision, and exercised translation
+  versions. Complete repository-defined suites cover variables, pluralization, formatting,
+  terminology, links, layout expansion, bidirectional text, fallback, and localized journeys.
+  Translators and preview-invited regional reviewers retain route/unit findings and decisions;
+  projections distinguish locale-plan, source, per-unit translation, and per-route interface
+  invalidation; every later evidence write revalidates the bound current plan version.
 
   Update it when you change how the apps fit together, not for every change.
 

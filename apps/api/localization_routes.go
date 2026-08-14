@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/localeplans"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/localization"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"net/http"
@@ -32,7 +34,7 @@ type localizationMutationInput struct {
 
 var errLocalizationReviewerRequired = errors.New("current locale reviewer required")
 
-func registerLocalizationRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, pulls *pullrequests.Store, plans *localeplans.Store, store *localization.Store) {
+func registerLocalizationRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, pulls *pullrequests.Store, plans *localeplans.Store, previewStore *previews.Store, store *localization.Store) {
 	pull := func(w http.ResponseWriter, r *http.Request) (pullrequests.PullRequest, bool) {
 		p, e := pulls.Get(r.PathValue("id"), r.PathValue("pull_id"))
 		if e != nil {
@@ -58,6 +60,7 @@ func registerLocalizationRoutes(mux *http.ServeMux, catalog *repositories.Store,
 			writeAPIError(w, 500, "localization_unavailable", "localization review could not be read")
 			return
 		}
+		applyLocalizationPlanVersions(plans, &v)
 		writeJSON(w, 200, v)
 	})
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/localization/extractions", func(w http.ResponseWriter, r *http.Request) {
@@ -249,4 +252,204 @@ func registerLocalizationRoutes(mux *http.ServeMux, catalog *repositories.Store,
 			writeJSON(w, 201, v)
 		}
 	})
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/localization/verification", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		p, ok := pull(w, r)
+		if !ok {
+			return
+		}
+		var in localizationMutationInput
+		if decodeJSON(r, &in) != nil || in.SourceRevision != p.SourceCommitID {
+			writeAPIError(w, 409, "localization_revision_changed", "verification must match the current pull source revision")
+			return
+		}
+		if in.Mutation != "publish_candidate" && in.Mutation != "record_checks" {
+			writeAPIError(w, 400, "invalid_localization_verification", "participants may publish candidates or repository-defined check results here")
+			return
+		}
+		candidatePlanID, candidatePlanVersion := "", 0
+		if in.Mutation == "publish_candidate" {
+			previewID, _ := in.Payload["preview_id"].(string)
+			locale, _ := in.Payload["locale"].(string)
+			planID, _ := in.Payload["locale_plan_id"].(string)
+			planVersion := 0
+			if value, yes := in.Payload["locale_plan_version"].(float64); yes {
+				planVersion = int(value)
+			}
+			preview, previewErr := previewStore.Get(p.RepositoryID, p.ID, previewID)
+			plan, planErr := plans.Get(planID, "")
+			validPlan := planErr == nil && plan.RepositoryID == p.RepositoryID && plan.CurrentVersion == planVersion
+			journeys := map[string]bool{}
+			localeDeclared := false
+			if validPlan {
+				for _, value := range plan.Revisions[len(plan.Revisions)-1].Locales {
+					if value.ID == locale {
+						localeDeclared = true
+					}
+				}
+			}
+			validPlan = validPlan && localeDeclared
+			if validPlan {
+				for _, value := range plan.Revisions[len(plan.Revisions)-1].Journeys {
+					for _, id := range value.LocaleIDs {
+						if id == locale {
+							journeys[value.ID] = true
+						}
+					}
+				}
+			}
+			var routes []localization.VerificationRoute
+			validRoutes := decodePayload(in.Payload["routes"], &routes)
+			for _, route := range routes {
+				validRoutes = validRoutes && journeys[route.JourneyID]
+			}
+			if previewErr != nil || preview.Revision != p.SourceCommitID || preview.Stale || !validPlan || !validRoutes {
+				writeAPIError(w, 409, "localization_candidate_invalid", "candidate preview, locale plan, journeys, and pull revision must all be current")
+				return
+			}
+			in.Payload["preview_url"] = preview.URL
+			candidatePlanID, candidatePlanVersion = planID, planVersion
+		} else {
+			candidateID, _ := in.Payload["candidate_id"].(string)
+			current, readErr := store.Get(p.RepositoryID, p.ID, p.SourceCommitID)
+			if readErr != nil {
+				writeAPIError(w, 404, "localization_candidate_not_found", "locale candidate is not available")
+				return
+			}
+			for _, candidate := range current.VerificationCandidates {
+				if candidate.ID == candidateID {
+					candidatePlanID, candidatePlanVersion = candidate.LocalePlanID, candidate.LocalePlanVersion
+				}
+			}
+			if candidatePlanID == "" {
+				writeAPIError(w, 404, "localization_candidate_not_found", "locale candidate is not available")
+				return
+			}
+		}
+		var out localization.Review
+		persist := func() error {
+			return pulls.WithSourceRevision(p.RepositoryID, p.ID, in.SourceRevision, func(current pullrequests.PullRequest) error {
+				var mutationErr error
+				out, mutationErr = store.Verify(current.RepositoryID, current.ID, in.SourceRevision, in.ExpectedVersion, in.Mutation, actor.UserID, "translator", candidatePlanVersion, in.Payload)
+				return mutationErr
+			})
+		}
+		var err error
+		if candidatePlanID != "" {
+			err = plans.WithCurrentVersion(candidatePlanID, candidatePlanVersion, func(plan localeplans.Plan) error {
+				if plan.RepositoryID != p.RepositoryID {
+					return localeplans.ErrInvalid
+				}
+				return persist()
+			})
+		} else {
+			err = persist()
+		}
+		applyLocalizationPlanVersions(plans, &out)
+		writeLocalizationVerification(w, err, out)
+	})
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/localization/previews/{preview_id}/review", func(w http.ResponseWriter, r *http.Request) {
+		actor, invitation, preview, ok := authorizePreviewGuest(w, r, catalog, previewStore, credentials)
+		if !ok {
+			return
+		}
+		p, ok := pull(w, r)
+		if !ok {
+			return
+		}
+		var in localizationMutationInput
+		if decodeJSON(r, &in) != nil || in.SourceRevision != p.SourceCommitID || preview.Revision != p.SourceCommitID || preview.Stale || (in.Mutation != "finding" && in.Mutation != "review") {
+			writeAPIError(w, 409, "localization_preview_changed", "regional evidence must match the current bounded preview and pull revision")
+			return
+		}
+		candidateID, _ := in.Payload["candidate_id"].(string)
+		current, readErr := store.Get(p.RepositoryID, p.ID, p.SourceCommitID)
+		applyLocalizationPlanVersions(plans, &current)
+		candidateMatches := false
+		candidateCurrent := false
+		locale := ""
+		candidatePlanID, candidatePlanVersion := "", 0
+		for _, candidate := range current.VerificationCandidates {
+			if candidate.ID == candidateID && candidate.PreviewID == preview.ID {
+				candidateMatches, locale = true, candidate.Locale
+				candidatePlanID, candidatePlanVersion = candidate.LocalePlanID, candidate.LocalePlanVersion
+			}
+		}
+		for _, projection := range current.Verification {
+			if projection.CandidateID == candidateID {
+				candidateCurrent = projection.Current
+			}
+		}
+		if readErr != nil || !candidateMatches {
+			writeAPIError(w, 404, "localization_candidate_not_found", "locale candidate is not available through this preview")
+			return
+		}
+		if !candidateCurrent {
+			writeAPIError(w, 409, "localization_candidate_stale", "source, translation, or interface changes require a current locale candidate")
+			return
+		}
+		in.Payload["locale"] = locale
+		role := "regional_reviewer"
+		repository, _ := catalog.GetByID(p.RepositoryID)
+		collaborator, _ := catalog.HasCollaborator(actor.UserID, p.RepositoryID)
+		if actor.UserID == repository.OwnerID || collaborator {
+			role = "translator"
+		} else if invitation.Role != "feedback" && invitation.Role != "test" {
+			writeAPIError(w, 403, "localization_review_access_required", "the invitation must permit testing or feedback")
+			return
+		}
+		var out localization.Review
+		err := previewStore.WithAudienceAdmission(func() error {
+			return plans.WithCurrentVersion(candidatePlanID, candidatePlanVersion, func(plan localeplans.Plan) error {
+				if plan.RepositoryID != p.RepositoryID {
+					return localeplans.ErrInvalid
+				}
+				return pulls.WithSourceRevision(p.RepositoryID, p.ID, in.SourceRevision, func(current pullrequests.PullRequest) error {
+					var mutationErr error
+					out, mutationErr = store.Verify(current.RepositoryID, current.ID, in.SourceRevision, in.ExpectedVersion, in.Mutation, actor.UserID, role, candidatePlanVersion, in.Payload)
+					return mutationErr
+				})
+			})
+		})
+		applyLocalizationPlanVersions(plans, &out)
+		writeLocalizationVerification(w, err, out)
+	})
+}
+
+func applyLocalizationPlanVersions(plans *localeplans.Store, review *localization.Review) {
+	versions := map[string]int{}
+	for _, candidate := range review.VerificationCandidates {
+		if _, seen := versions[candidate.LocalePlanID]; seen {
+			continue
+		}
+		plan, err := plans.Get(candidate.LocalePlanID, "")
+		if err == nil && plan.RepositoryID == review.RepositoryID {
+			versions[candidate.LocalePlanID] = plan.CurrentVersion
+		}
+	}
+	localization.ApplyLocalePlanVersions(review, versions)
+}
+
+func decodePayload(value any, out any) bool {
+	b, err := json.Marshal(value)
+	return err == nil && json.Unmarshal(b, out) == nil
+}
+func writeLocalizationVerification(w http.ResponseWriter, err error, out localization.Review) {
+	switch {
+	case errors.Is(err, pullrequests.ErrSourceChanged) || errors.Is(err, pullrequests.ErrNotReady):
+		writeAPIError(w, 409, "localization_revision_changed", "the pull source changed; reload before continuing")
+	case errors.Is(err, localization.ErrConflict):
+		writeAPIError(w, 409, "localization_workspace_conflict", "the localization workspace changed; reload before continuing")
+	case errors.Is(err, localeplans.ErrConflict):
+		writeAPIError(w, 409, "locale_plan_changed", "the locale plan changed; publish verification against its current version")
+	case errors.Is(err, localization.ErrInvalid):
+		writeAPIError(w, 400, "invalid_localization_verification", "verification evidence must be locale-, route-, journey-, unit-, preview-, and revision-grounded")
+	case err != nil:
+		writeAPIError(w, 500, "localization_unavailable", "localization verification could not be persisted")
+	default:
+		writeJSON(w, 201, out)
+	}
 }

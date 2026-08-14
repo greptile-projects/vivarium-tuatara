@@ -43,6 +43,12 @@ may publish a suggestion, which freezes source and plan provenance, cites termin
 source-context evidence, and declares uncertainty. Agent output is never approval: declared locale
 reviewers retain attributed approve/reject decisions, while any human may escalate. Every mutation
 uses the pull source lock and a workspace compare-and-swap version so concurrent edits are explicit.
+Participants also bind the pull revision to an existing named-user preview, current locale plan, and
+declared localized journey routes. Complete check suites retain variable, plural, formatting,
+terminology, link, expansion, bidirectional-text, fallback, and journey results. Translators and
+preview-invited regional reviewers attach findings and decisions to exact routes and units. Evidence
+projects stale locale-plan, source, translation-unit, and interface-route dependencies independently,
+and later checks or human evidence revalidate the candidate's bound plan version.
 Records default beneath `$LOCALIZATION_STORAGE_ROOT` (`localization`).
 
 ## Permitted data handling

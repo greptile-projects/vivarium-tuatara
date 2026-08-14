@@ -3184,3 +3184,20 @@ locations. Unit IDs and source hashes are server-derived.
 identity that can read the repository. It accepts the current `source_revision`, `unit_id`, `locale`,
 translated `text`, and optional `note`. A newer proposal or affected source edit marks earlier work
 `superseded` without deleting it. These endpoints grant no repository write, review, or merge authority.
+
+`POST /repositories/{id}/pulls/{pull_id}/localization/verification` accepts participant-only
+`publish_candidate` and `record_checks` mutations. A candidate binds an existing non-stale named-user
+preview to the current pull, locale-plan version, locale, declared journey routes, route interface
+hashes, and server-derived translation IDs. A check run must include `variables`, `pluralization`,
+`formatting`, `terminology`, `links`, `layout_expansion`, `bidirectional_text`, `fallback_behavior`,
+and `localized_journey` results, each grounded to an included route and affected units.
+
+`POST /repositories/{id}/pulls/{pull_id}/localization/previews/{preview_id}/review` accepts `finding`
+and `review` mutations from repository translators or named preview guests whose live invitation
+permits testing or feedback. Findings retain locale, route, units, category, severity, and rationale;
+reviews approve or reject only their named content and retain the translator or regional-reviewer
+role. Both surfaces require the current `source_revision` and `expected_version`. Reads expose
+separate `locale_plan`, `source_revision`, `translation:{unit_id}`, and `interface:{route}` stale
+scopes. Check, finding, and decision writes revalidate the candidate's plan through the current-plan
+mutation boundary, so a successor cannot receive evidence for superseded journeys. These
+records and preview access grant no Git, merge, release, or repository authority.
