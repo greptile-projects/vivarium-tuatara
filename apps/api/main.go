@@ -4029,7 +4029,9 @@ func registerReleaseRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 }
 
 func deriveReleaseChangedPaths(repository *storage.Repository, commitID string, previousCommitID *string) ([]string, error) {
-	args := []string{"--git-dir=" + repository.Path(), "diff-tree", "--root", "--no-commit-id", "--name-only", "-r", commitID, "--"}
+	// With no predecessor, every path in the candidate snapshot is part of the
+	// first release context, not merely the paths changed by its final commit.
+	args := []string{"--git-dir=" + repository.Path(), "ls-tree", "-r", "--name-only", commitID, "--"}
 	if previousCommitID != nil {
 		args = []string{"--git-dir=" + repository.Path(), "diff", "--name-only", *previousCommitID, commitID, "--"}
 	}

@@ -31,16 +31,19 @@ func TestCollaboratorDefinesAndInspectsExactReleaseCandidate(t *testing.T) {
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/collaborators", `{"user_id":"`+collaborator.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
 	gitRepository, _ := gitStore.Open(repository.ID)
 	definition, _ := gitRepository.WriteObject(storage.BlobObject, []byte(`{"version":1,"steps":[{"name":"package","image":"alpine:3.22","command":"printf artifact > \"$VIVARIUM_OUTPUT/package.txt\""}]}`))
+	readme, _ := gitRepository.WriteObject(storage.BlobObject, []byte("release documentation"))
+	baseTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "README.md", id: readme})
+	baseCommit := writeTestCommit(t, gitRepository, baseTree, nil, 1699999999, "base state")
 	definitionTree := writeTestTree(t, gitRepository, testTreeEntry{mode: "100644", name: "release.json", id: definition})
-	tree := writeTestTree(t, gitRepository, testTreeEntry{mode: "40000", name: ".vivarium", id: definitionTree})
-	commit := writeTestCommit(t, gitRepository, tree, nil, 1700000000, "release state")
+	tree := writeTestTree(t, gitRepository, testTreeEntry{mode: "40000", name: ".vivarium", id: definitionTree}, testTreeEntry{mode: "100644", name: "README.md", id: readme})
+	commit := writeTestCommit(t, gitRepository, tree, []storage.ObjectID{baseCommit}, 1700000000, "release state")
 	createdResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repository.ID+"/releases", `{"version":"v1.0.0","notes":"First exact delivery.","commit_id":"`+string(commit)+`"}`, collaborator.Credential.Token, http.StatusCreated)
 	var created releases.Candidate
 	if err := json.NewDecoder(createdResponse.Body).Decode(&created); err != nil {
 		t.Fatal(err)
 	}
 	createdResponse.Body.Close()
-	if created.CommitID != string(commit) || created.CreatedBy != collaborator.User.ID || created.Status != "candidate" || created.Inclusions.PullRequestIDs == nil || created.TargetBranch != "main" || len(created.ChangedPaths) != 1 || created.ChangedPaths[0] != ".vivarium/release.json" {
+	if created.CommitID != string(commit) || created.CreatedBy != collaborator.User.ID || created.Status != "candidate" || created.Inclusions.PullRequestIDs == nil || created.TargetBranch != "main" || len(created.ChangedPaths) != 2 || created.ChangedPaths[0] != ".vivarium/release.json" || created.ChangedPaths[1] != "README.md" {
 		t.Fatalf("created = %#v", created)
 	}
 	if createdResponse.Header.Get("Location") != "/repositories/"+repository.ID+"/releases/"+created.ID {
