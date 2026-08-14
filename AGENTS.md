@@ -1782,7 +1782,9 @@ whenever dependencies change or the web job fails before it starts.
   invalidation; every later evidence write revalidates the bound current plan version.
   Locale delivery policies bind the current plan to a branch, audiences, risks, named checks, and
   regional-review minimums across pull merge and release readiness. Owners stage, defer, or withdraw
-  one locale at an exact revision without blocking unaffected locales. Published application and
+  one locale at an exact revision without blocking unaffected locales; a deferred or withdrawn
+  locale cannot be published until a later attributed staging decision. Policy successors retire
+  older plan-version requirements, while a missing successor fails closed. Published application and
   documentation records expose locale, version, revision, plan provenance, and fallback state;
   permitted readers report contextual failures, which participants validate or dismiss and may link
   to bounded human- or approved-agent-owned repair work. These records grant no repository authority.

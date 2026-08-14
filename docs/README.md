@@ -57,7 +57,10 @@ target branch, governed locales, exact check names, and minimum regional review 
 revision-exact projection participates in ordinary pull merge readiness and is available for release
 candidates at `/repositories/{id}/releases/{release_id}/localization-readiness`. An attributed
 per-locale disposition may stage, defer, or withdraw one locale; deferred and withdrawn locales stay
-visible but do not block unaffected locale delivery.
+visible but do not block unaffected locale delivery. They also cannot be published until an owner
+records a later staging decision. When the locale plan advances, the prior policy fails closed until
+a current-version successor is published, then retires from aggregate readiness so it cannot block
+fresh current-plan evidence.
 
 Applications and documentation publish locale/version/source-revision/plan provenance and explicit
 complete, partial, or fallback state through `/repositories/{id}/localized-publications`. Current
