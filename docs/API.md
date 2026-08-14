@@ -1,5 +1,20 @@
 # HTTP API contract
 
+## Data commitments
+
+- `GET /repositories/{id}/data-commitments` lists readable repository commitments.
+- `GET /repositories/{id}/data-commitments/{commitment_id}` reads one commitment and its history.
+- `POST /repositories/{id}/data-commitments` publishes a complete initial revision for a current
+  repository participant with `repositories:write`.
+- `POST /repositories/{id}/data-commitments/{commitment_id}/revisions` publishes a complete
+  successor using `expected_version`; stale writers receive `409 data_commitment_conflict`.
+
+Every revision requires repository/release/extension/experiment/environment scope, at least one
+complete data-use declaration and accountable commitment owner, plus both an applicable `policy`
+and user-facing `notice` link. Responses retain immutable revision attribution and derive
+diagnostics for missing per-use ownership, unsupported guarantees, declared conflicts, and
+expiring or expired exceptions.
+
 ## Product feedback
 
 `POST /repositories/{id}/feedback` accepts an authenticated repository reader's project, release,

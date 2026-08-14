@@ -432,6 +432,14 @@ whenever dependencies change or the web job fails before it starts.
   when every required task has a durable evidence link, while aggregate evidence and provenance remain.
   Agent experiment interpretation is admitted only through a current operator of an
   organization-approved agent and retains the human operator as the authenticated writer.
+  Permitted data handling at `/repositories/{id}/data` retains complete, immutable commitment
+  revisions beneath `$DATA_COMMITMENT_STORAGE_ROOT` (default `data-commitments`). Repository
+  participants define categories, subjects, purposes, collection, processing, sharing, retention,
+  residency, deletion, consent, and accountable owners across repository, release, extension,
+  experiment, and environment scopes. Each commitment links an applicable policy and user-facing
+  notice; reads derive attributed ownership gaps, unsupported guarantees, declared conflicts, and
+  expiring or expired exceptions. Commitments document permission but grant no repository,
+  extension, experiment, deployment, or data-access authority.
 
   Product feedback at `/repositories/{id}/feedback` is a distinct needs channel for a project,
 
