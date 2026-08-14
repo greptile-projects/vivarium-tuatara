@@ -262,11 +262,17 @@ func resolveDataObservationScope(repo string, s dataobservations.Scope, commitme
 	}
 	if s.ExtensionInstallationID != "" {
 		ins, e := extensionsStore.GetInstallation(s.ExtensionInstallationID)
-		if e != nil || !slices.Contains(ins.RepositoryIDs, repo) {
+		// The installation is a live permission boundary, not merely historical
+		// provenance. Revocation retains earlier evidence but admits no new signal.
+		if !dataObservationInstallationActive(repo, ins, e) {
 			return nil, false
 		}
 	}
 	return owners, true
+}
+
+func dataObservationInstallationActive(repo string, installation extensions.Installation, err error) bool {
+	return err == nil && installation.Status == "active" && slices.Contains(installation.RepositoryIDs, repo)
 }
 
 func dataFlowRevisionReferencesUse(revision dataflows.Revision, commitmentID string, commitmentVersion int, dataUseID string) bool {

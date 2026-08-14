@@ -462,6 +462,8 @@ whenever dependencies change or the web job fails before it starts.
   use, notify participants, retain a private incident or expiring governed exception, and delegate
   ordinary human- or approved-agent-owned proposal tasks carrying only permitted evidence. These
   records grant no data, extension, environment, review, release, deployment, or repository authority.
+  An extension-scoped observation requires that installation to remain active for the repository;
+  suspension, quarantine, or removal blocks new signals without erasing retained evidence.
 
   Runtime privacy policies beneath `$PRIVACY_CHECK_STORAGE_ROOT` (default `privacy-checks`) select
   branches/paths, required collection, consent, minimization, access, retention, export, deletion,
