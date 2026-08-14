@@ -1732,6 +1732,12 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 	}
 	if s.localization != nil {
 		statuses := map[string]string{}
+		risks := []string{}
+		if report.PreviewAcceptance != nil {
+			for _, decision := range report.PreviewAcceptance.Decisions {
+				risks = append(risks, decision.RiskClasses...)
+			}
+		}
 		if s.checkRuns != nil {
 			runs, runErr := s.checkRuns.List(repositoryID, pullRequestID)
 			if runErr != nil {
@@ -1749,7 +1755,7 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 				statuses[run.Definition.Name] = status
 			}
 		}
-		localeReadiness, evaluationErr := s.localization.EvaluateDelivery(repositoryID, pullRequestID, "", p.SourceCommitID, p.TargetBranch, nil, nil, statuses)
+		localeReadiness, evaluationErr := s.localization.EvaluateDelivery(repositoryID, pullRequestID, "", p.SourceCommitID, p.TargetBranch, nil, risks, statuses)
 		if evaluationErr != nil {
 			return MergeReadiness{}, evaluationErr
 		}

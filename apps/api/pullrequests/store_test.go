@@ -14,6 +14,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/acceptance"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/localization"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
@@ -682,6 +683,46 @@ func TestIntegrationQueuePausesWhenAcceptanceChangesAfterAdmission(t *testing.T)
 	blocked, _ := store.Get(repository.ID(), pull.ID)
 	if blocked.Status != Open || !blocked.QueuePaused || blocked.MergeCommitID != nil {
 		t.Fatalf("queue landed invalidated acceptance: %#v", blocked)
+	}
+}
+
+func TestRiskScopedLocalizationBlocksReadinessAndQueueAdmission(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	repository, _ := gitStore.Create(testID('1'))
+	baseTree, _ := repository.WriteObject(storage.TreeObject, nil)
+	base := writeCommit(t, repository, baseTree, "base")
+	head := writeCommitWithParents(t, repository, baseTree, []storage.ObjectID{base}, "localized candidate")
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)})
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/topic", Target: string(head)})
+	store, _ := New(t.TempDir(), gitStore)
+	store.ConfigureRequiredChecks(queueRequirements{repositories.IntegrationQueuePolicy{Branch: "main", Enabled: true, Concurrency: 1, FailureBehavior: repositories.QueueFailurePause}}, nil)
+	acceptanceStore, _ := acceptance.New(t.TempDir())
+	store.ConfigurePreviewAcceptance(acceptanceStore, nil)
+	localizationStore, _ := localization.New(t.TempDir())
+	store.ConfigureLocalization(localizationStore)
+	pull, _ := store.Create(repository.ID(), testID('a'), "Candidate", "", "topic", "main", nil)
+	_, _ = store.SetReview(repository.ID(), pull.ID, testID('b'), Approved)
+	policy, err := acceptanceStore.SetPolicy(repository.ID(), "main", testID('c'), []acceptance.Requirement{{ID: "regional-risk", RiskClasses: []string{"high-risk"}, Scenarios: []acceptance.Scenario{{Name: "risk classified", Role: "owner", Blocking: true}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = acceptanceStore.Decide(acceptance.Decision{RepositoryID: repository.ID(), PullRequestID: pull.ID, Revision: pull.SourceCommitID, PolicyVersion: policy.Version, IdempotencyKey: "risk-current", RequirementID: "regional-risk", Scenario: "risk classified", Role: "owner", Outcome: "accepted", RiskClasses: []string{"high-risk"}, ActorID: testID('c')})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = localizationStore.CreateDeliveryPolicy(repository.ID(), testID('c'), localization.DeliveryPolicy{Branch: "main", LocalePlanID: "plan", LocalePlanVersion: 1, Locales: []string{"fr-CA"}, RiskClasses: []string{"high-risk"}, MinimumReviews: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readiness, err := store.Readiness(repository.ID(), pull.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readiness.Mergeable || readiness.CanEnqueue || readiness.LocalizationReadiness == nil || len(readiness.LocalizationReadiness.Requirements) != 1 {
+		t.Fatalf("risk-scoped localization was omitted: %#v", readiness)
+	}
+	if _, err = store.Enqueue(repository.ID(), pull.ID, testID('c')); !errors.Is(err, ErrNotReady) {
+		t.Fatalf("enqueue error = %v, want ErrNotReady", err)
 	}
 }
 
