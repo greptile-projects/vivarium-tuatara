@@ -208,7 +208,7 @@ func (s *Store) Override(repo, actor string, v Override) (Override, error) {
 	return v, e
 }
 
-func (s *Store) Evaluate(repo, revision, branch string, paths, journeys, risks []string, checkStatus map[string]string, assessments []accessibilityassessments.Assessment) (Readiness, error) {
+func (s *Store) Evaluate(repo, revision, branch, pullRequestID, releaseID string, paths, journeys, risks []string, checkStatus map[string]string, assessments []accessibilityassessments.Assessment) (Readiness, error) {
 	policies, err := s.Policies(repo)
 	if err != nil {
 		return Readiness{}, err
@@ -270,7 +270,7 @@ func (s *Store) Evaluate(repo, revision, branch string, paths, journeys, risks [
 			confirmed := map[string]bool{}
 			rejected := false
 			for _, v := range invitations {
-				if v.PolicyID != p.ID || v.Revision != revision || v.Role != rr.Role || !contains(rr.UserIDs, v.UserID) || !v.ExpiresAt.After(now) || v.Outcome == nil {
+				if v.PolicyID != p.ID || v.Revision != revision || v.PullRequestID != pullRequestID || v.ReleaseID != releaseID || v.Role != rr.Role || !contains(rr.UserIDs, v.UserID) || !v.ExpiresAt.After(now) || v.Outcome == nil {
 					continue
 				}
 				if v.Outcome.Decision == "confirmed" {

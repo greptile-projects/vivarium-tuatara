@@ -195,7 +195,11 @@ func accessibilityReadiness(store *accessibilitydelivery.Store, assessments *acc
 			journeys = append(journeys, finding.JourneyIDs...)
 		}
 	}
-	return store.Evaluate(repo, revision, branch, paths, journeys, risks, status, evidence)
+	releaseID := ""
+	if assessmentPull == "" {
+		releaseID = checkContext
+	}
+	return store.Evaluate(repo, revision, branch, assessmentPull, releaseID, paths, journeys, risks, status, evidence)
 }
 func writeAccessibilityDelivery(w http.ResponseWriter, out any, err error, status int) {
 	switch {

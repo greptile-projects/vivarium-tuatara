@@ -392,7 +392,8 @@ whenever dependencies change or the web job fails before it starts.
   participant roles. Pull merge and release readiness distinguish missing, stale, unevaluated,
   failed, and unresolved-barrier evidence. Evaluation invitations require an existing bounded guest
   invitation to the same exact preview and expiry; confirmations and rejections retain independent
-  rationale. Any live rejection blocks delivery even when the role's confirmation minimum is met.
+  rationale and satisfy only their exact pull or release context. Any live rejection blocks delivery
+  even when the role's confirmation minimum is met.
   Release candidates freeze their default-branch and release-range changed-path context; missing
   selection context fails closed. Owner overrides are expiring, preserve dissent, and require
   concrete follow-up work.

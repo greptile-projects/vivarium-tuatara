@@ -2891,8 +2891,9 @@ An evaluator must first receive ordinary bounded guest access to a revision-exac
 participant then creates the matching policy invitation at
 `POST /repositories/{id}/accessibility-evaluations/invitations`; the user, preview revision, and
 expiry must match. The invited user alone confirms or rejects at `POST
-.../invitations/{invitation_id}/outcome`. Outcomes are final and revision-bound; a rejection remains
-attributed dissent and never represents other access needs.
+.../invitations/{invitation_id}/outcome`. Outcomes are final and bound to the exact revision plus
+pull-or-release delivery context; a rejection remains attributed dissent and never represents other
+access needs.
 
 `GET /repositories/{id}/pulls/{pull_id}/accessibility-readiness` and
 `GET /repositories/{id}/releases/{release_id}/accessibility-readiness` report applicable evidence

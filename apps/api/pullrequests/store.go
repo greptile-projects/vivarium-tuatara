@@ -1674,7 +1674,7 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 				risks = append(risks, decision.RiskClasses...)
 			}
 		}
-		accessibility, evaluationErr := s.accessibilityDelivery.Evaluate(repositoryID, p.SourceCommitID, p.TargetBranch, paths, journeys, risks, statuses, evidence)
+		accessibility, evaluationErr := s.accessibilityDelivery.Evaluate(repositoryID, p.SourceCommitID, p.TargetBranch, pullRequestID, "", paths, journeys, risks, statuses, evidence)
 		if evaluationErr != nil {
 			return MergeReadiness{}, evaluationErr
 		}
