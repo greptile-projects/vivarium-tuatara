@@ -66,6 +66,16 @@ func TestRejectsIncompleteAndBrokenReferences(t *testing.T) {
 			r.Locales = append(r.Locales, Locale{ID: "es-MX", Language: "Spanish"})
 			r.Formatting = append(r.Formatting, Formatting{Locale: "es-MX", Date: "date", Time: "time", Number: "number", Currency: "MXN", Units: "metric", Direction: "ltr"})
 		},
+		"self fallback cycle": func(r *Revision) { r.Locales[0].FallbackLocale = "fr-CA" },
+		"multi-locale fallback cycle": func(r *Revision) {
+			addCompleteLocale(r, "es-MX")
+			r.Locales[0].FallbackLocale = "es-MX"
+			r.Locales[1].FallbackLocale = "fr-CA"
+		},
+		"threshold journey lacks locale": func(r *Revision) {
+			addCompleteLocale(r, "es-MX")
+			r.Journeys[0].LocaleIDs = []string{"es-MX"}
+		},
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -83,4 +93,12 @@ func TestRejectsIncompleteAndBrokenReferences(t *testing.T) {
 			}
 		})
 	}
+}
+
+func addCompleteLocale(r *Revision, locale string) {
+	r.Locales = append(r.Locales, Locale{ID: locale, Language: "Spanish"})
+	r.Formatting = append(r.Formatting, Formatting{Locale: locale, Date: "date", Time: "time", Number: "number", Currency: "MXN", Units: "metric", Direction: "ltr"})
+	r.Thresholds = append(r.Thresholds, Threshold{Locale: locale, MinimumPercent: 100, RequiredJourneyIDs: []string{"buy"}})
+	r.Resources[0].LocaleIDs = append(r.Resources[0].LocaleIDs, locale)
+	r.Journeys[0].LocaleIDs = append(r.Journeys[0].LocaleIDs, locale)
 }

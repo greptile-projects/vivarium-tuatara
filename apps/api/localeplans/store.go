@@ -206,6 +206,19 @@ func validate(r Revision) error {
 			return ErrInvalid
 		}
 	}
+	fallbacks := map[string]string{}
+	for _, l := range r.Locales {
+		fallbacks[l.ID] = l.FallbackLocale
+	}
+	for locale := range locales {
+		seen := map[string]bool{}
+		for current := locale; current != ""; current = fallbacks[current] {
+			if seen[current] {
+				return ErrInvalid
+			}
+			seen[current] = true
+		}
+	}
 	formattingLocales := map[string]bool{}
 	for _, f := range r.Formatting {
 		if !locales[f.Locale] || formattingLocales[f.Locale] || f.Date == "" || f.Time == "" || f.Number == "" || f.Currency == "" || f.Units == "" || !oneOf(f.Direction, "ltr", "rtl") {
@@ -223,16 +236,17 @@ func validate(r Revision) error {
 			return ErrInvalid
 		}
 	}
-	journeys := map[string]bool{}
+	journeys := map[string]map[string]bool{}
 	for _, j := range r.Journeys {
-		if j.ID == "" || j.Name == "" || journeys[j.ID] || len(j.LocaleIDs) == 0 {
+		if j.ID == "" || j.Name == "" || journeys[j.ID] != nil || len(j.LocaleIDs) == 0 {
 			return ErrInvalid
 		}
-		journeys[j.ID] = true
+		journeys[j.ID] = map[string]bool{}
 		for _, l := range j.LocaleIDs {
 			if !locales[l] {
 				return ErrInvalid
 			}
+			journeys[j.ID][l] = true
 		}
 	}
 	for _, x := range r.Resources {
@@ -252,7 +266,7 @@ func validate(r Revision) error {
 		}
 		thresholdLocales[t.Locale] = true
 		for _, j := range t.RequiredJourneyIDs {
-			if !journeys[j] {
+			if journeys[j] == nil || !journeys[j][t.Locale] {
 				return ErrInvalid
 			}
 		}
