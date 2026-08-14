@@ -1786,6 +1786,12 @@ whenever dependencies change or the web job fails before it starts.
   documentation records expose locale, version, revision, plan provenance, and fallback state;
   permitted readers report contextual failures, which participants validate or dismiss and may link
   to bounded human- or approved-agent-owned repair work. These records grant no repository authority.
+  The connected localization browser journey carries a changed product string through stale
+  translation recovery, grounded agent assistance, human linguistic decisions, exact French and
+  Arabic previews, required checks and regional review, an RTL finding with per-locale withdrawal,
+  ordinary review/merge, staged publication, and a reader-reported correction linked to a reviewed
+  repair and successor locale publication. Playwright isolates `$LOCALE_PLAN_STORAGE_ROOT` and
+  `$LOCALIZATION_STORAGE_ROOT` with its other temporary API stores.
 
   Update it when you change how the apps fit together, not for every change.
 

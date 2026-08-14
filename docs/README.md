@@ -66,6 +66,15 @@ content against the exact published route and locale. Repository participants va
 the report and may bind a validated finding to a human- or approved-agent-owned proposal/task URL
 with acceptance criteria. Reports and repair references grant no repository authority.
 
+The connected browser journey proves this as one trail: a product-string revision stales only its
+earlier translation, a repository-bound agent cites the current source and locale plan while a human
+retains the language decision, and exact French Canadian and Arabic previews retain regional
+authorship. Missing review blocks delivery; a confirmed right-to-left failure remains visible while
+Arabic is withdrawn and unaffected French delivery passes ordinary checks, review, merge, and
+publication. A post-release reader finding links to an ordinary reviewed repair and corrected locale
+publication without erasing the prior release, withdrawal, or dissent. Playwright assigns locale-plan
+and localization records per-run temporary roots.
+
 ## Permitted data handling
 
 Repository collaborators publish complete, compare-and-swap data commitment revisions at

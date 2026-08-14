@@ -268,7 +268,7 @@ func (s *Store) EvaluateDelivery(repo, pullID, releaseID, revision, branch strin
 			}
 			reviews := 0
 			for _, x := range review.LocaleReviewDecisions {
-				if x.Locale == locale && x.Kind == "approved" {
+				if x.Locale == locale && x.Kind == "approve" {
 					reviews++
 				}
 			}
