@@ -3,18 +3,21 @@ package main
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/accessibilityassessments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/accessibilitycommitments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/accessibilityreports"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
-func registerAccessibilityAssessmentRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, pulls *pullrequests.Store, previewStore *previews.Store, reportStore *accessibilityreports.Store, assessments *accessibilityassessments.Store) {
+func registerAccessibilityAssessmentRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, pulls *pullrequests.Store, previewStore *previews.Store, reportStore *accessibilityreports.Store, commitmentStore *accessibilitycommitments.Store, proposalStore *proposals.Store, assessments *accessibilityassessments.Store) {
 	authorize := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool, bool) {
 		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
 		if !ok {
@@ -170,6 +173,174 @@ func registerAccessibilityAssessmentRoutes(mux *http.ServeMux, git *storage.Stor
 		out, err := assessments.Decide(r.PathValue("id"), r.PathValue("assessment_id"), r.PathValue("finding_id"), actor.UserID, in.Classification, in.Reason)
 		writeAccessibilityAssessment(w, out, err, 200)
 	})
+	projectRepair := func(assessment accessibilityassessments.Assessment, finding accessibilityassessments.Finding) map[string]any {
+		out := map[string]any{"assessment": assessment, "finding": finding, "proposal": nil, "task": nil, "pull_request": nil, "previews": []previews.Preview{}}
+		if finding.Repair == nil || proposalStore == nil {
+			return out
+		}
+		proposal, err := proposalStore.Get(assessment.RepositoryID, finding.Repair.ProposalID)
+		if err != nil {
+			return out
+		}
+		task, err := proposalStore.GetTask(assessment.RepositoryID, proposal.ID, finding.Repair.TaskID)
+		if err != nil {
+			return out
+		}
+		out["proposal"], out["task"] = proposal, task
+		if task.Contribution != nil && pulls != nil {
+			if pull, getErr := pulls.Get(assessment.RepositoryID, task.Contribution.PullRequestID); getErr == nil {
+				out["pull_request"] = pull
+				if previewStore != nil {
+					if values, listErr := previewStore.List(assessment.RepositoryID, pull.ID, pull.SourceCommitID); listErr == nil {
+						out["previews"] = values
+					}
+				}
+			}
+		}
+		return out
+	}
+	mux.HandleFunc("GET /repositories/{id}/accessibility-assessments/{assessment_id}/findings/{finding_id}/repair", func(w http.ResponseWriter, r *http.Request) {
+		_, _, ok := authorize(w, r)
+		if !ok {
+			return
+		}
+		assessment, err := assessments.Get(r.PathValue("id"), r.PathValue("assessment_id"))
+		if err != nil {
+			writeAccessibilityAssessment(w, assessment, err, 0)
+			return
+		}
+		for _, finding := range assessment.Findings {
+			if finding.ID == r.PathValue("finding_id") {
+				if finding.Repair == nil {
+					writeAPIError(w, 404, "accessibility_repair_not_found", "finding has no governed repair")
+					return
+				}
+				writeJSON(w, 200, projectRepair(assessment, finding))
+				return
+			}
+		}
+		writeAPIError(w, 404, "accessibility_finding_not_found", "accessibility finding not found")
+	})
+	mux.HandleFunc("POST /repositories/{id}/accessibility-assessments/{assessment_id}/findings/{finding_id}/repair", func(w http.ResponseWriter, r *http.Request) {
+		actor, participant, ok := authorize(w, r)
+		if !ok {
+			return
+		}
+		if !participant {
+			writeAPIError(w, 403, "accessibility_repair_forbidden", "only a current human repository participant may start a repair")
+			return
+		}
+		if commitmentStore == nil || proposalStore == nil {
+			writeAPIError(w, 503, "accessibility_repair_unavailable", "governed accessibility repair is unavailable")
+			return
+		}
+		var in struct {
+			CommitmentID       string   `json:"commitment_id"`
+			CommitmentVersion  int      `json:"commitment_version"`
+			AcceptanceCriteria []string `json:"acceptance_criteria"`
+			ComponentGuidance  []string `json:"component_guidance"`
+			AssigneeType       string   `json:"assignee_type"`
+			AssigneeID         string   `json:"assignee_id"`
+		}
+		if decodeJSON(r, &in) != nil || (in.AssigneeType != "human" && in.AssigneeType != "agent") || len(in.AcceptanceCriteria) == 0 || len(in.AcceptanceCriteria) > 20 || len(in.ComponentGuidance) == 0 || len(in.ComponentGuidance) > 20 {
+			writeAPIError(w, 422, "invalid_accessibility_repair", "an exact commitment, acceptance criteria, component guidance, and owner are required")
+			return
+		}
+		for _, values := range [][]string{in.AcceptanceCriteria, in.ComponentGuidance} {
+			for i := range values {
+				values[i] = strings.TrimSpace(values[i])
+				if values[i] == "" || len(values[i]) > 1000 {
+					writeAPIError(w, 422, "invalid_accessibility_repair", "acceptance criteria and component guidance must be bounded")
+					return
+				}
+			}
+		}
+		if in.AssigneeType == "human" {
+			if strings.TrimSpace(in.AssigneeID) == "" {
+				in.AssigneeID = actor.UserID
+			}
+			repo, _ := catalog.GetByID(r.PathValue("id"))
+			collaborator, _ := catalog.HasCollaborator(in.AssigneeID, repo.ID)
+			if repo.OwnerID != in.AssigneeID && !collaborator {
+				writeAPIError(w, 422, "invalid_accessibility_assignee", "human owner must already participate in the repository")
+				return
+			}
+		}
+		commitment, err := commitmentStore.Get(strings.TrimSpace(in.CommitmentID))
+		if err != nil || commitment.RepositoryID != r.PathValue("id") || in.CommitmentVersion < 1 || in.CommitmentVersion > len(commitment.Revisions) {
+			writeAPIError(w, 422, "invalid_accessibility_commitment", "the selected commitment revision must belong to this repository")
+			return
+		}
+		commitmentRevision := commitment.Revisions[in.CommitmentVersion-1]
+		assessment, err := assessments.Get(r.PathValue("id"), r.PathValue("assessment_id"))
+		if err != nil {
+			writeAccessibilityAssessment(w, assessment, err, 0)
+			return
+		}
+		var finding *accessibilityassessments.Finding
+		for i := range assessment.Findings {
+			if assessment.Findings[i].ID == r.PathValue("finding_id") {
+				finding = &assessment.Findings[i]
+				break
+			}
+		}
+		if finding == nil {
+			writeAPIError(w, 404, "accessibility_finding_not_found", "accessibility finding not found")
+			return
+		}
+		if finding.InvalidatedAt != nil || finding.Decision == nil || finding.Decision.Classification != "accepted" {
+			writeAPIError(w, 409, "accessibility_finding_not_confirmed", "only a current accepted finding can enter implementation")
+			return
+		}
+		items := []proposals.ReasoningItem{{ID: finding.ID, Kind: "accessibility_finding", Summary: finding.Title + ": " + finding.Detail, Status: "accepted"}, {ID: commitment.ID + "-v" + strconv.Itoa(in.CommitmentVersion), Kind: "accessibility_commitment", Summary: commitmentRevision.Title + ": " + commitmentRevision.Summary, Status: "required"}}
+		evidence := []accessibilityassessments.RepairEvidence{}
+		for index, citation := range finding.Citations {
+			var currentPull *pullrequests.PullRequest
+			if citation.Kind == "preview" && previewStore != nil && pulls != nil {
+				if preview, findErr := previewStore.Find(assessment.RepositoryID, citation.ResourceID); findErr == nil {
+					if pull, getErr := pulls.Get(assessment.RepositoryID, preview.PullRequestID); getErr == nil {
+						currentPull = &pull
+					}
+				}
+			}
+			if !accessibilityCitationResolves(assessment.RepositoryID, assessment.Revision, citation, currentPull, previewStore, reportStore) {
+				writeAPIError(w, 409, "accessibility_evidence_changed", "the permitted reproduction evidence is no longer revision-exact")
+				return
+			}
+			summary := accessibilityRepairEvidenceSummary(assessment.RepositoryID, citation, previewStore, reportStore)
+			evidence = append(evidence, accessibilityassessments.RepairEvidence{Kind: citation.Kind, ResourceID: citation.ResourceID, EvidenceRef: citation.EvidenceRef, Summary: summary})
+			items = append(items, proposals.ReasoningItem{ID: "evidence-" + strconv.Itoa(index+1), Kind: "permitted_reproduction_evidence", Summary: summary, Status: "confirmed"})
+		}
+		for index, guidance := range in.ComponentGuidance {
+			items = append(items, proposals.ReasoningItem{ID: "component-guidance-" + strconv.Itoa(index+1), Kind: "component_guidance", Summary: guidance, Status: "required"})
+		}
+		criteria := strings.Join(in.AcceptanceCriteria, "\n- ")
+		guidance := strings.Join(in.ComponentGuidance, "\n- ")
+		origin := proposals.ReasoningOrigin{AssessmentID: assessment.ID, AssessmentVersion: 1, AccessibilityFindingID: finding.ID, AccessibilityCommitmentID: commitment.ID, AccessibilityCommitmentVersion: in.CommitmentVersion, Revision: assessment.Revision, SelectedItemIDs: []string{finding.ID}, Items: items, AnalysisStatus: "accessibility_repair"}
+		proposal, tasks, createErr := proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: assessment.RepositoryID, ActorID: actor.UserID, Title: "Accessible repair: " + finding.Title, Body: "Governed repair for accepted accessibility finding " + finding.ID + ". The affected user remains the author of their evidence; this implementation does not speak for them.\n\nAcceptance criteria:\n- " + criteria + "\n\nComponent guidance:\n- " + guidance + "\n\nPull requests must document design and code changes, interaction and content tradeoffs, and attach an exact-revision preview.", Origin: origin, Tasks: []proposals.ImplementationTaskInput{{Title: "Repair " + finding.Title, Outcome: "Meet every acceptance criterion at the exact repair revision while preserving contributor authorship and ordinary review.", Risk: finding.Severity + " accessibility barrier at " + assessment.Revision, VerificationPlan: criteria + "\n\nPreview the interaction and record design, code, interaction, and content tradeoffs.", AssigneeType: in.AssigneeType, AssigneeID: strings.TrimSpace(in.AssigneeID)}}})
+		if createErr != nil && !errors.Is(createErr, proposals.ErrDurabilityUncertain) {
+			if errors.Is(createErr, proposals.ErrImplementationConflict) {
+				writeAPIError(w, 409, "accessibility_repair_changed", "the frozen repair handoff differs from the existing work")
+				return
+			}
+			writeAPIError(w, 500, "accessibility_repair_failed", "governed repair could not be created")
+			return
+		}
+		repair := accessibilityassessments.Repair{ProposalID: proposal.ID, TaskID: tasks[0].ID, BaseRevision: assessment.Revision, AcceptanceCriteria: append([]string(nil), in.AcceptanceCriteria...), CommitmentID: commitment.ID, CommitmentVersion: in.CommitmentVersion, CommitmentTitle: commitmentRevision.Title, ComponentGuidance: append([]string(nil), in.ComponentGuidance...), PermittedEvidence: evidence}
+		updated, attachErr := assessments.AttachRepair(assessment.RepositoryID, assessment.ID, finding.ID, actor.UserID, repair)
+		if attachErr != nil {
+			w.Header().Set("Location", "/proposals/"+assessment.RepositoryID+"/"+proposal.ID)
+			writeJSON(w, 202, map[string]any{"assessment": assessment, "finding": finding, "proposal": proposal, "task": tasks[0], "recovery_pending": true})
+			return
+		}
+		for _, value := range updated.Findings {
+			if value.ID == finding.ID {
+				w.Header().Set("Location", "/repositories/"+assessment.RepositoryID+"/accessibility-assessments/"+assessment.ID+"/findings/"+finding.ID+"/repair")
+				writeJSON(w, 201, projectRepair(updated, value))
+				return
+			}
+		}
+	})
 	mux.HandleFunc("POST /repositories/{id}/accessibility-assessments/{assessment_id}/invalidate", func(w http.ResponseWriter, r *http.Request) {
 		actor, participant, ok := authorize(w, r)
 		if !ok {
@@ -190,6 +361,37 @@ func registerAccessibilityAssessmentRoutes(mux *http.ServeMux, git *storage.Stor
 		out, err := assessments.Invalidate(r.PathValue("id"), r.PathValue("assessment_id"), actor.UserID, in.SourceLocations, in.JourneyIDs)
 		writeAccessibilityAssessment(w, out, err, 200)
 	})
+}
+
+func accessibilityRepairEvidenceSummary(repositoryID string, citation accessibilityassessments.Citation, previewStore *previews.Store, reportStore *accessibilityreports.Store) string {
+	if citation.Kind == "preview" && previewStore != nil {
+		if preview, err := previewStore.Find(repositoryID, citation.ResourceID); err == nil {
+			for _, finding := range preview.Findings {
+				for _, artifact := range finding.Evidence {
+					if citation.EvidenceRef == "artifact://"+artifact.ID {
+						return "Preview " + finding.Route + ": " + finding.Title + ". " + finding.Description + " Steps: " + strings.Join(finding.ReproductionSteps, "; ") + ". Redacted artifact: " + artifact.Name + " (" + citation.EvidenceRef + ")"
+					}
+				}
+			}
+		}
+	}
+	if citation.Kind == "reproduction" && reportStore != nil {
+		if reports, err := reportStore.List(repositoryID); err == nil {
+			for _, report := range reports {
+				for _, attempt := range report.Attempts {
+					if attempt.ID != citation.ResourceID {
+						continue
+					}
+					for _, artifact := range attempt.Evidence {
+						if artifact.ContentRef == citation.EvidenceRef {
+							return "Expected: " + report.ExpectedOutcome + ". Steps: " + strings.Join(report.Steps, "; ") + ". Reproduction " + attempt.Outcome + ": " + attempt.Notes + ". Redacted " + artifact.Kind + ": " + artifact.Description + " (" + citation.EvidenceRef + ")"
+						}
+					}
+				}
+			}
+		}
+	}
+	return citation.Kind + " evidence at " + citation.EvidenceRef
 }
 
 func accessibilityRevisionIsVisible(git *storage.Store, repositoryID, revision string) bool {

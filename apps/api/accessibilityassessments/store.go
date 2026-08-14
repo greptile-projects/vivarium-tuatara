@@ -61,6 +61,26 @@ type Finding struct {
 	Decision        *Decision  `json:"decision,omitempty"`
 	InvalidatedAt   *time.Time `json:"invalidated_at,omitempty"`
 	CreatedAt       time.Time  `json:"created_at"`
+	Repair          *Repair    `json:"repair,omitempty"`
+}
+type RepairEvidence struct {
+	Kind        string `json:"kind"`
+	ResourceID  string `json:"resource_id"`
+	EvidenceRef string `json:"evidence_ref"`
+	Summary     string `json:"summary"`
+}
+type Repair struct {
+	ProposalID         string           `json:"proposal_id"`
+	TaskID             string           `json:"task_id"`
+	BaseRevision       string           `json:"base_revision"`
+	AcceptanceCriteria []string         `json:"acceptance_criteria"`
+	CommitmentID       string           `json:"commitment_id"`
+	CommitmentVersion  int              `json:"commitment_version"`
+	CommitmentTitle    string           `json:"commitment_title"`
+	ComponentGuidance  []string         `json:"component_guidance"`
+	PermittedEvidence  []RepairEvidence `json:"permitted_reproduction_evidence"`
+	CreatedBy          string           `json:"created_by"`
+	CreatedAt          time.Time        `json:"created_at"`
 }
 type Assessment struct {
 	ID            string    `json:"id"`
@@ -166,6 +186,42 @@ func (s *Store) Decide(repo, id, findingID, actor, classification, reason string
 	}
 	return v, ErrNotFound
 }
+func (s *Store) AttachRepair(repo, id, findingID, actor string, repair Repair) (Assessment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, e := s.lock(syscall.LOCK_EX)
+	if e != nil {
+		return Assessment{}, e
+	}
+	defer u()
+	v, e := s.get(repo, id)
+	if e != nil {
+		return v, e
+	}
+	for i := range v.Findings {
+		f := &v.Findings[i]
+		if f.ID != findingID {
+			continue
+		}
+		if f.InvalidatedAt != nil || f.Decision == nil || f.Decision.Classification != "accepted" {
+			return v, ErrInvalid
+		}
+		if f.Repair != nil {
+			if f.Repair.ProposalID == repair.ProposalID && f.Repair.TaskID == repair.TaskID {
+				return v, nil
+			}
+			return v, ErrInvalid
+		}
+		repair.CreatedBy, repair.CreatedAt = actor, s.now()
+		if !validRepair(repair, v.Revision, f.Citations) {
+			return v, ErrInvalid
+		}
+		f.Repair = &repair
+		v.UpdatedAt = repair.CreatedAt
+		return v, s.write(v)
+	}
+	return v, ErrNotFound
+}
 func (s *Store) Invalidate(repo, id, actor string, paths, journeys []string) (Assessment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -265,6 +321,21 @@ func validFinding(x Finding, revision string, existing []Finding) bool {
 	}
 	for _, c := range x.Citations {
 		if !contains([]string{"preview", "reproduction"}, c.Kind) || c.Revision != revision || !strings.HasPrefix(c.EvidenceRef, "artifact://") {
+			return false
+		}
+	}
+	return true
+}
+func validRepair(x Repair, revision string, citations []Citation) bool {
+	if !bounded(x.ProposalID, 64) || !bounded(x.TaskID, 64) || x.BaseRevision != revision || !bounded(x.CommitmentID, 64) || x.CommitmentVersion < 1 || !bounded(x.CommitmentTitle, 300) || len(x.AcceptanceCriteria) == 0 || len(x.AcceptanceCriteria) > 20 || len(x.ComponentGuidance) == 0 || len(x.ComponentGuidance) > 20 || len(x.PermittedEvidence) == 0 || len(x.PermittedEvidence) > 12 || !boundedList(x.AcceptanceCriteria, 1000) || !boundedList(x.ComponentGuidance, 1000) {
+		return false
+	}
+	allowed := map[string]bool{}
+	for _, c := range citations {
+		allowed[c.Kind+"\x00"+c.ResourceID+"\x00"+c.EvidenceRef] = true
+	}
+	for _, e := range x.PermittedEvidence {
+		if !allowed[e.Kind+"\x00"+e.ResourceID+"\x00"+e.EvidenceRef] || !bounded(e.Summary, 2000) {
 			return false
 		}
 	}

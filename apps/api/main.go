@@ -782,7 +782,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerAccessibilityReportRoutes(mux, repositoryCatalog, authStore, accessibilityReportStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && accessibilityAssessmentStore != nil {
-		registerAccessibilityAssessmentRoutes(mux, store, repositoryCatalog, authStore, pullRequestStore, previewStore, accessibilityReportStore, accessibilityAssessmentStore)
+		registerAccessibilityAssessmentRoutes(mux, store, repositoryCatalog, authStore, pullRequestStore, previewStore, accessibilityReportStore, accessibilityCommitmentStore, proposalStore, accessibilityAssessmentStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && productExperimentStore != nil {
 		registerProductExperimentRoutes(mux, repositoryCatalog, authStore, productExperimentStore, proposalStore, pullRequestStore, checkRunStore, releaseStore, deploymentStore, organizationStore)
@@ -1461,13 +1461,17 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 			return
 		}
 		var input struct {
-			Title              string `json:"title"`
-			Body               string `json:"body"`
-			SourceBranch       string `json:"source_branch"`
-			TargetBranch       string `json:"target_branch"`
-			SessionID          string `json:"session_id"`
-			RunID              string `json:"run_id"`
-			SourceRepositoryID string `json:"source_repository_id"`
+			Title                string `json:"title"`
+			Body                 string `json:"body"`
+			SourceBranch         string `json:"source_branch"`
+			TargetBranch         string `json:"target_branch"`
+			SessionID            string `json:"session_id"`
+			RunID                string `json:"run_id"`
+			SourceRepositoryID   string `json:"source_repository_id"`
+			DesignChanges        string `json:"design_changes"`
+			CodeChanges          string `json:"code_changes"`
+			InteractionTradeoffs string `json:"interaction_tradeoffs"`
+			ContentTradeoffs     string `json:"content_tradeoffs"`
 		}
 		if decodeJSON(r, &input) != nil || strings.TrimSpace(input.Title) == "" || strings.TrimSpace(input.SourceBranch) == "" || strings.TrimSpace(input.TargetBranch) == "" {
 			writeAPIError(w, 400, "invalid_task_contribution", "title, body, source_branch, and target_branch are required")
@@ -1484,6 +1488,16 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		if proposal.Status != proposals.Open || task.Status != proposals.TaskTodo || task.Assignment == nil || task.Assignment.ContextRevision != task.ContextRevision || (task.Assignment.AssigneeType == "human" && task.Assignment.AssigneeID != actor.UserID) {
 			writeAPIError(w, 409, "task_not_publishable", "task work must be published by its current assignee")
 			return
+		}
+		if task.Reasoning != nil && task.Reasoning.AnalysisStatus == "accessibility_repair" {
+			sections := []string{strings.TrimSpace(input.DesignChanges), strings.TrimSpace(input.CodeChanges), strings.TrimSpace(input.InteractionTradeoffs), strings.TrimSpace(input.ContentTradeoffs)}
+			for _, section := range sections {
+				if section == "" || len(section) > 4000 {
+					writeAPIError(w, 422, "accessibility_repair_context_required", "accessible repairs must document design and code changes plus interaction and content tradeoffs")
+					return
+				}
+			}
+			input.Body = strings.TrimSpace(input.Body) + "\n\n## Design changes\n\n" + sections[0] + "\n\n## Code changes\n\n" + sections[1] + "\n\n## Interaction tradeoffs\n\n" + sections[2] + "\n\n## Content tradeoffs\n\n" + sections[3]
 		}
 		var sessionID, runID *string
 		commits := []string{}

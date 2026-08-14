@@ -374,6 +374,14 @@ whenever dependencies change or the web job fails before it starts.
   Pull-bound assessment creation and preview-cited finding persistence hold
   `pullrequests.WithSourceRevision` across the cross-store write; concurrent synchronization returns
   a conflict, and one finding cannot span preview artifacts from different pulls.
+  Accepted current findings can create one finding-specific ordinary proposal/task repair with an
+  exact commitment revision, bounded acceptance criteria, collaborator-authored component guidance,
+  and only the already-permitted redacted reproduction references frozen into task reasoning. Human
+  and agent work continues through existing assignment, workspace/session, contribution, review, and
+  merge boundaries. Accessibility task publication requires explicit design/code change and
+  interaction/content tradeoff sections; the finding repair projection reports the connected task,
+  pull, and only current-source-revision previews without exposing reporter identity or unconsented
+  device context.
   Product experiments at `/repositories/{id}/experiments` retain append-only hypothesis-plan
   revisions sourced from proposals, issues, decisions, pulls, previews, or releases. Success and
   guardrail metrics bind exact permitted product-signal versions; audience eligibility,
