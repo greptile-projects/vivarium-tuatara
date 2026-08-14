@@ -27,6 +27,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/contributoropportunities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/contributorpathways"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/datacommitments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/decisions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deliveryteams"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
@@ -358,6 +359,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	dataCommitmentRoot := os.Getenv("DATA_COMMITMENT_STORAGE_ROOT")
+	if dataCommitmentRoot == "" {
+		dataCommitmentRoot = "data-commitments"
+	}
+	dataCommitmentStore, err := datacommitments.New(dataCommitmentRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	accessibilityReportRoot := os.Getenv("ACCESSIBILITY_REPORT_STORAGE_ROOT")
 	if accessibilityReportRoot == "" {
 		accessibilityReportRoot = "accessibility-reports"
@@ -449,7 +458,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -597,6 +606,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var accessibilityReportStore *accessibilityreports.Store
 	var accessibilityAssessmentStore *accessibilityassessments.Store
 	var accessibilityDeliveryStore *accessibilitydelivery.Store
+	var dataCommitmentStore *datacommitments.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -667,6 +677,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			accessibilityAssessmentStore = value
 		case *accessibilitydelivery.Store:
 			accessibilityDeliveryStore = value
+		case *datacommitments.Store:
+			dataCommitmentStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -789,6 +801,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && accessibilityCommitmentStore != nil {
 		registerAccessibilityCommitmentRoutes(mux, repositoryCatalog, authStore, accessibilityCommitmentStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && dataCommitmentStore != nil {
+		registerDataCommitmentRoutes(mux, repositoryCatalog, authStore, dataCommitmentStore, releaseStore, extensionStore, productExperimentStore, deploymentStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && accessibilityReportStore != nil {
 		registerAccessibilityReportRoutes(mux, repositoryCatalog, authStore, accessibilityReportStore)

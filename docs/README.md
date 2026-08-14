@@ -14,6 +14,17 @@ The supported consumer contract, including authentication, stable error
 shapes, validation, and collection pagination, is documented in [API.md](API.md).
 Consumers should use that HTTP boundary rather than reading storage roots.
 
+## Permitted data handling
+
+Repository collaborators publish complete, compare-and-swap data commitment revisions at
+`/repositories/{id}/data`. A revision makes categories, subjects, purposes, collection,
+processing, sharing, retention, residency, deletion, consent, and accountable owners inspectable
+across repository, release, extension, experiment, and environment scopes before implementation.
+Applicable policy and user-notice links are mandatory. Derived diagnostics keep missing ownership,
+unsupported guarantees, declared conflicts, and expiring exceptions visible and attributed.
+Records default beneath `$DATA_COMMITMENT_STORAGE_ROOT` (`data-commitments`) and document permitted
+handling without granting access or operational authority.
+
 ## Accountable product direction
 
 The repository roadmap at `/repositories/{id}/roadmap` turns exact product-opportunity versions

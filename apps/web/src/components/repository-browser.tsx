@@ -238,6 +238,7 @@ export function RepositoryBrowser({ id }: { id: string }) {
             <Link href={`/repositories/${id}/impact?ref=${immutableRevision}${currentPath ? `&path=${encodeURIComponent(currentPath)}` : ""}`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Assess prospective impact</Link>
             <Link href={`/repositories/${id}/performance`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Performance goals</Link>
             <Link href={`/repositories/${id}/accessibility`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Accessibility commitments</Link>
+            <Link href={`/repositories/${id}/data`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Data commitments</Link>
             <Link href={`/repositories/${id}/funds`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Project funds</Link>
             <Link href={`/repositories/${id}/funding`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Outcome funding</Link>
             <Link href={`/repositories/${id}/experiments`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Product experiments</Link>
