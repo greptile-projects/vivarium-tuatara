@@ -3167,3 +3167,20 @@ repository-readable and return the full immutable revision history plus derived 
 `missing_ownership`, `missing_reviewers`, `unsupported_format`, `conflicting_terminology`, and
 `stale_coverage` against the current default branch. A locale plan is an inspectable support promise,
 not release approval or operational authority.
+
+### Pull localization review
+
+`GET /repositories/{id}/pulls/{pull_id}/localization` projects the current pull source revision,
+retained extraction snapshots and translation history, contextual units, and per-locale added,
+changed, removed, reused, and untranslated counts. Repository visibility governs reads.
+
+`POST /repositories/{id}/pulls/{pull_id}/localization/extractions` requires repository write access
+and a `source_revision` equal to the current pull source commit. Its `map` names a stable ID, version,
+include paths, and formats; `locales` declares the reviewed locales; every unit supplies a stable key,
+message, context, optional screenshot, variables and plural rule, and one or more path/line source
+locations. Unit IDs and source hashes are server-derived.
+
+`POST /repositories/{id}/pulls/{pull_id}/localization/translations` requires only an authenticated
+identity that can read the repository. It accepts the current `source_revision`, `unit_id`, `locale`,
+translated `text`, and optional `note`. A newer proposal or affected source edit marks earlier work
+`superseded` without deleting it. These endpoints grant no repository write, review, or merge authority.
