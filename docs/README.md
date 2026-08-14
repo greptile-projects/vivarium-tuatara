@@ -73,7 +73,16 @@ release, environment, deployment, optional extension, and accountable owners. Hu
 contain use, notify participants, retain a private incident or expiring governed exception, and create
 a human- or approved-agent-owned ordinary proposal task carrying only sanitized evidence. Existing
 review, verification, release, and deployment boundaries remain authoritative. Records default beneath
-`$DATA_OBSERVATION_STORAGE_ROOT` (`data-observations`).
+`$DATA_OBSERVATION_STORAGE_ROOT` (`data-observations`). New extension-scoped signals require the
+installation to remain active for that repository; revocation preserves earlier evidence but fails
+closed for later submissions.
+
+The connected privacy-engineering browser journey freezes an existing account path, compares a new
+external-recipient flow, retains a cited challenge, proves source movement makes the first analysis
+stale, and verifies the revised design in an isolated synthetic preview. A non-owner cannot publish
+an exception, current privacy-owner acknowledgement is required before ordinary review and merge,
+and the commitment and evidence remain visible after release. Playwright isolates commitment, flow,
+privacy-review, privacy-check, and production-observation records.
 
 ## Accountable product direction
 

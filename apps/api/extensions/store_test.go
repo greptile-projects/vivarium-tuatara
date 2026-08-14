@@ -63,6 +63,48 @@ func TestWithInstallationsRepositoryHoldsMutationBoundary(t *testing.T) {
 	}
 }
 
+func TestWithActiveInstallationRepositoryExcludesRevocation(t *testing.T) {
+	store, _ := New(t.TempDir())
+	installation := Installation{ID: strings.Repeat("a", 32), RepositoryIDs: []string{strings.Repeat("b", 32)}, Status: "active", Version: 1}
+	if err := writeAtomic(filepath.Join(store.root, "installation-"+installation.ID+".json"), installation); err != nil {
+		t.Fatal(err)
+	}
+	revoked := make(chan struct{})
+	err := store.WithActiveInstallationRepository(installation.ID, installation.RepositoryIDs[0], func(current Installation) error {
+		if current.Status != "active" {
+			t.Fatalf("status = %s", current.Status)
+		}
+		go func() {
+			_, _ = store.ChangeInstallation(installation.ID, "", "remove", 1, nil, nil)
+			close(revoked)
+		}()
+		select {
+		case <-revoked:
+			t.Fatal("revocation crossed dependent persistence boundary")
+		case <-time.After(20 * time.Millisecond):
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-revoked:
+	case <-time.After(time.Second):
+		t.Fatal("revocation did not continue after dependent persistence")
+	}
+	removed, err := store.GetInstallation(installation.ID)
+	if err != nil || removed.Status != "removed" {
+		t.Fatalf("installation = %#v, error = %v", removed, err)
+	}
+	if err := store.WithActiveInstallationRepository(installation.ID, installation.RepositoryIDs[0], func(Installation) error {
+		t.Fatal("removed installation admitted dependent persistence")
+		return nil
+	}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("removed boundary error = %v", err)
+	}
+}
+
 func TestInstallationScopesDecisionsAndRetainsLifecycleHistory(t *testing.T) {
 	store, _ := New(t.TempDir())
 	extension, err := store.Create(strings.Repeat("a", 32), Registration{Name: "Review lens", OperatorContact: "ops@example.test", Capabilities: []string{"review", "summarize"}, CallbackURL: "https://example.test/events", ActionURL: "https://example.test/actions", RequestedPermissions: []Permission{{Resource: "pull_requests", Actions: []string{"read", "comment"}}, {Resource: "issues", Actions: []string{"read"}}}, SupportedEvents: []string{"pull_request.opened"}, CredentialRotation: RotationPolicy{IntervalDays: 30}}, time.Now())

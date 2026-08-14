@@ -457,7 +457,7 @@ export function DataFlowWorkspace({ repositoryID }: { repositoryID: string }) {
                 <Button disabled={busy}>Retain cited finding</Button>
               </div>
             </form>
-            {selected.analyses.flatMap((a) =>
+            {(selected.analyses ?? []).flatMap((a) =>
               a.findings.map((f) => (
                 <article
                   className="mt-4 rounded-lg border p-3 text-sm"
