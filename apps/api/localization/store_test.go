@@ -83,3 +83,38 @@ func TestExtractionPreservesUnreadableReview(t *testing.T) {
 		t.Fatalf("corrupt review was replaced: %q", after)
 	}
 }
+
+func TestGetDoesNotProjectOldRevisionAsActionable(t *testing.T) {
+	s, _ := New(t.TempDir())
+	m := ExtractionMap{ID: "docs", Version: 1, Name: "Docs", Include: []string{"docs/**"}, Formats: []string{"markdown"}}
+	v, err := s.Extract("repo", "pull", "1111111111111111111111111111111111111111", "owner", m, []string{"es"}, []Unit{{Key: "intro", Message: "Start", Context: "Introduction", Locations: []Location{{Path: "docs/start.md", Line: 1}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Propose("repo", "pull", v.CurrentRevision, v.Extractions[0].Units[0].ID, "es", "Inicio", "", "translator")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	projected, err := s.Get("repo", "pull", "2222222222222222222222222222222222222222")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projected.Counts) != 0 {
+		t.Fatalf("stale extraction produced current counts: %#v", projected.Counts)
+	}
+	if projected.Translations[0].Status != "stale" {
+		t.Fatalf("old translation status = %q", projected.Translations[0].Status)
+	}
+	if projected.Extractions[0].Units[0].LocaleStatus["es"] != "stale" {
+		t.Fatalf("old unit status = %#v", projected.Extractions[0].Units[0].LocaleStatus)
+	}
+
+	persisted, err := s.Get("repo", "pull", "1111111111111111111111111111111111111111")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Translations[0].Status != "proposed" {
+		t.Fatalf("read projection mutated history: %q", persisted.Translations[0].Status)
+	}
+}

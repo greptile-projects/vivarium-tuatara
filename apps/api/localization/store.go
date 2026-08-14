@@ -207,6 +207,22 @@ func (s *Store) Get(repo, pull, current string) (Review, error) {
 	}
 	v.CurrentRevision = current
 	s.project(&v)
+	if len(v.Extractions) > 0 && v.Extractions[len(v.Extractions)-1].SourceRevision != current {
+		// Retain the earlier extraction and translation history for context, but
+		// never project it as actionable work for a newer pull revision.
+		v.Counts = map[string]map[string]int{}
+		latest := &v.Extractions[len(v.Extractions)-1]
+		for i := range latest.Units {
+			for locale := range latest.Units[i].LocaleStatus {
+				latest.Units[i].LocaleStatus[locale] = "stale"
+			}
+		}
+		for i := range v.Translations {
+			if v.Translations[i].Status == "proposed" {
+				v.Translations[i].Status = "stale"
+			}
+		}
+	}
 	return v, nil
 }
 func (s *Store) project(v *Review) {
