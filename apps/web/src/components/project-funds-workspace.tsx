@@ -88,9 +88,6 @@ export function ProjectFundsWorkspace({
             purpose: d.get("purpose"),
             stewards: csv("stewards"),
             accepted_funding_sources: sources,
-            source_verification_keys: Object.fromEntries(
-              sources.map((source) => [source, d.get("source_key")]),
-            ),
             unit: d.get("unit"),
             precision: Number(d.get("precision")),
             spending_limits: [
@@ -166,10 +163,6 @@ export function ProjectFundsWorkspace({
               name="sources"
               label="Accepted sources"
               value="card, invoice"
-            />
-            <Field
-              name="source_key"
-              label="Source Ed25519 public key (base64)"
             />
             <Field name="unit" label="Currency or credit type" value="USD" />
             <Field

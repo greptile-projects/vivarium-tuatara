@@ -20,8 +20,17 @@ func proof(source, reference, status string, amount int64) *TransferProof {
 	p.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(testPrivateKey, transferProofMessage(*p)))
 	return p
 }
+func newStore(t *testing.T) *Store {
+	t.Helper()
+	key := base64.StdEncoding.EncodeToString(testPublicKey)
+	s, err := New(t.TempDir(), map[string]string{"card": key, "invoice": key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
 func TestCommitmentsCreateValueOnlyAfterVerifiedReconciliation(t *testing.T) {
-	s, _ := New(t.TempDir())
+	s := newStore(t)
 	f, e := s.Create("repo", "owner", terms())
 	if e != nil {
 		t.Fatal(e)
@@ -51,7 +60,7 @@ func TestCommitmentsCreateValueOnlyAfterVerifiedReconciliation(t *testing.T) {
 	}
 }
 func TestFailedAndUnauthorizedTransfersCannotCreateValue(t *testing.T) {
-	s, _ := New(t.TempDir())
+	s := newStore(t)
 	f, _ := s.Create("repo", "owner", terms())
 	f, _ = s.Commit(f.ID, "backer", "invoice", "inv-2", 500, "unique-2", "")
 	if _, e := s.Reconcile(f.ID, f.Ledger[0].ID, "owner", "settled", 500, proof("invoice", "inv-2", "settled", 500), "", f.Version); !errors.Is(e, ErrForbidden) {
@@ -63,5 +72,39 @@ func TestFailedAndUnauthorizedTransfersCannotCreateValue(t *testing.T) {
 	}
 	if f.Balances.Available != 0 || f.Balances.Pending != 0 {
 		t.Fatalf("failed balance=%+v", f.Balances)
+	}
+}
+func TestCreatorCannotChooseProofAuthority(t *testing.T) {
+	creatorPublic, _, _ := ed25519.GenerateKey(rand.Reader)
+	s, _ := New(t.TempDir(), map[string]string{"card": base64.StdEncoding.EncodeToString(testPublicKey)})
+	in := terms()
+	in.FundingSources = []string{"card"}
+	in.SourceVerificationKeys = map[string]string{"card": base64.StdEncoding.EncodeToString(creatorPublic)}
+	f, err := s.Create("repo", "creator", in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Terms.SourceVerificationKeys["card"] != base64.StdEncoding.EncodeToString(testPublicKey) {
+		t.Fatal("creator-controlled key was retained")
+	}
+}
+func TestTransferReferenceAndProofCannotBeReused(t *testing.T) {
+	s := newStore(t)
+	f, _ := s.Create("repo", "owner", terms())
+	f, _ = s.Commit(f.ID, "backer", "card", "transfer-1", 1000, "key-1", "")
+	if _, err := s.Commit(f.ID, "backer", "card", "transfer-1", 1000, "key-2", ""); !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate transfer=%v", err)
+	}
+	p := proof("card", "transfer-1", "settled", 1000)
+	f, err := s.Reconcile(f.ID, f.Ledger[0].ID, "steward", "settled", 1000, p, "", f.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Persisted-record defense counts a proof identity once even if corrupt legacy data repeats it.
+	duplicate := f.Ledger[len(f.Ledger)-1]
+	duplicate.ID = randomID()
+	f.Ledger = append(f.Ledger, duplicate)
+	if got := derive(f.Terms, f.Ledger).Available; got != 1000 {
+		t.Fatalf("replayed proof credited %d", got)
 	}
 }

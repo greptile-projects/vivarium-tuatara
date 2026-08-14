@@ -398,7 +398,13 @@ func main() {
 	if projectFundRoot == "" {
 		projectFundRoot = "project-funds"
 	}
-	projectFundStore, err := projectfunds.New(projectFundRoot)
+	trustedFundSources := map[string]string{}
+	if raw := os.Getenv("PROJECT_FUND_TRUSTED_SOURCES"); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &trustedFundSources); err != nil {
+			log.Fatal("invalid PROJECT_FUND_TRUSTED_SOURCES")
+		}
+	}
+	projectFundStore, err := projectfunds.New(projectFundRoot, trustedFundSources)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -2670,13 +2670,15 @@ balances subject to repository and ledger visibility.
 
 Authenticated repository readers commit backing through `POST
 /repositories/{id}/funds/{fund_id}/commitments` with an accepted source, external transfer
-reference, positive minor-unit amount, and idempotency key. Each declared source includes an
-Ed25519 verification key. Commitments are pending and contribute no available value. A named
+reference, positive minor-unit amount, and idempotency key. Accepted source keys come only from the
+operator-controlled `$PROJECT_FUND_TRUSTED_SOURCES` JSON object; fund authors select registered
+source names and cannot supply trust keys. Commitments are pending and contribute no available value. A named
 steward who remains a repository participant reconciles one through
 `POST .../commitments/{entry_id}/reconcile`, providing the current fund version and a `settled`,
 `partial`, `failed`, or `revoked` result. Spendable outcomes require the source's Ed25519 signature
 over the source, original reference, completed amount, status, verification time, and nonce. Only
-the cryptographically verified completed amount becomes available;
+the cryptographically verified completed amount becomes available. Source/reference pairs and
+signed proof nonces are single-use, with balance projection independently deduplicating proof identities;
 duplicate, stale, failed, revoked, repeated, or invalid partial transfers cannot do so. Fund roles
 and balances grant no repository or operational authority.
 

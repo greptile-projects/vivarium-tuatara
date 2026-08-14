@@ -91,23 +91,42 @@ type Fund struct {
 	AuthorityNote string    `json:"authority_note"`
 }
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root              string
+	trustedSourceKeys map[string]string
+	mu                sync.Mutex
+	now               func() time.Time
 }
 
-func New(root string) (*Store, error) {
+func New(root string, trustedSources ...map[string]string) (*Store, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, ErrInvalid
 	}
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
-	return &Store{root: root, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }}, nil
+	trusted := map[string]string{}
+	if len(trustedSources) > 0 {
+		for source, key := range trustedSources[0] {
+			decoded, err := base64.StdEncoding.DecodeString(key)
+			if strings.TrimSpace(source) == "" || err != nil || len(decoded) != ed25519.PublicKeySize {
+				return nil, ErrInvalid
+			}
+			trusted[source] = key
+		}
+	}
+	return &Store{root: root, trustedSourceKeys: trusted, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }}, nil
 }
 func (s *Store) Create(repositoryID, actor string, terms Terms) (Fund, error) {
 	var out Fund
 	err := s.lock(func() error {
+		terms.SourceVerificationKeys = make(map[string]string, len(terms.FundingSources))
+		for _, source := range terms.FundingSources {
+			key, ok := s.trustedSourceKeys[source]
+			if !ok {
+				return ErrInvalid
+			}
+			terms.SourceVerificationKeys[source] = key
+		}
 		if !validTerms(terms) {
 			return ErrInvalid
 		}
@@ -162,6 +181,9 @@ func (s *Store) Commit(id, contributor, source, external string, amount int64, k
 			if v.IdempotencyKey == key {
 				return ErrConflict
 			}
+			if v.Kind == "commitment" && v.Source == source && v.ExternalReference == external {
+				return ErrConflict
+			}
 		}
 		now := s.now()
 		f.Version++
@@ -206,6 +228,13 @@ func (s *Store) Reconcile(id, entryID, steward, status string, completed int64, 
 		if (status == "settled" || status == "partial") && !verifyTransferProof(f.Terms, original, status, completed, proof) {
 			return ErrInvalid
 		}
+		if proof != nil {
+			for _, entry := range f.Ledger {
+				if entry.TransferProof != nil && entry.TransferProof.Source == proof.Source && entry.TransferProof.Nonce == proof.Nonce {
+					return ErrConflict
+				}
+			}
+		}
 		now := s.now()
 		f.Ledger[idx].Status = status
 		f.Ledger = append(f.Ledger, Entry{ID: randomID(), Kind: "transfer_reconciliation", Amount: completed, SpendableDelta: completed, Status: status, Source: original.Source, ExternalReference: original.ExternalReference, ContributorID: original.ContributorID, ActorID: steward, Note: note, CreatedAt: now, TransferProof: proof})
@@ -219,12 +248,18 @@ func (s *Store) Reconcile(id, entryID, steward, status string, completed int64, 
 }
 func derive(terms Terms, es []Entry) Balances {
 	var b Balances
+	consumedProofs := map[string]bool{}
 	for _, e := range es {
 		if e.Kind == "commitment" && e.Status == "pending" {
 			b.Pending += e.Amount
 		}
-		if e.Kind == "transfer_reconciliation" && (e.Status == "settled" || e.Status == "partial") && verifyTransferProof(terms, e, e.Status, e.Amount, e.TransferProof) {
+		proofID := ""
+		if e.TransferProof != nil {
+			proofID = e.TransferProof.Source + "\x00" + e.TransferProof.Nonce
+		}
+		if e.Kind == "transfer_reconciliation" && (e.Status == "settled" || e.Status == "partial") && proofID != "" && !consumedProofs[proofID] && verifyTransferProof(terms, e, e.Status, e.Amount, e.TransferProof) {
 			b.Available += e.SpendableDelta
+			consumedProofs[proofID] = true
 		}
 	}
 	return b

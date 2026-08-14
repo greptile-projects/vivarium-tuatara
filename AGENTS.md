@@ -377,8 +377,10 @@ whenever dependencies change or the web job fails before it starts.
 
   Governed project funds at `/repositories/{id}/funds` retain named stewards, accepted sources,
   fixed-point currency or credit units, spending and approval rules, eligible recipients, refund
-  policy, source Ed25519 verification keys, and public or participant-bounded append-only ledgers beneath `$PROJECT_FUND_STORAGE_ROOT`
-  (default `project-funds`). Commitments are idempotent pending evidence; only a named steward who
+  policy, and public or participant-bounded append-only ledgers beneath `$PROJECT_FUND_STORAGE_ROOT`
+  (default `project-funds`). `$PROJECT_FUND_TRUSTED_SOURCES` is an operator-controlled JSON object
+  mapping accepted source names to base64 Ed25519 public keys; fund authors cannot define proof
+  authorities. Commitments are idempotent pending evidence; only a named steward who
   remains a project participant can reconcile verified full or partial completion into available
   value. Failed, revoked, duplicate, stale, or repeated transfers remain non-spendable, and fund
   roles grant no repository or operational authority.
