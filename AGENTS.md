@@ -441,6 +441,18 @@ whenever dependencies change or the web job fails before it starts.
   expiring or expired exceptions. Commitments document permission but grant no repository,
   extension, experiment, deployment, or data-access authority.
 
+  Repository-defined data-flow maps on the same `/repositories/{id}/data` workspace retain exact
+  visible code revisions and commitment/data-use versions beneath `$DATA_FLOW_STORAGE_ROOT`
+  (default `data-flows`). Typed interaction, interface, package, store, extension, release,
+  environment, audience, and external-recipient nodes connect through purpose/category/retained-copy
+  edges. Current participants publish declarations; participants and repository-bound read-only
+  agents add only bounded repository citations, findings, and uncertainty. Projections expose stale
+  analysis, inaccessible dependencies, undeclared flows, and declared/observed differences without
+  accepting or projecting restricted payloads, and grant no data or repository authority.
+  Anonymous and nonparticipant public-repository readers receive declarations only; bounded
+  analyses, citations, attribution, and analysis-derived diagnostics remain limited to current
+  participants and repository-bound read-only agents.
+
   Product feedback at `/repositories/{id}/feedback` is a distinct needs channel for a project,
 
   Governed project funds at `/repositories/{id}/funds` retain named stewards, accepted sources,

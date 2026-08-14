@@ -25,6 +25,17 @@ unsupported guarantees, declared conflicts, and expiring exceptions visible and 
 Records default beneath `$DATA_COMMITMENT_STORAGE_ROOT` (`data-commitments`) and document permitted
 handling without granting access or operational authority.
 
+Repository-defined data-flow maps on the same workspace bind an exact visible code revision and
+exact commitment/data-use versions to a directed path. Typed nodes cover user interactions,
+interfaces, packages, stores, extensions, releases, environments, audiences, and external
+recipients; edges declare the categories, purpose, operation, and whether another retained copy is
+created. Inaccessible dependencies and uncertainty remain explicit without copying their protected
+contents. Current participants publish declarations, while participants and repository-bound
+read-only agents may add bounded code citations and findings. Successor declarations make earlier
+analysis stale, and projections keep undeclared flows and declared/observed differences visible.
+Records default beneath `$DATA_FLOW_STORAGE_ROOT` (`data-flows`) and grant no data or repository
+authority.
+
 ## Accountable product direction
 
 The repository roadmap at `/repositories/{id}/roadmap` turns exact product-opportunity versions

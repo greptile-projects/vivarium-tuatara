@@ -15,6 +15,29 @@ and user-facing `notice` link. Responses retain immutable revision attribution a
 diagnostics for missing per-use ownership, unsupported guarantees, declared conflicts, and
 expiring or expired exceptions.
 
+### Data-flow evidence
+
+- `GET /repositories/{id}/data-flows` and `GET .../data-flows/{flow_id}` return readable maps,
+  immutable declaration history, bounded analyses, and derived diagnostics.
+- `POST /repositories/{id}/data-flows` publishes a participant-defined map at a 40-character commit
+  reachable from a visible branch. Every map and edge references exact same-repository commitment
+  versions and existing data-use IDs.
+- `POST .../data-flows/{flow_id}/revisions` publishes a complete successor with
+  `expected_version`; stale writers receive `409 data_flow_conflict`.
+- `POST .../data-flows/{flow_id}/analyses` lets current participants and repository-bound read-only
+  agents add bounded findings at the map's exact code revision. Findings use closed kinds
+  (`confirmed`, `undeclared_flow`, `declared_observed_difference`, `inaccessible_dependency`, or
+  `uncertainty`) and cite repository paths and line ranges. The schema accepts claims and references,
+  not captured data values or artifacts.
+
+Node kinds are `interaction`, `interface`, `package`, `store`, `extension`, `release`,
+`environment`, `audience`, and `external_recipient`. An inaccessible node requires an uncertainty
+statement. Diagnostics report inaccessible dependencies, uncertainty, undeclared or differing
+behavior, and analyses made stale by a successor declaration; they never broaden source visibility.
+Anonymous and nonparticipant readers of public repositories receive declarations and declaration
+diagnostics only. Complete analyses, citations, actor attribution, and analysis-derived diagnostics
+are projected only to current repository participants and repository-bound read-only agents.
+
 ## Product feedback
 
 `POST /repositories/{id}/feedback` accepts an authenticated repository reader's project, release,
