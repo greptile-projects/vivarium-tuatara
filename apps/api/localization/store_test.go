@@ -147,3 +147,78 @@ func TestProposalRejectsPersistedReviewWithoutExtractions(t *testing.T) {
 		t.Fatal("invalid review was rewritten")
 	}
 }
+
+func TestCollaborativeWorkspaceKeepsAgentEvidenceAndHumanAuthorityVisible(t *testing.T) {
+	s, _ := New(t.TempDir())
+	revision := "1111111111111111111111111111111111111111"
+	v, err := s.Extract("repo", "pull", revision, "owner", ExtractionMap{ID: "web", Version: 1, Name: "Web", Include: []string{"src/**"}, Formats: []string{"typescript"}}, []string{"fr"}, []Unit{{Key: "welcome", Message: "Welcome", Context: "Home hero", Locations: []Location{{Path: "src/home.tsx", Line: 2}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unit := v.Extractions[0].Units[0].ID
+	v, err = s.Mutate("repo", "pull", revision, v.WorkspaceVersion, "claim", "user", "translator", map[string]any{"unit_id": unit, "locale": "fr", "assignee_id": "translator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.Mutate("repo", "pull", revision, v.WorkspaceVersion, "comment", "user", "owner", map[string]any{"unit_id": unit, "locale": "fr", "body": "Keep the welcoming product tone."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.Mutate("repo", "pull", revision, v.WorkspaceVersion, "request_suggestion", "user", "translator", map[string]any{"unit_id": unit, "locale": "fr", "agent_id": "linguist-agent", "product_context": "Home hero for new contributors", "locale_plan_id": "plan", "locale_plan_version": float64(3), "protected": false, "embargoed": false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := v.SuggestionRequests[0]
+	v, err = s.Mutate("repo", "pull", revision, v.WorkspaceVersion, "suggest", "agent", "linguist-agent", map[string]any{"unit_id": unit, "locale": "fr", "request_id": request.ID, "text": "Bienvenue", "rationale": "Matches the approved welcoming term.", "uncertainty": "low", "evidence": []map[string]any{{"kind": "terminology", "reference": "plan:3:welcome"}, {"kind": "prior_translation", "reference": "translation:42"}, {"kind": "source_context", "reference": "unit:welcome"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.Suggestions[0]; got.AgentID != "linguist-agent" || got.SourceRevision != revision || got.SourceHash == "" || len(got.Evidence) != 3 {
+		t.Fatalf("suggestion provenance = %#v", got)
+	}
+	v, err = s.Mutate("repo", "pull", revision, v.WorkspaceVersion, "decide", "user", "reviewer", map[string]any{"unit_id": unit, "locale": "fr", "suggestion_id": v.Suggestions[0].ID, "kind": "approve", "reason": "Reviewed against current terminology"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Suggestions[0].Status != "approved" || v.Decisions[0].ActorID != "reviewer" {
+		t.Fatalf("human decision = %#v / %#v", v.Suggestions[0], v.Decisions)
+	}
+}
+
+func TestCollaborativeWorkspaceRejectsConcurrencyAndSensitiveSuggestionRequests(t *testing.T) {
+	s, _ := New(t.TempDir())
+	revision := "1111111111111111111111111111111111111111"
+	v, _ := s.Extract("repo", "pull", revision, "owner", ExtractionMap{ID: "docs", Version: 1, Name: "Docs", Include: []string{"docs/**"}, Formats: []string{"markdown"}}, []string{"es"}, []Unit{{Key: "intro", Message: "Start", Context: "Intro", Locations: []Location{{Path: "docs/a.md", Line: 1}}}})
+	payload := map[string]any{"unit_id": v.Extractions[0].Units[0].ID, "locale": "es", "agent_id": "agent", "product_context": "Intro", "locale_plan_id": "plan", "locale_plan_version": float64(1), "protected": true, "embargoed": false}
+	if _, err := s.Mutate("repo", "pull", revision, v.WorkspaceVersion, "request_suggestion", "user", "translator", payload); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("protected request error = %v", err)
+	}
+	if _, err := s.Mutate("repo", "pull", revision, v.WorkspaceVersion-1, "comment", "user", "translator", map[string]any{"unit_id": v.Extractions[0].Units[0].ID, "locale": "es", "body": "stale"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale version error = %v", err)
+	}
+}
+
+func TestSuggestionCannotRedirectRequestToAnotherProtectedUnitOrLocale(t *testing.T) {
+	s, _ := New(t.TempDir())
+	revision := "1111111111111111111111111111111111111111"
+	v, _ := s.Extract("repo", "pull", revision, "owner", ExtractionMap{ID: "web", Version: 1, Name: "Web", Include: []string{"src/**"}, Formats: []string{"typescript"}}, []string{"fr", "de"}, []Unit{
+		{Key: "normal", Message: "Welcome", Context: "Public hero", Locations: []Location{{Path: "src/a.tsx", Line: 1}}},
+		{Key: "secret", Message: "Unreleased launch", Context: "Embargoed launch", Protected: true, Locations: []Location{{Path: "src/b.tsx", Line: 1}}},
+	})
+	normal, secret := v.Extractions[0].Units[0].ID, v.Extractions[0].Units[1].ID
+	v, err := s.Mutate("repo", "pull", revision, v.WorkspaceVersion, "request_suggestion", "user", "translator", map[string]any{"unit_id": normal, "locale": "fr", "agent_id": "agent", "product_context": "Public hero", "locale_plan_id": "plan", "locale_plan_version": float64(1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Mutate("repo", "pull", revision, v.WorkspaceVersion, "suggest", "agent", "agent", map[string]any{"unit_id": secret, "locale": "de", "request_id": v.SuggestionRequests[0].ID, "text": "Geheimer Start", "rationale": "redirected", "uncertainty": "low", "evidence": []map[string]any{{"kind": "locale_plan", "reference": "plan:1"}, {"kind": "source_context", "reference": "unit:secret"}}})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("cross-scope protected suggestion error = %v", err)
+	}
+	stored, readErr := s.Get("repo", "pull", revision)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(stored.Suggestions) != 0 || stored.SuggestionRequests[0].State != "requested" {
+		t.Fatalf("redirect persisted: %#v", stored.Suggestions)
+	}
+}

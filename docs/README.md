@@ -36,7 +36,14 @@ source hashes from message keys, context, screenshots, variables, plural rules, 
 projects added, changed, removed, reused, and untranslated counts per locale. Any authenticated
 repository reader may propose a translation for a current unit without repository write access.
 Proposals are append-only; a changed source hash supersedes only affected work and retains its author
-and history. Records default beneath `$LOCALIZATION_STORAGE_ROOT` (`localization`).
+and history. The same revision-exact workspace lets authenticated readers claim or hand off locale
+units and discuss their context. Human requests bind one scoped agent to a current locale-plan
+version and bounded product context; protected or embargoed requests fail closed. Only that agent
+may publish a suggestion, which freezes source and plan provenance, cites terminology/prior-work and
+source-context evidence, and declares uncertainty. Agent output is never approval: declared locale
+reviewers retain attributed approve/reject decisions, while any human may escalate. Every mutation
+uses the pull source lock and a workspace compare-and-swap version so concurrent edits are explicit.
+Records default beneath `$LOCALIZATION_STORAGE_ROOT` (`localization`).
 
 ## Permitted data handling
 

@@ -1768,7 +1768,11 @@ whenever dependencies change or the web job fails before it starts.
   context, screenshots, variables, plural rules, and source locations; pull reads project added,
   changed, removed, reused, and untranslated work per locale. Authenticated repository readers may
   propose translations without repository write access, while source changes supersede only affected
-  proposals and preserve all attribution and history.
+  proposals and preserve all attribution and history. Revision- and version-guarded collaboration
+  retains locale claims/handoffs, per-unit discussion, and agent suggestion requests grounded in a
+  current locale plan and bounded product context. Suggestions must cite source plus plan/terminology
+  evidence and uncertainty; agents cannot decide them, and approve/reject remains with the plan's
+  declared human reviewers. Protected or embargoed requests fail closed.
 
   Update it when you change how the apps fit together, not for every change.
 

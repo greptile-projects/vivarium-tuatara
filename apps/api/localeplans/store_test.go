@@ -2,8 +2,54 @@ package localeplans
 
 import (
 	"errors"
+	"sync"
 	"testing"
+	"time"
 )
+
+func TestWithCurrentVersionExcludesReviewerRevocation(t *testing.T) {
+	s, _ := New(t.TempDir())
+	plan, err := s.Create("repo", "owner", completeRevision())
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	var boundaryErr error
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		boundaryErr = s.WithCurrentVersion(plan.ID, 1, func(current Plan) error {
+			if current.Revisions[0].Locales[0].ReviewerIDs[0] != "reviewer" {
+				t.Error("reviewer missing inside boundary")
+			}
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+	revised := make(chan error, 1)
+	replacement := completeRevision()
+	replacement.Locales[0].ReviewerIDs = []string{"replacement"}
+	go func() { _, e := s.Revise(plan.ID, 1, "owner", replacement); revised <- e }()
+	select {
+	case err := <-revised:
+		t.Fatalf("revision crossed active decision boundary: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	wg.Wait()
+	if boundaryErr != nil {
+		t.Fatal(boundaryErr)
+	}
+	if err := <-revised; err != nil {
+		t.Fatal(err)
+	}
+	if err = s.WithCurrentVersion(plan.ID, 1, func(Plan) error { return nil }); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale boundary error = %v", err)
+	}
+}
 
 func completeRevision() Revision {
 	return Revision{Title: "French support", Summary: "Core checkout works in Canadian French.", Subject: Subject{Kind: "product", ResourceID: "web", Name: "Web product"},
