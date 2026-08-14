@@ -93,6 +93,40 @@ type Contract = {
   current_version: number;
   revisions: Revision[];
   diagnostics: Diagnostic[];
+  signal_mappings: {
+    id: string;
+    current_version: number;
+    revisions: {
+      version: number;
+      contract_version: number;
+      objective_id: string;
+      instrumentation_revision: string;
+      sources: { kind: string; name: string; reference: string; visibility: string; sanitization: string }[];
+      calculation: string;
+      unit: string;
+      rationale: string;
+      created_by: string;
+      created_at: string;
+    }[];
+  }[];
+  observations: {
+    id: string;
+    mapping_id: string;
+    mapping_version: number;
+    objective_id: string;
+    window_start: string;
+    window_end: string;
+    attainment?: number;
+    target_met?: boolean;
+    error_budget_consumed_percent?: number;
+    uncertainty: number;
+    gaps: { kind: string; detail: string }[];
+    software: { kind: string; id: string; revision: string; label: string }[];
+    summary: string;
+    comparable_to_previous: boolean;
+    comparison_reason?: string;
+    recorded_by: string;
+  }[];
 };
 const value = (f: FormData, n: string) => String(f.get(n) ?? "").trim(),
   list = (v: string) =>
@@ -352,6 +386,28 @@ export function ServiceObjectivesWorkspace({
       setBusy(false);
     }
   }
+  async function publishMapping(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); if (!token || !selected || !current) return;
+    const f = new FormData(e.currentTarget), existing = selected.signal_mappings[0], revision = {
+      contract_version: current.version,
+      objective_id: current.objectives[0].id,
+      instrumentation_revision: value(f,"instrumentation_revision"),
+      calculation: current.indicators[0].calculation,
+      unit: current.indicators[0].unit,
+      rationale: value(f,"mapping_rationale"),
+      sources: value(f,"sources").split(";").map((entry) => { const [kind,name,reference,visibility,sanitization]=entry.split("|").map((x)=>x.trim()); return {kind,name,reference,visibility,sanitization}; }),
+    };
+    const path = existing ? `/repositories/${repositoryID}/service-objectives/${selected.id}/signal-mappings/${existing.id}/revisions` : `/repositories/${repositoryID}/service-objectives/${selected.id}/signal-mappings`;
+    try { const out=await api<Contract>(path,{method:"POST",body:JSON.stringify({revision,...(existing?{expected_version:existing.current_version}:{})})},token); setSelected(out); setItems((xs)=>[out,...xs.filter((x)=>x.id!==out.id)]); setError(""); }
+    catch(x){setError(x instanceof Error?x.message:"Signal mapping could not be published.");}
+  }
+  async function recordObservation(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); if (!token || !selected || !current || !selected.signal_mappings[0]) return;
+    const f=new FormData(e.currentTarget), mapping=selected.signal_mappings[0], software=value(f,"software").split(";").filter(Boolean).map((entry)=>{const [kind,id,revision,label]=entry.split("|").map((x)=>x.trim());return {kind,id,revision,label};}), gaps=value(f,"gaps").split(";").filter(Boolean).map((entry)=>{const [kind,detail]=entry.split("|").map((x)=>x.trim());return {kind,detail};});
+    const observation={mapping_id:mapping.id,mapping_version:mapping.current_version,contract_version:current.version,objective_id:current.objectives[0].id,window_start:new Date(value(f,"window_start")).toISOString(),window_end:new Date(value(f,"window_end")).toISOString(),good_events:Number(value(f,"good_events")),total_events:Number(value(f,"total_events")),uncertainty:Number(value(f,"uncertainty")),summary:value(f,"evidence_summary"),software,gaps};
+    try { const out=await api<Contract>(`/repositories/${repositoryID}/service-objectives/${selected.id}/observations`,{method:"POST",body:JSON.stringify({observation})},token); setSelected(out); setItems((xs)=>[out,...xs.filter((x)=>x.id!==out.id)]); setError(""); }
+    catch(x){setError(x instanceof Error?x.message:"Reliability observation could not be recorded.");}
+  }
   return (
     <div className="space-y-8">
       <header>
@@ -603,6 +659,31 @@ export function ServiceObjectivesWorkspace({
           </div>
         </form>
       </Card>
+      {selected && current && <Card className="p-5">
+        <h2 className="font-semibold">Operational evidence mapping</h2>
+        <p className="mt-1 text-sm text-[var(--muted)]">Connect sanitized observability and delivery sources to {current.objectives[0]?.name}. Prior instrumentation stays visible.</p>
+        <form onSubmit={publishMapping} className="mt-4 grid gap-4 md:grid-cols-2">
+          <Field n="instrumentation_revision" l="Instrumentation revision" v={selected.signal_mappings[0]?.revisions.at(-1)?.instrumentation_revision}/>
+          <Area n="mapping_rationale" l="Mapping rationale" v={selected.signal_mappings[0]?.revisions.at(-1)?.rationale}/>
+          <div className="md:col-span-2"><Area n="sources" l="Sources: kind | name | sanitized reference | public/participants | sanitization (semicolon separated)" v={selected.signal_mappings[0]?.revisions.at(-1)?.sources.map((x)=>`${x.kind} | ${x.name} | ${x.reference} | ${x.visibility} | ${x.sanitization}`).join("; ")}/></div>
+          <div className="md:col-span-2"><Button>{selected.signal_mappings[0]?`Publish mapping v${selected.signal_mappings[0].current_version+1}`:"Publish signal mapping"}</Button></div>
+        </form>
+        {selected.signal_mappings[0] && <form onSubmit={recordObservation} className="mt-6 grid gap-4 border-t pt-5 md:grid-cols-2">
+          <Field n="window_start" l="Window start" type="datetime-local"/><Field n="window_end" l="Window end" type="datetime-local"/>
+          <Field n="good_events" l="Good events" type="number" step="any"/><Field n="total_events" l="Total events" type="number" step="any"/>
+          <Field n="uncertainty" l="Uncertainty %" type="number" step="any" v="0"/><Area n="evidence_summary" l="Sanitized evidence summary"/>
+          <div className="md:col-span-2"><Area n="software" l="Delivered software: kind | id | exact revision | label (semicolon separated)"/></div>
+          <div className="md:col-span-2"><Area n="gaps" l="Evidence gaps: kind | detail (semicolon separated)"/></div>
+          <div className="md:col-span-2"><Button>Record evidence window</Button></div>
+        </form>}
+      </Card>}
+      {selected?.observations.length ? <section><h2 className="text-lg font-semibold">Attainment history</h2><div className="mt-3 space-y-3">{[...selected.observations].reverse().map((o)=><Card key={o.id} className="p-4">
+        <div className="flex flex-wrap gap-2"><strong>{o.attainment?.toFixed(3) ?? "Unavailable"}% attainment</strong><Badge tone={o.target_met?"success":"danger"}>{o.target_met?"target met":"target missed"}</Badge><Badge>{o.error_budget_consumed_percent?.toFixed(1) ?? "—"}% budget consumed</Badge>{!o.comparable_to_previous&&<Badge tone="warning">incomparable window</Badge>}</div>
+        <p className="mt-2 text-sm">{o.summary}</p><p className="mt-1 text-xs text-[var(--muted)]">{new Date(o.window_start).toLocaleString()} – {new Date(o.window_end).toLocaleString()} · uncertainty {o.uncertainty}% · mapping v{o.mapping_version} · recorded by {o.recorded_by}</p>
+        {o.comparison_reason&&<p className="mt-1 text-xs text-[var(--muted)]">{o.comparison_reason}</p>}
+        <p className="mt-2 text-xs text-[var(--muted)]">Provenance: {o.software.map((x)=>`${x.kind} ${x.label} @ ${x.revision}`).join(" · ")||"No delivered-software references"}</p>
+        {o.gaps.map((x)=><p key={`${x.kind}-${x.detail}`} className="mt-1 text-xs text-[var(--warning)]">Gap: {x.kind.replaceAll("_"," ")} — {x.detail}</p>)}
+      </Card>)}</div></section>:null}
       {error && (
         <p role="alert" className="text-sm text-[var(--danger)]">
           {error}

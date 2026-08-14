@@ -29,6 +29,17 @@ declare expected dependability and response responsibility; they do not confer r
 deployment, release, incident, or observability authority. Records default beneath
 `$SERVICE_OBJECTIVE_STORAGE_ROOT` (`service-objectives`).
 
+Each contract also retains compare-and-swap signal mappings and append-only observation windows.
+Mappings bind an exact contract/objective version and instrumentation revision to repository-defined
+metrics, logs, traces, health checks, support reports, deployments, releases, commits, pull requests,
+packages, and dependent services. Every source declares how it was sanitized and whether its
+reference is public or participant-only; public reads replace restricted references with an explicit
+marker. Evidence windows bind the mapping version and delivered-software revisions, retain uncertainty
+and known gaps, and derive current/historical attainment, target status, and error-budget consumption
+from aggregate good/total counts. A changed mapping version or window duration is projected as
+incomparable instead of silently extending the earlier series. Credential-shaped source or evidence
+text is rejected before persistence; the records inventory evidence but grant no observability access.
+
 ## Locale coverage contracts
 
 Repository participants publish complete, compare-and-swap locale plans through

@@ -1804,6 +1804,12 @@ whenever dependencies change or the web job fails before it starts.
   or ownership, unsupported calculations, conflicting targets, and expiring/expired exceptions
   explicit and attributed. Reliability contracts document expected behavior and response, but grant
   no repository, observability, incident, release, deployment, or environment authority.
+  Contract-scoped signal mappings retain exact objective/contract and instrumentation versions for
+  sanitized metrics, logs, traces, health checks, support reports, delivery records, Git revisions,
+  packages, and dependent services. Append-only evidence windows derive attainment and error-budget
+  consumption from aggregates while retaining uncertainty, gaps, and exact delivered-software
+  provenance. Mapping/window changes remain explicitly incomparable; anonymous public reads redact
+  participant-only source references, and credential-shaped evidence is rejected before persistence.
 
   Update it when you change how the apps fit together, not for every change.
 
