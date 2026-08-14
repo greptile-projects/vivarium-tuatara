@@ -71,9 +71,10 @@ export function AccessibilityReportsWorkspace({
   async function report(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!token) return;
+    const form = e.currentTarget;
     setBusy(true);
     setError("");
-    const f = new FormData(e.currentTarget);
+    const f = new FormData(form);
     try {
       await api(
         `/repositories/${repositoryID}/accessibility-reports`,
@@ -120,7 +121,7 @@ export function AccessibilityReportsWorkspace({
         },
         token,
       );
-      e.currentTarget.reset();
+      form.reset();
       await load();
     } catch (x) {
       setError(
@@ -293,7 +294,7 @@ export function AccessibilityReportsWorkspace({
             </div>
           </form>
           <div className="mt-3 space-y-1">
-            {x.attempts.map((a) => (
+            {(x.attempts ?? []).map((a) => (
               <p className="text-xs" key={a.id}>
                 <Badge>{a.outcome.replaceAll("_", " ")}</Badge> {a.boundary} ·{" "}
                 {a.notes} · {a.runner_id}
