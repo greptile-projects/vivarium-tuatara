@@ -179,11 +179,11 @@ func (s *Store) CreateDeliveryPolicy(repo, actor string, p DeliveryPolicy) (Deli
 		return p, ErrInvalid
 	}
 	p.RequiredChecks, _ = cleanUnique(p.RequiredChecks)
-	p.Audiences, ok = cleanUnique(p.Audiences)
+	p.Audiences, ok = cleanOptionalUnique(p.Audiences)
 	if !ok {
 		return p, ErrInvalid
 	}
-	p.RiskClasses, ok = cleanUnique(p.RiskClasses)
+	p.RiskClasses, ok = cleanOptionalUnique(p.RiskClasses)
 	if !ok {
 		return p, ErrInvalid
 	}
@@ -283,8 +283,11 @@ func (s *Store) EvaluateDelivery(repo, pullID, releaseID, revision, branch strin
 	return r, nil
 }
 func deliverySelected(policy, context []string) bool {
-	if len(context) == 0 || len(policy) == 0 {
+	if len(policy) == 0 {
 		return true
+	}
+	if len(context) == 0 {
+		return false
 	}
 	for _, p := range policy {
 		for _, c := range context {
@@ -294,6 +297,12 @@ func deliverySelected(policy, context []string) bool {
 		}
 	}
 	return false
+}
+func cleanOptionalUnique(values []string) ([]string, bool) {
+	if len(values) == 0 {
+		return []string{}, true
+	}
+	return cleanUnique(values)
 }
 func (s *Store) Publish(repo, actor string, p Publication) (Publication, error) {
 	s.mu.Lock()
