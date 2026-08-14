@@ -2571,6 +2571,9 @@ export type ProposalTask = {
 export type ReasoningOrigin = {
   assessment_id: string;
   assessment_version: number;
+  accessibility_finding_id?: string;
+  accessibility_commitment_id?: string;
+  accessibility_commitment_version?: number;
   revision: string;
   explanation_id?: string;
   conclusion_entry_id?: string;

@@ -2863,6 +2863,27 @@ assessment's guarded pull (or one shared pull for a standalone assessment).
 only intersecting checks/findings, clearing only their affected acceptance. Records default beneath
 `$ACCESSIBILITY_ASSESSMENT_STORAGE_ROOT` (`accessibility-assessments`).
 
+An accepted, current finding enters governed implementation through `POST
+.../{assessment-id}/findings/{finding-id}/repair`. A current human repository participant selects an
+exact accessibility commitment revision, supplies bounded acceptance criteria and component
+guidance, and assigns the resulting ordinary task to an existing human participant or an agent.
+The task freezes the assessment revision, accepted finding, permitted redacted citation references,
+commitment context, and collaborator-authored guidance; it does not copy reporter identity or
+unconsented device detail and grants no new authority. Retries converge on the finding-specific
+proposal/task identity. `GET .../repair` reports the live task, linked ordinary pull request, and
+only previews matching that pull's current exact source revision back to the original finding.
+The finding-side repair reservation is persisted before proposal creation and exposes a stable
+`recovery_id` with `state: pending`; an exact retry completes the link even if source invalidation
+arrived after reservation, while a mismatched retry conflicts. Responses depending on a proposal
+whose atomic rename committed but directory durability is uncertain include
+`Vivarium-Durability: uncertain`, including pending-recovery responses.
+
+Publishing an accessibility-repair task through the ordinary task contribution endpoint additionally
+requires structured design changes, code changes, interaction tradeoffs, and content tradeoffs. The
+server appends those sections to the pull body. Contributors then attach previews through the normal
+pull preview workflow; repository write, agent-session, review, check, queue, and merge policy remain
+unchanged.
+
 ## Performance goals
 
 Current repository participants create a complete contract with `POST

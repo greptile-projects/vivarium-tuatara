@@ -145,6 +145,14 @@ human participant can accept or mark a false positive. Explicit source/journey i
 only affected evidence and acceptance. Storage defaults beneath
 `$ACCESSIBILITY_ASSESSMENT_STORAGE_ROOT` (`accessibility-assessments`).
 
+Accepted assessment findings can become ordinary governed repair proposals and human- or agent-owned
+tasks without re-authoring the affected user's account. The handoff freezes the exact base revision,
+selected commitment revision, permitted redacted reproduction references, acceptance criteria, and
+component guidance into the task context used by shared workspaces and agent sessions. Connected pull
+requests must separate design and code changes from interaction and content tradeoffs; current-revision
+previews and task/pull status project back onto the original finding while established repository,
+agent, review, check, and merge authority remains in force.
+
 ## Collaborative performance goals
 
 Repository participants publish complete, append-only performance-contract revisions through
