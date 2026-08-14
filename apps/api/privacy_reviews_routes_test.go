@@ -5,6 +5,7 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/datacommitments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/dataflows"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 )
 
 func TestComparePrivacyClassifiesConsequencesAndRequirements(t *testing.T) {
@@ -40,5 +41,24 @@ func TestComparePrivacyClassifiesConsequencesAndRequirements(t *testing.T) {
 		if !kinds[kind] {
 			t.Errorf("missing requirement %s: %#v", kind, requirements)
 		}
+	}
+}
+
+func TestPrivacyFlowScopeMustCoverEveryPullChange(t *testing.T) {
+	changes := []pullrequests.FileChange{{Path: "sensitive.ts"}}
+	if privacyFlowCoversChanges(dataflows.Revision{AffectedPaths: []string{"unrelated.ts"}}, changes) {
+		t.Fatal("unrelated same-revision flow covered a changed path")
+	}
+	if !privacyFlowCoversChanges(dataflows.Revision{AffectedPaths: []string{"sensitive.ts"}}, changes) {
+		t.Fatal("exact affected path was not covered")
+	}
+}
+
+func TestCategoryComparisonIsDirectional(t *testing.T) {
+	if added := privacyAddedStrings([]string{"account"}, []string{"account", "device"}); len(added) != 0 {
+		t.Fatalf("removed category reported as added: %v", added)
+	}
+	if added := privacyAddedStrings([]string{"account", "device"}, []string{"account"}); len(added) != 1 || added[0] != "device" {
+		t.Fatalf("new category not isolated: %v", added)
 	}
 }

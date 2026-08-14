@@ -53,6 +53,7 @@ type Revision struct {
 	Version        int             `json:"version"`
 	CodeRevision   string          `json:"code_revision"`
 	Title          string          `json:"title"`
+	AffectedPaths  []string        `json:"affected_paths"`
 	EntryPoints    []string        `json:"entry_points"`
 	Nodes          []Node          `json:"nodes"`
 	Edges          []Edge          `json:"edges"`
@@ -224,6 +225,13 @@ func stamp(r *Revision, version int, actor string, now time.Time) {
 func validateRevision(r Revision) error {
 	if len(r.CodeRevision) != 40 || r.CodeRevision != strings.ToLower(r.CodeRevision) || r.Title == "" || len(r.EntryPoints) == 0 || len(r.Nodes) == 0 || len(r.Edges) == 0 || len(r.CommitmentRefs) == 0 {
 		return ErrInvalid
+	}
+	paths := map[string]bool{}
+	for _, path := range r.AffectedPaths {
+		if path == "" || strings.HasPrefix(path, "/") || strings.Contains(path, "\\") || strings.Contains(path, "://") || strings.Contains(path, "..") || paths[path] {
+			return ErrInvalid
+		}
+		paths[path] = true
 	}
 	kinds := map[string]bool{"interaction": true, "interface": true, "package": true, "store": true, "extension": true, "release": true, "environment": true, "audience": true, "external_recipient": true}
 	ids := map[string]bool{}

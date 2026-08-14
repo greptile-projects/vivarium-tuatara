@@ -1700,7 +1700,8 @@ whenever dependencies change or the web job fails before it starts.
 
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
 
-  Pull privacy review at `/repositories/{id}/pulls/{pull_id}/privacy-review` compares exact source
+  Pull privacy review at `/repositories/{id}/pulls/{pull_id}/privacy-review` requires a candidate
+  data-flow `affected_paths` scope covering every changed pull path, then compares exact source
   and target data-flow/commitment revisions and derives collection, purpose, recipient, retention,
   access, and user-control changes plus owner acknowledgement, notice, consent, migration, test,
   and exception requirements. Collaborators and repository-bound read-only agents retain cited

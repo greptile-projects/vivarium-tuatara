@@ -48,6 +48,7 @@ type Flow = {
     version: number;
     code_revision: string;
     title: string;
+    affected_paths: string[];
     entry_points: string[];
     nodes: Node[];
     edges: Edge[];
@@ -155,6 +156,7 @@ export function DataFlowWorkspace({ repositoryID }: { repositoryID: string }) {
     const revision = {
       code_revision: d.get("revision"),
       title: d.get("title"),
+      affected_paths: lines(d.get("affected_paths")),
       entry_points: csv(String(d.get("entry_points"))),
       nodes,
       edges,
@@ -282,6 +284,11 @@ export function DataFlowWorkspace({ repositoryID }: { repositoryID: string }) {
               n="entry_points"
               l="Entry node IDs"
               v={current?.entry_points.join(", ")}
+            />
+            <Area
+              n="affected_paths"
+              l="Affected source paths (one per line)"
+              v={current?.affected_paths.join("\n")}
             />
           </div>
           <Field

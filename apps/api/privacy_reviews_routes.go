@@ -97,6 +97,15 @@ func registerPrivacyReviewRoutes(mux *http.ServeMux, git *storage.Store, catalog
 			writeAPIError(w, 409, "stale_privacy_evidence", "data flows must match the pull's current source and target revisions")
 			return
 		}
+		pullChanges, changeErr := pulls.Changes(r.PathValue("id"), p.ID)
+		if changeErr != nil {
+			writeAPIError(w, 500, "privacy_review_unavailable", "pull changes could not be compared with the selected data-flow scope")
+			return
+		}
+		if !privacyFlowCoversChanges(sr, pullChanges) {
+			writeAPIError(w, 422, "invalid_privacy_evidence", "the source data-flow scope must cover every path changed by the pull request")
+			return
+		}
 		changes, requirements, valid := comparePrivacy(commitments, r.PathValue("id"), sr, tr)
 		if !valid {
 			writeAPIError(w, 422, "invalid_privacy_evidence", "every exact commitment and data-use reference must remain readable")
@@ -129,6 +138,11 @@ func registerPrivacyReviewRoutes(mux *http.ServeMux, git *storage.Store, catalog
 			writePrivacyReview(w, v, e, 0)
 			return
 		}
+		p, pullErr := pulls.Get(r.PathValue("id"), r.PathValue("pull_id"))
+		if pullErr != nil || p.SourceCommitID != v.SourceRevision {
+			writeAPIError(w, 409, "stale_privacy_review", "the pull moved; compare the current revision before commenting")
+			return
+		}
 		findings := []dataflows.Finding{{Citations: make([]dataflows.Citation, len(in.Evidence))}}
 		for i, c := range in.Evidence {
 			findings[0].Citations[i] = dataflows.Citation{Path: c.Path, StartLine: c.StartLine, EndLine: c.EndLine, Claim: c.Claim}
@@ -141,7 +155,16 @@ func registerPrivacyReviewRoutes(mux *http.ServeMux, git *storage.Store, catalog
 		if actor.AgentID != "" {
 			typ, id = "agent", actor.AgentID
 		}
-		out, e := reviews.AddComment(r.PathValue("id"), r.PathValue("pull_id"), typ, id, in)
+		var out privacyreviews.Review
+		e = pulls.WithSourceRevision(r.PathValue("id"), r.PathValue("pull_id"), v.SourceRevision, func(pullrequests.PullRequest) error {
+			var addErr error
+			out, addErr = reviews.AddComment(r.PathValue("id"), r.PathValue("pull_id"), typ, id, in)
+			return addErr
+		})
+		if errors.Is(e, pullrequests.ErrSourceChanged) {
+			writeAPIError(w, 409, "stale_privacy_review", "the pull moved; compare the current revision before commenting")
+			return
+		}
 		writePrivacyReview(w, out, e, 201)
 	})
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/privacy-review/acceptance", func(w http.ResponseWriter, r *http.Request) {
@@ -187,8 +210,8 @@ func comparePrivacy(store *datacommitments.Store, repo string, source, target da
 		if !ok {
 			add("collection", "New data path: "+e.Operation+" to "+e.To, e.DataCategories, []string{e.ID})
 		} else {
-			if !privacyStringsEqual(e.DataCategories, old.DataCategories) {
-				add("collection", "Data categories changed on "+e.Operation, e.DataCategories, []string{e.ID})
+			if added := privacyAddedStrings(e.DataCategories, old.DataCategories); len(added) > 0 {
+				add("collection", "New data categories on "+e.Operation, added, []string{e.ID})
 			}
 			if e.Purpose != old.Purpose {
 				add("purpose", "Purpose changed to "+e.Purpose, e.DataCategories, []string{e.ID})
@@ -230,6 +253,34 @@ func comparePrivacy(store *datacommitments.Store, repo string, source, target da
 	}
 	reqs := deriveRequirements(changes, sourceUses)
 	return changes, reqs, true
+}
+
+func privacyFlowCoversChanges(flow dataflows.Revision, changes []pullrequests.FileChange) bool {
+	covered := map[string]bool{}
+	for _, path := range flow.AffectedPaths {
+		covered[path] = true
+	}
+	for _, change := range changes {
+		if !covered[change.Path] {
+			return false
+		}
+	}
+	return len(changes) > 0
+}
+
+func privacyAddedStrings(source, target []string) []string {
+	old := map[string]bool{}
+	for _, value := range target {
+		old[value] = true
+	}
+	added := []string{}
+	for _, value := range source {
+		if !old[value] {
+			added = append(added, value)
+		}
+	}
+	sort.Strings(added)
+	return added
 }
 func edgeKey(e dataflows.Edge) string { return e.From + "\x00" + e.To + "\x00" + e.Operation }
 func privacyStringsEqual(a, b []string) bool {

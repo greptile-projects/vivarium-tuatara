@@ -26,7 +26,8 @@ Records default beneath `$DATA_COMMITMENT_STORAGE_ROOT` (`data-commitments`) and
 handling without granting access or operational authority.
 
 Repository-defined data-flow maps on the same workspace bind an exact visible code revision and
-exact commitment/data-use versions to a directed path. Typed nodes cover user interactions,
+exact affected source paths and commitment/data-use versions to a directed path. Privacy review
+rejects a candidate map unless that scope covers every path changed by the pull. Typed nodes cover user interactions,
 interfaces, packages, stores, extensions, releases, environments, audiences, and external
 recipients; edges declare the categories, purpose, operation, and whether another retained copy is
 created. Inaccessible dependencies and uncertainty remain explicit without copying their protected
