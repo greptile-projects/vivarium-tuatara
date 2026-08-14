@@ -14,6 +14,21 @@ The supported consumer contract, including authentication, stable error
 shapes, validation, and collection pagination, is documented in [API.md](API.md).
 Consumers should use that HTTP boundary rather than reading storage roots.
 
+## Locale coverage contracts
+
+Repository participants publish complete, compare-and-swap locale plans through
+`/repositories/{id}/locale-plans`; the web workspace is `/repositories/{id}/locales`. A plan scopes
+support to a repository, product, documentation collection, or release and records target language
+and region tags, fallback behavior, preferred and avoided terminology, date/time/number/currency/unit
+formatting, required journeys, accountable owners and reviewers, and locale-specific release
+thresholds. Every translatable resource binds an existing exact repository commit.
+
+Reads compare resource revisions to the current default branch and retain missing ownership or
+reviewers, unsupported extraction formats, conflicting preferred terminology, and stale coverage as
+explicit diagnostics. Successors preserve prior revisions and require the current version. The
+contract documents intended support and does not grant repository, review, or release authority.
+Records default beneath `$LOCALE_PLAN_STORAGE_ROOT` (`locale-plans`).
+
 ## Permitted data handling
 
 Repository collaborators publish complete, compare-and-swap data commitment revisions at
