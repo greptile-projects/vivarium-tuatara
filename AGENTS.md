@@ -385,6 +385,16 @@ whenever dependencies change or the web job fails before it starts.
   remains a project participant can reconcile verified full or partial completion into available
   value. Failed, revoked, duplicate, stale, or repeated transfers remain non-spendable, and fund
   roles grant no repository or operational authority.
+  Outcome funding at `/repositories/{id}/funding` connects those governed funds to an exact
+  issue, roadmap outcome, proposal, stewardship opportunity, incident follow-up, or security
+  repair beneath the fund store's `outcomes/` boundary. Current participants publish complete,
+  versioned contracts with scope, acceptance criteria, evidence, fixed-point budget, deadline,
+  contributor eligibility, allocation method, cancellation terms, dependencies, risks,
+  conflicts, and budget-balanced milestones. Authenticated permitted readers pledge to the whole
+  outcome or a milestone. Scope revisions invalidate active pledges until each backer explicitly
+  reconfirms; withdrawal, cancellation, insufficient or unsettled backing, overlapping awards,
+  and embargoed work remain attributable replanning diagnostics. Funding never grants task, Git,
+  credential, review, acceptance, merge, deployment, or security authority.
 
   Reciprocal roadmap learning retains feedback-specific decision, preview, delivery, rejection, and
   measured-outcome updates. Reporters see only updates citing their own feedback, can validate the

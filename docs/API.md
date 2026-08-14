@@ -2683,6 +2683,35 @@ admission lock, with balance projection independently deduplicating proof identi
 duplicate, stale, failed, revoked, repeated, or invalid partial transfers cannot do so. Fund roles
 and balances grant no repository or operational authority.
 
+## Outcome funding
+
+`POST /repositories/{id}/funded-outcomes` lets a current repository participant allocate a
+governed fund toward an exact `issue`, `roadmap_outcome`, `proposal`,
+`stewardship_opportunity`, `incident_follow_up`, or `security_repair`. The request contains
+`fund_id` and complete `terms`: a source ID, exact source revision and visibility; title and
+bounded scope; acceptance criteria and evidence requirements; positive minor-unit budget and
+deadline; contributor eligibility; `first_accepted`, `proportional`, `maintainer_selection`, or
+`milestone_claim` allocation; cancellation terms; dependencies, risks, conflicts; and optional
+milestones. When present, milestone budgets must exactly equal the outcome budget and each
+milestone independently declares acceptance and evidence.
+
+Repository readers use `GET /repositories/{id}/funded-outcomes` and `GET
+/repositories/{id}/funded-outcomes/{outcome_id}`. Participant and embargoed contracts require
+current repository participation. Projections show active whole/milestone backing and derive
+`insufficient_funds`, `unsettled_backing`, `overlapping_award`, `embargoed_work`,
+`changed_scope`, and `withdrawn_backing` diagnostics instead of presenting an ambiguous promise.
+
+Authenticated permitted readers pledge through `POST .../{outcome_id}/pledges` with
+`expected_version`, a positive amount, optional `milestone_id`, idempotency key, and rationale.
+The backer alone may `withdraw` or `reconfirm` through `POST
+.../{outcome_id}/pledges/{pledge_id}`. Current participants publish a successor through `POST
+.../{outcome_id}/revisions`; it retains the prior revision and an attributable reason, and every
+active pledge becomes `reconfirmation_required`. `POST .../{outcome_id}/cancel` retains the
+cancellation reason. All mutations compare-and-swap the outcome version. Funding and backing do
+not reserve project-fund value or grant task, Git, credential, review, acceptance, merge,
+deployment, or security authority; cryptographically settled fund value remains a separately
+derived custody fact.
+
 ## Performance goals
 
 Current repository participants create a complete contract with `POST

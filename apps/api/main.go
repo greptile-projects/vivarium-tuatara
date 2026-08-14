@@ -756,6 +756,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && projectFundStore != nil {
 		registerProjectFundRoutes(mux, repositoryCatalog, authStore, projectFundStore)
+		registerOutcomeFundingRoutes(mux, repositoryCatalog, authStore, projectFundStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && decisionStore != nil {
 		registerDecisionRoutes(mux, store, repositoryCatalog, authStore, userStore, decisionStore, activityStore, proposalStore, explanationStore, incidentStore, relationshipStore, organizationStore, workspaceStore, pullRequestStore, checkRunStore, releaseStore, deploymentStore)
