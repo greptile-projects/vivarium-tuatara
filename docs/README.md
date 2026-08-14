@@ -2110,6 +2110,19 @@ A run that does not reproduce is evidence rather than closure. Maintainers can
 request the missing condition, the reporter answers on the issue, and a later
 workspace attempt retains the corrected evidence and outcome without replacing
 the earlier non-reproduction.
+## Outcome funding
+
+Outcome funding turns verified backing into an inspectable, versioned promise without turning
+money into project authority. A current participant links one governed fund to an exact issue,
+roadmap outcome, proposal, stewardship opportunity, incident follow-up, or security repair and
+declares scope, acceptance criteria, evidence requirements, budget, deadline, contributor
+eligibility, allocation and cancellation rules, dependencies, risks, conflicts, and optional
+budget-balanced milestones. Backers can support the whole result or one milestone. Scope changes
+require explicit pledge reconfirmation, while insufficient or aggregate shared-fund unsettled
+backing, overlapping awards, embargoes, withdrawals, and cancellation remain visible as attributable replanning.
+The repository workspace is `/repositories/{id}/funding`; funding never grants contribution,
+acceptance, Git, review, merge, deployment, credential, or security authority.
+
 # Trusted external extensions
 
 Developers can register independently operated tools at `/extensions` before a

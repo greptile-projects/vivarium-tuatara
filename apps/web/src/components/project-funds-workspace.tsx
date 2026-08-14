@@ -3,6 +3,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/components/auth";
 import { Badge, Button, Card } from "@/components/ui";
 import { api } from "@/lib/api";
+import Link from "next/link";
 
 type Fund = {
   id: string;
@@ -152,6 +153,7 @@ export function ProjectFundsWorkspace({
           Inspect backing, allocation authority, and rules before promising paid
           work.
         </p>
+        <Link href={`/repositories/${repositoryID}/funding`} className="mt-3 inline-block text-sm font-semibold text-[var(--brand)] hover:underline">Allocate verified backing to evaluable outcomes →</Link>
       </div>
       {user && (
         <Card className="p-5">
