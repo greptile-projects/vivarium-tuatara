@@ -375,6 +375,14 @@ whenever dependencies change or the web job fails before it starts.
 
   Product feedback at `/repositories/{id}/feedback` is a distinct needs channel for a project,
 
+  Governed project funds at `/repositories/{id}/funds` retain named stewards, accepted sources,
+  fixed-point currency or credit units, spending and approval rules, eligible recipients, refund
+  policy, and public or participant-bounded append-only ledgers beneath `$PROJECT_FUND_STORAGE_ROOT`
+  (default `project-funds`). Commitments are idempotent pending evidence; only a named steward who
+  remains a project participant can reconcile verified full or partial completion into available
+  value. Failed, revoked, duplicate, stale, or repeated transfers remain non-spendable, and fund
+  roles grant no repository or operational authority.
+
   Reciprocal roadmap learning retains feedback-specific decision, preview, delivery, rejection, and
   measured-outcome updates. Reporters see only updates citing their own feedback, can validate the
   experience, add follow-up evidence, or leave future conversation. Maintainer reviews compare promises

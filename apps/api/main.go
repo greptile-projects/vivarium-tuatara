@@ -43,6 +43,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/productexperiments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/productopportunities"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/projectfunds"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/relationships"
@@ -393,12 +394,20 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	projectFundRoot := os.Getenv("PROJECT_FUND_STORAGE_ROOT")
+	if projectFundRoot == "" {
+		projectFundRoot = "project-funds"
+	}
+	projectFundStore, err := projectfunds.New(projectFundRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -541,6 +550,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var productOpportunityStore *productopportunities.Store
 	var roadmapStore *roadmaps.Store
 	var outcomeValidationStore *outcomevalidations.Store
+	var projectFundStore *projectfunds.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -601,6 +611,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			roadmapStore = value
 		case *outcomevalidations.Store:
 			outcomeValidationStore = value
+		case *projectfunds.Store:
+			projectFundStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -735,6 +747,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && roadmapStore != nil && productOpportunityStore != nil && outcomeValidationStore != nil {
 		registerOutcomeValidationRoutes(mux, repositoryCatalog, authStore, outcomeValidationStore, roadmapStore, productOpportunityStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && projectFundStore != nil {
+		registerProjectFundRoutes(mux, repositoryCatalog, authStore, projectFundStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && decisionStore != nil {
 		registerDecisionRoutes(mux, store, repositoryCatalog, authStore, userStore, decisionStore, activityStore, proposalStore, explanationStore, incidentStore, relationshipStore, organizationStore, workspaceStore, pullRequestStore, checkRunStore, releaseStore, deploymentStore)

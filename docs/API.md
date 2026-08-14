@@ -2658,6 +2658,25 @@ candidate archive symlinks cannot redirect staging. The issue durably reserves
 a deterministic verification identity before creating checks; split-outcome
 retries reuse and link that reservation, and execute only its recorded run IDs.
 
+## Governed project funds
+
+`POST /repositories/{id}/funds` lets a current repository participant establish immutable fund
+terms: named stewards, accepted funding sources, fixed-point currency or credit units, spending
+limits, approval thresholds and approvers, eligible recipient classes, refund policy, and `public`
+or `participants` ledger visibility. `GET /repositories/{id}/funds` and
+`GET /repositories/{id}/funds/{fund_id}` project the declared rules, authority disclaimer,
+append-only transfer evidence, and available, reserved, spent, refunded, disputed, and pending
+balances subject to repository and ledger visibility.
+
+Authenticated repository readers commit backing through `POST
+/repositories/{id}/funds/{fund_id}/commitments` with an accepted source, external transfer
+reference, positive minor-unit amount, and idempotency key. Commitments are pending and contribute
+no available value. A named steward who remains a repository participant reconciles one through
+`POST .../commitments/{entry_id}/reconcile`, providing the current fund version and a `settled`,
+`partial`, `failed`, or `revoked` result. Only the verified completed amount becomes available;
+duplicate, stale, failed, revoked, repeated, or invalid partial transfers cannot do so. Fund roles
+and balances grant no repository or operational authority.
+
 ## Performance goals
 
 Current repository participants create a complete contract with `POST
