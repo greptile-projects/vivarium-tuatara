@@ -270,7 +270,7 @@ func (s *Store) Evaluate(repo, revision, branch string, paths, journeys, risks [
 			confirmed := map[string]bool{}
 			rejected := false
 			for _, v := range invitations {
-				if v.PolicyID != p.ID || v.Revision != revision || v.Role != rr.Role || !v.ExpiresAt.After(now) || v.Outcome == nil {
+				if v.PolicyID != p.ID || v.Revision != revision || v.Role != rr.Role || !contains(rr.UserIDs, v.UserID) || !v.ExpiresAt.After(now) || v.Outcome == nil {
 					continue
 				}
 				if v.Outcome.Decision == "confirmed" {

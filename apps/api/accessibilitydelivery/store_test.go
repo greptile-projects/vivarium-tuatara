@@ -87,3 +87,31 @@ func TestRejectionBlocksSatisfiedRoleMinimumWithoutOverride(t *testing.T) {
 		t.Fatalf("rejection must block satisfied minimum: %#v, %v", readiness, err)
 	}
 }
+
+func TestSameRoleConfirmationCannotSatisfyDisjointNamedRequirement(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 14, 10, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	second := "44444444444444444444444444444444"
+	p, err := s.CreatePolicy(repo, owner, Policy{Branch: "main", RequiredRoles: []RoleRequirement{
+		{Role: "accessibility_reviewer", UserIDs: []string{evaluator}, Minimum: 1},
+		{Role: "accessibility_reviewer", UserIDs: []string{second}, Minimum: 1},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, err := s.Invite(repo, owner, Invitation{PolicyID: p.ID, PullRequestID: "pull", Revision: revision, PreviewID: "preview", UserID: evaluator, Role: "accessibility_reviewer", ExpiresAt: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Respond(repo, inv.ID, evaluator, "confirmed", "Confirmed only by the first named evaluator.", revision); err != nil {
+		t.Fatal(err)
+	}
+	readiness, err := s.Evaluate(repo, revision, "main", nil, nil, nil, nil, nil)
+	if err != nil || readiness.Ready || len(readiness.Requirements) != 2 || readiness.Requirements[0].Status != "passed" || readiness.Requirements[1].Status != "missing" {
+		t.Fatalf("disjoint named requirement must remain missing: %#v, %v", readiness, err)
+	}
+}
