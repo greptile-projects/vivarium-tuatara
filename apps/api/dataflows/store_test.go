@@ -50,7 +50,14 @@ func TestDataFlowLifecycleProjectsPermissionAndStaleness(t *testing.T) {
 
 func TestDataFlowRejectsUnboundedOrPayloadLikeEvidence(t *testing.T) {
 	store, _ := New(t.TempDir())
-	flow, _ := store.Create("repo", "human", declaration(strings.Repeat("a", 40)))
+	revision := declaration(strings.Repeat("a", 40))
+	invalidEdge := revision
+	invalidEdge.Edges = append([]Edge(nil), revision.Edges...)
+	invalidEdge.Edges[0].CommitmentRefs = []CommitmentRef{{CommitmentID: "commitment", Version: 2, DataUseIDs: []string{}}}
+	if _, err := store.Create("repo", "human", invalidEdge); err != ErrInvalid {
+		t.Fatalf("expected empty edge data-use binding to be invalid, got %v", err)
+	}
+	flow, _ := store.Create("repo", "human", revision)
 	bad := Analysis{MapVersion: 1, CodeRevision: strings.Repeat("a", 40), Findings: []Finding{{Kind: "confirmed", Summary: "uncited"}}}
 	if _, err := store.AddAnalysis("repo", flow.ID, "human", "human", bad); err != ErrInvalid {
 		t.Fatalf("expected invalid bounded analysis, got %v", err)

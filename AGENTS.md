@@ -449,6 +449,9 @@ whenever dependencies change or the web job fails before it starts.
   agents add only bounded repository citations, findings, and uncertainty. Projections expose stale
   analysis, inaccessible dependencies, undeclared flows, and declared/observed differences without
   accepting or projecting restricted payloads, and grant no data or repository authority.
+  Anonymous and nonparticipant public-repository readers receive declarations only; bounded
+  analyses, citations, attribution, and analysis-derived diagnostics remain limited to current
+  participants and repository-bound read-only agents.
 
   Product feedback at `/repositories/{id}/feedback` is a distinct needs channel for a project,
 

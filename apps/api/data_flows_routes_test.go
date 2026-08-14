@@ -43,6 +43,14 @@ func TestDataFlowAPIRequiresExactCommitmentAndRetainsCitedAnalysis(t *testing.T)
 	ref := map[string]any{"commitment_id": commitment.ID, "version": 1, "data_use_ids": []string{"events"}}
 	declaration := map[string]any{"code_revision": string(revision), "title": "Save flow", "entry_points": []string{"save"}, "commitment_refs": []any{ref}, "rationale": "Current implementation", "nodes": []any{map[string]any{"id": "save", "kind": "interaction", "name": "Save", "accessible": true}, map[string]any{"id": "db", "kind": "store", "name": "Events", "accessible": true}}, "edges": []any{map[string]any{"id": "write", "from": "save", "to": "db", "operation": "write", "data_categories": []string{"usage"}, "purpose": "reliability", "retained_copy": true, "commitment_refs": []any{ref}}}}
 	payload, _ := json.Marshal(map[string]any{"revision": declaration})
+	emptyEdgeDeclaration := mapsClone(declaration)
+	emptyEdges := append([]any(nil), declaration["edges"].([]any)...)
+	emptyEdge := mapsClone(emptyEdges[0].(map[string]any))
+	emptyRef := map[string]any{"commitment_id": commitment.ID, "version": 1, "data_use_ids": []string{}}
+	emptyEdge["commitment_refs"] = []any{emptyRef}
+	emptyEdgeDeclaration["edges"] = []any{emptyEdge}
+	emptyPayload, _ := json.Marshal(map[string]any{"revision": emptyEdgeDeclaration})
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/data-flows", string(emptyPayload), owner.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
 	createdResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/data-flows", string(payload), owner.Credential.Token, http.StatusCreated)
 	var created dataflows.Map
 	json.NewDecoder(createdResponse.Body).Decode(&created)
@@ -59,5 +67,41 @@ func TestDataFlowAPIRequiresExactCommitmentAndRetainsCitedAnalysis(t *testing.T)
 	result.Body.Close()
 	if analyzed.Analyses[0].Findings[0].AddedBy != owner.User.ID || analyzed.Diagnostics[len(analyzed.Diagnostics)-1].Kind != "declared_observed_difference" {
 		t.Fatalf("analysis attribution/diagnostic missing: %#v", analyzed)
+	}
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+repo.ID, `{"visibility":"public"}`, owner.Credential.Token, http.StatusOK).Body.Close()
+	for _, path := range []string{"/repositories/" + repo.ID + "/data-flows", "/repositories/" + repo.ID + "/data-flows/" + created.ID} {
+		publicResponse, requestErr := http.Get(server.URL + path)
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		if publicResponse.StatusCode != http.StatusOK {
+			t.Fatalf("anonymous GET %s returned %d", path, publicResponse.StatusCode)
+		}
+		var publicFlow dataflows.Map
+		if strings.HasSuffix(path, created.ID) {
+			json.NewDecoder(publicResponse.Body).Decode(&publicFlow)
+		} else {
+			var listed struct {
+				DataFlows []dataflows.Map `json:"data_flows"`
+			}
+			json.NewDecoder(publicResponse.Body).Decode(&listed)
+			publicFlow = listed.DataFlows[0]
+		}
+		publicResponse.Body.Close()
+		if len(publicFlow.Analyses) != 0 {
+			t.Fatalf("anonymous GET %s exposed analysis: %#v", path, publicFlow.Analyses)
+		}
+		for _, diagnostic := range publicFlow.Diagnostics {
+			if diagnostic.Kind == "declared_observed_difference" || strings.Contains(diagnostic.Message, "retention condition") {
+				t.Fatalf("anonymous GET %s exposed analysis-derived diagnostic: %#v", path, diagnostic)
+			}
+		}
+	}
+	ownerRead := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repo.ID+"/data-flows/"+created.ID, "", owner.Credential.Token, http.StatusOK)
+	var ownerFlow dataflows.Map
+	json.NewDecoder(ownerRead.Body).Decode(&ownerFlow)
+	ownerRead.Body.Close()
+	if len(ownerFlow.Analyses) != 1 {
+		t.Fatal("participant projection lost bounded analysis")
 	}
 }

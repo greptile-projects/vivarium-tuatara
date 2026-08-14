@@ -40,7 +40,8 @@ func registerDataFlowRoutes(mux *http.ServeMux, git *storage.Store, catalog *rep
 		return actor, participant, true
 	}
 	mux.HandleFunc("GET /repositories/{id}/data-flows", func(w http.ResponseWriter, r *http.Request) {
-		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
+		actor, authenticated, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok {
 			return
 		}
 		out, err := flows.List(r.PathValue("id"))
@@ -48,13 +49,21 @@ func registerDataFlowRoutes(mux *http.ServeMux, git *storage.Store, catalog *rep
 			writeDataFlow(w, dataflows.Map{}, err, 0)
 			return
 		}
+		includeAnalysis := dataFlowAnalysisVisible(catalog, r.PathValue("id"), actor, authenticated)
+		for i := range out {
+			out[i] = projectDataFlowForReader(out[i], includeAnalysis)
+		}
 		writeJSON(w, 200, map[string]any{"data_flows": out})
 	})
 	mux.HandleFunc("GET /repositories/{id}/data-flows/{flow_id}", func(w http.ResponseWriter, r *http.Request) {
-		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
+		actor, authenticated, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok {
 			return
 		}
 		out, err := flows.Get(r.PathValue("id"), r.PathValue("flow_id"))
+		if err == nil {
+			out = projectDataFlowForReader(out, dataFlowAnalysisVisible(catalog, r.PathValue("id"), actor, authenticated))
+		}
 		writeDataFlow(w, out, err, 200)
 	})
 	mux.HandleFunc("POST /repositories/{id}/data-flows", func(w http.ResponseWriter, r *http.Request) {
@@ -172,6 +181,9 @@ func dataFlowCommitmentsResolve(store *datacommitments.Store, repo string, refs 
 		all = append(all, e.CommitmentRefs...)
 	}
 	for _, ref := range all {
+		if len(ref.DataUseIDs) == 0 {
+			return false
+		}
 		c, err := store.Get(ref.CommitmentID)
 		if err != nil || c.RepositoryID != repo || ref.Version < 1 || ref.Version > len(c.Revisions) {
 			return false
@@ -187,6 +199,42 @@ func dataFlowCommitmentsResolve(store *datacommitments.Store, repo string, refs 
 		}
 	}
 	return len(all) > 0
+}
+
+func dataFlowAnalysisVisible(catalog *repositories.Store, repositoryID string, actor auth.Credential, authenticated bool) bool {
+	if !authenticated {
+		return false
+	}
+	if actor.AgentID != "" {
+		return actor.RepositoryID == repositoryID
+	}
+	repository, err := catalog.GetByID(repositoryID)
+	if err != nil {
+		return false
+	}
+	if actor.UserID == repository.OwnerID {
+		return true
+	}
+	participant, err := catalog.HasCollaborator(actor.UserID, repositoryID)
+	return err == nil && participant
+}
+
+func projectDataFlowForReader(value dataflows.Map, includeAnalysis bool) dataflows.Map {
+	if includeAnalysis {
+		return value
+	}
+	value.Analyses = []dataflows.Analysis{}
+	diagnostics := make([]dataflows.Diagnostic, 0, len(value.Diagnostics))
+	for _, diagnostic := range value.Diagnostics {
+		switch diagnostic.Kind {
+		case "stale_analysis", "undeclared_flow", "declared_observed_difference":
+			continue
+		default:
+			diagnostics = append(diagnostics, diagnostic)
+		}
+	}
+	value.Diagnostics = diagnostics
+	return value
 }
 func writeDataFlow(w http.ResponseWriter, out dataflows.Map, err error, status int) {
 	switch {

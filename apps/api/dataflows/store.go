@@ -243,6 +243,9 @@ func validateRevision(r Revision) error {
 		if e.ID == "" || edgeIDs[e.ID] || !ids[e.From] || !ids[e.To] || e.Operation == "" || len(e.DataCategories) == 0 || e.Purpose == "" || len(e.CommitmentRefs) == 0 {
 			return ErrInvalid
 		}
+		if validateRefs(e.CommitmentRefs) != nil {
+			return ErrInvalid
+		}
 		edgeIDs[e.ID] = true
 	}
 	return validateRefs(r.CommitmentRefs)

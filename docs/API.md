@@ -34,6 +34,9 @@ Node kinds are `interaction`, `interface`, `package`, `store`, `extension`, `rel
 `environment`, `audience`, and `external_recipient`. An inaccessible node requires an uncertainty
 statement. Diagnostics report inaccessible dependencies, uncertainty, undeclared or differing
 behavior, and analyses made stale by a successor declaration; they never broaden source visibility.
+Anonymous and nonparticipant readers of public repositories receive declarations and declaration
+diagnostics only. Complete analyses, citations, actor attribution, and analysis-derived diagnostics
+are projected only to current repository participants and repository-bound read-only agents.
 
 ## Product feedback
 
