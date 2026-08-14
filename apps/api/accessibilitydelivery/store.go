@@ -268,6 +268,7 @@ func (s *Store) Evaluate(repo, revision, branch string, paths, journeys, risks [
 		}
 		for _, rr := range p.RequiredRoles {
 			confirmed := map[string]bool{}
+			rejected := false
 			for _, v := range invitations {
 				if v.PolicyID != p.ID || v.Revision != revision || v.Role != rr.Role || !v.ExpiresAt.After(now) || v.Outcome == nil {
 					continue
@@ -276,10 +277,13 @@ func (s *Store) Evaluate(repo, revision, branch string, paths, journeys, risks [
 					confirmed[v.UserID] = true
 				} else {
 					r.Dissent = append(r.Dissent, *v.Outcome)
+					rejected = true
 				}
 			}
 			status := "missing"
-			if len(confirmed) >= rr.Minimum {
+			if rejected {
+				status = "failed"
+			} else if len(confirmed) >= rr.Minimum {
 				status = "passed"
 			}
 			add("acknowledgement", rr.Role, status, "independent invited acknowledgement is required")

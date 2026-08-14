@@ -2902,6 +2902,11 @@ rationale, expiry, and mandatory follow-up work at
 `POST /repositories/{id}/accessibility-delivery-overrides`; exceptions do not remove prior dissent
 or evidence. Records default beneath `$ACCESSIBILITY_DELIVERY_STORAGE_ROOT`
 (`accessibility-delivery`).
+Release creation freezes the repository default branch and the exact changed paths from the
+previous release (or the root candidate), so path-scoped gates cannot disappear during later
+readiness evaluation. Missing pull or release selection context fails closed. Any current invited
+rejection blocks its role even when the numerical confirmation minimum is otherwise met; only the
+explicit owner exception can permit delivery while preserving that dissent.
 
 Publishing an accessibility-repair task through the ordinary task contribution endpoint additionally
 requires structured design changes, code changes, interaction tradeoffs, and content tradeoffs. The

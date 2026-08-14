@@ -3808,6 +3808,17 @@ func registerReleaseRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 			}
 			candidate.PreviousCommitID = &previous.CommitID
 		}
+		info, inspectErr := repository.Inspect()
+		if inspectErr != nil {
+			writeAPIError(w, 500, "release_context_unavailable", "release branch context could not be determined")
+			return
+		}
+		candidate.TargetBranch = info.DefaultBranch
+		candidate.ChangedPaths, err = deriveReleaseChangedPaths(repository, candidate.CommitID, candidate.PreviousCommitID)
+		if err != nil {
+			writeAPIError(w, 422, "invalid_release_range", err.Error())
+			return
+		}
 		candidate.Inclusions, err = deriveReleaseInclusions(repository, candidate.CommitID, candidate.PreviousCommitID, proposalStore, pullStore, candidate.RepositoryID)
 		if err != nil {
 			writeAPIError(w, 422, "invalid_release_range", err.Error())
@@ -4015,6 +4026,24 @@ func registerReleaseRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 		go buildStore.Execute(run, repository.Path())
 		writeJSON(w, http.StatusAccepted, run)
 	})
+}
+
+func deriveReleaseChangedPaths(repository *storage.Repository, commitID string, previousCommitID *string) ([]string, error) {
+	args := []string{"--git-dir=" + repository.Path(), "diff-tree", "--root", "--no-commit-id", "--name-only", "-r", commitID, "--"}
+	if previousCommitID != nil {
+		args = []string{"--git-dir=" + repository.Path(), "diff", "--name-only", *previousCommitID, commitID, "--"}
+	}
+	output, err := exec.Command("git", args...).Output()
+	if err != nil {
+		return nil, errors.New("release changed paths could not be derived from the exact release range")
+	}
+	paths := []string{}
+	for _, value := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if value != "" {
+			paths = append(paths, value)
+		}
+	}
+	return paths, nil
 }
 
 func deriveReleaseInclusions(repository *storage.Repository, commitID string, previousCommitID *string, proposalStore *proposals.Store, pullStore *pullrequests.Store, repositoryID string) (releases.Inclusion, error) {

@@ -34,6 +34,8 @@ type Candidate struct {
 	Version           string    `json:"version"`
 	Notes             string    `json:"notes"`
 	CommitID          string    `json:"commit_id"`
+	TargetBranch      string    `json:"target_branch"`
+	ChangedPaths      []string  `json:"changed_paths"`
 	PreviousReleaseID *string   `json:"previous_release_id,omitempty"`
 	PreviousCommitID  *string   `json:"previous_commit_id,omitempty"`
 	Status            string    `json:"status"`
@@ -88,6 +90,7 @@ func (s *Store) Create(candidate Candidate) (Candidate, error) {
 	for _, values := range [][]string{candidate.Inclusions.PullRequestIDs, candidate.Inclusions.ProposalIDs, candidate.Inclusions.TaskIDs, candidate.Inclusions.ContributorIDs} {
 		sort.Strings(values)
 	}
+	sort.Strings(candidate.ChangedPaths)
 	dir := filepath.Join(s.root, candidate.RepositoryID)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return Candidate{}, err

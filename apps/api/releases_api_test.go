@@ -40,7 +40,7 @@ func TestCollaboratorDefinesAndInspectsExactReleaseCandidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	createdResponse.Body.Close()
-	if created.CommitID != string(commit) || created.CreatedBy != collaborator.User.ID || created.Status != "candidate" || created.Inclusions.PullRequestIDs == nil {
+	if created.CommitID != string(commit) || created.CreatedBy != collaborator.User.ID || created.Status != "candidate" || created.Inclusions.PullRequestIDs == nil || created.TargetBranch != "main" || len(created.ChangedPaths) != 1 || created.ChangedPaths[0] != ".vivarium/release.json" {
 		t.Fatalf("created = %#v", created)
 	}
 	if createdResponse.Header.Get("Location") != "/repositories/"+repository.ID+"/releases/"+created.ID {

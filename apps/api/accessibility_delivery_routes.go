@@ -121,10 +121,12 @@ func registerAccessibilityDeliveryRoutes(mux *http.ServeMux, catalog *repositori
 		}
 		paths := []string{}
 		changes, err := pulls.Changes(p.RepositoryID, p.ID)
-		if err == nil {
-			for _, c := range changes {
-				paths = append(paths, c.Path)
-			}
+		if err != nil {
+			writeAPIError(w, 500, "accessibility_readiness_unavailable", "accessibility readiness could not be evaluated")
+			return
+		}
+		for _, c := range changes {
+			paths = append(paths, c.Path)
 		}
 		out, err := accessibilityReadiness(delivery, assessments, checks, p.RepositoryID, p.ID, p.ID, p.SourceCommitID, p.TargetBranch, paths, r.URL.Query()["journey"], r.URL.Query()["risk_class"])
 		if err != nil {
@@ -142,7 +144,11 @@ func registerAccessibilityDeliveryRoutes(mux *http.ServeMux, catalog *repositori
 			writeAPIError(w, 404, "release_not_found", "release candidate not found")
 			return
 		}
-		out, err := accessibilityReadiness(delivery, assessments, checks, release.RepositoryID, release.ID, "", release.CommitID, "main", nil, r.URL.Query()["journey"], r.URL.Query()["risk_class"])
+		if release.TargetBranch == "" || release.ChangedPaths == nil {
+			writeAPIError(w, 500, "accessibility_readiness_unavailable", "release accessibility policy context is unavailable")
+			return
+		}
+		out, err := accessibilityReadiness(delivery, assessments, checks, release.RepositoryID, release.ID, "", release.CommitID, release.TargetBranch, release.ChangedPaths, r.URL.Query()["journey"], r.URL.Query()["risk_class"])
 		if err != nil {
 			writeAPIError(w, 500, "accessibility_readiness_unavailable", "accessibility readiness could not be evaluated")
 			return

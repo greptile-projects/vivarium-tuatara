@@ -60,3 +60,30 @@ func TestPolicySelectionIsExactUnlessWildcarded(t *testing.T) {
 		t.Fatal("wildcard selector should match")
 	}
 }
+
+func TestRejectionBlocksSatisfiedRoleMinimumWithoutOverride(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 14, 10, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	second := "44444444444444444444444444444444"
+	p, err := s.CreatePolicy(repo, owner, Policy{Branch: "main", RequiredRoles: []RoleRequirement{{Role: "accessibility_reviewer", UserIDs: []string{evaluator, second}, Minimum: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, outcome := range []struct{ user, decision string }{{evaluator, "confirmed"}, {second, "rejected"}} {
+		inv, inviteErr := s.Invite(repo, owner, Invitation{PolicyID: p.ID, PullRequestID: "pull", Revision: revision, PreviewID: "preview", UserID: outcome.user, Role: "accessibility_reviewer", ExpiresAt: now.Add(time.Hour)})
+		if inviteErr != nil {
+			t.Fatal(inviteErr)
+		}
+		if _, err = s.Respond(repo, inv.ID, outcome.user, outcome.decision, "Independent exact-revision result.", revision); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readiness, err := s.Evaluate(repo, revision, "main", nil, nil, nil, nil, nil)
+	if err != nil || readiness.Ready || len(readiness.Dissent) != 1 || readiness.Requirements[0].Status != "failed" {
+		t.Fatalf("rejection must block satisfied minimum: %#v, %v", readiness, err)
+	}
+}
