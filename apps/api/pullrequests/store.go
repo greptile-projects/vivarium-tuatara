@@ -1732,12 +1732,7 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 	}
 	if s.localization != nil {
 		statuses := map[string]string{}
-		risks := []string{}
-		if report.PreviewAcceptance != nil {
-			for _, decision := range report.PreviewAcceptance.Decisions {
-				risks = append(risks, decision.RiskClasses...)
-			}
-		}
+		risks := acceptedLocalizationRisks(report.PreviewAcceptance)
 		if s.checkRuns != nil {
 			runs, runErr := s.checkRuns.List(repositoryID, pullRequestID)
 			if runErr != nil {
@@ -1798,6 +1793,19 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 		}
 	}
 	return report, nil
+}
+
+func acceptedLocalizationRisks(evaluation *acceptance.Evaluation) []string {
+	if evaluation == nil {
+		return nil
+	}
+	risks := []string{}
+	for _, decision := range evaluation.Decisions {
+		if decision.Outcome == "accepted" {
+			risks = append(risks, decision.RiskClasses...)
+		}
+	}
+	return risks
 }
 
 func containsPrivacyRule(values []string, want string) bool {

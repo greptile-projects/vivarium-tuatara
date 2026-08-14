@@ -726,6 +726,18 @@ func TestRiskScopedLocalizationBlocksReadinessAndQueueAdmission(t *testing.T) {
 	}
 }
 
+func TestLocalizationRisksUseOnlyAcceptedCurrentDecisions(t *testing.T) {
+	evaluation := &acceptance.Evaluation{Decisions: []acceptance.Decision{
+		{Outcome: "accepted", RiskClasses: []string{"accepted-risk"}},
+		{Outcome: "rejected", RiskClasses: []string{"rejected-risk"}},
+		{Outcome: "overridden", RiskClasses: []string{"overridden-risk"}},
+	}}
+	risks := acceptedLocalizationRisks(evaluation)
+	if len(risks) != 1 || risks[0] != "accepted-risk" {
+		t.Fatalf("localization risks = %#v", risks)
+	}
+}
+
 func TestStakeholderAcceptanceRequiresLiveInvitationAtReadiness(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	repository, _ := gitStore.Create(testID('1'))
