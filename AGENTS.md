@@ -386,6 +386,13 @@ whenever dependencies change or the web job fails before it starts.
   exact retries finish a pending link after process failure or concurrent post-reservation
   invalidation, and GET retains pending state instead of losing the work association. Proposal
   directory-sync uncertainty propagates through both linked and recovery HTTP responses.
+  Accessibility delivery policies beneath `$ACCESSIBILITY_DELIVERY_STORAGE_ROOT` (default
+  `accessibility-delivery`) select branches, paths, journeys, or risk classes and require exact-
+  revision automated checks, scenario coverage, and minimum acknowledgements from named reviewer or
+  participant roles. Pull merge and release readiness distinguish missing, stale, unevaluated,
+  failed, and unresolved-barrier evidence. Evaluation invitations require an existing bounded guest
+  invitation to the same exact preview and expiry; confirmations and rejections retain independent
+  rationale. Owner overrides are expiring, preserve dissent, and require concrete follow-up work.
   Product experiments at `/repositories/{id}/experiments` retain append-only hypothesis-plan
   revisions sourced from proposals, issues, decisions, pulls, previews, or releases. Success and
   guardrail metrics bind exact permitted product-signal versions; audience eligibility,

@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/acceptance"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/accessibilityassessments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/accessibilitydelivery"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/performanceevidence"
@@ -472,6 +474,7 @@ type MergeReadiness struct {
 	CanEnqueue              bool                                   `json:"can_enqueue"`
 	PreviewAcceptance       *acceptance.Evaluation                 `json:"preview_acceptance,omitempty"`
 	PerformanceRequirements []performanceevidence.MergeRequirement `json:"performance_requirements"`
+	AccessibilityReadiness  *accessibilitydelivery.Readiness       `json:"accessibility_readiness,omitempty"`
 }
 
 type commentRecord struct {
@@ -501,10 +504,15 @@ type Store struct {
 		List(string, string, string) ([]previews.Preview, error)
 		WithAudienceAdmission(func() error) error
 	}
-	performance *performanceevidence.Store
+	performance              *performanceevidence.Store
+	accessibilityDelivery    *accessibilitydelivery.Store
+	accessibilityAssessments *accessibilityassessments.Store
 }
 
 func (s *Store) ConfigurePerformanceEvidence(store *performanceevidence.Store) { s.performance = store }
+func (s *Store) ConfigureAccessibilityDelivery(delivery *accessibilitydelivery.Store, assessments *accessibilityassessments.Store) {
+	s.accessibilityDelivery, s.accessibilityAssessments = delivery, assessments
+}
 
 func (s *Store) ConfigurePreviewAcceptance(a *acceptance.Store, p *previews.Store) {
 	s.acceptance = a
@@ -1611,6 +1619,77 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 		for _, requirement := range requirements {
 			if requirement.Status != "passed" {
 				addBlocker("performance_"+requirement.Status, fmt.Sprintf("performance goal %q: %s", requirement.GoalID, requirement.Message))
+			}
+		}
+	}
+	if s.accessibilityDelivery != nil && s.accessibilityAssessments != nil {
+		changes, changeErr := s.Changes(repositoryID, pullRequestID)
+		if changeErr != nil {
+			return MergeReadiness{}, changeErr
+		}
+		paths := make([]string, 0, len(changes))
+		for _, change := range changes {
+			paths = append(paths, change.Path)
+		}
+		statuses := map[string]string{}
+		if s.checkRuns != nil {
+			runs, runErr := s.checkRuns.List(repositoryID, pullRequestID)
+			if runErr != nil {
+				return MergeReadiness{}, runErr
+			}
+			for _, run := range runs {
+				if run.CommitID != p.SourceCommitID {
+					if _, ok := statuses[run.Definition.Name]; !ok {
+						statuses[run.Definition.Name] = "stale"
+					}
+					continue
+				}
+				status := "pending"
+				if run.State == "succeeded" {
+					status = "passed"
+				} else if run.State == "failed" {
+					status = "failed"
+				}
+				statuses[run.Definition.Name] = status
+			}
+		}
+		evidence, evidenceErr := s.accessibilityAssessments.List(repositoryID, "", pullRequestID)
+		if evidenceErr != nil {
+			return MergeReadiness{}, evidenceErr
+		}
+		journeys, risks := []string{}, []string{}
+		for _, assessment := range evidence {
+			for _, check := range assessment.Checks {
+				if check.JourneyID != "" {
+					journeys = append(journeys, check.JourneyID)
+				}
+			}
+			for _, finding := range assessment.Findings {
+				risks = append(risks, finding.Severity)
+				journeys = append(journeys, finding.JourneyIDs...)
+			}
+		}
+		if report.PreviewAcceptance != nil {
+			for _, decision := range report.PreviewAcceptance.Decisions {
+				risks = append(risks, decision.RiskClasses...)
+			}
+		}
+		accessibility, evaluationErr := s.accessibilityDelivery.Evaluate(repositoryID, p.SourceCommitID, p.TargetBranch, paths, journeys, risks, statuses, evidence)
+		if evaluationErr != nil {
+			return MergeReadiness{}, evaluationErr
+		}
+		report.AccessibilityReadiness = &accessibility
+		for _, requirement := range accessibility.Requirements {
+			if requirement.Status != "passed" {
+				overridden := false
+				for _, exception := range accessibility.ActiveExceptions {
+					if exception.PolicyID == requirement.PolicyID {
+						overridden = true
+					}
+				}
+				if !overridden {
+					addBlocker("accessibility_"+requirement.Kind+"_"+requirement.Status, requirement.Message+": "+requirement.Name)
+				}
 			}
 		}
 	}

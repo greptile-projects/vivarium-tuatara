@@ -2885,6 +2885,19 @@ export type MergeReadiness = {
   target: PullRequestBranchState;
   has_conflicts: boolean;
   blockers: { code: string; message: string }[];
+  accessibility_readiness?: {
+    ready: boolean;
+    revision: string;
+    requirements: {
+      policy_id: string;
+      kind: "automated_check" | "scenario" | "acknowledgement" | "barrier";
+      name: string;
+      status: "missing" | "stale" | "pending" | "unevaluated" | "failed" | "passed";
+      message: string;
+    }[];
+    active_exceptions: { id: string; policy_id: string; rationale: string; follow_up_work: string; expires_at: string }[];
+    dissent: { decision: "confirmed" | "rejected"; rationale: string; actor_id: string; revision: string; created_at: string }[];
+  };
   preview_acceptance?: {
     revision: string;
     policy_version: number;
