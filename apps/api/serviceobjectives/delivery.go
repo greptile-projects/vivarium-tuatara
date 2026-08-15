@@ -203,7 +203,7 @@ func (s *Store) EvaluateReliability(repo, kind, resourceID, revision, branch, se
 			var latest *ReliabilityImpact
 			for i := range v.ReliabilityImpacts {
 				x := &v.ReliabilityImpacts[i]
-				if x.PolicyID == p.ID && x.Kind == kind && x.ResourceID == resourceID && x.Revision == revision && (latest == nil || x.RecordedAt.After(latest.RecordedAt)) {
+				if x.PolicyID == p.ID && x.Kind == kind && x.ResourceID == resourceID && x.Revision == revision && impactMatchesScope(*x, branch, service, environment, journeys, risks) && (latest == nil || x.RecordedAt.After(latest.RecordedAt)) {
 					latest = x
 				}
 			}
@@ -250,10 +250,15 @@ func validImpact(p DeliveryPolicy, x ReliabilityImpact) bool {
 	if !oneOf(x.Kind, "pull_request", "integration_queue", "release", "deployment") || x.ResourceID == "" || x.Revision == "" || strings.TrimSpace(x.Summary) == "" || len(x.ObjectiveImpacts) == 0 {
 		return false
 	}
+	seen := map[string]bool{}
 	for _, i := range x.ObjectiveImpacts {
-		if !deliveryContains(p.ObjectiveIDs, i.ObjectiveID) || i.PredictedBudgetIncrease < 0 || !oneOf(i.Confidence, "low", "medium", "high") {
+		if !deliveryContains(p.ObjectiveIDs, i.ObjectiveID) || seen[i.ObjectiveID] || i.PredictedBudgetIncrease < 0 || !oneOf(i.Confidence, "low", "medium", "high") {
 			return false
 		}
+		seen[i.ObjectiveID] = true
+	}
+	if len(seen) != len(p.ObjectiveIDs) {
+		return false
 	}
 	return true
 }
@@ -319,9 +324,9 @@ func evaluatePolicy(p DeliveryPolicy, x *ReliabilityImpact, now time.Time) Deliv
 func rankEffect(x string) int {
 	return map[string]int{"none": 0, "warn": 1, "slow": 2, "block": 3, "pause": 4, "rollback": 5}[x]
 }
-func matches(s []string, v string) bool { return len(s) == 0 || v == "" || deliveryContains(s, v) }
+func matches(s []string, v string) bool { return len(s) == 0 || deliveryContains(s, v) }
 func overlaps(s, v []string) bool {
-	if len(s) == 0 || len(v) == 0 {
+	if len(s) == 0 {
 		return true
 	}
 	for _, x := range s {
@@ -330,6 +335,34 @@ func overlaps(s, v []string) bool {
 		}
 	}
 	return false
+}
+
+// impactMatchesScope prevents evidence for another delivery slice from
+// replacing evidence for the slice being evaluated. Empty impact dimensions
+// are intentional wildcards only when the evaluated dimension is also empty;
+// a supplied evaluation dimension requires an exact scalar or overlapping set.
+func impactMatchesScope(x ReliabilityImpact, branch, service, environment string, journeys, risks []string) bool {
+	return impactScalarMatches(x.Branch, branch) &&
+		impactScalarMatches(x.Service, service) &&
+		impactScalarMatches(x.EnvironmentID, environment) &&
+		impactSetMatches(x.JourneyIDs, journeys) &&
+		impactSetMatches(x.RiskClasses, risks)
+}
+
+func impactScalarMatches(recorded, evaluated string) bool {
+	return recorded == evaluated
+}
+
+func impactSetMatches(recorded, evaluated []string) bool {
+	if len(recorded) != len(evaluated) {
+		return false
+	}
+	for _, value := range recorded {
+		if !deliveryContains(evaluated, value) {
+			return false
+		}
+	}
+	return true
 }
 
 func deliveryContains(values []string, value string) bool {
