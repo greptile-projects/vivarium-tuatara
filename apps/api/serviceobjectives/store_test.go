@@ -2,6 +2,7 @@ package serviceobjectives
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -57,6 +58,50 @@ func TestReliabilityEvidenceRetainsExactMappingHistoryAndDerivesAttainment(t *te
 	}
 	if len(public.Observations[0].Software) != 6 || public.Observations[0].Gaps[0].Kind != "support_delay" {
 		t.Fatalf("public provenance missing: %#v", public.Observations[0])
+	}
+}
+
+func TestReliabilityDeliveryPolicyPreservesHumanAuthorityAndExceptions(t *testing.T) {
+	s, _ := New(t.TempDir())
+	contract, err := s.Create("repo", "owner", completeRevision())
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := DeliveryPolicy{ContractVersion: 1, ObjectiveIDs: []string{"availability"}, Branches: []string{"main"}, Services: []string{"checkout"}, EnvironmentIDs: []string{"production"}, JourneyIDs: []string{"buy"}, RiskClasses: []string{"availability"}, MaximumBudgetConsumed: 90, MaximumPredictedIncrease: 10, RequireCurrentEvidence: true, RequireDependencies: true, RequiredOwnerIDs: []string{"owner"}, MinimumAcknowledgements: 1, OnMissingEvidence: "block", OnBudgetExhausted: "pause", OnRegression: "slow", OnDependencyFailure: "rollback", Rationale: "Protect current purchasers."}
+	contract, err = s.PublishDeliveryPolicy(contract.ID, "owner", 1, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy = contract.DeliveryPolicies[0]
+	missing, err := s.EvaluateReliability("repo", "pull_request", "pull", strings.Repeat("a", 40), "main", "checkout", "production", []string{"buy"}, []string{"availability"})
+	if err != nil || len(missing) != 1 || missing[0].Effect != "block" {
+		t.Fatalf("missing = %#v, %v", missing, err)
+	}
+	consumed := 100.0
+	impact := ReliabilityImpact{PolicyID: policy.ID, PolicyVersion: 1, Kind: "pull_request", ResourceID: "pull", Revision: strings.Repeat("a", 40), Branch: "main", Service: "checkout", EnvironmentID: "production", JourneyIDs: []string{"buy"}, RiskClasses: []string{"availability"}, ObjectiveImpacts: []ObjectiveImpact{{ObjectiveID: "availability", ObservationID: "window", PredictedBudgetIncrease: 12, ObservedBudgetConsumed: &consumed, Confidence: "high"}}, DependencyFailures: []string{"payments objective failed"}, Summary: "Canary predicts and observes lost reliability."}
+	contract, err = s.RecordReliabilityImpact(contract.ID, "maintainer", impact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	impact = contract.ReliabilityImpacts[0]
+	blocked, _ := s.EvaluateReliability("repo", "pull_request", "pull", impact.Revision, "main", "checkout", "production", []string{"buy"}, []string{"availability"})
+	if len(blocked) != 1 || blocked[0].Effect != "rollback" || blocked[0].State != "blocked" || blocked[0].AuthorityNote == "" {
+		t.Fatalf("blocked = %#v", blocked)
+	}
+	if _, err = s.AcknowledgeReliabilityImpact(contract.ID, impact.ID, "maintainer", "not an owner"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("non-owner acknowledgement = %v", err)
+	}
+	contract, err = s.AcknowledgeReliabilityImpact(contract.ID, impact.ID, "owner", "Current user impact warrants a hold.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract, err = s.ExceptReliabilityImpact(contract.ID, impact.ID, "owner", DeliveryException{Reason: "Bounded emergency repair", ExpiresAt: time.Now().UTC().Add(time.Hour), FollowUp: "review tomorrow"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	excepted, _ := s.EvaluateReliability("repo", "pull_request", "pull", impact.Revision, "main", "checkout", "production", []string{"buy"}, []string{"availability"})
+	if excepted[0].State != "excepted" || excepted[0].ActiveException == nil || excepted[0].Effect != "none" {
+		t.Fatalf("excepted = %#v", excepted)
 	}
 }
 

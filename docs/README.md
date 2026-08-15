@@ -61,6 +61,15 @@ confirm or dispute it, request or answer owner input, or conclude with resulting
 Commit evidence must also be reachable from a participant-visible non-`vivarium-security/*` branch,
 and every trigger observation belongs to the investigation's exact contract version and objective.
 
+Repository owners apply those objectives through delivery policies scoped by branch, service,
+environment, journey, and risk class. Revision-exact predicted and observed impacts cover pulls,
+integration queues, releases, and deployments; readiness derives missing/stale evidence, predicted
+regression, exhausted budget, dependency failure, required owner acknowledgement, active exception,
+and the configured warn, slow, block, pause, or rollback effect with available next actions. Pull
+merge readiness and queue admission fail closed for blocking or containment effects. The same public
+readiness projection supports release and staged-deployment decisions without making a policy,
+acknowledgement, exception, or agent a source of merge, release, or environment authority.
+
 ## Locale coverage contracts
 
 Repository participants publish complete, compare-and-swap locale plans through

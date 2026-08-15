@@ -1826,6 +1826,12 @@ whenever dependencies change or the web job fails before it starts.
   confirm/dispute, request or answer owner input, and publish a concluding resulting-work reference.
   Git citations must be reachable from a non-security branch, and trigger observations must match the
   investigation's exact contract version and objective rather than merely sharing a resource string.
+  Repository-owner reliability delivery policies bind exact objective revisions to branch, service,
+  environment, journey, and risk selectors. Revision-exact pull, queue, release, and deployment
+  impacts project predicted and observed budget effects, dependency failures, required owner
+  acknowledgements, active bounded exceptions, and warn/slow/block/pause/rollback actions. Blocking
+  and containment effects participate in ordinary pull readiness and queue admission; policies,
+  acknowledgements, exceptions, and agent evidence grant no merge, release, or environment authority.
 
   Update it when you change how the apps fit together, not for every change.
 
