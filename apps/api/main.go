@@ -896,7 +896,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		serviceObjectiveStore.ConfigureInvestigationProvenance(func(contract serviceobjectives.Contract, in serviceobjectives.Investigation) bool {
 			return reliabilityInvestigationProvenanceResolves(store, pullRequestStore, deploymentStore, releaseStore, contract, in)
 		})
-		registerServiceObjectiveRoutes(mux, store, repositoryCatalog, authStore, serviceObjectiveStore, pullRequestStore, deploymentStore, releaseStore)
+		registerServiceObjectiveRoutes(mux, store, repositoryCatalog, authStore, serviceObjectiveStore, pullRequestStore, deploymentStore, releaseStore, proposalStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil && localizationStore != nil {
 		if localePlanStore != nil {

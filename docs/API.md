@@ -3219,6 +3219,29 @@ provenance names the exact delivery resource and revision. The server replaces a
 `observed_budget_consumed_percent` with the observation-derived value; unresolved, stale,
 cross-objective, or revision-mismatched citations are rejected.
 
+`POST .../improvements` converts exactly one investigation finding or reliability impact into
+ordinary proposal work. The request freezes `contract_version`, `objective_id`, baseline and affected
+observation IDs, affected revisions, dependency context, cited evidence, acceptance criteria, and one
+to twenty ordered tasks (`title`, `assignee_type`, `assignee_id`, `depends_on_previous`). The default
+branch revision and every human assignee remain valid through proposal publication. The response
+retains the proposal and task IDs; normal assignment, checks, review, merge, and release boundaries
+remain authoritative.
+The impact source must contain a server-derived observation at or beyond its delivery policy's
+depletion threshold, and that exact observation must be frozen in the improvement's baseline set;
+predicted-only or differently baselined impacts cannot authorize work. A stable `pending` improvement is
+reserved before proposal persistence, and an exact retry reuses the reservation and proposal origin
+to finish the link after cross-store failure. The reservation retains the server-selected depletion
+observation and original default-branch base; restoration must use that observation, and retries reuse
+that base even if the branch has advanced.
+
+`POST .../improvements/{improvement_id}/verifications` is repository-owner-only and accepts a
+`release` or `deployment`, exact resource/revision, retained baseline and current observation, one of
+`restore_budget`, `contain`, `rollback`, or `revisit`, and rationale. The current observation must
+postdate the baseline and cite that exact rollout. `restore_budget` is accepted only when the selected
+baseline belongs to the improvement's frozen baseline set and the current window meets its objective
+and consumes less error budget; failed measures require one of the other
+decisions. Responses retain before/after derived budget values and never rewrite the prior observation.
+
 ## Locale plans
 
 `POST /repositories/{id}/locale-plans` publishes a complete localization support contract. The
