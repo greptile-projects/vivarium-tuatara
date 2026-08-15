@@ -3226,12 +3226,17 @@ to twenty ordered tasks (`title`, `assignee_type`, `assignee_id`, `depends_on_pr
 branch revision and every human assignee remain valid through proposal publication. The response
 retains the proposal and task IDs; normal assignment, checks, review, merge, and release boundaries
 remain authoritative.
+The impact source must contain a server-derived observation at or beyond its delivery policy's
+depletion threshold; predicted-only impacts cannot authorize work. A stable `pending` improvement is
+reserved before proposal persistence, and an exact retry reuses the reservation and proposal origin
+to finish the link after cross-store failure.
 
 `POST .../improvements/{improvement_id}/verifications` is repository-owner-only and accepts a
 `release` or `deployment`, exact resource/revision, retained baseline and current observation, one of
 `restore_budget`, `contain`, `rollback`, or `revisit`, and rationale. The current observation must
-postdate the baseline and cite that exact rollout. `restore_budget` is accepted only when the current
-window meets its objective and consumes less error budget; failed measures require one of the other
+postdate the baseline and cite that exact rollout. `restore_budget` is accepted only when the selected
+baseline belongs to the improvement's frozen baseline set and the current window meets its objective
+and consumes less error budget; failed measures require one of the other
 decisions. Responses retain before/after derived budget values and never rewrite the prior observation.
 
 ## Locale plans

@@ -442,10 +442,28 @@ func registerServiceObjectiveRoutes(mux *http.ServeMux, git *storage.Store, cata
 		}
 		var p proposals.Proposal
 		var made []proposals.Task
+		var linked serviceobjectives.Contract
+		var reservation serviceobjectives.Improvement
 		err = catalog.WithCurrentParticipants(participants, contract.RepositoryID, func() error {
 			return bare.WithReferenceTarget("refs/heads/"+repo.DefaultBranch, revision, func() error {
 				var e error
+				_, reservation, e = contracts.ReserveImprovement(contract.ID, actor.UserID, validation)
+				if e != nil {
+					return e
+				}
+				if reservation.Status == "linked" {
+					linked, e = contracts.Get(contract.ID)
+					return e
+				}
 				p, made, e = proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: contract.RepositoryID, ActorID: actor.UserID, Title: in.Title, Body: in.Body, Origin: origin, Tasks: tasks})
+				if e != nil {
+					return e
+				}
+				taskIDs := make([]string, 0, len(made))
+				for _, t := range made {
+					taskIDs = append(taskIDs, t.ID)
+				}
+				linked, e = contracts.CompleteImprovement(contract.ID, reservation.ID, actor.UserID, p.ID, taskIDs)
 				return e
 			})
 		})
@@ -453,13 +471,7 @@ func registerServiceObjectiveRoutes(mux *http.ServeMux, git *storage.Store, cata
 			writeAPIError(w, 422, "reliability_improvement_invalid", "authority, source evidence, assignments, or implementation base changed")
 			return
 		}
-		taskIDs := []string{}
-		for _, t := range made {
-			taskIDs = append(taskIDs, t.ID)
-		}
-		validation.ProposalID, validation.TaskIDs = p.ID, taskIDs
-		out, err := contracts.LinkImprovement(contract.ID, actor.UserID, validation)
-		writeReliabilityDelivery(w, out, err, 201)
+		writeReliabilityDelivery(w, linked, nil, 201)
 	})
 	mux.HandleFunc("POST /repositories/{id}/service-objectives/{objective_id}/improvements/{improvement_id}/verifications", func(w http.ResponseWriter, r *http.Request) {
 		actor, owner, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")

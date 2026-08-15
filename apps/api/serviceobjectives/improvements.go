@@ -1,6 +1,7 @@
 package serviceobjectives
 
 import (
+	"reflect"
 	"strings"
 	"time"
 )
@@ -22,6 +23,7 @@ type Improvement struct {
 	AcceptanceCriteria     []string  `json:"acceptance_criteria"`
 	ProposalID             string    `json:"proposal_id"`
 	TaskIDs                []string  `json:"task_ids"`
+	Status                 string    `json:"status"`
 	CreatedBy              string    `json:"created_by"`
 	CreatedAt              time.Time `json:"created_at"`
 }
@@ -55,6 +57,75 @@ func (s *Store) ValidateImprovement(contractID string, in Improvement) error {
 	return nil
 }
 
+// ReserveImprovement publishes the source-side recovery identity before the
+// cross-store proposal write. Exact retries receive the same pending record.
+func (s *Store) ReserveImprovement(contractID, actor string, in Improvement) (Contract, Improvement, error) {
+	var out Contract
+	var reserved Improvement
+	err := s.lock(func() error {
+		v, e := s.read(contractID)
+		if e != nil {
+			return e
+		}
+		if actor == "" || !validImprovement(v, in) {
+			return ErrInvalid
+		}
+		for _, existing := range v.Improvements {
+			if sameImprovementSource(existing, in) {
+				if !sameImprovementRequest(existing, in) {
+					return ErrConflict
+				}
+				out, reserved = v, existing
+				return nil
+			}
+		}
+		in.ID, in.ProposalID, in.TaskIDs, in.Status = id(), "", []string{}, "pending"
+		in.CreatedBy, in.CreatedAt = actor, s.now()
+		v.Improvements = append(v.Improvements, in)
+		v.UpdatedAt = in.CreatedAt
+		out, reserved = v, in
+		return s.write(v)
+	})
+	return s.project(out), reserved, err
+}
+
+func (s *Store) CompleteImprovement(contractID, reservationID, actor, proposalID string, taskIDs []string) (Contract, error) {
+	var out Contract
+	err := s.lock(func() error {
+		v, e := s.read(contractID)
+		if e != nil {
+			return e
+		}
+		for i := range v.Improvements {
+			x := &v.Improvements[i]
+			if x.ID != reservationID {
+				continue
+			}
+			if x.CreatedBy != actor {
+				return ErrInvalid
+			}
+			if x.Status == "linked" {
+				if x.ProposalID == proposalID {
+					out = v
+					return nil
+				}
+				return ErrConflict
+			}
+			candidate := *x
+			candidate.ProposalID, candidate.TaskIDs, candidate.Status = proposalID, taskIDs, "linked"
+			if !validImprovement(v, candidate) {
+				return ErrInvalid
+			}
+			x.ProposalID, x.TaskIDs, x.Status = proposalID, append([]string(nil), taskIDs...), "linked"
+			v.UpdatedAt = s.now()
+			out = v
+			return s.write(v)
+		}
+		return ErrNotFound
+	})
+	return s.project(out), err
+}
+
 func (s *Store) LinkImprovement(contractID, actor string, in Improvement) (Contract, error) {
 	var out Contract
 	err := s.lock(func() error {
@@ -66,7 +137,7 @@ func (s *Store) LinkImprovement(contractID, actor string, in Improvement) (Contr
 			return ErrInvalid
 		}
 		for _, x := range v.Improvements {
-			if x.InvestigationID == in.InvestigationID && x.FindingID == in.FindingID && x.ImpactID == in.ImpactID {
+			if sameImprovementSource(x, in) {
 				if x.ProposalID == in.ProposalID {
 					out = v
 					return nil
@@ -74,13 +145,25 @@ func (s *Store) LinkImprovement(contractID, actor string, in Improvement) (Contr
 				return ErrConflict
 			}
 		}
-		in.ID, in.CreatedBy, in.CreatedAt = id(), actor, s.now()
+		in.ID, in.Status, in.CreatedBy, in.CreatedAt = id(), "linked", actor, s.now()
 		v.Improvements = append(v.Improvements, in)
 		v.UpdatedAt = in.CreatedAt
 		out = v
 		return s.write(v)
 	})
 	return s.project(out), err
+}
+
+func sameImprovementSource(a, b Improvement) bool {
+	return a.InvestigationID == b.InvestigationID && a.FindingID == b.FindingID && a.ImpactID == b.ImpactID
+}
+func sameImprovementRequest(a, b Improvement) bool {
+	for _, x := range []*Improvement{&a, &b} {
+		x.ID, x.ProposalID, x.Status, x.CreatedBy = "", "", "", ""
+		x.TaskIDs = nil
+		x.CreatedAt = time.Time{}
+	}
+	return reflect.DeepEqual(a, b)
 }
 
 func validImprovement(v Contract, x Improvement) bool {
@@ -133,9 +216,14 @@ func validImprovement(v Contract, x Improvement) bool {
 		found := false
 		for _, impact := range v.ReliabilityImpacts {
 			if impact.ID == x.ImpactID {
+				policy := deliveryPolicy(v, impact.PolicyID)
+				if policy == nil || policy.Version != impact.PolicyVersion {
+					return false
+				}
 				for _, objective := range impact.ObjectiveImpacts {
-					found = found || objective.ObjectiveID == x.ObjectiveID
-					evidence[objective.ObservationID] = true
+					if objective.ObjectiveID == x.ObjectiveID && objective.ObservationID != "" && objective.ObservedBudgetConsumed != nil && *objective.ObservedBudgetConsumed >= policy.MaximumBudgetConsumed {
+						found, evidence[objective.ObservationID] = true, true
+					}
 				}
 			}
 		}
@@ -176,7 +264,7 @@ func (s *Store) VerifyImprovement(contractID, actor string, in RolloutVerificati
 				improvement = &v.Improvements[i]
 			}
 		}
-		if improvement == nil || actor == "" || !oneOf(in.Kind, "release", "deployment") || !oneOf(in.Decision, "restore_budget", "contain", "rollback", "revisit") || strings.TrimSpace(in.Rationale) == "" {
+		if improvement == nil || improvement.Status != "linked" || actor == "" || !deliveryContains(improvement.BaselineObservationIDs, in.BaselineObservationID) || !oneOf(in.Kind, "release", "deployment") || !oneOf(in.Decision, "restore_budget", "contain", "rollback", "revisit") || strings.TrimSpace(in.Rationale) == "" {
 			return ErrInvalid
 		}
 		projected := s.project(v)

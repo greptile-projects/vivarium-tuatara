@@ -80,6 +80,8 @@ dependency context, evidence, and acceptance criteria while creating an ordinary
 task plan with explicit human or agent ownership. Repository authority and the exact default-branch
 base are revalidated across proposal publication; the record itself grants no Git, review, merge,
 release, or deployment authority.
+The reliability side reserves a stable pending recovery identity before proposal persistence; exact
+retries reuse and finish that link, so cross-store failure cannot leave unaccounted proposal work.
 
 Repository owners record governed release or deployment comparisons through the improvement's
 `/verifications` collection. The current observation must cite the exact rollout resource and follow

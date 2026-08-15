@@ -1841,6 +1841,8 @@ whenever dependencies change or the web job fails before it starts.
   derives improvement and budget restoration from a later exact-resource observation; failed measures
   retain containment, rollback, or decision-revisit outcomes, and successful restoration never rewrites
   the original impact. Improvement records grant no Git, review, merge, release, or deployment authority.
+  The reliability record is reserved before proposal persistence; pending records remain readable and
+  exact retries reuse the reservation and proposal origin to finish cross-store linking.
 
   Update it when you change how the apps fit together, not for every change.
 
