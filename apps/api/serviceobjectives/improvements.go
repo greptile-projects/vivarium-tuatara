@@ -9,23 +9,25 @@ import (
 // Improvement keeps the operational reason for ordinary proposal work frozen
 // alongside the exact objective evidence that authorized it.
 type Improvement struct {
-	ID                     string    `json:"id"`
-	ContractVersion        int       `json:"contract_version"`
-	ObjectiveID            string    `json:"objective_id"`
-	InvestigationID        string    `json:"investigation_id,omitempty"`
-	FindingID              string    `json:"finding_id,omitempty"`
-	ImpactID               string    `json:"impact_id,omitempty"`
-	BaselineObservationIDs []string  `json:"baseline_observation_ids"`
-	AffectedObservationIDs []string  `json:"affected_observation_ids"`
-	AffectedRevisions      []string  `json:"affected_revisions"`
-	DependencyContext      []string  `json:"dependency_context"`
-	EvidenceIDs            []string  `json:"evidence_ids"`
-	AcceptanceCriteria     []string  `json:"acceptance_criteria"`
-	ProposalID             string    `json:"proposal_id"`
-	TaskIDs                []string  `json:"task_ids"`
-	Status                 string    `json:"status"`
-	CreatedBy              string    `json:"created_by"`
-	CreatedAt              time.Time `json:"created_at"`
+	ID                         string    `json:"id"`
+	ContractVersion            int       `json:"contract_version"`
+	ObjectiveID                string    `json:"objective_id"`
+	InvestigationID            string    `json:"investigation_id,omitempty"`
+	FindingID                  string    `json:"finding_id,omitempty"`
+	ImpactID                   string    `json:"impact_id,omitempty"`
+	AuthorizationObservationID string    `json:"authorization_observation_id,omitempty"`
+	BaseRevision               string    `json:"base_revision"`
+	BaselineObservationIDs     []string  `json:"baseline_observation_ids"`
+	AffectedObservationIDs     []string  `json:"affected_observation_ids"`
+	AffectedRevisions          []string  `json:"affected_revisions"`
+	DependencyContext          []string  `json:"dependency_context"`
+	EvidenceIDs                []string  `json:"evidence_ids"`
+	AcceptanceCriteria         []string  `json:"acceptance_criteria"`
+	ProposalID                 string    `json:"proposal_id"`
+	TaskIDs                    []string  `json:"task_ids"`
+	Status                     string    `json:"status"`
+	CreatedBy                  string    `json:"created_by"`
+	CreatedAt                  time.Time `json:"created_at"`
 }
 
 type RolloutVerification struct {
@@ -70,6 +72,7 @@ func (s *Store) ReserveImprovement(contractID, actor string, in Improvement) (Co
 		if actor == "" || !validImprovement(v, in) {
 			return ErrInvalid
 		}
+		in.AuthorizationObservationID = improvementAuthorizationObservation(v, in)
 		for _, existing := range v.Improvements {
 			if sameImprovementSource(existing, in) {
 				if !sameImprovementRequest(existing, in) {
@@ -145,6 +148,7 @@ func (s *Store) LinkImprovement(contractID, actor string, in Improvement) (Contr
 				return ErrConflict
 			}
 		}
+		in.AuthorizationObservationID = improvementAuthorizationObservation(v, in)
 		in.ID, in.Status, in.CreatedBy, in.CreatedAt = id(), "linked", actor, s.now()
 		v.Improvements = append(v.Improvements, in)
 		v.UpdatedAt = in.CreatedAt
@@ -159,7 +163,7 @@ func sameImprovementSource(a, b Improvement) bool {
 }
 func sameImprovementRequest(a, b Improvement) bool {
 	for _, x := range []*Improvement{&a, &b} {
-		x.ID, x.ProposalID, x.Status, x.CreatedBy = "", "", "", ""
+		x.ID, x.ProposalID, x.Status, x.CreatedBy, x.AuthorizationObservationID, x.BaseRevision = "", "", "", "", "", ""
 		x.TaskIDs = nil
 		x.CreatedAt = time.Time{}
 	}
@@ -167,7 +171,7 @@ func sameImprovementRequest(a, b Improvement) bool {
 }
 
 func validImprovement(v Contract, x Improvement) bool {
-	if x.ContractVersion < 1 || x.ObjectiveID == "" || (x.FindingID == "") == (x.ImpactID == "") || x.ProposalID == "" || len(x.TaskIDs) == 0 || len(x.TaskIDs) > 20 || len(x.AcceptanceCriteria) == 0 || len(x.AcceptanceCriteria) > 50 || len(x.BaselineObservationIDs) == 0 || len(x.AffectedObservationIDs) == 0 || len(x.AffectedRevisions) == 0 || len(x.EvidenceIDs) == 0 {
+	if x.ContractVersion < 1 || x.ObjectiveID == "" || (x.FindingID == "") == (x.ImpactID == "") || x.ProposalID == "" || len(x.TaskIDs) == 0 || len(x.TaskIDs) > 20 || len(x.AcceptanceCriteria) == 0 || len(x.AcceptanceCriteria) > 50 || len(x.BaselineObservationIDs) == 0 || len(x.AffectedObservationIDs) == 0 || len(x.AffectedRevisions) == 0 || len(x.EvidenceIDs) == 0 || (x.BaseRevision != "" && len(x.BaseRevision) != 40) {
 		return false
 	}
 	r := deliveryRevision(v, x.ContractVersion)
@@ -213,23 +217,11 @@ func validImprovement(v Contract, x Improvement) bool {
 		}
 	}
 	if x.ImpactID != "" {
-		found := false
-		for _, impact := range v.ReliabilityImpacts {
-			if impact.ID == x.ImpactID {
-				policy := deliveryPolicy(v, impact.PolicyID)
-				if policy == nil || policy.Version != impact.PolicyVersion {
-					return false
-				}
-				for _, objective := range impact.ObjectiveImpacts {
-					if objective.ObjectiveID == x.ObjectiveID && objective.ObservationID != "" && deliveryContains(x.BaselineObservationIDs, objective.ObservationID) && objective.ObservedBudgetConsumed != nil && *objective.ObservedBudgetConsumed >= policy.MaximumBudgetConsumed {
-						found, evidence[objective.ObservationID] = true, true
-					}
-				}
-			}
-		}
-		if !found {
+		authorizationObservationID := improvementAuthorizationObservation(v, x)
+		if authorizationObservationID == "" {
 			return false
 		}
+		evidence[authorizationObservationID] = true
 	}
 	for _, revision := range x.AffectedRevisions {
 		if !affectedRevisions[revision] {
@@ -251,6 +243,27 @@ func validImprovement(v Contract, x Improvement) bool {
 	return true
 }
 
+func improvementAuthorizationObservation(v Contract, x Improvement) string {
+	if x.ImpactID == "" {
+		return ""
+	}
+	for _, impact := range v.ReliabilityImpacts {
+		if impact.ID != x.ImpactID {
+			continue
+		}
+		policy := deliveryPolicy(v, impact.PolicyID)
+		if policy == nil || policy.Version != impact.PolicyVersion {
+			return ""
+		}
+		for _, objective := range impact.ObjectiveImpacts {
+			if objective.ObjectiveID == x.ObjectiveID && objective.ObservationID != "" && deliveryContains(x.BaselineObservationIDs, objective.ObservationID) && objective.ObservedBudgetConsumed != nil && *objective.ObservedBudgetConsumed >= policy.MaximumBudgetConsumed {
+				return objective.ObservationID
+			}
+		}
+	}
+	return ""
+}
+
 func (s *Store) VerifyImprovement(contractID, actor string, in RolloutVerification) (Contract, error) {
 	var out Contract
 	err := s.lock(func() error {
@@ -264,7 +277,7 @@ func (s *Store) VerifyImprovement(contractID, actor string, in RolloutVerificati
 				improvement = &v.Improvements[i]
 			}
 		}
-		if improvement == nil || improvement.Status != "linked" || actor == "" || !deliveryContains(improvement.BaselineObservationIDs, in.BaselineObservationID) || !oneOf(in.Kind, "release", "deployment") || !oneOf(in.Decision, "restore_budget", "contain", "rollback", "revisit") || strings.TrimSpace(in.Rationale) == "" {
+		if improvement == nil || improvement.Status != "linked" || actor == "" || !deliveryContains(improvement.BaselineObservationIDs, in.BaselineObservationID) || (improvement.ImpactID != "" && in.BaselineObservationID != improvement.AuthorizationObservationID) || !oneOf(in.Kind, "release", "deployment") || !oneOf(in.Decision, "restore_budget", "contain", "rollback", "revisit") || strings.TrimSpace(in.Rationale) == "" {
 			return ErrInvalid
 		}
 		projected := s.project(v)

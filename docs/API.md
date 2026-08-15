@@ -3230,7 +3230,9 @@ The impact source must contain a server-derived observation at or beyond its del
 depletion threshold, and that exact observation must be frozen in the improvement's baseline set;
 predicted-only or differently baselined impacts cannot authorize work. A stable `pending` improvement is
 reserved before proposal persistence, and an exact retry reuses the reservation and proposal origin
-to finish the link after cross-store failure.
+to finish the link after cross-store failure. The reservation retains the server-selected depletion
+observation and original default-branch base; restoration must use that observation, and retries reuse
+that base even if the branch has advanced.
 
 `POST .../improvements/{improvement_id}/verifications` is repository-owner-only and accepts a
 `release` or `deployment`, exact resource/revision, retained baseline and current observation, one of

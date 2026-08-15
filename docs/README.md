@@ -84,6 +84,8 @@ Impact-authorized work must freeze the same trusted observation that crossed the
 threshold as a baseline; another same-objective window cannot substitute for that evidence.
 The reliability side reserves a stable pending recovery identity before proposal persistence; exact
 retries reuse and finish that link, so cross-store failure cannot leave unaccounted proposal work.
+That reservation also retains the server-derived depletion observation and original implementation
+base, preventing another frozen window or later default-branch movement from changing recovery.
 
 Repository owners record governed release or deployment comparisons through the improvement's
 `/verifications` collection. The current observation must cite the exact rollout resource and follow

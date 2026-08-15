@@ -1842,7 +1842,9 @@ whenever dependencies change or the web job fails before it starts.
   retain containment, rollback, or decision-revisit outcomes, and successful restoration never rewrites
   the original impact. Improvement records grant no Git, review, merge, release, or deployment authority.
   Impact-authorized work freezes the exact trusted depleted observation in its baseline set; another
-  same-objective observation cannot replace the evidence that authorized remediation.
+  same-objective observation cannot replace the evidence that authorized remediation. The reservation
+  retains that server-derived authorization observation and its original implementation base, both of
+  which remain stable across retries after default-branch movement.
   The reliability record is reserved before proposal persistence; pending records remain readable and
   exact retries reuse the reservation and proposal origin to finish cross-store linking.
 

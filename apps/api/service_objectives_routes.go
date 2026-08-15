@@ -416,6 +416,7 @@ func registerServiceObjectiveRoutes(mux *http.ServeMux, git *storage.Store, cata
 			writeAPIError(w, 409, "improvement_base_unavailable", "the default branch has no exact implementation base")
 			return
 		}
+		validation.BaseRevision = revision
 		items := []proposals.ReasoningItem{{ID: "objective", Kind: "reliability_objective", Summary: in.ObjectiveID, Status: "required"}}
 		for i, x := range in.AffectedRevisions {
 			items = append(items, proposals.ReasoningItem{ID: fmt.Sprintf("revision-%d", i), Kind: "affected_revision", Summary: x, Status: "affected"})
@@ -455,6 +456,7 @@ func registerServiceObjectiveRoutes(mux *http.ServeMux, git *storage.Store, cata
 					linked, e = contracts.Get(contract.ID)
 					return e
 				}
+				origin.Revision = reservation.BaseRevision
 				p, made, e = proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: contract.RepositoryID, ActorID: actor.UserID, Title: in.Title, Body: in.Body, Origin: origin, Tasks: tasks})
 				if e != nil {
 					return e

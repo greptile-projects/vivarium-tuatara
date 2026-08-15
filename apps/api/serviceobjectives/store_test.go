@@ -150,7 +150,7 @@ func TestImprovementRetainsHarmAndDerivesGovernedBudgetRestoration(t *testing.T)
 		t.Fatal(err)
 	}
 	unrelatedBaseline := c.Observations[1]
-	template := Improvement{ContractVersion: 1, ObjectiveID: "availability", ImpactID: c.ReliabilityImpacts[0].ID, BaselineObservationIDs: []string{harm.ID}, AffectedObservationIDs: []string{harm.ID}, AffectedRevisions: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, DependencyContext: []string{"payments owner"}, EvidenceIDs: []string{harm.ID}, AcceptanceCriteria: []string{"restore target attainment"}, ProposalID: "pending", TaskIDs: []string{"pending"}}
+	template := Improvement{ContractVersion: 1, ObjectiveID: "availability", ImpactID: c.ReliabilityImpacts[0].ID, BaselineObservationIDs: []string{harm.ID, unrelatedBaseline.ID}, AffectedObservationIDs: []string{harm.ID}, AffectedRevisions: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, DependencyContext: []string{"payments owner"}, EvidenceIDs: []string{harm.ID}, AcceptanceCriteria: []string{"restore target attainment"}, ProposalID: "pending", TaskIDs: []string{"pending"}, BaseRevision: "1111111111111111111111111111111111111111"}
 	wrongBaseline := template
 	wrongBaseline.BaselineObservationIDs = []string{unrelatedBaseline.ID}
 	if err = s.ValidateImprovement(c.ID, wrongBaseline); !errors.Is(err, ErrInvalid) {
@@ -162,6 +162,15 @@ func TestImprovementRetainsHarmAndDerivesGovernedBudgetRestoration(t *testing.T)
 	}
 	if reservation.Status != "pending" || reservation.ProposalID != "" {
 		t.Fatalf("reservation = %#v", reservation)
+	}
+	if reservation.AuthorizationObservationID != harm.ID {
+		t.Fatalf("authorization observation = %q", reservation.AuthorizationObservationID)
+	}
+	retryTemplate := template
+	retryTemplate.BaseRevision = "2222222222222222222222222222222222222222"
+	_, retried, retryErr := s.ReserveImprovement(c.ID, "owner", retryTemplate)
+	if retryErr != nil || retried.ID != reservation.ID || retried.BaseRevision != template.BaseRevision {
+		t.Fatalf("drift retry = %#v, %v", retried, retryErr)
 	}
 	c, err = s.CompleteImprovement(c.ID, reservation.ID, "owner", "proposal", []string{"task"})
 	if err != nil {
@@ -180,6 +189,9 @@ func TestImprovementRetainsHarmAndDerivesGovernedBudgetRestoration(t *testing.T)
 	}
 	if _, err = s.VerifyImprovement(c.ID, "owner", RolloutVerification{ImprovementID: c.Improvements[0].ID, Kind: "release", ResourceID: "release", Revision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", BaselineObservationID: unlinked.ID, CurrentObservationID: c.Observations[3].ID, Decision: "restore_budget", Rationale: "unlinked comparison"}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("unlinked baseline = %v", err)
+	}
+	if _, err = s.VerifyImprovement(c.ID, "owner", RolloutVerification{ImprovementID: c.Improvements[0].ID, Kind: "release", ResourceID: "release", Revision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", BaselineObservationID: unrelatedBaseline.ID, CurrentObservationID: c.Observations[3].ID, Decision: "restore_budget", Rationale: "wrong frozen comparison"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("wrong frozen baseline = %v", err)
 	}
 	c, err = s.VerifyImprovement(c.ID, "owner", RolloutVerification{ImprovementID: c.Improvements[0].ID, Kind: "release", ResourceID: "release", Revision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", BaselineObservationID: harm.ID, CurrentObservationID: c.Observations[3].ID, Decision: "restore_budget", Rationale: "target recovered in governed rollout"})
 	if err != nil {
