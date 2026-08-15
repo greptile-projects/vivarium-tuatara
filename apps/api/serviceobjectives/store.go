@@ -671,6 +671,9 @@ func validInvestigation(v Contract, x Investigation) bool {
 	}
 	triggerResolved := x.Trigger.Kind == "objective"
 	for _, o := range v.Observations {
+		if o.ContractVersion != x.ContractVersion || o.ObjectiveID != x.ObjectiveID {
+			continue
+		}
 		if x.Trigger.Kind == "budget_consumption" && o.ID == x.Trigger.ID && x.Trigger.Revision == "observation:"+o.ID {
 			triggerResolved = true
 		}

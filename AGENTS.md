@@ -1824,6 +1824,8 @@ whenever dependencies change or the web job fails before it starts.
   repository-scoped source of truth before persistence; the store fails closed without that resolver.
   Read-only agents may open investigations and add cited findings, while only human participants may
   confirm/dispute, request or answer owner input, and publish a concluding resulting-work reference.
+  Git citations must be reachable from a non-security branch, and trigger observations must match the
+  investigation's exact contract version and objective rather than merely sharing a resource string.
 
   Update it when you change how the apps fit together, not for every change.
 

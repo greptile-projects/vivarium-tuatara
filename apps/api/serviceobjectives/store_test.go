@@ -137,6 +137,17 @@ func TestReliabilityInvestigationFailsClosedWithoutProvenanceResolver(t *testing
 	}
 }
 
+func TestReliabilityInvestigationTriggerCannotCrossObjective(t *testing.T) {
+	r := completeRevision()
+	r.Objectives = append(r.Objectives, Objective{ID: "latency", Name: "Latency", IndicatorID: "success", WindowID: "month", Target: 99, Comparator: "at_least", JourneyIDs: []string{"buy"}, OwnerIDs: []string{"owner"}})
+	r.ErrorBudgets = append(r.ErrorBudgets, ErrorBudget{ObjectiveID: "latency", AllowedFailure: 1, Unit: "percent", BurnPolicy: "Investigate"})
+	v := Contract{CurrentVersion: 1, Revisions: []Revision{r}, Observations: []Observation{{ID: "latency-window", ContractVersion: 1, ObjectiveID: "latency", Software: []SoftwareReference{{Kind: "deployment", ID: "deploy-latency", Revision: "abc123", Label: "latency only"}}}}}
+	x := Investigation{ContractVersion: 1, ObjectiveID: "availability", Title: "Availability", Trigger: InvestigationTrigger{Kind: "deployment", ID: "deploy-latency", Revision: "abc123"}, JourneyIDs: []string{"buy"}, Evidence: []InvestigationEvidence{{Kind: "deployment", ResourceID: "deploy-latency", Revision: "abc123", Label: "deployment", Visibility: "participants"}}}
+	if validInvestigation(v, x) {
+		t.Fatal("cross-objective deployment resolved the availability trigger")
+	}
+}
+
 func TestNativeUnitObservationUsesDirectionalBudget(t *testing.T) {
 	s, _ := New(t.TempDir())
 	revision := completeRevision()

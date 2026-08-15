@@ -3197,6 +3197,9 @@ Missing, cross-repository, hidden, or revision-mismatched provenance returns
 `422 invalid_reliability_provenance`, and persistence fails closed if resolution is unavailable.
 Read-only agents may open an investigation and add cited findings only. Confirm/dispute responses,
 owner-input requests and answers, and concluding outcomes require a human repository participant.
+Commit evidence must be reachable from a non-`vivarium-security/*` branch. Pull, deployment, and
+budget triggers additionally require retained provenance on the investigation's exact contract
+version and objective; a canonical resource that appears only on another objective cannot authorize it.
 
 ## Locale plans
 

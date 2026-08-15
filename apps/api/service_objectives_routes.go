@@ -275,15 +275,7 @@ func reliabilityInvestigationProvenanceResolves(git *storage.Store, pulls *pullr
 			v, err := releaseStore.Get(repo, resourceID)
 			return err == nil && v.CommitID == revision
 		case "code", "commit":
-			if git == nil || resourceID != revision {
-				return false
-			}
-			r, err := git.Open(repo)
-			if err != nil {
-				return false
-			}
-			_, err = r.ReadCommit(storage.ObjectID(revision))
-			return err == nil
+			return resourceID == revision && accessibilityRevisionIsVisible(git, repo, revision)
 		case "metric", "log", "trace", "health_check", "support_report":
 			for _, o := range contract.Observations {
 				if o.ID == resourceID && revision == "observation:"+o.ID && o.ContractVersion == in.ContractVersion && o.ObjectiveID == in.ObjectiveID {

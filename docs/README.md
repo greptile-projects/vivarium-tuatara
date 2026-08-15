@@ -58,6 +58,8 @@ operational evidence cites an exact retained objective observation, and dependen
 frozen contract revision. The persistence store fails closed when this resolver is unavailable.
 Read-only agents may open investigations and publish cited analysis, but only human participants may
 confirm or dispute it, request or answer owner input, or conclude with resulting work.
+Commit evidence must also be reachable from a participant-visible non-`vivarium-security/*` branch,
+and every trigger observation belongs to the investigation's exact contract version and objective.
 
 ## Locale coverage contracts
 
