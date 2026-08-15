@@ -33,6 +33,19 @@ type investigationMutationInput struct {
 	Request         serviceobjectives.InputRequest          `json:"request"`
 	Outcome         *serviceobjectives.InvestigationOutcome `json:"outcome"`
 }
+type deliveryPolicyInput struct {
+	ExpectedVersion int                              `json:"expected_version"`
+	Policy          serviceobjectives.DeliveryPolicy `json:"policy"`
+}
+type reliabilityImpactInput struct {
+	Impact serviceobjectives.ReliabilityImpact `json:"impact"`
+}
+type reliabilityAcknowledgementInput struct {
+	Rationale string `json:"rationale"`
+}
+type reliabilityExceptionInput struct {
+	Exception serviceobjectives.DeliveryException `json:"exception"`
+}
 
 func registerServiceObjectiveRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, contracts *serviceobjectives.Store, pulls *pullrequests.Store, deploymentStore *deployments.Store, releaseStore *releases.Store) {
 	investigator := func(w http.ResponseWriter, r *http.Request) (auth.Credential, string, bool) {
@@ -85,6 +98,94 @@ func registerServiceObjectiveRoutes(mux *http.ServeMux, git *storage.Store, cata
 			return
 		}
 		writeJSON(w, 200, contracts.ProjectForReader(out, serviceObjectiveReaderParticipant(r, catalog, credentials, out.RepositoryID)))
+	})
+	mux.HandleFunc("POST /repositories/{id}/service-objectives/{objective_id}/delivery-policies", func(w http.ResponseWriter, r *http.Request) {
+		actor, owner, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if !owner {
+			writeAPIError(w, 403, "reliability_policy_owner_required", "only the repository owner may publish delivery policy")
+			return
+		}
+		current, err := contracts.Get(r.PathValue("objective_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "service_objective_not_found", "service objective not found")
+			return
+		}
+		var in deliveryPolicyInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "expected_version and a complete reliability delivery policy are required")
+			return
+		}
+		out, err := contracts.PublishDeliveryPolicy(current.ID, actor.UserID, in.ExpectedVersion, in.Policy)
+		writeReliabilityDelivery(w, out, err, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/service-objectives/{objective_id}/reliability-impacts", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := contracts.Get(r.PathValue("objective_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "service_objective_not_found", "service objective not found")
+			return
+		}
+		var in reliabilityImpactInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a revision-exact reliability impact is required")
+			return
+		}
+		out, err := contracts.RecordReliabilityImpact(current.ID, actor.UserID, in.Impact)
+		writeReliabilityDelivery(w, out, err, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/service-objectives/{objective_id}/reliability-impacts/{impact_id}/acknowledgements", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := contracts.Get(r.PathValue("objective_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "service_objective_not_found", "service objective not found")
+			return
+		}
+		var in reliabilityAcknowledgementInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an owner rationale is required")
+			return
+		}
+		out, err := contracts.AcknowledgeReliabilityImpact(current.ID, r.PathValue("impact_id"), actor.UserID, in.Rationale)
+		writeReliabilityDelivery(w, out, err, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/service-objectives/{objective_id}/reliability-impacts/{impact_id}/exceptions", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := contracts.Get(r.PathValue("objective_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "service_objective_not_found", "service objective not found")
+			return
+		}
+		var in reliabilityExceptionInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a bounded reliability exception is required")
+			return
+		}
+		out, err := contracts.ExceptReliabilityImpact(current.ID, r.PathValue("impact_id"), actor.UserID, in.Exception)
+		writeReliabilityDelivery(w, out, err, 201)
+	})
+	mux.HandleFunc("GET /repositories/{id}/reliability-readiness/{kind}/{resource_id}", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
+			return
+		}
+		q := r.URL.Query()
+		out, err := contracts.EvaluateReliability(r.PathValue("id"), r.PathValue("kind"), r.PathValue("resource_id"), q.Get("revision"), q.Get("branch"), q.Get("service"), q.Get("environment"), q["journey"], q["risk"])
+		if err != nil {
+			writeAPIError(w, 500, "reliability_delivery_unavailable", "reliability readiness could not be evaluated")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"evaluations": out})
 	})
 	mux.HandleFunc("POST /repositories/{id}/service-objectives", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
@@ -359,6 +460,21 @@ func writeReliabilityEvidence(w http.ResponseWriter, v serviceobjectives.Contrac
 	default:
 		log.Printf("reliability evidence storage: %v", err)
 		writeAPIError(w, 500, "reliability_evidence_unavailable", "reliability evidence could not be persisted")
+	}
+}
+func writeReliabilityDelivery(w http.ResponseWriter, v serviceobjectives.Contract, err error, status int) {
+	switch {
+	case err == nil:
+		writeJSON(w, status, v)
+	case errors.Is(err, serviceobjectives.ErrConflict):
+		writeAPIError(w, 409, "reliability_delivery_conflict", "reliability delivery evidence changed; reload before acting")
+	case errors.Is(err, serviceobjectives.ErrNotFound), errors.Is(err, serviceobjectives.ErrPolicyNotFound):
+		writeAPIError(w, 404, "reliability_delivery_not_found", "reliability delivery policy or impact not found")
+	case errors.Is(err, serviceobjectives.ErrInvalid):
+		writeAPIError(w, 422, "invalid_reliability_delivery", "policy and impact must remain objective-, revision-, scope-, owner-, and evidence-bound")
+	default:
+		log.Printf("reliability delivery storage: %v", err)
+		writeAPIError(w, 500, "reliability_delivery_unavailable", "reliability delivery state could not be persisted")
 	}
 }
 func serviceObjectiveParticipants(actor string, r serviceobjectives.Revision) []string {

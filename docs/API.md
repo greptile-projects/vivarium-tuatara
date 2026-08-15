@@ -3201,6 +3201,24 @@ Commit evidence must be reachable from a non-`vivarium-security/*` branch. Pull,
 budget triggers additionally require retained provenance on the investigation's exact contract
 version and objective; a canonical resource that appears only on another objective cannot authorize it.
 
+`POST .../delivery-policies` lets the repository owner bind an exact contract revision and objectives
+to branch, service, environment, journey, and risk selectors. A policy sets budget and predicted-impact
+limits, dependency/current-evidence requirements, required objective owners and acknowledgement count,
+and a `warn`, `slow`, `block`, `pause`, or `rollback` response for missing evidence, regression,
+exhaustion, and dependency failure. `POST .../reliability-impacts` records a pull request, integration
+queue, release, or deployment's exact revision with predicted and observed objective impact.
+Named owners use `.../acknowledgements` or a maximum-30-day `.../exceptions`; neither conveys delivery
+authority. `GET /repositories/{id}/reliability-readiness/{kind}/{resource_id}` accepts `revision`,
+`branch`, `service`, `environment`, repeated `journey`, and repeated `risk` query parameters and returns
+blockers, required and acknowledged owners, an active exception, configured effect, next actions, and
+an explicit authority note. Pull merge readiness includes this projection and blocks merge/queue
+admission for block, pause, or rollback effects.
+When current evidence is required, every objective impact must cite a retained observation for the
+same contract version and objective, within its declared measurement-window age, whose software
+provenance names the exact delivery resource and revision. The server replaces any submitted
+`observed_budget_consumed_percent` with the observation-derived value; unresolved, stale,
+cross-objective, or revision-mismatched citations are rejected.
+
 ## Locale plans
 
 `POST /repositories/{id}/locale-plans` publishes a complete localization support contract. The

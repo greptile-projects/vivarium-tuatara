@@ -2,6 +2,7 @@ package serviceobjectives
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -58,6 +59,131 @@ func TestReliabilityEvidenceRetainsExactMappingHistoryAndDerivesAttainment(t *te
 	if len(public.Observations[0].Software) != 6 || public.Observations[0].Gaps[0].Kind != "support_delay" {
 		t.Fatalf("public provenance missing: %#v", public.Observations[0])
 	}
+}
+
+func TestReliabilityDeliveryPolicyPreservesHumanAuthorityAndExceptions(t *testing.T) {
+	s, _ := New(t.TempDir())
+	contract, err := s.Create("repo", "owner", completeRevision())
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := DeliveryPolicy{ContractVersion: 1, ObjectiveIDs: []string{"availability"}, Branches: []string{"main"}, Services: []string{"checkout"}, EnvironmentIDs: []string{"production"}, JourneyIDs: []string{"buy"}, RiskClasses: []string{"availability"}, MaximumBudgetConsumed: 90, MaximumPredictedIncrease: 10, RequireCurrentEvidence: true, RequireDependencies: true, RequiredOwnerIDs: []string{"owner"}, MinimumAcknowledgements: 1, OnMissingEvidence: "block", OnBudgetExhausted: "pause", OnRegression: "slow", OnDependencyFailure: "rollback", Rationale: "Protect current purchasers."}
+	contract, err = s.PublishDeliveryPolicy(contract.ID, "owner", 1, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy = contract.DeliveryPolicies[0]
+	duplicatePolicy := policy
+	duplicatePolicy.ObjectiveIDs = []string{"availability", "availability"}
+	if _, err = s.PublishDeliveryPolicy(contract.ID, "owner", 1, duplicatePolicy); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("duplicate policy objectives = %v", err)
+	}
+	missing, err := s.EvaluateReliability("repo", "pull_request", "pull", strings.Repeat("a", 40), "main", "checkout", "production", []string{"buy"}, []string{"availability"})
+	if err != nil || len(missing) != 1 || missing[0].Effect != "block" {
+		t.Fatalf("missing = %#v, %v", missing, err)
+	}
+	consumed := 100.0
+	forged := ReliabilityImpact{PolicyID: policy.ID, PolicyVersion: 1, Kind: "pull_request", ResourceID: "pull", Revision: strings.Repeat("a", 40), Branch: "main", Service: "checkout", EnvironmentID: "production", JourneyIDs: []string{"buy"}, RiskClasses: []string{"availability"}, ObjectiveImpacts: []ObjectiveImpact{{ObjectiveID: "availability", ObservationID: "forged-window", ObservedBudgetConsumed: &consumed, Confidence: "high"}}, Summary: "Caller-selected evidence."}
+	if _, err = s.RecordReliabilityImpact(contract.ID, "maintainer", forged); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("forged observation = %v", err)
+	}
+	contract, observationID := deliveryObservation(t, s, contract, "availability", "pull", strings.Repeat("a", 40), 800, 1000)
+	impact := ReliabilityImpact{PolicyID: policy.ID, PolicyVersion: 1, Kind: "pull_request", ResourceID: "pull", Revision: strings.Repeat("a", 40), Branch: "main", Service: "checkout", EnvironmentID: "production", JourneyIDs: []string{"buy"}, RiskClasses: []string{"availability"}, ObjectiveImpacts: []ObjectiveImpact{{ObjectiveID: "availability", ObservationID: observationID, PredictedBudgetIncrease: 12, ObservedBudgetConsumed: &consumed, Confidence: "high"}}, DependencyFailures: []string{"payments objective failed"}, Summary: "Canary predicts and observes lost reliability."}
+	contract, err = s.RecordReliabilityImpact(contract.ID, "maintainer", impact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	impact = contract.ReliabilityImpacts[0]
+	if impact.ObjectiveImpacts[0].ObservedBudgetConsumed == nil || *impact.ObjectiveImpacts[0].ObservedBudgetConsumed == consumed {
+		t.Fatalf("caller budget was not replaced by trusted observation: %#v", impact.ObjectiveImpacts[0])
+	}
+	blocked, _ := s.EvaluateReliability("repo", "pull_request", "pull", impact.Revision, "main", "checkout", "production", []string{"buy"}, []string{"availability"})
+	if len(blocked) != 1 || blocked[0].Effect != "rollback" || blocked[0].State != "blocked" || blocked[0].AuthorityNote == "" {
+		t.Fatalf("blocked = %#v", blocked)
+	}
+	if _, err = s.AcknowledgeReliabilityImpact(contract.ID, impact.ID, "maintainer", "not an owner"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("non-owner acknowledgement = %v", err)
+	}
+	contract, err = s.AcknowledgeReliabilityImpact(contract.ID, impact.ID, "owner", "Current user impact warrants a hold.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract, err = s.ExceptReliabilityImpact(contract.ID, impact.ID, "owner", DeliveryException{Reason: "Bounded emergency repair", ExpiresAt: time.Now().UTC().Add(time.Hour), FollowUp: "review tomorrow"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	excepted, _ := s.EvaluateReliability("repo", "pull_request", "pull", impact.Revision, "main", "checkout", "production", []string{"buy"}, []string{"availability"})
+	if excepted[0].State != "excepted" || excepted[0].ActiveException == nil || excepted[0].Effect != "none" {
+		t.Fatalf("excepted = %#v", excepted)
+	}
+}
+
+func TestReliabilityDeliveryIsolatesScopesAndRequiresCompleteObjectives(t *testing.T) {
+	s, _ := New(t.TempDir())
+	revision := completeRevision()
+	revision.Objectives = append(revision.Objectives, Objective{ID: "latency", Name: "Checkout latency", IndicatorID: "success", WindowID: "month", Target: 95, Comparator: "at_least", JourneyIDs: []string{"buy"}, OwnerIDs: []string{"owner"}})
+	revision.ErrorBudgets = append(revision.ErrorBudgets, ErrorBudget{ObjectiveID: "latency", AllowedFailure: 5, Unit: "percent", BurnPolicy: "Slow rollout"})
+	contract, err := s.Create("repo", "owner", revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := DeliveryPolicy{ContractVersion: 1, ObjectiveIDs: []string{"availability", "latency"}, Branches: []string{"main"}, Services: []string{"checkout"}, EnvironmentIDs: []string{"production"}, JourneyIDs: []string{"buy"}, RiskClasses: []string{"availability"}, MaximumBudgetConsumed: 90, MaximumPredictedIncrease: 10, RequireCurrentEvidence: true, RequiredOwnerIDs: []string{"owner"}, OnMissingEvidence: "block", OnBudgetExhausted: "pause", OnRegression: "block", OnDependencyFailure: "pause", Rationale: "Protect checkout."}
+	contract, err = s.PublishDeliveryPolicy(contract.ID, "owner", 1, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy = contract.DeliveryPolicies[0]
+	partial := ReliabilityImpact{PolicyID: policy.ID, PolicyVersion: 1, Kind: "pull_request", ResourceID: "pull", Revision: strings.Repeat("b", 40), Branch: "main", Service: "checkout", EnvironmentID: "production", JourneyIDs: []string{"buy"}, RiskClasses: []string{"availability"}, ObjectiveImpacts: []ObjectiveImpact{{ObjectiveID: "availability", ObservationID: "one", Confidence: "high"}}, Summary: "Partial evidence."}
+	if _, err = s.RecordReliabilityImpact(contract.ID, "owner", partial); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("partial objective coverage = %v", err)
+	}
+	partial.ObjectiveImpacts = append(partial.ObjectiveImpacts, partial.ObjectiveImpacts[0])
+	if _, err = s.RecordReliabilityImpact(contract.ID, "owner", partial); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("duplicate objective coverage = %v", err)
+	}
+	contract, availabilityObservation := deliveryObservation(t, s, contract, "availability", "pull", strings.Repeat("b", 40), 980, 1000)
+	contract, latencyObservation := deliveryObservation(t, s, contract, "latency", "pull", strings.Repeat("b", 40), 990, 1000)
+	target := partial
+	target.ObjectiveImpacts = []ObjectiveImpact{{ObjectiveID: "availability", ObservationID: availabilityObservation, PredictedBudgetIncrease: 20, Confidence: "high"}, {ObjectiveID: "latency", ObservationID: latencyObservation, Confidence: "high"}}
+	contract, err = s.RecordReliabilityImpact(contract.ID, "owner", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.now = func() time.Time { return time.Now().UTC().Add(time.Minute) }
+	foreign := target
+	foreign.Service, foreign.EnvironmentID, foreign.JourneyIDs, foreign.RiskClasses = "billing", "staging", []string{"refund"}, []string{"latency"}
+	foreign.ObjectiveImpacts[0].PredictedBudgetIncrease = 0
+	contract, err = s.RecordReliabilityImpact(contract.ID, "owner", foreign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evaluations, _ := s.EvaluateReliability("repo", "pull_request", "pull", target.Revision, "main", "checkout", "production", []string{"buy"}, []string{"availability"})
+	if len(evaluations) != 1 || evaluations[0].Effect != "pause" {
+		t.Fatalf("foreign evidence replaced target: %#v", evaluations)
+	}
+	duplicateRisks, _ := s.EvaluateReliability("repo", "pull_request", "pull", target.Revision, "main", "checkout", "production", []string{"buy"}, []string{"availability", "availability"})
+	if len(duplicateRisks) != 1 || duplicateRisks[0].ImpactID != evaluations[0].ImpactID || duplicateRisks[0].Effect != "pause" {
+		t.Fatalf("duplicate risks hid matching impact: %#v", duplicateRisks)
+	}
+	omitted, _ := s.EvaluateReliability("repo", "pull_request", "pull", target.Revision, "main", "", "", nil, []string{"availability"})
+	if len(omitted) != 0 {
+		t.Fatalf("omitted restricted scope matched: %#v", omitted)
+	}
+}
+
+func deliveryObservation(t *testing.T, s *Store, contract Contract, objectiveID, resourceID, revision string, good, total float64) (Contract, string) {
+	t.Helper()
+	contract, err := s.PublishMapping(contract.ID, "owner", SignalMappingRevision{ContractVersion: 1, ObjectiveID: objectiveID, InstrumentationRevision: "delivery-" + objectiveID, Calculation: "ratio", Unit: "percent", Rationale: "Ground delivery readiness", Sources: []SignalSource{{Kind: "metric", Name: objectiveID, Reference: "metrics://" + objectiveID, Visibility: "participants", Sanitization: "aggregate counts"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapping := contract.SignalMappings[len(contract.SignalMappings)-1]
+	now := s.now()
+	contract, err = s.RecordObservation(contract.ID, "owner", Observation{MappingID: mapping.ID, MappingVersion: 1, ContractVersion: 1, ObjectiveID: objectiveID, WindowStart: now.Add(-time.Hour), WindowEnd: now, GoodEvents: good, TotalEvents: total, Summary: "Trusted delivery window", Uncertainty: 1, Software: []SoftwareReference{{Kind: "pull_request", ID: resourceID, Revision: revision, Label: "candidate"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return contract, contract.Observations[len(contract.Observations)-1].ID
 }
 
 func TestReliabilityEvidenceRejectsCredentials(t *testing.T) {

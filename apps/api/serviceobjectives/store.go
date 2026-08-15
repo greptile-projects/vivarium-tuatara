@@ -254,16 +254,18 @@ type Revision struct {
 	CreatedAt       time.Time        `json:"created_at"`
 }
 type Contract struct {
-	ID             string          `json:"id"`
-	RepositoryID   string          `json:"repository_id"`
-	CurrentVersion int             `json:"current_version"`
-	Revisions      []Revision      `json:"revisions"`
-	SignalMappings []SignalMapping `json:"signal_mappings"`
-	Observations   []Observation   `json:"observations"`
-	Investigations []Investigation `json:"investigations"`
-	Diagnostics    []Diagnostic    `json:"diagnostics"`
-	CreatedAt      time.Time       `json:"created_at"`
-	UpdatedAt      time.Time       `json:"updated_at"`
+	ID                 string              `json:"id"`
+	RepositoryID       string              `json:"repository_id"`
+	CurrentVersion     int                 `json:"current_version"`
+	Revisions          []Revision          `json:"revisions"`
+	SignalMappings     []SignalMapping     `json:"signal_mappings"`
+	Observations       []Observation       `json:"observations"`
+	Investigations     []Investigation     `json:"investigations"`
+	DeliveryPolicies   []DeliveryPolicy    `json:"delivery_policies"`
+	ReliabilityImpacts []ReliabilityImpact `json:"reliability_impacts"`
+	Diagnostics        []Diagnostic        `json:"diagnostics"`
+	CreatedAt          time.Time           `json:"created_at"`
+	UpdatedAt          time.Time           `json:"updated_at"`
 }
 
 func (s *Store) OpenInvestigation(contractID, actor string, in Investigation) (Contract, error) {

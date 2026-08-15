@@ -27,6 +27,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/privacychecks"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/serviceobjectives"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
@@ -479,6 +480,7 @@ type MergeReadiness struct {
 	AccessibilityReadiness  *accessibilitydelivery.Readiness       `json:"accessibility_readiness,omitempty"`
 	PrivacyReadiness        *privacychecks.Readiness               `json:"privacy_readiness,omitempty"`
 	LocalizationReadiness   *localization.LocaleReadiness          `json:"localization_readiness,omitempty"`
+	ReliabilityReadiness    []serviceobjectives.DeliveryEvaluation `json:"reliability_readiness"`
 }
 
 type commentRecord struct {
@@ -513,14 +515,16 @@ type Store struct {
 	accessibilityAssessments *accessibilityassessments.Store
 	privacyChecks            *privacychecks.Store
 	localization             *localization.Store
+	reliability              *serviceobjectives.Store
 }
 
 func (s *Store) ConfigurePerformanceEvidence(store *performanceevidence.Store) { s.performance = store }
 func (s *Store) ConfigureAccessibilityDelivery(delivery *accessibilitydelivery.Store, assessments *accessibilityassessments.Store) {
 	s.accessibilityDelivery, s.accessibilityAssessments = delivery, assessments
 }
-func (s *Store) ConfigurePrivacyChecks(store *privacychecks.Store) { s.privacyChecks = store }
-func (s *Store) ConfigureLocalization(store *localization.Store)   { s.localization = store }
+func (s *Store) ConfigurePrivacyChecks(store *privacychecks.Store)   { s.privacyChecks = store }
+func (s *Store) ConfigureLocalization(store *localization.Store)     { s.localization = store }
+func (s *Store) ConfigureReliability(store *serviceobjectives.Store) { s.reliability = store }
 
 func (s *Store) ConfigurePreviewAcceptance(a *acceptance.Store, p *previews.Store) {
 	s.acceptance = a
@@ -1627,6 +1631,24 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 		for _, requirement := range requirements {
 			if requirement.Status != "passed" {
 				addBlocker("performance_"+requirement.Status, fmt.Sprintf("performance goal %q: %s", requirement.GoalID, requirement.Message))
+			}
+		}
+	}
+	if s.reliability != nil {
+		risks := []string{}
+		if report.PreviewAcceptance != nil {
+			for _, decision := range report.PreviewAcceptance.Decisions {
+				risks = append(risks, decision.RiskClasses...)
+			}
+		}
+		evaluations, evaluationErr := s.reliability.EvaluateReliability(repositoryID, "pull_request", p.ID, p.SourceCommitID, p.TargetBranch, "", "", nil, risks)
+		if evaluationErr != nil {
+			return MergeReadiness{}, evaluationErr
+		}
+		report.ReliabilityReadiness = evaluations
+		for _, evaluation := range evaluations {
+			if evaluation.Effect == "block" || evaluation.Effect == "pause" || evaluation.Effect == "rollback" {
+				addBlocker("reliability_"+evaluation.Effect, strings.Join(evaluation.Blockers, "; "))
 			}
 		}
 	}
