@@ -120,6 +120,19 @@ func (s *Store) RecordReliabilityImpact(contractID, actor string, x ReliabilityI
 		if p == nil || p.Version != x.PolicyVersion || !validImpact(*p, x) {
 			return ErrInvalid
 		}
+		projected := s.project(v)
+		for i := range x.ObjectiveImpacts {
+			impact := &x.ObjectiveImpacts[i]
+			observation := applicableDeliveryObservation(projected, *p, x, *impact, s.now())
+			if p.RequireCurrentEvidence && observation == nil {
+				return ErrInvalid
+			}
+			if observation != nil {
+				impact.ObservedBudgetConsumed = observation.ErrorBudgetConsumed
+			} else {
+				impact.ObservedBudgetConsumed = nil
+			}
+		}
 		x.ID, x.RecordedBy, x.RecordedAt = id(), actor, s.now()
 		x.OwnerAcknowledgements = []OwnerAcknowledgement{}
 		v.ReliabilityImpacts = append(v.ReliabilityImpacts, x)
@@ -264,6 +277,43 @@ func validImpact(p DeliveryPolicy, x ReliabilityImpact) bool {
 		return false
 	}
 	return true
+}
+
+func applicableDeliveryObservation(v Contract, p DeliveryPolicy, x ReliabilityImpact, impact ObjectiveImpact, now time.Time) *Observation {
+	revision := deliveryRevision(v, p.ContractVersion)
+	if revision == nil {
+		return nil
+	}
+	var maximumAge time.Duration
+	for _, objective := range revision.Objectives {
+		if objective.ID != impact.ObjectiveID {
+			continue
+		}
+		for _, window := range revision.Windows {
+			if window.ID == objective.WindowID {
+				maximumAge, _ = time.ParseDuration(window.Duration)
+			}
+		}
+	}
+	for i := range v.Observations {
+		observation := &v.Observations[i]
+		if observation.ID != impact.ObservationID || observation.ContractVersion != p.ContractVersion || observation.ObjectiveID != impact.ObjectiveID || observation.ErrorBudgetConsumed == nil || maximumAge <= 0 || observation.WindowEnd.After(now) || now.Sub(observation.WindowEnd) > maximumAge {
+			continue
+		}
+		for _, software := range observation.Software {
+			if deliverySoftwareMatches(software, x) {
+				return observation
+			}
+		}
+	}
+	return nil
+}
+
+func deliverySoftwareMatches(software SoftwareReference, impact ReliabilityImpact) bool {
+	if impact.Kind == "integration_queue" {
+		return software.Kind == "pull_request" && software.ID == impact.ResourceID && software.Revision == impact.Revision
+	}
+	return software.Kind == impact.Kind && software.ID == impact.ResourceID && software.Revision == impact.Revision
 }
 func deliveryPolicy(v Contract, id string) *DeliveryPolicy {
 	for i := range v.DeliveryPolicies {

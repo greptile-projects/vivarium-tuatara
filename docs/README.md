@@ -69,6 +69,9 @@ and the configured warn, slow, block, pause, or rollback effect with available n
 merge readiness and queue admission fail closed for blocking or containment effects. The same public
 readiness projection supports release and staged-deployment decisions without making a policy,
 acknowledgement, exception, or agent a source of merge, release, or environment authority.
+Current-evidence policy resolves each cited observation against the exact contract objective,
+measurement window, and delivered resource/revision; error-budget consumption is server-derived from
+that retained observation, and caller-supplied budget values never participate in readiness.
 
 ## Locale coverage contracts
 

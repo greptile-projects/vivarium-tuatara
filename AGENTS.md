@@ -1832,6 +1832,9 @@ whenever dependencies change or the web job fails before it starts.
   acknowledgements, active bounded exceptions, and warn/slow/block/pause/rollback actions. Blocking
   and containment effects participate in ordinary pull readiness and queue admission; policies,
   acknowledgements, exceptions, and agent evidence grant no merge, release, or environment authority.
+  Current reliability evidence resolves through retained same-objective, same-contract observations
+  within the declared measurement-window age and exact delivered resource/revision. Budget
+  consumption is derived from that trusted observation; caller values never authorize readiness.
 
   Update it when you change how the apps fit together, not for every change.
 
