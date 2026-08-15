@@ -254,18 +254,20 @@ type Revision struct {
 	CreatedAt       time.Time        `json:"created_at"`
 }
 type Contract struct {
-	ID                 string              `json:"id"`
-	RepositoryID       string              `json:"repository_id"`
-	CurrentVersion     int                 `json:"current_version"`
-	Revisions          []Revision          `json:"revisions"`
-	SignalMappings     []SignalMapping     `json:"signal_mappings"`
-	Observations       []Observation       `json:"observations"`
-	Investigations     []Investigation     `json:"investigations"`
-	DeliveryPolicies   []DeliveryPolicy    `json:"delivery_policies"`
-	ReliabilityImpacts []ReliabilityImpact `json:"reliability_impacts"`
-	Diagnostics        []Diagnostic        `json:"diagnostics"`
-	CreatedAt          time.Time           `json:"created_at"`
-	UpdatedAt          time.Time           `json:"updated_at"`
+	ID                   string                `json:"id"`
+	RepositoryID         string                `json:"repository_id"`
+	CurrentVersion       int                   `json:"current_version"`
+	Revisions            []Revision            `json:"revisions"`
+	SignalMappings       []SignalMapping       `json:"signal_mappings"`
+	Observations         []Observation         `json:"observations"`
+	Investigations       []Investigation       `json:"investigations"`
+	DeliveryPolicies     []DeliveryPolicy      `json:"delivery_policies"`
+	ReliabilityImpacts   []ReliabilityImpact   `json:"reliability_impacts"`
+	Improvements         []Improvement         `json:"improvements"`
+	RolloutVerifications []RolloutVerification `json:"rollout_verifications"`
+	Diagnostics          []Diagnostic          `json:"diagnostics"`
+	CreatedAt            time.Time             `json:"created_at"`
+	UpdatedAt            time.Time             `json:"updated_at"`
 }
 
 func (s *Store) OpenInvestigation(contractID, actor string, in Investigation) (Contract, error) {
@@ -928,6 +930,12 @@ func (s *Store) project(v Contract) Contract {
 	}
 	if v.Investigations == nil {
 		v.Investigations = []Investigation{}
+	}
+	if v.Improvements == nil {
+		v.Improvements = []Improvement{}
+	}
+	if v.RolloutVerifications == nil {
+		v.RolloutVerifications = []RolloutVerification{}
 	}
 	if len(v.Revisions) == 0 {
 		return v

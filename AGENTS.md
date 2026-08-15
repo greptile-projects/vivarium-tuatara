@@ -1835,6 +1835,12 @@ whenever dependencies change or the web job fails before it starts.
   Current reliability evidence resolves through retained same-objective, same-contract observations
   within the declared measurement-window age and exact delivered resource/revision. Budget
   consumption is derived from that trusted observation; caller values never authorize readiness.
+  Reliability improvements convert exactly one cited investigation finding or depleted-budget impact
+  into ordinary ordered proposal tasks while freezing objective, baseline/affected observations,
+  revisions, dependencies, evidence, and acceptance criteria. Governed release/deployment verification
+  derives improvement and budget restoration from a later exact-resource observation; failed measures
+  retain containment, rollback, or decision-revisit outcomes, and successful restoration never rewrites
+  the original impact. Improvement records grant no Git, review, merge, release, or deployment authority.
 
   Update it when you change how the apps fit together, not for every change.
 

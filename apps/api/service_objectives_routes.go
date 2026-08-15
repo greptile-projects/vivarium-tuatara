@@ -2,12 +2,16 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"os/exec"
 	"strconv"
+	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
@@ -46,8 +50,33 @@ type reliabilityAcknowledgementInput struct {
 type reliabilityExceptionInput struct {
 	Exception serviceobjectives.DeliveryException `json:"exception"`
 }
+type reliabilityTaskInput struct {
+	Title             string `json:"title"`
+	AssigneeType      string `json:"assignee_type"`
+	AssigneeID        string `json:"assignee_id"`
+	DependsOnPrevious bool   `json:"depends_on_previous"`
+}
+type reliabilityImprovementInput struct {
+	ContractVersion        int                    `json:"contract_version"`
+	ObjectiveID            string                 `json:"objective_id"`
+	InvestigationID        string                 `json:"investigation_id"`
+	FindingID              string                 `json:"finding_id"`
+	ImpactID               string                 `json:"impact_id"`
+	Title                  string                 `json:"title"`
+	Body                   string                 `json:"body"`
+	BaselineObservationIDs []string               `json:"baseline_observation_ids"`
+	AffectedObservationIDs []string               `json:"affected_observation_ids"`
+	AffectedRevisions      []string               `json:"affected_revisions"`
+	DependencyContext      []string               `json:"dependency_context"`
+	EvidenceIDs            []string               `json:"evidence_ids"`
+	AcceptanceCriteria     []string               `json:"acceptance_criteria"`
+	Tasks                  []reliabilityTaskInput `json:"tasks"`
+}
+type reliabilityVerificationInput struct {
+	Verification serviceobjectives.RolloutVerification `json:"verification"`
+}
 
-func registerServiceObjectiveRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, contracts *serviceobjectives.Store, pulls *pullrequests.Store, deploymentStore *deployments.Store, releaseStore *releases.Store) {
+func registerServiceObjectiveRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, contracts *serviceobjectives.Store, pulls *pullrequests.Store, deploymentStore *deployments.Store, releaseStore *releases.Store, proposalStore *proposals.Store) {
 	investigator := func(w http.ResponseWriter, r *http.Request) (auth.Credential, string, bool) {
 		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
 		if !ok {
@@ -351,6 +380,123 @@ func registerServiceObjectiveRoutes(mux *http.ServeMux, git *storage.Store, cata
 			writeReliabilityInvestigation(w, out, err, 201)
 		})
 	}
+	mux.HandleFunc("POST /repositories/{id}/service-objectives/{objective_id}/improvements", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in reliabilityImprovementInput
+		if decodeJSON(r, &in) != nil || proposalStore == nil || len(in.Tasks) == 0 || len(in.Tasks) > 20 {
+			writeAPIError(w, 400, "invalid_reliability_improvement", "a cited source, acceptance criteria, and ordered owned tasks are required")
+			return
+		}
+		contract, err := contracts.Get(r.PathValue("objective_id"))
+		if err != nil || contract.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "service_objective_not_found", "service objective not found")
+			return
+		}
+		validation := serviceobjectives.Improvement{ContractVersion: in.ContractVersion, ObjectiveID: in.ObjectiveID, InvestigationID: in.InvestigationID, FindingID: in.FindingID, ImpactID: in.ImpactID, BaselineObservationIDs: in.BaselineObservationIDs, AffectedObservationIDs: in.AffectedObservationIDs, AffectedRevisions: in.AffectedRevisions, DependencyContext: in.DependencyContext, EvidenceIDs: in.EvidenceIDs, AcceptanceCriteria: in.AcceptanceCriteria, ProposalID: "pending", TaskIDs: []string{"pending"}}
+		if contracts.ValidateImprovement(contract.ID, validation) != nil {
+			writeAPIError(w, 422, "reliability_improvement_invalid", "the exact objective, finding or impact, observations, evidence, and criteria must remain valid")
+			return
+		}
+		bare, err := git.Open(contract.RepositoryID)
+		if err != nil {
+			writeAPIError(w, 503, "repository_unavailable", "repository context is unavailable")
+			return
+		}
+		repo, err := catalog.GetByID(contract.RepositoryID)
+		if err != nil {
+			writeAPIError(w, 503, "repository_unavailable", "repository context is unavailable")
+			return
+		}
+		data, err := exec.Command("git", "--git-dir="+bare.Path(), "rev-parse", "refs/heads/"+repo.DefaultBranch).Output()
+		revision := strings.TrimSpace(string(data))
+		if err != nil || len(revision) != 40 {
+			writeAPIError(w, 409, "improvement_base_unavailable", "the default branch has no exact implementation base")
+			return
+		}
+		items := []proposals.ReasoningItem{{ID: "objective", Kind: "reliability_objective", Summary: in.ObjectiveID, Status: "required"}}
+		for i, x := range in.AffectedRevisions {
+			items = append(items, proposals.ReasoningItem{ID: fmt.Sprintf("revision-%d", i), Kind: "affected_revision", Summary: x, Status: "affected"})
+		}
+		for i, x := range in.DependencyContext {
+			items = append(items, proposals.ReasoningItem{ID: fmt.Sprintf("dependency-%d", i), Kind: "dependency_context", Summary: x, Status: "required"})
+		}
+		for i, x := range in.EvidenceIDs {
+			items = append(items, proposals.ReasoningItem{ID: fmt.Sprintf("evidence-%d", i), Kind: "reliability_evidence", Summary: x, Status: "cited"})
+		}
+		for i, x := range in.AcceptanceCriteria {
+			items = append(items, proposals.ReasoningItem{ID: fmt.Sprintf("criterion-%d", i), Kind: "acceptance_criterion", Summary: x, Status: "required"})
+		}
+		origin := proposals.ReasoningOrigin{ReliabilityContractID: contract.ID, ReliabilityInvestigationID: in.InvestigationID, ReliabilityFindingID: in.FindingID, ReliabilityImpactID: in.ImpactID, Revision: revision, Items: items, AnalysisStatus: "reliability_improvement"}
+		for _, x := range items {
+			origin.SelectedItemIDs = append(origin.SelectedItemIDs, x.ID)
+		}
+		tasks, participants := []proposals.ImplementationTaskInput{}, []string{actor.UserID}
+		for _, x := range in.Tasks {
+			tasks = append(tasks, proposals.ImplementationTaskInput{Title: x.Title, Outcome: "Improve objective " + in.ObjectiveID + ": " + strings.Join(in.AcceptanceCriteria, "; "), VerificationPlan: "Compare rollout signals with baseline observations " + strings.Join(in.BaselineObservationIDs, ", "), Risk: "Failed measures require containment, rollback, or decision revisit.", AssigneeType: x.AssigneeType, AssigneeID: x.AssigneeID, DependsOnPrevious: x.DependsOnPrevious})
+			if x.AssigneeType == "human" {
+				participants = append(participants, x.AssigneeID)
+			}
+		}
+		var p proposals.Proposal
+		var made []proposals.Task
+		err = catalog.WithCurrentParticipants(participants, contract.RepositoryID, func() error {
+			return bare.WithReferenceTarget("refs/heads/"+repo.DefaultBranch, revision, func() error {
+				var e error
+				p, made, e = proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: contract.RepositoryID, ActorID: actor.UserID, Title: in.Title, Body: in.Body, Origin: origin, Tasks: tasks})
+				return e
+			})
+		})
+		if err != nil {
+			writeAPIError(w, 422, "reliability_improvement_invalid", "authority, source evidence, assignments, or implementation base changed")
+			return
+		}
+		taskIDs := []string{}
+		for _, t := range made {
+			taskIDs = append(taskIDs, t.ID)
+		}
+		validation.ProposalID, validation.TaskIDs = p.ID, taskIDs
+		out, err := contracts.LinkImprovement(contract.ID, actor.UserID, validation)
+		writeReliabilityDelivery(w, out, err, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/service-objectives/{objective_id}/improvements/{improvement_id}/verifications", func(w http.ResponseWriter, r *http.Request) {
+		actor, owner, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if !owner {
+			writeAPIError(w, 403, "reliability_rollout_owner_required", "only the repository owner may record a governed rollout decision")
+			return
+		}
+		contract, getErr := contracts.Get(r.PathValue("objective_id"))
+		if getErr != nil || contract.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "service_objective_not_found", "service objective not found")
+			return
+		}
+		var in reliabilityVerificationInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_reliability_verification", "an exact rollout comparison and decision are required")
+			return
+		}
+		in.Verification.ImprovementID = r.PathValue("improvement_id")
+		validResource := false
+		if in.Verification.Kind == "release" && releaseStore != nil {
+			value, e := releaseStore.Get(contract.RepositoryID, in.Verification.ResourceID)
+			validResource = e == nil && value.CommitID == in.Verification.Revision
+		}
+		if in.Verification.Kind == "deployment" && deploymentStore != nil {
+			value, e := deploymentStore.GetPromotion(contract.RepositoryID, in.Verification.ResourceID)
+			validResource = e == nil && value.CommitID == in.Verification.Revision
+		}
+		if !validResource {
+			writeAPIError(w, 422, "reliability_rollout_unresolved", "the rollout resource must resolve at its exact repository revision")
+			return
+		}
+		out, err := contracts.VerifyImprovement(contract.ID, actor.UserID, in.Verification)
+		writeReliabilityDelivery(w, out, err, 201)
+	})
 }
 
 func reliabilityInvestigationProvenanceResolves(git *storage.Store, pulls *pullrequests.Store, deploymentStore *deployments.Store, releaseStore *releases.Store, contract serviceobjectives.Contract, in serviceobjectives.Investigation) bool {

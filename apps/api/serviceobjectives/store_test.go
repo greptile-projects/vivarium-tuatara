@@ -118,6 +118,55 @@ func TestReliabilityDeliveryPolicyPreservesHumanAuthorityAndExceptions(t *testin
 	}
 }
 
+func TestImprovementRetainsHarmAndDerivesGovernedBudgetRestoration(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 15, 2, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	c, err := s.Create("repo", "owner", completeRevision())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err = s.PublishMapping(c.ID, "owner", SignalMappingRevision{ContractVersion: 1, ObjectiveID: "availability", InstrumentationRevision: "otel-v1", Sources: []SignalSource{{Kind: "metric", Name: "success", Reference: "metrics://success", Visibility: "public", Sanitization: "aggregates only"}}, Calculation: "ratio", Unit: "percent", Rationale: "release comparison"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapping := c.SignalMappings[0]
+	c, err = s.RecordObservation(c.ID, "owner", Observation{MappingID: mapping.ID, MappingVersion: 1, ContractVersion: 1, ObjectiveID: "availability", WindowStart: now.Add(-2 * time.Hour), WindowEnd: now.Add(-time.Hour), GoodEvents: 990, TotalEvents: 1000, Uncertainty: 1, Summary: "affected users", Software: []SoftwareReference{{Kind: "deployment", ID: "bad", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Label: "degraded rollout"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	harm := c.Observations[0]
+	policy := DeliveryPolicy{ContractVersion: 1, ObjectiveIDs: []string{"availability"}, RequiredOwnerIDs: []string{"owner"}, MaximumBudgetConsumed: 90, MaximumPredictedIncrease: 10, OnMissingEvidence: "block", OnBudgetExhausted: "pause", OnRegression: "slow", OnDependencyFailure: "rollback", Rationale: "protect users"}
+	c, err = s.PublishDeliveryPolicy(c.ID, "owner", 1, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err = s.RecordReliabilityImpact(c.ID, "owner", ReliabilityImpact{PolicyID: c.DeliveryPolicies[0].ID, PolicyVersion: 1, Kind: "deployment", ResourceID: "bad", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Summary: "budget depleted", ObjectiveImpacts: []ObjectiveImpact{{ObjectiveID: "availability", ObservationID: harm.ID, PredictedBudgetIncrease: 10, Confidence: "high"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err = s.LinkImprovement(c.ID, "owner", Improvement{ContractVersion: 1, ObjectiveID: "availability", ImpactID: c.ReliabilityImpacts[0].ID, BaselineObservationIDs: []string{harm.ID}, AffectedObservationIDs: []string{harm.ID}, AffectedRevisions: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, DependencyContext: []string{"payments owner"}, EvidenceIDs: []string{harm.ID}, AcceptanceCriteria: []string{"restore target attainment"}, ProposalID: "proposal", TaskIDs: []string{"task"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Hour)
+	c, err = s.RecordObservation(c.ID, "owner", Observation{MappingID: mapping.ID, MappingVersion: 1, ContractVersion: 1, ObjectiveID: "availability", WindowStart: now.Add(-time.Hour), WindowEnd: now, GoodEvents: 1000, TotalEvents: 1000, Uncertainty: 1, Summary: "recovered users", Software: []SoftwareReference{{Kind: "release", ID: "release", Revision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Label: "repair"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err = s.VerifyImprovement(c.ID, "owner", RolloutVerification{ImprovementID: c.Improvements[0].ID, Kind: "release", ResourceID: "release", Revision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", BaselineObservationID: harm.ID, CurrentObservationID: c.Observations[1].ID, Decision: "restore_budget", Rationale: "target recovered in governed rollout"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := c.RolloutVerifications[0]
+	if !got.Improved || !got.BudgetRestored || got.BudgetBefore == nil || got.BudgetAfter == nil || *got.BudgetAfter >= *got.BudgetBefore || c.Observations[0].Summary != "affected users" {
+		t.Fatalf("verification/history = %#v %#v", got, c.Observations[0])
+	}
+	if _, err = s.VerifyImprovement(c.ID, "owner", RolloutVerification{ImprovementID: c.Improvements[0].ID, Kind: "release", ResourceID: "release", Revision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", BaselineObservationID: harm.ID, CurrentObservationID: harm.ID, Decision: "restore_budget", Rationale: "forged recovery"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("forged restoration = %v", err)
+	}
+}
+
 func TestReliabilityDeliveryIsolatesScopesAndRequiresCompleteObjectives(t *testing.T) {
 	s, _ := New(t.TempDir())
 	revision := completeRevision()

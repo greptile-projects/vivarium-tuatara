@@ -73,6 +73,21 @@ Current-evidence policy resolves each cited observation against the exact contra
 measurement window, and delivered resource/revision; error-budget consumption is server-derived from
 that retained observation, and caller-supplied budget values never participate in readiness.
 
+Participants convert one cited investigation finding or depleted-budget impact into an immutable
+reliability improvement through `/repositories/{id}/service-objectives/{contract_id}/improvements`.
+The handoff freezes the objective, baseline and affected observations, affected revisions,
+dependency context, evidence, and acceptance criteria while creating an ordinary ordered proposal
+task plan with explicit human or agent ownership. Repository authority and the exact default-branch
+base are revalidated across proposal publication; the record itself grants no Git, review, merge,
+release, or deployment authority.
+
+Repository owners record governed release or deployment comparisons through the improvement's
+`/verifications` collection. The current observation must cite the exact rollout resource and follow
+the retained baseline. The server derives improvement and budget restoration from target attainment
+and error-budget consumption: unsuccessful evidence can only retain containment, rollback, or
+decision-revisit outcomes, while a successful comparison may restore current budget state without
+mutating the earlier user-impact observations.
+
 ## Locale coverage contracts
 
 Repository participants publish complete, compare-and-swap locale plans through
