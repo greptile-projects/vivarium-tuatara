@@ -73,6 +73,11 @@ func TestReliabilityDeliveryPolicyPreservesHumanAuthorityAndExceptions(t *testin
 		t.Fatal(err)
 	}
 	policy = contract.DeliveryPolicies[0]
+	duplicatePolicy := policy
+	duplicatePolicy.ObjectiveIDs = []string{"availability", "availability"}
+	if _, err = s.PublishDeliveryPolicy(contract.ID, "owner", 1, duplicatePolicy); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("duplicate policy objectives = %v", err)
+	}
 	missing, err := s.EvaluateReliability("repo", "pull_request", "pull", strings.Repeat("a", 40), "main", "checkout", "production", []string{"buy"}, []string{"availability"})
 	if err != nil || len(missing) != 1 || missing[0].Effect != "block" {
 		t.Fatalf("missing = %#v, %v", missing, err)
@@ -145,6 +150,10 @@ func TestReliabilityDeliveryIsolatesScopesAndRequiresCompleteObjectives(t *testi
 	evaluations, _ := s.EvaluateReliability("repo", "pull_request", "pull", target.Revision, "main", "checkout", "production", []string{"buy"}, []string{"availability"})
 	if len(evaluations) != 1 || evaluations[0].Effect != "block" {
 		t.Fatalf("foreign evidence replaced target: %#v", evaluations)
+	}
+	duplicateRisks, _ := s.EvaluateReliability("repo", "pull_request", "pull", target.Revision, "main", "checkout", "production", []string{"buy"}, []string{"availability", "availability"})
+	if len(duplicateRisks) != 1 || duplicateRisks[0].ImpactID != evaluations[0].ImpactID || duplicateRisks[0].Effect != "block" {
+		t.Fatalf("duplicate risks hid matching impact: %#v", duplicateRisks)
 	}
 	omitted, _ := s.EvaluateReliability("repo", "pull_request", "pull", target.Revision, "main", "", "", nil, []string{"availability"})
 	if len(omitted) != 0 {

@@ -219,6 +219,9 @@ func validDeliveryPolicy(v Contract, p DeliveryPolicy) bool {
 	if p.ContractVersion < 1 || p.ContractVersion > v.CurrentVersion || len(p.ObjectiveIDs) == 0 || len(p.RequiredOwnerIDs) == 0 || p.MinimumAcknowledgements < 0 || p.MinimumAcknowledgements > len(p.RequiredOwnerIDs) || p.MaximumBudgetConsumed < 0 || p.MaximumBudgetConsumed > 100 || p.MaximumPredictedIncrease < 0 || strings.TrimSpace(p.Rationale) == "" {
 		return false
 	}
+	if hasDeliveryDuplicates(p.ObjectiveIDs) {
+		return false
+	}
 	for _, a := range []string{p.OnMissingEvidence, p.OnBudgetExhausted, p.OnRegression, p.OnDependencyFailure} {
 		if !oneOf(a, "block", "slow", "pause", "rollback", "warn") {
 			return false
@@ -286,6 +289,7 @@ func evaluatePolicy(p DeliveryPolicy, x *ReliabilityImpact, now time.Time) Deliv
 		e.AvailableNextActions = []string{"record_predicted_impact", "collect_current_observation"}
 		return e
 	}
+	e.ImpactID = x.ID
 	for _, a := range x.OwnerAcknowledgements {
 		e.AcknowledgedOwnerIDs = append(e.AcknowledgedOwnerIDs, a.OwnerID)
 	}
@@ -354,6 +358,8 @@ func impactScalarMatches(recorded, evaluated string) bool {
 }
 
 func impactSetMatches(recorded, evaluated []string) bool {
+	recorded = uniqueDeliveryValues(recorded)
+	evaluated = uniqueDeliveryValues(evaluated)
 	if len(recorded) != len(evaluated) {
 		return false
 	}
@@ -363,6 +369,22 @@ func impactSetMatches(recorded, evaluated []string) bool {
 		}
 	}
 	return true
+}
+
+func uniqueDeliveryValues(values []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if !seen[value] {
+			seen[value] = true
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func hasDeliveryDuplicates(values []string) bool {
+	return len(uniqueDeliveryValues(values)) != len(values)
 }
 
 func deliveryContains(values []string, value string) bool {
