@@ -75,6 +75,79 @@ func TestReliabilityEvidenceRejectsCredentials(t *testing.T) {
 	}
 }
 
+func TestReliabilityInvestigationRetainsEvidenceDisputeOwnerInputAndStaleness(t *testing.T) {
+	s, _ := New(t.TempDir())
+	s.ConfigureInvestigationProvenance(func(_ Contract, in Investigation) bool {
+		return in.Trigger.ID == "42" && in.Trigger.Revision == "abc123"
+	})
+	c, _ := s.Create("repo", "owner", completeRevision())
+	c, _ = s.PublishMapping(c.ID, "owner", SignalMappingRevision{ContractVersion: 1, ObjectiveID: "availability", InstrumentationRevision: "v1", Calculation: "ratio", Unit: "percent", Rationale: "aggregate", Sources: []SignalSource{{Kind: "metric", Name: "success", Reference: "metrics://success", Visibility: "public", Sanitization: "aggregate"}}})
+	now := time.Now().UTC()
+	c, _ = s.RecordObservation(c.ID, "owner", Observation{MappingID: c.SignalMappings[0].ID, MappingVersion: 1, ContractVersion: 1, ObjectiveID: "availability", WindowStart: now.Add(-2 * time.Hour), WindowEnd: now.Add(-time.Hour), GoodEvents: 999, TotalEvents: 1000, Summary: "baseline", Uncertainty: 1})
+	c, _ = s.RecordObservation(c.ID, "owner", Observation{MappingID: c.SignalMappings[0].ID, MappingVersion: 1, ContractVersion: 1, ObjectiveID: "availability", WindowStart: now.Add(-time.Hour), WindowEnd: now, GoodEvents: 990, TotalEvents: 1000, Summary: "affected", Uncertainty: 3, Software: []SoftwareReference{{Kind: "pull_request", ID: "42", Revision: "abc123", Label: "retry change"}}})
+	c, err := s.OpenInvestigation(c.ID, "agent:reader", Investigation{ContractVersion: 1, ObjectiveID: "availability", Title: "Checkout may be degrading", Trigger: InvestigationTrigger{Kind: "pull_request", ID: "42", Revision: "abc123"}, BaselineObservationIDs: []string{c.Observations[0].ID}, AffectedObservationIDs: []string{c.Observations[1].ID}, JourneyIDs: []string{"buy"}, Evidence: []InvestigationEvidence{{Kind: "code", ResourceID: "diff-42", Revision: "abc123", Label: "retry change", Visibility: "public"}, {Kind: "trace", ResourceID: "trace-window", Revision: "window-2", Label: "sanitized critical path", Visibility: "participants"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	x := c.Investigations[0]
+	c, err = s.MutateInvestigation(c.ID, x.ID, "agent:reader", "agent", "finding", x.Version, InvestigationFinding{Kind: "hypothesis", Statement: "Retries correlate with lower completion.", Uncertainty: "Dependency saturation was not observed.", Confidence: "medium", CitationIDs: []string{c.Observations[1].ID, "diff-42"}}, InvestigationResponse{}, InputRequest{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	x = c.Investigations[0]
+	if _, err = s.MutateInvestigation(c.ID, x.ID, "agent:reader", "agent", "outcome", x.Version, InvestigationFinding{}, InvestigationResponse{}, InputRequest{}, &InvestigationOutcome{Kind: "incident", ResourceID: "incident-1", Summary: "contain"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("read-only agent outcome error = %v", err)
+	}
+	c, err = s.MutateInvestigation(c.ID, x.ID, "owner", "human", "response", x.Version, InvestigationFinding{}, InvestigationResponse{FindingID: x.Findings[0].ID, Kind: "dispute", Body: "The deployment preceded this pull."}, InputRequest{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	x = c.Investigations[0]
+	c, err = s.MutateInvestigation(c.ID, x.ID, "owner", "human", "request", x.Version, InvestigationFinding{}, InvestigationResponse{}, InputRequest{OwnerID: "owner", DependencyID: "payments", Question: "Did payment latency change?"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	x = c.Investigations[0]
+	c, err = s.MutateInvestigation(c.ID, x.ID, "owner", "human", "reply", x.Version, InvestigationFinding{}, InvestigationResponse{}, InputRequest{ID: x.InputRequests[0].ID, Response: "No regional latency change."}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := completeRevision()
+	r.Summary = "successor"
+	c, err = s.Revise(c.ID, 1, "owner", r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	x = c.Investigations[0]
+	if !x.Inconclusive || len(x.StaleEvidenceIDs) == 0 || x.Responses[0].Kind != "dispute" || x.InputRequests[0].Status != "answered" {
+		t.Fatalf("investigation projection=%#v", x)
+	}
+	public := s.ProjectForReader(c, false)
+	if len(public.Investigations) != 0 {
+		t.Fatalf("investigation leaked to anonymous reader: %#v", public.Investigations)
+	}
+}
+
+func TestReliabilityInvestigationFailsClosedWithoutProvenanceResolver(t *testing.T) {
+	s, _ := New(t.TempDir())
+	c, _ := s.Create("repo", "owner", completeRevision())
+	_, err := s.OpenInvestigation(c.ID, "owner", Investigation{ContractVersion: 1, ObjectiveID: "availability", Title: "Unverified", Trigger: InvestigationTrigger{Kind: "pull_request", ID: "invented", Revision: "invented-revision"}, JourneyIDs: []string{"buy"}, Evidence: []InvestigationEvidence{{Kind: "pull_request", ResourceID: "invented", Revision: "invented-revision", Label: "unverified", Visibility: "public"}}})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unconfigured provenance error = %v", err)
+	}
+}
+
+func TestReliabilityInvestigationTriggerCannotCrossObjective(t *testing.T) {
+	r := completeRevision()
+	r.Objectives = append(r.Objectives, Objective{ID: "latency", Name: "Latency", IndicatorID: "success", WindowID: "month", Target: 99, Comparator: "at_least", JourneyIDs: []string{"buy"}, OwnerIDs: []string{"owner"}})
+	r.ErrorBudgets = append(r.ErrorBudgets, ErrorBudget{ObjectiveID: "latency", AllowedFailure: 1, Unit: "percent", BurnPolicy: "Investigate"})
+	v := Contract{CurrentVersion: 1, Revisions: []Revision{r}, Observations: []Observation{{ID: "latency-window", ContractVersion: 1, ObjectiveID: "latency", Software: []SoftwareReference{{Kind: "deployment", ID: "deploy-latency", Revision: "abc123", Label: "latency only"}}}}}
+	x := Investigation{ContractVersion: 1, ObjectiveID: "availability", Title: "Availability", Trigger: InvestigationTrigger{Kind: "deployment", ID: "deploy-latency", Revision: "abc123"}, JourneyIDs: []string{"buy"}, Evidence: []InvestigationEvidence{{Kind: "deployment", ResourceID: "deploy-latency", Revision: "abc123", Label: "deployment", Visibility: "participants"}}}
+	if validInvestigation(v, x) {
+		t.Fatal("cross-objective deployment resolved the availability trigger")
+	}
+}
+
 func TestNativeUnitObservationUsesDirectionalBudget(t *testing.T) {
 	s, _ := New(t.TempDir())
 	revision := completeRevision()

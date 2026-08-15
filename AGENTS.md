@@ -1813,6 +1813,19 @@ whenever dependencies change or the web job fails before it starts.
   unsafe legacy references are always redacted. Ratio/availability signals derive percentages, count
   signals retain native counts, and percentile/custom signals require an explicit native value;
   directional native-unit error budgets use deviation from the objective target.
+  Authorized repository participants and repository-bound read-only agents open investigations
+  against an exact contract/objective plus objective, pull, deployment, or budget-consumption
+  trigger. Investigations freeze baseline and affected observation windows, journeys, sanitized
+  operational/code evidence, cited hypotheses/comparisons/uncertainty/conclusions, disputes, and
+  service/dependency-owner input requests. Reads derive stale evidence, hidden dependency ownership,
+  and inconclusive state; conclusions may reference an ordinary issue, incident, decision, or planned
+  improvement but grant no authority in those systems. Anonymous reliability reads omit investigations.
+  Pull, deployment, release, commit, operational-window, and dependency evidence resolves through its
+  repository-scoped source of truth before persistence; the store fails closed without that resolver.
+  Read-only agents may open investigations and add cited findings, while only human participants may
+  confirm/dispute, request or answer owner input, and publish a concluding resulting-work reference.
+  Git citations must be reachable from a non-security branch, and trigger observations must match the
+  investigation's exact contract version and objective rather than merely sharing a resource string.
 
   Update it when you change how the apps fit together, not for every change.
 

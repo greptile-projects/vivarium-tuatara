@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -161,6 +162,77 @@ type Observation struct {
 	RecordedBy           string              `json:"recorded_by"`
 	RecordedAt           time.Time           `json:"recorded_at"`
 }
+type InvestigationTrigger struct {
+	Kind     string `json:"kind"`
+	ID       string `json:"id"`
+	Revision string `json:"revision"`
+}
+type InvestigationEvidence struct {
+	Kind       string `json:"kind"`
+	ResourceID string `json:"resource_id"`
+	Revision   string `json:"revision"`
+	Label      string `json:"label"`
+	Visibility string `json:"visibility"`
+}
+type InvestigationFinding struct {
+	ID          string    `json:"id"`
+	Kind        string    `json:"kind"`
+	Statement   string    `json:"statement"`
+	Uncertainty string    `json:"uncertainty"`
+	Confidence  string    `json:"confidence"`
+	CitationIDs []string  `json:"citation_ids"`
+	CreatedBy   string    `json:"created_by"`
+	ActorType   string    `json:"actor_type"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+type InvestigationResponse struct {
+	ID        string    `json:"id"`
+	FindingID string    `json:"finding_id"`
+	Kind      string    `json:"kind"`
+	Body      string    `json:"body"`
+	CreatedBy string    `json:"created_by"`
+	CreatedAt time.Time `json:"created_at"`
+}
+type InputRequest struct {
+	ID           string     `json:"id"`
+	OwnerID      string     `json:"owner_id"`
+	DependencyID string     `json:"dependency_id,omitempty"`
+	Question     string     `json:"question"`
+	Status       string     `json:"status"`
+	Response     string     `json:"response,omitempty"`
+	RequestedBy  string     `json:"requested_by"`
+	RespondedBy  string     `json:"responded_by,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	RespondedAt  *time.Time `json:"responded_at,omitempty"`
+}
+type InvestigationOutcome struct {
+	Kind       string `json:"kind"`
+	ResourceID string `json:"resource_id"`
+	Summary    string `json:"summary"`
+}
+type Investigation struct {
+	ID                     string                  `json:"id"`
+	Version                int                     `json:"version"`
+	ContractVersion        int                     `json:"contract_version"`
+	ObjectiveID            string                  `json:"objective_id"`
+	Title                  string                  `json:"title"`
+	Trigger                InvestigationTrigger    `json:"trigger"`
+	BaselineObservationIDs []string                `json:"baseline_observation_ids"`
+	AffectedObservationIDs []string                `json:"affected_observation_ids"`
+	JourneyIDs             []string                `json:"journey_ids"`
+	Evidence               []InvestigationEvidence `json:"evidence"`
+	Findings               []InvestigationFinding  `json:"findings"`
+	Responses              []InvestigationResponse `json:"responses"`
+	InputRequests          []InputRequest          `json:"input_requests"`
+	Outcome                *InvestigationOutcome   `json:"outcome,omitempty"`
+	Status                 string                  `json:"status"`
+	StaleEvidenceIDs       []string                `json:"stale_evidence_ids"`
+	HiddenDependencyIDs    []string                `json:"hidden_dependency_ids"`
+	Inconclusive           bool                    `json:"inconclusive"`
+	CreatedBy              string                  `json:"created_by"`
+	CreatedAt              time.Time               `json:"created_at"`
+	UpdatedAt              time.Time               `json:"updated_at"`
+}
 type Revision struct {
 	Version         int              `json:"version"`
 	Title           string           `json:"title"`
@@ -188,14 +260,142 @@ type Contract struct {
 	Revisions      []Revision      `json:"revisions"`
 	SignalMappings []SignalMapping `json:"signal_mappings"`
 	Observations   []Observation   `json:"observations"`
+	Investigations []Investigation `json:"investigations"`
 	Diagnostics    []Diagnostic    `json:"diagnostics"`
 	CreatedAt      time.Time       `json:"created_at"`
 	UpdatedAt      time.Time       `json:"updated_at"`
 }
+
+func (s *Store) OpenInvestigation(contractID, actor string, in Investigation) (Contract, error) {
+	var out Contract
+	err := s.lock(func() error {
+		v, e := s.read(contractID)
+		if e != nil {
+			return e
+		}
+		if !validInvestigation(v, in) || actor == "" || s.provenance == nil || !s.provenance(v, in) {
+			return ErrInvalid
+		}
+		now := s.now()
+		in.ID = id()
+		in.Version = 1
+		in.CreatedBy = actor
+		in.CreatedAt = now
+		in.UpdatedAt = now
+		in.Status = "open"
+		in.Findings = []InvestigationFinding{}
+		in.Responses = []InvestigationResponse{}
+		in.InputRequests = []InputRequest{}
+		v.Investigations = append(v.Investigations, in)
+		v.UpdatedAt = now
+		out = v
+		return s.write(v)
+	})
+	return s.project(out), err
+}
+func (s *Store) MutateInvestigation(contractID, investigationID, actor, actorType, action string, expected int, finding InvestigationFinding, response InvestigationResponse, request InputRequest, outcome *InvestigationOutcome) (Contract, error) {
+	var out Contract
+	err := s.lock(func() error {
+		v, e := s.read(contractID)
+		if e != nil {
+			return e
+		}
+		var x *Investigation
+		for i := range v.Investigations {
+			if v.Investigations[i].ID == investigationID {
+				x = &v.Investigations[i]
+			}
+		}
+		if x == nil {
+			return ErrNotFound
+		}
+		if x.Version != expected {
+			return ErrConflict
+		}
+		now := s.now()
+		switch action {
+		case "finding":
+			if !validFinding(*x, finding) || !oneOf(actorType, "human", "agent") {
+				return ErrInvalid
+			}
+			finding.ID = id()
+			finding.CreatedBy = actor
+			finding.ActorType = actorType
+			finding.CreatedAt = now
+			x.Findings = append(x.Findings, finding)
+		case "response":
+			if actorType != "human" {
+				return ErrInvalid
+			}
+			if !oneOf(response.Kind, "dispute", "confirm") || strings.TrimSpace(response.Body) == "" || !findingExists(*x, response.FindingID) {
+				return ErrInvalid
+			}
+			response.ID = id()
+			response.CreatedBy = actor
+			response.CreatedAt = now
+			x.Responses = append(x.Responses, response)
+		case "request":
+			if actorType != "human" {
+				return ErrInvalid
+			}
+			if !validInputRequest(v, *x, request) {
+				return ErrInvalid
+			}
+			request.ID = id()
+			request.Status = "requested"
+			request.RequestedBy = actor
+			request.CreatedAt = now
+			x.InputRequests = append(x.InputRequests, request)
+		case "reply":
+			if actorType != "human" {
+				return ErrInvalid
+			}
+			found := false
+			for i := range x.InputRequests {
+				q := &x.InputRequests[i]
+				if q.ID == request.ID && q.OwnerID == actor && q.Status == "requested" && strings.TrimSpace(request.Response) != "" {
+					q.Status = "answered"
+					q.Response = strings.TrimSpace(request.Response)
+					q.RespondedBy = actor
+					q.RespondedAt = &now
+					found = true
+				}
+			}
+			if !found {
+				return ErrInvalid
+			}
+		case "outcome":
+			if actorType != "human" {
+				return ErrInvalid
+			}
+			if outcome == nil || !oneOf(outcome.Kind, "issue", "incident", "decision", "planned_improvement") || outcome.ResourceID == "" || outcome.Summary == "" {
+				return ErrInvalid
+			}
+			x.Outcome = outcome
+			x.Status = "concluded"
+		default:
+			return ErrInvalid
+		}
+		x.Version++
+		x.UpdatedAt = now
+		v.UpdatedAt = now
+		out = v
+		return s.write(v)
+	})
+	return s.project(out), err
+}
+
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root       string
+	mu         sync.Mutex
+	now        func() time.Time
+	provenance func(Contract, Investigation) bool
+}
+
+func (s *Store) ConfigureInvestigationProvenance(resolver func(Contract, Investigation) bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.provenance = resolver
 }
 
 func New(root string) (*Store, error) {
@@ -348,6 +548,9 @@ func (s *Store) RecordObservation(contractID string, actor string, observation O
 
 func (s *Store) ProjectForReader(v Contract, participant bool) Contract {
 	v = s.project(v)
+	if !participant {
+		v.Investigations = []Investigation{}
+	}
 	for mi := range v.SignalMappings {
 		for ri := range v.SignalMappings[mi].Revisions {
 			for si := range v.SignalMappings[mi].Revisions[ri].Sources {
@@ -359,6 +562,20 @@ func (s *Store) ProjectForReader(v Contract, participant bool) Contract {
 					source.Reference = "restricted"
 					source.Sanitization = "restricted source detail omitted"
 				}
+			}
+		}
+	}
+	for ii := range v.Investigations {
+		for ei := range v.Investigations[ii].Evidence {
+			e := &v.Investigations[ii].Evidence[ei]
+			if unsafe(e.ResourceID + e.Revision + e.Label) {
+				e.ResourceID = "redacted_unsafe_reference"
+				e.Revision = "redacted"
+				e.Label = "unsafe legacy evidence removed"
+			} else if e.Visibility == "participants" && !participant {
+				e.ResourceID = "restricted"
+				e.Revision = "restricted"
+				e.Label = "restricted evidence omitted"
 			}
 		}
 	}
@@ -418,6 +635,124 @@ func validObservation(o Observation) bool {
 		}
 	}
 	return true
+}
+func validInvestigation(v Contract, x Investigation) bool {
+	if x.ContractVersion < 1 || x.ObjectiveID == "" || strings.TrimSpace(x.Title) == "" || len(x.Title) > 200 || !oneOf(x.Trigger.Kind, "objective", "pull_request", "deployment", "budget_consumption") || x.Trigger.ID == "" || x.Trigger.Revision == "" || len(x.JourneyIDs) == 0 || len(x.Evidence) == 0 {
+		return false
+	}
+	r := revisionAt(v, x.ContractVersion)
+	if r == nil {
+		return false
+	}
+	objectives := map[string]bool{}
+	journeys := map[string]bool{}
+	for _, o := range r.Objectives {
+		objectives[o.ID] = true
+	}
+	for _, j := range r.Journeys {
+		journeys[j.ID] = true
+	}
+	if !objectives[x.ObjectiveID] {
+		return false
+	}
+	if x.Trigger.Kind == "objective" && (x.Trigger.ID != x.ObjectiveID || x.Trigger.Revision != "contract:"+strconv.Itoa(x.ContractVersion)) {
+		return false
+	}
+	for _, j := range x.JourneyIDs {
+		if !journeys[j] {
+			return false
+		}
+	}
+	observations := map[string]bool{}
+	for _, o := range v.Observations {
+		if o.ContractVersion == x.ContractVersion && o.ObjectiveID == x.ObjectiveID {
+			observations[o.ID] = true
+		}
+	}
+	triggerResolved := x.Trigger.Kind == "objective"
+	for _, o := range v.Observations {
+		if o.ContractVersion != x.ContractVersion || o.ObjectiveID != x.ObjectiveID {
+			continue
+		}
+		if x.Trigger.Kind == "budget_consumption" && o.ID == x.Trigger.ID && x.Trigger.Revision == "observation:"+o.ID {
+			triggerResolved = true
+		}
+		for _, sw := range o.Software {
+			if sw.ID == x.Trigger.ID && sw.Revision == x.Trigger.Revision && ((x.Trigger.Kind == "pull_request" && sw.Kind == "pull_request") || (x.Trigger.Kind == "deployment" && sw.Kind == "deployment")) {
+				triggerResolved = true
+			}
+		}
+	}
+	if !triggerResolved {
+		return false
+	}
+	for _, oid := range append(append([]string{}, x.BaselineObservationIDs...), x.AffectedObservationIDs...) {
+		if !observations[oid] {
+			return false
+		}
+	}
+	seen := map[string]bool{}
+	for _, e := range x.Evidence {
+		if !oneOf(e.Kind, "metric", "log", "trace", "health_check", "support_report", "code", "commit", "pull_request", "deployment", "release", "package", "dependent_service") || e.ResourceID == "" || e.Revision == "" || e.Label == "" || !oneOf(e.Visibility, "public", "participants") || unsafe(e.ResourceID+e.Revision+e.Label) || seen[e.ResourceID] {
+			return false
+		}
+		seen[e.ResourceID] = true
+	}
+	return true
+}
+func validFinding(x Investigation, f InvestigationFinding) bool {
+	if !oneOf(f.Kind, "hypothesis", "comparison", "uncertainty", "conclusion") || strings.TrimSpace(f.Statement) == "" || strings.TrimSpace(f.Uncertainty) == "" || !oneOf(f.Confidence, "low", "medium", "high") || len(f.CitationIDs) == 0 {
+		return false
+	}
+	allowed := map[string]bool{}
+	for _, e := range x.Evidence {
+		allowed[e.ResourceID] = true
+	}
+	for _, id := range append(append([]string{}, x.BaselineObservationIDs...), x.AffectedObservationIDs...) {
+		allowed[id] = true
+	}
+	for _, id := range f.CitationIDs {
+		if !allowed[id] {
+			return false
+		}
+	}
+	return !unsafe(f.Statement + f.Uncertainty)
+}
+func findingExists(x Investigation, id string) bool {
+	for _, f := range x.Findings {
+		if f.ID == id {
+			return true
+		}
+	}
+	return false
+}
+func validInputRequest(v Contract, x Investigation, q InputRequest) bool {
+	if q.OwnerID == "" || strings.TrimSpace(q.Question) == "" || unsafe(q.Question) {
+		return false
+	}
+	r := revisionAt(v, x.ContractVersion)
+	if r == nil {
+		return false
+	}
+	for _, o := range r.Objectives {
+		if o.ID == x.ObjectiveID {
+			for _, id := range o.OwnerIDs {
+				if id == q.OwnerID && q.DependencyID == "" {
+					return true
+				}
+			}
+		}
+	}
+	for _, d := range r.Dependencies {
+		if d.ID == q.DependencyID {
+			for _, id := range d.OwnerIDs {
+				if id == q.OwnerID {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 func unsafe(v string) bool {
 	if len(v) > 4000 {
@@ -589,6 +924,9 @@ func (s *Store) project(v Contract) Contract {
 	if v.Observations == nil {
 		v.Observations = []Observation{}
 	}
+	if v.Investigations == nil {
+		v.Investigations = []Investigation{}
+	}
 	if len(v.Revisions) == 0 {
 		return v
 	}
@@ -721,6 +1059,64 @@ func (s *Store) project(v Contract) Contract {
 				break
 			}
 		}
+	}
+	for i := range v.Investigations {
+		x := &v.Investigations[i]
+		if x.Findings == nil {
+			x.Findings = []InvestigationFinding{}
+		}
+		if x.Responses == nil {
+			x.Responses = []InvestigationResponse{}
+		}
+		if x.InputRequests == nil {
+			x.InputRequests = []InputRequest{}
+		}
+		x.StaleEvidenceIDs = []string{}
+		x.HiddenDependencyIDs = []string{}
+		x.Inconclusive = false
+		if s.provenance == nil || !s.provenance(v, *x) {
+			x.StaleEvidenceIDs = append(x.StaleEvidenceIDs, "provenance:"+x.ID)
+		}
+		if x.ContractVersion != v.CurrentVersion {
+			x.StaleEvidenceIDs = append(x.StaleEvidenceIDs, "contract:"+x.ID)
+		}
+		obs := map[string]Observation{}
+		for _, o := range v.Observations {
+			obs[o.ID] = o
+		}
+		for _, oid := range append(append([]string{}, x.BaselineObservationIDs...), x.AffectedObservationIDs...) {
+			o, ok := obs[oid]
+			mappingCurrent := false
+			for _, m := range v.SignalMappings {
+				if m.ID == o.MappingID && m.CurrentVersion == o.MappingVersion {
+					mappingCurrent = true
+				}
+			}
+			if !ok || o.ContractVersion != x.ContractVersion || !mappingCurrent {
+				x.StaleEvidenceIDs = append(x.StaleEvidenceIDs, oid)
+			}
+		}
+		rr := revisionAt(v, x.ContractVersion)
+		if rr != nil {
+			for _, d := range rr.Dependencies {
+				if len(d.OwnerIDs) == 0 {
+					x.HiddenDependencyIDs = append(x.HiddenDependencyIDs, d.ID)
+				}
+			}
+		}
+		disputed := false
+		for _, r := range x.Responses {
+			if r.Kind == "dispute" {
+				disputed = true
+			}
+		}
+		hasConclusion := false
+		for _, f := range x.Findings {
+			if f.Kind == "conclusion" {
+				hasConclusion = true
+			}
+		}
+		x.Inconclusive = !hasConclusion || disputed || len(x.StaleEvidenceIDs) > 0
 	}
 	return v
 }

@@ -3169,6 +3169,38 @@ revision and derive `missing_signal`, `unsupported_calculation`, `conflicting_ta
 The contract grants no operational authority. Storage defaults beneath
 `$SERVICE_OBJECTIVE_STORAGE_ROOT` (`service-objectives`).
 
+Signal mappings and append-only operational windows are published beneath a contract through
+`.../signal-mappings`, mapping `.../revisions`, and `.../observations`. Each binds exact contract,
+objective, instrumentation, window, and delivered-software revisions; projections derive attainment,
+target status, budget consumption, uncertainty, gaps, and comparability.
+
+`POST /repositories/{id}/service-objectives/{objective_id}/investigations` opens an authenticated,
+revision-bound investigation. `contract_version`, `objective_id`, and one exact `objective`,
+`pull_request`, `deployment`, or `budget_consumption` trigger must resolve through retained contract
+or observation provenance. Baseline and affected observations must belong to that objective revision;
+journeys must belong to its contract. Evidence declares a bounded kind, stable ID, exact revision,
+label, and `public` or `participants` visibility.
+
+Participants and repository-bound read-only agents append cited `hypothesis`, `comparison`,
+`uncertainty`, or `conclusion` entries through `.../investigations/{investigation_id}/findings`.
+Each states confidence and uncertainty and cites the closed evidence/observation set. `.../responses`
+retains `confirm` or `dispute`; `.../input-requests` addresses only a frozen objective/dependency
+owner, who answers through `.../input-responses`. `.../outcomes` retains an `issue`, `incident`,
+`decision`, or `planned_improvement` reference without creating it or granting authority. Mutations
+require `expected_version`; conflicts return `409 reliability_investigation_conflict`. Reads expose
+stale evidence, dependencies without owners, and inconclusive state caused by absent/disputed
+conclusions or stale evidence. Anonymous contract reads omit investigations.
+Pull, deployment, release, and commit evidence is resolved against the target repository and exact
+current resource revision. Metric/log/trace/health/support evidence must cite an exact retained
+observation from the frozen objective; dependency evidence must cite the frozen contract dependency.
+Missing, cross-repository, hidden, or revision-mismatched provenance returns
+`422 invalid_reliability_provenance`, and persistence fails closed if resolution is unavailable.
+Read-only agents may open an investigation and add cited findings only. Confirm/dispute responses,
+owner-input requests and answers, and concluding outcomes require a human repository participant.
+Commit evidence must be reachable from a non-`vivarium-security/*` branch. Pull, deployment, and
+budget triggers additionally require retained provenance on the investigation's exact contract
+version and objective; a canonical resource that appears only on another objective cannot authorize it.
+
 ## Locale plans
 
 `POST /repositories/{id}/locale-plans` publishes a complete localization support contract. The
