@@ -3190,6 +3190,13 @@ owner, who answers through `.../input-responses`. `.../outcomes` retains an `iss
 require `expected_version`; conflicts return `409 reliability_investigation_conflict`. Reads expose
 stale evidence, dependencies without owners, and inconclusive state caused by absent/disputed
 conclusions or stale evidence. Anonymous contract reads omit investigations.
+Pull, deployment, release, and commit evidence is resolved against the target repository and exact
+current resource revision. Metric/log/trace/health/support evidence must cite an exact retained
+observation from the frozen objective; dependency evidence must cite the frozen contract dependency.
+Missing, cross-repository, hidden, or revision-mismatched provenance returns
+`422 invalid_reliability_provenance`, and persistence fails closed if resolution is unavailable.
+Read-only agents may open an investigation and add cited findings only. Confirm/dispute responses,
+owner-input requests and answers, and concluding outcomes require a human repository participant.
 
 ## Locale plans
 

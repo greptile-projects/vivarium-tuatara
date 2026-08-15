@@ -273,7 +273,7 @@ func (s *Store) OpenInvestigation(contractID, actor string, in Investigation) (C
 		if e != nil {
 			return e
 		}
-		if !validInvestigation(v, in) || actor == "" {
+		if !validInvestigation(v, in) || actor == "" || s.provenance == nil || !s.provenance(v, in) {
 			return ErrInvalid
 		}
 		now := s.now()
@@ -324,6 +324,9 @@ func (s *Store) MutateInvestigation(contractID, investigationID, actor, actorTyp
 			finding.CreatedAt = now
 			x.Findings = append(x.Findings, finding)
 		case "response":
+			if actorType != "human" {
+				return ErrInvalid
+			}
 			if !oneOf(response.Kind, "dispute", "confirm") || strings.TrimSpace(response.Body) == "" || !findingExists(*x, response.FindingID) {
 				return ErrInvalid
 			}
@@ -332,6 +335,9 @@ func (s *Store) MutateInvestigation(contractID, investigationID, actor, actorTyp
 			response.CreatedAt = now
 			x.Responses = append(x.Responses, response)
 		case "request":
+			if actorType != "human" {
+				return ErrInvalid
+			}
 			if !validInputRequest(v, *x, request) {
 				return ErrInvalid
 			}
@@ -341,6 +347,9 @@ func (s *Store) MutateInvestigation(contractID, investigationID, actor, actorTyp
 			request.CreatedAt = now
 			x.InputRequests = append(x.InputRequests, request)
 		case "reply":
+			if actorType != "human" {
+				return ErrInvalid
+			}
 			found := false
 			for i := range x.InputRequests {
 				q := &x.InputRequests[i]
@@ -356,6 +365,9 @@ func (s *Store) MutateInvestigation(contractID, investigationID, actor, actorTyp
 				return ErrInvalid
 			}
 		case "outcome":
+			if actorType != "human" {
+				return ErrInvalid
+			}
 			if outcome == nil || !oneOf(outcome.Kind, "issue", "incident", "decision", "planned_improvement") || outcome.ResourceID == "" || outcome.Summary == "" {
 				return ErrInvalid
 			}
@@ -374,9 +386,16 @@ func (s *Store) MutateInvestigation(contractID, investigationID, actor, actorTyp
 }
 
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root       string
+	mu         sync.Mutex
+	now        func() time.Time
+	provenance func(Contract, Investigation) bool
+}
+
+func (s *Store) ConfigureInvestigationProvenance(resolver func(Contract, Investigation) bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.provenance = resolver
 }
 
 func New(root string) (*Store, error) {
@@ -1052,6 +1071,9 @@ func (s *Store) project(v Contract) Contract {
 		x.StaleEvidenceIDs = []string{}
 		x.HiddenDependencyIDs = []string{}
 		x.Inconclusive = false
+		if s.provenance == nil || !s.provenance(v, *x) {
+			x.StaleEvidenceIDs = append(x.StaleEvidenceIDs, "provenance:"+x.ID)
+		}
 		if x.ContractVersion != v.CurrentVersion {
 			x.StaleEvidenceIDs = append(x.StaleEvidenceIDs, "contract:"+x.ID)
 		}

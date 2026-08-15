@@ -4,10 +4,15 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/serviceobjectives"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
 type serviceObjectiveInput struct {
@@ -29,7 +34,7 @@ type investigationMutationInput struct {
 	Outcome         *serviceobjectives.InvestigationOutcome `json:"outcome"`
 }
 
-func registerServiceObjectiveRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, contracts *serviceobjectives.Store) {
+func registerServiceObjectiveRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, contracts *serviceobjectives.Store, pulls *pullrequests.Store, deploymentStore *deployments.Store, releaseStore *releases.Store) {
 	investigator := func(w http.ResponseWriter, r *http.Request) (auth.Credential, string, bool) {
 		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
 		if !ok {
@@ -206,6 +211,10 @@ func registerServiceObjectiveRoutes(mux *http.ServeMux, catalog *repositories.St
 			writeAPIError(w, 400, "invalid_request", "a revision-bound investigation is required")
 			return
 		}
+		if !reliabilityInvestigationProvenanceResolves(git, pulls, deploymentStore, releaseStore, current, in) {
+			writeAPIError(w, 422, "invalid_reliability_provenance", "the trigger and every evidence reference must resolve at its exact revision in this repository")
+			return
+		}
 		id := actor.UserID
 		if typ == "agent" {
 			id = actor.AgentID
@@ -233,14 +242,82 @@ func registerServiceObjectiveRoutes(mux *http.ServeMux, catalog *repositories.St
 			if typ == "agent" {
 				id = actor.AgentID
 			}
-			if action == "reply" && typ == "agent" {
-				writeAPIError(w, 403, "reliability_input_forbidden", "only the requested human owner may answer")
+			if action != "finding" && typ == "agent" {
+				writeAPIError(w, 403, "reliability_investigation_human_required", "read-only agents may add cited findings but only human participants may respond, request owner input, answer, or conclude")
 				return
 			}
 			out, err := contracts.MutateInvestigation(current.ID, r.PathValue("investigation_id"), id, typ, action, in.ExpectedVersion, in.Finding, in.Response, in.Request, in.Outcome)
 			writeReliabilityInvestigation(w, out, err, 201)
 		})
 	}
+}
+
+func reliabilityInvestigationProvenanceResolves(git *storage.Store, pulls *pullrequests.Store, deploymentStore *deployments.Store, releaseStore *releases.Store, contract serviceobjectives.Contract, in serviceobjectives.Investigation) bool {
+	repo := contract.RepositoryID
+	resolve := func(kind, resourceID, revision string) bool {
+		switch kind {
+		case "pull_request":
+			if pulls == nil {
+				return false
+			}
+			v, err := pulls.Get(repo, resourceID)
+			return err == nil && v.SourceCommitID == revision
+		case "deployment":
+			if deploymentStore == nil {
+				return false
+			}
+			v, err := deploymentStore.GetPromotion(repo, resourceID)
+			return err == nil && v.CommitID == revision
+		case "release":
+			if releaseStore == nil {
+				return false
+			}
+			v, err := releaseStore.Get(repo, resourceID)
+			return err == nil && v.CommitID == revision
+		case "code", "commit":
+			if git == nil || resourceID != revision {
+				return false
+			}
+			r, err := git.Open(repo)
+			if err != nil {
+				return false
+			}
+			_, err = r.ReadCommit(storage.ObjectID(revision))
+			return err == nil
+		case "metric", "log", "trace", "health_check", "support_report":
+			for _, o := range contract.Observations {
+				if o.ID == resourceID && revision == "observation:"+o.ID && o.ContractVersion == in.ContractVersion && o.ObjectiveID == in.ObjectiveID {
+					return true
+				}
+			}
+			return false
+		case "dependent_service":
+			for _, r := range contract.Revisions {
+				if r.Version == in.ContractVersion {
+					for _, d := range r.Dependencies {
+						if d.ID == resourceID && revision == "contract:"+strconv.Itoa(r.Version) {
+							return true
+						}
+					}
+				}
+			}
+			return false
+		default:
+			return false
+		}
+	}
+	if in.Trigger.Kind == "pull_request" && !resolve("pull_request", in.Trigger.ID, in.Trigger.Revision) {
+		return false
+	}
+	if in.Trigger.Kind == "deployment" && !resolve("deployment", in.Trigger.ID, in.Trigger.Revision) {
+		return false
+	}
+	for _, e := range in.Evidence {
+		if !resolve(e.Kind, e.ResourceID, e.Revision) {
+			return false
+		}
+	}
+	return true
 }
 
 func writeReliabilityInvestigation(w http.ResponseWriter, v serviceobjectives.Contract, err error, status int) {

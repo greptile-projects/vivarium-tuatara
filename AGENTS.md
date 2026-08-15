@@ -1820,6 +1820,10 @@ whenever dependencies change or the web job fails before it starts.
   service/dependency-owner input requests. Reads derive stale evidence, hidden dependency ownership,
   and inconclusive state; conclusions may reference an ordinary issue, incident, decision, or planned
   improvement but grant no authority in those systems. Anonymous reliability reads omit investigations.
+  Pull, deployment, release, commit, operational-window, and dependency evidence resolves through its
+  repository-scoped source of truth before persistence; the store fails closed without that resolver.
+  Read-only agents may open investigations and add cited findings, while only human participants may
+  confirm/dispute, request or answer owner input, and publish a concluding resulting-work reference.
 
   Update it when you change how the apps fit together, not for every change.
 

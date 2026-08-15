@@ -77,6 +77,9 @@ func TestReliabilityEvidenceRejectsCredentials(t *testing.T) {
 
 func TestReliabilityInvestigationRetainsEvidenceDisputeOwnerInputAndStaleness(t *testing.T) {
 	s, _ := New(t.TempDir())
+	s.ConfigureInvestigationProvenance(func(_ Contract, in Investigation) bool {
+		return in.Trigger.ID == "42" && in.Trigger.Revision == "abc123"
+	})
 	c, _ := s.Create("repo", "owner", completeRevision())
 	c, _ = s.PublishMapping(c.ID, "owner", SignalMappingRevision{ContractVersion: 1, ObjectiveID: "availability", InstrumentationRevision: "v1", Calculation: "ratio", Unit: "percent", Rationale: "aggregate", Sources: []SignalSource{{Kind: "metric", Name: "success", Reference: "metrics://success", Visibility: "public", Sanitization: "aggregate"}}})
 	now := time.Now().UTC()
@@ -92,6 +95,9 @@ func TestReliabilityInvestigationRetainsEvidenceDisputeOwnerInputAndStaleness(t 
 		t.Fatal(err)
 	}
 	x = c.Investigations[0]
+	if _, err = s.MutateInvestigation(c.ID, x.ID, "agent:reader", "agent", "outcome", x.Version, InvestigationFinding{}, InvestigationResponse{}, InputRequest{}, &InvestigationOutcome{Kind: "incident", ResourceID: "incident-1", Summary: "contain"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("read-only agent outcome error = %v", err)
+	}
 	c, err = s.MutateInvestigation(c.ID, x.ID, "owner", "human", "response", x.Version, InvestigationFinding{}, InvestigationResponse{FindingID: x.Findings[0].ID, Kind: "dispute", Body: "The deployment preceded this pull."}, InputRequest{}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -119,6 +125,15 @@ func TestReliabilityInvestigationRetainsEvidenceDisputeOwnerInputAndStaleness(t 
 	public := s.ProjectForReader(c, false)
 	if len(public.Investigations) != 0 {
 		t.Fatalf("investigation leaked to anonymous reader: %#v", public.Investigations)
+	}
+}
+
+func TestReliabilityInvestigationFailsClosedWithoutProvenanceResolver(t *testing.T) {
+	s, _ := New(t.TempDir())
+	c, _ := s.Create("repo", "owner", completeRevision())
+	_, err := s.OpenInvestigation(c.ID, "owner", Investigation{ContractVersion: 1, ObjectiveID: "availability", Title: "Unverified", Trigger: InvestigationTrigger{Kind: "pull_request", ID: "invented", Revision: "invented-revision"}, JourneyIDs: []string{"buy"}, Evidence: []InvestigationEvidence{{Kind: "pull_request", ResourceID: "invented", Revision: "invented-revision", Label: "unverified", Visibility: "public"}}})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unconfigured provenance error = %v", err)
 	}
 }
 

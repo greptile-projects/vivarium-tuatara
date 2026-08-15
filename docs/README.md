@@ -53,6 +53,11 @@ project as stale, dependencies without owners remain explicit, and a missing or 
 inconclusive. An investigation can retain a reference to an issue, incident, decision, or planned
 improvement without creating authority in that workflow. Investigations are omitted from anonymous
 contract reads.
+Pulls, deployments, releases, and commits must resolve in the target repository at the named revision;
+operational evidence cites an exact retained objective observation, and dependency evidence cites the
+frozen contract revision. The persistence store fails closed when this resolver is unavailable.
+Read-only agents may open investigations and publish cited analysis, but only human participants may
+confirm or dispute it, request or answer owner input, or conclude with resulting work.
 
 ## Locale coverage contracts
 
