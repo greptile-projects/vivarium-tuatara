@@ -3227,7 +3227,8 @@ branch revision and every human assignee remain valid through proposal publicati
 retains the proposal and task IDs; normal assignment, checks, review, merge, and release boundaries
 remain authoritative.
 The impact source must contain a server-derived observation at or beyond its delivery policy's
-depletion threshold; predicted-only impacts cannot authorize work. A stable `pending` improvement is
+depletion threshold, and that exact observation must be frozen in the improvement's baseline set;
+predicted-only or differently baselined impacts cannot authorize work. A stable `pending` improvement is
 reserved before proposal persistence, and an exact retry reuses the reservation and proposal origin
 to finish the link after cross-store failure.
 

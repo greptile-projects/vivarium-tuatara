@@ -221,7 +221,7 @@ func validImprovement(v Contract, x Improvement) bool {
 					return false
 				}
 				for _, objective := range impact.ObjectiveImpacts {
-					if objective.ObjectiveID == x.ObjectiveID && objective.ObservationID != "" && objective.ObservedBudgetConsumed != nil && *objective.ObservedBudgetConsumed >= policy.MaximumBudgetConsumed {
+					if objective.ObjectiveID == x.ObjectiveID && objective.ObservationID != "" && deliveryContains(x.BaselineObservationIDs, objective.ObservationID) && objective.ObservedBudgetConsumed != nil && *objective.ObservedBudgetConsumed >= policy.MaximumBudgetConsumed {
 						found, evidence[objective.ObservationID] = true, true
 					}
 				}

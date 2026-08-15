@@ -80,6 +80,8 @@ dependency context, evidence, and acceptance criteria while creating an ordinary
 task plan with explicit human or agent ownership. Repository authority and the exact default-branch
 base are revalidated across proposal publication; the record itself grants no Git, review, merge,
 release, or deployment authority.
+Impact-authorized work must freeze the same trusted observation that crossed the governing depletion
+threshold as a baseline; another same-objective window cannot substitute for that evidence.
 The reliability side reserves a stable pending recovery identity before proposal persistence; exact
 retries reuse and finish that link, so cross-store failure cannot leave unaccounted proposal work.
 

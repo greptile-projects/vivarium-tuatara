@@ -145,7 +145,17 @@ func TestImprovementRetainsHarmAndDerivesGovernedBudgetRestoration(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	c, err = s.RecordObservation(c.ID, "owner", Observation{MappingID: mapping.ID, MappingVersion: 1, ContractVersion: 1, ObjectiveID: "availability", WindowStart: now.Add(-time.Hour), WindowEnd: now, GoodEvents: 995, TotalEvents: 1000, Uncertainty: 1, Summary: "unrelated baseline", Software: []SoftwareReference{{Kind: "deployment", ID: "unrelated", Revision: "ffffffffffffffffffffffffffffffffffffffff", Label: "unrelated"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unrelatedBaseline := c.Observations[1]
 	template := Improvement{ContractVersion: 1, ObjectiveID: "availability", ImpactID: c.ReliabilityImpacts[0].ID, BaselineObservationIDs: []string{harm.ID}, AffectedObservationIDs: []string{harm.ID}, AffectedRevisions: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, DependencyContext: []string{"payments owner"}, EvidenceIDs: []string{harm.ID}, AcceptanceCriteria: []string{"restore target attainment"}, ProposalID: "pending", TaskIDs: []string{"pending"}}
+	wrongBaseline := template
+	wrongBaseline.BaselineObservationIDs = []string{unrelatedBaseline.ID}
+	if err = s.ValidateImprovement(c.ID, wrongBaseline); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("impact-unbound baseline = %v", err)
+	}
 	c, reservation, err := s.ReserveImprovement(c.ID, "owner", template)
 	if err != nil {
 		t.Fatal(err)
@@ -162,16 +172,16 @@ func TestImprovementRetainsHarmAndDerivesGovernedBudgetRestoration(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	unlinked := c.Observations[1]
+	unlinked := c.Observations[2]
 	now = now.Add(30 * time.Minute)
 	c, err = s.RecordObservation(c.ID, "owner", Observation{MappingID: mapping.ID, MappingVersion: 1, ContractVersion: 1, ObjectiveID: "availability", WindowStart: now.Add(-time.Hour), WindowEnd: now, GoodEvents: 1000, TotalEvents: 1000, Uncertainty: 1, Summary: "recovered users", Software: []SoftwareReference{{Kind: "release", ID: "release", Revision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Label: "repair"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.VerifyImprovement(c.ID, "owner", RolloutVerification{ImprovementID: c.Improvements[0].ID, Kind: "release", ResourceID: "release", Revision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", BaselineObservationID: unlinked.ID, CurrentObservationID: c.Observations[2].ID, Decision: "restore_budget", Rationale: "unlinked comparison"}); !errors.Is(err, ErrInvalid) {
+	if _, err = s.VerifyImprovement(c.ID, "owner", RolloutVerification{ImprovementID: c.Improvements[0].ID, Kind: "release", ResourceID: "release", Revision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", BaselineObservationID: unlinked.ID, CurrentObservationID: c.Observations[3].ID, Decision: "restore_budget", Rationale: "unlinked comparison"}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("unlinked baseline = %v", err)
 	}
-	c, err = s.VerifyImprovement(c.ID, "owner", RolloutVerification{ImprovementID: c.Improvements[0].ID, Kind: "release", ResourceID: "release", Revision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", BaselineObservationID: harm.ID, CurrentObservationID: c.Observations[2].ID, Decision: "restore_budget", Rationale: "target recovered in governed rollout"})
+	c, err = s.VerifyImprovement(c.ID, "owner", RolloutVerification{ImprovementID: c.Improvements[0].ID, Kind: "release", ResourceID: "release", Revision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", BaselineObservationID: harm.ID, CurrentObservationID: c.Observations[3].ID, Decision: "restore_budget", Rationale: "target recovered in governed rollout"})
 	if err != nil {
 		t.Fatal(err)
 	}
