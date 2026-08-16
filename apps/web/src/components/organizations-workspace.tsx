@@ -1051,7 +1051,7 @@ function OpportunityQueue({
 }: {
   group: Organization;
   mandate: OrganizationStewardshipMandate;
-  submit: (path: string, options: RequestInit) => Promise<void>;
+  submit: (path: string, options: RequestInit) => Promise<boolean>;
 }) {
   const { user } = useAuth();
   const owner = group.members.some(
@@ -1400,7 +1400,7 @@ function OpportunityQueue({
   );
 }
 
-function StewardshipHistory({ group, mandate, submit, owner, operator }: { group: Organization; mandate: OrganizationStewardshipMandate; submit: (path: string, options: RequestInit) => Promise<void>; owner: boolean; operator: boolean | undefined }) {
+function StewardshipHistory({ group, mandate, submit, owner, operator }: { group: Organization; mandate: OrganizationStewardshipMandate; submit: (path: string, options: RequestInit) => Promise<boolean>; owner: boolean; operator: boolean | undefined }) {
   const formID = useId(), [outcomeKey, setOutcomeKey] = useState(`outcome-${formID}`);
   const outcomes = mandate.outcomes ?? [], notices = mandate.notices ?? [], tuning = mandate.tuning ?? { version: 0, priority_evidence: [], ignored_evidence: [], minimum_confidence: 0 };
   const dispositions = mandate.opportunities.reduce<Record<string, number>>((all, item) => ({ ...all, [item.status]: (all[item.status] ?? 0) + 1 }), {});
@@ -1576,7 +1576,7 @@ function StewardshipWorkspace({
   owner: boolean;
   userID: string;
   token: string | null;
-  submit: (path: string, options: RequestInit) => Promise<void>;
+  submit: (path: string, options: RequestInit) => Promise<boolean>;
 }) {
   const [previews, setPreviews] = useState<
     Record<string, OrganizationStewardshipPreview>
@@ -1935,7 +1935,7 @@ function InitiativeWorkspace({
 }: {
   group: Organization;
   portfolio: OrganizationPortfolio;
-  submit: (path: string, options: RequestInit) => Promise<void>;
+  submit: (path: string, options: RequestInit) => Promise<boolean>;
 }) {
   const sources = [
     ...portfolio.active_proposals.map((x) => ({
@@ -2224,7 +2224,7 @@ function PolicyWorkspace({
   group: Organization;
   repositories: Repository[];
   owner: boolean;
-  submit: (path: string, options: RequestInit) => Promise<void>;
+  submit: (path: string, options: RequestInit) => Promise<boolean>;
 }) {
   const { token } = useAuth();
   const [preview, setPreview] = useState<{
