@@ -56,6 +56,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/productopportunities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/projectfunds"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/protectionplans"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/recoverycommitments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/relationships"
@@ -415,6 +416,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	protectionPlanRoot := os.Getenv("PROTECTION_PLAN_STORAGE_ROOT")
+	if protectionPlanRoot == "" {
+		protectionPlanRoot = "protection-plans"
+	}
+	protectionPlanStore, err := protectionplans.New(protectionPlanRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	localizationRoot := os.Getenv("LOCALIZATION_STORAGE_ROOT")
 	if localizationRoot == "" {
 		localizationRoot = "localization"
@@ -530,7 +539,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -687,6 +696,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var localizationStore *localization.Store
 	var serviceObjectiveStore *serviceobjectives.Store
 	var recoveryCommitmentStore *recoverycommitments.Store
+	var protectionPlanStore *protectionplans.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -775,6 +785,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			serviceObjectiveStore = value
 		case *recoverycommitments.Store:
 			recoveryCommitmentStore = value
+		case *protectionplans.Store:
+			protectionPlanStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -912,6 +924,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && recoveryCommitmentStore != nil {
 		registerRecoveryCommitmentRoutes(mux, repositoryCatalog, authStore, recoveryCommitmentStore, serviceObjectiveStore, deploymentStore, incidentStore, dataCommitmentStore, governanceStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && recoveryCommitmentStore != nil && protectionPlanStore != nil && store != nil {
+		registerProtectionPlanRoutes(mux, store, repositoryCatalog, authStore, protectionPlanStore, recoveryCommitmentStore, deploymentStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil && localizationStore != nil {
 		if localePlanStore != nil {

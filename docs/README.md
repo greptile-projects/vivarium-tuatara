@@ -119,6 +119,24 @@ revision is published. The records document continuity intent and grant no repos
 deployment, data, incident, privacy, or governance authority. Records default beneath
 `$RECOVERY_COMMITMENT_STORAGE_ROOT` (`recovery-commitments`).
 
+Repository participants turn current commitment targets into versioned protection plans through
+`/repositories/{id}/protection-plans`. A plan binds an exact repository commit or current governed
+environment definition, commitment revision, approved `vault://` destination, jurisdiction,
+retention and freshness objectives, named recovery owners, and validation checks. Capture walks and
+verifies the complete commit tree or reads the server-owned public environment definition, creates a
+content and dependency manifest, and encrypts that manifest and its source payload with AES-GCM
+beneath `$PROTECTION_PLAN_STORAGE_ROOT` (`protection-plans`). Environment credentials are excluded by
+the deployment store's protected read boundary.
+
+Repository-readable projections expose only entry and byte counts, manifest and source checksums,
+validation, retention, location, freshness inputs, cost units, and responsible actors. Paths,
+contents, ciphertext, nonces, and credentials remain omitted. Every read decrypts and checks the
+retained manifest; corruption, key failure, retention expiry, or deletion of a bound commit or
+environment changes the capture to non-recoverable. Each capture freezes its plan version, source
+resources, and freshness interval, so a successor plan cannot retroactively change historical
+evidence. A capture is evidence for later isolated
+rehearsal, not routine content access, restoration, repository, environment, or deployment authority.
+
 ## Locale coverage contracts
 
 Repository participants publish complete, compare-and-swap locale plans through
