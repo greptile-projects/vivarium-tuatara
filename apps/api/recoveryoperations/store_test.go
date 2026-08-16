@@ -70,6 +70,22 @@ func TestRecoveryRequiresIndependentApprovalAndDependencyValidation(t *testing.T
 	if _, err = s.Control(v.ID, "commander", "complete", "unsafe return", v.CurrentVersion); err != ErrConflict {
 		t.Fatalf("unsafe completion = %v", err)
 	}
+	v, err = s.Control(v.ID, "commander", "resume", "cutover fault contained; retry approved", v.CurrentVersion)
+	if err != nil || v.Status != "ready" || current(&v).Steps[1].Status != "paused" {
+		t.Fatalf("safe retry = %#v, %v", v, err)
+	}
+	v, err = s.UpdateStep(v.ID, "service", "agent", "running", "retry delegated bootstrap", nil, v.CurrentVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.UpdateStep(v.ID, "service", "agent", "validated", "health journey passed", []ValidationResult{result("health")}, v.CurrentVersion)
+	if err != nil || v.Status != "validated" {
+		t.Fatalf("retry validation = %#v, %v", v, err)
+	}
+	v, err = s.Control(v.ID, "commander", "complete", "service returned", v.CurrentVersion)
+	if err != nil || v.Status != "completed" {
+		t.Fatalf("completed recovery = %#v, %v", v, err)
+	}
 }
 
 func TestRejectedRecoveryCannotResume(t *testing.T) {

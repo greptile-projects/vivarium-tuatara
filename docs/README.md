@@ -180,13 +180,25 @@ acyclic dependency-ordered restoration plan. `$RECOVERY_OPERATION_STORAGE_ROOT` 
 The incident workspace projects active control, approval evidence, progress, blockers, validation,
 communications, and rollback. Every mutation compare-and-swaps the workspace version. Steps cannot
 begin before required approval or before dependencies validate; rejected approval cannot be resumed,
-and failed validation or explicit blockers pause the operation. The creator cannot be an approver.
+and failed validation or explicit blockers pause the operation. Once a blocker is contained, an
+approved resume moves only failed or blocked steps into an explicit retry state; validated dependencies
+remain intact and return to service still requires fresh passing evidence. The creator cannot be an approver.
 Validation criteria declare an evidence kind and require one unique passing result whose immutable
 resource and SHA-256 reference resolves server-side to the frozen protection capture or retained
 incident evidence. Incident evidence must belong to the recovery repository and name the current
 step or an exact resource frozen by the selected capture. Agent steps require an exact named agent and explicit delegation, and
 no recovery record grants repository, environment, secret, deployment, or destructive-cutover
 authority. Returning service is separately recorded only after every frozen step validates.
+Every recovery mutation revalidates authority against the operation's exact repository, so access to
+another repository in a multi-repository incident cannot cross that boundary and collaborator removal
+immediately prevents further response writes. The incident web workspace retains recovery responses in
+their own state projection and exposes pause, bounded resume, rollback, and final service-return controls.
+
+The connected continuity journey carries a regional-loss commitment through encrypted exact-source
+protection, isolated rehearsal, cited human-agent diagnosis, ordinary reviewed repair, a fresh successful
+exercise, and incident activation. It retains corrupted-capture rejection, missing dependency containment,
+revoked responder access, stale concurrent writes, a failed first cutover and bounded retry, public updates,
+cost evidence, collaboration history, and the final validated return within the declared objectives.
 
 ## Locale coverage contracts
 

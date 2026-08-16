@@ -157,6 +157,9 @@ func registerRecoveryOperationRoutes(mux *http.ServeMux, repos *repositories.Sto
 		if !recoveryOperationBelongs(w, operations, r.PathValue("recovery_id"), r.PathValue("incident_id")) {
 			return
 		}
+		if !recoveryOperationActorAllowed(w, repos, operations, actor, r.PathValue("recovery_id")) {
+			return
+		}
 		var in struct {
 			ExpectedVersion int    `json:"expected_version"`
 			Decision        string `json:"decision"`
@@ -175,6 +178,9 @@ func registerRecoveryOperationRoutes(mux *http.ServeMux, repos *repositories.Sto
 			return
 		}
 		if !recoveryOperationBelongs(w, operations, r.PathValue("recovery_id"), r.PathValue("incident_id")) {
+			return
+		}
+		if !recoveryOperationActorAllowed(w, repos, operations, actor, r.PathValue("recovery_id")) {
 			return
 		}
 		var in struct {
@@ -198,6 +204,9 @@ func registerRecoveryOperationRoutes(mux *http.ServeMux, repos *repositories.Sto
 		if !recoveryOperationBelongs(w, operations, r.PathValue("recovery_id"), r.PathValue("incident_id")) {
 			return
 		}
+		if !recoveryOperationActorAllowed(w, repos, operations, actor, r.PathValue("recovery_id")) {
+			return
+		}
 		var in struct {
 			ExpectedVersion int    `json:"expected_version"`
 			Audience        string `json:"audience"`
@@ -218,6 +227,9 @@ func registerRecoveryOperationRoutes(mux *http.ServeMux, repos *repositories.Sto
 		if !recoveryOperationBelongs(w, operations, r.PathValue("recovery_id"), r.PathValue("incident_id")) {
 			return
 		}
+		if !recoveryOperationActorAllowed(w, repos, operations, actor, r.PathValue("recovery_id")) {
+			return
+		}
 		var in struct {
 			ExpectedVersion int    `json:"expected_version"`
 			Action          string `json:"action"`
@@ -230,6 +242,32 @@ func registerRecoveryOperationRoutes(mux *http.ServeMux, repos *repositories.Sto
 		v, e := operations.Control(r.PathValue("recovery_id"), actor.UserID, in.Action, in.Message, in.ExpectedVersion)
 		writeRecoveryOperation(w, v, e)
 	})
+}
+
+func recoveryOperationActorAllowed(w http.ResponseWriter, repos *repositories.Store, operations *recoveryoperations.Store, actor auth.Credential, operationID string) bool {
+	operation, err := operations.Get(operationID)
+	if err != nil {
+		writeAPIError(w, 404, "recovery_not_found", "recovery operation not found")
+		return false
+	}
+	if actor.RepositoryID != "" && actor.RepositoryID != operation.RepositoryID {
+		writeAPIError(w, 404, "recovery_not_found", "recovery operation not found")
+		return false
+	}
+	repository, err := repos.GetByID(operation.RepositoryID)
+	if err != nil {
+		writeAPIError(w, 404, "recovery_not_found", "recovery operation not found")
+		return false
+	}
+	if actor.AgentID != "" && actor.RepositoryID == operation.RepositoryID && actor.AccessGrantID != "" {
+		return true
+	}
+	collaborator, err := repos.HasCollaborator(actor.UserID, operation.RepositoryID)
+	if err == nil && (repository.OwnerID == actor.UserID || collaborator) {
+		return true
+	}
+	writeAPIError(w, 404, "recovery_not_found", "recovery operation not found")
+	return false
 }
 
 func recoveryIncidentEvidenceMatches(incident incidents.Incident, reference recoveryoperations.EvidenceReference, repositoryID string, allowedResources map[string]bool) bool {

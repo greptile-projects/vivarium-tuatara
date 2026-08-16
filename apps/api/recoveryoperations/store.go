@@ -281,6 +281,14 @@ func (s *Store) Control(idv, actor, action, message string, expected int) (Opera
 			if v.Status != "paused" || v.Control == "approval_rejected" || !approvalThresholdSatisfied(v) {
 				return ErrConflict
 			}
+			revision := current(v)
+			for i := range revision.Steps {
+				if revision.Steps[i].Status == "failed" || revision.Steps[i].Status == "blocked" {
+					revision.Steps[i].Status = "paused"
+					revision.Steps[i].ValidationResults = nil
+				}
+			}
+			v.Revisions[len(v.Revisions)-1] = revision
 			v.Status = "ready"
 			v.Control = "approved_recovery_control"
 		case "rollback":

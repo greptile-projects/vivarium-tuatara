@@ -1867,6 +1867,11 @@ whenever dependencies change or the web job fails before it starts.
   match the recovery repository and current step or a resource frozen by the selected capture.
   Delegated agent steps grant no repository, environment, credential,
   deployment, destructive-cutover, or return-to-service authority.
+  Every mutation revalidates access to the operation's exact repository rather than accepting access
+  to another repository in the incident. Revoked collaborators cannot continue, and an approved safe
+  resume moves failed or blocked steps to retryable paused state without invalidating already verified
+  dependencies; fresh passing evidence remains mandatory. The incident UI stores operation responses
+  separately from incident state and exposes pause, resume, rollback, and service-return controls.
   Recovery commitments at `/repositories/{id}/recovery` retain immutable, compare-and-swap contracts
   beneath `$RECOVERY_COMMITMENT_STORAGE_ROOT` (default `recovery-commitments`). Repository participants
   define survival targets for repositories, packages, artifacts, configuration, collaboration records,
