@@ -1857,6 +1857,16 @@ whenever dependencies change or the web job fails before it starts.
   are compact opaque service-objective identifiers and remain valid when handed to ordinary proposals;
   proposal-sized identifier formatting is not an authorization boundary.
 
+  Recovery commitments at `/repositories/{id}/recovery` retain immutable, compare-and-swap contracts
+  beneath `$RECOVERY_COMMITMENT_STORAGE_ROOT` (default `recovery-commitments`). Repository participants
+  define survival targets for repositories, packages, artifacts, configuration, collaboration records,
+  and deployed service data with owners, dependencies, acceptable loss, restoration time, retention,
+  jurisdictions, validation criteria, exclusions, and typed service-objective, environment, incident,
+  privacy-rule, and governance links. Reads keep missing ownership, impossible dependency timing,
+  unprotected dependencies, and expired or soon-expiring exceptions explicit and attributed. These
+  records document continuity intent and grant no repository, deployment, data, incident, privacy, or
+  governance authority.
+
   Update it when you change how the apps fit together, not for every change.
 
 ## LADDER.md
