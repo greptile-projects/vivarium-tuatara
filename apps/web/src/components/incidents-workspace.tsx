@@ -8,6 +8,7 @@ import {
   type Deployment,
   type DeploymentEnvironment,
   type Incident,
+  type RecoveryOperation,
   type Repository,
   type User,
 } from "@/lib/api";
@@ -350,6 +351,7 @@ export function IncidentsWorkspace() {
 export function IncidentDetail({ incidentID }: { incidentID: string }) {
   const { token, user, loading } = useAuth();
   const [incident, setIncident] = useState<Incident | null>(null),
+    [recoveries, setRecoveries] = useState<RecoveryOperation[]>([]),
     [repos, setRepos] = useState<Record<string, Repository>>({}),
     [people, setPeople] = useState<Record<string, User>>({}),
     [pending, setPending] = useState(false),
@@ -358,8 +360,16 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
   const load = useCallback(async () => {
     if (!token) return;
     try {
-      const value = await api<Incident>(`/incidents/${incidentID}`, {}, token);
+      const [value, recoveryPage] = await Promise.all([
+        api<Incident>(`/incidents/${incidentID}`, {}, token),
+        api<{ recoveries: RecoveryOperation[] }>(
+          `/incidents/${incidentID}/recoveries`,
+          {},
+          token,
+        ).catch(() => ({ recoveries: [] })),
+      ]);
       setIncident(value);
+      setRecoveries(recoveryPage.recoveries);
       const repoValues = await Promise.all(
         value.scopes.map((x) =>
           api<Repository>(`/repositories/${x.repository_id}`, {}, token),
@@ -370,7 +380,10 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
         ...new Set([
           value.declared_by,
           ...(value.review ? [value.review.published_by] : []),
-          ...(value.commitments ?? []).flatMap((x) => [x.assignee_id, x.created_by]),
+          ...(value.commitments ?? []).flatMap((x) => [
+            x.assignee_id,
+            x.created_by,
+          ]),
           ...value.roles.map((x) => x.user_id),
           ...value.timeline.map((x) => x.actor_id),
         ]),
@@ -394,7 +407,11 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
     if (!token) return false;
     setPending(true);
     setError("");
-    const isOperation = path.endsWith("/updates") || path.endsWith("/findings") || path.endsWith("/actions") || path.endsWith("/attempts"),
+    const isOperation =
+        path.endsWith("/updates") ||
+        path.endsWith("/findings") ||
+        path.endsWith("/actions") ||
+        path.endsWith("/attempts"),
       draft = JSON.stringify(body),
       storageKey = `vivarium.incident-operation.${incidentID}.${path.split("/").at(-1)}`;
     let operationID = "";
@@ -466,17 +483,53 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
   async function resolve(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!incident || !token) return;
-    const form = event.currentTarget, data = new FormData(form);
-    setPending(true); setError("");
+    const form = event.currentTarget,
+      data = new FormData(form);
+    setPending(true);
+    setError("");
     try {
-      setIncident(await api<Incident>(`/incidents/${incidentID}/resolution`, {method:"PUT", body:JSON.stringify({expected_version:incident.version, impact:data.get("impact"), timeline:data.get("timeline"), contributing_factors:String(data.get("factors") ?? "").split("\n").map((x)=>x.trim()).filter(Boolean), conclusions:data.get("conclusions")})}, token));
-    } catch (reason) { setError(errorMessage(reason)); }
-    finally { setPending(false); }
+      setIncident(
+        await api<Incident>(
+          `/incidents/${incidentID}/resolution`,
+          {
+            method: "PUT",
+            body: JSON.stringify({
+              expected_version: incident.version,
+              impact: data.get("impact"),
+              timeline: data.get("timeline"),
+              contributing_factors: String(data.get("factors") ?? "")
+                .split("\n")
+                .map((x) => x.trim())
+                .filter(Boolean),
+              conclusions: data.get("conclusions"),
+            }),
+          },
+          token,
+        ),
+      );
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setPending(false);
+    }
   }
   async function commitFollowUp(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = event.currentTarget, data = new FormData(form);
-    if (await submit(`/incidents/${incidentID}/commitments`, {repository_id:data.get("repository_id"), proposal_title:data.get("proposal_title"), proposal_body:data.get("proposal_body"), task_title:data.get("task_title"), outcome:data.get("outcome"), assignee_id:data.get("assignee_id"), base_revision:data.get("base_revision"), due_at:new Date(String(data.get("due_at"))).toISOString()})) form.reset();
+    const form = event.currentTarget,
+      data = new FormData(form);
+    if (
+      await submit(`/incidents/${incidentID}/commitments`, {
+        repository_id: data.get("repository_id"),
+        proposal_title: data.get("proposal_title"),
+        proposal_body: data.get("proposal_body"),
+        task_title: data.get("task_title"),
+        outcome: data.get("outcome"),
+        assignee_id: data.get("assignee_id"),
+        base_revision: data.get("base_revision"),
+        due_at: new Date(String(data.get("due_at"))).toISOString(),
+      })
+    )
+      form.reset();
   }
   async function finding(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -573,37 +626,133 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
   async function proposeMitigation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!incident) return;
-    const form = event.currentTarget, data = new FormData(form), selected = new Set(data.getAll("evidence_ids").map(String));
-    const evidence = incident.timeline.filter((x) => selected.has(x.id)).flatMap((x) => x.evidence ?? []);
+    const form = event.currentTarget,
+      data = new FormData(form),
+      selected = new Set(data.getAll("evidence_ids").map(String));
+    const evidence = incident.timeline
+      .filter((x) => selected.has(x.id))
+      .flatMap((x) => x.evidence ?? []);
     const [stage, signal] = String(data.get("criterion")).split("/");
-    if (await submit(`/incidents/${incidentID}/actions`, {kind:data.get("kind"),repository_id:data.get("repository_id"),deployment_id:data.get("deployment_id"),rationale:data.get("rationale"),evidence,health_criteria:[{stage,signal}]})) form.reset();
+    if (
+      await submit(`/incidents/${incidentID}/actions`, {
+        kind: data.get("kind"),
+        repository_id: data.get("repository_id"),
+        deployment_id: data.get("deployment_id"),
+        rationale: data.get("rationale"),
+        evidence,
+        health_criteria: [{ stage, signal }],
+      })
+    )
+      form.reset();
   }
   async function decideMitigation(id: string, decision: "approve" | "reject") {
-    const message = prompt(`${decision === "approve" ? "Approval" : "Rejection"} rationale`) ?? "";
+    const message =
+      prompt(
+        `${decision === "approve" ? "Approval" : "Rejection"} rationale`,
+      ) ?? "";
     if (!message) return;
-    await submit(`/incidents/${incidentID}/actions/${id}/decisions`, {decision,message,override:false});
+    await submit(`/incidents/${incidentID}/actions/${id}/decisions`, {
+      decision,
+      message,
+      override: false,
+    });
   }
-  async function executeMitigation(action: NonNullable<Incident["actions"]>[number]) {
+  async function executeMitigation(
+    action: NonNullable<Incident["actions"]>[number],
+  ) {
     if (!token) return;
-    setPending(true); setError("");
+    setPending(true);
+    setError("");
     const operationID = crypto.randomUUID().replaceAll("-", "");
-    let outcome: "started" | "failed" = "started", resourceID = action.deployment_id, message = "Governed execution was accepted.";
+    let outcome: "started" | "failed" = "started",
+      resourceID = action.deployment_id,
+      message = "Governed execution was accepted.";
     try {
-      setIncident(await api<Incident>(`/incidents/${incidentID}/actions/${action.id}/attempts`, {method:"POST",body:JSON.stringify({operation_id:operationID,outcome:"pending",message:"Governed execution reserved before environment mutation."})}, token));
-      if (action.kind === "pause_rollout") await api(`/repositories/${action.repository_id}/deployments/${action.deployment_id}/controls`, {method:"POST",body:JSON.stringify({action:"pause",expected_state:"running",reason:`incident-mitigation:${action.id}:${operationID}`})}, token);
+      setIncident(
+        await api<Incident>(
+          `/incidents/${incidentID}/actions/${action.id}/attempts`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              operation_id: operationID,
+              outcome: "pending",
+              message:
+                "Governed execution reserved before environment mutation.",
+            }),
+          },
+          token,
+        ),
+      );
+      if (action.kind === "pause_rollout")
+        await api(
+          `/repositories/${action.repository_id}/deployments/${action.deployment_id}/controls`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              action: "pause",
+              expected_state: "running",
+              reason: `incident-mitigation:${action.id}:${operationID}`,
+            }),
+          },
+          token,
+        );
       else {
-        const result = await api<{deployment?:{id:string};pull_request?:{id:string}}>(`/repositories/${action.repository_id}/deployments/${action.deployment_id}/recoveries`, {method:"POST",body:JSON.stringify({action:action.kind === "restore_release" ? "rollback" : "repair"})}, token);
-        resourceID = result.deployment?.id ?? result.pull_request?.id ?? resourceID;
+        const result = await api<{
+          deployment?: { id: string };
+          pull_request?: { id: string };
+        }>(
+          `/repositories/${action.repository_id}/deployments/${action.deployment_id}/recoveries`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              action: action.kind === "restore_release" ? "rollback" : "repair",
+            }),
+          },
+          token,
+        );
+        resourceID =
+          result.deployment?.id ?? result.pull_request?.id ?? resourceID;
       }
-    } catch (reason) { outcome="failed"; message=errorMessage(reason); }
-    try { setIncident(await api<Incident>(`/incidents/${incidentID}/actions/${action.id}/attempts`, {method:"POST",body:JSON.stringify({operation_id:operationID,outcome,resource_id:resourceID,message})}, token)); }
-    catch (reason) { setError(errorMessage(reason)); }
-    finally { setPending(false); }
+    } catch (reason) {
+      outcome = "failed";
+      message = errorMessage(reason);
+    }
+    try {
+      setIncident(
+        await api<Incident>(
+          `/incidents/${incidentID}/actions/${action.id}/attempts`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              operation_id: operationID,
+              outcome,
+              resource_id: resourceID,
+              message,
+            }),
+          },
+          token,
+        ),
+      );
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setPending(false);
+    }
   }
-  async function verifyMitigation(action: NonNullable<Incident["actions"]>[number]) {
-    const resourceID = prompt("Recovery deployment ID to verify against the declared health criteria") ?? "";
+  async function verifyMitigation(
+    action: NonNullable<Incident["actions"]>[number],
+  ) {
+    const resourceID =
+      prompt(
+        "Recovery deployment ID to verify against the declared health criteria",
+      ) ?? "";
     if (!resourceID) return;
-    await submit(`/incidents/${incidentID}/actions/${action.id}/attempts`, {outcome:"recovered",resource_id:resourceID,message:"Declared health criteria passed on the retained recovery deployment."});
+    await submit(`/incidents/${incidentID}/actions/${action.id}/attempts`, {
+      outcome: "recovered",
+      resource_id: resourceID,
+      message:
+        "Declared health criteria passed on the retained recovery deployment.",
+    });
   }
   const evidenceHref = (
     source: NonNullable<Incident["timeline"][number]["evidence"]>[number],
@@ -658,24 +807,540 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
       )}
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <main className="space-y-5">
+          {recoveries.map((recovery) => {
+            const revision = recovery.revisions.at(-1)!;
+            const approved = recovery.approvals.filter(
+              (x) => x.decision === "approve",
+            ).length;
+            return (
+              <Card className="border-[var(--danger)] p-5" key={recovery.id}>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="font-mono text-xs font-semibold uppercase tracking-[.14em] text-[var(--danger)]">
+                      Active recovery control
+                    </p>
+                    <h2 className="mt-1 font-semibold">{revision.objective}</h2>
+                  </div>
+                  <Badge
+                    tone={
+                      recovery.status === "completed"
+                        ? "success"
+                        : recovery.status === "paused"
+                          ? "danger"
+                          : "warning"
+                    }
+                  >
+                    {recovery.status.replaceAll("_", " ")}
+                  </Badge>
+                </div>
+                <div className="mt-4 grid gap-3 text-xs sm:grid-cols-3">
+                  <p>
+                    <b>Recovery point</b>
+                    <br />
+                    <span className="font-mono">
+                      {recovery.recovery_point.source_revision.slice(0, 12)}
+                    </span>
+                    <br />
+                    {stamp(recovery.recovery_point.captured_at)}
+                  </p>
+                  <p>
+                    <b>Estimated loss</b>
+                    <br />
+                    {recovery.recovery_point.estimated_loss_minutes} minutes
+                  </p>
+                  <p>
+                    <b>Authorization</b>
+                    <br />
+                    {approved}/{revision.required_approvals} approvals
+                    <br />
+                    {recovery.control.replaceAll("_", " ")}
+                  </p>
+                </div>
+                <p className="mt-3 rounded bg-[var(--surface-soft)] p-3 text-xs">
+                  <b>Rollback:</b> {revision.rollback_option}
+                </p>
+                {recovery.status === "awaiting_approval" &&
+                  revision.approver_ids.includes(user?.id ?? "") &&
+                  !recovery.approvals.some((x) => x.actor_id === user?.id) && (
+                    <div className="mt-3 flex gap-2">
+                      <Button
+                        onClick={() =>
+                          void submit(
+                            `/incidents/${incidentID}/recoveries/${recovery.id}/approvals`,
+                            {
+                              expected_version: recovery.current_version,
+                              decision: "approve",
+                              message:
+                                "Verified recovery point, scope, dependencies, and rollback.",
+                            },
+                          )
+                        }
+                      >
+                        Approve recovery
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        onClick={() =>
+                          void submit(
+                            `/incidents/${incidentID}/recoveries/${recovery.id}/approvals`,
+                            {
+                              expected_version: recovery.current_version,
+                              decision: "reject",
+                              message: "Recovery must pause for review.",
+                            },
+                          )
+                        }
+                      >
+                        Reject
+                      </Button>
+                    </div>
+                  )}
+                <div className="mt-4 space-y-2">
+                  {revision.steps.map((step) => (
+                    <div
+                      className="rounded-lg border border-[var(--line)] p-3"
+                      key={step.id}
+                    >
+                      <div className="flex justify-between gap-2">
+                        <b>{step.name}</b>
+                        <Badge
+                          tone={
+                            step.status === "validated"
+                              ? "success"
+                              : step.status === "failed" ||
+                                  step.status === "blocked"
+                                ? "danger"
+                                : "neutral"
+                          }
+                        >
+                          {step.status}
+                        </Badge>
+                      </div>
+                      <p className="mt-1 text-xs text-[var(--muted)]">
+                        {step.kind} · {step.assignee_type} {step.assignee_id} ·
+                        depends on {step.depends_on?.join(", ") || "nothing"}
+                        {step.destructive ? " · destructive cutover" : ""}
+                      </p>
+                      <p className="mt-1 text-xs">
+                        Validate: {step.validation_criteria.join("; ")}
+                      </p>
+                      {(recovery.status === "ready" ||
+                        recovery.status === "restoring") &&
+                        step.assignee_id === user?.id && (
+                          <div className="mt-2 flex gap-2">
+                            {step.status === "pending" && (
+                              <Button
+                                variant="secondary"
+                                onClick={() =>
+                                  void submit(
+                                    `/incidents/${incidentID}/recoveries/${recovery.id}/steps/${step.id}`,
+                                    {
+                                      expected_version:
+                                        recovery.current_version,
+                                      status: "running",
+                                      message:
+                                        "Step started under retained resource authority.",
+                                    },
+                                  )
+                                }
+                              >
+                                Start
+                              </Button>
+                            )}
+                            {step.status === "running" && (
+                              <>
+                                <Button
+                                  onClick={() =>
+                                    void submit(
+                                      `/incidents/${incidentID}/recoveries/${recovery.id}/steps/${step.id}`,
+                                      {
+                                        expected_version:
+                                          recovery.current_version,
+                                        status: "validated",
+                                        message:
+                                          "Declared validation criteria passed.",
+                                      },
+                                    )
+                                  }
+                                >
+                                  Validate
+                                </Button>
+                                <Button
+                                  variant="secondary"
+                                  onClick={() =>
+                                    void submit(
+                                      `/incidents/${incidentID}/recoveries/${recovery.id}/steps/${step.id}`,
+                                      {
+                                        expected_version:
+                                          recovery.current_version,
+                                        status: "failed",
+                                        message:
+                                          "Validation failed; recovery paused.",
+                                      },
+                                    )
+                                  }
+                                >
+                                  Fail safely
+                                </Button>
+                              </>
+                            )}
+                          </div>
+                        )}
+                    </div>
+                  ))}
+                </div>
+                <form
+                  className="mt-4 flex gap-2"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    const form = new FormData(event.currentTarget);
+                    void submit(
+                      `/incidents/${incidentID}/recoveries/${recovery.id}/communications`,
+                      {
+                        expected_version: recovery.current_version,
+                        audience: "public",
+                        message: form.get("message"),
+                      },
+                    );
+                  }}
+                >
+                  <input
+                    className={field}
+                    name="message"
+                    required
+                    placeholder="Public recovery update"
+                  />
+                  <Button disabled={pending}>Publish</Button>
+                </form>
+              </Card>
+            );
+          })}
           <Card className="p-5">
             <h2 className="font-semibold">Post-incident review</h2>
-            {incident.review ? <div className="mt-3 space-y-4 text-sm"><div><b>Impact</b><p className="mt-1 whitespace-pre-wrap">{incident.review.impact}</p></div><div><b>Review timeline</b><p className="mt-1 whitespace-pre-wrap">{incident.review.timeline}</p></div><div><b>Contributing factors</b><ul className="mt-1 list-disc pl-5">{incident.review.contributing_factors.map((x)=><li key={x}>{x}</li>)}</ul></div><div><b>Conclusions</b><p className="mt-1 whitespace-pre-wrap">{incident.review.conclusions}</p></div><p className="text-xs text-[var(--muted)]">Published by {people[incident.review.published_by]?.display_name ?? incident.review.published_by} · {stamp(incident.review.published_at)}</p></div> : <form className="mt-4 grid gap-3" onSubmit={resolve}><textarea className={`${field} py-3`} name="impact" required rows={3} placeholder="Who or what was affected, how severely, and for how long?"/><textarea className={`${field} py-3`} name="timeline" required rows={4} placeholder="Reviewable sequence of detection, decisions, mitigation, and recovery"/><textarea className={`${field} py-3`} name="factors" required rows={3} placeholder="One contributing factor per line"/><textarea className={`${field} py-3`} name="conclusions" required rows={3} placeholder="What did the team learn, including uncertainty?"/><div><Button disabled={pending}>Resolve and publish review</Button></div></form>}
+            {incident.review ? (
+              <div className="mt-3 space-y-4 text-sm">
+                <div>
+                  <b>Impact</b>
+                  <p className="mt-1 whitespace-pre-wrap">
+                    {incident.review.impact}
+                  </p>
+                </div>
+                <div>
+                  <b>Review timeline</b>
+                  <p className="mt-1 whitespace-pre-wrap">
+                    {incident.review.timeline}
+                  </p>
+                </div>
+                <div>
+                  <b>Contributing factors</b>
+                  <ul className="mt-1 list-disc pl-5">
+                    {incident.review.contributing_factors.map((x) => (
+                      <li key={x}>{x}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <b>Conclusions</b>
+                  <p className="mt-1 whitespace-pre-wrap">
+                    {incident.review.conclusions}
+                  </p>
+                </div>
+                <p className="text-xs text-[var(--muted)]">
+                  Published by{" "}
+                  {people[incident.review.published_by]?.display_name ??
+                    incident.review.published_by}{" "}
+                  · {stamp(incident.review.published_at)}
+                </p>
+              </div>
+            ) : (
+              <form className="mt-4 grid gap-3" onSubmit={resolve}>
+                <textarea
+                  className={`${field} py-3`}
+                  name="impact"
+                  required
+                  rows={3}
+                  placeholder="Who or what was affected, how severely, and for how long?"
+                />
+                <textarea
+                  className={`${field} py-3`}
+                  name="timeline"
+                  required
+                  rows={4}
+                  placeholder="Reviewable sequence of detection, decisions, mitigation, and recovery"
+                />
+                <textarea
+                  className={`${field} py-3`}
+                  name="factors"
+                  required
+                  rows={3}
+                  placeholder="One contributing factor per line"
+                />
+                <textarea
+                  className={`${field} py-3`}
+                  name="conclusions"
+                  required
+                  rows={3}
+                  placeholder="What did the team learn, including uncertainty?"
+                />
+                <div>
+                  <Button disabled={pending}>Resolve and publish review</Button>
+                </div>
+              </form>
+            )}
           </Card>
-          {incident.review && <Card className="p-5"><h2 className="font-semibold">Corrective commitments</h2><p className="mt-1 text-xs text-[var(--muted)]">Create ordinary proposal work with one accountable owner and deadline. Review, checks, release, and deployment progress flows back here.</p><form className="mt-4 grid gap-3 sm:grid-cols-2" onSubmit={commitFollowUp}><select className={field} name="repository_id">{incident.scopes.map((x)=><option key={x.repository_id} value={x.repository_id}>{repos[x.repository_id]?.name ?? x.repository_id}</option>)}</select><input className={field} name="assignee_id" required placeholder="Collaborator ID"/><input className={field} name="proposal_title" required placeholder="Corrective proposal title"/><input className={field} name="task_title" required placeholder="Assigned task title"/><textarea className={`${field} py-3 sm:col-span-2`} name="proposal_body" required rows={3} placeholder="Why this work reduces recurrence"/><textarea className={`${field} py-3 sm:col-span-2`} name="outcome" required rows={3} placeholder="Verifiable expected outcome and mandate"/><input className={field} name="base_revision" required pattern="[0-9a-f]{40}" placeholder="Exact 40-character base commit"/><input className={field} name="due_at" type="datetime-local" required/><div><Button disabled={pending}>Create and assign follow-up</Button></div></form>{(incident.commitments ?? []).map((item)=><div className="mt-4 rounded-lg border border-[var(--line)] p-4" key={item.id}><div className="flex flex-wrap justify-between gap-2"><Link className="font-semibold text-[var(--brand)]" href={`/proposals/${item.repository_id}/${item.proposal_id}`}>Corrective proposal →</Link><Badge tone={item.progress.state === "completed" ? "success" : item.progress.state === "overdue" || item.progress.state === "invalidated" ? "danger" : "info"}>{item.progress.state}</Badge></div><p className="mt-2 text-xs text-[var(--muted)]">Owner {people[item.assignee_id]?.display_name ?? item.assignee_id} · due {stamp(item.due_at)}</p>{item.progress.pull_request_id && <Link className="mt-2 block text-xs font-semibold text-[var(--brand)]" href={`/pulls/${item.repository_id}/${item.progress.pull_request_id}`}>Review follow-up pull →</Link>}<p className="mt-2 text-xs text-[var(--muted)]">{item.progress.check_states?.join(" · ") || "No checks published"} · {item.progress.release_ids?.length ?? 0} release(s) · {item.progress.deployment_ids?.length ?? 0} deployment(s)</p></div>)}</Card>}
+          {incident.review && (
+            <Card className="p-5">
+              <h2 className="font-semibold">Corrective commitments</h2>
+              <p className="mt-1 text-xs text-[var(--muted)]">
+                Create ordinary proposal work with one accountable owner and
+                deadline. Review, checks, release, and deployment progress flows
+                back here.
+              </p>
+              <form
+                className="mt-4 grid gap-3 sm:grid-cols-2"
+                onSubmit={commitFollowUp}
+              >
+                <select className={field} name="repository_id">
+                  {incident.scopes.map((x) => (
+                    <option key={x.repository_id} value={x.repository_id}>
+                      {repos[x.repository_id]?.name ?? x.repository_id}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  className={field}
+                  name="assignee_id"
+                  required
+                  placeholder="Collaborator ID"
+                />
+                <input
+                  className={field}
+                  name="proposal_title"
+                  required
+                  placeholder="Corrective proposal title"
+                />
+                <input
+                  className={field}
+                  name="task_title"
+                  required
+                  placeholder="Assigned task title"
+                />
+                <textarea
+                  className={`${field} py-3 sm:col-span-2`}
+                  name="proposal_body"
+                  required
+                  rows={3}
+                  placeholder="Why this work reduces recurrence"
+                />
+                <textarea
+                  className={`${field} py-3 sm:col-span-2`}
+                  name="outcome"
+                  required
+                  rows={3}
+                  placeholder="Verifiable expected outcome and mandate"
+                />
+                <input
+                  className={field}
+                  name="base_revision"
+                  required
+                  pattern="[0-9a-f]{40}"
+                  placeholder="Exact 40-character base commit"
+                />
+                <input
+                  className={field}
+                  name="due_at"
+                  type="datetime-local"
+                  required
+                />
+                <div>
+                  <Button disabled={pending}>
+                    Create and assign follow-up
+                  </Button>
+                </div>
+              </form>
+              {(incident.commitments ?? []).map((item) => (
+                <div
+                  className="mt-4 rounded-lg border border-[var(--line)] p-4"
+                  key={item.id}
+                >
+                  <div className="flex flex-wrap justify-between gap-2">
+                    <Link
+                      className="font-semibold text-[var(--brand)]"
+                      href={`/proposals/${item.repository_id}/${item.proposal_id}`}
+                    >
+                      Corrective proposal →
+                    </Link>
+                    <Badge
+                      tone={
+                        item.progress.state === "completed"
+                          ? "success"
+                          : item.progress.state === "overdue" ||
+                              item.progress.state === "invalidated"
+                            ? "danger"
+                            : "info"
+                      }
+                    >
+                      {item.progress.state}
+                    </Badge>
+                  </div>
+                  <p className="mt-2 text-xs text-[var(--muted)]">
+                    Owner{" "}
+                    {people[item.assignee_id]?.display_name ?? item.assignee_id}{" "}
+                    · due {stamp(item.due_at)}
+                  </p>
+                  {item.progress.pull_request_id && (
+                    <Link
+                      className="mt-2 block text-xs font-semibold text-[var(--brand)]"
+                      href={`/pulls/${item.repository_id}/${item.progress.pull_request_id}`}
+                    >
+                      Review follow-up pull →
+                    </Link>
+                  )}
+                  <p className="mt-2 text-xs text-[var(--muted)]">
+                    {item.progress.check_states?.join(" · ") ||
+                      "No checks published"}{" "}
+                    · {item.progress.release_ids?.length ?? 0} release(s) ·{" "}
+                    {item.progress.deployment_ids?.length ?? 0} deployment(s)
+                  </p>
+                </div>
+              ))}
+            </Card>
+          )}
           <Card className="p-5">
             <h2 className="font-semibold">Mitigation decisions</h2>
-            <p className="mt-1 text-xs text-[var(--muted)]">Proposals retain their evidence, independent authorization, governed execution attempts, and recovery criteria.</p>
-            <form className="mt-4 grid gap-3 sm:grid-cols-2" onSubmit={proposeMitigation}>
-              <select className={field} name="kind"><option value="pause_rollout">Pause rollout</option><option value="restore_release">Restore attested release</option><option value="emergency_repair">Emergency repair</option></select>
-              <select className={field} name="repository_id">{incident.scopes.map((x)=><option key={x.repository_id} value={x.repository_id}>{repos[x.repository_id]?.name ?? x.repository_id}</option>)}</select>
-              <input className={field} name="deployment_id" required placeholder="Affected deployment ID" />
-              <input className={field} name="criterion" required placeholder="Declared health criterion: stage/signal" />
-              <textarea className={`${field} py-3 sm:col-span-2`} name="rationale" required rows={3} placeholder="Expected effect, risk, and reason to act" />
-              <fieldset className="sm:col-span-2"><legend className="text-xs font-semibold">Exact supporting evidence</legend>{incident.timeline.filter((x)=>x.evidence?.length).map((entry)=><label className="mt-2 flex gap-2 text-xs" key={entry.id}><input type="checkbox" name="evidence_ids" value={entry.id}/>{entry.message}</label>)}</fieldset>
-              <div><Button disabled={pending}>Propose mitigation</Button></div>
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              Proposals retain their evidence, independent authorization,
+              governed execution attempts, and recovery criteria.
+            </p>
+            <form
+              className="mt-4 grid gap-3 sm:grid-cols-2"
+              onSubmit={proposeMitigation}
+            >
+              <select className={field} name="kind">
+                <option value="pause_rollout">Pause rollout</option>
+                <option value="restore_release">
+                  Restore attested release
+                </option>
+                <option value="emergency_repair">Emergency repair</option>
+              </select>
+              <select className={field} name="repository_id">
+                {incident.scopes.map((x) => (
+                  <option key={x.repository_id} value={x.repository_id}>
+                    {repos[x.repository_id]?.name ?? x.repository_id}
+                  </option>
+                ))}
+              </select>
+              <input
+                className={field}
+                name="deployment_id"
+                required
+                placeholder="Affected deployment ID"
+              />
+              <input
+                className={field}
+                name="criterion"
+                required
+                placeholder="Declared health criterion: stage/signal"
+              />
+              <textarea
+                className={`${field} py-3 sm:col-span-2`}
+                name="rationale"
+                required
+                rows={3}
+                placeholder="Expected effect, risk, and reason to act"
+              />
+              <fieldset className="sm:col-span-2">
+                <legend className="text-xs font-semibold">
+                  Exact supporting evidence
+                </legend>
+                {incident.timeline
+                  .filter((x) => x.evidence?.length)
+                  .map((entry) => (
+                    <label className="mt-2 flex gap-2 text-xs" key={entry.id}>
+                      <input
+                        type="checkbox"
+                        name="evidence_ids"
+                        value={entry.id}
+                      />
+                      {entry.message}
+                    </label>
+                  ))}
+              </fieldset>
+              <div>
+                <Button disabled={pending}>Propose mitigation</Button>
+              </div>
             </form>
-            {(incident.actions ?? []).map((action)=><div key={action.id} className="mt-4 rounded-lg border border-[var(--line)] p-4"><div className="flex flex-wrap justify-between gap-2"><b>{action.kind.replaceAll("_"," ")}</b><Badge tone={action.status === "recovered" ? "success" : action.status === "failed" || action.status === "rejected" ? "danger" : "neutral"}>{action.status}</Badge></div><p className="mt-2 text-sm">{action.rationale}</p><p className="mt-2 text-xs text-[var(--muted)]">{action.evidence.length} evidence sources · recovery requires {action.health_criteria.map((x)=>`${x.stage}/${x.signal}`).join(", ")}</p>{action.status === "proposed" && <div className="mt-3 flex gap-2"><Button onClick={()=>void decideMitigation(action.id,"approve")}>Approve</Button><Button variant="secondary" onClick={()=>void decideMitigation(action.id,"reject")}>Reject</Button></div>}{action.status === "approved" && <Button className="mt-3" onClick={()=>void executeMitigation(action)} disabled={pending}>Execute through environment policy</Button>}{(action.status === "executing" || action.status === "failed") && <Button className="mt-3" variant="secondary" onClick={()=>void verifyMitigation(action)} disabled={pending}>Verify recovery</Button>}{action.attempts.map((attempt)=><p key={attempt.id} className="mt-2 text-xs"><b>{attempt.outcome}:</b> {attempt.message}</p>)}</div>)}
+            {(incident.actions ?? []).map((action) => (
+              <div
+                key={action.id}
+                className="mt-4 rounded-lg border border-[var(--line)] p-4"
+              >
+                <div className="flex flex-wrap justify-between gap-2">
+                  <b>{action.kind.replaceAll("_", " ")}</b>
+                  <Badge
+                    tone={
+                      action.status === "recovered"
+                        ? "success"
+                        : action.status === "failed" ||
+                            action.status === "rejected"
+                          ? "danger"
+                          : "neutral"
+                    }
+                  >
+                    {action.status}
+                  </Badge>
+                </div>
+                <p className="mt-2 text-sm">{action.rationale}</p>
+                <p className="mt-2 text-xs text-[var(--muted)]">
+                  {action.evidence.length} evidence sources · recovery requires{" "}
+                  {action.health_criteria
+                    .map((x) => `${x.stage}/${x.signal}`)
+                    .join(", ")}
+                </p>
+                {action.status === "proposed" && (
+                  <div className="mt-3 flex gap-2">
+                    <Button
+                      onClick={() =>
+                        void decideMitigation(action.id, "approve")
+                      }
+                    >
+                      Approve
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      onClick={() => void decideMitigation(action.id, "reject")}
+                    >
+                      Reject
+                    </Button>
+                  </div>
+                )}
+                {action.status === "approved" && (
+                  <Button
+                    className="mt-3"
+                    onClick={() => void executeMitigation(action)}
+                    disabled={pending}
+                  >
+                    Execute through environment policy
+                  </Button>
+                )}
+                {(action.status === "executing" ||
+                  action.status === "failed") && (
+                  <Button
+                    className="mt-3"
+                    variant="secondary"
+                    onClick={() => void verifyMitigation(action)}
+                    disabled={pending}
+                  >
+                    Verify recovery
+                  </Button>
+                )}
+                {action.attempts.map((attempt) => (
+                  <p key={attempt.id} className="mt-2 text-xs">
+                    <b>{attempt.outcome}:</b> {attempt.message}
+                  </p>
+                ))}
+              </div>
+            ))}
           </Card>
           <Card className="p-5">
             <h2 className="font-semibold">Delegate investigation</h2>

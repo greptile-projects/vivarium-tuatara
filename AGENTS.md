@@ -1857,6 +1857,12 @@ whenever dependencies change or the web job fails before it starts.
   are compact opaque service-objective identifiers and remain valid when handed to ordinary proposals;
   proposal-sized identifier formatting is not an authorization boundary.
 
+  Incident recovery operations beneath `$RECOVERY_OPERATION_STORAGE_ROOT` (default
+  `recovery-operations`) freeze one verified protection capture, estimated loss, independent
+  approvals, rollback, and an acyclic dependency-ordered plan. Their shared incident projection
+  uses compare-and-swap transitions; unmet dependencies, failed validation, blockers, and stale
+  writes pause safely. Delegated agent steps grant no repository, environment, credential,
+  deployment, destructive-cutover, or return-to-service authority.
   Recovery commitments at `/repositories/{id}/recovery` retain immutable, compare-and-swap contracts
   beneath `$RECOVERY_COMMITMENT_STORAGE_ROOT` (default `recovery-commitments`). Repository participants
   define survival targets for repositories, packages, artifacts, configuration, collaboration records,

@@ -60,6 +60,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/recoverycommitments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/recoveryexercises"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/recoveryoperations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/relationships"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
@@ -433,6 +434,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	recoveryOperationRoot := os.Getenv("RECOVERY_OPERATION_STORAGE_ROOT")
+	if recoveryOperationRoot == "" {
+		recoveryOperationRoot = "recovery-operations"
+	}
+	recoveryOperationStore, err := recoveryoperations.New(recoveryOperationRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	localizationRoot := os.Getenv("LOCALIZATION_STORAGE_ROOT")
 	if localizationRoot == "" {
 		localizationRoot = "localization"
@@ -548,7 +557,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -707,6 +716,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var recoveryCommitmentStore *recoverycommitments.Store
 	var protectionPlanStore *protectionplans.Store
 	var recoveryExerciseStore *recoveryexercises.Store
+	var recoveryOperationStore *recoveryoperations.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -799,6 +809,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			protectionPlanStore = value
 		case *recoveryexercises.Store:
 			recoveryExerciseStore = value
+		case *recoveryoperations.Store:
+			recoveryOperationStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -942,6 +954,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && store != nil && recoveryCommitmentStore != nil && protectionPlanStore != nil && recoveryExerciseStore != nil {
 		registerRecoveryExerciseRoutes(mux, store, deploymentStore, releaseStore, repositoryCatalog, authStore, protectionPlanStore, recoveryCommitmentStore, recoveryExerciseStore, proposalStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && incidentStore != nil && protectionPlanStore != nil && recoveryOperationStore != nil {
+		registerRecoveryOperationRoutes(mux, repositoryCatalog, authStore, incidentStore, protectionPlanStore, recoveryOperationStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil && localizationStore != nil {
 		if localePlanStore != nil {

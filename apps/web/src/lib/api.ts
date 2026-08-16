@@ -2023,6 +2023,79 @@ export type Incident = {
   updated_at: string;
   resolved_at?: string;
 };
+export type RecoveryOperation = {
+  id: string;
+  incident_id: string;
+  repository_id: string;
+  status:
+    | "awaiting_approval"
+    | "ready"
+    | "restoring"
+    | "paused"
+    | "validated"
+    | "completed"
+    | "rolled_back";
+  control: string;
+  recovery_point: {
+    plan_id: string;
+    plan_version: number;
+    capture_id: string;
+    source_revision: string;
+    captured_at: string;
+    estimated_loss_minutes: number;
+    manifest_sha256: string;
+  };
+  current_version: number;
+  revisions: {
+    version: number;
+    objective: string;
+    required_approvals: number;
+    approver_ids: string[];
+    rollback_option: string;
+    steps: {
+      id: string;
+      name: string;
+      kind: string;
+      resource_id: string;
+      environment_id?: string;
+      depends_on?: string[];
+      assignee_type: "human" | "agent";
+      assignee_id: string;
+      delegation?: string;
+      destructive: boolean;
+      validation_criteria: string[];
+      status: "pending" | "running" | "validated" | "failed" | "blocked";
+      message?: string;
+      updated_by?: string;
+      updated_at?: string;
+    }[];
+    created_by: string;
+    created_at: string;
+  }[];
+  approvals: {
+    actor_id: string;
+    decision: string;
+    message: string;
+    created_at: string;
+  }[];
+  communications: {
+    id: string;
+    actor_id: string;
+    audience: string;
+    message: string;
+    created_at: string;
+  }[];
+  events: {
+    id: string;
+    kind: string;
+    actor_id: string;
+    step_id?: string;
+    message: string;
+    created_at: string;
+  }[];
+  created_at: string;
+  updated_at: string;
+};
 export type Issue = {
   id: string;
   repository_id: string;
@@ -2892,11 +2965,24 @@ export type MergeReadiness = {
       policy_id: string;
       kind: "automated_check" | "scenario" | "acknowledgement" | "barrier";
       name: string;
-      status: "missing" | "stale" | "pending" | "unevaluated" | "failed" | "passed";
+      status:
+        "missing" | "stale" | "pending" | "unevaluated" | "failed" | "passed";
       message: string;
     }[];
-    active_exceptions: { id: string; policy_id: string; rationale: string; follow_up_work: string; expires_at: string }[];
-    dissent: { decision: "confirmed" | "rejected"; rationale: string; actor_id: string; revision: string; created_at: string }[];
+    active_exceptions: {
+      id: string;
+      policy_id: string;
+      rationale: string;
+      follow_up_work: string;
+      expires_at: string;
+    }[];
+    dissent: {
+      decision: "confirmed" | "rejected";
+      rationale: string;
+      actor_id: string;
+      revision: string;
+      created_at: string;
+    }[];
   };
   preview_acceptance?: {
     revision: string;

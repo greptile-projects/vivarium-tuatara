@@ -170,6 +170,20 @@ every task must be completed by a merged contribution whose implementation desce
 base and whose context revision still matches the current task mandate. Fresh rehearsal evidence
 cannot substitute for missing, obsolete, or unfinished governed delivery.
 
+When an incident or confirmed loss makes normal operation unsafe, affected repository participants
+activate one shared recovery operation through `/incidents/{incident_id}/recoveries`. Activation
+freezes an exact verified, unexpired protection-plan capture, its manifest and source revision, the
+estimated loss window, a versioned objective, independent named approvers, rollback option, and an
+acyclic dependency-ordered restoration plan. `$RECOVERY_OPERATION_STORAGE_ROOT` defaults to
+`recovery-operations`.
+
+The incident workspace projects active control, approval evidence, progress, blockers, validation,
+communications, and rollback. Every mutation compare-and-swaps the workspace version. Steps cannot
+begin before required approval or before dependencies validate; failed validation and explicit
+blockers pause the operation. Agent steps require an exact named agent and explicit delegation, and
+no recovery record grants repository, environment, secret, deployment, or destructive-cutover
+authority. Returning service is separately recorded only after every frozen step validates.
+
 ## Locale coverage contracts
 
 Repository participants publish complete, compare-and-swap locale plans through
