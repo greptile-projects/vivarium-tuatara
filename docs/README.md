@@ -102,6 +102,23 @@ ordinary proposal task records scoped agent guidance, compute cost, source chang
 review, and merge. A failed first repair stays contained with its rollout comparison; a later reviewed
 repair passes staged deployment and restores objective attainment without rewriting the depleted window.
 
+## Recovery commitments
+
+Repository participants publish complete, compare-and-swap recovery contracts at
+`/repositories/{id}/recovery-commitments`; the web workspace is `/repositories/{id}/recovery`.
+Immutable revisions cover repositories, packages, artifacts, configuration, collaboration records,
+and deployed service data. Each target names the user-facing capability it restores, accountable
+owners, acceptable loss and restoration time in minutes, retention, storage jurisdictions,
+validation criteria, dependencies, and declared exclusions. Typed references connect the agreement
+to service objectives, environments, incidents, privacy rules, and governance decisions.
+
+Reads preserve missing target ownership, dependencies without declared protection, dependency
+timelines that make a target impossible, and expired or soon-expiring exceptions as attributed
+diagnostics. Contract and exception approvers must remain current repository participants when a
+revision is published. The records document continuity intent and grant no repository, package,
+deployment, data, incident, privacy, or governance authority. Records default beneath
+`$RECOVERY_COMMITMENT_STORAGE_ROOT` (`recovery-commitments`).
+
 ## Locale coverage contracts
 
 Repository participants publish complete, compare-and-swap locale plans through
