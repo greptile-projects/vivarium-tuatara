@@ -29,27 +29,37 @@ type RecoveryPoint struct {
 	ManifestSHA256       string    `json:"manifest_sha256"`
 }
 type Step struct {
-	ID                 string             `json:"id"`
-	Name               string             `json:"name"`
-	Kind               string             `json:"kind"`
-	ResourceID         string             `json:"resource_id"`
-	EnvironmentID      string             `json:"environment_id,omitempty"`
-	DependsOn          []string           `json:"depends_on,omitempty"`
-	AssigneeType       string             `json:"assignee_type"`
-	AssigneeID         string             `json:"assignee_id"`
-	Delegation         string             `json:"delegation,omitempty"`
-	Destructive        bool               `json:"destructive"`
-	ValidationCriteria []string           `json:"validation_criteria"`
-	ValidationResults  []ValidationResult `json:"validation_results,omitempty"`
-	Status             string             `json:"status"`
-	Message            string             `json:"message,omitempty"`
-	UpdatedBy          string             `json:"updated_by,omitempty"`
-	UpdatedAt          *time.Time         `json:"updated_at,omitempty"`
+	ID                 string                `json:"id"`
+	Name               string                `json:"name"`
+	Kind               string                `json:"kind"`
+	ResourceID         string                `json:"resource_id"`
+	EnvironmentID      string                `json:"environment_id,omitempty"`
+	DependsOn          []string              `json:"depends_on,omitempty"`
+	AssigneeType       string                `json:"assignee_type"`
+	AssigneeID         string                `json:"assignee_id"`
+	Delegation         string                `json:"delegation,omitempty"`
+	Destructive        bool                  `json:"destructive"`
+	ValidationCriteria []ValidationCriterion `json:"validation_criteria"`
+	ValidationResults  []ValidationResult    `json:"validation_results,omitempty"`
+	Status             string                `json:"status"`
+	Message            string                `json:"message,omitempty"`
+	UpdatedBy          string                `json:"updated_by,omitempty"`
+	UpdatedAt          *time.Time            `json:"updated_at,omitempty"`
+}
+type ValidationCriterion struct {
+	ID           string `json:"id"`
+	Description  string `json:"description"`
+	EvidenceKind string `json:"evidence_kind"`
 }
 type ValidationResult struct {
-	Criterion string `json:"criterion"`
-	Status    string `json:"status"`
-	Evidence  string `json:"evidence"`
+	Criterion string            `json:"criterion"`
+	Status    string            `json:"status"`
+	Evidence  EvidenceReference `json:"evidence"`
+}
+type EvidenceReference struct {
+	Kind       string `json:"kind"`
+	ResourceID string `json:"resource_id"`
+	SHA256     string `json:"sha256"`
 }
 type Approval struct {
 	ActorID   string    `json:"actor_id"`
@@ -98,9 +108,10 @@ type Operation struct {
 	UpdatedAt      time.Time       `json:"updated_at"`
 }
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root             string
+	mu               sync.Mutex
+	now              func() time.Time
+	validateEvidence func(Operation, Step, []ValidationResult) bool
 }
 
 func New(root string) (*Store, error) {
@@ -120,11 +131,14 @@ func (s *Store) Create(incidentID, repositoryID, actor string, point RecoveryPoi
 	revision.Version = 1
 	revision.CreatedBy = actor
 	revision.CreatedAt = now
-	if !validPoint(point) || !validRevision(revision) || blank(incidentID, repositoryID, actor) {
+	if !validPoint(point) || !validRevision(revision) || blank(incidentID, repositoryID, actor) || contains(revision.ApproverIDs, actor) {
 		return Operation{}, ErrInvalid
 	}
 	v := Operation{ID: id(), IncidentID: incidentID, RepositoryID: repositoryID, Status: "awaiting_approval", Control: "recovery_control_active", RecoveryPoint: point, CurrentVersion: 1, Revisions: []Revision{revision}, Approvals: []Approval{}, Communications: []Communication{}, Events: []Event{{ID: id(), Kind: "recovery_activated", ActorID: actor, Message: "Recovery control activated at a verified recovery point.", CreatedAt: now}}, CreatedAt: now, UpdatedAt: now}
 	return v, s.write(v)
+}
+func (s *Store) ConfigureValidationResolver(resolver func(Operation, Step, []ValidationResult) bool) {
+	s.validateEvidence = resolver
 }
 func (s *Store) Get(idv string) (Operation, error) {
 	s.mu.Lock()
@@ -155,7 +169,7 @@ func (s *Store) ListIncident(incidentID string) ([]Operation, error) {
 func (s *Store) Approve(idv, actor, decision, message string, expected int) (Operation, error) {
 	return s.change(idv, expected, func(v *Operation, now time.Time) error {
 		r := current(v)
-		if v.Status != "awaiting_approval" || !contains(r.ApproverIDs, actor) || (decision != "approve" && decision != "reject") {
+		if v.Status != "awaiting_approval" || actor == r.CreatedBy || !contains(r.ApproverIDs, actor) || (decision != "approve" && decision != "reject") {
 			return ErrConflict
 		}
 		for _, a := range v.Approvals {
@@ -216,7 +230,7 @@ func (s *Store) UpdateStep(idv, stepID, actor, status, message string, results [
 			}
 			v.Status = "restoring"
 		} else if status == "validated" {
-			if step.Status != "running" || !validResults(step.ValidationCriteria, results) {
+			if step.Status != "running" || !validResults(step.ValidationCriteria, results) || s.validateEvidence == nil || !s.validateEvidence(*v, *step, results) {
 				return ErrConflict
 			}
 			step.ValidationResults = append([]ValidationResult(nil), results...)
@@ -336,17 +350,17 @@ func approvalThresholdSatisfied(v *Operation) bool {
 	}
 	return approved >= revision.RequiredApprovals
 }
-func validResults(criteria []string, results []ValidationResult) bool {
+func validResults(criteria []ValidationCriterion, results []ValidationResult) bool {
 	if len(criteria) != len(results) {
 		return false
 	}
-	required := map[string]bool{}
+	required := map[string]string{}
 	for _, criterion := range criteria {
-		required[criterion] = true
+		required[criterion.ID] = criterion.EvidenceKind
 	}
 	seen := map[string]bool{}
 	for _, result := range results {
-		if !required[result.Criterion] || seen[result.Criterion] || result.Status != "passed" || strings.TrimSpace(result.Evidence) == "" || len(result.Evidence) > 10000 {
+		if required[result.Criterion] == "" || seen[result.Criterion] || result.Status != "passed" || result.Evidence.Kind != required[result.Criterion] || blank(result.Evidence.ResourceID, result.Evidence.SHA256) || len(result.Evidence.SHA256) != 64 {
 			return false
 		}
 		seen[result.Criterion] = true
@@ -374,10 +388,10 @@ func validRevision(v Revision) bool {
 		}
 		criteria := map[string]bool{}
 		for _, criterion := range x.ValidationCriteria {
-			if strings.TrimSpace(criterion) == "" || criteria[criterion] {
+			if blank(criterion.ID, criterion.Description, criterion.EvidenceKind) || (criterion.EvidenceKind != "protection_capture" && criterion.EvidenceKind != "incident_evidence") || criteria[criterion.ID] {
 				return false
 			}
-			criteria[criterion] = true
+			criteria[criterion.ID] = true
 		}
 		steps[x.ID] = true
 		if x.AssigneeType == "agent" && strings.TrimSpace(x.Delegation) == "" {

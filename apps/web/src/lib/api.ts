@@ -2063,11 +2063,15 @@ export type RecoveryOperation = {
       assignee_id: string;
       delegation?: string;
       destructive: boolean;
-      validation_criteria: string[];
+      validation_criteria: {
+        id: string;
+        description: string;
+        evidence_kind: "protection_capture" | "incident_evidence";
+      }[];
       validation_results?: {
         criterion: string;
         status: "passed";
-        evidence: string;
+        evidence: { kind: string; resource_id: string; sha256: string };
       }[];
       status: "pending" | "running" | "validated" | "failed" | "blocked";
       message?: string;

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -13,6 +16,40 @@ import (
 )
 
 func registerRecoveryOperationRoutes(mux *http.ServeMux, repos *repositories.Store, credentials *auth.Store, incidentStore *incidents.Store, plans *protectionplans.Store, operations *recoveryoperations.Store) {
+	operations.ConfigureValidationResolver(func(operation recoveryoperations.Operation, step recoveryoperations.Step, results []recoveryoperations.ValidationResult) bool {
+		incident, err := incidentStore.Get(operation.IncidentID)
+		if err != nil {
+			return false
+		}
+		plan, err := plans.Get(operation.RecoveryPoint.PlanID)
+		if err != nil {
+			return false
+		}
+		for _, result := range results {
+			switch result.Evidence.Kind {
+			case "protection_capture":
+				if result.Evidence.ResourceID != operation.RecoveryPoint.CaptureID || result.Evidence.SHA256 != operation.RecoveryPoint.ManifestSHA256 {
+					return false
+				}
+				found := false
+				for _, capture := range plan.Captures {
+					if capture.ID == result.Evidence.ResourceID && capture.Recoverable && capture.Validation == "verified" && capture.ManifestSHA256 == result.Evidence.SHA256 {
+						found = true
+					}
+				}
+				if !found {
+					return false
+				}
+			case "incident_evidence":
+				if !recoveryIncidentEvidenceMatches(incident, result.Evidence) {
+					return false
+				}
+			default:
+				return false
+			}
+		}
+		return true
+	})
 	require := func(w http.ResponseWriter, r *http.Request, scope string) (auth.Credential, incidents.Incident, bool) {
 		actor, ok := authenticateRequest(w, r, credentials, scope, false)
 		if !ok {
@@ -180,6 +217,25 @@ func registerRecoveryOperationRoutes(mux *http.ServeMux, repos *repositories.Sto
 		v, e := operations.Control(r.PathValue("recovery_id"), actor.UserID, in.Action, in.Message, in.ExpectedVersion)
 		writeRecoveryOperation(w, v, e)
 	})
+}
+
+func recoveryIncidentEvidenceMatches(incident incidents.Incident, reference recoveryoperations.EvidenceReference) bool {
+	for _, entry := range incident.Timeline {
+		for _, evidence := range entry.Evidence {
+			if evidence.ResourceID != reference.ResourceID {
+				continue
+			}
+			value, err := json.Marshal(evidence)
+			if err != nil {
+				return false
+			}
+			digest := sha256.Sum256(value)
+			if hex.EncodeToString(digest[:]) == reference.SHA256 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func recoveryOperationBelongs(w http.ResponseWriter, store *recoveryoperations.Store, operationID, incidentID string) bool {

@@ -458,11 +458,25 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
   ) {
     const validationResults = [];
     for (const criterion of step.validation_criteria) {
-      const evidence = window
-        .prompt(`Evidence that this criterion passed:\n${criterion}`)
+      const evidenceValue = window
+        .prompt(
+          `Verified ${criterion.evidence_kind} reference for:\n${criterion.description}\n\nEnter resource-id:sha256`,
+        )
         ?.trim();
-      if (!evidence) return;
-      validationResults.push({ criterion, status: "passed", evidence });
+      if (!evidenceValue) return;
+      const separator = evidenceValue.lastIndexOf(":");
+      const resourceID = evidenceValue.slice(0, separator);
+      const sha256 = evidenceValue.slice(separator + 1);
+      if (!resourceID || !/^[0-9a-f]{64}$/.test(sha256)) return;
+      validationResults.push({
+        criterion: criterion.id,
+        status: "passed",
+        evidence: {
+          kind: criterion.evidence_kind,
+          resource_id: resourceID,
+          sha256,
+        },
+      });
     }
     void submit(
       `/incidents/${incidentID}/recoveries/${recovery.id}/steps/${step.id}`,
@@ -945,7 +959,13 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
                         {step.destructive ? " · destructive cutover" : ""}
                       </p>
                       <p className="mt-1 text-xs">
-                        Validate: {step.validation_criteria.join("; ")}
+                        Validate:{" "}
+                        {step.validation_criteria
+                          .map(
+                            (criterion) =>
+                              `${criterion.description} (${criterion.evidence_kind})`,
+                          )
+                          .join("; ")}
                       </p>
                       {(recovery.status === "ready" ||
                         recovery.status === "restoring") &&

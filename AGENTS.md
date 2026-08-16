@@ -1861,8 +1861,9 @@ whenever dependencies change or the web job fails before it starts.
   `recovery-operations`) freeze one verified protection capture, estimated loss, independent
   approvals, rollback, and an acyclic dependency-ordered plan. Their shared incident projection
   uses compare-and-swap transitions; rejected approval cannot be resumed, and unmet dependencies,
-  failed validation, blockers, and stale writes pause safely. Every frozen validation criterion needs
-  one unique passing result with retained evidence. Delegated agent steps grant no repository, environment, credential,
+  failed validation, blockers, and stale writes pause safely. Creators cannot approve their own
+  operation. Every frozen validation criterion declares an evidence kind and needs one unique passing
+  result whose immutable resource/SHA-256 reference resolves server-side. Delegated agent steps grant no repository, environment, credential,
   deployment, destructive-cutover, or return-to-service authority.
   Recovery commitments at `/repositories/{id}/recovery` retain immutable, compare-and-swap contracts
   beneath `$RECOVERY_COMMITMENT_STORAGE_ROOT` (default `recovery-commitments`). Repository participants
