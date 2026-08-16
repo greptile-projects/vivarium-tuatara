@@ -3327,7 +3327,11 @@ exercise, plus a changed protection-plan version or protected source revision. I
 rewrites, the original failure and marks the improvement `verified`. The follow-up must retain the
 same scenario, plan, commitment, ordered step contract, and pass every originally failed or cited
 result; stale, unrelated, weakened, or unchanged rehearsal evidence fails closed. Code citations
-likewise require an exact commit reachable from a visible non-security branch.
+likewise require an exact commit reachable from a visible non-security branch. Before accepting the
+follow-up, the API re-resolves the exact proposal origin and ordered task IDs, matches the frozen
+acceptance criteria and implementation base, requires every task to be completed through a currently
+merged contribution, and proves each implementation commit descends from that base. A missing,
+replaced, unfinished, closed-without-merge, or unrelated work record cannot become `verified`.
 
 ## Locale plans
 

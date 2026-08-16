@@ -69,6 +69,7 @@ type Investigation struct {
 }
 type Improvement struct {
 	ID                string    `json:"id"`
+	ExerciseID        string    `json:"exercise_id"`
 	InvestigationID   string    `json:"investigation_id"`
 	FindingID         string    `json:"finding_id"`
 	ProposalID        string    `json:"proposal_id"`
@@ -291,11 +292,11 @@ func (s *Store) LinkImprovement(repo, exerciseID, actor string, in Improvement) 
 			return x, prior, nil
 		}
 	}
-	in.ID, in.CreatedBy, in.CreatedAt, in.Status = id(), actor, s.now(), "work_open"
+	in.ID, in.ExerciseID, in.CreatedBy, in.CreatedAt, in.Status = id(), x.ID, actor, s.now(), "work_open"
 	x.Improvements = append(x.Improvements, in)
 	return x, in, s.write(x)
 }
-func (s *Store) VerifyImprovement(repo, exerciseID, improvementID, followUpID string) (Exercise, error) {
+func (s *Store) VerifyImprovement(repo, exerciseID, improvementID, followUpID string, governed func(Improvement) bool) (Exercise, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	x, err := s.read(repo, exerciseID)
@@ -311,7 +312,7 @@ func (s *Store) VerifyImprovement(repo, exerciseID, improvementID, followUpID st
 		if v.ID != improvementID {
 			continue
 		}
-		if follow.ID == x.ID || follow.Status != "passed" || !follow.Current || follow.Scenario != x.Scenario || follow.PlanID != x.PlanID || follow.CommitmentID != x.CommitmentID || (follow.PlanVersion <= x.PlanVersion && follow.SourceRevision == x.SourceRevision) || !sameExerciseContract(x, follow) || !resultsPassed(follow, v.RequiredResultIDs) {
+		if governed == nil || !governed(*v) || follow.ID == x.ID || follow.Status != "passed" || !follow.Current || follow.Scenario != x.Scenario || follow.PlanID != x.PlanID || follow.CommitmentID != x.CommitmentID || (follow.PlanVersion <= x.PlanVersion && follow.SourceRevision == x.SourceRevision) || !sameExerciseContract(x, follow) || !resultsPassed(follow, v.RequiredResultIDs) {
 			return Exercise{}, ErrInvalid
 		}
 		v.FollowUpID, v.Status = follow.ID, "verified"

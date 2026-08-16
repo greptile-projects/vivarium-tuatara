@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -288,9 +289,55 @@ func registerRecoveryExerciseRoutes(mux *http.ServeMux, git *storage.Store, envi
 			writeAPIError(w, 422, "recovery_verification_stale", "follow-up evidence must be current")
 			return
 		}
-		out, err := exercises.VerifyImprovement(r.PathValue("id"), r.PathValue("exercise_id"), r.PathValue("improvement_id"), follow.ID)
+		out, err := exercises.VerifyImprovement(r.PathValue("id"), r.PathValue("exercise_id"), r.PathValue("improvement_id"), follow.ID, func(improvement recoveryexercises.Improvement) bool {
+			return recoveryGovernedWorkComplete(git, proposalStore, r.PathValue("id"), improvement)
+		})
 		writeRecoveryMutation(w, out, err)
 	})
+}
+
+func recoveryGovernedWorkComplete(git *storage.Store, proposalStore *proposals.Store, repositoryID string, improvement recoveryexercises.Improvement) bool {
+	if git == nil || proposalStore == nil {
+		return false
+	}
+	proposal, err := proposalStore.Get(repositoryID, improvement.ProposalID)
+	if err != nil || proposal.Reasoning == nil || proposal.Reasoning.RecoveryExerciseID != improvement.ExerciseID || proposal.Reasoning.RecoveryInvestigationID != improvement.InvestigationID || proposal.Reasoning.RecoveryFindingID != improvement.FindingID || proposal.Reasoning.Revision != improvement.BaseRevision {
+		return false
+	}
+	criteria := []string{}
+	for _, item := range proposal.Reasoning.Items {
+		if item.Kind == "acceptance_criterion" && item.Status == "required" {
+			criteria = append(criteria, item.Summary)
+		}
+	}
+	if !slices.Equal(criteria, improvement.Criteria) {
+		return false
+	}
+	tasks, err := proposalStore.ListTasks(repositoryID, proposal.ID)
+	if err != nil || len(tasks) != len(improvement.TaskIDs) {
+		return false
+	}
+	repository, err := git.Open(repositoryID)
+	if err != nil {
+		return false
+	}
+	for i, task := range tasks {
+		if task.ID != improvement.TaskIDs[i] || task.Status != proposals.TaskCompleted || task.Contribution == nil || task.Contribution.Status != "merged" || task.Contribution.SourceCommitID == "" {
+			return false
+		}
+		ancestry, ancestryErr := repository.ListCommitAncestry(storage.ObjectID(task.Contribution.SourceCommitID))
+		if ancestryErr != nil {
+			return false
+		}
+		reachesBase := false
+		for _, commit := range ancestry {
+			reachesBase = reachesBase || string(commit.ID) == improvement.BaseRevision
+		}
+		if !reachesBase {
+			return false
+		}
+	}
+	return true
 }
 
 func writeRecoveryMutation(w http.ResponseWriter, out recoveryexercises.Exercise, err error) {

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/protectionplans"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/recoverycommitments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/recoveryexercises"
@@ -58,6 +59,39 @@ func TestRecoveryCodeEvidenceRequiresVisibleBranchReachability(t *testing.T) {
 	}
 	if !recoveryEvidenceResolves(git, nil, plans, commitments, exercise, []recoveryexercises.Evidence{{Kind: "code", ResourceID: "visible", Revision: string(visible), Summary: "visible"}}) {
 		t.Fatal("visible revision did not resolve")
+	}
+}
+
+func TestRecoveryVerificationRequiresCompletedGovernedWork(t *testing.T) {
+	repositoryID, actorID := strings.Repeat("1", 32), strings.Repeat("2", 32)
+	git, _ := storage.New(t.TempDir())
+	repository, _ := git.Create(repositoryID)
+	tree, _ := repository.WriteObject(storage.TreeObject, nil)
+	base, _ := repository.WriteObject(storage.CommitObject, []byte("tree "+string(tree)+"\nauthor Test <test@example.com> 0 +0000\ncommitter Test <test@example.com> 0 +0000\n\nbase\n"))
+	implementation, _ := repository.WriteObject(storage.CommitObject, []byte("tree "+string(tree)+"\nparent "+string(base)+"\nauthor Test <test@example.com> 1 +0000\ncommitter Test <test@example.com> 1 +0000\n\nimplementation\n"))
+	proposalStore, _ := proposals.New(t.TempDir())
+	origin := proposals.ReasoningOrigin{RecoveryExerciseID: strings.Repeat("3", 32), RecoveryInvestigationID: strings.Repeat("4", 32), RecoveryFindingID: strings.Repeat("5", 32), Revision: string(base), SelectedItemIDs: []string{"criterion-0"}, Items: []proposals.ReasoningItem{{ID: "criterion-0", Kind: "acceptance_criterion", Summary: "fresh exercise passes", Status: "required"}}, AnalysisStatus: "recovery_improvement"}
+	proposal, tasks, err := proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: repositoryID, ActorID: actorID, Title: "Repair recovery", Body: "Governed remediation", Origin: origin, Tasks: []proposals.ImplementationTaskInput{{Title: "Repair", Outcome: "Pass rehearsal", Risk: "bounded", VerificationPlan: "fresh exercise", AssigneeType: "human", AssigneeID: actorID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	improvement := recoveryexercises.Improvement{ExerciseID: origin.RecoveryExerciseID, InvestigationID: origin.RecoveryInvestigationID, FindingID: origin.RecoveryFindingID, ProposalID: proposal.ID, TaskIDs: []string{tasks[0].ID}, BaseRevision: string(base), Criteria: []string{"fresh exercise passes"}}
+	if recoveryGovernedWorkComplete(git, proposalStore, repositoryID, improvement) {
+		t.Fatal("unfinished task satisfied governance")
+	}
+	contribution := proposals.TaskContribution{PullRequestID: strings.Repeat("6", 32), SourceCommitID: string(implementation), CommitIDs: []string{string(implementation)}, Status: "review"}
+	if _, err = proposalStore.LinkTaskContribution(repositoryID, proposal.ID, tasks[0].ID, actorID, contribution); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = proposalStore.UpdateTaskContribution(repositoryID, proposal.ID, tasks[0].ID, actorID, contribution.PullRequestID, "merged"); err != nil {
+		t.Fatal(err)
+	}
+	if !recoveryGovernedWorkComplete(git, proposalStore, repositoryID, improvement) {
+		t.Fatal("completed merged descendant work did not satisfy governance")
+	}
+	improvement.ProposalID = strings.Repeat("7", 32)
+	if recoveryGovernedWorkComplete(git, proposalStore, repositoryID, improvement) {
+		t.Fatal("nonexistent proposal satisfied governance")
 	}
 }
 
