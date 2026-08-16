@@ -452,6 +452,27 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
       setPending(false);
     }
   }
+  async function submitRecovery(path: string, body: object) {
+    if (!token) return false;
+    setPending(true);
+    setError("");
+    try {
+      const value = await api<RecoveryOperation>(
+        path,
+        { method: "POST", body: JSON.stringify(body) },
+        token,
+      );
+      setRecoveries((current) =>
+        current.map((item) => (item.id === value.id ? value : item)),
+      );
+      return true;
+    } catch (reason) {
+      setError(errorMessage(reason));
+      return false;
+    } finally {
+      setPending(false);
+    }
+  }
   function validateRecoveryStep(
     recovery: RecoveryOperation,
     step: RecoveryOperation["revisions"][number]["steps"][number],
@@ -478,7 +499,7 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
         },
       });
     }
-    void submit(
+    void submitRecovery(
       `/incidents/${incidentID}/recoveries/${recovery.id}/steps/${step.id}`,
       {
         expected_version: recovery.current_version,
@@ -896,13 +917,87 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
                 <p className="mt-3 rounded bg-[var(--surface-soft)] p-3 text-xs">
                   <b>Rollback:</b> {revision.rollback_option}
                 </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {recovery.status !== "completed" &&
+                    recovery.status !== "rolled_back" &&
+                    recovery.status !== "paused" && (
+                      <Button
+                        variant="secondary"
+                        onClick={() =>
+                          void submitRecovery(
+                            `/incidents/${incidentID}/recoveries/${recovery.id}/control`,
+                            {
+                              expected_version: recovery.current_version,
+                              action: "pause",
+                              message: "Recovery paused under shared incident control.",
+                            },
+                          )
+                        }
+                      >
+                        Pause
+                      </Button>
+                    )}
+                  {recovery.status === "paused" && (
+                    <Button
+                      onClick={() =>
+                        void submitRecovery(
+                          `/incidents/${incidentID}/recoveries/${recovery.id}/control`,
+                          {
+                            expected_version: recovery.current_version,
+                            action: "resume",
+                            message:
+                              "Blocker contained; retry remains within the approved plan.",
+                          },
+                        )
+                      }
+                    >
+                      Resume safely
+                    </Button>
+                  )}
+                  {(recovery.status === "restoring" ||
+                    recovery.status === "paused" ||
+                    recovery.status === "validated") && (
+                    <Button
+                      variant="secondary"
+                      onClick={() =>
+                        void submitRecovery(
+                          `/incidents/${incidentID}/recoveries/${recovery.id}/control`,
+                          {
+                            expected_version: recovery.current_version,
+                            action: "rollback",
+                            message: revision.rollback_option,
+                          },
+                        )
+                      }
+                    >
+                      Roll back
+                    </Button>
+                  )}
+                  {recovery.status === "validated" && (
+                    <Button
+                      onClick={() =>
+                        void submitRecovery(
+                          `/incidents/${incidentID}/recoveries/${recovery.id}/control`,
+                          {
+                            expected_version: recovery.current_version,
+                            action: "complete",
+                            message:
+                              "All frozen steps passed; service return authorized.",
+                          },
+                        )
+                      }
+                    >
+                      Return service
+                    </Button>
+                  )}
+                </div>
                 {recovery.status === "awaiting_approval" &&
                   revision.approver_ids.includes(user?.id ?? "") &&
                   !recovery.approvals.some((x) => x.actor_id === user?.id) && (
                     <div className="mt-3 flex gap-2">
                       <Button
                         onClick={() =>
-                          void submit(
+                          void submitRecovery(
                             `/incidents/${incidentID}/recoveries/${recovery.id}/approvals`,
                             {
                               expected_version: recovery.current_version,
@@ -918,7 +1013,7 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
                       <Button
                         variant="secondary"
                         onClick={() =>
-                          void submit(
+                          void submitRecovery(
                             `/incidents/${incidentID}/recoveries/${recovery.id}/approvals`,
                             {
                               expected_version: recovery.current_version,
@@ -971,11 +1066,12 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
                         recovery.status === "restoring") &&
                         step.assignee_id === user?.id && (
                           <div className="mt-2 flex gap-2">
-                            {step.status === "pending" && (
+                            {(step.status === "pending" ||
+                              step.status === "paused") && (
                               <Button
                                 variant="secondary"
                                 onClick={() =>
-                                  void submit(
+                                  void submitRecovery(
                                     `/incidents/${incidentID}/recoveries/${recovery.id}/steps/${step.id}`,
                                     {
                                       expected_version:
@@ -987,7 +1083,7 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
                                   )
                                 }
                               >
-                                Start
+                                {step.status === "paused" ? "Restart" : "Start"}
                               </Button>
                             )}
                             {step.status === "running" && (
@@ -1002,7 +1098,7 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
                                 <Button
                                   variant="secondary"
                                   onClick={() =>
-                                    void submit(
+                                    void submitRecovery(
                                       `/incidents/${incidentID}/recoveries/${recovery.id}/steps/${step.id}`,
                                       {
                                         expected_version:
@@ -1028,7 +1124,7 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
                   onSubmit={(event) => {
                     event.preventDefault();
                     const form = new FormData(event.currentTarget);
-                    void submit(
+                    void submitRecovery(
                       `/incidents/${incidentID}/recoveries/${recovery.id}/communications`,
                       {
                         expected_version: recovery.current_version,
