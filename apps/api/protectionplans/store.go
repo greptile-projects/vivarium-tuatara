@@ -62,26 +62,28 @@ type Source struct {
 	Payload  []byte  `json:"-"`
 }
 type Capture struct {
-	ID                string    `json:"id"`
-	PlanVersion       int       `json:"plan_version"`
-	CommitmentVersion int       `json:"commitment_version"`
-	SourceRevision    string    `json:"source_revision"`
-	ManifestSHA256    string    `json:"manifest_sha256"`
-	EntryCount        int       `json:"entry_count"`
-	PlaintextBytes    int64     `json:"plaintext_bytes"`
-	StoredBytes       int64     `json:"stored_bytes"`
-	Location          string    `json:"location"`
-	RetainUntil       time.Time `json:"retain_until"`
-	CapturedBy        string    `json:"captured_by"`
-	CapturedAt        time.Time `json:"captured_at"`
-	Validation        string    `json:"validation"`
-	Freshness         string    `json:"freshness"`
-	ValidationChecks  []string  `json:"validation_checks"`
-	CostUnits         int64     `json:"cost_units"`
-	Failure           string    `json:"failure,omitempty"`
-	Recoverable       bool      `json:"recoverable"`
-	Ciphertext        string    `json:"-"`
-	Nonce             string    `json:"-"`
+	ID                string     `json:"id"`
+	PlanVersion       int        `json:"plan_version"`
+	CommitmentVersion int        `json:"commitment_version"`
+	Resources         []Resource `json:"resources"`
+	FreshnessMinutes  int        `json:"freshness_minutes"`
+	SourceRevision    string     `json:"source_revision"`
+	ManifestSHA256    string     `json:"manifest_sha256"`
+	EntryCount        int        `json:"entry_count"`
+	PlaintextBytes    int64      `json:"plaintext_bytes"`
+	StoredBytes       int64      `json:"stored_bytes"`
+	Location          string     `json:"location"`
+	RetainUntil       time.Time  `json:"retain_until"`
+	CapturedBy        string     `json:"captured_by"`
+	CapturedAt        time.Time  `json:"captured_at"`
+	Validation        string     `json:"validation"`
+	Freshness         string     `json:"freshness"`
+	ValidationChecks  []string   `json:"validation_checks"`
+	CostUnits         int64      `json:"cost_units"`
+	Failure           string     `json:"failure,omitempty"`
+	Recoverable       bool       `json:"recoverable"`
+	Ciphertext        string     `json:"-"`
+	Nonce             string     `json:"-"`
 }
 type Store struct {
 	root string
@@ -183,7 +185,7 @@ func (s *Store) Capture(idv, actor string, expected int, source Source) (Plan, e
 	}
 	sealed := gcm.Seal(nil, nonce, plain, []byte(p.ID))
 	now := s.now()
-	c := Capture{ID: id(), PlanVersion: p.Version, CommitmentVersion: p.CommitmentVersion, SourceRevision: source.Revision, ManifestSHA256: hex.EncodeToString(mh[:]), EntryCount: len(source.Entries), PlaintextBytes: int64(len(plain)), StoredBytes: int64(len(sealed)), Location: p.Destination, RetainUntil: now.Add(time.Duration(p.RetentionDays) * 24 * time.Hour), CapturedBy: actor, CapturedAt: now, Validation: "verified", Freshness: "fresh", ValidationChecks: append([]string(nil), p.ValidationChecks...), CostUnits: int64((len(sealed) + 1023) / 1024), Recoverable: true, Ciphertext: hex.EncodeToString(sealed), Nonce: hex.EncodeToString(nonce)}
+	c := Capture{ID: id(), PlanVersion: p.Version, CommitmentVersion: p.CommitmentVersion, Resources: append([]Resource(nil), p.Resources...), FreshnessMinutes: p.FreshnessMinutes, SourceRevision: source.Revision, ManifestSHA256: hex.EncodeToString(mh[:]), EntryCount: len(source.Entries), PlaintextBytes: int64(len(plain)), StoredBytes: int64(len(sealed)), Location: p.Destination, RetainUntil: now.Add(time.Duration(p.RetentionDays) * 24 * time.Hour), CapturedBy: actor, CapturedAt: now, Validation: "verified", Freshness: "fresh", ValidationChecks: append([]string(nil), p.ValidationChecks...), CostUnits: int64((len(sealed) + 1023) / 1024), Recoverable: true, Ciphertext: hex.EncodeToString(sealed), Nonce: hex.EncodeToString(nonce)}
 	p.Captures = append(p.Captures, c)
 	p.UpdatedAt = now
 	if e = s.write(p); e != nil {
@@ -254,7 +256,11 @@ func (s *Store) project(p Plan) Plan {
 		if now.After(c.RetainUntil) {
 			failure = "retention_expired"
 		}
-		if now.After(c.CapturedAt.Add(time.Duration(p.FreshnessMinutes) * time.Minute)) {
+		freshnessMinutes := c.FreshnessMinutes
+		if freshnessMinutes == 0 {
+			freshnessMinutes = p.FreshnessMinutes
+		}
+		if now.After(c.CapturedAt.Add(time.Duration(freshnessMinutes) * time.Minute)) {
 			c.Freshness = "stale"
 		} else {
 			c.Freshness = "fresh"

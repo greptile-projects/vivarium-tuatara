@@ -3262,7 +3262,8 @@ immutable and a changed commitment must be acknowledged by a current-version pla
 resolves and integrity-checks every source, walks the full Git tree or reads the credential-free
 environment projection, derives per-entry checksums and a complete manifest, and AES-GCM encrypts the
 manifest and payload at rest. Any missing or corrupt input rejects the whole capture; partial captures
-are never published.
+are never published. The capture also freezes the plan version, source-resource identities, and
+freshness interval used to evaluate it; successor plan policy applies only to later captures.
 
 `GET /repositories/{id}/protection-plans` and `GET .../{plan_id}` use ordinary repository read
 visibility. They return coverage counts, source and manifest checksums, encrypted byte counts,

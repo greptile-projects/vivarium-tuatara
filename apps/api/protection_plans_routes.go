@@ -252,7 +252,11 @@ func refreshProtectionSources(plans []protectionplans.Plan, git *storage.Store, 
 		p := &plans[pi]
 		for ci := range p.Captures {
 			c := &p.Captures[ci]
-			for _, r := range p.Resources {
+			resources := c.Resources
+			if len(resources) == 0 {
+				resources = p.Resources
+			}
+			for _, r := range resources {
 				missing := false
 				if r.Kind == "repository" {
 					repo, e := git.Open(p.RepositoryID)

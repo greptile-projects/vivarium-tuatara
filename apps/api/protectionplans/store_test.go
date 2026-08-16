@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestEncryptedCaptureProjectsProofWithoutProtectedContent(t *testing.T) {
@@ -75,5 +76,30 @@ func TestKeyLossCannotRemainRecoverable(t *testing.T) {
 	}
 	if got.Captures[0].Recoverable || got.Captures[0].Failure != "encryption_key_unavailable" {
 		t.Fatalf("keyless capture = %#v", got.Captures[0])
+	}
+}
+
+func TestRevisionDoesNotRewriteHistoricalCapturePolicy(t *testing.T) {
+	store, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	firstResource := Resource{TargetID: "source", Kind: "repository", Revision: strings.Repeat("a", 40)}
+	plan, err := store.Create("repo", "owner", Plan{Name: "Primary", CommitmentID: "commitment", CommitmentVersion: 1, Mode: "snapshot", Resources: []Resource{firstResource}, Destination: "vault://primary", Jurisdiction: "EU", RetentionDays: 1, FreshnessMinutes: 10, AccessorIDs: []string{"owner"}, ValidationChecks: []string{"decrypt"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err = store.Capture(plan.ID, "owner", 1, Source{Revision: "v1", Entries: []Entry{{Path: "README", Kind: "blob", Version: "one", SHA256: strings.Repeat("a", 64), Size: 4}}, Payload: []byte("safe")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(5 * time.Minute)
+	secondResource := Resource{TargetID: "source", Kind: "repository", Revision: strings.Repeat("b", 40)}
+	plan, err = store.Revise(plan.ID, 1, "owner", Plan{Name: "Primary", CommitmentID: "commitment", CommitmentVersion: 1, Mode: "snapshot", Resources: []Resource{secondResource}, Destination: "vault://primary", Jurisdiction: "EU", RetentionDays: 1, FreshnessMinutes: 1, AccessorIDs: []string{"owner"}, ValidationChecks: []string{"decrypt"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture := plan.Captures[0]
+	if capture.Freshness != "fresh" || capture.FreshnessMinutes != 10 || len(capture.Resources) != 1 || capture.Resources[0].Revision != firstResource.Revision {
+		t.Fatalf("historical capture changed under successor: %#v", capture)
 	}
 }

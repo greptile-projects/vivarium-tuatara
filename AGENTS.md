@@ -1873,7 +1873,9 @@ whenever dependencies change or the web job fails before it starts.
   never protected paths, contents, ciphertext, nonces, or environment credentials. Reads revalidate
   AES-GCM integrity, manifest checksums, retention, and source existence; corruption, key loss,
   expiry, or deleted commits/environments cannot remain recoverable. Plans and captures grant no
-  routine content, restore, repository, environment, or deployment authority.
+  routine content, restore, repository, environment, or deployment authority. Captures freeze their
+  plan version, resource identities, and freshness interval; never evaluate retained captures through
+  successor-plan resources or timing.
 
   Update it when you change how the apps fit together, not for every change.
 
