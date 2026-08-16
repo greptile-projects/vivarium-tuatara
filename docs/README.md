@@ -154,6 +154,22 @@ dropped capabilities, no new privileges, and CPU/memory/process limits. README/s
 missing entrypoints, or output mismatches fail. Unimplemented declared journey names fail instead of
 producing completion evidence, and the ephemeral filesystem is removed after the run is recorded.
 
+Authenticated repository readers, including repository-bound read-only agents, can turn a failed
+exercise into a citation-bound investigation. Permitted references resolve to retained exercise
+results, visible commits and releases, recovery configuration, dependencies, and accountable owners;
+findings retain their author type, confidence, and uncertainty. Investigation never grants restore,
+production, Git-write, policy, or delivery authority. The repository owner can freeze one finding and
+the exact default-branch base into an ordinary proposal with ordered human/agent tasks. Work then uses
+the existing assignment, session/workspace, pull, check, review, integration, release, and approval
+controls. A later successful current exercise with changed plan or source evidence links back only
+when it retains the same scenario, plan, commitment, step contract, and passes the originally failed
+or cited results. This preserves both the original weakness and the accountable repair trail. Code
+citations are limited to commits reachable from participant-visible non-security branches. Final
+verification also re-resolves the exact proposal origin, acceptance criteria, and ordered task IDs;
+every task must be completed by a merged contribution whose implementation descends from the frozen
+base and whose context revision still matches the current task mandate. Fresh rehearsal evidence
+cannot substitute for missing, obsolete, or unfinished governed delivery.
+
 ## Locale coverage contracts
 
 Repository participants publish complete, compare-and-swap locale plans through

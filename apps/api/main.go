@@ -941,7 +941,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerProtectionPlanRoutes(mux, store, repositoryCatalog, authStore, protectionPlanStore, recoveryCommitmentStore, deploymentStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && store != nil && recoveryCommitmentStore != nil && protectionPlanStore != nil && recoveryExerciseStore != nil {
-		registerRecoveryExerciseRoutes(mux, store, deploymentStore, repositoryCatalog, authStore, protectionPlanStore, recoveryCommitmentStore, recoveryExerciseStore)
+		registerRecoveryExerciseRoutes(mux, store, deploymentStore, releaseStore, repositoryCatalog, authStore, protectionPlanStore, recoveryCommitmentStore, recoveryExerciseStore, proposalStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil && localizationStore != nil {
 		if localePlanStore != nil {

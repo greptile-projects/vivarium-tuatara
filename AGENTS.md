@@ -1891,6 +1891,23 @@ whenever dependencies change or the web job fails before it starts.
   Application code runs with no network, a read-only source mount, dropped capabilities, no new
   privileges, and CPU/memory/process limits. README/static-only captures and unregistered journeys
   fail. The ephemeral filesystem is removed after evidence persistence.
+  Failed or risky exercises carry authenticated, repository-readable investigations that correlate
+  exact permitted exercise results, visible commits, releases, protection-plan configuration,
+  recovery commitments, dependencies, and accountable owners. Human collaborators and
+  repository-bound read-only agents may open investigations and publish citation-bound findings with
+  explicit uncertainty, but cannot conclude work, restore data, or mutate protected state through
+  those records. Only the current repository owner converts a finding into an ordinary ordered
+  human/agent proposal task plan at the exact default-branch base; resulting sessions, workspaces,
+  pulls, checks, policy changes, integration, and releases retain their existing authority boundaries.
+  An improvement remains open until the owner cites a later successful, current isolated exercise
+  for the same scenario, plan, commitment, ordered step contract, and originally failed or cited
+  results, whose plan version or protected source changed; the fresh evidence verifies the repair
+  without rewriting the original gap. Investigation code citations resolve only commits reachable
+  from participant-visible non-`vivarium-security/*` branches. Verification also re-resolves the
+  exact proposal reasoning and task IDs, requires every task's current contribution to be merged and
+  completed at the task's exact current context revision, and proves each implementation revision
+  descends from the frozen base; missing, replaced, obsolete, unfinished, or unrelated governed work
+  fails closed.
 
   Update it when you change how the apps fit together, not for every change.
 
