@@ -79,17 +79,48 @@ type Team struct {
 }
 
 type Agent struct {
-	ID           string    `json:"id"`
-	Name         string    `json:"name"`
-	Slug         string    `json:"slug"`
-	Description  string    `json:"description,omitempty"`
-	Visibility   string    `json:"visibility"`
-	Capabilities []string  `json:"capabilities"`
-	OperatorIDs  []string  `json:"operator_ids"`
-	TeamIDs      []string  `json:"team_ids"`
-	Version      int       `json:"version"`
-	RegisteredBy string    `json:"registered_by"`
-	RegisteredAt time.Time `json:"registered_at"`
+	ID           string         `json:"id"`
+	Name         string         `json:"name"`
+	Slug         string         `json:"slug"`
+	Description  string         `json:"description,omitempty"`
+	Visibility   string         `json:"visibility"`
+	Capabilities []string       `json:"capabilities"`
+	OperatorIDs  []string       `json:"operator_ids"`
+	TeamIDs      []string       `json:"team_ids"`
+	Version      int            `json:"version"`
+	RegisteredBy string         `json:"registered_by"`
+	RegisteredAt time.Time      `json:"registered_at"`
+	Profiles     []AgentProfile `json:"profiles"`
+}
+
+// AgentProfile is disclosure, not authority. Claims are operator-published;
+// verification is generated from platform-owned identity evidence.
+type AgentProfile struct {
+	Version                   int                     `json:"version"`
+	Summary                   string                  `json:"summary"`
+	SupportedTasks            []string                `json:"supported_tasks"`
+	Tools                     []string                `json:"tools"`
+	ModelProvenance           string                  `json:"model_provenance"`
+	ExecutionProvenance       string                  `json:"execution_provenance"`
+	DataUse                   string                  `json:"data_use"`
+	Retention                 string                  `json:"retention"`
+	Pricing                   string                  `json:"pricing"`
+	ResourceRequirements      []string                `json:"resource_requirements"`
+	RequestedCapabilities     []string                `json:"requested_capabilities"`
+	Availability              string                  `json:"availability"`
+	Support                   string                  `json:"support"`
+	Subprocessors             []string                `json:"subprocessors"`
+	RemoteExecutionBoundaries []string                `json:"remote_execution_boundaries"`
+	ChangeSummary             string                  `json:"change_summary"`
+	PublishedBy               string                  `json:"published_by"`
+	PublishedAt               time.Time               `json:"published_at"`
+	VerifiedEvidence          []AgentVerifiedEvidence `json:"verified_evidence"`
+}
+
+type AgentVerifiedEvidence struct {
+	Kind       string    `json:"kind"`
+	Statement  string    `json:"statement"`
+	VerifiedAt time.Time `json:"verified_at"`
 }
 
 type ResourceScope struct {
@@ -1052,8 +1083,54 @@ func (s *Store) RegisterAgent(id, actor, name, slug, description, visibility str
 		if e != nil {
 			return e
 		}
-		v.Agents = append(v.Agents, Agent{ID: aid, Name: name, Slug: strings.ToLower(strings.TrimSpace(slug)), Description: strings.TrimSpace(description), Visibility: visibility, Capabilities: caps, OperatorIDs: ops, TeamIDs: teams, Version: 1, RegisteredBy: actor, RegisteredAt: s.now().Truncate(time.Microsecond)})
+		v.Agents = append(v.Agents, Agent{ID: aid, Name: name, Slug: strings.ToLower(strings.TrimSpace(slug)), Description: strings.TrimSpace(description), Visibility: visibility, Capabilities: caps, OperatorIDs: ops, TeamIDs: teams, Version: 1, RegisteredBy: actor, RegisteredAt: s.now().Truncate(time.Microsecond), Profiles: []AgentProfile{}})
 		return s.event(v, "agent.registered", actor, aid, map[string]any{"operators": ops, "capabilities": caps})
+	})
+}
+
+func (s *Store) PublishAgentProfile(id, agentID, actor string, expectedVersion int, in AgentProfile) (Organization, error) {
+	if !validID(agentID) || expectedVersion < 0 || len(in.Summary) > 2000 || len(in.ModelProvenance) > 2000 || len(in.ExecutionProvenance) > 2000 || len(in.DataUse) > 3000 || len(in.Retention) > 2000 || len(in.Pricing) > 2000 || len(in.Availability) > 2000 || len(in.Support) > 2000 || len(in.ChangeSummary) > 1000 {
+		return Organization{}, ErrInvalid
+	}
+	cleanList := func(values []string, max int) ([]string, bool) {
+		return normalizeList(values, func(x string) bool { _, ok := clean(x, max); return ok })
+	}
+	var ok bool
+	if in.SupportedTasks, ok = cleanList(in.SupportedTasks, 300); !ok || len(in.SupportedTasks) == 0 || len(in.SupportedTasks) > 50 {
+		return Organization{}, ErrInvalid
+	}
+	for target, max := range map[*[]string]int{&in.Tools: 200, &in.ResourceRequirements: 300, &in.RequestedCapabilities: 300, &in.Subprocessors: 500, &in.RemoteExecutionBoundaries: 500} {
+		if *target, ok = cleanList(*target, max); !ok || len(*target) > 50 {
+			return Organization{}, ErrInvalid
+		}
+	}
+	required := []string{in.Summary, in.ModelProvenance, in.ExecutionProvenance, in.DataUse, in.Retention, in.Pricing, in.Availability, in.Support, in.ChangeSummary}
+	for _, value := range required {
+		if strings.TrimSpace(value) == "" {
+			return Organization{}, ErrInvalid
+		}
+	}
+	return s.mutate(id, func(v *Organization) error {
+		if !HasRole(*v, actor, "owner") {
+			return ErrNotFound
+		}
+		i := agentIndex(v, agentID)
+		if i < 0 {
+			return ErrNotFound
+		}
+		a := &v.Agents[i]
+		if len(a.Profiles) != expectedVersion {
+			return ErrConflict
+		}
+		now := s.now().Truncate(time.Microsecond)
+		in.Version, in.PublishedBy, in.PublishedAt = expectedVersion+1, actor, now
+		in.VerifiedEvidence = []AgentVerifiedEvidence{
+			{Kind: "stable_identity", Statement: "Platform identity agent:" + a.ID + " belongs to organization:" + v.ID + " and is distinct from user and installation principals.", VerifiedAt: now},
+			{Kind: "current_operators", Statement: fmt.Sprintf("Platform membership currently validates %d declared operator(s).", len(a.OperatorIDs)), VerifiedAt: now},
+		}
+		a.Profiles = append(a.Profiles, in)
+		a.Version++
+		return s.event(v, "agent.profile.published", actor, agentID, map[string]any{"profile_version": in.Version, "change_summary": in.ChangeSummary})
 	})
 }
 

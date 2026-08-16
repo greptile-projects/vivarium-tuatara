@@ -355,7 +355,13 @@ func TestOrganizationTeamDirectoryExplainsEffectivePeopleAgentsAndResponsibility
 	child = group.Teams[1]
 	authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/teams/"+child.ID+"/responsibilities", `{"repository_id":"`+repo.ID+`","area":"release runtime","description":"Owns runtime release health.","expected_version":2}`, owner.Credential.Token, http.StatusCreated).Body.Close()
 	authenticatedRequest(t, http.MethodPut, server.URL+"/organizations/"+group.ID+"/teams/"+child.ID+"/members", `{"user_id":"`+member.User.ID+`","role":"member","expected_version":1}`, owner.Credential.Token, http.StatusConflict).Body.Close()
-	authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/agents", `{"name":"Release Scout","slug":"release-scout","visibility":"public","capabilities":["inspect checks","summarize failures"],"operator_ids":["`+owner.User.ID+`"],"team_ids":["`+child.ID+`"]}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	agentResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/agents", `{"name":"Release Scout","slug":"release-scout","visibility":"public","capabilities":["inspect checks","summarize failures"],"operator_ids":["`+owner.User.ID+`"],"team_ids":["`+child.ID+`"]}`, owner.Credential.Token, http.StatusCreated)
+	json.NewDecoder(agentResponse.Body).Decode(&group)
+	agentResponse.Body.Close()
+	agentID := group.Agents[0].ID
+	profile := `{"expected_version":0,"profile":{"summary":"Reviews release failures","supported_tasks":["review checks"],"tools":["git"],"model_provenance":"Operator-selected model recorded per run","execution_provenance":"Operator-managed remote container","data_use":"Repository context is used for the requested review","retention":"Deleted after 24 hours","pricing":"One compute credit per run","resource_requirements":["read-only checkout"],"requested_capabilities":["repository:read"],"availability":"Weekdays","support":"support@example.test","subprocessors":["Compute Co for inference"],"remote_execution_boundaries":["Context crosses to Compute Co"],"change_summary":"Initial profile","verified_evidence":[{"kind":"forged","statement":"trust me"}]}}`
+	authenticatedRequest(t, http.MethodPut, server.URL+"/organizations/"+group.ID+"/agents/"+agentID+"/profile", profile, owner.Credential.Token, http.StatusOK).Body.Close()
+	authenticatedRequest(t, http.MethodPut, server.URL+"/organizations/"+group.ID+"/agents/"+agentID+"/profile", profile, owner.Credential.Token, http.StatusConflict).Body.Close()
 	hiddenResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+group.ID+"/teams", `{"name":"Internal","slug":"internal","visibility":"organization"}`, owner.Credential.Token, http.StatusCreated)
 	json.NewDecoder(hiddenResponse.Body).Decode(&group)
 	hiddenResponse.Body.Close()
@@ -381,6 +387,9 @@ func TestOrganizationTeamDirectoryExplainsEffectivePeopleAgentsAndResponsibility
 	}
 	if len(directory.Events) != 0 || directory.Agents[0].OperatorIDs[0] != owner.User.ID {
 		t.Fatalf("public projection leaked audit or hid operator: %#v", directory)
+	}
+	if got := directory.Agents[0].Profiles; len(got) != 1 || got[0].Version != 1 || len(got[0].VerifiedEvidence) != 2 || got[0].VerifiedEvidence[0].Kind == "forged" {
+		t.Fatalf("public profile did not separate claims and verification: %#v", got)
 	}
 	internal := authenticatedRequest(t, http.MethodGet, server.URL+"/organizations/"+group.ID+"/directory", "", member.Credential.Token, http.StatusOK)
 	json.NewDecoder(internal.Body).Decode(&directory)

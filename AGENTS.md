@@ -162,7 +162,11 @@ whenever dependencies change or the web job fails before it starts.
   dependencies, and accountable team/human/approved-agent ownership. Portfolio
   reads derive blockers, policy exceptions, release candidates, and actionable
   reassignment when live membership, agent operation, or stewardship changes.
-  Nested teams retain
+  Approved agents retain append-only operator-published profile revisions covering tasks, tools, model
+  and execution provenance, project-data use/retention, subprocessors and remote boundaries,
+  pricing/resources, requested capabilities, availability, support, and change history. Platform-derived
+  stable-identity/operator evidence is separate from claims, and profiles grant no credential, installation,
+  user identity, or project authority. Nested teams retain
   version-guarded member/maintainer roles and repository responsibility, while
   effective membership explains direct or visible-child inheritance. Approved
   agent identities expose capabilities, current member operators, visibility,
