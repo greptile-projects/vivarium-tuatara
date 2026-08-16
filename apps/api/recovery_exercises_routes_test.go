@@ -29,7 +29,7 @@ func TestRecoveryExecutorAllowsOnlyDeclaredBoundedChecks(t *testing.T) {
 	}
 }
 
-func TestRecoveryExecutorRestoresFilesBeforeRunningSmokeJourney(t *testing.T) {
+func TestRecoveryExecutorRejectsReadmeOnlySmokeJourney(t *testing.T) {
 	content := []byte("usable system")
 	sum := sha256.Sum256(content)
 	payload, err := json.Marshal(map[string]any{"source": map[string]any{"objects": map[string]storage.Object{"blob": {ID: "blob", Type: storage.BlobObject, Size: int64(len(content)), Content: content}}}})
@@ -44,7 +44,36 @@ func TestRecoveryExecutorRestoresFilesBeforeRunningSmokeJourney(t *testing.T) {
 	if status, _, artifact, _ := run(recoveryexercises.Step{Kind: "restore", Command: "restore:protected-manifest"}); status != "passed" || artifact != "restored artifacts: 1" {
 		t.Fatalf("restore = %q %q", status, artifact)
 	}
-	if status, log, _, _ := run(recoveryexercises.Step{Kind: "journey", Command: "journey:smoke"}); status != "passed" || !strings.Contains(log, "executed") {
+	if status, _, _, _ := run(recoveryexercises.Step{Kind: "journey", Command: "journey:smoke"}); status != "failed" {
+		t.Fatalf("README-only journey = %q", status)
+	}
+}
+
+func TestRecoveryExecutorRunsDeclaredHTTPApplicationJourney(t *testing.T) {
+	health := []byte(`{"status":"healthy"}`)
+	healthSum := sha256.Sum256(health)
+	contract, err := json.Marshal(recoverySmokeContract{Version: "v1", Entrypoint: "public", RequestPath: "/health.json", ExpectedStatus: 200, ExpectedSHA256: hex.EncodeToString(healthSum[:])})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contractSum := sha256.Sum256(contract)
+	payload, err := json.Marshal(map[string]any{"source": map[string]any{"objects": map[string]storage.Object{
+		"contract": {ID: "contract", Type: storage.BlobObject, Size: int64(len(contract)), Content: contract},
+		"health":   {ID: "health", Type: storage.BlobObject, Size: int64(len(health)), Content: health},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := protectionplans.RestoredSource{Manifest: []protectionplans.Entry{
+		{Path: ".vivarium/recovery-smoke.json", Kind: "blob", Version: "contract", SHA256: hex.EncodeToString(contractSum[:]), Size: int64(len(contract))},
+		{Path: "public/health.json", Kind: "blob", Version: "health", SHA256: hex.EncodeToString(healthSum[:]), Size: int64(len(health))},
+	}, Payload: payload}
+	run, cleanup := newExerciseExecutor(source, []string{"smoke"})
+	defer cleanup()
+	if status, _, _, _ := run(recoveryexercises.Step{Kind: "restore", Command: "restore:protected-manifest"}); status != "passed" {
+		t.Fatalf("restore = %q", status)
+	}
+	if status, log, _, _ := run(recoveryexercises.Step{Kind: "journey", Command: "journey:smoke"}); status != "passed" || !strings.Contains(log, "HTTP") {
 		t.Fatalf("journey = %q %q", status, log)
 	}
 }

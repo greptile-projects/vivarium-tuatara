@@ -3286,8 +3286,12 @@ only into an ephemeral no-network/no-production-credentials environment, runs st
 order, and never writes restored content to repository or environment authorities.
 Repository restore verifies each blob checksum before writing it with restrictive permissions;
 environment restore writes only the deployment store's credential-free public projection. The
-registered `smoke` journey executes against that populated filesystem. A declared journey without a
-registered bounded implementation fails, and the filesystem is deleted after the run completes.
+registered `smoke` journey requires exactly one `.vivarium/recovery-smoke.json` v1 contract in the
+restored repository. It names a relative static application `entrypoint`, absolute `request_path`,
+`expected_status`, and exact `expected_sha256`; the runner invokes the restored HTTP handler without
+opening a socket and verifies its response. README-only captures, missing entrypoints, and mismatched
+responses fail. A declared journey without a registered bounded implementation fails, and the
+filesystem is deleted after the run completes.
 
 `GET /repositories/{id}/recovery-exercises` uses ordinary repository visibility and returns the
 scenario, isolated environment identity, per-step timing, bounded command, redacted log/artifact,

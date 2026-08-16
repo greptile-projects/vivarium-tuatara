@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
@@ -166,10 +168,10 @@ func newExerciseExecutor(source protectionplans.RestoredSource, declared []strin
 			if name != "smoke" {
 				return "failed", "declared journey has no bounded runner implementation", "", false
 			}
-			if _, err := os.Stat(filepath.Join(runtime.root, ".recovery", "manifest.json")); err != nil || runtime.restored == 0 {
-				return "failed", "restored system failed the smoke journey", "", false
+			if err := runRecoverySmoke(runtime); err != nil {
+				return "failed", "restored application failed its declared smoke journey", "", false
 			}
-			return "passed", "bounded smoke journey executed against restored environment", "journey:smoke", false
+			return "passed", "bounded HTTP smoke journey returned its declared response", "journey:smoke", false
 		case "manual":
 			if step.Command != "manual:confirm" {
 				return "failed", "manual command is not permitted", "", true
@@ -179,6 +181,52 @@ func newExerciseExecutor(source protectionplans.RestoredSource, declared []strin
 		return "failed", "unsupported bounded command", "", false
 	}
 	return execute, cleanup
+}
+
+type recoverySmokeContract struct {
+	Version        string `json:"version"`
+	Entrypoint     string `json:"entrypoint"`
+	RequestPath    string `json:"request_path"`
+	ExpectedStatus int    `json:"expected_status"`
+	ExpectedSHA256 string `json:"expected_sha256"`
+}
+
+func runRecoverySmoke(runtime *recoveryRuntime) error {
+	contracts, err := filepath.Glob(filepath.Join(runtime.root, "workspace", "*", ".vivarium", "recovery-smoke.json"))
+	if err != nil || len(contracts) != 1 {
+		return recoveryexercises.ErrInvalid
+	}
+	body, err := os.ReadFile(contracts[0])
+	if err != nil || len(body) > 16*1024 {
+		return recoveryexercises.ErrInvalid
+	}
+	var contract recoverySmokeContract
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&contract) != nil || contract.Version != "v1" || contract.ExpectedStatus < 100 || contract.ExpectedStatus > 599 || len(contract.ExpectedSHA256) != 64 || !strings.HasPrefix(contract.RequestPath, "/") {
+		return recoveryexercises.ErrInvalid
+	}
+	if _, err = hex.DecodeString(contract.ExpectedSHA256); err != nil {
+		return recoveryexercises.ErrInvalid
+	}
+	cleanEntrypoint := filepath.Clean(contract.Entrypoint)
+	if cleanEntrypoint == "." || filepath.IsAbs(cleanEntrypoint) || cleanEntrypoint == ".." || strings.HasPrefix(cleanEntrypoint, ".."+string(filepath.Separator)) {
+		return recoveryexercises.ErrInvalid
+	}
+	targetRoot := filepath.Dir(filepath.Dir(contracts[0]))
+	applicationRoot := filepath.Join(targetRoot, cleanEntrypoint)
+	info, err := os.Stat(applicationRoot)
+	if err != nil || !info.IsDir() {
+		return recoveryexercises.ErrInvalid
+	}
+	request := httptest.NewRequest(http.MethodGet, "http://recovery.invalid"+contract.RequestPath, nil)
+	response := httptest.NewRecorder()
+	http.FileServer(http.Dir(applicationRoot)).ServeHTTP(response, request)
+	sum := sha256.Sum256(response.Body.Bytes())
+	if response.Code != contract.ExpectedStatus || hex.EncodeToString(sum[:]) != strings.ToLower(contract.ExpectedSHA256) {
+		return recoveryexercises.ErrInvalid
+	}
+	return nil
 }
 
 func restoreExercisePayload(runtime *recoveryRuntime, source protectionplans.RestoredSource) error {

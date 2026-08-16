@@ -147,9 +147,11 @@ source changes. Exercises never write restored data into repository or governed 
 records default beneath `$RECOVERY_EXERCISE_STORAGE_ROOT` (`recovery-exercises`).
 Repository captures are materialized as checksum-verified Git blobs with restrictive permissions;
 governed environment captures restore only their credential-free public projection. The registered
-`smoke` journey reads the populated runtime and fails when no restorable artifact or runtime manifest
-exists. Unimplemented declared journey names fail instead of producing completion evidence, and the
-ephemeral filesystem is removed after the run is recorded.
+`smoke` journey requires one restored `.vivarium/recovery-smoke.json` v1 contract naming a restored
+static application root, HTTP request path, expected status, and exact response SHA-256. It invokes
+that handler without opening a socket and fails README-only captures, missing entrypoints, or response
+mismatches. Unimplemented declared journey names fail instead of producing completion evidence, and
+the ephemeral filesystem is removed after the run is recorded.
 
 ## Locale coverage contracts
 
