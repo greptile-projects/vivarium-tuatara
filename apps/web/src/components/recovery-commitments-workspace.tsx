@@ -130,6 +130,16 @@ type Exercise = {
     manual: boolean;
     objective_achieved: boolean;
   }[];
+  investigations: {
+    id: string;
+    title: string;
+    version: number;
+    opened_by: string;
+    actor_type: "human" | "agent";
+    evidence: { id: string; kind: string; resource_id: string; revision?: string; summary: string }[];
+    findings: { id: string; statement: string; uncertainty: string; confidence: string; citation_ids: string[]; created_by: string; actor_type: string }[];
+  }[];
+  improvements: { id: string; finding_id: string; proposal_id: string; task_ids: string[]; status: string; follow_up_exercise_id?: string }[];
 };
 const value = (f: FormData, n: string) => String(f.get(n) ?? "").trim(),
   list = (v: string) =>
@@ -173,7 +183,7 @@ export function RecoveryCommitmentsWorkspace({
       ]);
       setItems(out.commitments);
       setPlans(protectedState.plans);
-      setExercises(exerciseState.exercises);
+      setExercises(exerciseState.exercises.map((exercise) => ({ ...exercise, investigations: exercise.investigations ?? [], improvements: exercise.improvements ?? [] })));
       setSelected(
         (x) =>
           out.commitments.find((v) => v.id === x?.id) ?? out.commitments[0],
@@ -454,6 +464,18 @@ export function RecoveryCommitmentsWorkspace({
     } finally {
       setBusy(false);
     }
+  }
+  async function investigate(event: FormEvent<HTMLFormElement>, exercise: Exercise) {
+    event.preventDefault(); if (!token) return; setBusy(true); setError(""); const form = new FormData(event.currentTarget);
+    try { await api(`/repositories/${repositoryID}/recovery-exercises/${exercise.id}/investigations`, { method: "POST", body: JSON.stringify({ title: value(form, "title"), evidence: [{ kind: "exercise_result", resource_id: value(form, "step_id"), summary: value(form, "summary") }] }) }, token); await load(); } catch (x) { setError(x instanceof Error ? x.message : "Investigation could not be opened."); } finally { setBusy(false); }
+  }
+  async function finding(event: FormEvent<HTMLFormElement>, exercise: Exercise, investigation: Exercise["investigations"][number]) {
+    event.preventDefault(); if (!token) return; setBusy(true); setError(""); const form = new FormData(event.currentTarget);
+    try { await api(`/repositories/${repositoryID}/recovery-exercises/${exercise.id}/investigations/${investigation.id}/findings`, { method: "POST", body: JSON.stringify({ expected_version: investigation.version, finding: { statement: value(form, "statement"), uncertainty: value(form, "uncertainty"), confidence: value(form, "confidence"), citation_ids: list(value(form, "citations")) } }) }, token); await load(); } catch (x) { setError(x instanceof Error ? x.message : "Finding could not be published."); } finally { setBusy(false); }
+  }
+  async function improve(event: FormEvent<HTMLFormElement>, exercise: Exercise, investigation: Exercise["investigations"][number], findingID: string) {
+    event.preventDefault(); if (!token) return; setBusy(true); setError(""); const form = new FormData(event.currentTarget);
+    try { await api(`/repositories/${repositoryID}/recovery-exercises/${exercise.id}/improvements`, { method: "POST", body: JSON.stringify({ investigation_id: investigation.id, finding_id: findingID, title: value(form, "title"), body: value(form, "body"), acceptance_criteria: list(value(form, "criteria")), tasks: [{ title: value(form, "task"), assignee_type: value(form, "assignee_type"), assignee_id: value(form, "assignee_id") }] }) }, token); await load(); } catch (x) { setError(x instanceof Error ? x.message : "Improvement could not be published."); } finally { setBusy(false); }
   }
   return (
     <main id="main-content" className="space-y-6">
@@ -957,6 +979,22 @@ export function RecoveryCommitmentsWorkspace({
                   Gaps: {x.gaps.join(" · ") || "none"}. Manual steps:{" "}
                   {x.manual_steps.join(" · ") || "none"}.
                 </p>
+                {x.investigations.length === 0 && (
+                  <form onSubmit={(event) => void investigate(event, x)} className="mt-3 grid gap-2 rounded border p-3 md:grid-cols-3">
+                    <Field n="title" l="Investigation title" v={`Investigate ${x.name} gaps`} />
+                    <Select n="step_id" l="Cited exercise result" v={x.results.find((result) => result.status !== "passed")?.step_id ?? x.results[0]?.step_id ?? ""} options={(x.results.some((result) => result.status !== "passed") ? x.results.filter((result) => result.status !== "passed") : x.results).map((result) => result.step_id)} />
+                    <Field n="summary" l="Why this evidence matters" v={x.gaps[0]} />
+                    <Button disabled={busy} variant="secondary">Open evidence investigation</Button>
+                  </form>
+                )}
+                {x.investigations.map((investigation) => (
+                  <section key={investigation.id} className="mt-3 rounded border p-3">
+                    <strong>{investigation.title}</strong><p className="text-xs text-[var(--muted)]">v{investigation.version} · {investigation.actor_type} {investigation.opened_by} · cited evidence only</p>
+                    {investigation.findings.map((findingItem) => <div key={findingItem.id} className="mt-2 rounded bg-[var(--surface-soft)] p-3 text-xs"><b>{findingItem.statement}</b><p>Uncertainty: {findingItem.uncertainty} · confidence {findingItem.confidence}</p>{!x.improvements.some((item) => item.finding_id === findingItem.id) && <form onSubmit={(event) => void improve(event, x, investigation, findingItem.id)} className="mt-2 grid gap-2 md:grid-cols-3"><Field n="title" l="Work proposal" v={`Repair ${x.name} gap`} /><Field n="body" l="Review context" v={findingItem.statement} /><Field n="criteria" l="Acceptance criteria" v="Fresh isolated exercise passes" /><Field n="task" l="Task" v="Repair recovery plan gap" /><Select n="assignee_type" l="Owner type" v="human" options={["human", "agent"]} /><Field n="assignee_id" l="Owner ID" v={user?.id} /><Button disabled={busy}>Publish governed work</Button></form>}</div>)}
+                    <form onSubmit={(event) => void finding(event, x, investigation)} className="mt-2 grid gap-2 md:grid-cols-3"><Field n="statement" l="Cited finding" /><Field n="uncertainty" l="Remaining uncertainty" /><Select n="confidence" l="Confidence" v="medium" options={["medium", "low", "high"]} /><Field n="citations" l="Evidence IDs" v={investigation.evidence.map((item) => item.id).join(", ")} /><Button disabled={busy} variant="secondary">Publish finding</Button></form>
+                  </section>
+                ))}
+                {x.improvements.map((improvement) => <p key={improvement.id} className="mt-2 text-xs"><strong>Governed improvement:</strong> proposal {improvement.proposal_id} · {improvement.task_ids.length} owned task(s) · {improvement.status}{improvement.follow_up_exercise_id ? ` · verified by ${improvement.follow_up_exercise_id}` : " · fresh exercise required"}</p>)}
               </article>
             ))}
         </Card>

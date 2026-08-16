@@ -3302,6 +3302,31 @@ or commitment, unavailable capture, or changed protected source prevents retaine
 counting as current. Exercise records default beneath `$RECOVERY_EXERCISE_STORAGE_ROOT`
 (`recovery-exercises`) and grant no restore, repository, deployment, environment, or secret access.
 
+### Recovery investigations and governed improvements
+
+`POST /repositories/{id}/recovery-exercises/{exercise_id}/investigations` is available to authenticated
+repository readers, including repository-bound read-only agent credentials, for an exercise with
+gaps. It accepts a title and bounded evidence references of type `exercise_result`, `code`, `release`,
+`protection_plan`, `configuration`, `recovery_commitment`, `dependency`, or `ownership`. The server
+resolves each reference against the exercise's repository, exact revision, retained plan/commitment,
+or result before persistence. `POST .../investigations/{investigation_id}/findings` compare-and-swaps
+the investigation version and requires a statement, explicit uncertainty and confidence, and citations
+to that investigation's permitted evidence. Agent credentials can investigate and publish findings;
+these endpoints grant no restore, Git-write, policy, review, merge, release, deployment, or production
+authority.
+
+`POST /repositories/{id}/recovery-exercises/{exercise_id}/improvements` is repository-owner-only. It
+freezes one cited finding and the current default-branch commit into an ordinary proposal with ordered
+human- or agent-owned tasks and acceptance criteria. Tasks continue through the existing assignment,
+session/workspace, pull, checks, review, integration, release, and policy-approval boundaries. The
+exercise retains the reciprocal proposal/task link and stays `work_open` after publication.
+
+`POST .../improvements/{improvement_id}/verifications` is also owner-only and accepts a
+`follow_up_exercise_id`. Verification requires a later successful and currently valid isolated
+exercise, plus a changed protection-plan version or protected source revision. It links, rather than
+rewrites, the original failure and marks the improvement `verified`; stale or unchanged rehearsal
+evidence fails closed.
+
 ## Locale plans
 
 `POST /repositories/{id}/locale-plans` publishes a complete localization support contract. The

@@ -39,31 +39,73 @@ type StepResult struct {
 	Manual            bool      `json:"manual"`
 	ObjectiveAchieved bool      `json:"objective_achieved"`
 }
+type Evidence struct {
+	ID         string `json:"id"`
+	Kind       string `json:"kind"`
+	ResourceID string `json:"resource_id"`
+	Revision   string `json:"revision,omitempty"`
+	Summary    string `json:"summary"`
+}
+type Finding struct {
+	ID          string    `json:"id"`
+	Statement   string    `json:"statement"`
+	Uncertainty string    `json:"uncertainty"`
+	Confidence  string    `json:"confidence"`
+	CitationIDs []string  `json:"citation_ids"`
+	CreatedBy   string    `json:"created_by"`
+	ActorType   string    `json:"actor_type"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+type Investigation struct {
+	ID        string     `json:"id"`
+	Title     string     `json:"title"`
+	Evidence  []Evidence `json:"evidence"`
+	Findings  []Finding  `json:"findings"`
+	OpenedBy  string     `json:"opened_by"`
+	ActorType string     `json:"actor_type"`
+	Version   int        `json:"version"`
+	OpenedAt  time.Time  `json:"opened_at"`
+}
+type Improvement struct {
+	ID              string    `json:"id"`
+	InvestigationID string    `json:"investigation_id"`
+	FindingID       string    `json:"finding_id"`
+	ProposalID      string    `json:"proposal_id"`
+	TaskIDs         []string  `json:"task_ids"`
+	BaseRevision    string    `json:"base_revision"`
+	Criteria        []string  `json:"acceptance_criteria"`
+	CreatedBy       string    `json:"created_by"`
+	CreatedAt       time.Time `json:"created_at"`
+	FollowUpID      string    `json:"follow_up_exercise_id,omitempty"`
+	Status          string    `json:"status"`
+}
 type Exercise struct {
-	ID                 string       `json:"id"`
-	RepositoryID       string       `json:"repository_id"`
-	Name               string       `json:"name"`
-	Scenario           string       `json:"scenario"`
-	PlanID             string       `json:"plan_id"`
-	PlanVersion        int          `json:"plan_version"`
-	CommitmentID       string       `json:"commitment_id"`
-	CommitmentVersion  int          `json:"commitment_version"`
-	CaptureID          string       `json:"capture_id"`
-	SourceRevision     string       `json:"source_revision"`
-	EnvironmentID      string       `json:"environment_id"`
-	Isolation          string       `json:"isolation"`
-	Steps              []Step       `json:"steps"`
-	Results            []StepResult `json:"results"`
-	Status             string       `json:"status"`
-	AchievedObjectives []string     `json:"achieved_objectives"`
-	Gaps               []string     `json:"gaps"`
-	ManualSteps        []string     `json:"manual_steps"`
-	StartedBy          string       `json:"started_by"`
-	StartedAt          time.Time    `json:"started_at"`
-	FinishedAt         time.Time    `json:"finished_at"`
-	DurationMS         int64        `json:"duration_ms"`
-	Current            bool         `json:"current"`
-	StaleReasons       []string     `json:"stale_reasons"`
+	ID                 string          `json:"id"`
+	RepositoryID       string          `json:"repository_id"`
+	Name               string          `json:"name"`
+	Scenario           string          `json:"scenario"`
+	PlanID             string          `json:"plan_id"`
+	PlanVersion        int             `json:"plan_version"`
+	CommitmentID       string          `json:"commitment_id"`
+	CommitmentVersion  int             `json:"commitment_version"`
+	CaptureID          string          `json:"capture_id"`
+	SourceRevision     string          `json:"source_revision"`
+	EnvironmentID      string          `json:"environment_id"`
+	Isolation          string          `json:"isolation"`
+	Steps              []Step          `json:"steps"`
+	Results            []StepResult    `json:"results"`
+	Status             string          `json:"status"`
+	AchievedObjectives []string        `json:"achieved_objectives"`
+	Gaps               []string        `json:"gaps"`
+	ManualSteps        []string        `json:"manual_steps"`
+	StartedBy          string          `json:"started_by"`
+	StartedAt          time.Time       `json:"started_at"`
+	FinishedAt         time.Time       `json:"finished_at"`
+	DurationMS         int64           `json:"duration_ms"`
+	Current            bool            `json:"current"`
+	StaleReasons       []string        `json:"stale_reasons"`
+	Investigations     []Investigation `json:"investigations"`
+	Improvements       []Improvement   `json:"improvements"`
 }
 type Store struct {
 	root string
@@ -99,6 +141,8 @@ func (s *Store) Run(repo, actor string, in Exercise, execute func(Step) (string,
 	in.Gaps = []string{}
 	in.ManualSteps = []string{}
 	in.AchievedObjectives = []string{}
+	in.Investigations = []Investigation{}
+	in.Improvements = []Improvement{}
 	completed := map[string]bool{}
 	for _, step := range in.Steps {
 		start := s.now()
@@ -134,6 +178,124 @@ func (s *Store) Run(repo, actor string, in Exercise, execute func(Step) (string,
 	}
 	return in, s.write(in)
 }
+func (s *Store) Get(repo, exerciseID string) (Exercise, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.read(repo, exerciseID)
+}
+func (s *Store) OpenInvestigation(repo, exerciseID, actor, actorType string, in Investigation) (Exercise, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	x, err := s.read(repo, exerciseID)
+	if err != nil || !contains([]string{"passed", "gaps_found"}, x.Status) || !safeText(in.Title) || len(in.Evidence) == 0 || len(in.Evidence) > 32 || !contains([]string{"human", "agent"}, actorType) {
+		return Exercise{}, ErrInvalid
+	}
+	seen := map[string]bool{}
+	for i := range in.Evidence {
+		e := &in.Evidence[i]
+		key := e.Kind + ":" + e.ResourceID + ":" + e.Revision
+		e.ID = id()
+		if !contains([]string{"exercise_result", "code", "dependency", "release", "configuration", "ownership", "protection_plan", "recovery_commitment"}, e.Kind) || !safeText(e.ResourceID) || !safeText(e.Summary) || len(e.Revision) > 128 || seen[key] {
+			return Exercise{}, ErrInvalid
+		}
+		seen[key] = true
+	}
+	in.ID, in.OpenedBy, in.ActorType, in.Version, in.OpenedAt, in.Findings = id(), actor, actorType, 1, s.now(), []Finding{}
+	x.Investigations = append(x.Investigations, in)
+	return x, s.write(x)
+}
+func (s *Store) AddFinding(repo, exerciseID, investigationID, actor, actorType string, expected int, in Finding) (Exercise, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	x, err := s.read(repo, exerciseID)
+	if err != nil {
+		return Exercise{}, err
+	}
+	for i := range x.Investigations {
+		v := &x.Investigations[i]
+		if v.ID != investigationID {
+			continue
+		}
+		if v.Version != expected || !safeText(in.Statement) || !safeText(in.Uncertainty) || !contains([]string{"low", "medium", "high"}, in.Confidence) || len(in.CitationIDs) == 0 || len(in.CitationIDs) > 16 || !contains([]string{"human", "agent"}, actorType) {
+			return Exercise{}, ErrInvalid
+		}
+		known := map[string]bool{}
+		for _, e := range v.Evidence {
+			known[e.ID] = true
+		}
+		for _, result := range x.Results {
+			known[result.StepID] = true
+		}
+		for _, citation := range in.CitationIDs {
+			if !known[citation] {
+				return Exercise{}, ErrInvalid
+			}
+		}
+		in.ID, in.CreatedBy, in.ActorType, in.CreatedAt = id(), actor, actorType, s.now()
+		v.Findings = append(v.Findings, in)
+		v.Version++
+		return x, s.write(x)
+	}
+	return Exercise{}, ErrNotFound
+}
+func (s *Store) LinkImprovement(repo, exerciseID, actor string, in Improvement) (Exercise, Improvement, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	x, err := s.read(repo, exerciseID)
+	if err != nil {
+		return Exercise{}, Improvement{}, err
+	}
+	found := false
+	for _, investigation := range x.Investigations {
+		if investigation.ID == in.InvestigationID {
+			for _, finding := range investigation.Findings {
+				if finding.ID == in.FindingID {
+					found = true
+				}
+			}
+		}
+	}
+	if !found || in.ProposalID == "" || len(in.TaskIDs) == 0 || len(in.Criteria) == 0 || len(in.Criteria) > 20 || len(in.BaseRevision) != 40 {
+		return Exercise{}, Improvement{}, ErrInvalid
+	}
+	for _, criterion := range in.Criteria {
+		if !safeText(criterion) {
+			return Exercise{}, Improvement{}, ErrInvalid
+		}
+	}
+	for _, prior := range x.Improvements {
+		if prior.InvestigationID == in.InvestigationID && prior.FindingID == in.FindingID {
+			return x, prior, nil
+		}
+	}
+	in.ID, in.CreatedBy, in.CreatedAt, in.Status = id(), actor, s.now(), "work_open"
+	x.Improvements = append(x.Improvements, in)
+	return x, in, s.write(x)
+}
+func (s *Store) VerifyImprovement(repo, exerciseID, improvementID, followUpID string) (Exercise, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	x, err := s.read(repo, exerciseID)
+	if err != nil {
+		return Exercise{}, err
+	}
+	follow, err := s.read(repo, followUpID)
+	if err != nil {
+		return Exercise{}, err
+	}
+	for i := range x.Improvements {
+		v := &x.Improvements[i]
+		if v.ID != improvementID {
+			continue
+		}
+		if follow.ID == x.ID || follow.Status != "passed" || !follow.Current || (follow.PlanVersion <= x.PlanVersion && follow.SourceRevision == x.SourceRevision) {
+			return Exercise{}, ErrInvalid
+		}
+		v.FollowUpID, v.Status = follow.ID, "verified"
+		return x, s.write(x)
+	}
+	return Exercise{}, ErrNotFound
+}
 func (s *Store) List(repo string) ([]Exercise, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -157,6 +319,34 @@ func (s *Store) List(repo string) ([]Exercise, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].StartedAt.After(out[j].StartedAt) })
 	return out, nil
+}
+func (s *Store) read(repo, exerciseID string) (Exercise, error) {
+	var x Exercise
+	b, err := os.ReadFile(filepath.Join(s.root, exerciseID+".json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return x, ErrNotFound
+		}
+		return x, err
+	}
+	if json.Unmarshal(b, &x) != nil || x.RepositoryID != repo {
+		return Exercise{}, ErrNotFound
+	}
+	if x.Investigations == nil {
+		x.Investigations = []Investigation{}
+	}
+	if x.Improvements == nil {
+		x.Improvements = []Improvement{}
+	}
+	return x, nil
+}
+func contains(xs []string, value string) bool {
+	for _, x := range xs {
+		if x == value {
+			return true
+		}
+	}
+	return false
 }
 func valid(x Exercise) bool {
 	if !safeText(x.Name) || !safeText(x.Scenario) || x.PlanID == "" || x.PlanVersion < 1 || x.CommitmentID == "" || x.CommitmentVersion < 1 || x.CaptureID == "" || x.SourceRevision == "" || len(x.Steps) == 0 || len(x.Steps) > 32 {
