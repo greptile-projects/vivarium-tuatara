@@ -262,7 +262,7 @@ export function OrganizationDetail({
               `/organizations/${organizationID}/portfolio`,
               {},
               token,
-            ).catch(() => null)
+            )
           : Promise.resolve(null),
       ]);
       setDirectory(nextDirectory);
