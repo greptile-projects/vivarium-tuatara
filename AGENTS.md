@@ -1884,6 +1884,9 @@ whenever dependencies change or the web job fails before it starts.
   environment; it never executes caller shell or writes authoritative state. Reads derive currentness
   against the frozen plan, commitment, capture, and protected source, while preserving timing,
   bounded commands, redacted logs/artifacts, gaps, manual work, achieved objectives, and actor history.
+  Restore materializes checksum-verified Git blobs or credential-free governed-environment JSON with
+  restrictive permissions, and the registered `smoke` journey inspects that populated runtime.
+  Unregistered journey names fail; the ephemeral filesystem is removed after evidence persistence.
 
   Update it when you change how the apps fit together, not for every change.
 

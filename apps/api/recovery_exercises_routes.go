@@ -3,8 +3,11 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -78,7 +81,9 @@ func registerRecoveryExerciseRoutes(mux *http.ServeMux, git *storage.Store, envi
 			return
 		}
 		exercise := recoveryexercises.Exercise{Name: strings.TrimSpace(in.Name), Scenario: strings.TrimSpace(in.Scenario), PlanID: p.ID, PlanVersion: capture.PlanVersion, CommitmentID: p.CommitmentID, CommitmentVersion: capture.CommitmentVersion, CaptureID: capture.ID, SourceRevision: capture.SourceRevision, Steps: in.Steps}
-		out, e := exercises.Run(r.PathValue("id"), actor.UserID, exercise, exerciseExecutor(restored, p.ValidationChecks))
+		execute, cleanup := newExerciseExecutor(restored, p.ValidationChecks)
+		defer cleanup()
+		out, e := exercises.Run(r.PathValue("id"), actor.UserID, exercise, execute)
 		if errors.Is(e, recoveryexercises.ErrInvalid) {
 			writeAPIError(w, 400, "invalid_recovery_exercise", "use ordered restore, integrity, journey, or manual steps with declared objectives")
 			return
@@ -91,14 +96,40 @@ func registerRecoveryExerciseRoutes(mux *http.ServeMux, git *storage.Store, envi
 	})
 }
 
-func exerciseExecutor(source protectionplans.RestoredSource, declared []string) func(recoveryexercises.Step) (string, string, string, bool) {
-	return func(step recoveryexercises.Step) (string, string, string, bool) {
+type recoveryRuntime struct {
+	root        string
+	provisioned bool
+	restored    int
+}
+
+func newExerciseExecutor(source protectionplans.RestoredSource, declared []string) (func(recoveryexercises.Step) (string, string, string, bool), func()) {
+	runtime := &recoveryRuntime{}
+	cleanup := func() {
+		if runtime.root != "" {
+			_ = os.RemoveAll(runtime.root)
+		}
+	}
+	execute := func(step recoveryexercises.Step) (string, string, string, bool) {
 		switch step.Kind {
 		case "restore":
 			if step.Command != "restore:protected-manifest" {
 				return "failed", "restore command is not permitted", "", false
 			}
-			return "passed", "restored encrypted capture into isolated environment", "manifest entries: " + exerciseInt(len(source.Manifest)), false
+			if runtime.provisioned {
+				return "failed", "isolated environment was already populated", "", false
+			}
+			root, err := os.MkdirTemp("", "vivarium-recovery-")
+			if err != nil {
+				return "failed", "isolated environment could not be provisioned", "", false
+			}
+			runtime.root = root
+			if err = restoreExercisePayload(runtime, source); err != nil {
+				cleanup()
+				runtime.root = ""
+				return "failed", "protected capture could not be applied to isolated environment", "", false
+			}
+			runtime.provisioned = true
+			return "passed", "protected capture applied to ephemeral isolated environment", "restored artifacts: " + exerciseInt(runtime.restored), false
 		case "integrity":
 			if step.Command != "verify:manifest" && step.Command != "verify:dependencies" {
 				return "failed", "integrity command is not permitted", "", false
@@ -129,7 +160,16 @@ func exerciseExecutor(source protectionplans.RestoredSource, declared []string) 
 			if name == step.Command || !exerciseContains(declared, name) {
 				return "failed", "journey is not declared by the protection plan", "", false
 			}
-			return "passed", "repository-defined journey completed in isolated environment", "journey:" + name, false
+			if !runtime.provisioned {
+				return "failed", "isolated environment has not been restored", "", false
+			}
+			if name != "smoke" {
+				return "failed", "declared journey has no bounded runner implementation", "", false
+			}
+			if _, err := os.Stat(filepath.Join(runtime.root, ".recovery", "manifest.json")); err != nil || runtime.restored == 0 {
+				return "failed", "restored system failed the smoke journey", "", false
+			}
+			return "passed", "bounded smoke journey executed against restored environment", "journey:smoke", false
 		case "manual":
 			if step.Command != "manual:confirm" {
 				return "failed", "manual command is not permitted", "", true
@@ -138,6 +178,68 @@ func exerciseExecutor(source protectionplans.RestoredSource, declared []string) 
 		}
 		return "failed", "unsupported bounded command", "", false
 	}
+	return execute, cleanup
+}
+
+func restoreExercisePayload(runtime *recoveryRuntime, source protectionplans.RestoredSource) error {
+	var resources map[string]json.RawMessage
+	if json.Unmarshal(source.Payload, &resources) != nil {
+		return protectionplans.ErrInvalid
+	}
+	for targetID, raw := range resources {
+		targetSum := sha256.Sum256([]byte(targetID))
+		targetDirectory := hex.EncodeToString(targetSum[:8])
+		var repository struct {
+			Objects map[string]storage.Object `json:"objects"`
+		}
+		if json.Unmarshal(raw, &repository) == nil && len(repository.Objects) > 0 {
+			for _, entry := range source.Manifest {
+				object, ok := repository.Objects[entry.Version]
+				if !ok || object.Type != storage.BlobObject {
+					continue
+				}
+				clean := filepath.Clean(entry.Path)
+				if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+					return protectionplans.ErrInvalid
+				}
+				sum := sha256.Sum256(object.Content)
+				if hex.EncodeToString(sum[:]) != entry.SHA256 {
+					return protectionplans.ErrInvalid
+				}
+				destination := filepath.Join(runtime.root, "workspace", targetDirectory, clean)
+				if err := os.MkdirAll(filepath.Dir(destination), 0700); err != nil {
+					return err
+				}
+				if err := os.WriteFile(destination, object.Content, 0600); err != nil {
+					return err
+				}
+				runtime.restored++
+			}
+			continue
+		}
+		// Governed environment captures contain only the credential-free public
+		// projection. Restore it under an opaque name to avoid trusting target IDs.
+		destination := filepath.Join(runtime.root, "environment", targetDirectory+".json")
+		if err := os.MkdirAll(filepath.Dir(destination), 0700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(destination, raw, 0600); err != nil {
+			return err
+		}
+		runtime.restored++
+	}
+	if runtime.restored == 0 {
+		return protectionplans.ErrInvalid
+	}
+	manifest, err := json.Marshal(source.Manifest)
+	if err != nil {
+		return err
+	}
+	manifestPath := filepath.Join(runtime.root, ".recovery", "manifest.json")
+	if err = os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
+		return err
+	}
+	return os.WriteFile(manifestPath, manifest, 0600)
 }
 func refreshExercise(x *recoveryexercises.Exercise, git *storage.Store, environments *deployments.Store, plans *protectionplans.Store, commitments *recoverycommitments.Store) {
 	x.Current = true

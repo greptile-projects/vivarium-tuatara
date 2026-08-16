@@ -3284,6 +3284,10 @@ name is declared in the protection plan's validation checks), and `manual:confir
 commands are rejected. The server freezes captured plan, commitment, and source versions, decrypts
 only into an ephemeral no-network/no-production-credentials environment, runs steps in declared
 order, and never writes restored content to repository or environment authorities.
+Repository restore verifies each blob checksum before writing it with restrictive permissions;
+environment restore writes only the deployment store's credential-free public projection. The
+registered `smoke` journey executes against that populated filesystem. A declared journey without a
+registered bounded implementation fails, and the filesystem is deleted after the run completes.
 
 `GET /repositories/{id}/recovery-exercises` uses ordinary repository visibility and returns the
 scenario, isolated environment identity, per-step timing, bounded command, redacted log/artifact,

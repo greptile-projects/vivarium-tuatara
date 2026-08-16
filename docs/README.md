@@ -145,6 +145,11 @@ ordered timing, redacted logs and artifacts, objectives, gaps, manual work, scen
 Reads mark retained evidence non-current when its protection plan, commitment, capture, or protected
 source changes. Exercises never write restored data into repository or governed environment stores;
 records default beneath `$RECOVERY_EXERCISE_STORAGE_ROOT` (`recovery-exercises`).
+Repository captures are materialized as checksum-verified Git blobs with restrictive permissions;
+governed environment captures restore only their credential-free public projection. The registered
+`smoke` journey reads the populated runtime and fails when no restorable artifact or runtime manifest
+exists. Unimplemented declared journey names fail instead of producing completion evidence, and the
+ephemeral filesystem is removed after the run is recorded.
 
 ## Locale coverage contracts
 
