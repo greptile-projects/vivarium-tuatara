@@ -3330,8 +3330,9 @@ result; stale, unrelated, weakened, or unchanged rehearsal evidence fails closed
 likewise require an exact commit reachable from a visible non-security branch. Before accepting the
 follow-up, the API re-resolves the exact proposal origin and ordered task IDs, matches the frozen
 acceptance criteria and implementation base, requires every task to be completed through a currently
-merged contribution, and proves each implementation commit descends from that base. A missing,
-replaced, unfinished, closed-without-merge, or unrelated work record cannot become `verified`.
+merged contribution at the task's exact current context revision, and proves each implementation
+commit descends from that base. A missing, replaced, obsolete, unfinished, closed-without-merge, or
+unrelated work record cannot become `verified`.
 
 ## Locale plans
 

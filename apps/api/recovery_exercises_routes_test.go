@@ -89,6 +89,14 @@ func TestRecoveryVerificationRequiresCompletedGovernedWork(t *testing.T) {
 	if !recoveryGovernedWorkComplete(git, proposalStore, repositoryID, improvement) {
 		t.Fatal("completed merged descendant work did not satisfy governance")
 	}
+	revisedTitle := "Repair revised mandate"
+	obsolete, err := proposalStore.UpdateTask(repositoryID, proposal.ID, tasks[0].ID, actorID, proposals.TaskPatch{Title: &revisedTitle})
+	if err != nil || obsolete.ContextState != "obsolete" || obsolete.ContextRevision == obsolete.Contribution.ContextRevision {
+		t.Fatalf("obsolete task context = %#v, %v", obsolete, err)
+	}
+	if recoveryGovernedWorkComplete(git, proposalStore, repositoryID, improvement) {
+		t.Fatal("obsolete merged contribution satisfied governance")
+	}
 	improvement.ProposalID = strings.Repeat("7", 32)
 	if recoveryGovernedWorkComplete(git, proposalStore, repositoryID, improvement) {
 		t.Fatal("nonexistent proposal satisfied governance")

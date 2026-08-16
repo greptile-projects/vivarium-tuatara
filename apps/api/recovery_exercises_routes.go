@@ -322,7 +322,7 @@ func recoveryGovernedWorkComplete(git *storage.Store, proposalStore *proposals.S
 		return false
 	}
 	for i, task := range tasks {
-		if task.ID != improvement.TaskIDs[i] || task.Status != proposals.TaskCompleted || task.Contribution == nil || task.Contribution.Status != "merged" || task.Contribution.SourceCommitID == "" {
+		if task.ID != improvement.TaskIDs[i] || task.Status != proposals.TaskCompleted || task.ContextState != "current" || task.Contribution == nil || task.Contribution.Status != "merged" || task.Contribution.ContextRevision != task.ContextRevision || task.Contribution.SourceCommitID == "" {
 			return false
 		}
 		ancestry, ancestryErr := repository.ListCommitAncestry(storage.ObjectID(task.Contribution.SourceCommitID))

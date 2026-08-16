@@ -167,7 +167,8 @@ or cited results. This preserves both the original weakness and the accountable 
 citations are limited to commits reachable from participant-visible non-security branches. Final
 verification also re-resolves the exact proposal origin, acceptance criteria, and ordered task IDs;
 every task must be completed by a merged contribution whose implementation descends from the frozen
-base. Fresh rehearsal evidence cannot substitute for missing or unfinished governed delivery.
+base and whose context revision still matches the current task mandate. Fresh rehearsal evidence
+cannot substitute for missing, obsolete, or unfinished governed delivery.
 
 ## Locale coverage contracts
 

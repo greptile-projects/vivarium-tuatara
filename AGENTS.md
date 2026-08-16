@@ -1905,8 +1905,9 @@ whenever dependencies change or the web job fails before it starts.
   without rewriting the original gap. Investigation code citations resolve only commits reachable
   from participant-visible non-`vivarium-security/*` branches. Verification also re-resolves the
   exact proposal reasoning and task IDs, requires every task's current contribution to be merged and
-  completed, and proves each implementation revision descends from the frozen base; missing,
-  replaced, unfinished, or unrelated governed work fails closed.
+  completed at the task's exact current context revision, and proves each implementation revision
+  descends from the frozen base; missing, replaced, obsolete, unfinished, or unrelated governed work
+  fails closed.
 
   Update it when you change how the apps fit together, not for every change.
 
