@@ -8,6 +8,29 @@ import (
 	"time"
 )
 
+func TestAgentProfilesAreVersionedClaimsWithPlatformEvidence(t *testing.T) {
+	store, _ := New(t.TempDir())
+	owner := "0123456789abcdef0123456789abcdef"
+	v, _ := store.Create("Tools", "tools", "", owner)
+	v, _ = store.RegisterAgent(v.ID, owner, "Scout", "scout", "", "public", []string{"inspect"}, []string{owner}, nil)
+	profile := AgentProfile{Summary: "Reviews unfamiliar changes", SupportedTasks: []string{"review changes"}, Tools: []string{"git"}, ModelProvenance: "Acme model family; version is recorded per run", ExecutionProvenance: "Runs in operator-managed containers", DataUse: "Repository context is used only to complete the requested task", Retention: "Inputs are deleted after 24 hours", Pricing: "$1 per run", ResourceRequirements: []string{"read-only checkout"}, RequestedCapabilities: []string{"repository:read"}, Availability: "Weekdays", Support: "security@example.test", Subprocessors: []string{"Compute Co — inference"}, RemoteExecutionBoundaries: []string{"Inference leaves the platform for Compute Co"}, ChangeSummary: "Initial disclosure", VerifiedEvidence: []AgentVerifiedEvidence{{Kind: "forged", Statement: "operator supplied"}}}
+	v, err := store.PublishAgentProfile(v.ID, v.Agents[0].ID, owner, 0, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := v.Agents[0].Profiles[0]
+	if got.Version != 1 || got.PublishedBy != owner || len(got.VerifiedEvidence) != 2 || got.VerifiedEvidence[0].Kind == "forged" {
+		t.Fatalf("profile = %#v", got)
+	}
+	if _, err := store.PublishAgentProfile(v.ID, v.Agents[0].ID, owner, 0, profile); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale publish = %v", err)
+	}
+	outsider := "abcdef0123456789abcdef0123456789"
+	if _, err := store.PublishAgentProfile(v.ID, v.Agents[0].ID, outsider, 1, profile); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("outsider publish = %v", err)
+	}
+}
+
 func TestCurrentAgentOperatorBoundaryExcludesConcurrentRevocation(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {

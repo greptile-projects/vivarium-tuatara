@@ -61,6 +61,10 @@ type organizationAgentInput struct {
 	OperatorIDs  []string `json:"operator_ids"`
 	TeamIDs      []string `json:"team_ids"`
 }
+type organizationAgentProfileInput struct {
+	ExpectedVersion int                        `json:"expected_version"`
+	Profile         organizations.AgentProfile `json:"profile"`
+}
 type organizationAccessInput struct {
 	PrincipalType string                          `json:"principal_type"`
 	PrincipalID   string                          `json:"principal_id"`
@@ -821,6 +825,22 @@ func registerOrganizationRoutes(mux *http.ServeMux, gitStore *storage.Store, org
 		}
 		w.Header().Set("Location", "/organizations/"+v.ID+"/agents/"+v.Agents[len(v.Agents)-1].ID)
 		writeJSON(w, 201, project(v, actor.UserID))
+	})
+	mux.HandleFunc("PUT /organizations/{id}/agents/{agent_id}/profile", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in organizationAgentProfileInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_agent_profile", "a complete versioned agent profile is required")
+			return
+		}
+		v, err := orgs.PublishAgentProfile(r.PathValue("id"), r.PathValue("agent_id"), actor.UserID, in.ExpectedVersion, in.Profile)
+		if writeOrganizationError(w, err) {
+			return
+		}
+		writeJSON(w, 200, project(v, actor.UserID))
 	})
 	mux.HandleFunc("POST /organizations/{id}/access-requests", func(w http.ResponseWriter, r *http.Request) {
 		actor, organization, ok := require(w, r, "repositories:read")

@@ -2145,7 +2145,14 @@ Portfolio initiatives turn existing proposals, interface evolution plans,
 incidents, and authorized private security work into an organization-level
 outcome map without copying their workflow state. Ordered work items connect
 repository contributions and dependencies to accountable humans, teams, or
-approved agents. The portfolio derives blockers, relevant policy exceptions,
+approved agents. Organization owners publish append-only agent profile revisions through `PUT
+/organizations/{organization_id}/agents/{agent_id}/profile`. Profiles disclose supported tasks and tools,
+model and execution provenance, project-data use and retention, subprocessors and remote boundaries,
+pricing/resources, requested capabilities, availability, support, and a change summary. Operator claims
+remain visibly separate from platform-generated evidence for the stable `agent:{id}` principal and its
+current organization operators. Public agents expose this history in the organization directory; a
+profile never grants a capability, credential, installation, user identity, or repository authority.
+The portfolio derives blockers, relevant policy exceptions,
 and upcoming release candidates from live records. If membership, agent
 operation, team identity, or repository stewardship changes, the original work
 and attribution remain visible with an explicit reassignment action.

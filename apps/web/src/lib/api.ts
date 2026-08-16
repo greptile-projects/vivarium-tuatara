@@ -1484,6 +1484,15 @@ export type OrganizationAgent = {
   version: number;
   registered_by: string;
   registered_at: string;
+  profiles: OrganizationAgentProfile[];
+};
+export type OrganizationAgentProfile = {
+  version: number; summary: string; supported_tasks: string[]; tools: string[];
+  model_provenance: string; execution_provenance: string; data_use: string; retention: string;
+  pricing: string; resource_requirements: string[]; requested_capabilities: string[];
+  availability: string; support: string; subprocessors: string[]; remote_execution_boundaries: string[];
+  change_summary: string; published_by: string; published_at: string;
+  verified_evidence: { kind: string; statement: string; verified_at: string }[];
 };
 export type OrganizationEvent = {
   id: string;
