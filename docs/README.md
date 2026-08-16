@@ -161,8 +161,10 @@ findings retain their author type, confidence, and uncertainty. Investigation ne
 production, Git-write, policy, or delivery authority. The repository owner can freeze one finding and
 the exact default-branch base into an ordinary proposal with ordered human/agent tasks. Work then uses
 the existing assignment, session/workspace, pull, check, review, integration, release, and approval
-controls. A later successful current exercise with changed plan or source evidence links back as
-verification, preserving both the original weakness and the accountable repair trail.
+controls. A later successful current exercise with changed plan or source evidence links back only
+when it retains the same scenario, plan, commitment, step contract, and passes the originally failed
+or cited results. This preserves both the original weakness and the accountable repair trail. Code
+citations are limited to commits reachable from participant-visible non-security branches.
 
 ## Locale coverage contracts
 

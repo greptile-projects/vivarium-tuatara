@@ -1900,8 +1900,10 @@ whenever dependencies change or the web job fails before it starts.
   human/agent proposal task plan at the exact default-branch base; resulting sessions, workspaces,
   pulls, checks, policy changes, integration, and releases retain their existing authority boundaries.
   An improvement remains open until the owner cites a later successful, current isolated exercise
-  whose plan version or protected source changed; the fresh evidence verifies the repair without
-  rewriting the original gap.
+  for the same scenario, plan, commitment, ordered step contract, and originally failed or cited
+  results, whose plan version or protected source changed; the fresh evidence verifies the repair
+  without rewriting the original gap. Investigation code citations resolve only commits reachable
+  from participant-visible non-`vivarium-security/*` branches.
 
   Update it when you change how the apps fit together, not for every change.
 

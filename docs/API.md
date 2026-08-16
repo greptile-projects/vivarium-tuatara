@@ -3324,8 +3324,10 @@ exercise retains the reciprocal proposal/task link and stays `work_open` after p
 `POST .../improvements/{improvement_id}/verifications` is also owner-only and accepts a
 `follow_up_exercise_id`. Verification requires a later successful and currently valid isolated
 exercise, plus a changed protection-plan version or protected source revision. It links, rather than
-rewrites, the original failure and marks the improvement `verified`; stale or unchanged rehearsal
-evidence fails closed.
+rewrites, the original failure and marks the improvement `verified`. The follow-up must retain the
+same scenario, plan, commitment, ordered step contract, and pass every originally failed or cited
+result; stale, unrelated, weakened, or unchanged rehearsal evidence fails closed. Code citations
+likewise require an exact commit reachable from a visible non-security branch.
 
 ## Locale plans
 

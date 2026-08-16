@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/protectionplans"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/recoverycommitments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/recoveryexercises"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
@@ -28,6 +29,35 @@ func TestRecoveryExecutorAllowsOnlyDeclaredBoundedChecks(t *testing.T) {
 	status, _, _, _ = run(recoveryexercises.Step{Kind: "restore", Command: "shell:cat /etc/passwd"})
 	if status != "failed" {
 		t.Fatalf("unbounded command = %q", status)
+	}
+}
+
+func TestRecoveryCodeEvidenceRequiresVisibleBranchReachability(t *testing.T) {
+	git, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, err := git.Create("repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, _ := repository.WriteObject(storage.TreeObject, nil)
+	visible, _ := repository.WriteObject(storage.CommitObject, []byte("tree "+string(tree)+"\nauthor Test <test@example.com> 0 +0000\ncommitter Test <test@example.com> 0 +0000\n\nvisible\n"))
+	if err = repository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(visible)}); err != nil {
+		t.Fatal(err)
+	}
+	hidden, _ := repository.WriteObject(storage.CommitObject, []byte("tree "+string(tree)+"\nparent "+string(visible)+"\nauthor Test <test@example.com> 1 +0000\ncommitter Test <test@example.com> 1 +0000\n\nhidden\n"))
+	if err = repository.CreateReference(storage.Reference{Name: "refs/heads/vivarium-security/recovery", Target: string(hidden)}); err != nil {
+		t.Fatal(err)
+	}
+	plans, _ := protectionplans.New(t.TempDir())
+	commitments, _ := recoverycommitments.New(t.TempDir())
+	exercise := recoveryexercises.Exercise{RepositoryID: "repo", PlanID: "plan", CommitmentID: "commitment"}
+	if recoveryEvidenceResolves(git, nil, plans, commitments, exercise, []recoveryexercises.Evidence{{Kind: "code", ResourceID: "visible", Revision: string(hidden), Summary: "hidden"}}) {
+		t.Fatal("hidden security revision resolved")
+	}
+	if !recoveryEvidenceResolves(git, nil, plans, commitments, exercise, []recoveryexercises.Evidence{{Kind: "code", ResourceID: "visible", Revision: string(visible), Summary: "visible"}}) {
+		t.Fatal("visible revision did not resolve")
 	}
 }
 

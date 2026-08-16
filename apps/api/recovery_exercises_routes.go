@@ -316,7 +316,10 @@ func recoveryEvidenceResolves(git *storage.Store, releaseStore *releases.Store, 
 			}
 		case "code":
 			repo, err := git.Open(exercise.RepositoryID)
-			ok = err == nil && len(e.Revision) == 40 && exec.Command("git", "--git-dir="+repo.Path(), "cat-file", "-e", e.Revision+"^{commit}").Run() == nil
+			if err == nil {
+				resolved, resolveErr := resolveRevision(repo, e.Revision)
+				ok = resolveErr == nil && string(resolved) == e.Revision
+			}
 		case "release":
 			if releaseStore != nil {
 				value, err := releaseStore.Get(exercise.RepositoryID, e.ResourceID)

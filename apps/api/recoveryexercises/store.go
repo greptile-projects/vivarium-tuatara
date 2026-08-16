@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -67,17 +68,18 @@ type Investigation struct {
 	OpenedAt  time.Time  `json:"opened_at"`
 }
 type Improvement struct {
-	ID              string    `json:"id"`
-	InvestigationID string    `json:"investigation_id"`
-	FindingID       string    `json:"finding_id"`
-	ProposalID      string    `json:"proposal_id"`
-	TaskIDs         []string  `json:"task_ids"`
-	BaseRevision    string    `json:"base_revision"`
-	Criteria        []string  `json:"acceptance_criteria"`
-	CreatedBy       string    `json:"created_by"`
-	CreatedAt       time.Time `json:"created_at"`
-	FollowUpID      string    `json:"follow_up_exercise_id,omitempty"`
-	Status          string    `json:"status"`
+	ID                string    `json:"id"`
+	InvestigationID   string    `json:"investigation_id"`
+	FindingID         string    `json:"finding_id"`
+	ProposalID        string    `json:"proposal_id"`
+	TaskIDs           []string  `json:"task_ids"`
+	BaseRevision      string    `json:"base_revision"`
+	Criteria          []string  `json:"acceptance_criteria"`
+	RequiredResultIDs []string  `json:"required_result_ids"`
+	CreatedBy         string    `json:"created_by"`
+	CreatedAt         time.Time `json:"created_at"`
+	FollowUpID        string    `json:"follow_up_exercise_id,omitempty"`
+	Status            string    `json:"status"`
 }
 type Exercise struct {
 	ID                 string          `json:"id"`
@@ -246,11 +248,13 @@ func (s *Store) LinkImprovement(repo, exerciseID, actor string, in Improvement) 
 		return Exercise{}, Improvement{}, err
 	}
 	found := false
+	var sourceFinding Finding
 	for _, investigation := range x.Investigations {
 		if investigation.ID == in.InvestigationID {
 			for _, finding := range investigation.Findings {
 				if finding.ID == in.FindingID {
 					found = true
+					sourceFinding = finding
 				}
 			}
 		}
@@ -261,6 +265,25 @@ func (s *Store) LinkImprovement(repo, exerciseID, actor string, in Improvement) 
 	for _, criterion := range in.Criteria {
 		if !safeText(criterion) {
 			return Exercise{}, Improvement{}, ErrInvalid
+		}
+	}
+	resultIDs := map[string]bool{}
+	for _, result := range x.Results {
+		resultIDs[result.StepID] = true
+		if result.Status != "passed" {
+			in.RequiredResultIDs = append(in.RequiredResultIDs, result.StepID)
+		}
+	}
+	if len(in.RequiredResultIDs) == 0 {
+		for _, citation := range sourceFinding.CitationIDs {
+			if resultIDs[citation] {
+				in.RequiredResultIDs = append(in.RequiredResultIDs, citation)
+			}
+		}
+	}
+	if len(in.RequiredResultIDs) == 0 {
+		for _, result := range x.Results {
+			in.RequiredResultIDs = append(in.RequiredResultIDs, result.StepID)
 		}
 	}
 	for _, prior := range x.Improvements {
@@ -288,13 +311,37 @@ func (s *Store) VerifyImprovement(repo, exerciseID, improvementID, followUpID st
 		if v.ID != improvementID {
 			continue
 		}
-		if follow.ID == x.ID || follow.Status != "passed" || !follow.Current || (follow.PlanVersion <= x.PlanVersion && follow.SourceRevision == x.SourceRevision) {
+		if follow.ID == x.ID || follow.Status != "passed" || !follow.Current || follow.Scenario != x.Scenario || follow.PlanID != x.PlanID || follow.CommitmentID != x.CommitmentID || (follow.PlanVersion <= x.PlanVersion && follow.SourceRevision == x.SourceRevision) || !sameExerciseContract(x, follow) || !resultsPassed(follow, v.RequiredResultIDs) {
 			return Exercise{}, ErrInvalid
 		}
 		v.FollowUpID, v.Status = follow.ID, "verified"
 		return x, s.write(x)
 	}
 	return Exercise{}, ErrNotFound
+}
+func sameExerciseContract(original, follow Exercise) bool {
+	if len(original.Steps) != len(follow.Steps) {
+		return false
+	}
+	for i, step := range original.Steps {
+		candidate := follow.Steps[i]
+		if step.ID != candidate.ID || step.Kind != candidate.Kind || step.Command != candidate.Command || step.Objective != candidate.Objective || !slices.Equal(step.DependsOn, candidate.DependsOn) {
+			return false
+		}
+	}
+	return true
+}
+func resultsPassed(exercise Exercise, required []string) bool {
+	passed := map[string]bool{}
+	for _, result := range exercise.Results {
+		passed[result.StepID] = result.Status == "passed" && result.ObjectiveAchieved
+	}
+	for _, id := range required {
+		if !passed[id] {
+			return false
+		}
+	}
+	return len(required) > 0
 }
 func (s *Store) List(repo string) ([]Exercise, error) {
 	s.mu.Lock()
