@@ -3273,6 +3273,26 @@ decryption and the manifest checksum and mark corruption, key loss, retention ex
 source as `recoverable: false` with an explicit failure. These records grant no content, restore,
 repository, environment, or deployment authority.
 
+## Recovery exercises
+
+`POST /repositories/{id}/recovery-exercises` requires repository write access and membership in the
+selected protection plan's `accessor_ids`. It accepts an exercise name, failure `scenario`, exact
+`plan_id` and recoverable `capture_id`, plus at most 32 dependency-ordered steps. Step kinds are
+`restore`, `integrity`, `journey`, and `manual`; commands are deliberately bounded to
+`restore:protected-manifest`, `verify:manifest`, `verify:dependencies`, `journey:{name}` (where the
+name is declared in the protection plan's validation checks), and `manual:confirm`. Arbitrary shell
+commands are rejected. The server freezes captured plan, commitment, and source versions, decrypts
+only into an ephemeral no-network/no-production-credentials environment, runs steps in declared
+order, and never writes restored content to repository or environment authorities.
+
+`GET /repositories/{id}/recovery-exercises` uses ordinary repository visibility and returns the
+scenario, isolated environment identity, per-step timing, bounded command, redacted log/artifact,
+gap/manual/objective results, actor, and overall duration/status. Protected paths and payloads are
+never returned. `current` and `stale_reasons` are derived on every read; a successor protection plan
+or commitment, unavailable capture, or changed protected source prevents retained evidence from
+counting as current. Exercise records default beneath `$RECOVERY_EXERCISE_STORAGE_ROOT`
+(`recovery-exercises`) and grant no restore, repository, deployment, environment, or secret access.
+
 ## Locale plans
 
 `POST /repositories/{id}/locale-plans` publishes a complete localization support contract. The

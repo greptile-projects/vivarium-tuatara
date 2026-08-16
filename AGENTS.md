@@ -1876,6 +1876,14 @@ whenever dependencies change or the web job fails before it starts.
   routine content, restore, repository, environment, or deployment authority. Captures freeze their
   plan version, resource identities, and freshness interval; never evaluate retained captures through
   successor-plan resources or timing.
+  Recovery exercises in the same workspace retain redacted evidence beneath
+  `$RECOVERY_EXERCISE_STORAGE_ROOT` (default `recovery-exercises`). Only a current repository
+  participant named in the plan's accessor list may launch one from an exact recoverable capture.
+  The runner accepts only dependency-ordered typed restore, manifest/dependency integrity, declared
+  journey, and manual-confirmation steps inside an ephemeral no-network/no-production-credentials
+  environment; it never executes caller shell or writes authoritative state. Reads derive currentness
+  against the frozen plan, commitment, capture, and protected source, while preserving timing,
+  bounded commands, redacted logs/artifacts, gaps, manual work, achieved objectives, and actor history.
 
   Update it when you change how the apps fit together, not for every change.
 

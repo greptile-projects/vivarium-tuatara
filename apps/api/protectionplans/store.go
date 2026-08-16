@@ -61,6 +61,13 @@ type Source struct {
 	Entries  []Entry `json:"entries"`
 	Payload  []byte  `json:"-"`
 }
+
+// RestoredSource is available only to the recovery runner. Payload is kept in
+// memory and must never be serialized into exercise evidence.
+type RestoredSource struct {
+	Manifest []Entry
+	Payload  []byte
+}
 type Capture struct {
 	ID                string     `json:"id"`
 	PlanVersion       int        `json:"plan_version"`
@@ -82,8 +89,8 @@ type Capture struct {
 	CostUnits         int64      `json:"cost_units"`
 	Failure           string     `json:"failure,omitempty"`
 	Recoverable       bool       `json:"recoverable"`
-	Ciphertext        string     `json:"-"`
-	Nonce             string     `json:"-"`
+	Ciphertext        string     `json:"ciphertext,omitempty"`
+	Nonce             string     `json:"nonce,omitempty"`
 }
 type Store struct {
 	root string
@@ -199,6 +206,54 @@ func (s *Store) Get(idv string) (Plan, error) {
 	p, e := s.read(idv)
 	return s.project(p), e
 }
+func (s *Store) Restore(idv, captureID string) (RestoredSource, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, e := s.read(idv)
+	if e != nil {
+		return RestoredSource{}, e
+	}
+	var capture *Capture
+	for i := range p.Captures {
+		if p.Captures[i].ID == captureID {
+			capture = &p.Captures[i]
+			break
+		}
+	}
+	if capture == nil {
+		return RestoredSource{}, ErrNotFound
+	}
+	if s.now().After(capture.RetainUntil) {
+		return RestoredSource{}, ErrInvalid
+	}
+	sealed, e1 := hex.DecodeString(capture.Ciphertext)
+	nonce, e2 := hex.DecodeString(capture.Nonce)
+	block, e3 := aes.NewCipher(s.key)
+	if e1 != nil || e2 != nil || e3 != nil {
+		return RestoredSource{}, ErrInvalid
+	}
+	gcm, e := cipher.NewGCM(block)
+	if e != nil || len(nonce) != gcm.NonceSize() {
+		return RestoredSource{}, ErrInvalid
+	}
+	plain, e := gcm.Open(nil, nonce, sealed, []byte(p.ID))
+	if e != nil {
+		return RestoredSource{}, ErrInvalid
+	}
+	var body struct {
+		Manifest []Entry `json:"manifest"`
+		Payload  []byte  `json:"payload"`
+	}
+	if json.Unmarshal(plain, &body) != nil || len(body.Manifest) != capture.EntryCount {
+		return RestoredSource{}, ErrInvalid
+	}
+	m, _ := json.Marshal(body.Manifest)
+	sum := sha256.Sum256(m)
+	if hex.EncodeToString(sum[:]) != capture.ManifestSHA256 {
+		return RestoredSource{}, ErrInvalid
+	}
+	return RestoredSource{Manifest: body.Manifest, Payload: body.Payload}, nil
+}
 func (s *Store) List(repo string) ([]Plan, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -270,6 +325,9 @@ func (s *Store) project(p Plan) Plan {
 		if failure != "" {
 			c.Validation = "failed"
 		}
+		// Encryption material is persisted for recovery but never projected.
+		c.Ciphertext = ""
+		c.Nonce = ""
 	}
 	return p
 }

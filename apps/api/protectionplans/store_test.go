@@ -38,6 +38,13 @@ func TestEncryptedCaptureProjectsProofWithoutProtectedContent(t *testing.T) {
 	if strings.Contains(string(onDisk), string(protected)) {
 		t.Fatal("plaintext persisted")
 	}
+	if !strings.Contains(string(onDisk), `"ciphertext"`) || !strings.Contains(string(onDisk), `"nonce"`) {
+		t.Fatal("encrypted restore material was not persisted")
+	}
+	restored, err := store.Restore(plan.ID, got.Captures[0].ID)
+	if err != nil || string(restored.Payload) != string(protected) || len(restored.Manifest) != 1 {
+		t.Fatalf("bounded restore = %#v, %v", restored, err)
+	}
 }
 
 func TestCorruptCaptureCannotRemainRecoverable(t *testing.T) {

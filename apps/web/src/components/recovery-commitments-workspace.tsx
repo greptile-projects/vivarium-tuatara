@@ -1,43 +1,1073 @@
 "use client";
 
 import Link from "next/link";
-import {useCallback,useEffect,useState,type FormEvent} from "react";
-import {api} from "@/lib/api";
-import {useAuth} from "./auth";
-import {Badge,Button,Card} from "./ui";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { api } from "@/lib/api";
+import { useAuth } from "./auth";
+import { Badge, Button, Card } from "./ui";
 
-type Target={id:string;kind:string;resource_id?:string;name:string;capability:string;owner_ids:string[];acceptable_loss_minutes:number;restoration_time_minutes:number;retention:string;jurisdictions:string[];validation_criteria:string[];dependencies:{target_id:string;protected:boolean;restoration_time_minutes?:number}[];exclusions?:string[]};
-type Revision={version:number;title:string;summary:string;owner_ids:string[];targets:Target[];links:{kind:string;id:string;url?:string;label:string;added_by?:string}[];exceptions:{id:string;target_id:string;reason:string;mitigation:string;approved_by:string;expires_at:string}[];rationale:string;created_by:string;created_at:string};
-type Commitment={id:string;current_version:number;revisions:Revision[];diagnostics:{kind:string;severity:string;message:string;resource_id?:string;attributed_to:string}[]};
-type ProtectionPlan={id:string;name:string;commitment_id:string;commitment_version:number;mode:"snapshot"|"replica";resources:{target_id:string;kind:"repository"|"environment";environment_id?:string;revision?:string}[];destination:string;jurisdiction:string;retention_days:number;freshness_minutes:number;accessor_ids:string[];validation_checks:string[];version:number;updated_by:string;captures:{id:string;source_revision:string;manifest_sha256:string;entry_count:number;plaintext_bytes:number;stored_bytes:number;location:string;retain_until:string;captured_by:string;captured_at:string;validation:string;freshness:string;validation_checks:string[];cost_units:number;failure?:string;recoverable:boolean}[]};
-const value=(f:FormData,n:string)=>String(f.get(n)??"").trim(), list=(v:string)=>v.split(",").map(x=>x.trim()).filter(Boolean), number=(f:FormData,n:string)=>Number(value(f,n));
+type Target = {
+  id: string;
+  kind: string;
+  resource_id?: string;
+  name: string;
+  capability: string;
+  owner_ids: string[];
+  acceptable_loss_minutes: number;
+  restoration_time_minutes: number;
+  retention: string;
+  jurisdictions: string[];
+  validation_criteria: string[];
+  dependencies: {
+    target_id: string;
+    protected: boolean;
+    restoration_time_minutes?: number;
+  }[];
+  exclusions?: string[];
+};
+type Revision = {
+  version: number;
+  title: string;
+  summary: string;
+  owner_ids: string[];
+  targets: Target[];
+  links: {
+    kind: string;
+    id: string;
+    url?: string;
+    label: string;
+    added_by?: string;
+  }[];
+  exceptions: {
+    id: string;
+    target_id: string;
+    reason: string;
+    mitigation: string;
+    approved_by: string;
+    expires_at: string;
+  }[];
+  rationale: string;
+  created_by: string;
+  created_at: string;
+};
+type Commitment = {
+  id: string;
+  current_version: number;
+  revisions: Revision[];
+  diagnostics: {
+    kind: string;
+    severity: string;
+    message: string;
+    resource_id?: string;
+    attributed_to: string;
+  }[];
+};
+type ProtectionPlan = {
+  id: string;
+  name: string;
+  commitment_id: string;
+  commitment_version: number;
+  mode: "snapshot" | "replica";
+  resources: {
+    target_id: string;
+    kind: "repository" | "environment";
+    environment_id?: string;
+    revision?: string;
+  }[];
+  destination: string;
+  jurisdiction: string;
+  retention_days: number;
+  freshness_minutes: number;
+  accessor_ids: string[];
+  validation_checks: string[];
+  version: number;
+  updated_by: string;
+  captures: {
+    id: string;
+    source_revision: string;
+    manifest_sha256: string;
+    entry_count: number;
+    plaintext_bytes: number;
+    stored_bytes: number;
+    location: string;
+    retain_until: string;
+    captured_by: string;
+    captured_at: string;
+    validation: string;
+    freshness: string;
+    validation_checks: string[];
+    cost_units: number;
+    failure?: string;
+    recoverable: boolean;
+  }[];
+};
+type Exercise = {
+  id: string;
+  name: string;
+  scenario: string;
+  plan_id: string;
+  capture_id: string;
+  environment_id: string;
+  isolation: string;
+  status: "passed" | "gaps_found";
+  current: boolean;
+  stale_reasons: string[];
+  started_by: string;
+  started_at: string;
+  duration_ms: number;
+  achieved_objectives: string[];
+  gaps: string[];
+  manual_steps: string[];
+  results: {
+    step_id: string;
+    kind: string;
+    command: string;
+    status: string;
+    duration_ms: number;
+    log: string;
+    artifact?: string;
+    gap?: string;
+    manual: boolean;
+    objective_achieved: boolean;
+  }[];
+};
+const value = (f: FormData, n: string) => String(f.get(n) ?? "").trim(),
+  list = (v: string) =>
+    v
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean),
+  number = (f: FormData, n: string) => Number(value(f, n));
 
-export function RecoveryCommitmentsWorkspace({repositoryID}:{repositoryID:string}){
- const {token,user}=useAuth(),[items,setItems]=useState<Commitment[]>([]),[plans,setPlans]=useState<ProtectionPlan[]>([]),[selected,setSelected]=useState<Commitment>(),[error,setError]=useState(""),[busy,setBusy]=useState(false);
- const load=useCallback(async()=>{if(!token)return;try{const [out,protectedState]=await Promise.all([api<{commitments:Commitment[]}>(`/repositories/${repositoryID}/recovery-commitments`,{},token),api<{plans:ProtectionPlan[]}>(`/repositories/${repositoryID}/protection-plans`,{},token)]);setItems(out.commitments);setPlans(protectedState.plans);setSelected(x=>out.commitments.find(v=>v.id===x?.id)??out.commitments[0]);setError("")}catch(e){setError(e instanceof Error?e.message:"Recovery evidence could not be loaded.")}},[repositoryID,token]);
- useEffect(()=>{void Promise.resolve().then(load)},[load]);
- const current=selected?.revisions.at(-1),target=current?.targets[0],dependency=target?.dependencies[0],exception=current?.exceptions[0];
- function build(f:FormData):Omit<Revision,"version"|"created_by"|"created_at">{
-  const owners=list(value(f,"owners")),targetID=value(f,"target_id"),oldTargetID=target?.id,dependencyID=value(f,"dependency_id"),exceptionID=value(f,"exception_id"),linkKinds=[["service_objective","Service objective"],["environment","Environment"],["incident","Incident"],["privacy_rule","Privacy rule"],["governance","Governance decision"]] as const;
-  const retarget=(id:string)=>oldTargetID&&id===oldTargetID?targetID:id;
-  const links=linkKinds.flatMap(([kind,label])=>{const id=value(f,`${kind}_id`),existing=current?.links.filter(x=>x.kind===kind)??[],edited=id?[existing[0]?.id===id?existing[0]:{kind,id,label}]:[];return [...edited,...existing.slice(1)]});
-  const dependencies=[...(dependencyID?[{target_id:retarget(dependencyID),protected:value(f,"protected")==="yes",restoration_time_minutes:number(f,"dependency_restore")}]:[]),...(target?.dependencies.slice(1).map(x=>({...x,target_id:retarget(x.target_id)}))??[])];
-  const exceptions=[...(exceptionID?[{id:exceptionID,target_id:targetID,reason:value(f,"exception_reason"),mitigation:value(f,"mitigation"),approved_by:exception?.id===exceptionID?exception.approved_by:user?.id??"",expires_at:new Date(value(f,"expires")).toISOString()}]:[]),...(current?.exceptions.slice(1).map(x=>({...x,target_id:retarget(x.target_id)}))??[])];
-  const remainingTargets=(current?.targets.slice(1)??[]).map(x=>({...x,dependencies:x.dependencies.map(d=>({...d,target_id:retarget(d.target_id)}))}));
-  return {title:value(f,"title"),summary:value(f,"summary"),owner_ids:owners,targets:[{id:targetID,kind:value(f,"kind"),resource_id:value(f,"resource_id"),name:value(f,"target_name"),capability:value(f,"capability"),owner_ids:list(value(f,"target_owners")),acceptable_loss_minutes:number(f,"loss"),restoration_time_minutes:number(f,"restore"),retention:value(f,"retention"),jurisdictions:list(value(f,"jurisdictions")),validation_criteria:list(value(f,"criteria")),dependencies,exclusions:list(value(f,"exclusions"))},...remainingTargets],links:[...links,...(current?.links.filter(x=>!linkKinds.some(([kind])=>kind===x.kind))??[])],exceptions,rationale:value(f,"rationale")}
- }
- async function publish(e:FormEvent<HTMLFormElement>){e.preventDefault();if(!token)return;setBusy(true);setError("");try{const path=selected?`/repositories/${repositoryID}/recovery-commitments/${selected.id}/revisions`:`/repositories/${repositoryID}/recovery-commitments`;const out=await api<Commitment>(path,{method:"POST",body:JSON.stringify({revision:build(new FormData(e.currentTarget)),...(selected?{expected_version:selected.current_version}:{})})},token);setSelected(out);setItems(v=>[out,...v.filter(x=>x.id!==out.id)])}catch(e){setError(e instanceof Error?e.message:"Recovery commitment could not be published.")}finally{setBusy(false)}}
- async function createPlan(e:FormEvent<HTMLFormElement>){e.preventDefault();if(!token||!selected)return;const f=new FormData(e.currentTarget);setBusy(true);try{const kind=value(f,"protected_kind") as "repository"|"environment";await api(`/repositories/${repositoryID}/protection-plans`,{method:"POST",body:JSON.stringify({plan:{name:value(f,"plan_name"),commitment_id:selected.id,commitment_version:selected.current_version,mode:value(f,"plan_mode"),resources:[{target_id:value(f,"protected_target"),kind,...(kind==="repository"?{revision:value(f,"protected_revision")}:{environment_id:value(f,"protected_environment")})}],destination:value(f,"destination"),jurisdiction:value(f,"protected_jurisdiction"),retention_days:number(f,"retention_days"),freshness_minutes:number(f,"freshness_minutes"),accessor_ids:list(value(f,"accessors")),validation_checks:list(value(f,"validation_checks"))}})},token);await load()}catch(x){setError(x instanceof Error?x.message:"Protection plan could not be created.")}finally{setBusy(false)}}
- async function capture(plan:ProtectionPlan){if(!token)return;setBusy(true);try{await api(`/repositories/${repositoryID}/protection-plans/${plan.id}/captures`,{method:"POST",body:JSON.stringify({expected_version:plan.version})},token);await load()}catch(x){setError(x instanceof Error?x.message:"Protected capture could not be completed.")}finally{setBusy(false)}}
- return <main id="main-content" className="space-y-6"><header><Link href={`/repositories/${repositoryID}`} className="text-sm text-[var(--muted)] hover:text-[var(--brand)]">Repository</Link><h1 className="mt-2 text-2xl font-semibold">Recovery commitments</h1><p className="mt-2 max-w-3xl text-sm text-[var(--muted)]">Agree on what project state must survive, how much loss is acceptable, and who restores each user-facing capability.</p></header>
- <Card className="p-5"><div className="flex justify-between gap-3"><h2 className="font-semibold">{selected?"Publish a complete successor":"Define a recovery contract"}</h2>{selected&&<Button type="button" variant="secondary" onClick={()=>setSelected(undefined)}>New commitment</Button>}</div><form onSubmit={publish} className="mt-4 space-y-4"><Grid><Field n="title" l="Contract title" v={current?.title}/><Field n="owners" l="Contract owner IDs" v={current?.owner_ids.join(", ")??user?.id}/><Field n="rationale" l="Revision rationale" v={current?.rationale}/></Grid><Area n="summary" l="What must survive and why" v={current?.summary}/>
- <Group title="Recovery target"><Field n="target_id" l="Stable target key" v={target?.id}/><Select n="kind" l="State kind" v={target?.kind??"repository"} options={["repository","package","artifact","configuration","collaboration_records","deployed_service_data"]}/><Field n="resource_id" l="Resource ID (optional)" v={target?.resource_id} required={false}/><Field n="target_name" l="Target name" v={target?.name}/><Field n="capability" l="User-facing capability" v={target?.capability}/><Field n="target_owners" l="Restoration owner IDs" v={target?.owner_ids.join(", ")} required={false}/><Field n="loss" l="Acceptable loss (minutes)" type="number" v={String(target?.acceptable_loss_minutes??0)}/><Field n="restore" l="Restoration time (minutes)" type="number" v={String(target?.restoration_time_minutes??60)}/><Field n="retention" l="Retention schedule" v={target?.retention}/><Field n="jurisdictions" l="Storage jurisdictions" v={target?.jurisdictions.join(", ")}/><Field n="criteria" l="Validation criteria" v={target?.validation_criteria.join(", ")}/><Field n="exclusions" l="Declared exclusions" v={target?.exclusions?.join(", ")} required={false}/></Group>
- <Group title="Dependency (optional)"><Field n="dependency_id" l="Target key dependency" v={dependency?.target_id} required={false}/><Select n="protected" l="Dependency protected" v={dependency?.protected===false?"no":"yes"} options={["yes","no"]}/><Field n="dependency_restore" l="Dependency restore minutes" type="number" v={String(dependency?.restoration_time_minutes??0)} required={false}/></Group>
- <Group title="Connected project contracts"><Field n="service_objective_id" l="Service objective ID" v={current?.links.find(x=>x.kind==="service_objective")?.id} required={false}/><Field n="environment_id" l="Environment ID" v={current?.links.find(x=>x.kind==="environment")?.id} required={false}/><Field n="incident_id" l="Incident ID" v={current?.links.find(x=>x.kind==="incident")?.id} required={false}/><Field n="privacy_rule_id" l="Privacy rule ID" v={current?.links.find(x=>x.kind==="privacy_rule")?.id} required={false}/><Field n="governance_id" l="Governance decision ID" v={current?.links.find(x=>x.kind==="governance")?.id} required={false}/></Group>
- <Group title="Time-bounded exception (optional)"><Field n="exception_id" l="Exception key" v={exception?.id} required={false}/><Field n="exception_reason" l="Reason" v={exception?.reason} required={false}/><Field n="mitigation" l="Compensating protection" v={exception?.mitigation} required={false}/><Field n="expires" l="Expires" type="datetime-local" v={exception?.expires_at?.slice(0,16)} required={false}/></Group><Button disabled={busy}>{busy?"Publishing…":selected?`Publish version ${selected.current_version+1}`:"Create commitment"}</Button></form></Card>{error&&<p role="alert" className="text-sm text-[var(--danger)]">{error}</p>}
- {selected&&current&&<Card className="p-5"><div className="flex flex-wrap gap-2"><h2 className="text-lg font-semibold">{current.title}</h2><Badge>version {selected.current_version}</Badge><Badge tone={selected.diagnostics.some(x=>x.severity==="blocking")?"danger":"success"}>{selected.diagnostics.length?`${selected.diagnostics.length} explicit issue(s)`:"recovery contract is explicit"}</Badge></div><p className="mt-2 text-sm text-[var(--muted)]">{current.targets.length} protected state target(s) · accountable to {current.owner_ids.join(", ")}</p>{current.targets.map(x=><article key={x.id} className="mt-4 rounded-lg border p-4"><div className="flex flex-wrap justify-between gap-2"><strong>{x.name}</strong><Badge>{x.kind.replaceAll("_"," ")}</Badge></div><p className="mt-2 text-sm">{x.capability}</p><p className="mt-2 text-xs text-[var(--muted)]">Lose at most {x.acceptable_loss_minutes} min · restore within {x.restoration_time_minutes} min · {x.retention} · {x.jurisdictions.join(", ")} · owners {x.owner_ids.join(", ")||"missing"}</p><p className="mt-2 text-xs"><b>Validation:</b> {x.validation_criteria.join(" · ")}</p>{x.exclusions?.length?<p className="mt-1 text-xs"><b>Excluded:</b> {x.exclusions.join(" · ")}</p>:null}</article>)}{selected.diagnostics.map((x,i)=><p className="mt-3 rounded-lg border p-3 text-sm" key={`${x.kind}-${x.resource_id}-${i}`}><Badge tone={x.severity==="blocking"?"danger":"warning"}>{x.kind.replaceAll("_"," ")}</Badge> {x.message} <span className="text-[var(--muted)]">Attributed to {x.attributed_to}</span></p>)}<p className="mt-4 text-xs text-[var(--muted)]">Connections: {current.links.map(x=>`${x.label}: ${x.id}`).join(" · ")||"none declared"}. This contract documents recovery intent and grants no deployment, data, repository, or incident authority.</p><details className="mt-4"><summary className="cursor-pointer font-semibold">Version history</summary>{selected.revisions.map(x=><p className="mt-2 text-sm" key={x.version}>v{x.version} · {x.rationale} · {x.created_by} · {new Date(x.created_at).toLocaleString()}</p>)}</details></Card>}
- {selected&&current&&<Card className="p-5"><h2 className="font-semibold">Verifiable protection</h2><p className="mt-1 text-sm text-[var(--muted)]">Encrypt exact committed state into an access-scoped vault. Evidence exposes integrity and coverage, never file contents or credentials.</p><form onSubmit={createPlan} className="mt-4 grid gap-3 md:grid-cols-3"><Field n="plan_name" l="Plan name"/><Select n="plan_mode" l="Protection mode" v="snapshot" options={["snapshot","replica"]}/><Field n="protected_target" l="Commitment target key" v={current.targets[0]?.id}/><Select n="protected_kind" l="Source kind" v="repository" options={["repository","environment"]}/><Field n="protected_revision" l="Exact commit (repository)" required={false}/><Field n="protected_environment" l="Environment ID (environment)" required={false}/><Field n="destination" l="Approved vault location" v="vault://primary"/><Field n="protected_jurisdiction" l="Storage jurisdiction" v={current.targets[0]?.jurisdictions[0]}/><Field n="retention_days" l="Retention days" type="number" v="35"/><Field n="freshness_minutes" l="Freshness objective (minutes)" type="number" v="60"/><Field n="accessors" l="Recovery owner IDs" v={current.owner_ids.join(", ")}/><Field n="validation_checks" l="Required integrity checks" v="decrypt, manifest checksum, source provenance"/><div><Button disabled={busy}>Create protection plan</Button></div></form>{plans.filter(x=>x.commitment_id===selected.id).map(plan=><article className="mt-5 rounded-lg border p-4" key={plan.id}><div className="flex flex-wrap items-center justify-between gap-2"><div><strong>{plan.name}</strong><p className="text-xs text-[var(--muted)]">{plan.mode} · {plan.destination} · {plan.jurisdiction} · retention {plan.retention_days} days</p></div><Button variant="secondary" disabled={busy} onClick={()=>void capture(plan)}>Capture exact state</Button></div>{plan.captures.length===0?<p className="mt-3 text-sm text-[var(--warning)]">No completed capture. This target is not yet recoverable.</p>:plan.captures.toReversed().map(c=><div className="mt-3 rounded bg-[var(--surface-soft)] p-3 text-sm" key={c.id}><div className="flex flex-wrap gap-2"><Badge tone={c.recoverable?"success":"danger"}>{c.recoverable?"verified recoverable":c.failure?.replaceAll("_"," ")||"failed"}</Badge><Badge tone={c.freshness==="fresh"?"success":"warning"}>{c.freshness}</Badge><Badge>{c.entry_count} manifest entries</Badge><Badge>{c.cost_units} cost units</Badge></div><p className="mt-2">Captured {new Date(c.captured_at).toLocaleString()} by {c.captured_by}; retain until {new Date(c.retain_until).toLocaleDateString()}.</p><p className="mt-1 break-all font-mono text-xs text-[var(--muted)]">manifest sha256 {c.manifest_sha256} · source {c.source_revision}</p><p className="mt-1 text-xs text-[var(--muted)]">{c.stored_bytes} encrypted bytes · checks: {c.validation_checks.join(" · ")}. Protected paths, content, and credentials are intentionally omitted.</p></div>)}</article>)}</Card>}
- <section><h2 className="font-semibold">Repository recovery contracts</h2>{items.length===0?<p className="mt-2 text-sm text-[var(--muted)]">No recovery commitment has been published.</p>:items.map(x=><button type="button" onClick={()=>setSelected(x)} className="mt-2 w-full rounded-xl border bg-white p-4 text-left hover:border-[var(--brand)]" key={x.id}><strong>{x.revisions.at(-1)?.title}</strong><span className="block text-xs text-[var(--muted)]">v{x.current_version} · {x.diagnostics.length} explicit issue(s)</span></button>)}</section></main>
+export function RecoveryCommitmentsWorkspace({
+  repositoryID,
+}: {
+  repositoryID: string;
+}) {
+  const { token, user } = useAuth(),
+    [items, setItems] = useState<Commitment[]>([]),
+    [plans, setPlans] = useState<ProtectionPlan[]>([]),
+    [exercises, setExercises] = useState<Exercise[]>([]),
+    [selected, setSelected] = useState<Commitment>(),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false);
+  const load = useCallback(async () => {
+    if (!token) return;
+    try {
+      const [out, protectedState, exerciseState] = await Promise.all([
+        api<{ commitments: Commitment[] }>(
+          `/repositories/${repositoryID}/recovery-commitments`,
+          {},
+          token,
+        ),
+        api<{ plans: ProtectionPlan[] }>(
+          `/repositories/${repositoryID}/protection-plans`,
+          {},
+          token,
+        ),
+        api<{ exercises: Exercise[] }>(
+          `/repositories/${repositoryID}/recovery-exercises`,
+          {},
+          token,
+        ),
+      ]);
+      setItems(out.commitments);
+      setPlans(protectedState.plans);
+      setExercises(exerciseState.exercises);
+      setSelected(
+        (x) =>
+          out.commitments.find((v) => v.id === x?.id) ?? out.commitments[0],
+      );
+      setError("");
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Recovery evidence could not be loaded.",
+      );
+    }
+  }, [repositoryID, token]);
+  useEffect(() => {
+    void Promise.resolve().then(load);
+  }, [load]);
+  const current = selected?.revisions.at(-1),
+    target = current?.targets[0],
+    dependency = target?.dependencies[0],
+    exception = current?.exceptions[0];
+  function build(
+    f: FormData,
+  ): Omit<Revision, "version" | "created_by" | "created_at"> {
+    const owners = list(value(f, "owners")),
+      targetID = value(f, "target_id"),
+      oldTargetID = target?.id,
+      dependencyID = value(f, "dependency_id"),
+      exceptionID = value(f, "exception_id"),
+      linkKinds = [
+        ["service_objective", "Service objective"],
+        ["environment", "Environment"],
+        ["incident", "Incident"],
+        ["privacy_rule", "Privacy rule"],
+        ["governance", "Governance decision"],
+      ] as const;
+    const retarget = (id: string) =>
+      oldTargetID && id === oldTargetID ? targetID : id;
+    const links = linkKinds.flatMap(([kind, label]) => {
+      const id = value(f, `${kind}_id`),
+        existing = current?.links.filter((x) => x.kind === kind) ?? [],
+        edited = id
+          ? [existing[0]?.id === id ? existing[0] : { kind, id, label }]
+          : [];
+      return [...edited, ...existing.slice(1)];
+    });
+    const dependencies = [
+      ...(dependencyID
+        ? [
+            {
+              target_id: retarget(dependencyID),
+              protected: value(f, "protected") === "yes",
+              restoration_time_minutes: number(f, "dependency_restore"),
+            },
+          ]
+        : []),
+      ...(target?.dependencies
+        .slice(1)
+        .map((x) => ({ ...x, target_id: retarget(x.target_id) })) ?? []),
+    ];
+    const exceptions = [
+      ...(exceptionID
+        ? [
+            {
+              id: exceptionID,
+              target_id: targetID,
+              reason: value(f, "exception_reason"),
+              mitigation: value(f, "mitigation"),
+              approved_by:
+                exception?.id === exceptionID
+                  ? exception.approved_by
+                  : (user?.id ?? ""),
+              expires_at: new Date(value(f, "expires")).toISOString(),
+            },
+          ]
+        : []),
+      ...(current?.exceptions
+        .slice(1)
+        .map((x) => ({ ...x, target_id: retarget(x.target_id) })) ?? []),
+    ];
+    const remainingTargets = (current?.targets.slice(1) ?? []).map((x) => ({
+      ...x,
+      dependencies: x.dependencies.map((d) => ({
+        ...d,
+        target_id: retarget(d.target_id),
+      })),
+    }));
+    return {
+      title: value(f, "title"),
+      summary: value(f, "summary"),
+      owner_ids: owners,
+      targets: [
+        {
+          id: targetID,
+          kind: value(f, "kind"),
+          resource_id: value(f, "resource_id"),
+          name: value(f, "target_name"),
+          capability: value(f, "capability"),
+          owner_ids: list(value(f, "target_owners")),
+          acceptable_loss_minutes: number(f, "loss"),
+          restoration_time_minutes: number(f, "restore"),
+          retention: value(f, "retention"),
+          jurisdictions: list(value(f, "jurisdictions")),
+          validation_criteria: list(value(f, "criteria")),
+          dependencies,
+          exclusions: list(value(f, "exclusions")),
+        },
+        ...remainingTargets,
+      ],
+      links: [
+        ...links,
+        ...(current?.links.filter(
+          (x) => !linkKinds.some(([kind]) => kind === x.kind),
+        ) ?? []),
+      ],
+      exceptions,
+      rationale: value(f, "rationale"),
+    };
+  }
+  async function publish(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!token) return;
+    setBusy(true);
+    setError("");
+    try {
+      const path = selected
+        ? `/repositories/${repositoryID}/recovery-commitments/${selected.id}/revisions`
+        : `/repositories/${repositoryID}/recovery-commitments`;
+      const out = await api<Commitment>(
+        path,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            revision: build(new FormData(e.currentTarget)),
+            ...(selected ? { expected_version: selected.current_version } : {}),
+          }),
+        },
+        token,
+      );
+      setSelected(out);
+      setItems((v) => [out, ...v.filter((x) => x.id !== out.id)]);
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Recovery commitment could not be published.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function createPlan(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!token || !selected) return;
+    const f = new FormData(e.currentTarget);
+    setBusy(true);
+    try {
+      const kind = value(f, "protected_kind") as "repository" | "environment";
+      await api(
+        `/repositories/${repositoryID}/protection-plans`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            plan: {
+              name: value(f, "plan_name"),
+              commitment_id: selected.id,
+              commitment_version: selected.current_version,
+              mode: value(f, "plan_mode"),
+              resources: [
+                {
+                  target_id: value(f, "protected_target"),
+                  kind,
+                  ...(kind === "repository"
+                    ? { revision: value(f, "protected_revision") }
+                    : { environment_id: value(f, "protected_environment") }),
+                },
+              ],
+              destination: value(f, "destination"),
+              jurisdiction: value(f, "protected_jurisdiction"),
+              retention_days: number(f, "retention_days"),
+              freshness_minutes: number(f, "freshness_minutes"),
+              accessor_ids: list(value(f, "accessors")),
+              validation_checks: list(value(f, "validation_checks")),
+            },
+          }),
+        },
+        token,
+      );
+      await load();
+    } catch (x) {
+      setError(
+        x instanceof Error
+          ? x.message
+          : "Protection plan could not be created.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function capture(plan: ProtectionPlan) {
+    if (!token) return;
+    setBusy(true);
+    try {
+      await api(
+        `/repositories/${repositoryID}/protection-plans/${plan.id}/captures`,
+        {
+          method: "POST",
+          body: JSON.stringify({ expected_version: plan.version }),
+        },
+        token,
+      );
+      await load();
+    } catch (x) {
+      setError(
+        x instanceof Error
+          ? x.message
+          : "Protected capture could not be completed.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function exercise(
+    e: FormEvent<HTMLFormElement>,
+    plan: ProtectionPlan,
+    captureID: string,
+  ) {
+    e.preventDefault();
+    if (!token) return;
+    const f = new FormData(e.currentTarget),
+      journey = value(f, "journey");
+    setBusy(true);
+    try {
+      await api(
+        `/repositories/${repositoryID}/recovery-exercises`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            name: value(f, "exercise_name"),
+            scenario: value(f, "scenario"),
+            plan_id: plan.id,
+            capture_id: captureID,
+            steps: [
+              {
+                id: "restore",
+                kind: "restore",
+                name: "Restore protected state",
+                command: "restore:protected-manifest",
+                objective: "Protected state restored",
+              },
+              {
+                id: "integrity",
+                kind: "integrity",
+                name: "Verify manifest and dependencies",
+                depends_on: ["restore"],
+                command: "verify:dependencies",
+                objective: "Dependency integrity verified",
+              },
+              {
+                id: "journey",
+                kind: "journey",
+                name: "Run usable-system journey",
+                depends_on: ["integrity"],
+                command: `journey:${journey}`,
+                objective: `Journey ${journey} usable`,
+              },
+            ],
+          }),
+        },
+        token,
+      );
+      await load();
+    } catch (x) {
+      setError(
+        x instanceof Error
+          ? x.message
+          : "Recovery exercise could not be completed.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <main id="main-content" className="space-y-6">
+      <header>
+        <Link
+          href={`/repositories/${repositoryID}`}
+          className="text-sm text-[var(--muted)] hover:text-[var(--brand)]"
+        >
+          Repository
+        </Link>
+        <h1 className="mt-2 text-2xl font-semibold">Recovery commitments</h1>
+        <p className="mt-2 max-w-3xl text-sm text-[var(--muted)]">
+          Agree on what project state must survive, how much loss is acceptable,
+          and who restores each user-facing capability.
+        </p>
+      </header>
+      <Card className="p-5">
+        <div className="flex justify-between gap-3">
+          <h2 className="font-semibold">
+            {selected
+              ? "Publish a complete successor"
+              : "Define a recovery contract"}
+          </h2>
+          {selected && (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setSelected(undefined)}
+            >
+              New commitment
+            </Button>
+          )}
+        </div>
+        <form onSubmit={publish} className="mt-4 space-y-4">
+          <Grid>
+            <Field n="title" l="Contract title" v={current?.title} />
+            <Field
+              n="owners"
+              l="Contract owner IDs"
+              v={current?.owner_ids.join(", ") ?? user?.id}
+            />
+            <Field
+              n="rationale"
+              l="Revision rationale"
+              v={current?.rationale}
+            />
+          </Grid>
+          <Area
+            n="summary"
+            l="What must survive and why"
+            v={current?.summary}
+          />
+          <Group title="Recovery target">
+            <Field n="target_id" l="Stable target key" v={target?.id} />
+            <Select
+              n="kind"
+              l="State kind"
+              v={target?.kind ?? "repository"}
+              options={[
+                "repository",
+                "package",
+                "artifact",
+                "configuration",
+                "collaboration_records",
+                "deployed_service_data",
+              ]}
+            />
+            <Field
+              n="resource_id"
+              l="Resource ID (optional)"
+              v={target?.resource_id}
+              required={false}
+            />
+            <Field n="target_name" l="Target name" v={target?.name} />
+            <Field
+              n="capability"
+              l="User-facing capability"
+              v={target?.capability}
+            />
+            <Field
+              n="target_owners"
+              l="Restoration owner IDs"
+              v={target?.owner_ids.join(", ")}
+              required={false}
+            />
+            <Field
+              n="loss"
+              l="Acceptable loss (minutes)"
+              type="number"
+              v={String(target?.acceptable_loss_minutes ?? 0)}
+            />
+            <Field
+              n="restore"
+              l="Restoration time (minutes)"
+              type="number"
+              v={String(target?.restoration_time_minutes ?? 60)}
+            />
+            <Field n="retention" l="Retention schedule" v={target?.retention} />
+            <Field
+              n="jurisdictions"
+              l="Storage jurisdictions"
+              v={target?.jurisdictions.join(", ")}
+            />
+            <Field
+              n="criteria"
+              l="Validation criteria"
+              v={target?.validation_criteria.join(", ")}
+            />
+            <Field
+              n="exclusions"
+              l="Declared exclusions"
+              v={target?.exclusions?.join(", ")}
+              required={false}
+            />
+          </Group>
+          <Group title="Dependency (optional)">
+            <Field
+              n="dependency_id"
+              l="Target key dependency"
+              v={dependency?.target_id}
+              required={false}
+            />
+            <Select
+              n="protected"
+              l="Dependency protected"
+              v={dependency?.protected === false ? "no" : "yes"}
+              options={["yes", "no"]}
+            />
+            <Field
+              n="dependency_restore"
+              l="Dependency restore minutes"
+              type="number"
+              v={String(dependency?.restoration_time_minutes ?? 0)}
+              required={false}
+            />
+          </Group>
+          <Group title="Connected project contracts">
+            <Field
+              n="service_objective_id"
+              l="Service objective ID"
+              v={current?.links.find((x) => x.kind === "service_objective")?.id}
+              required={false}
+            />
+            <Field
+              n="environment_id"
+              l="Environment ID"
+              v={current?.links.find((x) => x.kind === "environment")?.id}
+              required={false}
+            />
+            <Field
+              n="incident_id"
+              l="Incident ID"
+              v={current?.links.find((x) => x.kind === "incident")?.id}
+              required={false}
+            />
+            <Field
+              n="privacy_rule_id"
+              l="Privacy rule ID"
+              v={current?.links.find((x) => x.kind === "privacy_rule")?.id}
+              required={false}
+            />
+            <Field
+              n="governance_id"
+              l="Governance decision ID"
+              v={current?.links.find((x) => x.kind === "governance")?.id}
+              required={false}
+            />
+          </Group>
+          <Group title="Time-bounded exception (optional)">
+            <Field
+              n="exception_id"
+              l="Exception key"
+              v={exception?.id}
+              required={false}
+            />
+            <Field
+              n="exception_reason"
+              l="Reason"
+              v={exception?.reason}
+              required={false}
+            />
+            <Field
+              n="mitigation"
+              l="Compensating protection"
+              v={exception?.mitigation}
+              required={false}
+            />
+            <Field
+              n="expires"
+              l="Expires"
+              type="datetime-local"
+              v={exception?.expires_at?.slice(0, 16)}
+              required={false}
+            />
+          </Group>
+          <Button disabled={busy}>
+            {busy
+              ? "Publishing…"
+              : selected
+                ? `Publish version ${selected.current_version + 1}`
+                : "Create commitment"}
+          </Button>
+        </form>
+      </Card>
+      {error && (
+        <p role="alert" className="text-sm text-[var(--danger)]">
+          {error}
+        </p>
+      )}
+      {selected && current && (
+        <Card className="p-5">
+          <div className="flex flex-wrap gap-2">
+            <h2 className="text-lg font-semibold">{current.title}</h2>
+            <Badge>version {selected.current_version}</Badge>
+            <Badge
+              tone={
+                selected.diagnostics.some((x) => x.severity === "blocking")
+                  ? "danger"
+                  : "success"
+              }
+            >
+              {selected.diagnostics.length
+                ? `${selected.diagnostics.length} explicit issue(s)`
+                : "recovery contract is explicit"}
+            </Badge>
+          </div>
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            {current.targets.length} protected state target(s) · accountable to{" "}
+            {current.owner_ids.join(", ")}
+          </p>
+          {current.targets.map((x) => (
+            <article key={x.id} className="mt-4 rounded-lg border p-4">
+              <div className="flex flex-wrap justify-between gap-2">
+                <strong>{x.name}</strong>
+                <Badge>{x.kind.replaceAll("_", " ")}</Badge>
+              </div>
+              <p className="mt-2 text-sm">{x.capability}</p>
+              <p className="mt-2 text-xs text-[var(--muted)]">
+                Lose at most {x.acceptable_loss_minutes} min · restore within{" "}
+                {x.restoration_time_minutes} min · {x.retention} ·{" "}
+                {x.jurisdictions.join(", ")} · owners{" "}
+                {x.owner_ids.join(", ") || "missing"}
+              </p>
+              <p className="mt-2 text-xs">
+                <b>Validation:</b> {x.validation_criteria.join(" · ")}
+              </p>
+              {x.exclusions?.length ? (
+                <p className="mt-1 text-xs">
+                  <b>Excluded:</b> {x.exclusions.join(" · ")}
+                </p>
+              ) : null}
+            </article>
+          ))}
+          {selected.diagnostics.map((x, i) => (
+            <p
+              className="mt-3 rounded-lg border p-3 text-sm"
+              key={`${x.kind}-${x.resource_id}-${i}`}
+            >
+              <Badge tone={x.severity === "blocking" ? "danger" : "warning"}>
+                {x.kind.replaceAll("_", " ")}
+              </Badge>{" "}
+              {x.message}{" "}
+              <span className="text-[var(--muted)]">
+                Attributed to {x.attributed_to}
+              </span>
+            </p>
+          ))}
+          <p className="mt-4 text-xs text-[var(--muted)]">
+            Connections:{" "}
+            {current.links.map((x) => `${x.label}: ${x.id}`).join(" · ") ||
+              "none declared"}
+            . This contract documents recovery intent and grants no deployment,
+            data, repository, or incident authority.
+          </p>
+          <details className="mt-4">
+            <summary className="cursor-pointer font-semibold">
+              Version history
+            </summary>
+            {selected.revisions.map((x) => (
+              <p className="mt-2 text-sm" key={x.version}>
+                v{x.version} · {x.rationale} · {x.created_by} ·{" "}
+                {new Date(x.created_at).toLocaleString()}
+              </p>
+            ))}
+          </details>
+        </Card>
+      )}
+      {selected && current && (
+        <Card className="p-5">
+          <h2 className="font-semibold">Verifiable protection</h2>
+          <p className="mt-1 text-sm text-[var(--muted)]">
+            Encrypt exact committed state into an access-scoped vault. Evidence
+            exposes integrity and coverage, never file contents or credentials.
+          </p>
+          <form
+            onSubmit={createPlan}
+            className="mt-4 grid gap-3 md:grid-cols-3"
+          >
+            <Field n="plan_name" l="Plan name" />
+            <Select
+              n="plan_mode"
+              l="Protection mode"
+              v="snapshot"
+              options={["snapshot", "replica"]}
+            />
+            <Field
+              n="protected_target"
+              l="Commitment target key"
+              v={current.targets[0]?.id}
+            />
+            <Select
+              n="protected_kind"
+              l="Source kind"
+              v="repository"
+              options={["repository", "environment"]}
+            />
+            <Field
+              n="protected_revision"
+              l="Exact commit (repository)"
+              required={false}
+            />
+            <Field
+              n="protected_environment"
+              l="Environment ID (environment)"
+              required={false}
+            />
+            <Field
+              n="destination"
+              l="Approved vault location"
+              v="vault://primary"
+            />
+            <Field
+              n="protected_jurisdiction"
+              l="Storage jurisdiction"
+              v={current.targets[0]?.jurisdictions[0]}
+            />
+            <Field n="retention_days" l="Retention days" type="number" v="35" />
+            <Field
+              n="freshness_minutes"
+              l="Freshness objective (minutes)"
+              type="number"
+              v="60"
+            />
+            <Field
+              n="accessors"
+              l="Recovery owner IDs"
+              v={current.owner_ids.join(", ")}
+            />
+            <Field n="validation_checks" l="Allowed journey checks" v="smoke" />
+            <div>
+              <Button disabled={busy}>Create protection plan</Button>
+            </div>
+          </form>
+          {plans
+            .filter((x) => x.commitment_id === selected.id)
+            .map((plan) => (
+              <article className="mt-5 rounded-lg border p-4" key={plan.id}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <strong>{plan.name}</strong>
+                    <p className="text-xs text-[var(--muted)]">
+                      {plan.mode} · {plan.destination} · {plan.jurisdiction} ·
+                      retention {plan.retention_days} days
+                    </p>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() => void capture(plan)}
+                  >
+                    Capture exact state
+                  </Button>
+                </div>
+                {plan.captures.length === 0 ? (
+                  <p className="mt-3 text-sm text-[var(--warning)]">
+                    No completed capture. This target is not yet recoverable.
+                  </p>
+                ) : (
+                  plan.captures.toReversed().map((c) => (
+                    <div
+                      className="mt-3 rounded bg-[var(--surface-soft)] p-3 text-sm"
+                      key={c.id}
+                    >
+                      <div className="flex flex-wrap gap-2">
+                        <Badge tone={c.recoverable ? "success" : "danger"}>
+                          {c.recoverable
+                            ? "verified recoverable"
+                            : c.failure?.replaceAll("_", " ") || "failed"}
+                        </Badge>
+                        <Badge
+                          tone={c.freshness === "fresh" ? "success" : "warning"}
+                        >
+                          {c.freshness}
+                        </Badge>
+                        <Badge>{c.entry_count} manifest entries</Badge>
+                        <Badge>{c.cost_units} cost units</Badge>
+                      </div>
+                      <p className="mt-2">
+                        Captured {new Date(c.captured_at).toLocaleString()} by{" "}
+                        {c.captured_by}; retain until{" "}
+                        {new Date(c.retain_until).toLocaleDateString()}.
+                      </p>
+                      <p className="mt-1 break-all font-mono text-xs text-[var(--muted)]">
+                        manifest sha256 {c.manifest_sha256} · source{" "}
+                        {c.source_revision}
+                      </p>
+                      <p className="mt-1 text-xs text-[var(--muted)]">
+                        {c.stored_bytes} encrypted bytes · checks:{" "}
+                        {c.validation_checks.join(" · ")}. Protected paths,
+                        content, and credentials are intentionally omitted.
+                      </p>
+                      {c.recoverable && (
+                        <form
+                          onSubmit={(e) => void exercise(e, plan, c.id)}
+                          className="mt-3 grid gap-2 md:grid-cols-4"
+                        >
+                          <Field
+                            n="exercise_name"
+                            l="Exercise name"
+                            v={`${plan.name} drill`}
+                          />
+                          <Field
+                            n="scenario"
+                            l="Failure scenario"
+                            v="primary region unavailable"
+                          />
+                          <Select
+                            n="journey"
+                            l="Usability journey"
+                              v={plan.validation_checks[0] ?? ""}
+                            options={plan.validation_checks}
+                          />
+                          <div className="self-end">
+                            <Button disabled={busy} variant="secondary">
+                              Launch isolated exercise
+                            </Button>
+                          </div>
+                        </form>
+                      )}
+                    </div>
+                  ))
+                )}
+              </article>
+            ))}
+        </Card>
+      )}
+      {selected && (
+        <Card className="p-5">
+          <h2 className="font-semibold">Recovery exercise evidence</h2>
+          <p className="mt-1 text-sm text-[var(--muted)]">
+            Runs restore only into ephemeral, network-isolated environments with
+            no production credentials.
+          </p>
+          {exercises
+            .filter((x) =>
+              plans.some(
+                (p) => p.commitment_id === selected.id && p.id === x.plan_id,
+              ),
+            )
+            .map((x) => (
+              <article key={x.id} className="mt-4 rounded-lg border p-4">
+                <div className="flex flex-wrap gap-2">
+                  <strong>{x.name}</strong>
+                  <Badge tone={x.status === "passed" ? "success" : "warning"}>
+                    {x.status.replaceAll("_", " ")}
+                  </Badge>
+                  <Badge tone={x.current ? "success" : "warning"}>
+                    {x.current ? "current evidence" : "stale evidence"}
+                  </Badge>
+                </div>
+                <p className="mt-2 text-sm">
+                  {x.scenario} · {x.environment_id} · {x.duration_ms} ms ·
+                  launched by {x.started_by}
+                </p>
+                {x.stale_reasons.length > 0 && (
+                  <p className="mt-2 text-sm text-[var(--warning)]">
+                    No longer current: {x.stale_reasons.join(" · ")}
+                  </p>
+                )}
+                <div className="mt-3 space-y-2">
+                  {x.results.map((r) => (
+                    <div
+                      key={r.step_id}
+                      className="rounded bg-[var(--surface-soft)] p-3 text-xs"
+                    >
+                      <b>
+                        {r.kind}: {r.status}
+                      </b>{" "}
+                      · <span className="font-mono">{r.command}</span> ·{" "}
+                      {r.duration_ms} ms<p>{r.log}</p>
+                      {r.artifact && (
+                        <p className="break-all text-[var(--muted)]">
+                          Artifact: {r.artifact}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-2 text-xs">
+                  Objectives: {x.achieved_objectives.join(" · ") || "none"}.
+                  Gaps: {x.gaps.join(" · ") || "none"}. Manual steps:{" "}
+                  {x.manual_steps.join(" · ") || "none"}.
+                </p>
+              </article>
+            ))}
+        </Card>
+      )}
+      <section>
+        <h2 className="font-semibold">Repository recovery contracts</h2>
+        {items.length === 0 ? (
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            No recovery commitment has been published.
+          </p>
+        ) : (
+          items.map((x) => (
+            <button
+              type="button"
+              onClick={() => setSelected(x)}
+              className="mt-2 w-full rounded-xl border bg-white p-4 text-left hover:border-[var(--brand)]"
+              key={x.id}
+            >
+              <strong>{x.revisions.at(-1)?.title}</strong>
+              <span className="block text-xs text-[var(--muted)]">
+                v{x.current_version} · {x.diagnostics.length} explicit issue(s)
+              </span>
+            </button>
+          ))
+        )}
+      </section>
+    </main>
+  );
 }
-function Grid({children}:{children:React.ReactNode}){return <div className="grid gap-3 md:grid-cols-3">{children}</div>}function Group({title,children}:{title:string;children:React.ReactNode}){return <fieldset className="grid gap-3 rounded-lg border p-4 md:grid-cols-3"><legend className="px-2 text-sm font-semibold">{title}</legend>{children}</fieldset>}
-function Field({n,l,v,type="text",required=true}:{n:string;l:string;v?:string;type?:string;required?:boolean}){return <label className="text-xs font-semibold">{l}<input key={v} name={n} type={type} required={required} defaultValue={v} min={type==="number"?0:undefined} className="mt-1 min-h-10 w-full rounded-lg border px-3 font-normal"/></label>}function Area({n,l,v}:{n:string;l:string;v?:string}){return <label className="text-xs font-semibold">{l}<textarea key={v} name={n} required defaultValue={v} className="mt-1 w-full rounded-lg border p-3 font-normal"/></label>}function Select({n,l,v,options}:{n:string;l:string;v:string;options:string[]}){return <label className="text-xs font-semibold">{l}<select name={n} defaultValue={v} className="mt-1 min-h-10 w-full rounded-lg border bg-white px-3 font-normal">{options.map(x=><option key={x}>{x}</option>)}</select></label>}
+function Grid({ children }: { children: React.ReactNode }) {
+  return <div className="grid gap-3 md:grid-cols-3">{children}</div>;
+}
+function Group({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <fieldset className="grid gap-3 rounded-lg border p-4 md:grid-cols-3">
+      <legend className="px-2 text-sm font-semibold">{title}</legend>
+      {children}
+    </fieldset>
+  );
+}
+function Field({
+  n,
+  l,
+  v,
+  type = "text",
+  required = true,
+}: {
+  n: string;
+  l: string;
+  v?: string;
+  type?: string;
+  required?: boolean;
+}) {
+  return (
+    <label className="text-xs font-semibold">
+      {l}
+      <input
+        key={v}
+        name={n}
+        type={type}
+        required={required}
+        defaultValue={v}
+        min={type === "number" ? 0 : undefined}
+        className="mt-1 min-h-10 w-full rounded-lg border px-3 font-normal"
+      />
+    </label>
+  );
+}
+function Area({ n, l, v }: { n: string; l: string; v?: string }) {
+  return (
+    <label className="text-xs font-semibold">
+      {l}
+      <textarea
+        key={v}
+        name={n}
+        required
+        defaultValue={v}
+        className="mt-1 w-full rounded-lg border p-3 font-normal"
+      />
+    </label>
+  );
+}
+function Select({
+  n,
+  l,
+  v,
+  options,
+}: {
+  n: string;
+  l: string;
+  v: string;
+  options: string[];
+}) {
+  return (
+    <label className="text-xs font-semibold">
+      {l}
+      <select
+        name={n}
+        defaultValue={v}
+        className="mt-1 min-h-10 w-full rounded-lg border bg-white px-3 font-normal"
+      >
+        {options.map((x) => (
+          <option key={x}>{x}</option>
+        ))}
+      </select>
+    </label>
+  );
+}

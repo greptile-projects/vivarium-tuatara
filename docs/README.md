@@ -137,6 +137,15 @@ resources, and freshness interval, so a successor plan cannot retroactively chan
 evidence. A capture is evidence for later isolated
 rehearsal, not routine content access, restoration, repository, environment, or deployment authority.
 
+Declared recovery accessors who remain repository participants can launch exercises from an exact
+capture at `/repositories/{id}/recovery-exercises`. The bounded runner restores into an ephemeral,
+network-isolated environment without production credentials and accepts only typed restore,
+manifest/dependency integrity, declared journey, and manual-confirmation commands. Evidence retains
+ordered timing, redacted logs and artifacts, objectives, gaps, manual work, scenario, and actor.
+Reads mark retained evidence non-current when its protection plan, commitment, capture, or protected
+source changes. Exercises never write restored data into repository or governed environment stores;
+records default beneath `$RECOVERY_EXERCISE_STORAGE_ROOT` (`recovery-exercises`).
+
 ## Locale coverage contracts
 
 Repository participants publish complete, compare-and-swap locale plans through
