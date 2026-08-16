@@ -1866,6 +1866,14 @@ whenever dependencies change or the web job fails before it starts.
   unprotected dependencies, and expired or soon-expiring exceptions explicit and attributed. These
   records document continuity intent and grant no repository, deployment, data, incident, privacy, or
   governance authority.
+  Protection plans in that workspace bind current commitment targets to exact repository commits or
+  governed environment definitions and persist encrypted snapshots beneath
+  `$PROTECTION_PLAN_STORAGE_ROOT` (default `protection-plans`). The API projection exposes aggregate
+  coverage, freshness inputs, checksums, validation, retention, location, cost, failures, and actors,
+  never protected paths, contents, ciphertext, nonces, or environment credentials. Reads revalidate
+  AES-GCM integrity, manifest checksums, retention, and source existence; corruption, key loss,
+  expiry, or deleted commits/environments cannot remain recoverable. Plans and captures grant no
+  routine content, restore, repository, environment, or deployment authority.
 
   Update it when you change how the apps fit together, not for every change.
 

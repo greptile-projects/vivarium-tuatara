@@ -3247,6 +3247,31 @@ The connected browser journey exercises the public endpoints through noisy-signa
 dependency evidence, rejected exception, revision-exact human-agent investigation, containment, reviewed
 agent repair, failed verification, corrective review, staged deployment, and restored attainment.
 
+## Recovery protection plans
+
+`POST /repositories/{id}/protection-plans` requires repository write access and publishes a complete
+plan against the current `commitment_id` and `commitment_version`. Each resource names a commitment
+`target_id` and either an exact 40-character repository `revision` or an existing governed
+`environment_id`. The target must permit the plan jurisdiction. Plans also require `snapshot` or
+`replica` mode, an approved `vault://` destination, positive retention and freshness bounds, current
+repository-participant accessor IDs, and validation checks. Successors use
+`POST .../protection-plans/{plan_id}/revisions` with `expected_version`; the commitment identity is
+immutable and a changed commitment must be acknowledged by a current-version plan.
+
+`POST .../protection-plans/{plan_id}/captures` accepts only the current plan version. The server
+resolves and integrity-checks every source, walks the full Git tree or reads the credential-free
+environment projection, derives per-entry checksums and a complete manifest, and AES-GCM encrypts the
+manifest and payload at rest. Any missing or corrupt input rejects the whole capture; partial captures
+are never published.
+
+`GET /repositories/{id}/protection-plans` and `GET .../{plan_id}` use ordinary repository read
+visibility. They return coverage counts, source and manifest checksums, encrypted byte counts,
+validation checks and status, location, retention, cost units, freshness inputs, and actor history.
+They never return manifest paths, source content, ciphertext, nonces, or credentials. Reads verify
+decryption and the manifest checksum and mark corruption, key loss, retention expiry, or a deleted
+source as `recoverable: false` with an explicit failure. These records grant no content, restore,
+repository, environment, or deployment authority.
+
 ## Locale plans
 
 `POST /repositories/{id}/locale-plans` publishes a complete localization support contract. The
