@@ -25,23 +25,36 @@ func registerRecoveryOperationRoutes(mux *http.ServeMux, repos *repositories.Sto
 		if err != nil {
 			return false
 		}
+		var frozenCapture *protectionplans.Capture
+		for i := range plan.Captures {
+			if plan.Captures[i].ID == operation.RecoveryPoint.CaptureID && plan.Captures[i].PlanVersion == operation.RecoveryPoint.PlanVersion {
+				frozenCapture = &plan.Captures[i]
+			}
+		}
+		if frozenCapture == nil || !frozenCapture.Recoverable || frozenCapture.Validation != "verified" || frozenCapture.ManifestSHA256 != operation.RecoveryPoint.ManifestSHA256 {
+			return false
+		}
+		allowedResources := map[string]bool{step.ResourceID: true}
+		for _, resource := range frozenCapture.Resources {
+			allowedResources[resource.TargetID] = true
+			if resource.EnvironmentID != "" {
+				allowedResources[resource.EnvironmentID] = true
+			}
+			if resource.Revision != "" {
+				allowedResources[resource.Revision] = true
+			}
+		}
 		for _, result := range results {
 			switch result.Evidence.Kind {
 			case "protection_capture":
 				if result.Evidence.ResourceID != operation.RecoveryPoint.CaptureID || result.Evidence.SHA256 != operation.RecoveryPoint.ManifestSHA256 {
 					return false
 				}
-				found := false
-				for _, capture := range plan.Captures {
-					if capture.ID == result.Evidence.ResourceID && capture.Recoverable && capture.Validation == "verified" && capture.ManifestSHA256 == result.Evidence.SHA256 {
-						found = true
-					}
-				}
-				if !found {
+				if frozenCapture.ID != result.Evidence.ResourceID || frozenCapture.ManifestSHA256 != result.Evidence.SHA256 {
 					return false
 				}
 			case "incident_evidence":
-				if !recoveryIncidentEvidenceMatches(incident, result.Evidence) {
+				if !recoveryIncidentEvidenceMatches(incident, result.Evidence, operation.RepositoryID, allowedResources) {
 					return false
 				}
 			default:
@@ -219,10 +232,10 @@ func registerRecoveryOperationRoutes(mux *http.ServeMux, repos *repositories.Sto
 	})
 }
 
-func recoveryIncidentEvidenceMatches(incident incidents.Incident, reference recoveryoperations.EvidenceReference) bool {
+func recoveryIncidentEvidenceMatches(incident incidents.Incident, reference recoveryoperations.EvidenceReference, repositoryID string, allowedResources map[string]bool) bool {
 	for _, entry := range incident.Timeline {
 		for _, evidence := range entry.Evidence {
-			if evidence.ResourceID != reference.ResourceID {
+			if evidence.RepositoryID != repositoryID || evidence.ResourceID != reference.ResourceID || !allowedResources[evidence.ResourceID] {
 				continue
 			}
 			value, err := json.Marshal(evidence)

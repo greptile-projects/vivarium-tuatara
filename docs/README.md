@@ -183,7 +183,8 @@ begin before required approval or before dependencies validate; rejected approva
 and failed validation or explicit blockers pause the operation. The creator cannot be an approver.
 Validation criteria declare an evidence kind and require one unique passing result whose immutable
 resource and SHA-256 reference resolves server-side to the frozen protection capture or retained
-incident evidence. Agent steps require an exact named agent and explicit delegation, and
+incident evidence. Incident evidence must belong to the recovery repository and name the current
+step or an exact resource frozen by the selected capture. Agent steps require an exact named agent and explicit delegation, and
 no recovery record grants repository, environment, secret, deployment, or destructive-cutover
 authority. Returning service is separately recorded only after every frozen step validates.
 
