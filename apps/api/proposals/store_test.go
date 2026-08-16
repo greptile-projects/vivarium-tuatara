@@ -83,6 +83,19 @@ func TestReliabilityImplementationAcceptsCompactOpaqueReferences(t *testing.T) {
 	if err != nil || proposal.Reasoning == nil || proposal.Reasoning.ReliabilityImpactID != input.Origin.ReliabilityImpactID || len(tasks) != 1 {
 		t.Fatalf("reliability implementation = %#v, %#v, %v", proposal, tasks, err)
 	}
+	retry, _, err := store.CreateImplementation(input)
+	if err != nil || retry.ID != proposal.ID {
+		t.Fatalf("exact retry = %#v, %v", retry, err)
+	}
+	input.Origin.ReliabilityContractID = "  " + input.Origin.ReliabilityContractID + "  "
+	if _, _, err = store.CreateImplementation(input); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("padded reliability reference error = %v", err)
+	}
+	input.Origin.ReliabilityContractID = strings.Repeat("z", 24)
+	if _, _, err = store.CreateImplementation(input); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("noncanonical reliability reference error = %v", err)
+	}
+	input.Origin.ReliabilityContractID = strings.Repeat("c", 24)
 	input.Origin.ReliabilityImpactID = ""
 	if _, _, err = store.CreateImplementation(input); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("missing reliability source error = %v", err)

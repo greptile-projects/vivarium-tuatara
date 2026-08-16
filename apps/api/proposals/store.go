@@ -489,11 +489,15 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 	return p, tasks, nil
 }
 
-// Reliability records use compact opaque IDs rather than proposal-sized IDs.
-// Keep their reasoning boundary format-agnostic but bounded.
+// Reliability records use 12-byte opaque IDs rather than proposal-sized IDs.
+// Admit only their canonical lowercase hexadecimal representation so retries
+// cannot create a second origin by padding or otherwise re-encoding an ID.
 func validReliabilityReference(value string) bool {
-	value = strings.TrimSpace(value)
-	return value != "" && len(value) <= 128
+	if len(value) != 24 || value != strings.ToLower(value) {
+		return false
+	}
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == 12
 }
 
 func (s *Store) Create(repositoryID, authorID, title, body string) (Proposal, error) {
