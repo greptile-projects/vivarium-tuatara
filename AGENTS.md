@@ -1872,6 +1872,9 @@ whenever dependencies change or the web job fails before it starts.
   resume moves failed or blocked steps to retryable paused state without invalidating already verified
   dependencies; fresh passing evidence remains mandatory. The incident UI stores operation responses
   separately from incident state and exposes pause, resume, rollback, and service-return controls.
+  Agents execute only steps assigned to their exact agent identity with explicit delegation; approvals
+  remain human, while communications and recovery-wide controls require the human operation creator or
+  a current human incident role.
   Recovery commitments at `/repositories/{id}/recovery` retain immutable, compare-and-swap contracts
   beneath `$RECOVERY_COMMITMENT_STORAGE_ROOT` (default `recovery-commitments`). Repository participants
   define survival targets for repositories, packages, artifacts, configuration, collaboration records,

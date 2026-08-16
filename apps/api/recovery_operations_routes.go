@@ -160,6 +160,10 @@ func registerRecoveryOperationRoutes(mux *http.ServeMux, repos *repositories.Sto
 		if !recoveryOperationActorAllowed(w, repos, operations, actor, r.PathValue("recovery_id")) {
 			return
 		}
+		if actor.AgentID != "" {
+			writeAPIError(w, 403, "recovery_authority_required", "recovery approval requires an independently named human approver")
+			return
+		}
 		var in struct {
 			ExpectedVersion int    `json:"expected_version"`
 			Decision        string `json:"decision"`
@@ -193,18 +197,22 @@ func registerRecoveryOperationRoutes(mux *http.ServeMux, repos *repositories.Sto
 			writeAPIError(w, 400, "invalid_request", "a step transition is required")
 			return
 		}
-		v, e := operations.UpdateStep(r.PathValue("recovery_id"), r.PathValue("step_id"), actor.UserID, in.Status, in.Message, in.ValidationResults, in.ExpectedVersion)
+		actorID := actor.UserID
+		if actor.AgentID != "" {
+			actorID = actor.AgentID
+		}
+		v, e := operations.UpdateStep(r.PathValue("recovery_id"), r.PathValue("step_id"), actorID, in.Status, in.Message, in.ValidationResults, in.ExpectedVersion)
 		writeRecoveryOperation(w, v, e)
 	})
 	mux.HandleFunc("POST /incidents/{incident_id}/recoveries/{recovery_id}/communications", func(w http.ResponseWriter, r *http.Request) {
-		actor, _, ok := require(w, r, "repositories:write")
+		actor, incident, ok := require(w, r, "repositories:write")
 		if !ok {
 			return
 		}
 		if !recoveryOperationBelongs(w, operations, r.PathValue("recovery_id"), r.PathValue("incident_id")) {
 			return
 		}
-		if !recoveryOperationActorAllowed(w, repos, operations, actor, r.PathValue("recovery_id")) {
+		if !recoveryOperationControllerAllowed(w, repos, operations, actor, incident, r.PathValue("recovery_id")) {
 			return
 		}
 		var in struct {
@@ -220,14 +228,14 @@ func registerRecoveryOperationRoutes(mux *http.ServeMux, repos *repositories.Sto
 		writeRecoveryOperation(w, v, e)
 	})
 	mux.HandleFunc("POST /incidents/{incident_id}/recoveries/{recovery_id}/control", func(w http.ResponseWriter, r *http.Request) {
-		actor, _, ok := require(w, r, "repositories:write")
+		actor, incident, ok := require(w, r, "repositories:write")
 		if !ok {
 			return
 		}
 		if !recoveryOperationBelongs(w, operations, r.PathValue("recovery_id"), r.PathValue("incident_id")) {
 			return
 		}
-		if !recoveryOperationActorAllowed(w, repos, operations, actor, r.PathValue("recovery_id")) {
+		if !recoveryOperationControllerAllowed(w, repos, operations, actor, incident, r.PathValue("recovery_id")) {
 			return
 		}
 		var in struct {
@@ -242,6 +250,31 @@ func registerRecoveryOperationRoutes(mux *http.ServeMux, repos *repositories.Sto
 		v, e := operations.Control(r.PathValue("recovery_id"), actor.UserID, in.Action, in.Message, in.ExpectedVersion)
 		writeRecoveryOperation(w, v, e)
 	})
+}
+
+func recoveryOperationControllerAllowed(w http.ResponseWriter, repos *repositories.Store, operations *recoveryoperations.Store, actor auth.Credential, incident incidents.Incident, operationID string) bool {
+	if !recoveryOperationActorAllowed(w, repos, operations, actor, operationID) {
+		return false
+	}
+	if actor.AgentID != "" {
+		writeAPIError(w, 403, "recovery_authority_required", "delegated agents may execute only their exact recovery step")
+		return false
+	}
+	operation, err := operations.Get(operationID)
+	if err != nil || len(operation.Revisions) == 0 {
+		writeAPIError(w, 404, "recovery_not_found", "recovery operation not found")
+		return false
+	}
+	if operation.Revisions[len(operation.Revisions)-1].CreatedBy == actor.UserID {
+		return true
+	}
+	for _, role := range incident.Roles {
+		if role.UserID == actor.UserID {
+			return true
+		}
+	}
+	writeAPIError(w, 403, "recovery_authority_required", "recovery-wide control requires an assigned human incident role")
+	return false
 }
 
 func recoveryOperationActorAllowed(w http.ResponseWriter, repos *repositories.Store, operations *recoveryoperations.Store, actor auth.Credential, operationID string) bool {

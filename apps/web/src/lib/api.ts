@@ -2073,7 +2073,13 @@ export type RecoveryOperation = {
         status: "passed";
         evidence: { kind: string; resource_id: string; sha256: string };
       }[];
-      status: "pending" | "running" | "validated" | "failed" | "blocked";
+      status:
+        | "pending"
+        | "paused"
+        | "running"
+        | "validated"
+        | "failed"
+        | "blocked";
       message?: string;
       updated_by?: string;
       updated_at?: string;

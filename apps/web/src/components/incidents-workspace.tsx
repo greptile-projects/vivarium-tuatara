@@ -1066,7 +1066,8 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
                         recovery.status === "restoring") &&
                         step.assignee_id === user?.id && (
                           <div className="mt-2 flex gap-2">
-                            {step.status === "pending" && (
+                            {(step.status === "pending" ||
+                              step.status === "paused") && (
                               <Button
                                 variant="secondary"
                                 onClick={() =>
@@ -1082,7 +1083,7 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
                                   )
                                 }
                               >
-                                Start
+                                {step.status === "paused" ? "Restart" : "Start"}
                               </Button>
                             )}
                             {step.status === "running" && (

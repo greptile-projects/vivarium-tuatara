@@ -193,6 +193,9 @@ Every recovery mutation revalidates authority against the operation's exact repo
 another repository in a multi-repository incident cannot cross that boundary and collaborator removal
 immediately prevents further response writes. The incident web workspace retains recovery responses in
 their own state projection and exposes pause, bounded resume, rollback, and final service-return controls.
+Repository-bound agents can mutate only a step that names their exact agent identity and retains explicit
+delegation. They cannot approve, publish recovery communications, or use recovery-wide controls; those
+controls require the human operation creator or a currently assigned human incident role.
 
 The connected continuity journey carries a regional-loss commitment through encrypted exact-source
 protection, isolated rehearsal, cited human-agent diagnosis, ordinary reviewed repair, a fresh successful

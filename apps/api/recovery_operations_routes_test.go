@@ -63,6 +63,17 @@ func TestRecoveryMutationRequiresExactRepositoryAccess(t *testing.T) {
 	if !recoveryOperationActorAllowed(httptest.NewRecorder(), repos, operations, auth.Credential{UserID: actor}, operation.ID) {
 		t.Fatal("exact-scope collaborator rejected")
 	}
+	if recoveryOperationControllerAllowed(httptest.NewRecorder(), repos, operations, auth.Credential{UserID: actor}, incidents.Incident{}, operation.ID) {
+		t.Fatal("unassigned collaborator gained recovery-wide control")
+	}
+	assignedIncident := incidents.Incident{Roles: []incidents.Role{{Name: "recovery commander", UserID: actor}}}
+	if !recoveryOperationControllerAllowed(httptest.NewRecorder(), repos, operations, auth.Credential{UserID: actor}, assignedIncident, operation.ID) {
+		t.Fatal("assigned human incident controller rejected")
+	}
+	agent := auth.Credential{UserID: owner, AgentID: "recovery-agent", RepositoryID: recoveryRepo.ID, AccessGrantID: "grant"}
+	if recoveryOperationControllerAllowed(httptest.NewRecorder(), repos, operations, agent, assignedIncident, operation.ID) {
+		t.Fatal("repository-bound agent gained recovery-wide control")
+	}
 	if err = repos.RemoveCollaborator(owner, recoveryRepo.ID, actor); err != nil {
 		t.Fatal(err)
 	}
