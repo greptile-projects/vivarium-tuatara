@@ -38,12 +38,16 @@ func TestVersioningAndDiagnostics(t *testing.T) {
 	r.Targets[1].Dependencies[0].Protected = true
 	r.Targets[1].RestorationTimeMinutes = 60
 	r.Exceptions = nil
-	v, err = s.Revise(v.ID, 1, "owner", r)
+	r.Links[0].AddedBy = "spoofed"
+	v, err = s.Revise(v.ID, 1, "successor", r)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if v.CurrentVersion != 2 || len(v.Revisions) != 2 || len(v.Diagnostics) != 0 {
 		t.Fatalf("unexpected successor: %#v", v)
+	}
+	if v.Revisions[1].Links[0].AddedBy != "owner" {
+		t.Fatalf("link attribution changed: %#v", v.Revisions[1].Links[0])
 	}
 }
 

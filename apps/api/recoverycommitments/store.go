@@ -105,7 +105,7 @@ func (s *Store) Create(repo, actor string, r Revision) (Commitment, error) {
 			return ErrInvalid
 		}
 		now := s.now()
-		stamp(&r, 1, actor, now)
+		stamp(&r, 1, actor, now, nil)
 		out = Commitment{ID: randomID(), RepositoryID: repo, CurrentVersion: 1, Revisions: []Revision{r}, CreatedAt: now, UpdatedAt: now}
 		return s.write(out)
 	})
@@ -124,7 +124,7 @@ func (s *Store) Revise(id string, expected int, actor string, r Revision) (Commi
 		if validate(r) != nil {
 			return ErrInvalid
 		}
-		stamp(&r, expected+1, actor, s.now())
+		stamp(&r, expected+1, actor, s.now(), v.Revisions[len(v.Revisions)-1].Links)
 		v.CurrentVersion = r.Version
 		v.Revisions = append(v.Revisions, r)
 		v.UpdatedAt = r.CreatedAt
@@ -165,12 +165,18 @@ func (s *Store) List(repo string) ([]Commitment, error) {
 	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
 	return out, err
 }
-func stamp(r *Revision, version int, actor string, now time.Time) {
+func stamp(r *Revision, version int, actor string, now time.Time, previous []Link) {
 	r.Version = version
 	r.CreatedBy = actor
 	r.CreatedAt = now
 	for i := range r.Links {
 		r.Links[i].AddedBy = actor
+		for _, existing := range previous {
+			if existing.Kind == r.Links[i].Kind && existing.ID == r.Links[i].ID {
+				r.Links[i].AddedBy = existing.AddedBy
+				break
+			}
+		}
 	}
 }
 func validate(r Revision) error {
