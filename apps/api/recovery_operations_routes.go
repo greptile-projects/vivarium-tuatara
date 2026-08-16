@@ -128,15 +128,16 @@ func registerRecoveryOperationRoutes(mux *http.ServeMux, repos *repositories.Sto
 			return
 		}
 		var in struct {
-			ExpectedVersion int    `json:"expected_version"`
-			Status          string `json:"status"`
-			Message         string `json:"message"`
+			ExpectedVersion   int                                   `json:"expected_version"`
+			Status            string                                `json:"status"`
+			Message           string                                `json:"message"`
+			ValidationResults []recoveryoperations.ValidationResult `json:"validation_results"`
 		}
 		if decodeJSON(r, &in) != nil {
 			writeAPIError(w, 400, "invalid_request", "a step transition is required")
 			return
 		}
-		v, e := operations.UpdateStep(r.PathValue("recovery_id"), r.PathValue("step_id"), actor.UserID, in.Status, in.Message, in.ExpectedVersion)
+		v, e := operations.UpdateStep(r.PathValue("recovery_id"), r.PathValue("step_id"), actor.UserID, in.Status, in.Message, in.ValidationResults, in.ExpectedVersion)
 		writeRecoveryOperation(w, v, e)
 	})
 	mux.HandleFunc("POST /incidents/{incident_id}/recoveries/{recovery_id}/communications", func(w http.ResponseWriter, r *http.Request) {

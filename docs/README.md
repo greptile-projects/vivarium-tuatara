@@ -179,8 +179,9 @@ acyclic dependency-ordered restoration plan. `$RECOVERY_OPERATION_STORAGE_ROOT` 
 
 The incident workspace projects active control, approval evidence, progress, blockers, validation,
 communications, and rollback. Every mutation compare-and-swaps the workspace version. Steps cannot
-begin before required approval or before dependencies validate; failed validation and explicit
-blockers pause the operation. Agent steps require an exact named agent and explicit delegation, and
+begin before required approval or before dependencies validate; rejected approval cannot be resumed,
+and failed validation or explicit blockers pause the operation. Validation requires one unique,
+passing, evidence-bearing result for every frozen criterion. Agent steps require an exact named agent and explicit delegation, and
 no recovery record grants repository, environment, secret, deployment, or destructive-cutover
 authority. Returning service is separately recorded only after every frozen step validates.
 

@@ -452,6 +452,29 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
       setPending(false);
     }
   }
+  function validateRecoveryStep(
+    recovery: RecoveryOperation,
+    step: RecoveryOperation["revisions"][number]["steps"][number],
+  ) {
+    const validationResults = [];
+    for (const criterion of step.validation_criteria) {
+      const evidence = window
+        .prompt(`Evidence that this criterion passed:\n${criterion}`)
+        ?.trim();
+      if (!evidence) return;
+      validationResults.push({ criterion, status: "passed", evidence });
+    }
+    void submit(
+      `/incidents/${incidentID}/recoveries/${recovery.id}/steps/${step.id}`,
+      {
+        expected_version: recovery.current_version,
+        status: "validated",
+        message:
+          "Every declared validation criterion has retained passing evidence.",
+        validation_results: validationResults,
+      },
+    );
+  }
   async function change(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!incident || !token) return;
@@ -951,16 +974,7 @@ export function IncidentDetail({ incidentID }: { incidentID: string }) {
                               <>
                                 <Button
                                   onClick={() =>
-                                    void submit(
-                                      `/incidents/${incidentID}/recoveries/${recovery.id}/steps/${step.id}`,
-                                      {
-                                        expected_version:
-                                          recovery.current_version,
-                                        status: "validated",
-                                        message:
-                                          "Declared validation criteria passed.",
-                                      },
-                                    )
+                                    validateRecoveryStep(recovery, step)
                                   }
                                 >
                                   Validate

@@ -2064,6 +2064,11 @@ export type RecoveryOperation = {
       delegation?: string;
       destructive: boolean;
       validation_criteria: string[];
+      validation_results?: {
+        criterion: string;
+        status: "passed";
+        evidence: string;
+      }[];
       status: "pending" | "running" | "validated" | "failed" | "blocked";
       message?: string;
       updated_by?: string;

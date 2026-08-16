@@ -29,21 +29,27 @@ type RecoveryPoint struct {
 	ManifestSHA256       string    `json:"manifest_sha256"`
 }
 type Step struct {
-	ID                 string     `json:"id"`
-	Name               string     `json:"name"`
-	Kind               string     `json:"kind"`
-	ResourceID         string     `json:"resource_id"`
-	EnvironmentID      string     `json:"environment_id,omitempty"`
-	DependsOn          []string   `json:"depends_on,omitempty"`
-	AssigneeType       string     `json:"assignee_type"`
-	AssigneeID         string     `json:"assignee_id"`
-	Delegation         string     `json:"delegation,omitempty"`
-	Destructive        bool       `json:"destructive"`
-	ValidationCriteria []string   `json:"validation_criteria"`
-	Status             string     `json:"status"`
-	Message            string     `json:"message,omitempty"`
-	UpdatedBy          string     `json:"updated_by,omitempty"`
-	UpdatedAt          *time.Time `json:"updated_at,omitempty"`
+	ID                 string             `json:"id"`
+	Name               string             `json:"name"`
+	Kind               string             `json:"kind"`
+	ResourceID         string             `json:"resource_id"`
+	EnvironmentID      string             `json:"environment_id,omitempty"`
+	DependsOn          []string           `json:"depends_on,omitempty"`
+	AssigneeType       string             `json:"assignee_type"`
+	AssigneeID         string             `json:"assignee_id"`
+	Delegation         string             `json:"delegation,omitempty"`
+	Destructive        bool               `json:"destructive"`
+	ValidationCriteria []string           `json:"validation_criteria"`
+	ValidationResults  []ValidationResult `json:"validation_results,omitempty"`
+	Status             string             `json:"status"`
+	Message            string             `json:"message,omitempty"`
+	UpdatedBy          string             `json:"updated_by,omitempty"`
+	UpdatedAt          *time.Time         `json:"updated_at,omitempty"`
+}
+type ValidationResult struct {
+	Criterion string `json:"criterion"`
+	Status    string `json:"status"`
+	Evidence  string `json:"evidence"`
 }
 type Approval struct {
 	ActorID   string    `json:"actor_id"`
@@ -177,7 +183,7 @@ func (s *Store) Approve(idv, actor, decision, message string, expected int) (Ope
 		return nil
 	})
 }
-func (s *Store) UpdateStep(idv, stepID, actor, status, message string, expected int) (Operation, error) {
+func (s *Store) UpdateStep(idv, stepID, actor, status, message string, results []ValidationResult, expected int) (Operation, error) {
 	return s.change(idv, expected, func(v *Operation, now time.Time) error {
 		if v.Status != "ready" && v.Status != "restoring" {
 			return ErrConflict
@@ -210,9 +216,10 @@ func (s *Store) UpdateStep(idv, stepID, actor, status, message string, expected 
 			}
 			v.Status = "restoring"
 		} else if status == "validated" {
-			if step.Status != "running" {
+			if step.Status != "running" || !validResults(step.ValidationCriteria, results) {
 				return ErrConflict
 			}
+			step.ValidationResults = append([]ValidationResult(nil), results...)
 		} else if status == "failed" || status == "blocked" {
 			if step.Status != "running" {
 				return ErrConflict
@@ -257,7 +264,7 @@ func (s *Store) Control(idv, actor, action, message string, expected int) (Opera
 			v.Status = "paused"
 			v.Control = "manually_paused"
 		case "resume":
-			if v.Status != "paused" {
+			if v.Status != "paused" || v.Control == "approval_rejected" || !approvalThresholdSatisfied(v) {
 				return ErrConflict
 			}
 			v.Status = "ready"
@@ -316,6 +323,36 @@ func allValidated(v []Step) bool {
 	}
 	return true
 }
+func approvalThresholdSatisfied(v *Operation) bool {
+	revision := current(v)
+	approved := 0
+	for _, approval := range v.Approvals {
+		if approval.Decision == "reject" {
+			return false
+		}
+		if approval.Decision == "approve" {
+			approved++
+		}
+	}
+	return approved >= revision.RequiredApprovals
+}
+func validResults(criteria []string, results []ValidationResult) bool {
+	if len(criteria) != len(results) {
+		return false
+	}
+	required := map[string]bool{}
+	for _, criterion := range criteria {
+		required[criterion] = true
+	}
+	seen := map[string]bool{}
+	for _, result := range results {
+		if !required[result.Criterion] || seen[result.Criterion] || result.Status != "passed" || strings.TrimSpace(result.Evidence) == "" || len(result.Evidence) > 10000 {
+			return false
+		}
+		seen[result.Criterion] = true
+	}
+	return len(seen) == len(required)
+}
 func validPoint(v RecoveryPoint) bool {
 	return !blank(v.PlanID, v.CaptureID, v.SourceRevision, v.ManifestSHA256) && v.PlanVersion > 0 && v.EstimatedLossMinutes >= 0 && !v.CapturedAt.IsZero()
 }
@@ -334,6 +371,13 @@ func validRevision(v Revision) bool {
 	for _, x := range v.Steps {
 		if blank(x.ID, x.Name, x.Kind, x.ResourceID, x.AssigneeType, x.AssigneeID) || len(x.ValidationCriteria) == 0 || (x.AssigneeType != "human" && x.AssigneeType != "agent") || x.Status != "pending" {
 			return false
+		}
+		criteria := map[string]bool{}
+		for _, criterion := range x.ValidationCriteria {
+			if strings.TrimSpace(criterion) == "" || criteria[criterion] {
+				return false
+			}
+			criteria[criterion] = true
 		}
 		steps[x.ID] = true
 		if x.AssigneeType == "agent" && strings.TrimSpace(x.Delegation) == "" {
