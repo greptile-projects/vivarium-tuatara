@@ -3287,11 +3287,12 @@ order, and never writes restored content to repository or environment authoritie
 Repository restore verifies each blob checksum before writing it with restrictive permissions;
 environment restore writes only the deployment store's credential-free public projection. The
 registered `smoke` journey requires exactly one `.vivarium/recovery-smoke.json` v1 contract in the
-restored repository. It names a relative static application `entrypoint`, absolute `request_path`,
-`expected_status`, and exact `expected_sha256`; the runner invokes the restored HTTP handler without
-opening a socket and verifies its response. README-only captures, missing entrypoints, and mismatched
-responses fail. A declared journey without a registered bounded implementation fails, and the
-filesystem is deleted after the run completes.
+restored repository. It names a digest-pinned locally cached container `image`, relative executable
+script/ELF `entrypoint`, bounded `arguments` and `timeout_seconds`, zero `expected_exit_code`, and exact
+`expected_stdout_sha256`. The runner executes restored application code with no network, a read-only
+source mount, dropped capabilities, no new privileges, and CPU/memory/process limits. README/static-
+only captures, missing entrypoints, and mismatched outcomes fail. A declared journey without a
+registered bounded implementation fails, and the filesystem is deleted after the run completes.
 
 `GET /repositories/{id}/recovery-exercises` uses ordinary repository visibility and returns the
 scenario, isolated environment identity, per-step timing, bounded command, redacted log/artifact,

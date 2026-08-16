@@ -1886,10 +1886,11 @@ whenever dependencies change or the web job fails before it starts.
   bounded commands, redacted logs/artifacts, gaps, manual work, achieved objectives, and actor history.
   Restore materializes checksum-verified Git blobs or credential-free governed-environment JSON with
   restrictive permissions. The registered `smoke` journey requires a restored
-  `.vivarium/recovery-smoke.json` v1 contract naming a relative static application root, request path,
-  expected HTTP status, and exact response SHA-256; it invokes the restored handler without a socket.
-  README-only captures and unregistered journeys fail. The ephemeral filesystem is removed after
-  evidence persistence.
+  `.vivarium/recovery-smoke.json` v1 contract naming a digest-pinned cached container image, restored
+  script/ELF entrypoint, bounded arguments/timeout, required zero exit code, and exact stdout SHA-256.
+  Application code runs with no network, a read-only source mount, dropped capabilities, no new
+  privileges, and CPU/memory/process limits. README/static-only captures and unregistered journeys
+  fail. The ephemeral filesystem is removed after evidence persistence.
 
   Update it when you change how the apps fit together, not for every change.
 

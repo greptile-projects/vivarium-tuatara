@@ -2,16 +2,19 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
@@ -171,7 +174,7 @@ func newExerciseExecutor(source protectionplans.RestoredSource, declared []strin
 			if err := runRecoverySmoke(runtime); err != nil {
 				return "failed", "restored application failed its declared smoke journey", "", false
 			}
-			return "passed", "bounded HTTP smoke journey returned its declared response", "journey:smoke", false
+			return "passed", "bounded restored application returned its declared output", "journey:smoke", false
 		case "manual":
 			if step.Command != "manual:confirm" {
 				return "failed", "manual command is not permitted", "", true
@@ -184,12 +187,18 @@ func newExerciseExecutor(source protectionplans.RestoredSource, declared []strin
 }
 
 type recoverySmokeContract struct {
-	Version        string `json:"version"`
-	Entrypoint     string `json:"entrypoint"`
-	RequestPath    string `json:"request_path"`
-	ExpectedStatus int    `json:"expected_status"`
-	ExpectedSHA256 string `json:"expected_sha256"`
+	Version              string   `json:"version"`
+	Image                string   `json:"image"`
+	Entrypoint           string   `json:"entrypoint"`
+	Arguments            []string `json:"arguments,omitempty"`
+	TimeoutSeconds       int      `json:"timeout_seconds"`
+	ExpectedExitCode     int      `json:"expected_exit_code"`
+	ExpectedStdoutSHA256 string   `json:"expected_stdout_sha256"`
 }
+
+type recoveryApplicationRunner func(root string, contract recoverySmokeContract) (int, []byte, error)
+
+var executeRecoveryApplication recoveryApplicationRunner = runRecoveryApplicationContainer
 
 func runRecoverySmoke(runtime *recoveryRuntime) error {
 	contracts, err := filepath.Glob(filepath.Join(runtime.root, "workspace", "*", ".vivarium", "recovery-smoke.json"))
@@ -203,30 +212,125 @@ func runRecoverySmoke(runtime *recoveryRuntime) error {
 	var contract recoverySmokeContract
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&contract) != nil || contract.Version != "v1" || contract.ExpectedStatus < 100 || contract.ExpectedStatus > 599 || len(contract.ExpectedSHA256) != 64 || !strings.HasPrefix(contract.RequestPath, "/") {
+	if decoder.Decode(&contract) != nil || contract.Version != "v1" || contract.TimeoutSeconds < 1 || contract.TimeoutSeconds > 60 || contract.ExpectedExitCode != 0 || len(contract.ExpectedStdoutSHA256) != 64 || len(contract.Arguments) > 16 || !validRecoveryImage(contract.Image) {
 		return recoveryexercises.ErrInvalid
 	}
-	if _, err = hex.DecodeString(contract.ExpectedSHA256); err != nil {
+	if _, err = hex.DecodeString(contract.ExpectedStdoutSHA256); err != nil {
 		return recoveryexercises.ErrInvalid
+	}
+	for _, argument := range contract.Arguments {
+		if len(argument) > 256 || strings.ContainsAny(argument, "\x00\r\n") {
+			return recoveryexercises.ErrInvalid
+		}
 	}
 	cleanEntrypoint := filepath.Clean(contract.Entrypoint)
 	if cleanEntrypoint == "." || filepath.IsAbs(cleanEntrypoint) || cleanEntrypoint == ".." || strings.HasPrefix(cleanEntrypoint, ".."+string(filepath.Separator)) {
 		return recoveryexercises.ErrInvalid
 	}
 	targetRoot := filepath.Dir(filepath.Dir(contracts[0]))
-	applicationRoot := filepath.Join(targetRoot, cleanEntrypoint)
-	info, err := os.Stat(applicationRoot)
-	if err != nil || !info.IsDir() {
+	applicationEntrypoint := filepath.Join(targetRoot, cleanEntrypoint)
+	info, err := os.Stat(applicationEntrypoint)
+	if err != nil || !info.Mode().IsRegular() || !recoveryExecutable(applicationEntrypoint) || os.Chmod(applicationEntrypoint, 0500) != nil {
 		return recoveryexercises.ErrInvalid
 	}
-	request := httptest.NewRequest(http.MethodGet, "http://recovery.invalid"+contract.RequestPath, nil)
-	response := httptest.NewRecorder()
-	http.FileServer(http.Dir(applicationRoot)).ServeHTTP(response, request)
-	sum := sha256.Sum256(response.Body.Bytes())
-	if response.Code != contract.ExpectedStatus || hex.EncodeToString(sum[:]) != strings.ToLower(contract.ExpectedSHA256) {
+	exitCode, stdout, err := executeRecoveryApplication(targetRoot, contract)
+	if err != nil || len(stdout) > 1<<20 {
+		return recoveryexercises.ErrInvalid
+	}
+	sum := sha256.Sum256(stdout)
+	if exitCode != contract.ExpectedExitCode || hex.EncodeToString(sum[:]) != strings.ToLower(contract.ExpectedStdoutSHA256) {
 		return recoveryexercises.ErrInvalid
 	}
 	return nil
+}
+
+func recoveryExecutable(path string) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	header := make([]byte, 4)
+	n, err := io.ReadFull(file, header)
+	if err != nil && err != io.ErrUnexpectedEOF {
+		return false
+	}
+	return n >= 2 && (bytes.Equal(header[:2], []byte("#!")) || (n == 4 && bytes.Equal(header, []byte{0x7f, 'E', 'L', 'F'})))
+}
+
+func validRecoveryImage(image string) bool {
+	parts := strings.Split(image, "@sha256:")
+	if len(parts) != 2 || parts[0] == "" || len(parts[1]) != 64 {
+		return false
+	}
+	if strings.HasPrefix(parts[0], "-") || strings.ContainsAny(parts[0], " \t\r\n") {
+		return false
+	}
+	_, err := hex.DecodeString(parts[1])
+	return err == nil
+}
+
+func runRecoveryApplicationContainer(root string, contract recoverySmokeContract) (int, []byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(contract.TimeoutSeconds)*time.Second)
+	defer cancel()
+	nameSum := sha256.Sum256([]byte(root))
+	containerName := "vivarium-recovery-" + hex.EncodeToString(nameSum[:8])
+	args := recoveryContainerArguments(root, containerName, contract)
+	command := exec.CommandContext(ctx, "docker", args...)
+	defer exec.Command("docker", "rm", "--force", containerName).Run()
+	stdout := &boundedOutput{remaining: 1 << 20}
+	command.Stdout = stdout
+	command.Stderr = &recoveryDiscard{remaining: 64 << 10}
+	err := command.Run()
+	if ctx.Err() != nil {
+		return -1, nil, ctx.Err()
+	}
+	if stdout.overflow {
+		return -1, nil, recoveryexercises.ErrInvalid
+	}
+	if err == nil {
+		return 0, stdout.buffer.Bytes(), nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode(), stdout.buffer.Bytes(), nil
+	}
+	return -1, nil, err
+}
+
+func recoveryContainerArguments(root, name string, contract recoverySmokeContract) []string {
+	args := []string{"run", "--name", name, "--rm", "--pull=never", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=64", "--memory=128m", "--cpus=1", "--user", exerciseInt(os.Getuid()) + ":" + exerciseInt(os.Getgid()), "--mount", "type=bind,src=" + root + ",dst=/workspace,readonly", "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=16m,mode=1777", "--workdir", "/workspace", "--env", "HOME=/tmp", contract.Image, "./" + filepath.ToSlash(filepath.Clean(contract.Entrypoint))}
+	return append(args, contract.Arguments...)
+}
+
+type recoveryDiscard struct{ remaining int }
+
+func (w *recoveryDiscard) Write(p []byte) (int, error) {
+	if len(p) > w.remaining {
+		w.remaining = 0
+		return len(p), nil
+	}
+	w.remaining -= len(p)
+	return len(p), nil
+}
+
+type boundedOutput struct {
+	buffer    bytes.Buffer
+	remaining int
+	overflow  bool
+}
+
+func (w *boundedOutput) Write(p []byte) (int, error) {
+	n := len(p)
+	if n > w.remaining {
+		w.buffer.Write(p[:w.remaining])
+		w.remaining = 0
+		w.overflow = true
+		return n, nil
+	}
+	w.remaining -= n
+	w.buffer.Write(p)
+	return n, nil
 }
 
 func restoreExercisePayload(runtime *recoveryRuntime, source protectionplans.RestoredSource) error {
