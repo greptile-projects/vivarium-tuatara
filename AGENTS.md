@@ -1876,6 +1876,21 @@ whenever dependencies change or the web job fails before it starts.
   routine content, restore, repository, environment, or deployment authority. Captures freeze their
   plan version, resource identities, and freshness interval; never evaluate retained captures through
   successor-plan resources or timing.
+  Recovery exercises in the same workspace retain redacted evidence beneath
+  `$RECOVERY_EXERCISE_STORAGE_ROOT` (default `recovery-exercises`). Only a current repository
+  participant named in the plan's accessor list may launch one from an exact recoverable capture.
+  The runner accepts only dependency-ordered typed restore, manifest/dependency integrity, declared
+  journey, and manual-confirmation steps inside an ephemeral no-network/no-production-credentials
+  environment; it never executes caller shell or writes authoritative state. Reads derive currentness
+  against the frozen plan, commitment, capture, and protected source, while preserving timing,
+  bounded commands, redacted logs/artifacts, gaps, manual work, achieved objectives, and actor history.
+  Restore materializes checksum-verified Git blobs or credential-free governed-environment JSON with
+  restrictive permissions. The registered `smoke` journey requires a restored
+  `.vivarium/recovery-smoke.json` v1 contract naming a digest-pinned cached container image, restored
+  script/ELF entrypoint, bounded arguments/timeout, required zero exit code, and exact stdout SHA-256.
+  Application code runs with no network, a read-only source mount, dropped capabilities, no new
+  privileges, and CPU/memory/process limits. README/static-only captures and unregistered journeys
+  fail. The ephemeral filesystem is removed after evidence persistence.
 
   Update it when you change how the apps fit together, not for every change.
 
