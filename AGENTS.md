@@ -1847,6 +1847,15 @@ whenever dependencies change or the web job fails before it starts.
   which remain stable across retries after default-branch movement.
   The reliability record is reserved before proposal persistence; pending records remain readable and
   exact retries reuse the reservation and proposal origin to finish cross-store linking.
+  The connected reliability browser journey defines a released checkout objective and dependency,
+  corrects a noisy signal, confirms post-deployment budget burn, retains missing dependency evidence
+  and a rejected exception, and carries affected-owner plus read-only-agent investigation into
+  contained delivery. It then publishes ordinary agent task work with attributed guidance and cost,
+  reviews and deploys a failed first repair, and reviews a corrective staged deployment whose exact
+  observation restores attainment without erasing prior harm. Playwright isolates
+  `$SERVICE_OBJECTIVE_STORAGE_ROOT` with its other temporary API stores. Reliability reasoning IDs
+  are compact opaque service-objective identifiers and remain valid when handed to ordinary proposals;
+  proposal-sized identifier formatting is not an authorization boundary.
 
   Update it when you change how the apps fit together, not for every change.
 

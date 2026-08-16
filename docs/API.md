@@ -3241,6 +3241,11 @@ postdate the baseline and cite that exact rollout. `restore_budget` is accepted 
 baseline belongs to the improvement's frozen baseline set and the current window meets its objective
 and consumes less error budget; failed measures require one of the other
 decisions. Responses retain before/after derived budget values and never rewrite the prior observation.
+Reliability contract, finding, and impact references are compact opaque identifiers; their handoff to
+ordinary proposal reasoning preserves those exact values and does not require proposal-ID formatting.
+The connected browser journey exercises the public endpoints through noisy-signal correction, missing
+dependency evidence, rejected exception, revision-exact human-agent investigation, containment, reviewed
+agent repair, failed verification, corrective review, staged deployment, and restored attainment.
 
 ## Locale plans
 

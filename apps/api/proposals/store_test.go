@@ -67,6 +67,28 @@ func TestDecisionImplementationFreezesCriteriaOwnershipAndRetry(t *testing.T) {
 	}
 }
 
+func TestReliabilityImplementationAcceptsCompactOpaqueReferences(t *testing.T) {
+	store, _ := New(t.TempDir())
+	input := ImplementationInput{
+		RepositoryID: repositoryID, ActorID: authorID,
+		Title: "Restore checkout reliability", Body: "Carry depleted-budget evidence into ordinary review.",
+		Origin: ReasoningOrigin{
+			ReliabilityContractID: strings.Repeat("c", 24), ReliabilityImpactID: strings.Repeat("d", 24),
+			Revision: strings.Repeat("e", 40), AnalysisStatus: "reliability_improvement",
+			Items: []ReasoningItem{{ID: "objective", Kind: "reliability_objective", Summary: "availability", Status: "required"}}, SelectedItemIDs: []string{"objective"},
+		},
+		Tasks: []ImplementationTaskInput{{Title: "Bound retries", Outcome: "Restore objective attainment", Risk: "Contain a failed measure", VerificationPlan: "Compare exact rollout evidence", AssigneeType: "agent"}},
+	}
+	proposal, tasks, err := store.CreateImplementation(input)
+	if err != nil || proposal.Reasoning == nil || proposal.Reasoning.ReliabilityImpactID != input.Origin.ReliabilityImpactID || len(tasks) != 1 {
+		t.Fatalf("reliability implementation = %#v, %#v, %v", proposal, tasks, err)
+	}
+	input.Origin.ReliabilityImpactID = ""
+	if _, _, err = store.CreateImplementation(input); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("missing reliability source error = %v", err)
+	}
+}
+
 func TestIssueImplementationRecoveryRejectsChangedEvidence(t *testing.T) {
 	store, _ := New(t.TempDir())
 	origin := ReasoningOrigin{IssueID: strings.Repeat("4", 32), IssueVersion: 7, ReproductionID: strings.Repeat("5", 32), Revision: strings.Repeat("a", 40), SelectedItemIDs: []string{"attempt", "finding-a"}, Items: []ReasoningItem{{ID: "attempt", Kind: "reproduction", Summary: "fails", Status: "confirmed"}, {ID: "finding-a", Kind: "diagnosis", Summary: "parser rejects input", Status: "confirmed"}}, AnalysisStatus: "issue_repair"}

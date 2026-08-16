@@ -94,6 +94,14 @@ and error-budget consumption: unsuccessful evidence can only retain containment,
 decision-revisit outcomes, while a successful comparison may restore current budget state without
 mutating the earlier user-impact observations.
 
+The connected Playwright reliability journey proves this as one public web/API workflow. It retains a
+released-journey objective, dependency ownership, a noisy partial cohort and corrected burn window,
+missing dependency evidence, and an exception attempt rejected outside the policy's approval boundary.
+Human owners and a repository-bound read-only agent investigate exact deployment evidence before an
+ordinary proposal task records scoped agent guidance, compute cost, source changes, checks, independent
+review, and merge. A failed first repair stays contained with its rollout comparison; a later reviewed
+repair passes staged deployment and restores objective attainment without rewriting the depleted window.
+
 ## Locale coverage contracts
 
 Repository participants publish complete, compare-and-swap locale plans through

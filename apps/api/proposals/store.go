@@ -383,7 +383,7 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 	isGovernance := validID(input.Origin.GovernanceProposalID) && validID(input.Origin.GovernanceReceiptID)
 	isRoadmap := strings.TrimSpace(input.Origin.RoadmapItemID) != "" && input.Origin.RoadmapVersion > 0 && strings.TrimSpace(input.Origin.OpportunityID) != ""
 	isDataObservation := validID(input.Origin.DataObservationID) && input.Origin.DataObservationVersion > 0
-	isReliability := validID(input.Origin.ReliabilityContractID) && (validID(input.Origin.ReliabilityFindingID) != validID(input.Origin.ReliabilityImpactID))
+	isReliability := validReliabilityReference(input.Origin.ReliabilityContractID) && (validReliabilityReference(input.Origin.ReliabilityFindingID) != validReliabilityReference(input.Origin.ReliabilityImpactID))
 	originCount := 0
 	for _, present := range []bool{isAssessment, isAccessibility, isDecision, isIssue, isGovernance, isRoadmap, isDataObservation, isReliability} {
 		if present {
@@ -487,6 +487,13 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 		return Proposal{}, nil, writeErr
 	}
 	return p, tasks, nil
+}
+
+// Reliability records use compact opaque IDs rather than proposal-sized IDs.
+// Keep their reasoning boundary format-agnostic but bounded.
+func validReliabilityReference(value string) bool {
+	value = strings.TrimSpace(value)
+	return value != "" && len(value) <= 128
 }
 
 func (s *Store) Create(repositoryID, authorID, title, body string) (Proposal, error) {
