@@ -676,6 +676,24 @@ func (s *Store) AgreeParticipation(v, actor, kind, statement string) (Participat
 	p.Events = append(p.Events, ParticipationEvent{"participation.agreed", actor, "Required human boundary accepted.", now})
 	return p, write(s.participationPath(v), p)
 }
+
+func (s *Store) ReassignSponsor(v, actor, sponsor string, expected int) (Participation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, e := read[Participation](s.participationPath(v))
+	if e != nil {
+		return p, e
+	}
+	if p.Version != expected || p.Status != "pending_agreement" || p.AgreementRequirement != "sponsor" || !clean(actor, 64) || !clean(sponsor, 64) || sponsor == p.SponsorID {
+		return p, ErrConflict
+	}
+	now := s.now()
+	prior := p.SponsorID
+	p.SponsorID = sponsor
+	p.Version++
+	p.Events = append(p.Events, ParticipationEvent{Kind: "participation.sponsor_reassigned", ActorID: actor, Summary: "Human sponsor changed from " + prior + " to " + sponsor + ".", CreatedAt: now})
+	return p, write(s.participationPath(v), p)
+}
 func (s *Store) ActivateParticipation(v, actor, identity, grant string, expected int) (Participation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

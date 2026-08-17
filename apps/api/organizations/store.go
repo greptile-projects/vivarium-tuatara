@@ -2142,6 +2142,12 @@ func (s *Store) RecordDerivedCredential(id, grantID, agentID, operatorID, creden
 			if g.PrincipalType != "agent" || g.PrincipalID != agentID || g.RevokedAt != nil || (g.ExpiresAt != nil && !g.ExpiresAt.After(now)) || resourceDenied(*g, resource) {
 				return ErrNotFound
 			}
+			// This check must live inside the organization mutation lock. Route-level
+			// previews are advisory; concurrent issuers must reserve against the
+			// current durable count before their credential can become authoritative.
+			if g.Participation != nil && len(g.DerivedCredentials) >= g.Participation.MaxActions {
+				return ErrConflict
+			}
 			allowed := false
 			for _, x := range g.Resources {
 				if x == resource {

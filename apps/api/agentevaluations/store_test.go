@@ -148,3 +148,20 @@ func TestApprovedTrialBecomesBoundedRevocableParticipation(t *testing.T) {
 		t.Fatalf("revocation = %#v, %v", p, err)
 	}
 }
+
+func TestPendingSponsorCanBeReassignedWithHistory(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Now().UTC()
+	rev := Revision{RepositoryRevision: strings.Repeat("b", 40), Scenarios: []Scenario{{ID: "work", Title: "Work", SanitizedPrompt: "complete fixture", ExpectedOutcomes: []string{"done"}, Checks: []Check{{Name: "done", Kind: "contains", Expected: "done"}}}}, Budget: Budget{1, 1000, 3}, ProhibitedActions: []string{"merge"}, HumanReviewCriteria: []string{"inspect"}, ChangeSummary: "initial", CreatedBy: "owner"}
+	suite, _ := s.Create(Suite{OrganizationID: "org", RepositoryID: "repo", Name: "Trial"}, rev)
+	run, _ := s.CreateRun(suite.ID, 1, RunInput{AgentID: "agent", AgentProfileVersion: 1, Outputs: map[string]string{"work": "done"}}, "member")
+	_, _ = s.Decide(run.ID, "owner", "approved", "passed")
+	p, _ := s.CreateParticipation("org", "owner", ParticipationInput{AgentID: "agent", AgentProfileVersion: 1, EvaluationRunID: run.ID, Role: "viewer", Resources: []ParticipationResource{{Kind: "repository", ID: "repo"}}, Actions: []string{"repository.read"}, Budget: ParticipationBudget{MaxAgentMinutes: 5, MaxActions: 1}, StartsAt: now, ExpiresAt: now.Add(time.Hour), DataBoundaries: []string{"repository_metadata"}, AgreementRequirement: "sponsor", SponsorID: "former"})
+	p, err := s.ReassignSponsor(p.ID, "owner", "replacement", p.Version)
+	if err != nil || p.SponsorID != "replacement" || p.Version != 2 || p.Events[len(p.Events)-1].Kind != "participation.sponsor_reassigned" {
+		t.Fatalf("reassignment = %#v, %v", p, err)
+	}
+	if _, err = s.ReassignSponsor(p.ID, "owner", "another", 1); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale reassignment = %v", err)
+	}
+}

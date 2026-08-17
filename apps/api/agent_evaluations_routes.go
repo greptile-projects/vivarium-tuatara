@@ -36,6 +36,7 @@ type participationMutationInput struct {
 	ExpectedVersion int    `json:"expected_version"`
 	Statement       string `json:"statement"`
 	Decision        string `json:"decision"`
+	SponsorID       string `json:"sponsor_id"`
 }
 
 func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, orgs *organizations.Store, evaluations *agentevaluations.Store) {
@@ -346,6 +347,32 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 			return
 		}
 		v, e := evaluations.AgreeParticipation(p.ID, actor.UserID, p.AgreementRequirement, in.Statement)
+		if e != nil {
+			writeErr(w, e)
+			return
+		}
+		writeJSON(w, 200, v)
+	})
+	mux.HandleFunc("POST /organizations/{id}/agent-participations/{participation_id}/sponsor", func(w http.ResponseWriter, r *http.Request) {
+		actor, org, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		if !organizations.HasRole(org, actor.UserID, "owner") {
+			writeAPIError(w, 403, "participation_owner_required", "an organization owner must replace a participation sponsor")
+			return
+		}
+		var in participationMutationInput
+		if decodeJSON(r, &in) != nil || !organizations.HasRole(org, in.SponsorID, "") {
+			writeAPIError(w, 422, "participation_sponsor_invalid", "replacement sponsor must be a current organization member")
+			return
+		}
+		p, e := evaluations.GetParticipation(r.PathValue("participation_id"))
+		if e != nil || p.OrganizationID != org.ID {
+			writeErr(w, agentevaluations.ErrNotFound)
+			return
+		}
+		v, e := evaluations.ReassignSponsor(p.ID, actor.UserID, in.SponsorID, in.ExpectedVersion)
 		if e != nil {
 			writeErr(w, e)
 			return

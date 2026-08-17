@@ -178,7 +178,9 @@ whenever dependencies change or the web job fails before it starts.
   policy exceptions, and governance standing never confer access independently. Participation-derived
   credentials require explicit `repository.read`/`repository.write` actions and compatible
   `repository_metadata`/`repository_content` boundaries; write is not inferred from role, derivations
-  consume the action cap, and lifetime is capped by the agent-minute budget. Deployment compatibility
+  atomically consume the action cap, and lifetime is capped by the agent-minute budget. Pending
+  sponsor-required participation supports owner-only, version-guarded reassignment to a current
+  member and retains both identities in history. Deployment compatibility
   uses exact closed profile values (`platform`, `operator_managed`, `customer_managed`, or
   `external_service`); free-form execution prose is explanatory only. An omitted structured boundary
   is missing evidence and fails closed only when a search explicitly requests that boundary. Nested teams retain
