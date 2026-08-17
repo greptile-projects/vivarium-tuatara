@@ -2,6 +2,7 @@ package agentevaluations
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -174,6 +175,24 @@ func TestStaleControlDoesNotApplyAuthorityMutation(t *testing.T) {
 	_, err := s.ControlParticipationWith(p.ID, "owner", 1, ControlInput{Action: "suspend"}, func(Participation) error { called = true; return nil })
 	if !errors.Is(err, ErrConflict) || called {
 		t.Fatalf("stale control = %v, callback=%v", err, called)
+	}
+}
+
+func TestControlPersistsFailClosedStateBeforeAuthorityMutation(t *testing.T) {
+	root := t.TempDir()
+	s, _ := New(root)
+	p := Participation{ID: strings.Repeat("b", 32), OrganizationID: "org", AgentID: "agent", Version: 1, Status: "active", Actions: []string{"repository.read"}, DataBoundaries: []string{"repository_metadata"}}
+	if err := write(s.participationPath(p.ID), p); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(root, 0700)
+	called := false
+	_, err := s.ControlParticipationWith(p.ID, "owner", 1, ControlInput{Action: "suspend"}, func(Participation) error { called = true; return nil })
+	if err == nil || called {
+		t.Fatalf("write failure = %v, callback=%v", err, called)
 	}
 }
 

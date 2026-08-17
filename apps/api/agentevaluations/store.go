@@ -879,13 +879,16 @@ func (s *Store) ObserveProfileWith(participationID string, currentVersion int, m
 	if p.Status == "active" {
 		p.Status = "suspended"
 	}
+	p.Version++
+	if e := write(s.participationPath(participationID), p); e != nil {
+		return p, e
+	}
 	if apply != nil {
 		if e := apply(p); e != nil {
 			return p, e
 		}
 	}
-	p.Version++
-	return p, write(s.participationPath(participationID), p)
+	return p, nil
 }
 
 func (s *Store) ObserveProfile(participationID string, currentVersion int, material bool) (Participation, error) {
@@ -970,14 +973,17 @@ func (s *Store) ControlParticipationWith(participationID, actor string, expected
 	default:
 		return p, ErrInvalid
 	}
+	p.Version++
+	p.Events = append(p.Events, ParticipationEvent{"participation." + in.Action, actor, "Trust authority control applied without deleting commits or evidence.", now})
+	if e := write(s.participationPath(participationID), p); e != nil {
+		return p, e
+	}
 	if apply != nil {
 		if e := apply(p); e != nil {
 			return p, e
 		}
 	}
-	p.Version++
-	p.Events = append(p.Events, ParticipationEvent{"participation." + in.Action, actor, "Trust authority control applied without deleting commits or evidence.", now})
-	return p, write(s.participationPath(participationID), p)
+	return p, nil
 }
 
 func (s *Store) ControlParticipation(participationID, actor string, expected int, in ControlInput) (Participation, error) {
