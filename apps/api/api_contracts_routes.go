@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -90,7 +91,7 @@ func registerAPIContractRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 				}
 			}
 			if !apiContractSourcePathsResolve(git, repo, in.Revision.Source) {
-				writeAPIError(w, 422, "invalid_api_contract_source_paths", "definition_path and documentation_path must be files in the exact reviewed merge commit")
+				writeAPIError(w, 422, "invalid_api_contract_source_paths", "definition_path must be a valid OpenAPI JSON file and documentation_path must be a file in the exact reviewed merge commit")
 				return
 			}
 			owners := append([]string{actor.UserID}, in.Revision.OwnerIDs...)
@@ -140,13 +141,34 @@ func apiContractSourcePathsResolve(git *storage.Store, repositoryID string, sour
 	if err != nil {
 		return false
 	}
-	found := map[string]bool{}
+	found := map[string]storage.ObjectID{}
 	for _, entry := range entries {
 		if entry.Type == storage.BlobObject {
-			found[entry.Path] = true
+			found[entry.Path] = entry.ID
 		}
 	}
-	return found[source.DefinitionPath] && found[source.DocumentationPath]
+	definitionID, definitionFound := found[source.DefinitionPath]
+	_, documentationFound := found[source.DocumentationPath]
+	if !definitionFound || !documentationFound {
+		return false
+	}
+	definition, err := repository.ReadObject(definitionID)
+	if err != nil || definition.Type != storage.BlobObject {
+		return false
+	}
+	var document struct {
+		OpenAPI string          `json:"openapi"`
+		Swagger string          `json:"swagger"`
+		Paths   json.RawMessage `json:"paths"`
+	}
+	if json.Unmarshal(definition.Content, &document) != nil || (document.OpenAPI == "" && document.Swagger != "2.0") {
+		return false
+	}
+	if document.OpenAPI != "" && !strings.HasPrefix(document.OpenAPI, "3.") {
+		return false
+	}
+	var pathDefinitions map[string]json.RawMessage
+	return len(document.Paths) > 0 && json.Unmarshal(document.Paths, &pathDefinitions) == nil && pathDefinitions != nil
 }
 func writeAPIContract(w http.ResponseWriter, v apicontracts.Contract, err error, status int) {
 	switch {
