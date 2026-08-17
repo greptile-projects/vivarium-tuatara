@@ -41,3 +41,17 @@ func TestRejectsDanglingDefinitions(t *testing.T) {
 		t.Fatalf("error=%v", e)
 	}
 }
+
+func TestRejectsOperationWithoutAccountableOwner(t *testing.T) {
+	s, _ := New(t.TempDir())
+	r := validRevision()
+	r.Operations[0].OwnerIDs = nil
+	if _, err := s.Create("repo", "owner", r); err != ErrInvalid {
+		t.Fatalf("error=%v", err)
+	}
+	r = validRevision()
+	r.Operations[0].OwnerIDs = []string{""}
+	if _, err := s.Create("repo", "owner", r); err != ErrInvalid {
+		t.Fatalf("error=%v", err)
+	}
+}

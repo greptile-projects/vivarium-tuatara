@@ -4,6 +4,8 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"path"
+	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/apicontracts"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -87,7 +89,14 @@ func registerAPIContractRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 					return
 				}
 			}
+			if !apiContractSourcePathsResolve(git, repo, in.Revision.Source) {
+				writeAPIError(w, 422, "invalid_api_contract_source_paths", "definition_path and documentation_path must be files in the exact reviewed merge commit")
+				return
+			}
 			owners := append([]string{actor.UserID}, in.Revision.OwnerIDs...)
+			for _, operation := range in.Revision.Operations {
+				owners = append(owners, operation.OwnerIDs...)
+			}
 			var out apicontracts.Contract
 			err = catalog.WithCurrentParticipants(owners, repo, func() error {
 				if revise {
@@ -110,6 +119,34 @@ func registerAPIContractRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 	}
 	mux.HandleFunc("POST /repositories/{id}/api-contracts", publish(false))
 	mux.HandleFunc("POST /repositories/{id}/api-contracts/{contract_id}/revisions", publish(true))
+}
+
+func apiContractSourcePathsResolve(git *storage.Store, repositoryID string, source apicontracts.Source) bool {
+	paths := []string{source.DefinitionPath, source.DocumentationPath}
+	for _, candidate := range paths {
+		if candidate == "" || strings.HasPrefix(candidate, "/") || path.Clean(candidate) != candidate || candidate == "." || strings.HasPrefix(candidate, "../") {
+			return false
+		}
+	}
+	repository, err := git.Open(repositoryID)
+	if err != nil {
+		return false
+	}
+	commit, err := repository.ReadCommit(storage.ObjectID(source.CommitID))
+	if err != nil {
+		return false
+	}
+	entries, err := repository.WalkTree(commit.Tree)
+	if err != nil {
+		return false
+	}
+	found := map[string]bool{}
+	for _, entry := range entries {
+		if entry.Type == storage.BlobObject {
+			found[entry.Path] = true
+		}
+	}
+	return found[source.DefinitionPath] && found[source.DocumentationPath]
 }
 func writeAPIContract(w http.ResponseWriter, v apicontracts.Contract, err error, status int) {
 	switch {

@@ -254,8 +254,13 @@ func validate(r Revision) error {
 	}
 	ops := map[string]bool{}
 	for _, x := range r.Operations {
-		if x.ID == "" || x.Path == "" || x.Summary == "" || ops[x.ID] || !map[string]bool{"GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true, "HEAD": true, "OPTIONS": true}[x.Method] || !map[string]bool{"experimental": true, "beta": true, "stable": true, "deprecated": true}[x.Stability] {
+		if x.ID == "" || x.Path == "" || x.Summary == "" || len(x.OwnerIDs) == 0 || ops[x.ID] || !map[string]bool{"GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true, "HEAD": true, "OPTIONS": true}[x.Method] || !map[string]bool{"experimental": true, "beta": true, "stable": true, "deprecated": true}[x.Stability] {
 			return ErrInvalid
+		}
+		for _, owner := range x.OwnerIDs {
+			if strings.TrimSpace(owner) == "" {
+				return ErrInvalid
+			}
 		}
 		ops[x.ID] = true
 		for _, a := range x.Authentication {
