@@ -69,6 +69,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/securityadvisories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/serviceobjectives"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportthreads"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
@@ -240,6 +241,14 @@ func main() {
 		issueRoot = "issues"
 	}
 	issueStore, err := issues.New(issueRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
+	supportRoot := os.Getenv("SUPPORT_THREAD_STORAGE_ROOT")
+	if supportRoot == "" {
+		supportRoot = "support-threads"
+	}
+	supportThreadStore, err := supportthreads.New(supportRoot)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -566,7 +575,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -695,6 +704,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var decisionStore *decisions.Store
 	var deliveryTeamStore *deliveryteams.Store
 	var issueStore *issues.Store
+	var supportThreadStore *supportthreads.Store
 	var contributorPathwayStore *contributorpathways.Store
 	var contributorOpportunityStore *contributoropportunities.Store
 	var previewStore *previews.Store
@@ -759,6 +769,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			deliveryTeamStore = value
 		case *issues.Store:
 			issueStore = value
+		case *supportthreads.Store:
+			supportThreadStore = value
 		case *contributorpathways.Store:
 			contributorPathwayStore = value
 		case *contributoropportunities.Store:
@@ -903,6 +915,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && issueStore != nil {
 		registerIssueRoutes(mux, store, repositoryCatalog, issueStore, releaseStore, deploymentStore, incidentStore, proposalStore, pullRequestStore, packageStore, workspaceStore, authStore, activityStore, checkRunStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && supportThreadStore != nil {
+		registerSupportThreadRoutes(mux, repositoryCatalog, supportThreadStore, issueStore, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && contributorPathwayStore != nil {
 		registerContributorPathwayRoutes(mux, store, repositoryCatalog, contributorPathwayStore, releaseStore, issueStore, proposalStore, workspaceStore, authStore)

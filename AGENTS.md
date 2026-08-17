@@ -52,6 +52,16 @@ whenever dependencies change or the web job fails before it starts.
 
 ## Conventions
 
+- **Developer support** — `/support` and
+  `/repositories/{id}/support-threads` retain contextual questions separately
+  from unexpected-behavior issues. Threads name a repository, package,
+  release, API, documented journey, or error; keep version/environment/goal/
+  attempted-step gaps explicit; and accept only bounded logs, configuration,
+  or sample code. Audience controls visibility, contact email is projected only
+  to the author and current repository participants, and related answers/issues
+  expose metadata but never candidate evidence. Records default beneath
+  `$SUPPORT_THREAD_STORAGE_ROOT` (`support-threads`).
+
 - **Frontend** — App Router, file-based routes under `apps/web/src/app`. Entry
   point is `src/app/page.tsx`; `layout.tsx` installs the persistent application
   shell from `src/components/app-shell.tsx`. Reuse the accessible visual
