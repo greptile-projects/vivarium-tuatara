@@ -118,6 +118,9 @@ test("a project evaluates, adopts, delivers with, and replaces an unfamiliar age
     participation = await json(ownerPage, "post", `/organizations/${organization.id}/agent-participations/${participation.id}/activate`, owner.headers, { expected_version: participation.version });
     expect(participation).toMatchObject({ status: "active", authority_identity: `agent-participation:${participation.id}` });
     await rejected(ownerPage, `/organizations/${organization.id}/access-grants/${participation.access_grant_id}/credentials`, owner.headers, { agent_id: candidate.id, repository_id: repository.id, expires_in: 3600, purpose: "environment_write" });
+    const participationRead = await json(ownerPage, "post", `/organizations/${organization.id}/access-grants/${participation.access_grant_id}/credentials`, owner.headers, { agent_id: candidate.id, repository_id: repository.id, expires_in: 3600, purpose: "api_read" });
+    const participationReadHeaders = { Authorization: `Bearer ${participationRead.token}` };
+    expect((await ownerPage.request.get(`/api/repositories/${repository.id}`, { headers: participationReadHeaders })).status()).toBe(200);
 
     const proposal = await json(ownerPage, "post", `/repositories/${repository.id}/proposals`, owner.headers, { title: "Tighten dependency validation", body: "Use the evaluated collaborator through ordinary task, session, review, checks, and merge boundaries." });
     const task = await json(ownerPage, "post", `/repositories/${repository.id}/proposals/${proposal.id}/tasks`, owner.headers, { title: "Make validation strict", outcome: "The project check proves strict validation." });
@@ -145,6 +148,8 @@ test("a project evaluates, adopts, delivers with, and replaces an unfamiliar age
     participation = await json(ownerPage, "post", `/organizations/${organization.id}/agent-participations/${participation.id}/outcomes`, owner.headers, { expected_version: participation.version, outcome: { kind: "accepted_contribution", repository_id: repository.id, status: "accepted", summary: "Strict dependency validation passed project checks and independent review.", attribution_id: merged.merge_commit_id, cost: 2.4, latency_ms: 1400 } });
     participation = await json(ownerPage, "post", `/organizations/${organization.id}/agent-participations/${participation.id}/controls`, owner.headers, { expected_version: participation.version, control: { action: "handoff", to_agent_id: alternate.id, scope: "dependency validation role", work_summary: "Transfer the retained suite, reviewed merge, and remaining reevaluation without credentials.", evidence_ids: [suite.id, reproduced.id, pull.id, merged.merge_commit_id] } });
     expect(participation).toMatchObject({ status: "suspended", handoffs: [expect.objectContaining({ from_agent_id: candidate.id, to_agent_id: alternate.id })] });
+    expect((await ownerPage.request.get(`/api/repositories/${repository.id}`, { headers: participationReadHeaders })).status()).toBe(401);
+    await rejected(ownerPage, `/organizations/${organization.id}/access-grants/${participation.access_grant_id}/credentials`, owner.headers, { agent_id: candidate.id, repository_id: repository.id, expires_in: 3600, purpose: "git_read" });
 
     const orgState = await json(ownerPage, "put", `/organizations/${organization.id}/agents/${candidate.id}/profile`, owner.headers, { expected_version: 1, profile: profile("Model and price upgrade", "$4 per run", "Acme Repair 2") });
     participation = (await json(ownerPage, "get", `/organizations/${organization.id}/agent-participations`, owner.headers)).participations.find((x: any) => x.id === participation.id);
