@@ -169,6 +169,12 @@ repair passes staged deployment and restores objective attainment without rewrit
 
 ## Recovery commitments
 
+API applications retain permission-filtered operational windows for aggregate availability, latency,
+quota, errors, schema conformance, and usage, pinned to an exact contract, provider release, and environment.
+Shared investigations cite only visible evidence, admit explicitly invited read-only agents, reproduce only
+approved synthetic requests without payload retention, and freeze confirmed ownership into ordinary governed
+work references without revealing credentials, private usage, or unrelated consumers.
+
 Repository participants publish complete, compare-and-swap recovery contracts at
 `/repositories/{id}/recovery-commitments`; the web workspace is `/repositories/{id}/recovery`.
 Immutable revisions cover repositories, packages, artifacts, configuration, collaboration records,

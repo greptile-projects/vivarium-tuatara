@@ -10,13 +10,16 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/apicontracts"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
 
-func registerAPIContractApplicationRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, contracts *apicontracts.Store, userStore *users.Store, pulls *pullrequests.Store) {
+func registerAPIContractApplicationRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, contracts *apicontracts.Store, userStore *users.Store, pulls *pullrequests.Store, releaseStore *releases.Store, issueStore *issues.Store, proposalStore *proposals.Store) {
 	contractRevision := func(repo, id string, version int) (apicontracts.Revision, bool) {
 		contract, err := contracts.Get(id)
 		if err != nil || contract.RepositoryID != repo {
@@ -404,6 +407,388 @@ func registerAPIContractApplicationRoutes(mux *http.ServeMux, git *storage.Store
 		out, err := contracts.AddIntegrationEvidence(r.PathValue("work_id"), r.PathValue("candidate_id"), actor.UserID, in)
 		writeIntegrationWork(w, out, err, 201)
 	})
+
+	operationsBase := "/repositories/{id}/api-contracts/{contract_id}/applications/{application_id}/operations"
+	access := func(w http.ResponseWriter, r *http.Request, allowAgent bool) (auth.Credential, apicontracts.Application, bool, bool) {
+		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
+		if !ok {
+			return actor, apicontracts.Application{}, false, false
+		}
+		app, err := contracts.GetApplication(r.PathValue("application_id"))
+		if err != nil || app.RepositoryID != r.PathValue("id") || app.ContractID != r.PathValue("contract_id") {
+			writeAPIError(w, 404, "application_not_found", "Application not found")
+			return actor, app, false, false
+		}
+		repo, _ := catalog.GetByID(app.RepositoryID)
+		collab, _ := catalog.HasCollaborator(actor.UserID, app.RepositoryID)
+		producer := actor.AgentID == "" && (actor.UserID == repo.OwnerID || collab)
+		consumer := actor.AgentID == "" && actor.UserID == app.OwnerID
+		if actor.AgentID != "" && allowAgent && actor.RepositoryID == app.RepositoryID {
+			return actor, app, false, true
+		}
+		if !producer && !consumer {
+			writeAPIError(w, 404, "application_not_found", "Application not found")
+			return actor, app, false, false
+		}
+		return actor, app, producer, true
+	}
+	mux.HandleFunc("POST "+operationsBase+"/observations", func(w http.ResponseWriter, r *http.Request) {
+		actor, app, producer, ok := access(w, r, false)
+		if !ok {
+			return
+		}
+		var in apicontracts.OperationalObservation
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_operational_observation", "Aggregate operational evidence is required")
+			return
+		}
+		if (producer && actor.UserID != app.OwnerID && in.Visibility == "consumer_only") || (!producer && in.Visibility == "producer_only") {
+			writeAPIError(w, 403, "operational_visibility_forbidden", "Evidence can be private only to the publishing side or shared")
+			return
+		}
+		if _, releaseErr := releaseStore.Get(app.RepositoryID, in.ReleaseID); releaseErr != nil {
+			writeAPIError(w, 422, "operational_release_invalid", "Evidence must name an exact provider release")
+			return
+		}
+		out, err := contracts.AddOperationalObservation(app, actor.UserID, in)
+		writeOperationalRecord(w, out, err, 201)
+	})
+	mux.HandleFunc("GET "+operationsBase+"/observations", func(w http.ResponseWriter, r *http.Request) {
+		actor, app, producer, ok := access(w, r, true)
+		if !ok {
+			return
+		}
+		values, err := contracts.ListOperationalObservations(app.ID)
+		if err != nil {
+			writeAPIError(w, 500, "operational_evidence_unavailable", "Operational evidence could not be read")
+			return
+		}
+		visible := []apicontracts.OperationalObservation{}
+		agentEvidence := []string{}
+		if actor.AgentID != "" {
+			cases, _ := contracts.ListAPIInvestigations(app.ID)
+			for _, investigation := range cases {
+				if slices.Contains(investigation.InvitedAgentIDs, actor.AgentID) {
+					agentEvidence = append(agentEvidence, investigation.ObservationIDs...)
+				}
+			}
+		}
+		for _, v := range values {
+			if (actor.AgentID != "" && v.Visibility == "shared" && slices.Contains(agentEvidence, v.ID)) || (actor.AgentID == "" && (v.Visibility == "shared" || producer && v.Visibility == "producer_only" || actor.UserID == app.OwnerID && v.Visibility == "consumer_only")) {
+				visible = append(visible, v)
+			}
+		}
+		writeJSON(w, 200, map[string]any{"observations": visible})
+	})
+	mux.HandleFunc("POST "+operationsBase+"/investigations", func(w http.ResponseWriter, r *http.Request) {
+		actor, app, producer, ok := access(w, r, false)
+		if !ok {
+			return
+		}
+		var in struct {
+			Title          string   `json:"title"`
+			ObservationIDs []string `json:"observation_ids"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_investigation", "A title and permitted evidence are required")
+			return
+		}
+		values, evidenceErr := contracts.ListOperationalObservations(app.ID)
+		if evidenceErr != nil {
+			writeAPIError(w, 500, "operational_evidence_unavailable", "Operational evidence could not be read")
+			return
+		}
+		for _, id := range in.ObservationIDs {
+			if !slices.ContainsFunc(values, func(v apicontracts.OperationalObservation) bool {
+				return v.ID == id && (v.Visibility == "shared" || producer && v.Visibility == "producer_only" || actor.UserID == app.OwnerID && v.Visibility == "consumer_only")
+			}) {
+				writeAPIError(w, 422, "operational_evidence_inaccessible", "Investigation evidence must be visible to its opener")
+				return
+			}
+		}
+		out, err := contracts.CreateAPIInvestigation(app, actor.UserID, in.Title, in.ObservationIDs)
+		writeOperationalRecord(w, out, err, 201)
+	})
+	mux.HandleFunc("GET "+operationsBase+"/investigations", func(w http.ResponseWriter, r *http.Request) {
+		actor, app, producer, ok := access(w, r, true)
+		if !ok {
+			return
+		}
+		values, err := contracts.ListAPIInvestigations(app.ID)
+		if err != nil {
+			writeAPIError(w, 500, "investigations_unavailable", "Investigations could not be read")
+			return
+		}
+		if actor.AgentID != "" {
+			values = slices.DeleteFunc(values, func(v apicontracts.APIInvestigation) bool { return !slices.Contains(v.InvitedAgentIDs, actor.AgentID) })
+		} else {
+			observations, readErr := contracts.ListOperationalObservations(app.ID)
+			if readErr != nil {
+				writeAPIError(w, 500, "operational_evidence_unavailable", "Operational evidence could not be read")
+				return
+			}
+			values = slices.DeleteFunc(values, func(v apicontracts.APIInvestigation) bool {
+				return slices.ContainsFunc(v.ObservationIDs, func(id string) bool {
+					return !slices.ContainsFunc(observations, func(x apicontracts.OperationalObservation) bool {
+						return x.ID == id && (x.Visibility == "shared" || producer && x.Visibility == "producer_only" || actor.UserID == app.OwnerID && x.Visibility == "consumer_only")
+					})
+				})
+			})
+		}
+		writeJSON(w, 200, map[string]any{"investigations": values})
+	})
+	investigationBase := operationsBase + "/investigations/{investigation_id}"
+	mux.HandleFunc("POST "+investigationBase+"/agents", func(w http.ResponseWriter, r *http.Request) {
+		actor, app, _, ok := access(w, r, false)
+		if !ok {
+			return
+		}
+		var in struct {
+			AgentID string `json:"agent_id"`
+		}
+		if decodeJSON(r, &in) != nil || strings.TrimSpace(in.AgentID) == "" {
+			writeAPIError(w, 400, "invalid_agent_invitation", "A read-only agent identity is required")
+			return
+		}
+		out, err := contracts.UpdateAPIInvestigation(r.PathValue("investigation_id"), func(v *apicontracts.APIInvestigation) error {
+			if v.ApplicationID != app.ID {
+				return apicontracts.ErrNotFound
+			}
+			observations, readErr := contracts.ListOperationalObservations(app.ID)
+			if readErr != nil {
+				return readErr
+			}
+			for _, id := range v.ObservationIDs {
+				if !slices.ContainsFunc(observations, func(x apicontracts.OperationalObservation) bool { return x.ID == id && x.Visibility == "shared" }) {
+					return apicontracts.ErrInvalid
+				}
+			}
+			if !slices.Contains(v.InvitedAgentIDs, in.AgentID) {
+				v.InvitedAgentIDs = append(v.InvitedAgentIDs, in.AgentID)
+			}
+			return nil
+		})
+		_ = actor
+		writeOperationalRecord(w, out, err, 200)
+	})
+	mux.HandleFunc("POST "+investigationBase+"/findings", func(w http.ResponseWriter, r *http.Request) {
+		actor, app, producer, ok := access(w, r, true)
+		if !ok {
+			return
+		}
+		var in apicontracts.InvestigationFinding
+		if decodeJSON(r, &in) != nil || unsafeInvestigationFinding(in) {
+			writeAPIError(w, 422, "investigation_finding_unsafe", "A bounded, sanitized, evidence-cited finding is required")
+			return
+		}
+		out, err := contracts.UpdateAPIInvestigation(r.PathValue("investigation_id"), func(v *apicontracts.APIInvestigation) error {
+			if v.ApplicationID != app.ID {
+				return apicontracts.ErrNotFound
+			}
+			if actor.AgentID != "" && !slices.Contains(v.InvitedAgentIDs, actor.AgentID) {
+				return apicontracts.ErrNotFound
+			}
+			if actor.AgentID == "" {
+				observations, readErr := contracts.ListOperationalObservations(app.ID)
+				if readErr != nil {
+					return readErr
+				}
+				for _, id := range v.ObservationIDs {
+					if !slices.ContainsFunc(observations, func(x apicontracts.OperationalObservation) bool {
+						return x.ID == id && (x.Visibility == "shared" || producer && x.Visibility == "producer_only" || actor.UserID == app.OwnerID && x.Visibility == "consumer_only")
+					}) {
+						return apicontracts.ErrNotFound
+					}
+				}
+			}
+			for _, id := range in.EvidenceIDs {
+				if !slices.Contains(v.ObservationIDs, id) {
+					return apicontracts.ErrInvalid
+				}
+			}
+			in.ID = apicontracts.NewOperationalID()
+			in.ActorType = "human"
+			in.ActorID = actor.UserID
+			if actor.AgentID != "" {
+				in.ActorType = "agent"
+				in.ActorID = actor.AgentID
+			}
+			in.CreatedAt = time.Now().UTC()
+			v.Findings = append(v.Findings, in)
+			return nil
+		})
+		writeOperationalRecord(w, out, err, 201)
+	})
+	mux.HandleFunc("POST "+investigationBase+"/reproductions", func(w http.ResponseWriter, r *http.Request) {
+		actor, app, producer, ok := access(w, r, false)
+		if !ok {
+			return
+		}
+		var in struct {
+			ObservationID string `json:"observation_id"`
+			OperationID   string `json:"operation_id"`
+			Failure       string `json:"failure"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_reproduction", "A permitted synthetic reproduction is required")
+			return
+		}
+		revision, found := contractRevision(app.RepositoryID, app.ContractID, app.ContractVersion)
+		if !found {
+			writeAPIError(w, 409, "application_contract_stale", "Registered contract version is unavailable")
+			return
+		}
+		if !slices.Contains(app.ApprovedCapabilities, in.OperationID) || !slices.ContainsFunc(revision.Operations, func(v apicontracts.Operation) bool { return v.ID == in.OperationID }) {
+			writeAPIError(w, 403, "capability_not_approved", "The operation is outside this approval")
+			return
+		}
+		status, code := 200, "synthetic_success"
+		switch in.Failure {
+		case "":
+		case "rate_limit":
+			status, code = 429, "rate_limited"
+		case "timeout":
+			status, code = 504, "simulated_timeout"
+		case "server_error":
+			status, code = 503, "simulated_unavailable"
+		default:
+			writeAPIError(w, 400, "invalid_failure_simulation", "Failure simulation is unsupported")
+			return
+		}
+		out, err := contracts.UpdateAPIInvestigation(r.PathValue("investigation_id"), func(v *apicontracts.APIInvestigation) error {
+			if v.ApplicationID != app.ID || !slices.Contains(v.ObservationIDs, in.ObservationID) {
+				return apicontracts.ErrInvalid
+			}
+			observations, readErr := contracts.ListOperationalObservations(app.ID)
+			if readErr != nil {
+				return readErr
+			}
+			for _, id := range v.ObservationIDs {
+				if !slices.ContainsFunc(observations, func(x apicontracts.OperationalObservation) bool {
+					return x.ID == id && (x.Visibility == "shared" || producer && x.Visibility == "producer_only" || actor.UserID == app.OwnerID && x.Visibility == "consumer_only")
+				}) {
+					return apicontracts.ErrNotFound
+				}
+			}
+			v.Reproductions = append(v.Reproductions, apicontracts.SandboxReproduction{ID: apicontracts.NewOperationalID(), ObservationID: in.ObservationID, OperationID: in.OperationID, Failure: in.Failure, ResultStatus: status, ResultCode: code, SyntheticOnly: true, PayloadRetained: false, ActorID: actor.UserID, CreatedAt: time.Now().UTC()})
+			return nil
+		})
+		writeOperationalRecord(w, out, err, 201)
+	})
+	mux.HandleFunc("POST "+investigationBase+"/handoff", func(w http.ResponseWriter, r *http.Request) {
+		actor, app, producer, ok := access(w, r, false)
+		if !ok {
+			return
+		}
+		var in apicontracts.InvestigationHandoff
+		if decodeJSON(r, &in) != nil || !map[string]bool{"issue": true, "proposal": true}[in.Kind] || in.ResourceID == "" || len(in.ResourceID) > 160 || len(in.AcceptanceCriteria) == 0 || len(in.AcceptanceCriteria) > 20 || slices.ContainsFunc(in.AcceptanceCriteria, func(x string) bool { return strings.TrimSpace(x) == "" || len(x) > 500 || unsafeEvidenceText(x) }) {
+			writeAPIError(w, 422, "invalid_investigation_handoff", "A confirmed finding and ordinary issue or proposal are required")
+			return
+		}
+		current, currentErr := contracts.GetAPIInvestigation(r.PathValue("investigation_id"))
+		observations, observationErr := contracts.ListOperationalObservations(app.ID)
+		if observationErr != nil {
+			writeAPIError(w, 500, "operational_evidence_unavailable", "Operational evidence could not be read")
+			return
+		}
+		visible := !slices.ContainsFunc(current.ObservationIDs, func(id string) bool {
+			return !slices.ContainsFunc(observations, func(x apicontracts.OperationalObservation) bool {
+				return x.ID == id && (x.Visibility == "shared" || producer && x.Visibility == "producer_only" || actor.UserID == app.OwnerID && x.Visibility == "consumer_only")
+			})
+		})
+		findingIndex := slices.IndexFunc(current.Findings, func(x apicontracts.InvestigationFinding) bool {
+			return x.ID == in.FindingID && x.ActorType == "human" && map[string]bool{"service": true, "contract": true, "client": true, "environment": true}[x.Classification]
+		})
+		if currentErr != nil || current.ApplicationID != app.ID || findingIndex < 0 || !visible {
+			writeAPIError(w, 422, "invalid_investigation_handoff", "A human-confirmed finding is required")
+			return
+		}
+		expectedRepo := app.RepositoryID
+		if current.Findings[findingIndex].Classification == "client" {
+			consumerRepositoryID, workErr := clientHandoffRepository(contracts, app, in.IntegrationWorkID)
+			if workErr != nil {
+				writeAPIError(w, 422, "invalid_investigation_handoff", "Client work requires the exact affected integration-work record")
+				return
+			}
+			expectedRepo = consumerRepositoryID
+		} else if in.IntegrationWorkID != "" {
+			writeAPIError(w, 422, "invalid_investigation_handoff", "Provider work cannot name consumer integration work")
+			return
+		}
+		if in.RepositoryID != expectedRepo {
+			writeAPIError(w, 422, "invalid_investigation_handoff", "Work must belong to the classified provider or consumer repository")
+			return
+		}
+		if in.Kind == "issue" {
+			if _, resolveErr := issueStore.Get(expectedRepo, in.ResourceID); resolveErr != nil {
+				writeAPIError(w, 422, "invalid_investigation_handoff", "Referenced issue does not exist")
+				return
+			}
+		} else if _, resolveErr := proposalStore.Get(expectedRepo, in.ResourceID); resolveErr != nil {
+			writeAPIError(w, 422, "invalid_investigation_handoff", "Referenced proposal does not exist")
+			return
+		}
+		out, err := contracts.UpdateAPIInvestigation(r.PathValue("investigation_id"), func(v *apicontracts.APIInvestigation) error {
+			if v.ApplicationID != app.ID {
+				return apicontracts.ErrNotFound
+			}
+			if v.Handoff != nil {
+				return apicontracts.ErrAlreadyHandedOff
+			}
+			finding := slices.IndexFunc(v.Findings, func(x apicontracts.InvestigationFinding) bool {
+				return x.ID == in.FindingID && x.ActorType == "human" && map[string]bool{"service": true, "contract": true, "client": true, "environment": true}[x.Classification]
+			})
+			if finding < 0 {
+				return apicontracts.ErrInvalid
+			}
+			if in.RepositoryID != expectedRepo || v.Findings[finding].Classification != current.Findings[findingIndex].Classification {
+				return apicontracts.ErrInvalid
+			}
+			in.CreatedBy, in.CreatedAt = actor.UserID, time.Now().UTC()
+			v.Handoff = &in
+			return nil
+		})
+		writeOperationalRecord(w, out, err, 201)
+	})
+}
+
+func clientHandoffRepository(contracts *apicontracts.Store, app apicontracts.Application, workID string) (string, error) {
+	work, err := contracts.GetIntegrationWork(workID)
+	if err != nil || work.ApplicationID != app.ID || work.ContractID != app.ContractID || work.ContractVersion != app.ContractVersion {
+		return "", apicontracts.ErrInvalid
+	}
+	return work.ConsumerRepositoryID, nil
+}
+
+func unsafeInvestigationFinding(v apicontracts.InvestigationFinding) bool {
+	if !map[string]bool{"service": true, "contract": true, "client": true, "environment": true, "inconclusive": true}[v.Classification] || !map[string]bool{"low": true, "medium": true, "high": true}[v.Confidence] || strings.TrimSpace(v.Summary) == "" || strings.TrimSpace(v.Uncertainty) == "" || len(v.EvidenceIDs) == 0 {
+		return true
+	}
+	b, _ := json.Marshal(v)
+	return len(b) > 32*1024 || unsafeEvidenceText(string(b))
+}
+func unsafeEvidenceText(v string) bool {
+	v = strings.ToLower(v)
+	for _, x := range []string{"authorization:", "bearer ", "password=", "token=", "secret=", "private key", "vva_", "request body", "response body"} {
+		if strings.Contains(v, x) {
+			return true
+		}
+	}
+	return false
+}
+func writeOperationalRecord(w http.ResponseWriter, v any, err error, status int) {
+	switch {
+	case err == nil:
+		writeJSON(w, status, v)
+	case errors.Is(err, apicontracts.ErrNotFound):
+		writeAPIError(w, 404, "investigation_not_found", "Investigation not found")
+	case errors.Is(err, apicontracts.ErrAlreadyHandedOff):
+		writeAPIError(w, 409, "investigation_already_handed_off", "Investigation already routed")
+	case errors.Is(err, apicontracts.ErrInvalid):
+		writeAPIError(w, 422, "operational_record_invalid", "Operational evidence is stale, unsafe, inaccessible, or invalid")
+	default:
+		writeAPIError(w, 500, "operational_record_unavailable", "Operational record could not be persisted")
+	}
 }
 
 func unsafeIntegrationEvidence(v apicontracts.IntegrationEvidence) bool {
