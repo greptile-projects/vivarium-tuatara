@@ -29,6 +29,7 @@ type Revision struct {
 	StoreKind      string    `json:"store_kind"`
 	Description    string    `json:"description"`
 	Definition     string    `json:"definition"`
+	DefinitionPath string    `json:"definition_path"`
 	OwnerIDs       []string  `json:"owner_ids"`
 	Compatibility  []string  `json:"compatibility"`
 	Retention      string    `json:"retention"`
@@ -59,6 +60,7 @@ type Step struct {
 type Event struct {
 	ID        string    `json:"id"`
 	Kind      string    `json:"kind"`
+	StepID    string    `json:"step_id,omitempty"`
 	Summary   string    `json:"summary"`
 	ActorID   string    `json:"actor_id"`
 	CreatedAt time.Time `json:"created_at"`
@@ -176,6 +178,23 @@ func (s *Store) AddEvent(repo, schema, migration, actor string, expected int, e 
 		if strings.TrimSpace(e.Kind) == "" || strings.TrimSpace(e.Summary) == "" {
 			return Schema{}, ErrInvalid
 		}
+		if e.Kind == "approved" {
+			authorized := false
+			for _, step := range m.Steps {
+				if step.ID != e.StepID {
+					continue
+				}
+				for _, approver := range step.RequiredApproverIDs {
+					if approver == actor {
+						authorized = true
+						break
+					}
+				}
+			}
+			if !authorized {
+				return Schema{}, ErrInvalid
+			}
+		}
 		e.ID = id()
 		e.ActorID = actor
 		e.CreatedAt = s.now()
@@ -223,7 +242,7 @@ func (s *Store) List(repo string) ([]Schema, error) {
 }
 func validateRevision(r Revision) error {
 	k := map[string]bool{"database": true, "queue": true, "index": true, "object_store": true, "event_log": true, "cache": true, "other": true}
-	if r.Name == "" || !k[r.StoreKind] || r.Description == "" || r.Definition == "" || len(r.OwnerIDs) == 0 || len(r.Compatibility) == 0 || r.Retention == "" || len(r.Privacy) == 0 || r.PullRequestID == "" || r.ReviewedCommit == "" || r.Rationale == "" {
+	if r.Name == "" || !k[r.StoreKind] || r.Description == "" || r.Definition == "" || r.DefinitionPath == "" || len(r.OwnerIDs) == 0 || len(r.Compatibility) == 0 || r.Retention == "" || len(r.Privacy) == 0 || r.PullRequestID == "" || r.ReviewedCommit == "" || r.Rationale == "" {
 		return ErrInvalid
 	}
 	for _, l := range r.Links {
@@ -246,6 +265,7 @@ func validateMigration(s Schema, m Migration) error {
 		ops[o.ID] = true
 	}
 	steps := map[string]bool{}
+	coveredOperations := map[string]bool{}
 	for _, st := range m.Steps {
 		if st.ID == "" || steps[st.ID] || st.Description == "" || len(st.OperationIDs) == 0 || len(st.SuccessMeasures) == 0 || len(st.RequiredApproverIDs) == 0 {
 			return ErrInvalid
@@ -255,7 +275,11 @@ func validateMigration(s Schema, m Migration) error {
 			if !ops[o] {
 				return ErrInvalid
 			}
+			coveredOperations[o] = true
 		}
+	}
+	if len(coveredOperations) != len(ops) {
+		return ErrInvalid
 	}
 	return nil
 }

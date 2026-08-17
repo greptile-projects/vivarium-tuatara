@@ -4,15 +4,18 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"path"
+	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/decisions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/durableschemas"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
-func registerDurableSchemaRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *durableschemas.Store, pulls *pullrequests.Store, decisionStore *decisions.Store) {
+func registerDurableSchemaRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, store *durableschemas.Store, pulls *pullrequests.Store, decisionStore *decisions.Store) {
 	base := "/repositories/{id}/durable-schemas"
 	mux.HandleFunc("GET "+base, func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
@@ -53,6 +56,10 @@ func registerDurableSchemaRoutes(mux *http.ServeMux, catalog *repositories.Store
 			pr, e := pulls.Get(r.PathValue("id"), in.Revision.PullRequestID)
 			if e != nil || pr.Status != pullrequests.Merged || pr.MergeCommitID == nil || *pr.MergeCommitID != in.Revision.ReviewedCommit {
 				writeAPIError(w, 400, "invalid_reviewed_history", "schema revisions must cite the exact merge commit of a merged repository pull request")
+				return
+			}
+			if !durableSchemaDefinitionResolves(git, r.PathValue("id"), in.Revision) {
+				writeAPIError(w, 400, "invalid_reviewed_schema_definition", "definition_path must resolve to the exact submitted definition in the reviewed merge commit")
 				return
 			}
 			owners := append([]string{}, in.Revision.OwnerIDs...)
@@ -130,6 +137,33 @@ func registerDurableSchemaRoutes(mux *http.ServeMux, catalog *repositories.Store
 		out, e := store.AddEvent(r.PathValue("id"), r.PathValue("schema_id"), r.PathValue("migration_id"), actor.UserID, in.ExpectedVersion, in.Event)
 		writeDurableSchema(w, out, e, 200)
 	})
+}
+
+func durableSchemaDefinitionResolves(git *storage.Store, repositoryID string, revision durableschemas.Revision) bool {
+	candidate := revision.DefinitionPath
+	if candidate == "" || strings.HasPrefix(candidate, "/") || path.Clean(candidate) != candidate || candidate == "." || strings.HasPrefix(candidate, "../") {
+		return false
+	}
+	repository, err := git.Open(repositoryID)
+	if err != nil {
+		return false
+	}
+	commit, err := repository.ReadCommit(storage.ObjectID(revision.ReviewedCommit))
+	if err != nil {
+		return false
+	}
+	entries, err := repository.WalkTree(commit.Tree)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.Path != candidate || entry.Type != storage.BlobObject {
+			continue
+		}
+		definition, readErr := repository.ReadObject(entry.ID)
+		return readErr == nil && definition.Type == storage.BlobObject && string(definition.Content) == revision.Definition
+	}
+	return false
 }
 func writeDurableSchema(w http.ResponseWriter, v durableschemas.Schema, e error, status int) {
 	switch {

@@ -4,7 +4,7 @@ import "testing"
 
 func TestReviewedSchemasAndMigrationHistory(t *testing.T) {
 	s, _ := New(t.TempDir())
-	r := Revision{Name: "orders", StoreKind: "database", Description: "Order state", Definition: "orders(id uuid primary key)", OwnerIDs: []string{"owner"}, Compatibility: []string{"additive changes remain backward compatible"}, Retention: "seven years", Privacy: []string{"customer identifiers encrypted"}, Links: []Link{{Kind: "service", ID: "checkout", Label: "Checkout"}}, PullRequestID: "42", ReviewedCommit: "abc", Rationale: "Reviewed baseline"}
+	r := Revision{Name: "orders", StoreKind: "database", Description: "Order state", Definition: "orders(id uuid primary key)", DefinitionPath: "db/orders.sql", OwnerIDs: []string{"owner"}, Compatibility: []string{"additive changes remain backward compatible"}, Retention: "seven years", Privacy: []string{"customer identifiers encrypted"}, Links: []Link{{Kind: "service", ID: "checkout", Label: "Checkout"}}, PullRequestID: "42", ReviewedCommit: "abc", Rationale: "Reviewed baseline"}
 	v, e := s.Create("repo", "owner", r)
 	if e != nil || v.CurrentVersion != 1 {
 		t.Fatalf("create = %#v, %v", v, e)
@@ -20,12 +20,23 @@ func TestReviewedSchemasAndMigrationHistory(t *testing.T) {
 	if e != nil || len(v.Migrations) != 1 {
 		t.Fatalf("migration = %#v, %v", v, e)
 	}
-	v, e = s.AddEvent("repo", v.ID, v.Migrations[0].ID, "reviewer", 1, Event{Kind: "approved", Summary: "Storage owner approved sequence"})
+	if _, e = s.AddEvent("repo", v.ID, v.Migrations[0].ID, "reviewer", 1, Event{Kind: "approved", StepID: "observe", Summary: "Not authorized"}); e != ErrInvalid {
+		t.Fatalf("non-approver event = %v", e)
+	}
+	v, e = s.AddEvent("repo", v.ID, v.Migrations[0].ID, "owner", 1, Event{Kind: "approved", StepID: "observe", Summary: "Storage owner approved sequence"})
 	if e != nil || v.Migrations[0].Version != 2 || len(v.Migrations[0].Events) != 2 {
 		t.Fatalf("event = %#v, %v", v, e)
 	}
 	if _, e = s.AddEvent("repo", v.ID, v.Migrations[0].ID, "reviewer", 1, Event{Kind: "approved", Summary: "retry"}); e != ErrConflict {
 		t.Fatalf("stale event = %v", e)
+	}
+}
+
+func TestMigrationRejectsUnsequencedOperation(t *testing.T) {
+	schema := Schema{CurrentVersion: 2}
+	m := Migration{FromVersion: 1, ToVersion: 2, SourceKind: "pull_request", SourceID: "1", Summary: "mixed", Operations: []Operation{{ID: "read", Kind: "read", Description: "read", OwnerIDs: []string{"o"}, ConsumerIDs: []string{"c"}, RollbackLimit: "safe"}, {ID: "write", Kind: "write", Description: "write", OwnerIDs: []string{"o"}, ConsumerIDs: []string{"c"}, RollbackLimit: "safe"}}, Steps: []Step{{ID: "read", OperationIDs: []string{"read"}, Description: "read", SuccessMeasures: []string{"done"}, RequiredApproverIDs: []string{"o"}}}, RollbackLimits: []string{"safe"}}
+	if validateMigration(schema, m) != ErrInvalid {
+		t.Fatal("unsequenced operation accepted")
 	}
 }
 

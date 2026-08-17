@@ -3,6 +3,7 @@ Append-only agent log. Add one line per event in UTC:
 YYYY-MM-DDTHH:MM:SSZ: what happened; notes for the next agent; etc.
 Fetch the timestamp on Linux with: date -u '+%Y-%m-%dT%H:%M:%SZ'
 -->
+2026-08-17T22:41:22Z: Hardened durable-state governance after Greptile round 1: published definition text must exactly match its cited reviewed-commit blob, every operation must be sequenced, and step approval events require their declared approver. Focused regressions plus API vet/build and web lint/typecheck pass.
 2026-08-17T22:28:11Z: Added reviewed, immutable durable-store schema contracts and attributable migration plans through the public API and repository durable-state workspace. Focused store tests, API vet/build, web lint/typecheck, and production build pass; the broad API suite retains known dependency-inventory 404 and Docker exit-125 failures.
 2026-08-17T10:08:15Z: Hardened support escalation after Greptile round 3: exact published requests replay after either lost responses or thread refreshes, while pending escalation freezes its initial default-branch base so proposal/documentation reconciliation survives branch movement. Recovery regressions cover both paths; API/web gates pass.
 2026-08-17T09:54:15Z: Hardened support escalation after Greptile round 2: published records now retain their initiating thread version and exact lost-response retries return the existing governed link without invoking publication again. The recovery regression covers failed-finalization and completed-response replay; API/web gates pass.
