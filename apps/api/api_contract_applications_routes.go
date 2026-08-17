@@ -705,12 +705,15 @@ func registerAPIContractApplicationRoutes(mux *http.ServeMux, git *storage.Store
 		}
 		expectedRepo := app.RepositoryID
 		if current.Findings[findingIndex].Classification == "client" {
-			works, workErr := contracts.ListIntegrationWork(app.ID)
-			if workErr != nil || len(works) == 0 {
-				writeAPIError(w, 422, "invalid_investigation_handoff", "Client work requires a frozen consumer repository")
+			consumerRepositoryID, workErr := clientHandoffRepository(contracts, app, in.IntegrationWorkID)
+			if workErr != nil {
+				writeAPIError(w, 422, "invalid_investigation_handoff", "Client work requires the exact affected integration-work record")
 				return
 			}
-			expectedRepo = works[0].ConsumerRepositoryID
+			expectedRepo = consumerRepositoryID
+		} else if in.IntegrationWorkID != "" {
+			writeAPIError(w, 422, "invalid_investigation_handoff", "Provider work cannot name consumer integration work")
+			return
 		}
 		if in.RepositoryID != expectedRepo {
 			writeAPIError(w, 422, "invalid_investigation_handoff", "Work must belong to the classified provider or consumer repository")
@@ -747,6 +750,14 @@ func registerAPIContractApplicationRoutes(mux *http.ServeMux, git *storage.Store
 		})
 		writeOperationalRecord(w, out, err, 201)
 	})
+}
+
+func clientHandoffRepository(contracts *apicontracts.Store, app apicontracts.Application, workID string) (string, error) {
+	work, err := contracts.GetIntegrationWork(workID)
+	if err != nil || work.ApplicationID != app.ID || work.ContractID != app.ContractID || work.ContractVersion != app.ContractVersion {
+		return "", apicontracts.ErrInvalid
+	}
+	return work.ConsumerRepositoryID, nil
 }
 
 func unsafeInvestigationFinding(v apicontracts.InvestigationFinding) bool {

@@ -31,6 +31,8 @@
   repository-scoped read-only agents may add evidence-cited, uncertain findings, while humans retain
   sandbox reproduction and immutable ordinary issue/proposal handoff authority. Reproductions retain only
   synthetic status/code and never a payload; handoffs grant no Git, review, task, or merge authority.
+  A `client` handoff must name the exact affected `integration_work_id`; the server resolves its frozen
+  consumer repository instead of inferring one from other application work. Provider-side findings reject it.
 
 ## Approved-agent evaluation
 

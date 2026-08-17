@@ -1908,6 +1908,8 @@ whenever dependencies change or the web job fails before it starts.
   Visibility separates shared, producer-only, and consumer-only evidence. Shared investigations retain a closed
   evidence set, cited failure classification and uncertainty, explicit read-only agent invitations, payload-free
   sandbox reproductions, and human-only immutable issue/proposal handoffs without granting project authority.
+  Client handoffs name and retain the exact affected integration-work record; its frozen consumer repository
+  determines the governed-work boundary, while provider classifications reject consumer-work associations.
   Repository participants define repository, release, and environment scopes; user journeys;
   indicators and calculations; measurement windows and targets; dependencies; error budgets;
   severity responses and accountable owners; version-pinned product, performance, accessibility,

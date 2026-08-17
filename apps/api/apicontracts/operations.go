@@ -65,6 +65,7 @@ type InvestigationHandoff struct {
 	RepositoryID       string    `json:"repository_id"`
 	ResourceID         string    `json:"resource_id"`
 	FindingID          string    `json:"finding_id"`
+	IntegrationWorkID  string    `json:"integration_work_id,omitempty"`
 	AcceptanceCriteria []string  `json:"acceptance_criteria"`
 	CreatedBy          string    `json:"created_by"`
 	CreatedAt          time.Time `json:"created_at"`
