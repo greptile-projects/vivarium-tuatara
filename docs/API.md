@@ -14,7 +14,10 @@
   latency, and failure evidence. Repeated and operator-supplied trials are labeled explicitly.
 - `GET /organizations/{id}/agent-evaluation-runs` returns retained revision-exact evidence, while
   `POST /organizations/{id}/agent-evaluation-runs/{run_id}/decisions` appends a human evaluator's
-  approved, rejected, or needs-work decision. Suites, runs, and decisions grant no agent access or
+  approved, rejected, or needs-work decision. Ordinary member projections recompute correctness and
+  policy solely from public criteria and omit protected-derived contamination state. Organization-owner
+  evaluators receive protected-derived aggregate status but never protected definitions or result rows;
+  only those evaluators may decide a run. Suites, runs, and decisions grant no agent access or
   repository authority. Records default beneath `$AGENT_EVALUATION_STORAGE_ROOT`
   (`agent-evaluations`).
 

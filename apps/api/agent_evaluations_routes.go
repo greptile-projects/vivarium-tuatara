@@ -148,10 +148,17 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 		writeJSON(w, 200, view)
 	})
 	mux.HandleFunc("GET /organizations/{id}/agent-evaluation-runs", func(w http.ResponseWriter, r *http.Request) {
-		if _, _, ok := require(w, r, "repositories:read"); !ok {
+		actor, org, ok := require(w, r, "repositories:read")
+		if !ok {
 			return
 		}
-		v, e := evaluations.ListRuns(r.PathValue("id"))
+		var v []agentevaluations.Run
+		var e error
+		if organizations.HasRole(org, actor.UserID, "owner") {
+			v, e = evaluations.ListEvaluatorRuns(org.ID)
+		} else {
+			v, e = evaluations.ListRuns(org.ID)
+		}
 		if e != nil {
 			writeErr(w, e)
 			return
@@ -205,7 +212,11 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 		if !ok {
 			return
 		}
-		run, e := evaluations.GetRun(r.PathValue("run_id"))
+		if !organizations.HasRole(org, actor.UserID, "owner") {
+			writeAPIError(w, 403, "evaluation_owner_required", "only organization owners can decide protected evaluation evidence")
+			return
+		}
+		run, e := evaluations.GetEvaluatorRun(r.PathValue("run_id"))
 		if e != nil || run.OrganizationID != org.ID {
 			writeErr(w, agentevaluations.ErrNotFound)
 			return

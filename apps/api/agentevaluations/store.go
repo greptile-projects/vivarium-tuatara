@@ -406,9 +406,9 @@ func (s *Store) CreateRun(suiteID string, version int, in RunInput, actor string
 	if e := write(s.runPath(x), run); e != nil {
 		return Run{}, e
 	}
-	return publicRun(run), nil
+	return projectedRun(run, rev, false), nil
 }
-func publicRun(v Run) Run {
+func projectedRun(v Run, rev Revision, evaluator bool) Run {
 	publicResults := make([]CheckResult, 0, len(v.CheckResults))
 	for _, result := range v.CheckResults {
 		if !result.Hidden {
@@ -416,13 +416,54 @@ func publicRun(v Run) Run {
 		}
 	}
 	v.CheckResults = publicResults
+	if !evaluator {
+		correct, policy := true, true
+		for _, result := range publicResults {
+			if result.Kind == "policy" {
+				policy = policy && result.Passed
+			} else {
+				correct = correct && result.Passed
+			}
+		}
+		for _, action := range v.ToolActions {
+			for _, prohibited := range rev.ProhibitedActions {
+				if strings.EqualFold(strings.TrimSpace(action.Action), strings.TrimSpace(prohibited)) {
+					policy = false
+				}
+			}
+		}
+		if v.Failure != "" {
+			correct, policy = false, false
+		}
+		v.CorrectnessPassed, v.PolicyPassed = correct, policy
+		v.Contaminated = false
+		v.ContaminationReasons = nil
+	}
 	return v
 }
 func (s *Store) GetRun(v string) (Run, error) {
 	x, e := read[Run](s.runPath(v))
-	return publicRun(x), e
+	if e != nil {
+		return Run{}, e
+	}
+	suite, e := read[Suite](s.suitePath(x.SuiteID))
+	if e != nil || x.SuiteVersion < 1 || x.SuiteVersion > len(suite.Revisions) {
+		return Run{}, ErrInvalid
+	}
+	return projectedRun(x, suite.Revisions[x.SuiteVersion-1], false), nil
 }
-func (s *Store) ListRuns(org string) ([]Run, error) {
+func (s *Store) GetEvaluatorRun(v string) (Run, error) {
+	x, e := read[Run](s.runPath(v))
+	if e != nil {
+		return Run{}, e
+	}
+	suite, e := read[Suite](s.suitePath(x.SuiteID))
+	if e != nil || x.SuiteVersion < 1 || x.SuiteVersion > len(suite.Revisions) {
+		return Run{}, ErrInvalid
+	}
+	return projectedRun(x, suite.Revisions[x.SuiteVersion-1], true), nil
+}
+func (s *Store) listRuns(org string, evaluator bool) ([]Run, error) {
 	entries, e := os.ReadDir(s.root)
 	if e != nil {
 		return nil, e
@@ -435,12 +476,18 @@ func (s *Store) ListRuns(org string) ([]Run, error) {
 				return nil, er
 			}
 			if v.OrganizationID == org {
-				out = append(out, publicRun(v))
+				suite, suiteErr := read[Suite](s.suitePath(v.SuiteID))
+				if suiteErr != nil || v.SuiteVersion < 1 || v.SuiteVersion > len(suite.Revisions) {
+					return nil, ErrInvalid
+				}
+				out = append(out, projectedRun(v, suite.Revisions[v.SuiteVersion-1], evaluator))
 			}
 		}
 	}
 	return out, nil
 }
+func (s *Store) ListRuns(org string) ([]Run, error)          { return s.listRuns(org, false) }
+func (s *Store) ListEvaluatorRuns(org string) ([]Run, error) { return s.listRuns(org, true) }
 func (s *Store) Decide(runID, actor, decision, rationale string) (Run, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -457,5 +504,12 @@ func (s *Store) Decide(runID, actor, decision, rationale string) (Run, error) {
 	v.Decisions = append(v.Decisions, Decision{decision, rationale, actor, s.now()})
 	v.ReviewStatus = decision
 	e = write(s.runPath(runID), v)
-	return publicRun(v), e
+	if e != nil {
+		return Run{}, e
+	}
+	suite, e := read[Suite](s.suitePath(v.SuiteID))
+	if e != nil || v.SuiteVersion < 1 || v.SuiteVersion > len(suite.Revisions) {
+		return Run{}, ErrInvalid
+	}
+	return projectedRun(v, suite.Revisions[v.SuiteVersion-1], true), nil
 }

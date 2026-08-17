@@ -21,7 +21,7 @@ func TestHiddenEvaluationAndTrialLabels(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if !run.Contaminated || run.TrialLabel != "initial" || run.Authority.Publish {
+	if run.Contaminated || run.TrialLabel != "initial" || run.Authority.Publish {
 		t.Fatalf("unexpected run %#v", run)
 	}
 	if len(run.CheckResults) != 1 || run.CheckResults[0].Hidden {
@@ -34,6 +34,31 @@ func TestHiddenEvaluationAndTrialLabels(t *testing.T) {
 	got, _ := s.GetRun(run.ID)
 	if len(got.CheckResults) != 1 || got.CheckResults[0].Hidden {
 		t.Fatalf("protected result leaked from read: %#v", got.CheckResults)
+	}
+	evaluator, _ := s.GetEvaluatorRun(run.ID)
+	if !evaluator.Contaminated || len(evaluator.CheckResults) != 1 {
+		t.Fatalf("evaluator projection lost protected aggregate: %#v", evaluator)
+	}
+}
+
+func TestPublicAggregatesDoNotRevealProtectedOutcomes(t *testing.T) {
+	s, _ := New(t.TempDir())
+	rev := Revision{RepositoryRevision: strings.Repeat("e", 40), Scenarios: []Scenario{{ID: "fix", Title: "Fix", SanitizedPrompt: "fix fixture", ExpectedOutcomes: []string{"done"}, Checks: []Check{{Name: "public", Kind: "contains", Expected: "done"}}, HiddenChecks: []Check{{Name: "protected", Kind: "contains", Expected: "private-answer"}, {Name: "canary", Kind: "canary", Expected: "canary-value"}}}}, Budget: Budget{1, 1000, 3}, ProhibitedActions: []string{"publish"}, HumanReviewCriteria: []string{"inspect"}, ChangeSummary: "initial", CreatedBy: "owner"}
+	suite, err := s.Create(Suite{OrganizationID: "org", RepositoryID: "repo", Name: "Protected"}, rev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clean, _ := s.CreateRun(suite.ID, 1, RunInput{AgentID: "agent", AgentProfileVersion: 1, Outputs: map[string]string{"fix": "done"}}, "member")
+	matching, _ := s.CreateRun(suite.ID, 1, RunInput{AgentID: "agent", AgentProfileVersion: 1, Outputs: map[string]string{"fix": "done private-answer"}}, "member")
+	leaked, _ := s.CreateRun(suite.ID, 1, RunInput{AgentID: "agent", AgentProfileVersion: 1, Outputs: map[string]string{"fix": "done private-answer canary-value"}}, "member")
+	if clean.CorrectnessPassed != matching.CorrectnessPassed || clean.CorrectnessPassed != leaked.CorrectnessPassed || clean.PolicyPassed != matching.PolicyPassed || clean.Contaminated || matching.Contaminated || leaked.Contaminated || len(clean.ContaminationReasons) != 0 || len(matching.ContaminationReasons) != 0 || len(leaked.ContaminationReasons) != 0 {
+		t.Fatalf("public aggregates reveal protected result: clean=%#v matching=%#v leaked=%#v", clean, matching, leaked)
+	}
+	evaluatorClean, _ := s.GetEvaluatorRun(clean.ID)
+	evaluatorMatching, _ := s.GetEvaluatorRun(matching.ID)
+	evaluatorLeaked, _ := s.GetEvaluatorRun(leaked.ID)
+	if evaluatorClean.CorrectnessPassed == evaluatorMatching.CorrectnessPassed || !evaluatorLeaked.Contaminated {
+		t.Fatalf("evaluator aggregates did not retain protected result: clean=%#v matching=%#v", evaluatorClean, evaluatorMatching)
 	}
 }
 
