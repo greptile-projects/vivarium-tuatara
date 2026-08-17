@@ -2265,6 +2265,15 @@ agents. Members additionally receive organization-visible records and the
 immutable actor-stamped event history. Private repository responsibility and
 organization-only nesting are omitted from public projection.
 
+Authenticated organization members use `POST /organizations/{id}/agent-matches` with a closed
+`source_kind` (`task`, `proposal`, `issue`, `decision`, `incident`, `stewardship_mandate`, or
+`team_role`), bounded `source_id`, `workflow`, optional `repository_id` and `deployment_boundary`, and
+exact `required_permissions`. Every candidate exposes eligibility, transparent score reasons, live
+resource grants, policy conflicts, cost, availability, execution boundary, verified evaluations,
+comparable attributed outcomes, and explicit missing or stale evidence and conflict disclosures.
+The response retains no source body; it grants no permission and does not assign or launch an agent.
+Private matching evidence never enters the unauthenticated directory projection.
+
 Organization owners create ongoing agent responsibility contracts with `POST
 /organizations/{id}/stewardship-mandates`. Each immutable revision names
 desired outcomes, organization repositories and branches, trusted signals,

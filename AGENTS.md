@@ -166,7 +166,10 @@ whenever dependencies change or the web job fails before it starts.
   and execution provenance, project-data use/retention, subprocessors and remote boundaries,
   pricing/resources, requested capabilities, availability, support, and change history. Platform-derived
   stable-identity/operator evidence is separate from claims, and profiles grant no credential, installation,
-  user identity, or project authority. Nested teams retain
+  user identity, or project authority. Authenticated organization agent matching accepts bounded work
+  references and explains deterministic workflow fit from live grants, effective policy, deployment,
+  cost, availability, evidence freshness, conflicts, verified evaluations, and comparable attributed
+  outcomes without copying source content or exposing private evidence publicly. Nested teams retain
   version-guarded member/maintainer roles and repository responsibility, while
   effective membership explains direct or visible-child inheritance. Approved
   agent identities expose capabilities, current member operators, visibility,

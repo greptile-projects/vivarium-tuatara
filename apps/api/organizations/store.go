@@ -111,6 +111,7 @@ type AgentProfile struct {
 	Support                   string                  `json:"support"`
 	Subprocessors             []string                `json:"subprocessors"`
 	RemoteExecutionBoundaries []string                `json:"remote_execution_boundaries"`
+	ConflictDisclosures       []string                `json:"conflict_disclosures"`
 	ChangeSummary             string                  `json:"change_summary"`
 	PublishedBy               string                  `json:"published_by"`
 	PublishedAt               time.Time               `json:"published_at"`
@@ -1099,7 +1100,7 @@ func (s *Store) PublishAgentProfile(id, agentID, actor string, expectedVersion i
 	if in.SupportedTasks, ok = cleanList(in.SupportedTasks, 300); !ok || len(in.SupportedTasks) == 0 || len(in.SupportedTasks) > 50 {
 		return Organization{}, ErrInvalid
 	}
-	for target, max := range map[*[]string]int{&in.Tools: 200, &in.ResourceRequirements: 300, &in.RequestedCapabilities: 300, &in.Subprocessors: 500, &in.RemoteExecutionBoundaries: 500} {
+	for target, max := range map[*[]string]int{&in.Tools: 200, &in.ResourceRequirements: 300, &in.RequestedCapabilities: 300, &in.Subprocessors: 500, &in.RemoteExecutionBoundaries: 500, &in.ConflictDisclosures: 500} {
 		if *target, ok = cleanList(*target, max); !ok || len(*target) > 50 {
 			return Organization{}, ErrInvalid
 		}

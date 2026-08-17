@@ -65,6 +65,7 @@ type organizationAgentProfileInput struct {
 	ExpectedVersion int                        `json:"expected_version"`
 	Profile         organizations.AgentProfile `json:"profile"`
 }
+type organizationAgentMatchInput = organizations.AgentMatchRequest
 type organizationAccessInput struct {
 	PrincipalType string                          `json:"principal_type"`
 	PrincipalID   string                          `json:"principal_id"`
@@ -841,6 +842,22 @@ func registerOrganizationRoutes(mux *http.ServeMux, gitStore *storage.Store, org
 			return
 		}
 		writeJSON(w, 200, project(v, actor.UserID))
+	})
+	mux.HandleFunc("POST /organizations/{id}/agent-matches", func(w http.ResponseWriter, r *http.Request) {
+		_, organization, ok := require(w, r, "repositories:read")
+		if !ok {
+			return
+		}
+		var in organizationAgentMatchInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_agent_match", "a supported source and bounded work criteria are required")
+			return
+		}
+		matches, err := organizations.MatchAgents(organization, in, time.Now().UTC())
+		if writeOrganizationError(w, err) {
+			return
+		}
+		writeJSON(w, 200, matches)
 	})
 	mux.HandleFunc("POST /organizations/{id}/access-requests", func(w http.ResponseWriter, r *http.Request) {
 		actor, organization, ok := require(w, r, "repositories:read")
