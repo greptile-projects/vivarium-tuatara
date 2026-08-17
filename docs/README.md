@@ -87,6 +87,13 @@ The credential authenticates only an inspectable synthetic `/sandbox` request/re
 frozen quota and deterministic rate-limit, timeout, or server-error simulation. It never calls a declared
 base URL or reads production data, and grants no account, repository, Git, deployment, or environment access.
 
+Approved applications also open credential-free integration work from the same workspace. Human- or
+agent-owned task, session, and workspace records freeze the exact consumer commit plus the reviewed contract,
+SDK/example links, approved sandbox operations, and synthetic configuration. Producer and consumer pull
+candidates retain their exact source commits and separately owned scenarios; append-only evidence keeps only
+bounded sanitized request/response/log summaries, artifact checksums, coverage, cost, and authorship. It is
+review context only and never carries credentials, artifact payloads, Git authority, checks, or merge permission.
+
 Each contract also retains compare-and-swap signal mappings and append-only observation windows.
 Mappings bind an exact contract/objective version and instrumentation revision to repository-defined
 metrics, logs, traces, health checks, support reports, deployments, releases, commits, pull requests,

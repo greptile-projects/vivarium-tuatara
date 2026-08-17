@@ -1897,6 +1897,12 @@ whenever dependencies change or the web job fails before it starts.
   `/api-contracts/integrations` workspace exercises only synthetic inspected request/response examples,
   frozen quotas, and deterministic failure simulation; approval grants no repository, Git, deployment,
   environment, account, production-data, or production-endpoint authority.
+  Approved applications can create application-scoped integration work in human- or agent-owned task,
+  session, or workspace modes. Each record freezes the consumer repository commit and a credential-free
+  preload of the exact contract definition, SDK/example links, approved operations, and synthetic sandbox
+  settings. Linked producer and consumer pulls freeze their source commits and separately owned scenarios;
+  immutable results retain bounded sanitized requests, responses, logs, checksum-only artifacts, coverage,
+  costs, and authorship. Integration records add review provenance but no Git, check, workspace, or merge authority.
   Repository participants define repository, release, and environment scopes; user journeys;
   indicators and calculations; measurement windows and targets; dependencies; error budgets;
   severity responses and accountable owners; version-pinned product, performance, accessibility,
