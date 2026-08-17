@@ -121,7 +121,12 @@ func registerAPIContractMigrationRoutes(mux *http.ServeMux, catalog *repositorie
 				continue
 			}
 			entry := apicontracts.MigrationApplication{ApplicationID: app.ID, OwnerID: app.OwnerID}
-			if work, _ := contracts.ListIntegrationWork(app.ID); len(work) > 0 {
+			work, workErr := contracts.ListIntegrationWork(app.ID)
+			if workErr != nil {
+				writeAPIError(w, 500, "integration_work_unavailable", "Consumer integration work could not be read completely; migration was not created")
+				return
+			}
+			if len(work) > 0 {
 				latest := work[0]
 				for _, candidate := range work[1:] {
 					if candidate.CreatedAt.After(latest.CreatedAt) || (candidate.CreatedAt.Equal(latest.CreatedAt) && candidate.ID > latest.ID) {
