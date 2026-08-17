@@ -28,7 +28,16 @@ func TestContractMigrationReadinessRequiresAcknowledgedTestedZeroTraffic(t *test
 	if !out.Readiness.Ready || !out.Readiness.Consumers[0].Tested {
 		t.Fatalf("passing exact candidate and zero traffic should be ready: %#v", out.Readiness)
 	}
-	v.Attestations[0].IntegrationWorkID = "different-work"
+	failed := candidate
+	failed.ID = "failed-candidate"
+	failed.Evidence = []IntegrationEvidence{{Scenario: "provider", Status: "passed"}, {Scenario: "consumer", Status: "failed"}}
+	v.Attestations = []MigrationAttestation{{ApplicationID: "app", IntegrationWorkID: "work", CandidateID: failed.ID}, {ApplicationID: "app", IntegrationWorkID: "work", CandidateID: candidate.ID}}
+	work["app"][0].Candidates = []IntegrationCandidate{failed, candidate}
+	out = ProjectContractMigration(v, apps, work, observations, now)
+	if !out.Readiness.Ready || !out.Readiness.Consumers[0].Tested {
+		t.Fatal("later passing attestation did not supersede retained failed candidate evidence")
+	}
+	v.Attestations = []MigrationAttestation{{ApplicationID: "app", IntegrationWorkID: "different-work", CandidateID: "candidate"}}
 	out = ProjectContractMigration(v, apps, map[string][]IntegrationWork{"app": {{ID: "different-work", Candidates: []IntegrationCandidate{candidate}}}}, observations, now)
 	if out.Readiness.Ready || out.Readiness.Consumers[0].Tested {
 		t.Fatal("passing evidence from a different same-application work record satisfied the frozen migration binding")

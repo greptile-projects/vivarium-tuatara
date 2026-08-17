@@ -201,15 +201,18 @@ func ProjectContractMigration(v ContractMigration, apps map[string]Application, 
 		app, ok := apps[linked.ApplicationID]
 		c := MigrationConsumerReadiness{ApplicationID: linked.ApplicationID, OwnerID: linked.OwnerID, ConsumerRepositoryID: linked.ConsumerRepositoryID, AccessState: "unavailable", Blockers: []string{}}
 		c.Acknowledged = slices.ContainsFunc(v.Acknowledgements, func(x MigrationAcknowledgement) bool { return x.ApplicationID == linked.ApplicationID })
-		attest := slices.IndexFunc(v.Attestations, func(x MigrationAttestation) bool { return x.ApplicationID == linked.ApplicationID })
-		c.Attested = attest >= 0
-		if attest >= 0 && linked.IntegrationWorkID != "" && v.Attestations[attest].IntegrationWorkID == linked.IntegrationWorkID {
+		for _, attestation := range v.Attestations {
+			if attestation.ApplicationID != linked.ApplicationID || linked.IntegrationWorkID == "" || attestation.IntegrationWorkID != linked.IntegrationWorkID {
+				continue
+			}
+			c.Attested = true
 			for _, w := range work[linked.ApplicationID] {
-				if w.ID == v.Attestations[attest].IntegrationWorkID {
-					for _, candidate := range w.Candidates {
-						if candidate.ID == v.Attestations[attest].CandidateID && candidatePassing(candidate) {
-							c.Tested = true
-						}
+				if w.ID != linked.IntegrationWorkID {
+					continue
+				}
+				for _, candidate := range w.Candidates {
+					if candidate.ID == attestation.CandidateID && candidatePassing(candidate) {
+						c.Tested = true
 					}
 				}
 			}
