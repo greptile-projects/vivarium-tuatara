@@ -65,3 +65,31 @@ func TestApplicationDecisionCannotWidenCapabilities(t *testing.T) {
 		t.Fatalf("widened approval: %v", err)
 	}
 }
+
+func TestApplicationCredentialEnforcesAndResetsRequestWindow(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	app, _ := s.CreateApplication("r", "c", "u", "n", "", 1, []string{"sandbox"}, []string{"read"})
+	app, _ = s.DecideApplication(app.ID, "p", "approved", "why", []string{"read"}, now.Add(24*time.Hour))
+	_, issued, _ := s.IssueApplicationCredential(app.ID, "u", 24*time.Hour)
+	for i := 0; i < 2; i++ {
+		if _, err := s.AuthenticateApplicationRequest(app.ID, issued.Secret, 2, 3600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.AuthenticateApplicationRequest(app.ID, issued.Secret, 2, 3600); err != ErrQuotaExceeded {
+		t.Fatalf("quota not enforced: %v", err)
+	}
+	_, replacement, err := s.IssueApplicationCredential(app.ID, "u", 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AuthenticateApplicationRequest(app.ID, replacement.Secret, 2, 3600); err != ErrQuotaExceeded {
+		t.Fatalf("rotation reset application quota: %v", err)
+	}
+	now = now.Add(time.Hour)
+	if _, err := s.AuthenticateApplicationRequest(app.ID, replacement.Secret, 2, 3600); err != nil {
+		t.Fatalf("window did not reset: %v", err)
+	}
+}

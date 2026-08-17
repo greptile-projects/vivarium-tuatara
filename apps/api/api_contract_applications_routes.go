@@ -10,9 +10,10 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/apicontracts"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
 
-func registerAPIContractApplicationRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, contracts *apicontracts.Store) {
+func registerAPIContractApplicationRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, contracts *apicontracts.Store, userStore *users.Store) {
 	contractRevision := func(repo, id string, version int) (apicontracts.Revision, bool) {
 		contract, err := contracts.Get(id)
 		if err != nil || contract.RepositoryID != repo {
@@ -174,19 +175,36 @@ func registerAPIContractApplicationRoutes(mux *http.ServeMux, catalog *repositor
 			writeAPIError(w, 404, "application_not_found", "Application not found")
 			return
 		}
+		if strings.TrimSpace(in.OwnerID) != in.OwnerID {
+			writeAPIError(w, 422, "invalid_application_owner", "successor owner must be an existing human identity")
+			return
+		}
+		if _, err := userStore.Get(in.OwnerID); err != nil {
+			writeAPIError(w, 422, "invalid_application_owner", "successor owner must be an existing human identity")
+			return
+		}
 		out, err := contracts.TransferApplication(app.ID, actor.UserID, in.OwnerID)
 		writeApplication(w, out, err, 200)
 	})
 	mux.HandleFunc("POST /repositories/{id}/api-contracts/{contract_id}/applications/{application_id}/sandbox", func(w http.ResponseWriter, r *http.Request) {
 		secret := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		app, err := contracts.AuthenticateApplication(r.PathValue("application_id"), secret)
-		if err != nil || app.RepositoryID != r.PathValue("id") || app.ContractID != r.PathValue("contract_id") {
+		candidate, err := contracts.GetApplication(r.PathValue("application_id"))
+		if err != nil || candidate.RepositoryID != r.PathValue("id") || candidate.ContractID != r.PathValue("contract_id") {
 			writeAPIError(w, 401, "invalid_application_credential", "Application credential is invalid, expired, or revoked")
 			return
 		}
-		revision, found := contractRevision(app.RepositoryID, app.ContractID, app.ContractVersion)
+		revision, found := contractRevision(candidate.RepositoryID, candidate.ContractID, candidate.ContractVersion)
 		if !found {
 			writeAPIError(w, 409, "application_contract_stale", "The registered contract version is unavailable")
+			return
+		}
+		app, err := contracts.AuthenticateApplicationRequest(candidate.ID, secret, revision.Limits.Requests, revision.Limits.WindowSeconds)
+		if errors.Is(err, apicontracts.ErrQuotaExceeded) {
+			writeAPIError(w, 429, "sandbox_quota_exceeded", "The application exhausted its contract-defined sandbox request window")
+			return
+		}
+		if err != nil || app.RepositoryID != r.PathValue("id") || app.ContractID != r.PathValue("contract_id") {
+			writeAPIError(w, 401, "invalid_application_credential", "Application credential is invalid, expired, or revoked")
 			return
 		}
 		var in struct {

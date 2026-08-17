@@ -39,8 +39,8 @@ export function APIIntegrationSandbox({
   const [contracts, setContracts] = useState<Contract[]>([]),
     [contractID, setContractID] = useState(""),
     [apps, setApps] = useState<App[]>([]),
-    [secret, setSecret] = useState(""),
-    [inspection, setInspection] = useState<unknown>(),
+    [issued, setIssued] = useState<{ applicationID: string; secret: string }>(),
+    [inspections, setInspections] = useState<Record<string, unknown>>({}),
     [error, setError] = useState("");
   const contract = contracts.find((x) => x.id === contractID),
     revision = contract?.revisions.at(-1);
@@ -128,14 +128,16 @@ export function APIIntegrationSandbox({
           { method: "POST", body: JSON.stringify({ lifetime_hours: 24 }) },
           token,
         );
-        setSecret(out.credential.secret);
+        setIssued({ applicationID: app.id, secret: out.credential.secret });
       } else {
         await api(
           `/repositories/${repositoryID}/api-contracts/${contractID}/applications/${app.id}/${action}`,
           { method: "POST", body: "{}" },
           token,
         );
-        setSecret("");
+        setIssued((current) =>
+          current?.applicationID === app.id ? undefined : current,
+        );
       }
       await load();
     } catch (x) {
@@ -150,7 +152,7 @@ export function APIIntegrationSandbox({
         {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${secret}`,
+            Authorization: `Bearer ${issued?.applicationID === app.id ? issued.secret : ""}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
@@ -160,7 +162,8 @@ export function APIIntegrationSandbox({
           }),
         },
       );
-    setInspection(await response.json());
+    const body: unknown = await response.json();
+    setInspections((current) => ({ ...current, [app.id]: body }));
   }
   return (
     <main id="main-content" className="space-y-6">
@@ -313,33 +316,35 @@ export function APIIntegrationSandbox({
               </>
             )}
           </div>
-          {secret && app.status === "approved" && app.owner_id === user?.id && (
-            <div className="mt-4 rounded-lg bg-[var(--surface-soft)] p-3">
-              <strong className="text-xs">
-                Shown once — store outside source control
-              </strong>
-              <code className="block break-all text-xs">{secret}</code>
-              <form onSubmit={(e) => run(e, app)} className="mt-3 flex gap-2">
-                <select name="operation" className={field}>
-                  {app.approved_capabilities.map((x) => (
-                    <option key={x}>{x}</option>
-                  ))}
-                </select>
-                <select name="failure" className={field}>
-                  <option value="">Success</option>
-                  <option value="rate_limit">Rate limit</option>
-                  <option value="timeout">Timeout</option>
-                  <option value="server_error">Server error</option>
-                </select>
-                <Button>Send synthetic request</Button>
-              </form>
-              {inspection !== undefined && (
-                <pre className="mt-3 overflow-auto text-xs">
-                  {JSON.stringify(inspection, null, 2)}
-                </pre>
-              )}
-            </div>
-          )}
+          {issued?.applicationID === app.id &&
+            app.status === "approved" &&
+            app.owner_id === user?.id && (
+              <div className="mt-4 rounded-lg bg-[var(--surface-soft)] p-3">
+                <strong className="text-xs">
+                  Shown once — store outside source control
+                </strong>
+                <code className="block break-all text-xs">{issued.secret}</code>
+                <form onSubmit={(e) => run(e, app)} className="mt-3 flex gap-2">
+                  <select name="operation" className={field}>
+                    {app.approved_capabilities.map((x) => (
+                      <option key={x}>{x}</option>
+                    ))}
+                  </select>
+                  <select name="failure" className={field}>
+                    <option value="">Success</option>
+                    <option value="rate_limit">Rate limit</option>
+                    <option value="timeout">Timeout</option>
+                    <option value="server_error">Server error</option>
+                  </select>
+                  <Button>Send synthetic request</Button>
+                </form>
+                {inspections[app.id] !== undefined && (
+                  <pre className="mt-3 overflow-auto text-xs">
+                    {JSON.stringify(inspections[app.id], null, 2)}
+                  </pre>
+                )}
+              </div>
+            )}
           <details className="mt-3 text-xs">
             <summary>Attributable history and recovery</summary>
             {app.events.map((x, i) => (

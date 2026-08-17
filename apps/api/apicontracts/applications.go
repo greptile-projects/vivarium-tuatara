@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -28,25 +29,27 @@ type ApplicationCredential struct {
 	Hash       string     `json:"hash,omitempty"`
 }
 type Application struct {
-	ID                    string                  `json:"id"`
-	RepositoryID          string                  `json:"repository_id"`
-	ContractID            string                  `json:"contract_id"`
-	ContractVersion       int                     `json:"contract_version"`
-	OwnerID               string                  `json:"owner_id"`
-	Name                  string                  `json:"name"`
-	ProjectURL            string                  `json:"project_url"`
-	Environments          []string                `json:"environments"`
-	RequestedCapabilities []string                `json:"requested_capabilities"`
-	ApprovedCapabilities  []string                `json:"approved_capabilities"`
-	Status                string                  `json:"status"`
-	DecisionReason        string                  `json:"decision_reason,omitempty"`
-	DecidedBy             string                  `json:"decided_by,omitempty"`
-	DecidedAt             *time.Time              `json:"decided_at,omitempty"`
-	ApprovalExpiresAt     *time.Time              `json:"approval_expires_at,omitempty"`
-	Credentials           []ApplicationCredential `json:"credentials"`
-	Events                []ApplicationEvent      `json:"events"`
-	CreatedAt             time.Time               `json:"created_at"`
-	UpdatedAt             time.Time               `json:"updated_at"`
+	ID                     string                  `json:"id"`
+	RepositoryID           string                  `json:"repository_id"`
+	ContractID             string                  `json:"contract_id"`
+	ContractVersion        int                     `json:"contract_version"`
+	OwnerID                string                  `json:"owner_id"`
+	Name                   string                  `json:"name"`
+	ProjectURL             string                  `json:"project_url"`
+	Environments           []string                `json:"environments"`
+	RequestedCapabilities  []string                `json:"requested_capabilities"`
+	ApprovedCapabilities   []string                `json:"approved_capabilities"`
+	Status                 string                  `json:"status"`
+	DecisionReason         string                  `json:"decision_reason,omitempty"`
+	DecidedBy              string                  `json:"decided_by,omitempty"`
+	DecidedAt              *time.Time              `json:"decided_at,omitempty"`
+	ApprovalExpiresAt      *time.Time              `json:"approval_expires_at,omitempty"`
+	Credentials            []ApplicationCredential `json:"credentials"`
+	Events                 []ApplicationEvent      `json:"events"`
+	CreatedAt              time.Time               `json:"created_at"`
+	UpdatedAt              time.Time               `json:"updated_at"`
+	SandboxWindowStartedAt *time.Time              `json:"sandbox_window_started_at,omitempty"`
+	SandboxRequestCount    int                     `json:"sandbox_request_count,omitempty"`
 }
 type IssuedApplicationCredential struct {
 	ApplicationCredential
@@ -217,6 +220,16 @@ func (s *Store) TransferApplication(id, owner, successor string) (Application, e
 	return projectApplication(out), err
 }
 func (s *Store) AuthenticateApplication(id, secret string) (Application, error) {
+	return s.AuthenticateApplicationRequest(id, secret, 0, 0)
+}
+
+var ErrQuotaExceeded = errors.New("application sandbox quota exceeded")
+
+// AuthenticateApplicationRequest authenticates and atomically consumes one
+// request from the application's contract-defined fixed window. Credential
+// rotation therefore cannot reset or bypass the application quota. A zero limit
+// retains the authentication-only behavior used by storage callers.
+func (s *Store) AuthenticateApplicationRequest(id, secret string, limit, windowSeconds int) (Application, error) {
 	var out Application
 	err := s.lock(func() error {
 		v, e := s.readApplication(id)
@@ -232,6 +245,19 @@ func (s *Store) AuthenticateApplication(id, secret string) (Application, error) 
 		for i := range v.Credentials {
 			c := &v.Credentials[i]
 			if c.Hash == hash && c.RevokedAt == nil && c.ExpiresAt.After(now) {
+				if limit > 0 {
+					if windowSeconds <= 0 {
+						return ErrInvalid
+					}
+					if v.SandboxWindowStartedAt == nil || !now.Before(v.SandboxWindowStartedAt.Add(time.Duration(windowSeconds)*time.Second)) {
+						v.SandboxWindowStartedAt = &now
+						v.SandboxRequestCount = 0
+					}
+					if v.SandboxRequestCount >= limit {
+						return ErrQuotaExceeded
+					}
+					v.SandboxRequestCount++
+				}
 				c.LastUsedAt = &now
 				v.UpdatedAt = now
 				out = v
