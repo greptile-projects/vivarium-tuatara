@@ -2749,7 +2749,8 @@ The immutable handoff keeps the user goal, affected version, permitted reproduct
 criteria, while attachments and contact details remain inside the support audience. The support history links
 back to the governed resource so the asker can follow its pulls, checks, previews, releases, and documentation
 publication through existing project surfaces; escalation itself grants no repository, agent, review, or merge
-authority.
+authority. A pending escalation identity is persisted before publication and reused by issue, documentation-task,
+and proposal creation, so a failed final thread write can reconcile the same governed resource on retry.
 
 Successful proof can be published from `/support` as reusable project guidance. A solution freezes its exact
 support question, answer revision, passing attempt, tested instructions, applicable versions, limitations,

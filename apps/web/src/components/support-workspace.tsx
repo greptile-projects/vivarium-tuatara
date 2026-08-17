@@ -660,13 +660,17 @@ export function SupportWorkspace() {
               <strong className="text-sm">Governed improvement progress</strong>
               {selected.escalations.map((item) => (
                 <p key={item.id} className="mt-2 text-sm">
-                  <Link
-                    href={item.resource_url}
-                    className="font-semibold text-[var(--brand)]"
-                  >
-                    {item.resource_kind.replaceAll("_", " ")}
-                  </Link>{" "}
-                  · {item.classification.replaceAll("_", " ")} ·{" "}
+                  {item.status === "published" ? (
+                    <Link
+                      href={item.resource_url}
+                      className="font-semibold text-[var(--brand)]"
+                    >
+                      {item.resource_kind.replaceAll("_", " ")}
+                    </Link>
+                  ) : (
+                    <strong>{item.resource_kind.replaceAll("_", " ")}</strong>
+                  )}{" "}
+                  · {item.status} · {item.classification.replaceAll("_", " ")} ·{" "}
                   {item.affected_version || "version not supplied"}
                 </p>
               ))}

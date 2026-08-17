@@ -707,6 +707,7 @@ export type SupportThread = {
     reproduction: string[];
     created_by: string;
     created_at: string;
+    status: "pending" | "published";
   }[];
   version: number;
   created_at: string;

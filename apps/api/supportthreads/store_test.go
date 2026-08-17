@@ -74,6 +74,45 @@ func TestResolveHoldsThreadMutationBoundaryAcrossPublication(t *testing.T) {
 	}
 }
 
+func TestEscalationRetryReconcilesDurablePendingIdentity(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, err := s.Create(Thread{RepositoryID: "repo", AuthorID: "maintainer", Title: "Gap", Body: "Details", Target: Target{Kind: "package", Label: "sdk", Version: "3.2"}, Goal: "Make retries safe", AttemptedSteps: []string{"retry"}, Urgency: "high", Audience: "maintainers", ContactPreferences: ContactPreferences{ReplyInThread: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoDir := filepath.Join(s.root, "repo")
+	identities := map[string]bool{}
+	first := true
+	publish := func(_ Thread, escalationID string) (string, string, error) {
+		identities[escalationID] = true
+		if first {
+			first = false
+			if chmodErr := os.Chmod(repoDir, 0500); chmodErr != nil {
+				return "", "", chmodErr
+			}
+		}
+		return escalationID, "/issues/" + escalationID, nil
+	}
+	_, err = s.Escalate("repo", v.ID, "maintainer", v.Version, "defect", "issue", []string{"retry once"}, publish)
+	if chmodErr := os.Chmod(repoDir, 0700); chmodErr != nil {
+		t.Fatal(chmodErr)
+	}
+	if err == nil {
+		t.Fatal("forced finalization failure succeeded")
+	}
+	pending, readErr := s.Get("repo", v.ID)
+	if readErr != nil || pending.Version != v.Version+1 || len(pending.Escalations) != 1 || pending.Escalations[0].Status != "pending" {
+		t.Fatalf("pending = %#v, %v", pending, readErr)
+	}
+	completed, err := s.Escalate("repo", v.ID, "maintainer", v.Version, "defect", "issue", []string{"retry once"}, publish)
+	if err != nil || completed.Version != v.Version+2 || completed.Escalations[0].Status != "published" || completed.Escalations[0].ResourceID != pending.Escalations[0].ID {
+		t.Fatalf("completed = %#v, %v", completed, err)
+	}
+	if len(identities) != 1 {
+		t.Fatalf("published identities = %#v", identities)
+	}
+}
+
 func TestResolveCompensatesPublicationWhenThreadCloseCannotPersist(t *testing.T) {
 	s, _ := New(t.TempDir())
 	v, err := s.Create(Thread{RepositoryID: "repo", AuthorID: "asker", Title: "Help", Body: "Details", Target: Target{Kind: "repository", Label: "repo"}, Urgency: "normal", Audience: "public", ContactPreferences: ContactPreferences{ReplyInThread: true}})

@@ -103,4 +103,13 @@ func TestCollaboratorEscalatesRestrictedSupportIntoOrderedGovernedWork(t *testin
 	if strings.Contains(proposal.Body, "sensitive") || strings.Contains(proposal.Body, "private.log") {
 		t.Fatalf("restricted attachment leaked into proposal: %s", proposal.Body)
 	}
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/support-threads", `{"title":"Default plan","body":"The answer is incomplete.","target":{"kind":"package","label":"sdk","version":"3.2"},"environment":{"runtime":"Go 1.26"},"goal":"Document the supported path.","attempted_steps":["read the guide"],"urgency":"normal","audience":"maintainers","contact_preferences":{"reply_in_thread":true}}`, owner.Credential.Token, http.StatusCreated)
+	var defaultPlan supportthreads.Thread
+	decodeResponse(t, response, &defaultPlan)
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/support-threads/"+defaultPlan.ID+"/escalations", `{"classification":"documentation_gap","resource_kind":"ordered_work","expected_version":1,"acceptance_criteria":["the supported path is documented"],"tasks":[]}`, owner.Credential.Token, http.StatusCreated)
+	decodeResponse(t, response, &defaultPlan)
+	defaultTasks, err := proposalStore.ListTasks(repo.ID, defaultPlan.Escalations[0].ResourceID)
+	if err != nil || len(defaultTasks) != 1 || defaultTasks[0].Assignment == nil || defaultTasks[0].Assignment.AssigneeType != "human" {
+		t.Fatalf("default ordered work = %#v, %v", defaultTasks, err)
+	}
 }

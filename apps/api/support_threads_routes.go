@@ -220,7 +220,7 @@ func registerSupportThreadRoutes(mux *http.ServeMux, git *storage.Store, repos *
 			writeAPIError(w, 409, "support_escalation_base_missing", "repository default branch is required before governed work can be created")
 			return
 		}
-		updated, err := store.Escalate(repo.ID, r.PathValue("thread_id"), a.UserID, in.ExpectedVersion, in.Classification, in.ResourceKind, in.AcceptanceCriteria, func(thread supportthreads.Thread) (string, string, error) {
+		updated, err := store.Escalate(repo.ID, r.PathValue("thread_id"), a.UserID, in.ExpectedVersion, in.Classification, in.ResourceKind, in.AcceptanceCriteria, func(thread supportthreads.Thread, escalationID string) (string, string, error) {
 			criteria := strings.Join(in.AcceptanceCriteria, "\n- ")
 			context := fmt.Sprintf("Escalated from support thread %s.\n\nUser need: %s\n\nAffected version: %s\n\nPermitted reproduction:\n- %s\n\nAcceptance criteria:\n- %s", thread.ID, thread.Goal, thread.Target.Version, strings.Join(thread.AttemptedSteps, "\n- "), criteria)
 			switch in.ResourceKind {
@@ -232,14 +232,17 @@ func registerSupportThreadRoutes(mux *http.ServeMux, git *storage.Store, repos *
 				if thread.Audience != "public" {
 					visibility = "repository"
 				}
-				created, createErr := issueStore.Create(issues.Issue{RepositoryID: repo.ID, ReporterID: a.UserID, Title: thread.Title, ExpectedBehavior: thread.Goal, ObservedBehavior: thread.Body, Severity: mapUrgency(thread.Urgency), Environment: supportEnvironment(thread), ReproductionSteps: supportSteps(thread), Visibility: visibility, AffectedVersion: thread.Target.Version})
+				created, createErr := issueStore.CreateEscalated(issues.Issue{RepositoryID: repo.ID, ReporterID: a.UserID, Title: thread.Title, ExpectedBehavior: thread.Goal, ObservedBehavior: thread.Body, Severity: mapUrgency(thread.Urgency), Environment: supportEnvironment(thread), ReproductionSteps: supportSteps(thread), Visibility: visibility, AffectedVersion: thread.Target.Version}, escalationID)
 				return created.ID, "/repositories/" + repo.ID + "/issues/" + created.ID, createErr
 			case "documentation_task":
 				if documentationStore == nil {
 					return "", "", errors.New("documentation store unavailable")
 				}
 				path := strings.TrimSpace(in.DocumentationPath)
-				created, createErr := documentationStore.CreateTask(docscollections.Task{RepositoryID: repo.ID, Title: thread.Title, Path: path, Branch: "docs/support-" + thread.ID[:8], BaseRevision: base.Target, Source: docscollections.TaskSource{Kind: "support_thread", ResourceID: thread.ID, Revision: base.Target, Label: context}, CreatedBy: a.UserID})
+				if existing, getErr := documentationStore.GetTask(repo.ID, escalationID); getErr == nil {
+					return existing.ID, "/repositories/" + repo.ID + "/documentation/tasks/" + existing.ID, nil
+				}
+				created, createErr := documentationStore.CreateTask(docscollections.Task{ID: escalationID, RepositoryID: repo.ID, Title: thread.Title, Path: path, Branch: "docs/support-" + thread.ID[:8], BaseRevision: base.Target, Source: docscollections.TaskSource{Kind: "support_thread", ResourceID: thread.ID, Revision: base.Target, Label: context}, CreatedBy: a.UserID})
 				return created.ID, "/repositories/" + repo.ID + "/documentation/tasks/" + created.ID, createErr
 			case "proposal", "ordered_work":
 				if proposalStore == nil {
@@ -249,7 +252,7 @@ func registerSupportThreadRoutes(mux *http.ServeMux, git *storage.Store, repos *
 				for i, task := range in.Tasks {
 					tasks = append(tasks, proposals.ImplementationTaskInput{Title: task.Title, Outcome: task.Outcome, Risk: task.Risk, VerificationPlan: task.VerificationPlan, AssigneeType: task.AssigneeType, AssigneeID: task.AssigneeID, DependsOnPrevious: i > 0})
 				}
-				if in.ResourceKind == "proposal" && len(tasks) == 0 {
+				if len(tasks) == 0 {
 					tasks = append(tasks, proposals.ImplementationTaskInput{Title: "Plan " + thread.Title, Outcome: strings.Join(in.AcceptanceCriteria, "; "), VerificationPlan: strings.Join(in.AcceptanceCriteria, "\n"), AssigneeType: "human", AssigneeID: a.UserID})
 				}
 				origin := proposals.ReasoningOrigin{SupportThreadID: thread.ID, SupportThreadVersion: thread.Version, Revision: base.Target, SelectedItemIDs: []string{thread.ID}, Items: []proposals.ReasoningItem{{ID: thread.ID, Kind: "support_need", Summary: thread.Goal, Status: "unresolved"}}, AnalysisStatus: in.Classification}
