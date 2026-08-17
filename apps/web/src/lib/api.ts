@@ -576,6 +576,17 @@ export type Repository = {
   created_at: string;
   upstream_repository_id?: string;
 };
+export type SupportThread = {
+  id: string; repository_id: string; author_id: string; title: string; body: string;
+  target: { kind: "repository"|"package"|"release"|"api"|"documented_journey"|"error"; resource_id?: string; label: string; version?: string };
+  environment: { operating_system?: string; runtime?: string; dependencies?: string[]; deployment?: string; details?: string };
+  goal?: string; attempted_steps: string[]; urgency: "low"|"normal"|"high"|"urgent"; audience: "public"|"maintainers";
+  status: "open"|"needs_context"|"answered"|"closed"; contact_preferences: { reply_in_thread: boolean; email?: string; allow_maintainer_contact: boolean };
+  attachments: { id: string; kind: "log"|"configuration"|"sample_code"; name: string; media_type: string; size: number; data: string; created_at: string }[];
+  history: { id: string; kind: string; actor_id: string; from?: string; to?: string; message?: string; created_at: string }[];
+  diagnostics: { kind: string; message: string }[]; related?: { kind: "support_answer"|"issue"; id: string; title: string; status: string; score: number }[];
+  version: number; created_at: string; updated_at: string;
+};
 export type TechnicalDecision = {
   id: string;
   repository_id: string;

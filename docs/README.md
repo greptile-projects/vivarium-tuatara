@@ -2706,3 +2706,21 @@ authorized reader may challenge a synthesis, and a feedback reporter may detach 
 citation where the feedback policy permits, while the original source and earlier synthesis versions
 remain unchanged. Read-only repository agents may create cited syntheses, but cannot revise or
 correct them.
+
+## Contextual developer support
+
+The `/support` workspace keeps a developer's question beside the exact project
+target, version, environment, goal, attempted steps, urgency, audience, contact
+preferences, and permitted logs, configuration, or sample code. A question can
+target a repository, package, release, API, documented journey, or error.
+Server-derived diagnostics call out missing version, environment, goal, and
+attempts instead of making maintainers infer them.
+
+Public threads are available to authenticated readers of public repositories;
+maintainer-audience threads remain limited to the author and current repository
+participants. Contact email is never projected to an ordinary public reader.
+Related answered threads and issues are ranked only from readable records and
+return identity/title/status metadata, not candidate attachments or private
+discussion. Status changes are compare-and-swap and retain actor-stamped
+history. Records default beneath `$SUPPORT_THREAD_STORAGE_ROOT`
+(`support-threads`) and grant no repository authority.

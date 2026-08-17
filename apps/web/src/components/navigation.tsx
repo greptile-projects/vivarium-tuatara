@@ -18,6 +18,7 @@ const navigation = [
   { label: "Delivery teams", href: "/delivery-teams", icon: Icons.Spark },
   { label: "Pull requests", href: "/pulls", icon: Icons.GitPull },
   { label: "Issues", href: "/issues", icon: Icons.Activity },
+  { label: "Support", href: "/support", icon: Icons.Spark },
   { label: "Incidents", href: "/incidents", icon: Icons.Activity },
   { label: "Security", href: "/security", icon: Icons.Code },
   { label: "Inbox", href: "/inbox", icon: Icons.Bell },

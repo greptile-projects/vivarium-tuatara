@@ -3449,3 +3449,24 @@ mismatch, broken formatting, or missing-content evidence. Participants validate 
 `POST .../localization-findings/{finding_id}/decision`; validated findings may name a human or agent
 owner, linked proposal/task URL, and acceptance criteria. `GET /repositories/{id}/localization-delivery`
 returns the repository-readable policy, disposition, publication, finding, and repair projection.
+
+## Developer support threads
+
+`GET` and `POST /repositories/{id}/support-threads` list readable questions and
+open a contextual support thread. Creation accepts `title`, `body`, a `target`
+whose kind is `repository`, `package`, `release`, `api`, `documented_journey`,
+or `error`, structured `environment`, `goal`, ordered `attempted_steps`,
+`urgency`, `audience`, `contact_preferences`, and attachments. Attachments are
+restricted to `log`, `configuration`, or `sample_code`, base64 encoded, and at
+most 1 MiB each with at most 10 attachments per thread. At least an in-thread reply or maintainer-contact route is
+required.
+
+`GET /repositories/{id}/support-threads/{thread_id}` returns the thread with
+server-derived missing-context diagnostics and up to five readable related
+answered threads or issues. Related projections contain no attachments or
+discussion from the candidates. `PATCH` on that path requires
+`expected_version`, `status`, and an optional history message. Current
+repository participants can set `open`, `needs_context`, `answered`, or
+`closed`; authors can close or reopen their own question. Contact email is
+omitted for readers other than the author or a current repository participant.
+Audience and support state grant no repository access.
