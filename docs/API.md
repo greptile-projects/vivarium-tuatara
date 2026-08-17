@@ -33,6 +33,15 @@
   synthetic status/code and never a payload; handoffs grant no Git, review, task, or merge authority.
   A `client` handoff must name the exact affected `integration_work_id`; the server resolves its frozen
   consumer repository instead of inferring one from other application work. Provider-side findings reject it.
+- `POST|GET /repositories/{id}/api-contracts/{contract_id}/migrations` binds published predecessor and
+  candidate revisions to an existing provider evolution plan, classifies compatibility changes, discovers
+  exact-version applications and their permitted owners/work repositories, and defines ordered evidence and
+  traffic thresholds. Producer and affected-consumer projections remain permission-filtered.
+- `POST .../migrations/{migration_id}/consumer-actions` records compare-and-swap acknowledgement, an exact
+  passing integration candidate attestation, or a reasoned exception expiring within 90 days. `POST
+  .../stages` advances policy stages, but retirement fails while any consumer is unacknowledged, lacks a
+  passing candidate or active exception, has unavailable access, or exceeds the selected old-version traffic
+  threshold. These records coordinate existing evolution and integration work without granting authority.
 
 ## Approved-agent evaluation
 

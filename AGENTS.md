@@ -1910,6 +1910,13 @@ whenever dependencies change or the web job fails before it starts.
   sandbox reproductions, and human-only immutable issue/proposal handoffs without granting project authority.
   Client handoffs name and retain the exact affected integration-work record; its frozen consumer repository
   determines the governed-work boundary, while provider classifications reject consumer-work associations.
+  Contract migrations beneath the contract bind published predecessor/candidate revisions to an existing
+  interface evolution plan and discover exact-version applications plus their permitted owners and existing
+  consumer work. Ordered stages derive readiness from current application access, exact all-scenario passing
+  candidate attestations, bounded (at most 90-day) exceptions, acknowledgement, and latest old-version traffic.
+  Revoked access, unresponsive owners, failed or missing tests, expired exceptions, and traffic above the selected
+  stage threshold block retirement; migration records grant no Git, task, agent, fork, release, deployment, or
+  evolution authority. Records share `$API_CONTRACT_STORAGE_ROOT` beneath `contract-migrations`.
   Repository participants define repository, release, and environment scopes; user journeys;
   indicators and calculations; measurement windows and targets; dependencies; error budgets;
   severity responses and accountable owners; version-pinned product, performance, accessibility,

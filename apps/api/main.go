@@ -1039,6 +1039,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	if authStore != nil && userStore != nil && repositoryCatalog != nil && apiContractStore != nil && pullRequestStore != nil && releaseStore != nil {
 		registerAPIContractRoutes(mux, store, repositoryCatalog, authStore, apiContractStore, pullRequestStore, releaseStore)
 		registerAPIContractApplicationRoutes(mux, store, repositoryCatalog, authStore, apiContractStore, userStore, pullRequestStore, releaseStore, issueStore, proposalStore)
+		if relationshipStore != nil {
+			registerAPIContractMigrationRoutes(mux, repositoryCatalog, authStore, apiContractStore, relationshipStore)
+		}
 	}
 	if authStore != nil && repositoryCatalog != nil && recoveryCommitmentStore != nil && protectionPlanStore != nil && store != nil {
 		registerProtectionPlanRoutes(mux, store, repositoryCatalog, authStore, protectionPlanStore, recoveryCommitmentStore, deploymentStore)
