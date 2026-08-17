@@ -14,6 +14,11 @@ The supported consumer contract, including authentication, stable error
 shapes, validation, and collection pagination, is documented in [API.md](API.md).
 Consumers should use that HTTP boundary rather than reading storage roots.
 
+Support guidance can be proven in ordinary revision-pinned development workspaces. Immutable attempts
+bind an exact cited answer revision to sanitized thread inputs, declared environment, commands and
+outputs, artifacts, cost, and result; fresh-workspace reruns preserve the original record and reads expose
+stale provenance without retaining credentials or private machine state.
+
 ## Current approved-agent trust
 
 Approved-agent participation retains privacy-bounded delivered outcomes, cost and responsiveness,

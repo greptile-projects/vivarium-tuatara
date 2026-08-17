@@ -3488,3 +3488,31 @@ to comment, request clarification, endorse, or challenge the exact current revis
 perform those review actions. The repository owner alone uses `PATCH .../{answer_id}` to mark the
 current guidance `verified`, `needs_context`, or `retired`; verification grants no repository or
 software authority. Records default beneath `$KNOWLEDGE_ANSWER_STORAGE_ROOT` (`knowledge-answers`).
+
+## Support answer verification
+
+An authorized repository participant launches the ordinary bounded workspace with `POST /workspaces`
+using source kind `support_verification` and exact `support_thread_id`, `answer_id`, and
+`answer_revision_id`. The thread must state a software version, the answer revision must cite that thread,
+and the chosen commit's `.vivarium/workspace.json` remains the source of the isolated image, tools,
+dependencies, setup, and resource policy. Selected thread attachments are staged only by a caller that
+explicitly declares them sanitized; no platform or repository credentials enter workspace commands.
+The attempt endpoint revalidates that the workspace source names that exact thread, answer, and revision.
+Private workspaces cannot publish attempts because their raw command evidence would cross into the
+repository-readable verification audience; launch a repository-shared sanitized verification workspace.
+
+`GET|POST /repositories/{id}/support-threads/{thread_id}/verification-attempts` and the corresponding
+`GET .../{attempt_id}` retain immutable proof from that workspace. Creation binds the exact answer body,
+software version, declared environment, sanitized-input digest, commit and workspace-definition digest,
+and exact retained command outcomes. It records bounded command text, sanitized logs/output, up to ten
+explicitly sanitized 1 MiB artifacts with checksums, server-derived compute seconds, declared cost units,
+notes, actor, and a `passed`, `failed`, or `inconclusive` result. Credential-shaped instructions, inputs,
+outputs, notes, and artifacts are rejected rather than copied into reusable evidence.
+
+A participant reruns proof in a fresh workspace from the same support source and supplies `rerun_of` when
+publishing the new attempt. Reruns must preserve the exact answer revision and sanitized-input digest;
+the earlier evidence is never overwritten. Reads derive staleness when the answer instructions, stated
+software version, declared environment/dependencies, workspace revision, or workspace definition no
+longer matches its frozen provenance. Records default beneath `$SUPPORT_VERIFICATION_STORAGE_ROOT`
+(`support-verifications`) and grant no repository, workspace, credential, review, or answer-verification
+authority.

@@ -61,6 +61,14 @@ whenever dependencies change or the web job fails before it starts.
   to the author and current repository participants, and related answers/issues
   expose metadata but never candidate evidence. Records default beneath
   `$SUPPORT_THREAD_STORAGE_ROOT` (`support-threads`).
+  Exact cited answer revisions can be exercised through ordinary bounded workspaces with source kind
+  `support_verification`; immutable attempts live beneath `$SUPPORT_VERIFICATION_STORAGE_ROOT`
+  (`support-verifications`). Attempts freeze the stated version, declared environment, sanitized-input,
+  instruction, commit, and workspace-definition digests plus exact command outcomes, bounded sanitized
+  artifacts, cost, and result. Reruns require a fresh workspace with the same answer revision and inputs;
+  reads derive stale provenance, and credential-shaped reusable evidence is rejected. Attempt creation
+  revalidates the workspace's exact support source; private workspaces cannot publish repository-readable
+  verification output.
 
 - **Project knowledge** — `/repositories/{id}/knowledge` retains proposed and superseding
   guidance separately from conversational explanations and support questions. Every claim cites
