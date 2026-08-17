@@ -1510,6 +1510,15 @@ export type AgentMatchSet = {
     comparable_outcomes: { id: string; kind: string; status: string; summary: string; goal?: string; recorded_at: string }[];
   }[];
 };
+export type AgentEvaluationSuite = {
+  id: string; organization_id: string; repository_id: string; name: string;
+  revisions: { version: number; repository_revision: string; scenarios: { id: string; title: string; sanitized_prompt: string; expected_outcomes: string[]; checks: { name: string; kind: string; expected?: string }[] }[]; budget: { max_cost: number; max_latency_ms: number; max_tool_actions: number }; prohibited_actions: string[]; human_review_criteria: string[]; change_summary: string; created_by: string; created_at: string }[];
+};
+export type AgentEvaluationRun = {
+  id: string; suite_id: string; suite_version: number; repository_revision: string; agent_id: string; agent_profile_version: number; trial_label: "initial" | "repeated" | "operator_supplied"; input_digest: string;
+  outputs: Record<string,string>; tool_actions: { tool: string; action: string; input_summary: string; output_summary: string; duration_ms: number; failed: boolean }[]; artifacts: { name: string; sha256: string; size: number; summary: string }[]; cost: number; latency_ms: number; failure?: string;
+  authority: { publish: false; secrets: false; merge: false; environments: false; network: false }; check_results: { scenario_id: string; name: string; kind: string; passed: boolean; hidden: boolean; summary: string }[]; correctness_passed: boolean; policy_passed: boolean; budget_passed: boolean; contaminated: boolean; contamination_reasons: string[]; reproducible: boolean; review_status: string; created_at: string;
+};
 export type OrganizationEvent = {
   id: string;
   action: string;

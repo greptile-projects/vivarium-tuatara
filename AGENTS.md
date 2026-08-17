@@ -1937,6 +1937,19 @@ whenever dependencies change or the web job fails before it starts.
   descends from the frozen base; missing, replaced, obsolete, unfinished, or unrelated governed work
   fails closed.
 
+  Approved-agent evaluation suites beneath `$AGENT_EVALUATION_STORAGE_ROOT` (default
+  `agent-evaluations`) freeze sanitized representative scenarios, expected outcomes, public and
+  protected checks, budgets, prohibited actions, and human-review criteria to an exact repository
+  commit. Trial evidence binds an exact published agent profile and retains bounded outputs, tool
+  actions, digest-addressed artifacts, costs, latency, failures, derived checks, contamination,
+  reproducibility, and human decisions. Protected check definitions never appear in suite or run
+  projections. Ordinary member projections derive aggregates only from public criteria and omit
+  protected contamination state; organization-owner evaluators alone receive protected-derived
+  aggregate status or decide a run, and still receive no protected definitions or result rows.
+  Every evaluation authority manifest disables publish, secret, merge, environment,
+  and network access; a suite or favorable decision grants no organization or repository authority.
+  Repeated and operator-supplied trials remain explicitly labeled.
+
   Update it when you change how the apps fit together, not for every change.
 
 ## LADDER.md

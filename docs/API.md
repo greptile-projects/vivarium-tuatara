@@ -1,5 +1,26 @@
 # HTTP API contract
 
+## Approved-agent evaluation
+
+- `POST|PUT|GET /organizations/{id}/agent-evaluation-suites` lets organization collaborators
+  publish compare-and-swap suite revisions bound to an exact commit in an organization repository.
+  Each revision retains sanitized representative prompts, expected outcomes, public correctness and
+  policy criteria, budgets, prohibited actions, and human-review criteria. Protected checks are
+  persisted privately and public projections reveal only redacted result rows.
+- `POST /organizations/{id}/agent-evaluation-suites/{suite_id}/runs` records an exact agent profile
+  version in an isolated authority boundary with publish, secret, merge, environment, and network
+  access all disabled. The server derives correctness, policy, budget, contamination, and
+  reproducibility state from bounded outputs, tool actions, digest-addressed artifacts, cost,
+  latency, and failure evidence. Repeated and operator-supplied trials are labeled explicitly.
+- `GET /organizations/{id}/agent-evaluation-runs` returns retained revision-exact evidence, while
+  `POST /organizations/{id}/agent-evaluation-runs/{run_id}/decisions` appends a human evaluator's
+  approved, rejected, or needs-work decision. Ordinary member projections recompute correctness and
+  policy solely from public criteria and omit protected-derived contamination state. Organization-owner
+  evaluators receive protected-derived aggregate status but never protected definitions or result rows;
+  only those evaluators may decide a run. Suites, runs, and decisions grant no agent access or
+  repository authority. Records default beneath `$AGENT_EVALUATION_STORAGE_ROOT`
+  (`agent-evaluations`).
+
 ## Runtime privacy checks
 
 - `POST|GET /repositories/{id}/privacy-check-policies` lets repository owners define and readers
