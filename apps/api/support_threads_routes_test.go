@@ -9,7 +9,9 @@ import (
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/docscollections"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportthreads"
@@ -58,5 +60,47 @@ func TestPublicSupportQuestionRetainsContextAndPrivateSuggestions(t *testing.T) 
 	decodeResponse(t, response, &thread)
 	if thread.Status != "answered" || len(thread.History) != 2 {
 		t.Fatalf("answered = %#v", thread)
+	}
+}
+
+func TestCollaboratorEscalatesRestrictedSupportIntoOrderedGovernedWork(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	supportStore, _ := supportthreads.New(t.TempDir())
+	issueStore, _ := issues.New(t.TempDir())
+	proposalStore, _ := proposals.New(t.TempDir())
+	documentationStore, _ := docscollections.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, proposalStore, nil, nil, nil, nil, issueStore, supportStore, documentationStore))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "support-escalation-owner")
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"sdk"}`, owner.Credential.Token, http.StatusCreated)
+	var repo repositories.Repository
+	decodeResponse(t, response, &repo)
+	bare, _ := gitStore.Open(repo.ID)
+	base := writeCommit(t, bare, 1700000000, "support escalation base")
+	if err := bare.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)}); err != nil {
+		t.Fatal(err)
+	}
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/support-threads", `{"title":"SDK retries lose uploads","body":"A private customer identifier is present only in the attached log.","target":{"kind":"package","label":"sdk","version":"3.2"},"environment":{"runtime":"Go 1.26"},"goal":"Retries preserve one upload.","attempted_steps":["run the retry sample","observe two uploads"],"urgency":"high","audience":"maintainers","contact_preferences":{"reply_in_thread":true},"attachments":[{"kind":"log","name":"private.log","media_type":"text/plain","data":"c2Vuc2l0aXZl"}]}`, owner.Credential.Token, http.StatusCreated)
+	var thread supportthreads.Thread
+	decodeResponse(t, response, &thread)
+	body := `{"classification":"compatibility_problem","resource_kind":"ordered_work","expected_version":1,"acceptance_criteria":["one upload is retained","the retry journey is documented"],"tasks":[{"title":"Fix retry idempotency","outcome":"one upload is retained","risk":"duplicate writes","verification_plan":"run the bounded reproduction","assignee_type":"agent"},{"title":"Publish retry example","outcome":"the retry journey is documented","risk":"stale guidance","verification_plan":"review the documentation preview","assignee_type":"human","assignee_id":"` + owner.User.ID + `"}]}`
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/support-threads/"+thread.ID+"/escalations", body, owner.Credential.Token, http.StatusCreated)
+	decodeResponse(t, response, &thread)
+	if len(thread.Escalations) != 1 || thread.Escalations[0].AffectedVersion != "3.2" || len(thread.Escalations[0].Reproduction) != 2 {
+		t.Fatalf("escalation = %#v", thread.Escalations)
+	}
+	proposal, err := proposalStore.Get(repo.ID, thread.Escalations[0].ResourceID)
+	if err != nil || proposal.Reasoning == nil || proposal.Reasoning.SupportThreadID != thread.ID {
+		t.Fatalf("proposal = %#v, err = %v", proposal, err)
+	}
+	tasks, _ := proposalStore.ListTasks(repo.ID, proposal.ID)
+	if len(tasks) != 2 || len(tasks[1].DependencyIDs) != 1 || tasks[1].DependencyIDs[0] != tasks[0].ID || len(tasks[0].Assignment.Access.Scopes) != 2 || len(tasks[1].Assignment.Access.Scopes) != 0 {
+		t.Fatalf("tasks = %#v", tasks)
+	}
+	if strings.Contains(proposal.Body, "sensitive") || strings.Contains(proposal.Body, "private.log") {
+		t.Fatalf("restricted attachment leaked into proposal: %s", proposal.Body)
 	}
 }

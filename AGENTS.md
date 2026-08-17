@@ -81,6 +81,11 @@ whenever dependencies change or the web job fails before it starts.
   persist; idempotently returned prior solutions are never armed for deletion;
   terminal merged or archived records cannot be revived, and search admits only published or revalidation-needed
   records.
+  Current repository collaborators can classify an unresolved thread and escalate it through
+  `/repositories/{id}/support-threads/{thread_id}/escalations` into an ordinary issue, documentation task,
+  proposal, or dependency-ordered human/agent plan. The handoff freezes the affected version, user goal,
+  permitted reproduction, and acceptance criteria but never copies attachments or contact details. Human tasks
+  gain no access and agent work remains behind the existing task-scoped launch, review, check, and merge boundaries.
 
 - **Project knowledge** — `/repositories/{id}/knowledge` retains proposed and superseding
   guidance separately from conversational explanations and support questions. Every claim cites

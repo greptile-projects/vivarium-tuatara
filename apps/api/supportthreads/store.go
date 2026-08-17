@@ -66,6 +66,18 @@ type Related struct {
 	Status string `json:"status"`
 	Score  int    `json:"score"`
 }
+type Escalation struct {
+	ID                 string    `json:"id"`
+	Classification     string    `json:"classification"`
+	ResourceKind       string    `json:"resource_kind"`
+	ResourceID         string    `json:"resource_id"`
+	ResourceURL        string    `json:"resource_url"`
+	AffectedVersion    string    `json:"affected_version"`
+	AcceptanceCriteria []string  `json:"acceptance_criteria"`
+	Reproduction       []string  `json:"reproduction"`
+	CreatedBy          string    `json:"created_by"`
+	CreatedAt          time.Time `json:"created_at"`
+}
 type Thread struct {
 	ID                 string             `json:"id"`
 	RepositoryID       string             `json:"repository_id"`
@@ -84,6 +96,7 @@ type Thread struct {
 	History            []HistoryEntry     `json:"history"`
 	Diagnostics        []Diagnostic       `json:"diagnostics"`
 	Related            []Related          `json:"related,omitempty"`
+	Escalations        []Escalation       `json:"escalations,omitempty"`
 	Version            int                `json:"version"`
 	CreatedAt          time.Time          `json:"created_at"`
 	UpdatedAt          time.Time          `json:"updated_at"`
@@ -186,6 +199,47 @@ func (s *Store) UpdateStatus(repo, id, actor, status, message string, expected i
 	v.Version++
 	v.UpdatedAt = s.now()
 	v.History = append(v.History, HistoryEntry{ID: randomID(), Kind: "status_changed", ActorID: actor, From: from, To: status, Message: strings.TrimSpace(message), CreatedAt: v.UpdatedAt})
+	v.Diagnostics = diagnostics(v)
+	return v, s.write(v)
+}
+
+// Escalate holds the support mutation boundary while ordinary governed work is
+// created. The callback receives the immutable, privacy-safe context that may
+// cross into the target; attachments and contact details never leave the thread.
+func (s *Store) Escalate(repo, id, actor string, expected int, classification, resourceKind string, criteria []string, publish func(Thread) (string, string, error)) (Thread, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, id)
+	if err != nil {
+		return Thread{}, err
+	}
+	if v.Version != expected {
+		return Thread{}, ErrConflict
+	}
+	classes := map[string]bool{"defect": true, "documentation_gap": true, "missing_example": true, "compatibility_problem": true, "product_opportunity": true}
+	kinds := map[string]bool{"issue": true, "documentation_task": true, "proposal": true, "ordered_work": true}
+	clean := make([]string, 0, len(criteria))
+	for _, item := range criteria {
+		if item = strings.TrimSpace(item); item != "" {
+			clean = append(clean, item)
+		}
+	}
+	if !classes[classification] || !kinds[resourceKind] || len(clean) == 0 || len(clean) > 20 || publish == nil || v.Status == "closed" {
+		return Thread{}, ErrInvalid
+	}
+	resourceID, resourceURL, err := publish(v)
+	if err != nil {
+		return Thread{}, err
+	}
+	if strings.TrimSpace(resourceID) == "" || strings.TrimSpace(resourceURL) == "" {
+		return Thread{}, ErrInvalid
+	}
+	now := s.now()
+	escalation := Escalation{ID: randomID(), Classification: classification, ResourceKind: resourceKind, ResourceID: resourceID, ResourceURL: resourceURL, AffectedVersion: v.Target.Version, AcceptanceCriteria: clean, Reproduction: append([]string(nil), v.AttemptedSteps...), CreatedBy: actor, CreatedAt: now}
+	v.Escalations = append(v.Escalations, escalation)
+	v.Version++
+	v.UpdatedAt = now
+	v.History = append(v.History, HistoryEntry{ID: randomID(), Kind: "escalated", ActorID: actor, Message: classification + " → " + resourceKind + ":" + resourceID, CreatedAt: now})
 	v.Diagnostics = diagnostics(v)
 	return v, s.write(v)
 }

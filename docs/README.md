@@ -2740,6 +2740,17 @@ return identity/title/status metadata, not candidate attachments or private
 discussion. Status changes are compare-and-swap and retain actor-stamped
 history. Records default beneath `$SUPPORT_THREAD_STORAGE_ROOT`
 (`support-threads`) and grant no repository authority.
+
+Current repository collaborators can classify an unresolved question as a defect, documentation gap,
+missing example, compatibility problem, or product opportunity. `POST
+/repositories/{id}/support-threads/{thread_id}/escalations` creates a linked ordinary issue,
+documentation task, proposal, or dependency-ordered human/agent plan from the current default-branch base.
+The immutable handoff keeps the user goal, affected version, permitted reproduction steps, and acceptance
+criteria, while attachments and contact details remain inside the support audience. The support history links
+back to the governed resource so the asker can follow its pulls, checks, previews, releases, and documentation
+publication through existing project surfaces; escalation itself grants no repository, agent, review, or merge
+authority.
+
 Successful proof can be published from `/support` as reusable project guidance. A solution freezes its exact
 support question, answer revision, passing attempt, tested instructions, applicable versions, limitations,
 audience, links, and credits. Public records require an entirely public evidence chain; participant-only records

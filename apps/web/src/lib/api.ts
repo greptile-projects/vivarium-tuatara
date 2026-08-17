@@ -691,6 +691,23 @@ export type SupportThread = {
     status: string;
     score: number;
   }[];
+  escalations?: {
+    id: string;
+    classification:
+      | "defect"
+      | "documentation_gap"
+      | "missing_example"
+      | "compatibility_problem"
+      | "product_opportunity";
+    resource_kind: "issue" | "documentation_task" | "proposal" | "ordered_work";
+    resource_id: string;
+    resource_url: string;
+    affected_version?: string;
+    acceptance_criteria: string[];
+    reproduction: string[];
+    created_by: string;
+    created_at: string;
+  }[];
   version: number;
   created_at: string;
   updated_at: string;
