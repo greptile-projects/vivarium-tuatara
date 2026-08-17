@@ -2,6 +2,8 @@ package supportthreads
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 )
@@ -50,10 +52,10 @@ func TestResolveHoldsThreadMutationBoundaryAcrossPublication(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		resolved, resolveErr = s.Resolve("repo", v.ID, "asker", "published", v.Version, false, func() error {
+		resolved, resolveErr = s.Resolve("repo", v.ID, "asker", "published", v.Version, false, func() (func() error, error) {
 			close(entered)
 			<-release
-			return nil
+			return nil, nil
 		})
 	}()
 	<-entered
@@ -69,6 +71,36 @@ func TestResolveHoldsThreadMutationBoundaryAcrossPublication(t *testing.T) {
 	}
 	if updateErr := <-updateDone; !errors.Is(updateErr, ErrConflict) {
 		t.Fatalf("concurrent update = %v", updateErr)
+	}
+}
+
+func TestResolveCompensatesPublicationWhenThreadCloseCannotPersist(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, err := s.Create(Thread{RepositoryID: "repo", AuthorID: "asker", Title: "Help", Body: "Details", Target: Target{Kind: "repository", Label: "repo"}, Urgency: "normal", Audience: "public", ContactPreferences: ContactPreferences{ReplyInThread: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published := false
+	repoDir := filepath.Join(s.root, "repo")
+	_, err = s.Resolve("repo", v.ID, "asker", "published", v.Version, false, func() (func() error, error) {
+		published = true
+		if chmodErr := os.Chmod(repoDir, 0500); chmodErr != nil {
+			return nil, chmodErr
+		}
+		return func() error { published = false; return nil }, nil
+	})
+	if chmodErr := os.Chmod(repoDir, 0700); chmodErr != nil {
+		t.Fatal(chmodErr)
+	}
+	if err == nil {
+		t.Fatal("forced close failure succeeded")
+	}
+	if published {
+		t.Fatal("external publication was not compensated")
+	}
+	reloaded, readErr := s.Get("repo", v.ID)
+	if readErr != nil || reloaded.Status != "open" || reloaded.Version != v.Version {
+		t.Fatalf("thread diverged: %#v, %v", reloaded, readErr)
 	}
 }
 

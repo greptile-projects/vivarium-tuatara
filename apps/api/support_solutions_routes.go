@@ -174,10 +174,13 @@ func registerSupportSolutionRoutes(mux *http.ServeMux, repos *repositories.Store
 		}
 		credits := uniqueSupportCredits([]supportsolutions.Credit{{ActorID: thread.AuthorID, Role: "asker"}, {ActorID: revision.AuthorID, Role: "answer_author"}, {ActorID: attempt.ActorID, Role: "verifier"}, {ActorID: a.UserID, Role: "publisher"}})
 		var v supportsolutions.Solution
-		_, e = threads.Resolve(repo.ID, thread.ID, a.UserID, "Resolved by reusable solution from answer revision "+revision.ID, thread.Version, member, func() error {
+		_, e = threads.Resolve(repo.ID, thread.ID, a.UserID, "Resolved by reusable solution from answer revision "+revision.ID, thread.Version, member, func() (func() error, error) {
 			var createErr error
 			v, createErr = solutions.Create(supportsolutions.Solution{RepositoryID: repo.ID, ThreadID: thread.ID, AnswerID: answer.ID, AnswerRevisionID: revision.ID, VerificationAttemptID: attempt.ID, Title: in.Title, Summary: in.Summary, Instructions: revision.Body, Audience: in.Audience, ApplicableVersions: in.ApplicableVersions, Limitations: in.Limitations, Links: in.Links, Credits: credits}, a.UserID)
-			return createErr
+			if createErr != nil {
+				return nil, createErr
+			}
+			return func() error { return solutions.DeleteResolution(repo.ID, v.ID, thread.ID, revision.ID, attempt.ID) }, nil
 		})
 		if e != nil {
 			if errors.Is(e, supportthreads.ErrConflict) {

@@ -107,6 +107,21 @@ func (s *Store) Get(repo, sid string) (Solution, error) {
 	defer s.mu.Unlock()
 	return s.read(repo, sid)
 }
+
+// DeleteResolution compensates a failed source-thread close. It removes only the
+// exact evidence-bound solution the caller just attempted to attach.
+func (s *Store) DeleteResolution(repo, sid, thread, revision, attempt string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, sid)
+	if err != nil {
+		return err
+	}
+	if v.ThreadID != thread || v.AnswerRevisionID != revision || v.VerificationAttemptID != attempt {
+		return ErrInvalid
+	}
+	return os.Remove(filepath.Join(s.root, repo, sid+".json"))
+}
 func (s *Store) List(repo string) ([]Solution, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -73,3 +73,23 @@ func TestCreateIsIdempotentForExactResolutionEvidence(t *testing.T) {
 		t.Fatalf("solutions = %#v, %v", all, err)
 	}
 }
+
+func TestDeleteResolutionCompensatesOnlyExactEvidence(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, err := s.Create(fixture(), "maintainer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.DeleteResolution("repo", v.ID, v.ThreadID, v.AnswerRevisionID, "other-attempt"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("mismatched compensation = %v", err)
+	}
+	if _, err = s.Get("repo", v.ID); err != nil {
+		t.Fatalf("mismatch removed solution: %v", err)
+	}
+	if err = s.DeleteResolution("repo", v.ID, v.ThreadID, v.AnswerRevisionID, v.VerificationAttemptID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Get("repo", v.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("compensated solution remains: %v", err)
+	}
+}

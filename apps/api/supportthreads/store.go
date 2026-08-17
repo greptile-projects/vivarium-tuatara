@@ -191,8 +191,9 @@ func (s *Store) UpdateStatus(repo, id, actor, status, message string, expected i
 }
 
 // Resolve serializes publication with all thread mutations. The publication callback
-// runs only after the expected thread version and resolver authority are revalidated.
-func (s *Store) Resolve(repo, id, actor, message string, expected int, maintainer bool, publish func() error) (Thread, error) {
+// returns compensation for its external write; a failed close invokes it before the
+// error is returned, so the solution and source thread cannot diverge.
+func (s *Store) Resolve(repo, id, actor, message string, expected int, maintainer bool, publish func() (func() error, error)) (Thread, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v, err := s.read(repo, id)
@@ -208,8 +209,12 @@ func (s *Store) Resolve(repo, id, actor, message string, expected int, maintaine
 	if publish == nil {
 		return Thread{}, ErrInvalid
 	}
-	if err := publish(); err != nil {
+	compensate, err := publish()
+	if err != nil {
 		return Thread{}, err
+	}
+	if v.Status == "closed" {
+		return v, nil
 	}
 	now := s.now()
 	from := v.Status
@@ -218,7 +223,13 @@ func (s *Store) Resolve(repo, id, actor, message string, expected int, maintaine
 	v.UpdatedAt = now
 	v.History = append(v.History, HistoryEntry{ID: randomID(), Kind: "resolved", ActorID: actor, From: from, To: "closed", Message: strings.TrimSpace(message), CreatedAt: now})
 	v.Diagnostics = diagnostics(v)
-	return v, s.write(v)
+	if err := s.write(v); err != nil {
+		if compensate != nil {
+			return Thread{}, errors.Join(err, compensate())
+		}
+		return Thread{}, err
+	}
+	return v, nil
 }
 func valid(v Thread) bool {
 	kinds := map[string]bool{"repository": true, "package": true, "release": true, "api": true, "documented_journey": true, "error": true}
