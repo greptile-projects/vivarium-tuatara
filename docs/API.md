@@ -23,6 +23,14 @@
   response, and log summaries, checksum-only artifact metadata, coverage, cost, and human authorship.
   Evidence is capped at 128 KiB, artifact metadata at 32 MiB per referenced artifact, and credential-shaped
   text is rejected. These records add review provenance but grant no Git, check, workspace, or merge authority.
+- `POST|GET .../{application_id}/operations/observations` retains aggregate operational windows pinned
+  to the application's exact contract revision, declared environment, and an existing exact provider
+  release. Windows cover availability, p95 latency, quota rejection, errors, schema conformance, and
+  usage with a sanitization statement and `shared`, `producer_only`, or `consumer_only` visibility.
+- `POST|GET .../operations/investigations` opens a shared case from visible windows. Explicitly invited
+  repository-scoped read-only agents may add evidence-cited, uncertain findings, while humans retain
+  sandbox reproduction and immutable ordinary issue/proposal handoff authority. Reproductions retain only
+  synthetic status/code and never a payload; handoffs grant no Git, review, task, or merge authority.
 
 ## Approved-agent evaluation
 

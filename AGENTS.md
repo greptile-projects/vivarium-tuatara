@@ -1903,6 +1903,11 @@ whenever dependencies change or the web job fails before it starts.
   settings. Linked producer and consumer pulls freeze their source commits and separately owned scenarios;
   immutable results retain bounded sanitized requests, responses, logs, checksum-only artifacts, coverage,
   costs, and authorship. Integration records add review provenance but no Git, check, workspace, or merge authority.
+  Application operational surfaces freeze sanitized aggregate availability, p95 latency, quota, error,
+  schema-conformance, and usage windows to the exact contract version, provider release, and environment.
+  Visibility separates shared, producer-only, and consumer-only evidence. Shared investigations retain a closed
+  evidence set, cited failure classification and uncertainty, explicit read-only agent invitations, payload-free
+  sandbox reproductions, and human-only immutable issue/proposal handoffs without granting project authority.
   Repository participants define repository, release, and environment scopes; user journeys;
   indicators and calculations; measurement windows and targets; dependencies; error budgets;
   severity responses and accountable owners; version-pinned product, performance, accessibility,
