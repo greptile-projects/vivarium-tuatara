@@ -87,7 +87,12 @@ func MatchAgents(v Organization, in AgentMatchRequest, now time.Time) (AgentMatc
 				m.Eligible = false
 				m.MissingEvidence = append(m.MissingEvidence, "The current profile does not claim this workflow.")
 			}
-			if in.DeploymentBoundary == "" || slices.Contains(m.DeploymentBoundary, in.DeploymentBoundary) {
+			if in.DeploymentBoundary == "" {
+				m.Reasons = append(m.Reasons, "No deployment boundary constraint was requested.")
+			} else if len(m.DeploymentBoundary) == 0 {
+				m.Eligible = false
+				m.MissingEvidence = append(m.MissingEvidence, "No structured deployment boundary is disclosed for the requested boundary.")
+			} else if slices.Contains(m.DeploymentBoundary, in.DeploymentBoundary) {
 				m.Score += 10
 				m.Reasons = append(m.Reasons, "The disclosed execution boundary matches the requested boundary.")
 			} else {

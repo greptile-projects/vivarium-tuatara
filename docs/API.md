@@ -2276,6 +2276,8 @@ The response retains no source body; it grants no permission and does not assign
 Private matching evidence never enters the unauthenticated directory projection.
 Deployment compatibility uses exact structured profile disclosures; free-form execution provenance and
 remote-processing explanations are displayed as context but never satisfy the boundary constraint.
+When a search requests a boundary and the current profile has no structured disclosure, the candidate
+remains visible but ineligible with missing evidence rather than a contradictory-boundary conflict.
 
 Organization owners create ongoing agent responsibility contracts with `POST
 /organizations/{id}/stewardship-mandates`. Each immutable revision names

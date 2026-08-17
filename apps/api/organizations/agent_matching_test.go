@@ -1,6 +1,7 @@
 package organizations
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -39,11 +40,12 @@ func TestMatchAgentsMakesDeploymentBoundaryConflictsIneligible(t *testing.T) {
 		ID:   strings.Repeat("d", 32),
 		Name: "Internal agent",
 		Profiles: []AgentProfile{{
-			SupportedTasks:      []string{"incident response"},
-			ExecutionProvenance: "internal platform container",
-			Pricing:             "$2/run",
-			Availability:        "now",
-			PublishedAt:         now,
+			SupportedTasks:       []string{"incident response"},
+			ExecutionProvenance:  "internal platform container",
+			DeploymentBoundaries: []string{"operator_managed"},
+			Pricing:              "$2/run",
+			Availability:         "now",
+			PublishedAt:          now,
 		}},
 	}}}
 	got, err := MatchAgents(v, AgentMatchRequest{SourceKind: "incident", SourceID: "incident-8", Workflow: "incident response", DeploymentBoundary: "external_service"}, now)
@@ -67,5 +69,21 @@ func TestMatchAgentsNeverInfersBoundaryFromProse(t *testing.T) {
 	}
 	if got.Matches[0].Eligible || len(got.Matches[0].Conflicts) != 1 {
 		t.Fatalf("prose produced a boundary match: %#v", got.Matches[0])
+	}
+}
+
+func TestMatchAgentsTreatsUndisclosedBoundaryAsMissingEvidence(t *testing.T) {
+	now := time.Now().UTC()
+	v := Organization{Agents: []Agent{{
+		ID: strings.Repeat("f", 32), Name: "Legacy agent",
+		Profiles: []AgentProfile{{SupportedTasks: []string{"incident response"}, ExecutionProvenance: "operator container", Pricing: "$2/run", Availability: "now", PublishedAt: now}},
+	}}}
+	got, err := MatchAgents(v, AgentMatchRequest{SourceKind: "incident", SourceID: "incident-10", Workflow: "incident response", DeploymentBoundary: "platform"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := got.Matches[0]
+	if match.Eligible || len(match.Conflicts) != 0 || !slices.Contains(match.MissingEvidence, "No structured deployment boundary is disclosed for the requested boundary.") {
+		t.Fatalf("undisclosed boundary was not classified as missing evidence: %#v", match)
 	}
 }

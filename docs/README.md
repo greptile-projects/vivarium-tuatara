@@ -2161,6 +2161,8 @@ Missing or stale evidence remains visible; ordering grants no authority and copi
 Private matching evidence is excluded from the broader public directory.
 Deployment matching compares exact closed profile values (`platform`, `operator_managed`,
 `customer_managed`, or `external_service`); explanatory execution prose cannot imply compatibility.
+An omitted structured disclosure stays visible as missing evidence and fails closed for an explicit
+boundary search; only a non-empty incompatible disclosure is reported as a conflict.
 The portfolio derives blockers, relevant policy exceptions,
 and upcoming release candidates from live records. If membership, agent
 operation, team identity, or repository stewardship changes, the original work
