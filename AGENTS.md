@@ -169,7 +169,9 @@ whenever dependencies change or the web job fails before it starts.
   user identity, or project authority. Authenticated organization agent matching accepts bounded work
   references and explains deterministic workflow fit from live grants, effective policy, deployment,
   cost, availability, evidence freshness, conflicts, verified evaluations, and comparable attributed
-  outcomes without copying source content or exposing private evidence publicly. Nested teams retain
+  outcomes without copying source content or exposing private evidence publicly. Deployment compatibility
+  uses exact closed profile values (`platform`, `operator_managed`, `customer_managed`, or
+  `external_service`); free-form execution prose is explanatory only. Nested teams retain
   version-guarded member/maintainer roles and repository responsibility, while
   effective membership explains direct or visible-child inheritance. Approved
   agent identities expose capabilities, current member operators, visibility,

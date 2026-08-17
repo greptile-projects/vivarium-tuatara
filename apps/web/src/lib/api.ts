@@ -1488,7 +1488,7 @@ export type OrganizationAgent = {
 };
 export type OrganizationAgentProfile = {
   version: number; summary: string; supported_tasks: string[]; tools: string[];
-  model_provenance: string; execution_provenance: string; data_use: string; retention: string;
+  model_provenance: string; execution_provenance: string; deployment_boundaries: ("platform" | "operator_managed" | "customer_managed" | "external_service")[]; data_use: string; retention: string;
   pricing: string; resource_requirements: string[]; requested_capabilities: string[];
   availability: string; support: string; subprocessors: string[]; remote_execution_boundaries: string[];
   conflict_disclosures: string[];

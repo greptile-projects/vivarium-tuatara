@@ -2267,12 +2267,15 @@ organization-only nesting are omitted from public projection.
 
 Authenticated organization members use `POST /organizations/{id}/agent-matches` with a closed
 `source_kind` (`task`, `proposal`, `issue`, `decision`, `incident`, `stewardship_mandate`, or
-`team_role`), bounded `source_id`, `workflow`, optional `repository_id` and `deployment_boundary`, and
+`team_role`), bounded `source_id`, `workflow`, optional `repository_id` and closed
+`deployment_boundary` (`platform`, `operator_managed`, `customer_managed`, or `external_service`), and
 exact `required_permissions`. Every candidate exposes eligibility, transparent score reasons, live
 resource grants, policy conflicts, cost, availability, execution boundary, verified evaluations,
 comparable attributed outcomes, and explicit missing or stale evidence and conflict disclosures.
 The response retains no source body; it grants no permission and does not assign or launch an agent.
 Private matching evidence never enters the unauthenticated directory projection.
+Deployment compatibility uses exact structured profile disclosures; free-form execution provenance and
+remote-processing explanations are displayed as context but never satisfy the boundary constraint.
 
 Organization owners create ongoing agent responsibility contracts with `POST
 /organizations/{id}/stewardship-mandates`. Each immutable revision names

@@ -102,6 +102,7 @@ type AgentProfile struct {
 	Tools                     []string                `json:"tools"`
 	ModelProvenance           string                  `json:"model_provenance"`
 	ExecutionProvenance       string                  `json:"execution_provenance"`
+	DeploymentBoundaries      []string                `json:"deployment_boundaries"`
 	DataUse                   string                  `json:"data_use"`
 	Retention                 string                  `json:"retention"`
 	Pricing                   string                  `json:"pricing"`
@@ -1104,6 +1105,12 @@ func (s *Store) PublishAgentProfile(id, agentID, actor string, expectedVersion i
 		if *target, ok = cleanList(*target, max); !ok || len(*target) > 50 {
 			return Organization{}, ErrInvalid
 		}
+	}
+	in.DeploymentBoundaries, ok = normalizeList(in.DeploymentBoundaries, func(value string) bool {
+		return value == "platform" || value == "operator_managed" || value == "customer_managed" || value == "external_service"
+	})
+	if !ok || len(in.DeploymentBoundaries) > 4 {
+		return Organization{}, ErrInvalid
 	}
 	required := []string{in.Summary, in.ModelProvenance, in.ExecutionProvenance, in.DataUse, in.Retention, in.Pricing, in.Availability, in.Support, in.ChangeSummary}
 	for _, value := range required {

@@ -2159,6 +2159,8 @@ live independent grants, effective policy, disclosed cost and availability, depl
 profile freshness, conflicts, verified evaluations, and attributed outcomes on comparable work.
 Missing or stale evidence remains visible; ordering grants no authority and copies no source content.
 Private matching evidence is excluded from the broader public directory.
+Deployment matching compares exact closed profile values (`platform`, `operator_managed`,
+`customer_managed`, or `external_service`); explanatory execution prose cannot imply compatibility.
 The portfolio derives blockers, relevant policy exceptions,
 and upcoming release candidates from live records. If membership, agent
 operation, team identity, or repository stewardship changes, the original work

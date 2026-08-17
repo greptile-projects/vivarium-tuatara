@@ -45,10 +45,11 @@ type AgentMatchSet struct {
 }
 
 var matchSourceKinds = map[string]bool{"task": true, "proposal": true, "issue": true, "decision": true, "incident": true, "stewardship_mandate": true, "team_role": true}
+var deploymentBoundaries = map[string]bool{"platform": true, "operator_managed": true, "customer_managed": true, "external_service": true}
 
 func MatchAgents(v Organization, in AgentMatchRequest, now time.Time) (AgentMatchSet, error) {
 	in.SourceKind, in.SourceID, in.RepositoryID, in.Workflow, in.DeploymentBoundary = strings.TrimSpace(in.SourceKind), strings.TrimSpace(in.SourceID), strings.TrimSpace(in.RepositoryID), strings.TrimSpace(in.Workflow), strings.TrimSpace(in.DeploymentBoundary)
-	if !matchSourceKinds[in.SourceKind] || in.SourceID == "" || len(in.SourceID) > 200 || in.Workflow == "" || len(in.Workflow) > 300 || len(in.RequiredPermissions) > 50 || (in.RepositoryID != "" && !validID(in.RepositoryID)) {
+	if !matchSourceKinds[in.SourceKind] || in.SourceID == "" || len(in.SourceID) > 200 || in.Workflow == "" || len(in.Workflow) > 300 || len(in.RequiredPermissions) > 50 || (in.RepositoryID != "" && !validID(in.RepositoryID)) || (in.DeploymentBoundary != "" && !deploymentBoundaries[in.DeploymentBoundary]) {
 		return AgentMatchSet{}, ErrInvalid
 	}
 	for _, permission := range in.RequiredPermissions {
@@ -69,7 +70,7 @@ func MatchAgents(v Organization, in AgentMatchRequest, now time.Time) (AgentMatc
 		} else {
 			profile := agent.Profiles[len(agent.Profiles)-1]
 			m.Pricing, m.Availability = profile.Pricing, profile.Availability
-			m.DeploymentBoundary = append([]string{profile.ExecutionProvenance}, profile.RemoteExecutionBoundaries...)
+			m.DeploymentBoundary = append([]string{}, profile.DeploymentBoundaries...)
 			workflow := strings.ToLower(in.Workflow)
 			fit := false
 			for _, supported := range append(append([]string{}, profile.SupportedTasks...), agent.Capabilities...) {
@@ -86,9 +87,7 @@ func MatchAgents(v Organization, in AgentMatchRequest, now time.Time) (AgentMatc
 				m.Eligible = false
 				m.MissingEvidence = append(m.MissingEvidence, "The current profile does not claim this workflow.")
 			}
-			if in.DeploymentBoundary == "" || slices.ContainsFunc(m.DeploymentBoundary, func(x string) bool {
-				return strings.Contains(strings.ToLower(x), strings.ToLower(in.DeploymentBoundary))
-			}) {
+			if in.DeploymentBoundary == "" || slices.Contains(m.DeploymentBoundary, in.DeploymentBoundary) {
 				m.Score += 10
 				m.Reasons = append(m.Reasons, "The disclosed execution boundary matches the requested boundary.")
 			} else {
