@@ -29,6 +29,89 @@ type organizationInput struct {
 	Slug        string `json:"slug"`
 	Description string `json:"description"`
 }
+
+func retireParticipationGrant(orgs *organizations.Store, credentials *auth.Store, organizationID, grantID, actor string) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		current, e := orgs.Get(organizationID)
+		if e != nil {
+			return e
+		}
+		var grant *organizations.AccessGrant
+		for i := range current.AccessGrants {
+			if current.AccessGrants[i].ID == grantID {
+				grant = &current.AccessGrants[i]
+				break
+			}
+		}
+		if grant == nil {
+			return organizations.ErrNotFound
+		}
+		if grant.RevokedAt != nil {
+			return nil
+		}
+		_, e = orgs.RevokeAccessGrant(organizationID, grantID, actor, grant.Version, func(c organizations.DerivedCredential) error {
+			_, x := credentials.Revoke(c.OperatorID, c.ID)
+			if errors.Is(x, auth.ErrNotFound) {
+				return nil
+			}
+			return x
+		})
+		latest, getErr := orgs.Get(organizationID)
+		if getErr == nil {
+			for _, g := range latest.AccessGrants {
+				if g.ID == grantID && g.RevokedAt != nil {
+					return nil
+				}
+			}
+		}
+		if !errors.Is(e, organizations.ErrConflict) {
+			return e
+		}
+	}
+	return organizations.ErrConflict
+}
+
+func narrowParticipationGrant(orgs *organizations.Store, credentials *auth.Store, organizationID, grantID, actor string, actions, boundaries []string) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		current, e := orgs.Get(organizationID)
+		if e != nil {
+			return e
+		}
+		var grant *organizations.AccessGrant
+		for i := range current.AccessGrants {
+			if current.AccessGrants[i].ID == grantID {
+				grant = &current.AccessGrants[i]
+				break
+			}
+		}
+		if grant == nil {
+			return organizations.ErrNotFound
+		}
+		if grant.RevokedAt != nil {
+			return nil
+		}
+		_, e = orgs.NarrowParticipationGrant(organizationID, grantID, actor, grant.Version, actions, boundaries, func(c organizations.DerivedCredential) error {
+			_, x := credentials.Revoke(c.OperatorID, c.ID)
+			if errors.Is(x, auth.ErrNotFound) {
+				return nil
+			}
+			return x
+		})
+		latest, getErr := orgs.Get(organizationID)
+		if getErr == nil {
+			for _, g := range latest.AccessGrants {
+				if g.ID == grantID && (g.RevokedAt != nil || (g.Participation != nil && slices.Equal(g.Participation.AllowedActions, actions) && slices.Equal(g.Participation.DataBoundaries, boundaries))) {
+					return nil
+				}
+			}
+		}
+		if !errors.Is(e, organizations.ErrConflict) {
+			return e
+		}
+	}
+	return organizations.ErrConflict
+}
+
 type organizationInviteInput struct {
 	UserID string `json:"user_id"`
 }
@@ -858,9 +941,6 @@ func registerOrganizationRoutes(mux *http.ServeMux, gitStore *storage.Store, org
 						agent = a
 					}
 				}
-				if len(agent.Profiles) <= p.ConsentedProfileVersion && !slices.Equal(p.ConsentedOperatorIDs, agent.OperatorIDs) {
-					continue
-				}
 				old, next := agent.Profiles[p.ConsentedProfileVersion-1], agent.Profiles[len(agent.Profiles)-1]
 				material := old.ModelProvenance != next.ModelProvenance || old.DataUse != next.DataUse || old.Pricing != next.Pricing || !slices.Equal(old.RequestedCapabilities, next.RequestedCapabilities) || !slices.Equal(p.ConsentedOperatorIDs, agent.OperatorIDs)
 				if !material {
@@ -870,20 +950,7 @@ func registerOrganizationRoutes(mux *http.ServeMux, gitStore *storage.Store, org
 					if current.AccessGrantID == "" {
 						return nil
 					}
-					gv := 1
-					for _, g := range v.AccessGrants {
-						if g.ID == current.AccessGrantID {
-							gv = g.Version
-						}
-					}
-					_, re := orgs.RevokeAccessGrant(v.ID, current.AccessGrantID, actor.UserID, gv, func(c organizations.DerivedCredential) error {
-						_, ce := credentials.Revoke(c.OperatorID, c.ID)
-						if errors.Is(ce, auth.ErrNotFound) {
-							return nil
-						}
-						return ce
-					})
-					return re
+					return retireParticipationGrant(orgs, credentials, v.ID, current.AccessGrantID, actor.UserID)
 				})
 				if x != nil {
 					writeAPIError(w, 500, "agent_trust_update_failed", "profile published but affected authority was retired incompletely")
@@ -1293,6 +1360,40 @@ func registerOrganizationRoutes(mux *http.ServeMux, gitStore *storage.Store, org
 		})
 		if writeOrganizationError(w, err) {
 			return
+		}
+		if evaluations != nil {
+			items, x := evaluations.ListParticipations(v.ID)
+			if x != nil {
+				writeAPIError(w, 500, "evaluation_unavailable", "agent trust evidence is unavailable")
+				return
+			}
+			for _, p := range items {
+				if p.Status != "active" || !slices.Contains(p.ConsentedOperatorIDs, target) {
+					continue
+				}
+				currentVersion := p.ConsentedProfileVersion
+				for _, a := range v.Agents {
+					if a.ID == p.AgentID {
+						currentVersion = len(a.Profiles)
+						if slices.Equal(p.ConsentedOperatorIDs, a.OperatorIDs) {
+							currentVersion = 0
+						}
+					}
+				}
+				if currentVersion == 0 {
+					continue
+				}
+				_, x = evaluations.ObserveProfileWith(p.ID, currentVersion, true, func(current agentevaluations.Participation) error {
+					if current.AccessGrantID == "" {
+						return nil
+					}
+					return retireParticipationGrant(orgs, credentials, v.ID, current.AccessGrantID, actor.UserID)
+				})
+				if x != nil {
+					writeAPIError(w, 500, "agent_trust_update_failed", "member removed but affected agent authority retirement needs recovery")
+					return
+				}
+			}
 		}
 		repoItems, listErr := repos.ListOrganization(v.ID)
 		if writeRepositoryError(w, listErr) {

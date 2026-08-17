@@ -323,26 +323,11 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 			if current.AccessGrantID == "" {
 				return nil
 			}
-			gv := 1
-			for _, g := range org.AccessGrants {
-				if g.ID == current.AccessGrantID {
-					gv = g.Version
-				}
-			}
-			revokeCredential := func(c organizations.DerivedCredential) error {
-				_, x := credentials.Revoke(c.OperatorID, c.ID)
-				if errors.Is(x, auth.ErrNotFound) {
-					return nil
-				}
-				return x
-			}
 			if in.Control.Action == "suspend" || in.Control.Action == "handoff" {
-				_, x := orgs.RevokeAccessGrant(org.ID, current.AccessGrantID, actor.UserID, gv, revokeCredential)
-				return x
+				return retireParticipationGrant(orgs, credentials, org.ID, current.AccessGrantID, actor.UserID)
 			}
 			if in.Control.Action == "narrow" {
-				_, x := orgs.NarrowParticipationGrant(org.ID, current.AccessGrantID, actor.UserID, gv, in.Control.Actions, in.Control.DataBoundaries, revokeCredential)
-				return x
+				return narrowParticipationGrant(orgs, credentials, org.ID, current.AccessGrantID, actor.UserID, in.Control.Actions, in.Control.DataBoundaries)
 			}
 			return nil
 		})

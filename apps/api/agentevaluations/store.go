@@ -862,7 +862,7 @@ func (s *Store) ObserveProfileWith(participationID string, currentVersion int, m
 			changed = true
 		}
 	}
-	if currentVersion <= p.ConsentedProfileVersion || !material {
+	if currentVersion < p.ConsentedProfileVersion || !material {
 		if changed {
 			p.Version++
 			return p, write(s.participationPath(participationID), p)
@@ -917,6 +917,7 @@ func (s *Store) ControlParticipationWith(participationID, actor string, expected
 	if p.Version != expected || !clean(actor, 64) {
 		return p, ErrConflict
 	}
+	original := p
 	now := s.now()
 	switch in.Action {
 	case "suspend":
@@ -953,7 +954,7 @@ func (s *Store) ControlParticipationWith(participationID, actor string, expected
 				matched = true
 			}
 		}
-		if in.ProfileVersion <= p.ConsentedProfileVersion || !matched {
+		if in.ProfileVersion < p.ConsentedProfileVersion || (in.ProfileVersion == p.ConsentedProfileVersion && slices.Equal(in.OperatorIDs, p.ConsentedOperatorIDs)) || !matched {
 			return p, ErrInvalid
 		}
 		p.ConsentedProfileVersion = in.ProfileVersion
@@ -980,7 +981,10 @@ func (s *Store) ControlParticipationWith(participationID, actor string, expected
 	}
 	if apply != nil {
 		if e := apply(p); e != nil {
-			return p, e
+			if rollbackErr := write(s.participationPath(participationID), original); rollbackErr != nil {
+				return p, errors.Join(e, rollbackErr)
+			}
+			return original, e
 		}
 	}
 	return p, nil

@@ -3,6 +3,7 @@ package agentevaluations
 import (
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -193,6 +194,38 @@ func TestControlPersistsFailClosedStateBeforeAuthorityMutation(t *testing.T) {
 	_, err := s.ControlParticipationWith(p.ID, "owner", 1, ControlInput{Action: "suspend"}, func(Participation) error { called = true; return nil })
 	if err == nil || called {
 		t.Fatalf("write failure = %v, callback=%v", err, called)
+	}
+}
+
+func TestAuthorityFailureRollsBackParticipationForRetry(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p := Participation{ID: strings.Repeat("c", 32), OrganizationID: "org", AgentID: "agent", Version: 1, Status: "active", Actions: []string{"repository.read", "repository.write"}, DataBoundaries: []string{"repository_metadata", "repository_content"}}
+	if err := write(s.participationPath(p.ID), p); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.ControlParticipationWith(p.ID, "owner", 1, ControlInput{Action: "narrow", Actions: []string{"repository.read"}, DataBoundaries: []string{"repository_metadata"}}, func(Participation) error { return errors.New("grant conflict") })
+	if err == nil {
+		t.Fatal("authority failure accepted")
+	}
+	persisted, _ := s.GetParticipation(p.ID)
+	if persisted.Version != 1 || persisted.Status != "active" || len(persisted.Actions) != 2 {
+		t.Fatalf("rollback = %#v", persisted)
+	}
+}
+
+func TestOperatorOnlyMaterialChangeRequiresConsent(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p := Participation{ID: strings.Repeat("d", 32), OrganizationID: "org", AgentID: "agent", Version: 1, Status: "active", ConsentedProfileVersion: 1, ConsentedOperatorIDs: []string{"one", "two"}}
+	if err := write(s.participationPath(p.ID), p); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := s.ObserveProfile(p.ID, 1, true)
+	if err != nil || changed.Status != "suspended" || len(changed.Notices) != 1 || changed.Notices[0].ProfileVersion != 1 {
+		t.Fatalf("operator observation = %#v, %v", changed, err)
+	}
+	changed, err = s.ControlParticipation(changed.ID, "owner", changed.Version, ControlInput{Action: "consent", ProfileVersion: 1, OperatorIDs: []string{"two"}})
+	if err != nil || !slices.Equal(changed.ConsentedOperatorIDs, []string{"two"}) {
+		t.Fatalf("operator consent = %#v, %v", changed, err)
 	}
 }
 
