@@ -77,6 +77,16 @@ implementation, non-available environment, known-gap, unavailable-release, and d
 documentation-staleness diagnostics. Records default beneath `$API_CONTRACT_STORAGE_ROOT`
 (`api-contracts`).
 
+Authenticated consumers register independently owned applications against one exact contract revision
+through `/repositories/{id}/api-contracts/{contract_id}/applications` and the linked `/integrations`
+workspace. Requests select contract-declared environments and operation IDs; repository participants
+approve a subset with an expiry or retain an attributable denial. Approved owners rotate short-lived
+application secrets whose hashes alone persist. Rotation retires the predecessor; revocation, reported
+exposure, expiry, and ownership transfer fail closed. A transfer revokes every secret and resets consent.
+The credential authenticates only an inspectable synthetic `/sandbox` request/response pair with the
+frozen quota and deterministic rate-limit, timeout, or server-error simulation. It never calls a declared
+base URL or reads production data, and grants no account, repository, Git, deployment, or environment access.
+
 Each contract also retains compare-and-swap signal mappings and append-only observation windows.
 Mappings bind an exact contract/objective version and instrumentation revision to repository-defined
 metrics, logs, traces, health checks, support reports, deployments, releases, commits, pull requests,

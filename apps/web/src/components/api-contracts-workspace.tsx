@@ -115,13 +115,12 @@ export function APIContractsWorkspace({
         token,
       );
       setItems(out.contracts);
-      setSelected(
-        (old) =>
-          creatingNewRef.current
-            ? null
-            : (out.contracts.find((x) => x.id === old?.id) ??
-              out.contracts[0] ??
-              null),
+      setSelected((old) =>
+        creatingNewRef.current
+          ? null
+          : (out.contracts.find((x) => x.id === old?.id) ??
+            out.contracts[0] ??
+            null),
       );
       setError("");
     } catch (e) {
@@ -225,15 +224,18 @@ export function APIContractsWorkspace({
       rationale: String(f.get("rationale")),
     };
     try {
-      const path = !creatingNew && selected
-        ? `/repositories/${repositoryID}/api-contracts/${selected.id}/revisions`
-        : `/repositories/${repositoryID}/api-contracts`;
+      const path =
+        !creatingNew && selected
+          ? `/repositories/${repositoryID}/api-contracts/${selected.id}/revisions`
+          : `/repositories/${repositoryID}/api-contracts`;
       const out = await api<Contract>(
         path,
         {
           method: "POST",
           body: JSON.stringify({
-          expected_version: creatingNew ? 0 : (selected?.current_version ?? 0),
+            expected_version: creatingNew
+              ? 0
+              : (selected?.current_version ?? 0),
             revision,
           }),
         },
@@ -265,6 +267,12 @@ export function APIContractsWorkspace({
           Integrate from reviewed implementation provenance, explicit interface
           definitions, and versioned guarantees—not detached documentation.
         </p>
+        <Link
+          href={`/repositories/${repositoryID}/api-contracts/integrations`}
+          className="mt-3 inline-flex text-sm font-semibold text-[var(--brand)]"
+        >
+          Open consumer integration sandbox →
+        </Link>
       </header>
       {error && (
         <p role="alert" className="text-sm text-[var(--danger)]">
@@ -526,7 +534,9 @@ export function APIContractsWorkspace({
             <label className="text-xs font-semibold">
               Compatibility
               <select name="compatibility" className={field}>
-                <option value={!creatingNew && selected ? "compatible" : "initial"}>
+                <option
+                  value={!creatingNew && selected ? "compatible" : "initial"}
+                >
                   {!creatingNew && selected ? "compatible" : "initial"}
                 </option>
                 <option value="conditionally_compatible">
