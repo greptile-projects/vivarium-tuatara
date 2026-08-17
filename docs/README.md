@@ -62,6 +62,19 @@ declare expected dependability and response responsibility; they do not confer r
 deployment, release, incident, or observability authority. Records default beneath
 `$SERVICE_OBJECTIVE_STORAGE_ROOT` (`service-objectives`).
 
+## API contracts
+
+Repository participants publish versioned service interfaces through
+`/repositories/{id}/api-contracts`; the web workspace uses the same path. Each revision freezes the
+exact merge commit and merged pull that were reviewed, plus optional exact-release provenance,
+operations, schemas, errors, authentication, environments, limits, owners, stability, support
+terms, compatibility promises, known gaps, and typed source, release, documentation, data-use, and
+support links. Publication rejects detached definitions and release claims that do not resolve to
+the reviewed commit. Reads retain every revision for comparison and derive unreleased
+implementation, non-available environment, known-gap, unavailable-release, and default-branch
+documentation-staleness diagnostics. Records default beneath `$API_CONTRACT_STORAGE_ROOT`
+(`api-contracts`).
+
 Each contract also retains compare-and-swap signal mappings and append-only observation windows.
 Mappings bind an exact contract/objective version and instrumentation revision to repository-defined
 metrics, logs, traces, health checks, support reports, deployments, releases, commits, pull requests,

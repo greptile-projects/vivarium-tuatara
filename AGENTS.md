@@ -1881,6 +1881,14 @@ whenever dependencies change or the web job fails before it starts.
 
   Reliability contracts at `/repositories/{id}/reliability` retain complete append-only service
   objective revisions beneath `$SERVICE_OBJECTIVE_STORAGE_ROOT` (default `service-objectives`).
+
+  API contracts at `/repositories/{id}/api-contracts` retain immutable service-interface revisions
+  beneath `$API_CONTRACT_STORAGE_ROOT` (default `api-contracts`). Publication requires an exact
+  merged-pull commit and verifies an optional release against that commit. Revisions include
+  operations, schemas, errors, authentication modes, environments, limits, owners, stability,
+  support and compatibility terms, known gaps, and typed source/release/documentation/data-use links.
+  Reads preserve comparison history and explicitly project unreleased implementations, unavailable
+  environments/releases, known gaps, and documentation that trails the default branch.
   Repository participants define repository, release, and environment scopes; user journeys;
   indicators and calculations; measurement windows and targets; dependencies; error budgets;
   severity responses and accountable owners; version-pinned product, performance, accessibility,
