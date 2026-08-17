@@ -104,6 +104,13 @@ evidence, exception expiry, and the latest exact-version operational window. Rev
 failed tests, expired exceptions, and traffic above policy remain explicit retirement blockers. The migration
 record grants no Git, task, agent, fork, release, deployment, or evolution authority.
 
+The connected Playwright journey `api-delivery-journey.spec.ts` proves the complete producer-consumer loop:
+reviewed contract publication, narrow synthetic access, credential-free agent integration and independent release,
+sanitized shared failure diagnosis, breaking-version review and rollout, measured migration, and safe retirement.
+It retains overbroad-scope denial, exposed-secret revocation and ownership recovery, stale documentation, failed
+conformance, temporarily unavailable ownership, a bounded sunset exception, and zero old-version traffic as
+distinct evidence instead of allowing any of them to silently widen authority or bypass retirement policy.
+
 Each contract also retains compare-and-swap signal mappings and append-only observation windows.
 Mappings bind an exact contract/objective version and instrumentation revision to repository-defined
 metrics, logs, traces, health checks, support reports, deployments, releases, commits, pull requests,

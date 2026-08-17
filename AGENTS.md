@@ -1917,6 +1917,12 @@ whenever dependencies change or the web job fails before it starts.
   Revoked access, unresponsive owners, failed or missing tests, expired exceptions, and traffic above the selected
   stage threshold block retirement; migration records grant no Git, task, agent, fork, release, deployment, or
   evolution authority. Records share `$API_CONTRACT_STORAGE_ROOT` beneath `contract-migrations`.
+  The connected `api-delivery-journey.spec.ts` browser/API proof carries independently owned producer and consumer
+  repositories from reviewed v1 contract and narrow synthetic sandbox access through credential-free agent work,
+  reviewed consumer release, sanitized shared diagnosis, breaking v2 publication, failed-then-passing conformance,
+  rollout, zero-traffic evidence, and safe v1 retirement. It also proves containment and recovery for scope widening,
+  exposed credentials, stale contract documentation, unavailable consumer ownership, and a bounded sunset exception.
+  Playwright isolates these records with `$API_CONTRACT_STORAGE_ROOT`.
   Repository participants define repository, release, and environment scopes; user journeys;
   indicators and calculations; measurement windows and targets; dependencies; error budgets;
   severity responses and accountable owners; version-pinned product, performance, accessibility,
