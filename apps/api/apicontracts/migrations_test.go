@@ -8,7 +8,7 @@ import (
 func TestContractMigrationReadinessRequiresAcknowledgedTestedZeroTraffic(t *testing.T) {
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	v := ContractMigration{
-		Applications: []MigrationApplication{{ApplicationID: "app", OwnerID: "owner", ConsumerRepositoryID: "consumer"}},
+		Applications: []MigrationApplication{{ApplicationID: "app", OwnerID: "owner", ConsumerRepositoryID: "consumer", IntegrationWorkID: "work"}},
 		Stages:       []MigrationStage{{ID: "sunset", Name: "Sunset", Deadline: now.Add(24 * time.Hour), RequiredEvidence: "passing dual-version candidate and zero old traffic", ObservationMaxAgeHours: 24, MaxRemainingRequests: 0}},
 		CurrentStage: "sunset",
 	}
@@ -28,6 +28,12 @@ func TestContractMigrationReadinessRequiresAcknowledgedTestedZeroTraffic(t *test
 	if !out.Readiness.Ready || !out.Readiness.Consumers[0].Tested {
 		t.Fatalf("passing exact candidate and zero traffic should be ready: %#v", out.Readiness)
 	}
+	v.Attestations[0].IntegrationWorkID = "different-work"
+	out = ProjectContractMigration(v, apps, map[string][]IntegrationWork{"app": {{ID: "different-work", Candidates: []IntegrationCandidate{candidate}}}}, observations, now)
+	if out.Readiness.Ready || out.Readiness.Consumers[0].Tested {
+		t.Fatal("passing evidence from a different same-application work record satisfied the frozen migration binding")
+	}
+	v.Attestations[0].IntegrationWorkID = "work"
 
 	apps["app"] = Application{ID: "app", Status: "revoked"}
 	out = ProjectContractMigration(v, apps, work, observations, now)

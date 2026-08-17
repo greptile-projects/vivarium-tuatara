@@ -203,7 +203,7 @@ func ProjectContractMigration(v ContractMigration, apps map[string]Application, 
 		c.Acknowledged = slices.ContainsFunc(v.Acknowledgements, func(x MigrationAcknowledgement) bool { return x.ApplicationID == linked.ApplicationID })
 		attest := slices.IndexFunc(v.Attestations, func(x MigrationAttestation) bool { return x.ApplicationID == linked.ApplicationID })
 		c.Attested = attest >= 0
-		if attest >= 0 {
+		if attest >= 0 && linked.IntegrationWorkID != "" && v.Attestations[attest].IntegrationWorkID == linked.IntegrationWorkID {
 			for _, w := range work[linked.ApplicationID] {
 				if w.ID == v.Attestations[attest].IntegrationWorkID {
 					for _, candidate := range w.Candidates {

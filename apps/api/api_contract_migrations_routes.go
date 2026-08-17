@@ -110,7 +110,11 @@ func registerAPIContractMigrationRoutes(mux *http.ServeMux, catalog *repositorie
 			writeAPIError(w, 422, "invalid_contract_migration_evolution", "Migration must name an existing provider evolution plan")
 			return
 		}
-		applications, _ := contracts.ListApplications(r.PathValue("id"), contract.ID)
+		applications, e := contracts.ListApplications(r.PathValue("id"), contract.ID)
+		if e != nil {
+			writeAPIError(w, 500, "applications_unavailable", "Consumer applications could not be read completely; migration was not created")
+			return
+		}
 		linked := []apicontracts.MigrationApplication{}
 		for _, app := range applications {
 			if app.ContractVersion != in.FromVersion {
@@ -160,6 +164,10 @@ func registerAPIContractMigrationRoutes(mux *http.ServeMux, catalog *repositorie
 			return
 		}
 		if in.Action == "attest" {
+			if v.Applications[linked].IntegrationWorkID == "" || in.IntegrationWorkID != v.Applications[linked].IntegrationWorkID {
+				writeAPIError(w, 422, "invalid_api_contract_migration", "Attestation must use the exact integration work frozen for this migration")
+				return
+			}
 			work, e := contracts.GetIntegrationWork(in.IntegrationWorkID)
 			if e != nil || work.ApplicationID != in.ApplicationID || !slices.ContainsFunc(work.Candidates, func(c apicontracts.IntegrationCandidate) bool { return c.ID == in.CandidateID }) {
 				writeAPIError(w, 422, "invalid_api_contract_migration", "Attestation must name an exact candidate from this application's integration work")
