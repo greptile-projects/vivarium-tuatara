@@ -363,7 +363,7 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 			return
 		}
 		var in participationMutationInput
-		if decodeJSON(r, &in) != nil || !organizations.HasRole(org, in.SponsorID, "") {
+		if decodeJSON(r, &in) != nil {
 			writeAPIError(w, 422, "participation_sponsor_invalid", "replacement sponsor must be a current organization member")
 			return
 		}
@@ -372,8 +372,17 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 			writeErr(w, agentevaluations.ErrNotFound)
 			return
 		}
-		v, e := evaluations.ReassignSponsor(p.ID, actor.UserID, in.SponsorID, in.ExpectedVersion)
+		var v agentevaluations.Participation
+		e = orgs.WithCurrentMember(org.ID, in.SponsorID, func() error {
+			var x error
+			v, x = evaluations.ReassignSponsor(p.ID, actor.UserID, in.SponsorID, in.ExpectedVersion)
+			return x
+		})
 		if e != nil {
+			if errors.Is(e, organizations.ErrNotFound) {
+				writeAPIError(w, 422, "participation_sponsor_invalid", "replacement sponsor must be a current organization member")
+				return
+			}
 			writeErr(w, e)
 			return
 		}
@@ -429,7 +438,13 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 		grant := changed.AccessRequests[len(changed.AccessRequests)-1].GrantID
 		v, e := evaluations.ActivateParticipation(p.ID, actor.UserID, "agent-participation:"+p.ID, grant, in.ExpectedVersion)
 		if e != nil {
-			_, _ = orgs.RevokeAccessGrant(org.ID, grant, actor.UserID, 1, nil)
+			_, _ = orgs.RevokeAccessGrant(org.ID, grant, actor.UserID, 1, func(c organizations.DerivedCredential) error {
+				_, x := credentials.Revoke(c.OperatorID, c.ID)
+				if errors.Is(x, auth.ErrNotFound) {
+					return nil
+				}
+				return x
+			})
 			writeErr(w, e)
 			return
 		}

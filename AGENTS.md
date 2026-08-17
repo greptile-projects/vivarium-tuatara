@@ -180,7 +180,8 @@ whenever dependencies change or the web job fails before it starts.
   `repository_metadata`/`repository_content` boundaries; write is not inferred from role, derivations
   atomically consume the action cap, and lifetime is capped by the agent-minute budget. Pending
   sponsor-required participation supports owner-only, version-guarded reassignment to a current
-  member and retains both identities in history. Deployment compatibility
+  member, holds membership across that write, and retains both identities in history. Failed
+  activation rollback revokes the provisional grant and all credentials derived from it. Deployment compatibility
   uses exact closed profile values (`platform`, `operator_managed`, `customer_managed`, or
   `external_service`); free-form execution prose is explanatory only. An omitted structured boundary
   is missing evidence and fails closed only when a search explicitly requests that boundary. Nested teams retain

@@ -2178,6 +2178,9 @@ agent-minute budget. Capacity is reserved inside the serialized grant mutation, 
 derivations cannot exceed the ceiling. Cost remains a reporting ceiling and cannot expand technical
 scopes. If a pending proposal's sponsor leaves, an owner can compare-and-swap a replacement current
 member through its `/sponsor` endpoint; both identities remain in the participation event history.
+Sponsor membership is held across the participation write, excluding concurrent member removal.
+If activation loses its final participation compare-and-swap after provisional grant approval, rollback
+revokes the grant and every credential derived during that interval.
 Deployment matching compares exact closed profile values (`platform`, `operator_managed`,
 `customer_managed`, or `external_service`); explanatory execution prose cannot imply compatibility.
 An omitted structured disclosure stays visible as missing evidence and fails closed for an explicit

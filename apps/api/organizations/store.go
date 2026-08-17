@@ -666,6 +666,25 @@ func (s *Store) WithCurrentAgentOperator(agent, user string, fn func(organizatio
 	})
 }
 
+// WithCurrentMember holds membership stable while a dependent store commits.
+// Membership removal uses the same organization lock and therefore cannot
+// interleave between this admission check and the callback write.
+func (s *Store) WithCurrentMember(organizationID, user string, fn func() error) error {
+	if !validID(organizationID) || !validID(user) || fn == nil {
+		return ErrInvalid
+	}
+	return s.locked(func() error {
+		organization, err := s.Get(organizationID)
+		if err != nil {
+			return err
+		}
+		if !HasRole(organization, user, "") {
+			return ErrNotFound
+		}
+		return fn()
+	})
+}
+
 type DeliveryPrincipalRequirement struct {
 	Kind         string
 	ID           string

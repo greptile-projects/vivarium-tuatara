@@ -77,6 +77,38 @@ func TestCurrentAgentOperatorBoundaryExcludesConcurrentRevocation(t *testing.T) 
 	}
 }
 
+func TestCurrentMemberBoundaryExcludesConcurrentRemoval(t *testing.T) {
+	store, _ := New(t.TempDir())
+	owner, sponsor := "0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789"
+	v, _ := store.Create("Sponsors", "sponsors", "", owner)
+	v, _ = store.Invite(v.ID, owner, sponsor)
+	v, _ = store.AcceptInvitation(v.ID, v.Invitations[0].ID, sponsor)
+	entered, release, boundaryDone, removalDone := make(chan struct{}), make(chan struct{}), make(chan error, 1), make(chan error, 1)
+	go func() {
+		boundaryDone <- store.WithCurrentMember(v.ID, sponsor, func() error { close(entered); <-release; return nil })
+	}()
+	<-entered
+	go func() {
+		_, err := store.RemoveMember(v.ID, owner, sponsor, func(Organization) error { return nil })
+		removalDone <- err
+	}()
+	select {
+	case err := <-removalDone:
+		t.Fatalf("removal crossed sponsor boundary: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-boundaryDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-removalDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WithCurrentMember(v.ID, sponsor, func() error { return nil }); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("removed sponsor remained eligible: %v", err)
+	}
+}
+
 func TestStewardshipMandateRequiresCurrentOperatorAcceptanceAfterEveryRevision(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {
