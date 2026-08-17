@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"log"
 	"net/http"
@@ -231,6 +233,128 @@ func registerDurableSchemaRoutes(mux *http.ServeMux, git *storage.Store, catalog
 		projectDurableMigrationWork(&out, actor.UserID, catalog, proposalStore, pulls, sessionStore, workspaceStore)
 		writeJSON(w, 201, map[string]any{"schema": out, "migration_work": link, "task": assigned})
 	})
+	mux.HandleFunc("POST "+base+"/{schema_id}/migrations/{migration_id}/rehearsals", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int                      `json:"expected_version"`
+			Rehearsal       durableschemas.Rehearsal `json:"rehearsal"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a bounded rehearsal plan is required")
+			return
+		}
+		repository, err := git.Open(r.PathValue("id"))
+		if err != nil {
+			writeAPIError(w, 422, "invalid_application_revision", "repository storage is unavailable")
+			return
+		}
+		if _, err = repository.ReadCommit(storage.ObjectID(strings.ToLower(in.Rehearsal.ApplicationRevision))); err != nil {
+			writeAPIError(w, 422, "invalid_application_revision", "application_revision must be an exact repository commit")
+			return
+		}
+		out, rehearsal, err := store.CreateRehearsal(r.PathValue("id"), r.PathValue("schema_id"), r.PathValue("migration_id"), actor.UserID, in.ExpectedVersion, in.Rehearsal)
+		if err != nil {
+			writeDurableSchema(w, out, err, 201)
+			return
+		}
+		writeJSON(w, 201, map[string]any{"schema": out, "rehearsal": rehearsal})
+	})
+	mux.HandleFunc("POST "+base+"/{schema_id}/migrations/{migration_id}/rehearsals/{rehearsal_id}/runs", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in durableschemas.RehearsalRun
+		if decodeJSON(r, &in) != nil || workspaceStore == nil {
+			writeAPIError(w, 400, "invalid_rehearsal_run", "complete sanitized rehearsal evidence is required")
+			return
+		}
+		if !safeRehearsalRun(in) {
+			writeAPIError(w, 422, "unsafe_rehearsal_evidence", "logs and attestations must be sanitized and free of credential-shaped content")
+			return
+		}
+		ws, err := workspaceStore.Get(in.WorkspaceID)
+		if err != nil || ws.RepositoryID != r.PathValue("id") || ws.CreatorID != actor.UserID {
+			writeAPIError(w, 422, "invalid_rehearsal_workspace", "run evidence must come from the caller's bounded workspace in this repository")
+			return
+		}
+		schema, err := store.Get(r.PathValue("id"), r.PathValue("schema_id"))
+		var rehearsal *durableschemas.Rehearsal
+		for mi := range schema.Migrations {
+			if schema.Migrations[mi].ID == r.PathValue("migration_id") {
+				for ri := range schema.Migrations[mi].Rehearsals {
+					if schema.Migrations[mi].Rehearsals[ri].ID == r.PathValue("rehearsal_id") {
+						rehearsal = &schema.Migrations[mi].Rehearsals[ri]
+					}
+				}
+			}
+		}
+		if err != nil || rehearsal == nil || ws.CommitID != rehearsal.ApplicationRevision || !workspaceExecutedRehearsal(ws, *rehearsal) {
+			writeAPIError(w, 422, "invalid_rehearsal_workspace", "workspace must use the exact candidate and retain every repository-defined check outcome")
+			return
+		}
+		out, run, err := store.AddRehearsalRun(r.PathValue("id"), r.PathValue("schema_id"), r.PathValue("migration_id"), r.PathValue("rehearsal_id"), actor.UserID, in)
+		if err != nil {
+			writeDurableSchema(w, out, err, 201)
+			return
+		}
+		writeJSON(w, 201, map[string]any{"schema": out, "run": run})
+	})
+	mux.HandleFunc("POST "+base+"/{schema_id}/migrations/{migration_id}/rehearsals/{rehearsal_id}/notes", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			RunID string `json:"run_id"`
+			Body  string `json:"body"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a run and bounded investigation note are required")
+			return
+		}
+		if reusableSecret.MatchString(in.Body) {
+			writeAPIError(w, 422, "unsafe_rehearsal_evidence", "investigation notes must not contain credentials or secrets")
+			return
+		}
+		out, n, err := store.AddRehearsalNote(r.PathValue("id"), r.PathValue("schema_id"), r.PathValue("migration_id"), r.PathValue("rehearsal_id"), actor.UserID, in.RunID, in.Body)
+		if err != nil {
+			writeDurableSchema(w, out, err, 201)
+			return
+		}
+		writeJSON(w, 201, map[string]any{"schema": out, "note": n})
+	})
+}
+
+func workspaceExecutedRehearsal(ws workspaces.Workspace, rehearsal durableschemas.Rehearsal) bool {
+	executed := map[string]bool{}
+	for _, outcome := range ws.Commands {
+		executed[outcome.CommandSHA256] = true
+	}
+	for _, check := range rehearsal.Checks {
+		digest := sha256.Sum256([]byte(check.Command))
+		if !executed[hex.EncodeToString(digest[:])] {
+			return false
+		}
+	}
+	return true
+}
+
+func safeRehearsalRun(run durableschemas.RehearsalRun) bool {
+	for _, attestation := range run.Attestations {
+		if reusableSecret.MatchString(attestation) {
+			return false
+		}
+	}
+	for _, outcome := range run.Outcomes {
+		if reusableSecret.MatchString(outcome.SanitizedLog) {
+			return false
+		}
+	}
+	return true
 }
 
 func migrationWorkBody(schemaID, migrationID string, w durableschemas.MigrationWork) string {

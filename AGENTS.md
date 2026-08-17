@@ -71,6 +71,13 @@ whenever dependencies change or the web job fails before it starts.
   assumptions; agent sessions wait for merged cross-repository dependencies. Work is
   visible only where the reader can also read its target repository, and no schema
   definition, privacy metadata, data sample, or authority crosses that link implicitly.
+  Migration rehearsals freeze an exact application commit, schema and migration versions,
+  dependency fingerprints, privacy-bounded dataset shape, and repository checks for upgrades,
+  dual reads/writes, backfills, validation, rollback, and failure injection. Bounded-workspace
+  runs retain sanitized outcomes, counts, invariants, performance, artifacts, costs, and
+  attestations; attributable notes support failure investigation. Checks declare their revision
+  inputs so successor candidates invalidate only affected proof. Rehearsals grant no production,
+  deployment, environment, workspace, or data-store authority.
 
 - **Developer support** — `/support` and
   `/repositories/{id}/support-threads` retain contextual questions separately

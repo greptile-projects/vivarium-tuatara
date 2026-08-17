@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,7 +18,22 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
+
+func TestWorkspaceExecutedRehearsalRequiresEveryExactCommand(t *testing.T) {
+	command := "./scripts/rehearse upgrade"
+	digest := sha256.Sum256([]byte(command))
+	ws := workspaces.Workspace{Commands: []workspaces.CommandOutcome{{CommandSHA256: hex.EncodeToString(digest[:])}}}
+	rehearsal := durableschemas.Rehearsal{Checks: []durableschemas.RehearsalCheck{{ID: "upgrade", Command: command}}}
+	if !workspaceExecutedRehearsal(ws, rehearsal) {
+		t.Fatal("exact retained command was not accepted")
+	}
+	rehearsal.Checks = append(rehearsal.Checks, durableschemas.RehearsalCheck{ID: "failure", Command: "./scripts/rehearse failure"})
+	if workspaceExecutedRehearsal(ws, rehearsal) {
+		t.Fatal("partial execution was accepted")
+	}
+}
 
 func TestDurableSchemaDefinitionResolvesExactReviewedBlob(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())

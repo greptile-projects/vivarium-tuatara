@@ -98,6 +98,74 @@ type MigrationWork struct {
 	PullRequestID      string       `json:"pull_request_id,omitempty"`
 	ContributionStatus string       `json:"contribution_status,omitempty"`
 }
+
+// Rehearsal is a bounded, non-authoritative proof plan. It names only
+// synthetic or explicitly privacy-preserving inputs and exact revisions; the
+// retained runs are evidence for review and never confer data-store access.
+type Rehearsal struct {
+	ID                  string                `json:"id"`
+	Name                string                `json:"name"`
+	ApplicationRevision string                `json:"application_revision"`
+	MigrationVersion    int                   `json:"migration_version"`
+	Dataset             RehearsalDataset      `json:"dataset"`
+	Dependencies        []RehearsalDependency `json:"dependencies"`
+	Checks              []RehearsalCheck      `json:"checks"`
+	Runs                []RehearsalRun        `json:"runs"`
+	Notes               []RehearsalNote       `json:"notes"`
+	CreatedBy           string                `json:"created_by"`
+	CreatedAt           time.Time             `json:"created_at"`
+}
+type RehearsalDataset struct {
+	Kind          string `json:"kind"`
+	Description   string `json:"description"`
+	PrivacyMethod string `json:"privacy_method"`
+	Digest        string `json:"digest"`
+	MaxBytes      int64  `json:"max_bytes"`
+	RowCount      int64  `json:"row_count"`
+	ObjectCount   int64  `json:"object_count"`
+}
+type RehearsalDependency struct {
+	Name     string `json:"name"`
+	Revision string `json:"revision"`
+	Digest   string `json:"digest"`
+}
+type RehearsalCheck struct {
+	ID             string   `json:"id"`
+	Kind           string   `json:"kind"`
+	Command        string   `json:"command"`
+	Invariant      string   `json:"invariant"`
+	RevisionInputs []string `json:"revision_inputs"`
+}
+type RehearsalOutcome struct {
+	CheckID         string   `json:"check_id"`
+	Status          string   `json:"status"`
+	ExitCode        int      `json:"exit_code"`
+	DurationMS      int64    `json:"duration_ms"`
+	SanitizedLog    string   `json:"sanitized_log"`
+	RowsBefore      int64    `json:"rows_before"`
+	RowsAfter       int64    `json:"rows_after"`
+	ObjectsBefore   int64    `json:"objects_before"`
+	ObjectsAfter    int64    `json:"objects_after"`
+	InvariantPassed bool     `json:"invariant_passed"`
+	ArtifactDigests []string `json:"artifact_digests"`
+	CostUnits       int64    `json:"cost_units"`
+}
+type RehearsalRun struct {
+	ID           string             `json:"id"`
+	WorkspaceID  string             `json:"workspace_id"`
+	Result       string             `json:"result"`
+	Outcomes     []RehearsalOutcome `json:"outcomes"`
+	Attestations []string           `json:"attestations"`
+	CreatedBy    string             `json:"created_by"`
+	CreatedAt    time.Time          `json:"created_at"`
+}
+type RehearsalNote struct {
+	ID        string    `json:"id"`
+	RunID     string    `json:"run_id"`
+	Body      string    `json:"body"`
+	ActorID   string    `json:"actor_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
 type Event struct {
 	ID        string    `json:"id"`
 	Kind      string    `json:"kind"`
@@ -119,6 +187,7 @@ type Migration struct {
 	Version        int             `json:"version"`
 	Events         []Event         `json:"events"`
 	Work           []MigrationWork `json:"work"`
+	Rehearsals     []Rehearsal     `json:"rehearsals"`
 	CreatedBy      string          `json:"created_by"`
 	CreatedAt      time.Time       `json:"created_at"`
 	UpdatedAt      time.Time       `json:"updated_at"`
@@ -297,6 +366,163 @@ func (s *Store) CreateMigrationWork(repo, schema, migration, actor string, expec
 		return v, work, s.write(v)
 	}
 	return Schema{}, MigrationWork{}, ErrNotFound
+}
+
+func (s *Store) CreateRehearsal(repo, schema, migration, actor string, expected int, rehearsal Rehearsal) (Schema, Rehearsal, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, schema)
+	if err != nil {
+		return Schema{}, Rehearsal{}, err
+	}
+	for i := range v.Migrations {
+		m := &v.Migrations[i]
+		if m.ID != migration {
+			continue
+		}
+		if m.Version != expected {
+			return v, Rehearsal{}, ErrConflict
+		}
+		rehearsal.MigrationVersion = m.Version
+		if validateRehearsal(rehearsal) != nil {
+			return v, Rehearsal{}, ErrInvalid
+		}
+		now := s.now()
+		rehearsal.ID, rehearsal.CreatedBy, rehearsal.CreatedAt = id(), actor, now
+		rehearsal.Runs, rehearsal.Notes = []RehearsalRun{}, []RehearsalNote{}
+		m.Rehearsals = append(m.Rehearsals, rehearsal)
+		m.Version++
+		m.UpdatedAt, v.UpdatedAt = now, now
+		m.Events = append(m.Events, Event{ID: id(), Kind: "rehearsal_created", Summary: rehearsal.Name, ActorID: actor, CreatedAt: now})
+		return v, rehearsal, s.write(v)
+	}
+	return Schema{}, Rehearsal{}, ErrNotFound
+}
+
+func (s *Store) AddRehearsalRun(repo, schema, migration, rehearsal, actor string, run RehearsalRun) (Schema, RehearsalRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, schema)
+	if err != nil {
+		return Schema{}, RehearsalRun{}, err
+	}
+	for mi := range v.Migrations {
+		m := &v.Migrations[mi]
+		if m.ID != migration {
+			continue
+		}
+		for ri := range m.Rehearsals {
+			x := &m.Rehearsals[ri]
+			if x.ID != rehearsal {
+				continue
+			}
+			if validateRun(*x, run) != nil {
+				return v, RehearsalRun{}, ErrInvalid
+			}
+			for _, prior := range x.Runs {
+				if prior.WorkspaceID == run.WorkspaceID {
+					return v, RehearsalRun{}, ErrConflict
+				}
+			}
+			now := s.now()
+			run.ID, run.CreatedBy, run.CreatedAt = id(), actor, now
+			x.Runs = append(x.Runs, run)
+			v.UpdatedAt = now
+			return v, run, s.write(v)
+		}
+	}
+	return Schema{}, RehearsalRun{}, ErrNotFound
+}
+
+func (s *Store) AddRehearsalNote(repo, schema, migration, rehearsal, actor, runID, body string) (Schema, RehearsalNote, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, schema)
+	if err != nil {
+		return Schema{}, RehearsalNote{}, err
+	}
+	if strings.TrimSpace(body) == "" || len([]rune(body)) > 4000 {
+		return v, RehearsalNote{}, ErrInvalid
+	}
+	for mi := range v.Migrations {
+		m := &v.Migrations[mi]
+		if m.ID != migration {
+			continue
+		}
+		for ri := range m.Rehearsals {
+			x := &m.Rehearsals[ri]
+			if x.ID != rehearsal {
+				continue
+			}
+			found := false
+			for _, run := range x.Runs {
+				if run.ID == runID {
+					found = true
+				}
+			}
+			if !found {
+				return v, RehearsalNote{}, ErrInvalid
+			}
+			now := s.now()
+			n := RehearsalNote{ID: id(), RunID: runID, Body: body, ActorID: actor, CreatedAt: now}
+			x.Notes = append(x.Notes, n)
+			v.UpdatedAt = now
+			return v, n, s.write(v)
+		}
+	}
+	return Schema{}, RehearsalNote{}, ErrNotFound
+}
+
+func validateRehearsal(r Rehearsal) error {
+	if strings.TrimSpace(r.Name) == "" || r.ApplicationRevision == "" || r.MigrationVersion < 1 || len(r.Checks) == 0 || len(r.Checks) > 30 || len(r.Dependencies) > 30 {
+		return ErrInvalid
+	}
+	if (r.Dataset.Kind != "synthetic" && r.Dataset.Kind != "representative") || r.Dataset.Description == "" || r.Dataset.Digest == "" || r.Dataset.MaxBytes <= 0 || r.Dataset.MaxBytes > 1<<30 || (r.Dataset.Kind == "representative" && r.Dataset.PrivacyMethod == "") || r.Dataset.RowCount < 0 || r.Dataset.ObjectCount < 0 {
+		return ErrInvalid
+	}
+	deps := map[string]bool{"application": true, "schema_from": true, "schema_to": true, "migration": true, "data_shape": true}
+	for _, d := range r.Dependencies {
+		if d.Name == "" || d.Revision == "" || d.Digest == "" {
+			return ErrInvalid
+		}
+		deps["dependency:"+d.Name] = true
+	}
+	ids := map[string]bool{}
+	kinds := map[string]bool{"upgrade": true, "dual_read": true, "dual_write": true, "backfill": true, "validation": true, "rollback": true, "failure_injection": true}
+	for _, c := range r.Checks {
+		if c.ID == "" || ids[c.ID] || !kinds[c.Kind] || strings.TrimSpace(c.Command) == "" || len(c.Command) > 2000 || c.Invariant == "" || len(c.RevisionInputs) == 0 {
+			return ErrInvalid
+		}
+		ids[c.ID] = true
+		for _, input := range c.RevisionInputs {
+			if !deps[input] {
+				return ErrInvalid
+			}
+		}
+	}
+	return nil
+}
+func validateRun(r Rehearsal, run RehearsalRun) error {
+	if run.WorkspaceID == "" || (run.Result != "passed" && run.Result != "failed" && run.Result != "inconclusive") || len(run.Outcomes) != len(r.Checks) || len(run.Attestations) == 0 {
+		return ErrInvalid
+	}
+	checks := map[string]bool{}
+	for _, c := range r.Checks {
+		checks[c.ID] = true
+	}
+	seen := map[string]bool{}
+	allPassed := true
+	for _, o := range run.Outcomes {
+		if !checks[o.CheckID] || seen[o.CheckID] || (o.Status != "passed" && o.Status != "failed" && o.Status != "skipped") || len(o.SanitizedLog) > 65536 || o.DurationMS < 0 || o.CostUnits < 0 || o.RowsBefore < 0 || o.RowsAfter < 0 || o.ObjectsBefore < 0 || o.ObjectsAfter < 0 || len(o.ArtifactDigests) > 20 {
+			return ErrInvalid
+		}
+		seen[o.CheckID] = true
+		allPassed = allPassed && o.Status == "passed" && o.ExitCode == 0 && o.InvariantPassed
+	}
+	if (run.Result == "passed") != allPassed {
+		return ErrInvalid
+	}
+	return nil
 }
 
 func (s *Store) FindMigrationWork(repositoryID, taskID string) (Schema, Migration, MigrationWork, error) {

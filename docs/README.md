@@ -44,6 +44,16 @@ Cross-repository agent work cannot start until its linked predecessors merge. Ta
 repository visibility is rechecked on reads, so the link does not copy restricted
 schema definitions, privacy commitments, data samples, or access into another project.
 
+Before authoritative state changes, participants can freeze a migration rehearsal against
+the exact application commit, schema versions, migration version, dependency digests, and
+synthetic or explicitly privacy-preserving representative dataset shape. Repository-defined
+upgrade, dual-read/write, backfill, validation, rollback, and failure-injection commands run
+in ordinary bounded workspaces. Immutable runs retain sanitized per-check logs, counts,
+invariants, timing, artifacts, cost, and attestations; attributable notes let humans and
+scoped agents investigate failures without copying production data. Each check declares the
+revision inputs it depends on so later candidates can replace only affected proof. Rehearsal
+records are review evidence, not deployment or data-store authority.
+
 Support guidance can be proven in ordinary revision-pinned development workspaces. Immutable attempts
 bind an exact cited answer revision to sanitized thread inputs, declared environment, commands and
 outputs, artifacts, cost, and result; fresh-workspace reruns preserve the original record and reads expose
