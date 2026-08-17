@@ -2159,6 +2159,17 @@ live independent grants, effective policy, disclosed cost and availability, depl
 profile freshness, conflicts, verified evaluations, and attributed outcomes on comparable work.
 Missing or stale evidence remains visible; ordering grants no authority and copies no source content.
 Private matching evidence is excluded from the broader public directory.
+Organization owners can turn one explicitly approved evaluation run into a versioned participation
+proposal through `/organizations/{organization_id}/agent-participations`. The proposal freezes the
+agent profile and trial decision together with selected roles, resources, permitted actions,
+cost/action/time budgets, schedule, data boundaries, referenced policy exceptions, and either a
+current operator agreement or named human sponsor. Its `/preview` is always non-effective and reports
+schedule, agreement, and live agent-policy blockers. Activation issues the stable
+`agent-participation:{id}` attribution identity and links it to an ordinary organization access grant,
+the only source of technical authority used by established collaboration workflows. Denials,
+concurrent versions, trial evidence, agreements, expiry, activation, and revocation remain retained;
+revocation retires the linked grant and derived credentials. Evaluation approval, budgets, policy
+exceptions, and governance or sponsorship standing never create access on their own.
 Deployment matching compares exact closed profile values (`platform`, `operator_managed`,
 `customer_managed`, or `external_service`); explanatory execution prose cannot imply compatibility.
 An omitted structured disclosure stays visible as missing evidence and fails closed for an explicit

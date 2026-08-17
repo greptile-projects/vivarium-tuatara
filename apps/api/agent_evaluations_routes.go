@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"os/exec"
+	"slices"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/agentevaluations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -25,6 +27,15 @@ type evaluationRunInput struct {
 type evaluationDecisionInput struct {
 	Decision  string `json:"decision"`
 	Rationale string `json:"rationale"`
+}
+type participationCreateInput struct {
+	ExpectedVersion int                                 `json:"expected_version"`
+	Participation   agentevaluations.ParticipationInput `json:"participation"`
+}
+type participationMutationInput struct {
+	ExpectedVersion int    `json:"expected_version"`
+	Statement       string `json:"statement"`
+	Decision        string `json:"decision"`
 }
 
 func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, orgs *organizations.Store, evaluations *agentevaluations.Store) {
@@ -237,5 +248,196 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 			return
 		}
 		writeJSON(w, 201, v)
+	})
+	mux.HandleFunc("GET /organizations/{id}/agent-participations", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := require(w, r, "repositories:read"); !ok {
+			return
+		}
+		v, e := evaluations.ListParticipations(r.PathValue("id"))
+		if e != nil {
+			writeErr(w, e)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"participations": v})
+	})
+	mux.HandleFunc("POST /organizations/{id}/agent-participations", func(w http.ResponseWriter, r *http.Request) {
+		actor, org, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		if !organizations.HasRole(org, actor.UserID, "owner") {
+			writeAPIError(w, 403, "participation_owner_required", "an organization owner must define agent participation")
+			return
+		}
+		var in participationCreateInput
+		if decodeJSON(r, &in) != nil || in.ExpectedVersion != 0 {
+			writeAPIError(w, 400, "invalid_participation", "a new bounded participation with expected_version zero is required")
+			return
+		}
+		for _, scope := range in.Participation.Resources {
+			if scope.Kind == "repository" && !belongs(org.ID, scope.ID) {
+				writeAPIError(w, 422, "participation_resource_invalid", "repository resources must belong to this organization")
+				return
+			}
+		}
+		v, e := evaluations.CreateParticipation(org.ID, actor.UserID, in.Participation)
+		if e != nil {
+			writeErr(w, e)
+			return
+		}
+		writeJSON(w, 201, v)
+	})
+	mux.HandleFunc("GET /organizations/{id}/agent-participations/{participation_id}/preview", func(w http.ResponseWriter, r *http.Request) {
+		_, org, ok := require(w, r, "repositories:read")
+		if !ok {
+			return
+		}
+		p, e := evaluations.GetParticipation(r.PathValue("participation_id"))
+		if e != nil || p.OrganizationID != org.ID {
+			writeErr(w, agentevaluations.ErrNotFound)
+			return
+		}
+		blockers := []string{}
+		if p.Status == "pending_agreement" {
+			blockers = append(blockers, p.AgreementRequirement+" agreement required")
+		}
+		if time.Now().UTC().Before(p.StartsAt) {
+			blockers = append(blockers, "schedule has not started")
+		}
+		if !p.ExpiresAt.After(time.Now().UTC()) {
+			blockers = append(blockers, "approval expired")
+		}
+		for _, scope := range p.Resources {
+			if scope.Kind == "repository" && organizations.EffectivePolicies(org, scope.ID, organizations.ResponsibleTeamIDs(org, scope.ID), false, time.Now().UTC()).Rules.AgentAuthority == "disabled" {
+				blockers = append(blockers, "policy disables agent authority for repository "+scope.ID)
+			}
+		}
+		writeJSON(w, 200, map[string]any{"participation": p, "would_issue_identity": "agent-participation:" + p.ID, "would_create_access_grant": true, "effective": false, "blockers": blockers, "actions": p.Actions, "budget": p.Budget, "data_boundaries": p.DataBoundaries, "policy_exception_ids": p.PolicyExceptionIDs})
+	})
+	mux.HandleFunc("POST /organizations/{id}/agent-participations/{participation_id}/agreement", func(w http.ResponseWriter, r *http.Request) {
+		actor, org, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		p, e := evaluations.GetParticipation(r.PathValue("participation_id"))
+		if e != nil || p.OrganizationID != org.ID {
+			writeErr(w, agentevaluations.ErrNotFound)
+			return
+		}
+		var in participationMutationInput
+		if decodeJSON(r, &in) != nil || in.ExpectedVersion != p.Version {
+			writeErr(w, agentevaluations.ErrConflict)
+			return
+		}
+		allowed := p.AgreementRequirement == "sponsor" && actor.UserID == p.SponsorID
+		if p.AgreementRequirement == "operator" {
+			for _, a := range org.Agents {
+				if a.ID == p.AgentID && slices.Contains(a.OperatorIDs, actor.UserID) {
+					allowed = true
+				}
+			}
+		}
+		if !allowed {
+			writeAPIError(w, 403, "participation_agreement_required", "only the named sponsor or a current agent operator may agree")
+			return
+		}
+		v, e := evaluations.AgreeParticipation(p.ID, actor.UserID, p.AgreementRequirement, in.Statement)
+		if e != nil {
+			writeErr(w, e)
+			return
+		}
+		writeJSON(w, 200, v)
+	})
+	mux.HandleFunc("POST /organizations/{id}/agent-participations/{participation_id}/activate", func(w http.ResponseWriter, r *http.Request) {
+		actor, org, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		if !organizations.HasRole(org, actor.UserID, "owner") {
+			writeAPIError(w, 403, "participation_owner_required", "an organization owner must activate agent participation")
+			return
+		}
+		var in participationMutationInput
+		if decodeJSON(r, &in) != nil {
+			writeErr(w, agentevaluations.ErrInvalid)
+			return
+		}
+		p, e := evaluations.GetParticipation(r.PathValue("participation_id"))
+		if e != nil || p.OrganizationID != org.ID {
+			writeErr(w, agentevaluations.ErrNotFound)
+			return
+		}
+		if p.Version != in.ExpectedVersion || p.Status != "ready" || time.Now().UTC().Before(p.StartsAt) || !p.ExpiresAt.After(time.Now().UTC()) {
+			writeErr(w, agentevaluations.ErrConflict)
+			return
+		}
+		resources := make([]organizations.ResourceScope, 0, len(p.Resources))
+		for _, x := range p.Resources {
+			resources = append(resources, organizations.ResourceScope{Kind: x.Kind, ID: x.ID})
+		}
+		expires := p.ExpiresAt
+		changed, e := orgs.CreateAccessRequest(org.ID, actor.UserID, "agent", p.AgentID, p.Role, "Evaluated participation "+p.ID, resources, nil, &expires)
+		if e != nil {
+			writeOrganizationError(w, e)
+			return
+		}
+		req := changed.AccessRequests[len(changed.AccessRequests)-1]
+		changed, e = orgs.DecideAccessRequest(org.ID, req.ID, actor.UserID, "approve", func(request organizations.AccessRequest) error {
+			for _, x := range request.Resources {
+				if x.Kind == "repository" && organizations.EffectivePolicies(org, x.ID, organizations.ResponsibleTeamIDs(org, x.ID), false, time.Now().UTC()).Rules.AgentAuthority == "disabled" {
+					return organizations.ErrConflict
+				}
+			}
+			return nil
+		})
+		if e != nil {
+			writeOrganizationError(w, e)
+			return
+		}
+		grant := changed.AccessRequests[len(changed.AccessRequests)-1].GrantID
+		v, e := evaluations.ActivateParticipation(p.ID, actor.UserID, "agent-participation:"+p.ID, grant, in.ExpectedVersion)
+		if e != nil {
+			_, _ = orgs.RevokeAccessGrant(org.ID, grant, actor.UserID, 1, nil)
+			writeErr(w, e)
+			return
+		}
+		writeJSON(w, 200, v)
+	})
+	mux.HandleFunc("POST /organizations/{id}/agent-participations/{participation_id}/decision", func(w http.ResponseWriter, r *http.Request) {
+		actor, org, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		if !organizations.HasRole(org, actor.UserID, "owner") {
+			writeAPIError(w, 403, "participation_owner_required", "an organization owner must deny or revoke participation")
+			return
+		}
+		var in participationMutationInput
+		if decodeJSON(r, &in) != nil {
+			return
+		}
+		p, e := evaluations.GetParticipation(r.PathValue("participation_id"))
+		if e != nil || p.OrganizationID != org.ID {
+			writeErr(w, agentevaluations.ErrNotFound)
+			return
+		}
+		if in.Decision == "revoke" && p.AccessGrantID != "" {
+			if _, e = orgs.RevokeAccessGrant(org.ID, p.AccessGrantID, actor.UserID, 1, func(c organizations.DerivedCredential) error {
+				_, x := credentials.Revoke(c.OperatorID, c.ID)
+				if errors.Is(x, auth.ErrNotFound) {
+					return nil
+				}
+				return x
+			}); e != nil {
+				writeOrganizationError(w, e)
+				return
+			}
+		}
+		v, e := evaluations.DecideParticipation(p.ID, actor.UserID, in.Decision, in.ExpectedVersion)
+		if e != nil {
+			writeErr(w, e)
+			return
+		}
+		writeJSON(w, 200, v)
 	})
 }
