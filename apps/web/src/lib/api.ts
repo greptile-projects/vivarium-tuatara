@@ -683,6 +683,19 @@ export type SupportThread = {
     message?: string;
     created_at: string;
   }[];
+  replies: {
+    id: string;
+    actor_id: string;
+    body: string;
+    created_at: string;
+  }[];
+  notifications?: {
+    id: string;
+    user_id: string;
+    kind: string;
+    message: string;
+    created_at: string;
+  }[];
   diagnostics: { kind: string; message: string }[];
   related?: {
     kind: "support_answer" | "issue";

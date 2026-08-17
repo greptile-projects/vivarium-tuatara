@@ -55,10 +55,26 @@ func TestPublicSupportQuestionRetainsContextAndPrivateSuggestions(t *testing.T) 
 	if projected.ContactPreferences.Email != "" {
 		t.Fatal("public reader received private contact email")
 	}
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/support-threads/"+thread.ID+"/replies", `{"body":"Please confirm whether the timeout follows the first accepted chunk.","expected_version":1}`, owner.Credential.Token, http.StatusCreated)
+	decodeResponse(t, response, &thread)
+	if len(thread.Replies) != 1 || len(thread.Notifications) != 0 {
+		t.Fatalf("maintainer projection = %#v", thread)
+	}
+	response = authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repo.ID+"/support-threads/"+thread.ID, "", developer.Credential.Token, http.StatusOK)
+	decodeResponse(t, response, &thread)
+	if len(thread.Notifications) != 1 || thread.Notifications[0].UserID != developer.User.ID {
+		t.Fatalf("asker notification = %#v", thread.Notifications)
+	}
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/support-threads/"+thread.ID+"/replies", `{"body":"I saw this too.","expected_version":2}`, reader.Credential.Token, http.StatusForbidden).Body.Close()
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/support-threads/"+thread.ID+"/replies", `{"body":"Yes; version 2.1 accepted one chunk before the retry.","expected_version":2}`, developer.Credential.Token, http.StatusCreated)
+	decodeResponse(t, response, &thread)
+	if len(thread.Replies) != 2 || thread.Replies[1].ActorID != developer.User.ID {
+		t.Fatalf("refined thread = %#v", thread)
+	}
 	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+repo.ID+"/support-threads/"+thread.ID, `{"status":"answered","expected_version":`+strconv.Itoa(thread.Version)+`}`, developer.Credential.Token, http.StatusForbidden).Body.Close()
 	response = authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+repo.ID+"/support-threads/"+thread.ID, `{"status":"answered","expected_version":`+strconv.Itoa(thread.Version)+`,"message":"Documented retry guidance applies."}`, owner.Credential.Token, http.StatusOK)
 	decodeResponse(t, response, &thread)
-	if thread.Status != "answered" || len(thread.History) != 2 {
+	if thread.Status != "answered" || len(thread.History) != 4 {
 		t.Fatalf("answered = %#v", thread)
 	}
 }

@@ -3471,6 +3471,17 @@ repository participants can set `open`, `needs_context`, `answered`, or
 omitted for readers other than the author or a current repository participant.
 Audience and support state grant no repository access.
 
+`POST /repositories/{id}/support-threads/{thread_id}/replies` lets the asker or
+a current repository participant append a bounded attributable reply using
+`expected_version`. Replies share the thread's audience and mutation boundary,
+cannot be added after closure, and never grant repository authority. A
+participant reply appends an asker-only notification; other readers never
+receive that notification projection.
+
+The web support workspace accepts `?repository={id}` so a signed-in package
+user can open a public repository's support context without first becoming a
+collaborator; repository visibility is still resolved by the API.
+
 ## Project knowledge answers
 
 `GET` and `POST /repositories/{id}/knowledge-answers` expose durable project guidance to its declared
