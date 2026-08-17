@@ -52,6 +52,18 @@ whenever dependencies change or the web job fails before it starts.
 
 ## Conventions
 
+- **Durable state** — `/repositories/{id}/durable-schemas` and the repository
+  `/durable-state` workspace retain immutable database, queue, index, object-store,
+  event-log, cache, and other persistent-store schema revisions beneath
+  `$DURABLE_SCHEMA_STORAGE_ROOT` (`durable-schemas`). Every revision cites the exact
+  merge commit of a merged pull and declares owners, compatibility, retention,
+  privacy, and service/environment links. Migration plans originate from an
+  existing repository pull or affected technical decision, compare exact schema
+  versions, classify reads, writes, backfills, and destructive work, and freeze
+  affected consumers, ordered measures, required participant approvals, rollback
+  limits, and compare-and-swap attributed history. These records expose review
+  context only and grant no deployment, environment, Git, or data-store authority.
+
 - **Developer support** — `/support` and
   `/repositories/{id}/support-threads` retain contextual questions separately
   from unexpected-behavior issues. Threads name a repository, package,
