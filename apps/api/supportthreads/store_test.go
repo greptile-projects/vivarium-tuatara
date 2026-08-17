@@ -2,6 +2,9 @@ package supportthreads
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -33,6 +36,96 @@ func TestContextualQuestionLifecycleAndDiagnostics(t *testing.T) {
 	reloaded, err := s.Get("repo", v.ID)
 	if err != nil || reloaded.History[1].Message != "Please include the runtime." {
 		t.Fatalf("reloaded = %#v, %v", reloaded, err)
+	}
+}
+
+func TestResolveHoldsThreadMutationBoundaryAcrossPublication(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, err := s.Create(Thread{RepositoryID: "repo", AuthorID: "asker", Title: "Help", Body: "Details", Target: Target{Kind: "repository", Label: "repo"}, Urgency: "normal", Audience: "public", ContactPreferences: ContactPreferences{ReplyInThread: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	var resolved Thread
+	var resolveErr error
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		resolved, resolveErr = s.Resolve("repo", v.ID, "asker", "published", v.Version, false, func() (func() error, error) {
+			close(entered)
+			<-release
+			return nil, nil
+		})
+	}()
+	<-entered
+	updateDone := make(chan error, 1)
+	go func() {
+		_, updateErr := s.UpdateStatus("repo", v.ID, "asker", "open", "concurrent", v.Version, false)
+		updateDone <- updateErr
+	}()
+	close(release)
+	wg.Wait()
+	if resolveErr != nil || resolved.Status != "closed" || resolved.History[len(resolved.History)-1].Kind != "resolved" {
+		t.Fatalf("resolved = %#v, %v", resolved, resolveErr)
+	}
+	if updateErr := <-updateDone; !errors.Is(updateErr, ErrConflict) {
+		t.Fatalf("concurrent update = %v", updateErr)
+	}
+}
+
+func TestResolveCompensatesPublicationWhenThreadCloseCannotPersist(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, err := s.Create(Thread{RepositoryID: "repo", AuthorID: "asker", Title: "Help", Body: "Details", Target: Target{Kind: "repository", Label: "repo"}, Urgency: "normal", Audience: "public", ContactPreferences: ContactPreferences{ReplyInThread: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published := false
+	repoDir := filepath.Join(s.root, "repo")
+	_, err = s.Resolve("repo", v.ID, "asker", "published", v.Version, false, func() (func() error, error) {
+		published = true
+		if chmodErr := os.Chmod(repoDir, 0500); chmodErr != nil {
+			return nil, chmodErr
+		}
+		return func() error { published = false; return nil }, nil
+	})
+	if chmodErr := os.Chmod(repoDir, 0700); chmodErr != nil {
+		t.Fatal(chmodErr)
+	}
+	if err == nil {
+		t.Fatal("forced close failure succeeded")
+	}
+	if published {
+		t.Fatal("external publication was not compensated")
+	}
+	reloaded, readErr := s.Get("repo", v.ID)
+	if readErr != nil || reloaded.Status != "open" || reloaded.Version != v.Version {
+		t.Fatalf("thread diverged: %#v, %v", reloaded, readErr)
+	}
+}
+
+func TestResolveDoesNotCompensatePreexistingPublication(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, err := s.Create(Thread{RepositoryID: "repo", AuthorID: "asker", Title: "Help", Body: "Details", Target: Target{Kind: "repository", Label: "repo"}, Urgency: "normal", Audience: "public", ContactPreferences: ContactPreferences{ReplyInThread: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoDir := filepath.Join(s.root, "repo")
+	_, err = s.Resolve("repo", v.ID, "asker", "retry", v.Version, false, func() (func() error, error) {
+		if chmodErr := os.Chmod(repoDir, 0500); chmodErr != nil {
+			return nil, chmodErr
+		}
+		return nil, nil
+	})
+	if chmodErr := os.Chmod(repoDir, 0700); chmodErr != nil {
+		t.Fatal(chmodErr)
+	}
+	if err == nil {
+		t.Fatal("forced retry close failure succeeded")
+	}
+	reloaded, readErr := s.Get("repo", v.ID)
+	if readErr != nil || reloaded.Status != "open" {
+		t.Fatalf("thread = %#v, %v", reloaded, readErr)
 	}
 }
 

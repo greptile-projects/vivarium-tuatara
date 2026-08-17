@@ -6,8 +6,59 @@ export type User = {
   updated_at: string;
 };
 
-export type KnowledgeCitation = { kind: "source"|"symbol"|"documentation"|"package"|"release"|"support_thread"|"known_issue"; resource_id?: string; revision?: string; path?: string; symbol?: string; start_line?: number; end_line?: number; label: string; applicable_versions: string[] };
-export type KnowledgeAnswer = { id:string; repository_id:string; question:string; audience:"public"|"participants"; status:"proposed"|"verified"|"needs_context"|"retired"; current_revision_id:string; version:number; revisions:{id:string;number:number;summary:string;body:string;author_id:string;author_type:"human"|"agent";supersedes_revision_id?:string;created_at:string;claims:{id:string;text:string;confidence:"high"|"medium"|"low";uncertainty?:string;citations:KnowledgeCitation[]}[]}[]; responses:{id:string;revision_id:string;kind:string;body:string;actor_id:string;created_at:string}[]; updated_at:string };
+export type KnowledgeCitation = {
+  kind:
+    | "source"
+    | "symbol"
+    | "documentation"
+    | "package"
+    | "release"
+    | "support_thread"
+    | "known_issue";
+  resource_id?: string;
+  revision?: string;
+  path?: string;
+  symbol?: string;
+  start_line?: number;
+  end_line?: number;
+  label: string;
+  applicable_versions: string[];
+};
+export type KnowledgeAnswer = {
+  id: string;
+  repository_id: string;
+  question: string;
+  audience: "public" | "participants";
+  status: "proposed" | "verified" | "needs_context" | "retired";
+  current_revision_id: string;
+  version: number;
+  revisions: {
+    id: string;
+    number: number;
+    summary: string;
+    body: string;
+    author_id: string;
+    author_type: "human" | "agent";
+    supersedes_revision_id?: string;
+    created_at: string;
+    claims: {
+      id: string;
+      text: string;
+      confidence: "high" | "medium" | "low";
+      uncertainty?: string;
+      citations: KnowledgeCitation[];
+    }[];
+  }[];
+  responses: {
+    id: string;
+    revision_id: string;
+    kind: string;
+    body: string;
+    actor_id: string;
+    created_at: string;
+  }[];
+  updated_at: string;
+};
 export type CharterRevision = {
   id: string;
   scope_type: "repository" | "organization";
@@ -580,15 +631,127 @@ export type Repository = {
   upstream_repository_id?: string;
 };
 export type SupportThread = {
-  id: string; repository_id: string; author_id: string; title: string; body: string;
-  target: { kind: "repository"|"package"|"release"|"api"|"documented_journey"|"error"; resource_id?: string; label: string; version?: string };
-  environment: { operating_system?: string; runtime?: string; dependencies?: string[]; deployment?: string; details?: string };
-  goal?: string; attempted_steps: string[]; urgency: "low"|"normal"|"high"|"urgent"; audience: "public"|"maintainers";
-  status: "open"|"needs_context"|"answered"|"closed"; contact_preferences: { reply_in_thread: boolean; email?: string; allow_maintainer_contact: boolean };
-  attachments: { id: string; kind: "log"|"configuration"|"sample_code"; name: string; media_type: string; size: number; data: string; created_at: string }[];
-  history: { id: string; kind: string; actor_id: string; from?: string; to?: string; message?: string; created_at: string }[];
-  diagnostics: { kind: string; message: string }[]; related?: { kind: "support_answer"|"issue"; id: string; title: string; status: string; score: number }[];
-  version: number; created_at: string; updated_at: string;
+  id: string;
+  repository_id: string;
+  author_id: string;
+  title: string;
+  body: string;
+  target: {
+    kind:
+      | "repository"
+      | "package"
+      | "release"
+      | "api"
+      | "documented_journey"
+      | "error";
+    resource_id?: string;
+    label: string;
+    version?: string;
+  };
+  environment: {
+    operating_system?: string;
+    runtime?: string;
+    dependencies?: string[];
+    deployment?: string;
+    details?: string;
+  };
+  goal?: string;
+  attempted_steps: string[];
+  urgency: "low" | "normal" | "high" | "urgent";
+  audience: "public" | "maintainers";
+  status: "open" | "needs_context" | "answered" | "closed";
+  contact_preferences: {
+    reply_in_thread: boolean;
+    email?: string;
+    allow_maintainer_contact: boolean;
+  };
+  attachments: {
+    id: string;
+    kind: "log" | "configuration" | "sample_code";
+    name: string;
+    media_type: string;
+    size: number;
+    data: string;
+    created_at: string;
+  }[];
+  history: {
+    id: string;
+    kind: string;
+    actor_id: string;
+    from?: string;
+    to?: string;
+    message?: string;
+    created_at: string;
+  }[];
+  diagnostics: { kind: string; message: string }[];
+  related?: {
+    kind: "support_answer" | "issue";
+    id: string;
+    title: string;
+    status: string;
+    score: number;
+  }[];
+  version: number;
+  created_at: string;
+  updated_at: string;
+};
+export type SupportVerificationAttempt = {
+  id: string;
+  thread_id: string;
+  answer_id: string;
+  answer_revision_id: string;
+  software_version: string;
+  result: "passed" | "failed" | "inconclusive";
+  stale: boolean;
+  stale_reasons: string[];
+  actor_id: string;
+  created_at: string;
+};
+export type SupportSolution = {
+  id: string;
+  repository_id: string;
+  thread_id: string;
+  answer_id: string;
+  answer_revision_id: string;
+  verification_attempt_id: string;
+  title: string;
+  summary: string;
+  instructions: string;
+  audience: "public" | "participants";
+  applicable_versions: string[];
+  limitations: string[];
+  links: {
+    kind:
+      | "search"
+      | "documentation"
+      | "package"
+      | "release"
+      | "contributor_guidance";
+    resource_id?: string;
+    label: string;
+  }[];
+  status: "published" | "needs_revalidation" | "archived" | "merged";
+  duplicate_of?: string;
+  revalidation_versions?: string[];
+  credits: { actor_id: string; role: string }[];
+  events: {
+    id: string;
+    kind: string;
+    actor_id: string;
+    message?: string;
+    related_solution_id?: string;
+    created_at: string;
+  }[];
+  notifications: {
+    id: string;
+    user_id: string;
+    kind: string;
+    message: string;
+    created_at: string;
+  }[];
+  version: number;
+  created_at: string;
+  updated_at: string;
 };
 export type TechnicalDecision = {
   id: string;
@@ -1501,37 +1664,143 @@ export type OrganizationAgent = {
   profiles: OrganizationAgentProfile[];
 };
 export type OrganizationAgentProfile = {
-  version: number; summary: string; supported_tasks: string[]; tools: string[];
-  model_provenance: string; execution_provenance: string; deployment_boundaries: ("platform" | "operator_managed" | "customer_managed" | "external_service")[]; data_use: string; retention: string;
-  pricing: string; resource_requirements: string[]; requested_capabilities: string[];
-  availability: string; support: string; subprocessors: string[]; remote_execution_boundaries: string[];
+  version: number;
+  summary: string;
+  supported_tasks: string[];
+  tools: string[];
+  model_provenance: string;
+  execution_provenance: string;
+  deployment_boundaries: (
+    "platform" | "operator_managed" | "customer_managed" | "external_service"
+  )[];
+  data_use: string;
+  retention: string;
+  pricing: string;
+  resource_requirements: string[];
+  requested_capabilities: string[];
+  availability: string;
+  support: string;
+  subprocessors: string[];
+  remote_execution_boundaries: string[];
   conflict_disclosures: string[];
-  change_summary: string; published_by: string; published_at: string;
+  change_summary: string;
+  published_by: string;
+  published_at: string;
   verified_evidence: { kind: string; statement: string; verified_at: string }[];
 };
 export type AgentMatchSet = {
-  source_kind: "task" | "proposal" | "issue" | "decision" | "incident" | "stewardship_mandate" | "team_role";
+  source_kind:
+    | "task"
+    | "proposal"
+    | "issue"
+    | "decision"
+    | "incident"
+    | "stewardship_mandate"
+    | "team_role";
   source_id: string;
   repository_id?: string;
   workflow: string;
   explanation: string;
   matches: {
-    agent_id: string; name: string; eligible: boolean; score: number;
-    reasons: string[]; missing_evidence: string[]; stale_evidence: string[]; conflicts: string[];
+    agent_id: string;
+    name: string;
+    eligible: boolean;
+    score: number;
+    reasons: string[];
+    missing_evidence: string[];
+    stale_evidence: string[];
+    conflicts: string[];
     effective_permissions: { kind: string; id: string }[];
-    deployment_boundary: string[]; pricing?: string; availability?: string;
-    verified_evaluations: { kind: string; statement: string; verified_at: string }[];
-    comparable_outcomes: { id: string; kind: string; status: string; summary: string; goal?: string; recorded_at: string }[];
+    deployment_boundary: string[];
+    pricing?: string;
+    availability?: string;
+    verified_evaluations: {
+      kind: string;
+      statement: string;
+      verified_at: string;
+    }[];
+    comparable_outcomes: {
+      id: string;
+      kind: string;
+      status: string;
+      summary: string;
+      goal?: string;
+      recorded_at: string;
+    }[];
   }[];
 };
 export type AgentEvaluationSuite = {
-  id: string; organization_id: string; repository_id: string; name: string;
-  revisions: { version: number; repository_revision: string; scenarios: { id: string; title: string; sanitized_prompt: string; expected_outcomes: string[]; checks: { name: string; kind: string; expected?: string }[] }[]; budget: { max_cost: number; max_latency_ms: number; max_tool_actions: number }; prohibited_actions: string[]; human_review_criteria: string[]; change_summary: string; created_by: string; created_at: string }[];
+  id: string;
+  organization_id: string;
+  repository_id: string;
+  name: string;
+  revisions: {
+    version: number;
+    repository_revision: string;
+    scenarios: {
+      id: string;
+      title: string;
+      sanitized_prompt: string;
+      expected_outcomes: string[];
+      checks: { name: string; kind: string; expected?: string }[];
+    }[];
+    budget: {
+      max_cost: number;
+      max_latency_ms: number;
+      max_tool_actions: number;
+    };
+    prohibited_actions: string[];
+    human_review_criteria: string[];
+    change_summary: string;
+    created_by: string;
+    created_at: string;
+  }[];
 };
 export type AgentEvaluationRun = {
-  id: string; suite_id: string; suite_version: number; repository_revision: string; agent_id: string; agent_profile_version: number; trial_label: "initial" | "repeated" | "operator_supplied"; input_digest: string;
-  outputs: Record<string,string>; tool_actions: { tool: string; action: string; input_summary: string; output_summary: string; duration_ms: number; failed: boolean }[]; artifacts: { name: string; sha256: string; size: number; summary: string }[]; cost: number; latency_ms: number; failure?: string;
-  authority: { publish: false; secrets: false; merge: false; environments: false; network: false }; check_results: { scenario_id: string; name: string; kind: string; passed: boolean; hidden: boolean; summary: string }[]; correctness_passed: boolean; policy_passed: boolean; budget_passed: boolean; contaminated: boolean; contamination_reasons: string[]; reproducible: boolean; review_status: string; created_at: string;
+  id: string;
+  suite_id: string;
+  suite_version: number;
+  repository_revision: string;
+  agent_id: string;
+  agent_profile_version: number;
+  trial_label: "initial" | "repeated" | "operator_supplied";
+  input_digest: string;
+  outputs: Record<string, string>;
+  tool_actions: {
+    tool: string;
+    action: string;
+    input_summary: string;
+    output_summary: string;
+    duration_ms: number;
+    failed: boolean;
+  }[];
+  artifacts: { name: string; sha256: string; size: number; summary: string }[];
+  cost: number;
+  latency_ms: number;
+  failure?: string;
+  authority: {
+    publish: false;
+    secrets: false;
+    merge: false;
+    environments: false;
+    network: false;
+  };
+  check_results: {
+    scenario_id: string;
+    name: string;
+    kind: string;
+    passed: boolean;
+    hidden: boolean;
+    summary: string;
+  }[];
+  correctness_passed: boolean;
+  policy_passed: boolean;
+  budget_passed: boolean;
+  contaminated: boolean;
+  contamination_reasons: string[];
+  reproducible: boolean;
+  review_status: string;
+  created_at: string;
 };
 export type OrganizationEvent = {
   id: string;
@@ -2122,12 +2391,7 @@ export type RecoveryOperation = {
         evidence: { kind: string; resource_id: string; sha256: string };
       }[];
       status:
-        | "pending"
-        | "paused"
-        | "running"
-        | "validated"
-        | "failed"
-        | "blocked";
+        "pending" | "paused" | "running" | "validated" | "failed" | "blocked";
       message?: string;
       updated_by?: string;
       updated_at?: string;

@@ -189,6 +189,48 @@ func (s *Store) UpdateStatus(repo, id, actor, status, message string, expected i
 	v.Diagnostics = diagnostics(v)
 	return v, s.write(v)
 }
+
+// Resolve serializes publication with all thread mutations. The publication callback
+// returns compensation for its external write; a failed close invokes it before the
+// error is returned, so the solution and source thread cannot diverge.
+func (s *Store) Resolve(repo, id, actor, message string, expected int, maintainer bool, publish func() (func() error, error)) (Thread, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, id)
+	if err != nil {
+		return Thread{}, err
+	}
+	if v.Version != expected {
+		return Thread{}, ErrConflict
+	}
+	if !maintainer && actor != v.AuthorID {
+		return Thread{}, ErrForbidden
+	}
+	if publish == nil {
+		return Thread{}, ErrInvalid
+	}
+	compensate, err := publish()
+	if err != nil {
+		return Thread{}, err
+	}
+	if v.Status == "closed" {
+		return v, nil
+	}
+	now := s.now()
+	from := v.Status
+	v.Status = "closed"
+	v.Version++
+	v.UpdatedAt = now
+	v.History = append(v.History, HistoryEntry{ID: randomID(), Kind: "resolved", ActorID: actor, From: from, To: "closed", Message: strings.TrimSpace(message), CreatedAt: now})
+	v.Diagnostics = diagnostics(v)
+	if err := s.write(v); err != nil {
+		if compensate != nil {
+			return Thread{}, errors.Join(err, compensate())
+		}
+		return Thread{}, err
+	}
+	return v, nil
+}
 func valid(v Thread) bool {
 	kinds := map[string]bool{"repository": true, "package": true, "release": true, "api": true, "documented_journey": true, "error": true}
 	urg := map[string]bool{"low": true, "normal": true, "high": true, "urgent": true}

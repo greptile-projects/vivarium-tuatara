@@ -69,6 +69,18 @@ whenever dependencies change or the web job fails before it starts.
   reads derive stale provenance, and credential-shaped reusable evidence is rejected. Attempt creation
   revalidates the workspace's exact support source; private workspaces cannot publish repository-readable
   verification output.
+  Passing, current attempts can become immutable reusable solutions beneath
+  `$SUPPORT_SOLUTION_STORAGE_ROOT` (`support-solutions`). The asker or a current participant freezes the
+  exact thread, answer revision, attempt, instructions, versions, limitations, audience, project links,
+  and contributor credits. Public publication requires public repository, thread, and answer evidence;
+  documentation, package, release, and contributor-guidance links resolve within the repository. Search
+  omits merged duplicates, while version-guarded duplicate merge, archival, and revalidation requests append
+  attributed lifecycle events and notifications without rewriting the published solution or its evidence.
+  Publication holds the support-thread mutation boundary through idempotent solution persistence and closure,
+  and compensates the exact evidence-bound solution created by the current request if the thread close cannot
+  persist; idempotently returned prior solutions are never armed for deletion;
+  terminal merged or archived records cannot be revived, and search admits only published or revalidation-needed
+  records.
 
 - **Project knowledge** — `/repositories/{id}/knowledge` retains proposed and superseding
   guidance separately from conversational explanations and support questions. Every claim cites
