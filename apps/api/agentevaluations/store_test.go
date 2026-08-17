@@ -80,4 +80,15 @@ func TestReproducibilityReferencesExactPriorRun(t *testing.T) {
 	if _, err = s.CreateRun(suite.ID, 1, RunInput{AgentID: "agent", AgentProfileVersion: 2, ReproducesRunID: prior.ID, Outputs: map[string]string{"fix": "done"}}, "owner"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("cross-profile reference error = %v", err)
 	}
+	operator, err := s.CreateRun(suite.ID, 1, RunInput{AgentID: "agent", AgentProfileVersion: 1, OperatorSupplied: true, Outputs: map[string]string{"fix": "done"}}, "owner")
+	if err != nil || operator.Reproducible {
+		t.Fatalf("operator trial = %#v, %v", operator, err)
+	}
+	if _, err = s.CreateRun(suite.ID, 1, RunInput{AgentID: "agent", AgentProfileVersion: 1, ReproducesRunID: operator.ID, Outputs: map[string]string{"fix": "done"}}, "owner"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("operator baseline reference error = %v", err)
+	}
+	third, err := s.CreateRun(suite.ID, 1, RunInput{AgentID: "agent", AgentProfileVersion: 1, ReproducesRunID: valid.ID, Outputs: map[string]string{"fix": "done"}}, "owner")
+	if err != nil || !third.Reproducible {
+		t.Fatalf("reproducible baseline = %#v, %v", third, err)
+	}
 }

@@ -341,7 +341,7 @@ func (s *Store) CreateRun(suiteID string, version int, in RunInput, actor string
 			return Run{}, ErrInvalid
 		}
 		prior, priorErr := read[Run](s.runPath(in.ReproducesRunID))
-		if priorErr != nil || prior.OrganizationID != suite.OrganizationID || prior.SuiteID != suiteID || prior.SuiteVersion != version || prior.RepositoryID != suite.RepositoryID || prior.RepositoryRevision != rev.RepositoryRevision || prior.AgentID != in.AgentID || prior.AgentProfileVersion != in.AgentProfileVersion || prior.InputDigest != inputDigest {
+		if priorErr != nil || prior.TrialLabel == "operator_supplied" || prior.OrganizationID != suite.OrganizationID || prior.SuiteID != suiteID || prior.SuiteVersion != version || prior.RepositoryID != suite.RepositoryID || prior.RepositoryRevision != rev.RepositoryRevision || prior.AgentID != in.AgentID || prior.AgentProfileVersion != in.AgentProfileVersion || prior.InputDigest != inputDigest {
 			return Run{}, ErrInvalid
 		}
 		reproducible = !in.OperatorSupplied
