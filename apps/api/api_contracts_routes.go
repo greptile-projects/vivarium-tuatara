@@ -90,7 +90,7 @@ func registerAPIContractRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 					return
 				}
 			}
-			if !apiContractSourcePathsResolve(git, repo, in.Revision.Source) {
+			if !apiContractSourcePathsResolve(git, repo, in.Revision) {
 				writeAPIError(w, 422, "invalid_api_contract_source_paths", "definition_path must be a valid OpenAPI JSON file and documentation_path must be a file in the exact reviewed merge commit")
 				return
 			}
@@ -122,7 +122,8 @@ func registerAPIContractRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 	mux.HandleFunc("POST /repositories/{id}/api-contracts/{contract_id}/revisions", publish(true))
 }
 
-func apiContractSourcePathsResolve(git *storage.Store, repositoryID string, source apicontracts.Source) bool {
+func apiContractSourcePathsResolve(git *storage.Store, repositoryID string, revision apicontracts.Revision) bool {
+	source := revision.Source
 	paths := []string{source.DefinitionPath, source.DocumentationPath}
 	for _, candidate := range paths {
 		if candidate == "" || strings.HasPrefix(candidate, "/") || path.Clean(candidate) != candidate || candidate == "." || strings.HasPrefix(candidate, "../") {
@@ -167,8 +168,27 @@ func apiContractSourcePathsResolve(git *storage.Store, repositoryID string, sour
 	if document.OpenAPI != "" && !strings.HasPrefix(document.OpenAPI, "3.") {
 		return false
 	}
-	var pathDefinitions map[string]json.RawMessage
-	return len(document.Paths) > 0 && json.Unmarshal(document.Paths, &pathDefinitions) == nil && pathDefinitions != nil
+	var pathDefinitions map[string]map[string]json.RawMessage
+	if len(document.Paths) == 0 || json.Unmarshal(document.Paths, &pathDefinitions) != nil || pathDefinitions == nil {
+		return false
+	}
+	for _, operation := range revision.Operations {
+		pathItem, ok := pathDefinitions[operation.Path]
+		if !ok || pathItem == nil {
+			return false
+		}
+		rawOperation, ok := pathItem[strings.ToLower(operation.Method)]
+		if !ok || string(rawOperation) == "null" {
+			return false
+		}
+		var definition struct {
+			Responses map[string]json.RawMessage `json:"responses"`
+		}
+		if json.Unmarshal(rawOperation, &definition) != nil || len(definition.Responses) == 0 {
+			return false
+		}
+	}
+	return true
 }
 func writeAPIContract(w http.ResponseWriter, v apicontracts.Contract, err error, status int) {
 	switch {

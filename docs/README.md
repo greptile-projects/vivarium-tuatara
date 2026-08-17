@@ -71,7 +71,8 @@ operations, schemas, errors, authentication, environments, limits, owners, stabi
 terms, compatibility promises, known gaps, and typed source, release, documentation, data-use, and
 support links. The reviewed definition artifact is OpenAPI 3.x or Swagger 2.0 JSON with a paths
 object; publication parses that exact commit blob and rejects unrelated files, detached definitions,
-and release claims that do not resolve to the reviewed commit. Reads retain every revision for comparison and derive unreleased
+null or unusable path items, operations missing matching methods/responses, and release claims that
+do not resolve to the reviewed commit. Reads retain every revision for comparison and derive unreleased
 implementation, non-available environment, known-gap, unavailable-release, and default-branch
 documentation-staleness diagnostics. Records default beneath `$API_CONTRACT_STORAGE_ROOT`
 (`api-contracts`).

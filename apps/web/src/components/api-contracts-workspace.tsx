@@ -1,6 +1,13 @@
 "use client";
 import Link from "next/link";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/components/auth";
 import { Badge, Button, Card } from "@/components/ui";
@@ -95,9 +102,11 @@ export function APIContractsWorkspace({
   const { token, user } = useAuth();
   const [items, setItems] = useState<Contract[]>([]),
     [selected, setSelected] = useState<Contract | null>(null),
+    [creatingNew, setCreatingNew] = useState(false),
     [compare, setCompare] = useState<number>(0),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
+  const creatingNewRef = useRef(false);
   const load = useCallback(async () => {
     try {
       const out = await api<{ contracts: Contract[] }>(
@@ -108,9 +117,11 @@ export function APIContractsWorkspace({
       setItems(out.contracts);
       setSelected(
         (old) =>
-          out.contracts.find((x) => x.id === old?.id) ??
-          out.contracts[0] ??
-          null,
+          creatingNewRef.current
+            ? null
+            : (out.contracts.find((x) => x.id === old?.id) ??
+              out.contracts[0] ??
+              null),
       );
       setError("");
     } catch (e) {
@@ -214,7 +225,7 @@ export function APIContractsWorkspace({
       rationale: String(f.get("rationale")),
     };
     try {
-      const path = selected
+      const path = !creatingNew && selected
         ? `/repositories/${repositoryID}/api-contracts/${selected.id}/revisions`
         : `/repositories/${repositoryID}/api-contracts`;
       const out = await api<Contract>(
@@ -222,12 +233,14 @@ export function APIContractsWorkspace({
         {
           method: "POST",
           body: JSON.stringify({
-            expected_version: selected?.current_version ?? 0,
+          expected_version: creatingNew ? 0 : (selected?.current_version ?? 0),
             revision,
           }),
         },
         token,
       );
+      creatingNewRef.current = false;
+      setCreatingNew(false);
       setSelected(out);
       await load();
     } catch (e) {
@@ -390,6 +403,8 @@ export function APIContractsWorkspace({
             {token && (
               <Button
                 onClick={() => {
+                  creatingNewRef.current = true;
+                  setCreatingNew(true);
                   setSelected(null);
                   setCompare(0);
                   setError("");
@@ -403,6 +418,8 @@ export function APIContractsWorkspace({
             <button
               key={x.id}
               onClick={() => {
+                creatingNewRef.current = false;
+                setCreatingNew(false);
                 setSelected(x);
                 setCompare(0);
               }}
@@ -420,7 +437,9 @@ export function APIContractsWorkspace({
       {token && (
         <Card className="p-5">
           <h2 className="font-semibold">
-            {selected ? "Publish successor" : "Publish reviewed contract"}
+            {!creatingNew && selected
+              ? "Publish successor"
+              : "Publish reviewed contract"}
           </h2>
           <form onSubmit={publish} className="mt-4 grid gap-3 md:grid-cols-2">
             <Field n="title" l="Interface title" value={current?.title} />
@@ -507,8 +526,8 @@ export function APIContractsWorkspace({
             <label className="text-xs font-semibold">
               Compatibility
               <select name="compatibility" className={field}>
-                <option value={selected ? "compatible" : "initial"}>
-                  {selected ? "compatible" : "initial"}
+                <option value={!creatingNew && selected ? "compatible" : "initial"}>
+                  {!creatingNew && selected ? "compatible" : "initial"}
                 </option>
                 <option value="conditionally_compatible">
                   conditionally compatible
