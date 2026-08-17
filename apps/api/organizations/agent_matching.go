@@ -92,6 +92,7 @@ func MatchAgents(v Organization, in AgentMatchRequest, now time.Time) (AgentMatc
 				m.Score += 10
 				m.Reasons = append(m.Reasons, "The disclosed execution boundary matches the requested boundary.")
 			} else {
+				m.Eligible = false
 				m.Conflicts = append(m.Conflicts, "The disclosed execution boundary does not match the requested boundary.")
 			}
 			if now.Sub(profile.PublishedAt) > 180*24*time.Hour {

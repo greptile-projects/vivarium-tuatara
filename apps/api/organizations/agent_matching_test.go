@@ -28,3 +28,25 @@ func TestMatchAgentsRejectsUnboundedSources(t *testing.T) {
 		t.Fatal("expected invalid source kind")
 	}
 }
+
+func TestMatchAgentsMakesDeploymentBoundaryConflictsIneligible(t *testing.T) {
+	now := time.Now().UTC()
+	v := Organization{Agents: []Agent{{
+		ID:   strings.Repeat("d", 32),
+		Name: "Internal agent",
+		Profiles: []AgentProfile{{
+			SupportedTasks:      []string{"incident response"},
+			ExecutionProvenance: "internal platform container",
+			Pricing:             "$2/run",
+			Availability:        "now",
+			PublishedAt:         now,
+		}},
+	}}}
+	got, err := MatchAgents(v, AgentMatchRequest{SourceKind: "incident", SourceID: "incident-8", Workflow: "incident response", DeploymentBoundary: "external-production"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Matches) != 1 || got.Matches[0].Eligible || len(got.Matches[0].Conflicts) != 1 {
+		t.Fatalf("deployment conflict remained eligible: %#v", got.Matches)
+	}
+}
