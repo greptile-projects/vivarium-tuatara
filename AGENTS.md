@@ -88,6 +88,8 @@ whenever dependencies change or the web job fails before it starts.
   gain no access and agent work remains behind the existing task-scoped launch, review, check, and merge boundaries.
   Creation first persists a pending escalation identity; issue and documentation creation reuse that identity and
   proposal creation reuses the exact support origin, so finalization failures reconcile without duplicate work.
+  Published records retain their initiating thread version, allowing a lost-response retry to return the exact
+  governed resource without invoking publication again.
 
 - **Project knowledge** — `/repositories/{id}/knowledge` retains proposed and superseding
   guidance separately from conversational explanations and support questions. Every claim cites

@@ -2751,6 +2751,8 @@ back to the governed resource so the asker can follow its pulls, checks, preview
 publication through existing project surfaces; escalation itself grants no repository, agent, review, or merge
 authority. A pending escalation identity is persisted before publication and reused by issue, documentation-task,
 and proposal creation, so a failed final thread write can reconcile the same governed resource on retry.
+The record also freezes its initiating thread version; repeating that exact completed request after a lost response
+returns the published link without creating or mutating work.
 
 Successful proof can be published from `/support` as reusable project guidance. A solution freezes its exact
 support question, answer revision, passing attempt, tested instructions, applicable versions, limitations,

@@ -82,8 +82,10 @@ func TestEscalationRetryReconcilesDurablePendingIdentity(t *testing.T) {
 	}
 	repoDir := filepath.Join(s.root, "repo")
 	identities := map[string]bool{}
+	publishCalls := 0
 	first := true
 	publish := func(_ Thread, escalationID string) (string, string, error) {
+		publishCalls++
 		identities[escalationID] = true
 		if first {
 			first = false
@@ -110,6 +112,13 @@ func TestEscalationRetryReconcilesDurablePendingIdentity(t *testing.T) {
 	}
 	if len(identities) != 1 {
 		t.Fatalf("published identities = %#v", identities)
+	}
+	replayed, err := s.Escalate("repo", v.ID, "maintainer", v.Version, "defect", "issue", []string{"retry once"}, publish)
+	if err != nil || replayed.Version != completed.Version || replayed.Escalations[0].ResourceID != completed.Escalations[0].ResourceID {
+		t.Fatalf("lost-response replay = %#v, %v", replayed, err)
+	}
+	if publishCalls != 2 {
+		t.Fatalf("lost-response replay called publish again: %d", publishCalls)
 	}
 }
 

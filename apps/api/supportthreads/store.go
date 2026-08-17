@@ -79,6 +79,7 @@ type Escalation struct {
 	CreatedBy          string    `json:"created_by"`
 	CreatedAt          time.Time `json:"created_at"`
 	Status             string    `json:"status"`
+	RequestedVersion   int       `json:"requested_version"`
 }
 type Thread struct {
 	ID                 string             `json:"id"`
@@ -229,8 +230,12 @@ func (s *Store) Escalate(repo, id, actor string, expected int, classification, r
 	pending := -1
 	for i := len(v.Escalations) - 1; i >= 0; i-- {
 		candidate := v.Escalations[i]
+		matchingRequest := candidate.Classification == classification && candidate.ResourceKind == resourceKind && candidate.CreatedBy == actor && slices.Equal(candidate.AcceptanceCriteria, clean) && (candidate.RequestedVersion == expected || candidate.Status == "pending" && expected == v.Version)
+		if matchingRequest && candidate.Status == "published" {
+			return v, nil
+		}
 		if candidate.Status == "pending" {
-			if candidate.Classification == classification && candidate.ResourceKind == resourceKind && candidate.CreatedBy == actor && slices.Equal(candidate.AcceptanceCriteria, clean) && (expected == v.Version || expected == v.Version-1) {
+			if matchingRequest {
 				pending = i
 				break
 			}
@@ -242,7 +247,7 @@ func (s *Store) Escalate(repo, id, actor string, expected int, classification, r
 			return Thread{}, ErrConflict
 		}
 		now := s.now()
-		v.Escalations = append(v.Escalations, Escalation{ID: randomID(), Classification: classification, ResourceKind: resourceKind, AffectedVersion: v.Target.Version, AcceptanceCriteria: clean, Reproduction: append([]string(nil), v.AttemptedSteps...), CreatedBy: actor, CreatedAt: now, Status: "pending"})
+		v.Escalations = append(v.Escalations, Escalation{ID: randomID(), Classification: classification, ResourceKind: resourceKind, AffectedVersion: v.Target.Version, AcceptanceCriteria: clean, Reproduction: append([]string(nil), v.AttemptedSteps...), CreatedBy: actor, CreatedAt: now, Status: "pending", RequestedVersion: expected})
 		pending = len(v.Escalations) - 1
 		v.Version++
 		v.UpdatedAt = now
