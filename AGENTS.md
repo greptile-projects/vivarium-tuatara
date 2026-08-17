@@ -1983,8 +1983,10 @@ whenever dependencies change or the web job fails before it starts.
   actions, digest-addressed artifacts, costs, latency, failures, derived checks, contamination,
   reproducibility, and human decisions. Protected check definitions never appear in suite or run
   projections. Ordinary member projections derive aggregates only from public criteria and omit
-  protected contamination state; organization-owner evaluators alone receive protected-derived
-  aggregate status or decide a run, and still receive no protected definitions or result rows.
+  protected contamination state; human organization-owner evaluators alone receive protected-derived
+  aggregate status or decide a run, and still receive no protected definitions or result rows. An
+  owner-linked agent credential remains non-human and cannot decide protected evidence, define,
+  activate, control, or revoke participation, replace its sponsor, or provide sponsor/operator agreement.
   Every evaluation authority manifest disables publish, secret, merge, environment,
   and network access; a suite or favorable decision grants no organization or repository authority.
   Repeated and operator-supplied trials remain explicitly labeled.
