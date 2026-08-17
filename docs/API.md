@@ -2,6 +2,19 @@
 
 ## Approved-agent evaluation
 
+- `GET /organizations/{id}/agent-participations` projects current bounded authority together with
+  its reevaluation deadline, consented profile version, privacy-bounded delivered outcomes, structured
+  handoffs, and actionable trust notices. `POST .../{participation_id}/outcomes` appends attributable
+  task completion, reviewer correction, verification failure, reversion, security/policy violation,
+  or accepted-contribution evidence with cost and responsiveness, but accepts no prompt, patch,
+  branch, artifact content, or private work body. Failures and violations create explicit notices.
+- `POST /organizations/{id}/agent-participations/{participation_id}/controls` lets organization
+  owners compare-and-swap suspension, narrowing, renewed material-profile consent, reevaluation, or
+  structured replacement handoff. Suspension and handoff revoke the ordinary grant and its derived
+  credentials promptly; outcome history and legitimate Git commits are not deleted. Material model,
+  data-use, requested-capability, or price changes suspend active participation until explicit consent.
+  Reevaluation intervals are bounded to 1–365 days (90 days for older clients).
+
 - `POST|PUT|GET /organizations/{id}/agent-evaluation-suites` lets organization collaborators
   publish compare-and-swap suite revisions bound to an exact commit in an organization repository.
   Each revision retains sanitized representative prompts, expected outcomes, public correctness and

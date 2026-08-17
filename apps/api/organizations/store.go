@@ -2139,6 +2139,46 @@ func (s *Store) RevokeAccessGrant(id, grantID, actor string, expected int, revok
 	})
 }
 
+func (s *Store) NarrowParticipationGrant(id, grantID, actor string, expected int, actions, boundaries []string, revoke func(DerivedCredential) error) (Organization, error) {
+	return s.mutate(id, func(v *Organization) error {
+		if !HasRole(*v, actor, "owner") || len(actions) == 0 || len(boundaries) == 0 {
+			return ErrNotFound
+		}
+		for i := range v.AccessGrants {
+			g := &v.AccessGrants[i]
+			if g.ID != grantID {
+				continue
+			}
+			if g.Version != expected || g.RevokedAt != nil || g.Participation == nil {
+				return ErrConflict
+			}
+			for _, x := range actions {
+				if !slices.Contains(g.Participation.AllowedActions, x) {
+					return ErrInvalid
+				}
+			}
+			for _, x := range boundaries {
+				if !slices.Contains(g.Participation.DataBoundaries, x) {
+					return ErrInvalid
+				}
+			}
+			for _, c := range g.DerivedCredentials {
+				if revoke != nil {
+					if err := revoke(c); err != nil {
+						return err
+					}
+				}
+			}
+			g.DerivedCredentials = []DerivedCredential{}
+			g.Participation.AllowedActions = slices.Clone(actions)
+			g.Participation.DataBoundaries = slices.Clone(boundaries)
+			g.Version++
+			return s.event(v, "access.grant.narrowed", actor, g.ID, map[string]any{"actions": actions, "data_boundaries": boundaries})
+		}
+		return ErrNotFound
+	})
+}
+
 func resourceDenied(g AccessGrant, resource ResourceScope) bool {
 	for _, x := range g.Exceptions {
 		if x.Resource == resource {

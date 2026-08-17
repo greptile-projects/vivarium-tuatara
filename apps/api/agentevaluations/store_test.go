@@ -143,8 +143,20 @@ func TestApprovedTrialBecomesBoundedRevocableParticipation(t *testing.T) {
 	if err != nil || p.Status != "active" || p.AccessGrantID != "grant" {
 		t.Fatalf("activation = %#v, %v", p, err)
 	}
+	p, err = s.RecordOutcome(p.ID, "reviewer", p.Version, OutcomeInput{Kind: "verification_failure", RepositoryID: "repo", Status: "failed", Summary: "Public verification failed after delivery.", AttributionID: "check:42", Cost: 2.5, LatencyMS: 900})
+	if err != nil || len(p.Outcomes) != 1 || len(p.Notices) != 1 || p.Notices[0].Action == "" {
+		t.Fatalf("attributed outcome = %#v, %v", p, err)
+	}
+	p, err = s.ObserveProfile(p.ID, 2, true)
+	if err != nil || p.Status != "suspended" || len(p.Notices) != 2 {
+		t.Fatalf("material profile gate = %#v, %v", p, err)
+	}
+	p, err = s.ControlParticipation(p.ID, "owner", p.Version, ControlInput{Action: "consent", ProfileVersion: 2})
+	if err != nil || p.ConsentedProfileVersion != 2 || p.Notices[1].ResolvedAt == nil {
+		t.Fatalf("renewed consent = %#v, %v", p, err)
+	}
 	p, err = s.DecideParticipation(p.ID, "owner", "revoke", p.Version)
-	if err != nil || p.Status != "revoked" || len(p.Events) != 4 {
+	if err != nil || p.Status != "revoked" || len(p.Outcomes) != 1 {
 		t.Fatalf("revocation = %#v, %v", p, err)
 	}
 }
