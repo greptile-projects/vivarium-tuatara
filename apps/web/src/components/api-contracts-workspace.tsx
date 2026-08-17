@@ -120,7 +120,8 @@ export function APIContractsWorkspace({
     }
   }, [repositoryID, token]);
   useEffect(() => {
-    void load();
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
   }, [load]);
   const current = selected?.revisions.at(-1);
   const previous = selected?.revisions.find((x) => x.version === compare);
