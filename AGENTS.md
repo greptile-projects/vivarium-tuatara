@@ -1890,6 +1890,13 @@ whenever dependencies change or the web job fails before it starts.
   support and compatibility terms, known gaps, and typed source/release/documentation/data-use links.
   Reads preserve comparison history and explicitly project unreleased implementations, unavailable
   environments/releases, known gaps, and documentation that trails the default branch.
+  Exact-version consumer applications beneath the same storage root request only declared environments
+  and operation IDs. Producer participants approve a bounded subset with expiry or deny it; owners receive
+  one-time, hash-retained, rotatable sandbox secrets. Rotation, revocation, exposure reports, expiry, and
+  ownership transfer fail closed, with transfers revoking credentials and resetting consent. The linked
+  `/api-contracts/integrations` workspace exercises only synthetic inspected request/response examples,
+  frozen quotas, and deterministic failure simulation; approval grants no repository, Git, deployment,
+  environment, account, production-data, or production-endpoint authority.
   Repository participants define repository, release, and environment scopes; user journeys;
   indicators and calculations; measurement windows and targets; dependencies; error budgets;
   severity responses and accountable owners; version-pinned product, performance, accessibility,

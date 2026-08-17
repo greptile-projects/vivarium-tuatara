@@ -1,5 +1,18 @@
 # HTTP API contract
 
+## Consumer API applications and sandbox
+
+- `POST /repositories/{id}/api-contracts/{contract_id}/applications` registers the authenticated
+  consumer against one exact revision, selected available environment IDs, and operation-ID capabilities.
+  `GET` on the collection exposes records only to their owner and current producer participants.
+- `POST .../{application_id}/decision` lets a current producer participant approve no more than the
+  requested capabilities with an expiry, or deny with a reason. `POST .../credentials` returns a
+  short-lived secret once to the application owner and revokes any predecessor.
+- `POST .../{application_id}/sandbox` accepts that application secret and returns only synthetic inspected
+  request/response data, contract quotas, and deterministic `rate_limit`, `timeout`, or `server_error`
+  results. Revoke, exposure, and ownership endpoints revoke secrets; ownership transfer also resets consent.
+  These credentials authenticate no other API, Git, repository, deployment, environment, or production data.
+
 ## Approved-agent evaluation
 
 - `GET /organizations/{id}/agent-participations` projects current bounded authority together with
