@@ -82,5 +82,14 @@ test("support preserves refinement, privacy, duplicate context, and accountable 
     expect(proposal.body).not.toContain("customer-only evidence");
     const tasks = await json(ownerPage, "get", `/repositories/${repo.id}/proposals/${proposal.id}/tasks`, owner.headers);
     expect(tasks.tasks.map((x: any) => x.assignment.assignee_type)).toEqual(["human", "agent"]);
+    const staleSupportRequests: string[] = [];
+    ownerPage.on("response", (response) => {
+      if (response.url().includes("deleted-or-inaccessible/support-")) staleSupportRequests.push(response.url());
+    });
+    await ownerPage.goto("/support?repository=deleted-or-inaccessible");
+    await expect(ownerPage.getByRole("button", { name: "Ask for help" })).toBeEnabled();
+    await expect(ownerPage.getByRole("option", { name: repo.name })).toHaveCount(1);
+    await expect(ownerPage.getByText("repository not found", { exact: false })).toHaveCount(0);
+    expect(staleSupportRequests).toEqual([]);
   } finally { await Promise.all(copies.map((path) => rm(path, { recursive: true, force: true }))); }
 });

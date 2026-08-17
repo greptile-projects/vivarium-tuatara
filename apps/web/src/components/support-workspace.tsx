@@ -64,6 +64,7 @@ export function SupportWorkspace() {
     [attempts, setAttempts] = useState<SupportVerificationAttempt[]>([]),
     [error, setError] = useState(""),
     [pending, setPending] = useState(false);
+  const activeRepoID = repoID || repositories[0]?.id || "";
   const load = useCallback(async () => {
     if (!token) return;
     const sequence = ++loadSequence.current;
@@ -81,7 +82,11 @@ export function SupportWorkspace() {
       if (sequence !== loadSequence.current) return;
       const available = linked ? [linked, ...page.repositories] : page.repositories;
       setRepositories(available);
-      const id = repoID || linkedID || available[0]?.id || "";
+      const resolvedLinkedID =
+        page.repositories.some((item) => item.id === linkedID) || linked
+          ? linkedID
+          : "";
+      const id = repoID || resolvedLinkedID || available[0]?.id || "";
       if (id) {
         setRepoID(id);
         const [threadData, solutionData] = await Promise.all([
@@ -112,7 +117,7 @@ export function SupportWorkspace() {
     if (!token) return;
     const sequence = loadSequence.current,
       selection = selectionSequence.current,
-      repositoryID = repoID;
+      repositoryID = activeRepoID;
     setPending(true);
     setError("");
     const form = event.currentTarget,
@@ -433,7 +438,7 @@ export function SupportWorkspace() {
             Repository
             <select
               className={field}
-              value={repoID}
+              value={activeRepoID}
               onChange={(e) => {
                 loadSequence.current++;
                 selectionSequence.current++;
@@ -577,7 +582,7 @@ export function SupportWorkspace() {
               accept="text/plain,application/json,.log,.yaml,.yml,.toml,.js,.ts,.go,.py"
             />
           </label>
-          <Button className="lg:col-span-2" disabled={pending || !repoID}>
+          <Button className="lg:col-span-2" disabled={pending || !activeRepoID}>
             {pending ? "Opening question…" : "Ask for help"}
           </Button>
         </form>
