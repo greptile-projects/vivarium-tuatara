@@ -34,6 +34,16 @@ their exact step. Contracts and plans make deployment review inspectable but
 grant no Git, deployment, environment, or persistent-store authority. Records
 default beneath `$DURABLE_SCHEMA_STORAGE_ROOT` (`durable-schemas`).
 
+Each migration may publish ordered repository-owned work for schema changes,
+compatibility code, backfills, verification, and cleanup. The work link creates an
+ordinary assigned proposal task at an exact target-repository base; normal task
+sessions, bounded workspaces, pull publication, review, checks, and merge remain the
+execution boundary. Its review context freezes old/new reader and writer behavior,
+rollout flags, idempotency, transformations, ownership, and rollback assumptions.
+Cross-repository agent work cannot start until its linked predecessors merge. Target
+repository visibility is rechecked on reads, so the link does not copy restricted
+schema definitions, privacy commitments, data samples, or access into another project.
+
 Support guidance can be proven in ordinary revision-pinned development workspaces. Immutable attempts
 bind an exact cited answer revision to sanitized thread inputs, declared environment, commands and
 outputs, artifacts, cost, and result; fresh-workspace reruns preserve the original record and reads expose

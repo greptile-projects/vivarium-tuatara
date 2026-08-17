@@ -64,6 +64,13 @@ whenever dependencies change or the web job fails before it starts.
   limits, and compare-and-swap attributed history; approval events are step-bound
   and accepted only from that step's declared approvers. These records expose review
   context only and grant no deployment, environment, Git, or data-store authority.
+  Migration work beneath `/{schema_id}/migrations/{migration_id}/work` links ordered
+  schema-change, compatibility, backfill, verification, and cleanup steps to ordinary
+  repository proposal tasks. Each task freezes an explicit old/new reader and writer
+  contract, rollout flags, idempotency, transformations, ownership, and rollback
+  assumptions; agent sessions wait for merged cross-repository dependencies. Work is
+  visible only where the reader can also read its target repository, and no schema
+  definition, privacy metadata, data sample, or authority crosses that link implicitly.
 
 - **Developer support** — `/support` and
   `/repositories/{id}/support-threads` retain contextual questions separately

@@ -8,17 +8,21 @@ import (
 	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/decisions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/durableschemas"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
-func registerDurableSchemaRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, store *durableschemas.Store, pulls *pullrequests.Store, decisionStore *decisions.Store) {
+func registerDurableSchemaRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, store *durableschemas.Store, pulls *pullrequests.Store, decisionStore *decisions.Store, proposalStore *proposals.Store, sessionStore *changesessions.Store, workspaceStore *workspaces.Store) {
 	base := "/repositories/{id}/durable-schemas"
 	mux.HandleFunc("GET "+base, func(w http.ResponseWriter, r *http.Request) {
-		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
+		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok {
 			return
 		}
 		v, e := store.List(r.PathValue("id"))
@@ -26,10 +30,14 @@ func registerDurableSchemaRoutes(mux *http.ServeMux, git *storage.Store, catalog
 			writeAPIError(w, 500, "durable_schemas_unavailable", "durable schemas could not be read")
 			return
 		}
+		for i := range v {
+			projectDurableMigrationWork(&v[i], actor.UserID, catalog, proposalStore, pulls, sessionStore, workspaceStore)
+		}
 		writeJSON(w, 200, map[string]any{"schemas": v})
 	})
 	mux.HandleFunc("GET "+base+"/{schema_id}", func(w http.ResponseWriter, r *http.Request) {
-		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
+		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok {
 			return
 		}
 		v, e := store.Get(r.PathValue("id"), r.PathValue("schema_id"))
@@ -37,6 +45,7 @@ func registerDurableSchemaRoutes(mux *http.ServeMux, git *storage.Store, catalog
 			writeAPIError(w, 404, "durable_schema_not_found", "durable schema not found")
 			return
 		}
+		projectDurableMigrationWork(&v, actor.UserID, catalog, proposalStore, pulls, sessionStore, workspaceStore)
 		writeJSON(w, 200, v)
 	})
 	publish := func(revise bool) http.HandlerFunc {
@@ -137,6 +146,148 @@ func registerDurableSchemaRoutes(mux *http.ServeMux, git *storage.Store, catalog
 		out, e := store.AddEvent(r.PathValue("id"), r.PathValue("schema_id"), r.PathValue("migration_id"), actor.UserID, in.ExpectedVersion, in.Event)
 		writeDurableSchema(w, out, e, 200)
 	})
+	mux.HandleFunc("POST "+base+"/{schema_id}/migrations/{migration_id}/work", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion    int                         `json:"expected_version"`
+			Kind               string                      `json:"kind"`
+			StepID             string                      `json:"step_id"`
+			RepositoryID       string                      `json:"repository_id"`
+			Title              string                      `json:"title"`
+			CompletionCriteria string                      `json:"completion_criteria"`
+			AssigneeType       string                      `json:"assignee_type"`
+			AssigneeID         string                      `json:"assignee_id"`
+			Mandate            string                      `json:"mandate"`
+			BaseRevision       string                      `json:"base_revision"`
+			DependencyIDs      []string                    `json:"dependency_ids"`
+			Contract           durableschemas.WorkContract `json:"contract"`
+		}
+		if decodeJSON(r, &in) != nil || proposalStore == nil || (in.AssigneeType != "human" && in.AssigneeType != "agent") {
+			writeAPIError(w, 400, "invalid_migration_work", "ordered migration work, assignment, exact base, and compatibility contract are required")
+			return
+		}
+		target, err := catalog.GetByID(in.RepositoryID)
+		collaborator, _ := catalog.HasCollaborator(actor.UserID, in.RepositoryID)
+		if err != nil || (target.OwnerID != actor.UserID && !collaborator) {
+			writeAPIError(w, 403, "migration_work_forbidden", "a current target-repository participant must create migration work")
+			return
+		}
+		if strings.TrimSpace(in.Title) == "" || strings.ContainsAny(in.Title, "\r\n") || len([]rune(in.Title)) > 200 || strings.TrimSpace(in.CompletionCriteria) == "" || len([]rune(in.CompletionCriteria)) > 2000 || strings.TrimSpace(in.Mandate) == "" || len([]rune(in.Mandate)) > 4000 {
+			writeAPIError(w, 422, "invalid_migration_work", "title, completion criteria, and mandate are required and bounded")
+			return
+		}
+		repository, err := git.Open(in.RepositoryID)
+		if err != nil {
+			writeAPIError(w, 422, "invalid_migration_repository", "target repository storage is unavailable")
+			return
+		}
+		if _, err = repository.ReadCommit(storage.ObjectID(strings.ToLower(in.BaseRevision))); err != nil {
+			writeAPIError(w, 422, "invalid_base_revision", "base revision must be an existing target-repository commit")
+			return
+		}
+		if in.AssigneeType == "human" {
+			participant, _ := catalog.HasCollaborator(in.AssigneeID, in.RepositoryID)
+			if in.AssigneeID != target.OwnerID && !participant {
+				writeAPIError(w, 422, "invalid_task_assignee", "human assignee must already participate in the target repository")
+				return
+			}
+		}
+		work := durableschemas.MigrationWork{Kind: in.Kind, StepID: in.StepID, RepositoryID: in.RepositoryID, DependencyIDs: in.DependencyIDs, Contract: in.Contract}
+		var proposal proposals.Proposal
+		var assigned proposals.Task
+		out, link, err := store.CreateMigrationWork(r.PathValue("id"), r.PathValue("schema_id"), r.PathValue("migration_id"), actor.UserID, in.ExpectedVersion, work, func() (string, string, error) {
+			body := migrationWorkBody(r.PathValue("schema_id"), r.PathValue("migration_id"), work)
+			var publishErr error
+			proposal, publishErr = proposalStore.Create(in.RepositoryID, actor.UserID, in.Title, body)
+			if publishErr != nil && !errors.Is(publishErr, proposals.ErrDurabilityUncertain) {
+				return "", "", publishErr
+			}
+			task, taskErr := proposalStore.CreateTask(in.RepositoryID, proposal.ID, actor.UserID, in.Title, in.CompletionCriteria, nil, nil)
+			if taskErr != nil && !errors.Is(taskErr, proposals.ErrDurabilityUncertain) {
+				_ = proposalStore.DeleteMigrationWork(in.RepositoryID, proposal.ID, "", "")
+				return "", "", taskErr
+			}
+			assigned, publishErr = proposalStore.AssignTask(in.RepositoryID, proposal.ID, task.ID, actor.UserID, proposals.TaskAssignmentInput{AssigneeType: in.AssigneeType, AssigneeID: in.AssigneeID, Mandate: in.Mandate, RepositoryID: in.RepositoryID, BaseRevision: in.BaseRevision})
+			if publishErr != nil && !errors.Is(publishErr, proposals.ErrDurabilityUncertain) {
+				_ = proposalStore.DeleteMigrationWork(in.RepositoryID, proposal.ID, task.ID, "")
+				return "", "", publishErr
+			}
+			return proposal.ID, task.ID, nil
+		})
+		if errors.Is(err, durableschemas.ErrConflict) {
+			writeAPIError(w, 409, "migration_changed", "migration plan changed; reload before adding work")
+			return
+		}
+		if err != nil {
+			if proposal.ID != "" && assigned.Assignment != nil {
+				_ = proposalStore.DeleteMigrationWork(in.RepositoryID, proposal.ID, assigned.ID, assigned.Assignment.ID)
+			}
+			writeDurableSchema(w, out, err, 201)
+			return
+		}
+		projectDurableMigrationWork(&out, actor.UserID, catalog, proposalStore, pulls, sessionStore, workspaceStore)
+		writeJSON(w, 201, map[string]any{"schema": out, "migration_work": link, "task": assigned})
+	})
+}
+
+func migrationWorkBody(schemaID, migrationID string, w durableschemas.MigrationWork) string {
+	c := w.Contract
+	return "Durable-state migration " + migrationID + " for schema " + schemaID + ".\n\nWork kind: " + w.Kind + "\nStep: " + w.StepID + "\n\nCompatibility contract\nOld readers: " + strings.Join(c.OldReaders, "; ") + "\nNew readers: " + strings.Join(c.NewReaders, "; ") + "\nOld writers: " + strings.Join(c.OldWriters, "; ") + "\nNew writers: " + strings.Join(c.NewWriters, "; ") + "\nRollout flags: " + strings.Join(c.RolloutFlags, "; ") + "\nIdempotency: " + c.Idempotency + "\nTransformations: " + strings.Join(c.Transformations, "; ") + "\nOwnership: " + strings.Join(c.Ownership, "; ") + "\nRollback assumptions: " + strings.Join(c.RollbackAssumptions, "; ") + "\n\nThis context grants no repository, agent, review, merge, deployment, or data-store authority."
+}
+
+func projectDurableMigrationWork(schema *durableschemas.Schema, actorID string, catalog *repositories.Store, proposalStore *proposals.Store, pulls *pullrequests.Store, sessions *changesessions.Store, workspaceStore *workspaces.Store) {
+	var actorWorkspaces []workspaces.Workspace
+	if workspaceStore != nil && actorID != "" {
+		actorWorkspaces, _ = workspaceStore.List(actorID)
+	}
+	for mi := range schema.Migrations {
+		completed := map[string]bool{}
+		visible := schema.Migrations[mi].Work[:0]
+		for _, work := range schema.Migrations[mi].Work {
+			repo, err := catalog.GetByID(work.RepositoryID)
+			collaborator, _ := catalog.HasCollaborator(actorID, work.RepositoryID)
+			if err != nil || (repo.Visibility != repositories.Public && repo.OwnerID != actorID && !collaborator) {
+				continue
+			}
+			if task, err := proposalStore.GetTask(work.RepositoryID, work.ProposalID, work.TaskID); err == nil {
+				work.Status = task.Status
+				completed[work.ID] = task.Status == proposals.TaskCompleted
+				if task.Assignment != nil {
+					work.AssignmentID = task.Assignment.ID
+					work.AssigneeType = task.Assignment.AssigneeType
+					work.AssigneeID = task.Assignment.AssigneeID
+					work.BaseRevision = task.Assignment.Access.BaseRevision
+				}
+				if task.Contribution != nil {
+					work.PullRequestID = task.Contribution.PullRequestID
+					work.ContributionStatus = task.Contribution.Status
+				}
+			}
+			if sessions != nil {
+				if list, err := sessions.List(work.RepositoryID, work.TaskID); err == nil && len(list) > 0 {
+					work.SessionID = list[len(list)-1].ID
+				}
+			}
+			for _, workspace := range actorWorkspaces {
+				if workspace.RepositoryID == work.RepositoryID && workspace.Source.Kind == "proposal_task" && workspace.Source.ProposalID == work.ProposalID && workspace.Source.TaskID == work.TaskID {
+					work.WorkspaceID = workspace.ID
+					break
+				}
+			}
+			visible = append(visible, work)
+		}
+		for i := range visible {
+			ready := visible[i].Status == proposals.TaskTodo
+			for _, dep := range visible[i].DependencyIDs {
+				ready = ready && completed[dep]
+			}
+			visible[i].Ready = ready
+		}
+		schema.Migrations[mi].Work = visible
+	}
 }
 
 func durableSchemaDefinitionResolves(git *storage.Store, repositoryID string, revision durableschemas.Revision) bool {

@@ -939,7 +939,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			pullRequestStore.ConfigurePreviewAcceptance(acceptanceStore, previewStore)
 			registerAcceptanceRoutes(mux, repositoryCatalog, pullRequestStore, acceptanceStore, previewStore, authStore)
 		}
-		registerPullRequestRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, authStore, activityStore, userStore, checkRunStore, changeSessionStore, documentationStore, federationStore)
+		registerPullRequestRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, authStore, activityStore, userStore, checkRunStore, changeSessionStore, documentationStore, durableSchemaStore, federationStore)
 		if documentationStore != nil {
 			registerDocumentationReviewRoutes(mux, store, repositoryCatalog, pullRequestStore, documentationStore, checkRunStore, authStore)
 		}
@@ -951,7 +951,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerChangeSessionRoutes(mux, store, repositoryCatalog, pullRequestStore, changeSessionStore, authStore, activityStore, checkRunStore, previewStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && proposalStore != nil && changeSessionStore != nil {
-		registerTaskChangeSessionRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, changeSessionStore, authStore, relationshipStore, organizationStore)
+		registerTaskChangeSessionRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, changeSessionStore, authStore, relationshipStore, durableSchemaStore, organizationStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && activityStore != nil {
 		registerActivityRoutes(mux, repositoryCatalog, activityStore, authStore)
@@ -1049,7 +1049,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerRecoveryCommitmentRoutes(mux, repositoryCatalog, authStore, recoveryCommitmentStore, serviceObjectiveStore, deploymentStore, incidentStore, dataCommitmentStore, governanceStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && durableSchemaStore != nil && pullRequestStore != nil {
-		registerDurableSchemaRoutes(mux, store, repositoryCatalog, authStore, durableSchemaStore, pullRequestStore, decisionStore)
+		registerDurableSchemaRoutes(mux, store, repositoryCatalog, authStore, durableSchemaStore, pullRequestStore, decisionStore, proposalStore, changeSessionStore, workspaceStore)
 	}
 	if authStore != nil && userStore != nil && repositoryCatalog != nil && apiContractStore != nil && pullRequestStore != nil && releaseStore != nil {
 		registerAPIContractRoutes(mux, store, repositoryCatalog, authStore, apiContractStore, pullRequestStore, releaseStore)
@@ -1635,7 +1635,7 @@ func repairEvidence(run checkruns.Run, events []checkruns.Event) *changesessions
 	return evidence
 }
 
-func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoriesStore *repositories.Store, proposalStore *proposals.Store, store *pullrequests.Store, authStore *auth.Store, activityStore *activities.Store, userStore *users.Store, checkRunStore *checkruns.Store, sessionStore *changesessions.Store, documentationStore *docscollections.Store, federationStore ...*federation.Store) {
+func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repositoriesStore *repositories.Store, proposalStore *proposals.Store, store *pullrequests.Store, authStore *auth.Store, activityStore *activities.Store, userStore *users.Store, checkRunStore *checkruns.Store, sessionStore *changesessions.Store, documentationStore *docscollections.Store, durableStore *durableschemas.Store, federationStore ...*federation.Store) {
 	var federated *federation.Store
 	if len(federationStore) > 0 {
 		federated = federationStore[0]
@@ -1701,6 +1701,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 					all[i] = repaired
 				}
 			}
+			projectPullDurableMigration(&all[i], durableStore)
 		}
 		page, next, ok := paginate(r, all, func(p pullrequests.PullRequest) string { return p.ID })
 		if !ok {
@@ -1930,6 +1931,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 				return
 			}
 		}
+		projectPullDurableMigration(&pullRequest, durableStore)
 		writeJSON(w, 200, pullRequest)
 	})
 	mux.HandleFunc("PATCH /repositories/{id}/pulls/{pull_id}", func(w http.ResponseWriter, r *http.Request) {
@@ -2569,6 +2571,17 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		}
 		writeJSON(w, 200, review)
 	})
+}
+
+func projectPullDurableMigration(pull *pullrequests.PullRequest, store *durableschemas.Store) {
+	if store == nil || pull.TaskID == nil {
+		return
+	}
+	schema, migration, work, err := store.FindMigrationWork(pull.RepositoryID, *pull.TaskID)
+	if err != nil {
+		return
+	}
+	pull.DurableMigration = &pullrequests.DurableMigrationReview{SchemaID: schema.ID, MigrationID: migration.ID, WorkID: work.ID, StepID: work.StepID, Kind: work.Kind, DependencyIDs: append([]string(nil), work.DependencyIDs...), Contract: work.Contract}
 }
 
 func finalizeQueuedMerge(merged pullrequests.PullRequest, repositoriesStore *repositories.Store, proposalStore *proposals.Store, activityStore *activities.Store) error {

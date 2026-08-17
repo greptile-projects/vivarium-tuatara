@@ -3591,3 +3591,19 @@ Current repository participants use `POST .../support-solutions/{solution_id}/ac
 `needs_revalidation`; `archive` marks advice obsolete; `merge_duplicate` names an active canonical solution
 with the same audience. These actions never rewrite the original instructions, scope, discussion, authorship,
 or verification evidence. Records default beneath `$SUPPORT_SOLUTION_STORAGE_ROOT` (`support-solutions`).
+# Durable-state migration work
+
+`POST /repositories/{id}/durable-schemas/{schema_id}/migrations/{migration_id}/work`
+creates one ordered, repository-owned implementation task. The caller must be able to
+read the durable-state plan and already participate in the target repository. The
+request compare-and-swaps `expected_version`, names an existing migration `step_id`,
+an exact target `base_revision`, human or agent assignment, earlier work IDs, and a
+complete compatibility contract covering old/new readers and writers, rollout flags,
+idempotency, transformations, ownership, and rollback assumptions.
+
+The response includes `schema`, `migration_work`, and the ordinary assigned `task`.
+Subsequent sessions, workspaces, pulls, checks, reviews, and merges use their existing
+repository APIs and permissions. Agent sessions reject unmet dependencies until the
+earlier task contribution is merged. Schema reads omit work in target repositories the
+reader cannot access; definitions, privacy metadata, and data samples are never copied
+into the work contract.

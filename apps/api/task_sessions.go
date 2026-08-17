@@ -9,6 +9,7 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/durableschemas"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
@@ -19,7 +20,7 @@ import (
 
 // registerTaskChangeSessionRoutes connects proposal planning to the existing
 // durable session protocol without manufacturing a placeholder pull request.
-func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, sessionStore *changesessions.Store, authStore *auth.Store, relationStore *relationships.Store, organizationStore *organizations.Store) {
+func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, sessionStore *changesessions.Store, authStore *auth.Store, relationStore *relationships.Store, durableStore *durableschemas.Store, organizationStore *organizations.Store) {
 	key := func(r *http.Request) (string, string, string) {
 		return r.PathValue("id"), r.PathValue("proposal_id"), r.PathValue("task_id")
 	}
@@ -78,6 +79,27 @@ func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store
 				for _, dependency := range link.DependencyIDs {
 					if !completed[dependency] {
 						writeAPIError(w, 409, "migration_dependencies_incomplete", "earlier migration tasks must merge before this agent session can start")
+						return
+					}
+				}
+			}
+		}
+		if durableStore != nil {
+			_, migration, link, findErr := durableStore.FindMigrationWork(r.PathValue("id"), r.PathValue("task_id"))
+			if findErr != nil && !errors.Is(findErr, durableschemas.ErrNotFound) {
+				writeAPIError(w, 503, "migration_plan_unavailable", "durable-state migration dependencies could not be verified")
+				return
+			}
+			if findErr == nil {
+				completed := map[string]bool{}
+				for _, candidate := range migration.Work {
+					if task, taskErr := proposalStore.GetTask(candidate.RepositoryID, candidate.ProposalID, candidate.TaskID); taskErr == nil {
+						completed[candidate.ID] = task.Status == proposals.TaskCompleted && task.Contribution != nil && task.Contribution.Status == "merged" && task.Contribution.ContextRevision == task.ContextRevision
+					}
+				}
+				for _, dependency := range link.DependencyIDs {
+					if !completed[dependency] {
+						writeAPIError(w, 409, "migration_dependencies_incomplete", "earlier durable-state migration tasks must merge before this agent session can start")
 						return
 					}
 				}

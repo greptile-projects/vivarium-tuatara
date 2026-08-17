@@ -57,6 +57,47 @@ type Step struct {
 	SuccessMeasures     []string `json:"success_measures"`
 	RequiredApproverIDs []string `json:"required_approver_ids"`
 }
+
+// WorkContract is the exact, deliberately non-sensitive coexistence agreement
+// carried into repository work and review. Schema definitions, privacy terms,
+// and data samples remain at the schema's own visibility boundary.
+type WorkContract struct {
+	OldReaders          []string `json:"old_readers"`
+	NewReaders          []string `json:"new_readers"`
+	OldWriters          []string `json:"old_writers"`
+	NewWriters          []string `json:"new_writers"`
+	RolloutFlags        []string `json:"rollout_flags"`
+	Idempotency         string   `json:"idempotency"`
+	Transformations     []string `json:"transformations"`
+	Ownership           []string `json:"ownership"`
+	RollbackAssumptions []string `json:"rollback_assumptions"`
+}
+
+// MigrationWork links coordination to ordinary repository-owned proposal
+// work. Those repositories remain authoritative for assignment, sessions,
+// workspaces, review, checks, and merge.
+type MigrationWork struct {
+	ID                 string       `json:"id"`
+	Kind               string       `json:"kind"`
+	StepID             string       `json:"step_id"`
+	RepositoryID       string       `json:"repository_id"`
+	ProposalID         string       `json:"proposal_id"`
+	TaskID             string       `json:"task_id"`
+	DependencyIDs      []string     `json:"dependency_ids"`
+	Contract           WorkContract `json:"contract"`
+	CreatedBy          string       `json:"created_by"`
+	CreatedAt          time.Time    `json:"created_at"`
+	Status             string       `json:"status,omitempty"`
+	Ready              bool         `json:"ready"`
+	AssignmentID       string       `json:"assignment_id,omitempty"`
+	AssigneeType       string       `json:"assignee_type,omitempty"`
+	AssigneeID         string       `json:"assignee_id,omitempty"`
+	BaseRevision       string       `json:"base_revision,omitempty"`
+	SessionID          string       `json:"session_id,omitempty"`
+	WorkspaceID        string       `json:"workspace_id,omitempty"`
+	PullRequestID      string       `json:"pull_request_id,omitempty"`
+	ContributionStatus string       `json:"contribution_status,omitempty"`
+}
 type Event struct {
 	ID        string    `json:"id"`
 	Kind      string    `json:"kind"`
@@ -66,20 +107,21 @@ type Event struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 type Migration struct {
-	ID             string      `json:"id"`
-	FromVersion    int         `json:"from_version"`
-	ToVersion      int         `json:"to_version"`
-	SourceKind     string      `json:"source_kind"`
-	SourceID       string      `json:"source_id"`
-	Summary        string      `json:"summary"`
-	Operations     []Operation `json:"operations"`
-	Steps          []Step      `json:"steps"`
-	RollbackLimits []string    `json:"rollback_limits"`
-	Version        int         `json:"version"`
-	Events         []Event     `json:"events"`
-	CreatedBy      string      `json:"created_by"`
-	CreatedAt      time.Time   `json:"created_at"`
-	UpdatedAt      time.Time   `json:"updated_at"`
+	ID             string          `json:"id"`
+	FromVersion    int             `json:"from_version"`
+	ToVersion      int             `json:"to_version"`
+	SourceKind     string          `json:"source_kind"`
+	SourceID       string          `json:"source_id"`
+	Summary        string          `json:"summary"`
+	Operations     []Operation     `json:"operations"`
+	Steps          []Step          `json:"steps"`
+	RollbackLimits []string        `json:"rollback_limits"`
+	Version        int             `json:"version"`
+	Events         []Event         `json:"events"`
+	Work           []MigrationWork `json:"work"`
+	CreatedBy      string          `json:"created_by"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
 }
 type Schema struct {
 	ID             string      `json:"id"`
@@ -205,6 +247,116 @@ func (s *Store) AddEvent(repo, schema, migration, actor string, expected int, e 
 		return v, s.write(v)
 	}
 	return Schema{}, ErrNotFound
+}
+
+// CreateMigrationWork holds the schema-plan CAS boundary while an ordinary
+// repository task is published, preventing unlinked work and stale ordering.
+func (s *Store) CreateMigrationWork(repo, schema, migration, actor string, expected int, work MigrationWork, publish func() (string, string, error)) (Schema, MigrationWork, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, schema)
+	if err != nil {
+		return Schema{}, MigrationWork{}, err
+	}
+	for i := range v.Migrations {
+		m := &v.Migrations[i]
+		if m.ID != migration {
+			continue
+		}
+		if m.Version != expected {
+			return v, MigrationWork{}, ErrConflict
+		}
+		if validateWork(*m, work) != nil || publish == nil {
+			return v, MigrationWork{}, ErrInvalid
+		}
+		known := map[string]bool{}
+		for _, existing := range m.Work {
+			known[existing.ID] = true
+		}
+		seenDependencies := map[string]bool{}
+		for _, dependency := range work.DependencyIDs {
+			if !known[dependency] || seenDependencies[dependency] {
+				return v, MigrationWork{}, ErrInvalid
+			}
+			seenDependencies[dependency] = true
+		}
+		proposalID, taskID, publishErr := publish()
+		if publishErr != nil {
+			return v, MigrationWork{}, publishErr
+		}
+		if proposalID == "" || taskID == "" {
+			return v, MigrationWork{}, ErrInvalid
+		}
+		now := s.now()
+		work.ID, work.ProposalID, work.TaskID = id(), proposalID, taskID
+		work.CreatedBy, work.CreatedAt = actor, now
+		m.Work = append(m.Work, work)
+		m.Version++
+		m.Events = append(m.Events, Event{ID: id(), Kind: "work_created", StepID: work.StepID, Summary: work.Kind + " work created in repository " + work.RepositoryID, ActorID: actor, CreatedAt: now})
+		m.UpdatedAt, v.UpdatedAt = now, now
+		return v, work, s.write(v)
+	}
+	return Schema{}, MigrationWork{}, ErrNotFound
+}
+
+func (s *Store) FindMigrationWork(repositoryID, taskID string) (Schema, Migration, MigrationWork, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return Schema{}, Migration{}, MigrationWork{}, err
+	}
+	for _, dir := range entries {
+		if !dir.IsDir() {
+			continue
+		}
+		files, readErr := os.ReadDir(filepath.Join(s.root, dir.Name()))
+		if readErr != nil {
+			return Schema{}, Migration{}, MigrationWork{}, readErr
+		}
+		for _, file := range files {
+			if file.IsDir() || !strings.HasSuffix(file.Name(), ".json") {
+				continue
+			}
+			body, readErr := os.ReadFile(filepath.Join(s.root, dir.Name(), file.Name()))
+			if readErr != nil {
+				return Schema{}, Migration{}, MigrationWork{}, readErr
+			}
+			var schema Schema
+			if json.Unmarshal(body, &schema) != nil {
+				return Schema{}, Migration{}, MigrationWork{}, ErrInvalid
+			}
+			for _, migration := range schema.Migrations {
+				for _, work := range migration.Work {
+					if work.RepositoryID == repositoryID && work.TaskID == taskID {
+						return schema, migration, work, nil
+					}
+				}
+			}
+		}
+	}
+	return Schema{}, Migration{}, MigrationWork{}, ErrNotFound
+}
+
+func validateWork(m Migration, w MigrationWork) error {
+	kinds := map[string]bool{"schema_change": true, "compatibility": true, "backfill": true, "verification": true, "cleanup": true}
+	if !kinds[w.Kind] || w.RepositoryID == "" || w.StepID == "" || len(w.DependencyIDs) > 20 {
+		return ErrInvalid
+	}
+	stepFound := false
+	for _, step := range m.Steps {
+		if step.ID == w.StepID {
+			stepFound = true
+		}
+	}
+	if !stepFound {
+		return ErrInvalid
+	}
+	c := w.Contract
+	if len(c.OldReaders) == 0 || len(c.NewReaders) == 0 || len(c.OldWriters) == 0 || len(c.NewWriters) == 0 || len(c.RolloutFlags) == 0 || strings.TrimSpace(c.Idempotency) == "" || len(c.Transformations) == 0 || len(c.Ownership) == 0 || len(c.RollbackAssumptions) == 0 {
+		return ErrInvalid
+	}
+	return nil
 }
 func (s *Store) Get(repo, schema string) (Schema, error) {
 	s.mu.Lock()
