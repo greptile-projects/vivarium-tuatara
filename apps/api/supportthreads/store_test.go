@@ -2,6 +2,7 @@ package supportthreads
 
 import (
 	"errors"
+	"sync"
 	"testing"
 )
 
@@ -33,6 +34,41 @@ func TestContextualQuestionLifecycleAndDiagnostics(t *testing.T) {
 	reloaded, err := s.Get("repo", v.ID)
 	if err != nil || reloaded.History[1].Message != "Please include the runtime." {
 		t.Fatalf("reloaded = %#v, %v", reloaded, err)
+	}
+}
+
+func TestResolveHoldsThreadMutationBoundaryAcrossPublication(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, err := s.Create(Thread{RepositoryID: "repo", AuthorID: "asker", Title: "Help", Body: "Details", Target: Target{Kind: "repository", Label: "repo"}, Urgency: "normal", Audience: "public", ContactPreferences: ContactPreferences{ReplyInThread: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	var resolved Thread
+	var resolveErr error
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		resolved, resolveErr = s.Resolve("repo", v.ID, "asker", "published", v.Version, false, func() error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+	updateDone := make(chan error, 1)
+	go func() {
+		_, updateErr := s.UpdateStatus("repo", v.ID, "asker", "open", "concurrent", v.Version, false)
+		updateDone <- updateErr
+	}()
+	close(release)
+	wg.Wait()
+	if resolveErr != nil || resolved.Status != "closed" || resolved.History[len(resolved.History)-1].Kind != "resolved" {
+		t.Fatalf("resolved = %#v, %v", resolved, resolveErr)
+	}
+	if updateErr := <-updateDone; !errors.Is(updateErr, ErrConflict) {
+		t.Fatalf("concurrent update = %v", updateErr)
 	}
 }
 

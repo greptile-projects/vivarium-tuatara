@@ -87,6 +87,11 @@ func (s *Store) Create(v Solution, actor string) (Solution, error) {
 	if !valid(v) || actor == "" {
 		return Solution{}, ErrInvalid
 	}
+	if existing, found, err := s.findResolution(v.RepositoryID, v.ThreadID, v.AnswerRevisionID, v.VerificationAttemptID); err != nil {
+		return Solution{}, err
+	} else if found {
+		return existing, nil
+	}
 	now := s.now()
 	v.ID = id()
 	v.Status = "published"
@@ -140,6 +145,9 @@ func (s *Store) Transition(repo, sid, actor, action, message, related string, ve
 		return v, ErrConflict
 	}
 	kind, status, notice := "", "", ""
+	if v.Status == "merged" || v.Status == "archived" {
+		return v, ErrInvalid
+	}
 	switch action {
 	case "archive":
 		kind, status, notice = "archived", "archived", "A reusable support solution was archived as obsolete."
@@ -165,6 +173,29 @@ func (s *Store) Transition(repo, sid, actor, action, message, related string, ve
 	v.Events = append(v.Events, Event{ID: id(), Kind: kind, ActorID: actor, Message: strings.TrimSpace(message), RelatedSolutionID: related, CreatedAt: now})
 	addNotifications(&v, kind, notice, now)
 	return v, s.write(v)
+}
+func (s *Store) findResolution(repo, thread, revision, attempt string) (Solution, bool, error) {
+	dir := filepath.Join(s.root, repo)
+	es, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return Solution{}, false, nil
+	}
+	if err != nil {
+		return Solution{}, false, err
+	}
+	for _, entry := range es {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		v, readErr := s.read(repo, strings.TrimSuffix(entry.Name(), ".json"))
+		if readErr != nil {
+			return Solution{}, false, readErr
+		}
+		if v.ThreadID == thread && v.AnswerRevisionID == revision && v.VerificationAttemptID == attempt {
+			return v, true, nil
+		}
+	}
+	return Solution{}, false, nil
 }
 func valid(v Solution) bool {
 	if !segment(v.RepositoryID) || !segment(v.ThreadID) || !segment(v.AnswerID) || !segment(v.AnswerRevisionID) || !segment(v.VerificationAttemptID) || strings.TrimSpace(v.Title) == "" || strings.TrimSpace(v.Summary) == "" || strings.TrimSpace(v.Instructions) == "" || !map[string]bool{"public": true, "participants": true}[v.Audience] || len(clean(v.ApplicableVersions)) == 0 {

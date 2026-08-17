@@ -55,6 +55,11 @@ func TestSupportSolutionRequiresCurrentPassingRevisionAndPreservesSearchableScop
 	if published.AnswerRevisionID != answer.CurrentRevisionID || published.Instructions == "" || len(published.Credits) == 0 || len(published.Notifications) == 0 {
 		t.Fatalf("published = %#v", published)
 	}
+	var retry supportsolutions.Solution
+	decodeResponse(t, authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/support-threads/"+thread.ID+"/solutions", string(body), owner.Credential.Token, http.StatusCreated), &retry)
+	if retry.ID != published.ID {
+		t.Fatalf("retry created duplicate %s after %s", retry.ID, published.ID)
+	}
 	var search struct {
 		Solutions []supportsolutions.Solution `json:"solutions"`
 	}

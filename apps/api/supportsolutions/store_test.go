@@ -48,4 +48,28 @@ func TestDuplicateMergeRequiresExplicitTarget(t *testing.T) {
 	if err != nil || v.Status != "merged" || v.DuplicateOf != "canonical" || v.Events[1].RelatedSolutionID != "canonical" {
 		t.Fatalf("merged = %#v, %v", v, err)
 	}
+	if _, err = s.Transition("repo", v.ID, "maintainer", "request_revalidation", "revive", "", []string{"3.0"}, v.Version); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("merged solution revived: %v", err)
+	}
+}
+
+func TestCreateIsIdempotentForExactResolutionEvidence(t *testing.T) {
+	s, _ := New(t.TempDir())
+	first, err := s.Create(fixture(), "maintainer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry := fixture()
+	retry.Title = "A retry must not rewrite the published title"
+	second, err := s.Create(retry, "maintainer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != first.ID || second.Title != first.Title {
+		t.Fatalf("retry created or rewrote solution: first=%#v second=%#v", first, second)
+	}
+	all, err := s.List("repo")
+	if err != nil || len(all) != 1 {
+		t.Fatalf("solutions = %#v, %v", all, err)
+	}
 }

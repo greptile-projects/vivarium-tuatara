@@ -189,6 +189,37 @@ func (s *Store) UpdateStatus(repo, id, actor, status, message string, expected i
 	v.Diagnostics = diagnostics(v)
 	return v, s.write(v)
 }
+
+// Resolve serializes publication with all thread mutations. The publication callback
+// runs only after the expected thread version and resolver authority are revalidated.
+func (s *Store) Resolve(repo, id, actor, message string, expected int, maintainer bool, publish func() error) (Thread, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, id)
+	if err != nil {
+		return Thread{}, err
+	}
+	if v.Version != expected {
+		return Thread{}, ErrConflict
+	}
+	if !maintainer && actor != v.AuthorID {
+		return Thread{}, ErrForbidden
+	}
+	if publish == nil {
+		return Thread{}, ErrInvalid
+	}
+	if err := publish(); err != nil {
+		return Thread{}, err
+	}
+	now := s.now()
+	from := v.Status
+	v.Status = "closed"
+	v.Version++
+	v.UpdatedAt = now
+	v.History = append(v.History, HistoryEntry{ID: randomID(), Kind: "resolved", ActorID: actor, From: from, To: "closed", Message: strings.TrimSpace(message), CreatedAt: now})
+	v.Diagnostics = diagnostics(v)
+	return v, s.write(v)
+}
 func valid(v Thread) bool {
 	kinds := map[string]bool{"repository": true, "package": true, "release": true, "api": true, "documented_journey": true, "error": true}
 	urg := map[string]bool{"low": true, "normal": true, "high": true, "urgent": true}

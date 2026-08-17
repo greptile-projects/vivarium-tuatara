@@ -93,7 +93,7 @@ func registerSupportSolutionRoutes(mux *http.ServeMux, repos *repositories.Store
 		q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 		out := []supportsolutions.Solution{}
 		for _, v := range all {
-			if !visible(v, member) || v.Status == "merged" {
+			if !visible(v, member) || (v.Status != "published" && v.Status != "needs_revalidation") {
 				continue
 			}
 			if q != "" && !strings.Contains(strings.ToLower(v.Title+" "+v.Summary+" "+v.Instructions+" "+strings.Join(v.ApplicableVersions, " ")+" "+strings.Join(v.Limitations, " ")), q) {
@@ -173,12 +173,20 @@ func registerSupportSolutionRoutes(mux *http.ServeMux, repos *repositories.Store
 			return
 		}
 		credits := uniqueSupportCredits([]supportsolutions.Credit{{ActorID: thread.AuthorID, Role: "asker"}, {ActorID: revision.AuthorID, Role: "answer_author"}, {ActorID: attempt.ActorID, Role: "verifier"}, {ActorID: a.UserID, Role: "publisher"}})
-		v, e := solutions.Create(supportsolutions.Solution{RepositoryID: repo.ID, ThreadID: thread.ID, AnswerID: answer.ID, AnswerRevisionID: revision.ID, VerificationAttemptID: attempt.ID, Title: in.Title, Summary: in.Summary, Instructions: revision.Body, Audience: in.Audience, ApplicableVersions: in.ApplicableVersions, Limitations: in.Limitations, Links: in.Links, Credits: credits}, a.UserID)
+		var v supportsolutions.Solution
+		_, e = threads.Resolve(repo.ID, thread.ID, a.UserID, "Resolved by reusable solution from answer revision "+revision.ID, thread.Version, member, func() error {
+			var createErr error
+			v, createErr = solutions.Create(supportsolutions.Solution{RepositoryID: repo.ID, ThreadID: thread.ID, AnswerID: answer.ID, AnswerRevisionID: revision.ID, VerificationAttemptID: attempt.ID, Title: in.Title, Summary: in.Summary, Instructions: revision.Body, Audience: in.Audience, ApplicableVersions: in.ApplicableVersions, Limitations: in.Limitations, Links: in.Links, Credits: credits}, a.UserID)
+			return createErr
+		})
 		if e != nil {
+			if errors.Is(e, supportthreads.ErrConflict) {
+				writeAPIError(w, 409, "support_thread_changed", "support thread changed; reload before publishing its resolution")
+				return
+			}
 			writeSupportSolutionError(w, e)
 			return
 		}
-		_, _ = threads.UpdateStatus(repo.ID, thread.ID, a.UserID, "closed", "Resolved by reusable solution "+v.ID, thread.Version, member)
 		w.Header().Set("Location", "/repositories/"+repo.ID+"/support-solutions/"+v.ID)
 		writeJSON(w, 201, v)
 	})

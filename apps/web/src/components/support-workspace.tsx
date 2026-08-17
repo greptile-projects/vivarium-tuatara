@@ -237,8 +237,8 @@ export function SupportWorkspace() {
     if (!token || !selected) return;
     const form = event.currentTarget,
       d = new FormData(form),
-      answer = answers.find((x) => x.id === d.get("answer_id")),
-      attempt = attempts.find((x) => x.id === d.get("attempt_id"));
+      attempt = attempts.find((x) => x.id === d.get("attempt_id")),
+      answer = answers.find((x) => x.id === attempt?.answer_id);
     if (!answer || !attempt) return;
     setPending(true);
     try {
@@ -632,23 +632,15 @@ export function SupportWorkspace() {
                 </p>
               </div>
               <label className="text-sm font-semibold">
-                Tested answer
-                <select name="answer_id" className={field} required>
-                  {answers.map((x) => (
-                    <option key={x.id} value={x.id}>
-                      {x.question}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="text-sm font-semibold">
-                Passing attempt
+                Tested answer and passing attempt
                 <select name="attempt_id" className={field} required>
                   {attempts
                     .filter((x) => x.result === "passed" && !x.stale)
                     .map((x) => (
                       <option key={x.id} value={x.id}>
-                        {x.software_version} · {x.id.slice(0, 8)}
+                        {answers.find((answer) => answer.id === x.answer_id)
+                          ?.question || "Tested answer"}{" "}
+                        · {x.software_version} · {x.id.slice(0, 8)}
                       </option>
                     ))}
                 </select>
