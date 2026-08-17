@@ -94,6 +94,16 @@ candidates retain their exact source commits and separately owned scenarios; app
 bounded sanitized request/response/log summaries, artifact checksums, coverage, cost, and authorship. It is
 review context only and never carries credentials, artifact payloads, Git authority, checks, or merge permission.
 
+Contract migrations beneath `/api-contracts/{contract_id}/migrations` connect a published predecessor and
+candidate to an existing interface evolution plan. The producer classifies changes and defines ordered dual-run,
+migration, and sunset stages with evidence and remaining-traffic thresholds; affected applications, owners, and
+their existing integration work are discovered from retained records rather than an external inventory. Consumers
+acknowledge work, attest an exact candidate only when every declared producer and consumer scenario passes, or
+request a reasoned exception capped at 90 days. Readiness is derived anew from application access, candidate
+evidence, exception expiry, and the latest exact-version operational window. Revoked or unresponsive consumers,
+failed tests, expired exceptions, and traffic above policy remain explicit retirement blockers. The migration
+record grants no Git, task, agent, fork, release, deployment, or evolution authority.
+
 Each contract also retains compare-and-swap signal mappings and append-only observation windows.
 Mappings bind an exact contract/objective version and instrumentation revision to repository-defined
 metrics, logs, traces, health checks, support reports, deployments, releases, commits, pull requests,
