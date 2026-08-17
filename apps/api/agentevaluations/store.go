@@ -61,13 +61,14 @@ type DeliveryOutcome struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 type TrustNotice struct {
-	ID         string     `json:"id"`
-	Kind       string     `json:"kind"`
-	Severity   string     `json:"severity"`
-	Summary    string     `json:"summary"`
-	Action     string     `json:"action"`
-	CreatedAt  time.Time  `json:"created_at"`
-	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
+	ID             string     `json:"id"`
+	Kind           string     `json:"kind"`
+	Severity       string     `json:"severity"`
+	Summary        string     `json:"summary"`
+	Action         string     `json:"action"`
+	CreatedAt      time.Time  `json:"created_at"`
+	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
+	ProfileVersion int        `json:"profile_version,omitempty"`
 }
 type Handoff struct {
 	FromAgentID string    `json:"from_agent_id"`
@@ -839,7 +840,7 @@ func (s *Store) RecordOutcome(participationID, actor string, expected int, in Ou
 
 // ObserveProfile stops authority from silently following material disclosure
 // changes. The caller supplies a platform-derived material comparison.
-func (s *Store) ObserveProfile(participationID string, currentVersion int, material bool) (Participation, error) {
+func (s *Store) ObserveProfileWith(participationID string, currentVersion int, material bool, apply func(Participation) error) (Participation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p, e := read[Participation](s.participationPath(participationID))
@@ -874,12 +875,21 @@ func (s *Store) ObserveProfile(participationID string, currentVersion int, mater
 		}
 	}
 	n, _ := id()
-	p.Notices = append(p.Notices, TrustNotice{ID: n, Kind: "renewed_consent_required", Severity: "critical", Summary: "Material operator, model, data-use, capability, or price disclosure changed in profile version " + fmt.Sprint(currentVersion) + ".", Action: "compare profile versions and explicitly renew consent before restoring authority", CreatedAt: now})
+	p.Notices = append(p.Notices, TrustNotice{ID: n, Kind: "renewed_consent_required", Severity: "critical", Summary: "Material operator, model, data-use, capability, or price disclosure changed in profile version " + fmt.Sprint(currentVersion) + ".", Action: "compare profile versions and explicitly renew consent before restoring authority", CreatedAt: now, ProfileVersion: currentVersion})
 	if p.Status == "active" {
 		p.Status = "suspended"
 	}
+	if apply != nil {
+		if e := apply(p); e != nil {
+			return p, e
+		}
+	}
 	p.Version++
 	return p, write(s.participationPath(participationID), p)
+}
+
+func (s *Store) ObserveProfile(participationID string, currentVersion int, material bool) (Participation, error) {
+	return s.ObserveProfileWith(participationID, currentVersion, material, nil)
 }
 
 type ControlInput struct {
@@ -894,7 +904,7 @@ type ControlInput struct {
 	OperatorIDs    []string `json:"-"`
 }
 
-func (s *Store) ControlParticipation(participationID, actor string, expected int, in ControlInput) (Participation, error) {
+func (s *Store) ControlParticipationWith(participationID, actor string, expected int, in ControlInput, apply func(Participation) error) (Participation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p, e := read[Participation](s.participationPath(participationID))
@@ -934,7 +944,13 @@ func (s *Store) ControlParticipation(participationID, actor string, expected int
 		p.Handoffs = append(p.Handoffs, Handoff{p.AgentID, in.ToAgentID, in.Scope, in.WorkSummary, slices.Clone(in.EvidenceIDs), actor, now})
 		p.Status = "suspended"
 	case "consent":
-		if in.ProfileVersion <= p.ConsentedProfileVersion {
+		matched := false
+		for _, notice := range p.Notices {
+			if notice.Kind == "renewed_consent_required" && notice.ResolvedAt == nil && notice.ProfileVersion == in.ProfileVersion {
+				matched = true
+			}
+		}
+		if in.ProfileVersion <= p.ConsentedProfileVersion || !matched {
 			return p, ErrInvalid
 		}
 		p.ConsentedProfileVersion = in.ProfileVersion
@@ -954,7 +970,16 @@ func (s *Store) ControlParticipation(participationID, actor string, expected int
 	default:
 		return p, ErrInvalid
 	}
+	if apply != nil {
+		if e := apply(p); e != nil {
+			return p, e
+		}
+	}
 	p.Version++
 	p.Events = append(p.Events, ParticipationEvent{"participation." + in.Action, actor, "Trust authority control applied without deleting commits or evidence.", now})
 	return p, write(s.participationPath(participationID), p)
+}
+
+func (s *Store) ControlParticipation(participationID, actor string, expected int, in ControlInput) (Participation, error) {
+	return s.ControlParticipationWith(participationID, actor, expected, in, nil)
 }

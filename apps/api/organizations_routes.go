@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/agentevaluations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
@@ -147,7 +148,7 @@ func mandateRevision(in organizationMandateInput) organizations.MandateRevision 
 	return organizations.MandateRevision{DesiredOutcomes: in.DesiredOutcomes, Repositories: in.Repositories, TrustedSignals: in.TrustedSignals, Exclusions: in.Exclusions, Budget: in.Budget, StartsAt: in.StartsAt.UTC(), ExpiresAt: in.ExpiresAt.UTC(), AgentID: in.AgentID, AllowedActions: in.AllowedActions, RequiredHumanDecisions: in.RequiredHumanDecisions, OpportunityPolicies: in.OpportunityPolicies, Reason: in.Reason}
 }
 
-func registerOrganizationRoutes(mux *http.ServeMux, gitStore *storage.Store, orgs *organizations.Store, repos *repositories.Store, usersStore *users.Store, credentials *auth.Store, activityStore *activities.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, packageStore *packages.Store, incidentStore *incidents.Store, relationshipStore *relationships.Store, securityStore *securityadvisories.Store) {
+func registerOrganizationRoutes(mux *http.ServeMux, gitStore *storage.Store, orgs *organizations.Store, repos *repositories.Store, usersStore *users.Store, credentials *auth.Store, activityStore *activities.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, releaseStore *releases.Store, packageStore *packages.Store, incidentStore *incidents.Store, relationshipStore *relationships.Store, securityStore *securityadvisories.Store, evaluations *agentevaluations.Store) {
 	project := func(v organizations.Organization, actor string) organizations.Organization {
 		now := time.Now().UTC()
 		for i := range v.StewardshipMandates {
@@ -840,6 +841,55 @@ func registerOrganizationRoutes(mux *http.ServeMux, gitStore *storage.Store, org
 		v, err := orgs.PublishAgentProfile(r.PathValue("id"), r.PathValue("agent_id"), actor.UserID, in.ExpectedVersion, in.Profile)
 		if writeOrganizationError(w, err) {
 			return
+		}
+		if evaluations != nil {
+			items, x := evaluations.ListParticipations(v.ID)
+			if x != nil {
+				writeAPIError(w, 500, "evaluation_unavailable", "agent trust evidence is unavailable")
+				return
+			}
+			for _, p := range items {
+				if p.AgentID != r.PathValue("agent_id") || p.Status != "active" || len(v.Agents) == 0 {
+					continue
+				}
+				var agent organizations.Agent
+				for _, a := range v.Agents {
+					if a.ID == p.AgentID {
+						agent = a
+					}
+				}
+				if len(agent.Profiles) <= p.ConsentedProfileVersion && !slices.Equal(p.ConsentedOperatorIDs, agent.OperatorIDs) {
+					continue
+				}
+				old, next := agent.Profiles[p.ConsentedProfileVersion-1], agent.Profiles[len(agent.Profiles)-1]
+				material := old.ModelProvenance != next.ModelProvenance || old.DataUse != next.DataUse || old.Pricing != next.Pricing || !slices.Equal(old.RequestedCapabilities, next.RequestedCapabilities) || !slices.Equal(p.ConsentedOperatorIDs, agent.OperatorIDs)
+				if !material {
+					continue
+				}
+				_, x = evaluations.ObserveProfileWith(p.ID, len(agent.Profiles), true, func(current agentevaluations.Participation) error {
+					if current.AccessGrantID == "" {
+						return nil
+					}
+					gv := 1
+					for _, g := range v.AccessGrants {
+						if g.ID == current.AccessGrantID {
+							gv = g.Version
+						}
+					}
+					_, re := orgs.RevokeAccessGrant(v.ID, current.AccessGrantID, actor.UserID, gv, func(c organizations.DerivedCredential) error {
+						_, ce := credentials.Revoke(c.OperatorID, c.ID)
+						if errors.Is(ce, auth.ErrNotFound) {
+							return nil
+						}
+						return ce
+					})
+					return re
+				})
+				if x != nil {
+					writeAPIError(w, 500, "agent_trust_update_failed", "profile published but affected authority was retired incompletely")
+					return
+				}
+			}
 		}
 		writeJSON(w, 200, project(v, actor.UserID))
 	})

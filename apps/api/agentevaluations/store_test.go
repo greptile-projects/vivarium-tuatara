@@ -147,6 +147,9 @@ func TestApprovedTrialBecomesBoundedRevocableParticipation(t *testing.T) {
 	if err != nil || len(p.Outcomes) != 1 || len(p.Notices) != 1 || p.Notices[0].Action == "" {
 		t.Fatalf("attributed outcome = %#v, %v", p, err)
 	}
+	if _, err = s.ControlParticipation(p.ID, "owner", p.Version, ControlInput{Action: "consent", ProfileVersion: 2}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("future profile pre-consent = %v", err)
+	}
 	p, err = s.ObserveProfile(p.ID, 2, true)
 	if err != nil || p.Status != "suspended" || len(p.Notices) != 2 {
 		t.Fatalf("material profile gate = %#v, %v", p, err)
@@ -158,6 +161,19 @@ func TestApprovedTrialBecomesBoundedRevocableParticipation(t *testing.T) {
 	p, err = s.DecideParticipation(p.ID, "owner", "revoke", p.Version)
 	if err != nil || p.Status != "revoked" || len(p.Outcomes) != 1 {
 		t.Fatalf("revocation = %#v, %v", p, err)
+	}
+}
+
+func TestStaleControlDoesNotApplyAuthorityMutation(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p := Participation{ID: strings.Repeat("a", 32), OrganizationID: "org", AgentID: "agent", Version: 2, Status: "active", Actions: []string{"repository.read"}, DataBoundaries: []string{"repository_metadata"}}
+	if err := write(s.participationPath(p.ID), p); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	_, err := s.ControlParticipationWith(p.ID, "owner", 1, ControlInput{Action: "suspend"}, func(Participation) error { called = true; return nil })
+	if !errors.Is(err, ErrConflict) || called {
+		t.Fatalf("stale control = %v, callback=%v", err, called)
 	}
 }
 
