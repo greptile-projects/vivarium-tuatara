@@ -3458,7 +3458,7 @@ whose kind is `repository`, `package`, `release`, `api`, `documented_journey`,
 or `error`, structured `environment`, `goal`, ordered `attempted_steps`,
 `urgency`, `audience`, `contact_preferences`, and attachments. Attachments are
 restricted to `log`, `configuration`, or `sample_code`, base64 encoded, and at
-most 1 MiB each. At least an in-thread reply or maintainer-contact route is
+most 1 MiB each with at most 10 attachments per thread. At least an in-thread reply or maintainer-contact route is
 required.
 
 `GET /repositories/{id}/support-threads/{thread_id}` returns the thread with

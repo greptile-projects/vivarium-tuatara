@@ -14,6 +14,8 @@ import (
 )
 
 func registerSupportThreadRoutes(mux *http.ServeMux, repos *repositories.Store, store *supportthreads.Store, issueStore *issues.Store, credentials *auth.Store) {
+	const supportBodyLimit = 15 << 20
+	const supportAttachmentLimit = 10
 	access := func(w http.ResponseWriter, r *http.Request) (auth.Credential, repositories.Repository, bool, bool) {
 		a, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
 		if !ok {
@@ -108,7 +110,7 @@ func registerSupportThreadRoutes(mux *http.ServeMux, repos *repositories.Store, 
 			return
 		}
 		var in supportthreads.Thread
-		if decodeJSON(r, &in) != nil {
+		if decodeJSONLimit(r, &in, supportBodyLimit) != nil {
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
@@ -117,6 +119,10 @@ func registerSupportThreadRoutes(mux *http.ServeMux, repos *repositories.Store, 
 		in.Status = ""
 		in.History = nil
 		in.Related = nil
+		if len(in.Attachments) > supportAttachmentLimit {
+			writeAPIError(w, 422, "invalid_support_attachment", "support threads accept at most 10 attachments")
+			return
+		}
 		for i := range in.Attachments {
 			raw, e := base64.StdEncoding.DecodeString(in.Attachments[i].Data)
 			if e != nil || len(raw) > 1<<20 || len(raw) == 0 {

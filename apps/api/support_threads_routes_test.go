@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -36,6 +38,14 @@ func TestPublicSupportQuestionRetainsContextAndPrivateSuggestions(t *testing.T) 
 	decodeResponse(t, response, &thread)
 	if thread.AuthorID != developer.User.ID || thread.Attachments[0].Size != 7 || len(thread.Diagnostics) != 0 || thread.Status != "open" {
 		t.Fatalf("thread = %#v", thread)
+	}
+	boundaryData := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", 1<<20)))
+	boundaryBody := `{"title":"Boundary log","body":"A complete diagnostic log.","target":{"kind":"repository","label":"client-kit"},"urgency":"normal","audience":"public","contact_preferences":{"reply_in_thread":true},"attachments":[{"kind":"log","name":"complete.log","media_type":"text/plain","data":"` + boundaryData + `"}]}`
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/support-threads", boundaryBody, developer.Credential.Token, http.StatusCreated)
+	var boundary supportthreads.Thread
+	decodeResponse(t, response, &boundary)
+	if boundary.Attachments[0].Size != 1<<20 {
+		t.Fatalf("boundary attachment size = %d", boundary.Attachments[0].Size)
 	}
 	response = authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repo.ID+"/support-threads/"+thread.ID, "", reader.Credential.Token, http.StatusOK)
 	var projected supportthreads.Thread
