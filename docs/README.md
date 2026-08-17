@@ -14,6 +14,26 @@ The supported consumer contract, including authentication, stable error
 shapes, validation, and collection pagination, is documented in [API.md](API.md).
 Consumers should use that HTTP boundary rather than reading storage roots.
 
+## Durable-state contracts
+
+Repository participants publish immutable persistent-store schemas through
+`/repositories/{id}/durable-schemas`; the web workspace is
+`/repositories/{id}/durable-state`. Database, queue, index, object-store,
+event-log, cache, and other definitions bind ownership, compatibility guarantees,
+retention and privacy commitments, service/environment links, and a definition
+path whose exact contents resolve at the merge commit of the merged pull that reviewed them.
+
+Migration plans compare two exact published versions and must cite an existing
+repository pull request or affected technical decision. Each plan classifies
+reads, writes, backfills, and explicitly destructive operations, names affected
+owners and consumers, sequences measurable steps and participant approvals, and
+states operation-specific and overall rollback limits. Append-only,
+compare-and-swap events retain later approval and execution discussion without
+rewriting the plan; approval events are accepted only from the named approver for
+their exact step. Contracts and plans make deployment review inspectable but
+grant no Git, deployment, environment, or persistent-store authority. Records
+default beneath `$DURABLE_SCHEMA_STORAGE_ROOT` (`durable-schemas`).
+
 Support guidance can be proven in ordinary revision-pinned development workspaces. Immutable attempts
 bind an exact cited answer revision to sanitized thread inputs, declared environment, commands and
 outputs, artifacts, cost, and result; fresh-workspace reruns preserve the original record and reads expose
