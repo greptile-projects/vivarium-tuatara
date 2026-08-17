@@ -3516,3 +3516,24 @@ software version, declared environment/dependencies, workspace revision, or work
 longer matches its frozen provenance. Records default beneath `$SUPPORT_VERIFICATION_STORAGE_ROOT`
 (`support-verifications`) and grant no repository, workspace, credential, review, or answer-verification
 authority.
+
+## Reusable support solutions
+
+`POST /repositories/{id}/support-threads/{thread_id}/solutions` lets the asker or a current repository
+participant resolve a question with an exact passing, non-stale verification attempt. The request names the
+answer and revision, attempt, reusable title and summary, `public` or `participants` audience, applicable
+versions, limitations, and typed links. Publication freezes the tested instructions and gives attributable
+credit to the asker, answer author, verifier, and publisher. Public publication requires a public repository,
+thread, and knowledge answer. Documentation collection, `name@version` package, release, and current
+contributor-guidance links are resolved server-side; a `search` link makes the solution directly discoverable.
+
+`GET /repositories/{id}/support-solutions?q=...` searches readable active guidance across its title, summary,
+instructions, versions, and limitations. `GET .../support-solutions/{solution_id}` returns its exact evidence,
+credits, project links, append-only lifecycle events, and relevant credited-participant notifications. Merged
+duplicates are omitted from search but remain directly readable for provenance.
+
+Current repository participants use `POST .../support-solutions/{solution_id}/actions` with
+`expected_version`. `request_revalidation` names newer versions and moves the projection to
+`needs_revalidation`; `archive` marks advice obsolete; `merge_duplicate` names an active canonical solution
+with the same audience. These actions never rewrite the original instructions, scope, discussion, authorship,
+or verification evidence. Records default beneath `$SUPPORT_SOLUTION_STORAGE_ROOT` (`support-solutions`).

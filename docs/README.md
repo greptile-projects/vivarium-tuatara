@@ -2740,3 +2740,10 @@ return identity/title/status metadata, not candidate attachments or private
 discussion. Status changes are compare-and-swap and retain actor-stamped
 history. Records default beneath `$SUPPORT_THREAD_STORAGE_ROOT`
 (`support-threads`) and grant no repository authority.
+Successful proof can be published from `/support` as reusable project guidance. A solution freezes its exact
+support question, answer revision, passing attempt, tested instructions, applicable versions, limitations,
+audience, links, and credits. Public records require an entirely public evidence chain; participant-only records
+remain repository-scoped. Repository search (`GET /repositories/{id}/support-solutions?q=...`) discovers active
+solutions, and resolved links can point at documentation collections, exact package versions, releases, or the
+current contributor guidance. Maintainer duplicate merges, obsolete archives, and newer-version revalidation
+requests append attributed events and outcome notifications without changing the original discussion or proof.
