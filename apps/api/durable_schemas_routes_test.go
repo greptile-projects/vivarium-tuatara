@@ -63,8 +63,11 @@ func TestDurableMigrationWorkCreatesScopedOrdinaryTaskWithExactContract(t *testi
 	}
 	source, _ := createRepo("durable-source", provider.Credential.Token)
 	target, targetCommit := createRepo("durable-target", consumer.Credential.Token)
-	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+source.ID+"/collaborators", `{"user_id":"`+consumer.User.ID+`"}`, provider.Credential.Token, http.StatusCreated).Body.Close()
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+source.ID+"/collaborators", `{"user_id":"`+observer.User.ID+`"}`, provider.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+target.ID+"/collaborators", `{"user_id":"`+provider.User.ID+`"}`, consumer.Credential.Token, http.StatusCreated).Body.Close()
+	if _, err := catalog.SetVisibility(provider.User.ID, source.ID, repositories.Public); err != nil {
+		t.Fatal(err)
+	}
 	revision := durableschemas.Revision{Name: "orders", StoreKind: "database", Description: "orders", Definition: "v1", DefinitionPath: "orders.sql", OwnerIDs: []string{provider.User.ID}, Compatibility: []string{"expand-contract"}, Retention: "seven years", Privacy: []string{"restricted"}, PullRequestID: "pull", ReviewedCommit: string(targetCommit), Rationale: "test"}
 	schema, err := durableStore.Create(source.ID, provider.User.ID, revision)
 	if err != nil {
@@ -82,7 +85,13 @@ func TestDurableMigrationWorkCreatesScopedOrdinaryTaskWithExactContract(t *testi
 	migration := schema.Migrations[0]
 	contract := `"contract":{"old_readers":["read v1"],"new_readers":["read v1 and v2"],"old_writers":["write v1"],"new_writers":["dual write v1 and v2"],"rollout_flags":["orders_v2 defaults off"],"idempotency":"backfill uses order id compare-and-swap","transformations":["copy cents without rounding"],"ownership":["consumer owns compatibility"],"rollback_assumptions":["old column remains authoritative"]}`
 	body := fmt.Sprintf(`{"expected_version":%d,"kind":"compatibility","step_id":"compat","repository_id":"%s","title":"Add compatible order reader","completion_criteria":"Both schema versions pass","assignee_type":"human","assignee_id":"%s","mandate":"Implement only the compatibility reader","base_revision":"%s",%s}`, migration.Version, target.ID, consumer.User.ID, targetCommit, contract)
-	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+source.ID+"/durable-schemas/"+schema.ID+"/migrations/"+migration.ID+"/work", body, consumer.Credential.Token, http.StatusCreated)
+	workURL := server.URL + "/repositories/" + source.ID + "/durable-schemas/" + schema.ID + "/migrations/" + migration.ID + "/work"
+	authenticatedRequest(t, http.MethodPost, workURL, body, consumer.Credential.Token, http.StatusNotFound).Body.Close()
+	unchanged, err := durableStore.Get(source.ID, schema.ID)
+	if err != nil || len(unchanged.Migrations[0].Work) != 0 || unchanged.Migrations[0].Version != migration.Version {
+		t.Fatalf("source-read-only request mutated plan: %#v, %v", unchanged.Migrations[0], err)
+	}
+	response := authenticatedRequest(t, http.MethodPost, workURL, body, provider.Credential.Token, http.StatusCreated)
 	var result struct {
 		Schema durableschemas.Schema `json:"schema"`
 		Task   proposals.Task        `json:"task"`
