@@ -604,6 +604,33 @@ func TestRevokingOverlappingGrantPausesOnlyAfterFinalCoverage(t *testing.T) {
 	}
 }
 
+func TestGrantRevocationIsFailClosedAcrossCredentialErrors(t *testing.T) {
+	store, _ := New(t.TempDir())
+	owner := "0123456789abcdef0123456789abcdef"
+	v, _ := store.Create("Fail closed", "fail-closed", "", owner)
+	grantID := strings.Repeat("1", 32)
+	first, second := strings.Repeat("2", 32), strings.Repeat("3", 32)
+	v, _ = store.mutate(v.ID, func(current *Organization) error {
+		current.AccessGrants = []AccessGrant{{ID: grantID, PrincipalType: "agent", PrincipalID: strings.Repeat("4", 32), Version: 1, DerivedCredentials: []DerivedCredential{{ID: first}, {ID: second}}}}
+		return nil
+	})
+	seen := []string{}
+	_, err := store.RevokeAccessGrant(v.ID, grantID, owner, 1, func(c DerivedCredential) error {
+		seen = append(seen, c.ID)
+		if c.ID == first {
+			return errors.New("retirement unavailable")
+		}
+		return nil
+	})
+	if err == nil || !slices.Equal(seen, []string{first, second}) {
+		t.Fatalf("retirement = %v, seen=%v", err, seen)
+	}
+	persisted, _ := store.Get(v.ID)
+	if persisted.AccessGrants[0].RevokedAt == nil {
+		t.Fatal("grant remained live after credential retirement error")
+	}
+}
+
 func TestParticipationLimitsSurviveAccessApproval(t *testing.T) {
 	store, _ := New(t.TempDir())
 	base := time.Date(2026, 8, 17, 2, 0, 0, 0, time.UTC)

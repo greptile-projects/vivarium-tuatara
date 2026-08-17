@@ -181,7 +181,13 @@ whenever dependencies change or the web job fails before it starts.
   atomically consume the action cap, and lifetime is capped by the agent-minute budget. Pending
   sponsor-required participation supports owner-only, version-guarded reassignment to a current
   member, holds membership across that write, and retains both identities in history. Failed
-  activation rollback revokes the provisional grant and all credentials derived from it. Deployment compatibility
+  activation rollback revokes the provisional grant and all credentials derived from it. Active evaluated-agent
+  participations retain privacy-bounded task outcomes, reviewer corrections, verification failures,
+  reversions, security/policy violations, accepted contributions, cost, and responsiveness alongside
+  periodic reevaluation and material-profile consent. Material model, data-use, requested-capability,
+  or price changes suspend active trust pending renewed owner consent; anomaly evidence creates
+  actionable notices. Versioned narrowing, suspension, structured replacement handoff, and revocation
+  preserve commits and evidence while retiring linked grants and credentials. Deployment compatibility
   uses exact closed profile values (`platform`, `operator_managed`, `customer_managed`, or
   `external_service`); free-form execution prose is explanatory only. An omitted structured boundary
   is missing evidence and fails closed only when a search explicitly requests that boundary. Nested teams retain

@@ -38,6 +38,14 @@ type participationMutationInput struct {
 	Decision        string `json:"decision"`
 	SponsorID       string `json:"sponsor_id"`
 }
+type participationOutcomeInput struct {
+	ExpectedVersion int                           `json:"expected_version"`
+	Outcome         agentevaluations.OutcomeInput `json:"outcome"`
+}
+type participationControlInput struct {
+	ExpectedVersion int                           `json:"expected_version"`
+	Control         agentevaluations.ControlInput `json:"control"`
+}
 
 func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, orgs *organizations.Store, evaluations *agentevaluations.Store) {
 	require := func(w http.ResponseWriter, r *http.Request, scope string) (auth.Credential, organizations.Organization, bool) {
@@ -251,7 +259,8 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 		writeJSON(w, 201, v)
 	})
 	mux.HandleFunc("GET /organizations/{id}/agent-participations", func(w http.ResponseWriter, r *http.Request) {
-		if _, _, ok := require(w, r, "repositories:read"); !ok {
+		_, _, ok := require(w, r, "repositories:read")
+		if !ok {
 			return
 		}
 		v, e := evaluations.ListParticipations(r.PathValue("id"))
@@ -260,6 +269,73 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 			return
 		}
 		writeJSON(w, 200, map[string]any{"participations": v})
+	})
+	mux.HandleFunc("POST /organizations/{id}/agent-participations/{participation_id}/outcomes", func(w http.ResponseWriter, r *http.Request) {
+		actor, org, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		var in participationOutcomeInput
+		if decodeJSON(r, &in) != nil {
+			writeErr(w, agentevaluations.ErrInvalid)
+			return
+		}
+		p, e := evaluations.GetParticipation(r.PathValue("participation_id"))
+		if e != nil || p.OrganizationID != org.ID {
+			writeErr(w, agentevaluations.ErrNotFound)
+			return
+		}
+		v, e := evaluations.RecordOutcome(p.ID, actor.UserID, in.ExpectedVersion, in.Outcome)
+		if e != nil {
+			writeErr(w, e)
+			return
+		}
+		writeJSON(w, 201, v)
+	})
+	mux.HandleFunc("POST /organizations/{id}/agent-participations/{participation_id}/controls", func(w http.ResponseWriter, r *http.Request) {
+		actor, org, ok := require(w, r, "repositories:write")
+		if !ok {
+			return
+		}
+		if !organizations.HasRole(org, actor.UserID, "owner") {
+			writeAPIError(w, 403, "participation_owner_required", "an organization owner must control agent trust")
+			return
+		}
+		var in participationControlInput
+		if decodeJSON(r, &in) != nil {
+			writeErr(w, agentevaluations.ErrInvalid)
+			return
+		}
+		p, e := evaluations.GetParticipation(r.PathValue("participation_id"))
+		if e != nil || p.OrganizationID != org.ID {
+			writeErr(w, agentevaluations.ErrNotFound)
+			return
+		}
+		if in.Control.Action == "consent" {
+			for _, a := range org.Agents {
+				if a.ID == p.AgentID {
+					in.Control.ProfileVersion = len(a.Profiles)
+					in.Control.OperatorIDs = slices.Clone(a.OperatorIDs)
+				}
+			}
+		}
+		v, e := evaluations.ControlParticipationWith(p.ID, actor.UserID, in.ExpectedVersion, in.Control, func(current agentevaluations.Participation) error {
+			if current.AccessGrantID == "" {
+				return nil
+			}
+			if in.Control.Action == "suspend" || in.Control.Action == "handoff" {
+				return retireParticipationGrant(orgs, credentials, org.ID, current.AccessGrantID, actor.UserID)
+			}
+			if in.Control.Action == "narrow" {
+				return narrowParticipationGrant(orgs, credentials, org.ID, current.AccessGrantID, actor.UserID, in.Control.Actions, in.Control.DataBoundaries)
+			}
+			return nil
+		})
+		if e != nil {
+			writeErr(w, e)
+			return
+		}
+		writeJSON(w, 200, v)
 	})
 	mux.HandleFunc("POST /organizations/{id}/agent-participations", func(w http.ResponseWriter, r *http.Request) {
 		actor, org, ok := require(w, r, "repositories:write")
@@ -284,6 +360,11 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 		if in.Participation.AgreementRequirement == "sponsor" && !organizations.HasRole(org, in.Participation.SponsorID, "") {
 			writeAPIError(w, 422, "participation_sponsor_invalid", "the named sponsor must be a current organization member")
 			return
+		}
+		for _, a := range org.Agents {
+			if a.ID == in.Participation.AgentID {
+				in.Participation.OperatorIDs = slices.Clone(a.OperatorIDs)
+			}
 		}
 		v, e := evaluations.CreateParticipation(org.ID, actor.UserID, in.Participation)
 		if e != nil {
@@ -468,7 +549,7 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 			writeErr(w, agentevaluations.ErrNotFound)
 			return
 		}
-		if p.Version != in.ExpectedVersion || (in.Decision == "revoke" && p.Status != "active") || (in.Decision == "deny" && p.Status == "active") || (in.Decision != "deny" && in.Decision != "revoke") {
+		if p.Version != in.ExpectedVersion || (in.Decision == "revoke" && p.Status != "active" && p.Status != "suspended") || (in.Decision == "deny" && p.Status == "active") || (in.Decision != "deny" && in.Decision != "revoke") {
 			writeErr(w, agentevaluations.ErrConflict)
 			return
 		}

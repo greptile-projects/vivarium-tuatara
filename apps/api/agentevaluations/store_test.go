@@ -2,6 +2,8 @@ package agentevaluations
 
 import (
 	"errors"
+	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -143,9 +145,87 @@ func TestApprovedTrialBecomesBoundedRevocableParticipation(t *testing.T) {
 	if err != nil || p.Status != "active" || p.AccessGrantID != "grant" {
 		t.Fatalf("activation = %#v, %v", p, err)
 	}
+	p, err = s.RecordOutcome(p.ID, "reviewer", p.Version, OutcomeInput{Kind: "verification_failure", RepositoryID: "repo", Status: "failed", Summary: "Public verification failed after delivery.", AttributionID: "check:42", Cost: 2.5, LatencyMS: 900})
+	if err != nil || len(p.Outcomes) != 1 || len(p.Notices) != 1 || p.Notices[0].Action == "" {
+		t.Fatalf("attributed outcome = %#v, %v", p, err)
+	}
+	if _, err = s.ControlParticipation(p.ID, "owner", p.Version, ControlInput{Action: "consent", ProfileVersion: 2}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("future profile pre-consent = %v", err)
+	}
+	p, err = s.ObserveProfile(p.ID, 2, true)
+	if err != nil || p.Status != "suspended" || len(p.Notices) != 2 {
+		t.Fatalf("material profile gate = %#v, %v", p, err)
+	}
+	p, err = s.ControlParticipation(p.ID, "owner", p.Version, ControlInput{Action: "consent", ProfileVersion: 2})
+	if err != nil || p.ConsentedProfileVersion != 2 || p.Notices[1].ResolvedAt == nil {
+		t.Fatalf("renewed consent = %#v, %v", p, err)
+	}
 	p, err = s.DecideParticipation(p.ID, "owner", "revoke", p.Version)
-	if err != nil || p.Status != "revoked" || len(p.Events) != 4 {
+	if err != nil || p.Status != "revoked" || len(p.Outcomes) != 1 {
 		t.Fatalf("revocation = %#v, %v", p, err)
+	}
+}
+
+func TestStaleControlDoesNotApplyAuthorityMutation(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p := Participation{ID: strings.Repeat("a", 32), OrganizationID: "org", AgentID: "agent", Version: 2, Status: "active", Actions: []string{"repository.read"}, DataBoundaries: []string{"repository_metadata"}}
+	if err := write(s.participationPath(p.ID), p); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	_, err := s.ControlParticipationWith(p.ID, "owner", 1, ControlInput{Action: "suspend"}, func(Participation) error { called = true; return nil })
+	if !errors.Is(err, ErrConflict) || called {
+		t.Fatalf("stale control = %v, callback=%v", err, called)
+	}
+}
+
+func TestControlPersistsFailClosedStateBeforeAuthorityMutation(t *testing.T) {
+	root := t.TempDir()
+	s, _ := New(root)
+	p := Participation{ID: strings.Repeat("b", 32), OrganizationID: "org", AgentID: "agent", Version: 1, Status: "active", Actions: []string{"repository.read"}, DataBoundaries: []string{"repository_metadata"}}
+	if err := write(s.participationPath(p.ID), p); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(root, 0700)
+	called := false
+	_, err := s.ControlParticipationWith(p.ID, "owner", 1, ControlInput{Action: "suspend"}, func(Participation) error { called = true; return nil })
+	if err == nil || called {
+		t.Fatalf("write failure = %v, callback=%v", err, called)
+	}
+}
+
+func TestAuthorityFailureRollsBackParticipationForRetry(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p := Participation{ID: strings.Repeat("c", 32), OrganizationID: "org", AgentID: "agent", Version: 1, Status: "active", Actions: []string{"repository.read", "repository.write"}, DataBoundaries: []string{"repository_metadata", "repository_content"}}
+	if err := write(s.participationPath(p.ID), p); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.ControlParticipationWith(p.ID, "owner", 1, ControlInput{Action: "narrow", Actions: []string{"repository.read"}, DataBoundaries: []string{"repository_metadata"}}, func(Participation) error { return errors.New("grant conflict") })
+	if err == nil {
+		t.Fatal("authority failure accepted")
+	}
+	persisted, _ := s.GetParticipation(p.ID)
+	if persisted.Version != 1 || persisted.Status != "active" || len(persisted.Actions) != 2 {
+		t.Fatalf("rollback = %#v", persisted)
+	}
+}
+
+func TestOperatorOnlyMaterialChangeRequiresConsent(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p := Participation{ID: strings.Repeat("d", 32), OrganizationID: "org", AgentID: "agent", Version: 1, Status: "active", ConsentedProfileVersion: 1, ConsentedOperatorIDs: []string{"one", "two"}}
+	if err := write(s.participationPath(p.ID), p); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := s.ObserveProfile(p.ID, 1, true)
+	if err != nil || changed.Status != "suspended" || len(changed.Notices) != 1 || changed.Notices[0].ProfileVersion != 1 {
+		t.Fatalf("operator observation = %#v, %v", changed, err)
+	}
+	changed, err = s.ControlParticipation(changed.ID, "owner", changed.Version, ControlInput{Action: "consent", ProfileVersion: 1, OperatorIDs: []string{"two"}})
+	if err != nil || !slices.Equal(changed.ConsentedOperatorIDs, []string{"two"}) {
+		t.Fatalf("operator consent = %#v, %v", changed, err)
 	}
 }
 

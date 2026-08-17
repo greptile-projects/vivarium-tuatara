@@ -2067,7 +2067,8 @@ func (s *Store) DecideAccessRequest(id, requestID, actor, decision string, valid
 }
 
 func (s *Store) RevokeAccessGrant(id, grantID, actor string, expected int, revoke func(DerivedCredential) error) (Organization, error) {
-	return s.mutate(id, func(v *Organization) error {
+	var credentialErr error
+	out, err := s.mutate(id, func(v *Organization) error {
 		if !HasRole(*v, actor, "owner") {
 			return ErrNotFound
 		}
@@ -2085,7 +2086,7 @@ func (s *Store) RevokeAccessGrant(id, grantID, actor string, expected int, revok
 			for _, credential := range g.DerivedCredentials {
 				if revoke != nil {
 					if err := revoke(credential); err != nil {
-						return err
+						credentialErr = errors.Join(credentialErr, err)
 					}
 				}
 			}
@@ -2137,6 +2138,62 @@ func (s *Store) RevokeAccessGrant(id, grantID, actor string, expected int, revok
 		}
 		return ErrNotFound
 	})
+	if err != nil {
+		return out, err
+	}
+	return out, credentialErr
+}
+
+func (s *Store) NarrowParticipationGrant(id, grantID, actor string, expected int, actions, boundaries []string, revoke func(DerivedCredential) error) (Organization, error) {
+	var credentialErr error
+	out, err := s.mutate(id, func(v *Organization) error {
+		if !HasRole(*v, actor, "owner") || len(actions) == 0 || len(boundaries) == 0 {
+			return ErrNotFound
+		}
+		for i := range v.AccessGrants {
+			g := &v.AccessGrants[i]
+			if g.ID != grantID {
+				continue
+			}
+			if g.Version != expected || g.RevokedAt != nil || g.Participation == nil {
+				return ErrConflict
+			}
+			for _, x := range actions {
+				if !slices.Contains(g.Participation.AllowedActions, x) {
+					return ErrInvalid
+				}
+			}
+			for _, x := range boundaries {
+				if !slices.Contains(g.Participation.DataBoundaries, x) {
+					return ErrInvalid
+				}
+			}
+			for _, c := range g.DerivedCredentials {
+				if revoke != nil {
+					if err := revoke(c); err != nil {
+						credentialErr = errors.Join(credentialErr, err)
+					}
+				}
+			}
+			if credentialErr != nil {
+				now := s.now().Truncate(time.Microsecond)
+				g.RevokedAt = &now
+				g.RevokedBy = actor
+				g.Version++
+				return s.event(v, "access.revoked", actor, g.ID, map[string]any{"reason": "credential retirement failed during narrowing"})
+			}
+			g.DerivedCredentials = []DerivedCredential{}
+			g.Participation.AllowedActions = slices.Clone(actions)
+			g.Participation.DataBoundaries = slices.Clone(boundaries)
+			g.Version++
+			return s.event(v, "access.grant.narrowed", actor, g.ID, map[string]any{"actions": actions, "data_boundaries": boundaries})
+		}
+		return ErrNotFound
+	})
+	if err != nil {
+		return out, err
+	}
+	return out, credentialErr
 }
 
 func resourceDenied(g AccessGrant, resource ResourceScope) bool {

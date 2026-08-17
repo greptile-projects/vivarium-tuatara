@@ -14,6 +14,16 @@ The supported consumer contract, including authentication, stable error
 shapes, validation, and collection pagination, is documented in [API.md](API.md).
 Consumers should use that HTTP boundary rather than reading storage roots.
 
+## Current approved-agent trust
+
+Approved-agent participation retains privacy-bounded delivered outcomes, cost and responsiveness,
+review corrections, verification/reversion/violation evidence, periodic reevaluation deadlines,
+material-profile consent, and actionable anomaly notices in the existing agent-evaluation store.
+Organization-owner controls can narrow or suspend trust and retain structured replacement handoffs;
+suspension and handoff revoke the linked access grant and credentials without deleting commits or
+historical evidence. Profile claims, evaluation evidence, governance standing, and financial limits
+remain distinct from technical authority.
+
 ## Reliability contracts
 
 Repository participants publish complete, compare-and-swap service-objective contracts through

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -43,48 +44,92 @@ type ParticipationEvent struct {
 	Summary   string    `json:"summary"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+// DeliveryOutcome is a privacy-bounded project result. It deliberately retains
+// no prompt, patch, branch, issue body, or artifact content.
+type DeliveryOutcome struct {
+	ID             string    `json:"id"`
+	Kind           string    `json:"kind"`
+	RepositoryID   string    `json:"repository_id"`
+	Status         string    `json:"status"`
+	Summary        string    `json:"summary"`
+	AttributionID  string    `json:"attribution_id"`
+	ProfileVersion int       `json:"profile_version"`
+	Cost           float64   `json:"cost"`
+	LatencyMS      int64     `json:"latency_ms"`
+	RecordedBy     string    `json:"recorded_by"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+type TrustNotice struct {
+	ID             string     `json:"id"`
+	Kind           string     `json:"kind"`
+	Severity       string     `json:"severity"`
+	Summary        string     `json:"summary"`
+	Action         string     `json:"action"`
+	CreatedAt      time.Time  `json:"created_at"`
+	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
+	ProfileVersion int        `json:"profile_version,omitempty"`
+}
+type Handoff struct {
+	FromAgentID string    `json:"from_agent_id"`
+	ToAgentID   string    `json:"to_agent_id"`
+	Scope       string    `json:"scope"`
+	WorkSummary string    `json:"work_summary"`
+	EvidenceIDs []string  `json:"evidence_ids"`
+	CreatedBy   string    `json:"created_by"`
+	CreatedAt   time.Time `json:"created_at"`
+}
 type Participation struct {
-	ID                   string                   `json:"id"`
-	OrganizationID       string                   `json:"organization_id"`
-	AgentID              string                   `json:"agent_id"`
-	AgentProfileVersion  int                      `json:"agent_profile_version"`
-	EvaluationRunID      string                   `json:"evaluation_run_id"`
-	EvaluationDecisionAt time.Time                `json:"evaluation_decision_at"`
-	Version              int                      `json:"version"`
-	Status               string                   `json:"status"`
-	Role                 string                   `json:"role"`
-	Resources            []ParticipationResource  `json:"resources"`
-	Actions              []string                 `json:"actions"`
-	Budget               ParticipationBudget      `json:"budget"`
-	StartsAt             time.Time                `json:"starts_at"`
-	ExpiresAt            time.Time                `json:"expires_at"`
-	DataBoundaries       []string                 `json:"data_boundaries"`
-	PolicyExceptionIDs   []string                 `json:"policy_exception_ids"`
-	AgreementRequirement string                   `json:"agreement_requirement"`
-	SponsorID            string                   `json:"sponsor_id,omitempty"`
-	Agreements           []ParticipationAgreement `json:"agreements"`
-	AuthorityIdentity    string                   `json:"authority_identity,omitempty"`
-	AccessGrantID        string                   `json:"access_grant_id,omitempty"`
-	CreatedBy            string                   `json:"created_by"`
-	CreatedAt            time.Time                `json:"created_at"`
-	DeniedBy             string                   `json:"denied_by,omitempty"`
-	RevokedBy            string                   `json:"revoked_by,omitempty"`
-	Events               []ParticipationEvent     `json:"events"`
+	ID                       string                   `json:"id"`
+	OrganizationID           string                   `json:"organization_id"`
+	AgentID                  string                   `json:"agent_id"`
+	AgentProfileVersion      int                      `json:"agent_profile_version"`
+	EvaluationRunID          string                   `json:"evaluation_run_id"`
+	EvaluationDecisionAt     time.Time                `json:"evaluation_decision_at"`
+	Version                  int                      `json:"version"`
+	Status                   string                   `json:"status"`
+	Role                     string                   `json:"role"`
+	Resources                []ParticipationResource  `json:"resources"`
+	Actions                  []string                 `json:"actions"`
+	Budget                   ParticipationBudget      `json:"budget"`
+	StartsAt                 time.Time                `json:"starts_at"`
+	ExpiresAt                time.Time                `json:"expires_at"`
+	DataBoundaries           []string                 `json:"data_boundaries"`
+	PolicyExceptionIDs       []string                 `json:"policy_exception_ids"`
+	AgreementRequirement     string                   `json:"agreement_requirement"`
+	SponsorID                string                   `json:"sponsor_id,omitempty"`
+	Agreements               []ParticipationAgreement `json:"agreements"`
+	AuthorityIdentity        string                   `json:"authority_identity,omitempty"`
+	AccessGrantID            string                   `json:"access_grant_id,omitempty"`
+	CreatedBy                string                   `json:"created_by"`
+	CreatedAt                time.Time                `json:"created_at"`
+	DeniedBy                 string                   `json:"denied_by,omitempty"`
+	RevokedBy                string                   `json:"revoked_by,omitempty"`
+	Events                   []ParticipationEvent     `json:"events"`
+	ReevaluationIntervalDays int                      `json:"reevaluation_interval_days"`
+	ReevaluationDueAt        time.Time                `json:"reevaluation_due_at"`
+	ConsentedProfileVersion  int                      `json:"consented_profile_version"`
+	ConsentedOperatorIDs     []string                 `json:"consented_operator_ids"`
+	Outcomes                 []DeliveryOutcome        `json:"outcomes"`
+	Notices                  []TrustNotice            `json:"notices"`
+	Handoffs                 []Handoff                `json:"handoffs"`
 }
 type ParticipationInput struct {
-	AgentID              string                  `json:"agent_id"`
-	AgentProfileVersion  int                     `json:"agent_profile_version"`
-	EvaluationRunID      string                  `json:"evaluation_run_id"`
-	Role                 string                  `json:"role"`
-	Resources            []ParticipationResource `json:"resources"`
-	Actions              []string                `json:"actions"`
-	Budget               ParticipationBudget     `json:"budget"`
-	StartsAt             time.Time               `json:"starts_at"`
-	ExpiresAt            time.Time               `json:"expires_at"`
-	DataBoundaries       []string                `json:"data_boundaries"`
-	PolicyExceptionIDs   []string                `json:"policy_exception_ids"`
-	AgreementRequirement string                  `json:"agreement_requirement"`
-	SponsorID            string                  `json:"sponsor_id"`
+	AgentID                  string                  `json:"agent_id"`
+	AgentProfileVersion      int                     `json:"agent_profile_version"`
+	EvaluationRunID          string                  `json:"evaluation_run_id"`
+	Role                     string                  `json:"role"`
+	Resources                []ParticipationResource `json:"resources"`
+	Actions                  []string                `json:"actions"`
+	Budget                   ParticipationBudget     `json:"budget"`
+	StartsAt                 time.Time               `json:"starts_at"`
+	ExpiresAt                time.Time               `json:"expires_at"`
+	DataBoundaries           []string                `json:"data_boundaries"`
+	PolicyExceptionIDs       []string                `json:"policy_exception_ids"`
+	AgreementRequirement     string                  `json:"agreement_requirement"`
+	SponsorID                string                  `json:"sponsor_id"`
+	ReevaluationIntervalDays int                     `json:"reevaluation_interval_days"`
+	OperatorIDs              []string                `json:"-"`
 }
 
 type Check struct {
@@ -586,7 +631,7 @@ func (s *Store) Decide(runID, actor, decision, rationale string) (Run, error) {
 }
 
 func validParticipation(in ParticipationInput, now time.Time) bool {
-	if !clean(in.AgentID, 64) || in.AgentProfileVersion < 1 || !clean(in.EvaluationRunID, 64) || !slices.Contains([]string{"viewer", "contributor", "maintainer", "operator"}, in.Role) || len(in.Resources) == 0 || len(in.Resources) > 100 || len(in.Actions) == 0 || len(in.Actions) > 100 || len(in.DataBoundaries) == 0 || len(in.DataBoundaries) > 100 || in.Budget.MaxCost < 0 || in.Budget.MaxAgentMinutes < 1 || in.Budget.MaxActions < 1 || in.StartsAt.Before(now.Add(-time.Minute)) || !in.ExpiresAt.After(in.StartsAt) || !slices.Contains([]string{"operator", "sponsor"}, in.AgreementRequirement) {
+	if !clean(in.AgentID, 64) || in.AgentProfileVersion < 1 || !clean(in.EvaluationRunID, 64) || !slices.Contains([]string{"viewer", "contributor", "maintainer", "operator"}, in.Role) || len(in.Resources) == 0 || len(in.Resources) > 100 || len(in.Actions) == 0 || len(in.Actions) > 100 || len(in.DataBoundaries) == 0 || len(in.DataBoundaries) > 100 || in.Budget.MaxCost < 0 || in.Budget.MaxAgentMinutes < 1 || in.Budget.MaxActions < 1 || in.StartsAt.Before(now.Add(-time.Minute)) || !in.ExpiresAt.After(in.StartsAt) || !slices.Contains([]string{"operator", "sponsor"}, in.AgreementRequirement) || in.ReevaluationIntervalDays < 0 || in.ReevaluationIntervalDays > 365 {
 		return false
 	}
 	if in.AgreementRequirement == "sponsor" && !clean(in.SponsorID, 64) {
@@ -613,6 +658,9 @@ func (s *Store) CreateParticipation(org, actor string, in ParticipationInput) (P
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
+	if in.ReevaluationIntervalDays == 0 {
+		in.ReevaluationIntervalDays = 90
+	}
 	if !clean(org, 64) || !clean(actor, 64) || !validParticipation(in, now) {
 		return Participation{}, ErrInvalid
 	}
@@ -634,7 +682,7 @@ func (s *Store) CreateParticipation(org, actor string, in ParticipationInput) (P
 	if e != nil {
 		return Participation{}, e
 	}
-	p := Participation{ID: x, OrganizationID: org, AgentID: in.AgentID, AgentProfileVersion: in.AgentProfileVersion, EvaluationRunID: in.EvaluationRunID, EvaluationDecisionAt: approvedAt, Version: 1, Status: "pending_agreement", Role: in.Role, Resources: in.Resources, Actions: in.Actions, Budget: in.Budget, StartsAt: in.StartsAt, ExpiresAt: in.ExpiresAt, DataBoundaries: in.DataBoundaries, PolicyExceptionIDs: in.PolicyExceptionIDs, AgreementRequirement: in.AgreementRequirement, SponsorID: in.SponsorID, Agreements: []ParticipationAgreement{}, CreatedBy: actor, CreatedAt: now, Events: []ParticipationEvent{{Kind: "participation.proposed", ActorID: actor, Summary: "Approved trial proposed for bounded project participation.", CreatedAt: now}}}
+	p := Participation{ID: x, OrganizationID: org, AgentID: in.AgentID, AgentProfileVersion: in.AgentProfileVersion, EvaluationRunID: in.EvaluationRunID, EvaluationDecisionAt: approvedAt, Version: 1, Status: "pending_agreement", Role: in.Role, Resources: in.Resources, Actions: in.Actions, Budget: in.Budget, StartsAt: in.StartsAt, ExpiresAt: in.ExpiresAt, DataBoundaries: in.DataBoundaries, PolicyExceptionIDs: in.PolicyExceptionIDs, AgreementRequirement: in.AgreementRequirement, SponsorID: in.SponsorID, Agreements: []ParticipationAgreement{}, CreatedBy: actor, CreatedAt: now, Events: []ParticipationEvent{{Kind: "participation.proposed", ActorID: actor, Summary: "Approved trial proposed for bounded project participation.", CreatedAt: now}}, ReevaluationIntervalDays: in.ReevaluationIntervalDays, ReevaluationDueAt: approvedAt.Add(time.Duration(in.ReevaluationIntervalDays) * 24 * time.Hour), ConsentedProfileVersion: in.AgentProfileVersion, ConsentedOperatorIDs: slices.Clone(in.OperatorIDs), Outcomes: []DeliveryOutcome{}, Notices: []TrustNotice{}, Handoffs: []Handoff{}}
 	return p, write(s.participationPath(x), p)
 }
 func (s *Store) GetParticipation(v string) (Participation, error) {
@@ -730,7 +778,7 @@ func (s *Store) DecideParticipation(v, actor, decision string, expected int) (Pa
 		p.Status = "denied"
 		p.DeniedBy = actor
 	} else {
-		if p.Status != "active" {
+		if p.Status != "active" && p.Status != "suspended" {
 			return p, ErrConflict
 		}
 		p.Status = "revoked"
@@ -739,4 +787,209 @@ func (s *Store) DecideParticipation(v, actor, decision string, expected int) (Pa
 	p.Version++
 	p.Events = append(p.Events, ParticipationEvent{"participation." + decision + "d", actor, "Participation authority was explicitly " + decision + "d.", now})
 	return p, write(s.participationPath(v), p)
+}
+
+type OutcomeInput struct {
+	Kind          string  `json:"kind"`
+	RepositoryID  string  `json:"repository_id"`
+	Status        string  `json:"status"`
+	Summary       string  `json:"summary"`
+	AttributionID string  `json:"attribution_id"`
+	Cost          float64 `json:"cost"`
+	LatencyMS     int64   `json:"latency_ms"`
+}
+
+func (s *Store) RecordOutcome(participationID, actor string, expected int, in OutcomeInput) (Participation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, e := read[Participation](s.participationPath(participationID))
+	if e != nil {
+		return p, e
+	}
+	kinds := []string{"task_completed", "reviewer_correction", "verification_failure", "reversion", "security_violation", "policy_violation", "accepted_contribution"}
+	if p.Version != expected || p.Status == "revoked" || !slices.Contains(kinds, in.Kind) || !slices.Contains([]string{"accepted", "corrected", "failed", "reverted", "violated"}, in.Status) || !clean(in.RepositoryID, 64) || !clean(in.Summary, 500) || !sanitized(in.Summary) || !clean(in.AttributionID, 200) || in.Cost < 0 || in.LatencyMS < 0 {
+		return p, ErrInvalid
+	}
+	allowed := false
+	for _, r := range p.Resources {
+		if r.Kind == "repository" && r.ID == in.RepositoryID {
+			allowed = true
+		}
+	}
+	if !allowed {
+		return p, ErrInvalid
+	}
+	x, e := id()
+	if e != nil {
+		return p, e
+	}
+	now := s.now()
+	p.Outcomes = append(p.Outcomes, DeliveryOutcome{ID: x, Kind: in.Kind, RepositoryID: in.RepositoryID, Status: in.Status, Summary: strings.TrimSpace(in.Summary), AttributionID: in.AttributionID, ProfileVersion: p.ConsentedProfileVersion, Cost: in.Cost, LatencyMS: in.LatencyMS, RecordedBy: actor, CreatedAt: now})
+	if slices.Contains([]string{"verification_failure", "reversion", "security_violation", "policy_violation"}, in.Kind) {
+		n, _ := id()
+		severity := "warning"
+		if strings.Contains(in.Kind, "violation") {
+			severity = "critical"
+		}
+		p.Notices = append(p.Notices, TrustNotice{ID: n, Kind: "outcome_anomaly", Severity: severity, Summary: in.Kind + ": " + strings.TrimSpace(in.Summary), Action: "review evidence and narrow, suspend, hand off, or revoke participation", CreatedAt: now})
+	}
+	p.Version++
+	p.Events = append(p.Events, ParticipationEvent{"participation.outcome_recorded", actor, "Privacy-bounded " + in.Kind + " outcome recorded.", now})
+	return p, write(s.participationPath(participationID), p)
+}
+
+// ObserveProfile stops authority from silently following material disclosure
+// changes. The caller supplies a platform-derived material comparison.
+func (s *Store) ObserveProfileWith(participationID string, currentVersion int, material bool, apply func(Participation) error) (Participation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, e := read[Participation](s.participationPath(participationID))
+	if e != nil {
+		return p, e
+	}
+	now := s.now()
+	changed := false
+	if !p.ReevaluationDueAt.IsZero() && !now.Before(p.ReevaluationDueAt) {
+		found := false
+		for _, n := range p.Notices {
+			if n.Kind == "reevaluation_due" && n.ResolvedAt == nil {
+				found = true
+			}
+		}
+		if !found {
+			n, _ := id()
+			p.Notices = append(p.Notices, TrustNotice{ID: n, Kind: "reevaluation_due", Severity: "warning", Summary: "Periodic project reevaluation is due.", Action: "run the current bounded evaluation suite and record the reevaluation decision", CreatedAt: now})
+			changed = true
+		}
+	}
+	if currentVersion < p.ConsentedProfileVersion || !material {
+		if changed {
+			p.Version++
+			return p, write(s.participationPath(participationID), p)
+		}
+		return p, nil
+	}
+	for _, n := range p.Notices {
+		if n.Kind == "renewed_consent_required" && n.ResolvedAt == nil {
+			return p, nil
+		}
+	}
+	n, _ := id()
+	p.Notices = append(p.Notices, TrustNotice{ID: n, Kind: "renewed_consent_required", Severity: "critical", Summary: "Material operator, model, data-use, capability, or price disclosure changed in profile version " + fmt.Sprint(currentVersion) + ".", Action: "compare profile versions and explicitly renew consent before restoring authority", CreatedAt: now, ProfileVersion: currentVersion})
+	if p.Status == "active" {
+		p.Status = "suspended"
+	}
+	p.Version++
+	if e := write(s.participationPath(participationID), p); e != nil {
+		return p, e
+	}
+	if apply != nil {
+		if e := apply(p); e != nil {
+			return p, e
+		}
+	}
+	return p, nil
+}
+
+func (s *Store) ObserveProfile(participationID string, currentVersion int, material bool) (Participation, error) {
+	return s.ObserveProfileWith(participationID, currentVersion, material, nil)
+}
+
+type ControlInput struct {
+	Action         string   `json:"action"`
+	Actions        []string `json:"actions"`
+	DataBoundaries []string `json:"data_boundaries"`
+	ToAgentID      string   `json:"to_agent_id"`
+	Scope          string   `json:"scope"`
+	WorkSummary    string   `json:"work_summary"`
+	EvidenceIDs    []string `json:"evidence_ids"`
+	ProfileVersion int      `json:"profile_version"`
+	OperatorIDs    []string `json:"-"`
+}
+
+func (s *Store) ControlParticipationWith(participationID, actor string, expected int, in ControlInput, apply func(Participation) error) (Participation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, e := read[Participation](s.participationPath(participationID))
+	if e != nil {
+		return p, e
+	}
+	if p.Version != expected || !clean(actor, 64) {
+		return p, ErrConflict
+	}
+	original := p
+	now := s.now()
+	switch in.Action {
+	case "suspend":
+		if p.Status != "active" {
+			return p, ErrConflict
+		}
+		p.Status = "suspended"
+	case "narrow":
+		if p.Status != "active" || len(in.Actions) == 0 || len(in.DataBoundaries) == 0 {
+			return p, ErrInvalid
+		}
+		for _, x := range in.Actions {
+			if !slices.Contains(p.Actions, x) {
+				return p, ErrInvalid
+			}
+		}
+		for _, x := range in.DataBoundaries {
+			if !slices.Contains(p.DataBoundaries, x) {
+				return p, ErrInvalid
+			}
+		}
+		p.Actions = slices.Clone(in.Actions)
+		p.DataBoundaries = slices.Clone(in.DataBoundaries)
+	case "handoff":
+		if p.Status != "active" || !clean(in.ToAgentID, 64) || in.ToAgentID == p.AgentID || !clean(in.Scope, 300) || !clean(in.WorkSummary, 1000) || !sanitized(in.WorkSummary) {
+			return p, ErrInvalid
+		}
+		p.Handoffs = append(p.Handoffs, Handoff{p.AgentID, in.ToAgentID, in.Scope, in.WorkSummary, slices.Clone(in.EvidenceIDs), actor, now})
+		p.Status = "suspended"
+	case "consent":
+		matched := false
+		for _, notice := range p.Notices {
+			if notice.Kind == "renewed_consent_required" && notice.ResolvedAt == nil && notice.ProfileVersion == in.ProfileVersion {
+				matched = true
+			}
+		}
+		if in.ProfileVersion < p.ConsentedProfileVersion || (in.ProfileVersion == p.ConsentedProfileVersion && slices.Equal(in.OperatorIDs, p.ConsentedOperatorIDs)) || !matched {
+			return p, ErrInvalid
+		}
+		p.ConsentedProfileVersion = in.ProfileVersion
+		p.ConsentedOperatorIDs = slices.Clone(in.OperatorIDs)
+		for i := range p.Notices {
+			if p.Notices[i].Kind == "renewed_consent_required" && p.Notices[i].ResolvedAt == nil {
+				p.Notices[i].ResolvedAt = &now
+			}
+		}
+	case "reevaluated":
+		p.ReevaluationDueAt = now.Add(time.Duration(p.ReevaluationIntervalDays) * 24 * time.Hour)
+		for i := range p.Notices {
+			if p.Notices[i].Kind == "reevaluation_due" && p.Notices[i].ResolvedAt == nil {
+				p.Notices[i].ResolvedAt = &now
+			}
+		}
+	default:
+		return p, ErrInvalid
+	}
+	p.Version++
+	p.Events = append(p.Events, ParticipationEvent{"participation." + in.Action, actor, "Trust authority control applied without deleting commits or evidence.", now})
+	if e := write(s.participationPath(participationID), p); e != nil {
+		return p, e
+	}
+	if apply != nil {
+		if e := apply(p); e != nil {
+			if rollbackErr := write(s.participationPath(participationID), original); rollbackErr != nil {
+				return p, errors.Join(e, rollbackErr)
+			}
+			return original, e
+		}
+	}
+	return p, nil
+}
+
+func (s *Store) ControlParticipation(participationID, actor string, expected int, in ControlInput) (Participation, error) {
+	return s.ControlParticipationWith(participationID, actor, expected, in, nil)
 }
