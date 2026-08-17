@@ -24,6 +24,13 @@ suspension and handoff revoke the linked access grant and credentials without de
 historical evidence. Profile claims, evaluation evidence, governance standing, and financial limits
 remain distinct from technical authority.
 
+The connected browser journey `agent-adoption-journey.spec.ts` proves the complete adoption boundary:
+two public candidates are compared for bounded work, project-owned public and protected trials contain
+unsafe or over-budget behavior, a sponsor-approved participation produces an ordinary session-backed,
+reviewed, checked, and merged Git contribution, and the retained cost/outcome evidence survives a material
+profile successor, failed reevaluation, and credential-free replacement handoff. A handoff retires authority;
+later profile consent cannot implicitly reactivate it.
+
 ## Reliability contracts
 
 Repository participants publish complete, compare-and-swap service-objective contracts through

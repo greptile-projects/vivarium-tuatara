@@ -1967,6 +1967,12 @@ whenever dependencies change or the web job fails before it starts.
   Every evaluation authority manifest disables publish, secret, merge, environment,
   and network access; a suite or favorable decision grants no organization or repository authority.
   Repeated and operator-supplied trials remain explicitly labeled.
+  The connected agent-adoption browser journey compares two published candidates, contains hidden-check,
+  prohibited-action, budget, and operator-outage trial failures, activates only sponsored project-owned
+  evaluation evidence, and carries the selected agent through an ordinary proposal task, isolated session,
+  stock Git contribution, independent review, repository check, and merge. Its retained outcome, material
+  profile successor, failed reevaluation, and credential-free replacement handoff keep claims, evidence,
+  authority, cost, code, and human decisions linked without letting consent reactivate retired authority.
 
   Update it when you change how the apps fit together, not for every change.
 
