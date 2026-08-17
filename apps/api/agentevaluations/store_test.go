@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHiddenEvaluationAndTrialLabels(t *testing.T) {
@@ -115,5 +116,52 @@ func TestReproducibilityReferencesExactPriorRun(t *testing.T) {
 	third, err := s.CreateRun(suite.ID, 1, RunInput{AgentID: "agent", AgentProfileVersion: 1, ReproducesRunID: valid.ID, Outputs: map[string]string{"fix": "done"}}, "owner")
 	if err != nil || !third.Reproducible {
 		t.Fatalf("reproducible baseline = %#v, %v", third, err)
+	}
+}
+
+func TestApprovedTrialBecomesBoundedRevocableParticipation(t *testing.T) {
+	s, _ := New(t.TempDir())
+	rev := Revision{RepositoryRevision: strings.Repeat("a", 40), Scenarios: []Scenario{{ID: "work", Title: "Work", SanitizedPrompt: "complete fixture", ExpectedOutcomes: []string{"done"}, Checks: []Check{{Name: "done", Kind: "contains", Expected: "done"}}}}, Budget: Budget{1, 1000, 3}, ProhibitedActions: []string{"merge"}, HumanReviewCriteria: []string{"inspect"}, ChangeSummary: "initial", CreatedBy: "owner"}
+	suite, _ := s.Create(Suite{OrganizationID: "org", RepositoryID: "repo", Name: "Trial"}, rev)
+	run, _ := s.CreateRun(suite.ID, 1, RunInput{AgentID: "agent", AgentProfileVersion: 1, Outputs: map[string]string{"work": "done"}}, "member")
+	if _, err := s.CreateParticipation("org", "owner", ParticipationInput{AgentID: "agent", AgentProfileVersion: 1, EvaluationRunID: run.ID}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unevaluated evidence admitted: %v", err)
+	}
+	if _, err := s.Decide(run.ID, "owner", "approved", "bounded evidence passed"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	p, err := s.CreateParticipation("org", "owner", ParticipationInput{AgentID: "agent", AgentProfileVersion: 1, EvaluationRunID: run.ID, Role: "contributor", Resources: []ParticipationResource{{Kind: "repository", ID: "repo"}}, Actions: []string{"task.write", "workspace.start"}, Budget: ParticipationBudget{MaxCost: 10, MaxAgentMinutes: 60, MaxActions: 20}, StartsAt: now, ExpiresAt: now.Add(time.Hour), DataBoundaries: []string{"repository_content"}, AgreementRequirement: "sponsor", SponsorID: "human"})
+	if err != nil || p.Status != "pending_agreement" || p.AuthorityIdentity != "" {
+		t.Fatalf("proposal = %#v, %v", p, err)
+	}
+	p, err = s.AgreeParticipation(p.ID, "human", "sponsor", "I will own consequential decisions.")
+	if err != nil || p.Status != "ready" {
+		t.Fatalf("agreement = %#v, %v", p, err)
+	}
+	p, err = s.ActivateParticipation(p.ID, "owner", "agent-participation:"+p.ID, "grant", p.Version)
+	if err != nil || p.Status != "active" || p.AccessGrantID != "grant" {
+		t.Fatalf("activation = %#v, %v", p, err)
+	}
+	p, err = s.DecideParticipation(p.ID, "owner", "revoke", p.Version)
+	if err != nil || p.Status != "revoked" || len(p.Events) != 4 {
+		t.Fatalf("revocation = %#v, %v", p, err)
+	}
+}
+
+func TestPendingSponsorCanBeReassignedWithHistory(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Now().UTC()
+	rev := Revision{RepositoryRevision: strings.Repeat("b", 40), Scenarios: []Scenario{{ID: "work", Title: "Work", SanitizedPrompt: "complete fixture", ExpectedOutcomes: []string{"done"}, Checks: []Check{{Name: "done", Kind: "contains", Expected: "done"}}}}, Budget: Budget{1, 1000, 3}, ProhibitedActions: []string{"merge"}, HumanReviewCriteria: []string{"inspect"}, ChangeSummary: "initial", CreatedBy: "owner"}
+	suite, _ := s.Create(Suite{OrganizationID: "org", RepositoryID: "repo", Name: "Trial"}, rev)
+	run, _ := s.CreateRun(suite.ID, 1, RunInput{AgentID: "agent", AgentProfileVersion: 1, Outputs: map[string]string{"work": "done"}}, "member")
+	_, _ = s.Decide(run.ID, "owner", "approved", "passed")
+	p, _ := s.CreateParticipation("org", "owner", ParticipationInput{AgentID: "agent", AgentProfileVersion: 1, EvaluationRunID: run.ID, Role: "viewer", Resources: []ParticipationResource{{Kind: "repository", ID: "repo"}}, Actions: []string{"repository.read"}, Budget: ParticipationBudget{MaxAgentMinutes: 5, MaxActions: 1}, StartsAt: now, ExpiresAt: now.Add(time.Hour), DataBoundaries: []string{"repository_metadata"}, AgreementRequirement: "sponsor", SponsorID: "former"})
+	p, err := s.ReassignSponsor(p.ID, "owner", "replacement", p.Version)
+	if err != nil || p.SponsorID != "replacement" || p.Version != 2 || p.Events[len(p.Events)-1].Kind != "participation.sponsor_reassigned" {
+		t.Fatalf("reassignment = %#v, %v", p, err)
+	}
+	if _, err = s.ReassignSponsor(p.ID, "owner", "another", 1); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale reassignment = %v", err)
 	}
 }

@@ -169,7 +169,19 @@ whenever dependencies change or the web job fails before it starts.
   user identity, or project authority. Authenticated organization agent matching accepts bounded work
   references and explains deterministic workflow fit from live grants, effective policy, deployment,
   cost, availability, evidence freshness, conflicts, verified evaluations, and comparable attributed
-  outcomes without copying source content or exposing private evidence publicly. Deployment compatibility
+  outcomes without copying source content or exposing private evidence publicly. Approved evaluation
+  runs become authority only through `/organizations/{id}/agent-participations`, which freeze the
+  evaluated profile/run, role, resources, actions, budgets, schedule, data boundaries, exceptions,
+  and required operator agreement or human sponsor. Preview is non-effective; activation links a
+  distinct `agent-participation:{id}` identity to the existing revocable access-grant boundary.
+  Revocation retires that grant and derived credentials. Evaluation, sponsorship, financial limits,
+  policy exceptions, and governance standing never confer access independently. Participation-derived
+  credentials require explicit `repository.read`/`repository.write` actions and compatible
+  `repository_metadata`/`repository_content` boundaries; write is not inferred from role, derivations
+  atomically consume the action cap, and lifetime is capped by the agent-minute budget. Pending
+  sponsor-required participation supports owner-only, version-guarded reassignment to a current
+  member, holds membership across that write, and retains both identities in history. Failed
+  activation rollback revokes the provisional grant and all credentials derived from it. Deployment compatibility
   uses exact closed profile values (`platform`, `operator_managed`, `customer_managed`, or
   `external_service`); free-form execution prose is explanatory only. An omitted structured boundary
   is missing evidence and fails closed only when a search explicitly requests that boundary. Nested teams retain

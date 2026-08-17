@@ -2,8 +2,10 @@ package organizations
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -72,6 +74,38 @@ func TestCurrentAgentOperatorBoundaryExcludesConcurrentRevocation(t *testing.T) 
 	}
 	if err := store.WithCurrentAgentOperator(agent, operator, func(string) error { return nil }); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("removed operator remained authorized: %v", err)
+	}
+}
+
+func TestCurrentMemberBoundaryExcludesConcurrentRemoval(t *testing.T) {
+	store, _ := New(t.TempDir())
+	owner, sponsor := "0123456789abcdef0123456789abcdef", "abcdef0123456789abcdef0123456789"
+	v, _ := store.Create("Sponsors", "sponsors", "", owner)
+	v, _ = store.Invite(v.ID, owner, sponsor)
+	v, _ = store.AcceptInvitation(v.ID, v.Invitations[0].ID, sponsor)
+	entered, release, boundaryDone, removalDone := make(chan struct{}), make(chan struct{}), make(chan error, 1), make(chan error, 1)
+	go func() {
+		boundaryDone <- store.WithCurrentMember(v.ID, sponsor, func() error { close(entered); <-release; return nil })
+	}()
+	<-entered
+	go func() {
+		_, err := store.RemoveMember(v.ID, owner, sponsor, func(Organization) error { return nil })
+		removalDone <- err
+	}()
+	select {
+	case err := <-removalDone:
+		t.Fatalf("removal crossed sponsor boundary: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-boundaryDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-removalDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WithCurrentMember(v.ID, sponsor, func() error { return nil }); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("removed sponsor remained eligible: %v", err)
 	}
 }
 
@@ -567,5 +601,78 @@ func TestRevokingOverlappingGrantPausesOnlyAfterFinalCoverage(t *testing.T) {
 	v, err = store.RevokeAccessGrant(v.ID, strings.Repeat("2", 32), owner, 1, nil)
 	if err != nil || v.StewardshipMandates[0].Status != "paused" || len(v.StewardshipMandates[0].Notices) != 1 {
 		t.Fatalf("final coverage revocation did not pause: %#v, %v", v.StewardshipMandates[0], err)
+	}
+}
+
+func TestParticipationLimitsSurviveAccessApproval(t *testing.T) {
+	store, _ := New(t.TempDir())
+	base := time.Date(2026, 8, 17, 2, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return base }
+	owner, repository := "0123456789abcdef0123456789abcdef", "11111111111111111111111111111111"
+	v, _ := store.Create("Bounded", "bounded-authority", "", owner)
+	v, _ = store.RegisterAgent(v.ID, owner, "Worker", "bounded-worker", "", "organization", []string{"work"}, []string{owner}, nil)
+	limits := &AgentParticipationAuthority{ParticipationID: strings.Repeat("a", 32), AllowedActions: []string{"repository.read"}, DataBoundaries: []string{"repository_metadata"}, MaxCost: 1, MaxAgentMinutes: 5, MaxActions: 1}
+	expires := base.Add(time.Hour)
+	v, err := store.CreateAccessRequest(v.ID, owner, "agent", v.Agents[0].ID, "contributor", "evaluated", []ResourceScope{{Kind: "repository", ID: repository}}, nil, &expires, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := v.AccessRequests[0]
+	v, err = store.DecideAccessRequest(v.ID, request.ID, owner, "approve", func(AccessRequest) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := v.AccessGrants[0]
+	if grant.Participation == nil || grant.Participation.ParticipationID != limits.ParticipationID || !slices.Equal(grant.Participation.AllowedActions, []string{"repository.read"}) || !slices.Equal(grant.Participation.DataBoundaries, []string{"repository_metadata"}) || grant.Participation.MaxActions != 1 {
+		t.Fatalf("participation limits were dropped: %#v", grant)
+	}
+	v, err = store.RecordDerivedCredential(v.ID, grant.ID, v.Agents[0].ID, owner, strings.Repeat("c", 32), ResourceScope{Kind: "repository", ID: repository})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.RecordDerivedCredential(v.ID, grant.ID, v.Agents[0].ID, owner, strings.Repeat("d", 32), ResourceScope{Kind: "repository", ID: repository}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("second credential exceeded atomic action cap: %v", err)
+	}
+	if len(v.AccessGrants[0].DerivedCredentials) != 1 {
+		t.Fatalf("unexpected durable credential count: %#v", v.AccessGrants[0].DerivedCredentials)
+	}
+}
+
+func TestParticipationActionCapIsAtomicAcrossCredentialRecords(t *testing.T) {
+	store, _ := New(t.TempDir())
+	owner, repository := "0123456789abcdef0123456789abcdef", "11111111111111111111111111111111"
+	v, _ := store.Create("Concurrent", "concurrent-authority", "", owner)
+	v, _ = store.RegisterAgent(v.ID, owner, "Worker", "concurrent-worker", "", "organization", []string{"work"}, []string{owner}, nil)
+	grantID := strings.Repeat("a", 32)
+	v, _ = store.mutate(v.ID, func(current *Organization) error {
+		current.AccessGrants = append(current.AccessGrants, AccessGrant{ID: grantID, PrincipalType: "agent", PrincipalID: v.Agents[0].ID, Role: "contributor", Resources: []ResourceScope{{Kind: "repository", ID: repository}}, Version: 1, Participation: &AgentParticipationAuthority{ParticipationID: strings.Repeat("b", 32), AllowedActions: []string{"repository.write"}, DataBoundaries: []string{"repository_content"}, MaxAgentMinutes: 5, MaxActions: 1}})
+		return nil
+	})
+	var wg sync.WaitGroup
+	results := make(chan error, 16)
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results <- func() error {
+				credential := fmt.Sprintf("%032x", i+1)
+				_, err := store.RecordDerivedCredential(v.ID, grantID, v.Agents[0].ID, owner, credential, ResourceScope{Kind: "repository", ID: repository})
+				return err
+			}()
+		}(i)
+	}
+	wg.Wait()
+	close(results)
+	success := 0
+	for err := range results {
+		if err == nil {
+			success++
+		} else if !errors.Is(err, ErrConflict) {
+			t.Fatalf("unexpected record error: %v", err)
+		}
+	}
+	current, _ := store.Get(v.ID)
+	if success != 1 || len(current.AccessGrants[0].DerivedCredentials) != 1 {
+		t.Fatalf("atomic cap admitted %d successes and %d credentials", success, len(current.AccessGrants[0].DerivedCredentials))
 	}
 }

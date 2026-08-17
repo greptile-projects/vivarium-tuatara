@@ -142,37 +142,51 @@ type DerivedCredential struct {
 }
 
 type AccessGrant struct {
-	ID                 string              `json:"id"`
-	PrincipalType      string              `json:"principal_type"`
-	PrincipalID        string              `json:"principal_id"`
-	Role               string              `json:"role"`
-	Resources          []ResourceScope     `json:"resources"`
-	Exceptions         []AccessException   `json:"exceptions"`
-	Reason             string              `json:"reason"`
-	ExpiresAt          *time.Time          `json:"expires_at,omitempty"`
-	Version            int                 `json:"version"`
-	GrantedBy          string              `json:"granted_by"`
-	GrantedAt          time.Time           `json:"granted_at"`
-	RevokedBy          string              `json:"revoked_by,omitempty"`
-	RevokedAt          *time.Time          `json:"revoked_at,omitempty"`
-	DerivedCredentials []DerivedCredential `json:"derived_credentials"`
+	ID                 string                       `json:"id"`
+	PrincipalType      string                       `json:"principal_type"`
+	PrincipalID        string                       `json:"principal_id"`
+	Role               string                       `json:"role"`
+	Resources          []ResourceScope              `json:"resources"`
+	Exceptions         []AccessException            `json:"exceptions"`
+	Reason             string                       `json:"reason"`
+	ExpiresAt          *time.Time                   `json:"expires_at,omitempty"`
+	Version            int                          `json:"version"`
+	GrantedBy          string                       `json:"granted_by"`
+	GrantedAt          time.Time                    `json:"granted_at"`
+	RevokedBy          string                       `json:"revoked_by,omitempty"`
+	RevokedAt          *time.Time                   `json:"revoked_at,omitempty"`
+	DerivedCredentials []DerivedCredential          `json:"derived_credentials"`
+	Participation      *AgentParticipationAuthority `json:"participation,omitempty"`
+}
+
+// AgentParticipationAuthority is the closed technical boundary retained on an
+// access request and its resulting grant. Financial limits remain visible but
+// never expand scopes; actionable limits are enforced when credentials derive.
+type AgentParticipationAuthority struct {
+	ParticipationID string   `json:"participation_id"`
+	AllowedActions  []string `json:"allowed_actions"`
+	DataBoundaries  []string `json:"data_boundaries"`
+	MaxCost         float64  `json:"max_cost"`
+	MaxAgentMinutes int      `json:"max_agent_minutes"`
+	MaxActions      int      `json:"max_actions"`
 }
 
 type AccessRequest struct {
-	ID            string            `json:"id"`
-	RequesterID   string            `json:"requester_id"`
-	PrincipalType string            `json:"principal_type"`
-	PrincipalID   string            `json:"principal_id"`
-	Role          string            `json:"role"`
-	Resources     []ResourceScope   `json:"resources"`
-	Exceptions    []AccessException `json:"exceptions"`
-	Reason        string            `json:"reason"`
-	ExpiresAt     *time.Time        `json:"expires_at,omitempty"`
-	Status        string            `json:"status"`
-	CreatedAt     time.Time         `json:"created_at"`
-	DecidedBy     string            `json:"decided_by,omitempty"`
-	DecidedAt     *time.Time        `json:"decided_at,omitempty"`
-	GrantID       string            `json:"grant_id,omitempty"`
+	ID            string                       `json:"id"`
+	RequesterID   string                       `json:"requester_id"`
+	PrincipalType string                       `json:"principal_type"`
+	PrincipalID   string                       `json:"principal_id"`
+	Role          string                       `json:"role"`
+	Resources     []ResourceScope              `json:"resources"`
+	Exceptions    []AccessException            `json:"exceptions"`
+	Reason        string                       `json:"reason"`
+	ExpiresAt     *time.Time                   `json:"expires_at,omitempty"`
+	Status        string                       `json:"status"`
+	CreatedAt     time.Time                    `json:"created_at"`
+	DecidedBy     string                       `json:"decided_by,omitempty"`
+	DecidedAt     *time.Time                   `json:"decided_at,omitempty"`
+	GrantID       string                       `json:"grant_id,omitempty"`
+	Participation *AgentParticipationAuthority `json:"participation,omitempty"`
 }
 
 // PolicyRules is intentionally explicit: clients can explain every supported
@@ -649,6 +663,25 @@ func (s *Store) WithCurrentAgentOperator(agent, user string, fn func(organizatio
 			}
 		}
 		return ErrNotFound
+	})
+}
+
+// WithCurrentMember holds membership stable while a dependent store commits.
+// Membership removal uses the same organization lock and therefore cannot
+// interleave between this admission check and the callback write.
+func (s *Store) WithCurrentMember(organizationID, user string, fn func() error) error {
+	if !validID(organizationID) || !validID(user) || fn == nil {
+		return ErrInvalid
+	}
+	return s.locked(func() error {
+		organization, err := s.Get(organizationID)
+		if err != nil {
+			return err
+		}
+		if !HasRole(organization, user, "") {
+			return ErrNotFound
+		}
+		return fn()
 	})
 }
 
@@ -1950,7 +1983,7 @@ func validateAccess(role, reason string, resources []ResourceScope, exceptions [
 	return true
 }
 
-func (s *Store) CreateAccessRequest(id, actor, principalType, principalID, role, reason string, resources []ResourceScope, exceptions []AccessException, expires *time.Time) (Organization, error) {
+func (s *Store) CreateAccessRequest(id, actor, principalType, principalID, role, reason string, resources []ResourceScope, exceptions []AccessException, expires *time.Time, participation *AgentParticipationAuthority) (Organization, error) {
 	return s.mutate(id, func(v *Organization) error {
 		if !HasRole(*v, actor, "") || !validPrincipal(v, principalType, principalID) || !validateAccess(role, reason, resources, exceptions, expires, s.now()) {
 			return ErrInvalid
@@ -1982,7 +2015,10 @@ func (s *Store) CreateAccessRequest(id, actor, principalType, principalID, role,
 			return err
 		}
 		now := s.now().Truncate(time.Microsecond)
-		v.AccessRequests = append(v.AccessRequests, AccessRequest{ID: rid, RequesterID: actor, PrincipalType: principalType, PrincipalID: principalID, Role: role, Resources: resources, Exceptions: exceptions, Reason: strings.TrimSpace(reason), ExpiresAt: expires, Status: "pending", CreatedAt: now})
+		if participation != nil && (principalType != "agent" || !validID(participation.ParticipationID) || len(participation.AllowedActions) == 0 || len(participation.DataBoundaries) == 0 || participation.MaxCost < 0 || participation.MaxAgentMinutes < 1 || participation.MaxActions < 1) {
+			return ErrInvalid
+		}
+		v.AccessRequests = append(v.AccessRequests, AccessRequest{ID: rid, RequesterID: actor, PrincipalType: principalType, PrincipalID: principalID, Role: role, Resources: resources, Exceptions: exceptions, Reason: strings.TrimSpace(reason), ExpiresAt: expires, Status: "pending", CreatedAt: now, Participation: participation})
 		return s.event(v, "access.requested", actor, rid, map[string]any{"principal_type": principalType, "principal_id": principalID, "role": role})
 	})
 }
@@ -2023,7 +2059,7 @@ func (s *Store) DecideAccessRequest(id, requestID, actor, decision string, valid
 				return err
 			}
 			r.Status, r.GrantID = "approved", gid
-			v.AccessGrants = append(v.AccessGrants, AccessGrant{ID: gid, PrincipalType: r.PrincipalType, PrincipalID: r.PrincipalID, Role: r.Role, Resources: r.Resources, Exceptions: r.Exceptions, Reason: r.Reason, ExpiresAt: r.ExpiresAt, Version: 1, GrantedBy: actor, GrantedAt: now, DerivedCredentials: []DerivedCredential{}})
+			v.AccessGrants = append(v.AccessGrants, AccessGrant{ID: gid, PrincipalType: r.PrincipalType, PrincipalID: r.PrincipalID, Role: r.Role, Resources: r.Resources, Exceptions: r.Exceptions, Reason: r.Reason, ExpiresAt: r.ExpiresAt, Version: 1, GrantedBy: actor, GrantedAt: now, DerivedCredentials: []DerivedCredential{}, Participation: r.Participation})
 			return s.event(v, "access.granted", actor, gid, map[string]any{"request_id": r.ID, "role": r.Role})
 		}
 		return ErrNotFound
@@ -2124,6 +2160,12 @@ func (s *Store) RecordDerivedCredential(id, grantID, agentID, operatorID, creden
 			now := s.now()
 			if g.PrincipalType != "agent" || g.PrincipalID != agentID || g.RevokedAt != nil || (g.ExpiresAt != nil && !g.ExpiresAt.After(now)) || resourceDenied(*g, resource) {
 				return ErrNotFound
+			}
+			// This check must live inside the organization mutation lock. Route-level
+			// previews are advisory; concurrent issuers must reserve against the
+			// current durable count before their credential can become authoritative.
+			if g.Participation != nil && len(g.DerivedCredentials) >= g.Participation.MaxActions {
+				return ErrConflict
 			}
 			allowed := false
 			for _, x := range g.Resources {

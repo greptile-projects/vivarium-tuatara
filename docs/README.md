@@ -2159,6 +2159,28 @@ live independent grants, effective policy, disclosed cost and availability, depl
 profile freshness, conflicts, verified evaluations, and attributed outcomes on comparable work.
 Missing or stale evidence remains visible; ordering grants no authority and copies no source content.
 Private matching evidence is excluded from the broader public directory.
+Organization owners can turn one explicitly approved evaluation run into a versioned participation
+proposal through `/organizations/{organization_id}/agent-participations`. The proposal freezes the
+agent profile and trial decision together with selected roles, resources, permitted actions,
+cost/action/time budgets, schedule, data boundaries, referenced policy exceptions, and either a
+current operator agreement or named human sponsor. Its `/preview` is always non-effective and reports
+schedule, agreement, and live agent-policy blockers. Activation issues the stable
+`agent-participation:{id}` attribution identity and links it to an ordinary organization access grant,
+the only source of technical authority used by established collaboration workflows. Denials,
+concurrent versions, trial evidence, agreements, expiry, activation, and revocation remain retained;
+revocation retires the linked grant and derived credentials. Evaluation approval, budgets, policy
+exceptions, and governance or sponsorship standing never create access on their own.
+The linked request and grant retain the approved participation limits. Derived API/Git credentials
+require an explicit `repository.read` or `repository.write` action and a compatible
+`repository_metadata` or `repository_content` data boundary; write is never inferred from the role.
+Credential derivations consume the action ceiling, and each credential lifetime is capped by the
+agent-minute budget. Capacity is reserved inside the serialized grant mutation, so concurrent
+derivations cannot exceed the ceiling. Cost remains a reporting ceiling and cannot expand technical
+scopes. If a pending proposal's sponsor leaves, an owner can compare-and-swap a replacement current
+member through its `/sponsor` endpoint; both identities remain in the participation event history.
+Sponsor membership is held across the participation write, excluding concurrent member removal.
+If activation loses its final participation compare-and-swap after provisional grant approval, rollback
+revokes the grant and every credential derived during that interval.
 Deployment matching compares exact closed profile values (`platform`, `operator_managed`,
 `customer_managed`, or `external_service`); explanatory execution prose cannot imply compatibility.
 An omitted structured disclosure stays visible as missing evidence and fails closed for an explicit

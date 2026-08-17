@@ -884,7 +884,7 @@ func registerOrganizationRoutes(mux *http.ServeMux, gitStore *storage.Store, org
 				return
 			}
 		}
-		v, err := orgs.CreateAccessRequest(r.PathValue("id"), actor.UserID, in.PrincipalType, in.PrincipalID, in.Role, in.Reason, in.Resources, in.Exceptions, in.ExpiresAt)
+		v, err := orgs.CreateAccessRequest(r.PathValue("id"), actor.UserID, in.PrincipalType, in.PrincipalID, in.Role, in.Reason, in.Resources, in.Exceptions, in.ExpiresAt, nil)
 		if writeOrganizationError(w, err) {
 			return
 		}
@@ -1119,9 +1119,44 @@ func registerOrganizationRoutes(mux *http.ServeMux, gitStore *storage.Store, org
 			lifetime = time.Until(*grant.ExpiresAt)
 		}
 		scopes := []string{"git:read"}
+		if grant.Participation != nil {
+			limits := grant.Participation
+			if len(grant.DerivedCredentials) >= limits.MaxActions {
+				writeAPIError(w, 409, "participation_budget_exhausted", "the participation action budget is exhausted")
+				return
+			}
+			maxLifetime := time.Duration(limits.MaxAgentMinutes) * time.Minute
+			if lifetime > maxLifetime {
+				lifetime = maxLifetime
+			}
+			metadata := slices.Contains(limits.DataBoundaries, "repository_metadata") || slices.Contains(limits.DataBoundaries, "repository_content")
+			content := slices.Contains(limits.DataBoundaries, "repository_content")
+			switch in.Purpose {
+			case "api_read":
+				if !slices.Contains(limits.AllowedActions, "repository.read") || !metadata {
+					writeAPIError(w, 403, "participation_boundary_denied", "participation does not allow repository metadata reads")
+					return
+				}
+			case "git_read":
+				if !slices.Contains(limits.AllowedActions, "repository.read") || !content {
+					writeAPIError(w, 403, "participation_boundary_denied", "participation does not allow repository content reads")
+					return
+				}
+			case "git_write":
+				if grant.Role == "viewer" || !slices.Contains(limits.AllowedActions, "repository.write") || !content {
+					writeAPIError(w, 403, "participation_boundary_denied", "participation does not allow repository writes")
+					return
+				}
+			default:
+				writeAPIError(w, 400, "invalid_access_credential", "bounded participation credentials require api_read, git_read, or git_write purpose")
+				return
+			}
+		}
 		if in.Purpose == "api_read" {
 			scopes = []string{"repositories:read"}
-		} else if grant.Role != "viewer" {
+		} else if grant.Participation != nil && in.Purpose == "git_write" {
+			scopes = append(scopes, "git:write")
+		} else if grant.Participation == nil && grant.Role != "viewer" {
 			scopes = append(scopes, "git:write")
 		}
 		issued, err := credentials.IssueOrganizationAgent(actor.UserID, "Organization agent "+in.AgentID, v.ID, grant.ID, in.AgentID, in.RepositoryID, scopes, lifetime)
