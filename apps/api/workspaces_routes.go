@@ -20,16 +20,28 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/knowledgeanswers"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportthreads"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
-func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, incidentStore *incidents.Store, issueStore *issues.Store, releaseStore *releases.Store, store *workspaces.Store, authStore *auth.Store, organizationStore *organizations.Store, checkStore *checkruns.Store, sessionStore *changesessions.Store) {
+func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, incidentStore *incidents.Store, issueStore *issues.Store, releaseStore *releases.Store, store *workspaces.Store, authStore *auth.Store, organizationStore *organizations.Store, checkStore *checkruns.Store, sessionStore *changesessions.Store, supportStores ...any) {
+	var threadStore *supportthreads.Store
+	var answerStore *knowledgeanswers.Store
+	for _, candidate := range supportStores {
+		switch value := candidate.(type) {
+		case *supportthreads.Store:
+			threadStore = value
+		case *knowledgeanswers.Store:
+			answerStore = value
+		}
+	}
 	registerWorkspaceGovernanceRoutes(mux, catalog, store, authStore, organizationStore)
 	registerWorkspaceIDERoutes(mux, catalog, store, authStore)
 	registerWorkspaceCollaborationRoutes(mux, catalog, store, authStore, organizationStore)
@@ -74,6 +86,26 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 		if err = validateWorkspaceSource(input.Source, input.CommitID, proposalStore, pullStore, incidentStore, issueStore, releaseStore); err != nil {
 			writeAPIError(w, 422, "workspace_source_invalid", err.Error())
 			return
+		}
+		if input.Source.Kind == "support_verification" {
+			if threadStore == nil || answerStore == nil {
+				writeAPIError(w, 422, "workspace_source_invalid", "support verification is unavailable")
+				return
+			}
+			thread, threadErr := threadStore.Get(input.RepositoryID, input.Source.SupportThreadID)
+			answer, answerErr := answerStore.Get(input.RepositoryID, input.Source.AnswerID)
+			validRevision := false
+			if answerErr == nil {
+				for _, revision := range answer.Revisions {
+					if revision.ID == input.Source.AnswerRevisionID && answerCitesThread(revision, thread.ID) {
+						validRevision = true
+					}
+				}
+			}
+			if threadErr != nil || answerErr != nil || !validRevision || thread.Target.Version == "" {
+				writeAPIError(w, 422, "workspace_source_invalid", "support verification requires a readable versioned thread and exact citing answer revision")
+				return
+			}
 		}
 		var releaseExperimentClaim func()
 		if input.Source.Kind == "decision_experiment" {
@@ -384,6 +416,11 @@ func parseWorkspaceDefinition(body []byte) (workspaces.Definition, error) {
 func validateWorkspaceSource(source workspaces.Source, commit string, ps *proposals.Store, prs *pullrequests.Store, is *incidents.Store, issueStore *issues.Store, releaseStore *releases.Store) error {
 	switch source.Kind {
 	case "repository":
+		return nil
+	case "support_verification":
+		if source.SupportThreadID == "" || source.AnswerID == "" || source.AnswerRevisionID == "" {
+			return errors.New("support verification requires a thread and exact answer revision")
+		}
 		return nil
 	case "decision_experiment":
 		if strings.TrimSpace(source.DecisionID) == "" || strings.TrimSpace(source.AlternativeID) == "" {

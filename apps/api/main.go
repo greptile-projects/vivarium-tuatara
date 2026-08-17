@@ -71,6 +71,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/serviceobjectives"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportthreads"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportverifications"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
@@ -250,6 +251,14 @@ func main() {
 		supportRoot = "support-threads"
 	}
 	supportThreadStore, err := supportthreads.New(supportRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
+	supportVerificationRoot := os.Getenv("SUPPORT_VERIFICATION_STORAGE_ROOT")
+	if supportVerificationRoot == "" {
+		supportVerificationRoot = "support-verifications"
+	}
+	supportVerificationStore, err := supportverifications.New(supportVerificationRoot)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -584,7 +593,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, knowledgeAnswerStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, supportVerificationStore, knowledgeAnswerStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -714,6 +723,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var deliveryTeamStore *deliveryteams.Store
 	var issueStore *issues.Store
 	var supportThreadStore *supportthreads.Store
+	var supportVerificationStore *supportverifications.Store
 	var knowledgeAnswerStore *knowledgeanswers.Store
 	var contributorPathwayStore *contributorpathways.Store
 	var contributorOpportunityStore *contributoropportunities.Store
@@ -781,6 +791,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			issueStore = value
 		case *supportthreads.Store:
 			supportThreadStore = value
+		case *supportverifications.Store:
+			supportVerificationStore = value
 		case *knowledgeanswers.Store:
 			knowledgeAnswerStore = value
 		case *contributorpathways.Store:
@@ -934,6 +946,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	if authStore != nil && repositoryCatalog != nil && knowledgeAnswerStore != nil && supportThreadStore != nil && issueStore != nil && releaseStore != nil && packageStore != nil {
 		registerKnowledgeAnswerRoutes(mux, store, repositoryCatalog, authStore, knowledgeAnswerStore, supportThreadStore, issueStore, releaseStore, packageStore)
 	}
+	if authStore != nil && repositoryCatalog != nil && supportThreadStore != nil && knowledgeAnswerStore != nil && workspaceStore != nil && supportVerificationStore != nil {
+		registerSupportVerificationRoutes(mux, repositoryCatalog, supportThreadStore, knowledgeAnswerStore, workspaceStore, supportVerificationStore, authStore)
+	}
 	if authStore != nil && repositoryCatalog != nil && contributorPathwayStore != nil {
 		registerContributorPathwayRoutes(mux, store, repositoryCatalog, contributorPathwayStore, releaseStore, issueStore, proposalStore, workspaceStore, authStore)
 	}
@@ -961,7 +976,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		}
 	}
 	if authStore != nil && repositoryCatalog != nil && workspaceStore != nil {
-		registerWorkspaceRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, incidentStore, issueStore, releaseStore, workspaceStore, authStore, organizationStore, checkRunStore, changeSessionStore)
+		registerWorkspaceRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, incidentStore, issueStore, releaseStore, workspaceStore, authStore, organizationStore, checkRunStore, changeSessionStore, supportThreadStore, knowledgeAnswerStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && explanationStore != nil {
 		registerExplanationRoutes(mux, store, repositoryCatalog, authStore, explanationStore, proposalStore, pullRequestStore, incidentStore, workspaceStore, checkRunStore, relationshipStore)

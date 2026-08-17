@@ -63,6 +63,9 @@ type Source struct {
 	DefaultDefinitionSHA256 string `json:"default_definition_sha256,omitempty"`
 	UpstreamRepositoryID    string `json:"upstream_repository_id,omitempty"`
 	OpportunityID           string `json:"opportunity_id,omitempty"`
+	SupportThreadID         string `json:"support_thread_id,omitempty"`
+	AnswerID                string `json:"answer_id,omitempty"`
+	AnswerRevisionID        string `json:"answer_revision_id,omitempty"`
 }
 
 type ContributorContext struct {
