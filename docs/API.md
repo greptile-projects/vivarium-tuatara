@@ -3470,3 +3470,21 @@ repository participants can set `open`, `needs_context`, `answered`, or
 `closed`; authors can close or reopen their own question. Contact email is
 omitted for readers other than the author or a current repository participant.
 Audience and support state grant no repository access.
+
+## Project knowledge answers
+
+`GET` and `POST /repositories/{id}/knowledge-answers` expose durable project guidance to its declared
+`public` or `participants` audience. A proposal contains a developer question, answer summary and
+body, plus independently inspectable claims. Every claim states confidence and cites one or more
+exact `source`, `symbol`, `documentation`, `package`, `release`, `support_thread`, or `known_issue`
+resources with applicable versions. Source, symbol, and documentation commits must be reachable from
+a participant-visible non-`vivarium-security/*` branch; private support and issue evidence can never
+be used to publish a public answer.
+
+Current repository participants and exact repository-scoped agents use `POST .../{answer_id}/revisions`
+with `expected_version` to supersede, but never overwrite, the current revision. Every agent claim
+must include explicit uncertainty. Current human participants use `POST .../{answer_id}/responses`
+to comment, request clarification, endorse, or challenge the exact current revision. Agents cannot
+perform those review actions. The repository owner alone uses `PATCH .../{answer_id}` to mark the
+current guidance `verified`, `needs_context`, or `retired`; verification grants no repository or
+software authority. Records default beneath `$KNOWLEDGE_ANSWER_STORAGE_ROOT` (`knowledge-answers`).

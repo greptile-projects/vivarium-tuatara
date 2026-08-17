@@ -31,6 +31,17 @@ reviewed, checked, and merged Git contribution, and the retained cost/outcome ev
 profile successor, failed reevaluation, and credential-free replacement handoff. A handoff retires authority;
 later profile consent cannot implicitly reactivate it.
 
+## Inspectable project knowledge
+
+The repository knowledge workspace at `/repositories/{id}/knowledge` turns exact, currently visible
+source, symbols, documentation, packages, releases, support answers, and known issues into versioned
+guidance. Claims retain applicable versions and confidence; scoped-agent claims also retain explicit
+uncertainty. Human participants can comment, request clarification, endorse, or challenge an exact
+revision, and maintainers distinguish reviewed guidance from proposals or missing-context answers.
+Successors preserve the earlier answer and discussion. Evidence visibility is checked before
+publication, so a reference to restricted context cannot silently become public advice. These records
+coordinate understanding only and grant no Git, package, release, support, or repository authority.
+
 ## Reliability contracts
 
 Repository participants publish complete, compare-and-swap service-objective contracts through
