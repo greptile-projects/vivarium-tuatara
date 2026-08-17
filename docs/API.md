@@ -3497,6 +3497,9 @@ using source kind `support_verification` and exact `support_thread_id`, `answer_
 and the chosen commit's `.vivarium/workspace.json` remains the source of the isolated image, tools,
 dependencies, setup, and resource policy. Selected thread attachments are staged only by a caller that
 explicitly declares them sanitized; no platform or repository credentials enter workspace commands.
+The attempt endpoint revalidates that the workspace source names that exact thread, answer, and revision.
+Private workspaces cannot publish attempts because their raw command evidence would cross into the
+repository-readable verification audience; launch a repository-shared sanitized verification workspace.
 
 `GET|POST /repositories/{id}/support-threads/{thread_id}/verification-attempts` and the corresponding
 `GET .../{attempt_id}` retain immutable proof from that workspace. Creation binds the exact answer body,

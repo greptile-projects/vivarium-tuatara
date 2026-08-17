@@ -144,6 +144,14 @@ func registerSupportVerificationRoutes(mux *http.ServeMux, repos *repositories.S
 			writeAPIError(w, 422, "support_workspace_invalid", "workspace was not found for this repository")
 			return
 		}
+		if !supportWorkspaceMatches(ws, thread.ID, answer.ID, revision.ID) {
+			writeAPIError(w, 422, "support_workspace_invalid", "workspace must have been launched for this exact support thread and answer revision")
+			return
+		}
+		if ws.Policy.Sharing == "private" {
+			writeAPIError(w, 422, "support_workspace_private", "private workspace output cannot be published as repository-readable verification evidence")
+			return
+		}
 		member := false
 		repo, _ := repos.GetByID(thread.RepositoryID)
 		if repo.OwnerID == a.UserID {
@@ -151,7 +159,7 @@ func registerSupportVerificationRoutes(mux *http.ServeMux, repos *repositories.S
 		} else {
 			member, _ = repos.HasCollaborator(a.UserID, repo.ID)
 		}
-		if !member || (ws.Policy.Sharing == "private" && ws.CreatorID != a.UserID && repo.OwnerID != a.UserID) {
+		if !member {
 			writeAPIError(w, 404, "support_workspace_invalid", "workspace was not found for this participant")
 			return
 		}
@@ -204,6 +212,13 @@ func registerSupportVerificationRoutes(mux *http.ServeMux, repos *repositories.S
 		}
 		writeJSON(w, 200, project(v, thread))
 	})
+}
+
+func supportWorkspaceMatches(w workspaces.Workspace, threadID, answerID, revisionID string) bool {
+	return w.Source.Kind == "support_verification" &&
+		w.Source.SupportThreadID == threadID &&
+		w.Source.AnswerID == answerID &&
+		w.Source.AnswerRevisionID == revisionID
 }
 
 func answerCitesThread(r knowledgeanswers.Revision, id string) bool {

@@ -44,4 +44,21 @@ func TestSupportVerificationSanitizationAndCommandBinding(t *testing.T) {
 	}
 }
 
+func TestSupportVerificationWorkspaceProvenance(t *testing.T) {
+	matching := workspaces.Workspace{Source: workspaces.Source{Kind: "support_verification", SupportThreadID: "thread", AnswerID: "answer", AnswerRevisionID: "revision"}}
+	if !supportWorkspaceMatches(matching, "thread", "answer", "revision") {
+		t.Fatal("exact support workspace provenance was rejected")
+	}
+	for name, workspace := range map[string]workspaces.Workspace{
+		"repository source": {Source: workspaces.Source{Kind: "repository"}},
+		"other thread":      {Source: workspaces.Source{Kind: "support_verification", SupportThreadID: "other", AnswerID: "answer", AnswerRevisionID: "revision"}},
+		"other answer":      {Source: workspaces.Source{Kind: "support_verification", SupportThreadID: "thread", AnswerID: "other", AnswerRevisionID: "revision"}},
+		"other revision":    {Source: workspaces.Source{Kind: "support_verification", SupportThreadID: "thread", AnswerID: "answer", AnswerRevisionID: "other"}},
+	} {
+		if supportWorkspaceMatches(workspace, "thread", "answer", "revision") {
+			t.Errorf("%s provenance was accepted", name)
+		}
+	}
+}
+
 func sha256Text(v string) string { d := sha256.Sum256([]byte(v)); return hex.EncodeToString(d[:]) }
