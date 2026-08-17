@@ -47,6 +47,9 @@ func registerSupportThreadRoutes(mux *http.ServeMux, git *storage.Store, repos *
 		if v.AuthorID != actor && !member {
 			v.ContactPreferences.Email = ""
 		}
+		if v.AuthorID != actor {
+			v.Notifications = nil
+		}
 		return v
 	}
 	withRelated := func(v supportthreads.Thread, actor string, member bool) supportthreads.Thread {
@@ -181,6 +184,31 @@ func registerSupportThreadRoutes(mux *http.ServeMux, git *storage.Store, repos *
 			return
 		}
 		writeJSON(w, 200, project(v, a.UserID, member))
+	})
+	mux.HandleFunc("POST /repositories/{id}/support-threads/{thread_id}/replies", func(w http.ResponseWriter, r *http.Request) {
+		a, repo, member, ok := access(w, r)
+		if !ok {
+			return
+		}
+		var in struct {
+			Body            string `json:"body"`
+			ExpectedVersion int    `json:"expected_version"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		v, e := store.Get(repo.ID, r.PathValue("thread_id"))
+		if e != nil || !visible(v, a.UserID, member) {
+			writeAPIError(w, 404, "support_thread_not_found", "support thread not found")
+			return
+		}
+		v, e = store.AddReply(repo.ID, v.ID, a.UserID, in.Body, in.ExpectedVersion, member)
+		if e != nil {
+			writeSupportError(w, e)
+			return
+		}
+		writeJSON(w, 201, project(v, a.UserID, member))
 	})
 	mux.HandleFunc("POST /repositories/{id}/support-threads/{thread_id}/escalations", func(w http.ResponseWriter, r *http.Request) {
 		a, repo, member, ok := access(w, r)

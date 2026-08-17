@@ -31,11 +31,22 @@ func TestContextualQuestionLifecycleAndDiagnostics(t *testing.T) {
 	if v.Status != "needs_context" || v.Version != 2 || len(v.History) != 2 {
 		t.Fatalf("updated = %#v", v)
 	}
+	v, err = s.AddReply("repo", v.ID, "developer", "The runtime is Go 1.26; the timeout occurs after the first upload.", v.Version, false)
+	if err != nil || len(v.Replies) != 1 || v.Replies[0].ActorID != "developer" || v.Version != 3 {
+		t.Fatalf("reply = %#v, %v", v, err)
+	}
+	if _, err = s.AddReply("repo", v.ID, "outsider", "untrusted reply", v.Version, false); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("outsider reply = %v", err)
+	}
+	v, err = s.AddReply("repo", v.ID, "maintainer", "Confirmed; I can reproduce that sequence.", v.Version, true)
+	if err != nil || len(v.Notifications) != 1 || v.Notifications[0].UserID != "developer" {
+		t.Fatalf("asker notification = %#v, %v", v.Notifications, err)
+	}
 	if _, err = s.UpdateStatus("repo", v.ID, "maintainer", "answered", "", 1, true); !errors.Is(err, ErrConflict) {
 		t.Fatalf("stale update = %v", err)
 	}
 	reloaded, err := s.Get("repo", v.ID)
-	if err != nil || reloaded.History[1].Message != "Please include the runtime." {
+	if err != nil || reloaded.History[1].Message != "Please include the runtime." || reloaded.Replies[0].Body == "" {
 		t.Fatalf("reloaded = %#v, %v", reloaded, err)
 	}
 }

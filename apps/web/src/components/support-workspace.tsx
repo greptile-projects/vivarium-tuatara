@@ -74,8 +74,14 @@ export function SupportWorkspace() {
         token,
       );
       if (sequence !== loadSequence.current) return;
-      setRepositories(page.repositories);
-      const id = repoID || page.repositories[0]?.id || "";
+      const linkedID = new URL(window.location.href).searchParams.get("repository") || "";
+      const linked = linkedID && !page.repositories.some((item) => item.id === linkedID)
+        ? await api<Repository>(`/repositories/${linkedID}`, {}, token).catch(() => null)
+        : null;
+      if (sequence !== loadSequence.current) return;
+      const available = linked ? [linked, ...page.repositories] : page.repositories;
+      setRepositories(available);
+      const id = repoID || linkedID || available[0]?.id || "";
       if (id) {
         setRepoID(id);
         const [threadData, solutionData] = await Promise.all([
@@ -230,6 +236,36 @@ export function SupportWorkspace() {
         selection === selectionSequence.current
       )
         setError(message(e));
+    }
+  }
+  async function reply(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!token || !selected) return;
+    const form = event.currentTarget,
+      d = new FormData(form);
+    setPending(true);
+    setError("");
+    try {
+      const updated = await api<SupportThread>(
+        `/repositories/${selected.repository_id}/support-threads/${selected.id}/replies`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            body: d.get("reply"),
+            expected_version: selected.version,
+          }),
+        },
+        token,
+      );
+      setSelected(updated);
+      setThreads((items) =>
+        items.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      form.reset();
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setPending(false);
     }
   }
   async function publish(event: FormEvent<HTMLFormElement>) {
@@ -685,6 +721,35 @@ export function SupportWorkspace() {
               </p>
             ))}
           </div>
+          {selected.replies?.length > 0 && (
+            <div className="mt-4 space-y-2" aria-label="Thread replies">
+              {selected.replies.map((item) => (
+                <div key={item.id} className="rounded-lg bg-[var(--surface)] p-3 text-sm">
+                  <p className="whitespace-pre-wrap">{item.body}</p>
+                  <p className="mt-1 text-xs text-[var(--muted)]">
+                    {item.actor_id} · {new Date(item.created_at).toLocaleString()}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+          {selected.notifications?.length ? (
+            <div className="mt-4 rounded-lg bg-[var(--success-soft)] p-3 text-sm">
+              <strong>Support notifications</strong>
+              {selected.notifications.map((item) => (
+                <p key={item.id} className="mt-1">{item.message}</p>
+              ))}
+            </div>
+          ) : null}
+          {selected.status !== "closed" && (
+            <form onSubmit={reply} className="mt-4 flex flex-col gap-2 border-t border-[var(--line)] pt-4">
+              <label className="text-sm font-semibold">
+                Add context or reply
+                <textarea name="reply" className={`${field} min-h-20`} required maxLength={10000} />
+              </label>
+              <Button className="self-start" disabled={pending}>Reply in thread</Button>
+            </form>
+          )}
           {selected.status !== "closed" && (
             <form
               onSubmit={escalate}

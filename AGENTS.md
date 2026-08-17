@@ -61,6 +61,10 @@ whenever dependencies change or the web job fails before it starts.
   to the author and current repository participants, and related answers/issues
   expose metadata but never candidate evidence. Records default beneath
   `$SUPPORT_THREAD_STORAGE_ROOT` (`support-threads`).
+  The web accepts `?repository={id}` for public package-user entry. The asker
+  and current participants append bounded, CAS-guarded in-thread replies;
+  participant replies create asker-only notifications, while closed threads
+  reject further discussion and replies grant no repository authority.
   Exact cited answer revisions can be exercised through ordinary bounded workspaces with source kind
   `support_verification`; immutable attempts live beneath `$SUPPORT_VERIFICATION_STORAGE_ROOT`
   (`support-verifications`). Attempts freeze the stated version, declared environment, sanitized-input,

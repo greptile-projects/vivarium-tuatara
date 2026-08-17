@@ -56,6 +56,19 @@ type HistoryEntry struct {
 	Message   string    `json:"message,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
+type Reply struct {
+	ID        string    `json:"id"`
+	ActorID   string    `json:"actor_id"`
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"created_at"`
+}
+type Notification struct {
+	ID        string    `json:"id"`
+	UserID    string    `json:"user_id"`
+	Kind      string    `json:"kind"`
+	Message   string    `json:"message"`
+	CreatedAt time.Time `json:"created_at"`
+}
 type Diagnostic struct {
 	Kind    string `json:"kind"`
 	Message string `json:"message"`
@@ -98,6 +111,8 @@ type Thread struct {
 	ContactPreferences ContactPreferences `json:"contact_preferences"`
 	Attachments        []Attachment       `json:"attachments"`
 	History            []HistoryEntry     `json:"history"`
+	Replies            []Reply            `json:"replies"`
+	Notifications      []Notification     `json:"notifications,omitempty"`
 	Diagnostics        []Diagnostic       `json:"diagnostics"`
 	Related            []Related          `json:"related,omitempty"`
 	Escalations        []Escalation       `json:"escalations,omitempty"`
@@ -105,6 +120,39 @@ type Thread struct {
 	CreatedAt          time.Time          `json:"created_at"`
 	UpdatedAt          time.Time          `json:"updated_at"`
 }
+
+// AddReply appends discussion under the same compare-and-swap boundary as
+// status, escalation, and resolution changes. Only the asker and current
+// repository participants may add context to a thread.
+func (s *Store) AddReply(repo, id, actor, body string, expected int, maintainer bool) (Thread, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, id)
+	if err != nil {
+		return Thread{}, err
+	}
+	body = strings.TrimSpace(body)
+	if v.Version != expected {
+		return Thread{}, ErrConflict
+	}
+	if actor != v.AuthorID && !maintainer {
+		return Thread{}, ErrForbidden
+	}
+	if v.Status == "closed" || body == "" || len(body) > 10_000 {
+		return Thread{}, ErrInvalid
+	}
+	now := s.now()
+	v.Replies = append(v.Replies, Reply{ID: randomID(), ActorID: actor, Body: body, CreatedAt: now})
+	if actor != v.AuthorID {
+		v.Notifications = append(v.Notifications, Notification{ID: randomID(), UserID: v.AuthorID, Kind: "support_reply", Message: "A repository participant replied to your support question.", CreatedAt: now})
+	}
+	v.History = append(v.History, HistoryEntry{ID: randomID(), Kind: "replied", ActorID: actor, CreatedAt: now})
+	v.Version++
+	v.UpdatedAt = now
+	v.Diagnostics = diagnostics(v)
+	return v, s.write(v)
+}
+
 type Store struct {
 	root string
 	mu   sync.Mutex
