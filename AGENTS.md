@@ -175,7 +175,10 @@ whenever dependencies change or the web job fails before it starts.
   and required operator agreement or human sponsor. Preview is non-effective; activation links a
   distinct `agent-participation:{id}` identity to the existing revocable access-grant boundary.
   Revocation retires that grant and derived credentials. Evaluation, sponsorship, financial limits,
-  policy exceptions, and governance standing never confer access independently. Deployment compatibility
+  policy exceptions, and governance standing never confer access independently. Participation-derived
+  credentials require explicit `repository.read`/`repository.write` actions and compatible
+  `repository_metadata`/`repository_content` boundaries; write is not inferred from role, derivations
+  consume the action cap, and lifetime is capped by the agent-minute budget. Deployment compatibility
   uses exact closed profile values (`platform`, `operator_managed`, `customer_managed`, or
   `external_service`); free-form execution prose is explanatory only. An omitted structured boundary
   is missing evidence and fails closed only when a search explicitly requests that boundary. Nested teams retain

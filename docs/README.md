@@ -2170,6 +2170,11 @@ the only source of technical authority used by established collaboration workflo
 concurrent versions, trial evidence, agreements, expiry, activation, and revocation remain retained;
 revocation retires the linked grant and derived credentials. Evaluation approval, budgets, policy
 exceptions, and governance or sponsorship standing never create access on their own.
+The linked request and grant retain the approved participation limits. Derived API/Git credentials
+require an explicit `repository.read` or `repository.write` action and a compatible
+`repository_metadata` or `repository_content` data boundary; write is never inferred from the role.
+Credential derivations consume the action ceiling, and each credential lifetime is capped by the
+agent-minute budget. Cost remains a reporting ceiling and cannot expand technical scopes.
 Deployment matching compares exact closed profile values (`platform`, `operator_managed`,
 `customer_managed`, or `external_service`); explanatory execution prose cannot imply compatibility.
 An omitted structured disclosure stays visible as missing evidence and fails closed for an explicit

@@ -569,3 +569,27 @@ func TestRevokingOverlappingGrantPausesOnlyAfterFinalCoverage(t *testing.T) {
 		t.Fatalf("final coverage revocation did not pause: %#v, %v", v.StewardshipMandates[0], err)
 	}
 }
+
+func TestParticipationLimitsSurviveAccessApproval(t *testing.T) {
+	store, _ := New(t.TempDir())
+	base := time.Date(2026, 8, 17, 2, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return base }
+	owner, repository := "0123456789abcdef0123456789abcdef", "11111111111111111111111111111111"
+	v, _ := store.Create("Bounded", "bounded-authority", "", owner)
+	v, _ = store.RegisterAgent(v.ID, owner, "Worker", "bounded-worker", "", "organization", []string{"work"}, []string{owner}, nil)
+	limits := &AgentParticipationAuthority{ParticipationID: strings.Repeat("a", 32), AllowedActions: []string{"repository.read"}, DataBoundaries: []string{"repository_metadata"}, MaxCost: 1, MaxAgentMinutes: 5, MaxActions: 1}
+	expires := base.Add(time.Hour)
+	v, err := store.CreateAccessRequest(v.ID, owner, "agent", v.Agents[0].ID, "contributor", "evaluated", []ResourceScope{{Kind: "repository", ID: repository}}, nil, &expires, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := v.AccessRequests[0]
+	v, err = store.DecideAccessRequest(v.ID, request.ID, owner, "approve", func(AccessRequest) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := v.AccessGrants[0]
+	if grant.Participation == nil || grant.Participation.ParticipationID != limits.ParticipationID || !slices.Equal(grant.Participation.AllowedActions, []string{"repository.read"}) || !slices.Equal(grant.Participation.DataBoundaries, []string{"repository_metadata"}) || grant.Participation.MaxActions != 1 {
+		t.Fatalf("participation limits were dropped: %#v", grant)
+	}
+}

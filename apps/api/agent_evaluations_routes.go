@@ -280,6 +280,10 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 				return
 			}
 		}
+		if in.Participation.AgreementRequirement == "sponsor" && !organizations.HasRole(org, in.Participation.SponsorID, "") {
+			writeAPIError(w, 422, "participation_sponsor_invalid", "the named sponsor must be a current organization member")
+			return
+		}
 		v, e := evaluations.CreateParticipation(org.ID, actor.UserID, in.Participation)
 		if e != nil {
 			writeErr(w, e)
@@ -376,7 +380,8 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 			resources = append(resources, organizations.ResourceScope{Kind: x.Kind, ID: x.ID})
 		}
 		expires := p.ExpiresAt
-		changed, e := orgs.CreateAccessRequest(org.ID, actor.UserID, "agent", p.AgentID, p.Role, "Evaluated participation "+p.ID, resources, nil, &expires)
+		authority := &organizations.AgentParticipationAuthority{ParticipationID: p.ID, AllowedActions: p.Actions, DataBoundaries: p.DataBoundaries, MaxCost: p.Budget.MaxCost, MaxAgentMinutes: p.Budget.MaxAgentMinutes, MaxActions: p.Budget.MaxActions}
+		changed, e := orgs.CreateAccessRequest(org.ID, actor.UserID, "agent", p.AgentID, p.Role, "Evaluated participation "+p.ID, resources, nil, &expires, authority)
 		if e != nil {
 			writeOrganizationError(w, e)
 			return
@@ -419,6 +424,10 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 		p, e := evaluations.GetParticipation(r.PathValue("participation_id"))
 		if e != nil || p.OrganizationID != org.ID {
 			writeErr(w, agentevaluations.ErrNotFound)
+			return
+		}
+		if p.Version != in.ExpectedVersion || (in.Decision == "revoke" && p.Status != "active") || (in.Decision == "deny" && p.Status == "active") || (in.Decision != "deny" && in.Decision != "revoke") {
+			writeErr(w, agentevaluations.ErrConflict)
 			return
 		}
 		if in.Decision == "revoke" && p.AccessGrantID != "" {
