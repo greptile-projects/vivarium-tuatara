@@ -21,6 +21,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/accessibilitydelivery"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/accessibilityreports"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/agentevaluations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/charters"
@@ -279,6 +280,14 @@ func main() {
 		organizationRoot = "organizations"
 	}
 	organizationStore, err := organizations.New(organizationRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
+	agentEvaluationRoot := os.Getenv("AGENT_EVALUATION_STORAGE_ROOT")
+	if agentEvaluationRoot == "" {
+		agentEvaluationRoot = "agent-evaluations"
+	}
+	agentEvaluationStore, err := agentevaluations.New(agentEvaluationRoot)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -557,7 +566,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -717,6 +726,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var protectionPlanStore *protectionplans.Store
 	var recoveryExerciseStore *recoveryexercises.Store
 	var recoveryOperationStore *recoveryoperations.Store
+	var agentEvaluationStore *agentevaluations.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -811,6 +821,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			recoveryExerciseStore = value
 		case *recoveryoperations.Store:
 			recoveryOperationStore = value
+		case *agentevaluations.Store:
+			agentEvaluationStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -908,6 +920,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && userStore != nil && organizationStore != nil {
 		registerOrganizationRoutes(mux, store, organizationStore, repositoryCatalog, userStore, authStore, activityStore, proposalStore, pullRequestStore, releaseStore, packageStore, incidentStore, relationshipStore, securityAdvisoryStore)
+		if agentEvaluationStore != nil && store != nil {
+			registerAgentEvaluationRoutes(mux, store, repositoryCatalog, authStore, organizationStore, agentEvaluationStore)
+		}
 	}
 	if authStore != nil && repositoryCatalog != nil && charterStore != nil {
 		registerCharterRoutes(mux, charterStore, governanceStore, repositoryCatalog, organizationStore, authStore)
