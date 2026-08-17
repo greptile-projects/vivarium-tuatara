@@ -286,6 +286,12 @@ func digest(v any) string {
 	x := sha256.Sum256(b)
 	return hex.EncodeToString(x[:])
 }
+func revisionInputDigest(rev Revision) string {
+	return digest(struct {
+		Revision  string
+		Scenarios []Scenario
+	}{rev.RepositoryRevision, rev.Scenarios})
+}
 func evaluate(c Check, out string) (bool, string) {
 	passed := strings.Contains(out, c.Expected)
 	if c.Kind == "not_contains" || c.Kind == "policy" || c.Kind == "canary" {
@@ -303,7 +309,7 @@ func (s *Store) CreateRun(suiteID string, version int, in RunInput, actor string
 	if e != nil {
 		return Run{}, e
 	}
-	if version < 1 || version > len(suite.Revisions) || !clean(in.AgentID, 64) || in.AgentProfileVersion < 1 || !clean(actor, 64) || in.Cost < 0 || in.LatencyMS < 0 || len(in.ToolActions) > 500 || len(in.Artifacts) > 100 {
+	if version < 1 || version > len(suite.Revisions) || !clean(in.AgentID, 64) || in.AgentProfileVersion < 1 || !clean(actor, 64) || in.Cost < 0 || in.LatencyMS < 0 || len(in.ToolActions) > 500 || len(in.Artifacts) > 100 || len(in.Failure) > 2000 || !sanitized(in.Failure) {
 		return Run{}, ErrInvalid
 	}
 	for scenarioID, output := range in.Outputs {
@@ -322,6 +328,24 @@ func (s *Store) CreateRun(suiteID string, version int, in RunInput, actor string
 		}
 	}
 	rev := suite.Revisions[version-1]
+	for _, scenario := range rev.Scenarios {
+		output, exists := in.Outputs[scenario.ID]
+		if !exists || strings.TrimSpace(output) == "" {
+			return Run{}, ErrInvalid
+		}
+	}
+	inputDigest := revisionInputDigest(rev)
+	reproducible := false
+	if in.ReproducesRunID != "" {
+		if !clean(in.ReproducesRunID, 64) {
+			return Run{}, ErrInvalid
+		}
+		prior, priorErr := read[Run](s.runPath(in.ReproducesRunID))
+		if priorErr != nil || prior.OrganizationID != suite.OrganizationID || prior.SuiteID != suiteID || prior.SuiteVersion != version || prior.RepositoryID != suite.RepositoryID || prior.RepositoryRevision != rev.RepositoryRevision || prior.AgentID != in.AgentID || prior.AgentProfileVersion != in.AgentProfileVersion || prior.InputDigest != inputDigest {
+			return Run{}, ErrInvalid
+		}
+		reproducible = !in.OperatorSupplied
+	}
 	label := "initial"
 	entries, _ := os.ReadDir(s.root)
 	for _, entry := range entries {
@@ -371,23 +395,27 @@ func (s *Store) CreateRun(suiteID string, version int, in RunInput, actor string
 		}
 	}
 	budget := in.Cost <= rev.Budget.MaxCost && in.LatencyMS <= rev.Budget.MaxLatencyMS && len(in.ToolActions) <= rev.Budget.MaxToolActions
+	if strings.TrimSpace(in.Failure) != "" {
+		correct, policy, budget = false, false, false
+	}
 	x, e := id()
 	if e != nil {
 		return Run{}, e
 	}
-	run := Run{ID: x, SuiteID: suiteID, SuiteVersion: version, OrganizationID: suite.OrganizationID, RepositoryID: suite.RepositoryID, RepositoryRevision: rev.RepositoryRevision, AgentID: in.AgentID, AgentProfileVersion: in.AgentProfileVersion, TrialLabel: label, ReproducesRunID: in.ReproducesRunID, InputDigest: digest(struct {
-		Revision  string
-		Scenarios []Scenario
-	}{rev.RepositoryRevision, rev.Scenarios}), Outputs: in.Outputs, ToolActions: in.ToolActions, Artifacts: in.Artifacts, Cost: in.Cost, LatencyMS: in.LatencyMS, Failure: in.Failure, Authority: Authority{}, CheckResults: results, CorrectnessPassed: correct, PolicyPassed: policy, BudgetPassed: budget, Contaminated: len(contam) > 0, ContaminationReasons: contam, Reproducible: in.ReproducesRunID != "" && !in.OperatorSupplied, ReviewStatus: "pending", Decisions: []Decision{}, CreatedBy: actor, CreatedAt: s.now()}
-	return run, write(s.runPath(x), run)
+	run := Run{ID: x, SuiteID: suiteID, SuiteVersion: version, OrganizationID: suite.OrganizationID, RepositoryID: suite.RepositoryID, RepositoryRevision: rev.RepositoryRevision, AgentID: in.AgentID, AgentProfileVersion: in.AgentProfileVersion, TrialLabel: label, ReproducesRunID: in.ReproducesRunID, InputDigest: inputDigest, Outputs: in.Outputs, ToolActions: in.ToolActions, Artifacts: in.Artifacts, Cost: in.Cost, LatencyMS: in.LatencyMS, Failure: strings.TrimSpace(in.Failure), Authority: Authority{}, CheckResults: results, CorrectnessPassed: correct, PolicyPassed: policy, BudgetPassed: budget, Contaminated: len(contam) > 0, ContaminationReasons: contam, Reproducible: reproducible, ReviewStatus: "pending", Decisions: []Decision{}, CreatedBy: actor, CreatedAt: s.now()}
+	if e := write(s.runPath(x), run); e != nil {
+		return Run{}, e
+	}
+	return publicRun(run), nil
 }
 func publicRun(v Run) Run {
-	for i := range v.CheckResults {
-		if v.CheckResults[i].Hidden {
-			v.CheckResults[i].Name = "protected criterion"
-			v.CheckResults[i].Kind = "hidden"
+	publicResults := make([]CheckResult, 0, len(v.CheckResults))
+	for _, result := range v.CheckResults {
+		if !result.Hidden {
+			publicResults = append(publicResults, result)
 		}
 	}
+	v.CheckResults = publicResults
 	return v
 }
 func (s *Store) GetRun(v string) (Run, error) {
@@ -421,6 +449,9 @@ func (s *Store) Decide(runID, actor, decision, rationale string) (Run, error) {
 		return Run{}, e
 	}
 	if (decision != "approved" && decision != "rejected" && decision != "needs_work") || !clean(rationale, 2000) || !clean(actor, 64) {
+		return Run{}, ErrInvalid
+	}
+	if decision == "approved" && (!v.CorrectnessPassed || !v.PolicyPassed || !v.BudgetPassed || v.Contaminated || v.Failure != "") {
 		return Run{}, ErrInvalid
 	}
 	v.Decisions = append(v.Decisions, Decision{decision, rationale, actor, s.now()})

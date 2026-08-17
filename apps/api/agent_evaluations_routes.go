@@ -193,6 +193,11 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 			writeErr(w, e)
 			return
 		}
+		run, e = evaluations.GetRun(run.ID)
+		if e != nil {
+			writeErr(w, e)
+			return
+		}
 		writeJSON(w, 201, run)
 	})
 	mux.HandleFunc("POST /organizations/{id}/agent-evaluation-runs/{run_id}/decisions", func(w http.ResponseWriter, r *http.Request) {
