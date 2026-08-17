@@ -203,6 +203,10 @@ func registerKnowledgeAnswerRoutes(mux *http.ServeMux, git *storage.Store, catal
 		if !ok {
 			return
 		}
+		if a.AgentID != "" {
+			writeAPIError(w, 403, "knowledge_human_review_required", "agent credentials cannot perform human review actions")
+			return
+		}
 		if !member {
 			writeAPIError(w, 403, "knowledge_participant_required", "only current human participants may review guidance")
 			return
@@ -227,6 +231,10 @@ func registerKnowledgeAnswerRoutes(mux *http.ServeMux, git *storage.Store, catal
 	mux.HandleFunc("PATCH /repositories/{id}/knowledge-answers/{answer_id}", func(w http.ResponseWriter, r *http.Request) {
 		a, repo, _, ok := access(w, r)
 		if !ok {
+			return
+		}
+		if a.AgentID != "" {
+			writeAPIError(w, 403, "knowledge_human_decision_required", "agent credentials cannot make maintainer guidance decisions")
 			return
 		}
 		if repo.OwnerID != a.UserID {

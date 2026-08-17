@@ -65,3 +65,32 @@ func TestAgentRequiresUncertaintyAndEveryClaimRequiresEvidence(t *testing.T) {
 		t.Fatalf("missing citation err = %v", err)
 	}
 }
+
+func TestReadAndMutationCannotEscapeRepository(t *testing.T) {
+	s, _ := New(t.TempDir())
+	left, err := s.Create(Answer{RepositoryID: "repo-a", Question: "Left?", Audience: "participants"}, cited("human"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := s.Create(Answer{RepositoryID: "repo-b", Question: "Private?", Audience: "participants"}, cited("human"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	escaped := "../repo-b/" + right.ID
+	if _, err = s.Get("repo-a", escaped); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("escaped read err = %v", err)
+	}
+	if _, err = s.SetStatus("repo-a", escaped, "owner-a", "verified", right.Version); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("escaped mutation err = %v", err)
+	}
+	unchanged, err := s.Get("repo-b", right.ID)
+	if err != nil || unchanged.Status != "proposed" {
+		t.Fatalf("foreign answer changed: %#v, %v", unchanged, err)
+	}
+	if _, err = s.Get("repo-a", right.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("foreign ID err = %v", err)
+	}
+	if _, err = s.Get("repo-a", left.ID); err != nil {
+		t.Fatalf("local read: %v", err)
+	}
+}

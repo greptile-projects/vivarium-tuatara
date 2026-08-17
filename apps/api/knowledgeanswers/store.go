@@ -196,7 +196,7 @@ func (s *Store) SetStatus(repo, answer, actor, status string, expected int) (Ans
 	return v, s.write(v)
 }
 func validAnswer(v Answer) bool {
-	return v.RepositoryID != "" && strings.TrimSpace(v.Question) != "" && len(v.Question) <= 1000 && map[string]bool{"public": true, "participants": true}[v.Audience]
+	return validPathSegment(v.RepositoryID) && strings.TrimSpace(v.Question) != "" && len(v.Question) <= 1000 && map[string]bool{"public": true, "participants": true}[v.Audience]
 }
 func validRevision(r Revision) bool {
 	if strings.TrimSpace(r.Summary) == "" || strings.TrimSpace(r.Body) == "" || r.AuthorID == "" || !map[string]bool{"human": true, "agent": true}[r.AuthorType] || len(r.Claims) == 0 {
@@ -221,6 +221,9 @@ func assignClaimIDs(r *Revision) {
 }
 func (s *Store) read(repo, answer string) (Answer, error) {
 	var v Answer
+	if !validAnswerID(answer) || !validPathSegment(repo) {
+		return v, ErrNotFound
+	}
 	b, err := os.ReadFile(filepath.Join(s.root, repo, answer+".json"))
 	if os.IsNotExist(err) {
 		return v, ErrNotFound
@@ -231,9 +234,31 @@ func (s *Store) read(repo, answer string) (Answer, error) {
 	if json.Unmarshal(b, &v) != nil {
 		return v, ErrInvalid
 	}
+	if v.ID != answer || v.RepositoryID != repo {
+		return Answer{}, ErrNotFound
+	}
 	return v, nil
 }
+
+func validAnswerID(value string) bool {
+	if len(value) != 24 {
+		return false
+	}
+	for _, r := range value {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+func validPathSegment(value string) bool {
+	return value != "" && value != "." && value != ".." && filepath.Base(value) == value
+}
 func (s *Store) write(v Answer) error {
+	if !validPathSegment(v.RepositoryID) || !validAnswerID(v.ID) {
+		return ErrInvalid
+	}
 	d := filepath.Join(s.root, v.RepositoryID)
 	if err := os.MkdirAll(d, 0700); err != nil {
 		return err
