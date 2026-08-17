@@ -72,6 +72,16 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 		}
 		return false
 	}
+	humanOwner := func(actor auth.Credential, org organizations.Organization) bool {
+		return actor.AgentID == "" && organizations.HasRole(org, actor.UserID, "owner")
+	}
+	requireHumanOwner := func(w http.ResponseWriter, actor auth.Credential, org organizations.Organization, code, message string) bool {
+		if !humanOwner(actor, org) {
+			writeAPIError(w, 403, code, message)
+			return false
+		}
+		return true
+	}
 	writeErr := func(w http.ResponseWriter, err error) {
 		switch {
 		case errors.Is(err, agentevaluations.ErrNotFound):
@@ -174,7 +184,7 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 		}
 		var v []agentevaluations.Run
 		var e error
-		if organizations.HasRole(org, actor.UserID, "owner") {
+		if humanOwner(actor, org) {
 			v, e = evaluations.ListEvaluatorRuns(org.ID)
 		} else {
 			v, e = evaluations.ListRuns(org.ID)
@@ -232,8 +242,7 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 		if !ok {
 			return
 		}
-		if !organizations.HasRole(org, actor.UserID, "owner") {
-			writeAPIError(w, 403, "evaluation_owner_required", "only organization owners can decide protected evaluation evidence")
+		if !requireHumanOwner(w, actor, org, "evaluation_owner_required", "only human organization owners can decide protected evaluation evidence") {
 			return
 		}
 		run, e := evaluations.GetEvaluatorRun(r.PathValue("run_id"))
@@ -297,8 +306,7 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 		if !ok {
 			return
 		}
-		if !organizations.HasRole(org, actor.UserID, "owner") {
-			writeAPIError(w, 403, "participation_owner_required", "an organization owner must control agent trust")
+		if !requireHumanOwner(w, actor, org, "participation_owner_required", "a human organization owner must control agent trust") {
 			return
 		}
 		var in participationControlInput
@@ -342,8 +350,7 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 		if !ok {
 			return
 		}
-		if !organizations.HasRole(org, actor.UserID, "owner") {
-			writeAPIError(w, 403, "participation_owner_required", "an organization owner must define agent participation")
+		if !requireHumanOwner(w, actor, org, "participation_owner_required", "a human organization owner must define agent participation") {
 			return
 		}
 		var in participationCreateInput
@@ -405,6 +412,10 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 		if !ok {
 			return
 		}
+		if actor.AgentID != "" {
+			writeAPIError(w, 403, "participation_human_agreement_required", "agent credentials cannot provide sponsor or operator agreement")
+			return
+		}
 		p, e := evaluations.GetParticipation(r.PathValue("participation_id"))
 		if e != nil || p.OrganizationID != org.ID {
 			writeErr(w, agentevaluations.ErrNotFound)
@@ -439,8 +450,7 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 		if !ok {
 			return
 		}
-		if !organizations.HasRole(org, actor.UserID, "owner") {
-			writeAPIError(w, 403, "participation_owner_required", "an organization owner must replace a participation sponsor")
+		if !requireHumanOwner(w, actor, org, "participation_owner_required", "a human organization owner must replace a participation sponsor") {
 			return
 		}
 		var in participationMutationInput
@@ -474,8 +484,7 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 		if !ok {
 			return
 		}
-		if !organizations.HasRole(org, actor.UserID, "owner") {
-			writeAPIError(w, 403, "participation_owner_required", "an organization owner must activate agent participation")
+		if !requireHumanOwner(w, actor, org, "participation_owner_required", "a human organization owner must activate agent participation") {
 			return
 		}
 		var in participationMutationInput
@@ -536,8 +545,7 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 		if !ok {
 			return
 		}
-		if !organizations.HasRole(org, actor.UserID, "owner") {
-			writeAPIError(w, 403, "participation_owner_required", "an organization owner must deny or revoke participation")
+		if !requireHumanOwner(w, actor, org, "participation_owner_required", "a human organization owner must deny or revoke participation") {
 			return
 		}
 		var in participationMutationInput

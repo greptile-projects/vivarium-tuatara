@@ -5,6 +5,9 @@ export type User = {
   created_at: string;
   updated_at: string;
 };
+
+export type KnowledgeCitation = { kind: "source"|"symbol"|"documentation"|"package"|"release"|"support_thread"|"known_issue"; resource_id?: string; revision?: string; path?: string; symbol?: string; start_line?: number; end_line?: number; label: string; applicable_versions: string[] };
+export type KnowledgeAnswer = { id:string; repository_id:string; question:string; audience:"public"|"participants"; status:"proposed"|"verified"|"needs_context"|"retired"; current_revision_id:string; version:number; revisions:{id:string;number:number;summary:string;body:string;author_id:string;author_type:"human"|"agent";supersedes_revision_id?:string;created_at:string;claims:{id:string;text:string;confidence:"high"|"medium"|"low";uncertainty?:string;citations:KnowledgeCitation[]}[]}[]; responses:{id:string;revision_id:string;kind:string;body:string;actor_id:string;created_at:string}[]; updated_at:string };
 export type CharterRevision = {
   id: string;
   scope_type: "repository" | "organization";

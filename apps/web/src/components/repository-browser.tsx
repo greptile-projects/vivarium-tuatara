@@ -235,6 +235,7 @@ export function RepositoryBrowser({ id }: { id: string }) {
             <Link href={`/repositories/${id}/documentation`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Documentation</Link>
             <Link href={`/repositories/${id}/code?ref=${immutableRevision}`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Search and navigate code</Link>
             <Link href={`/repositories/${id}/explanations?ref=${immutableRevision}${currentPath ? `&kind=file&path=${encodeURIComponent(currentPath)}` : ""}`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Ask about this revision</Link>
+            <Link href={`/repositories/${id}/knowledge`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Project guidance</Link>
             <Link href={`/repositories/${id}/impact?ref=${immutableRevision}${currentPath ? `&path=${encodeURIComponent(currentPath)}` : ""}`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Assess prospective impact</Link>
             <Link href={`/repositories/${id}/performance`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Performance goals</Link>
             <Link href={`/repositories/${id}/accessibility`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Accessibility commitments</Link>

@@ -62,6 +62,17 @@ whenever dependencies change or the web job fails before it starts.
   expose metadata but never candidate evidence. Records default beneath
   `$SUPPORT_THREAD_STORAGE_ROOT` (`support-threads`).
 
+- **Project knowledge** — `/repositories/{id}/knowledge` retains proposed and superseding
+  guidance separately from conversational explanations and support questions. Every claim cites
+  exact participant-visible source/symbol/documentation, package, release, answered support thread,
+  or known issue evidence and names applicable versions; source citations must be reachable from a
+  non-security branch. Scoped repository agents must declare uncertainty on every claim and cannot
+  review or verify answers. Current human participants comment, request clarification, endorse, or
+  challenge the current immutable revision, while only the repository owner marks it verified,
+  context-missing, or retired. Audience is rechecked on reads and restricted evidence never becomes
+  part of a public answer implicitly. Records default beneath `$KNOWLEDGE_ANSWER_STORAGE_ROOT`
+  (`knowledge-answers`).
+
 - **Frontend** — App Router, file-based routes under `apps/web/src/app`. Entry
   point is `src/app/page.tsx`; `layout.tsx` installs the persistent application
   shell from `src/components/app-shell.tsx`. Reuse the accessible visual
@@ -1972,8 +1983,10 @@ whenever dependencies change or the web job fails before it starts.
   actions, digest-addressed artifacts, costs, latency, failures, derived checks, contamination,
   reproducibility, and human decisions. Protected check definitions never appear in suite or run
   projections. Ordinary member projections derive aggregates only from public criteria and omit
-  protected contamination state; organization-owner evaluators alone receive protected-derived
-  aggregate status or decide a run, and still receive no protected definitions or result rows.
+  protected contamination state; human organization-owner evaluators alone receive protected-derived
+  aggregate status or decide a run, and still receive no protected definitions or result rows. An
+  owner-linked agent credential remains non-human and cannot decide protected evidence, define,
+  activate, control, or revoke participation, replace its sponsor, or provide sponsor/operator agreement.
   Every evaluation authority manifest disables publish, secret, merge, environment,
   and network access; a suite or favorable decision grants no organization or repository authority.
   Repeated and operator-supplied trials remain explicitly labeled.
