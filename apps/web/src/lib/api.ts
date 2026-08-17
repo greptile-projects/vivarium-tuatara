@@ -3089,6 +3089,25 @@ export type PullRequest = {
       completed_at: string;
     };
   };
+  durable_migration?: {
+    schema_id: string;
+    migration_id: string;
+    work_id: string;
+    step_id: string;
+    kind: string;
+    dependency_ids: string[];
+    contract: {
+      old_readers: string[];
+      new_readers: string[];
+      old_writers: string[];
+      new_writers: string[];
+      rollout_flags: string[];
+      idempotency: string;
+      transformations: string[];
+      ownership: string[];
+      rollback_assumptions: string[];
+    };
+  };
   workspace_id?: string;
   workspace_checkpoint_id?: string;
   workspace_contributor_ids?: string[];

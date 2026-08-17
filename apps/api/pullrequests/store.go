@@ -22,6 +22,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/accessibilitydelivery"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/durableschemas"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/localization"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/performanceevidence"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
@@ -53,52 +54,65 @@ const (
 )
 
 type PullRequest struct {
-	ID                       string                 `json:"id"`
-	RepositoryID             string                 `json:"repository_id"`
-	SourceRepositoryID       string                 `json:"source_repository_id"`
-	AuthorID                 string                 `json:"author_id"`
-	FederatedAuthor          string                 `json:"federated_author,omitempty"`
-	FederatedContributionID  string                 `json:"federated_contribution_id,omitempty"`
-	Title                    string                 `json:"title"`
-	Body                     string                 `json:"body"`
-	SourceBranch             string                 `json:"source_branch"`
-	TargetBranch             string                 `json:"target_branch"`
-	SourceCommitID           string                 `json:"source_commit_id"`
-	TargetCommitID           string                 `json:"target_commit_id"`
-	ProposalID               *string                `json:"proposal_id"`
-	TaskID                   *string                `json:"task_id,omitempty"`
-	TaskSessionID            *string                `json:"task_session_id,omitempty"`
-	TaskRunID                *string                `json:"task_run_id,omitempty"`
-	TaskCommitIDs            []string               `json:"task_commit_ids,omitempty"`
-	TaskEvidence             *TaskReviewEvidence    `json:"task_evidence,omitempty"`
-	WorkspaceID              string                 `json:"workspace_id,omitempty"`
-	WorkspaceCheckpointID    string                 `json:"workspace_checkpoint_id,omitempty"`
-	WorkspaceContributorIDs  []string               `json:"workspace_contributor_ids,omitempty"`
-	WorkspaceCommandIDs      []string               `json:"workspace_command_ids,omitempty"`
-	ContributionEvidence     *ContributionEvidence  `json:"contribution_evidence,omitempty"`
-	DeliveryTeamID           string                 `json:"delivery_team_id,omitempty"`
-	DeliveryIntegrationID    string                 `json:"delivery_integration_id,omitempty"`
-	DeliveryStreamID         string                 `json:"delivery_stream_id,omitempty"`
-	DeliveryIntegrationOrder int                    `json:"delivery_integration_order,omitempty"`
-	TaskStatePending         string                 `json:"task_state_pending,omitempty"`
-	Status                   string                 `json:"status"`
-	MaintainerEditsAllowed   bool                   `json:"maintainer_edits_allowed"`
-	CreatedAt                time.Time              `json:"created_at"`
-	UpdatedAt                time.Time              `json:"updated_at"`
-	ClosedAt                 *time.Time             `json:"closed_at"`
-	ClosedBy                 *string                `json:"closed_by"`
-	MergedAt                 *time.Time             `json:"merged_at"`
-	MergedBy                 *string                `json:"merged_by"`
-	MergeCommitID            *string                `json:"merge_commit_id"`
-	QueuedAt                 *time.Time             `json:"queued_at,omitempty"`
-	QueuedBy                 *string                `json:"queued_by,omitempty"`
-	QueueRank                string                 `json:"queue_rank,omitempty"`
-	QueuePaused              bool                   `json:"queue_paused,omitempty"`
-	QueueActions             []QueueAction          `json:"queue_actions,omitempty"`
-	QueueFinalizationPending bool                   `json:"queue_finalization_pending,omitempty"`
-	QueueFinalizedAt         *time.Time             `json:"queue_finalized_at,omitempty"`
-	IntegrationCandidates    []IntegrationCandidate `json:"integration_candidates,omitempty"`
+	ID                       string                  `json:"id"`
+	RepositoryID             string                  `json:"repository_id"`
+	SourceRepositoryID       string                  `json:"source_repository_id"`
+	AuthorID                 string                  `json:"author_id"`
+	FederatedAuthor          string                  `json:"federated_author,omitempty"`
+	FederatedContributionID  string                  `json:"federated_contribution_id,omitempty"`
+	Title                    string                  `json:"title"`
+	Body                     string                  `json:"body"`
+	SourceBranch             string                  `json:"source_branch"`
+	TargetBranch             string                  `json:"target_branch"`
+	SourceCommitID           string                  `json:"source_commit_id"`
+	TargetCommitID           string                  `json:"target_commit_id"`
+	ProposalID               *string                 `json:"proposal_id"`
+	TaskID                   *string                 `json:"task_id,omitempty"`
+	TaskSessionID            *string                 `json:"task_session_id,omitempty"`
+	TaskRunID                *string                 `json:"task_run_id,omitempty"`
+	TaskCommitIDs            []string                `json:"task_commit_ids,omitempty"`
+	TaskEvidence             *TaskReviewEvidence     `json:"task_evidence,omitempty"`
+	DurableMigration         *DurableMigrationReview `json:"durable_migration,omitempty"`
+	WorkspaceID              string                  `json:"workspace_id,omitempty"`
+	WorkspaceCheckpointID    string                  `json:"workspace_checkpoint_id,omitempty"`
+	WorkspaceContributorIDs  []string                `json:"workspace_contributor_ids,omitempty"`
+	WorkspaceCommandIDs      []string                `json:"workspace_command_ids,omitempty"`
+	ContributionEvidence     *ContributionEvidence   `json:"contribution_evidence,omitempty"`
+	DeliveryTeamID           string                  `json:"delivery_team_id,omitempty"`
+	DeliveryIntegrationID    string                  `json:"delivery_integration_id,omitempty"`
+	DeliveryStreamID         string                  `json:"delivery_stream_id,omitempty"`
+	DeliveryIntegrationOrder int                     `json:"delivery_integration_order,omitempty"`
+	TaskStatePending         string                  `json:"task_state_pending,omitempty"`
+	Status                   string                  `json:"status"`
+	MaintainerEditsAllowed   bool                    `json:"maintainer_edits_allowed"`
+	CreatedAt                time.Time               `json:"created_at"`
+	UpdatedAt                time.Time               `json:"updated_at"`
+	ClosedAt                 *time.Time              `json:"closed_at"`
+	ClosedBy                 *string                 `json:"closed_by"`
+	MergedAt                 *time.Time              `json:"merged_at"`
+	MergedBy                 *string                 `json:"merged_by"`
+	MergeCommitID            *string                 `json:"merge_commit_id"`
+	QueuedAt                 *time.Time              `json:"queued_at,omitempty"`
+	QueuedBy                 *string                 `json:"queued_by,omitempty"`
+	QueueRank                string                  `json:"queue_rank,omitempty"`
+	QueuePaused              bool                    `json:"queue_paused,omitempty"`
+	QueueActions             []QueueAction           `json:"queue_actions,omitempty"`
+	QueueFinalizationPending bool                    `json:"queue_finalization_pending,omitempty"`
+	QueueFinalizedAt         *time.Time              `json:"queue_finalized_at,omitempty"`
+	IntegrationCandidates    []IntegrationCandidate  `json:"integration_candidates,omitempty"`
 	mergeIntent              *mergeIntent
+}
+
+// DurableMigrationReview exposes the exact non-sensitive coexistence contract
+// on an ordinary linked pull without making it a source of review or merge authority.
+type DurableMigrationReview struct {
+	SchemaID      string                      `json:"schema_id"`
+	MigrationID   string                      `json:"migration_id"`
+	WorkID        string                      `json:"work_id"`
+	StepID        string                      `json:"step_id"`
+	Kind          string                      `json:"kind"`
+	DependencyIDs []string                    `json:"dependency_ids"`
+	Contract      durableschemas.WorkContract `json:"contract"`
 }
 
 // ContributionEvidence keeps the intent and support behind guided newcomer
