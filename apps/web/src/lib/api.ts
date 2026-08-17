@@ -709,6 +709,7 @@ export type SupportThread = {
     created_at: string;
     status: "pending" | "published";
     requested_version: number;
+    base_revision: string;
   }[];
   version: number;
   created_at: string;

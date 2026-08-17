@@ -220,7 +220,7 @@ func registerSupportThreadRoutes(mux *http.ServeMux, git *storage.Store, repos *
 			writeAPIError(w, 409, "support_escalation_base_missing", "repository default branch is required before governed work can be created")
 			return
 		}
-		updated, err := store.Escalate(repo.ID, r.PathValue("thread_id"), a.UserID, in.ExpectedVersion, in.Classification, in.ResourceKind, in.AcceptanceCriteria, func(thread supportthreads.Thread, escalationID string) (string, string, error) {
+		updated, err := store.Escalate(repo.ID, r.PathValue("thread_id"), a.UserID, in.ExpectedVersion, in.Classification, in.ResourceKind, base.Target, in.AcceptanceCriteria, func(thread supportthreads.Thread, escalationID, frozenBase string) (string, string, error) {
 			criteria := strings.Join(in.AcceptanceCriteria, "\n- ")
 			context := fmt.Sprintf("Escalated from support thread %s.\n\nUser need: %s\n\nAffected version: %s\n\nPermitted reproduction:\n- %s\n\nAcceptance criteria:\n- %s", thread.ID, thread.Goal, thread.Target.Version, strings.Join(thread.AttemptedSteps, "\n- "), criteria)
 			switch in.ResourceKind {
@@ -242,7 +242,7 @@ func registerSupportThreadRoutes(mux *http.ServeMux, git *storage.Store, repos *
 				if existing, getErr := documentationStore.GetTask(repo.ID, escalationID); getErr == nil {
 					return existing.ID, "/repositories/" + repo.ID + "/documentation/tasks/" + existing.ID, nil
 				}
-				created, createErr := documentationStore.CreateTask(docscollections.Task{ID: escalationID, RepositoryID: repo.ID, Title: thread.Title, Path: path, Branch: "docs/support-" + thread.ID[:8], BaseRevision: base.Target, Source: docscollections.TaskSource{Kind: "support_thread", ResourceID: thread.ID, Revision: base.Target, Label: context}, CreatedBy: a.UserID})
+				created, createErr := documentationStore.CreateTask(docscollections.Task{ID: escalationID, RepositoryID: repo.ID, Title: thread.Title, Path: path, Branch: "docs/support-" + thread.ID[:8], BaseRevision: frozenBase, Source: docscollections.TaskSource{Kind: "support_thread", ResourceID: thread.ID, Revision: frozenBase, Label: context}, CreatedBy: a.UserID})
 				return created.ID, "/repositories/" + repo.ID + "/documentation/tasks/" + created.ID, createErr
 			case "proposal", "ordered_work":
 				if proposalStore == nil {
@@ -255,7 +255,7 @@ func registerSupportThreadRoutes(mux *http.ServeMux, git *storage.Store, repos *
 				if len(tasks) == 0 {
 					tasks = append(tasks, proposals.ImplementationTaskInput{Title: "Plan " + thread.Title, Outcome: strings.Join(in.AcceptanceCriteria, "; "), VerificationPlan: strings.Join(in.AcceptanceCriteria, "\n"), AssigneeType: "human", AssigneeID: a.UserID})
 				}
-				origin := proposals.ReasoningOrigin{SupportThreadID: thread.ID, SupportThreadVersion: thread.Version, Revision: base.Target, SelectedItemIDs: []string{thread.ID}, Items: []proposals.ReasoningItem{{ID: thread.ID, Kind: "support_need", Summary: thread.Goal, Status: "unresolved"}}, AnalysisStatus: in.Classification}
+				origin := proposals.ReasoningOrigin{SupportThreadID: thread.ID, SupportThreadVersion: thread.Version, Revision: frozenBase, SelectedItemIDs: []string{thread.ID}, Items: []proposals.ReasoningItem{{ID: thread.ID, Kind: "support_need", Summary: thread.Goal, Status: "unresolved"}}, AnalysisStatus: in.Classification}
 				created, _, createErr := proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: repo.ID, ActorID: a.UserID, Title: thread.Title, Body: context, Origin: origin, Tasks: tasks})
 				return created.ID, "/proposals/" + repo.ID + "/" + created.ID, createErr
 			}

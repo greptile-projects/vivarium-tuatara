@@ -80,6 +80,7 @@ type Escalation struct {
 	CreatedAt          time.Time `json:"created_at"`
 	Status             string    `json:"status"`
 	RequestedVersion   int       `json:"requested_version"`
+	BaseRevision       string    `json:"base_revision"`
 }
 type Thread struct {
 	ID                 string             `json:"id"`
@@ -209,7 +210,7 @@ func (s *Store) UpdateStatus(repo, id, actor, status, message string, expected i
 // Escalate holds the support mutation boundary while ordinary governed work is
 // created. The callback receives the immutable, privacy-safe context that may
 // cross into the target; attachments and contact details never leave the thread.
-func (s *Store) Escalate(repo, id, actor string, expected int, classification, resourceKind string, criteria []string, publish func(Thread, string) (string, string, error)) (Thread, error) {
+func (s *Store) Escalate(repo, id, actor string, expected int, classification, resourceKind, baseRevision string, criteria []string, publish func(Thread, string, string) (string, string, error)) (Thread, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v, err := s.read(repo, id)
@@ -224,13 +225,14 @@ func (s *Store) Escalate(repo, id, actor string, expected int, classification, r
 			clean = append(clean, item)
 		}
 	}
-	if !classes[classification] || !kinds[resourceKind] || len(clean) == 0 || len(clean) > 20 || publish == nil || v.Status == "closed" {
+	if !classes[classification] || !kinds[resourceKind] || len(baseRevision) != 40 || len(clean) == 0 || len(clean) > 20 || publish == nil || v.Status == "closed" {
 		return Thread{}, ErrInvalid
 	}
 	pending := -1
 	for i := len(v.Escalations) - 1; i >= 0; i-- {
 		candidate := v.Escalations[i]
-		matchingRequest := candidate.Classification == classification && candidate.ResourceKind == resourceKind && candidate.CreatedBy == actor && slices.Equal(candidate.AcceptanceCriteria, clean) && (candidate.RequestedVersion == expected || candidate.Status == "pending" && expected == v.Version)
+		sameContent := candidate.Classification == classification && candidate.ResourceKind == resourceKind && candidate.CreatedBy == actor && slices.Equal(candidate.AcceptanceCriteria, clean)
+		matchingRequest := sameContent && (candidate.Status == "published" || candidate.RequestedVersion == expected || candidate.Status == "pending" && expected == v.Version)
 		if matchingRequest && candidate.Status == "published" {
 			return v, nil
 		}
@@ -247,7 +249,7 @@ func (s *Store) Escalate(repo, id, actor string, expected int, classification, r
 			return Thread{}, ErrConflict
 		}
 		now := s.now()
-		v.Escalations = append(v.Escalations, Escalation{ID: randomID(), Classification: classification, ResourceKind: resourceKind, AffectedVersion: v.Target.Version, AcceptanceCriteria: clean, Reproduction: append([]string(nil), v.AttemptedSteps...), CreatedBy: actor, CreatedAt: now, Status: "pending", RequestedVersion: expected})
+		v.Escalations = append(v.Escalations, Escalation{ID: randomID(), Classification: classification, ResourceKind: resourceKind, AffectedVersion: v.Target.Version, AcceptanceCriteria: clean, Reproduction: append([]string(nil), v.AttemptedSteps...), CreatedBy: actor, CreatedAt: now, Status: "pending", RequestedVersion: expected, BaseRevision: baseRevision})
 		pending = len(v.Escalations) - 1
 		v.Version++
 		v.UpdatedAt = now
@@ -255,7 +257,7 @@ func (s *Store) Escalate(repo, id, actor string, expected int, classification, r
 			return Thread{}, err
 		}
 	}
-	resourceID, resourceURL, err := publish(v, v.Escalations[pending].ID)
+	resourceID, resourceURL, err := publish(v, v.Escalations[pending].ID, v.Escalations[pending].BaseRevision)
 	if err != nil {
 		return Thread{}, err
 	}

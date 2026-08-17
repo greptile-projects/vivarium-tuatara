@@ -89,7 +89,9 @@ whenever dependencies change or the web job fails before it starts.
   Creation first persists a pending escalation identity; issue and documentation creation reuse that identity and
   proposal creation reuses the exact support origin, so finalization failures reconcile without duplicate work.
   Published records retain their initiating thread version, allowing a lost-response retry to return the exact
-  governed resource without invoking publication again.
+  governed resource without invoking publication again; the same exact request after a thread refresh also returns
+  that record. Pending records freeze the initial default-branch base so proposal and documentation reconciliation
+  cannot drift when the branch advances.
 
 - **Project knowledge** — `/repositories/{id}/knowledge` retains proposed and superseding
   guidance separately from conversational explanations and support questions. Every claim cites
