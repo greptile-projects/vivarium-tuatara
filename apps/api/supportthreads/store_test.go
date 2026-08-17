@@ -104,6 +104,31 @@ func TestResolveCompensatesPublicationWhenThreadCloseCannotPersist(t *testing.T)
 	}
 }
 
+func TestResolveDoesNotCompensatePreexistingPublication(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, err := s.Create(Thread{RepositoryID: "repo", AuthorID: "asker", Title: "Help", Body: "Details", Target: Target{Kind: "repository", Label: "repo"}, Urgency: "normal", Audience: "public", ContactPreferences: ContactPreferences{ReplyInThread: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoDir := filepath.Join(s.root, "repo")
+	_, err = s.Resolve("repo", v.ID, "asker", "retry", v.Version, false, func() (func() error, error) {
+		if chmodErr := os.Chmod(repoDir, 0500); chmodErr != nil {
+			return nil, chmodErr
+		}
+		return nil, nil
+	})
+	if chmodErr := os.Chmod(repoDir, 0700); chmodErr != nil {
+		t.Fatal(chmodErr)
+	}
+	if err == nil {
+		t.Fatal("forced retry close failure succeeded")
+	}
+	reloaded, readErr := s.Get("repo", v.ID)
+	if readErr != nil || reloaded.Status != "open" {
+		t.Fatalf("thread = %#v, %v", reloaded, readErr)
+	}
+}
+
 func TestQuestionRequiresSafeTargetContactAndAttachments(t *testing.T) {
 	s, _ := New(t.TempDir())
 	base := Thread{RepositoryID: "repo", AuthorID: "user", Title: "Help", Body: "Details", Target: Target{Kind: "repository", Label: "repo"}, Urgency: "normal", Audience: "maintainers", ContactPreferences: ContactPreferences{ReplyInThread: true}}

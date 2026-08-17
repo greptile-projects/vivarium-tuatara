@@ -55,15 +55,21 @@ func TestDuplicateMergeRequiresExplicitTarget(t *testing.T) {
 
 func TestCreateIsIdempotentForExactResolutionEvidence(t *testing.T) {
 	s, _ := New(t.TempDir())
-	first, err := s.Create(fixture(), "maintainer")
+	first, created, err := s.CreateResolution(fixture(), "maintainer")
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !created {
+		t.Fatal("first resolution was not reported as created")
+	}
 	retry := fixture()
 	retry.Title = "A retry must not rewrite the published title"
-	second, err := s.Create(retry, "maintainer")
+	second, created, err := s.CreateResolution(retry, "maintainer")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if created {
+		t.Fatal("idempotent retry was reported as newly created")
 	}
 	if second.ID != first.ID || second.Title != first.Title {
 		t.Fatalf("retry created or rewrote solution: first=%#v second=%#v", first, second)

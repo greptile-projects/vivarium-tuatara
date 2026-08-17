@@ -82,15 +82,22 @@ func New(root string) (*Store, error) {
 	return &Store{root: root, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }}, nil
 }
 func (s *Store) Create(v Solution, actor string) (Solution, error) {
+	created, _, err := s.CreateResolution(v, actor)
+	return created, err
+}
+
+// CreateResolution reports whether this call persisted the solution so callers
+// only compensate writes they own, never an idempotently returned prior record.
+func (s *Store) CreateResolution(v Solution, actor string) (Solution, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !valid(v) || actor == "" {
-		return Solution{}, ErrInvalid
+		return Solution{}, false, ErrInvalid
 	}
 	if existing, found, err := s.findResolution(v.RepositoryID, v.ThreadID, v.AnswerRevisionID, v.VerificationAttemptID); err != nil {
-		return Solution{}, err
+		return Solution{}, false, err
 	} else if found {
-		return existing, nil
+		return existing, false, nil
 	}
 	now := s.now()
 	v.ID = id()
@@ -100,7 +107,10 @@ func (s *Store) Create(v Solution, actor string) (Solution, error) {
 	v.UpdatedAt = now
 	v.Events = []Event{{ID: id(), Kind: "published", ActorID: actor, CreatedAt: now}}
 	addNotifications(&v, "solution_published", "A tested support solution was published.", now)
-	return v, s.write(v)
+	if err := s.write(v); err != nil {
+		return Solution{}, false, err
+	}
+	return v, true, nil
 }
 func (s *Store) Get(repo, sid string) (Solution, error) {
 	s.mu.Lock()

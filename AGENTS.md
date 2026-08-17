@@ -77,7 +77,8 @@ whenever dependencies change or the web job fails before it starts.
   omits merged duplicates, while version-guarded duplicate merge, archival, and revalidation requests append
   attributed lifecycle events and notifications without rewriting the published solution or its evidence.
   Publication holds the support-thread mutation boundary through idempotent solution persistence and closure,
-  and compensates the exact evidence-bound solution if the thread close cannot persist;
+  and compensates the exact evidence-bound solution created by the current request if the thread close cannot
+  persist; idempotently returned prior solutions are never armed for deletion;
   terminal merged or archived records cannot be revived, and search admits only published or revalidation-needed
   records.
 

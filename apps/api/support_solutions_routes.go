@@ -176,9 +176,13 @@ func registerSupportSolutionRoutes(mux *http.ServeMux, repos *repositories.Store
 		var v supportsolutions.Solution
 		_, e = threads.Resolve(repo.ID, thread.ID, a.UserID, "Resolved by reusable solution from answer revision "+revision.ID, thread.Version, member, func() (func() error, error) {
 			var createErr error
-			v, createErr = solutions.Create(supportsolutions.Solution{RepositoryID: repo.ID, ThreadID: thread.ID, AnswerID: answer.ID, AnswerRevisionID: revision.ID, VerificationAttemptID: attempt.ID, Title: in.Title, Summary: in.Summary, Instructions: revision.Body, Audience: in.Audience, ApplicableVersions: in.ApplicableVersions, Limitations: in.Limitations, Links: in.Links, Credits: credits}, a.UserID)
+			var created bool
+			v, created, createErr = solutions.CreateResolution(supportsolutions.Solution{RepositoryID: repo.ID, ThreadID: thread.ID, AnswerID: answer.ID, AnswerRevisionID: revision.ID, VerificationAttemptID: attempt.ID, Title: in.Title, Summary: in.Summary, Instructions: revision.Body, Audience: in.Audience, ApplicableVersions: in.ApplicableVersions, Limitations: in.Limitations, Links: in.Links, Credits: credits}, a.UserID)
 			if createErr != nil {
 				return nil, createErr
+			}
+			if !created {
+				return nil, nil
 			}
 			return func() error { return solutions.DeleteResolution(repo.ID, v.ID, thread.ID, revision.ID, attempt.ID) }, nil
 		})
