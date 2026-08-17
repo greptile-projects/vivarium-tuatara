@@ -2152,6 +2152,17 @@ pricing/resources, requested capabilities, availability, support, and a change s
 remain visibly separate from platform-generated evidence for the stable `agent:{id}` principal and its
 current organization operators. Public agents expose this history in the organization directory; a
 profile never grants a capability, credential, installation, user identity, or repository authority.
+Organization members can compare agents against a bounded task, proposal, issue, decision, incident,
+stewardship mandate, or team-role reference through `POST
+/organizations/{organization_id}/agent-matches`. The deterministic projection explains workflow fit,
+live independent grants, effective policy, disclosed cost and availability, deployment boundaries,
+profile freshness, conflicts, verified evaluations, and attributed outcomes on comparable work.
+Missing or stale evidence remains visible; ordering grants no authority and copies no source content.
+Private matching evidence is excluded from the broader public directory.
+Deployment matching compares exact closed profile values (`platform`, `operator_managed`,
+`customer_managed`, or `external_service`); explanatory execution prose cannot imply compatibility.
+An omitted structured disclosure stays visible as missing evidence and fails closed for an explicit
+boundary search; only a non-empty incompatible disclosure is reported as a conflict.
 The portfolio derives blockers, relevant policy exceptions,
 and upcoming release candidates from live records. If membership, agent
 operation, team identity, or repository stewardship changes, the original work

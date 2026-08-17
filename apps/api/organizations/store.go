@@ -102,6 +102,7 @@ type AgentProfile struct {
 	Tools                     []string                `json:"tools"`
 	ModelProvenance           string                  `json:"model_provenance"`
 	ExecutionProvenance       string                  `json:"execution_provenance"`
+	DeploymentBoundaries      []string                `json:"deployment_boundaries"`
 	DataUse                   string                  `json:"data_use"`
 	Retention                 string                  `json:"retention"`
 	Pricing                   string                  `json:"pricing"`
@@ -111,6 +112,7 @@ type AgentProfile struct {
 	Support                   string                  `json:"support"`
 	Subprocessors             []string                `json:"subprocessors"`
 	RemoteExecutionBoundaries []string                `json:"remote_execution_boundaries"`
+	ConflictDisclosures       []string                `json:"conflict_disclosures"`
 	ChangeSummary             string                  `json:"change_summary"`
 	PublishedBy               string                  `json:"published_by"`
 	PublishedAt               time.Time               `json:"published_at"`
@@ -1099,10 +1101,16 @@ func (s *Store) PublishAgentProfile(id, agentID, actor string, expectedVersion i
 	if in.SupportedTasks, ok = cleanList(in.SupportedTasks, 300); !ok || len(in.SupportedTasks) == 0 || len(in.SupportedTasks) > 50 {
 		return Organization{}, ErrInvalid
 	}
-	for target, max := range map[*[]string]int{&in.Tools: 200, &in.ResourceRequirements: 300, &in.RequestedCapabilities: 300, &in.Subprocessors: 500, &in.RemoteExecutionBoundaries: 500} {
+	for target, max := range map[*[]string]int{&in.Tools: 200, &in.ResourceRequirements: 300, &in.RequestedCapabilities: 300, &in.Subprocessors: 500, &in.RemoteExecutionBoundaries: 500, &in.ConflictDisclosures: 500} {
 		if *target, ok = cleanList(*target, max); !ok || len(*target) > 50 {
 			return Organization{}, ErrInvalid
 		}
+	}
+	in.DeploymentBoundaries, ok = normalizeList(in.DeploymentBoundaries, func(value string) bool {
+		return value == "platform" || value == "operator_managed" || value == "customer_managed" || value == "external_service"
+	})
+	if !ok || len(in.DeploymentBoundaries) > 4 {
+		return Organization{}, ErrInvalid
 	}
 	required := []string{in.Summary, in.ModelProvenance, in.ExecutionProvenance, in.DataUse, in.Retention, in.Pricing, in.Availability, in.Support, in.ChangeSummary}
 	for _, value := range required {

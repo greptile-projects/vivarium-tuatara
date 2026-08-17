@@ -1488,11 +1488,27 @@ export type OrganizationAgent = {
 };
 export type OrganizationAgentProfile = {
   version: number; summary: string; supported_tasks: string[]; tools: string[];
-  model_provenance: string; execution_provenance: string; data_use: string; retention: string;
+  model_provenance: string; execution_provenance: string; deployment_boundaries: ("platform" | "operator_managed" | "customer_managed" | "external_service")[]; data_use: string; retention: string;
   pricing: string; resource_requirements: string[]; requested_capabilities: string[];
   availability: string; support: string; subprocessors: string[]; remote_execution_boundaries: string[];
+  conflict_disclosures: string[];
   change_summary: string; published_by: string; published_at: string;
   verified_evidence: { kind: string; statement: string; verified_at: string }[];
+};
+export type AgentMatchSet = {
+  source_kind: "task" | "proposal" | "issue" | "decision" | "incident" | "stewardship_mandate" | "team_role";
+  source_id: string;
+  repository_id?: string;
+  workflow: string;
+  explanation: string;
+  matches: {
+    agent_id: string; name: string; eligible: boolean; score: number;
+    reasons: string[]; missing_evidence: string[]; stale_evidence: string[]; conflicts: string[];
+    effective_permissions: { kind: string; id: string }[];
+    deployment_boundary: string[]; pricing?: string; availability?: string;
+    verified_evaluations: { kind: string; statement: string; verified_at: string }[];
+    comparable_outcomes: { id: string; kind: string; status: string; summary: string; goal?: string; recorded_at: string }[];
+  }[];
 };
 export type OrganizationEvent = {
   id: string;
