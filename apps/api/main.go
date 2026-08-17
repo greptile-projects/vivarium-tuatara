@@ -953,7 +953,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerIssueRoutes(mux, store, repositoryCatalog, issueStore, releaseStore, deploymentStore, incidentStore, proposalStore, pullRequestStore, packageStore, workspaceStore, authStore, activityStore, checkRunStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && supportThreadStore != nil {
-		registerSupportThreadRoutes(mux, repositoryCatalog, supportThreadStore, issueStore, authStore)
+		registerSupportThreadRoutes(mux, store, repositoryCatalog, supportThreadStore, issueStore, proposalStore, documentationStore, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && knowledgeAnswerStore != nil && supportThreadStore != nil && issueStore != nil && releaseStore != nil && packageStore != nil {
 		registerKnowledgeAnswerRoutes(mux, store, repositoryCatalog, authStore, knowledgeAnswerStore, supportThreadStore, issueStore, releaseStore, packageStore)

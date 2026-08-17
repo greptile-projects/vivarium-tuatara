@@ -405,7 +405,7 @@ func (s *Store) CreateTask(v Task) (Task, error) {
 		return Task{}, err
 	}
 	defer unlock()
-	if !validID(v.RepositoryID) || !validID(v.CreatedBy) || strings.TrimSpace(v.Title) == "" || len(v.Title) > 160 || !cleanPath(v.Path) || !cleanRef(v.Branch) || len(v.BaseRevision) != 40 || !oneOf(v.Source.Kind, "proposal", "issue", "pull_request", "release", "investigation", "stewardship_opportunity") || !validID(v.Source.ResourceID) || strings.TrimSpace(v.Source.Label) == "" || v.Source.Revision != v.BaseRevision {
+	if !validID(v.RepositoryID) || !validID(v.CreatedBy) || strings.TrimSpace(v.Title) == "" || len(v.Title) > 160 || !cleanPath(v.Path) || !cleanRef(v.Branch) || len(v.BaseRevision) != 40 || !oneOf(v.Source.Kind, "proposal", "issue", "pull_request", "release", "investigation", "stewardship_opportunity", "support_thread") || !validID(v.Source.ResourceID) || strings.TrimSpace(v.Source.Label) == "" || v.Source.Revision != v.BaseRevision {
 		return Task{}, ErrInvalid
 	}
 	if v.ID == "" {

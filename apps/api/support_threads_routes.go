@@ -3,17 +3,21 @@ package main
 import (
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/docscollections"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportthreads"
 )
 
-func registerSupportThreadRoutes(mux *http.ServeMux, repos *repositories.Store, store *supportthreads.Store, issueStore *issues.Store, credentials *auth.Store) {
+func registerSupportThreadRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, store *supportthreads.Store, issueStore *issues.Store, proposalStore *proposals.Store, documentationStore *docscollections.Store, credentials *auth.Store) {
 	const supportBodyLimit = 15 << 20
 	const supportAttachmentLimit = 10
 	access := func(w http.ResponseWriter, r *http.Request) (auth.Credential, repositories.Repository, bool, bool) {
@@ -178,6 +182,114 @@ func registerSupportThreadRoutes(mux *http.ServeMux, repos *repositories.Store, 
 		}
 		writeJSON(w, 200, project(v, a.UserID, member))
 	})
+	mux.HandleFunc("POST /repositories/{id}/support-threads/{thread_id}/escalations", func(w http.ResponseWriter, r *http.Request) {
+		a, repo, member, ok := access(w, r)
+		if !ok {
+			return
+		}
+		if !member {
+			writeAPIError(w, 403, "support_escalation_forbidden", "only current repository collaborators may create governed work")
+			return
+		}
+		var in struct {
+			Classification     string   `json:"classification"`
+			ResourceKind       string   `json:"resource_kind"`
+			AcceptanceCriteria []string `json:"acceptance_criteria"`
+			DocumentationPath  string   `json:"documentation_path"`
+			Tasks              []struct {
+				Title            string `json:"title"`
+				Outcome          string `json:"outcome"`
+				Risk             string `json:"risk"`
+				VerificationPlan string `json:"verification_plan"`
+				AssigneeType     string `json:"assignee_type"`
+				AssigneeID       string `json:"assignee_id"`
+			} `json:"tasks"`
+			ExpectedVersion int `json:"expected_version"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		bare, err := git.Open(repo.ID)
+		if err != nil {
+			writeAPIError(w, 409, "support_escalation_base_missing", "repository default branch is required before governed work can be created")
+			return
+		}
+		base, err := bare.ReadReference("refs/heads/" + repo.DefaultBranch)
+		if err != nil || base.Symbolic {
+			writeAPIError(w, 409, "support_escalation_base_missing", "repository default branch is required before governed work can be created")
+			return
+		}
+		updated, err := store.Escalate(repo.ID, r.PathValue("thread_id"), a.UserID, in.ExpectedVersion, in.Classification, in.ResourceKind, base.Target, in.AcceptanceCriteria, func(thread supportthreads.Thread, escalationID, frozenBase string) (string, string, error) {
+			criteria := strings.Join(in.AcceptanceCriteria, "\n- ")
+			context := fmt.Sprintf("Escalated from support thread %s.\n\nUser need: %s\n\nAffected version: %s\n\nPermitted reproduction:\n- %s\n\nAcceptance criteria:\n- %s", thread.ID, thread.Goal, thread.Target.Version, strings.Join(thread.AttemptedSteps, "\n- "), criteria)
+			switch in.ResourceKind {
+			case "issue":
+				if issueStore == nil {
+					return "", "", errors.New("issue store unavailable")
+				}
+				visibility := "public"
+				if thread.Audience != "public" {
+					visibility = "repository"
+				}
+				created, createErr := issueStore.CreateEscalated(issues.Issue{RepositoryID: repo.ID, ReporterID: a.UserID, Title: thread.Title, ExpectedBehavior: thread.Goal, ObservedBehavior: thread.Body, Severity: mapUrgency(thread.Urgency), Environment: supportEnvironment(thread), ReproductionSteps: supportSteps(thread), Visibility: visibility, AffectedVersion: thread.Target.Version}, escalationID)
+				return created.ID, "/repositories/" + repo.ID + "/issues/" + created.ID, createErr
+			case "documentation_task":
+				if documentationStore == nil {
+					return "", "", errors.New("documentation store unavailable")
+				}
+				path := strings.TrimSpace(in.DocumentationPath)
+				if existing, getErr := documentationStore.GetTask(repo.ID, escalationID); getErr == nil {
+					return existing.ID, "/repositories/" + repo.ID + "/documentation/tasks/" + existing.ID, nil
+				}
+				created, createErr := documentationStore.CreateTask(docscollections.Task{ID: escalationID, RepositoryID: repo.ID, Title: thread.Title, Path: path, Branch: "docs/support-" + thread.ID[:8], BaseRevision: frozenBase, Source: docscollections.TaskSource{Kind: "support_thread", ResourceID: thread.ID, Revision: frozenBase, Label: context}, CreatedBy: a.UserID})
+				return created.ID, "/repositories/" + repo.ID + "/documentation/tasks/" + created.ID, createErr
+			case "proposal", "ordered_work":
+				if proposalStore == nil {
+					return "", "", errors.New("proposal store unavailable")
+				}
+				tasks := make([]proposals.ImplementationTaskInput, 0, len(in.Tasks))
+				for i, task := range in.Tasks {
+					tasks = append(tasks, proposals.ImplementationTaskInput{Title: task.Title, Outcome: task.Outcome, Risk: task.Risk, VerificationPlan: task.VerificationPlan, AssigneeType: task.AssigneeType, AssigneeID: task.AssigneeID, DependsOnPrevious: i > 0})
+				}
+				if len(tasks) == 0 {
+					tasks = append(tasks, proposals.ImplementationTaskInput{Title: "Plan " + thread.Title, Outcome: strings.Join(in.AcceptanceCriteria, "; "), VerificationPlan: strings.Join(in.AcceptanceCriteria, "\n"), AssigneeType: "human", AssigneeID: a.UserID})
+				}
+				origin := proposals.ReasoningOrigin{SupportThreadID: thread.ID, SupportThreadVersion: thread.Version, Revision: frozenBase, SelectedItemIDs: []string{thread.ID}, Items: []proposals.ReasoningItem{{ID: thread.ID, Kind: "support_need", Summary: thread.Goal, Status: "unresolved"}}, AnalysisStatus: in.Classification}
+				created, _, createErr := proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: repo.ID, ActorID: a.UserID, Title: thread.Title, Body: context, Origin: origin, Tasks: tasks})
+				return created.ID, "/proposals/" + repo.ID + "/" + created.ID, createErr
+			}
+			return "", "", supportthreads.ErrInvalid
+		})
+		if err != nil {
+			writeSupportError(w, err)
+			return
+		}
+		writeJSON(w, 201, project(updated, a.UserID, member))
+	})
+}
+
+func mapUrgency(value string) string {
+	if value == "urgent" || value == "high" {
+		return "high"
+	}
+	if value == "low" {
+		return "low"
+	}
+	return "medium"
+}
+func supportSteps(v supportthreads.Thread) []string {
+	if len(v.AttemptedSteps) > 0 {
+		return append([]string(nil), v.AttemptedSteps...)
+	}
+	return []string{"Follow the support thread's permitted reproduction."}
+}
+func supportEnvironment(v supportthreads.Thread) string {
+	value := strings.Trim(strings.Join([]string{v.Environment.OperatingSystem, v.Environment.Runtime, v.Environment.Deployment, v.Environment.Details}, "; "), "; ")
+	if value == "" {
+		return "See the support thread; environment details remain explicitly missing."
+	}
+	return value
 }
 
 func writeSupportError(w http.ResponseWriter, err error) {

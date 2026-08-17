@@ -52,6 +52,8 @@ type Proposal struct {
 // ReasoningOrigin is an immutable, revision-exact handoff from collaborative
 // investigation and impact analysis into implementation and review.
 type ReasoningOrigin struct {
+	SupportThreadID                string                     `json:"support_thread_id,omitempty"`
+	SupportThreadVersion           int                        `json:"support_thread_version,omitempty"`
 	RecoveryExerciseID             string                     `json:"recovery_exercise_id,omitempty"`
 	RecoveryInvestigationID        string                     `json:"recovery_investigation_id,omitempty"`
 	RecoveryFindingID              string                     `json:"recovery_finding_id,omitempty"`
@@ -388,8 +390,9 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 	isDataObservation := validID(input.Origin.DataObservationID) && input.Origin.DataObservationVersion > 0
 	isReliability := validReliabilityReference(input.Origin.ReliabilityContractID) && (validReliabilityReference(input.Origin.ReliabilityFindingID) != validReliabilityReference(input.Origin.ReliabilityImpactID))
 	isRecovery := validID(input.Origin.RecoveryExerciseID) && validID(input.Origin.RecoveryInvestigationID) && validID(input.Origin.RecoveryFindingID)
+	isSupport := validID(input.Origin.SupportThreadID) && input.Origin.SupportThreadVersion > 0
 	originCount := 0
-	for _, present := range []bool{isAssessment, isAccessibility, isDecision, isIssue, isGovernance, isRoadmap, isDataObservation, isReliability, isRecovery} {
+	for _, present := range []bool{isAssessment, isAccessibility, isDecision, isIssue, isGovernance, isRoadmap, isDataObservation, isReliability, isRecovery, isSupport} {
 		if present {
 			originCount++
 		}
@@ -421,8 +424,8 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 		if readErr != nil {
 			return Proposal{}, nil, readErr
 		}
-		if r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && ((isAccessibility && r.Proposal.Reasoning.AssessmentID == input.Origin.AssessmentID && r.Proposal.Reasoning.AccessibilityFindingID == input.Origin.AccessibilityFindingID) || (isAssessment && r.Proposal.Reasoning.AssessmentID == input.Origin.AssessmentID) || (isDecision && r.Proposal.Reasoning.DecisionID == input.Origin.DecisionID && r.Proposal.Reasoning.CommitmentVersion == input.Origin.CommitmentVersion) || (isIssue && r.Proposal.Reasoning.IssueID == input.Origin.IssueID && r.Proposal.Reasoning.ReproductionID == input.Origin.ReproductionID) || (isGovernance && r.Proposal.Reasoning.GovernanceProposalID == input.Origin.GovernanceProposalID) || (isRoadmap && r.Proposal.Reasoning.RoadmapItemID == input.Origin.RoadmapItemID && r.Proposal.Reasoning.RoadmapVersion == input.Origin.RoadmapVersion) || (isDataObservation && r.Proposal.Reasoning.DataObservationID == input.Origin.DataObservationID) || (isReliability && r.Proposal.Reasoning.ReliabilityContractID == input.Origin.ReliabilityContractID && r.Proposal.Reasoning.ReliabilityFindingID == input.Origin.ReliabilityFindingID && r.Proposal.Reasoning.ReliabilityImpactID == input.Origin.ReliabilityImpactID) || (isRecovery && r.Proposal.Reasoning.RecoveryExerciseID == input.Origin.RecoveryExerciseID && r.Proposal.Reasoning.RecoveryFindingID == input.Origin.RecoveryFindingID)) {
-			if ((isAccessibility || isIssue || isGovernance || isRoadmap || isReliability || isRecovery) && !reflect.DeepEqual(*r.Proposal.Reasoning, input.Origin)) || r.Proposal.Title != title || r.Proposal.Body != body || len(r.Tasks) != len(input.Tasks) {
+		if r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && ((isAccessibility && r.Proposal.Reasoning.AssessmentID == input.Origin.AssessmentID && r.Proposal.Reasoning.AccessibilityFindingID == input.Origin.AccessibilityFindingID) || (isAssessment && r.Proposal.Reasoning.AssessmentID == input.Origin.AssessmentID) || (isDecision && r.Proposal.Reasoning.DecisionID == input.Origin.DecisionID && r.Proposal.Reasoning.CommitmentVersion == input.Origin.CommitmentVersion) || (isIssue && r.Proposal.Reasoning.IssueID == input.Origin.IssueID && r.Proposal.Reasoning.ReproductionID == input.Origin.ReproductionID) || (isGovernance && r.Proposal.Reasoning.GovernanceProposalID == input.Origin.GovernanceProposalID) || (isRoadmap && r.Proposal.Reasoning.RoadmapItemID == input.Origin.RoadmapItemID && r.Proposal.Reasoning.RoadmapVersion == input.Origin.RoadmapVersion) || (isDataObservation && r.Proposal.Reasoning.DataObservationID == input.Origin.DataObservationID) || (isReliability && r.Proposal.Reasoning.ReliabilityContractID == input.Origin.ReliabilityContractID && r.Proposal.Reasoning.ReliabilityFindingID == input.Origin.ReliabilityFindingID && r.Proposal.Reasoning.ReliabilityImpactID == input.Origin.ReliabilityImpactID) || (isRecovery && r.Proposal.Reasoning.RecoveryExerciseID == input.Origin.RecoveryExerciseID && r.Proposal.Reasoning.RecoveryFindingID == input.Origin.RecoveryFindingID) || (isSupport && r.Proposal.Reasoning.SupportThreadID == input.Origin.SupportThreadID)) {
+			if ((isAccessibility || isIssue || isGovernance || isRoadmap || isReliability || isRecovery || isSupport) && !reflect.DeepEqual(*r.Proposal.Reasoning, input.Origin)) || r.Proposal.Title != title || r.Proposal.Body != body || len(r.Tasks) != len(input.Tasks) {
 				return Proposal{}, nil, ErrImplementationConflict
 			}
 			for i, task := range r.Tasks {

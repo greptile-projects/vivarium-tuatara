@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -71,6 +72,63 @@ func TestResolveHoldsThreadMutationBoundaryAcrossPublication(t *testing.T) {
 	}
 	if updateErr := <-updateDone; !errors.Is(updateErr, ErrConflict) {
 		t.Fatalf("concurrent update = %v", updateErr)
+	}
+}
+
+func TestEscalationRetryReconcilesDurablePendingIdentity(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, err := s.Create(Thread{RepositoryID: "repo", AuthorID: "maintainer", Title: "Gap", Body: "Details", Target: Target{Kind: "package", Label: "sdk", Version: "3.2"}, Goal: "Make retries safe", AttemptedSteps: []string{"retry"}, Urgency: "high", Audience: "maintainers", ContactPreferences: ContactPreferences{ReplyInThread: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoDir := filepath.Join(s.root, "repo")
+	identities := map[string]bool{}
+	bases := []string{}
+	publishCalls := 0
+	first := true
+	publish := func(_ Thread, escalationID, baseRevision string) (string, string, error) {
+		publishCalls++
+		identities[escalationID] = true
+		bases = append(bases, baseRevision)
+		if first {
+			first = false
+			if chmodErr := os.Chmod(repoDir, 0500); chmodErr != nil {
+				return "", "", chmodErr
+			}
+		}
+		return escalationID, "/issues/" + escalationID, nil
+	}
+	_, err = s.Escalate("repo", v.ID, "maintainer", v.Version, "defect", "issue", strings.Repeat("a", 40), []string{"retry once"}, publish)
+	if chmodErr := os.Chmod(repoDir, 0700); chmodErr != nil {
+		t.Fatal(chmodErr)
+	}
+	if err == nil {
+		t.Fatal("forced finalization failure succeeded")
+	}
+	pending, readErr := s.Get("repo", v.ID)
+	if readErr != nil || pending.Version != v.Version+1 || len(pending.Escalations) != 1 || pending.Escalations[0].Status != "pending" {
+		t.Fatalf("pending = %#v, %v", pending, readErr)
+	}
+	completed, err := s.Escalate("repo", v.ID, "maintainer", v.Version, "defect", "issue", strings.Repeat("b", 40), []string{"retry once"}, publish)
+	if err != nil || completed.Version != v.Version+2 || completed.Escalations[0].Status != "published" || completed.Escalations[0].ResourceID != pending.Escalations[0].ID {
+		t.Fatalf("completed = %#v, %v", completed, err)
+	}
+	if len(identities) != 1 {
+		t.Fatalf("published identities = %#v", identities)
+	}
+	if len(bases) != 2 || bases[0] != strings.Repeat("a", 40) || bases[1] != bases[0] {
+		t.Fatalf("publication bases = %#v", bases)
+	}
+	replayed, err := s.Escalate("repo", v.ID, "maintainer", v.Version, "defect", "issue", strings.Repeat("c", 40), []string{"retry once"}, publish)
+	if err != nil || replayed.Version != completed.Version || replayed.Escalations[0].ResourceID != completed.Escalations[0].ResourceID {
+		t.Fatalf("lost-response replay = %#v, %v", replayed, err)
+	}
+	if publishCalls != 2 {
+		t.Fatalf("lost-response replay called publish again: %d", publishCalls)
+	}
+	refreshed, err := s.Escalate("repo", v.ID, "maintainer", completed.Version, "defect", "issue", strings.Repeat("d", 40), []string{"retry once"}, publish)
+	if err != nil || refreshed.Version != completed.Version || refreshed.Escalations[0].ResourceID != completed.Escalations[0].ResourceID || publishCalls != 2 {
+		t.Fatalf("refreshed replay = %#v, calls = %d, err = %v", refreshed, publishCalls, err)
 	}
 }
 

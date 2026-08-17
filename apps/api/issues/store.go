@@ -325,6 +325,16 @@ func newID() string {
 }
 
 func (s *Store) Create(v Issue) (Issue, error) {
+	return s.create(v, "")
+}
+
+// CreateEscalated makes the support escalation identity the issue creation
+// idempotency key, so reconciliation cannot publish a second issue.
+func (s *Store) CreateEscalated(v Issue, escalationID string) (Issue, error) {
+	return s.create(v, escalationID)
+}
+
+func (s *Store) create(v Issue, requestedID string) (Issue, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v.Title, v.ExpectedBehavior, v.ObservedBehavior, v.Environment = strings.TrimSpace(v.Title), strings.TrimSpace(v.ExpectedBehavior), strings.TrimSpace(v.ObservedBehavior), strings.TrimSpace(v.Environment)
@@ -340,8 +350,21 @@ func (s *Store) Create(v Issue) (Issue, error) {
 	if err := validateAttachments(v.Attachments); err != nil {
 		return Issue{}, err
 	}
+	if requestedID != "" {
+		if len(requestedID) != 32 {
+			return Issue{}, ErrInvalid
+		}
+		if existing, err := s.read(v.RepositoryID, requestedID); err == nil {
+			return existing, nil
+		} else if !errors.Is(err, ErrNotFound) {
+			return Issue{}, err
+		}
+	}
 	now := time.Now().UTC()
-	v.ID, v.Status, v.Version, v.CreatedAt, v.UpdatedAt = newID(), "open", 1, now, now
+	if requestedID == "" {
+		requestedID = newID()
+	}
+	v.ID, v.Status, v.Version, v.CreatedAt, v.UpdatedAt = requestedID, "open", 1, now, now
 	for i := range v.Attachments {
 		v.Attachments[i].ID, v.Attachments[i].CreatedAt = newID(), now
 	}
