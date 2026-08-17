@@ -56,6 +56,218 @@ type IssuedApplicationCredential struct {
 	Secret string `json:"secret"`
 }
 
+// IntegrationWork is the review bridge between an approved consumer application
+// and ordinary project work. Preload is declarative and deliberately contains no
+// application credential or inaccessible contract payload.
+type IntegrationWork struct {
+	ID                   string                 `json:"id"`
+	ApplicationID        string                 `json:"application_id"`
+	ProducerRepositoryID string                 `json:"producer_repository_id"`
+	ConsumerRepositoryID string                 `json:"consumer_repository_id"`
+	ConsumerRevision     string                 `json:"consumer_revision"`
+	ContractID           string                 `json:"contract_id"`
+	ContractVersion      int                    `json:"contract_version"`
+	Kind                 string                 `json:"kind"`
+	OwnerType            string                 `json:"owner_type"`
+	OwnerID              string                 `json:"owner_id"`
+	Title                string                 `json:"title"`
+	Preload              IntegrationPreload     `json:"preload"`
+	Candidates           []IntegrationCandidate `json:"candidates"`
+	CreatedBy            string                 `json:"created_by"`
+	CreatedAt            time.Time              `json:"created_at"`
+}
+type IntegrationPreload struct {
+	DefinitionPath      string   `json:"definition_path"`
+	DefinitionCommit    string   `json:"definition_commit"`
+	SDKs                []Link   `json:"sdks"`
+	Examples            []Link   `json:"examples"`
+	Environments        []string `json:"sandbox_environments"`
+	Operations          []string `json:"sandbox_operations"`
+	SyntheticOnly       bool     `json:"synthetic_only"`
+	CredentialsIncluded bool     `json:"credentials_included"`
+}
+type IntegrationScenario struct {
+	Name      string `json:"name"`
+	OwnerSide string `json:"owner_side"`
+	Command   string `json:"command"`
+}
+type IntegrationEvidence struct {
+	ID              string             `json:"id"`
+	Scenario        string             `json:"scenario"`
+	Side            string             `json:"side"`
+	Status          string             `json:"status"`
+	Requests        []string           `json:"requests"`
+	Responses       []string           `json:"responses"`
+	Logs            []string           `json:"logs"`
+	Artifacts       []EvidenceArtifact `json:"artifacts"`
+	CoveragePercent float64            `json:"coverage_percent"`
+	CostUnits       int                `json:"cost_units"`
+	AuthoredBy      string             `json:"authored_by"`
+	CreatedAt       time.Time          `json:"created_at"`
+}
+type EvidenceArtifact struct {
+	Name   string `json:"name"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+type IntegrationCandidate struct {
+	ID                    string                `json:"id"`
+	ProducerPullRequestID string                `json:"producer_pull_request_id"`
+	ProducerRevision      string                `json:"producer_revision"`
+	ConsumerPullRequestID string                `json:"consumer_pull_request_id"`
+	ConsumerRevision      string                `json:"consumer_revision"`
+	Scenarios             []IntegrationScenario `json:"scenarios"`
+	Evidence              []IntegrationEvidence `json:"evidence"`
+	CreatedBy             string                `json:"created_by"`
+	CreatedAt             time.Time             `json:"created_at"`
+}
+
+func (s *Store) CreateIntegrationWork(app Application, actor, consumerRepo, consumerRevision, kind, ownerType, ownerID, title string, preload IntegrationPreload) (IntegrationWork, error) {
+	var out IntegrationWork
+	err := s.lock(func() error {
+		if app.Status != "approved" || app.ApprovalExpiresAt == nil || !app.ApprovalExpiresAt.After(s.now()) || consumerRepo == "" || consumerRevision == "" || strings.TrimSpace(title) == "" || !map[string]bool{"task": true, "session": true, "workspace": true}[kind] || !map[string]bool{"human": true, "agent": true}[ownerType] || strings.TrimSpace(ownerID) == "" {
+			return ErrInvalid
+		}
+		now := s.now()
+		out = IntegrationWork{ID: randomID(), ApplicationID: app.ID, ProducerRepositoryID: app.RepositoryID, ConsumerRepositoryID: consumerRepo, ConsumerRevision: consumerRevision, ContractID: app.ContractID, ContractVersion: app.ContractVersion, Kind: kind, OwnerType: ownerType, OwnerID: ownerID, Title: strings.TrimSpace(title), Preload: preload, Candidates: []IntegrationCandidate{}, CreatedBy: actor, CreatedAt: now}
+		return s.writeIntegrationWork(out)
+	})
+	return out, err
+}
+func (s *Store) ListIntegrationWork(applicationID string) ([]IntegrationWork, error) {
+	out := []IntegrationWork{}
+	err := s.lock(func() error {
+		entries, e := os.ReadDir(filepath.Join(s.root, "integration-work"))
+		if os.IsNotExist(e) {
+			return nil
+		}
+		if e != nil {
+			return e
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			var v IntegrationWork
+			b, e := os.ReadFile(filepath.Join(s.root, "integration-work", entry.Name()))
+			if e != nil {
+				return e
+			}
+			if e = json.Unmarshal(b, &v); e != nil {
+				return e
+			}
+			if v.ApplicationID == applicationID {
+				out = append(out, v)
+			}
+		}
+		return nil
+	})
+	return out, err
+}
+func (s *Store) GetIntegrationWork(id string) (IntegrationWork, error) {
+	var out IntegrationWork
+	err := s.lock(func() error { var e error; out, e = s.readIntegrationWork(id); return e })
+	return out, err
+}
+func (s *Store) AddIntegrationCandidate(workID, actor string, candidate IntegrationCandidate) (IntegrationWork, error) {
+	var out IntegrationWork
+	err := s.lock(func() error {
+		v, e := s.readIntegrationWork(workID)
+		if e != nil {
+			return e
+		}
+		if len(candidate.Scenarios) == 0 || len(candidate.Scenarios) > 32 {
+			return ErrInvalid
+		}
+		for _, scenario := range candidate.Scenarios {
+			text := strings.ToLower(scenario.Name + " " + scenario.Command)
+			if strings.TrimSpace(scenario.Name) == "" || len(scenario.Name) > 120 || strings.TrimSpace(scenario.Command) == "" || len(scenario.Command) > 1000 || !map[string]bool{"producer": true, "consumer": true}[scenario.OwnerSide] {
+				return ErrInvalid
+			}
+			for _, marker := range []string{"authorization:", "bearer ", "password=", "token=", "secret=", "private key", "vva_"} {
+				if strings.Contains(text, marker) {
+					return ErrInvalid
+				}
+			}
+		}
+		candidate.ID = randomID()
+		candidate.CreatedBy = actor
+		candidate.CreatedAt = s.now()
+		candidate.Evidence = []IntegrationEvidence{}
+		v.Candidates = append(v.Candidates, candidate)
+		out = v
+		return s.writeIntegrationWork(v)
+	})
+	return out, err
+}
+func (s *Store) AddIntegrationEvidence(workID, candidateID, actor string, evidence IntegrationEvidence) (IntegrationWork, error) {
+	var out IntegrationWork
+	err := s.lock(func() error {
+		v, e := s.readIntegrationWork(workID)
+		if e != nil {
+			return e
+		}
+		for i := range v.Candidates {
+			if v.Candidates[i].ID != candidateID {
+				continue
+			}
+			if !slices.ContainsFunc(v.Candidates[i].Scenarios, func(x IntegrationScenario) bool { return x.Name == evidence.Scenario && x.OwnerSide == evidence.Side }) || !map[string]bool{"passed": true, "failed": true}[evidence.Status] || evidence.CoveragePercent < 0 || evidence.CoveragePercent > 100 || evidence.CostUnits < 0 {
+				return ErrInvalid
+			}
+			evidence.ID = randomID()
+			evidence.AuthoredBy = actor
+			evidence.CreatedAt = s.now()
+			v.Candidates[i].Evidence = append(v.Candidates[i].Evidence, evidence)
+			out = v
+			return s.writeIntegrationWork(v)
+		}
+		return ErrNotFound
+	})
+	return out, err
+}
+func (s *Store) readIntegrationWork(id string) (IntegrationWork, error) {
+	var v IntegrationWork
+	b, e := os.ReadFile(filepath.Join(s.root, "integration-work", id+".json"))
+	if os.IsNotExist(e) {
+		return v, ErrNotFound
+	}
+	if e != nil {
+		return v, e
+	}
+	e = json.Unmarshal(b, &v)
+	return v, e
+}
+func (s *Store) writeIntegrationWork(v IntegrationWork) error {
+	dir := filepath.Join(s.root, "integration-work")
+	if e := os.MkdirAll(dir, 0700); e != nil {
+		return e
+	}
+	b, e := json.MarshalIndent(v, "", "  ")
+	if e != nil {
+		return e
+	}
+	f, e := os.CreateTemp(dir, ".integration-work-")
+	if e != nil {
+		return e
+	}
+	name := f.Name()
+	defer os.Remove(name)
+	if e = f.Chmod(0600); e == nil {
+		_, e = f.Write(b)
+	}
+	if e == nil {
+		e = f.Sync()
+	}
+	closeErr := f.Close()
+	if e == nil {
+		e = closeErr
+	}
+	if e == nil {
+		e = os.Rename(name, filepath.Join(dir, v.ID+".json"))
+	}
+	return e
+}
+
 func (s *Store) CreateApplication(repo, contract, owner, name, project string, version int, environments, capabilities []string) (Application, error) {
 	var out Application
 	err := s.lock(func() error {

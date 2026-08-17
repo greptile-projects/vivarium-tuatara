@@ -93,3 +93,42 @@ func TestApplicationCredentialEnforcesAndResetsRequestWindow(t *testing.T) {
 		t.Fatalf("window did not reset: %v", err)
 	}
 }
+
+func TestIntegrationWorkFreezesReviewCandidatesAndEvidence(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := store.CreateApplication("producer", "contract", "consumer-owner", "client", "", 3, []string{"sandbox"}, []string{"listWidgets"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err = store.DecideApplication(app.ID, "producer-owner", "approved", "bounded adoption", app.RequestedCapabilities, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	preload := IntegrationPreload{DefinitionPath: "openapi.json", DefinitionCommit: "abc", Environments: app.Environments, Operations: app.ApprovedCapabilities, SyntheticOnly: true, CredentialsIncluded: false}
+	work, err := store.CreateIntegrationWork(app, "consumer-owner", "consumer", "111", "workspace", "agent", "agent-1", "Adopt widgets", preload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if work.Preload.CredentialsIncluded || work.ContractVersion != 3 {
+		t.Fatalf("unsafe or wrong preload: %#v", work.Preload)
+	}
+	candidate, err := store.AddIntegrationCandidate(work.ID, "producer-owner", IntegrationCandidate{ProducerPullRequestID: "p1", ProducerRevision: "222", ConsumerPullRequestID: "p2", ConsumerRevision: "333", Scenarios: []IntegrationScenario{{Name: "provider conformance", OwnerSide: "producer", Command: "test-provider"}, {Name: "client tests", OwnerSide: "consumer", Command: "test-client"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateID := candidate.Candidates[0].ID
+	result, err := store.AddIntegrationEvidence(work.ID, candidateID, "reviewer", IntegrationEvidence{Scenario: "client tests", Side: "consumer", Status: "passed", Logs: []string{"12 tests passed"}, Artifacts: []EvidenceArtifact{{Name: "coverage.json", SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Size: 12}}, CoveragePercent: 91.2, CostUnits: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result.Candidates[0].Evidence[0]; got.AuthoredBy != "reviewer" || got.CoveragePercent != 91.2 {
+		t.Fatalf("evidence provenance lost: %#v", got)
+	}
+	listed, err := store.ListIntegrationWork(app.ID)
+	if err != nil || len(listed) != 1 || len(listed[0].Candidates[0].Evidence) != 1 {
+		t.Fatalf("durable work missing: %#v, %v", listed, err)
+	}
+}

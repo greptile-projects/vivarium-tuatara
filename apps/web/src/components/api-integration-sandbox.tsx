@@ -28,6 +28,24 @@ type App = {
   credentials: { prefix: string; expires_at: string; revoked_at?: string }[];
   events: { type: string; actor_id: string; detail: string; at: string }[];
 };
+type IntegrationWork = {
+  id: string;
+  application_id: string;
+  title: string;
+  kind: "task" | "session" | "workspace";
+  owner_type: "human" | "agent";
+  owner_id: string;
+  consumer_repository_id: string;
+  consumer_revision: string;
+  contract_version: number;
+  preload: {
+    definition_path: string;
+    sandbox_operations: string[];
+    synthetic_only: boolean;
+    credentials_included: boolean;
+  };
+  candidates: { id: string; evidence: { status: string }[] }[];
+};
 const field =
   "min-h-10 rounded-lg border border-[var(--line-strong)] bg-white px-3 text-sm";
 export function APIIntegrationSandbox({
@@ -40,6 +58,7 @@ export function APIIntegrationSandbox({
     [contractID, setContractID] = useState(""),
     [apps, setApps] = useState<App[]>([]),
     [issued, setIssued] = useState<{ applicationID: string; secret: string }>(),
+    [work, setWork] = useState<Record<string, IntegrationWork[]>>({}),
     [inspections, setInspections] = useState<Record<string, unknown>>({}),
     [error, setError] = useState("");
   const contract = contracts.find((x) => x.id === contractID),
@@ -61,6 +80,17 @@ export function APIIntegrationSandbox({
           token,
         );
         setApps(a.applications);
+        const entries = await Promise.all(
+          a.applications.map(async (application) => {
+            const response = await api<{ integration_work: IntegrationWork[] }>(
+              `/repositories/${repositoryID}/api-contracts/${id}/applications/${application.id}/integration-work`,
+              {},
+              token,
+            );
+            return [application.id, response.integration_work] as const;
+          }),
+        );
+        setWork(Object.fromEntries(entries));
       }
       setError("");
     } catch (e) {
@@ -164,6 +194,32 @@ export function APIIntegrationSandbox({
       );
     const body: unknown = await response.json();
     setInspections((current) => ({ ...current, [app.id]: body }));
+  }
+  async function createWork(e: FormEvent<HTMLFormElement>, app: App) {
+    e.preventDefault();
+    if (!token || !user) return;
+    const f = new FormData(e.currentTarget);
+    try {
+      await api(
+        `/repositories/${repositoryID}/api-contracts/${contractID}/applications/${app.id}/integration-work`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            title: f.get("title"),
+            kind: f.get("kind"),
+            owner_type: f.get("owner_type"),
+            owner_id: f.get("owner_id") || user.id,
+            consumer_repository_id: f.get("consumer_repository_id"),
+            consumer_revision: f.get("consumer_revision"),
+          }),
+        },
+        token,
+      );
+      e.currentTarget.reset();
+      await load();
+    } catch (x) {
+      setError(x instanceof Error ? x.message : "Work creation failed");
+    }
   }
   return (
     <main id="main-content" className="space-y-6">
@@ -345,6 +401,41 @@ export function APIIntegrationSandbox({
                 )}
               </div>
             )}
+          {app.status === "approved" && (
+            <div className="mt-5 border-t border-[var(--line)] pt-4">
+              <h3 className="text-sm font-semibold">Reviewable adoption work</h3>
+              <p className="mt-1 text-xs text-[var(--muted)]">
+                Freeze a consumer commit with the exact contract and synthetic
+                sandbox configuration. Credentials are never preloaded.
+              </p>
+              <form
+                onSubmit={(event) => createWork(event, app)}
+                className="mt-3 grid gap-2 md:grid-cols-3"
+              >
+                <input name="title" required placeholder="Work title" className={field} />
+                <input name="consumer_repository_id" required placeholder="Consumer repository ID" className={field} />
+                <input name="consumer_revision" required placeholder="Exact commit SHA" className={field} />
+                <select name="kind" aria-label="Work type" className={field}>
+                  <option value="task">Task</option><option value="session">Session</option><option value="workspace">Workspace</option>
+                </select>
+                <select name="owner_type" aria-label="Owner type" className={field}>
+                  <option value="human">Human-owned</option><option value="agent">Agent-owned</option>
+                </select>
+                <input name="owner_id" placeholder={`Owner ID (default ${user?.id ?? "you"})`} className={field} />
+                <div><Button>Create frozen work</Button></div>
+              </form>
+              <ul className="mt-3 space-y-2">
+                {(work[app.id] ?? []).map((item) => (
+                  <li key={item.id} className="rounded-lg bg-[var(--surface-soft)] p-3 text-xs">
+                    <strong>{item.title}</strong> · {item.kind} · {item.owner_type}:{item.owner_id}
+                    <span className="block text-[var(--muted)]">
+                      Contract v{item.contract_version} · {item.consumer_repository_id}@{item.consumer_revision.slice(0, 12)} · {item.preload.definition_path} · {item.candidates.length} linked candidate(s)
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <details className="mt-3 text-xs">
             <summary>Attributable history and recovery</summary>
             {app.events.map((x, i) => (

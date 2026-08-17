@@ -12,6 +12,17 @@
   request/response data, contract quotas, and deterministic `rate_limit`, `timeout`, or `server_error`
   results. Revoke, exposure, and ownership endpoints revoke secrets; ownership transfer also resets consent.
   These credentials authenticate no other API, Git, repository, deployment, environment, or production data.
+- `POST|GET .../{application_id}/integration-work` creates and lists human- or agent-owned `task`,
+  `session`, or `workspace` adoption records. Creation requires current write participation in the named
+  consumer repository and freezes its exact commit together with the registered contract definition,
+  SDK/example links, approved operations, and synthetic sandbox configuration. The preload projection
+  always reports `credentials_included: false`.
+- `POST .../integration-work/{work_id}/candidates` binds an ordinary producer pull and consumer pull at
+  their current exact source commits and names producer-owned conformance and consumer-owned test scenarios.
+  `POST .../candidates/{candidate_id}/evidence` appends immutable scenario results with sanitized request,
+  response, and log summaries, checksum-only artifact metadata, coverage, cost, and human authorship.
+  Evidence is capped at 128 KiB, artifact metadata at 32 MiB per referenced artifact, and credential-shaped
+  text is rejected. These records add review provenance but grant no Git, check, workspace, or merge authority.
 
 ## Approved-agent evaluation
 
