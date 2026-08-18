@@ -783,19 +783,17 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 			writeAPIError(w, 422, "debugging_delivery_invalid", "validation requires the linked merged pull")
 			return
 		}
+		rel, e := releaseStore.Get(repo.ID, in.ReleaseID)
+		if e != nil || !debugContains(rel.Inclusions.PullRequestIDs, pull.ID) {
+			writeAPIError(w, 422, "debugging_release_invalid", "release must include the linked integrated pull")
+			return
+		}
 		runs, e := checkStore.List(repo.ID, pull.ID)
 		if e != nil {
 			writeAPIError(w, 422, "debugging_checks_invalid", "check evidence unavailable")
 			return
 		}
-		selected := map[string]checkruns.Run{}
-		for _, run := range runs {
-			for _, id := range in.CheckRunIDs {
-				if run.ID == id && run.CommitID == pull.SourceCommitID && run.State == "completed" && run.ExitCode != nil && *run.ExitCode == 0 {
-					selected[id] = run
-				}
-			}
-		}
+		selected := debugPassingChecks(runs, in.CheckRunIDs, rel.CommitID)
 		if len(selected) != len(in.CheckRunIDs) || len(selected) == 0 {
 			writeAPIError(w, 422, "debugging_checks_invalid", "all selected checks must pass at the linked pull revision")
 			return
@@ -821,11 +819,6 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 		}
 		if len(matchedScenarioHashes) != len(scenarioHashes) || len(ordinary) == 0 {
 			writeAPIError(w, 422, "debugging_checks_incomplete", "the frozen scenario and ordinary required checks must both pass")
-			return
-		}
-		rel, e := releaseStore.Get(repo.ID, in.ReleaseID)
-		if e != nil || !debugContains(rel.Inclusions.PullRequestIDs, pull.ID) {
-			writeAPIError(w, 422, "debugging_release_invalid", "release must include the linked integrated pull")
 			return
 		}
 		dep, e := deploymentStore.GetPromotion(repo.ID, in.DeploymentID)
@@ -865,7 +858,7 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 		needsAction := in.Outcome == "failed" && oneOf(in.Action, "pause", "restore")
 		out, updated, e := workspaces.UpdateRepairWork(repo.ID, current.ID, work.ID, actorID(c), in.ExpectedVersion, func(x *debugworkspaces.RepairWork) error {
 			x.PullRequestID = pull.ID
-			x.PullRevision = pull.SourceCommitID
+			x.PullRevision = rel.CommitID
 			x.ScenarioCheckRunIDs = scenarioRuns
 			x.RequiredCheckRunIDs = ordinary
 			x.ReleaseID = rel.ID
@@ -928,6 +921,17 @@ func debugContains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+func debugPassingChecks(runs []checkruns.Run, ids []string, deployedCommit string) map[string]checkruns.Run {
+	selected := map[string]checkruns.Run{}
+	for _, run := range runs {
+		for _, id := range ids {
+			if run.ID == id && run.CommitID == deployedCommit && run.State == "completed" && run.ExitCode != nil && *run.ExitCode == 0 {
+				selected[id] = run
+			}
+		}
+	}
+	return selected
 }
 func oneOf(v string, values ...string) bool {
 	for _, x := range values {

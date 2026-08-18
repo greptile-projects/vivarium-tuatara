@@ -66,7 +66,8 @@
   participant-only pause or known-good rollback boundary, or mark the diagnosis reopened. Investigators and task
   agents gain no review, merge, release, deployment, or environment authority. Publication reserves the repair
   identity before proposal/task creation so stale CAS requests cannot orphan ordinary work. Successful validation
-  requires a succeeded deployment. Failed-measure actions persist an intent before execution; rollback retries reuse
+  requires a succeeded deployment, and both scenario and ordinary checks must have run against that deployment's exact
+  release commit rather than only the pre-integration pull source. Failed-measure actions persist an intent before execution; rollback retries reuse
   the exact existing recovery and post-action record races return an explicit reconciliation-pending response.
 
 ## Consumer API applications and sandbox
