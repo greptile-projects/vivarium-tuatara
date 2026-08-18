@@ -603,12 +603,12 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 				writeAPIError(w, 422, "replay_commands_invalid", "every outcome must come from the selected workspace")
 				return
 			}
-			for _, cmd := range scenario.Commands {
-				d, ok := declared[cmd.Name]
-				if ok && d.Command == cmd.SHA256 && o.CommandSHA256 == cmd.SHA256 {
-					selected[cmd.Name] = o
-				}
+			commandName, matched := replayCommandForOutcome(scenario.Commands, declared, o)
+			if !matched {
+				writeAPIError(w, 422, "replay_commands_invalid", "every outcome must match a command frozen in the replay scenario")
+				return
 			}
+			selected[commandName] = o
 			in.Attempt.Outputs = append(in.Attempt.Outputs, o.Output)
 		}
 		in.Attempt.CommitID = dw.CommitID
@@ -646,6 +646,16 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 
 func canReadReplayWorkspace(workspace devworkspaces.Workspace, actor, repositoryOwner string) bool {
 	return workspace.Policy.Sharing != "private" || actor == workspace.CreatorID || actor == repositoryOwner
+}
+
+func replayCommandForOutcome(commands []debugworkspaces.ReplayCommand, declared map[string]devworkspaces.ExperimentCommand, outcome devworkspaces.CommandOutcome) (string, bool) {
+	for _, command := range commands {
+		definition, ok := declared[command.Name]
+		if ok && definition.Command == command.SHA256 && outcome.CommandSHA256 == command.SHA256 {
+			return command.Name, true
+		}
+	}
+	return "", false
 }
 
 func validateDebugContext(v *debugworkspaces.Workspace, releasesStore *releases.Store, deploymentStore *deployments.Store, issueStore *issues.Store, incidentStore *incidents.Store, supportStore *supportthreads.Store, objectiveStore *serviceobjectives.Store, packageStore *packages.Store, infrastructureStore *infrastructure.Store) error {

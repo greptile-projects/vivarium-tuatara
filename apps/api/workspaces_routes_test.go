@@ -64,6 +64,22 @@ func TestPrivateReplayWorkspaceEvidenceRequiresWorkspaceAudience(t *testing.T) {
 	}
 }
 
+func TestReplayOutputRequiresFrozenScenarioCommand(t *testing.T) {
+	hash := strings.Repeat("a", 64)
+	commands := []debugworkspaces.ReplayCommand{{Name: "replay", SHA256: hash}}
+	declared := map[string]workspaces.ExperimentCommand{"replay": {Name: "replay", Command: hash}}
+	if name, ok := replayCommandForOutcome(commands, declared, workspaces.CommandOutcome{CommandSHA256: hash}); !ok || name != "replay" {
+		t.Fatal("matching frozen command was rejected")
+	}
+	if _, ok := replayCommandForOutcome(commands, declared, workspaces.CommandOutcome{CommandSHA256: strings.Repeat("b", 64)}); ok {
+		t.Fatal("unmatched workspace output gained replay provenance")
+	}
+	declared["replay"] = workspaces.ExperimentCommand{Name: "replay", Command: strings.Repeat("c", 64)}
+	if _, ok := replayCommandForOutcome(commands, declared, workspaces.CommandOutcome{CommandSHA256: hash}); ok {
+		t.Fatal("command absent from the exact workspace definition was accepted")
+	}
+}
+
 func TestReproductionSecretScreeningRejectsCredentialFormats(t *testing.T) {
 	tests := []struct{ name, body string }{
 		{"input.txt", "GITHUB_TOKEN=ghp_example"},
