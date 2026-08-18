@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -120,11 +121,50 @@ func (s *Store) write(kind, scope string, v record) error {
 	if e != nil {
 		return e
 	}
-	tmp := s.file(kind, scope) + ".tmp"
-	if e = os.WriteFile(tmp, b, 0600); e == nil {
-		e = os.Rename(tmp, s.file(kind, scope))
+	tmp, e := os.CreateTemp(s.root, ".design-governance-*")
+	if e != nil {
+		return e
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if e = tmp.Chmod(0600); e == nil {
+		_, e = tmp.Write(b)
+	}
+	if e == nil {
+		e = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); e == nil {
+		e = closeErr
+	}
+	if e == nil {
+		e = os.Rename(name, s.file(kind, scope))
+	}
+	if e == nil {
+		var dir *os.File
+		dir, e = os.Open(s.root)
+		if e == nil {
+			e = dir.Sync()
+			if closeErr := dir.Close(); e == nil {
+				e = closeErr
+			}
+		}
 	}
 	return e
+}
+
+func (s *Store) lockScope(kind, scope string) (func(), error) {
+	lock, err := os.OpenFile(s.file(kind, scope)+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		_ = lock.Close()
+		return nil, err
+	}
+	return func() {
+		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+		_ = lock.Close()
+	}, nil
 }
 func validPolicy(p Policy) bool {
 	if (p.ScopeKind != "repository" && p.ScopeKind != "organization") || p.ScopeID == "" || strings.TrimSpace(p.Name) == "" || len(p.Selectors) == 0 || len(p.Requirements) == 0 || p.ExceptionMaxHours < 1 || p.ExceptionMaxHours > 720 {
@@ -150,6 +190,11 @@ func (s *Store) CreatePolicy(p Policy) (Policy, error) {
 	if !validPolicy(p) {
 		return p, ErrInvalid
 	}
+	unlock, e := s.lockScope(p.ScopeKind, p.ScopeID)
+	if e != nil {
+		return p, e
+	}
+	defer unlock()
 	v, e := s.read(p.ScopeKind, p.ScopeID)
 	if e != nil {
 		return p, e
@@ -199,6 +244,11 @@ func (s *Store) Accept(repo, org string, a Acceptance) (Acceptance, error) {
 	if !allowed || a.PolicyVersion != p.Version || len(a.Revision) != 40 || (a.Decision != "accepted" && a.Decision != "rejected") || strings.TrimSpace(a.Rationale) == "" {
 		return a, ErrInvalid
 	}
+	unlock, e := s.lockScope("repository", repo)
+	if e != nil {
+		return a, e
+	}
+	defer unlock()
 	v, e := s.read("repository", repo)
 	if e != nil {
 		return a, e
@@ -219,6 +269,11 @@ func (s *Store) Except(repo, org string, x Exception) (Exception, error) {
 	if x.ActorID != p.CreatedBy || x.PolicyVersion != p.Version || len(x.Revision) != 40 || strings.TrimSpace(x.Reason) == "" || !x.ExpiresAt.After(s.now()) || x.ExpiresAt.After(s.now().Add(time.Duration(p.ExceptionMaxHours)*time.Hour)) {
 		return x, ErrInvalid
 	}
+	unlock, e := s.lockScope("repository", repo)
+	if e != nil {
+		return x, e
+	}
+	defer unlock()
 	v, e := s.read("repository", repo)
 	if e != nil {
 		return x, e

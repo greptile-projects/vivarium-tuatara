@@ -1,7 +1,9 @@
 package designgovernance
 
 import (
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -40,6 +42,39 @@ func TestReadinessRequiresCurrentScopedAcceptanceAndReportsExpiry(t *testing.T) 
 	excepted, _ := s.Evaluate(repo, "", pull, strings.Repeat("b", 40), []string{"ui/settings/page.tsx"}, nil, nil, nil, nil)
 	if !excepted.Ready || len(excepted.ActiveExceptions) != 1 || excepted.Diagnostics[0].Kind != "expiring_exception" {
 		t.Fatalf("expected explicit expiring exception: %#v", excepted)
+	}
+}
+
+func TestSharedRootConcurrentPoliciesDoNotLoseSuccessfulWrites(t *testing.T) {
+	root := t.TempDir()
+	first, _ := New(root)
+	second, _ := New(root)
+	repo, owner := strings.Repeat("a", 32), strings.Repeat("b", 32)
+	stores := []*Store{first, second}
+	const count = 40
+	var wg sync.WaitGroup
+	errs := make(chan error, count)
+	for i := 0; i < count; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			_, err := stores[index%len(stores)].CreatePolicy(Policy{ScopeKind: "repository", ScopeID: repo, Name: fmt.Sprintf("policy-%d", index), Selectors: []Selector{{Kind: "path", Value: fmt.Sprintf("ui/%d", index)}}, Requirements: []Requirement{{Role: "design_owner", ApproverIDs: []string{owner}}}, ExceptionMaxHours: 24, CreatedBy: owner})
+			errs <- err
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	policies, err := first.Policies("repository", repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(policies) != count {
+		t.Fatalf("persisted %d successful writes, want %d", len(policies), count)
 	}
 }
 

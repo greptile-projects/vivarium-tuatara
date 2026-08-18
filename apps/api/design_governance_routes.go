@@ -38,6 +38,10 @@ func registerDesignGovernanceRoutes(mux *http.ServeMux, repos *repositories.Stor
 				continue
 			}
 			currentPreview = true
+			if c.Status != "passed" {
+				diagnostics = append(diagnostics, designgovernance.Diagnostic{Kind: "failed_interface_check", Severity: "blocking", Message: "A current interface check did not pass.", ResourceID: c.ID})
+				continue
+			}
 			journeys = append(journeys, c.Journey)
 			components = append(components, c.Coverage...)
 			for _, d := range c.Differences {
@@ -212,10 +216,41 @@ func registerDesignGovernanceRoutes(mux *http.ServeMux, repos *repositories.Stor
 			writeAPIError(w, 404, "release_not_found", "release candidate not found")
 			return
 		}
-		out, e := governance.Evaluate(release.RepositoryID, repoOrg(release.RepositoryID), "", release.CommitID, release.ChangedPaths, nil, nil, nil, []designgovernance.Diagnostic{{Kind: "release_evidence_scope", Severity: "warning", Message: "Release readiness preserves pull-bound acceptance; a release does not create new design authority."}})
-		if e != nil {
-			writeAPIError(w, 500, "design_governance_unavailable", "design readiness is unavailable")
-			return
+		out := designgovernance.Readiness{Ready: true, Revision: release.CommitID, Policies: []designgovernance.Policy{}, Acceptances: []designgovernance.Acceptance{}, ActiveExceptions: []designgovernance.Exception{}, Diagnostics: []designgovernance.Diagnostic{{Kind: "release_evidence_scope", Severity: "warning", Message: "Release readiness preserves included pull-bound acceptance; a release does not create new design authority."}}, Authority: "Design acceptance is evidence only and grants no code review, merge, release, deployment, or repository authority."}
+		if len(release.Inclusions.PullRequestIDs) == 0 {
+			var e error
+			out, e = governance.Evaluate(release.RepositoryID, repoOrg(release.RepositoryID), "", release.CommitID, release.ChangedPaths, nil, nil, nil, out.Diagnostics)
+			if e != nil {
+				writeAPIError(w, 500, "design_governance_unavailable", "design readiness is unavailable")
+				return
+			}
+		} else {
+			for _, pullID := range release.Inclusions.PullRequestIDs {
+				included, pullErr := pulls.Get(release.RepositoryID, pullID)
+				if pullErr != nil {
+					writeAPIError(w, 500, "design_governance_unavailable", "included pull evidence is unavailable")
+					return
+				}
+				includedChanges, changeErr := pulls.Changes(release.RepositoryID, included.ID)
+				if changeErr != nil {
+					writeAPIError(w, 500, "design_governance_unavailable", "included pull paths are unavailable")
+					return
+				}
+				paths := make([]string, 0, len(includedChanges))
+				for _, change := range includedChanges {
+					paths = append(paths, change.Path)
+				}
+				projected, evalErr := readiness(release.RepositoryID, included.ID, included.SourceCommitID, paths)
+				if evalErr != nil {
+					writeAPIError(w, 500, "design_governance_unavailable", "design readiness is unavailable")
+					return
+				}
+				out.Ready = out.Ready && projected.Ready
+				out.Policies = append(out.Policies, projected.Policies...)
+				out.Acceptances = append(out.Acceptances, projected.Acceptances...)
+				out.ActiveExceptions = append(out.ActiveExceptions, projected.ActiveExceptions...)
+				out.Diagnostics = append(out.Diagnostics, projected.Diagnostics...)
+			}
 		}
 		writeJSON(w, 200, out)
 	})
