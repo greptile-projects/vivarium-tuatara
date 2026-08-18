@@ -33,6 +33,34 @@ no workspace, Git, design-approval, review, merge, deployment, or environment
 authority. Records default beneath `$INTERFACE_CHECK_STORAGE_ROOT`
 (`interface-checks`).
 
+## Governed design acceptance and evolution
+
+Repositories and organizations publish scoped acceptance policy through their
+`/design-acceptance-policies` collections. A policy selects components, journeys,
+paths, or risk classes and names the exact people who may act as design owner,
+accessibility, content, localization, or invited-user approvers. Pull decisions
+freeze the policy version and candidate commit; candidate movement makes them
+stale. Only the policy creator may issue an exception, bounded by the policy's
+maximum (never more than 30 days), and readiness warns during its final seven days.
+
+Pull `/design-readiness` combines those decisions with current interface-check
+differences and interface-system implementation diagnostics. It is also embedded
+in ordinary merge readiness, where unresolved deviations, known regressions,
+obsolete component use, and stale preview evidence block alongside normal reviews
+and repository checks. Release `/design-readiness` re-evaluates the exact release
+commit and changed paths without manufacturing new acceptance. Interface-system
+changes can seed repository-owned migration and documentation tasks; release
+feedback or observed regressions can seed linked repairs. Both continue through
+ordinary task, Git, review, check, merge, release, and deployment controls. Records
+default beneath `$DESIGN_GOVERNANCE_STORAGE_ROOT` (`design-governance`).
+
+Each release freezes the source revision and changed paths for every included
+pull. Release design readiness consumes that immutable snapshot rather than the
+pull's later synchronized state. Within one pull revision, the latest durable
+interface-check result for a definition and journey is authoritative, allowing a
+successful rerun to supersede an earlier failed attempt while retaining both
+records and preserving independent definitions that share the journey.
+
 The API resolves the named release itself, derives its retained display version,
 requires the exact release commit to exist, and verifies every component,
 interaction, and content source path in that snapshot. Current implementations

@@ -36,6 +36,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/decisions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deliveryteams"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/designgovernance"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/designproposals"
 	docscollections "github.com/greptile-projects/vivarium-tuatara/apps/api/docscollections"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/durableschemas"
@@ -526,6 +527,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	designGovernanceRoot := os.Getenv("DESIGN_GOVERNANCE_STORAGE_ROOT")
+	if designGovernanceRoot == "" {
+		designGovernanceRoot = "design-governance"
+	}
+	designGovernanceStore, err := designgovernance.New(designGovernanceRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	protectionPlanRoot := os.Getenv("PROTECTION_PLAN_STORAGE_ROOT")
 	if protectionPlanRoot == "" {
 		protectionPlanRoot = "protection-plans"
@@ -665,7 +674,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, supportVerificationStore, supportSolutionStore, knowledgeAnswerStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore, apiContractStore, durableSchemaStore, infrastructureStore, debugWorkspaceStore, interfaceSystemStore, designProposalStore, interfaceCheckStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, supportVerificationStore, supportSolutionStore, knowledgeAnswerStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore, apiContractStore, durableSchemaStore, infrastructureStore, debugWorkspaceStore, interfaceSystemStore, designProposalStore, interfaceCheckStore, designGovernanceStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -837,6 +846,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var interfaceSystemStore *interfacesystems.Store
 	var designProposalStore *designproposals.Store
 	var interfaceCheckStore *interfacechecks.Store
+	var designGovernanceStore *designgovernance.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -955,6 +965,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			designProposalStore = value
 		case *interfacechecks.Store:
 			interfaceCheckStore = value
+		case *designgovernance.Store:
+			designGovernanceStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -1116,6 +1128,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil && previewStore != nil && designProposalStore != nil && interfaceCheckStore != nil {
 		registerInterfaceCheckRoutes(mux, store, repositoryCatalog, authStore, pullRequestStore, previewStore, designProposalStore, interfaceCheckStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && organizationStore != nil && designGovernanceStore != nil && pullRequestStore != nil && releaseStore != nil && interfaceCheckStore != nil && interfaceSystemStore != nil && proposalStore != nil {
+		registerDesignGovernanceRoutes(mux, repositoryCatalog, organizationStore, authStore, designGovernanceStore, pullRequestStore, releaseStore, interfaceCheckStore, interfaceSystemStore, proposalStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && durableSchemaStore != nil && pullRequestStore != nil {
 		registerDurableSchemaRoutes(mux, store, repositoryCatalog, authStore, durableSchemaStore, pullRequestStore, decisionStore, proposalStore, changeSessionStore, workspaceStore, deploymentStore, releaseStore)
@@ -4487,7 +4502,7 @@ func deriveReleaseInclusions(repository *storage.Repository, commitID string, pr
 			delete(rangeCommits, string(commit.ID))
 		}
 	}
-	result := releases.Inclusion{PullRequestIDs: []string{}, ProposalIDs: []string{}, TaskIDs: []string{}, ContributorIDs: []string{}}
+	result := releases.Inclusion{PullRequestIDs: []string{}, PullEvidence: []releases.PullEvidence{}, ProposalIDs: []string{}, TaskIDs: []string{}, ContributorIDs: []string{}}
 	if pullStore == nil {
 		return result, nil
 	}
@@ -4501,6 +4516,15 @@ func deriveReleaseInclusions(repository *storage.Repository, commitID string, pr
 			continue
 		}
 		result.PullRequestIDs = append(result.PullRequestIDs, pull.ID)
+		changes, changeErr := pullStore.Changes(repositoryID, pull.ID)
+		if changeErr != nil {
+			return releases.Inclusion{}, changeErr
+		}
+		paths := make([]string, 0, len(changes))
+		for _, change := range changes {
+			paths = append(paths, change.Path)
+		}
+		result.PullEvidence = append(result.PullEvidence, releases.PullEvidence{PullRequestID: pull.ID, SourceCommitID: pull.SourceCommitID, ChangedPaths: paths})
 		contributorIDs[pull.AuthorID] = true
 		if pull.MergedBy != nil {
 			contributorIDs[*pull.MergedBy] = true
