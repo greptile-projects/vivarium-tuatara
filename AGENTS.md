@@ -9,6 +9,17 @@ from issues, incidents, support threads, deployments, service objectives, traces
 journey, owners, severity, exact source/package/configuration/infrastructure revisions, permitted sanitized
 evidence, explicit gaps, access, attributable hypotheses, status, and compare-and-swap history. They grant no
 observability, runtime, environment, deployment, Git, or data authority.
+Participants may request explicit-audience, maximum-24-hour probes for logs, traces, profiles, state snapshots,
+or exact-source repository-defined diagnostics. Requests preview closed data categories, privacy/security
+transformations, retention, sampling, cost, and load; an affected-environment owner may only deny or narrow them.
+Only the requester can report against a live approval, retaining sanitized digest metadata, provenance, timing,
+transformations, and gaps. Owner revocation, expiry, denied access, overload, and partial capture stop collection,
+and evidence with gaps cannot be reported as complete. A probe remains bounded authority, not a general production,
+observability, credential, environment, deployment, Git, or data grant.
+Probe privacy controls form the closed order `hash_user_identifiers` < `remove_user_identifiers` <
+`remove_user_data`; security controls form `detect_secrets` < `redact_secrets` <
+`drop_secret_bearing_records`. Approval accepts equal or stronger controls only. Workspace creator, owner,
+and access roles never bypass a probe's explicit audience for probe records or lifecycle history.
 
 ## What this is
 
