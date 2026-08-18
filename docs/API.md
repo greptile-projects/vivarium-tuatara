@@ -3706,7 +3706,8 @@ evidence and no unmanaged or cleanup remainder; partial and failed evidence is i
 provider availability. Granted or partial runs can retain bounded configuration-drift, unmanaged-change,
 failed-cleanup, credential-expiry, and provider-loss findings with sanitized cause attribution; denied runs cannot
 assert provider findings. `POST .../drift-responses` compare-and-swaps the execution and links a finding to an
-accountable incident, exception, repair, reviewed-adoption pull/proposal, or restoration task/proposal. These links
+accountable existing issue, proposal, proposal task, repository-scoped incident, or pull. Exception responses use
+their ordinary proposal rather than an unverified free-form exception ID. These links
 do not create infrastructure authority, rewrite the external observation, or bypass ordinary environment policy,
 review, assignment, or merge controls.
 

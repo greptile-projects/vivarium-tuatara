@@ -102,6 +102,7 @@ type DriftResponse struct {
 	Kind         string    `json:"kind"`
 	OwnerID      string    `json:"owner_id"`
 	ResourceKind string    `json:"resource_kind"`
+	ParentID     string    `json:"parent_id,omitempty"`
 	ResourceID   string    `json:"resource_id"`
 	Summary      string    `json:"summary"`
 	CreatedBy    string    `json:"created_by"`
@@ -569,8 +570,8 @@ func (s *Store) RespondToDrift(id, actor string, expected int, response DriftRes
 			}
 		}
 		kinds := map[string]bool{"incident": true, "exception": true, "repair": true, "adopt": true, "restore": true}
-		resourceKinds := map[string]bool{"issue": true, "proposal": true, "task": true, "incident": true, "exception": true, "pull_request": true}
-		if !found || !kinds[response.Kind] || response.OwnerID == "" || !resourceKinds[response.ResourceKind] || response.ResourceID == "" || strings.TrimSpace(response.Summary) == "" || unsafe(response.ResourceID, response.Summary) {
+		resourceKinds := map[string]bool{"issue": true, "proposal": true, "task": true, "incident": true, "pull_request": true}
+		if !found || !kinds[response.Kind] || response.OwnerID == "" || !resourceKinds[response.ResourceKind] || response.ResourceID == "" || (response.ResourceKind == "task" && response.ParentID == "") || strings.TrimSpace(response.Summary) == "" || unsafe(response.ParentID, response.ResourceID, response.Summary) {
 			return ErrInvalid
 		}
 		if response.Kind == "adopt" && response.ResourceKind != "pull_request" && response.ResourceKind != "proposal" {

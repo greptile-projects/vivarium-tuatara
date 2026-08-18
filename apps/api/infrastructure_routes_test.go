@@ -11,12 +11,33 @@ import (
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/infrastructure"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
+
+func TestInfrastructureDriftTargetsRejectNonexistentGovernedWork(t *testing.T) {
+	issueStore, _ := issues.New(t.TempDir())
+	proposalStore, _ := proposals.New(t.TempDir())
+	incidentStore, _ := incidents.New(t.TempDir())
+	for _, response := range []infrastructure.DriftResponse{
+		{ResourceKind: "issue", ResourceID: "nonexistent"},
+		{ResourceKind: "proposal", ResourceID: "nonexistent"},
+		{ResourceKind: "task", ParentID: "nonexistent-proposal", ResourceID: "nonexistent"},
+		{ResourceKind: "incident", ResourceID: "nonexistent"},
+		{ResourceKind: "pull_request", ResourceID: "nonexistent"},
+		{ResourceKind: "exception", ResourceID: "nonexistent"},
+	} {
+		if infrastructureDriftTargetExists("repo", response, nil, issueStore, proposalStore, incidentStore) {
+			t.Fatalf("accepted nonexistent %s target", response.ResourceKind)
+		}
+	}
+}
 
 func TestInfrastructureCommitBlobBindsCandidateToExactPullTree(t *testing.T) {
 	git, _ := storage.New(t.TempDir())

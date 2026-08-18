@@ -11,7 +11,10 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/infrastructure"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
@@ -24,7 +27,7 @@ type infrastructureInput struct {
 	Revision        infrastructure.Revision `json:"revision"`
 }
 
-func registerInfrastructureRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, definitions *infrastructure.Store, pulls *pullrequests.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, workspaceStore *workspaces.Store) {
+func registerInfrastructureRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, definitions *infrastructure.Store, pulls *pullrequests.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, workspaceStore *workspaces.Store, issueStore *issues.Store, proposalStore *proposals.Store, incidentStore *incidents.Store) {
 	mux.HandleFunc("GET /repositories/{id}/infrastructure", func(w http.ResponseWriter, r *http.Request) {
 		actor, authenticated, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
 		if !ok {
@@ -569,10 +572,8 @@ func registerInfrastructureRoutes(mux *http.ServeMux, git *storage.Store, catalo
 		}
 		var out infrastructure.Execution
 		err = catalog.WithCurrentParticipants([]string{in.Response.OwnerID}, r.PathValue("id"), func() error {
-			if in.Response.Kind == "adopt" && in.Response.ResourceKind == "pull_request" {
-				if pull, pullErr := pulls.Get(r.PathValue("id"), in.Response.ResourceID); pullErr != nil || pull.RepositoryID != r.PathValue("id") {
-					return infrastructure.ErrInvalid
-				}
+			if !infrastructureDriftTargetExists(r.PathValue("id"), in.Response, pulls, issueStore, proposalStore, incidentStore) {
+				return infrastructure.ErrInvalid
 			}
 			var responseErr error
 			out, responseErr = definitions.RespondToDrift(current.ID, actor.UserID, in.ExpectedVersion, in.Response)
@@ -580,6 +581,51 @@ func registerInfrastructureRoutes(mux *http.ServeMux, git *storage.Store, catalo
 		})
 		writeInfrastructureExecution(w, out, err, 201)
 	})
+}
+
+func infrastructureDriftTargetExists(repositoryID string, response infrastructure.DriftResponse, pulls *pullrequests.Store, issueStore *issues.Store, proposalStore *proposals.Store, incidentStore *incidents.Store) bool {
+	switch response.ResourceKind {
+	case "issue":
+		if issueStore == nil {
+			return false
+		}
+		issue, err := issueStore.Get(repositoryID, response.ResourceID)
+		return err == nil && issue.RepositoryID == repositoryID
+	case "proposal":
+		if proposalStore == nil {
+			return false
+		}
+		proposal, err := proposalStore.Get(repositoryID, response.ResourceID)
+		return err == nil && proposal.RepositoryID == repositoryID
+	case "task":
+		if proposalStore == nil || response.ParentID == "" {
+			return false
+		}
+		task, err := proposalStore.GetTask(repositoryID, response.ParentID, response.ResourceID)
+		return err == nil && task.ProposalID == response.ParentID
+	case "incident":
+		if incidentStore == nil {
+			return false
+		}
+		incident, err := incidentStore.Get(response.ResourceID)
+		if err != nil {
+			return false
+		}
+		for _, scope := range incident.Scopes {
+			if scope.RepositoryID == repositoryID {
+				return true
+			}
+		}
+		return false
+	case "pull_request":
+		if pulls == nil {
+			return false
+		}
+		pull, err := pulls.Get(repositoryID, response.ResourceID)
+		return err == nil && pull.RepositoryID == repositoryID
+	default:
+		return false
+	}
 }
 
 func writeInfrastructureExecution(w http.ResponseWriter, v infrastructure.Execution, err error, status int) {
