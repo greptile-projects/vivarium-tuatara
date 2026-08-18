@@ -2960,3 +2960,14 @@ remain repository-scoped. Repository search (`GET /repositories/{id}/support-sol
 solutions, and resolved links can point at documentation collections, exact package versions, releases, or the
 current contributor guidance. Maintainer duplicate merges, obsolete archives, and newer-version revalidation
 requests append attributed events and outcome notifications without changing the original discussion or proof.
+
+## Code-connected production debugging
+
+The repository `/debugging` workspace gives responders one durable starting point for observed runtime
+behavior. A collaborator selects a governed issue, incident, support thread, deployment, service objective,
+trace, or manual observation and freezes the affected release, exact source commit, established environment,
+bounded time window, user journey, accountable owners, severity, package/configuration/infrastructure
+revisions, audience, and sanitized evidence. Missing or inaccessible evidence is retained as an explicit gap.
+Restricted workspaces are visible only to their creator and named readers; repository workspaces still follow
+ordinary repository visibility. Compare-and-swap status and hypothesis events preserve authorship and history.
+The workspace is collaboration context, not authority to query production, collect traces, deploy, or change code.
