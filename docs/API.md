@@ -3805,6 +3805,29 @@ their ordinary proposal rather than an unverified free-form exception ID. These 
 do not create infrastructure authority, rewrite the external observation, or bypass ordinary environment policy,
 review, assignment, or merge controls.
 
+# Design acceptance and interface-system evolution
+
+- `POST|GET /repositories/{id}/design-acceptance-policies` publishes and lists
+  repository policy; reads include inherited organization policy. Organization
+  owners publish portfolio policy at `POST /organizations/{id}/design-acceptance-policies`.
+  Selectors are `component`, `journey`, `path`, or `risk_class`; requirements name
+  exact approvers for `design_owner`, `accessibility`, `content`, `localization`,
+  or `invited_user`.
+- `POST .../pulls/{pull_id}/design-acceptances` retains an accepted or rejected
+  role decision at the current candidate and policy version. `POST
+  .../design-exceptions` is policy-creator-only and cannot exceed the declared
+  maximum or 30 days. `GET .../design-readiness` reports missing acceptance,
+  unresolved deviation/regression, obsolete component use, stale previews, and
+  expiring exceptions; the same projection and blockers appear in ordinary
+  `merge-readiness`.
+- `GET /repositories/{id}/releases/{release_id}/design-readiness` evaluates exact
+  release paths without converting design evidence into release authority.
+  `POST .../interface-systems/{system_id}/migration-work` creates ordinary
+  repository proposal work for implementation or documentation, while `POST
+  .../releases/{release_id}/design-repairs` connects feedback or observed
+  regressions to ordinary repair work. Neither endpoint grants code, review,
+  merge, release, deployment, organization, or repository authority.
+
 # Durable-state migration work
 
 `POST /repositories/{id}/durable-schemas/{schema_id}/migrations/{migration_id}/work`

@@ -495,6 +495,7 @@ type MergeReadiness struct {
 	PrivacyReadiness        *privacychecks.Readiness               `json:"privacy_readiness,omitempty"`
 	LocalizationReadiness   *localization.LocaleReadiness          `json:"localization_readiness,omitempty"`
 	ReliabilityReadiness    []serviceobjectives.DeliveryEvaluation `json:"reliability_readiness"`
+	DesignReadiness         any                                    `json:"design_readiness,omitempty"`
 }
 
 type commentRecord struct {
@@ -530,6 +531,13 @@ type Store struct {
 	privacyChecks            *privacychecks.Store
 	localization             *localization.Store
 	reliability              *serviceobjectives.Store
+	designReadiness          func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)
+}
+
+// ConfigureDesignReadiness adds an evidence-only policy projection to ordinary
+// readiness. Its blockers remain subject to every existing review and check.
+func (s *Store) ConfigureDesignReadiness(fn func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)) {
+	s.designReadiness = fn
 }
 
 func (s *Store) ConfigurePerformanceEvidence(store *performanceevidence.Store) { s.performance = store }
@@ -1814,6 +1822,18 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 				addBlocker("merge_conflict", "source and target branches have merge conflicts")
 			}
 		}
+	}
+	if s.designReadiness != nil {
+		changes, changeErr := s.Changes(repositoryID, pullRequestID)
+		if changeErr != nil {
+			return MergeReadiness{}, changeErr
+		}
+		projection, blockers, designErr := s.designReadiness(p, changes)
+		if designErr != nil {
+			return MergeReadiness{}, designErr
+		}
+		report.DesignReadiness = projection
+		report.Blockers = append(report.Blockers, blockers...)
 	}
 	report.Mergeable = len(report.Blockers) == 0
 	report.CanMerge = report.Mergeable && actorCanMerge

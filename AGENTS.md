@@ -301,6 +301,19 @@ whenever dependencies change or the web job fails before it starts.
   grant no execution, Git, design approval, review, merge, deployment, or
   environment authority.
 
+- **Design acceptance and evolution** — Repository and organization policies at
+  `/design-acceptance-policies` require named design-owner, accessibility,
+  content, localization, or invited-user decisions for matching components,
+  journeys, paths, and risk classes. Acceptances and bounded owner exceptions
+  freeze the exact pull revision and policy version. `/design-readiness` is
+  projected into ordinary merge readiness and separately for releases; unresolved
+  differences, regressions, obsolete implementation evidence, stale previews,
+  and exceptions expiring within seven days remain explicit. Interface-system
+  migration work and post-release feedback/regression repairs create ordinary
+  repository proposal tasks and grant design participants no review, merge,
+  release, deployment, organization, or repository authority. Records default
+  beneath `$DESIGN_GOVERNANCE_STORAGE_ROOT` (`design-governance`).
+
 - **Product design proposals** — `/repositories/{id}/design-proposals` and the repository
   `/design` workspace retain product behavior before implementation. Each immutable revision
   names its feedback, issue, roadmap outcome, accessibility finding, or pull-request source and
