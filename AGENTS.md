@@ -2,6 +2,14 @@
 
 Guidance for coding agents working in this repository.
 
+Production debugging at `/repositories/{id}/debugging` and the public
+`/repositories/{id}/debugging-workspaces` API retains revision-exact, audience-controlled starting context
+from issues, incidents, support threads, deployments, service objectives, traces, or manual observations beneath
+`$DEBUG_WORKSPACE_STORAGE_ROOT` (`debugging-workspaces`). Records freeze the affected release/environment/window,
+journey, owners, severity, exact source/package/configuration/infrastructure revisions, permitted sanitized
+evidence, explicit gaps, access, attributable hypotheses, status, and compare-and-swap history. They grant no
+observability, runtime, environment, deployment, Git, or data authority.
+
 ## What this is
 
 A Bun workspace monorepo with two apps:

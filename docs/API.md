@@ -1,5 +1,21 @@
 # HTTP API contract
 
+## Production debugging workspaces
+
+- `POST /repositories/{id}/debugging-workspaces` lets a current repository collaborator open a
+  durable runtime investigation from an `issue`, `incident`, `support_thread`, `deployment`,
+  `service_objective`, `trace`, or `manual_observation`. The server resolves governed triggers and
+  requires an existing release and environment; the source and configuration revision must equal the
+  release commit. Optional package IDs must have been published from that commit, and an optional
+  infrastructure definition version must exist in the same repository.
+- Each workspace freezes a bounded observation window, user journey, owners, severity, repository or
+  explicit restricted audience, permitted sanitized evidence, and explicit unavailable-context reasons.
+  `GET` on the collection or item rechecks repository read access and hides restricted workspaces from
+  identities outside their frozen access list.
+- `POST .../{workspace_id}/events` compare-and-swaps the workspace version to append an attributable
+  status transition or proposed hypothesis. History is never rewritten. These records coordinate
+  understanding only and grant no observability, runtime, deployment, environment, Git, or data authority.
+
 ## Consumer API applications and sandbox
 
 - `POST /repositories/{id}/api-contracts/{contract_id}/applications` registers the authenticated
