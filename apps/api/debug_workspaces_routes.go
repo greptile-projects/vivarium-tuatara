@@ -151,7 +151,22 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 				permitted = permitted && found
 			}
 			if permitted {
-				claims = append(claims, claim)
+				projected := claim
+				projected.Responses = []debugworkspaces.ClaimResponse{}
+				for _, response := range claim.Responses {
+					responsePermitted := true
+					for _, id := range response.CitationIDs {
+						found := false
+						for _, allowedID := range x.CitationIDs {
+							found = found || id == allowedID
+						}
+						responsePermitted = responsePermitted && found
+					}
+					if responsePermitted {
+						projected.Responses = append(projected.Responses, response)
+					}
+				}
+				claims = append(claims, projected)
 			}
 		}
 		return map[string]any{"investigation": x, "citations": allowed, "claims": claims}

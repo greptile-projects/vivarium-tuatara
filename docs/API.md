@@ -43,7 +43,8 @@
   packet and accepts uncertain, cited claims while running. Human collaborators can guide, pause, resume, or
   revoke the investigation; revocation retires the credential, and initiator repository-access loss fails closed.
   Investigation reads and claim-write responses share the same selected-citation packet projection; neither
-  response exposes unselected workspace citations or claims.
+  response exposes unselected workspace citations or claims, and nested claim responses citing any unselected
+  evidence are omitted rather than returning their citation identifiers or evidence-derived prose.
   Neither citations nor the agent credential confer secret, observability, runtime, Git, deployment, or mutation
   authority.
 

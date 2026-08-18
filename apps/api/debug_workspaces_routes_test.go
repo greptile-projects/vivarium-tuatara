@@ -135,7 +135,11 @@ func TestDebugWorkspaceReadRedactsAllRestrictedEvidenceMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	agentBody := `{"expected_version":7,"mandate":"test only the selected correlation","citation_ids":["` + diagnosed.Citations[0].ID + `"],"expires_in":300}`
+	withUnselected, err = workspaceStore.RespondClaim(repo.ID, created.ID, diagnosed.Claims[0].ID, owner.User.ID, "support", "undelegated evidence discussion", []string{withUnselected.Citations[1].ID}, withUnselected.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentBody := `{"expected_version":8,"mandate":"test only the selected correlation","citation_ids":["` + diagnosed.Citations[0].ID + `"],"expires_in":300}`
 	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/agent-investigations", agentBody, owner.Credential.Token, http.StatusCreated)
 	var launched struct {
 		DebuggingWorkspace debugworkspaces.Workspace          `json:"debugging_workspace"`
@@ -143,7 +147,7 @@ func TestDebugWorkspaceReadRedactsAllRestrictedEvidenceMetadata(t *testing.T) {
 		Credential         auth.IssuedCredential              `json:"credential"`
 	}
 	decodeResponse(t, response, &launched)
-	agentClaim := `{"expected_version":8,"claim":{"kind":"uncertainty","statement":"the selected evidence cannot establish the branch","uncertainty":"runtime evidence is blocked","confidence":"low","citation_ids":["` + diagnosed.Citations[0].ID + `"]}}`
+	agentClaim := `{"expected_version":9,"claim":{"kind":"uncertainty","statement":"the selected evidence cannot establish the branch","uncertainty":"runtime evidence is blocked","confidence":"low","citation_ids":["` + diagnosed.Citations[0].ID + `"]}}`
 	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/agent-investigations/"+launched.AgentInvestigation.ID+"/claims", agentClaim, launched.Credential.Token, http.StatusCreated)
 	var agentPublished struct {
 		Investigation debugworkspaces.AgentInvestigation `json:"investigation"`
@@ -153,6 +157,9 @@ func TestDebugWorkspaceReadRedactsAllRestrictedEvidenceMetadata(t *testing.T) {
 	decodeResponse(t, response, &agentPublished)
 	if len(agentPublished.Citations) != 1 || agentPublished.Citations[0].ID != diagnosed.Citations[0].ID || len(agentPublished.Claims) != 2 || agentPublished.Claims[1].CreatedBy != launched.AgentInvestigation.AgentID {
 		t.Fatalf("agent claim packet escaped selection or lost attribution = citations %#v, claims %#v", agentPublished.Citations, agentPublished.Claims)
+	}
+	if len(agentPublished.Claims[0].Responses) != 0 {
+		t.Fatalf("POST packet exposed response based on undelegated evidence: %#v", agentPublished.Claims[0].Responses)
 	}
 	for _, citation := range agentPublished.Citations {
 		if citation.ID == withUnselected.Citations[1].ID {
@@ -164,9 +171,17 @@ func TestDebugWorkspaceReadRedactsAllRestrictedEvidenceMetadata(t *testing.T) {
 			t.Fatalf("unselected claim escaped: %#v", claim)
 		}
 	}
-	control := `{"expected_version":9,"action":"pause","message":"wait for privacy-owner input"}`
+	response = authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/agent-investigations/"+launched.AgentInvestigation.ID, "", launched.Credential.Token, http.StatusOK)
+	var agentRead struct {
+		Claims []debugworkspaces.Claim `json:"claims"`
+	}
+	decodeResponse(t, response, &agentRead)
+	if len(agentRead.Claims) != 2 || len(agentRead.Claims[0].Responses) != 0 {
+		t.Fatalf("GET packet exposed undelegated response: %#v", agentRead.Claims)
+	}
+	control := `{"expected_version":10,"action":"pause","message":"wait for privacy-owner input"}`
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/agent-investigations/"+launched.AgentInvestigation.ID+"/controls", control, owner.Credential.Token, http.StatusCreated).Body.Close()
-	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/agent-investigations/"+launched.AgentInvestigation.ID+"/claims", strings.Replace(agentClaim, `"expected_version":8`, `"expected_version":10`, 1), launched.Credential.Token, http.StatusForbidden).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/agent-investigations/"+launched.AgentInvestigation.ID+"/claims", strings.Replace(agentClaim, `"expected_version":9`, `"expected_version":11`, 1), launched.Credential.Token, http.StatusForbidden).Body.Close()
 
 	restricted, err := workspaceStore.Create(debugworkspaces.Workspace{RepositoryID: repo.ID, Title: "Restricted diagnosis", Summary: "Need-to-know runtime context", Trigger: debugworkspaces.Reference{Kind: "manual_observation", Label: "private report"}, Release: debugworkspaces.Reference{ResourceID: strings.Repeat("4", 32), Revision: strings.Repeat("c", 40)}, Environment: debugworkspaces.Reference{ResourceID: strings.Repeat("5", 32)}, TimeStart: start, TimeEnd: start.Add(time.Hour), UserJourney: "private checkout", OwnerIDs: []string{owner.User.ID}, Severity: "critical", Audience: "restricted", AccessUserIDs: []string{owner.User.ID}, Source: debugworkspaces.Reference{Revision: strings.Repeat("c", 40)}}, owner.User.ID)
 	if err != nil {
