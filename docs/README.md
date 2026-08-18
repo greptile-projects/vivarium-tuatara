@@ -54,6 +54,15 @@ scoped agents investigate failures without copying production data. Each check d
 revision inputs it depends on so later candidates can replace only affected proof. Rehearsal
 records are review evidence, not deployment or data-store authority.
 
+After declared approvals and a passing rehearsal, participants can open one governed production
+execution against an existing release and established environment. Its fixed expand, deploy,
+backfill, cutover, and contract phases expose the active revision, controller, compatibility window,
+progress, lag, invariants, service health, privacy constraints, cost, blockers, and next actions.
+Compare-and-swap controls pause, resume, throttle, advance, or abort work only while its frozen
+rollback boundary remains reversible. Deployment proof resolves through the ordinary environment
+promotion store; the migration record never receives credentials or performs production operations.
+Agents can only report a phase explicitly delegated to their exact identity and step.
+
 Support guidance can be proven in ordinary revision-pinned development workspaces. Immutable attempts
 bind an exact cited answer revision to sanitized thread inputs, declared environment, commands and
 outputs, artifacts, cost, and result; fresh-workspace reruns preserve the original record and reads expose

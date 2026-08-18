@@ -83,6 +83,14 @@ whenever dependencies change or the web job fails before it starts.
   those values have platform-retained provenance; it emits only exact workspace/command attestations.
   Every check freezes distinct work and invariant commands. Both retained outcomes must start and
   finish after rehearsal creation, and both must succeed before the invariant or run can pass.
+  Production execution beneath `/{migration_id}/executions` begins only after every declared step
+  approval and a passing rehearsal, freezes an exact existing release and established environment,
+  and sequences expand, deploy, backfill, cutover, and contract. CAS controls and reports expose
+  active revision, controller, compatibility/privacy/cost bounds, progress, lag, invariants, service
+  health, blockers, and next actions. Advancing requires complete healthy unblocked evidence;
+  deployment evidence resolves through the existing promotion boundary. Agents may report only an
+  explicitly delegated phase and step. Execution records carry no commands, credentials, database,
+  deployment, environment, or destructive authority.
 
 - **Developer support** — `/support` and
   `/repositories/{id}/support-threads` retain contextual questions separately

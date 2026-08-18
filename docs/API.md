@@ -3636,3 +3636,23 @@ passes only when both exit successfully; process success alone never proves the 
 bounded attributable investigation note to an existing run. Repository read authorization
 controls all projections; these endpoints execute or review proof but confer no production,
 deployment, environment, workspace, or durable-store authority.
+
+# Durable-state production execution
+
+`POST /repositories/{id}/durable-schemas/{schema_id}/migrations/{migration_id}/executions`
+opens one compare-and-swap production collaboration only after every step's declared approver has
+approved and the selected rehearsal has a passing immutable run. The request freezes an existing
+repository release and established release environment, the active schema revision, controller,
+old/new compatibility window, privacy constraints, cost ceiling, reversible-abort limit, and any
+agent's exact phase, migration step, and bounded mandate. Only one nonterminal execution is allowed.
+
+The server creates the closed ordered phases `expand`, `deploy`, `backfill`, `cutover`, and
+`contract`. `POST .../executions/{execution_id}/controls` compare-and-swaps the execution version and
+supports `start`, `pause`, `resume`, `throttle`, `report`, `advance`, and reversible `abort`. Reports
+retain progress, lag, current invariants, service health, cost, blockers, and next actions. A phase
+advances only at 100% progress with healthy service, at least one current invariant, and no blockers;
+cost cannot exceed the frozen ceiling. Deployment evidence must resolve to a successful ordinary
+promotion of the frozen release in the frozen environment. An agent-attributed request can only
+report the currently active phase when its exact agent ID was explicitly delegated that phase; it
+cannot control the execution. These records carry no command, credential, database, environment,
+deployment, or destructive authority.

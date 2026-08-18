@@ -175,6 +175,60 @@ type Event struct {
 	ActorID   string    `json:"actor_id"`
 	CreatedAt time.Time `json:"created_at"`
 }
+type ExecutionPhase struct {
+	Name            string     `json:"name"`
+	State           string     `json:"state"`
+	ProgressPercent int        `json:"progress_percent"`
+	LagSeconds      int64      `json:"lag_seconds"`
+	Invariants      []string   `json:"invariants"`
+	ServiceHealth   string     `json:"service_health"`
+	Blockers        []string   `json:"blockers"`
+	NextActions     []string   `json:"next_actions"`
+	CostUnits       int64      `json:"cost_units"`
+	StartedAt       *time.Time `json:"started_at,omitempty"`
+	CompletedAt     *time.Time `json:"completed_at,omitempty"`
+}
+type ExecutionDelegation struct {
+	Phase   string `json:"phase"`
+	AgentID string `json:"agent_id"`
+	StepID  string `json:"step_id"`
+	Mandate string `json:"mandate"`
+}
+type ExecutionEvent struct {
+	Kind      string    `json:"kind"`
+	Phase     string    `json:"phase,omitempty"`
+	Summary   string    `json:"summary"`
+	ActorID   string    `json:"actor_id"`
+	AgentID   string    `json:"agent_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Execution is a collaboration record over authoritative work. It references
+// established release resources but deliberately carries no credentials or
+// executable commands.
+type Execution struct {
+	ID                   string                `json:"id"`
+	Version              int                   `json:"version"`
+	MigrationVersion     int                   `json:"migration_version"`
+	ActiveRevision       int                   `json:"active_revision"`
+	EnvironmentID        string                `json:"environment_id"`
+	ReleaseID            string                `json:"release_id"`
+	DeploymentID         string                `json:"deployment_id,omitempty"`
+	RehearsalID          string                `json:"rehearsal_id"`
+	ControllerID         string                `json:"controller_id"`
+	Status               string                `json:"status"`
+	CurrentPhase         int                   `json:"current_phase"`
+	CompatibilityWindow  string                `json:"compatibility_window"`
+	PrivacyConstraints   []string              `json:"privacy_constraints"`
+	CostBudgetUnits      int64                 `json:"cost_budget_units"`
+	ThrottlePercent      int                   `json:"throttle_percent"`
+	AbortReversibleUntil string                `json:"abort_reversible_until"`
+	Phases               []ExecutionPhase      `json:"phases"`
+	Delegations          []ExecutionDelegation `json:"delegations"`
+	Events               []ExecutionEvent      `json:"events"`
+	CreatedAt            time.Time             `json:"created_at"`
+	UpdatedAt            time.Time             `json:"updated_at"`
+}
 type Migration struct {
 	ID             string          `json:"id"`
 	FromVersion    int             `json:"from_version"`
@@ -189,10 +243,239 @@ type Migration struct {
 	Events         []Event         `json:"events"`
 	Work           []MigrationWork `json:"work"`
 	Rehearsals     []Rehearsal     `json:"rehearsals"`
+	Executions     []Execution     `json:"executions"`
 	CreatedBy      string          `json:"created_by"`
 	CreatedAt      time.Time       `json:"created_at"`
 	UpdatedAt      time.Time       `json:"updated_at"`
 }
+
+func (s *Store) CreateExecution(repo, schema, migration, actor string, expected int, in Execution) (Schema, Execution, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, schema)
+	if err != nil {
+		return Schema{}, Execution{}, err
+	}
+	for mi := range v.Migrations {
+		m := &v.Migrations[mi]
+		if m.ID != migration {
+			continue
+		}
+		if m.Version != expected {
+			return v, Execution{}, ErrConflict
+		}
+		if len(m.Executions) > 0 && m.Executions[len(m.Executions)-1].Status != "completed" && m.Executions[len(m.Executions)-1].Status != "aborted" {
+			return v, Execution{}, ErrConflict
+		}
+		passed := false
+		var passedAt time.Time
+		for _, rehearsal := range m.Rehearsals {
+			if rehearsal.ID == in.RehearsalID {
+				for _, run := range rehearsal.Runs {
+					if run.Result == "passed" && run.CreatedAt.After(passedAt) {
+						passed, passedAt = true, run.CreatedAt
+					}
+				}
+			}
+		}
+		approved := map[string]map[string]bool{}
+		for _, e := range m.Events {
+			if e.Kind == "approved" && !e.CreatedAt.Before(passedAt) {
+				if approved[e.StepID] == nil {
+					approved[e.StepID] = map[string]bool{}
+				}
+				approved[e.StepID][e.ActorID] = true
+			}
+		}
+		for _, step := range m.Steps {
+			for _, owner := range step.RequiredApproverIDs {
+				if !approved[step.ID][owner] {
+					return v, Execution{}, ErrInvalid
+				}
+			}
+		}
+		if !passed || in.EnvironmentID == "" || in.ReleaseID == "" || strings.TrimSpace(in.CompatibilityWindow) == "" || len(in.PrivacyConstraints) == 0 || in.CostBudgetUnits < 0 || in.CostBudgetUnits > 1_000_000_000 || strings.TrimSpace(in.AbortReversibleUntil) == "" {
+			return v, Execution{}, ErrInvalid
+		}
+		steps := map[string]bool{}
+		for _, step := range m.Steps {
+			steps[step.ID] = true
+		}
+		delegations := map[string]bool{}
+		for _, d := range in.Delegations {
+			key := d.AgentID + ":" + d.Phase + ":" + d.StepID
+			if d.AgentID == "" || !steps[d.StepID] || strings.TrimSpace(d.Mandate) == "" || !executionPhase(d.Phase) || delegations[key] {
+				return v, Execution{}, ErrInvalid
+			}
+			delegations[key] = true
+		}
+		now := s.now()
+		phases := make([]ExecutionPhase, 5)
+		for i, name := range []string{"expand", "deploy", "backfill", "cutover", "contract"} {
+			phases[i] = ExecutionPhase{Name: name, State: "pending", Invariants: []string{}, Blockers: []string{}, NextActions: []string{"begin " + name}}
+		}
+		phases[0].State = "ready"
+		in.ID = id()
+		in.Version = 1
+		in.MigrationVersion = m.Version
+		in.ActiveRevision = m.ToVersion
+		in.ControllerID = actor
+		in.Status = "ready"
+		in.CurrentPhase = 0
+		in.ThrottlePercent = 100
+		in.Phases = phases
+		in.Events = []ExecutionEvent{{Kind: "created", Phase: "expand", Summary: "production migration execution opened after approvals and rehearsal evidence", ActorID: actor, CreatedAt: now}}
+		in.CreatedAt = now
+		in.UpdatedAt = now
+		m.Executions = append(m.Executions, in)
+		m.Version++
+		m.UpdatedAt = now
+		v.UpdatedAt = now
+		return v, in, s.write(v)
+	}
+	return Schema{}, Execution{}, ErrNotFound
+}
+
+type ExecutionUpdate struct {
+	Action          string
+	ExpectedVersion int
+	Phase           string
+	ProgressPercent int
+	LagSeconds      int64
+	Invariants      []string
+	ServiceHealth   string
+	Blockers        []string
+	NextActions     []string
+	CostUnits       int64
+	ThrottlePercent int
+	Summary         string
+	AgentID         string
+	DeploymentID    string
+}
+
+func (s *Store) UpdateExecution(repo, schema, migration, execution, actor string, in ExecutionUpdate) (Schema, Execution, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, schema)
+	if err != nil {
+		return Schema{}, Execution{}, err
+	}
+	for mi := range v.Migrations {
+		m := &v.Migrations[mi]
+		if m.ID != migration {
+			continue
+		}
+		for ei := range m.Executions {
+			x := &m.Executions[ei]
+			if x.ID != execution {
+				continue
+			}
+			if x.Version != in.ExpectedVersion {
+				return v, *x, ErrConflict
+			}
+			now := s.now()
+			phase := &x.Phases[x.CurrentPhase]
+			if in.AgentID != "" {
+				delegated := false
+				for _, d := range x.Delegations {
+					delegated = delegated || d.AgentID == in.AgentID && d.Phase == phase.Name
+				}
+				if !delegated || in.Action != "report" {
+					return v, *x, ErrInvalid
+				}
+			}
+			switch in.Action {
+			case "start":
+				if x.Status != "ready" {
+					return v, *x, ErrInvalid
+				}
+				x.Status = "running"
+				phase.State = "running"
+				if phase.StartedAt == nil {
+					phase.StartedAt = &now
+				}
+			case "pause":
+				if x.Status != "running" {
+					return v, *x, ErrInvalid
+				}
+				x.Status = "paused"
+				phase.State = "paused"
+			case "resume":
+				if x.Status != "paused" {
+					return v, *x, ErrInvalid
+				}
+				x.Status = "running"
+				phase.State = "running"
+			case "throttle":
+				if x.Status != "running" || in.ThrottlePercent < 1 || in.ThrottlePercent > 100 {
+					return v, *x, ErrInvalid
+				}
+				x.ThrottlePercent = in.ThrottlePercent
+			case "abort":
+				if x.Status == "completed" || phase.Name == "contract" || in.Summary == "" {
+					return v, *x, ErrInvalid
+				}
+				x.Status = "aborted"
+				phase.State = "aborted"
+			case "report":
+				if x.Status != "running" || in.Phase != phase.Name || in.ProgressPercent < 0 || in.ProgressPercent > 100 || in.LagSeconds < 0 || in.CostUnits < 0 {
+					return v, *x, ErrInvalid
+				}
+				if in.DeploymentID != "" && phase.Name != "deploy" {
+					return v, *x, ErrInvalid
+				}
+				total := int64(0)
+				for _, p := range x.Phases {
+					total += p.CostUnits
+				}
+				total += in.CostUnits - phase.CostUnits
+				if x.CostBudgetUnits > 0 && total > x.CostBudgetUnits {
+					return v, *x, ErrInvalid
+				}
+				phase.ProgressPercent = in.ProgressPercent
+				phase.LagSeconds = in.LagSeconds
+				phase.Invariants = append([]string{}, in.Invariants...)
+				phase.ServiceHealth = strings.TrimSpace(in.ServiceHealth)
+				phase.Blockers = append([]string{}, in.Blockers...)
+				phase.NextActions = append([]string{}, in.NextActions...)
+				phase.CostUnits = in.CostUnits
+				if in.DeploymentID != "" {
+					x.DeploymentID = in.DeploymentID
+				}
+			case "advance":
+				if x.Status != "running" || phase.ProgressPercent != 100 || len(phase.Blockers) > 0 || phase.ServiceHealth != "healthy" || len(phase.Invariants) == 0 || (phase.Name == "deploy" && x.DeploymentID == "") {
+					return v, *x, ErrInvalid
+				}
+				phase.State = "completed"
+				phase.CompletedAt = &now
+				if x.CurrentPhase == len(x.Phases)-1 {
+					x.Status = "completed"
+				} else {
+					x.CurrentPhase++
+					x.Status = "ready"
+					x.Phases[x.CurrentPhase].State = "ready"
+				}
+			default:
+				return v, *x, ErrInvalid
+			}
+			x.Version++
+			x.UpdatedAt = now
+			summary := strings.TrimSpace(in.Summary)
+			if summary == "" {
+				summary = in.Action
+			}
+			x.Events = append(x.Events, ExecutionEvent{Kind: in.Action, Phase: phase.Name, Summary: summary, ActorID: actor, AgentID: in.AgentID, CreatedAt: now})
+			m.UpdatedAt = now
+			v.UpdatedAt = now
+			return v, *x, s.write(v)
+		}
+	}
+	return Schema{}, Execution{}, ErrNotFound
+}
+func executionPhase(v string) bool {
+	return v == "expand" || v == "deploy" || v == "backfill" || v == "cutover" || v == "contract"
+}
+
 type Schema struct {
 	ID             string      `json:"id"`
 	RepositoryID   string      `json:"repository_id"`
