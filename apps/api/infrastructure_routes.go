@@ -355,6 +355,171 @@ func registerInfrastructureRoutes(mux *http.ServeMux, git *storage.Store, catalo
 		}
 		writeJSON(w, 201, map[string]any{"plan": out, "run": run})
 	})
+	mux.HandleFunc("GET /repositories/{id}/infrastructure-executions", func(w http.ResponseWriter, r *http.Request) {
+		_, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok {
+			return
+		}
+		items, err := definitions.ListExecutions(r.PathValue("id"))
+		if err != nil {
+			writeAPIError(w, 500, "infrastructure_execution_unavailable", "infrastructure executions could not be read")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"executions": items})
+	})
+	mux.HandleFunc("GET /repositories/{id}/infrastructure-executions/{execution_id}", func(w http.ResponseWriter, r *http.Request) {
+		_, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok {
+			return
+		}
+		x, err := definitions.GetExecution(r.PathValue("execution_id"))
+		if err != nil || x.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "infrastructure_execution_not_found", "infrastructure execution not found")
+			return
+		}
+		writeJSON(w, 200, x)
+	})
+	mux.HandleFunc("POST /repositories/{id}/infrastructure-executions", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			PlanID              string                               `json:"plan_id"`
+			EnvironmentID       string                               `json:"environment_id"`
+			EnvironmentPolicy   string                               `json:"environment_policy"`
+			RehearsalID         string                               `json:"rehearsal_id"`
+			BudgetUnits         float64                              `json:"budget_units"`
+			CredentialExpiresAt time.Time                            `json:"credential_expires_at"`
+			Delegations         []infrastructure.ExecutionDelegation `json:"delegations"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an exact plan, environment policy, budget, passing rehearsal, and credential expiry are required")
+			return
+		}
+		plan, err := definitions.GetPlan(in.PlanID)
+		if err != nil || plan.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "infrastructure_plan_not_found", "infrastructure plan not found")
+			return
+		}
+		pull, err := pulls.Get(r.PathValue("id"), plan.PullRequestID)
+		if err != nil || pull.Status != pullrequests.Merged || pull.MergeCommitID == nil {
+			writeAPIError(w, 409, "infrastructure_execution_blocked", "the exact reviewed pull must be merged before execution")
+			return
+		}
+		current, err := definitions.Get(plan.DefinitionID, true)
+		if err != nil || !definitions.ProjectPlan(plan, current, pull.SourceCommitID, func(x infrastructure.PolicyEffect) bool {
+			return infrastructurePolicyCurrent(git, pull.SourceRepositoryID, plan.SourceRevision, x)
+		}).Fresh {
+			writeAPIError(w, 409, "infrastructure_execution_blocked", "the plan, observations, and policies must remain current")
+			return
+		}
+		if _, err = deploymentStore.GetEnvironment(r.PathValue("id"), in.EnvironmentID); err != nil {
+			writeAPIError(w, 422, "infrastructure_environment_invalid", "execution requires an established repository environment")
+			return
+		}
+		for _, change := range plan.Changes {
+			resource := change.After
+			if resource == nil {
+				resource = change.Before
+			}
+			if resource != nil && resource.EnvironmentID != "" && resource.EnvironmentID != in.EnvironmentID {
+				writeAPIError(w, 409, "infrastructure_environment_authority_mismatch", "each execution may include only resources governed by its exact environment")
+				return
+			}
+		}
+		limit := 0.0
+		for _, resource := range plan.Candidate.Resources {
+			if resource.EnvironmentID != "" && resource.EnvironmentID != in.EnvironmentID {
+				continue
+			}
+			for _, constraint := range resource.Constraints {
+				if constraint.Kind == "cost" {
+					limit += constraint.Limit
+				}
+			}
+		}
+		if in.BudgetUnits > limit {
+			writeAPIError(w, 409, "infrastructure_budget_exceeded", "execution budget exceeds the reviewed resource cost limits")
+			return
+		}
+		out, err := definitions.CreateExecution(plan, actor.UserID, infrastructure.ExecutionCreation{MergeCommitID: *pull.MergeCommitID, EnvironmentID: in.EnvironmentID, EnvironmentPolicy: in.EnvironmentPolicy, RehearsalID: in.RehearsalID, BudgetUnits: in.BudgetUnits, CredentialExpiry: in.CredentialExpiresAt, Delegations: in.Delegations})
+		writeInfrastructureExecution(w, out, err, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/infrastructure-executions/{execution_id}/reports", func(w http.ResponseWriter, r *http.Request) {
+		actor, authenticated, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok || !authenticated {
+			return
+		}
+		if actor.AgentID == "" && !infrastructureParticipant(catalog, r.PathValue("id"), actor, true) {
+			writeAPIError(w, 403, "infrastructure_execution_forbidden", "only the controller or an exactly delegated agent may report")
+			return
+		}
+		currentExecution, executionErr := definitions.GetExecution(r.PathValue("execution_id"))
+		if executionErr != nil || currentExecution.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "infrastructure_execution_not_found", "infrastructure execution not found")
+			return
+		}
+		var in struct {
+			ExpectedVersion int                       `json:"expected_version"`
+			StepID          string                    `json:"step_id"`
+			Report          infrastructure.StepReport `json:"report"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an exact step report and expected version are required")
+			return
+		}
+		actorID, actorType := actor.UserID, "human"
+		if actor.AgentID != "" {
+			actorID, actorType = actor.AgentID, "agent"
+		}
+		out, err := definitions.ReportExecution(r.PathValue("execution_id"), actorID, actorType, in.StepID, in.ExpectedVersion, in.Report)
+		if out.RepositoryID != "" && out.RepositoryID != r.PathValue("id") {
+			err = infrastructure.ErrExecutionNotFound
+		}
+		writeInfrastructureExecution(w, out, err, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/infrastructure-executions/{execution_id}/controls", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		currentExecution, executionErr := definitions.GetExecution(r.PathValue("execution_id"))
+		if executionErr != nil || currentExecution.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "infrastructure_execution_not_found", "infrastructure execution not found")
+			return
+		}
+		var in struct {
+			ExpectedVersion int    `json:"expected_version"`
+			Action          string `json:"action"`
+			Summary         string `json:"summary"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an action, summary, and expected version are required")
+			return
+		}
+		out, err := definitions.ControlExecution(r.PathValue("execution_id"), actor.UserID, in.Action, in.Summary, in.ExpectedVersion)
+		if out.RepositoryID != "" && out.RepositoryID != r.PathValue("id") {
+			err = infrastructure.ErrExecutionNotFound
+		}
+		writeInfrastructureExecution(w, out, err, 201)
+	})
+}
+
+func writeInfrastructureExecution(w http.ResponseWriter, v infrastructure.Execution, err error, status int) {
+	switch {
+	case err == nil:
+		writeJSON(w, status, v)
+	case errors.Is(err, infrastructure.ErrExecutionNotFound):
+		writeAPIError(w, 404, "infrastructure_execution_not_found", "infrastructure execution not found")
+	case errors.Is(err, infrastructure.ErrExecutionBlocked), errors.Is(err, infrastructure.ErrConflict):
+		writeAPIError(w, 409, "infrastructure_execution_blocked", "execution admission or transition requirements are not satisfied")
+	case errors.Is(err, infrastructure.ErrInvalid):
+		writeAPIError(w, 400, "invalid_infrastructure_execution", "execution evidence must be sanitized, dependency ordered, within budget, and within explicit authority")
+	default:
+		log.Printf("infrastructure execution storage: %v", err)
+		writeAPIError(w, 500, "infrastructure_execution_unavailable", "infrastructure execution could not be persisted")
+	}
 }
 
 func bindInfrastructureRehearsal(ws workspaces.Workspace, plan infrastructure.ChangePlan, rehearsal infrastructure.Rehearsal, checkIDs []string) (infrastructure.RehearsalRun, bool) {
