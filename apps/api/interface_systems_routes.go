@@ -35,7 +35,7 @@ func registerInterfaceSystemRoutes(mux *http.ServeMux, git *storage.Store, catal
 		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
 			return
 		}
-		out, err := systems.Get(r.PathValue("system_id"))
+		out, err := systems.Get(r.PathValue("id"), r.PathValue("system_id"))
 		if err != nil || out.RepositoryID != r.PathValue("id") {
 			writeAPIError(w, 404, "interface_system_not_found", "interface system not found")
 			return
@@ -62,11 +62,11 @@ func registerInterfaceSystemRoutes(mux *http.ServeMux, git *storage.Store, catal
 			var err error
 			err = catalog.WithCurrentParticipants(owners, r.PathValue("id"), func() error {
 				if revise {
-					current, e := systems.Get(r.PathValue("system_id"))
+					current, e := systems.Get(r.PathValue("id"), r.PathValue("system_id"))
 					if e != nil || current.RepositoryID != r.PathValue("id") {
 						return interfacesystems.ErrNotFound
 					}
-					out, err = systems.Revise(current.ID, in.ExpectedVersion, actor.UserID, in.Revision)
+					out, err = systems.Revise(r.PathValue("id"), current.ID, in.ExpectedVersion, actor.UserID, in.Revision)
 				} else {
 					out, err = systems.Create(r.PathValue("id"), actor.UserID, in.Revision)
 				}

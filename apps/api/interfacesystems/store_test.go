@@ -26,14 +26,14 @@ func TestVersionHistoryAndExplicitDiagnostics(t *testing.T) {
 	}
 	next := revision("Button")
 	next.Summary = "Successor"
-	updated, err := s.Revise(first.ID, 1, "actor", next)
+	updated, err := s.Revise("repo", first.ID, 1, "actor", next)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if updated.CurrentVersion != 2 || len(updated.Revisions) != 2 || updated.Revisions[0].Summary != "Shared decisions" {
 		t.Fatalf("history was not retained: %#v", updated)
 	}
-	if _, err = s.Revise(first.ID, 1, "actor", next); err != ErrConflict {
+	if _, err = s.Revise("repo", first.ID, 1, "actor", next); err != ErrConflict {
 		t.Fatalf("stale write = %v", err)
 	}
 }
@@ -48,19 +48,37 @@ func TestConflictingCurrentDefinitionsAreProjected(t *testing.T) {
 	if !hasDiagnostic(created, "conflicting_definition") {
 		t.Fatal("create response omitted the persisted conflict")
 	}
-	out, err := s.Get(a.ID)
+	out, err := s.Get("repo", a.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !hasDiagnostic(out, "conflicting_definition") {
 		t.Fatal("conflicting current definitions were presented as one coherent system")
 	}
-	revised, err := s.Revise(a.ID, 1, "one", revision("Button"))
+	revised, err := s.Revise("repo", a.ID, 1, "one", revision("Button"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !hasDiagnostic(revised, "conflicting_definition") {
 		t.Fatal("revise response omitted the persisted conflict")
+	}
+}
+
+func TestReadsAndRevisionsRequireOwningRepository(t *testing.T) {
+	s, _ := New(t.TempDir())
+	created, err := s.Create("repository-a", "owner", revision("Button"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Get("repository-b", created.ID); err != ErrNotFound {
+		t.Fatalf("cross-repository get = %v", err)
+	}
+	if _, err = s.Revise("repository-b", created.ID, 1, "owner", revision("Button")); err != ErrNotFound {
+		t.Fatalf("cross-repository revise = %v", err)
+	}
+	persisted, err := s.Get("repository-a", created.ID)
+	if err != nil || persisted.CurrentVersion != 1 {
+		t.Fatalf("owning record changed: %#v, %v", persisted, err)
 	}
 }
 
@@ -100,10 +118,10 @@ func TestInvalidPeerCannotTurnCommittedMutationIntoFailure(t *testing.T) {
 	if len(after) != len(before) {
 		t.Fatalf("failed create persisted a record: %d -> %d", len(before), len(after))
 	}
-	if _, err = s.Revise(first.ID, 1, "actor", revision("Button")); err == nil {
+	if _, err = s.Revise("repo", first.ID, 1, "actor", revision("Button")); err == nil {
 		t.Fatal("revise ignored invalid peer")
 	}
-	persisted, err := s.read(first.ID)
+	persisted, err := s.read("repo", first.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
