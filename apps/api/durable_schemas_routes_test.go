@@ -26,16 +26,23 @@ func TestBindRehearsalRunDerivesEvidenceFromExactCommand(t *testing.T) {
 	command := "./scripts/rehearse upgrade"
 	digest := sha256.Sum256([]byte(command))
 	started := time.Now().UTC()
-	ws := workspaces.Workspace{Commands: []workspaces.CommandOutcome{{CommandSHA256: hex.EncodeToString(digest[:]), ExitCode: 17, Output: "rollback check failed", StartedAt: started, CompletedAt: started.Add(25 * time.Millisecond)}}}
+	ws := workspaces.Workspace{ID: "workspace", Commands: []workspaces.CommandOutcome{{ID: "command", CommandSHA256: hex.EncodeToString(digest[:]), ExitCode: 17, Output: "rollback check failed", StartedAt: started, CompletedAt: started.Add(25 * time.Millisecond)}}}
 	rehearsal := durableschemas.Rehearsal{Checks: []durableschemas.RehearsalCheck{{ID: "upgrade", Command: command}}}
 	forged := durableschemas.RehearsalRun{Result: "passed", Outcomes: []durableschemas.RehearsalOutcome{{CheckID: "upgrade", Status: "passed", InvariantPassed: true}}}
 	bound, ok := bindRehearsalRun(ws, rehearsal, forged)
-	if !ok || bound.Result != "failed" || bound.Outcomes[0].Status != "failed" || bound.Outcomes[0].ExitCode != 17 || bound.Outcomes[0].InvariantPassed || bound.Outcomes[0].SanitizedLog != "rollback check failed" || bound.Outcomes[0].DurationMS != 25 {
+	if !ok || bound.Result != "failed" || bound.Outcomes[0].Status != "failed" || bound.Outcomes[0].ExitCode != 17 || bound.Outcomes[0].InvariantPassed || bound.Outcomes[0].SanitizedLog != "rollback check failed" || bound.Outcomes[0].DurationMS != 25 || len(bound.Attestations) != 1 || !strings.Contains(bound.Attestations[0], "command_outcome:command") {
 		t.Fatalf("retained failure was not canonical: %#v, %v", bound, ok)
 	}
 	ws.Commands = append(ws.Commands, ws.Commands[0])
 	if _, ok = bindRehearsalRun(ws, rehearsal, forged); ok {
 		t.Fatal("ambiguous repeated execution was accepted")
+	}
+	forged.Outcomes[0].RowsAfter = 1_000_000
+	forged.Outcomes[0].ArtifactDigests = []string{"fabricated"}
+	forged.Outcomes[0].CostUnits = 1
+	forged.Attestations = []string{"fabricated"}
+	if safeRehearsalRunRequest(forged) {
+		t.Fatal("caller-supplied operational evidence was accepted")
 	}
 }
 

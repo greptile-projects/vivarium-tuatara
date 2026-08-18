@@ -79,6 +79,8 @@ whenever dependencies change or the web job fails before it starts.
   derive from one unambiguous exact-command workspace outcome. Attributable notes support failure investigation. Checks declare their revision
   inputs so successor candidates invalidate only affected proof. Rehearsals grant no production,
   deployment, environment, workspace, or data-store authority.
+  Run publication rejects caller-supplied counts, artifact digests, costs, and attestations until
+  those values have platform-retained provenance; it emits only exact workspace/command attestations.
 
 - **Developer support** — `/support` and
   `/repositories/{id}/support-threads` retain contextual questions separately

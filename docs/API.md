@@ -3625,6 +3625,9 @@ invariant result, bounded artifact digests, cost, and attestations. A run can be
 when every outcome passed with exit zero and its invariant held. Status, exit code, log,
 duration, invariant result, and the overall result are derived from one unambiguous retained
 workspace command outcome per exact command digest rather than trusted from the request.
+Caller-supplied counts, artifacts, costs, and attestations are rejected until a platform-retained
+source can derive them; unsupported values remain zero or empty, and the platform adds only an
+exact workspace/command-outcome attestation.
 `POST .../notes` appends a
 bounded attributable investigation note to an existing run. Repository read authorization
 controls all projections; these endpoints execute or review proof but confer no production,
