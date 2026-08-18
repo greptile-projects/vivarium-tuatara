@@ -95,4 +95,14 @@ func TestDebugWorkspaceReadRedactsAllRestrictedEvidenceMetadata(t *testing.T) {
 	if approved.Probes[1].Status != "approved" || approved.Probes[1].DecidedBy != owner.User.ID || approved.Probes[1].ApprovedPolicy == nil || approved.Probes[1].ApprovedPolicy.Privacy != "remove_user_identifiers" {
 		t.Fatalf("probe decision = %#v", approved.Probes[1])
 	}
+	eventBody := `{"expected_version":4,"kind":"hypothesis","value":"latency correlates with queue depth","message":"excluded collaborator observation"}`
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/events", eventBody, reader.Credential.Token, http.StatusCreated)
+	var eventProjection debugworkspaces.Workspace
+	decodeResponse(t, response, &eventProjection)
+	if len(eventProjection.Probes) != 0 {
+		t.Fatalf("event response escaped probe audience: %#v", eventProjection.Probes)
+	}
+	if len(eventProjection.Hypotheses) != 1 || eventProjection.Hypotheses[0].CreatedBy != reader.User.ID {
+		t.Fatalf("event response lost permitted mutation: %#v", eventProjection.Hypotheses)
+	}
 }

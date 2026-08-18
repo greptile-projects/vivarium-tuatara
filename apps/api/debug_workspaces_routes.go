@@ -165,7 +165,7 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			return
 		}
 		out, err := workspaces.Update(current.RepositoryID, current.ID, actorID(c), in.Kind, in.Value, in.Message, in.ExpectedVersion)
-		writeDebugWorkspace(w, out, err, 201)
+		writeDebugWorkspace(w, project(out, actorID(c)), err, 201)
 	})
 	mux.HandleFunc("POST /repositories/{id}/debugging-workspaces/{workspace_id}/probes", func(w http.ResponseWriter, r *http.Request) {
 		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
