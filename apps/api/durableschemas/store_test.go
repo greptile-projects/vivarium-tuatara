@@ -47,3 +47,35 @@ func TestMigrationRequiresExplicitIrreversibility(t *testing.T) {
 		t.Fatal("destructive operation without explicit flag accepted")
 	}
 }
+
+func TestBoundedRehearsalRetainsExactSanitizedEvidence(t *testing.T) {
+	s, _ := New(t.TempDir())
+	r := Revision{Name: "orders", StoreKind: "database", Description: "orders", Definition: "v1", DefinitionPath: "db.sql", OwnerIDs: []string{"owner"}, Compatibility: []string{"dual"}, Retention: "year", Privacy: []string{"tokenized"}, PullRequestID: "1", ReviewedCommit: "abc", Rationale: "baseline"}
+	v, _ := s.Create("repo", "owner", r)
+	r.Definition = "v2"
+	r.Rationale = "candidate"
+	v, _ = s.Revise("repo", v.ID, 1, "owner", r)
+	m := Migration{FromVersion: 1, ToVersion: 2, SourceKind: "pull_request", SourceID: "2", Summary: "upgrade", Operations: []Operation{{ID: "upgrade", Kind: "write", Description: "upgrade", OwnerIDs: []string{"owner"}, ConsumerIDs: []string{"app"}, RollbackLimit: "before cutover"}}, Steps: []Step{{ID: "prove", OperationIDs: []string{"upgrade"}, Description: "rehearse", SuccessMeasures: []string{"meaning preserved"}, RequiredApproverIDs: []string{"owner"}}}, RollbackLimits: []string{"before cutover"}}
+	v, _ = s.AddMigration("repo", v.ID, "owner", m)
+	migration := v.Migrations[0]
+	rehearsal := Rehearsal{Name: "realistic tokenized rehearsal", ApplicationRevision: "commit", Dataset: RehearsalDataset{Kind: "representative", Description: "tokenized distribution", PrivacyMethod: "irreversible tokenization", Digest: "data-digest", MaxBytes: 1024, RowCount: 10}, Dependencies: []RehearsalDependency{{Name: "driver", Revision: "1.2.3", Digest: "dep-digest"}}, Checks: []RehearsalCheck{{ID: "upgrade", Kind: "upgrade", Command: "./check upgrade", Invariant: "balances unchanged", InvariantCommand: "./check balances", RevisionInputs: []string{"application", "schema_from", "schema_to", "migration", "data_shape", "dependency:driver"}}, {ID: "rollback", Kind: "rollback", Command: "./check rollback", Invariant: "old reader succeeds", InvariantCommand: "./check old-reader", RevisionInputs: []string{"application", "migration"}}}}
+	v, rehearsal, err := s.CreateRehearsal("repo", v.ID, migration.ID, "owner", migration.Version, rehearsal)
+	if err != nil || len(v.Migrations[0].Rehearsals) != 1 {
+		t.Fatalf("create rehearsal = %#v, %v", rehearsal, err)
+	}
+	run := RehearsalRun{WorkspaceID: "workspace", Result: "failed", Attestations: []string{"reviewer observed isolated execution"}, Outcomes: []RehearsalOutcome{{CheckID: "upgrade", Status: "passed", InvariantPassed: true, SanitizedLog: "10 rows upgraded", RowsBefore: 10, RowsAfter: 10, ArtifactDigests: []string{"artifact"}, CostUnits: 2}, {CheckID: "rollback", Status: "failed", ExitCode: 1, SanitizedLog: "old reader rejected new value", RowsBefore: 10, RowsAfter: 10}}}
+	v, run, err = s.AddRehearsalRun("repo", v.ID, migration.ID, rehearsal.ID, "agent", run)
+	if err != nil || run.ID == "" {
+		t.Fatalf("run = %#v, %v", run, err)
+	}
+	_, note, err := s.AddRehearsalNote("repo", v.ID, migration.ID, rehearsal.ID, "owner", run.ID, "Rollback failed only for enum values; investigate decoder.")
+	if err != nil || note.ActorID != "owner" {
+		t.Fatalf("note = %#v, %v", note, err)
+	}
+	bad := run
+	bad.ID = ""
+	bad.Result = "passed"
+	if _, _, err = s.AddRehearsalRun("repo", v.ID, migration.ID, rehearsal.ID, "agent", bad); err != ErrInvalid {
+		t.Fatalf("dishonest passing summary accepted: %v", err)
+	}
+}

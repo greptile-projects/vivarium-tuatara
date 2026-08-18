@@ -1,12 +1,15 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
@@ -16,7 +19,39 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
+
+func TestBindRehearsalRunDerivesEvidenceFromExactCommand(t *testing.T) {
+	command := "./scripts/rehearse upgrade"
+	invariantCommand := "./scripts/rehearse verify-invariant"
+	digest, invariantDigest := sha256.Sum256([]byte(command)), sha256.Sum256([]byte(invariantCommand))
+	started := time.Now().UTC()
+	ws := workspaces.Workspace{ID: "workspace", Commands: []workspaces.CommandOutcome{{ID: "command", CommandSHA256: hex.EncodeToString(digest[:]), ExitCode: 0, Output: "upgrade completed", StartedAt: started, CompletedAt: started.Add(25 * time.Millisecond)}, {ID: "invariant", CommandSHA256: hex.EncodeToString(invariantDigest[:]), ExitCode: 9, Output: "balances changed", StartedAt: started, CompletedAt: started.Add(10 * time.Millisecond)}}}
+	rehearsal := durableschemas.Rehearsal{CreatedAt: started.Add(-time.Second), Checks: []durableschemas.RehearsalCheck{{ID: "upgrade", Command: command, Invariant: "balances unchanged", InvariantCommand: invariantCommand}}}
+	forged := durableschemas.RehearsalRun{Result: "passed", Outcomes: []durableschemas.RehearsalOutcome{{CheckID: "upgrade", Status: "passed", InvariantPassed: true}}}
+	bound, ok := bindRehearsalRun(ws, rehearsal, forged)
+	if !ok || bound.Result != "failed" || bound.Outcomes[0].Status != "failed" || bound.Outcomes[0].ExitCode != 0 || bound.Outcomes[0].InvariantPassed || !strings.Contains(bound.Outcomes[0].SanitizedLog, "balances changed") || bound.Outcomes[0].DurationMS != 35 || len(bound.Attestations) != 2 || !strings.Contains(bound.Attestations[1], "invariant_outcome:invariant") {
+		t.Fatalf("retained failure was not canonical: %#v, %v", bound, ok)
+	}
+	ws.Commands[1].ExitCode = 0
+	ws.Commands[1].StartedAt, ws.Commands[1].CompletedAt = rehearsal.CreatedAt.Add(-time.Minute), rehearsal.CreatedAt.Add(-time.Minute+time.Second)
+	if _, ok = bindRehearsalRun(ws, rehearsal, forged); ok {
+		t.Fatal("pre-rehearsal invariant evidence was accepted")
+	}
+	ws.Commands[1].StartedAt, ws.Commands[1].CompletedAt = started, started.Add(10*time.Millisecond)
+	ws.Commands = append(ws.Commands, ws.Commands[0])
+	if _, ok = bindRehearsalRun(ws, rehearsal, forged); ok {
+		t.Fatal("ambiguous repeated execution was accepted")
+	}
+	forged.Outcomes[0].RowsAfter = 1_000_000
+	forged.Outcomes[0].ArtifactDigests = []string{"fabricated"}
+	forged.Outcomes[0].CostUnits = 1
+	forged.Attestations = []string{"fabricated"}
+	if safeRehearsalRunRequest(forged) {
+		t.Fatal("caller-supplied operational evidence was accepted")
+	}
+}
 
 func TestDurableSchemaDefinitionResolvesExactReviewedBlob(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())

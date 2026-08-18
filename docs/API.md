@@ -3607,3 +3607,32 @@ repository APIs and permissions. Agent sessions reject unmet dependencies until 
 earlier task contribution is merged. Schema reads omit work in target repositories the
 reader cannot access; definitions, privacy metadata, and data samples are never copied
 into the work contract.
+
+# Durable-state migration rehearsals
+
+`POST /repositories/{id}/durable-schemas/{schema_id}/migrations/{migration_id}/rehearsals`
+compare-and-swaps `expected_version` and freezes a bounded proof plan. It requires an exact
+repository application commit, the migration's exact schema and plan versions, dependency
+revision/digest pairs, and either synthetic data metadata or representative metadata with an
+explicit privacy method. Raw datasets are not accepted. Checks use the closed kinds `upgrade`,
+`dual_read`, `dual_write`, `backfill`, `validation`, `rollback`, and `failure_injection`; each
+retains a repository command, a separate repository-defined invariant command, the invariant
+claim, and only the revision-input names that affect it.
+
+`POST .../rehearsals/{rehearsal_id}/runs` accepts evidence only from the caller's bounded
+workspace in that repository. A run has exactly one outcome per frozen check and retains its
+status, exit code, sanitized log (up to 64 KiB), duration, before/after row and object counts,
+invariant result, bounded artifact digests, cost, and attestations. A run can be `passed` only
+when every outcome passed with exit zero and its invariant held. Status, exit code, log,
+duration, invariant result, and the overall result are derived from one unambiguous retained
+workspace command outcome per exact command digest rather than trusted from the request.
+Caller-supplied counts, artifacts, costs, and attestations are rejected until a platform-retained
+source can derive them; unsupported values remain zero or empty, and the platform adds only an
+exact workspace/command-outcome attestation.
+Both the work command and its distinct invariant command must have one retained outcome whose
+start and completion are no earlier than the rehearsal's immutable creation time. Execution
+passes only when both exit successfully; process success alone never proves the invariant.
+`POST .../notes` appends a
+bounded attributable investigation note to an existing run. Repository read authorization
+controls all projections; these endpoints execute or review proof but confer no production,
+deployment, environment, workspace, or durable-store authority.
