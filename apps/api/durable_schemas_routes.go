@@ -208,6 +208,9 @@ func registerDurableSchemaRoutes(mux *http.ServeMux, git *storage.Store, catalog
 			AgentID         string   `json:"agent_id"`
 			StepID          string   `json:"step_id"`
 			DeploymentID    string   `json:"deployment_id"`
+			FailureKind     string   `json:"failure_kind"`
+			SafetyPoint     string   `json:"safety_point"`
+			FailureEvidence []string `json:"failure_evidence"`
 		}
 		if decodeJSON(r, &in) != nil {
 			writeAPIError(w, 400, "invalid_execution_control", "a bounded execution control is required")
@@ -247,7 +250,7 @@ func registerDurableSchemaRoutes(mux *http.ServeMux, git *storage.Store, catalog
 				return
 			}
 		}
-		out, execution, err := store.UpdateExecution(r.PathValue("id"), r.PathValue("schema_id"), r.PathValue("migration_id"), r.PathValue("execution_id"), actor.UserID, durableschemas.ExecutionUpdate{Action: in.Action, ExpectedVersion: in.ExpectedVersion, Phase: in.Phase, ProgressPercent: in.ProgressPercent, LagSeconds: in.LagSeconds, Invariants: in.Invariants, ServiceHealth: in.ServiceHealth, Blockers: in.Blockers, NextActions: in.NextActions, CostUnits: in.CostUnits, ThrottlePercent: in.ThrottlePercent, Summary: in.Summary, AgentID: actor.AgentID, StepID: in.StepID, DeploymentID: in.DeploymentID})
+		out, execution, err := store.UpdateExecution(r.PathValue("id"), r.PathValue("schema_id"), r.PathValue("migration_id"), r.PathValue("execution_id"), actor.UserID, durableschemas.ExecutionUpdate{Action: in.Action, ExpectedVersion: in.ExpectedVersion, Phase: in.Phase, ProgressPercent: in.ProgressPercent, LagSeconds: in.LagSeconds, Invariants: in.Invariants, ServiceHealth: in.ServiceHealth, Blockers: in.Blockers, NextActions: in.NextActions, CostUnits: in.CostUnits, ThrottlePercent: in.ThrottlePercent, Summary: in.Summary, AgentID: actor.AgentID, StepID: in.StepID, DeploymentID: in.DeploymentID, FailureKind: in.FailureKind, SafetyPoint: in.SafetyPoint, FailureEvidence: in.FailureEvidence})
 		if errors.Is(err, durableschemas.ErrConflict) {
 			writeAPIError(w, 409, "migration_execution_changed", "execution changed; reload before intervening")
 			return
@@ -261,6 +264,119 @@ func registerDurableSchemaRoutes(mux *http.ServeMux, git *storage.Store, catalog
 			return
 		}
 		writeJSON(w, 200, map[string]any{"schema": out, "execution": execution})
+	})
+	mux.HandleFunc("POST "+base+"/{schema_id}/migrations/{migration_id}/executions/{execution_id}/recoveries", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion     int      `json:"expected_version"`
+			IdempotencyKey      string   `json:"idempotency_key"`
+			Kind                string   `json:"kind"`
+			FailureID           string   `json:"failure_id"`
+			Summary             string   `json:"summary"`
+			Evidence            []string `json:"evidence"`
+			RecoveryPoint       string   `json:"recovery_point"`
+			RecoveryAttestation string   `json:"recovery_attestation"`
+			RollbackReleaseID   string   `json:"rollback_release_id"`
+			RepairWorkID        string   `json:"repair_work_id"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_recovery", "an evidence-backed recovery action is required")
+			return
+		}
+		if in.RollbackReleaseID != "" {
+			if releaseStore == nil {
+				writeAPIError(w, 422, "recovery_evidence_unavailable", "rollback release evidence cannot be verified")
+				return
+			}
+			if _, err := releaseStore.Get(r.PathValue("id"), in.RollbackReleaseID); err != nil {
+				writeAPIError(w, 422, "invalid_rollback_release", "traffic rollback must name an existing repository release")
+				return
+			}
+		}
+		out, execution, recovery, err := store.RecoverExecution(r.PathValue("id"), r.PathValue("schema_id"), r.PathValue("migration_id"), r.PathValue("execution_id"), actor.UserID, durableschemas.RecoveryRequest{ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, Kind: in.Kind, FailureID: in.FailureID, Summary: in.Summary, Evidence: in.Evidence, RecoveryPoint: in.RecoveryPoint, RecoveryAttestation: in.RecoveryAttestation, RollbackReleaseID: in.RollbackReleaseID, RepairWorkID: in.RepairWorkID})
+		if errors.Is(err, durableschemas.ErrConflict) {
+			writeAPIError(w, 409, "migration_recovery_changed", "idempotency identity or execution state conflicts")
+			return
+		}
+		if errors.Is(err, durableschemas.ErrInvalid) {
+			writeAPIError(w, 422, "migration_recovery_blocked", "recovery requires a paused failure and action-specific evidence within the compatibility window")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 404, "migration_execution_not_found", "migration execution not found")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"schema": out, "execution": execution, "recovery": recovery})
+	})
+	mux.HandleFunc("POST "+base+"/{schema_id}/migrations/{migration_id}/retirement-approvals", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int    `json:"expected_version"`
+			Summary         string `json:"summary"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_retirement_approval", "an owner approval is required")
+			return
+		}
+		out, err := store.ApproveRetirement(r.PathValue("id"), r.PathValue("schema_id"), r.PathValue("migration_id"), actor.UserID, in.ExpectedVersion, in.Summary)
+		writeDurableSchema(w, out, err, 200)
+	})
+	mux.HandleFunc("POST "+base+"/{schema_id}/migrations/{migration_id}/completion", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int                                 `json:"expected_version"`
+			Completion      durableschemas.RetirementCompletion `json:"completion"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_migration_completion", "measured retirement completion evidence is required")
+			return
+		}
+		if deploymentStore == nil {
+			writeAPIError(w, 422, "environment_evidence_unavailable", "completion environments cannot be verified")
+			return
+		}
+		established, err := deploymentStore.ListEnvironments(r.PathValue("id"))
+		if err != nil {
+			writeAPIError(w, 422, "environment_evidence_unavailable", "completion environments cannot be enumerated")
+			return
+		}
+		declared := map[string]bool{}
+		for _, environment := range in.Completion.Environments {
+			declared[environment.EnvironmentID] = true
+			if _, err := deploymentStore.GetEnvironment(r.PathValue("id"), environment.EnvironmentID); err != nil {
+				writeAPIError(w, 422, "invalid_completion_environment", "every completion environment must be established for the repository")
+				return
+			}
+		}
+		for _, environment := range established {
+			if !declared[environment.ID] {
+				writeAPIError(w, 422, "incomplete_environment_evidence", "completion must report current schema and disposition for every established environment")
+				return
+			}
+		}
+		out, completion, err := store.CompleteRetirement(r.PathValue("id"), r.PathValue("schema_id"), r.PathValue("migration_id"), actor.UserID, in.ExpectedVersion, in.Completion)
+		if errors.Is(err, durableschemas.ErrConflict) {
+			writeAPIError(w, 409, "migration_retirement_changed", "migration retirement changed or is already complete")
+			return
+		}
+		if errors.Is(err, durableschemas.ErrInvalid) {
+			writeAPIError(w, 422, "migration_retirement_blocked", "completed execution, elapsed observation, all owner approvals, and environment deletion evidence are required")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 404, "migration_not_found", "migration not found")
+			return
+		}
+		writeJSON(w, 201, map[string]any{"schema": out, "completion": completion})
 	})
 	mux.HandleFunc("POST "+base+"/{schema_id}/migrations/{migration_id}/work", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")

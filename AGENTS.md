@@ -92,6 +92,14 @@ whenever dependencies change or the web job fails before it starts.
   exact phase and step delegated to their authenticated identity; step evidence remains separate and
   cannot populate controller-owned phase readiness. Every current-phase delegation's latest report
   must be complete, healthy, invariant-backed, and unblocked before human-controlled advancement.
+  Failed invariants, service regressions, revoked approvals, conflicting writes, capacity exhaustion,
+  and interrupted backfills append evidence and pause at the reported safety point. Participants may
+  append an idempotent retry, attested recovery-point restore, compatibility-window release rollback,
+  or a link to ordinary assigned migration repair work; failed attempts are never rewritten. Each
+  execution declares its observation period. After success and that full period, every candidate-schema
+  owner must approve retirement before completion freezes removed compatibility machinery, obsolete
+  fields, irreversible decisions, retained/changed/deleted data, exceptions, cost, and current schema
+  version for every established environment.
   Execution records carry no commands, credentials, database,
   deployment, environment, or destructive authority.
 

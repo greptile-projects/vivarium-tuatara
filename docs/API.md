@@ -43,6 +43,22 @@
   passing candidate or active exception, has unavailable access, or exceeds the selected old-version traffic
   threshold. These records coordinate existing evolution and integration work without granting authority.
 
+## Durable-schema execution recovery and retirement
+
+- Execution `report` controls may declare `failed_invariant`, `service_regression`, `conflicting_writes`,
+  `capacity_exhaustion`, or `interrupted_backfill` with a safety point and bounded evidence. The execution
+  pauses while retaining all phase and attempt history. Revoking a step approval through the migration
+  event API does the same and invalidates that approval for later execution admission.
+- `POST .../durable-schemas/{schema_id}/migrations/{migration_id}/executions/{execution_id}/recoveries`
+  appends an idempotency-keyed `retry`, attested `restore`, existing-release `traffic_rollback`, or `repair`
+  linked to already assigned ordinary migration work. Recovery evidence grants no release, traffic,
+  workspace, deployment, or data-store authority.
+- `POST .../retirement-approvals` records one immutable approval from each candidate-schema owner. `POST
+  .../completion` succeeds only after production completion and the execution's declared observation period,
+  and must account for retained/changed data, verified deletion, exceptions, costs, and the candidate schema
+  version across every established environment as well as removed compatibility code, obsolete fields, and
+  irreversible decisions. Failed executions and recovery attempts remain unchanged.
+
 ## Approved-agent evaluation
 
 - `GET /organizations/{id}/agent-participations` projects current bounded authority together with

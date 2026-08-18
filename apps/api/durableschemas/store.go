@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -217,52 +218,107 @@ type ExecutionStepReport struct {
 	Summary         string    `json:"summary"`
 	CreatedAt       time.Time `json:"created_at"`
 }
+type FailureEvidence struct {
+	ID              string    `json:"id"`
+	Kind            string    `json:"kind"`
+	Phase           string    `json:"phase"`
+	SafetyPoint     string    `json:"safety_point"`
+	Summary         string    `json:"summary"`
+	Evidence        []string  `json:"evidence"`
+	RecoveryActions []string  `json:"recovery_actions"`
+	ActorID         string    `json:"actor_id"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+type RecoveryAction struct {
+	ID                  string    `json:"id"`
+	IdempotencyKey      string    `json:"idempotency_key"`
+	Kind                string    `json:"kind"`
+	FailureID           string    `json:"failure_id"`
+	Summary             string    `json:"summary"`
+	Evidence            []string  `json:"evidence"`
+	RecoveryPoint       string    `json:"recovery_point,omitempty"`
+	RecoveryAttestation string    `json:"recovery_attestation,omitempty"`
+	RollbackReleaseID   string    `json:"rollback_release_id,omitempty"`
+	RepairWorkID        string    `json:"repair_work_id,omitempty"`
+	ActorID             string    `json:"actor_id"`
+	CreatedAt           time.Time `json:"created_at"`
+}
+type RetirementApproval struct {
+	OwnerID   string    `json:"owner_id"`
+	Summary   string    `json:"summary"`
+	CreatedAt time.Time `json:"created_at"`
+}
+type EnvironmentCompletion struct {
+	EnvironmentID    string   `json:"environment_id"`
+	CurrentVersion   int      `json:"current_version"`
+	RetainedData     []string `json:"retained_data"`
+	ChangedData      []string `json:"changed_data"`
+	VerifiedDeletion []string `json:"verified_deletion"`
+	Exceptions       []string `json:"exceptions"`
+	CostUnits        int64    `json:"cost_units"`
+}
+type RetirementCompletion struct {
+	ObservationStartedAt  time.Time               `json:"observation_started_at"`
+	ObservationEndedAt    time.Time               `json:"observation_ended_at"`
+	CompatibilityRemoved  []string                `json:"compatibility_removed"`
+	ObsoleteFields        []string                `json:"obsolete_fields"`
+	IrreversibleDecisions []string                `json:"irreversible_decisions"`
+	Environments          []EnvironmentCompletion `json:"environments"`
+	ApprovedBy            []string                `json:"approved_by"`
+	CompletedBy           string                  `json:"completed_by"`
+	CompletedAt           time.Time               `json:"completed_at"`
+}
 
 // Execution is a collaboration record over authoritative work. It references
 // established release resources but deliberately carries no credentials or
 // executable commands.
 type Execution struct {
-	ID                   string                `json:"id"`
-	Version              int                   `json:"version"`
-	MigrationVersion     int                   `json:"migration_version"`
-	ActiveRevision       int                   `json:"active_revision"`
-	EnvironmentID        string                `json:"environment_id"`
-	ReleaseID            string                `json:"release_id"`
-	DeploymentID         string                `json:"deployment_id,omitempty"`
-	RehearsalID          string                `json:"rehearsal_id"`
-	ControllerID         string                `json:"controller_id"`
-	Status               string                `json:"status"`
-	CurrentPhase         int                   `json:"current_phase"`
-	CompatibilityWindow  string                `json:"compatibility_window"`
-	PrivacyConstraints   []string              `json:"privacy_constraints"`
-	CostBudgetUnits      int64                 `json:"cost_budget_units"`
-	ThrottlePercent      int                   `json:"throttle_percent"`
-	AbortReversibleUntil string                `json:"abort_reversible_until"`
-	Phases               []ExecutionPhase      `json:"phases"`
-	Delegations          []ExecutionDelegation `json:"delegations"`
-	StepReports          []ExecutionStepReport `json:"step_reports"`
-	Events               []ExecutionEvent      `json:"events"`
-	CreatedAt            time.Time             `json:"created_at"`
-	UpdatedAt            time.Time             `json:"updated_at"`
+	ID                       string                `json:"id"`
+	Version                  int                   `json:"version"`
+	MigrationVersion         int                   `json:"migration_version"`
+	ActiveRevision           int                   `json:"active_revision"`
+	EnvironmentID            string                `json:"environment_id"`
+	ReleaseID                string                `json:"release_id"`
+	DeploymentID             string                `json:"deployment_id,omitempty"`
+	RehearsalID              string                `json:"rehearsal_id"`
+	ControllerID             string                `json:"controller_id"`
+	Status                   string                `json:"status"`
+	CurrentPhase             int                   `json:"current_phase"`
+	CompatibilityWindow      string                `json:"compatibility_window"`
+	ObservationPeriodSeconds int64                 `json:"observation_period_seconds"`
+	PrivacyConstraints       []string              `json:"privacy_constraints"`
+	CostBudgetUnits          int64                 `json:"cost_budget_units"`
+	ThrottlePercent          int                   `json:"throttle_percent"`
+	AbortReversibleUntil     string                `json:"abort_reversible_until"`
+	Phases                   []ExecutionPhase      `json:"phases"`
+	Delegations              []ExecutionDelegation `json:"delegations"`
+	StepReports              []ExecutionStepReport `json:"step_reports"`
+	Failures                 []FailureEvidence     `json:"failures"`
+	Recoveries               []RecoveryAction      `json:"recoveries"`
+	Events                   []ExecutionEvent      `json:"events"`
+	CreatedAt                time.Time             `json:"created_at"`
+	UpdatedAt                time.Time             `json:"updated_at"`
 }
 type Migration struct {
-	ID             string          `json:"id"`
-	FromVersion    int             `json:"from_version"`
-	ToVersion      int             `json:"to_version"`
-	SourceKind     string          `json:"source_kind"`
-	SourceID       string          `json:"source_id"`
-	Summary        string          `json:"summary"`
-	Operations     []Operation     `json:"operations"`
-	Steps          []Step          `json:"steps"`
-	RollbackLimits []string        `json:"rollback_limits"`
-	Version        int             `json:"version"`
-	Events         []Event         `json:"events"`
-	Work           []MigrationWork `json:"work"`
-	Rehearsals     []Rehearsal     `json:"rehearsals"`
-	Executions     []Execution     `json:"executions"`
-	CreatedBy      string          `json:"created_by"`
-	CreatedAt      time.Time       `json:"created_at"`
-	UpdatedAt      time.Time       `json:"updated_at"`
+	ID                  string                `json:"id"`
+	FromVersion         int                   `json:"from_version"`
+	ToVersion           int                   `json:"to_version"`
+	SourceKind          string                `json:"source_kind"`
+	SourceID            string                `json:"source_id"`
+	Summary             string                `json:"summary"`
+	Operations          []Operation           `json:"operations"`
+	Steps               []Step                `json:"steps"`
+	RollbackLimits      []string              `json:"rollback_limits"`
+	Version             int                   `json:"version"`
+	Events              []Event               `json:"events"`
+	Work                []MigrationWork       `json:"work"`
+	Rehearsals          []Rehearsal           `json:"rehearsals"`
+	Executions          []Execution           `json:"executions"`
+	RetirementApprovals []RetirementApproval  `json:"retirement_approvals"`
+	Completion          *RetirementCompletion `json:"completion,omitempty"`
+	CreatedBy           string                `json:"created_by"`
+	CreatedAt           time.Time             `json:"created_at"`
+	UpdatedAt           time.Time             `json:"updated_at"`
 }
 
 func (s *Store) CreateExecution(repo, schema, migration, actor string, expected int, in Execution) (Schema, Execution, error) {
@@ -296,7 +352,11 @@ func (s *Store) CreateExecution(repo, schema, migration, actor string, expected 
 		}
 		approved := map[string]map[string]bool{}
 		for _, e := range m.Events {
-			if e.Kind == "approved" && !e.CreatedAt.Before(passedAt) {
+			if e.Kind == "approval_revoked" {
+				if approved[e.StepID] != nil {
+					delete(approved[e.StepID], e.ActorID)
+				}
+			} else if e.Kind == "approved" && !e.CreatedAt.Before(passedAt) {
 				if approved[e.StepID] == nil {
 					approved[e.StepID] = map[string]bool{}
 				}
@@ -310,7 +370,7 @@ func (s *Store) CreateExecution(repo, schema, migration, actor string, expected 
 				}
 			}
 		}
-		if !passed || in.EnvironmentID == "" || in.ReleaseID == "" || strings.TrimSpace(in.CompatibilityWindow) == "" || len(in.PrivacyConstraints) == 0 || in.CostBudgetUnits < 0 || in.CostBudgetUnits > 1_000_000_000 || strings.TrimSpace(in.AbortReversibleUntil) == "" {
+		if !passed || in.EnvironmentID == "" || in.ReleaseID == "" || strings.TrimSpace(in.CompatibilityWindow) == "" || in.ObservationPeriodSeconds < 1 || in.ObservationPeriodSeconds > int64((365*24*time.Hour)/time.Second) || len(in.PrivacyConstraints) == 0 || in.CostBudgetUnits < 0 || in.CostBudgetUnits > 1_000_000_000 || strings.TrimSpace(in.AbortReversibleUntil) == "" {
 			return v, Execution{}, ErrInvalid
 		}
 		steps := map[string]bool{}
@@ -341,6 +401,8 @@ func (s *Store) CreateExecution(repo, schema, migration, actor string, expected 
 		in.ThrottlePercent = 100
 		in.Phases = phases
 		in.StepReports = []ExecutionStepReport{}
+		in.Failures = []FailureEvidence{}
+		in.Recoveries = []RecoveryAction{}
 		in.Events = []ExecutionEvent{{Kind: "created", Phase: "expand", Summary: "production migration execution opened after approvals and rehearsal evidence", ActorID: actor, CreatedAt: now}}
 		in.CreatedAt = now
 		in.UpdatedAt = now
@@ -369,6 +431,9 @@ type ExecutionUpdate struct {
 	AgentID         string
 	StepID          string
 	DeploymentID    string
+	FailureKind     string
+	SafetyPoint     string
+	FailureEvidence []string
 }
 
 func (s *Store) UpdateExecution(repo, schema, migration, execution, actor string, in ExecutionUpdate) (Schema, Execution, error) {
@@ -429,7 +494,7 @@ func (s *Store) UpdateExecution(repo, schema, migration, execution, actor string
 				x.Status = "paused"
 				phase.State = "paused"
 			case "resume":
-				if x.Status != "paused" {
+				if x.Status != "paused" || !migrationApprovalsCurrent(*m) {
 					return v, *x, ErrInvalid
 				}
 				x.Status = "running"
@@ -457,9 +522,7 @@ func (s *Store) UpdateExecution(repo, schema, migration, execution, actor string
 					total += p.CostUnits
 				}
 				total += in.CostUnits - phase.CostUnits
-				if x.CostBudgetUnits > 0 && total > x.CostBudgetUnits {
-					return v, *x, ErrInvalid
-				}
+				overCapacity := x.CostBudgetUnits > 0 && total > x.CostBudgetUnits
 				phase.ProgressPercent = in.ProgressPercent
 				phase.LagSeconds = in.LagSeconds
 				phase.Invariants = append([]string{}, in.Invariants...)
@@ -469,6 +532,29 @@ func (s *Store) UpdateExecution(repo, schema, migration, execution, actor string
 				phase.CostUnits = in.CostUnits
 				if in.DeploymentID != "" {
 					x.DeploymentID = in.DeploymentID
+				}
+				failureKind := in.FailureKind
+				failureSummary := strings.TrimSpace(in.Summary)
+				safetyPoint := strings.TrimSpace(in.SafetyPoint)
+				failureEvidence := append([]string{}, in.FailureEvidence...)
+				if overCapacity {
+					failureKind = "capacity_exhaustion"
+					if failureSummary == "" {
+						failureSummary = "declared migration cost capacity exhausted"
+					}
+					if safetyPoint == "" {
+						safetyPoint = phase.Name + " cost-budget boundary"
+					}
+					if len(failureEvidence) == 0 {
+						failureEvidence = []string{"cost budget units exceeded by retained phase report"}
+					}
+				}
+				if failureKind != "" {
+					if !executionFailureKind(failureKind) || safetyPoint == "" || len(safetyPoint) > 500 || failureSummary == "" || len(failureSummary) > 2000 || !boundedEvidence(failureEvidence) {
+						return v, *x, ErrInvalid
+					}
+					x.Status, phase.State = "paused", "paused"
+					x.Failures = append(x.Failures, FailureEvidence{ID: id(), Kind: failureKind, Phase: phase.Name, SafetyPoint: safetyPoint, Summary: failureSummary, Evidence: failureEvidence, RecoveryActions: []string{"retry", "restore", "traffic_rollback", "repair"}, ActorID: actor, CreatedAt: now})
 				}
 			case "advance":
 				if x.Status != "running" || phase.ProgressPercent != 100 || len(phase.Blockers) > 0 || phase.ServiceHealth != "healthy" || len(phase.Invariants) == 0 || !delegatedPhaseReady(*x, phase.Name) || (phase.Name == "deploy" && x.DeploymentID == "") {
@@ -499,6 +585,113 @@ func (s *Store) UpdateExecution(repo, schema, migration, execution, actor string
 		}
 	}
 	return Schema{}, Execution{}, ErrNotFound
+}
+func migrationApprovalsCurrent(m Migration) bool {
+	current := map[string]map[string]bool{}
+	for _, event := range m.Events {
+		if event.Kind != "approved" && event.Kind != "approval_revoked" {
+			continue
+		}
+		if current[event.StepID] == nil {
+			current[event.StepID] = map[string]bool{}
+		}
+		current[event.StepID][event.ActorID] = event.Kind == "approved"
+	}
+	for _, step := range m.Steps {
+		for _, owner := range step.RequiredApproverIDs {
+			if !current[step.ID][owner] {
+				return false
+			}
+		}
+	}
+	return true
+}
+func executionFailureKind(v string) bool {
+	return v == "failed_invariant" || v == "service_regression" || v == "conflicting_writes" || v == "capacity_exhaustion" || v == "interrupted_backfill"
+}
+
+func boundedEvidence(values []string) bool {
+	if len(values) == 0 || len(values) > 20 {
+		return false
+	}
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" || len(value) > 2000 {
+			return false
+		}
+	}
+	return true
+}
+
+type RecoveryRequest struct {
+	ExpectedVersion     int
+	IdempotencyKey      string
+	Kind                string
+	FailureID           string
+	Summary             string
+	Evidence            []string
+	RecoveryPoint       string
+	RecoveryAttestation string
+	RollbackReleaseID   string
+	RepairWorkID        string
+}
+
+func (s *Store) RecoverExecution(repo, schema, migration, execution, actor string, in RecoveryRequest) (Schema, Execution, RecoveryAction, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, schema)
+	if err != nil {
+		return Schema{}, Execution{}, RecoveryAction{}, err
+	}
+	for mi := range v.Migrations {
+		m := &v.Migrations[mi]
+		if m.ID != migration {
+			continue
+		}
+		for ei := range m.Executions {
+			x := &m.Executions[ei]
+			if x.ID != execution {
+				continue
+			}
+			for _, prior := range x.Recoveries {
+				if prior.IdempotencyKey == in.IdempotencyKey {
+					if prior.Kind != in.Kind || prior.FailureID != in.FailureID || prior.Summary != strings.TrimSpace(in.Summary) || !slices.Equal(prior.Evidence, in.Evidence) || prior.RecoveryPoint != in.RecoveryPoint || prior.RecoveryAttestation != in.RecoveryAttestation || prior.RollbackReleaseID != in.RollbackReleaseID || prior.RepairWorkID != in.RepairWorkID {
+						return v, *x, prior, ErrConflict
+					}
+					return v, *x, prior, nil
+				}
+			}
+			if x.Version != in.ExpectedVersion || x.Status != "paused" || in.IdempotencyKey == "" || len(in.IdempotencyKey) > 200 || strings.TrimSpace(in.Summary) == "" || len(in.Summary) > 2000 || !boundedEvidence(in.Evidence) || len(in.RecoveryPoint) > 1000 || len(in.RecoveryAttestation) > 2000 {
+				return v, *x, RecoveryAction{}, ErrInvalid
+			}
+			failureFound := false
+			for _, f := range x.Failures {
+				failureFound = failureFound || f.ID == in.FailureID
+			}
+			if !failureFound {
+				return v, *x, RecoveryAction{}, ErrInvalid
+			}
+			valid := in.Kind == "retry" || (in.Kind == "restore" && in.RecoveryPoint != "" && in.RecoveryAttestation != "") || (in.Kind == "traffic_rollback" && in.RollbackReleaseID != "" && x.CurrentPhase < 4) || (in.Kind == "repair" && in.RepairWorkID != "")
+			if in.Kind == "repair" {
+				found := false
+				for _, work := range m.Work {
+					found = found || work.ID == in.RepairWorkID
+				}
+				valid = valid && found
+			}
+			if !valid {
+				return v, *x, RecoveryAction{}, ErrInvalid
+			}
+			now := s.now()
+			a := RecoveryAction{ID: id(), IdempotencyKey: in.IdempotencyKey, Kind: in.Kind, FailureID: in.FailureID, Summary: strings.TrimSpace(in.Summary), Evidence: append([]string{}, in.Evidence...), RecoveryPoint: in.RecoveryPoint, RecoveryAttestation: in.RecoveryAttestation, RollbackReleaseID: in.RollbackReleaseID, RepairWorkID: in.RepairWorkID, ActorID: actor, CreatedAt: now}
+			x.Recoveries = append(x.Recoveries, a)
+			x.Version++
+			x.UpdatedAt = now
+			x.Events = append(x.Events, ExecutionEvent{Kind: "recovery_" + in.Kind, Phase: x.Phases[x.CurrentPhase].Name, Summary: a.Summary, ActorID: actor, CreatedAt: now})
+			m.UpdatedAt, v.UpdatedAt = now, now
+			return v, *x, a, s.write(v)
+		}
+	}
+	return Schema{}, Execution{}, RecoveryAction{}, ErrNotFound
 }
 func executionPhase(v string) bool {
 	return v == "expand" || v == "deploy" || v == "backfill" || v == "cutover" || v == "contract"
@@ -637,6 +830,30 @@ func (s *Store) AddEvent(repo, schema, migration, actor string, expected int, e 
 				return Schema{}, ErrInvalid
 			}
 		}
+		if e.Kind == "approval_revoked" {
+			authorized := false
+			for _, step := range m.Steps {
+				if step.ID == e.StepID {
+					for _, approver := range step.RequiredApproverIDs {
+						authorized = authorized || approver == actor
+					}
+				}
+			}
+			if !authorized {
+				return Schema{}, ErrInvalid
+			}
+			for xi := range m.Executions {
+				x := &m.Executions[xi]
+				if x.Status != "completed" && x.Status != "aborted" {
+					now := s.now()
+					x.Status = "paused"
+					x.Phases[x.CurrentPhase].State = "paused"
+					x.Failures = append(x.Failures, FailureEvidence{ID: id(), Kind: "revoked_approval", Phase: x.Phases[x.CurrentPhase].Name, SafetyPoint: "approval revocation boundary", Summary: e.Summary, Evidence: []string{"step:" + e.StepID, "approver:" + actor}, RecoveryActions: []string{"retry", "restore", "traffic_rollback", "repair"}, ActorID: actor, CreatedAt: now})
+					x.Version++
+					x.UpdatedAt = now
+				}
+			}
+		}
 		e.ID = id()
 		e.ActorID = actor
 		e.CreatedAt = s.now()
@@ -647,6 +864,113 @@ func (s *Store) AddEvent(repo, schema, migration, actor string, expected int, e 
 		return v, s.write(v)
 	}
 	return Schema{}, ErrNotFound
+}
+
+func (s *Store) ApproveRetirement(repo, schema, migration, actor string, expected int, summary string) (Schema, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, schema)
+	if err != nil {
+		return Schema{}, err
+	}
+	for mi := range v.Migrations {
+		m := &v.Migrations[mi]
+		if m.ID != migration {
+			continue
+		}
+		if m.Version != expected || m.Completion != nil || strings.TrimSpace(summary) == "" {
+			return v, ErrConflict
+		}
+		owners := map[string]bool{}
+		for _, rev := range v.Revisions {
+			if rev.Version == m.ToVersion {
+				for _, owner := range rev.OwnerIDs {
+					owners[owner] = true
+				}
+			}
+		}
+		if !owners[actor] {
+			return v, ErrInvalid
+		}
+		for _, approval := range m.RetirementApprovals {
+			if approval.OwnerID == actor {
+				return v, ErrConflict
+			}
+		}
+		now := s.now()
+		m.RetirementApprovals = append(m.RetirementApprovals, RetirementApproval{OwnerID: actor, Summary: summary, CreatedAt: now})
+		m.Version++
+		m.UpdatedAt, v.UpdatedAt = now, now
+		return v, s.write(v)
+	}
+	return Schema{}, ErrNotFound
+}
+
+func (s *Store) CompleteRetirement(repo, schema, migration, actor string, expected int, c RetirementCompletion) (Schema, RetirementCompletion, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, schema)
+	if err != nil {
+		return Schema{}, RetirementCompletion{}, err
+	}
+	for mi := range v.Migrations {
+		m := &v.Migrations[mi]
+		if m.ID != migration {
+			continue
+		}
+		if m.Version != expected || m.Completion != nil {
+			return v, RetirementCompletion{}, ErrConflict
+		}
+		owners, approved := map[string]bool{}, map[string]bool{}
+		for _, rev := range v.Revisions {
+			if rev.Version == m.ToVersion {
+				for _, owner := range rev.OwnerIDs {
+					owners[owner] = true
+				}
+			}
+		}
+		for _, a := range m.RetirementApprovals {
+			approved[a.OwnerID] = true
+		}
+		allOwners := len(owners) > 0
+		for owner := range owners {
+			allOwners = allOwners && approved[owner]
+		}
+		completed := false
+		observationSeconds := int64(0)
+		for _, x := range m.Executions {
+			if x.Status == "completed" {
+				completed = true
+				if x.ObservationPeriodSeconds > observationSeconds {
+					observationSeconds = x.ObservationPeriodSeconds
+				}
+			}
+		}
+		validEnvironments := len(c.Environments) > 0
+		seen := map[string]bool{}
+		for _, env := range c.Environments {
+			if env.EnvironmentID == "" || seen[env.EnvironmentID] || env.CurrentVersion != m.ToVersion || len(env.RetainedData) == 0 || len(env.ChangedData) == 0 || len(env.VerifiedDeletion) == 0 || env.CostUnits < 0 {
+				validEnvironments = false
+			}
+			seen[env.EnvironmentID] = true
+		}
+		if !owners[actor] || !allOwners || !completed || !c.ObservationEndedAt.After(c.ObservationStartedAt) || c.ObservationEndedAt.Sub(c.ObservationStartedAt) < time.Duration(observationSeconds)*time.Second || c.ObservationEndedAt.After(s.now()) || len(c.CompatibilityRemoved) == 0 || len(c.ObsoleteFields) == 0 || len(c.IrreversibleDecisions) == 0 || !validEnvironments {
+			return v, RetirementCompletion{}, ErrInvalid
+		}
+		c.ApprovedBy = make([]string, 0, len(approved))
+		for owner := range approved {
+			c.ApprovedBy = append(c.ApprovedBy, owner)
+		}
+		sort.Strings(c.ApprovedBy)
+		now := s.now()
+		c.CompletedBy, c.CompletedAt = actor, now
+		m.Completion = &c
+		m.Version++
+		m.UpdatedAt, v.UpdatedAt = now, now
+		m.Events = append(m.Events, Event{ID: id(), Kind: "retirement_completed", Summary: "compatibility machinery retired after observation", ActorID: actor, CreatedAt: now})
+		return v, c, s.write(v)
+	}
+	return Schema{}, RetirementCompletion{}, ErrNotFound
 }
 
 // CreateMigrationWork holds the schema-plan CAS boundary while an ordinary
