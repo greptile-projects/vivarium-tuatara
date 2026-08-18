@@ -979,7 +979,7 @@ func (s *Store) CompleteRetirement(repo, schema, migration, actor string, expect
 			}
 			seen[env.EnvironmentID] = true
 		}
-		if !owners[actor] || !allOwners || latestSuccess.IsZero() || c.ObservationStartedAt.Before(latestSuccess) || !c.ObservationEndedAt.After(c.ObservationStartedAt) || c.ObservationEndedAt.Sub(c.ObservationStartedAt) < time.Duration(observationSeconds)*time.Second || c.ObservationEndedAt.After(s.now()) || len(c.CompatibilityRemoved) == 0 || len(c.ObsoleteFields) == 0 || len(c.IrreversibleDecisions) == 0 || !validEnvironments {
+		if !owners[actor] || !allOwners || latestSuccess.IsZero() || !c.ObservationStartedAt.After(latestSuccess) || !c.ObservationEndedAt.After(c.ObservationStartedAt) || c.ObservationEndedAt.Sub(c.ObservationStartedAt) < time.Duration(observationSeconds)*time.Second || c.ObservationEndedAt.After(s.now()) || len(c.CompatibilityRemoved) == 0 || len(c.ObsoleteFields) == 0 || len(c.IrreversibleDecisions) == 0 || !validEnvironments {
 			return v, RetirementCompletion{}, ErrInvalid
 		}
 		c.ApprovedBy = make([]string, 0, len(approved))

@@ -200,6 +200,12 @@ func TestProductionExecutionRequiresEvidenceAndKeepsAgentsDelegated(t *testing.T
 	if _, _, err = s.CompleteRetirement("repo", v.ID, migration.ID, "owner", v.Migrations[0].Version, predated); err != ErrInvalid {
 		t.Fatalf("pre-success observation accepted: %v", err)
 	}
+	equalityBoundary := completionInput
+	equalityBoundary.ObservationStartedAt = completedAt
+	equalityBoundary.ObservationEndedAt = completedAt.Add(time.Hour)
+	if _, _, err = s.CompleteRetirement("repo", v.ID, migration.ID, "owner", v.Migrations[0].Version, equalityBoundary); err != ErrInvalid {
+		t.Fatalf("observation starting exactly at success accepted: %v", err)
+	}
 	wrongEnvironment := completionInput
 	wrongEnvironment.Environments = append([]EnvironmentCompletion{}, completionInput.Environments...)
 	wrongEnvironment.Environments[0].EnvironmentID = "never-run"
