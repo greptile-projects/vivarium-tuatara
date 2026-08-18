@@ -110,6 +110,14 @@ assumptions and impact analysis; only an affected human owner can acknowledge. R
 source, provider observation, definition, and policy input, marking drift stale and suppressing prior
 acknowledgements. These records remain review evidence without operational authority.
 
+Authorized collaborators can attach isolated or policy-approved ephemeral rehearsals to a current
+plan. Each freezes expiring provider scope limited to changed resources, synthetic or permitted state,
+and repository checks for provisioning, connectivity, access, policy, service journeys, failure, cost,
+teardown, and recovery. Publishing a run names only the exact-candidate bounded workspace and checks;
+the platform derives sanitized logs, timing, artifacts, resource graphs, attestations, and agent
+actions. Destructive effects remain explicitly unsupported, stale plans reject evidence, and no
+production or provider authority is conferred.
+
 Support guidance can be proven in ordinary revision-pinned development workspaces. Immutable attempts
 bind an exact cited answer revision to sanitized thread inputs, declared environment, commands and
 outputs, artifacts, cost, and result; fresh-workspace reruns preserve the original record and reads expose

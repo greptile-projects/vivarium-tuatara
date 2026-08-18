@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
@@ -15,6 +16,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
 type infrastructureInput struct {
@@ -22,7 +24,7 @@ type infrastructureInput struct {
 	Revision        infrastructure.Revision `json:"revision"`
 }
 
-func registerInfrastructureRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, definitions *infrastructure.Store, pulls *pullrequests.Store, releaseStore *releases.Store, deploymentStore *deployments.Store) {
+func registerInfrastructureRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, definitions *infrastructure.Store, pulls *pullrequests.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, workspaceStore *workspaces.Store) {
 	mux.HandleFunc("GET /repositories/{id}/infrastructure", func(w http.ResponseWriter, r *http.Request) {
 		actor, authenticated, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
 		if !ok {
@@ -251,7 +253,158 @@ func registerInfrastructureRoutes(mux *http.ServeMux, git *storage.Store, catalo
 		})
 		writeInfrastructurePlan(w, out, err, 201)
 	})
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/infrastructure-plans/{plan_id}/rehearsals", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		pull, err := pulls.Get(r.PathValue("id"), r.PathValue("pull_id"))
+		if err != nil {
+			writeAPIError(w, 404, "pull_request_not_found", "pull request not found")
+			return
+		}
+		plan, err := definitions.GetPlan(r.PathValue("plan_id"))
+		if err != nil || plan.RepositoryID != pull.RepositoryID || plan.PullRequestID != pull.ID {
+			writeAPIError(w, 404, "infrastructure_plan_not_found", "infrastructure plan not found")
+			return
+		}
+		current, _ := definitions.Get(plan.DefinitionID, true)
+		if !definitions.ProjectPlan(plan, current, pull.SourceCommitID, func(x infrastructure.PolicyEffect) bool {
+			return infrastructurePolicyCurrent(git, pull.SourceRepositoryID, plan.SourceRevision, x)
+		}).Fresh {
+			writeAPIError(w, 409, "infrastructure_plan_stale", "only a current exact plan can be rehearsed")
+			return
+		}
+		var in infrastructure.Rehearsal
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a scoped ephemeral rehearsal and complete repository checks are required")
+			return
+		}
+		var out infrastructure.ChangePlan
+		var rehearsal infrastructure.Rehearsal
+		err = pulls.WithSourceRevision(pull.RepositoryID, pull.ID, plan.SourceRevision, func(p pullrequests.PullRequest) error {
+			var e error
+			out, rehearsal, e = definitions.CreateRehearsalCurrent(plan.ID, actor.UserID, in)
+			return e
+		})
+		if err != nil {
+			writeInfrastructurePlan(w, out, err, 201)
+			return
+		}
+		writeJSON(w, 201, map[string]any{"plan": out, "rehearsal": rehearsal})
+	})
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/infrastructure-plans/{plan_id}/rehearsals/{rehearsal_id}/runs", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if workspaceStore == nil {
+			writeAPIError(w, 422, "infrastructure_rehearsal_unavailable", "bounded workspace evidence is unavailable")
+			return
+		}
+		var request struct {
+			WorkspaceID string   `json:"workspace_id"`
+			CheckIDs    []string `json:"check_ids"`
+		}
+		if decodeJSON(r, &request) != nil {
+			writeAPIError(w, 400, "invalid_request", "workspace_id and exact check_ids are required")
+			return
+		}
+		pull, err := pulls.Get(r.PathValue("id"), r.PathValue("pull_id"))
+		if err != nil {
+			writeAPIError(w, 404, "pull_request_not_found", "pull request not found")
+			return
+		}
+		plan, err := definitions.GetPlan(r.PathValue("plan_id"))
+		if err != nil || plan.RepositoryID != pull.RepositoryID || plan.PullRequestID != pull.ID {
+			writeAPIError(w, 404, "infrastructure_plan_not_found", "infrastructure plan not found")
+			return
+		}
+		current, _ := definitions.Get(plan.DefinitionID, true)
+		if !definitions.ProjectPlan(plan, current, pull.SourceCommitID, func(x infrastructure.PolicyEffect) bool {
+			return infrastructurePolicyCurrent(git, pull.SourceRepositoryID, plan.SourceRevision, x)
+		}).Fresh {
+			writeAPIError(w, 409, "infrastructure_plan_stale", "stale plans cannot receive rehearsal evidence")
+			return
+		}
+		var rehearsal *infrastructure.Rehearsal
+		for i := range plan.Rehearsals {
+			if plan.Rehearsals[i].ID == r.PathValue("rehearsal_id") {
+				rehearsal = &plan.Rehearsals[i]
+			}
+		}
+		ws, wsErr := workspaceStore.Get(request.WorkspaceID)
+		if rehearsal == nil || wsErr != nil || ws.RepositoryID != plan.RepositoryID || ws.CreatorID != actor.UserID || ws.CommitID != plan.SourceRevision || time.Now().UTC().After(rehearsal.Scope.CredentialExpiresAt) {
+			writeAPIError(w, 422, "invalid_infrastructure_rehearsal_workspace", "evidence must come from the collaborator's exact-candidate workspace before scoped credentials expire")
+			return
+		}
+		run, valid := bindInfrastructureRehearsal(ws, plan, *rehearsal, request.CheckIDs)
+		if !valid {
+			writeAPIError(w, 422, "invalid_infrastructure_rehearsal_evidence", "each declared check requires one fresh sanitized retained command outcome")
+			return
+		}
+		var out infrastructure.ChangePlan
+		out, run, err = definitions.AddRehearsalRun(plan.ID, rehearsal.ID, actor.UserID, run)
+		if err != nil {
+			writeInfrastructurePlan(w, out, err, 201)
+			return
+		}
+		writeJSON(w, 201, map[string]any{"plan": out, "run": run})
+	})
 }
+
+func bindInfrastructureRehearsal(ws workspaces.Workspace, plan infrastructure.ChangePlan, rehearsal infrastructure.Rehearsal, checkIDs []string) (infrastructure.RehearsalRun, bool) {
+	if len(checkIDs) != len(rehearsal.Checks) {
+		return infrastructure.RehearsalRun{}, false
+	}
+	requested := map[string]bool{}
+	for _, id := range checkIDs {
+		if requested[id] {
+			return infrastructure.RehearsalRun{}, false
+		}
+		requested[id] = true
+	}
+	retained := map[string][]workspaces.CommandOutcome{}
+	for _, c := range ws.Commands {
+		retained[c.CommandSHA256] = append(retained[c.CommandSHA256], c)
+	}
+	run := infrastructure.RehearsalRun{WorkspaceID: ws.ID, Outcomes: []infrastructure.RehearsalOutcome{}, Artifacts: []infrastructure.RehearsalArtifact{}, ResourceGraph: plan.Candidate.Resources, Attestations: []string{}, AgentActions: []string{}}
+	passed := true
+	for _, check := range rehearsal.Checks {
+		if !requested[check.ID] {
+			return run, false
+		}
+		digest := infrastructure.CommandDigest(check.Command)
+		matches := retained[digest]
+		if len(matches) != 1 || matches[0].StartedAt.Before(rehearsal.CreatedAt) || matches[0].CompletedAt.Before(matches[0].StartedAt) || len(matches[0].Output) > 65500 || reusableSecret.MatchString(matches[0].Output) {
+			return run, false
+		}
+		x := matches[0]
+		status := "passed"
+		if x.ExitCode != 0 {
+			status, passed = "failed", false
+		}
+		run.Outcomes = append(run.Outcomes, infrastructure.RehearsalOutcome{CheckID: check.ID, Kind: check.Kind, Status: status, ExitCode: x.ExitCode, SanitizedLog: x.Output, DurationMS: x.CompletedAt.Sub(x.StartedAt).Milliseconds(), StartedAt: x.StartedAt, CompletedAt: x.CompletedAt, CommandDigest: digest, ActorID: x.ActorID})
+		run.Attestations = append(run.Attestations, "workspace:"+ws.ID+" command_outcome:"+x.ID+" command_sha256:"+digest)
+		if x.ActorID != actorForWorkspace(ws) {
+			run.AgentActions = append(run.AgentActions, "actor:"+x.ActorID+" command_outcome:"+x.ID)
+		}
+	}
+	for _, change := range ws.Changes {
+		if reusableSecret.MatchString(change.Path) {
+			return run, false
+		}
+		run.Artifacts = append(run.Artifacts, infrastructure.RehearsalArtifact{Path: change.Path, Digest: change.SHA256, Size: change.Size})
+	}
+	if passed {
+		run.Result = "passed"
+	} else {
+		run.Result = "failed"
+	}
+	return run, true
+}
+
+func actorForWorkspace(ws workspaces.Workspace) string { return ws.CreatorID }
 
 func infrastructurePolicyCurrent(git *storage.Store, repoID, revision string, policy infrastructure.PolicyEffect) bool {
 	_, digest, ok := infrastructureCommitBlob(git, repoID, revision, policy.Path)

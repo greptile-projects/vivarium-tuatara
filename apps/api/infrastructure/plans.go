@@ -69,6 +69,7 @@ type ChangePlan struct {
 	Fresh                  bool           `json:"fresh"`
 	StaleReasons           []string       `json:"stale_reasons"`
 	AcknowledgedOwnerIDs   []string       `json:"acknowledged_owner_ids"`
+	Rehearsals             []Rehearsal    `json:"rehearsals"`
 	CreatedBy              string         `json:"created_by"`
 	CreatedAt              time.Time      `json:"created_at"`
 }
@@ -100,7 +101,7 @@ func (s *Store) CreatePlan(repo, actor string, in PlanCreation) (ChangePlan, err
 			return ErrInvalid
 		}
 		now := s.now()
-		out = ChangePlan{ID: randomID(), RepositoryID: repo, PullRequestID: in.PullRequestID, SourceRevision: in.Revision, DefinitionID: in.Definition.ID, DefinitionVersion: in.Definition.CurrentVersion, ObservationFingerprint: observationFingerprint(in.Definition), ObservationsValidUntil: observationExpiry(in.Definition), Candidate: in.Candidate, CandidatePath: in.CandidatePath, CandidateDigest: in.CandidateDigest, Changes: changes, PolicyEffects: in.Policies, AffectedOwnerIDs: owners, Events: []PlanEvent{}, Fresh: true, StaleReasons: []string{}, AcknowledgedOwnerIDs: []string{}, CreatedBy: actor, CreatedAt: now}
+		out = ChangePlan{ID: randomID(), RepositoryID: repo, PullRequestID: in.PullRequestID, SourceRevision: in.Revision, DefinitionID: in.Definition.ID, DefinitionVersion: in.Definition.CurrentVersion, ObservationFingerprint: observationFingerprint(in.Definition), ObservationsValidUntil: observationExpiry(in.Definition), Candidate: in.Candidate, CandidatePath: in.CandidatePath, CandidateDigest: in.CandidateDigest, Changes: changes, PolicyEffects: in.Policies, AffectedOwnerIDs: owners, Events: []PlanEvent{}, Rehearsals: []Rehearsal{}, Fresh: true, StaleReasons: []string{}, AcknowledgedOwnerIDs: []string{}, CreatedBy: actor, CreatedAt: now}
 		return s.writePlan(out)
 	})
 	return out, err
