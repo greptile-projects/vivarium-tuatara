@@ -235,21 +235,21 @@ func registerInfrastructureRoutes(mux *http.ServeMux, git *storage.Store, catalo
 			actorID, actorType = actor.AgentID, "agent"
 		}
 		var out infrastructure.ChangePlan
-		err = pulls.WithSourceRevision(pull.RepositoryID, pull.ID, plan.SourceRevision, func(_ pullrequests.PullRequest) error {
+		err = pulls.WithSourceRevision(pull.RepositoryID, pull.ID, plan.SourceRevision, func(guardedPull pullrequests.PullRequest) error {
 			var appendErr error
 			out, appendErr = definitions.AddPlanEventCurrent(plan.ID, actorID, actorType, in.ExpectedEvents, in.Event)
-			return appendErr
-		})
-		if err == nil {
+			if appendErr != nil {
+				return appendErr
+			}
 			latest, latestErr := definitions.Get(plan.DefinitionID, true)
 			if latestErr != nil {
-				writeAPIError(w, 500, "infrastructure_plan_unavailable", "infrastructure plan dependencies could not be revalidated")
-				return
+				return latestErr
 			}
-			out = definitions.ProjectPlan(out, latest, pull.SourceCommitID, func(x infrastructure.PolicyEffect) bool {
+			out = definitions.ProjectPlan(out, latest, guardedPull.SourceCommitID, func(x infrastructure.PolicyEffect) bool {
 				return infrastructurePolicyCurrent(git, pull.SourceRepositoryID, plan.SourceRevision, x)
 			})
-		}
+			return nil
+		})
 		writeInfrastructurePlan(w, out, err, 201)
 	})
 }
