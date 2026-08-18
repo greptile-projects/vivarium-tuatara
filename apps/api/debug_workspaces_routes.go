@@ -935,7 +935,7 @@ func debugPassingChecks(runs []checkruns.Run, ids []string, deployedCommit strin
 	selected := map[string]checkruns.Run{}
 	for _, run := range runs {
 		for _, id := range ids {
-			if run.ID == id && run.CommitID == deployedCommit && run.State == "completed" && run.ExitCode != nil && *run.ExitCode == 0 {
+			if run.ID == id && run.CommitID == deployedCommit && (run.State == "succeeded" || run.State == "completed") && run.ExitCode != nil && *run.ExitCode == 0 {
 				selected[id] = run
 			}
 		}

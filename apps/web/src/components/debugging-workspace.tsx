@@ -1208,10 +1208,18 @@ export function DebuggingWorkspace({ repositoryID }: { repositoryID: string }) {
                   </form>
                 )}
                 {p.actions.map((a) => (
-                  <p key={a.id} className="mt-2 border-t pt-2 text-xs">
-                    <strong>{a.outcome}</strong> · {a.provenance}
-                    {a.gaps.length > 0 ? ` · gaps: ${a.gaps.join(", ")}` : " · no declared gaps"}
-                  </p>
+                  <div key={a.id} className="mt-2 border-t pt-2 text-xs">
+                    <p>
+                      <strong>{a.outcome}</strong> · {a.provenance}
+                      {a.gaps.length > 0 ? ` · gaps: ${a.gaps.join(", ")}` : " · no declared gaps"}
+                    </p>
+                    <p className="mt-1 text-[var(--muted)]">Transformations: {a.transformations.join(", ")}</p>
+                    {a.artifacts.map((artifact) => (
+                      <p key={`${a.id}-${artifact.digest}`} className="mt-1 text-[var(--muted)]">
+                        {artifact.kind} · {artifact.size_bytes} bytes · redaction: {artifact.redaction} · digest <code>{artifact.digest.slice(0, 12)}</code>
+                      </p>
+                    ))}
+                  </div>
                 ))}
               </div>
             ))}

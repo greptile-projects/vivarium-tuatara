@@ -215,7 +215,7 @@ func TestDebugWorkspaceReadRedactsAllRestrictedEvidenceMetadata(t *testing.T) {
 func TestDebugRepairChecksMustMatchDeployedRevision(t *testing.T) {
 	zero := 0
 	source, deployed := strings.Repeat("a", 40), strings.Repeat("b", 40)
-	runs := []checkruns.Run{{ID: strings.Repeat("1", 32), CommitID: source, State: "completed", ExitCode: &zero}, {ID: strings.Repeat("2", 32), CommitID: deployed, State: "completed", ExitCode: &zero}}
+	runs := []checkruns.Run{{ID: strings.Repeat("1", 32), CommitID: source, State: "completed", ExitCode: &zero}, {ID: strings.Repeat("2", 32), CommitID: deployed, State: "succeeded", ExitCode: &zero}}
 	selected := debugPassingChecks(runs, []string{runs[0].ID, runs[1].ID}, deployed)
 	if len(selected) != 1 || selected[runs[1].ID].CommitID != deployed {
 		t.Fatalf("selected checks from wrong revision: %#v", selected)

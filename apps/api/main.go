@@ -2371,6 +2371,21 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 			writeUncertainMutation(w, merged)
 			return
 		}
+		if merged.MergeCommitID != nil {
+			required, requiredErr := repositoriesStore.RequiredChecks(merged.RepositoryID, merged.TargetBranch)
+			if requiredErr != nil {
+				log.Printf("resolve required checks after merge: %v", requiredErr)
+				writeUncertainMutation(w, merged)
+				return
+			}
+			integrated := merged
+			integrated.SourceCommitID = *merged.MergeCommitID
+			if checkErr := startCheckRuns(gitStore, checkRunStore, integrated, required...); checkErr != nil {
+				log.Printf("start required checks after merge: %v", checkErr)
+				writeUncertainMutation(w, merged)
+				return
+			}
+		}
 		if documentationStore != nil {
 			if publicationErr := publishMergedDocumentation(gitStore, documentationStore, merged, actor.UserID); publicationErr != nil {
 				log.Printf("publish merged documentation: %v", publicationErr)

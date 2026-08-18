@@ -71,6 +71,11 @@
   be included and passing; caller-selected passing checks cannot hide an omitted, pending, failed, or stale required run.
   Failed-measure actions persist an intent before execution; rollback retries reuse
   the exact existing recovery and post-action record races return an explicit reconciliation-pending response.
+  Ordinary direct merges start the target branch's required checks again at the exact merge commit so a later
+  release and staged deployment can satisfy this revision-exact validation boundary; canonical succeeded check
+  runs and legacy completed runs both require an explicit zero exit code. If required-check policy resolution or
+  scheduling fails after the Git merge, the merge response remains explicitly uncertain; retrying the idempotent
+  merge boundary reconciles missing exact-commit runs before reporting success.
 
 ## Consumer API applications and sandbox
 

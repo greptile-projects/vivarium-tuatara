@@ -3,6 +3,16 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Connected production debugging
+
+The `debugging-journey.spec.ts` browser/API/Git journey carries an intermittent released-user failure through
+an audience-bound debugging workspace, denied and narrowed trace consent, visible privacy transformations,
+human/agent cited diagnosis, a revoked investigation, a failed replay and deterministic privacy-safe refinement,
+and a failed then corrected repair. The reviewed merge reruns the frozen replay and ordinary required check at
+the exact integration revision before release, staged deployment, production-signal validation, and web inspection.
+The retained trail keeps user impact, gaps, costs, authorship, authority, delivery, and outcome connected without
+granting the debugging workspace runtime, Git, review, merge, release, or deployment authority.
+
 ## Entrypoints
 
 - `apps/web` — Next.js frontend. Starts at `src/app/page.tsx`; routes are
