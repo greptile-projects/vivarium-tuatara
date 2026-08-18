@@ -131,6 +131,31 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 		v.History = history
 		return v
 	}
+	projectAgentPacket := func(v debugworkspaces.Workspace, x debugworkspaces.AgentInvestigation) map[string]any {
+		allowed := []debugworkspaces.Citation{}
+		for _, citation := range v.Citations {
+			for _, id := range x.CitationIDs {
+				if citation.ID == id {
+					allowed = append(allowed, citation)
+				}
+			}
+		}
+		claims := []debugworkspaces.Claim{}
+		for _, claim := range v.Claims {
+			permitted := true
+			for _, id := range claim.CitationIDs {
+				found := false
+				for _, allowedID := range x.CitationIDs {
+					found = found || id == allowedID
+				}
+				permitted = permitted && found
+			}
+			if permitted {
+				claims = append(claims, claim)
+			}
+		}
+		return map[string]any{"investigation": x, "citations": allowed, "claims": claims}
+	}
 	mux.HandleFunc("GET /repositories/{id}/debugging-workspaces", func(w http.ResponseWriter, r *http.Request) {
 		c, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
 		if !ok {
@@ -341,29 +366,7 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 					writeAPIError(w, 403, "debugging_agent_access_changed", "the investigation initiator no longer has repository access")
 					return
 				}
-				allowed := []debugworkspaces.Citation{}
-				for _, citation := range v.Citations {
-					for _, id := range x.CitationIDs {
-						if citation.ID == id {
-							allowed = append(allowed, citation)
-						}
-					}
-				}
-				claims := []debugworkspaces.Claim{}
-				for _, claim := range v.Claims {
-					permitted := true
-					for _, id := range claim.CitationIDs {
-						found := false
-						for _, allowedID := range x.CitationIDs {
-							found = found || id == allowedID
-						}
-						permitted = permitted && found
-					}
-					if permitted {
-						claims = append(claims, claim)
-					}
-				}
-				writeJSON(w, 200, map[string]any{"investigation": x, "citations": allowed, "claims": claims})
+				writeJSON(w, 200, projectAgentPacket(v, x))
 				return
 			}
 		}
@@ -379,13 +382,13 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 			writeAPIError(w, 404, "debugging_agent_not_found", "investigation not found")
 			return
 		}
-		initiator := ""
+		var selected debugworkspaces.AgentInvestigation
 		for _, investigation := range current.AgentInvestigations {
 			if investigation.ID == r.PathValue("investigation_id") && investigation.CredentialID == c.ID {
-				initiator = investigation.InitiatorID
+				selected = investigation
 			}
 		}
-		if initiator == "" || !canRead(current, initiator) || catalog.WithCurrentParticipant(initiator, current.RepositoryID, func() error { return nil }) != nil {
+		if selected.ID == "" || !canRead(current, selected.InitiatorID) || catalog.WithCurrentParticipant(selected.InitiatorID, current.RepositoryID, func() error { return nil }) != nil {
 			writeAPIError(w, 403, "debugging_agent_access_changed", "the investigation initiator no longer has repository access")
 			return
 		}
@@ -398,7 +401,16 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 			return
 		}
 		out, e := workspaces.AgentClaim(r.PathValue("id"), r.PathValue("workspace_id"), r.PathValue("investigation_id"), c.ID, in.Claim, in.ExpectedVersion)
-		writeDebugWorkspace(w, out, e, 201)
+		if e != nil {
+			writeDebugWorkspace(w, debugworkspaces.Workspace{}, e, 201)
+			return
+		}
+		for _, investigation := range out.AgentInvestigations {
+			if investigation.ID == selected.ID {
+				selected = investigation
+			}
+		}
+		writeJSON(w, 201, projectAgentPacket(out, selected))
 	})
 	mux.HandleFunc("POST /repositories/{id}/debugging-workspaces/{workspace_id}/agent-investigations/{investigation_id}/controls", func(w http.ResponseWriter, r *http.Request) {
 		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")

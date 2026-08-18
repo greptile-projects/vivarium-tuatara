@@ -29,6 +29,8 @@ pause, resume, or revoke them, and revocation or initiator access loss stops pub
 observability, deployment, environment, Git, or mutation authority.
 Every diagnosis mutation rechecks the restricted workspace audience before parsing or issuing credentials, and
 agent-authored claims use the same statement-size and credential-shaped-content rejection as human claims.
+Both agent investigation reads and successful claim writes project only the investigation's selected citations
+and claims wholly supported by that citation set; a write response never returns the enclosing workspace.
 
 ## What this is
 
