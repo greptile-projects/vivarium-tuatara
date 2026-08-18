@@ -3660,6 +3660,19 @@ and repository-bound read-only agents can investigate, while only a named affect
 acknowledge. Stale plans reject new events. Plans grant no provider, credential, policy, review, merge,
 deployment, environment, or execution authority and share `$INFRASTRUCTURE_STORAGE_ROOT`.
 
+`POST .../infrastructure-plans/{plan_id}/rehearsals` freezes a current plan's isolated or
+policy-approved ephemeral scope, credential expiry and changed-resource scope, synthetic or permitted
+state, and repository checks. Checks cover `provisioning`, `connectivity`, `access`, `policy`,
+`service_journey`, `failure`, `cost`, `teardown`, and `recovery`. Replace and destroy changes require
+an `unsupported_effects` entry rather than being represented as rehearsed authoritative destruction.
+
+`POST .../rehearsals/{rehearsal_id}/runs` accepts only `workspace_id` and all declared `check_ids`.
+The caller-owned workspace must use the exact pull revision and retain one fresh sanitized outcome per
+command before credential expiry. The server derives logs, exit status, timing, artifact digests,
+candidate resource graph, attestations, and agent actions. Credential-shaped output and stale plans
+are rejected; retained evidence grants no provider, production, deployment, review, merge, or
+destructive authority.
+
 # Durable-state migration work
 
 `POST /repositories/{id}/durable-schemas/{schema_id}/migrations/{migration_id}/work`

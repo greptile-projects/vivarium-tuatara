@@ -135,6 +135,12 @@ whenever dependencies change or the web job fails before it starts.
   assumptions and impact analysis, but only an exact affected human owner can acknowledge. Reads
   re-resolve the pull, definition, observations, and policy blobs; drift marks a plan stale and removes
   its acknowledgements from the current projection. Plans grant no operational or review authority.
+  Current plans retain isolated or policy-approved ephemeral rehearsals with expiring provider scope
+  limited to changed resources and synthetic or explicitly permitted state. Repository checks cover
+  provisioning, connectivity, access, policy, service journeys, failure, cost, teardown, and recovery.
+  Runs derive sanitized outcomes, timing, artifacts, resource graphs, attestations, and agent actions
+  from the collaborator's exact-candidate bounded workspace. Destructive effects stay explicitly
+  unsupported; rehearsals grant no production, provider, deployment, review, merge, or environment authority.
 
 - **Developer support** — `/support` and
   `/repositories/{id}/support-threads` retain contextual questions separately
