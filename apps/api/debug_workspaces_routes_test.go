@@ -70,6 +70,11 @@ func TestDebugWorkspaceReadRedactsAllRestrictedEvidenceMetadata(t *testing.T) {
 	if len(projected.Probes) != 0 {
 		t.Fatalf("probe escaped its explicit audience: %#v", projected.Probes)
 	}
+	for _, event := range projected.History {
+		if strings.HasPrefix(event.Kind, "probe_") {
+			t.Fatalf("probe history escaped its explicit audience: %#v", projected.History)
+		}
+	}
 	response = authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID, "", creator.Credential.Token, http.StatusOK)
 	decodeResponse(t, response, &projected)
 	if len(projected.Probes) != 0 {
@@ -95,12 +100,26 @@ func TestDebugWorkspaceReadRedactsAllRestrictedEvidenceMetadata(t *testing.T) {
 	if approved.Probes[1].Status != "approved" || approved.Probes[1].DecidedBy != owner.User.ID || approved.Probes[1].ApprovedPolicy == nil || approved.Probes[1].ApprovedPolicy.Privacy != "remove_user_identifiers" {
 		t.Fatalf("probe decision = %#v", approved.Probes[1])
 	}
+	visibleLifecycle := false
+	for _, event := range approved.History {
+		if event.Kind == "probe_approved" && event.To == approved.Probes[1].ID {
+			visibleLifecycle = true
+		}
+	}
+	if !visibleLifecycle {
+		t.Fatalf("explicit audience lost probe history: %#v", approved.History)
+	}
 	eventBody := `{"expected_version":4,"kind":"hypothesis","value":"latency correlates with queue depth","message":"excluded collaborator observation"}`
 	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/events", eventBody, reader.Credential.Token, http.StatusCreated)
 	var eventProjection debugworkspaces.Workspace
 	decodeResponse(t, response, &eventProjection)
 	if len(eventProjection.Probes) != 0 {
 		t.Fatalf("event response escaped probe audience: %#v", eventProjection.Probes)
+	}
+	for _, event := range eventProjection.History {
+		if strings.HasPrefix(event.Kind, "probe_") {
+			t.Fatalf("event response escaped hidden probe history: %#v", eventProjection.History)
+		}
 	}
 	if len(eventProjection.Hypotheses) != 1 || eventProjection.Hypotheses[0].CreatedBy != reader.User.ID {
 		t.Fatalf("event response lost permitted mutation: %#v", eventProjection.Hypotheses)

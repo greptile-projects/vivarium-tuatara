@@ -25,9 +25,9 @@
   requester while that approval is live, retaining timing, collector provenance, transformations, explicit
   gaps, and digest-addressed sanitized artifact metadata—not production payloads. A result with gaps cannot
   claim completion; denied access, overload, partial capture, expiry, or `POST .../revoke` stops collection
-  and remains distinguishable. Probe records are projected only to their requester and explicit audience;
-  workspace roles do not bypass that boundary. Approval grants no general observability, environment,
-  credential, or diagnostic authority.
+  and remains distinguishable. Probe records and their lifecycle history are projected only to their
+  requester and explicit audience; workspace roles do not bypass that boundary. Approval grants no general
+  observability, environment, credential, or diagnostic authority.
   Privacy controls are ordered from `hash_user_identifiers` through `remove_user_identifiers` to
   `remove_user_data`; security controls are ordered from `detect_secrets` through `redact_secrets` to
   `drop_secret_bearing_records`. Approval may retain or strengthen either control, never weaken it.

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -83,22 +84,33 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			}
 		}
 		visible := []debugworkspaces.Probe{}
+		visibleProbeIDs := map[string]bool{}
 		for _, p := range v.Probes {
 			if p.Status == "approved" && !time.Now().UTC().Before(p.ExpiresAt) {
 				p.Status = "expired"
 			}
 			if p.RequestedBy == actor {
 				visible = append(visible, p)
+				visibleProbeIDs[p.ID] = true
 				continue
 			}
 			for _, id := range p.AudienceUserIDs {
 				if id == actor {
 					visible = append(visible, p)
+					visibleProbeIDs[p.ID] = true
 					break
 				}
 			}
 		}
 		v.Probes = visible
+		history := make([]debugworkspaces.Event, 0, len(v.History))
+		for _, event := range v.History {
+			if strings.HasPrefix(event.Kind, "probe_") && !visibleProbeIDs[event.To] {
+				continue
+			}
+			history = append(history, event)
+		}
+		v.History = history
 		return v
 	}
 	mux.HandleFunc("GET /repositories/{id}/debugging-workspaces", func(w http.ResponseWriter, r *http.Request) {

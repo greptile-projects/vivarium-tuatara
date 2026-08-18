@@ -19,7 +19,7 @@ observability, credential, environment, deployment, Git, or data grant.
 Probe privacy controls form the closed order `hash_user_identifiers` < `remove_user_identifiers` <
 `remove_user_data`; security controls form `detect_secrets` < `redact_secrets` <
 `drop_secret_bearing_records`. Approval accepts equal or stronger controls only. Workspace creator, owner,
-and access roles never bypass a probe's explicit audience for reads.
+and access roles never bypass a probe's explicit audience for probe records or lifecycle history.
 
 ## What this is
 
