@@ -1,6 +1,9 @@
 package durableschemas
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestReviewedSchemasAndMigrationHistory(t *testing.T) {
 	s, _ := New(t.TempDir())
@@ -48,6 +51,23 @@ func TestMigrationRequiresExplicitIrreversibility(t *testing.T) {
 	}
 }
 
+func TestCriticalFailuresRejectGenericRetry(t *testing.T) {
+	for _, kind := range []string{"service_regression", "capacity_exhaustion", "conflicting_writes"} {
+		failure := FailureEvidence{Kind: kind}
+		if recoveryValidForFailure(failure, "retry", "", "", "", "") {
+			t.Fatalf("generic retry accepted for %s", kind)
+		}
+		if !recoveryValidForFailure(failure, "retry", "", "remediation attested", "", "") {
+			t.Fatalf("attested retry rejected for %s", kind)
+		}
+	}
+	for _, kind := range []string{"failed_invariant", "interrupted_backfill"} {
+		if !recoveryValidForFailure(FailureEvidence{Kind: kind}, "retry", "", "", "", "") {
+			t.Fatalf("idempotent retry rejected for %s", kind)
+		}
+	}
+}
+
 func TestBoundedRehearsalRetainsExactSanitizedEvidence(t *testing.T) {
 	s, _ := New(t.TempDir())
 	r := Revision{Name: "orders", StoreKind: "database", Description: "orders", Definition: "v1", DefinitionPath: "db.sql", OwnerIDs: []string{"owner"}, Compatibility: []string{"dual"}, Retention: "year", Privacy: []string{"tokenized"}, PullRequestID: "1", ReviewedCommit: "abc", Rationale: "baseline"}
@@ -91,7 +111,7 @@ func TestProductionExecutionRequiresEvidenceAndKeepsAgentsDelegated(t *testing.T
 	migration := v.Migrations[0]
 	rehearsal := Rehearsal{Name: "proof", ApplicationRevision: "commit", Dataset: RehearsalDataset{Kind: "synthetic", Description: "shape", Digest: "digest", MaxBytes: 10}, Checks: []RehearsalCheck{{ID: "upgrade", Kind: "upgrade", Command: "./up", Invariant: "safe", InvariantCommand: "./verify", RevisionInputs: []string{"application"}}}}
 	v, rehearsal, _ = s.CreateRehearsal("repo", v.ID, migration.ID, "owner", migration.Version, rehearsal)
-	base := Execution{EnvironmentID: "prod", ReleaseID: "release", RehearsalID: rehearsal.ID, CompatibilityWindow: "old and new readers through contract", PrivacyConstraints: []string{"aggregate metrics only"}, CostBudgetUnits: 100, AbortReversibleUntil: "before contract", Delegations: []ExecutionDelegation{{Phase: "backfill", AgentID: "agent", StepID: "change", Mandate: "report bounded batch progress"}}}
+	base := Execution{EnvironmentID: "prod", ReleaseID: "release", DeploymentID: "caller-forged-deployment", RehearsalID: rehearsal.ID, CompatibilityWindow: "old and new readers through contract", ObservationPeriodSeconds: 3600, PrivacyConstraints: []string{"aggregate metrics only"}, CostBudgetUnits: 100, AbortReversibleUntil: "before contract", Delegations: []ExecutionDelegation{{Phase: "backfill", AgentID: "agent", StepID: "change", Mandate: "report bounded batch progress"}}}
 	if _, _, err := s.CreateExecution("repo", v.ID, migration.ID, "owner", v.Migrations[0].Version, base); err != ErrInvalid {
 		t.Fatalf("execution without approvals or passing proof = %v", err)
 	}
@@ -99,7 +119,7 @@ func TestProductionExecutionRequiresEvidenceAndKeepsAgentsDelegated(t *testing.T
 	v, _, _ = s.AddRehearsalRun("repo", v.ID, migration.ID, rehearsal.ID, "owner", run)
 	v, _ = s.AddEvent("repo", v.ID, migration.ID, "owner", v.Migrations[0].Version, Event{Kind: "approved", StepID: "change", Summary: "approved current evidence"})
 	v, execution, err := s.CreateExecution("repo", v.ID, migration.ID, "operator", v.Migrations[0].Version, base)
-	if err != nil || execution.Phases[0].Name != "expand" || execution.ControllerID != "operator" {
+	if err != nil || execution.Phases[0].Name != "expand" || execution.ControllerID != "operator" || execution.DeploymentID != "" {
 		t.Fatalf("execution = %#v, %v", execution, err)
 	}
 	_, execution, _ = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "start", ExpectedVersion: execution.Version})
@@ -143,5 +163,77 @@ func TestProductionExecutionRequiresEvidenceAndKeepsAgentsDelegated(t *testing.T
 	_, execution, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "advance", ExpectedVersion: execution.Version})
 	if err != nil || execution.CurrentPhase != 3 {
 		t.Fatalf("satisfied delegated step did not unblock phase: %#v, %v", execution, err)
+	}
+	_, execution, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "start", ExpectedVersion: execution.Version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, execution, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "report", ExpectedVersion: execution.Version, Phase: "cutover", ProgressPercent: 55, ServiceHealth: "degraded", Blockers: []string{"write collision"}, Summary: "new and old writers diverged", FailureKind: "conflicting_writes", SafetyPoint: "stop before routing the next shard", FailureEvidence: []string{"aggregate mismatch digest"}})
+	if err != nil || execution.Status != "paused" || len(execution.Failures) != 1 {
+		t.Fatalf("failure did not pause safely: %#v, %v", execution, err)
+	}
+	failure := execution.Failures[0]
+	if _, _, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "resume", ExpectedVersion: execution.Version}); err != ErrInvalid {
+		t.Fatalf("failure pause resumed without recovery: %v", err)
+	}
+	if _, _, _, err = s.RecoverExecution("repo", v.ID, migration.ID, execution.ID, "operator", RecoveryRequest{ExpectedVersion: execution.Version, IdempotencyKey: "unsafe-retry", Kind: "retry", FailureID: failure.ID, Summary: "retry without remediation", Evidence: []string{"same conditions"}}); err != ErrInvalid {
+		t.Fatalf("generic retry cleared conflicting writers: %v", err)
+	}
+	v, execution, recovery, err := s.RecoverExecution("repo", v.ID, migration.ID, execution.ID, "operator", RecoveryRequest{ExpectedVersion: execution.Version, IdempotencyKey: "retry-cutover-1", Kind: "retry", FailureID: failure.ID, Summary: "retry the idempotent shard after writer fencing", Evidence: []string{"writer fence confirmed"}, RecoveryAttestation: "writer lease proves the obsolete writer is fenced"})
+	if err != nil || recovery.Kind != "retry" {
+		t.Fatalf("recovery = %#v, %v", recovery, err)
+	}
+	_, _, same, err := s.RecoverExecution("repo", v.ID, migration.ID, execution.ID, "operator", RecoveryRequest{ExpectedVersion: 0, IdempotencyKey: "retry-cutover-1", Kind: "retry", FailureID: failure.ID, Summary: "retry the idempotent shard after writer fencing", Evidence: []string{"writer fence confirmed"}, RecoveryAttestation: "writer lease proves the obsolete writer is fenced"})
+	if err != nil || same.ID != recovery.ID {
+		t.Fatalf("idempotent recovery retry = %#v, %v", same, err)
+	}
+	v, execution, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "resume", ExpectedVersion: execution.Version})
+	if err != nil || execution.Status != "running" {
+		t.Fatalf("recovered execution did not resume: %#v, %v", execution, err)
+	}
+	v, execution, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "pause", ExpectedVersion: execution.Version, Summary: "hold for approval review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.AddEvent("repo", v.ID, migration.ID, "owner", v.Migrations[0].Version, Event{Kind: "approval_revoked", StepID: "change", Summary: "service regression invalidated the approval"})
+	if err != nil || len(v.Migrations[0].Executions[0].Failures) != 2 || v.Migrations[0].Executions[0].Failures[1].Kind != "revoked_approval" {
+		t.Fatalf("revocation evidence = %#v, %v", v.Migrations[0].Executions[0].Failures, err)
+	}
+	retained = &v.Migrations[0].Executions[0]
+	retained.Status = "completed"
+	retained.CurrentPhase = len(retained.Phases) - 1
+	retained.DeploymentID = "successful-prod-deployment"
+	completedAt := time.Now().UTC().Add(-3 * time.Hour)
+	retained.Phases[retained.CurrentPhase].State = "completed"
+	retained.Phases[retained.CurrentPhase].CompletedAt = &completedAt
+	if err = s.write(v); err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.ApproveRetirement("repo", v.ID, migration.ID, "owner", v.Migrations[0].Version, "observation stayed healthy; approve cleanup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	completionInput := RetirementCompletion{ObservationStartedAt: now.Add(-2 * time.Hour), ObservationEndedAt: now.Add(-time.Hour), CompatibilityRemoved: []string{"dual writer"}, ObsoleteFields: []string{"orders.legacy_status"}, IrreversibleDecisions: []string{"legacy field physically deleted"}, Environments: []EnvironmentCompletion{{EnvironmentID: "prod", CurrentVersion: 2, RetainedData: []string{"10 order rows"}, ChangedData: []string{"10 status values normalized"}, VerifiedDeletion: []string{"legacy column absent digest"}, Exceptions: []string{"none"}, CostUnits: 12}}}
+	predated := completionInput
+	predated.ObservationStartedAt, predated.ObservationEndedAt = now.Add(-5*time.Hour), now.Add(-4*time.Hour)
+	if _, _, err = s.CompleteRetirement("repo", v.ID, migration.ID, "owner", v.Migrations[0].Version, predated); err != ErrInvalid {
+		t.Fatalf("pre-success observation accepted: %v", err)
+	}
+	equalityBoundary := completionInput
+	equalityBoundary.ObservationStartedAt = completedAt
+	equalityBoundary.ObservationEndedAt = completedAt.Add(time.Hour)
+	if _, _, err = s.CompleteRetirement("repo", v.ID, migration.ID, "owner", v.Migrations[0].Version, equalityBoundary); err != ErrInvalid {
+		t.Fatalf("observation starting exactly at success accepted: %v", err)
+	}
+	wrongEnvironment := completionInput
+	wrongEnvironment.Environments = append([]EnvironmentCompletion{}, completionInput.Environments...)
+	wrongEnvironment.Environments[0].EnvironmentID = "never-run"
+	if _, _, err = s.CompleteRetirement("repo", v.ID, migration.ID, "owner", v.Migrations[0].Version, wrongEnvironment); err != ErrInvalid {
+		t.Fatalf("unexecuted environment accepted: %v", err)
+	}
+	_, completion, err := s.CompleteRetirement("repo", v.ID, migration.ID, "owner", v.Migrations[0].Version, RetirementCompletion{ObservationStartedAt: now.Add(-2 * time.Hour), ObservationEndedAt: now.Add(-time.Hour), CompatibilityRemoved: []string{"dual writer"}, ObsoleteFields: []string{"orders.legacy_status"}, IrreversibleDecisions: []string{"legacy field physically deleted"}, Environments: []EnvironmentCompletion{{EnvironmentID: "prod", CurrentVersion: 2, RetainedData: []string{"10 order rows"}, ChangedData: []string{"10 status values normalized"}, VerifiedDeletion: []string{"legacy column absent digest"}, Exceptions: []string{"none"}, CostUnits: 12}}})
+	if err != nil || len(completion.ApprovedBy) != 1 {
+		t.Fatalf("completion = %#v, %v", completion, err)
 	}
 }

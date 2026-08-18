@@ -66,6 +66,19 @@ step evidence is retained separately and cannot populate or advance controller-o
 Every current-phase delegation must nevertheless have a latest complete, healthy, invariant-backed,
 unblocked report before the human controller can advance.
 
+Operational failures do not erase or restart an execution. Failed invariants, service regressions,
+approval revocation, conflicting writes, capacity exhaustion, and interrupted backfills append their
+bounded evidence and pause at a declared safety point. Recovery records are append-only and offer an
+idempotent retry, an attested recovery-point restore, an existing-release traffic rollback before the
+contract phase, or a connection to ordinary assigned human/agent migration work. Once an execution
+finishes, its declared observation period must elapse and every candidate-schema owner must approve
+retirement. The immutable completion then accounts for compatibility code and obsolete fields removed,
+irreversible choices, exceptions, cost, retained and changed data, verified deletion, and current schema
+version in every established repository environment.
+Idempotent retry alone applies only to failed invariants and interrupted backfills. Service regressions,
+capacity exhaustion, and conflicting writes require a remediation attestation, attested restore, or
+compatibility-window traffic rollback before resume; merely opening linked repair work does not resume.
+
 Support guidance can be proven in ordinary revision-pinned development workspaces. Immutable attempts
 bind an exact cited answer revision to sanitized thread inputs, declared environment, commands and
 outputs, artifacts, cost, and result; fresh-workspace reruns preserve the original record and reads expose

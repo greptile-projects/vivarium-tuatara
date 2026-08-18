@@ -92,6 +92,19 @@ whenever dependencies change or the web job fails before it starts.
   exact phase and step delegated to their authenticated identity; step evidence remains separate and
   cannot populate controller-owned phase readiness. Every current-phase delegation's latest report
   must be complete, healthy, invariant-backed, and unblocked before human-controlled advancement.
+  Failed invariants, service regressions, revoked approvals, conflicting writes, capacity exhaustion,
+  and interrupted backfills append evidence and pause at the reported safety point. Participants may
+  append an idempotent retry, attested recovery-point restore, compatibility-window release rollback,
+  or a link to ordinary assigned migration repair work; failed attempts are never rewritten. Each
+  execution declares its observation period. After success and that full period, every candidate-schema
+  owner must approve retirement before completion freezes removed compatibility machinery, obsolete
+  fields, irreversible decisions, retained/changed/deleted data, exceptions, cost, and current schema
+  version for every established environment. The observation starts strictly after the latest relevant
+  final-phase completion, and each reported environment requires its own completed, deployment-linked
+  execution. A failure-caused pause cannot resume until its latest failure has a matching recovery record.
+  Failed invariants and interrupted backfills may use an evidence-backed idempotent retry; service
+  regressions, capacity exhaustion, and conflicting writes additionally require an explicit remediation
+  attestation (or an attested restore or compatibility-window rollback). Opening repair work alone remains paused.
   Execution records carry no commands, credentials, database,
   deployment, environment, or destructive authority.
 
