@@ -494,7 +494,7 @@ func (s *Store) UpdateExecution(repo, schema, migration, execution, actor string
 				x.Status = "paused"
 				phase.State = "paused"
 			case "resume":
-				if x.Status != "paused" || !migrationApprovalsCurrent(*m) {
+				if x.Status != "paused" || !migrationApprovalsCurrent(*m) || !latestFailureRecovered(*x) {
 					return v, *x, ErrInvalid
 				}
 				x.Status = "running"
@@ -605,6 +605,18 @@ func migrationApprovalsCurrent(m Migration) bool {
 		}
 	}
 	return true
+}
+func latestFailureRecovered(x Execution) bool {
+	if len(x.Failures) == 0 {
+		return true
+	}
+	latest := x.Failures[len(x.Failures)-1]
+	for _, recovery := range x.Recoveries {
+		if recovery.FailureID == latest.ID && !recovery.CreatedAt.Before(latest.CreatedAt) {
+			return true
+		}
+	}
+	return false
 }
 func executionFailureKind(v string) bool {
 	return v == "failed_invariant" || v == "service_regression" || v == "conflicting_writes" || v == "capacity_exhaustion" || v == "interrupted_backfill"
@@ -936,25 +948,35 @@ func (s *Store) CompleteRetirement(repo, schema, migration, actor string, expect
 		for owner := range owners {
 			allOwners = allOwners && approved[owner]
 		}
-		completed := false
-		observationSeconds := int64(0)
+		completedByEnvironment := map[string]Execution{}
 		for _, x := range m.Executions {
-			if x.Status == "completed" {
-				completed = true
-				if x.ObservationPeriodSeconds > observationSeconds {
-					observationSeconds = x.ObservationPeriodSeconds
+			if x.Status == "completed" && x.DeploymentID != "" && x.CurrentPhase == len(x.Phases)-1 && len(x.Phases) > 0 && x.Phases[len(x.Phases)-1].CompletedAt != nil {
+				prior, exists := completedByEnvironment[x.EnvironmentID]
+				if !exists || x.Phases[len(x.Phases)-1].CompletedAt.After(*prior.Phases[len(prior.Phases)-1].CompletedAt) {
+					completedByEnvironment[x.EnvironmentID] = x
 				}
 			}
 		}
 		validEnvironments := len(c.Environments) > 0
+		observationSeconds := int64(0)
+		var latestSuccess time.Time
 		seen := map[string]bool{}
 		for _, env := range c.Environments {
-			if env.EnvironmentID == "" || seen[env.EnvironmentID] || env.CurrentVersion != m.ToVersion || len(env.RetainedData) == 0 || len(env.ChangedData) == 0 || len(env.VerifiedDeletion) == 0 || env.CostUnits < 0 {
+			execution, executed := completedByEnvironment[env.EnvironmentID]
+			if env.EnvironmentID == "" || seen[env.EnvironmentID] || !executed || env.CurrentVersion != m.ToVersion || len(env.RetainedData) == 0 || len(env.ChangedData) == 0 || len(env.VerifiedDeletion) == 0 || env.CostUnits < 0 {
 				validEnvironments = false
+			} else {
+				completedAt := *execution.Phases[len(execution.Phases)-1].CompletedAt
+				if completedAt.After(latestSuccess) {
+					latestSuccess = completedAt
+				}
+				if execution.ObservationPeriodSeconds > observationSeconds {
+					observationSeconds = execution.ObservationPeriodSeconds
+				}
 			}
 			seen[env.EnvironmentID] = true
 		}
-		if !owners[actor] || !allOwners || !completed || !c.ObservationEndedAt.After(c.ObservationStartedAt) || c.ObservationEndedAt.Sub(c.ObservationStartedAt) < time.Duration(observationSeconds)*time.Second || c.ObservationEndedAt.After(s.now()) || len(c.CompatibilityRemoved) == 0 || len(c.ObsoleteFields) == 0 || len(c.IrreversibleDecisions) == 0 || !validEnvironments {
+		if !owners[actor] || !allOwners || latestSuccess.IsZero() || c.ObservationStartedAt.Before(latestSuccess) || !c.ObservationEndedAt.After(c.ObservationStartedAt) || c.ObservationEndedAt.Sub(c.ObservationStartedAt) < time.Duration(observationSeconds)*time.Second || c.ObservationEndedAt.After(s.now()) || len(c.CompatibilityRemoved) == 0 || len(c.ObsoleteFields) == 0 || len(c.IrreversibleDecisions) == 0 || !validEnvironments {
 			return v, RetirementCompletion{}, ErrInvalid
 		}
 		c.ApprovedBy = make([]string, 0, len(approved))

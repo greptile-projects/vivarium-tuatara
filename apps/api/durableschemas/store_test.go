@@ -156,6 +156,9 @@ func TestProductionExecutionRequiresEvidenceAndKeepsAgentsDelegated(t *testing.T
 		t.Fatalf("failure did not pause safely: %#v, %v", execution, err)
 	}
 	failure := execution.Failures[0]
+	if _, _, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "resume", ExpectedVersion: execution.Version}); err != ErrInvalid {
+		t.Fatalf("failure pause resumed without recovery: %v", err)
+	}
 	v, execution, recovery, err := s.RecoverExecution("repo", v.ID, migration.ID, execution.ID, "operator", RecoveryRequest{ExpectedVersion: execution.Version, IdempotencyKey: "retry-cutover-1", Kind: "retry", FailureID: failure.ID, Summary: "retry the idempotent shard after writer fencing", Evidence: []string{"writer fence confirmed"}})
 	if err != nil || recovery.Kind != "retry" {
 		t.Fatalf("recovery = %#v, %v", recovery, err)
@@ -164,13 +167,25 @@ func TestProductionExecutionRequiresEvidenceAndKeepsAgentsDelegated(t *testing.T
 	if err != nil || same.ID != recovery.ID {
 		t.Fatalf("idempotent recovery retry = %#v, %v", same, err)
 	}
+	v, execution, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "resume", ExpectedVersion: execution.Version})
+	if err != nil || execution.Status != "running" {
+		t.Fatalf("recovered execution did not resume: %#v, %v", execution, err)
+	}
+	v, execution, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "pause", ExpectedVersion: execution.Version, Summary: "hold for approval review"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	v, err = s.AddEvent("repo", v.ID, migration.ID, "owner", v.Migrations[0].Version, Event{Kind: "approval_revoked", StepID: "change", Summary: "service regression invalidated the approval"})
 	if err != nil || len(v.Migrations[0].Executions[0].Failures) != 2 || v.Migrations[0].Executions[0].Failures[1].Kind != "revoked_approval" {
 		t.Fatalf("revocation evidence = %#v, %v", v.Migrations[0].Executions[0].Failures, err)
 	}
 	retained = &v.Migrations[0].Executions[0]
 	retained.Status = "completed"
+	retained.CurrentPhase = len(retained.Phases) - 1
+	retained.DeploymentID = "successful-prod-deployment"
+	completedAt := time.Now().UTC().Add(-3 * time.Hour)
 	retained.Phases[retained.CurrentPhase].State = "completed"
+	retained.Phases[retained.CurrentPhase].CompletedAt = &completedAt
 	if err = s.write(v); err != nil {
 		t.Fatal(err)
 	}
@@ -179,6 +194,18 @@ func TestProductionExecutionRequiresEvidenceAndKeepsAgentsDelegated(t *testing.T
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
+	completionInput := RetirementCompletion{ObservationStartedAt: now.Add(-2 * time.Hour), ObservationEndedAt: now.Add(-time.Hour), CompatibilityRemoved: []string{"dual writer"}, ObsoleteFields: []string{"orders.legacy_status"}, IrreversibleDecisions: []string{"legacy field physically deleted"}, Environments: []EnvironmentCompletion{{EnvironmentID: "prod", CurrentVersion: 2, RetainedData: []string{"10 order rows"}, ChangedData: []string{"10 status values normalized"}, VerifiedDeletion: []string{"legacy column absent digest"}, Exceptions: []string{"none"}, CostUnits: 12}}}
+	predated := completionInput
+	predated.ObservationStartedAt, predated.ObservationEndedAt = now.Add(-5*time.Hour), now.Add(-4*time.Hour)
+	if _, _, err = s.CompleteRetirement("repo", v.ID, migration.ID, "owner", v.Migrations[0].Version, predated); err != ErrInvalid {
+		t.Fatalf("pre-success observation accepted: %v", err)
+	}
+	wrongEnvironment := completionInput
+	wrongEnvironment.Environments = append([]EnvironmentCompletion{}, completionInput.Environments...)
+	wrongEnvironment.Environments[0].EnvironmentID = "never-run"
+	if _, _, err = s.CompleteRetirement("repo", v.ID, migration.ID, "owner", v.Migrations[0].Version, wrongEnvironment); err != ErrInvalid {
+		t.Fatalf("unexecuted environment accepted: %v", err)
+	}
 	_, completion, err := s.CompleteRetirement("repo", v.ID, migration.ID, "owner", v.Migrations[0].Version, RetirementCompletion{ObservationStartedAt: now.Add(-2 * time.Hour), ObservationEndedAt: now.Add(-time.Hour), CompatibilityRemoved: []string{"dual writer"}, ObsoleteFields: []string{"orders.legacy_status"}, IrreversibleDecisions: []string{"legacy field physically deleted"}, Environments: []EnvironmentCompletion{{EnvironmentID: "prod", CurrentVersion: 2, RetainedData: []string{"10 order rows"}, ChangedData: []string{"10 status values normalized"}, VerifiedDeletion: []string{"legacy column absent digest"}, Exceptions: []string{"none"}, CostUnits: 12}}})
 	if err != nil || len(completion.ApprovedBy) != 1 {
 		t.Fatalf("completion = %#v, %v", completion, err)

@@ -99,7 +99,9 @@ whenever dependencies change or the web job fails before it starts.
   execution declares its observation period. After success and that full period, every candidate-schema
   owner must approve retirement before completion freezes removed compatibility machinery, obsolete
   fields, irreversible decisions, retained/changed/deleted data, exceptions, cost, and current schema
-  version for every established environment.
+  version for every established environment. The observation starts no earlier than the latest relevant
+  final-phase completion, and each reported environment requires its own completed, deployment-linked
+  execution. A failure-caused pause cannot resume until its latest failure has a matching recovery record.
   Execution records carry no commands, credentials, database,
   deployment, environment, or destructive authority.
 
