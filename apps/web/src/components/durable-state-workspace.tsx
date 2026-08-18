@@ -102,6 +102,7 @@ type Execution = {
   cost_budget_units: number;
   throttle_percent: number;
   abort_reversible_until: string;
+  observation_period_seconds: number;
   phases: ExecutionPhase[];
   step_reports: {
     phase: string;
@@ -111,6 +112,23 @@ type Execution = {
     service_health: string;
     blockers: string[];
     summary: string;
+  }[];
+  failures: {
+    id: string;
+    kind: string;
+    phase: string;
+    safety_point: string;
+    summary: string;
+    evidence: string[];
+  }[];
+  recoveries: {
+    id: string;
+    kind: string;
+    failure_id: string;
+    summary: string;
+    evidence: string[];
+    recovery_attestation?: string;
+    rollback_release_id?: string;
   }[];
   events: {
     kind: string;
@@ -153,6 +171,23 @@ type Migration = {
   work: Work[];
   rehearsals: Rehearsal[];
   executions: Execution[];
+  retirement_approvals: { owner_id: string; summary: string }[];
+  completion?: {
+    compatibility_removed: string[];
+    obsolete_fields: string[];
+    irreversible_decisions: string[];
+    environments: {
+      environment_id: string;
+      current_version: number;
+      retained_data: string[];
+      changed_data: string[];
+      verified_deletion: string[];
+      exceptions: string[];
+      cost_units: number;
+    }[];
+    approved_by: string[];
+    completed_by: string;
+  };
 };
 type Schema = {
   id: string;
@@ -471,6 +506,9 @@ export function DurableStateWorkspace({
               release_id: val(f, "execution_release"),
               rehearsal_id: val(f, "execution_rehearsal"),
               compatibility_window: val(f, "compatibility_window"),
+              observation_period_seconds: Number(
+                val(f, "observation_period"),
+              ),
               privacy_constraints: list(val(f, "execution_privacy")),
               cost_budget_units: Number(val(f, "cost_budget")),
               abort_reversible_until: val(f, "abort_until"),
@@ -765,7 +803,8 @@ export function DurableStateWorkspace({
                       <p className="text-xs text-[var(--muted)]">
                         Compatibility: {x.compatibility_window} · Privacy:{" "}
                         {x.privacy_constraints.join("; ")} · Reversible{" "}
-                        {x.abort_reversible_until}
+                        {x.abort_reversible_until} · Observe for{" "}
+                        {x.observation_period_seconds}s
                       </p>
                       <div className="mt-3 grid gap-2 sm:grid-cols-5">
                         {x.phases.map((p) => (
@@ -806,6 +845,20 @@ export function DurableStateWorkspace({
                           Blockers: {phase.blockers.join("; ")}
                         </p>
                       )}
+                      {x.failures?.map((failure) => (
+                        <p
+                          key={failure.id}
+                          className="mt-2 text-sm text-[var(--danger)]"
+                        >
+                          Contained {failure.kind} in {failure.phase} at{" "}
+                          {failure.safety_point}: {failure.summary}
+                        </p>
+                      ))}
+                      {x.recoveries?.map((recovery) => (
+                        <p key={recovery.id} className="mt-1 text-sm">
+                          Recovery {recovery.kind}: {recovery.summary}
+                        </p>
+                      ))}
                       <p className="text-sm">
                         Next:{" "}
                         {phase.next_actions.join("; ") || "await evidence"}
@@ -918,6 +971,33 @@ export function DurableStateWorkspace({
                     </div>
                   );
                 })}
+                {m.completion && (
+                  <div className="mt-4 rounded-lg border border-[var(--line)] p-4">
+                    <div className="flex flex-wrap gap-2">
+                      <Badge tone="success">Migration cleanup verified</Badge>
+                      <Badge>
+                        {m.retirement_approvals.length} owner approval
+                        {m.retirement_approvals.length === 1 ? "" : "s"}
+                      </Badge>
+                    </div>
+                    <p className="mt-2 text-sm">
+                      Compatibility removed:{" "}
+                      {m.completion.compatibility_removed.join("; ")} · Obsolete
+                      fields: {m.completion.obsolete_fields.join("; ")}
+                    </p>
+                    {m.completion.environments.map((environment) => (
+                      <p
+                        key={environment.environment_id}
+                        className="mt-1 text-sm text-[var(--muted)]"
+                      >
+                        Environment {environment.environment_id} now uses schema
+                        v{environment.current_version}; deletion verified:{" "}
+                        {environment.verified_deletion.join("; ")}; cost{" "}
+                        {environment.cost_units}
+                      </p>
+                    ))}
+                  </div>
+                )}
                 <details className="mt-4">
                   <summary className="cursor-pointer font-semibold">
                     Open production execution
@@ -939,6 +1019,7 @@ export function DurableStateWorkspace({
                       ["execution_privacy", "Privacy constraints"],
                       ["cost_budget", "Cost budget units"],
                       ["abort_until", "Reversible until"],
+                      ["observation_period", "Observation period seconds"],
                       ["agent_id", "Delegated agent ID (optional)"],
                       ["agent_phase", "Agent phase (optional)"],
                       ["agent_step", "Agent step (optional)"],

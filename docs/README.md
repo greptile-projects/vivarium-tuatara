@@ -79,6 +79,13 @@ Idempotent retry alone applies only to failed invariants and interrupted backfil
 capacity exhaustion, and conflicting writes require a remediation attestation, attested restore, or
 compatibility-window traffic rollback before resume; merely opening linked repair work does not resume.
 
+The connected `durable-state-journey.spec.ts` journey carries a reviewed breaking database revision
+through human- and agent-owned compatibility work, a failed and then passing synthetic rehearsal,
+real release and deployment evidence, old-writer fencing, an interrupted backfill, an invariant breach,
+and contract-phase rollback rejection. The web record then exposes every contained failure and recovery
+beside the observation-gated owner approval, per-environment schema version, cost, retained/changed data,
+and verified obsolete-field deletion.
+
 Support guidance can be proven in ordinary revision-pinned development workspaces. Immutable attempts
 bind an exact cited answer revision to sanitized thread inputs, declared environment, commands and
 outputs, artifacts, cost, and result; fresh-workspace reruns preserve the original record and reads expose

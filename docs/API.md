@@ -60,6 +60,9 @@
   and must account for retained/changed data, verified deletion, exceptions, costs, and the candidate schema
   version across every established environment as well as removed compatibility code, obsolete fields, and
   irreversible decisions. Failed executions and recovery attempts remain unchanged.
+- The `/repositories/{id}/durable-state` execution form sends the required
+  `observation_period_seconds`; its projection keeps contained failures, recovery actions, owner approvals,
+  environment cleanup evidence, and verified deletion visible after completion.
 
 ## Approved-agent evaluation
 

@@ -107,6 +107,11 @@ whenever dependencies change or the web job fails before it starts.
   attestation (or an attested restore or compatibility-window rollback). Opening repair work alone remains paused.
   Execution records carry no commands, credentials, database,
   deployment, environment, or destructive authority.
+  The connected `durable-state-journey.spec.ts` browser/API/Git journey proves reviewed
+  breaking revisions, human and agent migration work, failed and passing privacy-bounded
+  rehearsal, governed delivery, old-writer fencing, interrupted-backfill and invariant
+  recovery, contract-phase rollback rejection, and observation-gated verified cleanup.
+  Playwright isolates these records with `DURABLE_SCHEMA_STORAGE_ROOT` like its other stores.
 
 - **Developer support** — `/support` and
   `/repositories/{id}/support-threads` retain contextual questions separately
