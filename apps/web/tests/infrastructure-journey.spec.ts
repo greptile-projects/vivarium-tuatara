@@ -158,6 +158,9 @@ test("humans and a scoped agent evolve infrastructure from proposal through reco
     await expect(ownerPage.getByText("converged", { exact: true })).toBeVisible();
     await expect(ownerPage.getByText("Out-of-band route timeout differs from reviewed intent")).toBeVisible();
     await expect(ownerPage.getByText("Reviewed repair restores declared state without rewriting the external edit.")).toBeVisible();
+    await ownerPage.getByRole("link", { name: `Governed work ${repairPull.id}` }).click();
+    await expect(ownerPage).toHaveURL(new RegExp(`/pulls/${repository.id}/${repairPull.id}$`));
+    await expect(ownerPage.getByRole("heading", { name: "Restore reviewed route timeout" })).toBeVisible();
     expect(merged.merge_commit_id).toBeTruthy();
   } finally {
     await rm(copy, { recursive: true, force: true });

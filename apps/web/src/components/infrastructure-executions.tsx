@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import Link from "next/link";
 import { api } from "@/lib/api";
 import { useAuth } from "./auth";
 import { Badge, Button, Card } from "./ui";
@@ -60,6 +61,26 @@ type Execution = {
 };
 const field = (form: FormData, name: string) =>
   String(form.get(name) ?? "").trim();
+
+function governedWorkHref(
+  repositoryID: string,
+  response: Execution["drift_responses"][number],
+) {
+  switch (response.resource_kind) {
+    case "issue":
+      return `/repositories/${repositoryID}/issues/${response.resource_id}`;
+    case "proposal":
+      return `/proposals/${repositoryID}/${response.resource_id}`;
+    case "task":
+      return `/proposals/${repositoryID}/${response.parent_id}`;
+    case "incident":
+      return `/incidents/${response.resource_id}`;
+    case "pull_request":
+      return `/pulls/${repositoryID}/${response.resource_id}`;
+    default:
+      return null;
+  }
+}
 
 export function InfrastructureExecutions({
   repositoryID,
@@ -400,8 +421,9 @@ export function InfrastructureExecutions({
           {x.assessments?.map(a=><div key={a.id} className="mt-3 rounded-lg border p-3"><Badge tone={a.converged?"success":"warning"}>{a.converged?"converged":"divergent"}</Badge><p className="mt-2 text-xs text-[var(--muted)]">{a.reasons.join(" · ") || "Every frozen outcome and measure passed."}</p></div>)}
           {token && <form onSubmit={(e)=>monitor(e,x)} className="mt-4 grid gap-2 rounded-lg border p-4 md:grid-cols-3"><h3 className="md:col-span-3 font-semibold">Permission-aware drift monitor</h3><Select name="permission" options={["granted","partial","denied"]}/><Select name="provider_status" options={["available","degraded","lost","unknown"]}/><Select name="finding_kind" options={["configuration_drift","unmanaged_change","failed_cleanup","credential_expiring","provider_loss"]}/><Select name="severity" options={["low","medium","high","critical"]}/><Input name="resource_id" label="Resource ID" required={false}/><Input name="finding_summary" label="Finding (blank for no finding)" required={false}/><Input name="cause" label="Attributed cause" required={false}/><Button disabled={busy}>Record monitoring run</Button></form>}
           {x.monitor_runs?.flatMap(run=>run.findings).map(f=><div key={f.id} className="mt-3 rounded-lg border p-3"><div className="flex gap-2"><Badge tone={f.severity==="critical"||f.severity==="high"?"danger":"warning"}>{f.kind}</Badge>{f.resource_id&&<Badge>{f.resource_id}</Badge>}</div><p className="mt-2 text-sm">{f.summary}</p><p className="text-xs text-[var(--muted)]">{f.cause||"Cause unavailable"} · response must link ordinary governed work.</p>{token&&<form onSubmit={(e)=>respond(e,x,f.id)} className="mt-3 grid gap-2 md:grid-cols-3"><Select name="response_kind" options={["incident","exception","repair","adopt","restore"]}/><Select name="resource_kind" options={["issue","proposal","task","incident","pull_request"]}/><Input name="parent_id" label="Proposal ID (task only)" required={false}/><Input name="work_id" label="Existing governed work ID"/><Input name="owner_id" label="Accountable owner ID"/><Input name="response_summary" label="Response and policy boundary"/><Button disabled={busy}>Link accountable response</Button></form>}</div>)}
-          {x.drift_responses?.map((response) => (
-            <div key={response.id} className="mt-3 rounded-lg border p-3">
+          {x.drift_responses?.map((response) => {
+            const href = governedWorkHref(repositoryID, response);
+            return <div key={response.id} className="mt-3 rounded-lg border p-3">
               <div className="flex flex-wrap gap-2">
                 <Badge tone="success">{response.kind}</Badge>
                 <Badge>{response.resource_kind.replaceAll("_", " ")}</Badge>
@@ -409,10 +431,10 @@ export function InfrastructureExecutions({
               </div>
               <p className="mt-2 text-sm">{response.summary}</p>
               <p className="text-xs text-[var(--muted)]">
-                Governed work {response.resource_id} · finding {response.finding_id}
+                {href ? <Link className="font-semibold text-[var(--brand)] hover:underline" href={href}>Governed work {response.resource_id}</Link> : <>Governed work {response.resource_id}</>} · finding {response.finding_id}
               </p>
-            </div>
-          ))}
+            </div>;
+          })}
         </Card>
       ))}
     </section>
