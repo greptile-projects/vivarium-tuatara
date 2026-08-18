@@ -35,6 +35,7 @@ import { PullLocalizationReview } from "./pull-localization-review";
 import { PullRequestPreviews } from "./pull-request-previews";
 import { DocumentationPullReviewCard } from "./documentation-pull-review";
 import { ExtensionContributions } from "./extension-contributions";
+import { PullInfrastructurePlans } from "./pull-infrastructure-plans";
 import { Icons } from "./icons";
 import { Avatar, Badge, Button, Card } from "./ui";
 
@@ -878,6 +879,7 @@ export function PullRequestDetail({
           <PullPrivacyReview repositoryID={repositoryID} pullRequestID={pullRequestID} sourceRevision={pull.source_commit_id} targetRevision={pull.target_commit_id} participant={participant} />
           <PullLocalizationReview repositoryID={repositoryID} pullRequestID={pullRequestID} />
           <PullPerformanceEvaluations repositoryID={repositoryID} pullRequestID={pullRequestID} />
+          <PullInfrastructurePlans repositoryID={repositoryID} pullRequestID={pullRequestID} participant={participant} />
           <section
             id="conversation"
             className="scroll-mt-24 space-y-5"

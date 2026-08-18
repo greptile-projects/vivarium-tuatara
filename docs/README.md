@@ -102,6 +102,14 @@ configuration explicit. This inventory grants no cloud, deployment, environment,
 infrastructure execution authority. Records default beneath `$INFRASTRUCTURE_STORAGE_ROOT`
 (`infrastructure`).
 
+Open pulls retain immutable infrastructure plans beneath their review API. Each plan freezes the exact
+pull source, declaration and permitted observation fingerprint, candidate resources, and policy files,
+then derives ordered create/change/replace/destroy operations, affected owners, risks, mitigations,
+expected policy effects, and rollback limits. Humans and repository-bound read-only agents append
+assumptions and impact analysis; only an affected human owner can acknowledge. Reads recheck every
+source, provider observation, definition, and policy input, marking drift stale and suppressing prior
+acknowledgements. These records remain review evidence without operational authority.
+
 Support guidance can be proven in ordinary revision-pinned development workspaces. Immutable attempts
 bind an exact cited answer revision to sanitized thread inputs, declared environment, commands and
 outputs, artifacts, cost, and result; fresh-workspace reruns preserve the original record and reads expose

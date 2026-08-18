@@ -127,6 +127,14 @@ whenever dependencies change or the web job fails before it starts.
   boundaries, and missing current observations explicit. Definitions and observations are
   inventory/review context only and grant no provider, credential, repository, deployment,
   environment, or infrastructure authority.
+  Pull infrastructure plans freeze an exact open-pull source revision, current definition version,
+  permitted observation fingerprint, candidate resources, and exact candidate-commit policy-file
+  digests. Immutable comparisons derive create/change/replace/destroy actions in dependency order,
+  affected owners, availability/security/privacy/continuity/cost/data risks, policy effects, and
+  rollback limits. Append-only CAS events admit participant and repository-bound read-only-agent
+  assumptions and impact analysis, but only an exact affected human owner can acknowledge. Reads
+  re-resolve the pull, definition, observations, and policy blobs; drift marks a plan stale and removes
+  its acknowledgements from the current projection. Plans grant no operational or review authority.
 
 - **Developer support** — `/support` and
   `/repositories/{id}/support-threads` retain contextual questions separately
