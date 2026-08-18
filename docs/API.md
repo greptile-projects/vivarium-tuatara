@@ -3653,6 +3653,8 @@ source commit, and candidate-commit policy paths with SHA-256 digests and expect
 declaration is parsed from the retained Git blob rather than accepted from the caller. It returns dependency-ordered operations, affected owners,
 classified risks and mitigations, and rollback limits. `GET` on the collection re-resolves all inputs;
 `fresh: false` and `stale_reasons` expose drift and stale records project no current acknowledgements.
+The candidate file may omit `revision`: the server binds it to the guarded pull source because a Git blob cannot
+embed the ID of the commit containing itself. If supplied, `revision` must already equal that exact source.
 
 `POST .../infrastructure-plans/{plan_id}/events` appends an `assumption`, `impact`,
 `acknowledgement_request`, or `owner_acknowledgement` with `expected_events` CAS ordering. Participants
