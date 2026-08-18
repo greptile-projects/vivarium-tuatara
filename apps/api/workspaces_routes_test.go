@@ -80,6 +80,19 @@ func TestReplayOutputRequiresFrozenScenarioCommand(t *testing.T) {
 	}
 }
 
+func TestReplayAttemptRejectsRepeatedCommandExecutions(t *testing.T) {
+	selected := map[string]workspaces.CommandOutcome{}
+	if !selectReplayOutcome(selected, "replay", workspaces.CommandOutcome{ID: "failed", ExitCode: 1}) {
+		t.Fatal("first execution was rejected")
+	}
+	if selectReplayOutcome(selected, "replay", workspaces.CommandOutcome{ID: "passing", ExitCode: 0}) {
+		t.Fatal("later execution replaced contradictory invariant evidence")
+	}
+	if selected["replay"].ID != "failed" {
+		t.Fatal("first selected outcome was overwritten")
+	}
+}
+
 func TestReproductionSecretScreeningRejectsCredentialFormats(t *testing.T) {
 	tests := []struct{ name, body string }{
 		{"input.txt", "GITHUB_TOKEN=ghp_example"},

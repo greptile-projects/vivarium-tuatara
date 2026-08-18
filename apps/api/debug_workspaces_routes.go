@@ -608,7 +608,10 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 				writeAPIError(w, 422, "replay_commands_invalid", "every outcome must match a command frozen in the replay scenario")
 				return
 			}
-			selected[commandName] = o
+			if !selectReplayOutcome(selected, commandName, o) {
+				writeAPIError(w, 422, "replay_commands_invalid", "an attempt may select only one outcome for each frozen scenario command")
+				return
+			}
 			in.Attempt.Outputs = append(in.Attempt.Outputs, o.Output)
 		}
 		in.Attempt.CommitID = dw.CommitID
@@ -656,6 +659,14 @@ func replayCommandForOutcome(commands []debugworkspaces.ReplayCommand, declared 
 		}
 	}
 	return "", false
+}
+
+func selectReplayOutcome(selected map[string]devworkspaces.CommandOutcome, commandName string, outcome devworkspaces.CommandOutcome) bool {
+	if _, exists := selected[commandName]; exists {
+		return false
+	}
+	selected[commandName] = outcome
+	return true
 }
 
 func validateDebugContext(v *debugworkspaces.Workspace, releasesStore *releases.Store, deploymentStore *deployments.Store, issueStore *issues.Store, incidentStore *incidents.Store, supportStore *supportthreads.Store, objectiveStore *serviceobjectives.Store, packageStore *packages.Store, infrastructureStore *infrastructure.Store) error {
