@@ -399,6 +399,9 @@ func (s *Store) CreateExecution(repo, schema, migration, actor string, expected 
 		in.Status = "ready"
 		in.CurrentPhase = 0
 		in.ThrottlePercent = 100
+		// Deployment evidence is attached only through the separately verified
+		// deploy-phase report boundary; execution creation cannot self-attest it.
+		in.DeploymentID = ""
 		in.Phases = phases
 		in.StepReports = []ExecutionStepReport{}
 		in.Failures = []FailureEvidence{}
@@ -612,7 +615,7 @@ func latestFailureRecovered(x Execution) bool {
 	}
 	latest := x.Failures[len(x.Failures)-1]
 	for _, recovery := range x.Recoveries {
-		if recovery.FailureID == latest.ID && !recovery.CreatedAt.Before(latest.CreatedAt) {
+		if recovery.FailureID == latest.ID && recovery.Kind != "repair" && !recovery.CreatedAt.Before(latest.CreatedAt) {
 			return true
 		}
 	}

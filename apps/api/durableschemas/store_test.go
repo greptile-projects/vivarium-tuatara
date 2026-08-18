@@ -94,7 +94,7 @@ func TestProductionExecutionRequiresEvidenceAndKeepsAgentsDelegated(t *testing.T
 	migration := v.Migrations[0]
 	rehearsal := Rehearsal{Name: "proof", ApplicationRevision: "commit", Dataset: RehearsalDataset{Kind: "synthetic", Description: "shape", Digest: "digest", MaxBytes: 10}, Checks: []RehearsalCheck{{ID: "upgrade", Kind: "upgrade", Command: "./up", Invariant: "safe", InvariantCommand: "./verify", RevisionInputs: []string{"application"}}}}
 	v, rehearsal, _ = s.CreateRehearsal("repo", v.ID, migration.ID, "owner", migration.Version, rehearsal)
-	base := Execution{EnvironmentID: "prod", ReleaseID: "release", RehearsalID: rehearsal.ID, CompatibilityWindow: "old and new readers through contract", ObservationPeriodSeconds: 3600, PrivacyConstraints: []string{"aggregate metrics only"}, CostBudgetUnits: 100, AbortReversibleUntil: "before contract", Delegations: []ExecutionDelegation{{Phase: "backfill", AgentID: "agent", StepID: "change", Mandate: "report bounded batch progress"}}}
+	base := Execution{EnvironmentID: "prod", ReleaseID: "release", DeploymentID: "caller-forged-deployment", RehearsalID: rehearsal.ID, CompatibilityWindow: "old and new readers through contract", ObservationPeriodSeconds: 3600, PrivacyConstraints: []string{"aggregate metrics only"}, CostBudgetUnits: 100, AbortReversibleUntil: "before contract", Delegations: []ExecutionDelegation{{Phase: "backfill", AgentID: "agent", StepID: "change", Mandate: "report bounded batch progress"}}}
 	if _, _, err := s.CreateExecution("repo", v.ID, migration.ID, "owner", v.Migrations[0].Version, base); err != ErrInvalid {
 		t.Fatalf("execution without approvals or passing proof = %v", err)
 	}
@@ -102,7 +102,7 @@ func TestProductionExecutionRequiresEvidenceAndKeepsAgentsDelegated(t *testing.T
 	v, _, _ = s.AddRehearsalRun("repo", v.ID, migration.ID, rehearsal.ID, "owner", run)
 	v, _ = s.AddEvent("repo", v.ID, migration.ID, "owner", v.Migrations[0].Version, Event{Kind: "approved", StepID: "change", Summary: "approved current evidence"})
 	v, execution, err := s.CreateExecution("repo", v.ID, migration.ID, "operator", v.Migrations[0].Version, base)
-	if err != nil || execution.Phases[0].Name != "expand" || execution.ControllerID != "operator" {
+	if err != nil || execution.Phases[0].Name != "expand" || execution.ControllerID != "operator" || execution.DeploymentID != "" {
 		t.Fatalf("execution = %#v, %v", execution, err)
 	}
 	_, execution, _ = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "start", ExpectedVersion: execution.Version})
