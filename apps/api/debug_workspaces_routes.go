@@ -230,6 +230,11 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 		if !ok {
 			return
 		}
+		current, getErr := workspaces.Get(r.PathValue("id"), r.PathValue("workspace_id"))
+		if getErr != nil || !canRead(current, actorID(c)) {
+			writeAPIError(w, 404, "debugging_workspace_not_found", "debugging workspace not found")
+			return
+		}
 		var in struct {
 			ExpectedVersion int      `json:"expected_version"`
 			Kind            string   `json:"kind"`
@@ -248,6 +253,11 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 		if !ok {
 			return
 		}
+		current, getErr := workspaces.Get(r.PathValue("id"), r.PathValue("workspace_id"))
+		if getErr != nil || !canRead(current, actorID(c)) {
+			writeAPIError(w, 404, "debugging_workspace_not_found", "debugging workspace not found")
+			return
+		}
 		var in struct {
 			ExpectedVersion int                          `json:"expected_version"`
 			Request         debugworkspaces.OwnerRequest `json:"request"`
@@ -264,6 +274,11 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 		if !ok {
 			return
 		}
+		current, getErr := workspaces.Get(r.PathValue("id"), r.PathValue("workspace_id"))
+		if getErr != nil || !canRead(current, actorID(c)) {
+			writeAPIError(w, 404, "debugging_workspace_not_found", "debugging workspace not found")
+			return
+		}
 		var in struct {
 			ExpectedVersion int    `json:"expected_version"`
 			Response        string `json:"response"`
@@ -278,6 +293,11 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 	mux.HandleFunc("POST /repositories/{id}/debugging-workspaces/{workspace_id}/agent-investigations", func(w http.ResponseWriter, r *http.Request) {
 		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
 		if !ok {
+			return
+		}
+		current, getErr := workspaces.Get(r.PathValue("id"), r.PathValue("workspace_id"))
+		if getErr != nil || !canRead(current, actorID(c)) {
+			writeAPIError(w, 404, "debugging_workspace_not_found", "debugging workspace not found")
 			return
 		}
 		var in struct {
@@ -317,7 +337,7 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 		}
 		for _, x := range v.AgentInvestigations {
 			if x.ID == r.PathValue("investigation_id") && x.CredentialID == c.ID && x.State != "revoked" {
-				if catalog.WithCurrentParticipant(x.InitiatorID, v.RepositoryID, func() error { return nil }) != nil {
+				if !canRead(v, x.InitiatorID) || catalog.WithCurrentParticipant(x.InitiatorID, v.RepositoryID, func() error { return nil }) != nil {
 					writeAPIError(w, 403, "debugging_agent_access_changed", "the investigation initiator no longer has repository access")
 					return
 				}
@@ -365,7 +385,7 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 				initiator = investigation.InitiatorID
 			}
 		}
-		if initiator == "" || catalog.WithCurrentParticipant(initiator, current.RepositoryID, func() error { return nil }) != nil {
+		if initiator == "" || !canRead(current, initiator) || catalog.WithCurrentParticipant(initiator, current.RepositoryID, func() error { return nil }) != nil {
 			writeAPIError(w, 403, "debugging_agent_access_changed", "the investigation initiator no longer has repository access")
 			return
 		}
@@ -383,6 +403,11 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 	mux.HandleFunc("POST /repositories/{id}/debugging-workspaces/{workspace_id}/agent-investigations/{investigation_id}/controls", func(w http.ResponseWriter, r *http.Request) {
 		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
 		if !ok {
+			return
+		}
+		current, getErr := workspaces.Get(r.PathValue("id"), r.PathValue("workspace_id"))
+		if getErr != nil || !canRead(current, actorID(c)) {
+			writeAPIError(w, 404, "debugging_workspace_not_found", "debugging workspace not found")
 			return
 		}
 		var in struct {

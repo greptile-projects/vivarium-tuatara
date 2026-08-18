@@ -149,4 +149,31 @@ func TestDebugWorkspaceReadRedactsAllRestrictedEvidenceMetadata(t *testing.T) {
 	control := `{"expected_version":8,"action":"pause","message":"wait for privacy-owner input"}`
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/agent-investigations/"+launched.AgentInvestigation.ID+"/controls", control, owner.Credential.Token, http.StatusCreated).Body.Close()
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/agent-investigations/"+launched.AgentInvestigation.ID+"/claims", strings.Replace(agentClaim, `"expected_version":7`, `"expected_version":9`, 1), launched.Credential.Token, http.StatusForbidden).Body.Close()
+
+	restricted, err := workspaceStore.Create(debugworkspaces.Workspace{RepositoryID: repo.ID, Title: "Restricted diagnosis", Summary: "Need-to-know runtime context", Trigger: debugworkspaces.Reference{Kind: "manual_observation", Label: "private report"}, Release: debugworkspaces.Reference{ResourceID: strings.Repeat("4", 32), Revision: strings.Repeat("c", 40)}, Environment: debugworkspaces.Reference{ResourceID: strings.Repeat("5", 32)}, TimeStart: start, TimeEnd: start.Add(time.Hour), UserJourney: "private checkout", OwnerIDs: []string{owner.User.ID}, Severity: "critical", Audience: "restricted", AccessUserIDs: []string{owner.User.ID}, Source: debugworkspaces.Reference{Revision: strings.Repeat("c", 40)}}, owner.User.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restricted, err = workspaceStore.AddClaim(repo.ID, restricted.ID, owner.User.ID, []debugworkspaces.Citation{{Kind: "commit", Revision: restricted.Source.Revision, Label: "affected source", Accessible: true}}, debugworkspaces.Claim{Kind: "hypothesis", Statement: "private hypothesis", Uncertainty: "private uncertainty", Confidence: "low"}, restricted.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restricted, restrictedAgent, err := workspaceStore.StartAgent(repo.ID, restricted.ID, owner.User.ID, strings.Repeat("6", 32), strings.Repeat("7", 32), "private mandate", []string{restricted.Citations[0].ID}, restricted.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	excludedMutations := []struct{ path, body string }{
+		{"/claims/" + restricted.Claims[0].ID + "/responses", `{"expected_version":3,"kind":"dispute","message":"guess","citation_ids":[]}`},
+		{"/owner-requests", `{"expected_version":3,"request":{"owner_type":"code","owner_id":"` + owner.User.ID + `","question":"guess","citation_ids":[]}}`},
+		{"/owner-requests/" + strings.Repeat("8", 32) + "/answer", `{"expected_version":3,"response":"guess"}`},
+		{"/agent-investigations", `{"expected_version":3,"mandate":"guess","citation_ids":["` + restricted.Citations[0].ID + `"],"expires_in":300}`},
+		{"/agent-investigations/" + restrictedAgent.ID + "/controls", `{"expected_version":3,"action":"pause","message":"guess"}`},
+	}
+	for _, mutation := range excludedMutations {
+		authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+restricted.ID+mutation.path, mutation.body, reader.Credential.Token, http.StatusNotFound).Body.Close()
+	}
+	afterRestricted, err := workspaceStore.Get(repo.ID, restricted.ID)
+	if err != nil || afterRestricted.Version != restricted.Version {
+		t.Fatalf("excluded mutation changed restricted workspace: version %d, err %v", afterRestricted.Version, err)
+	}
 }

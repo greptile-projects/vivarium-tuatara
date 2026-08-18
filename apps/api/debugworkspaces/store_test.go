@@ -126,6 +126,20 @@ func TestCitedDiagnosisIsChallengeableAndRevokedAgentFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, statement := range []string{strings.Repeat("x", 8001), "response included secret=should-never-persist"} {
+		_, claimErr := s.AgentClaim(v.RepositoryID, v.ID, investigation.ID, credentialID, Claim{Kind: "finding", Statement: statement, Uncertainty: "bounded uncertainty", Confidence: "low", CitationIDs: []string{v.Citations[0].ID}}, v.Version)
+		if !errors.Is(claimErr, ErrInvalid) {
+			t.Fatalf("unsafe agent statement was accepted: %v", claimErr)
+		}
+	}
+	reopened, reopenErr := New(s.root)
+	if reopenErr != nil {
+		t.Fatal(reopenErr)
+	}
+	persisted, reopenErr := reopened.Get(v.RepositoryID, v.ID)
+	if reopenErr != nil || len(persisted.Claims) != 1 {
+		t.Fatalf("rejected agent text reached durable state: %#v, %v", persisted.Claims, reopenErr)
+	}
 	v, _, err = s.ControlAgent(v.RepositoryID, v.ID, investigation.ID, owner, "revoke", "evidence consent changed", v.Version)
 	if err != nil {
 		t.Fatal(err)

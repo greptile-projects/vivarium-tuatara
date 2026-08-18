@@ -27,6 +27,8 @@ explicit, while code, service, privacy, and security owner questions remain dist
 agents receive only selected citation metadata through a maximum-24-hour credential; collaborators may guide,
 pause, resume, or revoke them, and revocation or initiator access loss stops publication. This grants no secret,
 observability, deployment, environment, Git, or mutation authority.
+Every diagnosis mutation rechecks the restricted workspace audience before parsing or issuing credentials, and
+agent-authored claims use the same statement-size and credential-shaped-content rejection as human claims.
 
 ## What this is
 

@@ -409,7 +409,7 @@ func (s *Store) AgentClaim(repo, wid, iid, credentialID string, claim Claim, exp
 	if x.CredentialID != credentialID || x.State != "running" {
 		return Workspace{}, ErrForbidden
 	}
-	if !one(claim.Kind, "hypothesis", "query", "finding", "uncertainty") || strings.TrimSpace(claim.Statement) == "" || strings.TrimSpace(claim.Uncertainty) == "" || !one(claim.Confidence, "low", "medium", "high") || len(claim.CitationIDs) == 0 || !subset(claim.CitationIDs, x.CitationIDs) || !allCitationIDs(v, claim.CitationIDs) {
+	if !one(claim.Kind, "hypothesis", "query", "finding", "uncertainty") || strings.TrimSpace(claim.Statement) == "" || len(claim.Statement) > 8000 || strings.TrimSpace(claim.Uncertainty) == "" || !one(claim.Confidence, "low", "medium", "high") || len(claim.CitationIDs) == 0 || !subset(claim.CitationIDs, x.CitationIDs) || !allCitationIDs(v, claim.CitationIDs) || sensitive(claim.Statement+claim.Uncertainty) {
 		return Workspace{}, ErrInvalid
 	}
 	now := s.now()
