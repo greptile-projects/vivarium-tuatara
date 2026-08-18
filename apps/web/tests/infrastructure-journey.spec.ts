@@ -148,6 +148,7 @@ test("humans and a scoped agent evolve infrastructure from proposal through reco
     await request(ownerPage, "post", `/repositories/${repository.id}/pulls/${repairPull.id}/merge`, owner.headers, {});
     execution = await request(ownerPage, "post", `/repositories/${repository.id}/infrastructure-executions/${execution.id}/drift-responses`, owner.headers, { expected_version: execution.version, response: { finding_id: finding.id, kind: "repair", owner_id: service.user.id, resource_kind: "pull_request", resource_id: repairPull.id, summary: "Reviewed repair restores declared state without rewriting the external edit." } });
     expect(execution.drift_responses.at(-1)).toMatchObject({ finding_id: finding.id, resource_id: repairPull.id, kind: "repair" });
+    execution = await request(ownerPage, "post", `/repositories/${repository.id}/infrastructure-executions/${execution.id}/drift-responses`, owner.headers, { expected_version: execution.version, response: { finding_id: finding.id, kind: "restore", owner_id: owner.user.id, resource_kind: "task", parent_id: proposal.id, resource_id: task.id, summary: "The exact accountable analysis task remains directly inspectable." } });
     const revoked = await ownerPage.request.delete(`/api/auth/credentials/${credential.id}`, { headers: owner.headers });
     expect(revoked.status()).toBe(204);
     await rejected(await ownerPage.request.get("/api/user", { headers: { Authorization: `Bearer ${credential.token}` } }), 401, "unauthorized");
@@ -158,6 +159,10 @@ test("humans and a scoped agent evolve infrastructure from proposal through reco
     await expect(ownerPage.getByText("converged", { exact: true })).toBeVisible();
     await expect(ownerPage.getByText("Out-of-band route timeout differs from reviewed intent")).toBeVisible();
     await expect(ownerPage.getByText("Reviewed repair restores declared state without rewriting the external edit.")).toBeVisible();
+    await ownerPage.getByRole("link", { name: `Governed work ${task.id}` }).click();
+    await expect(ownerPage).toHaveURL(new RegExp(`/proposals/${repository.id}/${proposal.id}#task-${task.id}$`));
+    await expect(ownerPage.getByRole("heading", { name: "Bound the infrastructure analysis", exact: true })).toBeFocused();
+    await ownerPage.goto(`/repositories/${repository.id}/infrastructure`);
     await ownerPage.getByRole("link", { name: `Governed work ${repairPull.id}` }).click();
     await expect(ownerPage).toHaveURL(new RegExp(`/pulls/${repository.id}/${repairPull.id}$`));
     await expect(ownerPage.getByRole("heading", { name: "Restore reviewed route timeout" })).toBeVisible();

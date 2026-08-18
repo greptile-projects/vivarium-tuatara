@@ -72,7 +72,7 @@ function governedWorkHref(
     case "proposal":
       return `/proposals/${repositoryID}/${response.resource_id}`;
     case "task":
-      return `/proposals/${repositoryID}/${response.parent_id}`;
+      return `/proposals/${repositoryID}/${response.parent_id}#task-${response.resource_id}`;
     case "incident":
       return `/incidents/${response.resource_id}`;
     case "pull_request":

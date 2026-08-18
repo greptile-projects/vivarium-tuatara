@@ -306,6 +306,20 @@ export function ProposalConversation({ repositoryID, proposalID }: { repositoryI
   }, [authLoading, proposalID, repositoryID, token]);
 
   useEffect(() => { void Promise.resolve().then(load); }, [load]);
+  useEffect(() => {
+    if (loading || !window.location.hash.startsWith("#task-")) return;
+    const taskID = window.location.hash.slice("#task-".length);
+    const taskIndex = tasks.findIndex((item) => item.id === taskID);
+    const plan = document.getElementById("plan-heading")?.closest("section");
+    if (taskIndex < 0 || !plan) return;
+    const taskTitles = new Set(tasks.map((item) => item.title));
+    const target = [...plan.querySelectorAll<HTMLHeadingElement>("h3")]
+      .filter((heading) => taskTitles.has(heading.textContent ?? ""))[taskIndex];
+    if (!target) return;
+    target.tabIndex = -1;
+    target.focus({ preventScroll: true });
+    target.scrollIntoView({ block: "center" });
+  }, [loading, tasks]);
 
   async function update(payload: { title?: FormDataEntryValue | null; body?: FormDataEntryValue | null; status?: "closed" }) {
     setPending(true); setError("");
