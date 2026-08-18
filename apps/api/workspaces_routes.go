@@ -18,6 +18,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/debugworkspaces"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/knowledgeanswers"
@@ -34,12 +35,15 @@ import (
 func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, incidentStore *incidents.Store, issueStore *issues.Store, releaseStore *releases.Store, store *workspaces.Store, authStore *auth.Store, organizationStore *organizations.Store, checkStore *checkruns.Store, sessionStore *changesessions.Store, supportStores ...any) {
 	var threadStore *supportthreads.Store
 	var answerStore *knowledgeanswers.Store
+	var debugStore *debugworkspaces.Store
 	for _, candidate := range supportStores {
 		switch value := candidate.(type) {
 		case *supportthreads.Store:
 			threadStore = value
 		case *knowledgeanswers.Store:
 			answerStore = value
+		case *debugworkspaces.Store:
+			debugStore = value
 		}
 	}
 	registerWorkspaceGovernanceRoutes(mux, catalog, store, authStore, organizationStore)
@@ -83,7 +87,7 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 			writeAPIError(w, 422, "workspace_revision_invalid", "commit_id must name an exact repository commit")
 			return
 		}
-		if err = validateWorkspaceSource(input.Source, input.CommitID, proposalStore, pullStore, incidentStore, issueStore, releaseStore); err != nil {
+		if err = validateWorkspaceSource(input.Source, input.CommitID, actor.UserID, proposalStore, pullStore, incidentStore, issueStore, releaseStore, debugStore); err != nil {
 			writeAPIError(w, 422, "workspace_source_invalid", err.Error())
 			return
 		}
@@ -413,7 +417,7 @@ func parseWorkspaceDefinition(body []byte) (workspaces.Definition, error) {
 	}
 	return d, nil
 }
-func validateWorkspaceSource(source workspaces.Source, commit string, ps *proposals.Store, prs *pullrequests.Store, is *incidents.Store, issueStore *issues.Store, releaseStore *releases.Store) error {
+func validateWorkspaceSource(source workspaces.Source, commit, actor string, ps *proposals.Store, prs *pullrequests.Store, is *incidents.Store, issueStore *issues.Store, releaseStore *releases.Store, debugStore *debugworkspaces.Store) error {
 	switch source.Kind {
 	case "repository":
 		return nil
@@ -489,10 +493,34 @@ func validateWorkspaceSource(source workspaces.Source, commit string, ps *propos
 		if strings.TrimSpace(source.DebuggingWorkspaceID) == "" || strings.TrimSpace(source.ReplayScenarioID) == "" {
 			return errors.New("debugging reproductions require a debugging workspace and replay scenario")
 		}
-		return nil
+		if debugStore == nil {
+			return errors.New("debugging reproductions unavailable")
+		}
+		debugging, err := debugStore.Get(source.RepositoryID, source.DebuggingWorkspaceID)
+		if err != nil || !canReadDebuggingWorkspace(debugging, actor) {
+			return errors.New("debugging replay scenario not found")
+		}
+		for _, scenario := range debugging.ReplayScenarios {
+			if scenario.ID == source.ReplayScenarioID && scenario.CommitID == commit {
+				return nil
+			}
+		}
+		return errors.New("revision must match the frozen debugging replay scenario")
 	default:
 		return errors.New("source kind must be repository, proposal_task, pull_request, incident_repair, decision_experiment, issue_reproduction, or debugging_reproduction")
 	}
+}
+
+func canReadDebuggingWorkspace(workspace debugworkspaces.Workspace, actor string) bool {
+	if workspace.Audience != "restricted" || workspace.CreatedBy == actor {
+		return true
+	}
+	for _, id := range workspace.AccessUserIDs {
+		if id == actor {
+			return true
+		}
+	}
+	return false
 }
 func provisionWorkspace(gitPath, runtime, id, commit string, d workspaces.Definition) ([]workspaces.SetupStep, bool) {
 	container := "vivarium-workspace-" + id

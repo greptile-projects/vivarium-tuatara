@@ -581,6 +581,11 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 			writeAPIError(w, 422, "replay_workspace_invalid", "attempt must use this scenario's isolated revision-exact debugging workspace")
 			return
 		}
+		meta, metaErr := catalog.GetByID(dw.RepositoryID)
+		if metaErr != nil || !canReadReplayWorkspace(dw, c.UserID, meta.OwnerID) {
+			writeAPIError(w, 404, "replay_workspace_not_found", "replay workspace not found")
+			return
+		}
 		declared := map[string]devworkspaces.ExperimentCommand{}
 		for _, cmd := range dw.Definition.Experiments {
 			sum := sha256.Sum256([]byte(cmd.Command))
@@ -637,6 +642,10 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 		}
 		writeJSON(w, 201, map[string]any{"debugging_workspace": project(out, actorID(c)), "attempt": attempt})
 	})
+}
+
+func canReadReplayWorkspace(workspace devworkspaces.Workspace, actor, repositoryOwner string) bool {
+	return workspace.Policy.Sharing != "private" || actor == workspace.CreatorID || actor == repositoryOwner
 }
 
 func validateDebugContext(v *debugworkspaces.Workspace, releasesStore *releases.Store, deploymentStore *deployments.Store, issueStore *issues.Store, incidentStore *incidents.Store, supportStore *supportthreads.Store, objectiveStore *serviceobjectives.Store, packageStore *packages.Store, infrastructureStore *infrastructure.Store) error {

@@ -9,8 +9,60 @@ import (
 	"testing"
 	"time"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/debugworkspaces"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
+
+func TestDebuggingReproductionSourceResolvesScenarioAudienceAndRevision(t *testing.T) {
+	store, err := debugworkspaces.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	repo, owner, reader := strings.Repeat("1", 32), strings.Repeat("2", 32), strings.Repeat("3", 32)
+	commit := strings.Repeat("a", 40)
+	debugging, err := store.Create(debugworkspaces.Workspace{RepositoryID: repo, Title: "production behavior", Summary: "bounded observation", Trigger: debugworkspaces.Reference{Kind: "trace", Label: "trace"}, Release: debugworkspaces.Reference{ResourceID: strings.Repeat("4", 32), Revision: commit}, Environment: debugworkspaces.Reference{ResourceID: strings.Repeat("5", 32)}, TimeStart: now.Add(-time.Hour), TimeEnd: now, UserJourney: "checkout", OwnerIDs: []string{owner}, Severity: "high", Audience: "restricted", AccessUserIDs: []string{reader}, Source: debugworkspaces.Reference{Revision: commit}}, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	debugging, err = store.AddClaim(repo, debugging.ID, owner, []debugworkspaces.Citation{{Kind: "commit", Label: "affected commit", Revision: commit, Accessible: true}}, debugworkspaces.Claim{Kind: "finding", Statement: "bounded behavior", Uncertainty: "one condition unknown", Confidence: "medium"}, debugging.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	debugging, scenario, err := store.CreateReplay(repo, debugging.ID, owner, debugworkspaces.ReplayScenario{Title: "synthetic replay", Objective: "demonstrate behavior", EvidenceCitationIDs: []string{debugging.Citations[0].ID}, Inputs: []debugworkspaces.ReplayInput{{Name: "shape", Kind: "synthetic", Schema: "bounded generated shape", SHA256: strings.Repeat("b", 64), Sanitization: "generated only"}}, Commands: []debugworkspaces.ReplayCommand{{Name: "replay", SHA256: strings.Repeat("c", 64), Purpose: "run replay"}}, Invariants: []debugworkspaces.ReplayInvariant{{Name: "observed", CommandName: "replay", ExpectedExitCode: 0, Description: "behavior observed"}}, ProductionDifferences: []string{"synthetic state"}}, debugging.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := workspaces.Source{Kind: "debugging_reproduction", RepositoryID: repo, DebuggingWorkspaceID: debugging.ID, ReplayScenarioID: scenario.ID}
+	if err = validateWorkspaceSource(source, commit, reader, nil, nil, nil, nil, nil, store); err != nil {
+		t.Fatalf("valid source rejected: %v", err)
+	}
+	if err = validateWorkspaceSource(source, strings.Repeat("d", 40), reader, nil, nil, nil, nil, nil, store); err == nil {
+		t.Fatal("changed revision accepted")
+	}
+	source.ReplayScenarioID = strings.Repeat("e", 32)
+	if err = validateWorkspaceSource(source, commit, reader, nil, nil, nil, nil, nil, store); err == nil {
+		t.Fatal("forged scenario accepted")
+	}
+	source.ReplayScenarioID = scenario.ID
+	if err = validateWorkspaceSource(source, commit, strings.Repeat("6", 32), nil, nil, nil, nil, nil, store); err == nil {
+		t.Fatal("excluded audience accepted")
+	}
+}
+
+func TestPrivateReplayWorkspaceEvidenceRequiresWorkspaceAudience(t *testing.T) {
+	workspace := workspaces.Workspace{CreatorID: "creator", Policy: workspaces.Policy{Sharing: "private"}}
+	if canReadReplayWorkspace(workspace, "other-collaborator", "repository-owner") {
+		t.Fatal("private workspace evidence crossed to another collaborator")
+	}
+	if !canReadReplayWorkspace(workspace, "creator", "repository-owner") || !canReadReplayWorkspace(workspace, "repository-owner", "repository-owner") {
+		t.Fatal("private workspace owner access was rejected")
+	}
+	workspace.Policy.Sharing = "repository"
+	if !canReadReplayWorkspace(workspace, "other-collaborator", "repository-owner") {
+		t.Fatal("repository-shared evidence was rejected")
+	}
+}
 
 func TestReproductionSecretScreeningRejectsCredentialFormats(t *testing.T) {
 	tests := []struct{ name, body string }{
