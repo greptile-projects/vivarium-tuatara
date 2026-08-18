@@ -1,6 +1,7 @@
 package debugworkspaces
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -30,6 +31,46 @@ func TestWorkspaceRetainsExactContextAndCASHistory(t *testing.T) {
 	_, err = s.Update(v.RepositoryID, v.ID, "55555555555555555555555555555555", "status", "resolved", "", 1)
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("wanted conflict, got %v", err)
+	}
+}
+
+func TestReplayRequiresPrivacyBoundedInputsAndDistinctPassingAttempts(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 18, 14, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	owner := "44444444444444444444444444444444"
+	v, err := s.Create(Workspace{RepositoryID: "11111111111111111111111111111111", Title: "checkout timeout", Summary: "observed production behavior", Trigger: Reference{Kind: "trace", Label: "trace"}, Release: Reference{ResourceID: "22222222222222222222222222222222", Revision: strings.Repeat("a", 40)}, Environment: Reference{ResourceID: "33333333333333333333333333333333"}, TimeStart: now.Add(-time.Hour), TimeEnd: now, UserJourney: "checkout", OwnerIDs: []string{owner}, Severity: "high", Audience: "repository", Source: Reference{Revision: strings.Repeat("a", 40)}}, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.AddClaim(v.RepositoryID, v.ID, owner, []Citation{{Kind: "commit", Label: "affected release", Revision: v.Source.Revision, Accessible: true}}, Claim{Kind: "finding", Statement: "timeout follows retry exhaustion", Uncertainty: "production state is not retained", Confidence: "medium"}, v.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandHash := strings.Repeat("b", 64)
+	scenario := ReplayScenario{Title: "minimal retry exhaustion", Objective: "demonstrate the timeout without production state", EvidenceCitationIDs: []string{v.Citations[0].ID}, Inputs: []ReplayInput{{Name: "queue-shape", Kind: "synthetic", Schema: "three delayed synthetic jobs", SHA256: strings.Repeat("c", 64), Sanitization: "generated values; no user records"}}, Dependencies: []string{"local synthetic queue"}, Commands: []ReplayCommand{{Name: "replay", SHA256: commandHash, Purpose: "exercise retry exhaustion"}}, Invariants: []ReplayInvariant{{Name: "timeout-visible", CommandName: "replay", ExpectedExitCode: 0, Description: "bounded replay observes the timeout"}}, ProductionDifferences: []string{"synthetic queue replaces production traffic"}}
+	v, created, err := s.CreateReplay(v.RepositoryID, v.ID, owner, scenario, v.Version)
+	if err != nil || created.Status != "ready" {
+		t.Fatalf("scenario = %#v, %v", created, err)
+	}
+	bad := scenario
+	bad.Inputs[0].Kind = "production_copy"
+	if _, _, err = s.CreateReplay(v.RepositoryID, v.ID, owner, bad, v.Version); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("protected input accepted: %v", err)
+	}
+	for n, workspaceID := range []string{"workspace-one", "workspace-two"} {
+		attempt := ReplayAttempt{WorkspaceID: workspaceID, CommitID: v.Source.Revision, DefinitionSHA256: strings.Repeat("d", 64), Environment: json.RawMessage(`{"image":"isolated"}`), CommandOutcomeIDs: []string{"outcome-" + workspaceID}, Outputs: []string{"sanitized timeout observed"}, Invariants: []ReplayInvariantResult{{Name: "timeout-visible", OutcomeID: "outcome-" + workspaceID, ActualExitCode: 0, Passed: true}}, CostCents: 3, ProductionDifferences: []string{"synthetic traffic"}}
+		v, _, err = s.AddReplayAttempt(v.RepositoryID, v.ID, created.ID, owner, attempt, v.Version)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "demonstrated"
+		if n == 1 {
+			want = "reproduced"
+		}
+		if v.ReplayScenarios[0].Status != want {
+			t.Fatalf("status=%s want %s", v.ReplayScenarios[0].Status, want)
+		}
 	}
 }
 

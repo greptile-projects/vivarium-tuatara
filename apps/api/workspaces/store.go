@@ -66,6 +66,8 @@ type Source struct {
 	SupportThreadID         string `json:"support_thread_id,omitempty"`
 	AnswerID                string `json:"answer_id,omitempty"`
 	AnswerRevisionID        string `json:"answer_revision_id,omitempty"`
+	DebuggingWorkspaceID    string `json:"debugging_workspace_id,omitempty"`
+	ReplayScenarioID        string `json:"replay_scenario_id,omitempty"`
 }
 
 type ContributorContext struct {

@@ -164,6 +164,74 @@ type Probe struct {
 	RevokedAt          *time.Time    `json:"revoked_at,omitempty"`
 	Actions            []ProbeAction `json:"actions"`
 }
+type ReplayInput struct {
+	Name         string `json:"name"`
+	Kind         string `json:"kind"`
+	Schema       string `json:"schema"`
+	SHA256       string `json:"sha256"`
+	Sanitization string `json:"sanitization"`
+}
+type ReplayCommand struct {
+	Name    string `json:"name"`
+	SHA256  string `json:"sha256"`
+	Purpose string `json:"purpose"`
+}
+type ReplayInvariant struct {
+	Name             string `json:"name"`
+	CommandName      string `json:"command_name"`
+	ExpectedExitCode int    `json:"expected_exit_code"`
+	Description      string `json:"description"`
+}
+type ReplayTrace struct {
+	Kind      string `json:"kind"`
+	SHA256    string `json:"sha256"`
+	SizeBytes int64  `json:"size_bytes"`
+	Reference string `json:"reference"`
+	Sanitized string `json:"sanitized"`
+}
+type ReplayInvariantResult struct {
+	Name           string `json:"name"`
+	OutcomeID      string `json:"outcome_id"`
+	ActualExitCode int    `json:"actual_exit_code"`
+	Passed         bool   `json:"passed"`
+}
+type ReplayAttempt struct {
+	ID                    string                  `json:"id"`
+	WorkspaceID           string                  `json:"workspace_id"`
+	CommitID              string                  `json:"commit_id"`
+	DefinitionSHA256      string                  `json:"definition_sha256"`
+	Environment           json.RawMessage         `json:"environment"`
+	CommandOutcomeIDs     []string                `json:"command_outcome_ids"`
+	Outputs               []string                `json:"outputs"`
+	Traces                []ReplayTrace           `json:"traces"`
+	Invariants            []ReplayInvariantResult `json:"invariants"`
+	CostCents             int                     `json:"cost_cents"`
+	ProductionDifferences []string                `json:"production_differences"`
+	Gaps                  []string                `json:"gaps"`
+	Result                string                  `json:"result"`
+	CreatedBy             string                  `json:"created_by"`
+	CreatedAt             time.Time               `json:"created_at"`
+}
+type ReplayScenario struct {
+	ID                    string            `json:"id"`
+	Version               int               `json:"version"`
+	ParentScenarioID      string            `json:"parent_scenario_id,omitempty"`
+	Title                 string            `json:"title"`
+	Objective             string            `json:"objective"`
+	CommitID              string            `json:"commit_id"`
+	EvidenceCitationIDs   []string          `json:"evidence_citation_ids"`
+	Inputs                []ReplayInput     `json:"inputs"`
+	Dependencies          []string          `json:"dependencies"`
+	Commands              []ReplayCommand   `json:"commands"`
+	Invariants            []ReplayInvariant `json:"invariants"`
+	ProductionDifferences []string          `json:"production_differences"`
+	UnsafeSideEffects     []string          `json:"unsafe_side_effects"`
+	Gaps                  []string          `json:"gaps"`
+	Status                string            `json:"status"`
+	Attempts              []ReplayAttempt   `json:"attempts"`
+	CreatedBy             string            `json:"created_by"`
+	CreatedAt             time.Time         `json:"created_at"`
+}
 type Workspace struct {
 	ID                  string               `json:"id"`
 	RepositoryID        string               `json:"repository_id"`
@@ -194,6 +262,7 @@ type Workspace struct {
 	Claims              []Claim              `json:"claims"`
 	OwnerRequests       []OwnerRequest       `json:"owner_requests"`
 	AgentInvestigations []AgentInvestigation `json:"agent_investigations"`
+	ReplayScenarios     []ReplayScenario     `json:"replay_scenarios"`
 	CreatedBy           string               `json:"created_by"`
 	CreatedAt           time.Time            `json:"created_at"`
 	UpdatedAt           time.Time            `json:"updated_at"`
@@ -248,8 +317,145 @@ func (s *Store) Create(v Workspace, actor string) (Workspace, error) {
 	v.Hypotheses = []Hypothesis{}
 	v.Probes = []Probe{}
 	v.Citations, v.Claims, v.OwnerRequests, v.AgentInvestigations = []Citation{}, []Claim{}, []OwnerRequest{}, []AgentInvestigation{}
+	v.ReplayScenarios = []ReplayScenario{}
 	v.History = []Event{{ID: id(), Kind: "opened", ActorID: actor, To: "open", CreatedAt: now}}
 	return v, s.write(v)
+}
+
+func (s *Store) CreateReplay(repo, wid, actor string, in ReplayScenario, expected int) (Workspace, ReplayScenario, error) {
+	var out ReplayScenario
+	v, err := s.mutate(repo, wid, expected, func(v *Workspace, now time.Time) error {
+		if !validReplay(*v, in) {
+			return ErrInvalid
+		}
+		if in.ParentScenarioID != "" {
+			found := false
+			for _, x := range v.ReplayScenarios {
+				if x.ID == in.ParentScenarioID {
+					found = true
+				}
+			}
+			if !found {
+				return ErrNotFound
+			}
+		}
+		in.ID, in.Version, in.CommitID, in.Status, in.CreatedBy, in.CreatedAt = id(), 1, v.Source.Revision, "ready", actor, now
+		in.EvidenceCitationIDs, in.Dependencies, in.ProductionDifferences, in.UnsafeSideEffects, in.Gaps = uniqueWords(in.EvidenceCitationIDs), uniqueWords(in.Dependencies), uniqueWords(in.ProductionDifferences), uniqueWords(in.UnsafeSideEffects), uniqueWords(in.Gaps)
+		in.Attempts = []ReplayAttempt{}
+		if len(in.UnsafeSideEffects) > 0 {
+			in.Status = "unsafe_side_effects"
+		} else if len(in.Gaps) > 0 {
+			in.Status = "blocked"
+		}
+		v.ReplayScenarios = append(v.ReplayScenarios, in)
+		out = in
+		v.History = append(v.History, Event{ID: id(), Kind: "replay_scenario_created", ActorID: actor, To: in.ID, CreatedAt: now})
+		return nil
+	})
+	return v, out, err
+}
+
+func (s *Store) AddReplayAttempt(repo, wid, sid, actor string, attempt ReplayAttempt, expected int) (Workspace, ReplayAttempt, error) {
+	var out ReplayAttempt
+	v, err := s.mutate(repo, wid, expected, func(v *Workspace, now time.Time) error {
+		for i := range v.ReplayScenarios {
+			x := &v.ReplayScenarios[i]
+			if x.ID != sid {
+				continue
+			}
+			changedRevision := attempt.CommitID != x.CommitID
+			if attempt.WorkspaceID == "" || (!changedRevision && (len(attempt.CommandOutcomeIDs) == 0 || len(attempt.Invariants) != len(x.Invariants))) || attempt.CostCents < 0 || attempt.CostCents > 10000000 || len(attempt.ProductionDifferences) == 0 || len(attempt.Outputs) > 20 || sensitive(strings.Join(attempt.Outputs, " ")) {
+				return ErrInvalid
+			}
+			for _, trace := range attempt.Traces {
+				if !one(trace.Kind, "trace", "log", "profile", "snapshot") || !hash(trace.SHA256) || trace.SizeBytes < 0 || strings.TrimSpace(trace.Reference) == "" || strings.TrimSpace(trace.Sanitized) == "" || sensitive(trace.Reference+trace.Sanitized) {
+					return ErrInvalid
+				}
+			}
+			for _, old := range x.Attempts {
+				if old.WorkspaceID == attempt.WorkspaceID {
+					return ErrConflict
+				}
+			}
+			attempt.ID, attempt.CreatedBy, attempt.CreatedAt = id(), actor, now
+			attempt.CommandOutcomeIDs = uniqueWords(attempt.CommandOutcomeIDs)
+			attempt.ProductionDifferences = uniqueWords(attempt.ProductionDifferences)
+			attempt.Gaps = uniqueWords(attempt.Gaps)
+			passed := !changedRevision && len(attempt.Gaps) == 0 && len(x.Gaps) == 0 && len(x.UnsafeSideEffects) == 0
+			for _, r := range attempt.Invariants {
+				if !r.Passed {
+					passed = false
+				}
+			}
+			if changedRevision {
+				attempt.Result = "changed_revision"
+			} else if passed {
+				attempt.Result = "demonstrated"
+			} else {
+				attempt.Result = "not_reproduced"
+			}
+			x.Attempts = append(x.Attempts, attempt)
+			successes, failures := 0, 0
+			for _, a := range x.Attempts {
+				if a.Result == "demonstrated" {
+					successes++
+				} else if a.Result == "not_reproduced" {
+					failures++
+				}
+			}
+			if len(x.UnsafeSideEffects) > 0 {
+				x.Status = "unsafe_side_effects"
+			} else if len(x.Gaps) > 0 {
+				x.Status = "blocked"
+			} else if successes > 0 && failures > 0 {
+				x.Status = "nondeterministic"
+			} else if successes >= 2 {
+				x.Status = "reproduced"
+			} else if successes == 1 {
+				x.Status = "demonstrated"
+			} else if len(x.Attempts) > 0 && x.Attempts[len(x.Attempts)-1].Result == "changed_revision" {
+				x.Status = "changed_revision"
+			} else {
+				x.Status = "not_reproduced"
+			}
+			x.Version++
+			out = attempt
+			v.History = append(v.History, Event{ID: id(), Kind: "replay_attempt_recorded", ActorID: actor, To: attempt.ID, Message: attempt.Result, CreatedAt: now})
+			return nil
+		}
+		return ErrNotFound
+	})
+	return v, out, err
+}
+
+func validReplay(v Workspace, x ReplayScenario) bool {
+	if strings.TrimSpace(x.Title) == "" || len(x.Title) > 200 || strings.TrimSpace(x.Objective) == "" || len(x.Objective) > 4000 || len(x.EvidenceCitationIDs) == 0 || !allCitationIDs(v, x.EvidenceCitationIDs) || len(x.Commands) == 0 || len(x.Invariants) == 0 || len(x.Inputs) > 20 || len(x.Commands) > 20 || len(x.Invariants) > 20 {
+		return false
+	}
+	commands := map[string]bool{}
+	for _, c := range x.Commands {
+		if !replayName(c.Name) || !hash(c.SHA256) || strings.TrimSpace(c.Purpose) == "" {
+			return false
+		}
+		commands[c.Name] = true
+	}
+	for _, i := range x.Inputs {
+		if !replayName(i.Name) || !one(i.Kind, "synthetic", "privacy_preserving") || strings.TrimSpace(i.Schema) == "" || !hash(i.SHA256) || strings.TrimSpace(i.Sanitization) == "" || sensitive(i.Schema+i.Sanitization) {
+			return false
+		}
+	}
+	for _, i := range x.Invariants {
+		if !replayName(i.Name) || !commands[i.CommandName] || strings.TrimSpace(i.Description) == "" {
+			return false
+		}
+	}
+	return !sensitive(x.Title + x.Objective + strings.Join(x.Dependencies, " ") + strings.Join(x.ProductionDifferences, " ") + strings.Join(x.Gaps, " "))
+}
+
+func hash(value string) bool { b, err := hex.DecodeString(value); return err == nil && len(b) == 32 }
+func replayName(value string) bool {
+	value = strings.TrimSpace(value)
+	return value != "" && len(value) <= 100 && !sensitive(value)
 }
 
 func (s *Store) AddClaim(repo, wid, actor string, citations []Citation, claim Claim, expected int) (Workspace, error) {

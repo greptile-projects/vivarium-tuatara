@@ -1039,7 +1039,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		}
 	}
 	if authStore != nil && repositoryCatalog != nil && workspaceStore != nil {
-		registerWorkspaceRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, incidentStore, issueStore, releaseStore, workspaceStore, authStore, organizationStore, checkRunStore, changeSessionStore, supportThreadStore, knowledgeAnswerStore)
+		registerWorkspaceRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, incidentStore, issueStore, releaseStore, workspaceStore, authStore, organizationStore, checkRunStore, changeSessionStore, supportThreadStore, knowledgeAnswerStore, debugWorkspaceStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && explanationStore != nil {
 		registerExplanationRoutes(mux, store, repositoryCatalog, authStore, explanationStore, proposalStore, pullRequestStore, incidentStore, workspaceStore, checkRunStore, relationshipStore)
@@ -1079,7 +1079,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerInfrastructureRoutes(mux, store, repositoryCatalog, authStore, infrastructureStore, pullRequestStore, releaseStore, deploymentStore, workspaceStore, issueStore, proposalStore, incidentStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && debugWorkspaceStore != nil && releaseStore != nil && deploymentStore != nil && issueStore != nil && incidentStore != nil && supportThreadStore != nil && serviceObjectiveStore != nil && packageStore != nil && infrastructureStore != nil {
-		registerDebugWorkspaceRoutes(mux, store, repositoryCatalog, authStore, debugWorkspaceStore, releaseStore, deploymentStore, issueStore, incidentStore, supportThreadStore, serviceObjectiveStore, packageStore, infrastructureStore)
+		registerDebugWorkspaceRoutes(mux, store, repositoryCatalog, authStore, debugWorkspaceStore, releaseStore, deploymentStore, issueStore, incidentStore, supportThreadStore, serviceObjectiveStore, packageStore, infrastructureStore, workspaceStore)
 	}
 	if authStore != nil && userStore != nil && repositoryCatalog != nil && apiContractStore != nil && pullRequestStore != nil && releaseStore != nil {
 		registerAPIContractRoutes(mux, store, repositoryCatalog, authStore, apiContractStore, pullRequestStore, releaseStore)
