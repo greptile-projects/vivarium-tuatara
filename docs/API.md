@@ -31,6 +31,22 @@
   Privacy controls are ordered from `hash_user_identifiers` through `remove_user_identifiers` to
   `remove_user_data`; security controls are ordered from `detect_secrets` through `redact_secrets` to
   `drop_secret_bearing_records`. Approval may retain or strengthen either control, never weaken it.
+- `POST .../{workspace_id}/claims` publishes a hypothesis, exact query, finding, or uncertainty only with one
+  or more server-resolved citations. Citation kinds cover selected visible runtime evidence, bounded lines and a
+  symbol at the frozen source commit, that commit itself, frozen package/dependency and configuration revisions,
+  infrastructure, an exact affected-environment deployment, or a current known issue. Claims project as
+  `supported`, `disputed`, `stale`, or `blocked`; responses append support, dispute, or stale evidence without
+  rewriting the claim. Inaccessible runtime material is returned as an opaque blocked citation.
+- `POST .../owner-requests` asks a named code, service, privacy, or security owner a citation-bound question;
+  only that human owner can answer it. `POST .../agent-investigations` delegates selected citations and a bounded
+  mandate through a 5-minute to 24-hour `debugging:investigate` credential. The agent endpoint exposes only that
+  packet and accepts uncertain, cited claims while running. Human collaborators can guide, pause, resume, or
+  revoke the investigation; revocation retires the credential, and initiator repository-access loss fails closed.
+  Investigation reads and claim-write responses share the same selected-citation packet projection; neither
+  response exposes unselected workspace citations or claims, and nested claim responses citing any unselected
+  evidence are omitted rather than returning their citation identifiers or evidence-derived prose.
+  Neither citations nor the agent credential confer secret, observability, runtime, Git, deployment, or mutation
+  authority.
 
 ## Consumer API applications and sandbox
 

@@ -20,6 +20,18 @@ Probe privacy controls form the closed order `hash_user_identifiers` < `remove_u
 `remove_user_data`; security controls form `detect_secrets` < `redact_secrets` <
 `drop_secret_bearing_records`. Approval accepts equal or stronger controls only. Workspace creator, owner,
 and access roles never bypass a probe's explicit audience for probe records or lifecycle history.
+Workspace diagnosis retains server-resolved citations to selected visible runtime evidence, exact source symbols,
+commits, packages/dependencies, configuration, infrastructure, deployments, and known issues. Attributable
+hypotheses, queries, findings, uncertainty, support, disputes, and stale markers keep inaccessible evidence
+explicit, while code, service, privacy, and security owner questions remain distinct. Purpose-only diagnostic
+agents receive only selected citation metadata through a maximum-24-hour credential; collaborators may guide,
+pause, resume, or revoke them, and revocation or initiator access loss stops publication. This grants no secret,
+observability, deployment, environment, Git, or mutation authority.
+Every diagnosis mutation rechecks the restricted workspace audience before parsing or issuing credentials, and
+agent-authored claims use the same statement-size and credential-shaped-content rejection as human claims.
+Both agent investigation reads and successful claim writes project only the investigation's selected citations
+and claims wholly supported by that citation set. Nested claim responses that cite anything outside the selected
+set are omitted with their prose, and a write response never returns the enclosing workspace.
 
 ## What this is
 

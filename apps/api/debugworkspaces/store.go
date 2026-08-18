@@ -43,6 +43,69 @@ type Hypothesis struct {
 	CreatedBy string    `json:"created_by"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+// Citation is a server-resolved, revision-aware pointer used to make a diagnostic
+// claim independently inspectable. Detail is deliberately bounded metadata, not
+// runtime payload content.
+type Citation struct {
+	ID            string `json:"id"`
+	Kind          string `json:"kind"`
+	ResourceID    string `json:"resource_id,omitempty"`
+	Revision      string `json:"revision,omitempty"`
+	Path          string `json:"path,omitempty"`
+	Symbol        string `json:"symbol,omitempty"`
+	LineStart     int    `json:"line_start,omitempty"`
+	LineEnd       int    `json:"line_end,omitempty"`
+	Label         string `json:"label"`
+	EvidenceID    string `json:"evidence_id,omitempty"`
+	Accessible    bool   `json:"accessible"`
+	BlockedReason string `json:"blocked_reason,omitempty"`
+}
+type ClaimResponse struct {
+	ID          string    `json:"id"`
+	ActorID     string    `json:"actor_id"`
+	Kind        string    `json:"kind"`
+	Message     string    `json:"message"`
+	CitationIDs []string  `json:"citation_ids"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+type Claim struct {
+	ID                   string          `json:"id"`
+	Kind                 string          `json:"kind"`
+	Statement            string          `json:"statement"`
+	Uncertainty          string          `json:"uncertainty"`
+	Confidence           string          `json:"confidence"`
+	CitationIDs          []string        `json:"citation_ids"`
+	Status               string          `json:"status"`
+	CreatedBy            string          `json:"created_by"`
+	AgentInvestigationID string          `json:"agent_investigation_id,omitempty"`
+	Responses            []ClaimResponse `json:"responses"`
+	CreatedAt            time.Time       `json:"created_at"`
+}
+type OwnerRequest struct {
+	ID          string    `json:"id"`
+	OwnerType   string    `json:"owner_type"`
+	OwnerID     string    `json:"owner_id"`
+	Question    string    `json:"question"`
+	CitationIDs []string  `json:"citation_ids"`
+	Status      string    `json:"status"`
+	RequestedBy string    `json:"requested_by"`
+	Response    string    `json:"response,omitempty"`
+	RespondedBy string    `json:"responded_by,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+type AgentInvestigation struct {
+	ID           string    `json:"id"`
+	AgentID      string    `json:"agent_id"`
+	InitiatorID  string    `json:"initiator_id"`
+	CredentialID string    `json:"credential_id"`
+	Mandate      string    `json:"mandate"`
+	CitationIDs  []string  `json:"citation_ids"`
+	State        string    `json:"state"`
+	Guidance     []Event   `json:"guidance"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
 type Event struct {
 	ID        string    `json:"id"`
 	Kind      string    `json:"kind"`
@@ -102,34 +165,38 @@ type Probe struct {
 	Actions            []ProbeAction `json:"actions"`
 }
 type Workspace struct {
-	ID                 string       `json:"id"`
-	RepositoryID       string       `json:"repository_id"`
-	Version            int          `json:"version"`
-	Title              string       `json:"title"`
-	Summary            string       `json:"summary"`
-	Trigger            Reference    `json:"trigger"`
-	Release            Reference    `json:"release"`
-	Environment        Reference    `json:"environment"`
-	TimeStart          time.Time    `json:"time_start"`
-	TimeEnd            time.Time    `json:"time_end"`
-	UserJourney        string       `json:"user_journey"`
-	OwnerIDs           []string     `json:"owner_ids"`
-	Severity           string       `json:"severity"`
-	Audience           string       `json:"audience"`
-	AccessUserIDs      []string     `json:"access_user_ids"`
-	Status             string       `json:"status"`
-	Source             Reference    `json:"source"`
-	Packages           []Reference  `json:"packages"`
-	Configuration      Reference    `json:"configuration"`
-	Infrastructure     Reference    `json:"infrastructure"`
-	Evidence           []Evidence   `json:"permitted_evidence"`
-	UnavailableContext []string     `json:"unavailable_context"`
-	Hypotheses         []Hypothesis `json:"hypotheses"`
-	History            []Event      `json:"history"`
-	Probes             []Probe      `json:"probes"`
-	CreatedBy          string       `json:"created_by"`
-	CreatedAt          time.Time    `json:"created_at"`
-	UpdatedAt          time.Time    `json:"updated_at"`
+	ID                  string               `json:"id"`
+	RepositoryID        string               `json:"repository_id"`
+	Version             int                  `json:"version"`
+	Title               string               `json:"title"`
+	Summary             string               `json:"summary"`
+	Trigger             Reference            `json:"trigger"`
+	Release             Reference            `json:"release"`
+	Environment         Reference            `json:"environment"`
+	TimeStart           time.Time            `json:"time_start"`
+	TimeEnd             time.Time            `json:"time_end"`
+	UserJourney         string               `json:"user_journey"`
+	OwnerIDs            []string             `json:"owner_ids"`
+	Severity            string               `json:"severity"`
+	Audience            string               `json:"audience"`
+	AccessUserIDs       []string             `json:"access_user_ids"`
+	Status              string               `json:"status"`
+	Source              Reference            `json:"source"`
+	Packages            []Reference          `json:"packages"`
+	Configuration       Reference            `json:"configuration"`
+	Infrastructure      Reference            `json:"infrastructure"`
+	Evidence            []Evidence           `json:"permitted_evidence"`
+	UnavailableContext  []string             `json:"unavailable_context"`
+	Hypotheses          []Hypothesis         `json:"hypotheses"`
+	History             []Event              `json:"history"`
+	Probes              []Probe              `json:"probes"`
+	Citations           []Citation           `json:"citations"`
+	Claims              []Claim              `json:"claims"`
+	OwnerRequests       []OwnerRequest       `json:"owner_requests"`
+	AgentInvestigations []AgentInvestigation `json:"agent_investigations"`
+	CreatedBy           string               `json:"created_by"`
+	CreatedAt           time.Time            `json:"created_at"`
+	UpdatedAt           time.Time            `json:"updated_at"`
 }
 type Store struct {
 	root string
@@ -180,8 +247,237 @@ func (s *Store) Create(v Workspace, actor string) (Workspace, error) {
 	}
 	v.Hypotheses = []Hypothesis{}
 	v.Probes = []Probe{}
+	v.Citations, v.Claims, v.OwnerRequests, v.AgentInvestigations = []Citation{}, []Claim{}, []OwnerRequest{}, []AgentInvestigation{}
 	v.History = []Event{{ID: id(), Kind: "opened", ActorID: actor, To: "open", CreatedAt: now}}
 	return v, s.write(v)
+}
+
+func (s *Store) AddClaim(repo, wid, actor string, citations []Citation, claim Claim, expected int) (Workspace, error) {
+	return s.mutate(repo, wid, expected, func(v *Workspace, now time.Time) error {
+		if !one(claim.Kind, "hypothesis", "query", "finding", "uncertainty") || strings.TrimSpace(claim.Statement) == "" || len(claim.Statement) > 8000 || strings.TrimSpace(claim.Uncertainty) == "" || !one(claim.Confidence, "low", "medium", "high") || len(citations) == 0 || sensitive(claim.Statement+claim.Uncertainty) {
+			return ErrInvalid
+		}
+		ids := []string{}
+		for i := range citations {
+			citations[i].ID = id()
+			ids = append(ids, citations[i].ID)
+			v.Citations = append(v.Citations, citations[i])
+		}
+		claim.ID, claim.CreatedBy, claim.CreatedAt, claim.CitationIDs, claim.Responses = id(), actor, now, ids, []ClaimResponse{}
+		claim.Status = deriveClaimStatus(claim, v.Citations)
+		v.Claims = append(v.Claims, claim)
+		v.History = append(v.History, Event{ID: id(), Kind: "claim_published", ActorID: actor, To: claim.ID, Message: claim.Kind, CreatedAt: now})
+		return nil
+	})
+}
+
+func (s *Store) RespondClaim(repo, wid, claimID, actor, kind, message string, citationIDs []string, expected int) (Workspace, error) {
+	return s.mutate(repo, wid, expected, func(v *Workspace, now time.Time) error {
+		if !one(kind, "support", "dispute", "mark_stale") || strings.TrimSpace(message) == "" || len(message) > 4000 || !allCitationIDs(*v, citationIDs) {
+			return ErrInvalid
+		}
+		for i := range v.Claims {
+			if v.Claims[i].ID == claimID {
+				r := ClaimResponse{ID: id(), ActorID: actor, Kind: kind, Message: strings.TrimSpace(message), CitationIDs: uniqueWords(citationIDs), CreatedAt: now}
+				v.Claims[i].Responses = append(v.Claims[i].Responses, r)
+				if kind == "dispute" {
+					v.Claims[i].Status = "disputed"
+				} else if kind == "mark_stale" {
+					v.Claims[i].Status = "stale"
+				} else if v.Claims[i].Status != "disputed" && v.Claims[i].Status != "stale" {
+					v.Claims[i].Status = deriveClaimStatus(v.Claims[i], v.Citations)
+				}
+				v.History = append(v.History, Event{ID: id(), Kind: "claim_" + kind, ActorID: actor, To: claimID, Message: r.Message, CreatedAt: now})
+				return nil
+			}
+		}
+		return ErrNotFound
+	})
+}
+
+func (s *Store) RequestOwner(repo, wid, actor string, in OwnerRequest, expected int) (Workspace, error) {
+	return s.mutate(repo, wid, expected, func(v *Workspace, now time.Time) error {
+		if !one(in.OwnerType, "code", "service", "privacy", "security") || !closed(in.OwnerID) || strings.TrimSpace(in.Question) == "" || len(in.Question) > 4000 || !allCitationIDs(*v, in.CitationIDs) {
+			return ErrInvalid
+		}
+		in.ID, in.Status, in.RequestedBy, in.CreatedAt = id(), "open", actor, now
+		in.CitationIDs = uniqueWords(in.CitationIDs)
+		v.OwnerRequests = append(v.OwnerRequests, in)
+		v.History = append(v.History, Event{ID: id(), Kind: "owner_input_requested", ActorID: actor, To: in.ID, Message: in.OwnerType, CreatedAt: now})
+		return nil
+	})
+}
+
+func (s *Store) AnswerOwner(repo, wid, requestID, actor, response string, expected int) (Workspace, error) {
+	return s.mutate(repo, wid, expected, func(v *Workspace, now time.Time) error {
+		for i := range v.OwnerRequests {
+			x := &v.OwnerRequests[i]
+			if x.ID == requestID {
+				if x.OwnerID != actor || x.Status != "open" || strings.TrimSpace(response) == "" || len(response) > 4000 {
+					return ErrForbidden
+				}
+				x.Status, x.Response, x.RespondedBy = "answered", strings.TrimSpace(response), actor
+				v.History = append(v.History, Event{ID: id(), Kind: "owner_input_answered", ActorID: actor, To: x.ID, CreatedAt: now})
+				return nil
+			}
+		}
+		return ErrNotFound
+	})
+}
+
+func (s *Store) StartAgent(repo, wid, actor, agentID, credentialID, mandate string, citationIDs []string, expected int) (Workspace, AgentInvestigation, error) {
+	var out AgentInvestigation
+	v, e := s.mutate(repo, wid, expected, func(v *Workspace, now time.Time) error {
+		if !closed(agentID) || !closed(credentialID) || strings.TrimSpace(mandate) == "" || len(mandate) > 4000 || len(citationIDs) == 0 || !allCitationIDs(*v, citationIDs) {
+			return ErrInvalid
+		}
+		out = AgentInvestigation{ID: id(), AgentID: agentID, InitiatorID: actor, CredentialID: credentialID, Mandate: strings.TrimSpace(mandate), CitationIDs: uniqueWords(citationIDs), State: "running", Guidance: []Event{}, CreatedAt: now, UpdatedAt: now}
+		v.AgentInvestigations = append(v.AgentInvestigations, out)
+		v.History = append(v.History, Event{ID: id(), Kind: "agent_started", ActorID: actor, To: out.ID, CreatedAt: now})
+		return nil
+	})
+	return v, out, e
+}
+
+func (s *Store) ControlAgent(repo, wid, iid, actor, action, message string, expected int) (Workspace, AgentInvestigation, error) {
+	var out AgentInvestigation
+	v, e := s.mutate(repo, wid, expected, func(v *Workspace, now time.Time) error {
+		for i := range v.AgentInvestigations {
+			x := &v.AgentInvestigations[i]
+			if x.ID != iid {
+				continue
+			}
+			switch action {
+			case "guide":
+				if strings.TrimSpace(message) == "" || x.State == "revoked" {
+					return ErrConflict
+				}
+				x.Guidance = append(x.Guidance, Event{ID: id(), Kind: "guide", ActorID: actor, Message: strings.TrimSpace(message), CreatedAt: now})
+			case "pause":
+				if x.State != "running" {
+					return ErrConflict
+				}
+				x.State = "paused"
+			case "resume":
+				if x.State != "paused" {
+					return ErrConflict
+				}
+				x.State = "running"
+			case "revoke":
+				if x.State == "revoked" {
+					out = *x
+					return nil
+				}
+				x.State = "revoked"
+			default:
+				return ErrInvalid
+			}
+			x.UpdatedAt = now
+			out = *x
+			v.History = append(v.History, Event{ID: id(), Kind: "agent_" + action, ActorID: actor, To: iid, Message: strings.TrimSpace(message), CreatedAt: now})
+			return nil
+		}
+		return ErrNotFound
+	})
+	return v, out, e
+}
+
+func (s *Store) AgentClaim(repo, wid, iid, credentialID string, claim Claim, expected int) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, e := s.lock()
+	if e != nil {
+		return Workspace{}, e
+	}
+	defer unlock()
+	v, e := s.read(repo, wid)
+	if e != nil {
+		return Workspace{}, e
+	}
+	if v.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	var x *AgentInvestigation
+	for i := range v.AgentInvestigations {
+		if v.AgentInvestigations[i].ID == iid {
+			x = &v.AgentInvestigations[i]
+		}
+	}
+	if x == nil {
+		return Workspace{}, ErrNotFound
+	}
+	if x.CredentialID != credentialID || x.State != "running" {
+		return Workspace{}, ErrForbidden
+	}
+	if !one(claim.Kind, "hypothesis", "query", "finding", "uncertainty") || strings.TrimSpace(claim.Statement) == "" || len(claim.Statement) > 8000 || strings.TrimSpace(claim.Uncertainty) == "" || !one(claim.Confidence, "low", "medium", "high") || len(claim.CitationIDs) == 0 || !subset(claim.CitationIDs, x.CitationIDs) || !allCitationIDs(v, claim.CitationIDs) || sensitive(claim.Statement+claim.Uncertainty) {
+		return Workspace{}, ErrInvalid
+	}
+	now := s.now()
+	claim.ID, claim.CreatedBy, claim.AgentInvestigationID, claim.CreatedAt, claim.Responses = id(), x.AgentID, x.ID, now, []ClaimResponse{}
+	claim.Status = deriveClaimStatus(claim, v.Citations)
+	v.Claims = append(v.Claims, claim)
+	x.UpdatedAt = now
+	v.Version++
+	v.UpdatedAt = now
+	v.History = append(v.History, Event{ID: id(), Kind: "agent_claim_published", ActorID: x.AgentID, To: claim.ID, Message: claim.Kind, CreatedAt: now})
+	return v, s.write(v)
+}
+
+func (s *Store) mutate(repo, wid string, expected int, fn func(*Workspace, time.Time) error) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, e := s.lock()
+	if e != nil {
+		return Workspace{}, e
+	}
+	defer unlock()
+	v, e := s.read(repo, wid)
+	if e != nil {
+		return Workspace{}, e
+	}
+	if v.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	now := s.now()
+	if e = fn(&v, now); e != nil {
+		return Workspace{}, e
+	}
+	v.Version++
+	v.UpdatedAt = now
+	return v, s.write(v)
+}
+func allCitationIDs(v Workspace, ids []string) bool {
+	if len(ids) == 0 {
+		return true
+	}
+	for _, wanted := range ids {
+		found := false
+		for _, c := range v.Citations {
+			found = found || c.ID == wanted
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+func subset(a, b []string) bool {
+	for _, x := range a {
+		if !contains(b, x) {
+			return false
+		}
+	}
+	return true
+}
+func deriveClaimStatus(c Claim, citations []Citation) string {
+	for _, id := range c.CitationIDs {
+		for _, x := range citations {
+			if x.ID == id && !x.Accessible {
+				return "blocked"
+			}
+		}
+	}
+	return "supported"
 }
 
 func (s *Store) RequestProbe(repo, wid, actor string, in Probe, expected int) (Workspace, error) {

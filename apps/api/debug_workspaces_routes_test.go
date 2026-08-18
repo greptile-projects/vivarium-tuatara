@@ -124,4 +124,89 @@ func TestDebugWorkspaceReadRedactsAllRestrictedEvidenceMetadata(t *testing.T) {
 	if len(eventProjection.Hypotheses) != 1 || eventProjection.Hypotheses[0].CreatedBy != reader.User.ID {
 		t.Fatalf("event response lost permitted mutation: %#v", eventProjection.Hypotheses)
 	}
+	claimBody := `{"expected_version":5,"claim":{"kind":"hypothesis","statement":"retry exhaustion caused the timeout","uncertainty":"the restricted trace remains unavailable","confidence":"medium"},"citations":[{"kind":"runtime_evidence","evidence_id":"` + created.Evidence[0].ID + `","label":"restricted trace selection"}]}`
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/claims", claimBody, reader.Credential.Token, http.StatusCreated)
+	var diagnosed debugworkspaces.Workspace
+	decodeResponse(t, response, &diagnosed)
+	if len(diagnosed.Claims) != 1 || diagnosed.Claims[0].Status != "blocked" || diagnosed.Citations[0].Accessible || diagnosed.Citations[0].Label != "Inaccessible evidence" {
+		t.Fatalf("inaccessible claim projection = %#v / %#v", diagnosed.Claims, diagnosed.Citations)
+	}
+	withUnselected, err := workspaceStore.AddClaim(repo.ID, created.ID, owner.User.ID, []debugworkspaces.Citation{{Kind: "commit", Revision: created.Source.Revision, Label: "unselected source context", Accessible: true}}, debugworkspaces.Claim{Kind: "finding", Statement: "unselected finding", Uncertainty: "not delegated", Confidence: "low"}, diagnosed.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withUnselected, err = workspaceStore.RespondClaim(repo.ID, created.ID, diagnosed.Claims[0].ID, owner.User.ID, "support", "undelegated evidence discussion", []string{withUnselected.Citations[1].ID}, withUnselected.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentBody := `{"expected_version":8,"mandate":"test only the selected correlation","citation_ids":["` + diagnosed.Citations[0].ID + `"],"expires_in":300}`
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/agent-investigations", agentBody, owner.Credential.Token, http.StatusCreated)
+	var launched struct {
+		DebuggingWorkspace debugworkspaces.Workspace          `json:"debugging_workspace"`
+		AgentInvestigation debugworkspaces.AgentInvestigation `json:"agent_investigation"`
+		Credential         auth.IssuedCredential              `json:"credential"`
+	}
+	decodeResponse(t, response, &launched)
+	agentClaim := `{"expected_version":9,"claim":{"kind":"uncertainty","statement":"the selected evidence cannot establish the branch","uncertainty":"runtime evidence is blocked","confidence":"low","citation_ids":["` + diagnosed.Citations[0].ID + `"]}}`
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/agent-investigations/"+launched.AgentInvestigation.ID+"/claims", agentClaim, launched.Credential.Token, http.StatusCreated)
+	var agentPublished struct {
+		Investigation debugworkspaces.AgentInvestigation `json:"investigation"`
+		Citations     []debugworkspaces.Citation         `json:"citations"`
+		Claims        []debugworkspaces.Claim            `json:"claims"`
+	}
+	decodeResponse(t, response, &agentPublished)
+	if len(agentPublished.Citations) != 1 || agentPublished.Citations[0].ID != diagnosed.Citations[0].ID || len(agentPublished.Claims) != 2 || agentPublished.Claims[1].CreatedBy != launched.AgentInvestigation.AgentID {
+		t.Fatalf("agent claim packet escaped selection or lost attribution = citations %#v, claims %#v", agentPublished.Citations, agentPublished.Claims)
+	}
+	if len(agentPublished.Claims[0].Responses) != 0 {
+		t.Fatalf("POST packet exposed response based on undelegated evidence: %#v", agentPublished.Claims[0].Responses)
+	}
+	for _, citation := range agentPublished.Citations {
+		if citation.ID == withUnselected.Citations[1].ID {
+			t.Fatalf("unselected citation escaped: %#v", citation)
+		}
+	}
+	for _, claim := range agentPublished.Claims {
+		if claim.ID == withUnselected.Claims[1].ID {
+			t.Fatalf("unselected claim escaped: %#v", claim)
+		}
+	}
+	response = authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/agent-investigations/"+launched.AgentInvestigation.ID, "", launched.Credential.Token, http.StatusOK)
+	var agentRead struct {
+		Claims []debugworkspaces.Claim `json:"claims"`
+	}
+	decodeResponse(t, response, &agentRead)
+	if len(agentRead.Claims) != 2 || len(agentRead.Claims[0].Responses) != 0 {
+		t.Fatalf("GET packet exposed undelegated response: %#v", agentRead.Claims)
+	}
+	control := `{"expected_version":10,"action":"pause","message":"wait for privacy-owner input"}`
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/agent-investigations/"+launched.AgentInvestigation.ID+"/controls", control, owner.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/agent-investigations/"+launched.AgentInvestigation.ID+"/claims", strings.Replace(agentClaim, `"expected_version":9`, `"expected_version":11`, 1), launched.Credential.Token, http.StatusForbidden).Body.Close()
+
+	restricted, err := workspaceStore.Create(debugworkspaces.Workspace{RepositoryID: repo.ID, Title: "Restricted diagnosis", Summary: "Need-to-know runtime context", Trigger: debugworkspaces.Reference{Kind: "manual_observation", Label: "private report"}, Release: debugworkspaces.Reference{ResourceID: strings.Repeat("4", 32), Revision: strings.Repeat("c", 40)}, Environment: debugworkspaces.Reference{ResourceID: strings.Repeat("5", 32)}, TimeStart: start, TimeEnd: start.Add(time.Hour), UserJourney: "private checkout", OwnerIDs: []string{owner.User.ID}, Severity: "critical", Audience: "restricted", AccessUserIDs: []string{owner.User.ID}, Source: debugworkspaces.Reference{Revision: strings.Repeat("c", 40)}}, owner.User.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restricted, err = workspaceStore.AddClaim(repo.ID, restricted.ID, owner.User.ID, []debugworkspaces.Citation{{Kind: "commit", Revision: restricted.Source.Revision, Label: "affected source", Accessible: true}}, debugworkspaces.Claim{Kind: "hypothesis", Statement: "private hypothesis", Uncertainty: "private uncertainty", Confidence: "low"}, restricted.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restricted, restrictedAgent, err := workspaceStore.StartAgent(repo.ID, restricted.ID, owner.User.ID, strings.Repeat("6", 32), strings.Repeat("7", 32), "private mandate", []string{restricted.Citations[0].ID}, restricted.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	excludedMutations := []struct{ path, body string }{
+		{"/claims/" + restricted.Claims[0].ID + "/responses", `{"expected_version":3,"kind":"dispute","message":"guess","citation_ids":[]}`},
+		{"/owner-requests", `{"expected_version":3,"request":{"owner_type":"code","owner_id":"` + owner.User.ID + `","question":"guess","citation_ids":[]}}`},
+		{"/owner-requests/" + strings.Repeat("8", 32) + "/answer", `{"expected_version":3,"response":"guess"}`},
+		{"/agent-investigations", `{"expected_version":3,"mandate":"guess","citation_ids":["` + restricted.Citations[0].ID + `"],"expires_in":300}`},
+		{"/agent-investigations/" + restrictedAgent.ID + "/controls", `{"expected_version":3,"action":"pause","message":"guess"}`},
+	}
+	for _, mutation := range excludedMutations {
+		authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+restricted.ID+mutation.path, mutation.body, reader.Credential.Token, http.StatusNotFound).Body.Close()
+	}
+	afterRestricted, err := workspaceStore.Get(repo.ID, restricted.ID)
+	if err != nil || afterRestricted.Version != restricted.Version {
+		t.Fatalf("excluded mutation changed restricted workspace: version %d, err %v", afterRestricted.Version, err)
+	}
 }
