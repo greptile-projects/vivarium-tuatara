@@ -3696,6 +3696,21 @@ or unrelated resource authority. The human controller uses `POST .../controls` w
 `cancel`; transitions occur only at declared safety points, and resume requires remediation evidence to have
 cleared retained blockers before the short-lived scope expires.
 
+`POST .../infrastructure-executions/{execution_id}/assessments` compare-and-swaps a terminal or paused execution
+version and retains sanitized exact-provider resource outcomes, unmanaged resources, and failed cleanup. The server
+compares resource presence and every service, security, privacy, cost, continuity, and candidate commitment measure
+frozen at execution creation. It derives `converged: true` only for a succeeded execution with complete passing
+evidence and no unmanaged or cleanup remainder; partial and failed evidence is immutable and cannot claim success.
+
+`POST .../monitor-runs` is participant-only and records `granted`, `partial`, or `denied` provider visibility plus
+provider availability. Granted or partial runs can retain bounded configuration-drift, unmanaged-change,
+failed-cleanup, credential-expiry, and provider-loss findings with sanitized cause attribution; denied runs cannot
+assert provider findings. `POST .../drift-responses` compare-and-swaps the execution and links a finding to an
+accountable existing issue, proposal, proposal task, repository-scoped incident, or pull. Exception responses use
+their ordinary proposal rather than an unverified free-form exception ID. These links
+do not create infrastructure authority, rewrite the external observation, or bypass ordinary environment policy,
+review, assignment, or merge controls.
+
 # Durable-state migration work
 
 `POST /repositories/{id}/durable-schemas/{schema_id}/migrations/{migration_id}/work`

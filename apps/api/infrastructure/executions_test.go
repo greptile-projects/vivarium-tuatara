@@ -134,3 +134,49 @@ func TestInfrastructureExecutionRequiresEnvironmentBoundRehearsalEvidence(t *tes
 		t.Fatalf("policy-authorized equivalence = %#v, %v", x, err)
 	}
 }
+
+func TestExecutionAssessmentNeverClaimsConvergenceForPartialOrFailedEvidence(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Now().UTC()
+	s.now = func() time.Time { return now }
+	resource := Resource{ID: "service", EnvironmentID: "prod", Commitments: Commitments{Security: []string{"least privilege"}, Privacy: []string{"regional data"}, Reliability: []string{"99.9 availability"}, Continuity: []string{"restore tested"}}, Constraints: []Constraint{{Kind: "cost", Limit: 10, Unit: "usd"}}}
+	plan := ChangePlan{ID: "plan", RepositoryID: "repo", DefinitionID: "definition", DefinitionVersion: 2, AffectedOwnerIDs: []string{"owner"}, AcknowledgedOwnerIDs: []string{"owner"}, Rehearsals: []Rehearsal{{ID: "r", Scope: RehearsalScope{EnvironmentID: "prod"}, Runs: []RehearsalRun{{Result: "passed"}}}}, Changes: []PlanChange{{ResourceID: "service", Action: "change", After: &resource, Order: 1}}}
+	x, err := s.CreateExecution(plan, "owner", ExecutionCreation{MergeCommitID: "merge", EnvironmentID: "prod", EnvironmentPolicy: "policy", RehearsalID: "r", BudgetUnits: 10, CredentialExpiry: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	x, err = s.ReportExecution(x.ID, "owner", "human", "step-service", x.Version, StepReport{Status: "failed", ProviderResponse: "apply partially completed", Health: "degraded", NextAction: "repair", SafetyPoint: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	x, err = s.AssessExecution(x.ID, "owner", x.Version, []ResourceOutcome{{ResourceID: "service", Present: true, ProviderRevision: "provider-2", Service: "failed", Security: "unknown", Privacy: "unknown", Cost: "passed", Continuity: "failed", MeasuresPassed: []string{"cost", "cost:10 usd"}, Summary: "partial provider state retained"}}, []string{"orphan-network"}, []string{"old-service"})
+	if err != nil || x.Assessments[len(x.Assessments)-1].Converged {
+		t.Fatalf("assessment = %#v, %v", x, err)
+	}
+}
+
+func TestExecutionConvergenceDriftMonitoringAndGovernedResponse(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Now().UTC()
+	s.now = func() time.Time { return now }
+	resource := Resource{ID: "service", EnvironmentID: "prod"}
+	plan := ChangePlan{ID: "plan", RepositoryID: "repo", DefinitionID: "definition", DefinitionVersion: 3, AffectedOwnerIDs: []string{"owner"}, AcknowledgedOwnerIDs: []string{"owner"}, Rehearsals: []Rehearsal{{ID: "r", Scope: RehearsalScope{EnvironmentID: "prod"}, Runs: []RehearsalRun{{Result: "passed"}}}}, Changes: []PlanChange{{ResourceID: "service", Action: "change", After: &resource, Order: 1}}}
+	x, _ := s.CreateExecution(plan, "owner", ExecutionCreation{MergeCommitID: "merge", EnvironmentID: "prod", EnvironmentPolicy: "policy", RehearsalID: "r", BudgetUnits: 0, CredentialExpiry: now.Add(time.Hour)})
+	x, _ = s.ReportExecution(x.ID, "owner", "human", "step-service", x.Version, StepReport{Status: "succeeded", ProviderResponse: "applied", Health: "healthy", NextAction: "verify", SafetyPoint: true})
+	x, err := s.AssessExecution(x.ID, "owner", x.Version, []ResourceOutcome{{ResourceID: "service", Present: true, ProviderRevision: "provider-3", Service: "passed", Security: "passed", Privacy: "passed", Cost: "passed", Continuity: "passed", MeasuresPassed: []string{"service", "security", "privacy", "cost", "continuity"}, Summary: "all declared outcomes verified"}}, nil, nil)
+	if err != nil || !x.Assessments[0].Converged {
+		t.Fatalf("convergence = %#v, %v", x.Assessments, err)
+	}
+	x, err = s.MonitorExecution(x.ID, "owner", "partial", "available", []DriftFinding{{Kind: "configuration_drift", ResourceID: "service", Severity: "high", Summary: "provider configuration changed", Cause: "attributed external maintenance"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finding := x.MonitorRuns[0].Findings[0]
+	x, err = s.RespondToDrift(x.ID, "owner", x.Version, DriftResponse{FindingID: finding.ID, Kind: "adopt", OwnerID: "owner", ResourceKind: "pull_request", ResourceID: "pull-42", Summary: "review the legitimate provider change through ordinary policy"})
+	if err != nil || len(x.DriftResponses) != 1 {
+		t.Fatalf("response = %#v, %v", x, err)
+	}
+	if _, err = s.MonitorExecution(x.ID, "owner", "denied", "unknown", []DriftFinding{{Kind: "provider_loss", Severity: "critical", Summary: "invented finding"}}); err != ErrInvalid {
+		t.Fatalf("permission bypass = %v", err)
+	}
+}

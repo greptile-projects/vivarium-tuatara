@@ -54,33 +54,101 @@ type ExecutionEvent struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type ExpectedOutcome struct {
+	ResourceID string   `json:"resource_id"`
+	Present    bool     `json:"present"`
+	Measures   []string `json:"measures"`
+}
+
+type ResourceOutcome struct {
+	ResourceID       string   `json:"resource_id"`
+	Present          bool     `json:"present"`
+	ProviderRevision string   `json:"provider_revision"`
+	Service          string   `json:"service"`
+	Security         string   `json:"security"`
+	Privacy          string   `json:"privacy"`
+	Cost             string   `json:"cost"`
+	Continuity       string   `json:"continuity"`
+	MeasuresPassed   []string `json:"measures_passed"`
+	Summary          string   `json:"summary"`
+}
+
+type ConvergenceAssessment struct {
+	ID                 string            `json:"id"`
+	ExecutionVersion   int               `json:"execution_version"`
+	DefinitionVersion  int               `json:"definition_version"`
+	Outcomes           []ResourceOutcome `json:"outcomes"`
+	UnmanagedResources []string          `json:"unmanaged_resources"`
+	FailedCleanup      []string          `json:"failed_cleanup"`
+	Converged          bool              `json:"converged"`
+	Reasons            []string          `json:"reasons"`
+	RecordedBy         string            `json:"recorded_by"`
+	RecordedAt         time.Time         `json:"recorded_at"`
+}
+
+type DriftFinding struct {
+	ID         string    `json:"id"`
+	Kind       string    `json:"kind"`
+	ResourceID string    `json:"resource_id,omitempty"`
+	Severity   string    `json:"severity"`
+	Summary    string    `json:"summary"`
+	Cause      string    `json:"cause,omitempty"`
+	DetectedAt time.Time `json:"detected_at"`
+}
+
+type DriftResponse struct {
+	ID           string    `json:"id"`
+	FindingID    string    `json:"finding_id"`
+	Kind         string    `json:"kind"`
+	OwnerID      string    `json:"owner_id"`
+	ResourceKind string    `json:"resource_kind"`
+	ParentID     string    `json:"parent_id,omitempty"`
+	ResourceID   string    `json:"resource_id"`
+	Summary      string    `json:"summary"`
+	CreatedBy    string    `json:"created_by"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+type MonitorRun struct {
+	ID             string         `json:"id"`
+	Permission     string         `json:"permission"`
+	ProviderStatus string         `json:"provider_status"`
+	Findings       []DriftFinding `json:"findings"`
+	RecordedBy     string         `json:"recorded_by"`
+	RecordedAt     time.Time      `json:"recorded_at"`
+}
+
 type Execution struct {
-	ID                 string                `json:"id"`
-	RepositoryID       string                `json:"repository_id"`
-	PlanID             string                `json:"plan_id"`
-	PullRequestID      string                `json:"pull_request_id"`
-	ReviewedRevision   string                `json:"reviewed_revision"`
-	MergeCommitID      string                `json:"merge_commit_id"`
-	CandidateDigest    string                `json:"candidate_digest"`
-	DefinitionID       string                `json:"definition_id"`
-	DefinitionVersion  int                   `json:"definition_version"`
-	EnvironmentID      string                `json:"environment_id"`
-	EnvironmentPolicy  string                `json:"environment_policy"`
-	RehearsalID        string                `json:"rehearsal_id"`
-	BudgetUnits        float64               `json:"budget_units"`
-	CostUnits          float64               `json:"cost_units"`
-	Status             string                `json:"status"`
-	ActiveControllerID string                `json:"active_controller_id"`
-	Version            int                   `json:"version"`
-	Steps              []ExecutionStep       `json:"steps"`
-	Delegations        []ExecutionDelegation `json:"delegations"`
-	Credential         ExecutionCredential   `json:"credential"`
-	Events             []ExecutionEvent      `json:"events"`
-	Blockers           []string              `json:"blockers"`
-	NextActions        []string              `json:"next_actions"`
-	CreatedBy          string                `json:"created_by"`
-	CreatedAt          time.Time             `json:"created_at"`
-	UpdatedAt          time.Time             `json:"updated_at"`
+	ID                 string                  `json:"id"`
+	RepositoryID       string                  `json:"repository_id"`
+	PlanID             string                  `json:"plan_id"`
+	PullRequestID      string                  `json:"pull_request_id"`
+	ReviewedRevision   string                  `json:"reviewed_revision"`
+	MergeCommitID      string                  `json:"merge_commit_id"`
+	CandidateDigest    string                  `json:"candidate_digest"`
+	DefinitionID       string                  `json:"definition_id"`
+	DefinitionVersion  int                     `json:"definition_version"`
+	EnvironmentID      string                  `json:"environment_id"`
+	EnvironmentPolicy  string                  `json:"environment_policy"`
+	RehearsalID        string                  `json:"rehearsal_id"`
+	BudgetUnits        float64                 `json:"budget_units"`
+	CostUnits          float64                 `json:"cost_units"`
+	Status             string                  `json:"status"`
+	ActiveControllerID string                  `json:"active_controller_id"`
+	Version            int                     `json:"version"`
+	Steps              []ExecutionStep         `json:"steps"`
+	Delegations        []ExecutionDelegation   `json:"delegations"`
+	Credential         ExecutionCredential     `json:"credential"`
+	Events             []ExecutionEvent        `json:"events"`
+	Blockers           []string                `json:"blockers"`
+	NextActions        []string                `json:"next_actions"`
+	ExpectedOutcomes   []ExpectedOutcome       `json:"expected_outcomes"`
+	Assessments        []ConvergenceAssessment `json:"assessments"`
+	MonitorRuns        []MonitorRun            `json:"monitor_runs"`
+	DriftResponses     []DriftResponse         `json:"drift_responses"`
+	CreatedBy          string                  `json:"created_by"`
+	CreatedAt          time.Time               `json:"created_at"`
+	UpdatedAt          time.Time               `json:"updated_at"`
 }
 
 type ExecutionCreation struct {
@@ -179,7 +247,8 @@ func (s *Store) CreateExecution(plan ChangePlan, actor string, in ExecutionCreat
 			seenAgents[d.StepID+":"+d.AgentID] = true
 		}
 		now := s.now()
-		out = Execution{ID: randomID(), RepositoryID: plan.RepositoryID, PlanID: plan.ID, PullRequestID: plan.PullRequestID, ReviewedRevision: plan.SourceRevision, MergeCommitID: in.MergeCommitID, CandidateDigest: plan.CandidateDigest, DefinitionID: plan.DefinitionID, DefinitionVersion: plan.DefinitionVersion, EnvironmentID: in.EnvironmentID, EnvironmentPolicy: strings.TrimSpace(in.EnvironmentPolicy), RehearsalID: in.RehearsalID, BudgetUnits: in.BudgetUnits, Status: "running", ActiveControllerID: actor, Version: 1, Steps: steps, Delegations: append([]ExecutionDelegation{}, in.Delegations...), Credential: ExecutionCredential{PrincipalID: actor, StepIDs: keys(stepIDs), ResourceIDs: resources, Actions: []string{"report", "pause", "resume", "cancel"}, ExpiresAt: in.CredentialExpiry}, Events: []ExecutionEvent{{Sequence: 1, Kind: "started", ActorID: actor, ActorType: "human", Summary: "exact merged infrastructure execution started", CreatedAt: now}}, Blockers: []string{}, NextActions: []string{"report the first dependency-ready step"}, CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
+		expected := expectedOutcomes(plan, in.EnvironmentID)
+		out = Execution{ID: randomID(), RepositoryID: plan.RepositoryID, PlanID: plan.ID, PullRequestID: plan.PullRequestID, ReviewedRevision: plan.SourceRevision, MergeCommitID: in.MergeCommitID, CandidateDigest: plan.CandidateDigest, DefinitionID: plan.DefinitionID, DefinitionVersion: plan.DefinitionVersion, EnvironmentID: in.EnvironmentID, EnvironmentPolicy: strings.TrimSpace(in.EnvironmentPolicy), RehearsalID: in.RehearsalID, BudgetUnits: in.BudgetUnits, Status: "running", ActiveControllerID: actor, Version: 1, Steps: steps, Delegations: append([]ExecutionDelegation{}, in.Delegations...), Credential: ExecutionCredential{PrincipalID: actor, StepIDs: keys(stepIDs), ResourceIDs: resources, Actions: []string{"report", "pause", "resume", "cancel"}, ExpiresAt: in.CredentialExpiry}, Events: []ExecutionEvent{{Sequence: 1, Kind: "started", ActorID: actor, ActorType: "human", Summary: "exact merged infrastructure execution started", CreatedAt: now}}, Blockers: []string{}, NextActions: []string{"report the first dependency-ready step"}, ExpectedOutcomes: expected, Assessments: []ConvergenceAssessment{}, MonitorRuns: []MonitorRun{}, DriftResponses: []DriftResponse{}, CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
 		return s.writeExecution(out)
 	})
 	return out, err
@@ -317,6 +386,208 @@ func (s *Store) ControlExecution(id, actor, action, summary string, expected int
 		x.Version++
 		x.UpdatedAt = s.now()
 		x.Events = append(x.Events, ExecutionEvent{Sequence: len(x.Events) + 1, Kind: action + "d", ActorID: actor, ActorType: "human", Summary: summary, CreatedAt: s.now()})
+		out = x
+		return s.writeExecution(x)
+	})
+	return out, err
+}
+
+func expectedOutcomes(plan ChangePlan, environment string) []ExpectedOutcome {
+	out := []ExpectedOutcome{}
+	for _, change := range plan.Changes {
+		resource, present := change.After, true
+		if resource == nil {
+			resource, present = change.Before, false
+		}
+		if resource == nil || (resource.EnvironmentID != "" && resource.EnvironmentID != environment) {
+			continue
+		}
+		measures := []string{"service", "security", "privacy", "cost", "continuity"}
+		for _, value := range resource.Commitments.Reliability {
+			measures = append(measures, "service:"+value)
+		}
+		for _, value := range resource.Commitments.Security {
+			measures = append(measures, "security:"+value)
+		}
+		for _, value := range resource.Commitments.Privacy {
+			measures = append(measures, "privacy:"+value)
+		}
+		for _, value := range resource.Commitments.Continuity {
+			measures = append(measures, "continuity:"+value)
+		}
+		for _, value := range resource.Constraints {
+			if value.Kind == "cost" {
+				measures = append(measures, "cost:"+formatLimit(value))
+			}
+		}
+		out = append(out, ExpectedOutcome{ResourceID: resource.ID, Present: present, Measures: measures})
+	}
+	return out
+}
+
+func (s *Store) AssessExecution(id, actor string, expected int, outcomes []ResourceOutcome, unmanaged, cleanup []string) (Execution, error) {
+	var out Execution
+	err := s.lock(func() error {
+		x, err := s.readExecution(id)
+		if err != nil {
+			return err
+		}
+		if x.Version != expected || len(x.ExpectedOutcomes) == 0 || (x.Status != "succeeded" && x.Status != "paused" && x.Status != "cancelled") {
+			return ErrExecutionBlocked
+		}
+		seen := map[string]bool{}
+		allowed := map[string]bool{}
+		for _, outcome := range x.ExpectedOutcomes {
+			allowed[outcome.ResourceID] = true
+		}
+		reasons := []string{}
+		validState := map[string]bool{"passed": true, "failed": true, "unknown": true}
+		for _, o := range outcomes {
+			if o.ResourceID == "" || !allowed[o.ResourceID] || seen[o.ResourceID] || strings.TrimSpace(o.ProviderRevision) == "" || !validState[o.Service] || !validState[o.Security] || !validState[o.Privacy] || !validState[o.Cost] || !validState[o.Continuity] || strings.TrimSpace(o.Summary) == "" || unsafe(o.ProviderRevision, o.Summary, strings.Join(o.MeasuresPassed, " ")) {
+				return ErrInvalid
+			}
+			seen[o.ResourceID] = true
+		}
+		converged := x.Status == "succeeded" && len(unmanaged) == 0 && len(cleanup) == 0
+		if x.Status != "succeeded" {
+			reasons = append(reasons, "apply did not succeed")
+		}
+		for _, want := range x.ExpectedOutcomes {
+			found := false
+			for _, got := range outcomes {
+				if got.ResourceID != want.ResourceID {
+					continue
+				}
+				found = true
+				if got.Present != want.Present {
+					converged = false
+					reasons = append(reasons, want.ResourceID+" presence differs from plan")
+				}
+				if got.Service != "passed" || got.Security != "passed" || got.Privacy != "passed" || got.Cost != "passed" || got.Continuity != "passed" {
+					converged = false
+					reasons = append(reasons, want.ResourceID+" has failed or unknown success measures")
+				}
+				passed := map[string]bool{}
+				for _, m := range got.MeasuresPassed {
+					passed[m] = true
+				}
+				for _, m := range want.Measures {
+					if !passed[m] {
+						converged = false
+						reasons = append(reasons, want.ResourceID+" is missing measure "+m)
+					}
+				}
+			}
+			if !found {
+				converged = false
+				reasons = append(reasons, want.ResourceID+" was not observed")
+			}
+		}
+		if len(unmanaged) > 0 {
+			converged = false
+			reasons = append(reasons, "unmanaged resources remain")
+		}
+		if len(cleanup) > 0 {
+			converged = false
+			reasons = append(reasons, "cleanup remains incomplete")
+		}
+		if unsafe(strings.Join(unmanaged, " "), strings.Join(cleanup, " ")) {
+			return ErrInvalid
+		}
+		now := s.now()
+		a := ConvergenceAssessment{ID: randomID(), ExecutionVersion: x.Version, DefinitionVersion: x.DefinitionVersion, Outcomes: append([]ResourceOutcome{}, outcomes...), UnmanagedResources: append([]string{}, unmanaged...), FailedCleanup: append([]string{}, cleanup...), Converged: converged, Reasons: reasons, RecordedBy: actor, RecordedAt: now}
+		x.Assessments = append(x.Assessments, a)
+		x.Version++
+		x.UpdatedAt = now
+		x.Events = append(x.Events, ExecutionEvent{Sequence: len(x.Events) + 1, Kind: "convergence_assessed", ActorID: actor, ActorType: "human", Summary: map[bool]string{true: "reviewed intent and observed outcomes converge", false: "divergence retained for accountable action"}[converged], CreatedAt: now})
+		out = x
+		return s.writeExecution(x)
+	})
+	return out, err
+}
+
+func (s *Store) MonitorExecution(id, actor, permission, provider string, findings []DriftFinding) (Execution, error) {
+	var out Execution
+	err := s.lock(func() error {
+		x, err := s.readExecution(id)
+		if err != nil {
+			return err
+		}
+		if x.Status == "running" {
+			return ErrExecutionBlocked
+		}
+		if permission != "granted" && permission != "partial" && permission != "denied" {
+			return ErrInvalid
+		}
+		if provider != "available" && provider != "degraded" && provider != "lost" && provider != "unknown" {
+			return ErrInvalid
+		}
+		kinds := map[string]bool{"configuration_drift": true, "unmanaged_change": true, "failed_cleanup": true, "credential_expiring": true, "provider_loss": true}
+		severities := map[string]bool{"low": true, "medium": true, "high": true, "critical": true}
+		allowedResources := map[string]bool{}
+		for _, e := range x.ExpectedOutcomes {
+			allowedResources[e.ResourceID] = true
+		}
+		now := s.now()
+		normalized := make([]DriftFinding, len(findings))
+		for i, f := range findings {
+			if !kinds[f.Kind] || !severities[f.Severity] || strings.TrimSpace(f.Summary) == "" || (f.ResourceID != "" && !allowedResources[f.ResourceID] && f.Kind != "unmanaged_change") || unsafe(f.Summary, f.Cause) {
+				return ErrInvalid
+			}
+			f.ID = randomID()
+			f.DetectedAt = now
+			normalized[i] = f
+		}
+		if permission == "denied" && len(findings) > 0 {
+			return ErrInvalid
+		}
+		x.MonitorRuns = append(x.MonitorRuns, MonitorRun{ID: randomID(), Permission: permission, ProviderStatus: provider, Findings: normalized, RecordedBy: actor, RecordedAt: now})
+		x.Version++
+		x.UpdatedAt = now
+		x.Events = append(x.Events, ExecutionEvent{Sequence: len(x.Events) + 1, Kind: "drift_monitored", ActorID: actor, ActorType: "human", Summary: "permission-aware infrastructure monitoring retained", CreatedAt: now})
+		out = x
+		return s.writeExecution(x)
+	})
+	return out, err
+}
+
+func (s *Store) RespondToDrift(id, actor string, expected int, response DriftResponse) (Execution, error) {
+	var out Execution
+	err := s.lock(func() error {
+		x, err := s.readExecution(id)
+		if err != nil {
+			return err
+		}
+		if x.Version != expected {
+			return ErrConflict
+		}
+		found := false
+		for _, run := range x.MonitorRuns {
+			for _, f := range run.Findings {
+				if f.ID == response.FindingID {
+					found = true
+				}
+			}
+		}
+		kinds := map[string]bool{"incident": true, "exception": true, "repair": true, "adopt": true, "restore": true}
+		resourceKinds := map[string]bool{"issue": true, "proposal": true, "task": true, "incident": true, "pull_request": true}
+		if !found || !kinds[response.Kind] || response.OwnerID == "" || !resourceKinds[response.ResourceKind] || response.ResourceID == "" || (response.ResourceKind == "task" && response.ParentID == "") || strings.TrimSpace(response.Summary) == "" || unsafe(response.ParentID, response.ResourceID, response.Summary) {
+			return ErrInvalid
+		}
+		if response.Kind == "adopt" && response.ResourceKind != "pull_request" && response.ResourceKind != "proposal" {
+			return ErrInvalid
+		}
+		if response.Kind == "restore" && response.ResourceKind != "task" && response.ResourceKind != "proposal" {
+			return ErrInvalid
+		}
+		now := s.now()
+		response.ID = randomID()
+		response.CreatedBy = actor
+		response.CreatedAt = now
+		x.DriftResponses = append(x.DriftResponses, response)
+		x.Version++
+		x.UpdatedAt = now
+		x.Events = append(x.Events, ExecutionEvent{Sequence: len(x.Events) + 1, Kind: "drift_response_linked", ActorID: actor, ActorType: "human", Summary: response.Kind + " linked without rewriting observed change", CreatedAt: now})
 		out = x
 		return s.writeExecution(x)
 	})

@@ -136,6 +136,19 @@ safety point. Agents may report only explicitly delegated non-destructive steps 
 acknowledgement, destructive, environment, or unrelated provider authority. The web infrastructure workspace
 exposes the same start, report, pause, resume, and cancel flow.
 
+Terminal and safety-paused applies can be assessed against the resource presence and declared service, security,
+privacy, cost, and continuity measures frozen from the approved candidate. Assessments retain exact sanitized
+provider revisions, partial results, unmanaged resources, and failed cleanup. Convergence is derived only for a
+succeeded apply with every measure passing and complete cleanup; unknown, partial, failed, paused, or cancelled work
+remains explicitly divergent.
+
+Current participants can append permission-aware monitoring runs after apply. Each run records whether provider
+visibility was granted, partial, or denied, and retains bounded findings for configuration drift, unmanaged changes,
+failed cleanup, expiring credentials, and provider loss with an available sanitized cause. Findings can link an
+accountable owner and ordinary incident, exception, human/agent repair, reviewed adoption pull/proposal, or
+declared-state restoration task. Adoption and restoration remain normal policy-governed review paths: monitoring
+does not overwrite the external event or confer provider, environment, policy, review, or merge authority.
+
 Support guidance can be proven in ordinary revision-pinned development workspaces. Immutable attempts
 bind an exact cited answer revision to sanitized thread inputs, declared environment, commands and
 outputs, artifacts, cost, and result; fresh-workspace reruns preserve the original record and reads expose
