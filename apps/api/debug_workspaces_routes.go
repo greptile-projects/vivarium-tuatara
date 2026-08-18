@@ -2,7 +2,9 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -21,6 +23,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/serviceobjectives"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportthreads"
+	devworkspaces "github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
 type debugMutationInput struct {
@@ -45,7 +48,7 @@ type debugProbeRevokeInput struct {
 	Reason          string `json:"reason"`
 }
 
-func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *repositories.Store, credentials *auth.Store, workspaces *debugworkspaces.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, issueStore *issues.Store, incidentStore *incidents.Store, supportStore *supportthreads.Store, objectiveStore *serviceobjectives.Store, packageStore *packages.Store, infrastructureStore *infrastructure.Store) {
+func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *repositories.Store, credentials *auth.Store, workspaces *debugworkspaces.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, issueStore *issues.Store, incidentStore *incidents.Store, supportStore *supportthreads.Store, objectiveStore *serviceobjectives.Store, packageStore *packages.Store, infrastructureStore *infrastructure.Store, developmentWorkspaces *devworkspaces.Store) {
 	actorID := func(c auth.Credential) string {
 		if c.AgentID != "" {
 			return c.AgentID
@@ -511,6 +514,128 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 		}
 		out, err := workspaces.RevokeProbe(r.PathValue("id"), r.PathValue("workspace_id"), r.PathValue("probe_id"), actorID(c), in.Reason, in.ExpectedVersion)
 		writeDebugWorkspace(w, project(out, actorID(c)), err, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/debugging-workspaces/{workspace_id}/replay-scenarios", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := workspaces.Get(r.PathValue("id"), r.PathValue("workspace_id"))
+		if err != nil || !canRead(current, actorID(c)) {
+			writeAPIError(w, 404, "debugging_workspace_not_found", "debugging workspace not found")
+			return
+		}
+		var in struct {
+			ExpectedVersion int                            `json:"expected_version"`
+			Scenario        debugworkspaces.ReplayScenario `json:"scenario"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a minimized privacy-bounded replay scenario is required")
+			return
+		}
+		out, scenario, err := workspaces.CreateReplay(current.RepositoryID, current.ID, actorID(c), in.Scenario, in.ExpectedVersion)
+		if err != nil {
+			writeDebugWorkspace(w, project(out, actorID(c)), err, 201)
+			return
+		}
+		writeJSON(w, 201, map[string]any{"debugging_workspace": project(out, actorID(c)), "replay_scenario": scenario})
+	})
+	mux.HandleFunc("POST /repositories/{id}/debugging-workspaces/{workspace_id}/replay-scenarios/{scenario_id}/attempts", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := workspaces.Get(r.PathValue("id"), r.PathValue("workspace_id"))
+		if err != nil || !canRead(current, actorID(c)) {
+			writeAPIError(w, 404, "debugging_workspace_not_found", "debugging workspace not found")
+			return
+		}
+		var scenario *debugworkspaces.ReplayScenario
+		for i := range current.ReplayScenarios {
+			if current.ReplayScenarios[i].ID == r.PathValue("scenario_id") {
+				scenario = &current.ReplayScenarios[i]
+			}
+		}
+		if scenario == nil {
+			writeAPIError(w, 404, "replay_scenario_not_found", "replay scenario not found")
+			return
+		}
+		if len(scenario.UnsafeSideEffects) > 0 {
+			writeAPIError(w, 422, "replay_side_effects_unsafe", "unsafe side effects must be removed before an isolated replay can run")
+			return
+		}
+		if developmentWorkspaces == nil {
+			writeAPIError(w, 503, "replay_workspace_unavailable", "isolated workspace evidence is unavailable")
+			return
+		}
+		var in struct {
+			ExpectedVersion int                           `json:"expected_version"`
+			Attempt         debugworkspaces.ReplayAttempt `json:"attempt"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "revision-exact replay evidence is required")
+			return
+		}
+		dw, e := developmentWorkspaces.Get(strings.TrimSpace(in.Attempt.WorkspaceID))
+		if e != nil || dw.RepositoryID != current.RepositoryID || dw.Source.Kind != "debugging_reproduction" || dw.Source.DebuggingWorkspaceID != current.ID || dw.Source.ReplayScenarioID != scenario.ID || dw.State == "provisioning" {
+			writeAPIError(w, 422, "replay_workspace_invalid", "attempt must use this scenario's isolated revision-exact debugging workspace")
+			return
+		}
+		declared := map[string]devworkspaces.ExperimentCommand{}
+		for _, cmd := range dw.Definition.Experiments {
+			sum := sha256.Sum256([]byte(cmd.Command))
+			declared[cmd.Name] = devworkspaces.ExperimentCommand{Name: cmd.Name, Command: hex.EncodeToString(sum[:])}
+		}
+		outcomes := map[string]devworkspaces.CommandOutcome{}
+		for _, o := range dw.Commands {
+			outcomes[o.ID] = o
+		}
+		selected := map[string]devworkspaces.CommandOutcome{}
+		in.Attempt.Outputs = []string{}
+		for _, oid := range in.Attempt.CommandOutcomeIDs {
+			o, found := outcomes[oid]
+			if !found {
+				writeAPIError(w, 422, "replay_commands_invalid", "every outcome must come from the selected workspace")
+				return
+			}
+			for _, cmd := range scenario.Commands {
+				d, ok := declared[cmd.Name]
+				if ok && d.Command == cmd.SHA256 && o.CommandSHA256 == cmd.SHA256 {
+					selected[cmd.Name] = o
+				}
+			}
+			in.Attempt.Outputs = append(in.Attempt.Outputs, o.Output)
+		}
+		in.Attempt.CommitID = dw.CommitID
+		in.Attempt.DefinitionSHA256 = dw.DefinitionSHA256
+		environment, _ := json.Marshal(dw.Definition)
+		in.Attempt.Environment = environment
+		if dw.CommitID != scenario.CommitID {
+			in.Attempt.Gaps = append(in.Attempt.Gaps, "workspace revision differs from the frozen affected revision")
+			in.Attempt.ProductionDifferences = append(in.Attempt.ProductionDifferences, "revision changed from "+scenario.CommitID+" to "+dw.CommitID)
+			out, attempt, e := workspaces.AddReplayAttempt(current.RepositoryID, current.ID, scenario.ID, actorID(c), in.Attempt, in.ExpectedVersion)
+			if e != nil {
+				writeDebugWorkspace(w, project(out, actorID(c)), e, 201)
+				return
+			}
+			writeJSON(w, 201, map[string]any{"debugging_workspace": project(out, actorID(c)), "attempt": attempt})
+			return
+		}
+		in.Attempt.Invariants = []debugworkspaces.ReplayInvariantResult{}
+		for _, inv := range scenario.Invariants {
+			o, found := selected[inv.CommandName]
+			if !found {
+				writeAPIError(w, 422, "replay_commands_invalid", "every invariant requires its repository-defined command outcome")
+				return
+			}
+			in.Attempt.Invariants = append(in.Attempt.Invariants, debugworkspaces.ReplayInvariantResult{Name: inv.Name, OutcomeID: o.ID, ActualExitCode: o.ExitCode, Passed: o.ExitCode == inv.ExpectedExitCode})
+		}
+		out, attempt, e := workspaces.AddReplayAttempt(current.RepositoryID, current.ID, scenario.ID, actorID(c), in.Attempt, in.ExpectedVersion)
+		if e != nil {
+			writeDebugWorkspace(w, project(out, actorID(c)), e, 201)
+			return
+		}
+		writeJSON(w, 201, map[string]any{"debugging_workspace": project(out, actorID(c)), "attempt": attempt})
 	})
 }
 

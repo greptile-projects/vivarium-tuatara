@@ -485,8 +485,13 @@ func validateWorkspaceSource(source workspaces.Source, commit string, ps *propos
 			return errors.New("issue has no attested release")
 		}
 		return nil
+	case "debugging_reproduction":
+		if strings.TrimSpace(source.DebuggingWorkspaceID) == "" || strings.TrimSpace(source.ReplayScenarioID) == "" {
+			return errors.New("debugging reproductions require a debugging workspace and replay scenario")
+		}
+		return nil
 	default:
-		return errors.New("source kind must be repository, proposal_task, pull_request, incident_repair, decision_experiment, or issue_reproduction")
+		return errors.New("source kind must be repository, proposal_task, pull_request, incident_repair, decision_experiment, issue_reproduction, or debugging_reproduction")
 	}
 }
 func provisionWorkspace(gitPath, runtime, id, commit string, d workspaces.Definition) ([]workspaces.SetupStep, bool) {

@@ -32,6 +32,13 @@ agent-authored claims use the same statement-size and credential-shaped-content 
 Both agent investigation reads and successful claim writes project only the investigation's selected citations
 and claims wholly supported by that citation set. Nested claim responses that cite anything outside the selected
 set are omitted with their prose, and a write response never returns the enclosing workspace.
+Permitted debugging citations can seed immutable minimized replay scenarios at the affected commit. Scenarios retain
+only digest-addressed synthetic or privacy-preserving input shapes, sanitization, repository experiment-command
+hashes, invariants, dependencies, production differences, unsafe effects, gaps, and parent refinements. Attempts
+must resolve through a linked `debugging_reproduction` bounded workspace, and retain its exact environment,
+definition digest, command outputs, sanitized trace metadata, derived invariant results, cost, differences, and
+gaps. One passing run is only demonstrated; two distinct passing workspaces derive reproduced, mixed results derive
+nondeterministic, and unsafe, missing, revision-changed, or irreducible conditions never become reproduced.
 
 ## What this is
 

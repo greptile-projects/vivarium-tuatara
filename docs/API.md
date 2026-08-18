@@ -47,6 +47,17 @@
   evidence are omitted rather than returning their citation identifiers or evidence-derived prose.
   Neither citations nor the agent credential confer secret, observability, runtime, Git, deployment, or mutation
   authority.
+- `POST .../{workspace_id}/replay-scenarios` minimizes selected permitted citations into an immutable scenario at
+  the affected commit. Inputs are digest-only `synthetic` or `privacy_preserving` shapes with declared
+  sanitization; repository experiment-command hashes, observable invariants, dependencies, production
+  differences, gaps, unsafe effects, and optional parent-scenario refinement remain explicit.
+- Launch `POST /workspaces` with source kind `debugging_reproduction`, the debugging workspace ID, replay scenario
+  ID, and exact scenario commit. `POST .../replay-scenarios/{scenario_id}/attempts` accepts only outcomes from that
+  linked isolated workspace and derives invariant results from repository-defined command exit codes. Attempts
+  retain the exact environment definition, definition digest, sanitized output/trace metadata, cost, gaps, and
+  production differences. One passing workspace is `demonstrated`; two distinct passing workspaces are
+  `reproduced`; mixed outcomes are `nondeterministic`. Unsafe effects prevent launch, while missing dependencies,
+  changed revisions, and irreducible conditions cannot be reported as reproduced.
 
 ## Consumer API applications and sandbox
 

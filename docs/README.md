@@ -2989,3 +2989,13 @@ opaque blocked dependency. Citation-bound questions can be directed to named cod
 owners. The web canvas refreshes active reasoning while purpose-only agents can be guided, paused, resumed, or
 revoked. Their selected citation packet and short-lived credential carry no secret, production, observability,
 deployment, Git, or mutation authority.
+
+Collaborators can turn those permitted citations into immutable minimized replay scenarios without retaining raw
+production state. Each scenario freezes the affected commit, digest-only synthetic or privacy-preserving input
+shape, repository-defined experiment commands, invariants, dependencies, production differences, unsafe effects,
+and explicit gaps; refinements name their parent instead of rewriting prior evidence. Attempts run through ordinary
+isolated revision-exact development workspaces and retain their exact environment, command outputs, sanitized trace
+metadata, invariant results, costs, and gaps. The server derives outcomes from retained commands and requires two
+distinct passing workspaces before projecting `reproduced`; disagreement remains `nondeterministic`, and unsafe,
+changed-revision, missing-dependency, or irreducible production conditions remain explicit evidence rather than a
+successful reproduction.
