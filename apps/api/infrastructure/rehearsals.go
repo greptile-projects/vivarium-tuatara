@@ -193,6 +193,37 @@ func (s *Store) AddRehearsalRun(planID, rehearsalID, actor string, run Rehearsal
 	return plan, run, err
 }
 
+// AddRehearsalRunCurrent verifies definition and observation freshness under
+// the same durable lock that appends the retained run. The route holds the pull
+// source-revision guard around this call.
+func (s *Store) AddRehearsalRunCurrent(planID, rehearsalID, actor string, run RehearsalRun) (ChangePlan, RehearsalRun, error) {
+	var plan ChangePlan
+	err := s.lock(func() error {
+		p, err := s.readPlan(planID)
+		if err != nil {
+			return err
+		}
+		current, err := s.read(p.DefinitionID)
+		if err != nil || current.CurrentVersion != p.DefinitionVersion || observationFingerprint(current) != p.ObservationFingerprint || (p.ObservationsValidUntil != nil && s.now().After(*p.ObservationsValidUntil)) {
+			return ErrPlanStale
+		}
+		for i := range p.Rehearsals {
+			if p.Rehearsals[i].ID != rehearsalID {
+				continue
+			}
+			if run.WorkspaceID == "" || len(run.Outcomes) != len(p.Rehearsals[i].Checks) || (run.Result != "passed" && run.Result != "failed") {
+				return ErrInvalid
+			}
+			run.ID, run.CreatedBy, run.CreatedAt = randomID(), actor, s.now()
+			p.Rehearsals[i].Runs = append(p.Rehearsals[i].Runs, run)
+			plan = p
+			return s.writePlan(p)
+		}
+		return ErrPlanNotFound
+	})
+	return plan, run, err
+}
+
 func CommandDigest(command string) string {
 	sum := sha256.Sum256([]byte(command))
 	return hex.EncodeToString(sum[:])

@@ -15,6 +15,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
 func TestInfrastructureCommitBlobBindsCandidateToExactPullTree(t *testing.T) {
@@ -31,6 +32,20 @@ func TestInfrastructureCommitBlobBindsCandidateToExactPullTree(t *testing.T) {
 	}
 	if _, _, ok = infrastructureCommitBlob(git, "candidate-binding", string(commit), "invented.json"); ok {
 		t.Fatal("resource declaration absent from pull commit resolved")
+	}
+}
+
+func TestInfrastructureRehearsalBindingUsesLatestCommandRetry(t *testing.T) {
+	created := time.Now().UTC()
+	command := "./verify provisioning"
+	digest := infrastructure.CommandDigest(command)
+	first := workspaces.CommandOutcome{ID: "first", CommandSHA256: digest, ExitCode: 1, Output: "first attempt failed", ActorID: "owner", StartedAt: created.Add(time.Second), CompletedAt: created.Add(2 * time.Second)}
+	latest := workspaces.CommandOutcome{ID: "latest", CommandSHA256: digest, ExitCode: 0, Output: "retry passed", ActorID: "owner", StartedAt: created.Add(3 * time.Second), CompletedAt: created.Add(4 * time.Second)}
+	ws := workspaces.Workspace{ID: "workspace", CreatorID: "owner", Commands: []workspaces.CommandOutcome{first, latest}}
+	rehearsal := infrastructure.Rehearsal{CreatedAt: created, Checks: []infrastructure.RehearsalCheck{{ID: "provisioning", Kind: "provisioning", Command: command}}}
+	run, ok := bindInfrastructureRehearsal(ws, infrastructure.ChangePlan{}, rehearsal, []string{"provisioning"})
+	if !ok || run.Result != "passed" || len(run.Outcomes) != 1 || run.Outcomes[0].SanitizedLog != "retry passed" || run.Outcomes[0].ExitCode != 0 {
+		t.Fatalf("latest retry binding = %#v, %v", run, ok)
 	}
 }
 

@@ -61,3 +61,32 @@ func TestInfrastructureRehearsalLabelsDestructiveEffectsUnsupported(t *testing.T
 		t.Fatalf("explicit unsupported effect = %v", err)
 	}
 }
+
+func TestCurrentRehearsalRunAppendRejectsDefinitionDrift(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Now().UTC()
+	s.now = func() time.Time { return now }
+	definition := Definition{ID: "definition", RepositoryID: "repo", CurrentVersion: 1, Revisions: []Revision{{Version: 1}}, Observations: []Observation{}}
+	plan := ChangePlan{ID: "plan-current", RepositoryID: "repo", DefinitionID: definition.ID, DefinitionVersion: 1, ObservationFingerprint: observationFingerprint(definition), Rehearsals: []Rehearsal{{ID: "rehearsal", Checks: []RehearsalCheck{{ID: "check"}}}}}
+	if err := s.lock(func() error {
+		if err := s.write(definition); err != nil {
+			return err
+		}
+		return s.writePlan(plan)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	definition.CurrentVersion = 2
+	definition.Revisions = append(definition.Revisions, Revision{Version: 2})
+	if err := s.lock(func() error { return s.write(definition) }); err != nil {
+		t.Fatal(err)
+	}
+	run := RehearsalRun{WorkspaceID: "workspace", Result: "passed", Outcomes: []RehearsalOutcome{{CheckID: "check", Status: "passed"}}}
+	if _, _, err := s.AddRehearsalRunCurrent(plan.ID, "rehearsal", "owner", run); err != ErrPlanStale {
+		t.Fatalf("stale run append = %v", err)
+	}
+	stored, err := s.GetPlan(plan.ID)
+	if err != nil || len(stored.Rehearsals[0].Runs) != 0 {
+		t.Fatalf("stale run was retained: %#v, %v", stored.Rehearsals[0].Runs, err)
+	}
+}

@@ -325,9 +325,44 @@ export function PullInfrastructurePlans({
                   Depends on{" "}
                   {change.dependency_ids.join(", ") || "no planned resource"}
                 </p>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {change.risks.map((risk, index) => (
+                    <div
+                      key={`${risk.kind}-${index}`}
+                      className="rounded-lg bg-[var(--canvas)] p-3 text-sm"
+                    >
+                      <Badge
+                        tone={
+                          risk.severity === "high"
+                            ? "danger"
+                            : risk.severity === "medium"
+                              ? "warning"
+                              : "neutral"
+                        }
+                      >
+                        {risk.kind} · {risk.severity}
+                      </Badge>
+                      <p className="mt-2">{risk.summary}</p>
+                      <p className="mt-1 text-xs text-[var(--muted)]">
+                        {risk.mitigation}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-3 text-xs">
+                  <strong>Rollback limit:</strong> {change.rollback_limit}
+                </p>
               </li>
             ))}
           </ol>
+          <div className="mt-4">
+            <h3 className="text-sm font-semibold">Expected policy effects</h3>
+            {plan.policy_effects.map((effect) => (
+              <p key={effect.path} className="mt-2 text-sm">
+                <code>{effect.path}</code> · {effect.effects.join("; ")}
+              </p>
+            ))}
+          </div>
           <div className="mt-4">
             <h3 className="text-sm font-semibold">
               Affected-owner acknowledgements
@@ -337,6 +372,21 @@ export function PullInfrastructurePlans({
               {plan.affected_owner_ids.length} current
             </p>
           </div>
+          {plan.events.length > 0 && (
+            <div className="mt-4 space-y-2">
+              {plan.events.map((event) => (
+                <p
+                  key={event.id}
+                  className="rounded-lg border border-[var(--line)] p-3 text-sm"
+                >
+                  <Badge>{event.kind.replaceAll("_", " ")}</Badge> {event.body}
+                  <span className="mt-1 block text-xs text-[var(--muted)]">
+                    {event.actor_type} {event.actor_id}
+                  </span>
+                </p>
+              ))}
+            </div>
+          )}
           {plan.rehearsals?.map((rehearsal) => (
             <div
               key={rehearsal.id}

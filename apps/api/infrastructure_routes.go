@@ -344,7 +344,11 @@ func registerInfrastructureRoutes(mux *http.ServeMux, git *storage.Store, catalo
 			return
 		}
 		var out infrastructure.ChangePlan
-		out, run, err = definitions.AddRehearsalRun(plan.ID, rehearsal.ID, actor.UserID, run)
+		err = pulls.WithSourceRevision(pull.RepositoryID, pull.ID, plan.SourceRevision, func(p pullrequests.PullRequest) error {
+			var appendErr error
+			out, run, appendErr = definitions.AddRehearsalRunCurrent(plan.ID, rehearsal.ID, actor.UserID, run)
+			return appendErr
+		})
 		if err != nil {
 			writeInfrastructurePlan(w, out, err, 201)
 			return
@@ -376,10 +380,13 @@ func bindInfrastructureRehearsal(ws workspaces.Workspace, plan infrastructure.Ch
 		}
 		digest := infrastructure.CommandDigest(check.Command)
 		matches := retained[digest]
-		if len(matches) != 1 || matches[0].StartedAt.Before(rehearsal.CreatedAt) || matches[0].CompletedAt.Before(matches[0].StartedAt) || len(matches[0].Output) > 65500 || reusableSecret.MatchString(matches[0].Output) {
+		if len(matches) == 0 {
 			return run, false
 		}
-		x := matches[0]
+		x := matches[len(matches)-1]
+		if x.StartedAt.Before(rehearsal.CreatedAt) || x.CompletedAt.Before(x.StartedAt) || len(x.Output) > 65500 || reusableSecret.MatchString(x.Output) {
+			return run, false
+		}
 		status := "passed"
 		if x.ExitCode != 0 {
 			status, passed = "failed", false
