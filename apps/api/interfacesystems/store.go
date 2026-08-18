@@ -129,7 +129,10 @@ func (s *Store) Create(repo, actor string, r Revision) (System, error) {
 		out = System{ID: randomID(), RepositoryID: repo, CurrentVersion: 1, Revisions: []Revision{r}, CreatedAt: now, UpdatedAt: now}
 		return s.write(out)
 	})
-	return s.project(out, nil), err
+	if err != nil {
+		return System{}, err
+	}
+	return s.Get(out.ID)
 }
 func (s *Store) Revise(id string, expected int, actor string, r Revision) (System, error) {
 	var out System
@@ -151,7 +154,10 @@ func (s *Store) Revise(id string, expected int, actor string, r Revision) (Syste
 		out = v
 		return s.write(v)
 	})
-	return s.project(out, nil), err
+	if err != nil {
+		return System{}, err
+	}
+	return s.Get(out.ID)
 }
 func (s *Store) Get(id string) (System, error) {
 	var out System
@@ -239,7 +245,7 @@ func validate(r Revision) error {
 	}
 	statuses := map[string]bool{"current": true, "stale": true, "unsupported": true, "unknown": true}
 	for _, x := range r.Implementations {
-		if x.Consumer == "" || len(x.CommitID) != 40 || x.DefinitionName == "" || !statuses[x.Status] {
+		if x.Consumer == "" || x.ReleaseID == "" || len(x.CommitID) != 40 || x.DefinitionName == "" || !statuses[x.Status] {
 			return ErrInvalid
 		}
 	}

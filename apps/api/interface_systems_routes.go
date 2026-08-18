@@ -119,15 +119,27 @@ func interfaceSystemProvenanceResolves(git *storage.Store, releaseStore *release
 			}
 		}
 	}
-	for _, implementation := range revision.Implementations {
-		if implementation.RepositoryID == "" || implementation.RepositoryID == repositoryID {
-			if implementation.CommitID != revision.CommitID {
-				return false
-			}
-			if implementation.ReleaseID != "" && implementation.ReleaseID != revision.ReleaseID {
-				return false
-			}
+	for index := range revision.Implementations {
+		implementation := &revision.Implementations[index]
+		if implementation.RepositoryID != "" && implementation.RepositoryID != repositoryID {
+			// This repository-scoped mutation grants no authority to make
+			// attributable provenance claims for another repository.
+			return false
 		}
+		implementationRepositoryID := repositoryID
+		implementationRelease, err := releaseStore.Get(implementationRepositoryID, implementation.ReleaseID)
+		if err != nil || implementationRelease.CommitID != strings.ToLower(implementation.CommitID) {
+			return false
+		}
+		implementationRepository, err := git.Open(implementationRepositoryID)
+		if err != nil {
+			return false
+		}
+		if _, err = implementationRepository.ReadCommit(storage.ObjectID(implementationRelease.CommitID)); err != nil {
+			return false
+		}
+		implementation.RepositoryID = implementationRepositoryID
+		implementation.CommitID = implementationRelease.CommitID
 	}
 	return true
 }

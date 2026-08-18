@@ -212,10 +212,20 @@ export function InterfaceSystemWorkspace({
           description: text(f, "token_description"),
           owner_ids: owners,
         },
+        ...(current?.tokens.slice(1) ?? []),
       ],
-      components: [definition(f, "component")],
-      interaction_patterns: [definition(f, "interaction")],
-      content_rules: [definition(f, "content")],
+      components: [
+        definition(f, "component"),
+        ...(current?.components.slice(1) ?? []),
+      ],
+      interaction_patterns: [
+        definition(f, "interaction"),
+        ...(current?.interaction_patterns.slice(1) ?? []),
+      ],
+      content_rules: [
+        definition(f, "content"),
+        ...(current?.content_rules.slice(1) ?? []),
+      ],
       responsive_rules: [
         {
           name: text(f, "responsive_name"),
@@ -223,6 +233,7 @@ export function InterfaceSystemWorkspace({
           behavior: text(f, "responsive_behavior"),
           owner_ids: owners,
         },
+        ...(current?.responsive_rules.slice(1) ?? []),
       ],
       adoption_policy: {
         level: text(f, "policy"),
@@ -240,6 +251,7 @@ export function InterfaceSystemWorkspace({
           status: text(f, "status"),
           notes: text(f, "implementation_notes"),
         },
+        ...(current?.implementations.slice(1) ?? []),
       ],
     };
     try {
