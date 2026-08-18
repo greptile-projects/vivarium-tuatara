@@ -221,3 +221,12 @@ func TestDebugRepairChecksMustMatchDeployedRevision(t *testing.T) {
 		t.Fatalf("selected checks from wrong revision: %#v", selected)
 	}
 }
+
+func TestDebugRepairRequiresEveryTargetBranchCheck(t *testing.T) {
+	zero := 0
+	selected := map[string]checkruns.Run{strings.Repeat("1", 32): {Definition: checkruns.Definition{Name: "passing-required"}, State: "completed", ExitCode: &zero}}
+	missing := debugMissingRequiredChecks(selected, []string{"passing-required", "omitted-failing-required"})
+	if len(missing) != 1 || missing[0] != "omitted-failing-required" {
+		t.Fatalf("missing required checks = %#v", missing)
+	}
+}

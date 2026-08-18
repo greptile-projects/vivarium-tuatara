@@ -798,6 +798,15 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 			writeAPIError(w, 422, "debugging_checks_invalid", "all selected checks must pass at the linked pull revision")
 			return
 		}
+		requiredChecks, e := catalog.RequiredChecks(repo.ID, pull.TargetBranch)
+		if e != nil {
+			writeAPIError(w, 422, "debugging_required_checks_unavailable", "target-branch required-check policy is unavailable")
+			return
+		}
+		if missing := debugMissingRequiredChecks(selected, requiredChecks); len(missing) > 0 {
+			writeAPIError(w, 422, "debugging_required_checks_incomplete", "every target-branch required check must pass at the deployed revision: "+strings.Join(missing, ", "))
+			return
+		}
 		scenarioHashes := map[string]bool{}
 		for _, s := range current.ReplayScenarios {
 			if s.ID == work.ScenarioID {
@@ -932,6 +941,19 @@ func debugPassingChecks(runs []checkruns.Run, ids []string, deployedCommit strin
 		}
 	}
 	return selected
+}
+func debugMissingRequiredChecks(selected map[string]checkruns.Run, required []string) []string {
+	present := map[string]bool{}
+	for _, run := range selected {
+		present[run.Definition.Name] = true
+	}
+	missing := []string{}
+	for _, name := range required {
+		if !present[name] {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }
 func oneOf(v string, values ...string) bool {
 	for _, x := range values {

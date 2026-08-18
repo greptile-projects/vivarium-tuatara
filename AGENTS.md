@@ -46,6 +46,7 @@ staged deployment, and named production signals. Failed signals use existing par
 reopen diagnosis; debugging and task identities gain no review, merge, release, deployment, or environment authority.
 Repair publication reserves its workspace identity before ordinary task creation. Production success requires a
 succeeded staged deployment and scenario plus ordinary checks from its exact release commit, not merely the pull source;
+every check required by the pull target branch must be selected and passing, so callers cannot omit failed policy gates;
 failed-measure actions persist intent first, rollback creation is idempotent for the exact
 failed/known-good pair, and post-action write races remain explicitly pending for retry-safe reconciliation.
 
