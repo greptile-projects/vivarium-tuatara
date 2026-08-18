@@ -548,6 +548,22 @@ analysis stale, and projections keep undeclared flows and declared/observed diff
 Records default beneath `$DATA_FLOW_STORAGE_ROOT` (`data-flows`) and grant no data or repository
 authority.
 
+## Product behavior before code
+
+Repository collaborators can open design proposals through
+`/repositories/{id}/design-proposals` and evaluate them in the `/repositories/{id}/design`
+workspace. Immutable revisions keep their originating feedback, issue, roadmap outcome,
+accessibility finding, or pull request beside explicit goals, journeys, states, product language,
+constraints, alternatives, success measures, affected components, uncertainty, citations, and
+audience-scoped wireframes or prototypes.
+
+Comments, questions, dissent, and grounded-agent evidence bind to the revision they evaluated.
+Only named current participant owners can acknowledge the current revision or request changes.
+Artifact bodies and interactions are projected only to their explicit audience; inaccessible
+research remains a citation gap rather than becoming repository-visible content. Design proposals
+are review context and grant no implementation, Git, review, release, deployment, environment,
+research, or asset access.
+
 Pull requests compare a candidate data-flow revision and its exact commitment/data-use versions
 with a target-revision flow at `/repositories/{id}/pulls/{pull_id}/privacy-review`. The server
 classifies changed collection, purposes, recipients, retention, access, and user controls, then

@@ -288,6 +288,17 @@ whenever dependencies change or the web job fails before it starts.
   system. These records document reviewed product intent and provenance but grant
   no Git, release, review, merge, deployment, or consumer-repository authority.
 
+- **Product design proposals** — `/repositories/{id}/design-proposals` and the repository
+  `/design` workspace retain product behavior before implementation. Each immutable revision
+  names its feedback, issue, roadmap outcome, accessibility finding, or pull-request source and
+  defines the user goal, journeys, states, content, constraints, alternatives, success measures,
+  affected components, uncertainty, evidence citations, and explicit-audience wireframes or
+  prototypes beneath `$DESIGN_PROPOSAL_STORAGE_ROOT` (`design-proposals`). Participant discussion,
+  questions, dissent, and grounded evidence remain revision-bound; inaccessible citations retain
+  gaps without copying asset content. Only named current participant owners acknowledge or request
+  changes on the current revision. These records grant no Git, review, implementation, release,
+  deployment, environment, research, or private-asset authority.
+
 - **Frontend** — App Router, file-based routes under `apps/web/src/app`. Entry
   point is `src/app/page.tsx`; `layout.tsx` installs the persistent application
   shell from `src/components/app-shell.tsx`. Reuse the accessible visual

@@ -3,6 +3,7 @@ Append-only agent log. Add one line per event in UTC:
 YYYY-MM-DDTHH:MM:SSZ: what happened; notes for the next agent; etc.
 Fetch the timestamp on Linux with: date -u '+%Y-%m-%dT%H:%M:%SZ'
 -->
+2026-08-18T19:04:09Z: Added revisioned product design proposals with structured behavior, explicit-audience wireframes/prototypes, visibility-safe evidence gaps, revision-bound discussion/dissent, current-owner acknowledgement, and a repository design workspace. Full API tests/vet/build and web lint/typecheck/production build pass.
 2026-08-18T00:47:00Z: Hardened migration rehearsals after Greptile round 3: each check now freezes a distinct invariant command, both exact retained outcomes must postdate rehearsal creation, and invariant/run success requires both commands to pass. Focused API tests, vet/build, and web lint/typecheck/build pass.
 2026-08-18T00:29:52Z: Hardened migration rehearsals after Greptile round 2: run publication rejects caller-supplied counts, artifacts, costs, and attestations, retaining only command-derived evidence and server-generated exact workspace/command attestations. Focused API regressions, vet, and build pass.
 2026-08-18T00:16:33Z: Hardened migration rehearsals after Greptile round 1: durable status, exit, logs, timing, invariants, and overall result now derive from one unambiguous exact-command workspace outcome, and the browser freezes structured JSON checks without comma corruption. Focused API tests, vet/build, and web lint/typecheck/build pass.
