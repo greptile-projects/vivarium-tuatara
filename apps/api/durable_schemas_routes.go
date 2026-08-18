@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
@@ -350,27 +351,36 @@ func bindRehearsalRun(ws workspaces.Workspace, rehearsal durableschemas.Rehearsa
 		if !exists {
 			return run, false
 		}
-		digest := sha256.Sum256([]byte(check.Command))
-		matches := retained[hex.EncodeToString(digest[:])]
-		if len(matches) != 1 || len(matches[0].Output) > 65536 || reusableSecret.MatchString(matches[0].Output) {
+		commandDigest := sha256.Sum256([]byte(check.Command))
+		invariantDigest := sha256.Sum256([]byte(check.InvariantCommand))
+		matches := retained[hex.EncodeToString(commandDigest[:])]
+		invariantMatches := retained[hex.EncodeToString(invariantDigest[:])]
+		if len(matches) != 1 || len(invariantMatches) != 1 || !rehearsalCommandCurrent(matches[0], rehearsal.CreatedAt) || !rehearsalCommandCurrent(invariantMatches[0], rehearsal.CreatedAt) || len(matches[0].Output)+len(invariantMatches[0].Output) > 65500 || reusableSecret.MatchString(matches[0].Output) || reusableSecret.MatchString(invariantMatches[0].Output) {
 			return run, false
 		}
 		evidence := matches[0]
-		passed := evidence.ExitCode == 0
+		invariantEvidence := invariantMatches[0]
+		invariantPassed := invariantEvidence.ExitCode == 0
+		passed := evidence.ExitCode == 0 && invariantPassed
 		run.Outcomes[i].ExitCode = evidence.ExitCode
 		run.Outcomes[i].Status = map[bool]string{true: "passed", false: "failed"}[passed]
-		run.Outcomes[i].InvariantPassed = passed
-		run.Outcomes[i].SanitizedLog = evidence.Output
-		run.Outcomes[i].DurationMS = evidence.CompletedAt.Sub(evidence.StartedAt).Milliseconds()
+		run.Outcomes[i].InvariantPassed = invariantPassed
+		run.Outcomes[i].SanitizedLog = "command:\n" + evidence.Output + "\ninvariant:\n" + invariantEvidence.Output
+		run.Outcomes[i].DurationMS = evidence.CompletedAt.Sub(evidence.StartedAt).Milliseconds() + invariantEvidence.CompletedAt.Sub(invariantEvidence.StartedAt).Milliseconds()
 		if run.Outcomes[i].DurationMS < 0 {
 			return run, false
 		}
 		allPassed = allPassed && passed
 		attestations = append(attestations, "workspace:"+ws.ID+" command_outcome:"+evidence.ID+" command_sha256:"+evidence.CommandSHA256)
+		attestations = append(attestations, "workspace:"+ws.ID+" invariant_outcome:"+invariantEvidence.ID+" command_sha256:"+invariantEvidence.CommandSHA256)
 	}
 	run.Result = map[bool]string{true: "passed", false: "failed"}[allPassed]
 	run.Attestations = attestations
 	return run, true
+}
+
+func rehearsalCommandCurrent(outcome workspaces.CommandOutcome, createdAt time.Time) bool {
+	return !outcome.StartedAt.Before(createdAt) && !outcome.CompletedAt.Before(createdAt) && !outcome.CompletedAt.Before(outcome.StartedAt)
 }
 
 func safeRehearsalRunRequest(run durableschemas.RehearsalRun) bool {

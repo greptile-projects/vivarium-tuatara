@@ -130,11 +130,12 @@ type RehearsalDependency struct {
 	Digest   string `json:"digest"`
 }
 type RehearsalCheck struct {
-	ID             string   `json:"id"`
-	Kind           string   `json:"kind"`
-	Command        string   `json:"command"`
-	Invariant      string   `json:"invariant"`
-	RevisionInputs []string `json:"revision_inputs"`
+	ID               string   `json:"id"`
+	Kind             string   `json:"kind"`
+	Command          string   `json:"command"`
+	Invariant        string   `json:"invariant"`
+	InvariantCommand string   `json:"invariant_command"`
+	RevisionInputs   []string `json:"revision_inputs"`
 }
 type RehearsalOutcome struct {
 	CheckID         string   `json:"check_id"`
@@ -491,11 +492,12 @@ func validateRehearsal(r Rehearsal) error {
 	commands := map[string]bool{}
 	kinds := map[string]bool{"upgrade": true, "dual_read": true, "dual_write": true, "backfill": true, "validation": true, "rollback": true, "failure_injection": true}
 	for _, c := range r.Checks {
-		if c.ID == "" || ids[c.ID] || commands[c.Command] || !kinds[c.Kind] || strings.TrimSpace(c.Command) == "" || len(c.Command) > 2000 || c.Invariant == "" || len(c.RevisionInputs) == 0 {
+		if c.ID == "" || ids[c.ID] || commands[c.Command] || commands[c.InvariantCommand] || c.Command == c.InvariantCommand || !kinds[c.Kind] || strings.TrimSpace(c.Command) == "" || strings.TrimSpace(c.InvariantCommand) == "" || len(c.Command) > 2000 || len(c.InvariantCommand) > 2000 || c.Invariant == "" || len(c.RevisionInputs) == 0 {
 			return ErrInvalid
 		}
 		ids[c.ID] = true
 		commands[c.Command] = true
+		commands[c.InvariantCommand] = true
 		for _, input := range c.RevisionInputs {
 			if !deps[input] {
 				return ErrInvalid

@@ -24,15 +24,22 @@ import (
 
 func TestBindRehearsalRunDerivesEvidenceFromExactCommand(t *testing.T) {
 	command := "./scripts/rehearse upgrade"
-	digest := sha256.Sum256([]byte(command))
+	invariantCommand := "./scripts/rehearse verify-invariant"
+	digest, invariantDigest := sha256.Sum256([]byte(command)), sha256.Sum256([]byte(invariantCommand))
 	started := time.Now().UTC()
-	ws := workspaces.Workspace{ID: "workspace", Commands: []workspaces.CommandOutcome{{ID: "command", CommandSHA256: hex.EncodeToString(digest[:]), ExitCode: 17, Output: "rollback check failed", StartedAt: started, CompletedAt: started.Add(25 * time.Millisecond)}}}
-	rehearsal := durableschemas.Rehearsal{Checks: []durableschemas.RehearsalCheck{{ID: "upgrade", Command: command}}}
+	ws := workspaces.Workspace{ID: "workspace", Commands: []workspaces.CommandOutcome{{ID: "command", CommandSHA256: hex.EncodeToString(digest[:]), ExitCode: 0, Output: "upgrade completed", StartedAt: started, CompletedAt: started.Add(25 * time.Millisecond)}, {ID: "invariant", CommandSHA256: hex.EncodeToString(invariantDigest[:]), ExitCode: 9, Output: "balances changed", StartedAt: started, CompletedAt: started.Add(10 * time.Millisecond)}}}
+	rehearsal := durableschemas.Rehearsal{CreatedAt: started.Add(-time.Second), Checks: []durableschemas.RehearsalCheck{{ID: "upgrade", Command: command, Invariant: "balances unchanged", InvariantCommand: invariantCommand}}}
 	forged := durableschemas.RehearsalRun{Result: "passed", Outcomes: []durableschemas.RehearsalOutcome{{CheckID: "upgrade", Status: "passed", InvariantPassed: true}}}
 	bound, ok := bindRehearsalRun(ws, rehearsal, forged)
-	if !ok || bound.Result != "failed" || bound.Outcomes[0].Status != "failed" || bound.Outcomes[0].ExitCode != 17 || bound.Outcomes[0].InvariantPassed || bound.Outcomes[0].SanitizedLog != "rollback check failed" || bound.Outcomes[0].DurationMS != 25 || len(bound.Attestations) != 1 || !strings.Contains(bound.Attestations[0], "command_outcome:command") {
+	if !ok || bound.Result != "failed" || bound.Outcomes[0].Status != "failed" || bound.Outcomes[0].ExitCode != 0 || bound.Outcomes[0].InvariantPassed || !strings.Contains(bound.Outcomes[0].SanitizedLog, "balances changed") || bound.Outcomes[0].DurationMS != 35 || len(bound.Attestations) != 2 || !strings.Contains(bound.Attestations[1], "invariant_outcome:invariant") {
 		t.Fatalf("retained failure was not canonical: %#v, %v", bound, ok)
 	}
+	ws.Commands[1].ExitCode = 0
+	ws.Commands[1].StartedAt, ws.Commands[1].CompletedAt = rehearsal.CreatedAt.Add(-time.Minute), rehearsal.CreatedAt.Add(-time.Minute+time.Second)
+	if _, ok = bindRehearsalRun(ws, rehearsal, forged); ok {
+		t.Fatal("pre-rehearsal invariant evidence was accepted")
+	}
+	ws.Commands[1].StartedAt, ws.Commands[1].CompletedAt = started, started.Add(10*time.Millisecond)
 	ws.Commands = append(ws.Commands, ws.Commands[0])
 	if _, ok = bindRehearsalRun(ws, rehearsal, forged); ok {
 		t.Fatal("ambiguous repeated execution was accepted")

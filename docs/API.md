@@ -3616,7 +3616,8 @@ repository application commit, the migration's exact schema and plan versions, d
 revision/digest pairs, and either synthetic data metadata or representative metadata with an
 explicit privacy method. Raw datasets are not accepted. Checks use the closed kinds `upgrade`,
 `dual_read`, `dual_write`, `backfill`, `validation`, `rollback`, and `failure_injection`; each
-retains a repository command, invariant, and only the revision-input names that affect it.
+retains a repository command, a separate repository-defined invariant command, the invariant
+claim, and only the revision-input names that affect it.
 
 `POST .../rehearsals/{rehearsal_id}/runs` accepts evidence only from the caller's bounded
 workspace in that repository. A run has exactly one outcome per frozen check and retains its
@@ -3628,6 +3629,9 @@ workspace command outcome per exact command digest rather than trusted from the 
 Caller-supplied counts, artifacts, costs, and attestations are rejected until a platform-retained
 source can derive them; unsupported values remain zero or empty, and the platform adds only an
 exact workspace/command-outcome attestation.
+Both the work command and its distinct invariant command must have one retained outcome whose
+start and completion are no earlier than the rehearsal's immutable creation time. Execution
+passes only when both exit successfully; process success alone never proves the invariant.
 `POST .../notes` appends a
 bounded attributable investigation note to an existing run. Repository read authorization
 controls all projections; these endpoints execute or review proof but confer no production,

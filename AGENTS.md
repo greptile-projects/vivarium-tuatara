@@ -81,6 +81,8 @@ whenever dependencies change or the web job fails before it starts.
   deployment, environment, workspace, or data-store authority.
   Run publication rejects caller-supplied counts, artifact digests, costs, and attestations until
   those values have platform-retained provenance; it emits only exact workspace/command attestations.
+  Every check freezes distinct work and invariant commands. Both retained outcomes must start and
+  finish after rehearsal creation, and both must succeed before the invariant or run can pass.
 
 - **Developer support** — `/support` and
   `/repositories/{id}/support-threads` retain contextual questions separately
