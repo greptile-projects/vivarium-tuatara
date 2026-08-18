@@ -1,6 +1,10 @@
 package interfacesystems
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func revision(name string) Revision {
 	commit := "0123456789abcdef0123456789abcdef01234567"
@@ -67,4 +71,43 @@ func hasDiagnostic(system System, kind string) bool {
 		}
 	}
 	return false
+}
+
+func TestInvalidPeerCannotTurnCommittedMutationIntoFailure(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.Create("repo", "actor", revision("Button"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	corrupt := filepath.Join(s.repoDir("repo"), "corrupt.json")
+	if err = os.WriteFile(corrupt, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadDir(s.repoDir("repo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Create("repo", "actor", revision("Link")); err == nil {
+		t.Fatal("create ignored invalid peer")
+	}
+	after, err := os.ReadDir(s.repoDir("repo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("failed create persisted a record: %d -> %d", len(before), len(after))
+	}
+	if _, err = s.Revise(first.ID, 1, "actor", revision("Button")); err == nil {
+		t.Fatal("revise ignored invalid peer")
+	}
+	persisted, err := s.read(first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.CurrentVersion != 1 || len(persisted.Revisions) != 1 {
+		t.Fatalf("failed revise persisted state: %#v", persisted)
+	}
 }

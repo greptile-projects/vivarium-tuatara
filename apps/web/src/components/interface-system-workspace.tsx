@@ -126,13 +126,17 @@ function Area({
     </label>
   );
 }
-function definition(f: FormData, prefix: string): Definition {
+function definition(
+  f: FormData,
+  prefix: string,
+  current?: Definition,
+): Definition {
   return {
     name: text(f, `${prefix}_name`),
     description: text(f, `${prefix}_description`),
     usage: text(f, `${prefix}_usage`),
     source_path: text(f, `${prefix}_path`),
-    owner_ids: list(text(f, "owners")),
+    owner_ids: current?.owner_ids ?? list(text(f, "owners")),
     constraints: {
       accessibility: list(text(f, `${prefix}_a11y`)),
       localization: list(text(f, `${prefix}_l10n`)),
@@ -141,8 +145,12 @@ function definition(f: FormData, prefix: string): Definition {
       {
         title: text(f, `${prefix}_example`),
         description: text(f, `${prefix}_example_description`),
-        properties: { state: text(f, `${prefix}_state`) },
+        properties: {
+          ...(current?.examples[0]?.properties ?? {}),
+          state: text(f, `${prefix}_state`),
+        },
       },
+      ...(current?.examples.slice(1) ?? []),
     ],
   };
 }
@@ -215,15 +223,15 @@ export function InterfaceSystemWorkspace({
         ...(current?.tokens.slice(1) ?? []),
       ],
       components: [
-        definition(f, "component"),
+        definition(f, "component", component),
         ...(current?.components.slice(1) ?? []),
       ],
       interaction_patterns: [
-        definition(f, "interaction"),
+        definition(f, "interaction", interaction),
         ...(current?.interaction_patterns.slice(1) ?? []),
       ],
       content_rules: [
-        definition(f, "content"),
+        definition(f, "content", content),
         ...(current?.content_rules.slice(1) ?? []),
       ],
       responsive_rules: [

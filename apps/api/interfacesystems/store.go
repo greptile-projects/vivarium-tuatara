@@ -124,15 +124,20 @@ func (s *Store) Create(repo, actor string, r Revision) (System, error) {
 		if validate(r) != nil || repo == "" || actor == "" {
 			return ErrInvalid
 		}
+		peers, err := s.listRaw(repo)
+		if err != nil {
+			return err
+		}
 		now := s.now()
 		stamp(&r, 1, actor, now)
 		out = System{ID: randomID(), RepositoryID: repo, CurrentVersion: 1, Revisions: []Revision{r}, CreatedAt: now, UpdatedAt: now}
-		return s.write(out)
+		if err = s.write(out); err != nil {
+			return err
+		}
+		out = s.project(out, peers)
+		return nil
 	})
-	if err != nil {
-		return System{}, err
-	}
-	return s.Get(out.ID)
+	return out, err
 }
 func (s *Store) Revise(id string, expected int, actor string, r Revision) (System, error) {
 	var out System
@@ -147,17 +152,22 @@ func (s *Store) Revise(id string, expected int, actor string, r Revision) (Syste
 		if validate(r) != nil || actor == "" {
 			return ErrInvalid
 		}
+		peers, err := s.listRaw(v.RepositoryID)
+		if err != nil {
+			return err
+		}
 		stamp(&r, expected+1, actor, s.now())
 		v.CurrentVersion = r.Version
 		v.Revisions = append(v.Revisions, r)
 		v.UpdatedAt = r.CreatedAt
 		out = v
-		return s.write(v)
+		if err = s.write(v); err != nil {
+			return err
+		}
+		out = s.project(out, peers)
+		return nil
 	})
-	if err != nil {
-		return System{}, err
-	}
-	return s.Get(out.ID)
+	return out, err
 }
 func (s *Store) Get(id string) (System, error) {
 	var out System
@@ -174,26 +184,9 @@ func (s *Store) Get(id string) (System, error) {
 func (s *Store) List(repo string) ([]System, error) {
 	raw := []System{}
 	err := s.lock(func() error {
-		entries, err := os.ReadDir(s.repoDir(repo))
-		if os.IsNotExist(err) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-				continue
-			}
-			v, err := s.readFile(filepath.Join(s.repoDir(repo), e.Name()))
-			if err != nil {
-				return err
-			}
-			if v.RepositoryID == repo {
-				raw = append(raw, v)
-			}
-		}
-		return nil
+		var err error
+		raw, err = s.listRaw(repo)
+		return err
 	})
 	if err != nil {
 		return nil, err
@@ -204,6 +197,30 @@ func (s *Store) List(repo string) ([]System, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
 	return out, nil
+}
+
+func (s *Store) listRaw(repo string) ([]System, error) {
+	raw := []System{}
+	entries, err := os.ReadDir(s.repoDir(repo))
+	if os.IsNotExist(err) {
+		return raw, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		value, err := s.readFile(filepath.Join(s.repoDir(repo), entry.Name()))
+		if err != nil {
+			return nil, err
+		}
+		if value.RepositoryID == repo {
+			raw = append(raw, value)
+		}
+	}
+	return raw, nil
 }
 func stamp(r *Revision, version int, actor string, now time.Time) {
 	r.Version = version
