@@ -3683,6 +3683,9 @@ the satisfied `environment_policy`, short-lived `credential_expires_at`, and opt
 `delegations`. The record freezes reviewed and merge commits, candidate digest, definition version, plan,
 rehearsal, environment, controller, dependency-ordered steps, and resource/step/action credential metadata;
 no credential secret is returned or persisted. `GET` on the collection or item exposes this collaboration.
+The selected passing rehearsal must either use the exact execution environment ID or be a
+`policy_approved_ephemeral` rehearsal whose frozen `policy_approval` exactly equals `environment_policy`;
+ordinary isolated preview evidence cannot cross the authoritative environment boundary.
 
 `POST .../infrastructure-executions/{execution_id}/reports` compare-and-swaps `expected_version` and accepts
 one exact step's sanitized provider response, state, health, cumulative cost, blockers, next action, and

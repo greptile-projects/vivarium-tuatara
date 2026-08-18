@@ -127,7 +127,8 @@ func (s *Store) CreateExecution(plan ChangePlan, actor string, in ExecutionCreat
 		}
 		passed := false
 		for _, rehearsal := range plan.Rehearsals {
-			if rehearsal.ID == in.RehearsalID && len(rehearsal.Runs) > 0 && rehearsal.Runs[len(rehearsal.Runs)-1].Result == "passed" {
+			environmentBound := rehearsal.Scope.EnvironmentID == in.EnvironmentID || (rehearsal.Scope.EnvironmentKind == "policy_approved_ephemeral" && strings.TrimSpace(rehearsal.Scope.PolicyApproval) != "" && rehearsal.Scope.PolicyApproval == strings.TrimSpace(in.EnvironmentPolicy))
+			if rehearsal.ID == in.RehearsalID && environmentBound && len(rehearsal.Runs) > 0 && rehearsal.Runs[len(rehearsal.Runs)-1].Result == "passed" {
 				passed = true
 			}
 		}

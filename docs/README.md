@@ -125,6 +125,10 @@ environment, and caps the requested budget by reviewed resource limits. The immu
 reviewed and merge commits, candidate digest, environment policy, rehearsal, controller, and a short-lived
 resource/step/action credential scope.
 
+The selected rehearsal must either name that authoritative environment directly or carry a
+`policy_approved_ephemeral` scope whose frozen policy approval exactly matches the execution's environment-policy
+reference. An isolated preview rehearsal without that explicit equivalence cannot admit production execution.
+
 Compare-and-swap reports retain dependency-ordered progress, sanitized provider responses, health, cost,
 blockers, next actions, controller, and declared safety points. Failure, degraded health, or a blocker pauses
 without erasing evidence; the human controller can pause, resume after remediation evidence, or cancel at a

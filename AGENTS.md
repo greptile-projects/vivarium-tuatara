@@ -151,6 +151,9 @@ whenever dependencies change or the web job fails before it starts.
   running or paused controller is admitted per environment across all plans. Execution creation derives persisted
   owner acknowledgement events and rejects unresolved or cyclic changed-resource dependencies. Paused reports may
   record remediation and clear blockers but preserve step state; only an explicit resume can advance or complete.
+  Passing rehearsal evidence must use the authoritative environment ID, or be a `policy_approved_ephemeral`
+  rehearsal whose frozen policy approval exactly equals the execution's established environment-policy reference;
+  isolated preview evidence alone cannot admit production.
 
 - **Developer support** — `/support` and
   `/repositories/{id}/support-threads` retain contextual questions separately

@@ -9,7 +9,7 @@ func TestInfrastructureExecutionIsDependencyOrderedSteerableAndAgentBounded(t *t
 	s, _ := New(t.TempDir())
 	now := time.Now().UTC()
 	s.now = func() time.Time { return now }
-	passed := Rehearsal{ID: "rehearsal", Runs: []RehearsalRun{{Result: "passed"}}}
+	passed := Rehearsal{ID: "rehearsal", Scope: RehearsalScope{EnvironmentID: "prod"}, Runs: []RehearsalRun{{Result: "passed"}}}
 	plan := ChangePlan{ID: "plan", RepositoryID: "repo", PullRequestID: "pull", SourceRevision: "reviewed", CandidateDigest: "digest", DefinitionID: "definition", DefinitionVersion: 2, AffectedOwnerIDs: []string{"owner"}, AcknowledgedOwnerIDs: []string{"owner"}, Rehearsals: []Rehearsal{passed}, Changes: []PlanChange{
 		{ResourceID: "network", Action: "create", Order: 1},
 		{ResourceID: "service", Action: "change", DependencyIDs: []string{"network"}, Order: 2},
@@ -35,7 +35,7 @@ func TestInfrastructureExecutionPausesOnBlockerAndHonorsSafetyAndBudget(t *testi
 	s, _ := New(t.TempDir())
 	now := time.Now().UTC()
 	s.now = func() time.Time { return now }
-	plan := ChangePlan{ID: "plan", RepositoryID: "repo", AffectedOwnerIDs: []string{"owner"}, AcknowledgedOwnerIDs: []string{"owner"}, Rehearsals: []Rehearsal{{ID: "r", Runs: []RehearsalRun{{Result: "passed"}}}}, Changes: []PlanChange{{ResourceID: "db", Action: "replace", Order: 1}}}
+	plan := ChangePlan{ID: "plan", RepositoryID: "repo", AffectedOwnerIDs: []string{"owner"}, AcknowledgedOwnerIDs: []string{"owner"}, Rehearsals: []Rehearsal{{ID: "r", Scope: RehearsalScope{EnvironmentID: "prod"}, Runs: []RehearsalRun{{Result: "passed"}}}}, Changes: []PlanChange{{ResourceID: "db", Action: "replace", Order: 1}}}
 	if _, err := s.CreateExecution(plan, "operator", ExecutionCreation{MergeCommitID: "merged", EnvironmentID: "prod", EnvironmentPolicy: "approved", RehearsalID: "r", BudgetUnits: 5, CredentialExpiry: now.Add(time.Hour), Delegations: []ExecutionDelegation{{StepID: "step-db", AgentID: "agent", Mandate: "replace database"}}}); err != ErrInvalid {
 		t.Fatalf("destructive agent delegation = %v", err)
 	}
@@ -70,7 +70,7 @@ func TestInfrastructureExecutionDerivesPersistedAcknowledgementsAndLocksEnvironm
 	s, _ := New(t.TempDir())
 	now := time.Now().UTC()
 	s.now = func() time.Time { return now }
-	plan := ChangePlan{ID: "plan-one", RepositoryID: "repo", AffectedOwnerIDs: []string{"owner"}, Events: []PlanEvent{{Kind: "owner_acknowledgement", ActorID: "owner", ActorType: "human", OwnerID: "owner"}}, Rehearsals: []Rehearsal{{ID: "r", Runs: []RehearsalRun{{Result: "passed"}}}}, Changes: []PlanChange{{ResourceID: "service", Action: "change", Order: 1}}}
+	plan := ChangePlan{ID: "plan-one", RepositoryID: "repo", AffectedOwnerIDs: []string{"owner"}, Events: []PlanEvent{{Kind: "owner_acknowledgement", ActorID: "owner", ActorType: "human", OwnerID: "owner"}}, Rehearsals: []Rehearsal{{ID: "r", Scope: RehearsalScope{EnvironmentID: "prod"}, Runs: []RehearsalRun{{Result: "passed"}}}}, Changes: []PlanChange{{ResourceID: "service", Action: "change", Order: 1}}}
 	first, err := s.CreateExecution(plan, "operator", ExecutionCreation{MergeCommitID: "merged", EnvironmentID: "prod", EnvironmentPolicy: "policy", RehearsalID: "r", BudgetUnits: 5, CredentialExpiry: now.Add(time.Hour)})
 	if err != nil || first.Status != "running" {
 		t.Fatalf("persisted acknowledgement admission = %#v, %v", first, err)
@@ -85,7 +85,7 @@ func TestInfrastructureExecutionRejectsMissingAndCyclicChangedDependencies(t *te
 	s, _ := New(t.TempDir())
 	now := time.Now().UTC()
 	s.now = func() time.Time { return now }
-	base := ChangePlan{ID: "dependencies", RepositoryID: "repo", AffectedOwnerIDs: []string{"owner"}, AcknowledgedOwnerIDs: []string{"owner"}, Rehearsals: []Rehearsal{{ID: "r", Runs: []RehearsalRun{{Result: "passed"}}}}}
+	base := ChangePlan{ID: "dependencies", RepositoryID: "repo", AffectedOwnerIDs: []string{"owner"}, AcknowledgedOwnerIDs: []string{"owner"}, Rehearsals: []Rehearsal{{ID: "r", Scope: RehearsalScope{EnvironmentID: "prod"}, Runs: []RehearsalRun{{Result: "passed"}}}}}
 	in := ExecutionCreation{MergeCommitID: "merged", EnvironmentID: "prod", EnvironmentPolicy: "policy", RehearsalID: "r", BudgetUnits: 5, CredentialExpiry: now.Add(time.Hour)}
 	missing := base
 	missing.Changes = []PlanChange{{ResourceID: "service", Action: "change", Order: 1, DependencyIDs: []string{"absent-network"}}}
@@ -104,7 +104,7 @@ func TestPausedInfrastructureExecutionCannotCompleteBeforeResume(t *testing.T) {
 	s, _ := New(t.TempDir())
 	now := time.Now().UTC()
 	s.now = func() time.Time { return now }
-	plan := ChangePlan{ID: "pause", RepositoryID: "repo", AffectedOwnerIDs: []string{"owner"}, AcknowledgedOwnerIDs: []string{"owner"}, Rehearsals: []Rehearsal{{ID: "r", Runs: []RehearsalRun{{Result: "passed"}}}}, Changes: []PlanChange{{ResourceID: "service", Action: "change", Order: 1}}}
+	plan := ChangePlan{ID: "pause", RepositoryID: "repo", AffectedOwnerIDs: []string{"owner"}, AcknowledgedOwnerIDs: []string{"owner"}, Rehearsals: []Rehearsal{{ID: "r", Scope: RehearsalScope{EnvironmentID: "prod"}, Runs: []RehearsalRun{{Result: "passed"}}}}, Changes: []PlanChange{{ResourceID: "service", Action: "change", Order: 1}}}
 	x, err := s.CreateExecution(plan, "operator", ExecutionCreation{MergeCommitID: "merged", EnvironmentID: "prod", EnvironmentPolicy: "policy", RehearsalID: "r", BudgetUnits: 5, CredentialExpiry: now.Add(time.Hour)})
 	if err != nil {
 		t.Fatal(err)
@@ -115,5 +115,22 @@ func TestPausedInfrastructureExecutionCannotCompleteBeforeResume(t *testing.T) {
 	}
 	if _, err = s.ReportExecution(x.ID, "operator", "human", "step-service", x.Version, StepReport{Status: "succeeded", ProviderResponse: "health recovered", Health: "healthy", NextAction: "complete", SafetyPoint: true}); err != ErrExecutionBlocked {
 		t.Fatalf("completed while paused = %v", err)
+	}
+}
+
+func TestInfrastructureExecutionRequiresEnvironmentBoundRehearsalEvidence(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Now().UTC()
+	s.now = func() time.Time { return now }
+	plan := ChangePlan{ID: "environment-proof", RepositoryID: "repo", AffectedOwnerIDs: []string{"owner"}, AcknowledgedOwnerIDs: []string{"owner"}, Rehearsals: []Rehearsal{{ID: "r", Scope: RehearsalScope{EnvironmentKind: "isolated", EnvironmentID: "preview-isolated-42"}, Runs: []RehearsalRun{{Result: "passed"}}}}, Changes: []PlanChange{{ResourceID: "service", Action: "change", Order: 1}}}
+	in := ExecutionCreation{MergeCommitID: "merged", EnvironmentID: "production", EnvironmentPolicy: "production-policy-v2", RehearsalID: "r", BudgetUnits: 5, CredentialExpiry: now.Add(time.Hour)}
+	if _, err := s.CreateExecution(plan, "operator", in); err != ErrExecutionBlocked {
+		t.Fatalf("isolated cross-environment rehearsal = %v", err)
+	}
+	plan.Rehearsals[0].Scope.EnvironmentKind = "policy_approved_ephemeral"
+	plan.Rehearsals[0].Scope.PolicyApproval = in.EnvironmentPolicy
+	x, err := s.CreateExecution(plan, "operator", in)
+	if err != nil || x.Status != "running" {
+		t.Fatalf("policy-authorized equivalence = %#v, %v", x, err)
 	}
 }
