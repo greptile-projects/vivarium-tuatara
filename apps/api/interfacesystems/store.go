@@ -139,10 +139,10 @@ func (s *Store) Create(repo, actor string, r Revision) (System, error) {
 	})
 	return out, err
 }
-func (s *Store) Revise(id string, expected int, actor string, r Revision) (System, error) {
+func (s *Store) Revise(repo, id string, expected int, actor string, r Revision) (System, error) {
 	var out System
 	err := s.lock(func() error {
-		v, err := s.read(id)
+		v, err := s.read(repo, id)
 		if err != nil {
 			return err
 		}
@@ -169,13 +169,13 @@ func (s *Store) Revise(id string, expected int, actor string, r Revision) (Syste
 	})
 	return out, err
 }
-func (s *Store) Get(id string) (System, error) {
+func (s *Store) Get(repo, id string) (System, error) {
 	var out System
-	err := s.lock(func() error { var err error; out, err = s.read(id); return err })
+	err := s.lock(func() error { var err error; out, err = s.read(repo, id); return err })
 	if err != nil {
 		return System{}, err
 	}
-	peers, err := s.List(out.RepositoryID)
+	peers, err := s.List(repo)
 	if err != nil {
 		return System{}, err
 	}
@@ -337,20 +337,18 @@ func (s *Store) project(v System, peers []System) System {
 func (s *Store) repoDir(repo string) string {
 	return filepath.Join(s.root, "repo-"+base64.RawURLEncoding.EncodeToString([]byte(repo)))
 }
-func (s *Store) read(id string) (System, error) {
-	entries, e := os.ReadDir(s.root)
-	if e != nil {
-		return System{}, e
+func (s *Store) read(repo, id string) (System, error) {
+	if repo == "" || id == "" || strings.ContainsAny(id, "/\\") {
+		return System{}, ErrNotFound
 	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			v, err := s.readFile(filepath.Join(s.root, entry.Name(), id+".json"))
-			if !errors.Is(err, ErrNotFound) {
-				return v, err
-			}
-		}
+	v, err := s.readFile(filepath.Join(s.repoDir(repo), id+".json"))
+	if err != nil {
+		return System{}, err
 	}
-	return System{}, ErrNotFound
+	if v.RepositoryID != repo || v.ID != id {
+		return System{}, ErrNotFound
+	}
+	return v, nil
 }
 func (s *Store) readFile(name string) (System, error) {
 	var v System
