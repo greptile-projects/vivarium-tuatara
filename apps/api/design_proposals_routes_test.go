@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/designproposals"
+	productfeedback "github.com/greptile-projects/vivarium-tuatara/apps/api/feedback"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
 )
 
@@ -25,6 +26,37 @@ func TestDesignArtifactProjectionHonorsExplicitAudience(t *testing.T) {
 	redactDesignArtifacts(&anonymous, "")
 	if anonymous.Revisions[0].Artifacts[0].Content != "" {
 		t.Fatalf("empty audience authorized anonymous reader: %#v", anonymous)
+	}
+}
+
+func TestDesignEvidenceProjectionRechecksCurrentReaderVisibility(t *testing.T) {
+	feedbackStore, err := productfeedback.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repositoryID := "22222222222222222222222222222222"
+	item, err := feedbackStore.Create(productfeedback.Item{RepositoryID: repositoryID, Target: productfeedback.Target{Kind: "project", Label: "Setup"}, Need: "Safer setup", DesiredOutcome: "Preview effects", Frequency: "weekly", Impact: "Abandoned setup", Audience: "organization_private", IdentityVisibility: "reporter_only", ContactPreference: "none"}, "reporter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := designproposals.Source{Kind: "feedback", ResourceID: item.ID}
+	proposal := func() designproposals.Proposal {
+		return designproposals.Proposal{RepositoryID: repositoryID, Revisions: []designproposals.Revision{{Source: source, Evidence: []designproposals.Evidence{{Kind: "feedback", ResourceID: item.ID, Accessible: true}}}}}
+	}
+	anonymous := proposal()
+	projectDesignEvidence(&anonymous, "", false, nil, feedbackStore, nil, nil, nil)
+	if anonymous.Revisions[0].Evidence[0].Accessible {
+		t.Fatalf("anonymous reader received restricted feedback: %#v", anonymous)
+	}
+	outsider := proposal()
+	projectDesignEvidence(&outsider, "authenticated-outsider", false, nil, feedbackStore, nil, nil, nil)
+	if outsider.Revisions[0].Evidence[0].Accessible {
+		t.Fatalf("nonparticipant received organization-private feedback: %#v", outsider)
+	}
+	participant := proposal()
+	projectDesignEvidence(&participant, "maintainer", true, nil, feedbackStore, nil, nil, nil)
+	if !participant.Revisions[0].Evidence[0].Accessible {
+		t.Fatalf("participant lost accessible feedback: %#v", participant)
 	}
 }
 

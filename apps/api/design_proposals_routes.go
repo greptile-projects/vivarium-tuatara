@@ -33,6 +33,7 @@ func registerDesignProposalRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			return
 		}
 		for i := range v {
+			projectDesignEvidence(&v[i], actor.UserID, designReaderIsParticipant(catalog, r.PathValue("id"), actor.UserID), issueStore, feedbackStore, roadmapStore, assessmentStore, pullStore)
 			redactDesignArtifacts(&v[i], actor.UserID)
 		}
 		writeJSON(w, 200, map[string]any{"design_proposals": v})
@@ -43,6 +44,7 @@ func registerDesignProposalRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			return
 		}
 		v, e := store.Get(r.PathValue("id"), r.PathValue("proposal_id"))
+		projectDesignEvidence(&v, actor.UserID, designReaderIsParticipant(catalog, r.PathValue("id"), actor.UserID), issueStore, feedbackStore, roadmapStore, assessmentStore, pullStore)
 		redactDesignArtifacts(&v, actor.UserID)
 		writeDesignProposal(w, v, e, 200)
 	})
@@ -191,6 +193,60 @@ func designSourceExists(repositoryID string, source designproposals.Source, issu
 		return err == nil && v.RepositoryID == repositoryID
 	default:
 		return false
+	}
+}
+
+func designReaderIsParticipant(catalog *repositories.Store, repositoryID, actor string) bool {
+	if actor == "" {
+		return false
+	}
+	repository, err := catalog.GetByID(repositoryID)
+	if err != nil {
+		return false
+	}
+	if repository.OwnerID == actor {
+		return true
+	}
+	ok, _ := catalog.HasCollaborator(actor, repositoryID)
+	return ok
+}
+
+func projectDesignEvidence(v *designproposals.Proposal, actor string, participant bool, issueStore *issues.Store, feedbackStore *productfeedback.Store, roadmapStore *roadmaps.Store, assessmentStore *accessibilityassessments.Store, pullStore *pullrequests.Store) {
+	visible := func(source designproposals.Source) bool {
+		if actor == "" || !designSourceExists(v.RepositoryID, source, issueStore, feedbackStore, roadmapStore, assessmentStore, pullStore) {
+			return false
+		}
+		switch source.Kind {
+		case "issue":
+			return participant
+		case "feedback":
+			item, err := feedbackStore.Get(source.ResourceID)
+			return err == nil && (item.Audience != "organization_private" || participant || item.ReporterID == actor)
+		default:
+			return true
+		}
+	}
+	project := func(evidence *designproposals.Evidence, source designproposals.Source) {
+		evidence.Accessible = visible(source) && evidence.Kind == source.Kind && evidence.ResourceID == source.ResourceID
+		if !evidence.Accessible && evidence.Gap == "" {
+			evidence.Gap = "citation is not visible to the current reader; no evidence content was copied"
+		}
+	}
+	for ri := range v.Revisions {
+		source := v.Revisions[ri].Source
+		for ei := range v.Revisions[ri].Evidence {
+			project(&v.Revisions[ri].Evidence[ei], source)
+		}
+	}
+	for ci := range v.Comments {
+		revision := v.Comments[ci].Revision
+		if revision < 1 || revision > len(v.Revisions) {
+			continue
+		}
+		source := v.Revisions[revision-1].Source
+		for ei := range v.Comments[ci].Evidence {
+			project(&v.Comments[ci].Evidence[ei], source)
+		}
 	}
 }
 
