@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/designproposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/interfacechecks"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
@@ -13,7 +14,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
-func registerInterfaceCheckRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, credentials *auth.Store, pulls *pullrequests.Store, previewStore *previews.Store, designs *designproposals.Store, checks *interfacechecks.Store) {
+func registerInterfaceCheckRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, credentials *auth.Store, pulls *pullrequests.Store, previewStore *previews.Store, runs *checkruns.Store, designs *designproposals.Store, checks *interfacechecks.Store) {
 	project := func(pull pullrequests.PullRequest, all []interfacechecks.Check) map[string]any {
 		current := []interfacechecks.Check{}
 		stale := []interfacechecks.Check{}
@@ -64,7 +65,8 @@ func registerInterfaceCheckRoutes(mux *http.ServeMux, git *storage.Store, repos 
 			return
 		}
 		preview, e := previewStore.Get(p.RepositoryID, p.ID, in.PreviewID)
-		if e != nil || preview.Revision != p.SourceCommitID || preview.Stale || preview.State != "succeeded" {
+		build, buildErr := runs.Get(p.RepositoryID, p.ID, preview.BuildRunID)
+		if e != nil || buildErr != nil || preview.Revision != p.SourceCommitID || preview.Stale || build.State != "succeeded" {
 			writeAPIError(w, 422, "invalid_interface_preview", "evidence requires a successful exact-revision bounded preview")
 			return
 		}

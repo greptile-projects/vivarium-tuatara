@@ -297,9 +297,11 @@ func designRequirementItems(r designproposals.Revision) []proposals.ReasoningIte
 	add("component_contract", r.ComponentContracts)
 	add("content", r.Content)
 	add("breakpoint", r.Breakpoints)
-	for _, s := range r.States {
-		add("state", []string{s.Name + ": " + s.Description + " — " + s.Content})
+	states := make([]string, len(r.States))
+	for i, s := range r.States {
+		states[i] = s.Name + ": " + s.Description + " — " + s.Content
 	}
+	add("state", states)
 	add("acceptance_criterion", r.AcceptanceCriteria)
 	return out
 }

@@ -54,6 +54,18 @@ feedback or observed regressions can seed linked repairs. Both continue through
 ordinary task, Git, review, check, merge, release, and deployment controls. Records
 default beneath `$DESIGN_GOVERNANCE_STORAGE_ROOT` (`design-governance`).
 
+The connected `interface-design-journey.spec.ts` browser/API/Git journey starts
+with invited-user release feedback, compares a designer prototype with an
+agent-assisted alternative, and retains a stale incomplete revision before owner
+acceptance. Human and bounded-agent authorship then meet in ordinary task, Git,
+pull, and review controls. Exact previews cover responsive, keyboard,
+screen-reader, long-content, and localized contexts; stale evidence, a visual
+regression, and a rejected implementation deviation remain visible before the
+corrected evidence receives design, accessibility, localization, and invited-user
+acceptance. The trail continues through merge, release, staged deployment,
+measured follow-up feedback, a changed design token, and ordinary downstream
+migration and repair work.
+
 Each release freezes the source revision and changed paths for every included
 pull. Release design readiness consumes that immutable snapshot rather than the
 pull's later synchronized state. Within one pull revision, the latest durable
