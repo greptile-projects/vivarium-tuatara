@@ -58,6 +58,13 @@
   production differences. One passing workspace is `demonstrated`; two distinct passing workspaces are
   `reproduced`; mixed outcomes are `nondeterministic`. Unsafe effects prevent launch, while missing dependencies,
   changed revisions, and irreducible conditions cannot be reported as reproduced.
+- `POST .../{workspace_id}/repair-work` requires a scenario reproduced in two distinct workspaces and a supported
+  cited finding. It freezes the affected revision, acceptance and regression criteria, and human or agent owner into
+  an ordinary proposal task; the task grants no new authority. `POST .../repair-work/{work_id}/validation` accepts
+  only the linked merged pull, passing scenario plus ordinary check runs at its exact revision, an including release,
+  its exact staged deployment, and named passing production signals. A failed measure may invoke the existing
+  participant-only pause or known-good rollback boundary, or mark the diagnosis reopened. Investigators and task
+  agents gain no review, merge, release, deployment, or environment authority.
 
 ## Consumer API applications and sandbox
 

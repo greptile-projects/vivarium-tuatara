@@ -74,6 +74,36 @@ func TestReplayRequiresPrivacyBoundedInputsAndDistinctPassingAttempts(t *testing
 	}
 }
 
+func TestRepairWorkRequiresReproducedScenarioAndSupportedCause(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 18, 15, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	actor, repo := strings.Repeat("4", 32), strings.Repeat("1", 32)
+	v, _ := s.Create(Workspace{RepositoryID: repo, Title: "timeout", Summary: "production timeout", Trigger: Reference{Kind: "trace", Label: "trace"}, Release: Reference{ResourceID: strings.Repeat("2", 32), Revision: strings.Repeat("a", 40)}, Environment: Reference{ResourceID: strings.Repeat("3", 32)}, TimeStart: now.Add(-time.Hour), TimeEnd: now, UserJourney: "checkout", OwnerIDs: []string{actor}, Severity: "high", Audience: "repository", Source: Reference{Revision: strings.Repeat("a", 40)}}, actor)
+	v.Citations = []Citation{{ID: strings.Repeat("5", 32), Kind: "commit", Accessible: true}}
+	v.Claims = []Claim{{ID: strings.Repeat("6", 32), Kind: "finding", Status: "supported"}}
+	v.ReplayScenarios = []ReplayScenario{{ID: strings.Repeat("7", 32), Status: "reproduced"}}
+	if err := s.write(v); err != nil {
+		t.Fatal(err)
+	}
+	in := RepairWork{ID: strings.Repeat("8", 32), ScenarioID: v.ReplayScenarios[0].ID, CauseClaimID: v.Claims[0].ID, AffectedRevision: v.Source.Revision, AcceptanceCriteria: []string{"timeout no longer occurs"}, RegressionCriteria: []string{"scenario passes on every pull revision"}, ProposalID: strings.Repeat("9", 32), TaskID: strings.Repeat("b", 32), AssigneeType: "agent", AssigneeID: strings.Repeat("c", 32)}
+	v, work, err := s.CreateRepairWork(repo, v.ID, actor, in, v.Version)
+	if err != nil || work.ValidationStatus != "awaiting_pull" || len(v.RepairWork) != 1 {
+		t.Fatalf("repair=%#v workspace=%#v err=%v", work, v, err)
+	}
+	_, _, err = s.UpdateRepairWork(repo, v.ID, work.ID, actor, v.Version, func(x *RepairWork) error {
+		x.PullRequestID = strings.Repeat("d", 32)
+		x.ValidationStatus = "validated"
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = s.CreateRepairWork(repo, v.ID, actor, in, v.Version); !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate repair accepted: %v", err)
+	}
+}
+
 func TestProbeLifecycleNarrowsAuthorityAndRetainsPartialEvidence(t *testing.T) {
 	s, _ := New(t.TempDir())
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
