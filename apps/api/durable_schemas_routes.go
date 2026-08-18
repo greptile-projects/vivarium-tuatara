@@ -13,15 +13,17 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/decisions"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/durableschemas"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
-func registerDurableSchemaRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, store *durableschemas.Store, pulls *pullrequests.Store, decisionStore *decisions.Store, proposalStore *proposals.Store, sessionStore *changesessions.Store, workspaceStore *workspaces.Store) {
+func registerDurableSchemaRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, store *durableschemas.Store, pulls *pullrequests.Store, decisionStore *decisions.Store, proposalStore *proposals.Store, sessionStore *changesessions.Store, workspaceStore *workspaces.Store, deploymentStore *deployments.Store, releaseStore *releases.Store) {
 	base := "/repositories/{id}/durable-schemas"
 	mux.HandleFunc("GET "+base, func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
@@ -148,6 +150,117 @@ func registerDurableSchemaRoutes(mux *http.ServeMux, git *storage.Store, catalog
 		}
 		out, e := store.AddEvent(r.PathValue("id"), r.PathValue("schema_id"), r.PathValue("migration_id"), actor.UserID, in.ExpectedVersion, in.Event)
 		writeDurableSchema(w, out, e, 200)
+	})
+	mux.HandleFunc("POST "+base+"/{schema_id}/migrations/{migration_id}/executions", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int                      `json:"expected_version"`
+			Execution       durableschemas.Execution `json:"execution"`
+		}
+		if decodeJSON(r, &in) != nil || deploymentStore == nil || releaseStore == nil {
+			writeAPIError(w, 400, "invalid_execution", "a governed production execution is required")
+			return
+		}
+		if _, err := deploymentStore.GetEnvironment(r.PathValue("id"), in.Execution.EnvironmentID); err != nil {
+			writeAPIError(w, 422, "invalid_execution_environment", "execution must use an established repository environment")
+			return
+		}
+		if _, err := releaseStore.Get(r.PathValue("id"), in.Execution.ReleaseID); err != nil {
+			writeAPIError(w, 422, "invalid_execution_release", "execution must freeze an existing exact release")
+			return
+		}
+		out, execution, err := store.CreateExecution(r.PathValue("id"), r.PathValue("schema_id"), r.PathValue("migration_id"), actor.UserID, in.ExpectedVersion, in.Execution)
+		if errors.Is(err, durableschemas.ErrConflict) {
+			writeAPIError(w, 409, "migration_execution_changed", "migration execution changed or is already active")
+			return
+		}
+		if errors.Is(err, durableschemas.ErrInvalid) {
+			writeAPIError(w, 422, "migration_execution_not_ready", "all required approvals, passing rehearsal evidence, compatibility, privacy, rollback, and cost bounds are required")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 404, "migration_not_found", "migration not found")
+			return
+		}
+		writeJSON(w, 201, map[string]any{"schema": out, "execution": execution})
+	})
+	mux.HandleFunc("POST "+base+"/{schema_id}/migrations/{migration_id}/executions/{execution_id}/controls", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			Action          string   `json:"action"`
+			ExpectedVersion int      `json:"expected_version"`
+			Phase           string   `json:"phase"`
+			ProgressPercent int      `json:"progress_percent"`
+			LagSeconds      int64    `json:"lag_seconds"`
+			Invariants      []string `json:"invariants"`
+			ServiceHealth   string   `json:"service_health"`
+			Blockers        []string `json:"blockers"`
+			NextActions     []string `json:"next_actions"`
+			CostUnits       int64    `json:"cost_units"`
+			ThrottlePercent int      `json:"throttle_percent"`
+			Summary         string   `json:"summary"`
+			AgentID         string   `json:"agent_id"`
+			StepID          string   `json:"step_id"`
+			DeploymentID    string   `json:"deployment_id"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_execution_control", "a bounded execution control is required")
+			return
+		}
+		if in.AgentID != "" && in.AgentID != actor.AgentID {
+			writeAPIError(w, 403, "agent_attribution_forbidden", "agent attribution must come from the authenticated agent credential")
+			return
+		}
+		if in.DeploymentID != "" {
+			if deploymentStore == nil {
+				writeAPIError(w, 422, "deployment_evidence_unavailable", "deployment evidence cannot be verified")
+				return
+			}
+			d, err := deploymentStore.GetPromotion(r.PathValue("id"), in.DeploymentID)
+			if err != nil {
+				writeAPIError(w, 422, "invalid_deployment_evidence", "deployment evidence does not resolve")
+				return
+			}
+			schema, err := store.Get(r.PathValue("id"), r.PathValue("schema_id"))
+			if err != nil {
+				writeAPIError(w, 404, "migration_not_found", "migration not found")
+				return
+			}
+			valid := false
+			for _, m := range schema.Migrations {
+				if m.ID == r.PathValue("migration_id") {
+					for _, x := range m.Executions {
+						if x.ID == r.PathValue("execution_id") && x.EnvironmentID == d.EnvironmentID && x.ReleaseID == d.ReleaseID && d.State == "succeeded" {
+							valid = true
+						}
+					}
+				}
+			}
+			if !valid {
+				writeAPIError(w, 422, "invalid_deployment_evidence", "deployment must be the successful frozen release in the frozen environment")
+				return
+			}
+		}
+		out, execution, err := store.UpdateExecution(r.PathValue("id"), r.PathValue("schema_id"), r.PathValue("migration_id"), r.PathValue("execution_id"), actor.UserID, durableschemas.ExecutionUpdate{Action: in.Action, ExpectedVersion: in.ExpectedVersion, Phase: in.Phase, ProgressPercent: in.ProgressPercent, LagSeconds: in.LagSeconds, Invariants: in.Invariants, ServiceHealth: in.ServiceHealth, Blockers: in.Blockers, NextActions: in.NextActions, CostUnits: in.CostUnits, ThrottlePercent: in.ThrottlePercent, Summary: in.Summary, AgentID: actor.AgentID, StepID: in.StepID, DeploymentID: in.DeploymentID})
+		if errors.Is(err, durableschemas.ErrConflict) {
+			writeAPIError(w, 409, "migration_execution_changed", "execution changed; reload before intervening")
+			return
+		}
+		if errors.Is(err, durableschemas.ErrInvalid) {
+			writeAPIError(w, 422, "execution_control_blocked", "control is unavailable, unsafe, over budget, or outside an agent's explicit delegation")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 404, "migration_execution_not_found", "migration execution not found")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"schema": out, "execution": execution})
 	})
 	mux.HandleFunc("POST "+base+"/{schema_id}/migrations/{migration_id}/work", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")

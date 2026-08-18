@@ -74,6 +74,33 @@ func TestDurableSchemaDefinitionResolvesExactReviewedBlob(t *testing.T) {
 	}
 }
 
+func TestMigrationControlsBindAgentIdentityAndFailClosedWithoutDeployments(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	pullStore, _ := pullrequests.New(t.TempDir(), gitStore)
+	durableStore, _ := durableschemas.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, pullStore, nil, nil, nil, durableStore))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "migration-control-owner")
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"migration-controls"}`, owner.Credential.Token, http.StatusCreated)
+	var repository repositories.Repository
+	decodeResponse(t, response, &repository)
+	controls := server.URL + "/repositories/" + repository.ID + "/durable-schemas/schema/migrations/migration/executions/execution/controls"
+	authenticatedRequest(t, http.MethodPost, controls, `{"action":"report","expected_version":1,"agent_id":"forged-agent"}`, owner.Credential.Token, http.StatusForbidden).Body.Close()
+	response = authenticatedRequest(t, http.MethodPost, controls, `{"action":"report","expected_version":1,"deployment_id":"deployment"}`, owner.Credential.Token, http.StatusUnprocessableEntity)
+	var apiErr struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	decodeResponse(t, response, &apiErr)
+	if apiErr.Error.Code != "deployment_evidence_unavailable" {
+		t.Fatalf("nil deployment store response = %#v", apiErr)
+	}
+}
+
 func TestDurableMigrationWorkCreatesScopedOrdinaryTaskWithExactContract(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	identities, _ := users.New(t.TempDir())

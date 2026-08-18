@@ -79,3 +79,69 @@ func TestBoundedRehearsalRetainsExactSanitizedEvidence(t *testing.T) {
 		t.Fatalf("dishonest passing summary accepted: %v", err)
 	}
 }
+
+func TestProductionExecutionRequiresEvidenceAndKeepsAgentsDelegated(t *testing.T) {
+	s, _ := New(t.TempDir())
+	r := Revision{Name: "orders", StoreKind: "database", Description: "orders", Definition: "v1", DefinitionPath: "db.sql", OwnerIDs: []string{"owner"}, Compatibility: []string{"dual read"}, Retention: "year", Privacy: []string{"tokenized"}, PullRequestID: "1", ReviewedCommit: "abc", Rationale: "baseline"}
+	v, _ := s.Create("repo", "owner", r)
+	r.Definition, r.Rationale = "v2", "candidate"
+	v, _ = s.Revise("repo", v.ID, 1, "owner", r)
+	m := Migration{FromVersion: 1, ToVersion: 2, SourceKind: "pull_request", SourceID: "2", Summary: "expand then contract", Operations: []Operation{{ID: "change", Kind: "write", Description: "dual write", OwnerIDs: []string{"owner"}, ConsumerIDs: []string{"app"}, RollbackLimit: "before contract"}}, Steps: []Step{{ID: "change", OperationIDs: []string{"change"}, Description: "change", SuccessMeasures: []string{"healthy"}, RequiredApproverIDs: []string{"owner"}}}, RollbackLimits: []string{"before contract"}}
+	v, _ = s.AddMigration("repo", v.ID, "owner", m)
+	migration := v.Migrations[0]
+	rehearsal := Rehearsal{Name: "proof", ApplicationRevision: "commit", Dataset: RehearsalDataset{Kind: "synthetic", Description: "shape", Digest: "digest", MaxBytes: 10}, Checks: []RehearsalCheck{{ID: "upgrade", Kind: "upgrade", Command: "./up", Invariant: "safe", InvariantCommand: "./verify", RevisionInputs: []string{"application"}}}}
+	v, rehearsal, _ = s.CreateRehearsal("repo", v.ID, migration.ID, "owner", migration.Version, rehearsal)
+	base := Execution{EnvironmentID: "prod", ReleaseID: "release", RehearsalID: rehearsal.ID, CompatibilityWindow: "old and new readers through contract", PrivacyConstraints: []string{"aggregate metrics only"}, CostBudgetUnits: 100, AbortReversibleUntil: "before contract", Delegations: []ExecutionDelegation{{Phase: "backfill", AgentID: "agent", StepID: "change", Mandate: "report bounded batch progress"}}}
+	if _, _, err := s.CreateExecution("repo", v.ID, migration.ID, "owner", v.Migrations[0].Version, base); err != ErrInvalid {
+		t.Fatalf("execution without approvals or passing proof = %v", err)
+	}
+	run := RehearsalRun{WorkspaceID: "ws", Result: "passed", Attestations: []string{"exact outcomes"}, Outcomes: []RehearsalOutcome{{CheckID: "upgrade", Status: "passed", InvariantPassed: true}}}
+	v, _, _ = s.AddRehearsalRun("repo", v.ID, migration.ID, rehearsal.ID, "owner", run)
+	v, _ = s.AddEvent("repo", v.ID, migration.ID, "owner", v.Migrations[0].Version, Event{Kind: "approved", StepID: "change", Summary: "approved current evidence"})
+	v, execution, err := s.CreateExecution("repo", v.ID, migration.ID, "operator", v.Migrations[0].Version, base)
+	if err != nil || execution.Phases[0].Name != "expand" || execution.ControllerID != "operator" {
+		t.Fatalf("execution = %#v, %v", execution, err)
+	}
+	_, execution, _ = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "start", ExpectedVersion: execution.Version})
+	if _, _, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "report", ExpectedVersion: execution.Version, Phase: "expand", ProgressPercent: 25, ServiceHealth: "healthy", Invariants: []string{"dual reads agree"}, AgentID: "agent"}); err != ErrInvalid {
+		t.Fatalf("agent escaped phase delegation: %v", err)
+	}
+	_, execution, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "report", ExpectedVersion: execution.Version, Phase: "expand", ProgressPercent: 100, ServiceHealth: "healthy", Invariants: []string{"dual reads agree"}, NextActions: []string{"advance"}, CostUnits: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, execution, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "advance", ExpectedVersion: execution.Version})
+	if err != nil || execution.CurrentPhase != 1 || execution.Phases[0].State != "completed" {
+		t.Fatalf("advance = %#v, %v", execution, err)
+	}
+	// Put the retained execution at its delegated phase without manufacturing
+	// controller evidence for the intervening deployment phase.
+	retained := &v.Migrations[0].Executions[0]
+	retained.CurrentPhase, retained.Status = 2, "running"
+	retained.Phases[2].State = "running"
+	if err = s.write(v); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "report", ExpectedVersion: retained.Version, Phase: "backfill", StepID: "other", ProgressPercent: 100, ServiceHealth: "healthy", Invariants: []string{"done"}, Summary: "wrong step", AgentID: "agent"}); err != ErrInvalid {
+		t.Fatalf("agent escaped step delegation: %v", err)
+	}
+	_, execution, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "report", ExpectedVersion: retained.Version, Phase: "backfill", StepID: "change", ProgressPercent: 50, ServiceHealth: "degraded", Invariants: []string{"completed batches valid"}, Blockers: []string{"replica lag"}, Summary: "assigned step blocked", AgentID: "agent"})
+	if err != nil || len(execution.StepReports) != 1 || execution.Phases[2].ProgressPercent != 0 || execution.Phases[2].ServiceHealth != "" {
+		t.Fatalf("scoped agent report changed phase readiness: %#v, %v", execution, err)
+	}
+	_, execution, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "report", ExpectedVersion: execution.Version, Phase: "backfill", ProgressPercent: 100, ServiceHealth: "healthy", Invariants: []string{"aggregate rows match"}, NextActions: []string{"advance"}, Summary: "controller phase assessment"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "advance", ExpectedVersion: execution.Version}); err != ErrInvalid {
+		t.Fatalf("blocked delegated step did not gate phase: %v", err)
+	}
+	_, execution, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "report", ExpectedVersion: execution.Version, Phase: "backfill", StepID: "change", ProgressPercent: 100, ServiceHealth: "healthy", Invariants: []string{"assigned batch valid"}, Summary: "assigned step complete", AgentID: "agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, execution, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "advance", ExpectedVersion: execution.Version})
+	if err != nil || execution.CurrentPhase != 3 {
+		t.Fatalf("satisfied delegated step did not unblock phase: %#v, %v", execution, err)
+	}
+}
