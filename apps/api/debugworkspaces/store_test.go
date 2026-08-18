@@ -103,3 +103,35 @@ func TestWorkspaceRejectsUnboundedOrUnexplainedEvidence(t *testing.T) {
 		t.Fatalf("wanted invalid, got %v", err)
 	}
 }
+
+func TestCitedDiagnosisIsChallengeableAndRevokedAgentFailsClosed(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	owner := "44444444444444444444444444444444"
+	v, err := s.Create(Workspace{RepositoryID: "11111111111111111111111111111111", Title: "checkout path", Summary: "timeouts", Trigger: Reference{Kind: "trace", Label: "trace"}, Release: Reference{ResourceID: "22222222222222222222222222222222", Revision: strings.Repeat("a", 40)}, Environment: Reference{ResourceID: "33333333333333333333333333333333"}, TimeStart: now.Add(-time.Hour), TimeEnd: now, UserJourney: "checkout", OwnerIDs: []string{owner}, Severity: "high", Audience: "repository", Source: Reference{Revision: strings.Repeat("a", 40)}}, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.AddClaim(v.RepositoryID, v.ID, owner, []Citation{{Kind: "runtime_evidence", Label: "redacted trace", Accessible: false, BlockedReason: "privacy audience excludes this reader"}}, Claim{Kind: "hypothesis", Statement: "retry path exhausted the pool", Uncertainty: "one shard is inaccessible", Confidence: "medium"}, v.Version)
+	if err != nil || v.Claims[0].Status != "blocked" {
+		t.Fatalf("blocked claim = %#v, %v", v.Claims, err)
+	}
+	v, err = s.RespondClaim(v.RepositoryID, v.ID, v.Claims[0].ID, owner, "dispute", "the stack points at the non-retry path", nil, v.Version)
+	if err != nil || v.Claims[0].Status != "disputed" {
+		t.Fatalf("dispute = %#v, %v", v.Claims[0], err)
+	}
+	agentID, credentialID := "55555555555555555555555555555555", "66666666666666666666666666666666"
+	v, investigation, err := s.StartAgent(v.RepositoryID, v.ID, owner, agentID, credentialID, "inspect only the cited trace", []string{v.Citations[0].ID}, v.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, _, err = s.ControlAgent(v.RepositoryID, v.ID, investigation.ID, owner, "revoke", "evidence consent changed", v.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.AgentClaim(v.RepositoryID, v.ID, investigation.ID, credentialID, Claim{Kind: "finding", Statement: "late output", Uncertainty: "revoked", Confidence: "low", CitationIDs: []string{v.Citations[0].ID}}, v.Version)
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("revoked agent publication = %v", err)
+	}
+}

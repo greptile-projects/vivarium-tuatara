@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"strconv"
@@ -17,6 +19,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/serviceobjectives"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportthreads"
 )
 
@@ -42,7 +45,7 @@ type debugProbeRevokeInput struct {
 	Reason          string `json:"reason"`
 }
 
-func registerDebugWorkspaceRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, workspaces *debugworkspaces.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, issueStore *issues.Store, incidentStore *incidents.Store, supportStore *supportthreads.Store, objectiveStore *serviceobjectives.Store, packageStore *packages.Store, infrastructureStore *infrastructure.Store) {
+func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *repositories.Store, credentials *auth.Store, workspaces *debugworkspaces.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, issueStore *issues.Store, incidentStore *incidents.Store, supportStore *supportthreads.Store, objectiveStore *serviceobjectives.Store, packageStore *packages.Store, infrastructureStore *infrastructure.Store) {
 	actorID := func(c auth.Credential) string {
 		if c.AgentID != "" {
 			return c.AgentID
@@ -103,6 +106,21 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			}
 		}
 		v.Probes = visible
+		for i := range v.Citations {
+			if v.Citations[i].Kind != "runtime_evidence" {
+				continue
+			}
+			visibleEvidence := false
+			for _, evidence := range v.Evidence {
+				if evidence.ID == v.Citations[i].EvidenceID && evidence.Available {
+					visibleEvidence = true
+				}
+			}
+			if v.Citations[i].EvidenceID != "" && !visibleEvidence {
+				v.Citations[i].Accessible, v.Citations[i].BlockedReason = false, "selected runtime evidence is inaccessible to this reader"
+				v.Citations[i].Label, v.Citations[i].ResourceID, v.Citations[i].Revision, v.Citations[i].Path, v.Citations[i].Symbol = "Inaccessible evidence", "", "", "", ""
+			}
+		}
 		history := make([]debugworkspaces.Event, 0, len(v.History))
 		for _, event := range v.History {
 			if strings.HasPrefix(event.Kind, "probe_") && !visibleProbeIDs[event.To] {
@@ -178,6 +196,209 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, catalog *repositories.Stor
 		}
 		out, err := workspaces.Update(current.RepositoryID, current.ID, actorID(c), in.Kind, in.Value, in.Message, in.ExpectedVersion)
 		writeDebugWorkspace(w, project(out, actorID(c)), err, 201)
+	})
+	type claimInput struct {
+		ExpectedVersion int                        `json:"expected_version"`
+		Claim           debugworkspaces.Claim      `json:"claim"`
+		Citations       []debugworkspaces.Citation `json:"citations"`
+	}
+	mux.HandleFunc("POST /repositories/{id}/debugging-workspaces/{workspace_id}/claims", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, e := workspaces.Get(r.PathValue("id"), r.PathValue("workspace_id"))
+		if e != nil || !canRead(current, actorID(c)) {
+			writeAPIError(w, 404, "debugging_workspace_not_found", "debugging workspace not found")
+			return
+		}
+		var in claimInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a cited diagnostic claim is required")
+			return
+		}
+		projected := project(current, actorID(c))
+		if e = resolveDebugCitations(gitStore, issueStore, deploymentStore, packageStore, infrastructureStore, projected, in.Citations); e != nil {
+			writeAPIError(w, 422, "invalid_debugging_citation", e.Error())
+			return
+		}
+		out, e := workspaces.AddClaim(current.RepositoryID, current.ID, actorID(c), in.Citations, in.Claim, in.ExpectedVersion)
+		writeDebugWorkspace(w, project(out, actorID(c)), e, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/debugging-workspaces/{workspace_id}/claims/{claim_id}/responses", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int      `json:"expected_version"`
+			Kind            string   `json:"kind"`
+			Message         string   `json:"message"`
+			CitationIDs     []string `json:"citation_ids"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a supported, disputed, or stale response is required")
+			return
+		}
+		out, e := workspaces.RespondClaim(r.PathValue("id"), r.PathValue("workspace_id"), r.PathValue("claim_id"), actorID(c), in.Kind, in.Message, in.CitationIDs, in.ExpectedVersion)
+		writeDebugWorkspace(w, project(out, actorID(c)), e, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/debugging-workspaces/{workspace_id}/owner-requests", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int                          `json:"expected_version"`
+			Request         debugworkspaces.OwnerRequest `json:"request"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a bounded owner question is required")
+			return
+		}
+		out, e := workspaces.RequestOwner(r.PathValue("id"), r.PathValue("workspace_id"), actorID(c), in.Request, in.ExpectedVersion)
+		writeDebugWorkspace(w, project(out, actorID(c)), e, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/debugging-workspaces/{workspace_id}/owner-requests/{request_id}/answer", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int    `json:"expected_version"`
+			Response        string `json:"response"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an owner response is required")
+			return
+		}
+		out, e := workspaces.AnswerOwner(r.PathValue("id"), r.PathValue("workspace_id"), r.PathValue("request_id"), actorID(c), in.Response, in.ExpectedVersion)
+		writeDebugWorkspace(w, project(out, actorID(c)), e, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/debugging-workspaces/{workspace_id}/agent-investigations", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int      `json:"expected_version"`
+			Mandate         string   `json:"mandate"`
+			CitationIDs     []string `json:"citation_ids"`
+			ExpiresIn       int      `json:"expires_in"`
+		}
+		if decodeJSON(r, &in) != nil || in.ExpiresIn < 300 || in.ExpiresIn > 86400 {
+			writeAPIError(w, 422, "invalid_agent_investigation", "select citations, guidance, and a 5 minute to 24 hour expiry")
+			return
+		}
+		issued, e := credentials.Issue(c.UserID, auth.API, "Debugging investigation", []string{"debugging:investigate"}, time.Duration(in.ExpiresIn)*time.Second)
+		if e != nil {
+			writeAPIError(w, 500, "debugging_agent_unavailable", "read-only access could not be issued")
+			return
+		}
+		b := make([]byte, 16)
+		_, _ = rand.Read(b)
+		out, x, e := workspaces.StartAgent(r.PathValue("id"), r.PathValue("workspace_id"), actorID(c), hex.EncodeToString(b), issued.ID, in.Mandate, in.CitationIDs, in.ExpectedVersion)
+		if e != nil {
+			_, _ = credentials.Revoke(c.UserID, issued.ID)
+			writeDebugWorkspace(w, out, e, 201)
+			return
+		}
+		writeJSON(w, 201, map[string]any{"debugging_workspace": project(out, actorID(c)), "agent_investigation": x, "credential": issued})
+	})
+	mux.HandleFunc("GET /repositories/{id}/debugging-workspaces/{workspace_id}/agent-investigations/{investigation_id}", func(w http.ResponseWriter, r *http.Request) {
+		c, ok := authenticateRequest(w, r, credentials, "debugging:investigate", false)
+		if !ok {
+			return
+		}
+		v, e := workspaces.Get(r.PathValue("id"), r.PathValue("workspace_id"))
+		if e != nil {
+			writeAPIError(w, 404, "debugging_agent_not_found", "investigation not found")
+			return
+		}
+		for _, x := range v.AgentInvestigations {
+			if x.ID == r.PathValue("investigation_id") && x.CredentialID == c.ID && x.State != "revoked" {
+				if catalog.WithCurrentParticipant(x.InitiatorID, v.RepositoryID, func() error { return nil }) != nil {
+					writeAPIError(w, 403, "debugging_agent_access_changed", "the investigation initiator no longer has repository access")
+					return
+				}
+				allowed := []debugworkspaces.Citation{}
+				for _, citation := range v.Citations {
+					for _, id := range x.CitationIDs {
+						if citation.ID == id {
+							allowed = append(allowed, citation)
+						}
+					}
+				}
+				claims := []debugworkspaces.Claim{}
+				for _, claim := range v.Claims {
+					permitted := true
+					for _, id := range claim.CitationIDs {
+						found := false
+						for _, allowedID := range x.CitationIDs {
+							found = found || id == allowedID
+						}
+						permitted = permitted && found
+					}
+					if permitted {
+						claims = append(claims, claim)
+					}
+				}
+				writeJSON(w, 200, map[string]any{"investigation": x, "citations": allowed, "claims": claims})
+				return
+			}
+		}
+		writeAPIError(w, 404, "debugging_agent_not_found", "investigation not found")
+	})
+	mux.HandleFunc("POST /repositories/{id}/debugging-workspaces/{workspace_id}/agent-investigations/{investigation_id}/claims", func(w http.ResponseWriter, r *http.Request) {
+		c, ok := authenticateRequest(w, r, credentials, "debugging:investigate", false)
+		if !ok {
+			return
+		}
+		current, getErr := workspaces.Get(r.PathValue("id"), r.PathValue("workspace_id"))
+		if getErr != nil {
+			writeAPIError(w, 404, "debugging_agent_not_found", "investigation not found")
+			return
+		}
+		initiator := ""
+		for _, investigation := range current.AgentInvestigations {
+			if investigation.ID == r.PathValue("investigation_id") && investigation.CredentialID == c.ID {
+				initiator = investigation.InitiatorID
+			}
+		}
+		if initiator == "" || catalog.WithCurrentParticipant(initiator, current.RepositoryID, func() error { return nil }) != nil {
+			writeAPIError(w, 403, "debugging_agent_access_changed", "the investigation initiator no longer has repository access")
+			return
+		}
+		var in struct {
+			ExpectedVersion int                   `json:"expected_version"`
+			Claim           debugworkspaces.Claim `json:"claim"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an uncertain cited agent claim is required")
+			return
+		}
+		out, e := workspaces.AgentClaim(r.PathValue("id"), r.PathValue("workspace_id"), r.PathValue("investigation_id"), c.ID, in.Claim, in.ExpectedVersion)
+		writeDebugWorkspace(w, out, e, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/debugging-workspaces/{workspace_id}/agent-investigations/{investigation_id}/controls", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int    `json:"expected_version"`
+			Action          string `json:"action"`
+			Message         string `json:"message"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a guide, pause, resume, or revoke control is required")
+			return
+		}
+		out, x, e := workspaces.ControlAgent(r.PathValue("id"), r.PathValue("workspace_id"), r.PathValue("investigation_id"), actorID(c), in.Action, in.Message, in.ExpectedVersion)
+		if e == nil && in.Action == "revoke" {
+			_, _ = credentials.Revoke(x.InitiatorID, x.CredentialID)
+		}
+		writeDebugWorkspace(w, project(out, actorID(c)), e, 201)
 	})
 	mux.HandleFunc("POST /repositories/{id}/debugging-workspaces/{workspace_id}/probes", func(w http.ResponseWriter, r *http.Request) {
 		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
@@ -334,6 +555,108 @@ func validateDebugContext(v *debugworkspaces.Workspace, releasesStore *releases.
 		wanted, e := strconv.Atoi(v.Infrastructure.Revision)
 		if e != nil || wanted < 1 || wanted > d.CurrentVersion {
 			return errors.New("infrastructure revision is unavailable")
+		}
+	}
+	return nil
+}
+
+func resolveDebugCitations(gitStore *storage.Store, issueStore *issues.Store, deploymentStore *deployments.Store, packageStore *packages.Store, infrastructureStore *infrastructure.Store, v debugworkspaces.Workspace, citations []debugworkspaces.Citation) error {
+	if len(citations) == 0 || len(citations) > 20 {
+		return errors.New("one to twenty revision-aware citations are required")
+	}
+	for i := range citations {
+		c := &citations[i]
+		c.Label = strings.TrimSpace(c.Label)
+		if c.Label == "" || len(c.Label) > 500 {
+			return errors.New("every citation requires a bounded label")
+		}
+		c.Accessible = true
+		switch c.Kind {
+		case "runtime_evidence":
+			found := false
+			for _, e := range v.Evidence {
+				if e.ID == c.EvidenceID && e.Available {
+					found = true
+					c.ResourceID = e.ID
+					c.Revision = v.Source.Revision
+				}
+			}
+			for _, p := range v.Probes {
+				for _, a := range p.Actions {
+					for _, artifact := range a.Artifacts {
+						if artifact.Digest == c.ResourceID {
+							found = true
+							c.Revision = v.Source.Revision
+						}
+					}
+				}
+			}
+			if !found {
+				c.Accessible = false
+				c.BlockedReason = "selected runtime evidence is unavailable to this reader"
+			}
+		case "symbol":
+			if c.Revision != v.Source.Revision || strings.TrimSpace(c.Path) == "" || strings.TrimSpace(c.Symbol) == "" || c.LineStart < 1 || c.LineEnd < c.LineStart || c.LineEnd-c.LineStart > 200 {
+				return errors.New("symbol citations must select bounded lines at the workspace source revision")
+			}
+			repo, e := gitStore.Open(v.RepositoryID)
+			if e != nil {
+				return errors.New("source repository is unavailable")
+			}
+			commit, e := repo.ReadCommit(storage.ObjectID(c.Revision))
+			if e != nil {
+				return errors.New("source revision is unavailable")
+			}
+			entry, e := resolvePath(repo, commit.Tree, c.Path)
+			if e != nil || entry.Type != storage.BlobObject {
+				return errors.New("cited source path is unavailable")
+			}
+			blob, e := repo.ReadObject(entry.ID)
+			if e != nil || c.LineEnd > len(strings.Split(string(blob.Content), "\n")) {
+				return errors.New("cited source lines are unavailable")
+			}
+		case "commit":
+			if c.Revision != v.Source.Revision {
+				return errors.New("commit citation must equal the affected source revision")
+			}
+		case "dependency":
+			found := false
+			for _, p := range v.Packages {
+				if p.ResourceID == c.ResourceID && p.Revision == c.Revision {
+					found = true
+				}
+			}
+			if !found {
+				return errors.New("dependency citation is not frozen in this workspace")
+			}
+			if _, e := packageStore.ListRepository(v.RepositoryID); e != nil {
+				return errors.New("dependency inventory is unavailable")
+			}
+		case "configuration":
+			if c.Revision != v.Configuration.Revision {
+				return errors.New("configuration citation is not revision-exact")
+			}
+		case "infrastructure":
+			if c.ResourceID != v.Infrastructure.ResourceID || c.Revision != v.Infrastructure.Revision {
+				return errors.New("infrastructure citation is not frozen in this workspace")
+			}
+			if _, e := infrastructureStore.Get(c.ResourceID, true); e != nil {
+				return errors.New("infrastructure citation is unavailable")
+			}
+		case "deployment":
+			p, e := deploymentStore.GetPromotion(v.RepositoryID, c.ResourceID)
+			if e != nil || p.CommitID != v.Source.Revision || p.EnvironmentID != v.Environment.ResourceID {
+				return errors.New("deployment citation does not describe the affected release and environment")
+			}
+			c.Revision = p.CommitID
+		case "known_issue":
+			x, e := issueStore.Get(v.RepositoryID, c.ResourceID)
+			if e != nil {
+				return errors.New("known issue citation is unavailable")
+			}
+			c.Revision = strconv.Itoa(x.Version)
+		default:
+			return errors.New("citation kind must be runtime_evidence, symbol, commit, dependency, configuration, infrastructure, deployment, or known_issue")
 		}
 	}
 	return nil

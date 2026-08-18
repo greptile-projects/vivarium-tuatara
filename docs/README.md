@@ -2979,3 +2979,13 @@ service load, and a maximum 24-hour lifetime. Approval can only narrow those bou
 sanitized, digest-addressed collection metadata with exact timing, collector provenance, transformations, gaps,
 and actions; raw production payloads and reusable credentials are not accepted. Expiry, owner revocation, access
 denial, overload, and partial capture terminate or narrow the probe and can never appear as complete evidence.
+
+The same workspace turns selected evidence into an inspectable live explanation. Server-resolved citations join
+permitted runtime captures to exact released symbols and line ranges, commits, frozen dependencies and
+configuration, infrastructure definitions, affected-environment deployments, and known issues. Humans and
+bounded read-only agents publish hypotheses, queries, findings, and explicit uncertainty; collaborators append
+support, disputes, and staleness without replacing the original reasoning, and inaccessible evidence remains an
+opaque blocked dependency. Citation-bound questions can be directed to named code, service, privacy, or security
+owners. The web canvas refreshes active reasoning while purpose-only agents can be guided, paused, resumed, or
+revoked. Their selected citation packet and short-lived credential carry no secret, production, observability,
+deployment, Git, or mutation authority.

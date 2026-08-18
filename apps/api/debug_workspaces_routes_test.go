@@ -124,4 +124,29 @@ func TestDebugWorkspaceReadRedactsAllRestrictedEvidenceMetadata(t *testing.T) {
 	if len(eventProjection.Hypotheses) != 1 || eventProjection.Hypotheses[0].CreatedBy != reader.User.ID {
 		t.Fatalf("event response lost permitted mutation: %#v", eventProjection.Hypotheses)
 	}
+	claimBody := `{"expected_version":5,"claim":{"kind":"hypothesis","statement":"retry exhaustion caused the timeout","uncertainty":"the restricted trace remains unavailable","confidence":"medium"},"citations":[{"kind":"runtime_evidence","evidence_id":"` + created.Evidence[0].ID + `","label":"restricted trace selection"}]}`
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/claims", claimBody, reader.Credential.Token, http.StatusCreated)
+	var diagnosed debugworkspaces.Workspace
+	decodeResponse(t, response, &diagnosed)
+	if len(diagnosed.Claims) != 1 || diagnosed.Claims[0].Status != "blocked" || diagnosed.Citations[0].Accessible || diagnosed.Citations[0].Label != "Inaccessible evidence" {
+		t.Fatalf("inaccessible claim projection = %#v / %#v", diagnosed.Claims, diagnosed.Citations)
+	}
+	agentBody := `{"expected_version":6,"mandate":"test only the selected correlation","citation_ids":["` + diagnosed.Citations[0].ID + `"],"expires_in":300}`
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/agent-investigations", agentBody, owner.Credential.Token, http.StatusCreated)
+	var launched struct {
+		DebuggingWorkspace debugworkspaces.Workspace          `json:"debugging_workspace"`
+		AgentInvestigation debugworkspaces.AgentInvestigation `json:"agent_investigation"`
+		Credential         auth.IssuedCredential              `json:"credential"`
+	}
+	decodeResponse(t, response, &launched)
+	agentClaim := `{"expected_version":7,"claim":{"kind":"uncertainty","statement":"the selected evidence cannot establish the branch","uncertainty":"runtime evidence is blocked","confidence":"low","citation_ids":["` + diagnosed.Citations[0].ID + `"]}}`
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/agent-investigations/"+launched.AgentInvestigation.ID+"/claims", agentClaim, launched.Credential.Token, http.StatusCreated)
+	var agentPublished debugworkspaces.Workspace
+	decodeResponse(t, response, &agentPublished)
+	if len(agentPublished.Claims) != 2 || agentPublished.Claims[1].CreatedBy != launched.AgentInvestigation.AgentID {
+		t.Fatalf("agent claim attribution = %#v", agentPublished.Claims)
+	}
+	control := `{"expected_version":8,"action":"pause","message":"wait for privacy-owner input"}`
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/agent-investigations/"+launched.AgentInvestigation.ID+"/controls", control, owner.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/agent-investigations/"+launched.AgentInvestigation.ID+"/claims", strings.Replace(agentClaim, `"expected_version":7`, `"expected_version":9`, 1), launched.Credential.Token, http.StatusForbidden).Body.Close()
 }
