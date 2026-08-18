@@ -3648,8 +3648,9 @@ release, deployment, environment, or infrastructure execution authority. Storage
 
 Infrastructure change review is pull-scoped. `POST
 /repositories/{id}/pulls/{pull_id}/infrastructure-plans` freezes the current pull source, infrastructure
-definition and observations, a complete candidate declaration, and candidate-commit policy paths with
-SHA-256 digests and expected effects. It returns dependency-ordered operations, affected owners,
+definition and observations, a `candidate_source` JSON path and SHA-256 digest resolved from that exact
+source commit, and candidate-commit policy paths with SHA-256 digests and expected effects. The candidate
+declaration is parsed from the retained Git blob rather than accepted from the caller. It returns dependency-ordered operations, affected owners,
 classified risks and mitigations, and rollback limits. `GET` on the collection re-resolves all inputs;
 `fresh: false` and `stale_reasons` expose drift and stale records project no current acknowledgements.
 

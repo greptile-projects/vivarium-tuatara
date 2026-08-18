@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -144,10 +145,13 @@ func registerInfrastructureRoutes(mux *http.ServeMux, git *storage.Store, catalo
 			return
 		}
 		var in struct {
-			DefinitionID   string                        `json:"definition_id"`
-			SourceRevision string                        `json:"source_revision"`
-			Candidate      infrastructure.Revision       `json:"candidate"`
-			PolicyEffects  []infrastructure.PolicyEffect `json:"policy_effects"`
+			DefinitionID    string `json:"definition_id"`
+			SourceRevision  string `json:"source_revision"`
+			CandidateSource struct {
+				Path   string `json:"path"`
+				Digest string `json:"digest"`
+			} `json:"candidate_source"`
+			PolicyEffects []infrastructure.PolicyEffect `json:"policy_effects"`
 		}
 		if decodeJSON(r, &in) != nil {
 			writeAPIError(w, 400, "invalid_request", "an exact infrastructure candidate and policy effects are required")
@@ -163,6 +167,16 @@ func registerInfrastructureRoutes(mux *http.ServeMux, git *storage.Store, catalo
 			writeAPIError(w, 404, "pull_request_not_found", "pull request not found")
 			return
 		}
+		candidateBody, candidateDigest, ok := infrastructureCommitBlob(git, pull.SourceRepositoryID, in.SourceRevision, in.CandidateSource.Path)
+		if !ok || candidateDigest != in.CandidateSource.Digest {
+			writeAPIError(w, 422, "infrastructure_candidate_invalid", "the candidate declaration must be an exact JSON file in the pull source commit")
+			return
+		}
+		var candidate infrastructure.Revision
+		if json.Unmarshal(candidateBody, &candidate) != nil || candidate.Revision != in.SourceRevision {
+			writeAPIError(w, 422, "infrastructure_candidate_invalid", "the candidate declaration must be an exact JSON file in the pull source commit")
+			return
+		}
 		for _, p := range in.PolicyEffects {
 			if !infrastructurePolicyCurrent(git, pull.SourceRepositoryID, in.SourceRevision, p) {
 				writeAPIError(w, 422, "infrastructure_policy_invalid", "each policy effect must cite an exact candidate-revision file digest")
@@ -170,10 +184,10 @@ func registerInfrastructureRoutes(mux *http.ServeMux, git *storage.Store, catalo
 			}
 		}
 		var out infrastructure.ChangePlan
-		err = catalog.WithCurrentParticipants(infrastructureOwners(actor.UserID, in.Candidate), r.PathValue("id"), func() error {
+		err = catalog.WithCurrentParticipants(infrastructureOwners(actor.UserID, candidate), r.PathValue("id"), func() error {
 			return pulls.WithSourceRevision(r.PathValue("id"), r.PathValue("pull_id"), in.SourceRevision, func(p pullrequests.PullRequest) error {
 				var e error
-				out, e = definitions.CreatePlan(p.RepositoryID, actor.UserID, infrastructure.PlanCreation{PullRequestID: p.ID, Revision: p.SourceCommitID, Definition: current, Candidate: in.Candidate, Policies: in.PolicyEffects})
+				out, e = definitions.CreatePlan(p.RepositoryID, actor.UserID, infrastructure.PlanCreation{PullRequestID: p.ID, Revision: p.SourceCommitID, Definition: current, Candidate: candidate, CandidatePath: in.CandidateSource.Path, CandidateDigest: candidateDigest, Policies: in.PolicyEffects})
 				return e
 			})
 		})
@@ -220,9 +234,19 @@ func registerInfrastructureRoutes(mux *http.ServeMux, git *storage.Store, catalo
 		if actor.AgentID != "" {
 			actorID, actorType = actor.AgentID, "agent"
 		}
-		out, err := definitions.AddPlanEvent(plan.ID, actorID, actorType, in.ExpectedEvents, in.Event)
+		var out infrastructure.ChangePlan
+		err = pulls.WithSourceRevision(pull.RepositoryID, pull.ID, plan.SourceRevision, func(_ pullrequests.PullRequest) error {
+			var appendErr error
+			out, appendErr = definitions.AddPlanEventCurrent(plan.ID, actorID, actorType, in.ExpectedEvents, in.Event)
+			return appendErr
+		})
 		if err == nil {
-			out = definitions.ProjectPlan(out, current, pull.SourceCommitID, func(x infrastructure.PolicyEffect) bool {
+			latest, latestErr := definitions.Get(plan.DefinitionID, true)
+			if latestErr != nil {
+				writeAPIError(w, 500, "infrastructure_plan_unavailable", "infrastructure plan dependencies could not be revalidated")
+				return
+			}
+			out = definitions.ProjectPlan(out, latest, pull.SourceCommitID, func(x infrastructure.PolicyEffect) bool {
 				return infrastructurePolicyCurrent(git, pull.SourceRepositoryID, plan.SourceRevision, x)
 			})
 		}
@@ -231,30 +255,35 @@ func registerInfrastructureRoutes(mux *http.ServeMux, git *storage.Store, catalo
 }
 
 func infrastructurePolicyCurrent(git *storage.Store, repoID, revision string, policy infrastructure.PolicyEffect) bool {
+	_, digest, ok := infrastructureCommitBlob(git, repoID, revision, policy.Path)
+	return ok && digest == policy.Digest
+}
+
+func infrastructureCommitBlob(git *storage.Store, repoID, revision, sourcePath string) ([]byte, string, bool) {
 	repo, err := git.Open(repoID)
 	if err != nil {
-		return false
+		return nil, "", false
 	}
 	commit, err := repo.ReadCommit(storage.ObjectID(revision))
 	if err != nil {
-		return false
+		return nil, "", false
 	}
 	entries, err := repo.WalkTree(commit.Tree)
 	if err != nil {
-		return false
+		return nil, "", false
 	}
 	for _, entry := range entries {
-		if entry.Path != policy.Path || entry.Type != storage.BlobObject {
+		if entry.Path != sourcePath || entry.Type != storage.BlobObject {
 			continue
 		}
 		blob, truncated, binary, err := repo.ReadBlobPreview(entry.ID, 1<<20)
 		if err != nil || truncated || binary {
-			return false
+			return nil, "", false
 		}
 		sum := sha256.Sum256(blob.Content)
-		return hex.EncodeToString(sum[:]) == policy.Digest
+		return blob.Content, hex.EncodeToString(sum[:]), true
 	}
-	return false
+	return nil, "", false
 }
 
 func writeInfrastructurePlan(w http.ResponseWriter, v infrastructure.ChangePlan, err error, status int) {
@@ -263,6 +292,8 @@ func writeInfrastructurePlan(w http.ResponseWriter, v infrastructure.ChangePlan,
 		writeJSON(w, status, v)
 	case errors.Is(err, infrastructure.ErrConflict):
 		writeAPIError(w, 409, "infrastructure_plan_conflict", "the plan discussion changed; reload before contributing")
+	case errors.Is(err, infrastructure.ErrPlanStale):
+		writeAPIError(w, 409, "infrastructure_plan_stale", "source, provider, policy, or observed state changed; create a new plan")
 	case errors.Is(err, infrastructure.ErrInvalid):
 		writeAPIError(w, 400, "invalid_infrastructure_plan", "the plan must compare exact resources, policy effects, risks, dependencies, affected owners, and rollback limits")
 	case errors.Is(err, pullrequests.ErrSourceChanged), errors.Is(err, pullrequests.ErrNotReady):

@@ -13,6 +13,7 @@ import (
 )
 
 var ErrPlanNotFound = errors.New("infrastructure plan not found")
+var ErrPlanStale = errors.New("infrastructure plan dependencies changed")
 
 type PlanRisk struct {
 	Kind       string `json:"kind"`
@@ -59,6 +60,8 @@ type ChangePlan struct {
 	ObservationFingerprint string         `json:"observation_fingerprint"`
 	ObservationsValidUntil *time.Time     `json:"observations_valid_until,omitempty"`
 	Candidate              Revision       `json:"candidate"`
+	CandidatePath          string         `json:"candidate_path"`
+	CandidateDigest        string         `json:"candidate_digest"`
 	Changes                []PlanChange   `json:"changes"`
 	PolicyEffects          []PolicyEffect `json:"policy_effects"`
 	AffectedOwnerIDs       []string       `json:"affected_owner_ids"`
@@ -71,17 +74,19 @@ type ChangePlan struct {
 }
 
 type PlanCreation struct {
-	PullRequestID string
-	Revision      string
-	Definition    Definition
-	Candidate     Revision
-	Policies      []PolicyEffect
+	PullRequestID   string
+	Revision        string
+	Definition      Definition
+	Candidate       Revision
+	CandidatePath   string
+	CandidateDigest string
+	Policies        []PolicyEffect
 }
 
 func (s *Store) CreatePlan(repo, actor string, in PlanCreation) (ChangePlan, error) {
 	var out ChangePlan
 	err := s.lock(func() error {
-		if strings.TrimSpace(in.PullRequestID) == "" || in.Revision == "" || in.Definition.RepositoryID != repo || in.Definition.CurrentVersion < 1 || in.Candidate.Revision != in.Revision || validateRevision(in.Candidate) != nil || len(in.Policies) == 0 {
+		if strings.TrimSpace(in.PullRequestID) == "" || in.Revision == "" || in.Definition.RepositoryID != repo || in.Definition.CurrentVersion < 1 || in.Candidate.Revision != in.Revision || in.CandidatePath == "" || len(in.CandidateDigest) != 64 || validateRevision(in.Candidate) != nil || len(in.Policies) == 0 {
 			return ErrInvalid
 		}
 		for _, p := range in.Policies {
@@ -95,7 +100,7 @@ func (s *Store) CreatePlan(repo, actor string, in PlanCreation) (ChangePlan, err
 			return ErrInvalid
 		}
 		now := s.now()
-		out = ChangePlan{ID: randomID(), RepositoryID: repo, PullRequestID: in.PullRequestID, SourceRevision: in.Revision, DefinitionID: in.Definition.ID, DefinitionVersion: in.Definition.CurrentVersion, ObservationFingerprint: observationFingerprint(in.Definition), ObservationsValidUntil: observationExpiry(in.Definition), Candidate: in.Candidate, Changes: changes, PolicyEffects: in.Policies, AffectedOwnerIDs: owners, Events: []PlanEvent{}, Fresh: true, StaleReasons: []string{}, AcknowledgedOwnerIDs: []string{}, CreatedBy: actor, CreatedAt: now}
+		out = ChangePlan{ID: randomID(), RepositoryID: repo, PullRequestID: in.PullRequestID, SourceRevision: in.Revision, DefinitionID: in.Definition.ID, DefinitionVersion: in.Definition.CurrentVersion, ObservationFingerprint: observationFingerprint(in.Definition), ObservationsValidUntil: observationExpiry(in.Definition), Candidate: in.Candidate, CandidatePath: in.CandidatePath, CandidateDigest: in.CandidateDigest, Changes: changes, PolicyEffects: in.Policies, AffectedOwnerIDs: owners, Events: []PlanEvent{}, Fresh: true, StaleReasons: []string{}, AcknowledgedOwnerIDs: []string{}, CreatedBy: actor, CreatedAt: now}
 		return s.writePlan(out)
 	})
 	return out, err
@@ -289,37 +294,64 @@ func (s *Store) AddPlanEvent(id, actor, actorType string, expectedEvents int, e 
 		if er != nil {
 			return er
 		}
-		if len(p.Events) != expectedEvents {
-			return ErrConflict
-		}
-		if (e.Kind != "assumption" && e.Kind != "impact" && e.Kind != "acknowledgement_request" && e.Kind != "owner_acknowledgement") || strings.TrimSpace(e.Body) == "" || unsafe(e.Body) {
-			return ErrInvalid
-		}
-		for _, rid := range e.ResourceIDs {
-			found := false
-			for _, c := range p.Changes {
-				if c.ResourceID == rid {
-					found = true
-					break
-				}
+		return s.addPlanEventLocked(&p, actor, actorType, expectedEvents, e, &out)
+	})
+	return out, err
+}
+
+func (s *Store) addPlanEventLocked(p *ChangePlan, actor, actorType string, expectedEvents int, e PlanEvent, out *ChangePlan) error {
+	if len(p.Events) != expectedEvents {
+		return ErrConflict
+	}
+	if (e.Kind != "assumption" && e.Kind != "impact" && e.Kind != "acknowledgement_request" && e.Kind != "owner_acknowledgement") || strings.TrimSpace(e.Body) == "" || unsafe(e.Body) {
+		return ErrInvalid
+	}
+	for _, rid := range e.ResourceIDs {
+		found := false
+		for _, c := range p.Changes {
+			if c.ResourceID == rid {
+				found = true
+				break
 			}
-			if !found {
-				return ErrInvalid
-			}
 		}
-		if e.Kind == "acknowledgement_request" && !contains(p.AffectedOwnerIDs, e.OwnerID) {
+		if !found {
 			return ErrInvalid
 		}
-		if e.Kind == "owner_acknowledgement" && (actorType != "human" || e.OwnerID != actor || !contains(p.AffectedOwnerIDs, actor)) {
-			return ErrInvalid
+	}
+	if e.Kind == "acknowledgement_request" && !contains(p.AffectedOwnerIDs, e.OwnerID) {
+		return ErrInvalid
+	}
+	if e.Kind == "owner_acknowledgement" && (actorType != "human" || e.OwnerID != actor || !contains(p.AffectedOwnerIDs, actor)) {
+		return ErrInvalid
+	}
+	e.ID = randomID()
+	e.ActorID = actor
+	e.ActorType = actorType
+	e.CreatedAt = s.now()
+	p.Events = append(p.Events, e)
+	*out = *p
+	return s.writePlan(*p)
+}
+
+// AddPlanEventCurrent checks definition and observation freshness under the
+// same infrastructure-store lock that appends the event. Callers hold the
+// pull source-revision lock around this method, making the append linearizable
+// with both pull movement and infrastructure dependency changes.
+func (s *Store) AddPlanEventCurrent(id, actor, actorType string, expectedEvents int, e PlanEvent) (ChangePlan, error) {
+	var out ChangePlan
+	err := s.lock(func() error {
+		p, err := s.readPlan(id)
+		if err != nil {
+			return err
 		}
-		e.ID = randomID()
-		e.ActorID = actor
-		e.ActorType = actorType
-		e.CreatedAt = s.now()
-		p.Events = append(p.Events, e)
-		out = p
-		return s.writePlan(p)
+		current, err := s.read(p.DefinitionID)
+		if err != nil {
+			return ErrPlanStale
+		}
+		if current.CurrentVersion != p.DefinitionVersion || observationFingerprint(current) != p.ObservationFingerprint || (p.ObservationsValidUntil != nil && s.now().After(*p.ObservationsValidUntil)) {
+			return ErrPlanStale
+		}
+		return s.addPlanEventLocked(&p, actor, actorType, expectedEvents, e, &out)
 	})
 	return out, err
 }

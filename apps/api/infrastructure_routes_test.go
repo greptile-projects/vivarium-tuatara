@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +16,23 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
+
+func TestInfrastructureCommitBlobBindsCandidateToExactPullTree(t *testing.T) {
+	git, _ := storage.New(t.TempDir())
+	repo, _ := git.Create("candidate-binding")
+	body := []byte(`{"revision":"candidate","resources":[]}`)
+	blob, _ := repo.WriteObject(storage.BlobObject, body)
+	tree := writeTestTree(t, repo, testTreeEntry{mode: "100644", name: "candidate.json", id: blob})
+	commit, _ := repo.WriteObject(storage.CommitObject, []byte("tree "+string(tree)+"\nauthor Test <test@example.com> 0 +0000\ncommitter Test <test@example.com> 0 +0000\n\ncandidate\n"))
+	got, digest, ok := infrastructureCommitBlob(git, "candidate-binding", string(commit), "candidate.json")
+	want := sha256.Sum256(body)
+	if !ok || string(got) != string(body) || digest != hex.EncodeToString(want[:]) {
+		t.Fatalf("exact candidate blob = %q, %q, %v", got, digest, ok)
+	}
+	if _, _, ok = infrastructureCommitBlob(git, "candidate-binding", string(commit), "invented.json"); ok {
+		t.Fatal("resource declaration absent from pull commit resolved")
+	}
+}
 
 func TestInfrastructureAPIKeepsExactIntentPublicAndSensitiveEvidenceBounded(t *testing.T) {
 	git, _ := storage.New(t.TempDir())

@@ -23,7 +23,7 @@ func TestChangePlanDerivesOrderRisksAndInvalidatesAcknowledgements(t *testing.T)
 		{ID: "db", Kind: "data_store", Name: "Database", OwnerIDs: []string{"data-owner"}, Provider: "other-cloud", ProviderRef: "db/2", ProviderAccess: "participant", DependsOn: []string{}, Constraints: base.Resources[0].Constraints, Commitments: base.Resources[0].Commitments},
 		{ID: "api", Kind: "service", Name: "API", OwnerIDs: []string{"service-owner"}, Provider: "cloud", ProviderRef: "service/1", ProviderAccess: "participant", DependsOn: []string{"db"}, Constraints: []Constraint{{Kind: "capacity", Limit: 1000, Unit: "requests/second"}}, Commitments: base.Resources[1].Commitments},
 	}
-	plan, err := s.CreatePlan("repo", "owner", PlanCreation{PullRequestID: "pull", Revision: candidate.Revision, Definition: definition, Candidate: candidate, Policies: []PolicyEffect{{Path: "infra/policy.json", Digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Effects: []string{"encryption rule remains blocking"}}}})
+	plan, err := s.CreatePlan("repo", "owner", PlanCreation{PullRequestID: "pull", Revision: candidate.Revision, Definition: definition, Candidate: candidate, CandidatePath: "infra/candidate.json", CandidateDigest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Policies: []PolicyEffect{{Path: "infra/policy.json", Digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Effects: []string{"encryption rule remains blocking"}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,10 @@ func TestChangePlanDerivesOrderRisksAndInvalidatesAcknowledgements(t *testing.T)
 	if !current.Fresh || len(current.AcknowledgedOwnerIDs) != 1 {
 		t.Fatalf("current acknowledgement missing: %#v", current)
 	}
-	definition.Observations = append(definition.Observations, Observation{ID: "new-provider-revision"})
+	definition, err = s.Observe(definition.ID, "owner", Observation{DefinitionVersion: 1, ResourceID: "db", ProviderResource: "db/1", ObservedRevision: "provider-2", Status: "healthy", Summary: "Observed after plan creation.", Visibility: "participant", Managed: true, ObservedAt: s.now()})
+	if err != nil {
+		t.Fatal(err)
+	}
 	stale := s.ProjectPlan(plan, definition, candidate.Revision, func(PolicyEffect) bool { return true })
 	if stale.Fresh || len(stale.AcknowledgedOwnerIDs) != 0 || !contains(stale.StaleReasons, "observed_state_changed") {
 		t.Fatalf("stale plan reused approval: %#v", stale)
@@ -62,5 +65,12 @@ func TestChangePlanDerivesOrderRisksAndInvalidatesAcknowledgements(t *testing.T)
 	policyStale := s.ProjectPlan(plan, definition, candidate.Revision, func(PolicyEffect) bool { return false })
 	if !contains(policyStale.StaleReasons, "policy_changed") {
 		t.Fatalf("policy drift not projected: %#v", policyStale.StaleReasons)
+	}
+	if _, err = s.AddPlanEventCurrent(plan.ID, "service-owner", "human", 2, PlanEvent{Kind: "assumption", Body: "This must not be appended after observation drift."}); err != ErrPlanStale {
+		t.Fatalf("stale append error = %v, want stale", err)
+	}
+	persisted, err := s.GetPlan(plan.ID)
+	if err != nil || len(persisted.Events) != 2 {
+		t.Fatalf("stale event persisted: %#v, %v", persisted.Events, err)
 	}
 }
