@@ -113,6 +113,21 @@ whenever dependencies change or the web job fails before it starts.
   recovery, contract-phase rollback rejection, and observation-gated verified cleanup.
   Playwright isolates these records with `DURABLE_SCHEMA_STORAGE_ROOT` like its other stores.
 
+- **Infrastructure intent** — `/repositories/{id}/infrastructure` and the repository
+  `/infrastructure` workspace retain immutable, exact-commit definitions of environments,
+  services, networks, identities, data stores, compute, and external dependencies beneath
+  `$INFRASTRUCTURE_STORAGE_ROOT` (`infrastructure`). Resources name current participant owners,
+  providers, non-secret provider identities, configuration boundaries, cost/capacity limits,
+  dependencies, established release/environment links, and security, privacy, reliability,
+  continuity, and regional commitments. Append-only sanitized observations bind an exact
+  definition version and observed provider revision. Public reads redact participant-only
+  provider identities, revisions, and summaries; credential-shaped content is rejected.
+  Projections keep unmanaged resources, inaccessible providers, observations older than 24
+  hours or tied to predecessor definitions, conflicting provider ownership, secret-backed
+  boundaries, and missing current observations explicit. Definitions and observations are
+  inventory/review context only and grant no provider, credential, repository, deployment,
+  environment, or infrastructure authority.
+
 - **Developer support** — `/support` and
   `/repositories/{id}/support-threads` retain contextual questions separately
   from unexpected-behavior issues. Threads name a repository, package,
