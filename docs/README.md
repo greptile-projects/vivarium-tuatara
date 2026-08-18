@@ -25,9 +25,10 @@ recordings and other digest-addressed artifacts, coverage, performance budgets,
 and affected requirements. Collaborators classify each difference once as an
 intentional change, regression, or false positive with an attributable rationale.
 
-Reads project current and stale evidence separately. Candidate movement therefore
-invalidates only evidence and classifications tied to the earlier revision while
-retaining the audit trail. This ledger reports bounded preview outcomes and grants
+Reads project current and stale evidence separately. Candidate movement or an
+accepted design successor therefore invalidates only evidence and classifications
+tied to the earlier code or design revision while retaining the audit trail. This
+ledger reports bounded preview outcomes and grants
 no workspace, Git, design-approval, review, merge, deployment, or environment
 authority. Records default beneath `$INTERFACE_CHECK_STORAGE_ROOT`
 (`interface-checks`).

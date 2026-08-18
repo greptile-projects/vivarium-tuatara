@@ -148,6 +148,9 @@ func valid(c Check) bool {
 		if performance.Passed != (performance.Candidate <= performance.Budget) {
 			return false
 		}
+		if c.Status == "passed" && !performance.Passed {
+			return false
+		}
 	}
 	return true
 }

@@ -295,7 +295,9 @@ whenever dependencies change or the web job fails before it starts.
   locale, interaction, assistive-technology, difference, recording/artifact,
   coverage, performance, and affected-requirement evidence. Collaborator
   classifications are attributable and revision-bound; reads separate stale
-  evidence after candidate movement. Records beneath `$INTERFACE_CHECK_STORAGE_ROOT`
+  evidence after candidate movement or an accepted design successor. Cross-store
+  publication holds both design- and pull-revision guards through persistence.
+  Records beneath `$INTERFACE_CHECK_STORAGE_ROOT`
   grant no execution, Git, design approval, review, merge, deployment, or
   environment authority.
 

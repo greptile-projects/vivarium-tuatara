@@ -18,7 +18,8 @@ func registerInterfaceCheckRoutes(mux *http.ServeMux, git *storage.Store, repos 
 		current := []interfacechecks.Check{}
 		stale := []interfacechecks.Check{}
 		for _, c := range all {
-			if c.Revision == pull.SourceCommitID {
+			design, err := designs.Get(c.RepositoryID, c.DesignProposalID)
+			if c.Revision == pull.SourceCommitID && err == nil && interfaceCheckMatchesDesign(design, c) {
 				current = append(current, c)
 			} else {
 				stale = append(stale, c)
@@ -67,11 +68,6 @@ func registerInterfaceCheckRoutes(mux *http.ServeMux, git *storage.Store, repos 
 			writeAPIError(w, 422, "invalid_interface_preview", "evidence requires a successful exact-revision bounded preview")
 			return
 		}
-		design, e := designs.Get(p.RepositoryID, in.DesignProposalID)
-		if e != nil || !interfaceCheckMatchesDesign(design, in) {
-			writeAPIError(w, 422, "invalid_interface_specification", "evidence must cite the accepted implemented design revision")
-			return
-		}
 		blob, digest, found := infrastructureCommitBlob(git, p.RepositoryID, p.SourceCommitID, in.DefinitionPath)
 		_ = blob
 		if !found || digest != in.DefinitionDigest {
@@ -79,11 +75,24 @@ func registerInterfaceCheckRoutes(mux *http.ServeMux, git *storage.Store, repos 
 			return
 		}
 		var out interfacechecks.Check
-		e = pulls.WithSourceRevision(p.RepositoryID, p.ID, in.Revision, func(pullrequests.PullRequest) error {
-			var createErr error
-			out, createErr = checks.Create(in)
-			return createErr
+		e = designs.WithCurrentVersion(p.RepositoryID, in.DesignProposalID, in.DesignVersion, func(design designproposals.Proposal) error {
+			if !interfaceCheckMatchesDesign(design, in) {
+				return designproposals.ErrInvalid
+			}
+			return pulls.WithSourceRevision(p.RepositoryID, p.ID, in.Revision, func(pullrequests.PullRequest) error {
+				var createErr error
+				out, createErr = checks.Create(in)
+				return createErr
+			})
 		})
+		if errors.Is(e, designproposals.ErrConflict) {
+			writeAPIError(w, 409, "interface_design_changed", "the accepted design moved while interface evidence was retained")
+			return
+		}
+		if errors.Is(e, designproposals.ErrInvalid) || errors.Is(e, designproposals.ErrNotFound) {
+			writeAPIError(w, 422, "invalid_interface_specification", "evidence must cite the accepted implemented design revision")
+			return
+		}
 		if errors.Is(e, pullrequests.ErrSourceChanged) || errors.Is(e, pullrequests.ErrNotReady) {
 			writeAPIError(w, 409, "interface_revision_changed", "the pull moved while interface evidence was retained")
 			return
@@ -127,11 +136,20 @@ func registerInterfaceCheckRoutes(mux *http.ServeMux, git *storage.Store, repos 
 			return
 		}
 		var out interfacechecks.Check
-		e = pulls.WithSourceRevision(p.RepositoryID, p.ID, in.Revision, func(pullrequests.PullRequest) error {
-			var classifyErr error
-			out, classifyErr = checks.Classify(p.RepositoryID, p.ID, c.ID, in.DifferenceID, in.Outcome, in.Rationale, actor.UserID)
-			return classifyErr
+		e = designs.WithCurrentVersion(p.RepositoryID, c.DesignProposalID, c.DesignVersion, func(design designproposals.Proposal) error {
+			if !interfaceCheckMatchesDesign(design, c) {
+				return designproposals.ErrInvalid
+			}
+			return pulls.WithSourceRevision(p.RepositoryID, p.ID, in.Revision, func(pullrequests.PullRequest) error {
+				var classifyErr error
+				out, classifyErr = checks.Classify(p.RepositoryID, p.ID, c.ID, in.DifferenceID, in.Outcome, in.Rationale, actor.UserID)
+				return classifyErr
+			})
 		})
+		if errors.Is(e, designproposals.ErrConflict) || errors.Is(e, designproposals.ErrInvalid) || errors.Is(e, designproposals.ErrNotFound) {
+			writeAPIError(w, 409, "interface_design_changed", "classification applies only while the accepted design revision remains current")
+			return
+		}
 		if errors.Is(e, pullrequests.ErrSourceChanged) || errors.Is(e, pullrequests.ErrNotReady) {
 			writeAPIError(w, 409, "interface_revision_changed", "the pull moved while the classification was retained")
 			return

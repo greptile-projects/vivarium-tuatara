@@ -43,6 +43,12 @@ func TestRejectsContradictoryEvidenceClaims(t *testing.T) {
 	if _, err := s.Create(overBudget); err != ErrInvalid {
 		t.Fatalf("over-budget passed evidence = %v", err)
 	}
+	failedMetricPassedCheck := base
+	failedMetricPassedCheck.Status = "passed"
+	failedMetricPassedCheck.Performance = []Performance{{Metric: "interaction", Unit: "ms", Baseline: 90, Candidate: 130, Budget: 120, Passed: false}}
+	if _, err := s.Create(failedMetricPassedCheck); err != ErrInvalid {
+		t.Fatalf("passed aggregate with failed metric = %v", err)
+	}
 
 	unlinked := base
 	unlinked.Differences = []Difference{{ID: "difference", Kind: "behavioral", Summary: "wrong focus", Requirement: "unrelated requirement"}}
