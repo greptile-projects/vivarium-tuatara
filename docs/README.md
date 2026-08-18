@@ -118,6 +118,24 @@ the platform derives sanitized logs, timing, artifacts, resource graphs, attesta
 actions. Destructive effects remain explicitly unsupported, stale plans reject evidence, and no
 production or provider authority is conferred.
 
+Once that exact pull is merged, an authorized repository operator can create an authoritative apply at
+`/repositories/{id}/infrastructure-executions`. Admission re-resolves the plan and policy files, requires
+every affected owner acknowledgement and a latest passing rehearsal, checks the established deployment
+environment, and caps the requested budget by reviewed resource limits. The immutable identity binds both
+reviewed and merge commits, candidate digest, environment policy, rehearsal, controller, and a short-lived
+resource/step/action credential scope.
+
+The selected rehearsal must either name that authoritative environment directly or carry a
+`policy_approved_ephemeral` scope whose frozen policy approval exactly matches the execution's environment-policy
+reference. An isolated preview rehearsal without that explicit equivalence cannot admit production execution.
+
+Compare-and-swap reports retain dependency-ordered progress, sanitized provider responses, health, cost,
+blockers, next actions, controller, and declared safety points. Failure, degraded health, or a blocker pauses
+without erasing evidence; the human controller can pause, resume after remediation evidence, or cancel at a
+safety point. Agents may report only explicitly delegated non-destructive steps and receive no secret,
+acknowledgement, destructive, environment, or unrelated provider authority. The web infrastructure workspace
+exposes the same start, report, pause, resume, and cancel flow.
+
 Support guidance can be proven in ordinary revision-pinned development workspaces. Immutable attempts
 bind an exact cited answer revision to sanitized thread inputs, declared environment, commands and
 outputs, artifacts, cost, and result; fresh-workspace reruns preserve the original record and reads expose

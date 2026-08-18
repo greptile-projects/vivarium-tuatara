@@ -141,6 +141,19 @@ whenever dependencies change or the web job fails before it starts.
   Runs derive sanitized outcomes, timing, artifacts, resource graphs, attestations, and agent actions
   from the collaborator's exact-candidate bounded workspace. Destructive effects stay explicitly
   unsupported; rehearsals grant no production, provider, deployment, review, merge, or environment authority.
+  Authoritative applies beneath `/infrastructure-executions` admit only an exact merged plan whose current
+  inputs, affected-owner acknowledgements, latest passing rehearsal, established environment, environment
+  policy, and reviewed cost limits remain satisfied. Executions freeze reviewed and merge revisions, candidate
+  digest, dependency-ordered steps, human controller, budget, and short-lived resource/step/action scope.
+  Sanitized CAS reports retain provider responses, health, cost, blockers, next actions, and safety points;
+  degraded or blocked work pauses. Controllers steer only at safety points, while agents report only explicitly
+  delegated non-destructive steps and gain no secret, approval, provider, or unrelated-resource authority. One
+  running or paused controller is admitted per environment across all plans. Execution creation derives persisted
+  owner acknowledgement events and rejects unresolved or cyclic changed-resource dependencies. Paused reports may
+  record remediation and clear blockers but preserve step state; only an explicit resume can advance or complete.
+  Passing rehearsal evidence must use the authoritative environment ID, or be a `policy_approved_ephemeral`
+  rehearsal whose frozen policy approval exactly equals the execution's established environment-policy reference;
+  isolated preview evidence alone cannot admit production.
 
 - **Developer support** — `/support` and
   `/repositories/{id}/support-threads` retain contextual questions separately

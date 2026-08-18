@@ -3673,6 +3673,29 @@ candidate resource graph, attestations, and agent actions. Credential-shaped out
 are rejected; retained evidence grants no provider, production, deployment, review, merge, or
 destructive authority.
 
+# Authoritative infrastructure execution
+
+`POST /repositories/{id}/infrastructure-executions` starts an apply only for an exact merged pull plan.
+The server re-resolves current plan inputs, requires all affected-owner acknowledgements and the latest
+selected rehearsal run to pass, verifies `environment_id` through the established deployment environment
+store, and rejects a `budget_units` ceiling above reviewed resource cost constraints. The request also names
+the satisfied `environment_policy`, short-lived `credential_expires_at`, and optional exact agent
+`delegations`. The record freezes reviewed and merge commits, candidate digest, definition version, plan,
+rehearsal, environment, controller, dependency-ordered steps, and resource/step/action credential metadata;
+no credential secret is returned or persisted. `GET` on the collection or item exposes this collaboration.
+The selected passing rehearsal must either use the exact execution environment ID or be a
+`policy_approved_ephemeral` rehearsal whose frozen `policy_approval` exactly equals `environment_policy`;
+ordinary isolated preview evidence cannot cross the authoritative environment boundary.
+
+`POST .../infrastructure-executions/{execution_id}/reports` compare-and-swaps `expected_version` and accepts
+one exact step's sanitized provider response, state, health, cumulative cost, blockers, next action, and
+safety-point state. Dependencies must already have succeeded and aggregate cost cannot exceed the frozen
+budget. Failed, degraded, or blocked evidence pauses the apply. A delegated agent can report only its exact
+non-destructive step; it cannot steer the execution or gain provider, secret, acknowledgement, destructive,
+or unrelated resource authority. The human controller uses `POST .../controls` with `pause`, `resume`, or
+`cancel`; transitions occur only at declared safety points, and resume requires remediation evidence to have
+cleared retained blockers before the short-lived scope expires.
+
 # Durable-state migration work
 
 `POST /repositories/{id}/durable-schemas/{schema_id}/migrations/{migration_id}/work`
