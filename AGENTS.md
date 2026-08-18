@@ -273,6 +273,21 @@ whenever dependencies change or the web job fails before it starts.
   part of a public answer implicitly. Records default beneath `$KNOWLEDGE_ANSWER_STORAGE_ROOT`
   (`knowledge-answers`).
 
+- **Interface systems** — `/repositories/{id}/interface-systems` and the repository
+  `/interface-system` workspace retain versioned reusable visual and interaction
+  decisions beneath `$INTERFACE_SYSTEM_STORAGE_ROOT` (`interface-systems`). Each
+  revision is bound server-side to an exact repository release commit and to
+  source paths present in that snapshot, and includes design tokens, themes,
+  components, interaction patterns, content rules, responsive behavior, rendered
+  example descriptions, accessibility/localization constraints, owners, adoption
+  policy, and consumer implementation evidence. Publishing is participant-only
+  and compare-and-swap guarded; repository read visibility controls discovery.
+  Public projections preserve immutable history and explicitly diagnose conflicting
+  current definitions, missing owners, unsupported consumers, stale implementations,
+  and unknown implementation currency rather than selecting a false canonical
+  system. These records document reviewed product intent and provenance but grant
+  no Git, release, review, merge, deployment, or consumer-repository authority.
+
 - **Frontend** — App Router, file-based routes under `apps/web/src/app`. Entry
   point is `src/app/page.tsx`; `layout.tsx` installs the persistent application
   shell from `src/components/app-shell.tsx`. Reuse the accessible visual

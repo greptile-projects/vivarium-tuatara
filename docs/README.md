@@ -3,6 +3,24 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Versioned interface systems
+
+Reusable product language is repository state, not an untracked style-guide
+artifact. `GET /repositories/{id}/interface-systems` exposes every visible
+system with immutable revisions and diagnostics; participants publish to that
+collection and publish compare-and-swap successors at `/{system_id}/revisions`.
+The repository `/interface-system` workspace renders examples and exposes usage,
+accessibility, localization, responsive, adoption, theme, ownership,
+implementation, history, and provenance context.
+
+The API resolves the named release itself, derives its retained display version,
+requires the exact release commit to exist, and verifies every component,
+interaction, and content source path in that snapshot. Current implementations
+for the defining repository must name that same release commit. Definitions in
+another current system are reported as conflicts; owner gaps and stale, unknown,
+or unsupported consumers remain visible. These records grant no release, Git,
+review, merge, deployment, or downstream authority.
+
 ## Connected production debugging
 
 The `debugging-journey.spec.ts` browser/API/Git journey carries an intermittent released-user failure through

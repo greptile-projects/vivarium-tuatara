@@ -46,6 +46,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/impacts"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/infrastructure"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/interfacesystems"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/knowledgeanswers"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/localeplans"
@@ -499,6 +500,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	interfaceSystemRoot := os.Getenv("INTERFACE_SYSTEM_STORAGE_ROOT")
+	if interfaceSystemRoot == "" {
+		interfaceSystemRoot = "interface-systems"
+	}
+	interfaceSystemStore, err := interfacesystems.New(interfaceSystemRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	protectionPlanRoot := os.Getenv("PROTECTION_PLAN_STORAGE_ROOT")
 	if protectionPlanRoot == "" {
 		protectionPlanRoot = "protection-plans"
@@ -638,7 +647,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, supportVerificationStore, supportSolutionStore, knowledgeAnswerStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore, apiContractStore, durableSchemaStore, infrastructureStore, debugWorkspaceStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, supportVerificationStore, supportSolutionStore, knowledgeAnswerStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore, apiContractStore, durableSchemaStore, infrastructureStore, debugWorkspaceStore, interfaceSystemStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -807,6 +816,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var durableSchemaStore *durableschemas.Store
 	var infrastructureStore *infrastructure.Store
 	var debugWorkspaceStore *debugworkspaces.Store
+	var interfaceSystemStore *interfacesystems.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -919,6 +929,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			infrastructureStore = value
 		case *debugworkspaces.Store:
 			debugWorkspaceStore = value
+		case *interfacesystems.Store:
+			interfaceSystemStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -1071,6 +1083,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && recoveryCommitmentStore != nil {
 		registerRecoveryCommitmentRoutes(mux, repositoryCatalog, authStore, recoveryCommitmentStore, serviceObjectiveStore, deploymentStore, incidentStore, dataCommitmentStore, governanceStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && interfaceSystemStore != nil && store != nil && releaseStore != nil {
+		registerInterfaceSystemRoutes(mux, store, repositoryCatalog, authStore, interfaceSystemStore, releaseStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && durableSchemaStore != nil && pullRequestStore != nil {
 		registerDurableSchemaRoutes(mux, store, repositoryCatalog, authStore, durableSchemaStore, pullRequestStore, decisionStore, proposalStore, changeSessionStore, workspaceStore, deploymentStore, releaseStore)
