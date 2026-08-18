@@ -54,6 +54,8 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			for i := range v.Evidence {
 				if v.Evidence[i].Visibility == "restricted" {
 					v.Evidence[i].Reference = ""
+					v.Evidence[i].Label = "Restricted evidence"
+					v.Evidence[i].Sanitization = ""
 					v.Evidence[i].Available = false
 					v.Evidence[i].UnavailableReason = "restricted evidence is unavailable to this reader"
 				}
