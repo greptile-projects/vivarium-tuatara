@@ -3048,7 +3048,8 @@ successful reproduction.
 
 Accepted product design is delivered through the ordinary proposal-task boundary. Publication freezes the
 accepted design revision and current default-branch commit, creates ordered human/agent assignments, and embeds
-the exact prototype, state, content, component, breakpoint, acceptance, and asset-provenance requirements in each
-task's reasoning context. Proposal-task workspaces and pull requests therefore reuse existing access, agent,
+audience-safe immutable prototype references plus exact state, content, component, breakpoint, acceptance, and
+asset-provenance requirements in each task's reasoning context. Exact artifact payloads stay behind the design
+proposal's explicit-audience projection. Proposal-task workspaces and pull requests therefore reuse existing access, agent,
 review, and merge controls. Implementers append requirement-to-code/surface mappings and disclose deviations;
 only named design owners decide those deviations, without gaining repository authority from design ownership.

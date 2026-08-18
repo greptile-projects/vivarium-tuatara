@@ -300,8 +300,9 @@ whenever dependencies change or the web job fails before it starts.
   deployment, environment, research, or private-asset authority.
   Once every named owner acknowledges the current revision, its implementation endpoint freezes the
   default-branch commit and creates ordinary dependency-ordered human/agent proposal tasks. Frozen task
-  reasoning carries exact prototypes, component contracts, asset provenance, content, breakpoints, states,
-  and acceptance criteria into task workspaces and pull contributions. Implementation reports map code paths
+  reasoning carries audience-safe immutable prototype references, component contracts, asset provenance, content,
+  breakpoints, states, and acceptance criteria into task workspaces and pull contributions. Exact artifact payloads
+  remain behind the design proposal's reader-specific projection. Implementation reports map code paths
   and rendered surfaces to requirements; deliberate deviations remain pending until a named design owner
   approves or rejects them. This ledger grants no workspace, Git, agent, review, or merge authority.
 

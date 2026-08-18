@@ -229,6 +229,7 @@ func registerDesignProposalRoutes(mux *http.ServeMux, git *storage.Store, catalo
 			return
 		}
 		out, e := store.Report(r.PathValue("id"), r.PathValue("proposal_id"), actor.UserID, in.Mapping, in.Deviation)
+		redactDesignArtifacts(&out, actor.UserID)
 		writeDesignProposal(w, out, e, 201)
 	})
 	mux.HandleFunc("POST /repositories/{id}/design-proposals/{proposal_id}/implementation/deviations/{deviation_id}/decision", func(w http.ResponseWriter, r *http.Request) {
@@ -245,6 +246,7 @@ func registerDesignProposalRoutes(mux *http.ServeMux, git *storage.Store, catalo
 			return
 		}
 		out, e := store.DecideDeviation(r.PathValue("id"), r.PathValue("proposal_id"), r.PathValue("deviation_id"), actor.UserID, in.Status, in.Note)
+		redactDesignArtifacts(&out, actor.UserID)
 		writeDesignProposal(w, out, e, 201)
 	})
 }
@@ -303,7 +305,10 @@ func designRequirementItems(r designproposals.Revision) []proposals.ReasoningIte
 func artifactSummaries(v []designproposals.Artifact) []string {
 	out := make([]string, len(v))
 	for i, a := range v {
-		out[i] = a.ID + ": " + a.Title + " — " + a.Description + " — exact prototype: " + a.Content + " — interactions: " + strings.Join(a.Interactions, "; ") + " (author " + a.AuthorID + ", license " + a.License + ", source " + a.Source + ", transformations: " + strings.Join(a.Transformations, ", ") + ")"
+		// Ordinary proposals, tasks, histories, and workspaces are repository-readable.
+		// Keep audience-controlled artifact payloads solely behind the design
+		// proposal projection; task workers resolve this immutable ID there.
+		out[i] = a.ID + ": " + a.Kind + " " + a.Title + " — audience-controlled prototype; resolve through design proposal (author " + a.AuthorID + ", license " + a.License + ", source " + a.Source + ", transformations: " + strings.Join(a.Transformations, ", ") + ")"
 	}
 	return out
 }
