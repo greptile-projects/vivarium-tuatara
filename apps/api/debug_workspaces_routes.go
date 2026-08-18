@@ -87,7 +87,7 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			if p.Status == "approved" && !time.Now().UTC().Before(p.ExpiresAt) {
 				p.Status = "expired"
 			}
-			if privileged || p.RequestedBy == actor {
+			if p.RequestedBy == actor {
 				visible = append(visible, p)
 				continue
 			}

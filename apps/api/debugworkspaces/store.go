@@ -569,7 +569,7 @@ func validProbe(p Probe, w Workspace, now time.Time) bool {
 	return !sensitive(p.Purpose + p.DefinitionPath)
 }
 func validPolicy(p ProbePolicy) bool {
-	if len(p.DataCategories) == 0 || strings.TrimSpace(p.Privacy) == "" || strings.TrimSpace(p.Security) == "" || p.RetentionHours < 1 || p.RetentionHours > 720 || p.SamplePercent < 1 || p.SamplePercent > 100 || p.MaxCostCents < 0 || p.MaxCostCents > 10000000 || p.MaxLoadPercent < 1 || p.MaxLoadPercent > 100 {
+	if len(p.DataCategories) == 0 || privacyRank(p.Privacy) == 0 || securityRank(p.Security) == 0 || p.RetentionHours < 1 || p.RetentionHours > 720 || p.SamplePercent < 1 || p.SamplePercent > 100 || p.MaxCostCents < 0 || p.MaxCostCents > 10000000 || p.MaxLoadPercent < 1 || p.MaxLoadPercent > 100 {
 		return false
 	}
 	for _, c := range p.DataCategories {
@@ -577,10 +577,10 @@ func validPolicy(p ProbePolicy) bool {
 			return false
 		}
 	}
-	return len(p.Privacy) <= 2000 && len(p.Security) <= 2000 && !sensitive(p.Privacy+p.Security)
+	return true
 }
 func narrower(a, requested ProbePolicy) bool {
-	if a.Privacy != requested.Privacy || a.Security != requested.Security {
+	if privacyRank(a.Privacy) < privacyRank(requested.Privacy) || securityRank(a.Security) < securityRank(requested.Security) {
 		return false
 	}
 	if a.RetentionHours > requested.RetentionHours || a.SamplePercent > requested.SamplePercent || a.MaxCostCents > requested.MaxCostCents || a.MaxLoadPercent > requested.MaxLoadPercent {
@@ -592,6 +592,30 @@ func narrower(a, requested ProbePolicy) bool {
 		}
 	}
 	return true
+}
+func privacyRank(v string) int {
+	switch v {
+	case "hash_user_identifiers":
+		return 1
+	case "remove_user_identifiers":
+		return 2
+	case "remove_user_data":
+		return 3
+	default:
+		return 0
+	}
+}
+func securityRank(v string) int {
+	switch v {
+	case "detect_secrets":
+		return 1
+	case "redact_secrets":
+		return 2
+	case "drop_secret_bearing_records":
+		return 3
+	default:
+		return 0
+	}
 }
 func validAction(a ProbeAction, p Probe, now time.Time) bool {
 	if p.ApprovedAt == nil || !one(a.Outcome, "complete", "partial", "overloaded", "denied") || a.StartedAt.IsZero() || a.FinishedAt.Before(a.StartedAt) || a.FinishedAt.After(now) || a.StartedAt.Before(*p.ApprovedAt) || a.FinishedAt.After(p.ExpiresAt) || strings.TrimSpace(a.Provenance) == "" || len(a.Provenance) > 2000 {

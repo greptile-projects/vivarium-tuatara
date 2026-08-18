@@ -42,7 +42,7 @@ func TestProbeLifecycleNarrowsAuthorityAndRetainsPartialEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	requested := Probe{Kind: "dynamic_diagnostic", Purpose: "inspect queue depth", DefinitionPath: ".vivarium/diagnostics/queue.json", DefinitionRevision: v.Source.Revision, AudienceUserIDs: []string{requester, owner}, ExpiresAt: now.Add(time.Hour), RequestedPolicy: ProbePolicy{DataCategories: []string{"aggregate_state", "request_metadata"}, Privacy: "hash user identifiers", Security: "remove credentials", RetentionHours: 24, SamplePercent: 50, MaxCostCents: 500, MaxLoadPercent: 10}}
+	requested := Probe{Kind: "dynamic_diagnostic", Purpose: "inspect queue depth", DefinitionPath: ".vivarium/diagnostics/queue.json", DefinitionRevision: v.Source.Revision, AudienceUserIDs: []string{requester, owner}, ExpiresAt: now.Add(time.Hour), RequestedPolicy: ProbePolicy{DataCategories: []string{"aggregate_state", "request_metadata"}, Privacy: "hash_user_identifiers", Security: "redact_secrets", RetentionHours: 24, SamplePercent: 50, MaxCostCents: 500, MaxLoadPercent: 10}}
 	v, err = s.RequestProbe(v.RepositoryID, v.ID, requester, requested, v.Version)
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +50,12 @@ func TestProbeLifecycleNarrowsAuthorityAndRetainsPartialEvidence(t *testing.T) {
 	if v.Probes[0].Status != "pending" || v.Probes[0].ApprovedPolicy != nil {
 		t.Fatalf("request = %#v", v.Probes[0])
 	}
-	approved := ProbePolicy{DataCategories: []string{"aggregate_state"}, Privacy: "hash user identifiers", Security: "remove credentials", RetentionHours: 12, SamplePercent: 10, MaxCostCents: 100, MaxLoadPercent: 5}
+	approved := ProbePolicy{DataCategories: []string{"aggregate_state"}, Privacy: "remove_user_identifiers", Security: "drop_secret_bearing_records", RetentionHours: 12, SamplePercent: 10, MaxCostCents: 100, MaxLoadPercent: 5}
+	weakened := approved
+	weakened.Security = "detect_secrets"
+	if _, err = s.DecideProbe(v.RepositoryID, v.ID, v.Probes[0].ID, owner, "approved", "unsafe weakening", weakened, now.Add(30*time.Minute), v.Version); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("weakened approval = %v", err)
+	}
 	widened := requested.RequestedPolicy
 	widened.MaxLoadPercent++
 	if _, err = s.DecideProbe(v.RepositoryID, v.ID, v.Probes[0].ID, owner, "approved", "safe bounded capture", widened, now.Add(30*time.Minute), v.Version); !errors.Is(err, ErrInvalid) {
@@ -77,7 +82,7 @@ func TestProbeExpiryAndCompleteGapFailClosed(t *testing.T) {
 	s.now = func() time.Time { return now }
 	owner := "44444444444444444444444444444444"
 	v, _ := s.Create(Workspace{RepositoryID: "11111111111111111111111111111111", Title: "x", Summary: "x", Trigger: Reference{Kind: "trace", Label: "x"}, Release: Reference{ResourceID: "22222222222222222222222222222222", Revision: strings.Repeat("a", 40)}, Environment: Reference{ResourceID: "33333333333333333333333333333333"}, TimeStart: now.Add(-time.Hour), TimeEnd: now, UserJourney: "x", OwnerIDs: []string{owner}, Severity: "low", Audience: "repository", Source: Reference{Revision: strings.Repeat("a", 40)}}, owner)
-	policy := ProbePolicy{DataCategories: []string{"application_logs"}, Privacy: "remove user data", Security: "remove secrets", RetentionHours: 1, SamplePercent: 5, MaxCostCents: 10, MaxLoadPercent: 2}
+	policy := ProbePolicy{DataCategories: []string{"application_logs"}, Privacy: "remove_user_data", Security: "redact_secrets", RetentionHours: 1, SamplePercent: 5, MaxCostCents: 10, MaxLoadPercent: 2}
 	v, _ = s.RequestProbe(v.RepositoryID, v.ID, owner, Probe{Kind: "logs", Purpose: "inspect failures", AudienceUserIDs: []string{owner}, RequestedPolicy: policy, ExpiresAt: now.Add(10 * time.Minute)}, v.Version)
 	v, _ = s.DecideProbe(v.RepositoryID, v.ID, v.Probes[0].ID, owner, "approved", "bounded", policy, now.Add(5*time.Minute), v.Version)
 	bad := ProbeAction{Outcome: "complete", StartedAt: now, FinishedAt: now, Provenance: "collector", Transformations: []string{"redacted"}, Gaps: []string{"missing shard"}}

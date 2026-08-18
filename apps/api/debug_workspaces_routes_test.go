@@ -41,16 +41,20 @@ func TestDebugWorkspaceReadRedactsAllRestrictedEvidenceMetadata(t *testing.T) {
 	defer server.Close()
 	owner := createTestAccount(t, server.URL, "debug-owner")
 	reader := createTestAccount(t, server.URL, "debug-reader")
+	creator := createTestAccount(t, server.URL, "debug-creator")
+	access := createTestAccount(t, server.URL, "debug-access")
 	response := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"runtime-service"}`, owner.Credential.Token, http.StatusCreated)
 	var repo repositories.Repository
 	decodeResponse(t, response, &repo)
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/collaborators", `{"user_id":"`+reader.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/collaborators", `{"user_id":"`+creator.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/collaborators", `{"user_id":"`+access.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
 	start := time.Date(2026, 8, 18, 9, 0, 0, 0, time.UTC)
-	created, err := workspaceStore.Create(debugworkspaces.Workspace{RepositoryID: repo.ID, Title: "Runtime failure", Summary: "Intermittent failure", Trigger: debugworkspaces.Reference{Kind: "manual_observation", Label: "operator report"}, Release: debugworkspaces.Reference{ResourceID: strings.Repeat("2", 32), Revision: strings.Repeat("a", 40)}, Environment: debugworkspaces.Reference{ResourceID: strings.Repeat("3", 32)}, TimeStart: start, TimeEnd: start.Add(time.Hour), UserJourney: "checkout", OwnerIDs: []string{owner.User.ID}, Severity: "high", Audience: "repository", Source: debugworkspaces.Reference{Revision: strings.Repeat("a", 40)}, Evidence: []debugworkspaces.Evidence{{Kind: "trace", Reference: "CALLER_CONTROLLED_SECRET_REFERENCE", Label: "CALLER_CONTROLLED_SECRET_LABEL", Visibility: "restricted", Sanitization: "CALLER_CONTROLLED_SECRET_SANITIZATION", Available: true}}}, owner.User.ID)
+	created, err := workspaceStore.Create(debugworkspaces.Workspace{RepositoryID: repo.ID, Title: "Runtime failure", Summary: "Intermittent failure", Trigger: debugworkspaces.Reference{Kind: "manual_observation", Label: "operator report"}, Release: debugworkspaces.Reference{ResourceID: strings.Repeat("2", 32), Revision: strings.Repeat("a", 40)}, Environment: debugworkspaces.Reference{ResourceID: strings.Repeat("3", 32)}, TimeStart: start, TimeEnd: start.Add(time.Hour), UserJourney: "checkout", OwnerIDs: []string{owner.User.ID}, Severity: "high", Audience: "repository", AccessUserIDs: []string{access.User.ID}, Source: debugworkspaces.Reference{Revision: strings.Repeat("a", 40)}, Evidence: []debugworkspaces.Evidence{{Kind: "trace", Reference: "CALLER_CONTROLLED_SECRET_REFERENCE", Label: "CALLER_CONTROLLED_SECRET_LABEL", Visibility: "restricted", Sanitization: "CALLER_CONTROLLED_SECRET_SANITIZATION", Available: true}}}, creator.User.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err = workspaceStore.RequestProbe(repo.ID, created.ID, owner.User.ID, debugworkspaces.Probe{Kind: "logs", Purpose: "inspect failures", AudienceUserIDs: []string{owner.User.ID}, ExpiresAt: time.Now().UTC().Add(time.Hour), RequestedPolicy: debugworkspaces.ProbePolicy{DataCategories: []string{"application_logs"}, Privacy: "remove user data", Security: "remove secrets", RetentionHours: 1, SamplePercent: 5, MaxCostCents: 10, MaxLoadPercent: 2}}, created.Version)
+	created, err = workspaceStore.RequestProbe(repo.ID, created.ID, owner.User.ID, debugworkspaces.Probe{Kind: "logs", Purpose: "inspect failures", AudienceUserIDs: []string{owner.User.ID}, ExpiresAt: time.Now().UTC().Add(time.Hour), RequestedPolicy: debugworkspaces.ProbePolicy{DataCategories: []string{"application_logs"}, Privacy: "remove_user_data", Security: "redact_secrets", RetentionHours: 1, SamplePercent: 5, MaxCostCents: 10, MaxLoadPercent: 2}}, created.Version)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,19 +70,29 @@ func TestDebugWorkspaceReadRedactsAllRestrictedEvidenceMetadata(t *testing.T) {
 	if len(projected.Probes) != 0 {
 		t.Fatalf("probe escaped its explicit audience: %#v", projected.Probes)
 	}
+	response = authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID, "", creator.Credential.Token, http.StatusOK)
+	decodeResponse(t, response, &projected)
+	if len(projected.Probes) != 0 {
+		t.Fatalf("probe escaped to workspace creator: %#v", projected.Probes)
+	}
+	response = authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID, "", access.Credential.Token, http.StatusOK)
+	decodeResponse(t, response, &projected)
+	if len(projected.Probes) != 0 {
+		t.Fatalf("probe escaped to workspace access user: %#v", projected.Probes)
+	}
 	expiry := time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)
-	requestBody := `{"expected_version":2,"probe":{"kind":"traces","purpose":"inspect checkout latency","audience_user_ids":["` + owner.User.ID + `"],"requested_policy":{"data_categories":["timing_spans"],"privacy":"remove user data","security":"remove secrets","retention_hours":2,"sample_percent":5,"max_cost_cents":20,"max_load_percent":2},"expires_at":"` + expiry + `"}}`
+	requestBody := `{"expected_version":2,"probe":{"kind":"traces","purpose":"inspect checkout latency","audience_user_ids":["` + owner.User.ID + `"],"requested_policy":{"data_categories":["timing_spans"],"privacy":"hash_user_identifiers","security":"detect_secrets","retention_hours":2,"sample_percent":5,"max_cost_cents":20,"max_load_percent":2},"expires_at":"` + expiry + `"}}`
 	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/probes", requestBody, owner.Credential.Token, http.StatusCreated)
 	var requested debugworkspaces.Workspace
 	decodeResponse(t, response, &requested)
 	if len(requested.Probes) != 2 || requested.Probes[1].Status != "pending" {
 		t.Fatalf("probe request = %#v", requested.Probes)
 	}
-	decisionBody := `{"expected_version":3,"decision":"denied","reason":"environment load is elevated"}`
+	decisionBody := `{"expected_version":3,"decision":"approved","reason":"stronger transformations protect the capture","policy":{"data_categories":["timing_spans"],"privacy":"remove_user_identifiers","security":"redact_secrets","retention_hours":1,"sample_percent":5,"max_cost_cents":20,"max_load_percent":2},"expires_at":"` + expiry + `"}`
 	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/probes/"+requested.Probes[1].ID+"/decision", decisionBody, owner.Credential.Token, http.StatusCreated)
-	var denied debugworkspaces.Workspace
-	decodeResponse(t, response, &denied)
-	if denied.Probes[1].Status != "denied" || denied.Probes[1].DecidedBy != owner.User.ID {
-		t.Fatalf("probe decision = %#v", denied.Probes[1])
+	var approved debugworkspaces.Workspace
+	decodeResponse(t, response, &approved)
+	if approved.Probes[1].Status != "approved" || approved.Probes[1].DecidedBy != owner.User.ID || approved.Probes[1].ApprovedPolicy == nil || approved.Probes[1].ApprovedPolicy.Privacy != "remove_user_identifiers" {
+		t.Fatalf("probe decision = %#v", approved.Probes[1])
 	}
 }
