@@ -147,7 +147,10 @@ whenever dependencies change or the web job fails before it starts.
   digest, dependency-ordered steps, human controller, budget, and short-lived resource/step/action scope.
   Sanitized CAS reports retain provider responses, health, cost, blockers, next actions, and safety points;
   degraded or blocked work pauses. Controllers steer only at safety points, while agents report only explicitly
-  delegated non-destructive steps and gain no secret, approval, provider, or unrelated-resource authority.
+  delegated non-destructive steps and gain no secret, approval, provider, or unrelated-resource authority. One
+  running or paused controller is admitted per environment across all plans. Execution creation derives persisted
+  owner acknowledgement events and rejects unresolved or cyclic changed-resource dependencies. Paused reports may
+  record remediation and clear blockers but preserve step state; only an explicit resume can advance or complete.
 
 - **Developer support** — `/support` and
   `/repositories/{id}/support-threads` retain contextual questions separately

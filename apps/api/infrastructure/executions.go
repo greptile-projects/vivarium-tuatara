@@ -106,7 +106,7 @@ type StepReport struct {
 func (s *Store) CreateExecution(plan ChangePlan, actor string, in ExecutionCreation) (Execution, error) {
 	var out Execution
 	err := s.lock(func() error {
-		if plan.ID == "" || in.MergeCommitID == "" || in.EnvironmentID == "" || strings.TrimSpace(in.EnvironmentPolicy) == "" || in.BudgetUnits < 0 || !in.CredentialExpiry.After(s.now()) || in.CredentialExpiry.After(s.now().Add(time.Hour)) || !allAcknowledged(plan.AffectedOwnerIDs, plan.AcknowledgedOwnerIDs) {
+		if plan.ID == "" || in.MergeCommitID == "" || in.EnvironmentID == "" || strings.TrimSpace(in.EnvironmentPolicy) == "" || in.BudgetUnits < 0 || !in.CredentialExpiry.After(s.now()) || in.CredentialExpiry.After(s.now().Add(time.Hour)) || !planOwnersAcknowledged(plan) {
 			return ErrExecutionBlocked
 		}
 		entries, err := os.ReadDir(s.executionDir(plan.RepositoryID))
@@ -121,7 +121,7 @@ func (s *Store) CreateExecution(plan ChangePlan, actor string, in ExecutionCreat
 			if readErr != nil {
 				return readErr
 			}
-			if prior.PlanID == plan.ID && prior.EnvironmentID == in.EnvironmentID && (prior.Status == "running" || prior.Status == "paused") {
+			if prior.EnvironmentID == in.EnvironmentID && (prior.Status == "running" || prior.Status == "paused") {
 				return ErrExecutionBlocked
 			}
 		}
@@ -134,13 +134,36 @@ func (s *Store) CreateExecution(plan ChangePlan, actor string, in ExecutionCreat
 		if !passed {
 			return ErrExecutionBlocked
 		}
+		changed := map[string]bool{}
+		for _, change := range plan.Changes {
+			if change.ResourceID == "" || changed[change.ResourceID] {
+				return ErrInvalid
+			}
+			changed[change.ResourceID] = true
+		}
+		candidateResources := map[string]bool{}
+		for _, resource := range plan.Candidate.Resources {
+			candidateResources[resource.ID] = true
+		}
 		steps, resources := make([]ExecutionStep, 0, len(plan.Changes)), []string{}
 		stepIDs := map[string]bool{}
 		for _, change := range plan.Changes {
 			id := "step-" + change.ResourceID
 			stepIDs[id] = true
 			resources = append(resources, change.ResourceID)
-			steps = append(steps, ExecutionStep{ID: id, Order: change.Order, ResourceID: change.ResourceID, Action: change.Action, DependencyIDs: append([]string{}, change.DependencyIDs...), Status: "pending", Health: "unknown", Blockers: []string{}, NextAction: "wait for dependencies, then apply the frozen change", SafetyPoint: true})
+			dependencies := []string{}
+			for _, dependencyID := range change.DependencyIDs {
+				if !changed[dependencyID] && !candidateResources[dependencyID] {
+					return ErrInvalid
+				}
+				if changed[dependencyID] {
+					dependencies = append(dependencies, dependencyID)
+				}
+			}
+			steps = append(steps, ExecutionStep{ID: id, Order: change.Order, ResourceID: change.ResourceID, Action: change.Action, DependencyIDs: dependencies, Status: "pending", Health: "unknown", Blockers: []string{}, NextAction: "wait for dependencies, then apply the frozen change", SafetyPoint: true})
+		}
+		if cyclicExecutionSteps(steps) {
+			return ErrInvalid
 		}
 		seenAgents := map[string]bool{}
 		for _, d := range in.Delegations {
@@ -194,19 +217,33 @@ func (s *Store) ReportExecution(id, actor, actorType, stepID string, expected in
 			return ErrExecutionBlocked
 		}
 		for _, dep := range x.Steps[idx].DependencyIDs {
+			matches := 0
 			for _, prior := range x.Steps {
-				if prior.ResourceID == dep && prior.Status != "succeeded" {
-					return ErrExecutionBlocked
+				if prior.ResourceID == dep {
+					matches++
+					if prior.Status != "succeeded" {
+						return ErrExecutionBlocked
+					}
 				}
+			}
+			if matches != 1 {
+				return ErrExecutionBlocked
 			}
 		}
 		priorCost := x.Steps[idx].CostUnits
 		if x.CostUnits-priorCost+report.CostUnits > x.BudgetUnits {
 			return ErrExecutionBlocked
 		}
-		x.Steps[idx].Status, x.Steps[idx].ControllerID, x.Steps[idx].ProviderResponse, x.Steps[idx].Health, x.Steps[idx].CostUnits, x.Steps[idx].Blockers, x.Steps[idx].NextAction, x.Steps[idx].SafetyPoint, x.Steps[idx].UpdatedAt = report.Status, actor, report.ProviderResponse, report.Health, report.CostUnits, append([]string{}, report.Blockers...), report.NextAction, report.SafetyPoint, s.now()
-		x.CostUnits = x.CostUnits - priorCost + report.CostUnits
 		wasPaused := x.Status == "paused"
+		if wasPaused && report.Status == "succeeded" {
+			return ErrExecutionBlocked
+		}
+		stepStatus := report.Status
+		if wasPaused {
+			stepStatus = x.Steps[idx].Status
+		}
+		x.Steps[idx].Status, x.Steps[idx].ControllerID, x.Steps[idx].ProviderResponse, x.Steps[idx].Health, x.Steps[idx].CostUnits, x.Steps[idx].Blockers, x.Steps[idx].NextAction, x.Steps[idx].SafetyPoint, x.Steps[idx].UpdatedAt = stepStatus, actor, report.ProviderResponse, report.Health, report.CostUnits, append([]string{}, report.Blockers...), report.NextAction, report.SafetyPoint, s.now()
+		x.CostUnits = x.CostUnits - priorCost + report.CostUnits
 		kind := "step_reported"
 		if report.Status == "failed" || report.Health == "degraded" || len(report.Blockers) > 0 {
 			x.Status = "paused"
@@ -384,4 +421,46 @@ func allAcknowledged(owners, acknowledgements []string) bool {
 		}
 	}
 	return len(owners) > 0
+}
+
+func planOwnersAcknowledged(plan ChangePlan) bool {
+	acknowledgements := append([]string{}, plan.AcknowledgedOwnerIDs...)
+	for _, event := range plan.Events {
+		if event.Kind == "owner_acknowledgement" && event.ActorType == "human" && event.ActorID == event.OwnerID {
+			acknowledgements = append(acknowledgements, event.OwnerID)
+		}
+	}
+	return allAcknowledged(plan.AffectedOwnerIDs, acknowledgements)
+}
+
+func cyclicExecutionSteps(steps []ExecutionStep) bool {
+	dependencies := map[string][]string{}
+	for _, step := range steps {
+		dependencies[step.ResourceID] = append([]string{}, step.DependencyIDs...)
+	}
+	visiting, visited := map[string]bool{}, map[string]bool{}
+	var visit func(string) bool
+	visit = func(id string) bool {
+		if visiting[id] {
+			return true
+		}
+		if visited[id] {
+			return false
+		}
+		visiting[id] = true
+		for _, dependencyID := range dependencies[id] {
+			if visit(dependencyID) {
+				return true
+			}
+		}
+		delete(visiting, id)
+		visited[id] = true
+		return false
+	}
+	for id := range dependencies {
+		if visit(id) {
+			return true
+		}
+	}
+	return false
 }

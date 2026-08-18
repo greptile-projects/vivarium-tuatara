@@ -341,7 +341,11 @@ export function InfrastructureExecutions({
                     >
                       <Select
                         name="status"
-                        options={["running", "succeeded", "failed"]}
+                        options={
+                          x.status === "paused"
+                            ? ["running"]
+                            : ["running", "succeeded", "failed"]
+                        }
                       />
                       <Select
                         name="health"
@@ -363,7 +367,11 @@ export function InfrastructureExecutions({
                       />
                       <Input name="next_action" label="Next action" />
                       <Select name="safety_point" options={["yes", "no"]} />
-                      <Button disabled={busy}>Report exact step</Button>
+                      <Button disabled={busy}>
+                        {x.status === "paused"
+                          ? "Report remediation"
+                          : "Report exact step"}
+                      </Button>
                     </form>
                   )}
               </li>
