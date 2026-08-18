@@ -76,3 +76,43 @@ func TestRevisionDiscussionAndAcknowledgementAreBound(t *testing.T) {
 		t.Fatalf("stale acknowledgement = %v", e)
 	}
 }
+
+func TestWithCurrentVersionSerializesRevision(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := s.Create("repo", "author", []string{"owner"}, complete())
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, release, guardedDone := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		guardedDone <- s.WithCurrentVersion("repo", v.ID, 1, func(current Proposal) error {
+			if current.CurrentVersion != 1 {
+				t.Errorf("guarded version = %d", current.CurrentVersion)
+			}
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+	revised := make(chan error, 1)
+	go func() { _, reviseErr := s.Revise("repo", v.ID, "author", 1, complete()); revised <- reviseErr }()
+	select {
+	case err := <-revised:
+		t.Fatalf("revision did not wait for guard: %v", err)
+	default:
+	}
+	close(release)
+	if err := <-guardedDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-revised; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WithCurrentVersion("repo", v.ID, 1, func(Proposal) error { return nil }); err != ErrConflict {
+		t.Fatalf("stale guard = %v", err)
+	}
+}

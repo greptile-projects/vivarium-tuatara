@@ -332,6 +332,25 @@ func (s *Store) Get(repo, pid string) (Proposal, error) {
 	err := s.lock(func() error { var e error; out, e = s.read(repo, pid); return e })
 	return out, err
 }
+
+// WithCurrentVersion runs fn while holding the design mutation lock, provided
+// the proposal still names the expected current revision. Cross-store evidence
+// publications use this boundary so a design successor cannot race persistence.
+func (s *Store) WithCurrentVersion(repo, pid string, expected int, fn func(Proposal) error) error {
+	if expected < 1 || fn == nil {
+		return ErrInvalid
+	}
+	return s.lock(func() error {
+		v, err := s.read(repo, pid)
+		if err != nil {
+			return err
+		}
+		if v.CurrentVersion != expected {
+			return ErrConflict
+		}
+		return fn(v)
+	})
+}
 func (s *Store) List(repo string) ([]Proposal, error) {
 	out := []Proposal{}
 	err := s.lock(func() error {

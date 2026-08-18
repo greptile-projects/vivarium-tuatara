@@ -33,6 +33,7 @@ import { PullPerformanceEvaluations } from "./pull-performance-evaluations";
 import { PullPrivacyReview } from "./pull-privacy-review";
 import { PullLocalizationReview } from "./pull-localization-review";
 import { PullRequestPreviews } from "./pull-request-previews";
+import { PullInterfaceChecks } from "./pull-interface-checks";
 import { DocumentationPullReviewCard } from "./documentation-pull-review";
 import { ExtensionContributions } from "./extension-contributions";
 import { PullInfrastructurePlans } from "./pull-infrastructure-plans";
@@ -1119,6 +1120,7 @@ export function PullRequestDetail({
           <ExtensionContributions repositoryID={repositoryID} pullRequestID={pullRequestID} revision={pull.source_commit_id} />
           <DocumentationPullReviewCard repositoryID={repositoryID} pullRequestID={pullRequestID} participant={participant} />
           <PullRequestPreviews repositoryID={repositoryID} pullRequestID={pullRequestID} participant={participant} owner={isOwner} />
+          <PullInterfaceChecks repositoryID={repositoryID} pullRequestID={pullRequestID} participant={participant} />
           <section id="commits" className="scroll-mt-24">
             <div className="mb-3 flex items-baseline justify-between">
               <h2 className="text-lg font-semibold">Commits</h2>

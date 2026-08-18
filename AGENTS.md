@@ -288,6 +288,19 @@ whenever dependencies change or the web job fails before it starts.
   system. These records document reviewed product intent and provenance but grant
   no Git, release, review, merge, deployment, or consumer-repository authority.
 
+- **Interface verification** — Pull evidence beneath
+  `/repositories/{id}/pulls/{pull_id}/interface-checks` binds the exact candidate,
+  successful bounded preview, candidate-resolved repository check definition, and
+  accepted implemented design revision. Checks retain viewport, theme, content,
+  locale, interaction, assistive-technology, difference, recording/artifact,
+  coverage, performance, and affected-requirement evidence. Collaborator
+  classifications are attributable and revision-bound; reads separate stale
+  evidence after candidate movement or an accepted design successor. Cross-store
+  publication holds both design- and pull-revision guards through persistence.
+  Records beneath `$INTERFACE_CHECK_STORAGE_ROOT`
+  grant no execution, Git, design approval, review, merge, deployment, or
+  environment authority.
+
 - **Product design proposals** — `/repositories/{id}/design-proposals` and the repository
   `/design` workspace retain product behavior before implementation. Each immutable revision
   names its feedback, issue, roadmap outcome, accessibility finding, or pull-request source and
