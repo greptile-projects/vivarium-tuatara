@@ -241,13 +241,12 @@ func registerInfrastructureRoutes(mux *http.ServeMux, git *storage.Store, catalo
 			if appendErr != nil {
 				return appendErr
 			}
-			latest, latestErr := definitions.Get(plan.DefinitionID, true)
-			if latestErr != nil {
-				return latestErr
+			// AddPlanEventCurrent returns the projection derived from the exact
+			// definition/observation snapshot held through its durable append.
+			// The guarded pull value establishes the matching source revision.
+			if out.SourceRevision != guardedPull.SourceCommitID {
+				return pullrequests.ErrSourceChanged
 			}
-			out = definitions.ProjectPlan(out, latest, guardedPull.SourceCommitID, func(x infrastructure.PolicyEffect) bool {
-				return infrastructurePolicyCurrent(git, pull.SourceRepositoryID, plan.SourceRevision, x)
-			})
 			return nil
 		})
 		writeInfrastructurePlan(w, out, err, 201)

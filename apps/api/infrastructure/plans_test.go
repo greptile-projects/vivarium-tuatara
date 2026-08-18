@@ -46,9 +46,12 @@ func TestChangePlanDerivesOrderRisksAndInvalidatesAcknowledgements(t *testing.T)
 	if _, err = s.AddPlanEvent(plan.ID, "agent-1", "agent", 1, PlanEvent{Kind: "owner_acknowledgement", Body: "ack", OwnerID: "data-owner"}); err == nil {
 		t.Fatal("agent impersonated affected owner")
 	}
-	plan, err = s.AddPlanEvent(plan.ID, "data-owner", "human", 1, PlanEvent{Kind: "owner_acknowledgement", Body: "Recovery evidence is required before replacement.", OwnerID: "data-owner", ResourceIDs: []string{"db"}})
+	plan, err = s.AddPlanEventCurrent(plan.ID, "data-owner", "human", 1, PlanEvent{Kind: "owner_acknowledgement", Body: "Recovery evidence is required before replacement.", OwnerID: "data-owner", ResourceIDs: []string{"db"}})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !plan.Fresh || len(plan.AcknowledgedOwnerIDs) != 1 || plan.AcknowledgedOwnerIDs[0] != "data-owner" {
+		t.Fatalf("atomic append omitted its current projection: %#v", plan)
 	}
 	current := s.ProjectPlan(plan, definition, candidate.Revision, func(PolicyEffect) bool { return true })
 	if !current.Fresh || len(current.AcknowledgedOwnerIDs) != 1 {

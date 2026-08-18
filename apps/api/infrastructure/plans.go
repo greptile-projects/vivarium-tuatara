@@ -351,9 +351,29 @@ func (s *Store) AddPlanEventCurrent(id, actor, actorType string, expectedEvents 
 		if current.CurrentVersion != p.DefinitionVersion || observationFingerprint(current) != p.ObservationFingerprint || (p.ObservationsValidUntil != nil && s.now().After(*p.ObservationsValidUntil)) {
 			return ErrPlanStale
 		}
-		return s.addPlanEventLocked(&p, actor, actorType, expectedEvents, e, &out)
+		if err := s.addPlanEventLocked(&p, actor, actorType, expectedEvents, e, &out); err != nil {
+			return err
+		}
+		projectCurrentPlan(&out)
+		return nil
 	})
 	return out, err
+}
+
+func projectCurrentPlan(p *ChangePlan) {
+	p.Fresh = true
+	p.StaleReasons = []string{}
+	p.AcknowledgedOwnerIDs = []string{}
+	seen := map[string]bool{}
+	for _, e := range p.Events {
+		if e.Kind == "owner_acknowledgement" {
+			seen[e.OwnerID] = true
+		}
+	}
+	for id := range seen {
+		p.AcknowledgedOwnerIDs = append(p.AcknowledgedOwnerIDs, id)
+	}
+	sort.Strings(p.AcknowledgedOwnerIDs)
 }
 
 func (s *Store) ListPlans(repo, pull string) ([]ChangePlan, error) {
@@ -405,18 +425,10 @@ func (s *Store) ProjectPlan(p ChangePlan, current Definition, currentRevision st
 	}
 	p.Fresh = len(reasons) == 0
 	p.StaleReasons = reasons
-	p.AcknowledgedOwnerIDs = []string{}
 	if p.Fresh {
-		seen := map[string]bool{}
-		for _, e := range p.Events {
-			if e.Kind == "owner_acknowledgement" {
-				seen[e.OwnerID] = true
-			}
-		}
-		for id := range seen {
-			p.AcknowledgedOwnerIDs = append(p.AcknowledgedOwnerIDs, id)
-		}
-		sort.Strings(p.AcknowledgedOwnerIDs)
+		projectCurrentPlan(&p)
+	} else {
+		p.AcknowledgedOwnerIDs = []string{}
 	}
 	return p
 }
