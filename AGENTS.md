@@ -161,6 +161,10 @@ whenever dependencies change or the web job fails before it starts.
   change, cleanup, credential-expiry, and provider-loss findings with available cause attribution. Owners link
   findings to ordinary incident, exception, repair, reviewed adoption, or declared-state restoration work; these
   append-only links neither rewrite external observations nor grant provider, environment, policy, or review authority.
+  The connected `infrastructure-journey.spec.ts` browser/API/Git journey proves exact application-plus-infrastructure
+  planning, owner and scoped-agent collaboration, isolated rehearsal recovery, protected execution, convergence,
+  drift detection, and reviewed repair while retaining rejected stale, destructive, over-budget, failed-provider,
+  partial, revoked-credential, and failed-cleanup paths.
 
 - **Developer support** — `/support` and
   `/repositories/{id}/support-threads` retain contextual questions separately

@@ -149,6 +149,13 @@ accountable owner and ordinary incident, exception, human/agent repair, reviewed
 declared-state restoration task. Adoption and restoration remain normal policy-governed review paths: monitoring
 does not overwrite the external event or confer provider, environment, policy, review, or merge authority.
 
+The connected `infrastructure-journey.spec.ts` browser/API/Git journey carries application and infrastructure
+changes through exact planning by security and service owners, scoped-agent analysis, failed and passing isolated
+teardown, protected merge, governed apply, partial and converged verification, out-of-band drift, and a reviewed
+repair. Rejected wrong-owner approval, stale evidence, destructive delegation, provider failure, budget overrun,
+undelegated or revoked credentials, and incomplete cleanup remain visible containment evidence rather than hidden
+provider-side state.
+
 Support guidance can be proven in ordinary revision-pinned development workspaces. Immutable attempts
 bind an exact cited answer revision to sanitized thread inputs, declared environment, commands and
 outputs, artifacts, cost, and result; fresh-workspace reruns preserve the original record and reads expose

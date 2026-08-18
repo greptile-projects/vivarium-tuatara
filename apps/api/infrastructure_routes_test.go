@@ -56,6 +56,16 @@ func TestInfrastructureCommitBlobBindsCandidateToExactPullTree(t *testing.T) {
 	}
 }
 
+func TestInfrastructureCandidateRevisionIsBoundFromGuardedPull(t *testing.T) {
+	candidate, ok := bindInfrastructureCandidate([]byte(`{"title":"candidate","revision":""}`), "exact-pull-revision")
+	if !ok || candidate.Revision != "exact-pull-revision" {
+		t.Fatalf("bound candidate = %#v, %v", candidate, ok)
+	}
+	if _, ok = bindInfrastructureCandidate([]byte(`{"title":"candidate","revision":"stale"}`), "exact-pull-revision"); ok {
+		t.Fatal("accepted a candidate that named a different source revision")
+	}
+}
+
 func TestInfrastructureRehearsalBindingUsesLatestCommandRetry(t *testing.T) {
 	created := time.Now().UTC()
 	command := "./verify provisioning"

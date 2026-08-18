@@ -177,8 +177,8 @@ func registerInfrastructureRoutes(mux *http.ServeMux, git *storage.Store, catalo
 			writeAPIError(w, 422, "infrastructure_candidate_invalid", "the candidate declaration must be an exact JSON file in the pull source commit")
 			return
 		}
-		var candidate infrastructure.Revision
-		if json.Unmarshal(candidateBody, &candidate) != nil || candidate.Revision != in.SourceRevision {
+		candidate, candidateOK := bindInfrastructureCandidate(candidateBody, in.SourceRevision)
+		if !candidateOK {
 			writeAPIError(w, 422, "infrastructure_candidate_invalid", "the candidate declaration must be an exact JSON file in the pull source commit")
 			return
 		}
@@ -581,6 +581,18 @@ func registerInfrastructureRoutes(mux *http.ServeMux, git *storage.Store, catalo
 		})
 		writeInfrastructureExecution(w, out, err, 201)
 	})
+}
+
+func bindInfrastructureCandidate(body []byte, sourceRevision string) (infrastructure.Revision, bool) {
+	var candidate infrastructure.Revision
+	if json.Unmarshal(body, &candidate) != nil || sourceRevision == "" || (candidate.Revision != "" && candidate.Revision != sourceRevision) {
+		return infrastructure.Revision{}, false
+	}
+	// The commit that contains a blob cannot also be embedded in that blob
+	// without changing its own object ID. Bind the revision from the guarded
+	// pull source instead of requiring an impossible self-referential hash.
+	candidate.Revision = sourceRevision
+	return candidate, true
 }
 
 func infrastructureDriftTargetExists(repositoryID string, response infrastructure.DriftResponse, pulls *pullrequests.Store, issueStore *issues.Store, proposalStore *proposals.Store, incidentStore *incidents.Store) bool {
