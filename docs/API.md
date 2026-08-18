@@ -3646,6 +3646,19 @@ records explain intent and permitted evidence only: they grant no provider acces
 release, deployment, environment, or infrastructure execution authority. Storage defaults to
 `$INFRASTRUCTURE_STORAGE_ROOT` (`infrastructure`).
 
+Infrastructure change review is pull-scoped. `POST
+/repositories/{id}/pulls/{pull_id}/infrastructure-plans` freezes the current pull source, infrastructure
+definition and observations, a complete candidate declaration, and candidate-commit policy paths with
+SHA-256 digests and expected effects. It returns dependency-ordered operations, affected owners,
+classified risks and mitigations, and rollback limits. `GET` on the collection re-resolves all inputs;
+`fresh: false` and `stale_reasons` expose drift and stale records project no current acknowledgements.
+
+`POST .../infrastructure-plans/{plan_id}/events` appends an `assumption`, `impact`,
+`acknowledgement_request`, or `owner_acknowledgement` with `expected_events` CAS ordering. Participants
+and repository-bound read-only agents can investigate, while only a named affected human owner can
+acknowledge. Stale plans reject new events. Plans grant no provider, credential, policy, review, merge,
+deployment, environment, or execution authority and share `$INFRASTRUCTURE_STORAGE_ROOT`.
+
 # Durable-state migration work
 
 `POST /repositories/{id}/durable-schemas/{schema_id}/migrations/{migration_id}/work`
