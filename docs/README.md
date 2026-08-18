@@ -61,7 +61,8 @@ progress, lag, invariants, service health, privacy constraints, cost, blockers, 
 Compare-and-swap controls pause, resume, throttle, advance, or abort work only while its frozen
 rollback boundary remains reversible. Deployment proof resolves through the ordinary environment
 promotion store; the migration record never receives credentials or performs production operations.
-Agents can only report a phase explicitly delegated to their exact identity and step.
+Agents can only report an exact phase and step delegated to their authenticated identity. Their
+step evidence is retained separately and cannot populate or advance controller-owned phase readiness.
 
 Support guidance can be proven in ordinary revision-pinned development workspaces. Immutable attempts
 bind an exact cited answer revision to sanitized thread inputs, declared environment, commands and

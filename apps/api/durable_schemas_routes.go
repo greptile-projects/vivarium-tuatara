@@ -206,6 +206,7 @@ func registerDurableSchemaRoutes(mux *http.ServeMux, git *storage.Store, catalog
 			ThrottlePercent int      `json:"throttle_percent"`
 			Summary         string   `json:"summary"`
 			AgentID         string   `json:"agent_id"`
+			StepID          string   `json:"step_id"`
 			DeploymentID    string   `json:"deployment_id"`
 		}
 		if decodeJSON(r, &in) != nil {
@@ -246,7 +247,7 @@ func registerDurableSchemaRoutes(mux *http.ServeMux, git *storage.Store, catalog
 				return
 			}
 		}
-		out, execution, err := store.UpdateExecution(r.PathValue("id"), r.PathValue("schema_id"), r.PathValue("migration_id"), r.PathValue("execution_id"), actor.UserID, durableschemas.ExecutionUpdate{Action: in.Action, ExpectedVersion: in.ExpectedVersion, Phase: in.Phase, ProgressPercent: in.ProgressPercent, LagSeconds: in.LagSeconds, Invariants: in.Invariants, ServiceHealth: in.ServiceHealth, Blockers: in.Blockers, NextActions: in.NextActions, CostUnits: in.CostUnits, ThrottlePercent: in.ThrottlePercent, Summary: in.Summary, AgentID: actor.AgentID, DeploymentID: in.DeploymentID})
+		out, execution, err := store.UpdateExecution(r.PathValue("id"), r.PathValue("schema_id"), r.PathValue("migration_id"), r.PathValue("execution_id"), actor.UserID, durableschemas.ExecutionUpdate{Action: in.Action, ExpectedVersion: in.ExpectedVersion, Phase: in.Phase, ProgressPercent: in.ProgressPercent, LagSeconds: in.LagSeconds, Invariants: in.Invariants, ServiceHealth: in.ServiceHealth, Blockers: in.Blockers, NextActions: in.NextActions, CostUnits: in.CostUnits, ThrottlePercent: in.ThrottlePercent, Summary: in.Summary, AgentID: actor.AgentID, StepID: in.StepID, DeploymentID: in.DeploymentID})
 		if errors.Is(err, durableschemas.ErrConflict) {
 			writeAPIError(w, 409, "migration_execution_changed", "execution changed; reload before intervening")
 			return

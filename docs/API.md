@@ -3652,7 +3652,10 @@ supports `start`, `pause`, `resume`, `throttle`, `report`, `advance`, and revers
 retain progress, lag, current invariants, service health, cost, blockers, and next actions. A phase
 advances only at 100% progress with healthy service, at least one current invariant, and no blockers;
 cost cannot exceed the frozen ceiling. Deployment evidence must resolve to a successful ordinary
-promotion of the frozen release in the frozen environment. An agent-attributed request can only
-report the currently active phase when its exact agent ID was explicitly delegated that phase; it
-cannot control the execution. These records carry no command, credential, database, environment,
+promotion of the frozen release in the frozen environment. An agent-attributed request must name
+the exact migration step and can report only when its authenticated agent ID, current phase, and
+step match one frozen delegation. Agent reports persist as separate step evidence and never overwrite
+controller-owned phase readiness fields or satisfy phase advancement; only a human operator can
+synthesize phase progress after reviewing every required step. An agent cannot control the execution.
+These records carry no command, credential, database, environment,
 deployment, or destructive authority.

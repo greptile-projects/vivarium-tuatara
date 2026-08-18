@@ -103,6 +103,15 @@ type Execution = {
   throttle_percent: number;
   abort_reversible_until: string;
   phases: ExecutionPhase[];
+  step_reports: {
+    phase: string;
+    step_id: string;
+    agent_id: string;
+    progress_percent: number;
+    service_health: string;
+    blockers: string[];
+    summary: string;
+  }[];
   events: {
     kind: string;
     phase: string;
@@ -719,7 +728,9 @@ export function DurableStateWorkspace({
                   {m.rehearsals.map((r) => (
                     <Badge
                       key={r.id}
-                      tone={r.runs.at(-1)?.result === "passed" ? "success" : "info"}
+                      tone={
+                        r.runs.at(-1)?.result === "passed" ? "success" : "info"
+                      }
                     >
                       {r.name} · {r.runs.at(-1)?.result ?? "not run"}
                     </Badge>
@@ -777,6 +788,19 @@ export function DurableStateWorkspace({
                         Cost {x.phases.reduce((n, p) => n + p.cost_units, 0)}/
                         {x.cost_budget_units}
                       </p>
+                      {x.step_reports
+                        ?.filter((report) => report.phase === phase.name)
+                        .map((report) => (
+                          <p
+                            key={`${report.agent_id}:${report.step_id}:${report.summary}`}
+                            className="mt-1 text-xs text-[var(--muted)]"
+                          >
+                            Agent {report.agent_id} · step {report.step_id} ·{" "}
+                            {report.progress_percent}% ·{" "}
+                            {report.service_health || "health pending"}:{" "}
+                            {report.summary}
+                          </p>
+                        ))}
                       {phase.blockers.length > 0 && (
                         <p className="text-sm text-[var(--danger)]">
                           Blockers: {phase.blockers.join("; ")}

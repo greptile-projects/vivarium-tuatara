@@ -197,10 +197,25 @@ type ExecutionDelegation struct {
 type ExecutionEvent struct {
 	Kind      string    `json:"kind"`
 	Phase     string    `json:"phase,omitempty"`
+	StepID    string    `json:"step_id,omitempty"`
 	Summary   string    `json:"summary"`
 	ActorID   string    `json:"actor_id"`
 	AgentID   string    `json:"agent_id,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+}
+type ExecutionStepReport struct {
+	Phase           string    `json:"phase"`
+	StepID          string    `json:"step_id"`
+	AgentID         string    `json:"agent_id"`
+	ProgressPercent int       `json:"progress_percent"`
+	LagSeconds      int64     `json:"lag_seconds"`
+	Invariants      []string  `json:"invariants"`
+	ServiceHealth   string    `json:"service_health"`
+	Blockers        []string  `json:"blockers"`
+	NextActions     []string  `json:"next_actions"`
+	CostUnits       int64     `json:"cost_units"`
+	Summary         string    `json:"summary"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // Execution is a collaboration record over authoritative work. It references
@@ -225,6 +240,7 @@ type Execution struct {
 	AbortReversibleUntil string                `json:"abort_reversible_until"`
 	Phases               []ExecutionPhase      `json:"phases"`
 	Delegations          []ExecutionDelegation `json:"delegations"`
+	StepReports          []ExecutionStepReport `json:"step_reports"`
 	Events               []ExecutionEvent      `json:"events"`
 	CreatedAt            time.Time             `json:"created_at"`
 	UpdatedAt            time.Time             `json:"updated_at"`
@@ -324,6 +340,7 @@ func (s *Store) CreateExecution(repo, schema, migration, actor string, expected 
 		in.CurrentPhase = 0
 		in.ThrottlePercent = 100
 		in.Phases = phases
+		in.StepReports = []ExecutionStepReport{}
 		in.Events = []ExecutionEvent{{Kind: "created", Phase: "expand", Summary: "production migration execution opened after approvals and rehearsal evidence", ActorID: actor, CreatedAt: now}}
 		in.CreatedAt = now
 		in.UpdatedAt = now
@@ -350,6 +367,7 @@ type ExecutionUpdate struct {
 	ThrottlePercent int
 	Summary         string
 	AgentID         string
+	StepID          string
 	DeploymentID    string
 }
 
@@ -378,11 +396,21 @@ func (s *Store) UpdateExecution(repo, schema, migration, execution, actor string
 			if in.AgentID != "" {
 				delegated := false
 				for _, d := range x.Delegations {
-					delegated = delegated || d.AgentID == in.AgentID && d.Phase == phase.Name
+					delegated = delegated || d.AgentID == in.AgentID && d.Phase == phase.Name && d.StepID == in.StepID
 				}
-				if !delegated || in.Action != "report" {
+				if !delegated || in.Action != "report" || in.Phase != phase.Name || in.ProgressPercent < 0 || in.ProgressPercent > 100 || in.LagSeconds < 0 || in.CostUnits < 0 || in.DeploymentID != "" {
 					return v, *x, ErrInvalid
 				}
+				summary := strings.TrimSpace(in.Summary)
+				if summary == "" {
+					return v, *x, ErrInvalid
+				}
+				x.StepReports = append(x.StepReports, ExecutionStepReport{Phase: phase.Name, StepID: in.StepID, AgentID: in.AgentID, ProgressPercent: in.ProgressPercent, LagSeconds: in.LagSeconds, Invariants: append([]string{}, in.Invariants...), ServiceHealth: strings.TrimSpace(in.ServiceHealth), Blockers: append([]string{}, in.Blockers...), NextActions: append([]string{}, in.NextActions...), CostUnits: in.CostUnits, Summary: summary, CreatedAt: now})
+				x.Version++
+				x.UpdatedAt = now
+				x.Events = append(x.Events, ExecutionEvent{Kind: "step_report", Phase: phase.Name, StepID: in.StepID, Summary: summary, ActorID: actor, AgentID: in.AgentID, CreatedAt: now})
+				m.UpdatedAt, v.UpdatedAt = now, now
+				return v, *x, s.write(v)
 			}
 			switch in.Action {
 			case "start":

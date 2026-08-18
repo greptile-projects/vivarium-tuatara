@@ -89,7 +89,8 @@ whenever dependencies change or the web job fails before it starts.
   active revision, controller, compatibility/privacy/cost bounds, progress, lag, invariants, service
   health, blockers, and next actions. Advancing requires complete healthy unblocked evidence;
   deployment evidence resolves through the existing promotion boundary. Agents may report only an
-  explicitly delegated phase and step. Execution records carry no commands, credentials, database,
+  exact phase and step delegated to their authenticated identity; step evidence remains separate and
+  cannot populate or advance controller-owned phase readiness. Execution records carry no commands, credentials, database,
   deployment, environment, or destructive authority.
 
 - **Developer support** — `/support` and

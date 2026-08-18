@@ -110,8 +110,26 @@ func TestProductionExecutionRequiresEvidenceAndKeepsAgentsDelegated(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, execution, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "advance", ExpectedVersion: execution.Version})
+	v, execution, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "advance", ExpectedVersion: execution.Version})
 	if err != nil || execution.CurrentPhase != 1 || execution.Phases[0].State != "completed" {
 		t.Fatalf("advance = %#v, %v", execution, err)
+	}
+	// Put the retained execution at its delegated phase without manufacturing
+	// controller evidence for the intervening deployment phase.
+	retained := &v.Migrations[0].Executions[0]
+	retained.CurrentPhase, retained.Status = 2, "running"
+	retained.Phases[2].State = "running"
+	if err = s.write(v); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "report", ExpectedVersion: retained.Version, Phase: "backfill", StepID: "other", ProgressPercent: 100, ServiceHealth: "healthy", Invariants: []string{"done"}, Summary: "wrong step", AgentID: "agent"}); err != ErrInvalid {
+		t.Fatalf("agent escaped step delegation: %v", err)
+	}
+	_, execution, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "report", ExpectedVersion: retained.Version, Phase: "backfill", StepID: "change", ProgressPercent: 100, ServiceHealth: "healthy", Invariants: []string{"assigned batch valid"}, Summary: "assigned step complete", AgentID: "agent"})
+	if err != nil || len(execution.StepReports) != 1 || execution.Phases[2].ProgressPercent != 0 || execution.Phases[2].ServiceHealth != "" {
+		t.Fatalf("scoped agent report changed phase readiness: %#v, %v", execution, err)
+	}
+	if _, _, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "advance", ExpectedVersion: execution.Version}); err != ErrInvalid {
+		t.Fatalf("agent step report advanced phase: %v", err)
 	}
 }
