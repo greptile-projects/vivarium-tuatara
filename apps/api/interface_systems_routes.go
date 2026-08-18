@@ -131,6 +131,9 @@ func interfaceSystemProvenanceResolves(git *storage.Store, releaseStore *release
 		if err != nil || implementationRelease.CommitID != strings.ToLower(implementation.CommitID) {
 			return false
 		}
+		if implementation.Status == "current" && (implementation.ReleaseID != revision.ReleaseID || implementationRelease.CommitID != revision.CommitID) {
+			return false
+		}
 		implementationRepository, err := git.Open(implementationRepositoryID)
 		if err != nil {
 			return false
