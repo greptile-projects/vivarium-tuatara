@@ -50,6 +50,10 @@ func TestDebugWorkspaceReadRedactsAllRestrictedEvidenceMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	created, err = workspaceStore.RequestProbe(repo.ID, created.ID, owner.User.ID, debugworkspaces.Probe{Kind: "logs", Purpose: "inspect failures", AudienceUserIDs: []string{owner.User.ID}, ExpiresAt: time.Now().UTC().Add(time.Hour), RequestedPolicy: debugworkspaces.ProbePolicy{DataCategories: []string{"application_logs"}, Privacy: "remove user data", Security: "remove secrets", RetentionHours: 1, SamplePercent: 5, MaxCostCents: 10, MaxLoadPercent: 2}}, created.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
 	response = authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID, "", reader.Credential.Token, http.StatusOK)
 	var projected debugworkspaces.Workspace
 	if err = json.NewDecoder(response.Body).Decode(&projected); err != nil {
@@ -58,5 +62,23 @@ func TestDebugWorkspaceReadRedactsAllRestrictedEvidenceMetadata(t *testing.T) {
 	response.Body.Close()
 	if len(projected.Evidence) != 1 || projected.Evidence[0].Reference != "" || projected.Evidence[0].Label != "Restricted evidence" || projected.Evidence[0].Sanitization != "" || projected.Evidence[0].Available || projected.Evidence[0].UnavailableReason == "" {
 		t.Fatalf("restricted evidence metadata escaped projection: %#v", projected.Evidence)
+	}
+	if len(projected.Probes) != 0 {
+		t.Fatalf("probe escaped its explicit audience: %#v", projected.Probes)
+	}
+	expiry := time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)
+	requestBody := `{"expected_version":2,"probe":{"kind":"traces","purpose":"inspect checkout latency","audience_user_ids":["` + owner.User.ID + `"],"requested_policy":{"data_categories":["timing_spans"],"privacy":"remove user data","security":"remove secrets","retention_hours":2,"sample_percent":5,"max_cost_cents":20,"max_load_percent":2},"expires_at":"` + expiry + `"}}`
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/probes", requestBody, owner.Credential.Token, http.StatusCreated)
+	var requested debugworkspaces.Workspace
+	decodeResponse(t, response, &requested)
+	if len(requested.Probes) != 2 || requested.Probes[1].Status != "pending" {
+		t.Fatalf("probe request = %#v", requested.Probes)
+	}
+	decisionBody := `{"expected_version":3,"decision":"denied","reason":"environment load is elevated"}`
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/debugging-workspaces/"+created.ID+"/probes/"+requested.Probes[1].ID+"/decision", decisionBody, owner.Credential.Token, http.StatusCreated)
+	var denied debugworkspaces.Workspace
+	decodeResponse(t, response, &denied)
+	if denied.Probes[1].Status != "denied" || denied.Probes[1].DecidedBy != owner.User.ID {
+		t.Fatalf("probe decision = %#v", denied.Probes[1])
 	}
 }

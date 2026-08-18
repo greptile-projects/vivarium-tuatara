@@ -2971,3 +2971,11 @@ revisions, audience, and sanitized evidence. Missing or inaccessible evidence is
 Restricted workspaces are visible only to their creator and named readers; repository workspaces still follow
 ordinary repository visibility. Compare-and-swap status and hypothesis events preserve authorship and history.
 The workspace is collaboration context, not authority to query production, collect traces, deploy, or change code.
+
+Participants can request a scoped probe for logs, traces, profiles, state snapshots, or a dynamic diagnostic
+defined at the frozen source revision. Before an affected-environment owner can approve it, the request previews
+the exact audience and data categories plus privacy/security filtering, retention, sampling, maximum cost and
+service load, and a maximum 24-hour lifetime. Approval can only narrow those bounds. The requester then retains
+sanitized, digest-addressed collection metadata with exact timing, collector provenance, transformations, gaps,
+and actions; raw production payloads and reusable credentials are not accepted. Expiry, owner revocation, access
+denial, overload, and partial capture terminate or narrow the probe and can never appear as complete evidence.

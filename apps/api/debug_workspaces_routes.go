@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/debugworkspaces"
@@ -23,6 +24,21 @@ type debugMutationInput struct {
 	Kind            string `json:"kind"`
 	Value           string `json:"value"`
 	Message         string `json:"message"`
+}
+type debugProbeDecisionInput struct {
+	ExpectedVersion int                         `json:"expected_version"`
+	Decision        string                      `json:"decision"`
+	Reason          string                      `json:"reason"`
+	Policy          debugworkspaces.ProbePolicy `json:"policy"`
+	ExpiresAt       time.Time                   `json:"expires_at"`
+}
+type debugProbeActionInput struct {
+	ExpectedVersion int                         `json:"expected_version"`
+	Action          debugworkspaces.ProbeAction `json:"action"`
+}
+type debugProbeRevokeInput struct {
+	ExpectedVersion int    `json:"expected_version"`
+	Reason          string `json:"reason"`
 }
 
 func registerDebugWorkspaceRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, workspaces *debugworkspaces.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, issueStore *issues.Store, incidentStore *incidents.Store, supportStore *supportthreads.Store, objectiveStore *serviceobjectives.Store, packageStore *packages.Store, infrastructureStore *infrastructure.Store) {
@@ -45,6 +61,11 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, catalog *repositories.Stor
 	}
 	project := func(v debugworkspaces.Workspace, actor string) debugworkspaces.Workspace {
 		privileged := actor == v.CreatedBy
+		for _, id := range v.OwnerIDs {
+			if id == actor {
+				privileged = true
+			}
+		}
 		for _, id := range v.AccessUserIDs {
 			if id == actor {
 				privileged = true
@@ -61,6 +82,23 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, catalog *repositories.Stor
 				}
 			}
 		}
+		visible := []debugworkspaces.Probe{}
+		for _, p := range v.Probes {
+			if p.Status == "approved" && !time.Now().UTC().Before(p.ExpiresAt) {
+				p.Status = "expired"
+			}
+			if privileged || p.RequestedBy == actor {
+				visible = append(visible, p)
+				continue
+			}
+			for _, id := range p.AudienceUserIDs {
+				if id == actor {
+					visible = append(visible, p)
+					break
+				}
+			}
+		}
+		v.Probes = visible
 		return v
 	}
 	mux.HandleFunc("GET /repositories/{id}/debugging-workspaces", func(w http.ResponseWriter, r *http.Request) {
@@ -128,6 +166,66 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, catalog *repositories.Stor
 		}
 		out, err := workspaces.Update(current.RepositoryID, current.ID, actorID(c), in.Kind, in.Value, in.Message, in.ExpectedVersion)
 		writeDebugWorkspace(w, out, err, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/debugging-workspaces/{workspace_id}/probes", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := workspaces.Get(r.PathValue("id"), r.PathValue("workspace_id"))
+		if err != nil || !canRead(current, actorID(c)) {
+			writeAPIError(w, 404, "debugging_workspace_not_found", "debugging workspace not found")
+			return
+		}
+		var in struct {
+			ExpectedVersion int                   `json:"expected_version"`
+			Probe           debugworkspaces.Probe `json:"probe"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a bounded probe preview is required")
+			return
+		}
+		out, err := workspaces.RequestProbe(current.RepositoryID, current.ID, actorID(c), in.Probe, in.ExpectedVersion)
+		writeDebugWorkspace(w, project(out, actorID(c)), err, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/debugging-workspaces/{workspace_id}/probes/{probe_id}/decision", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in debugProbeDecisionInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an owner decision is required")
+			return
+		}
+		out, err := workspaces.DecideProbe(r.PathValue("id"), r.PathValue("workspace_id"), r.PathValue("probe_id"), actorID(c), in.Decision, in.Reason, in.Policy, in.ExpiresAt, in.ExpectedVersion)
+		writeDebugWorkspace(w, project(out, actorID(c)), err, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/debugging-workspaces/{workspace_id}/probes/{probe_id}/actions", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in debugProbeActionInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a retained collection outcome is required")
+			return
+		}
+		out, err := workspaces.ReportProbe(r.PathValue("id"), r.PathValue("workspace_id"), r.PathValue("probe_id"), actorID(c), in.Action, in.ExpectedVersion)
+		writeDebugWorkspace(w, project(out, actorID(c)), err, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/debugging-workspaces/{workspace_id}/probes/{probe_id}/revoke", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in debugProbeRevokeInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a revocation reason is required")
+			return
+		}
+		out, err := workspaces.RevokeProbe(r.PathValue("id"), r.PathValue("workspace_id"), r.PathValue("probe_id"), actorID(c), in.Reason, in.ExpectedVersion)
+		writeDebugWorkspace(w, project(out, actorID(c)), err, 201)
 	})
 }
 
@@ -238,6 +336,8 @@ func writeDebugWorkspace(w http.ResponseWriter, v debugworkspaces.Workspace, err
 		writeAPIError(w, 409, "debugging_workspace_changed", "debugging workspace changed; refresh before appending history")
 	case errors.Is(err, debugworkspaces.ErrNotFound):
 		writeAPIError(w, 404, "debugging_workspace_not_found", "debugging workspace not found")
+	case errors.Is(err, debugworkspaces.ErrForbidden):
+		writeAPIError(w, 403, "debugging_probe_forbidden", "the affected environment owner or probe requester must perform this action")
 	default:
 		writeAPIError(w, 500, "debugging_workspace_unavailable", "debugging workspace could not be persisted")
 	}

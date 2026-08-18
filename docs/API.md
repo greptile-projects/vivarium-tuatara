@@ -15,6 +15,18 @@
 - `POST .../{workspace_id}/events` compare-and-swaps the workspace version to append an attributable
   status transition or proposed hypothesis. History is never rewritten. These records coordinate
   understanding only and grant no observability, runtime, deployment, environment, Git, or data authority.
+- `POST .../{workspace_id}/probes` lets a current participant request logs, traces, a runtime profile,
+  state snapshot, or repository-defined dynamic diagnostic pinned to the workspace source revision. The
+  request previews its explicit audience, closed data categories, privacy and security transformations,
+  retention, sampling, maximum cost/load, and an expiry no more than 24 hours away. The requester is part
+  of the audience; restricted-workspace probes cannot widen the workspace audience.
+- `POST .../probes/{probe_id}/decision` is limited to a declared affected-environment owner and may deny
+  or approve only a narrower policy and earlier expiry. `POST .../actions` accepts an outcome only from the
+  requester while that approval is live, retaining timing, collector provenance, transformations, explicit
+  gaps, and digest-addressed sanitized artifact metadata—not production payloads. A result with gaps cannot
+  claim completion; denied access, overload, partial capture, expiry, or `POST .../revoke` stops collection
+  and remains distinguishable. Probe records are projected only to their explicit audience and workspace
+  owners, and approval grants no general observability, environment, credential, or diagnostic authority.
 
 ## Consumer API applications and sandbox
 
