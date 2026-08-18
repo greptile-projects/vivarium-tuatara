@@ -254,6 +254,9 @@ type RepairWork struct {
 	ValidationSummary     string    `json:"validation_summary,omitempty"`
 	ValidationSignalNames []string  `json:"validation_signal_names"`
 	ReopenedDiagnosis     bool      `json:"reopened_diagnosis"`
+	RequestedAction       string    `json:"requested_action,omitempty"`
+	ActionStatus          string    `json:"action_status,omitempty"`
+	ActionDeploymentID    string    `json:"action_deployment_id,omitempty"`
 	CreatedBy             string    `json:"created_by"`
 	CreatedAt             time.Time `json:"created_at"`
 	UpdatedAt             time.Time `json:"updated_at"`
@@ -353,7 +356,7 @@ func (s *Store) Create(v Workspace, actor string) (Workspace, error) {
 func (s *Store) CreateRepairWork(repo, wid, actor string, in RepairWork, expected int) (Workspace, RepairWork, error) {
 	var out RepairWork
 	v, err := s.mutate(repo, wid, expected, func(v *Workspace, now time.Time) error {
-		if !one(in.AssigneeType, "human", "agent") || strings.TrimSpace(in.AssigneeID) == "" || len(in.AcceptanceCriteria) == 0 || len(in.RegressionCriteria) == 0 || in.AffectedRevision != v.Source.Revision || in.ProposalID == "" || in.TaskID == "" {
+		if !one(in.AssigneeType, "human", "agent") || strings.TrimSpace(in.AssigneeID) == "" || len(in.AcceptanceCriteria) == 0 || len(in.RegressionCriteria) == 0 || in.AffectedRevision != v.Source.Revision {
 			return ErrInvalid
 		}
 		scenario, claim := false, false
@@ -374,7 +377,7 @@ func (s *Store) CreateRepairWork(repo, wid, actor string, in RepairWork, expecte
 		if len(in.ID) != 32 {
 			return ErrInvalid
 		}
-		in.Version, in.ValidationStatus, in.CreatedBy, in.CreatedAt, in.UpdatedAt = 1, "awaiting_pull", actor, now, now
+		in.Version, in.ValidationStatus, in.CreatedBy, in.CreatedAt, in.UpdatedAt = 1, "publishing", actor, now, now
 		in.AcceptanceCriteria, in.RegressionCriteria = uniqueWords(in.AcceptanceCriteria), uniqueWords(in.RegressionCriteria)
 		in.ScenarioCheckRunIDs, in.RequiredCheckRunIDs, in.ValidationSignalNames = []string{}, []string{}, []string{}
 		v.RepairWork = append(v.RepairWork, in)

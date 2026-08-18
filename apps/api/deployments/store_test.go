@@ -116,6 +116,10 @@ func TestRollbackTargetSelectsNewestEarlierSuccessfulArtifact(t *testing.T) {
 	if err != nil || restored.ID != first.ID || rollback.RecoveryOf != second.ID || rollback.ArtifactSHA256 != first.ArtifactSHA256 {
 		t.Fatalf("rollback = %#v, %v", rollback, err)
 	}
+	retried, _, err := store.CreateRollback(repo, second.ID, actor)
+	if err != nil || retried.ID != rollback.ID {
+		t.Fatalf("rollback retry duplicated recovery: first=%s retry=%s err=%v", rollback.ID, retried.ID, err)
+	}
 }
 
 func TestRolloutControlsRetainAttributedDecisionsAndHealthEvidence(t *testing.T) {

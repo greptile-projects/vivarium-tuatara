@@ -88,7 +88,7 @@ func TestRepairWorkRequiresReproducedScenarioAndSupportedCause(t *testing.T) {
 	}
 	in := RepairWork{ID: strings.Repeat("8", 32), ScenarioID: v.ReplayScenarios[0].ID, CauseClaimID: v.Claims[0].ID, AffectedRevision: v.Source.Revision, AcceptanceCriteria: []string{"timeout no longer occurs"}, RegressionCriteria: []string{"scenario passes on every pull revision"}, ProposalID: strings.Repeat("9", 32), TaskID: strings.Repeat("b", 32), AssigneeType: "agent", AssigneeID: strings.Repeat("c", 32)}
 	v, work, err := s.CreateRepairWork(repo, v.ID, actor, in, v.Version)
-	if err != nil || work.ValidationStatus != "awaiting_pull" || len(v.RepairWork) != 1 {
+	if err != nil || work.ValidationStatus != "publishing" || len(v.RepairWork) != 1 {
 		t.Fatalf("repair=%#v workspace=%#v err=%v", work, v, err)
 	}
 	_, _, err = s.UpdateRepairWork(repo, v.ID, work.ID, actor, v.Version, func(x *RepairWork) error {

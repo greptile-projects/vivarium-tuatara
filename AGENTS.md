@@ -44,6 +44,9 @@ The handoff freezes the debugging workspace, scenario, cause, affected revision,
 criteria. Validation resolves the linked merged pull, exact-revision scenario and ordinary check runs, including release,
 staged deployment, and named production signals. Failed signals use existing participant-only pause/rollback controls or
 reopen diagnosis; debugging and task identities gain no review, merge, release, deployment, or environment authority.
+Repair publication reserves its workspace identity before ordinary task creation. Production success requires a
+succeeded staged deployment; failed-measure actions persist intent first, rollback creation is idempotent for the exact
+failed/known-good pair, and post-action write races remain explicitly pending for retry-safe reconciliation.
 
 ## What this is
 

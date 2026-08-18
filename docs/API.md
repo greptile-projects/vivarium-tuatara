@@ -64,7 +64,10 @@
   only the linked merged pull, passing scenario plus ordinary check runs at its exact revision, an including release,
   its exact staged deployment, and named passing production signals. A failed measure may invoke the existing
   participant-only pause or known-good rollback boundary, or mark the diagnosis reopened. Investigators and task
-  agents gain no review, merge, release, deployment, or environment authority.
+  agents gain no review, merge, release, deployment, or environment authority. Publication reserves the repair
+  identity before proposal/task creation so stale CAS requests cannot orphan ordinary work. Successful validation
+  requires a succeeded deployment. Failed-measure actions persist an intent before execution; rollback retries reuse
+  the exact existing recovery and post-action record races return an explicit reconciliation-pending response.
 
 ## Consumer API applications and sandbox
 
