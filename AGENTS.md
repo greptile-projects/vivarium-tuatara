@@ -49,6 +49,9 @@ succeeded staged deployment and scenario plus ordinary checks from its exact rel
 every check required by the pull target branch must be selected and passing, so callers cannot omit failed policy gates;
 failed-measure actions persist intent first, rollback creation is idempotent for the exact
 failed/known-good pair, and post-action write races remain explicitly pending for retry-safe reconciliation.
+The connected `debugging-journey.spec.ts` browser/API/Git journey retains denied and privacy-redacted probes,
+noisy evidence, disputed diagnosis, revoked agent access, failed and refined replay, a failed first repair,
+reviewed integration checks, release, staged deployment signals, and the final validated user outcome.
 
 ## What this is
 
