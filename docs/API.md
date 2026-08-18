@@ -3622,7 +3622,10 @@ retains a repository command, invariant, and only the revision-input names that 
 workspace in that repository. A run has exactly one outcome per frozen check and retains its
 status, exit code, sanitized log (up to 64 KiB), duration, before/after row and object counts,
 invariant result, bounded artifact digests, cost, and attestations. A run can be `passed` only
-when every outcome passed with exit zero and its invariant held. `POST .../notes` appends a
+when every outcome passed with exit zero and its invariant held. Status, exit code, log,
+duration, invariant result, and the overall result are derived from one unambiguous retained
+workspace command outcome per exact command digest rather than trusted from the request.
+`POST .../notes` appends a
 bounded attributable investigation note to an existing run. Repository read authorization
 controls all projections; these endpoints execute or review proof but confer no production,
 deployment, environment, workspace, or durable-store authority.

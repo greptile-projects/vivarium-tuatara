@@ -488,12 +488,14 @@ func validateRehearsal(r Rehearsal) error {
 		deps["dependency:"+d.Name] = true
 	}
 	ids := map[string]bool{}
+	commands := map[string]bool{}
 	kinds := map[string]bool{"upgrade": true, "dual_read": true, "dual_write": true, "backfill": true, "validation": true, "rollback": true, "failure_injection": true}
 	for _, c := range r.Checks {
-		if c.ID == "" || ids[c.ID] || !kinds[c.Kind] || strings.TrimSpace(c.Command) == "" || len(c.Command) > 2000 || c.Invariant == "" || len(c.RevisionInputs) == 0 {
+		if c.ID == "" || ids[c.ID] || commands[c.Command] || !kinds[c.Kind] || strings.TrimSpace(c.Command) == "" || len(c.Command) > 2000 || c.Invariant == "" || len(c.RevisionInputs) == 0 {
 			return ErrInvalid
 		}
 		ids[c.ID] = true
+		commands[c.Command] = true
 		for _, input := range c.RevisionInputs {
 			if !deps[input] {
 				return ErrInvalid

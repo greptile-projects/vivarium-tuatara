@@ -75,7 +75,8 @@ whenever dependencies change or the web job fails before it starts.
   dependency fingerprints, privacy-bounded dataset shape, and repository checks for upgrades,
   dual reads/writes, backfills, validation, rollback, and failure injection. Bounded-workspace
   runs retain sanitized outcomes, counts, invariants, performance, artifacts, costs, and
-  attestations; attributable notes support failure investigation. Checks declare their revision
+  attestations; command status, exit code, log, duration, invariant result, and overall result
+  derive from one unambiguous exact-command workspace outcome. Attributable notes support failure investigation. Checks declare their revision
   inputs so successor candidates invalidate only affected proof. Rehearsals grant no production,
   deployment, environment, workspace, or data-store authority.
 

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
@@ -21,17 +22,20 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
-func TestWorkspaceExecutedRehearsalRequiresEveryExactCommand(t *testing.T) {
+func TestBindRehearsalRunDerivesEvidenceFromExactCommand(t *testing.T) {
 	command := "./scripts/rehearse upgrade"
 	digest := sha256.Sum256([]byte(command))
-	ws := workspaces.Workspace{Commands: []workspaces.CommandOutcome{{CommandSHA256: hex.EncodeToString(digest[:])}}}
+	started := time.Now().UTC()
+	ws := workspaces.Workspace{Commands: []workspaces.CommandOutcome{{CommandSHA256: hex.EncodeToString(digest[:]), ExitCode: 17, Output: "rollback check failed", StartedAt: started, CompletedAt: started.Add(25 * time.Millisecond)}}}
 	rehearsal := durableschemas.Rehearsal{Checks: []durableschemas.RehearsalCheck{{ID: "upgrade", Command: command}}}
-	if !workspaceExecutedRehearsal(ws, rehearsal) {
-		t.Fatal("exact retained command was not accepted")
+	forged := durableschemas.RehearsalRun{Result: "passed", Outcomes: []durableschemas.RehearsalOutcome{{CheckID: "upgrade", Status: "passed", InvariantPassed: true}}}
+	bound, ok := bindRehearsalRun(ws, rehearsal, forged)
+	if !ok || bound.Result != "failed" || bound.Outcomes[0].Status != "failed" || bound.Outcomes[0].ExitCode != 17 || bound.Outcomes[0].InvariantPassed || bound.Outcomes[0].SanitizedLog != "rollback check failed" || bound.Outcomes[0].DurationMS != 25 {
+		t.Fatalf("retained failure was not canonical: %#v, %v", bound, ok)
 	}
-	rehearsal.Checks = append(rehearsal.Checks, durableschemas.RehearsalCheck{ID: "failure", Command: "./scripts/rehearse failure"})
-	if workspaceExecutedRehearsal(ws, rehearsal) {
-		t.Fatal("partial execution was accepted")
+	ws.Commands = append(ws.Commands, ws.Commands[0])
+	if _, ok = bindRehearsalRun(ws, rehearsal, forged); ok {
+		t.Fatal("ambiguous repeated execution was accepted")
 	}
 }
 

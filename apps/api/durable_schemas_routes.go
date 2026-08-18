@@ -273,7 +273,7 @@ func registerDurableSchemaRoutes(mux *http.ServeMux, git *storage.Store, catalog
 			return
 		}
 		if !safeRehearsalRun(in) {
-			writeAPIError(w, 422, "unsafe_rehearsal_evidence", "logs and attestations must be sanitized and free of credential-shaped content")
+			writeAPIError(w, 422, "unsafe_rehearsal_evidence", "attestations must be sanitized and free of credential-shaped content")
 			return
 		}
 		ws, err := workspaceStore.Get(in.WorkspaceID)
@@ -292,8 +292,13 @@ func registerDurableSchemaRoutes(mux *http.ServeMux, git *storage.Store, catalog
 				}
 			}
 		}
-		if err != nil || rehearsal == nil || ws.CommitID != rehearsal.ApplicationRevision || !workspaceExecutedRehearsal(ws, *rehearsal) {
+		if err != nil || rehearsal == nil || ws.CommitID != rehearsal.ApplicationRevision {
 			writeAPIError(w, 422, "invalid_rehearsal_workspace", "workspace must use the exact candidate and retain every repository-defined check outcome")
+			return
+		}
+		in, ok = bindRehearsalRun(ws, *rehearsal, in)
+		if !ok {
+			writeAPIError(w, 422, "invalid_rehearsal_workspace", "each check must have one unambiguous, sanitized retained command outcome")
 			return
 		}
 		out, run, err := store.AddRehearsalRun(r.PathValue("id"), r.PathValue("schema_id"), r.PathValue("migration_id"), r.PathValue("rehearsal_id"), actor.UserID, in)
@@ -329,28 +334,45 @@ func registerDurableSchemaRoutes(mux *http.ServeMux, git *storage.Store, catalog
 	})
 }
 
-func workspaceExecutedRehearsal(ws workspaces.Workspace, rehearsal durableschemas.Rehearsal) bool {
-	executed := map[string]bool{}
+func bindRehearsalRun(ws workspaces.Workspace, rehearsal durableschemas.Rehearsal, run durableschemas.RehearsalRun) (durableschemas.RehearsalRun, bool) {
+	retained := map[string][]workspaces.CommandOutcome{}
 	for _, outcome := range ws.Commands {
-		executed[outcome.CommandSHA256] = true
+		retained[outcome.CommandSHA256] = append(retained[outcome.CommandSHA256], outcome)
 	}
+	checks := map[string]durableschemas.RehearsalCheck{}
 	for _, check := range rehearsal.Checks {
-		digest := sha256.Sum256([]byte(check.Command))
-		if !executed[hex.EncodeToString(digest[:])] {
-			return false
-		}
+		checks[check.ID] = check
 	}
-	return true
+	allPassed := true
+	for i := range run.Outcomes {
+		check, exists := checks[run.Outcomes[i].CheckID]
+		if !exists {
+			return run, false
+		}
+		digest := sha256.Sum256([]byte(check.Command))
+		matches := retained[hex.EncodeToString(digest[:])]
+		if len(matches) != 1 || len(matches[0].Output) > 65536 || reusableSecret.MatchString(matches[0].Output) {
+			return run, false
+		}
+		evidence := matches[0]
+		passed := evidence.ExitCode == 0
+		run.Outcomes[i].ExitCode = evidence.ExitCode
+		run.Outcomes[i].Status = map[bool]string{true: "passed", false: "failed"}[passed]
+		run.Outcomes[i].InvariantPassed = passed
+		run.Outcomes[i].SanitizedLog = evidence.Output
+		run.Outcomes[i].DurationMS = evidence.CompletedAt.Sub(evidence.StartedAt).Milliseconds()
+		if run.Outcomes[i].DurationMS < 0 {
+			return run, false
+		}
+		allPassed = allPassed && passed
+	}
+	run.Result = map[bool]string{true: "passed", false: "failed"}[allPassed]
+	return run, true
 }
 
 func safeRehearsalRun(run durableschemas.RehearsalRun) bool {
 	for _, attestation := range run.Attestations {
 		if reusableSecret.MatchString(attestation) {
-			return false
-		}
-	}
-	for _, outcome := range run.Outcomes {
-		if reusableSecret.MatchString(outcome.SanitizedLog) {
 			return false
 		}
 	}
