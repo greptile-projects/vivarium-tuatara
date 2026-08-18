@@ -68,31 +68,8 @@ func registerInterfaceCheckRoutes(mux *http.ServeMux, git *storage.Store, repos 
 			return
 		}
 		design, e := designs.Get(p.RepositoryID, in.DesignProposalID)
-		if e != nil || design.CurrentVersion != in.DesignVersion || design.Implementation == nil {
+		if e != nil || !interfaceCheckMatchesDesign(design, in) {
 			writeAPIError(w, 422, "invalid_interface_specification", "evidence must cite the accepted implemented design revision")
-			return
-		}
-		spec := design.Revisions[len(design.Revisions)-1]
-		journeyFound := false
-		for _, journey := range spec.Journeys {
-			if journey.Name == in.Journey {
-				journeyFound = true
-			}
-		}
-		requirements := append(append([]string{}, spec.AcceptanceCriteria...), spec.ComponentContracts...)
-		for _, requirement := range in.AffectedRequirements {
-			found := false
-			for _, accepted := range requirements {
-				if accepted == requirement {
-					found = true
-				}
-			}
-			if !found {
-				journeyFound = false
-			}
-		}
-		if !journeyFound {
-			writeAPIError(w, 422, "invalid_interface_requirements", "journey and affected requirements must come from the accepted design revision")
 			return
 		}
 		blob, digest, found := infrastructureCommitBlob(git, p.RepositoryID, p.SourceCommitID, in.DefinitionPath)
@@ -101,7 +78,16 @@ func registerInterfaceCheckRoutes(mux *http.ServeMux, git *storage.Store, repos 
 			writeAPIError(w, 422, "invalid_interface_definition", "the repository-defined check must resolve at the exact candidate revision")
 			return
 		}
-		out, e := checks.Create(in)
+		var out interfacechecks.Check
+		e = pulls.WithSourceRevision(p.RepositoryID, p.ID, in.Revision, func(pullrequests.PullRequest) error {
+			var createErr error
+			out, createErr = checks.Create(in)
+			return createErr
+		})
+		if errors.Is(e, pullrequests.ErrSourceChanged) || errors.Is(e, pullrequests.ErrNotReady) {
+			writeAPIError(w, 409, "interface_revision_changed", "the pull moved while interface evidence was retained")
+			return
+		}
 		if errors.Is(e, interfacechecks.ErrInvalid) {
 			writeAPIError(w, 422, "invalid_interface_check", "contexts, coverage, differences, artifacts, performance, and requirements must be complete")
 			return
@@ -140,11 +126,51 @@ func registerInterfaceCheckRoutes(mux *http.ServeMux, git *storage.Store, repos 
 			writeAPIError(w, 409, "interface_revision_changed", "classification applies only to current-revision evidence")
 			return
 		}
-		out, e := checks.Classify(p.RepositoryID, p.ID, c.ID, in.DifferenceID, in.Outcome, in.Rationale, actor.UserID)
+		var out interfacechecks.Check
+		e = pulls.WithSourceRevision(p.RepositoryID, p.ID, in.Revision, func(pullrequests.PullRequest) error {
+			var classifyErr error
+			out, classifyErr = checks.Classify(p.RepositoryID, p.ID, c.ID, in.DifferenceID, in.Outcome, in.Rationale, actor.UserID)
+			return classifyErr
+		})
+		if errors.Is(e, pullrequests.ErrSourceChanged) || errors.Is(e, pullrequests.ErrNotReady) {
+			writeAPIError(w, 409, "interface_revision_changed", "the pull moved while the classification was retained")
+			return
+		}
 		if e != nil {
 			writeAPIError(w, 409, "interface_classification_invalid", "difference is already classified or the decision is invalid")
 			return
 		}
 		writeJSON(w, 201, out)
 	})
+}
+
+func interfaceCheckMatchesDesign(design designproposals.Proposal, check interfacechecks.Check) bool {
+	if design.CurrentVersion != check.DesignVersion || design.Implementation == nil || design.Implementation.DesignVersion != check.DesignVersion || len(design.Revisions) != design.CurrentVersion {
+		return false
+	}
+	spec := design.Revisions[check.DesignVersion-1]
+	journeyFound := false
+	for _, journey := range spec.Journeys {
+		if journey.Name == check.Journey {
+			journeyFound = true
+		}
+	}
+	if !journeyFound {
+		return false
+	}
+	accepted := map[string]bool{}
+	for _, requirement := range append(append([]string{}, spec.AcceptanceCriteria...), spec.ComponentContracts...) {
+		accepted[requirement] = true
+	}
+	for _, requirement := range check.AffectedRequirements {
+		if !accepted[requirement] {
+			return false
+		}
+	}
+	for _, difference := range check.Differences {
+		if !accepted[difference.Requirement] {
+			return false
+		}
+	}
+	return true
 }

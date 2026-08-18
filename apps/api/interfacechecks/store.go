@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -113,13 +114,38 @@ func valid(c Check) bool {
 	if c.Status != "passed" && c.Status != "failed" {
 		return false
 	}
+	artifactIDs := map[string]bool{}
 	for _, a := range c.Artifacts {
-		if a.ID == "" || a.Name == "" || len(a.Digest) != 64 || a.SizeBytes < 0 || !strings.HasPrefix(a.URL, "/") || strings.HasPrefix(a.URL, "//") {
+		if a.ID == "" || artifactIDs[a.ID] || a.Name == "" || len(a.Digest) != 64 || a.SizeBytes < 0 || !strings.HasPrefix(a.URL, "/") || strings.HasPrefix(a.URL, "//") {
 			return false
 		}
+		artifactIDs[a.ID] = true
 	}
+	affected := map[string]bool{}
+	for _, requirement := range c.AffectedRequirements {
+		if strings.TrimSpace(requirement) == "" || affected[requirement] {
+			return false
+		}
+		affected[requirement] = true
+	}
+	differenceIDs := map[string]bool{}
 	for _, d := range c.Differences {
-		if d.ID == "" || d.Summary == "" || d.Requirement == "" || (d.Kind != "visual" && d.Kind != "behavioral" && d.Kind != "accessibility" && d.Kind != "content" && d.Kind != "performance") {
+		if d.ID == "" || differenceIDs[d.ID] || d.Summary == "" || !affected[d.Requirement] || (d.Kind != "visual" && d.Kind != "behavioral" && d.Kind != "accessibility" && d.Kind != "content" && d.Kind != "performance") {
+			return false
+		}
+		differenceIDs[d.ID] = true
+	}
+	for _, performance := range c.Performance {
+		values := []float64{performance.Baseline, performance.Candidate, performance.Budget}
+		if strings.TrimSpace(performance.Metric) == "" || strings.TrimSpace(performance.Unit) == "" {
+			return false
+		}
+		for _, value := range values {
+			if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+				return false
+			}
+		}
+		if performance.Passed != (performance.Candidate <= performance.Budget) {
 			return false
 		}
 	}
