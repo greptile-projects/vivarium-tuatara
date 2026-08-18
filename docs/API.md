@@ -3635,7 +3635,9 @@ bound to an exact retained definition version and provider revision. Managed obs
 in that revision; unmanaged discoveries deliberately omit `resource_id`. Optional release and environment
 IDs must resolve in the repository. Visibility is `public` or `participant`, status is `healthy`,
 `degraded`, or `unknown`, and `observed_at` records source freshness. Credential-shaped provider,
-revision, configuration, summary, or commitment text is rejected.
+revision, configuration, summary, or commitment text—including common provider token and access-key
+formats—is rejected. Future timestamps are rejected; only current-definition observations from the
+preceding 24 hours satisfy current observed-state coverage.
 
 Reads derive diagnostics for unmanaged resources, inaccessible providers, observations older than 24
 hours or attached to an earlier definition revision, conflicting owners for one provider identity,

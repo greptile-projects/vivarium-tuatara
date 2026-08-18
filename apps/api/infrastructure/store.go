@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -19,6 +20,14 @@ import (
 var ErrNotFound = errors.New("infrastructure definition not found")
 var ErrInvalid = errors.New("invalid infrastructure definition")
 var ErrConflict = errors.New("infrastructure definition version conflict")
+
+var credentialPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bgh[pousr]_[a-z0-9]{20,}\b`),
+	regexp.MustCompile(`(?i)\bgithub_pat_[a-z0-9_]{20,}\b`),
+	regexp.MustCompile(`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`),
+	regexp.MustCompile(`(?i)\b(?:xox[baprs]-[a-z0-9-]{10,}|sk-(?:proj-)?[a-z0-9_-]{20,})\b`),
+	regexp.MustCompile(`(?i)\beyJ[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\b`),
+}
 
 type ConfigurationBoundary struct {
 	Name        string `json:"name"`
@@ -155,7 +164,7 @@ func (s *Store) Observe(id, actor string, o Observation) (Definition, error) {
 		if e != nil {
 			return e
 		}
-		if validateObservation(v, o) != nil {
+		if validateObservation(v, o, s.now()) != nil {
 			return ErrInvalid
 		}
 		o.ID = randomID()
@@ -245,8 +254,8 @@ func validateRevision(r Revision) error {
 	}
 	return nil
 }
-func validateObservation(v Definition, o Observation) error {
-	if o.DefinitionVersion < 1 || o.DefinitionVersion > v.CurrentVersion || o.ProviderResource == "" || o.ObservedRevision == "" || o.Summary == "" || o.ObservedAt.IsZero() || (o.Visibility != "public" && o.Visibility != "participant") || (o.Status != "healthy" && o.Status != "degraded" && o.Status != "unknown") || unsafe(o.ProviderResource, o.ObservedRevision, o.Summary) {
+func validateObservation(v Definition, o Observation, now time.Time) error {
+	if o.DefinitionVersion < 1 || o.DefinitionVersion > v.CurrentVersion || o.ProviderResource == "" || o.ObservedRevision == "" || o.Summary == "" || o.ObservedAt.IsZero() || o.ObservedAt.After(now) || (o.Visibility != "public" && o.Visibility != "participant") || (o.Status != "healthy" && o.Status != "degraded" && o.Status != "unknown") || unsafe(o.ProviderResource, o.ObservedRevision, o.Summary) {
 		return ErrInvalid
 	}
 	if o.Managed {
@@ -276,6 +285,11 @@ func unsafe(values ...string) bool {
 		l := strings.ToLower(v)
 		for _, needle := range []string{"-----begin private key", "bearer ", "api_key=", "apikey=", "password=", "secret=", "token="} {
 			if strings.Contains(l, needle) {
+				return true
+			}
+		}
+		for _, pattern := range credentialPatterns {
+			if pattern.MatchString(v) {
 				return true
 			}
 		}
@@ -320,14 +334,18 @@ func (s *Store) project(v Definition, participant bool) Definition {
 	projected := make([]Observation, 0, len(v.Observations))
 	observed := map[string]bool{}
 	for _, o := range v.Observations {
+		age := s.now().Sub(o.ObservedAt)
+		current := o.DefinitionVersion == v.CurrentVersion && age >= 0 && age <= 24*time.Hour
 		if o.DefinitionVersion != v.CurrentVersion {
 			add("stale_observation", "warning", "Observation targets an earlier definition revision.", o.ResourceID)
-		} else if s.now().Sub(o.ObservedAt) > 24*time.Hour {
+		} else if age < 0 {
+			add("invalid_observation_time", "blocking", "Observation timestamp is later than the projection clock.", o.ResourceID)
+		} else if age > 24*time.Hour {
 			add("stale_observation", "warning", "Observation is older than 24 hours.", o.ResourceID)
 		}
 		if !o.Managed {
 			add("unmanaged_resource", "warning", "Observed provider resource is not represented by this definition.", "")
-		} else if o.DefinitionVersion == v.CurrentVersion {
+		} else if current {
 			observed[o.ResourceID] = true
 		}
 		if !participant && o.Visibility != "public" {

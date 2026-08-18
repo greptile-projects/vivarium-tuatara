@@ -83,6 +83,39 @@ func TestRejectsSecretsInvalidLinksAndConflictingWrites(t *testing.T) {
 	if _, err = s.Observe(v.ID, "owner", bad); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("observation error = %v", err)
 	}
+	for _, credential := range []string{"ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", "AKIAABCDEFGHIJKLMNOP", "github_pat_11ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"} {
+		bad.ObservedRevision = "revision"
+		bad.Summary = "deployment credential " + credential
+		if _, err = s.Observe(v.ID, "owner", bad); !errors.Is(err, ErrInvalid) {
+			t.Errorf("credential %q error = %v", credential, err)
+		}
+	}
+}
+
+func TestFutureAndStaleObservationsCannotSatisfyCurrentCoverage(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 18, 4, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	v, err := s.Create("repo", "owner", revision())
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation := Observation{DefinitionVersion: 1, ResourceID: "api", ProviderResource: "service/api", ObservedRevision: "4", Status: "healthy", Summary: "Sanitized.", Visibility: "public", Managed: true, ObservedAt: now.Add(time.Second)}
+	if _, err = s.Observe(v.ID, "owner", observation); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("future observation error = %v", err)
+	}
+	observation.ObservedAt = now.Add(-25 * time.Hour)
+	v, err = s.Observe(v.ID, "owner", observation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[string]bool{}
+	for _, diagnostic := range v.Diagnostics {
+		kinds[diagnostic.Kind] = true
+	}
+	if !kinds["stale_observation"] || !kinds["missing_observation"] {
+		t.Fatalf("diagnostics = %#v", v.Diagnostics)
+	}
 }
 
 func TestReportsUnmanagedAndConflictingOwnership(t *testing.T) {

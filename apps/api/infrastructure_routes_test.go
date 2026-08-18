@@ -39,6 +39,10 @@ func TestInfrastructureAPIKeepsExactIntentPublicAndSensitiveEvidenceBounded(t *t
 	createdResponse.Body.Close()
 	observation, _ := json.Marshal(map[string]any{"definition_version": 1, "resource_id": "api", "provider_resource": "service/api", "observed_revision": "generation-4", "status": "healthy", "summary": "Within declared bounds.", "visibility": "participant", "managed": true, "observed_at": time.Now().UTC()})
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/infrastructure/"+created.ID+"/observations", string(observation), owner.Credential.Token, http.StatusCreated).Body.Close()
+	for _, credential := range []string{"ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", "AKIAABCDEFGHIJKLMNOP", "github_pat_11ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"} {
+		unsafeObservation, _ := json.Marshal(map[string]any{"definition_version": 1, "resource_id": "api", "provider_resource": "service/api", "observed_revision": "generation-4", "status": "healthy", "summary": "deployment credential " + credential, "visibility": "public", "managed": true, "observed_at": time.Now().UTC()})
+		authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/infrastructure/"+created.ID+"/observations", string(unsafeObservation), owner.Credential.Token, http.StatusBadRequest).Body.Close()
+	}
 	publicResponse, err := http.Get(server.URL + "/repositories/" + repo.ID + "/infrastructure/" + created.ID)
 	if err != nil {
 		t.Fatal(err)
