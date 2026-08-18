@@ -3043,3 +3043,13 @@ metadata, invariant results, costs, and gaps. The server derives outcomes from r
 distinct passing workspaces before projecting `reproduced`; disagreement remains `nondeterministic`, and unsafe,
 changed-revision, missing-dependency, or irreducible production conditions remain explicit evidence rather than a
 successful reproduction.
+
+### Design implementation handoff
+
+Accepted product design is delivered through the ordinary proposal-task boundary. Publication freezes the
+accepted design revision and current default-branch commit, creates ordered human/agent assignments, and embeds
+audience-safe immutable prototype references plus exact state, content, component, breakpoint, acceptance, and
+asset-provenance requirements in each task's reasoning context. Exact artifact payloads stay behind the design
+proposal's explicit-audience projection. Proposal-task workspaces and pull requests therefore reuse existing access, agent,
+review, and merge controls. Implementers append requirement-to-code/surface mappings and disclose deviations;
+only named design owners decide those deviations, without gaining repository authority from design ownership.

@@ -217,6 +217,8 @@ type Workspace struct {
 type ReasoningContext struct {
 	AssessmentID      string                     `json:"assessment_id"`
 	AssessmentVersion int                        `json:"assessment_version"`
+	DesignProposalID  string                     `json:"design_proposal_id,omitempty"`
+	DesignVersion     int                        `json:"design_version,omitempty"`
 	Revision          string                     `json:"revision"`
 	ExplanationID     string                     `json:"explanation_id,omitempty"`
 	ConclusionEntryID string                     `json:"conclusion_entry_id,omitempty"`

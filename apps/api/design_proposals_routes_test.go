@@ -1,12 +1,31 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/designproposals"
 	productfeedback "github.com/greptile-projects/vivarium-tuatara/apps/api/feedback"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
 )
+
+func TestDesignImplementationReasoningDoesNotCopyRestrictedArtifactPayload(t *testing.T) {
+	artifacts := []designproposals.Artifact{{ID: "private-prototype", Kind: "prototype", Title: "Checkout", Description: "restricted-description", Content: "restricted-content", Interactions: []string{"restricted-interaction"}, AuthorID: "designer", License: "MIT", Source: "design.fig"}}
+	items := artifactSummaries(artifacts)
+	if len(items) != 1 {
+		t.Fatalf("items = %#v", items)
+	}
+	for _, secret := range []string{"restricted-description", "restricted-content", "restricted-interaction"} {
+		if strings.Contains(items[0], secret) {
+			t.Fatalf("restricted artifact payload copied into ordinary reasoning: %q", items[0])
+		}
+	}
+	for _, provenance := range []string{"private-prototype", "designer", "MIT", "design.fig"} {
+		if !strings.Contains(items[0], provenance) {
+			t.Fatalf("accountable provenance %q missing from %q", provenance, items[0])
+		}
+	}
+}
 
 func TestDesignArtifactProjectionHonorsExplicitAudience(t *testing.T) {
 	v := designproposals.Proposal{Revisions: []designproposals.Revision{{Artifacts: []designproposals.Artifact{{ID: "private-research", Description: "private interview", Content: "participant details", Interactions: []string{"open transcript"}, Audience: []string{"invited-user"}}}}}}
@@ -26,6 +45,21 @@ func TestDesignArtifactProjectionHonorsExplicitAudience(t *testing.T) {
 	redactDesignArtifacts(&anonymous, "")
 	if anonymous.Revisions[0].Artifacts[0].Content != "" {
 		t.Fatalf("empty audience authorized anonymous reader: %#v", anonymous)
+	}
+}
+
+func TestDesignArtifactProjectionRedactsHistoricalRevisionForCurrentPublisher(t *testing.T) {
+	v := designproposals.Proposal{Revisions: []designproposals.Revision{
+		{Artifacts: []designproposals.Artifact{{ID: "historical", Description: "historical-description", Content: "historical-content", Interactions: []string{"historical-interaction"}, Audience: []string{"original-designer"}}}},
+		{Artifacts: []designproposals.Artifact{{ID: "current", Description: "current-description", Content: "current-content", Interactions: []string{"current-interaction"}, Audience: []string{"publisher"}}}},
+	}}
+	redactDesignArtifacts(&v, "publisher")
+	historical, current := v.Revisions[0].Artifacts[0], v.Revisions[1].Artifacts[0]
+	if historical.Content != "" || len(historical.Interactions) != 0 || historical.Description == "historical-description" {
+		t.Fatalf("historical restricted artifact leaked to current publisher: %#v", historical)
+	}
+	if current.Content != "current-content" || current.Description != "current-description" || len(current.Interactions) != 1 {
+		t.Fatalf("current explicitly visible artifact was redacted: %#v", current)
 	}
 }
 

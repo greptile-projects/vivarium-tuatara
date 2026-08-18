@@ -142,7 +142,7 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 		if input.Source.Kind == "proposal_task" && proposalStore != nil {
 			task, taskErr := proposalStore.GetTask(input.RepositoryID, input.Source.ProposalID, input.Source.TaskID)
 			if taskErr == nil && task.Reasoning != nil {
-				reasoning = &workspaces.ReasoningContext{AssessmentID: task.Reasoning.AssessmentID, AssessmentVersion: task.Reasoning.AssessmentVersion, Revision: task.Reasoning.Revision, ExplanationID: task.Reasoning.ExplanationID, ConclusionEntryID: task.Reasoning.ConclusionEntryID}
+				reasoning = &workspaces.ReasoningContext{AssessmentID: task.Reasoning.AssessmentID, AssessmentVersion: task.Reasoning.AssessmentVersion, DesignProposalID: task.Reasoning.DesignProposalID, DesignVersion: task.Reasoning.DesignProposalVersion, Revision: task.Reasoning.Revision, ExplanationID: task.Reasoning.ExplanationID, ConclusionEntryID: task.Reasoning.ConclusionEntryID}
 				for _, item := range task.Reasoning.Items {
 					reasoning.Items = append(reasoning.Items, workspaces.ReasoningItem{ID: item.ID, Kind: item.Kind, Summary: item.Summary, Status: item.Status})
 				}
