@@ -44,6 +44,10 @@ type Execution = {
   };
   blockers: string[];
   next_actions: string[];
+  expected_outcomes: { resource_id: string; present: boolean; measures: string[] }[];
+  assessments: { id: string; converged: boolean; reasons: string[]; recorded_at: string }[];
+  monitor_runs: { id: string; permission: string; provider_status: string; recorded_at: string; findings: { id: string; kind: string; resource_id?: string; severity: string; summary: string; cause?: string }[] }[];
+  drift_responses: { id: string; finding_id: string; kind: string; owner_id: string; resource_kind: string; resource_id: string; summary: string }[];
   events: {
     sequence: number;
     kind: string;
@@ -182,6 +186,21 @@ export function InfrastructureExecutions({
     } finally {
       setBusy(false);
     }
+  }
+  async function assess(e: FormEvent<HTMLFormElement>, x: Execution) {
+    e.preventDefault(); if (!token) return; setBusy(true); const form = new FormData(e.currentTarget);
+    const state = field(form, "outcome");
+    try {
+      await api(`/repositories/${repositoryID}/infrastructure-executions/${x.id}/assessments`, { method:"POST", body:JSON.stringify({ expected_version:x.version, outcomes:x.expected_outcomes.map((o)=>({ resource_id:o.resource_id, present:field(form, `present-${o.resource_id}`)==="yes", provider_revision:field(form, `revision-${o.resource_id}`), service:state, security:state, privacy:state, cost:state, continuity:state, measures_passed:state==="passed"?o.measures:[], summary:field(form,"summary") })), unmanaged_resources:field(form,"unmanaged").split(",").map(v=>v.trim()).filter(Boolean), failed_cleanup:field(form,"cleanup").split(",").map(v=>v.trim()).filter(Boolean) }) }, token); await load();
+    } catch (z) { setError(z instanceof Error?z.message:"Convergence evidence could not be retained."); } finally { setBusy(false); }
+  }
+  async function monitor(e: FormEvent<HTMLFormElement>, x: Execution) {
+    e.preventDefault(); if (!token) return; setBusy(true); const form=new FormData(e.currentTarget); const summary=field(form,"finding_summary");
+    try { await api(`/repositories/${repositoryID}/infrastructure-executions/${x.id}/monitor-runs`,{method:"POST",body:JSON.stringify({permission:field(form,"permission"),provider_status:field(form,"provider_status"),findings:summary?[{kind:field(form,"finding_kind"),resource_id:field(form,"resource_id"),severity:field(form,"severity"),summary,cause:field(form,"cause")}]:[]})},token); await load(); } catch(z){setError(z instanceof Error?z.message:"Monitoring evidence could not be retained.");} finally{setBusy(false);}
+  }
+  async function respond(e: FormEvent<HTMLFormElement>, x: Execution, findingID: string) {
+    e.preventDefault(); if(!token)return; setBusy(true); const form=new FormData(e.currentTarget);
+    try { await api(`/repositories/${repositoryID}/infrastructure-executions/${x.id}/drift-responses`,{method:"POST",body:JSON.stringify({expected_version:x.version,response:{finding_id:findingID,kind:field(form,"response_kind"),owner_id:field(form,"owner_id"),resource_kind:field(form,"resource_kind"),resource_id:field(form,"work_id"),summary:field(form,"response_summary")}})},token); await load(); } catch(z){setError(z instanceof Error?z.message:"Drift response could not be linked.");} finally{setBusy(false);}
   }
   return (
     <section className="space-y-3">
@@ -377,6 +396,10 @@ export function InfrastructureExecutions({
               </li>
             ))}
           </ol>
+          {token && ["succeeded", "paused", "cancelled"].includes(x.status) && <form onSubmit={(e)=>assess(e,x)} className="mt-4 grid gap-2 rounded-lg border p-4 md:grid-cols-3"><h3 className="md:col-span-3 font-semibold">Verify reviewed outcomes</h3><Select name="outcome" options={["passed","failed","unknown"]}/>{x.expected_outcomes.map(o=><div key={o.resource_id} className="contents"><Input name={`revision-${o.resource_id}`} label={`${o.resource_id} provider revision`}/><Select name={`present-${o.resource_id}`} options={["yes","no"]}/></div>)}<Input name="summary" label="Sanitized verification summary"/><Input name="unmanaged" label="Unmanaged resources" required={false}/><Input name="cleanup" label="Failed cleanup" required={false}/><Button disabled={busy}>Assess convergence</Button></form>}
+          {x.assessments?.map(a=><div key={a.id} className="mt-3 rounded-lg border p-3"><Badge tone={a.converged?"success":"warning"}>{a.converged?"converged":"divergent"}</Badge><p className="mt-2 text-xs text-[var(--muted)]">{a.reasons.join(" · ") || "Every frozen outcome and measure passed."}</p></div>)}
+          {token && <form onSubmit={(e)=>monitor(e,x)} className="mt-4 grid gap-2 rounded-lg border p-4 md:grid-cols-3"><h3 className="md:col-span-3 font-semibold">Permission-aware drift monitor</h3><Select name="permission" options={["granted","partial","denied"]}/><Select name="provider_status" options={["available","degraded","lost","unknown"]}/><Select name="finding_kind" options={["configuration_drift","unmanaged_change","failed_cleanup","credential_expiring","provider_loss"]}/><Select name="severity" options={["low","medium","high","critical"]}/><Input name="resource_id" label="Resource ID" required={false}/><Input name="finding_summary" label="Finding (blank for no finding)" required={false}/><Input name="cause" label="Attributed cause" required={false}/><Button disabled={busy}>Record monitoring run</Button></form>}
+          {x.monitor_runs?.flatMap(run=>run.findings).map(f=><div key={f.id} className="mt-3 rounded-lg border p-3"><div className="flex gap-2"><Badge tone={f.severity==="critical"||f.severity==="high"?"danger":"warning"}>{f.kind}</Badge>{f.resource_id&&<Badge>{f.resource_id}</Badge>}</div><p className="mt-2 text-sm">{f.summary}</p><p className="text-xs text-[var(--muted)]">{f.cause||"Cause unavailable"} · response must link ordinary governed work.</p>{token&&<form onSubmit={(e)=>respond(e,x,f.id)} className="mt-3 grid gap-2 md:grid-cols-3"><Select name="response_kind" options={["incident","exception","repair","adopt","restore"]}/><Select name="resource_kind" options={["issue","proposal","task","incident","exception","pull_request"]}/><Input name="work_id" label="Existing governed work ID"/><Input name="owner_id" label="Accountable owner ID"/><Input name="response_summary" label="Response and policy boundary"/><Button disabled={busy}>Link accountable response</Button></form>}</div>)}
         </Card>
       ))}
     </section>

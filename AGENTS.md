@@ -154,6 +154,13 @@ whenever dependencies change or the web job fails before it starts.
   Passing rehearsal evidence must use the authoritative environment ID, or be a `policy_approved_ephemeral`
   rehearsal whose frozen policy approval exactly equals the execution's established environment-policy reference;
   isolated preview evidence alone cannot admit production.
+  Completed, paused, and cancelled applies retain version-bound convergence assessments against frozen resource
+  presence and service, security, privacy, cost, and continuity measures. Only a succeeded apply with complete
+  passing observations, no unmanaged resources, and no failed cleanup projects convergence. Participant-scoped
+  monitor runs retain granted, partial, or denied provider visibility and sanitized configuration drift, unmanaged
+  change, cleanup, credential-expiry, and provider-loss findings with available cause attribution. Owners link
+  findings to ordinary incident, exception, repair, reviewed adoption, or declared-state restoration work; these
+  append-only links neither rewrite external observations nor grant provider, environment, policy, or review authority.
 
 - **Developer support** — `/support` and
   `/repositories/{id}/support-threads` retain contextual questions separately

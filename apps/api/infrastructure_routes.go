@@ -504,6 +504,82 @@ func registerInfrastructureRoutes(mux *http.ServeMux, git *storage.Store, catalo
 		}
 		writeInfrastructureExecution(w, out, err, 201)
 	})
+	mux.HandleFunc("POST /repositories/{id}/infrastructure-executions/{execution_id}/assessments", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := definitions.GetExecution(r.PathValue("execution_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "infrastructure_execution_not_found", "infrastructure execution not found")
+			return
+		}
+		var in struct {
+			ExpectedVersion    int                              `json:"expected_version"`
+			Outcomes           []infrastructure.ResourceOutcome `json:"outcomes"`
+			UnmanagedResources []string                         `json:"unmanaged_resources"`
+			FailedCleanup      []string                         `json:"failed_cleanup"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "exact observed outcomes and execution version are required")
+			return
+		}
+		out, err := definitions.AssessExecution(current.ID, actor.UserID, in.ExpectedVersion, in.Outcomes, in.UnmanagedResources, in.FailedCleanup)
+		writeInfrastructureExecution(w, out, err, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/infrastructure-executions/{execution_id}/monitor-runs", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := definitions.GetExecution(r.PathValue("execution_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "infrastructure_execution_not_found", "infrastructure execution not found")
+			return
+		}
+		var in struct {
+			Permission     string                        `json:"permission"`
+			ProviderStatus string                        `json:"provider_status"`
+			Findings       []infrastructure.DriftFinding `json:"findings"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "monitor permission, provider status, and bounded findings are required")
+			return
+		}
+		out, err := definitions.MonitorExecution(current.ID, actor.UserID, in.Permission, in.ProviderStatus, in.Findings)
+		writeInfrastructureExecution(w, out, err, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/infrastructure-executions/{execution_id}/drift-responses", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		current, err := definitions.GetExecution(r.PathValue("execution_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "infrastructure_execution_not_found", "infrastructure execution not found")
+			return
+		}
+		var in struct {
+			ExpectedVersion int                          `json:"expected_version"`
+			Response        infrastructure.DriftResponse `json:"response"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a current finding and governed response link are required")
+			return
+		}
+		var out infrastructure.Execution
+		err = catalog.WithCurrentParticipants([]string{in.Response.OwnerID}, r.PathValue("id"), func() error {
+			if in.Response.Kind == "adopt" && in.Response.ResourceKind == "pull_request" {
+				if pull, pullErr := pulls.Get(r.PathValue("id"), in.Response.ResourceID); pullErr != nil || pull.RepositoryID != r.PathValue("id") {
+					return infrastructure.ErrInvalid
+				}
+			}
+			var responseErr error
+			out, responseErr = definitions.RespondToDrift(current.ID, actor.UserID, in.ExpectedVersion, in.Response)
+			return responseErr
+		})
+		writeInfrastructureExecution(w, out, err, 201)
+	})
 }
 
 func writeInfrastructureExecution(w http.ResponseWriter, v infrastructure.Execution, err error, status int) {
