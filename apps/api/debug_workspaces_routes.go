@@ -12,12 +12,15 @@ import (
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/debugworkspaces"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/infrastructure"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/serviceobjectives"
@@ -48,7 +51,7 @@ type debugProbeRevokeInput struct {
 	Reason          string `json:"reason"`
 }
 
-func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *repositories.Store, credentials *auth.Store, workspaces *debugworkspaces.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, issueStore *issues.Store, incidentStore *incidents.Store, supportStore *supportthreads.Store, objectiveStore *serviceobjectives.Store, packageStore *packages.Store, infrastructureStore *infrastructure.Store, developmentWorkspaces *devworkspaces.Store) {
+func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *repositories.Store, credentials *auth.Store, workspaces *debugworkspaces.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, issueStore *issues.Store, incidentStore *incidents.Store, supportStore *supportthreads.Store, objectiveStore *serviceobjectives.Store, packageStore *packages.Store, infrastructureStore *infrastructure.Store, developmentWorkspaces *devworkspaces.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, checkStore *checkruns.Store) {
 	actorID := func(c auth.Credential) string {
 		if c.AgentID != "" {
 			return c.AgentID
@@ -645,6 +648,320 @@ func registerDebugWorkspaceRoutes(mux *http.ServeMux, gitStore *storage.Store, c
 		}
 		writeJSON(w, 201, map[string]any{"debugging_workspace": project(out, actorID(c)), "attempt": attempt})
 	})
+	mux.HandleFunc("POST /repositories/{id}/debugging-workspaces/{workspace_id}/repair-work", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		repo, err := catalog.GetByID(r.PathValue("id"))
+		if err != nil {
+			writeAPIError(w, 404, "repository_not_found", "repository not found")
+			return
+		}
+		current, err := workspaces.Get(repo.ID, r.PathValue("workspace_id"))
+		if err != nil || !canRead(current, actorID(c)) {
+			writeAPIError(w, 404, "debugging_workspace_not_found", "debugging workspace not found")
+			return
+		}
+		var in struct {
+			ExpectedVersion    int      `json:"expected_version"`
+			ScenarioID         string   `json:"scenario_id"`
+			CauseClaimID       string   `json:"cause_claim_id"`
+			AcceptanceCriteria []string `json:"acceptance_criteria"`
+			RegressionCriteria []string `json:"regression_criteria"`
+			AssigneeType       string   `json:"assignee_type"`
+			AssigneeID         string   `json:"assignee_id"`
+			Title              string   `json:"title"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "proven diagnosis and owned repair criteria are required")
+			return
+		}
+		provenScenario, provenCause := false, false
+		for _, scenario := range current.ReplayScenarios {
+			provenScenario = provenScenario || (scenario.ID == in.ScenarioID && scenario.Status == "reproduced")
+		}
+		for _, claim := range current.Claims {
+			provenCause = provenCause || (claim.ID == in.CauseClaimID && claim.Kind == "finding" && claim.Status == "supported")
+		}
+		if !provenScenario || !provenCause {
+			writeAPIError(w, 422, "invalid_debugging_repair", "repair requires a reproduced scenario and supported cited cause")
+			return
+		}
+		if in.AssigneeType == "human" {
+			participant, _ := catalog.HasCollaborator(in.AssigneeID, repo.ID)
+			if repo.OwnerID != in.AssigneeID && !participant {
+				writeAPIError(w, 422, "invalid_debugging_repair", "human owner must already participate in the repository")
+				return
+			}
+		}
+		identity := sha256.Sum256([]byte(current.ID + "\x00" + in.ScenarioID + "\x00" + in.CauseClaimID))
+		workID := hex.EncodeToString(identity[:16])
+		reserved, work := current, debugworkspaces.RepairWork{}
+		for _, existing := range current.RepairWork {
+			if existing.ID == workID {
+				work = existing
+			}
+		}
+		if work.ID == "" {
+			var reserveErr error
+			reserved, work, reserveErr = workspaces.CreateRepairWork(repo.ID, current.ID, actorID(c), debugworkspaces.RepairWork{ID: workID, ScenarioID: in.ScenarioID, CauseClaimID: in.CauseClaimID, AffectedRevision: current.Source.Revision, AcceptanceCriteria: in.AcceptanceCriteria, RegressionCriteria: in.RegressionCriteria, AssigneeType: in.AssigneeType, AssigneeID: in.AssigneeID}, in.ExpectedVersion)
+			if reserveErr != nil {
+				writeDebugWorkspace(w, project(reserved, actorID(c)), reserveErr, 201)
+				return
+			}
+		} else if work.ValidationStatus != "publishing" || work.AffectedRevision != current.Source.Revision {
+			writeAPIError(w, 409, "debugging_repair_changed", "repair work is already published")
+			return
+		}
+		origin := proposals.ReasoningOrigin{DebuggingWorkspaceID: current.ID, DebuggingRepairWorkID: workID, DebuggingScenarioID: in.ScenarioID, DebuggingCauseClaimID: in.CauseClaimID, Revision: current.Source.Revision, SelectedItemIDs: []string{in.ScenarioID, in.CauseClaimID}, Items: []proposals.ReasoningItem{{ID: in.ScenarioID, Kind: "reproduction", Summary: "Minimized production behavior reproduced twice", Status: "confirmed"}, {ID: in.CauseClaimID, Kind: "diagnosis", Summary: "Cited cause selected for repair", Status: "supported"}}, AnalysisStatus: "debugging_repair"}
+		criteria := strings.Join(append(append([]string{}, in.AcceptanceCriteria...), in.RegressionCriteria...), "\n- ")
+		title := strings.TrimSpace(in.Title)
+		if title == "" {
+			title = "Repair diagnosed production behavior"
+		}
+		p, tasks, e := proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: repo.ID, ActorID: actorID(c), Title: title, Body: "Governed repair from debugging workspace " + current.ID + " at affected revision " + current.Source.Revision + ".\n\nCriteria:\n- " + criteria, Origin: origin, Tasks: []proposals.ImplementationTaskInput{{Title: title, Outcome: "Change the reproduced execution for the cited cause and validate it in the affected environment.", Risk: current.Severity + " production regression", VerificationPlan: "Rerun the frozen scenario and every ordinary required check on each pull revision, then validate production signals after staged deployment.\n- " + criteria, AssigneeType: in.AssigneeType, AssigneeID: in.AssigneeID}}})
+		if e != nil {
+			writeAPIError(w, 422, "invalid_debugging_repair", e.Error())
+			return
+		}
+		out, work, e := workspaces.UpdateRepairWork(repo.ID, current.ID, work.ID, actorID(c), reserved.Version, func(x *debugworkspaces.RepairWork) error {
+			x.ProposalID = p.ID
+			x.TaskID = tasks[0].ID
+			x.AssigneeID = tasks[0].Assignment.AssigneeID
+			x.ValidationStatus = "awaiting_pull"
+			return nil
+		})
+		if e != nil {
+			writeDebugWorkspace(w, project(out, actorID(c)), e, 201)
+			return
+		}
+		writeJSON(w, 201, map[string]any{"debugging_workspace": project(out, actorID(c)), "repair_work": work, "proposal": p, "task": tasks[0]})
+	})
+	mux.HandleFunc("POST /repositories/{id}/debugging-workspaces/{workspace_id}/repair-work/{work_id}/validation", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		repo, e := catalog.GetByID(r.PathValue("id"))
+		if e != nil {
+			writeAPIError(w, 404, "repository_not_found", "repository not found")
+			return
+		}
+		current, e := workspaces.Get(repo.ID, r.PathValue("workspace_id"))
+		if e != nil || !canRead(current, actorID(c)) {
+			writeAPIError(w, 404, "debugging_workspace_not_found", "debugging workspace not found")
+			return
+		}
+		var in struct {
+			ExpectedVersion int      `json:"expected_version"`
+			PullRequestID   string   `json:"pull_request_id"`
+			CheckRunIDs     []string `json:"check_run_ids"`
+			ReleaseID       string   `json:"release_id"`
+			DeploymentID    string   `json:"deployment_id"`
+			SignalNames     []string `json:"signal_names"`
+			Outcome         string   `json:"outcome"`
+			Summary         string   `json:"summary"`
+			Action          string   `json:"action"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "governed delivery evidence is required")
+			return
+		}
+		var work *debugworkspaces.RepairWork
+		for i := range current.RepairWork {
+			if current.RepairWork[i].ID == r.PathValue("work_id") {
+				work = &current.RepairWork[i]
+			}
+		}
+		if work == nil {
+			writeAPIError(w, 404, "debugging_repair_not_found", "repair work not found")
+			return
+		}
+		pull, e := pullStore.Get(repo.ID, in.PullRequestID)
+		if e != nil || pull.TaskID == nil || *pull.TaskID != work.TaskID || pull.Status != "merged" || pull.MergeCommitID == nil {
+			writeAPIError(w, 422, "debugging_delivery_invalid", "validation requires the linked merged pull")
+			return
+		}
+		rel, e := releaseStore.Get(repo.ID, in.ReleaseID)
+		if e != nil || !debugContains(rel.Inclusions.PullRequestIDs, pull.ID) {
+			writeAPIError(w, 422, "debugging_release_invalid", "release must include the linked integrated pull")
+			return
+		}
+		runs, e := checkStore.List(repo.ID, pull.ID)
+		if e != nil {
+			writeAPIError(w, 422, "debugging_checks_invalid", "check evidence unavailable")
+			return
+		}
+		selected := debugPassingChecks(runs, in.CheckRunIDs, rel.CommitID)
+		if len(selected) != len(in.CheckRunIDs) || len(selected) == 0 {
+			writeAPIError(w, 422, "debugging_checks_invalid", "all selected checks must pass at the linked pull revision")
+			return
+		}
+		requiredChecks, e := catalog.RequiredChecks(repo.ID, pull.TargetBranch)
+		if e != nil {
+			writeAPIError(w, 422, "debugging_required_checks_unavailable", "target-branch required-check policy is unavailable")
+			return
+		}
+		if missing := debugMissingRequiredChecks(selected, requiredChecks); len(missing) > 0 {
+			writeAPIError(w, 422, "debugging_required_checks_incomplete", "every target-branch required check must pass at the deployed revision: "+strings.Join(missing, ", "))
+			return
+		}
+		scenarioHashes := map[string]bool{}
+		for _, s := range current.ReplayScenarios {
+			if s.ID == work.ScenarioID {
+				for _, cmd := range s.Commands {
+					scenarioHashes[cmd.SHA256] = true
+				}
+			}
+		}
+		scenarioRuns, ordinary := []string{}, []string{}
+		matchedScenarioHashes := map[string]bool{}
+		for id, run := range selected {
+			sum := sha256.Sum256([]byte(run.Definition.Command))
+			if scenarioHashes[hex.EncodeToString(sum[:])] {
+				scenarioRuns = append(scenarioRuns, id)
+				matchedScenarioHashes[hex.EncodeToString(sum[:])] = true
+			} else {
+				ordinary = append(ordinary, id)
+			}
+		}
+		if len(matchedScenarioHashes) != len(scenarioHashes) || len(ordinary) == 0 {
+			writeAPIError(w, 422, "debugging_checks_incomplete", "the frozen scenario and ordinary required checks must both pass")
+			return
+		}
+		dep, e := deploymentStore.GetPromotion(repo.ID, in.DeploymentID)
+		if e != nil || dep.ReleaseID != rel.ID || dep.CommitID != rel.CommitID {
+			writeAPIError(w, 422, "debugging_deployment_invalid", "deployment must deliver the exact repair release")
+			return
+		}
+		if in.Outcome == "validated" && dep.State != "succeeded" {
+			writeAPIError(w, 422, "debugging_deployment_incomplete", "validated repair requires a succeeded staged deployment")
+			return
+		}
+		signalStates := map[string]string{}
+		for _, signal := range dep.Evidence {
+			signalStates[signal.Signal] = signal.State
+		}
+		failedMeasure := false
+		for _, name := range in.SignalNames {
+			state, found := signalStates[name]
+			failedMeasure = failedMeasure || state == "failed"
+			if !found || (in.Outcome == "validated" && state != "passed") {
+				writeAPIError(w, 422, "debugging_signals_invalid", "every production validation signal must be retained and validated signals must pass")
+				return
+			}
+		}
+		if len(in.SignalNames) == 0 || !oneOf(in.Outcome, "validated", "failed") {
+			writeAPIError(w, 422, "debugging_validation_invalid", "a measured outcome and production signals are required")
+			return
+		}
+		if !oneOf(in.Action, "none", "pause", "restore", "reopen") || (in.Outcome == "validated" && in.Action != "none") {
+			writeAPIError(w, 422, "debugging_action_invalid", "action must match the measured outcome")
+			return
+		}
+		if in.Outcome == "failed" && !failedMeasure {
+			writeAPIError(w, 422, "debugging_signals_invalid", "a failed validation requires a retained failed production measure")
+			return
+		}
+		needsAction := in.Outcome == "failed" && oneOf(in.Action, "pause", "restore")
+		out, updated, e := workspaces.UpdateRepairWork(repo.ID, current.ID, work.ID, actorID(c), in.ExpectedVersion, func(x *debugworkspaces.RepairWork) error {
+			x.PullRequestID = pull.ID
+			x.PullRevision = rel.CommitID
+			x.ScenarioCheckRunIDs = scenarioRuns
+			x.RequiredCheckRunIDs = ordinary
+			x.ReleaseID = rel.ID
+			x.DeploymentID = dep.ID
+			x.ValidationStatus = in.Outcome
+			x.ValidationSummary = in.Summary
+			x.ValidationSignalNames = append([]string{}, in.SignalNames...)
+			x.ReopenedDiagnosis = in.Outcome == "failed" && in.Action == "reopen"
+			x.RequestedAction = in.Action
+			x.ActionStatus = "completed"
+			if needsAction {
+				x.ActionStatus = "pending"
+			}
+			return nil
+		})
+		if e != nil {
+			writeDebugWorkspace(w, project(out, actorID(c)), e, 201)
+			return
+		}
+		if !needsAction {
+			writeJSON(w, 201, map[string]any{"debugging_workspace": project(out, actorID(c)), "repair_work": updated})
+			return
+		}
+		actionDeploymentID := dep.ID
+		if in.Action == "pause" {
+			if dep.State != "paused" {
+				var controlled deployments.Promotion
+				controlled, e = deploymentStore.Control(repo.ID, dep.ID, actorID(c), "pause", dep.State, in.Summary)
+				actionDeploymentID = controlled.ID
+			}
+		}
+		if in.Action == "restore" {
+			var rollback deployments.Promotion
+			rollback, _, e = deploymentStore.CreateRollback(repo.ID, dep.ID, actorID(c))
+			actionDeploymentID = rollback.ID
+		}
+		if e != nil {
+			_, _, _ = workspaces.UpdateRepairWork(repo.ID, current.ID, work.ID, actorID(c), out.Version, func(x *debugworkspaces.RepairWork) error { x.ActionStatus = "failed"; return nil })
+			writeAPIError(w, 409, "debugging_operational_action_failed", e.Error())
+			return
+		}
+		final, completed, finalErr := workspaces.UpdateRepairWork(repo.ID, current.ID, work.ID, actorID(c), out.Version, func(x *debugworkspaces.RepairWork) error {
+			x.ActionStatus = "completed"
+			x.ActionDeploymentID = actionDeploymentID
+			return nil
+		})
+		if finalErr != nil {
+			w.Header().Set("Vivarium-Recovery-Validation", "pending")
+			writeJSON(w, 202, map[string]any{"debugging_workspace": project(out, actorID(c)), "repair_work": updated, "operational_action_deployment_id": actionDeploymentID, "reconciliation_pending": true})
+			return
+		}
+		writeJSON(w, 201, map[string]any{"debugging_workspace": project(final, actorID(c)), "repair_work": completed})
+	})
+}
+
+func debugContains(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+func debugPassingChecks(runs []checkruns.Run, ids []string, deployedCommit string) map[string]checkruns.Run {
+	selected := map[string]checkruns.Run{}
+	for _, run := range runs {
+		for _, id := range ids {
+			if run.ID == id && run.CommitID == deployedCommit && run.State == "completed" && run.ExitCode != nil && *run.ExitCode == 0 {
+				selected[id] = run
+			}
+		}
+	}
+	return selected
+}
+func debugMissingRequiredChecks(selected map[string]checkruns.Run, required []string) []string {
+	present := map[string]bool{}
+	for _, run := range selected {
+		present[run.Definition.Name] = true
+	}
+	missing := []string{}
+	for _, name := range required {
+		if !present[name] {
+			missing = append(missing, name)
+		}
+	}
+	return missing
+}
+func oneOf(v string, values ...string) bool {
+	for _, x := range values {
+		if v == x {
+			return true
+		}
+	}
+	return false
 }
 
 func canReadReplayWorkspace(workspace devworkspaces.Workspace, actor, repositoryOwner string) bool {

@@ -1079,7 +1079,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerInfrastructureRoutes(mux, store, repositoryCatalog, authStore, infrastructureStore, pullRequestStore, releaseStore, deploymentStore, workspaceStore, issueStore, proposalStore, incidentStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && debugWorkspaceStore != nil && releaseStore != nil && deploymentStore != nil && issueStore != nil && incidentStore != nil && supportThreadStore != nil && serviceObjectiveStore != nil && packageStore != nil && infrastructureStore != nil {
-		registerDebugWorkspaceRoutes(mux, store, repositoryCatalog, authStore, debugWorkspaceStore, releaseStore, deploymentStore, issueStore, incidentStore, supportThreadStore, serviceObjectiveStore, packageStore, infrastructureStore, workspaceStore)
+		registerDebugWorkspaceRoutes(mux, store, repositoryCatalog, authStore, debugWorkspaceStore, releaseStore, deploymentStore, issueStore, incidentStore, supportThreadStore, serviceObjectiveStore, packageStore, infrastructureStore, workspaceStore, proposalStore, pullRequestStore, checkRunStore)
 	}
 	if authStore != nil && userStore != nil && repositoryCatalog != nil && apiContractStore != nil && pullRequestStore != nil && releaseStore != nil {
 		registerAPIContractRoutes(mux, store, repositoryCatalog, authStore, apiContractStore, pullRequestStore, releaseStore)

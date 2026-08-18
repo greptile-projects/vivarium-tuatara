@@ -232,6 +232,35 @@ type ReplayScenario struct {
 	CreatedBy             string            `json:"created_by"`
 	CreatedAt             time.Time         `json:"created_at"`
 }
+type RepairWork struct {
+	ID                    string    `json:"id"`
+	Version               int       `json:"version"`
+	ScenarioID            string    `json:"scenario_id"`
+	CauseClaimID          string    `json:"cause_claim_id"`
+	AffectedRevision      string    `json:"affected_revision"`
+	AcceptanceCriteria    []string  `json:"acceptance_criteria"`
+	RegressionCriteria    []string  `json:"regression_criteria"`
+	ProposalID            string    `json:"proposal_id"`
+	TaskID                string    `json:"task_id"`
+	AssigneeType          string    `json:"assignee_type"`
+	AssigneeID            string    `json:"assignee_id"`
+	PullRequestID         string    `json:"pull_request_id,omitempty"`
+	PullRevision          string    `json:"pull_revision,omitempty"`
+	ScenarioCheckRunIDs   []string  `json:"scenario_check_run_ids"`
+	RequiredCheckRunIDs   []string  `json:"required_check_run_ids"`
+	ReleaseID             string    `json:"release_id,omitempty"`
+	DeploymentID          string    `json:"deployment_id,omitempty"`
+	ValidationStatus      string    `json:"validation_status"`
+	ValidationSummary     string    `json:"validation_summary,omitempty"`
+	ValidationSignalNames []string  `json:"validation_signal_names"`
+	ReopenedDiagnosis     bool      `json:"reopened_diagnosis"`
+	RequestedAction       string    `json:"requested_action,omitempty"`
+	ActionStatus          string    `json:"action_status,omitempty"`
+	ActionDeploymentID    string    `json:"action_deployment_id,omitempty"`
+	CreatedBy             string    `json:"created_by"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
+}
 type Workspace struct {
 	ID                  string               `json:"id"`
 	RepositoryID        string               `json:"repository_id"`
@@ -263,6 +292,7 @@ type Workspace struct {
 	OwnerRequests       []OwnerRequest       `json:"owner_requests"`
 	AgentInvestigations []AgentInvestigation `json:"agent_investigations"`
 	ReplayScenarios     []ReplayScenario     `json:"replay_scenarios"`
+	RepairWork          []RepairWork         `json:"repair_work"`
 	CreatedBy           string               `json:"created_by"`
 	CreatedAt           time.Time            `json:"created_at"`
 	UpdatedAt           time.Time            `json:"updated_at"`
@@ -318,8 +348,76 @@ func (s *Store) Create(v Workspace, actor string) (Workspace, error) {
 	v.Probes = []Probe{}
 	v.Citations, v.Claims, v.OwnerRequests, v.AgentInvestigations = []Citation{}, []Claim{}, []OwnerRequest{}, []AgentInvestigation{}
 	v.ReplayScenarios = []ReplayScenario{}
+	v.RepairWork = []RepairWork{}
 	v.History = []Event{{ID: id(), Kind: "opened", ActorID: actor, To: "open", CreatedAt: now}}
 	return v, s.write(v)
+}
+
+func (s *Store) CreateRepairWork(repo, wid, actor string, in RepairWork, expected int) (Workspace, RepairWork, error) {
+	var out RepairWork
+	v, err := s.mutate(repo, wid, expected, func(v *Workspace, now time.Time) error {
+		if !one(in.AssigneeType, "human", "agent") || strings.TrimSpace(in.AssigneeID) == "" || len(in.AcceptanceCriteria) == 0 || len(in.RegressionCriteria) == 0 || in.AffectedRevision != v.Source.Revision {
+			return ErrInvalid
+		}
+		scenario, claim := false, false
+		for _, x := range v.ReplayScenarios {
+			scenario = scenario || (x.ID == in.ScenarioID && x.Status == "reproduced")
+		}
+		for _, x := range v.Claims {
+			claim = claim || (x.ID == in.CauseClaimID && x.Kind == "finding" && x.Status == "supported")
+		}
+		if !scenario || !claim || !boundedWords(in.AcceptanceCriteria) || !boundedWords(in.RegressionCriteria) {
+			return ErrInvalid
+		}
+		for _, old := range v.RepairWork {
+			if old.ScenarioID == in.ScenarioID && old.CauseClaimID == in.CauseClaimID {
+				return ErrConflict
+			}
+		}
+		if len(in.ID) != 32 {
+			return ErrInvalid
+		}
+		in.Version, in.ValidationStatus, in.CreatedBy, in.CreatedAt, in.UpdatedAt = 1, "publishing", actor, now, now
+		in.AcceptanceCriteria, in.RegressionCriteria = uniqueWords(in.AcceptanceCriteria), uniqueWords(in.RegressionCriteria)
+		in.ScenarioCheckRunIDs, in.RequiredCheckRunIDs, in.ValidationSignalNames = []string{}, []string{}, []string{}
+		v.RepairWork = append(v.RepairWork, in)
+		out = in
+		v.History = append(v.History, Event{ID: id(), Kind: "repair_work_created", ActorID: actor, To: in.ID, CreatedAt: now})
+		return nil
+	})
+	return v, out, err
+}
+
+func (s *Store) UpdateRepairWork(repo, wid, workID, actor string, expected int, fn func(*RepairWork) error) (Workspace, RepairWork, error) {
+	var out RepairWork
+	v, err := s.mutate(repo, wid, expected, func(v *Workspace, now time.Time) error {
+		for i := range v.RepairWork {
+			if v.RepairWork[i].ID == workID {
+				if err := fn(&v.RepairWork[i]); err != nil {
+					return err
+				}
+				v.RepairWork[i].Version++
+				v.RepairWork[i].UpdatedAt = now
+				out = v.RepairWork[i]
+				v.History = append(v.History, Event{ID: id(), Kind: "repair_work_updated", ActorID: actor, To: workID, Message: out.ValidationStatus, CreatedAt: now})
+				return nil
+			}
+		}
+		return ErrNotFound
+	})
+	return v, out, err
+}
+
+func boundedWords(values []string) bool {
+	if len(values) > 20 {
+		return false
+	}
+	for _, x := range values {
+		if strings.TrimSpace(x) == "" || len(x) > 1000 || sensitive(x) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) CreateReplay(repo, wid, actor string, in ReplayScenario, expected int) (Workspace, ReplayScenario, error) {

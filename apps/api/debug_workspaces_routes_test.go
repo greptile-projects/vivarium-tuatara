@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/debugworkspaces"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
@@ -208,5 +209,24 @@ func TestDebugWorkspaceReadRedactsAllRestrictedEvidenceMetadata(t *testing.T) {
 	afterRestricted, err := workspaceStore.Get(repo.ID, restricted.ID)
 	if err != nil || afterRestricted.Version != restricted.Version {
 		t.Fatalf("excluded mutation changed restricted workspace: version %d, err %v", afterRestricted.Version, err)
+	}
+}
+
+func TestDebugRepairChecksMustMatchDeployedRevision(t *testing.T) {
+	zero := 0
+	source, deployed := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	runs := []checkruns.Run{{ID: strings.Repeat("1", 32), CommitID: source, State: "completed", ExitCode: &zero}, {ID: strings.Repeat("2", 32), CommitID: deployed, State: "completed", ExitCode: &zero}}
+	selected := debugPassingChecks(runs, []string{runs[0].ID, runs[1].ID}, deployed)
+	if len(selected) != 1 || selected[runs[1].ID].CommitID != deployed {
+		t.Fatalf("selected checks from wrong revision: %#v", selected)
+	}
+}
+
+func TestDebugRepairRequiresEveryTargetBranchCheck(t *testing.T) {
+	zero := 0
+	selected := map[string]checkruns.Run{strings.Repeat("1", 32): {Definition: checkruns.Definition{Name: "passing-required"}, State: "completed", ExitCode: &zero}}
+	missing := debugMissingRequiredChecks(selected, []string{"passing-required", "omitted-failing-required"})
+	if len(missing) != 1 || missing[0] != "omitted-failing-required" {
+		t.Fatalf("missing required checks = %#v", missing)
 	}
 }

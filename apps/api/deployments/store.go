@@ -333,6 +333,15 @@ func (s *Store) CreateRollback(repo, failedID, actor string) (Promotion, Promoti
 	if err != nil {
 		return Promotion{}, Promotion{}, err
 	}
+	items, err := s.listPromotions(repo)
+	if err != nil {
+		return Promotion{}, Promotion{}, err
+	}
+	for _, existing := range items {
+		if existing.RecoveryKind == "rollback" && existing.RecoveryOf == failed.ID && existing.RestoresDeploymentID == target.ID {
+			return existing, target, nil
+		}
+	}
 	value, err := s.createPromotionLocked(Promotion{RepositoryID: target.RepositoryID, EnvironmentID: target.EnvironmentID, ReleaseID: target.ReleaseID, BuildID: target.BuildID, ArtifactID: target.ArtifactID, ArtifactSHA256: target.ArtifactSHA256, CommitID: target.CommitID, Rollout: target.Rollout, InitiatedBy: actor, RecoveryOf: failed.ID, RecoveryKind: "rollback", RestoresDeploymentID: target.ID})
 	return value, target, err
 }

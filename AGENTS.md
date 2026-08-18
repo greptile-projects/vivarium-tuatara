@@ -39,6 +39,16 @@ must resolve through a linked `debugging_reproduction` bounded workspace, and re
 definition digest, command outputs, sanitized trace metadata, derived invariant results, cost, differences, and
 gaps. One passing run is only demonstrated; two distinct passing workspaces derive reproduced, mixed results derive
 nondeterministic, and unsafe, missing, revision-changed, or irreducible conditions never become reproduced.
+Reproduced debugging scenarios and supported cited causes can seed ordinary human- or agent-owned repair proposal tasks.
+The handoff freezes the debugging workspace, scenario, cause, affected revision, acceptance criteria, and regression
+criteria. Validation resolves the linked merged pull, exact-revision scenario and ordinary check runs, including release,
+staged deployment, and named production signals. Failed signals use existing participant-only pause/rollback controls or
+reopen diagnosis; debugging and task identities gain no review, merge, release, deployment, or environment authority.
+Repair publication reserves its workspace identity before ordinary task creation. Production success requires a
+succeeded staged deployment and scenario plus ordinary checks from its exact release commit, not merely the pull source;
+every check required by the pull target branch must be selected and passing, so callers cannot omit failed policy gates;
+failed-measure actions persist intent first, rollback creation is idempotent for the exact
+failed/known-good pair, and post-action write races remain explicitly pending for retry-safe reconciliation.
 
 ## What this is
 
