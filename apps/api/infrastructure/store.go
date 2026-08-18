@@ -24,6 +24,7 @@ var ErrConflict = errors.New("infrastructure definition version conflict")
 var credentialPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bgh[pousr]_[a-z0-9]{20,}\b`),
 	regexp.MustCompile(`(?i)\bgithub_pat_[a-z0-9_]{20,}\b`),
+	regexp.MustCompile(`\bglpat-[A-Za-z0-9_-]{20,}\b`),
 	regexp.MustCompile(`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`),
 	regexp.MustCompile(`(?i)\b(?:xox[baprs]-[a-z0-9-]{10,}|sk-(?:proj-)?[a-z0-9_-]{20,})\b`),
 	regexp.MustCompile(`(?i)\beyJ[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\b`),

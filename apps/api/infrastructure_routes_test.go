@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,6 +44,13 @@ func TestInfrastructureAPIKeepsExactIntentPublicAndSensitiveEvidenceBounded(t *t
 		unsafeObservation, _ := json.Marshal(map[string]any{"definition_version": 1, "resource_id": "api", "provider_resource": "service/api", "observed_revision": "generation-4", "status": "healthy", "summary": "deployment credential " + credential, "visibility": "public", "managed": true, "observed_at": time.Now().UTC()})
 		authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/infrastructure/"+created.ID+"/observations", string(unsafeObservation), owner.Credential.Token, http.StatusBadRequest).Body.Close()
 	}
+	gitLabToken := "glpat-XXXXXXXXXXXXXXXXXXXX"
+	for _, field := range []string{"provider_resource", "observed_revision", "summary"} {
+		unsafe := map[string]any{"definition_version": 1, "resource_id": "api", "provider_resource": "service/api", "observed_revision": "generation-4", "status": "healthy", "summary": "sanitized", "visibility": "public", "managed": true, "observed_at": time.Now().UTC()}
+		unsafe[field] = gitLabToken
+		unsafeObservation, _ := json.Marshal(unsafe)
+		authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/infrastructure/"+created.ID+"/observations", string(unsafeObservation), owner.Credential.Token, http.StatusBadRequest).Body.Close()
+	}
 	publicResponse, err := http.Get(server.URL + "/repositories/" + repo.ID + "/infrastructure/" + created.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -53,6 +61,10 @@ func TestInfrastructureAPIKeepsExactIntentPublicAndSensitiveEvidenceBounded(t *t
 	}
 	var public infrastructure.Definition
 	json.NewDecoder(publicResponse.Body).Decode(&public)
+	publicJSON, _ := json.Marshal(public)
+	if strings.Contains(string(publicJSON), gitLabToken) {
+		t.Fatalf("public projection contains rejected GitLab credential: %s", publicJSON)
+	}
 	if public.Revisions[0].Resources[0].ProviderRef != "restricted" || public.Observations[0].ObservedRevision != "restricted" || public.Observations[0].Summary != "Participant-only observation" {
 		t.Fatalf("public projection leaked sensitive evidence: %#v %#v", public.Revisions[0].Resources[0], public.Observations[0])
 	}

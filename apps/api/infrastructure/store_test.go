@@ -90,6 +90,18 @@ func TestRejectsSecretsInvalidLinksAndConflictingWrites(t *testing.T) {
 			t.Errorf("credential %q error = %v", credential, err)
 		}
 	}
+	gitLabToken := "glpat-XXXXXXXXXXXXXXXXXXXX"
+	for _, mutate := range []func(*Observation){
+		func(o *Observation) { o.ProviderResource = gitLabToken },
+		func(o *Observation) { o.ObservedRevision = gitLabToken },
+		func(o *Observation) { o.Summary = gitLabToken },
+	} {
+		candidate := Observation{DefinitionVersion: 1, ResourceID: "api", ProviderResource: "service/api", ObservedRevision: "revision", Status: "healthy", Summary: "sanitized", Visibility: "public", Managed: true, ObservedAt: time.Now()}
+		mutate(&candidate)
+		if _, err = s.Observe(v.ID, "owner", candidate); !errors.Is(err, ErrInvalid) {
+			t.Errorf("GitLab credential observation error = %v", err)
+		}
+	}
 }
 
 func TestFutureAndStaleObservationsCannotSatisfyCurrentCoverage(t *testing.T) {
