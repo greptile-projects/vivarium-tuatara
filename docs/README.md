@@ -75,6 +75,9 @@ finishes, its declared observation period must elapse and every candidate-schema
 retirement. The immutable completion then accounts for compatibility code and obsolete fields removed,
 irreversible choices, exceptions, cost, retained and changed data, verified deletion, and current schema
 version in every established repository environment.
+Idempotent retry alone applies only to failed invariants and interrupted backfills. Service regressions,
+capacity exhaustion, and conflicting writes require a remediation attestation, attested restore, or
+compatibility-window traffic rollback before resume; merely opening linked repair work does not resume.
 
 Support guidance can be proven in ordinary revision-pinned development workspaces. Immutable attempts
 bind an exact cited answer revision to sanitized thread inputs, declared environment, commands and

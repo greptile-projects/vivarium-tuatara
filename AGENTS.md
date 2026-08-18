@@ -102,6 +102,9 @@ whenever dependencies change or the web job fails before it starts.
   version for every established environment. The observation starts strictly after the latest relevant
   final-phase completion, and each reported environment requires its own completed, deployment-linked
   execution. A failure-caused pause cannot resume until its latest failure has a matching recovery record.
+  Failed invariants and interrupted backfills may use an evidence-backed idempotent retry; service
+  regressions, capacity exhaustion, and conflicting writes additionally require an explicit remediation
+  attestation (or an attested restore or compatibility-window rollback). Opening repair work alone remains paused.
   Execution records carry no commands, credentials, database,
   deployment, environment, or destructive authority.
 

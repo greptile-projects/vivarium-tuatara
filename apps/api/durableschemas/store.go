@@ -615,11 +615,31 @@ func latestFailureRecovered(x Execution) bool {
 	}
 	latest := x.Failures[len(x.Failures)-1]
 	for _, recovery := range x.Recoveries {
-		if recovery.FailureID == latest.ID && recovery.Kind != "repair" && !recovery.CreatedAt.Before(latest.CreatedAt) {
+		if recovery.FailureID == latest.ID && recoveryValidForFailure(latest, recovery.Kind, recovery.RecoveryPoint, recovery.RecoveryAttestation, recovery.RollbackReleaseID, recovery.RepairWorkID) && recovery.Kind != "repair" && !recovery.CreatedAt.Before(latest.CreatedAt) {
 			return true
 		}
 	}
 	return false
+}
+
+func recoveryValidForFailure(failure FailureEvidence, kind, recoveryPoint, recoveryAttestation, rollbackReleaseID, repairWorkID string) bool {
+	switch kind {
+	case "retry":
+		if failure.Kind == "failed_invariant" || failure.Kind == "interrupted_backfill" {
+			return true
+		}
+		// Regressed service, exhausted capacity, and conflicting writers require
+		// an explicit remediation attestation rather than a generic retry claim.
+		return recoveryAttestation != ""
+	case "restore":
+		return recoveryPoint != "" && recoveryAttestation != ""
+	case "traffic_rollback":
+		return rollbackReleaseID != ""
+	case "repair":
+		return repairWorkID != ""
+	default:
+		return false
+	}
 }
 func executionFailureKind(v string) bool {
 	return v == "failed_invariant" || v == "service_regression" || v == "conflicting_writes" || v == "capacity_exhaustion" || v == "interrupted_backfill"
@@ -678,14 +698,20 @@ func (s *Store) RecoverExecution(repo, schema, migration, execution, actor strin
 			if x.Version != in.ExpectedVersion || x.Status != "paused" || in.IdempotencyKey == "" || len(in.IdempotencyKey) > 200 || strings.TrimSpace(in.Summary) == "" || len(in.Summary) > 2000 || !boundedEvidence(in.Evidence) || len(in.RecoveryPoint) > 1000 || len(in.RecoveryAttestation) > 2000 {
 				return v, *x, RecoveryAction{}, ErrInvalid
 			}
+			var failure FailureEvidence
 			failureFound := false
 			for _, f := range x.Failures {
-				failureFound = failureFound || f.ID == in.FailureID
+				if f.ID == in.FailureID {
+					failure, failureFound = f, true
+				}
 			}
 			if !failureFound {
 				return v, *x, RecoveryAction{}, ErrInvalid
 			}
-			valid := in.Kind == "retry" || (in.Kind == "restore" && in.RecoveryPoint != "" && in.RecoveryAttestation != "") || (in.Kind == "traffic_rollback" && in.RollbackReleaseID != "" && x.CurrentPhase < 4) || (in.Kind == "repair" && in.RepairWorkID != "")
+			valid := recoveryValidForFailure(failure, in.Kind, in.RecoveryPoint, in.RecoveryAttestation, in.RollbackReleaseID, in.RepairWorkID)
+			if in.Kind == "traffic_rollback" {
+				valid = valid && x.CurrentPhase < 4
+			}
 			if in.Kind == "repair" {
 				found := false
 				for _, work := range m.Work {

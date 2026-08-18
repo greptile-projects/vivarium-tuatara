@@ -52,7 +52,9 @@
 - `POST .../durable-schemas/{schema_id}/migrations/{migration_id}/executions/{execution_id}/recoveries`
   appends an idempotency-keyed `retry`, attested `restore`, existing-release `traffic_rollback`, or `repair`
   linked to already assigned ordinary migration work. Recovery evidence grants no release, traffic,
-  workspace, deployment, or data-store authority.
+  workspace, deployment, or data-store authority. A plain retry can resume failed invariants and interrupted
+  backfills; service regressions, capacity exhaustion, and conflicting writes require a remediation
+  attestation, attested restore, or compatibility-window rollback. A repair link alone remains paused.
 - `POST .../retirement-approvals` records one immutable approval from each candidate-schema owner. `POST
   .../completion` succeeds only after production completion and the execution's declared observation period,
   and must account for retained/changed data, verified deletion, exceptions, costs, and the candidate schema

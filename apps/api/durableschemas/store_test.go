@@ -51,6 +51,23 @@ func TestMigrationRequiresExplicitIrreversibility(t *testing.T) {
 	}
 }
 
+func TestCriticalFailuresRejectGenericRetry(t *testing.T) {
+	for _, kind := range []string{"service_regression", "capacity_exhaustion", "conflicting_writes"} {
+		failure := FailureEvidence{Kind: kind}
+		if recoveryValidForFailure(failure, "retry", "", "", "", "") {
+			t.Fatalf("generic retry accepted for %s", kind)
+		}
+		if !recoveryValidForFailure(failure, "retry", "", "remediation attested", "", "") {
+			t.Fatalf("attested retry rejected for %s", kind)
+		}
+	}
+	for _, kind := range []string{"failed_invariant", "interrupted_backfill"} {
+		if !recoveryValidForFailure(FailureEvidence{Kind: kind}, "retry", "", "", "", "") {
+			t.Fatalf("idempotent retry rejected for %s", kind)
+		}
+	}
+}
+
 func TestBoundedRehearsalRetainsExactSanitizedEvidence(t *testing.T) {
 	s, _ := New(t.TempDir())
 	r := Revision{Name: "orders", StoreKind: "database", Description: "orders", Definition: "v1", DefinitionPath: "db.sql", OwnerIDs: []string{"owner"}, Compatibility: []string{"dual"}, Retention: "year", Privacy: []string{"tokenized"}, PullRequestID: "1", ReviewedCommit: "abc", Rationale: "baseline"}
@@ -159,11 +176,14 @@ func TestProductionExecutionRequiresEvidenceAndKeepsAgentsDelegated(t *testing.T
 	if _, _, err = s.UpdateExecution("repo", v.ID, migration.ID, execution.ID, "operator", ExecutionUpdate{Action: "resume", ExpectedVersion: execution.Version}); err != ErrInvalid {
 		t.Fatalf("failure pause resumed without recovery: %v", err)
 	}
-	v, execution, recovery, err := s.RecoverExecution("repo", v.ID, migration.ID, execution.ID, "operator", RecoveryRequest{ExpectedVersion: execution.Version, IdempotencyKey: "retry-cutover-1", Kind: "retry", FailureID: failure.ID, Summary: "retry the idempotent shard after writer fencing", Evidence: []string{"writer fence confirmed"}})
+	if _, _, _, err = s.RecoverExecution("repo", v.ID, migration.ID, execution.ID, "operator", RecoveryRequest{ExpectedVersion: execution.Version, IdempotencyKey: "unsafe-retry", Kind: "retry", FailureID: failure.ID, Summary: "retry without remediation", Evidence: []string{"same conditions"}}); err != ErrInvalid {
+		t.Fatalf("generic retry cleared conflicting writers: %v", err)
+	}
+	v, execution, recovery, err := s.RecoverExecution("repo", v.ID, migration.ID, execution.ID, "operator", RecoveryRequest{ExpectedVersion: execution.Version, IdempotencyKey: "retry-cutover-1", Kind: "retry", FailureID: failure.ID, Summary: "retry the idempotent shard after writer fencing", Evidence: []string{"writer fence confirmed"}, RecoveryAttestation: "writer lease proves the obsolete writer is fenced"})
 	if err != nil || recovery.Kind != "retry" {
 		t.Fatalf("recovery = %#v, %v", recovery, err)
 	}
-	_, _, same, err := s.RecoverExecution("repo", v.ID, migration.ID, execution.ID, "operator", RecoveryRequest{ExpectedVersion: 0, IdempotencyKey: "retry-cutover-1", Kind: "retry", FailureID: failure.ID, Summary: "retry the idempotent shard after writer fencing", Evidence: []string{"writer fence confirmed"}})
+	_, _, same, err := s.RecoverExecution("repo", v.ID, migration.ID, execution.ID, "operator", RecoveryRequest{ExpectedVersion: 0, IdempotencyKey: "retry-cutover-1", Kind: "retry", FailureID: failure.ID, Summary: "retry the idempotent shard after writer fencing", Evidence: []string{"writer fence confirmed"}, RecoveryAttestation: "writer lease proves the obsolete writer is fenced"})
 	if err != nil || same.ID != recovery.ID {
 		t.Fatalf("idempotent recovery retry = %#v, %v", same, err)
 	}
