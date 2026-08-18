@@ -298,6 +298,12 @@ whenever dependencies change or the web job fails before it starts.
   gaps without copying asset content. Only named current participant owners acknowledge or request
   changes on the current revision. These records grant no Git, review, implementation, release,
   deployment, environment, research, or private-asset authority.
+  Once every named owner acknowledges the current revision, its implementation endpoint freezes the
+  default-branch commit and creates ordinary dependency-ordered human/agent proposal tasks. Frozen task
+  reasoning carries exact prototypes, component contracts, asset provenance, content, breakpoints, states,
+  and acceptance criteria into task workspaces and pull contributions. Implementation reports map code paths
+  and rendered surfaces to requirements; deliberate deviations remain pending until a named design owner
+  approves or rejects them. This ledger grants no workspace, Git, agent, review, or merge authority.
 
 - **Frontend** — App Router, file-based routes under `apps/web/src/app`. Entry
   point is `src/app/page.tsx`; `layout.tsx` installs the persistent application

@@ -43,13 +43,17 @@ type Evidence struct {
 	Gap        string `json:"gap,omitempty"`
 }
 type Artifact struct {
-	ID           string   `json:"id"`
-	Kind         string   `json:"kind"`
-	Title        string   `json:"title"`
-	Description  string   `json:"description"`
-	Content      string   `json:"content"`
-	Interactions []string `json:"interactions"`
-	Audience     []string `json:"audience"`
+	ID              string   `json:"id"`
+	Kind            string   `json:"kind"`
+	Title           string   `json:"title"`
+	Description     string   `json:"description"`
+	Content         string   `json:"content"`
+	Interactions    []string `json:"interactions"`
+	Audience        []string `json:"audience"`
+	AuthorID        string   `json:"author_id"`
+	License         string   `json:"license"`
+	Source          string   `json:"source"`
+	Transformations []string `json:"transformations"`
 }
 type Revision struct {
 	Version            int        `json:"version"`
@@ -63,11 +67,42 @@ type Revision struct {
 	Alternatives       []string   `json:"alternatives"`
 	SuccessMeasures    []string   `json:"success_measures"`
 	AffectedComponents []string   `json:"affected_components"`
+	ComponentContracts []string   `json:"component_contracts"`
+	Breakpoints        []string   `json:"breakpoints"`
+	AcceptanceCriteria []string   `json:"acceptance_criteria"`
 	Evidence           []Evidence `json:"evidence"`
 	Artifacts          []Artifact `json:"artifacts"`
 	Uncertainty        []string   `json:"uncertainty"`
 	CreatedBy          string     `json:"created_by"`
 	CreatedAt          time.Time  `json:"created_at"`
+}
+type RequirementMapping struct {
+	Requirement string   `json:"requirement"`
+	CodePaths   []string `json:"code_paths"`
+	Surfaces    []string `json:"rendered_surfaces"`
+	Evidence    []string `json:"evidence"`
+}
+type Deviation struct {
+	ID          string     `json:"id"`
+	Requirement string     `json:"requirement"`
+	Reason      string     `json:"reason"`
+	Impact      string     `json:"impact"`
+	Status      string     `json:"status"`
+	ReportedBy  string     `json:"reported_by"`
+	DecidedBy   string     `json:"decided_by,omitempty"`
+	Note        string     `json:"note,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	DecidedAt   *time.Time `json:"decided_at,omitempty"`
+}
+type Implementation struct {
+	DesignVersion int                  `json:"design_version"`
+	BaseRevision  string               `json:"base_revision"`
+	ProposalID    string               `json:"proposal_id"`
+	TaskIDs       []string             `json:"task_ids"`
+	Mappings      []RequirementMapping `json:"mappings"`
+	Deviations    []Deviation          `json:"deviations"`
+	CreatedBy     string               `json:"created_by"`
+	CreatedAt     time.Time            `json:"created_at"`
 }
 type Comment struct {
 	ID        string     `json:"id"`
@@ -93,9 +128,116 @@ type Proposal struct {
 	Revisions        []Revision        `json:"revisions"`
 	Comments         []Comment         `json:"comments"`
 	Acknowledgements []Acknowledgement `json:"acknowledgements"`
+	Implementation   *Implementation   `json:"implementation,omitempty"`
 	CreatedAt        time.Time         `json:"created_at"`
 	UpdatedAt        time.Time         `json:"updated_at"`
 }
+
+func (s *Store) PublishImplementation(repo, pid, actor string, expected int, implementation Implementation) (Proposal, error) {
+	var out Proposal
+	err := s.lock(func() error {
+		v, e := s.read(repo, pid)
+		if e != nil {
+			return e
+		}
+		if v.CurrentVersion != expected {
+			return ErrConflict
+		}
+		if v.Implementation != nil {
+			if v.Implementation.DesignVersion == implementation.DesignVersion && v.Implementation.ProposalID == implementation.ProposalID {
+				out = v
+				return nil
+			}
+			return ErrConflict
+		}
+		if !accepted(v) || implementation.DesignVersion != expected || len(implementation.BaseRevision) != 40 || implementation.ProposalID == "" || len(implementation.TaskIDs) == 0 {
+			return ErrInvalid
+		}
+		implementation.CreatedBy, implementation.CreatedAt = actor, s.now()
+		implementation.Mappings, implementation.Deviations = []RequirementMapping{}, []Deviation{}
+		v.Implementation, v.UpdatedAt = &implementation, implementation.CreatedAt
+		out = v
+		return s.write(v)
+	})
+	return out, err
+}
+func (s *Store) Report(repo, pid, actor string, mapping *RequirementMapping, deviation *Deviation) (Proposal, error) {
+	var out Proposal
+	err := s.lock(func() error {
+		v, e := s.read(repo, pid)
+		if e != nil {
+			return e
+		}
+		if v.Implementation == nil {
+			return ErrInvalid
+		}
+		if mapping != nil {
+			if strings.TrimSpace(mapping.Requirement) == "" || len(mapping.CodePaths) == 0 || len(mapping.Surfaces) == 0 {
+				return ErrInvalid
+			}
+			v.Implementation.Mappings = append(v.Implementation.Mappings, *mapping)
+		} else if deviation != nil {
+			if deviation.Requirement == "" || deviation.Reason == "" || deviation.Impact == "" {
+				return ErrInvalid
+			}
+			deviation.ID = id()
+			deviation.ReportedBy = actor
+			deviation.Status = "pending"
+			deviation.CreatedAt = s.now()
+			v.Implementation.Deviations = append(v.Implementation.Deviations, *deviation)
+		} else {
+			return ErrInvalid
+		}
+		v.UpdatedAt = s.now()
+		out = v
+		return s.write(v)
+	})
+	return out, err
+}
+func (s *Store) DecideDeviation(repo, pid, deviationID, actor, status, note string) (Proposal, error) {
+	var out Proposal
+	err := s.lock(func() error {
+		v, e := s.read(repo, pid)
+		if e != nil {
+			return e
+		}
+		if v.Implementation == nil || !contains(v.OwnerIDs, actor) || (status != "approved" && status != "rejected") {
+			return ErrInvalid
+		}
+		for i := range v.Implementation.Deviations {
+			d := &v.Implementation.Deviations[i]
+			if d.ID == deviationID && d.Status == "pending" {
+				now := s.now()
+				d.Status = status
+				d.Note = strings.TrimSpace(note)
+				d.DecidedBy = actor
+				d.DecidedAt = &now
+				v.UpdatedAt = now
+				out = v
+				return s.write(v)
+			}
+		}
+		return ErrNotFound
+	})
+	return out, err
+}
+func accepted(v Proposal) bool {
+	for _, owner := range v.OwnerIDs {
+		ok := false
+		for i := len(v.Acknowledgements) - 1; i >= 0; i-- {
+			a := v.Acknowledgements[i]
+			if a.OwnerID == owner && a.Revision == v.CurrentVersion {
+				ok = a.Status == "acknowledged"
+				break
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
 type Store struct {
 	root string
 	mu   sync.Mutex

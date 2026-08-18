@@ -2,17 +2,21 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/accessibilityassessments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/designproposals"
 	productfeedback "github.com/greptile-projects/vivarium-tuatara/apps/api/feedback"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/roadmaps"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
 type designProposalInput struct {
@@ -21,7 +25,7 @@ type designProposalInput struct {
 	Revision        designproposals.Revision `json:"revision"`
 }
 
-func registerDesignProposalRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *designproposals.Store, issueStore *issues.Store, feedbackStore *productfeedback.Store, roadmapStore *roadmaps.Store, assessmentStore *accessibilityassessments.Store, pullStore *pullrequests.Store) {
+func registerDesignProposalRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, store *designproposals.Store, issueStore *issues.Store, feedbackStore *productfeedback.Store, roadmapStore *roadmaps.Store, assessmentStore *accessibilityassessments.Store, pullStore *pullrequests.Store, proposalStore *proposals.Store) {
 	mux.HandleFunc("GET /repositories/{id}/design-proposals", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
 		if !ok {
@@ -125,6 +129,190 @@ func registerDesignProposalRoutes(mux *http.ServeMux, catalog *repositories.Stor
 		redactDesignArtifacts(&out, actor.UserID)
 		writeDesignProposal(w, out, e, 201)
 	})
+	type taskInput struct {
+		Title             string `json:"title"`
+		AssigneeType      string `json:"assignee_type"`
+		AssigneeID        string `json:"assignee_id"`
+		DependsOnPrevious bool   `json:"depends_on_previous"`
+	}
+	mux.HandleFunc("POST /repositories/{id}/design-proposals/{proposal_id}/implementation", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		repository, repositoryErr := catalog.GetByID(r.PathValue("id"))
+		if repositoryErr != nil {
+			writeAPIError(w, 404, "repository_not_found", "repository not found")
+			return
+		}
+		var in struct {
+			ExpectedVersion int         `json:"expected_version"`
+			Title           string      `json:"title"`
+			Body            string      `json:"body"`
+			Tasks           []taskInput `json:"tasks"`
+		}
+		if decodeJSON(r, &in) != nil || len(in.Tasks) == 0 {
+			writeAPIError(w, 400, "invalid_request", "accepted revision and ordered owned tasks are required")
+			return
+		}
+		design, e := store.Get(repository.ID, r.PathValue("proposal_id"))
+		if e != nil {
+			writeDesignProposal(w, design, e, 0)
+			return
+		}
+		if design.CurrentVersion != in.ExpectedVersion || design.Implementation != nil {
+			writeAPIError(w, 409, "design_implementation_conflict", "the design revision or implementation changed")
+			return
+		}
+		if !designRevisionAccepted(design) {
+			writeAPIError(w, 409, "design_not_accepted", "every named design owner must acknowledge the current revision")
+			return
+		}
+		revision := design.Revisions[in.ExpectedVersion-1]
+		if len(revision.ComponentContracts) == 0 || len(revision.Breakpoints) == 0 || len(revision.AcceptanceCriteria) == 0 || !designAssetsAccountable(revision.Artifacts, actor.UserID) {
+			writeAPIError(w, 400, "incomplete_design_handoff", "component contracts, breakpoints, acceptance criteria, and accountable assets are required")
+			return
+		}
+		bare, e := git.Open(repository.ID)
+		if e != nil {
+			writeAPIError(w, 500, "design_implementation_unavailable", "repository could not be resolved")
+			return
+		}
+		ref, e := bare.ReadReference("refs/heads/" + repository.DefaultBranch)
+		if e != nil {
+			writeAPIError(w, 409, "design_base_unavailable", "the default branch has no implementation base")
+			return
+		}
+		items := designRequirementItems(revision)
+		tasks := make([]proposals.ImplementationTaskInput, len(in.Tasks))
+		participants := []string{actor.UserID}
+		for i, t := range in.Tasks {
+			outcome := "Implement the accepted design requirements without unstated behavior: " + strings.Join(revision.AcceptanceCriteria, "; ")
+			tasks[i] = proposals.ImplementationTaskInput{Title: t.Title, Outcome: outcome, Risk: "Any deliberate deviation requires design-owner approval.", VerificationPlan: "Map changed code and rendered surfaces to every applicable design requirement.", AssigneeType: t.AssigneeType, AssigneeID: t.AssigneeID, DependsOnPrevious: t.DependsOnPrevious}
+			if t.AssigneeType == "human" {
+				participants = append(participants, t.AssigneeID)
+			}
+		}
+		var ordinary proposals.Proposal
+		var made []proposals.Task
+		e = catalog.WithCurrentParticipants(participants, repository.ID, func() error {
+			var createErr error
+			ordinary, made, createErr = proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: repository.ID, ActorID: actor.UserID, Title: in.Title, Body: in.Body, Origin: proposals.ReasoningOrigin{DesignProposalID: design.ID, DesignProposalVersion: revision.Version, Revision: ref.Target, SelectedItemIDs: requirementIDs(items), Items: items, AnalysisStatus: "accepted_design_handoff"}, Tasks: tasks})
+			return createErr
+		})
+		if e != nil {
+			writeAPIError(w, 400, "invalid_design_implementation", "tasks must use current participants or ordinary agent ownership")
+			return
+		}
+		ids := make([]string, len(made))
+		for i := range made {
+			ids[i] = made[i].ID
+		}
+		out, e := store.PublishImplementation(repository.ID, design.ID, actor.UserID, in.ExpectedVersion, designproposals.Implementation{DesignVersion: revision.Version, BaseRevision: ref.Target, ProposalID: ordinary.ID, TaskIDs: ids})
+		if e != nil {
+			writeDesignProposal(w, out, e, 0)
+			return
+		}
+		writeJSON(w, 201, map[string]any{"design_proposal": out, "proposal": ordinary, "tasks": made})
+	})
+	mux.HandleFunc("POST /repositories/{id}/design-proposals/{proposal_id}/implementation/reports", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			Mapping   *designproposals.RequirementMapping `json:"mapping"`
+			Deviation *designproposals.Deviation          `json:"deviation"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a requirement mapping or deviation is required")
+			return
+		}
+		out, e := store.Report(r.PathValue("id"), r.PathValue("proposal_id"), actor.UserID, in.Mapping, in.Deviation)
+		writeDesignProposal(w, out, e, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/design-proposals/{proposal_id}/implementation/deviations/{deviation_id}/decision", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			Status string `json:"status"`
+			Note   string `json:"note"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an owner decision is required")
+			return
+		}
+		out, e := store.DecideDeviation(r.PathValue("id"), r.PathValue("proposal_id"), r.PathValue("deviation_id"), actor.UserID, in.Status, in.Note)
+		writeDesignProposal(w, out, e, 201)
+	})
+}
+
+func designAssetsAccountable(v []designproposals.Artifact, actor string) bool {
+	for _, a := range v {
+		if a.AuthorID == "" || a.License == "" || a.Source == "" || !stringContains(a.Audience, actor) {
+			return false
+		}
+	}
+	return true
+}
+
+func stringContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func designRevisionAccepted(v designproposals.Proposal) bool {
+	for _, owner := range v.OwnerIDs {
+		accepted := false
+		for i := len(v.Acknowledgements) - 1; i >= 0; i-- {
+			a := v.Acknowledgements[i]
+			if a.OwnerID == owner && a.Revision == v.CurrentVersion {
+				accepted = a.Status == "acknowledged"
+				break
+			}
+		}
+		if !accepted {
+			return false
+		}
+	}
+	return true
+}
+func designRequirementItems(r designproposals.Revision) []proposals.ReasoningItem {
+	out := []proposals.ReasoningItem{}
+	add := func(kind string, values []string) {
+		for i, v := range values {
+			out = append(out, proposals.ReasoningItem{ID: fmt.Sprintf("%s-%d", kind, i+1), Kind: kind, Summary: v, Status: "accepted"})
+		}
+	}
+	add("prototype", artifactSummaries(r.Artifacts))
+	add("component_contract", r.ComponentContracts)
+	add("content", r.Content)
+	add("breakpoint", r.Breakpoints)
+	for _, s := range r.States {
+		add("state", []string{s.Name + ": " + s.Description + " — " + s.Content})
+	}
+	add("acceptance_criterion", r.AcceptanceCriteria)
+	return out
+}
+func artifactSummaries(v []designproposals.Artifact) []string {
+	out := make([]string, len(v))
+	for i, a := range v {
+		out[i] = a.ID + ": " + a.Title + " — " + a.Description + " — exact prototype: " + a.Content + " — interactions: " + strings.Join(a.Interactions, "; ") + " (author " + a.AuthorID + ", license " + a.License + ", source " + a.Source + ", transformations: " + strings.Join(a.Transformations, ", ") + ")"
+	}
+	return out
+}
+func requirementIDs(v []proposals.ReasoningItem) []string {
+	out := make([]string, len(v))
+	for i := range v {
+		out[i] = v[i].ID
+	}
+	return out
 }
 
 // Citation metadata is retained, but caller claims never make research or assets visible.

@@ -1,9 +1,49 @@
 package designproposals
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func complete() Revision {
 	return Revision{Title: "Safer first run", UserGoal: "A new contributor can evaluate setup before changing files", Source: Source{Kind: "issue", ResourceID: "issue-1", Summary: "Setup confusion"}, Journeys: []Journey{{Name: "First run", Actor: "Contributor", Goal: "Understand effects", Steps: []string{"Preview", "Confirm"}}}, States: []State{{Name: "Preview", Description: "No mutation yet", Content: "Review setup"}}, Content: []string{"Use direct language"}, Constraints: []string{"Keyboard operable"}, Alternatives: []string{"Immediate setup"}, SuccessMeasures: []string{"Fewer abandoned runs"}, AffectedComponents: []string{"setup dialog"}, Artifacts: []Artifact{{ID: "wire-1", Kind: "wireframe", Title: "Preview", Description: "A review screen", Content: "[effects] [confirm]", Audience: []string{"owner"}}}, Uncertainty: []string{"Invited user sample is small"}}
+}
+
+func TestAcceptedDesignImplementationRetainsAccountability(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := s.Create("repo", "designer", []string{"designer"}, complete())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.PublishImplementation("repo", v.ID, "designer", 1, Implementation{DesignVersion: 1, BaseRevision: strings.Repeat("a", 40), ProposalID: strings.Repeat("b", 32), TaskIDs: []string{"task"}}); err != ErrInvalid {
+		t.Fatalf("unaccepted design published: %v", err)
+	}
+	v, err = s.Acknowledge("repo", v.ID, "designer", Acknowledgement{Revision: 1, Status: "acknowledged"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.PublishImplementation("repo", v.ID, "designer", 1, Implementation{DesignVersion: 1, BaseRevision: strings.Repeat("a", 40), ProposalID: strings.Repeat("b", 32), TaskIDs: []string{"task"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.Report("repo", v.ID, "developer", &RequirementMapping{Requirement: "empty state", CodePaths: []string{"ui/empty.tsx"}, Surfaces: []string{"/inbox empty"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.Report("repo", v.ID, "developer", nil, &Deviation{Requirement: "mobile breakpoint", Reason: "native control limitation", Impact: "layout differs below 320px"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.DecideDeviation("repo", v.ID, v.Implementation.Deviations[0].ID, "designer", "approved", "Accepted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Implementation.Mappings) != 1 || v.Implementation.Deviations[0].Status != "approved" {
+		t.Fatalf("accountability lost: %#v", v.Implementation)
+	}
 }
 func TestRevisionDiscussionAndAcknowledgementAreBound(t *testing.T) {
 	s, e := New(t.TempDir())
