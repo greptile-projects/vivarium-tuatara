@@ -226,6 +226,7 @@ export function DurableStateWorkspace({
     [items, setItems] = useState<Schema[]>([]),
     [selected, setSelected] = useState<Schema>(),
     [error, setError] = useState(""),
+    [observationError, setObservationError] = useState(""),
     [busy, setBusy] = useState(false);
   const load = useCallback(async () => {
     if (!token) return;
@@ -368,8 +369,8 @@ export function DurableStateWorkspace({
   ) {
     e.preventDefault();
     if (!token || !selected) return;
-    setBusy(true);
     const f = new FormData(e.currentTarget);
+    setBusy(true);
     try {
       await api(
         `/repositories/${repositoryID}/durable-schemas/${selected.id}/migrations/${migration.id}/work`,
@@ -414,8 +415,8 @@ export function DurableStateWorkspace({
   async function rehearse(e: FormEvent<HTMLFormElement>, migration: Migration) {
     e.preventDefault();
     if (!token || !selected) return;
-    setBusy(true);
     const f = new FormData(e.currentTarget);
+    setBusy(true);
     try {
       const parsed: unknown = JSON.parse(val(f, "checks_json"));
       if (
@@ -491,8 +492,20 @@ export function DurableStateWorkspace({
   ) {
     e.preventDefault();
     if (!token || !selected) return;
-    setBusy(true);
     const f = new FormData(e.currentTarget);
+    const observation = val(f, "observation_period");
+    if (
+      !/^\d+$/.test(observation) ||
+      Number(observation) < 1 ||
+      Number(observation) > 31_536_000
+    ) {
+      setObservationError(
+        "Observation period must be a whole number from 1 to 31,536,000 seconds.",
+      );
+      return;
+    }
+    setObservationError("");
+    setBusy(true);
     try {
       const agent = val(f, "agent_id");
       await api(
@@ -506,9 +519,7 @@ export function DurableStateWorkspace({
               release_id: val(f, "execution_release"),
               rehearsal_id: val(f, "execution_rehearsal"),
               compatibility_window: val(f, "compatibility_window"),
-              observation_period_seconds: Number(
-                val(f, "observation_period"),
-              ),
+              observation_period_seconds: Number(observation),
               privacy_constraints: list(val(f, "execution_privacy")),
               cost_budget_units: Number(val(f, "cost_budget")),
               abort_reversible_until: val(f, "abort_until"),
@@ -1019,7 +1030,6 @@ export function DurableStateWorkspace({
                       ["execution_privacy", "Privacy constraints"],
                       ["cost_budget", "Cost budget units"],
                       ["abort_until", "Reversible until"],
-                      ["observation_period", "Observation period seconds"],
                       ["agent_id", "Delegated agent ID (optional)"],
                       ["agent_phase", "Agent phase (optional)"],
                       ["agent_step", "Agent step (optional)"],
@@ -1033,6 +1043,30 @@ export function DurableStateWorkspace({
                         className="rounded-lg border border-[var(--line)] px-3 py-2 text-sm"
                       />
                     ))}
+                    <div>
+                      <input
+                        name="observation_period"
+                        required
+                        type="number"
+                        min={1}
+                        max={31_536_000}
+                        step={1}
+                        inputMode="numeric"
+                        placeholder="Observation period seconds"
+                        aria-describedby="observation-period-error"
+                        aria-invalid={observationError ? true : undefined}
+                        onChange={() => observationError && setObservationError("")}
+                        className="w-full rounded-lg border border-[var(--line)] px-3 py-2 text-sm"
+                      />
+                      {observationError && (
+                        <p
+                          id="observation-period-error"
+                          className="mt-1 text-xs text-[var(--danger)]"
+                        >
+                          {observationError}
+                        </p>
+                      )}
+                    </div>
                     <Button disabled={busy} className="sm:col-span-2">
                       Open governed execution
                     </Button>

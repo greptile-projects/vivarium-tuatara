@@ -180,6 +180,11 @@ test("collaborators evolve durable state from reviewed intent through verified c
     await expect(ownerPage.getByText("Recovery retry: Recover conflicting_writes from retained evidence.")).toBeVisible();
     await expect(ownerPage.getByText("Migration cleanup verified")).toBeVisible();
     await expect(ownerPage.getByText(/display_name absent from exact schema digest/)).toBeVisible();
+    await ownerPage.getByText("Open production execution", { exact: true }).click();
+    const executionForm = ownerPage.locator('form:has(input[name="observation_period"])');
+    await executionForm.locator('input[name="observation_period"]').fill("1.5");
+    await executionForm.dispatchEvent("submit");
+    await expect(ownerPage.getByText("Observation period must be a whole number from 1 to 31,536,000 seconds.")).toBeVisible();
   } finally {
     await rm(copy, { recursive: true, force: true });
   }
