@@ -1,5 +1,20 @@
 # HTTP API contract
 
+## Pull request interface verification
+
+- `GET /repositories/{id}/pulls/{pull_id}/interface-checks` is repository-readable
+  and separates evidence for the current pull revision from retained stale checks.
+- `POST /repositories/{id}/pulls/{pull_id}/interface-checks` lets a participant
+  publish bounded comparison evidence only when its candidate revision, successful
+  preview, accepted implemented design revision, and repository check-definition
+  digest all resolve exactly.
+- `POST /repositories/{id}/pulls/{pull_id}/interface-checks/{check_id}/classifications`
+  records one current-revision collaborator decision per difference. Outcomes are
+  `intentional_change`, `regression`, or `false_positive` and require a rationale.
+
+These records are review evidence only. Artifact URLs remain governed by their
+originating bounded system and no endpoint grants execution or merge authority.
+
 ## Production debugging workspaces
 
 - `POST /repositories/{id}/debugging-workspaces` lets a current repository collaborator open a

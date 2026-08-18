@@ -13,6 +13,25 @@ The repository `/interface-system` workspace renders examples and exposes usage,
 accessibility, localization, responsive, adoption, theme, ownership,
 implementation, history, and provenance context.
 
+## Revision-exact interface verification
+
+Pull requests expose repository-defined interface evidence at
+`/repositories/{id}/pulls/{pull_id}/interface-checks`. A publication must bind the
+current candidate, a successful isolated preview, the exact digest of its check
+definition in that candidate, and the current accepted design proposal revision.
+It records viewport, theme, content-length, locale, interaction-state, and
+assistive-technology context alongside visual and behavioral differences,
+recordings and other digest-addressed artifacts, coverage, performance budgets,
+and affected requirements. Collaborators classify each difference once as an
+intentional change, regression, or false positive with an attributable rationale.
+
+Reads project current and stale evidence separately. Candidate movement therefore
+invalidates only evidence and classifications tied to the earlier revision while
+retaining the audit trail. This ledger reports bounded preview outcomes and grants
+no workspace, Git, design-approval, review, merge, deployment, or environment
+authority. Records default beneath `$INTERFACE_CHECK_STORAGE_ROOT`
+(`interface-checks`).
+
 The API resolves the named release itself, derives its retained display version,
 requires the exact release commit to exist, and verifies every component,
 interaction, and content source path in that snapshot. Current implementations
