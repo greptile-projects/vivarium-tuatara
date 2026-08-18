@@ -212,7 +212,15 @@ func registerDurableSchemaRoutes(mux *http.ServeMux, git *storage.Store, catalog
 			writeAPIError(w, 400, "invalid_execution_control", "a bounded execution control is required")
 			return
 		}
+		if in.AgentID != "" && in.AgentID != actor.AgentID {
+			writeAPIError(w, 403, "agent_attribution_forbidden", "agent attribution must come from the authenticated agent credential")
+			return
+		}
 		if in.DeploymentID != "" {
+			if deploymentStore == nil {
+				writeAPIError(w, 422, "deployment_evidence_unavailable", "deployment evidence cannot be verified")
+				return
+			}
 			d, err := deploymentStore.GetPromotion(r.PathValue("id"), in.DeploymentID)
 			if err != nil {
 				writeAPIError(w, 422, "invalid_deployment_evidence", "deployment evidence does not resolve")
@@ -238,7 +246,7 @@ func registerDurableSchemaRoutes(mux *http.ServeMux, git *storage.Store, catalog
 				return
 			}
 		}
-		out, execution, err := store.UpdateExecution(r.PathValue("id"), r.PathValue("schema_id"), r.PathValue("migration_id"), r.PathValue("execution_id"), actor.UserID, durableschemas.ExecutionUpdate{Action: in.Action, ExpectedVersion: in.ExpectedVersion, Phase: in.Phase, ProgressPercent: in.ProgressPercent, LagSeconds: in.LagSeconds, Invariants: in.Invariants, ServiceHealth: in.ServiceHealth, Blockers: in.Blockers, NextActions: in.NextActions, CostUnits: in.CostUnits, ThrottlePercent: in.ThrottlePercent, Summary: in.Summary, AgentID: in.AgentID, DeploymentID: in.DeploymentID})
+		out, execution, err := store.UpdateExecution(r.PathValue("id"), r.PathValue("schema_id"), r.PathValue("migration_id"), r.PathValue("execution_id"), actor.UserID, durableschemas.ExecutionUpdate{Action: in.Action, ExpectedVersion: in.ExpectedVersion, Phase: in.Phase, ProgressPercent: in.ProgressPercent, LagSeconds: in.LagSeconds, Invariants: in.Invariants, ServiceHealth: in.ServiceHealth, Blockers: in.Blockers, NextActions: in.NextActions, CostUnits: in.CostUnits, ThrottlePercent: in.ThrottlePercent, Summary: in.Summary, AgentID: actor.AgentID, DeploymentID: in.DeploymentID})
 		if errors.Is(err, durableschemas.ErrConflict) {
 			writeAPIError(w, 409, "migration_execution_changed", "execution changed; reload before intervening")
 			return
