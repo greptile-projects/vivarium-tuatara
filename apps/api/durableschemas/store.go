@@ -471,7 +471,7 @@ func (s *Store) UpdateExecution(repo, schema, migration, execution, actor string
 					x.DeploymentID = in.DeploymentID
 				}
 			case "advance":
-				if x.Status != "running" || phase.ProgressPercent != 100 || len(phase.Blockers) > 0 || phase.ServiceHealth != "healthy" || len(phase.Invariants) == 0 || (phase.Name == "deploy" && x.DeploymentID == "") {
+				if x.Status != "running" || phase.ProgressPercent != 100 || len(phase.Blockers) > 0 || phase.ServiceHealth != "healthy" || len(phase.Invariants) == 0 || !delegatedPhaseReady(*x, phase.Name) || (phase.Name == "deploy" && x.DeploymentID == "") {
 					return v, *x, ErrInvalid
 				}
 				phase.State = "completed"
@@ -502,6 +502,25 @@ func (s *Store) UpdateExecution(repo, schema, migration, execution, actor string
 }
 func executionPhase(v string) bool {
 	return v == "expand" || v == "deploy" || v == "backfill" || v == "cutover" || v == "contract"
+}
+
+func delegatedPhaseReady(execution Execution, phase string) bool {
+	latest := map[string]ExecutionStepReport{}
+	for _, report := range execution.StepReports {
+		if report.Phase == phase {
+			latest[report.AgentID+":"+report.StepID] = report
+		}
+	}
+	for _, delegation := range execution.Delegations {
+		if delegation.Phase != phase {
+			continue
+		}
+		report, ok := latest[delegation.AgentID+":"+delegation.StepID]
+		if !ok || report.ProgressPercent != 100 || report.ServiceHealth != "healthy" || len(report.Invariants) == 0 || len(report.Blockers) > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 type Schema struct {

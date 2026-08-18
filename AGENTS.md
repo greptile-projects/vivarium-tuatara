@@ -90,7 +90,9 @@ whenever dependencies change or the web job fails before it starts.
   health, blockers, and next actions. Advancing requires complete healthy unblocked evidence;
   deployment evidence resolves through the existing promotion boundary. Agents may report only an
   exact phase and step delegated to their authenticated identity; step evidence remains separate and
-  cannot populate or advance controller-owned phase readiness. Execution records carry no commands, credentials, database,
+  cannot populate controller-owned phase readiness. Every current-phase delegation's latest report
+  must be complete, healthy, invariant-backed, and unblocked before human-controlled advancement.
+  Execution records carry no commands, credentials, database,
   deployment, environment, or destructive authority.
 
 - **Developer support** — `/support` and

@@ -3656,6 +3656,8 @@ promotion of the frozen release in the frozen environment. An agent-attributed r
 the exact migration step and can report only when its authenticated agent ID, current phase, and
 step match one frozen delegation. Agent reports persist as separate step evidence and never overwrite
 controller-owned phase readiness fields or satisfy phase advancement; only a human operator can
-synthesize phase progress after reviewing every required step. An agent cannot control the execution.
+synthesize phase progress after reviewing every required step. Advancement also requires the latest
+report for every current-phase delegation to be 100% complete, healthy, invariant-backed, and
+unblocked, so an operator cannot bypass incomplete delegated work. An agent cannot control the execution.
 These records carry no command, credential, database, environment,
 deployment, or destructive authority.

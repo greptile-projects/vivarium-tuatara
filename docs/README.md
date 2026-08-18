@@ -63,6 +63,8 @@ rollback boundary remains reversible. Deployment proof resolves through the ordi
 promotion store; the migration record never receives credentials or performs production operations.
 Agents can only report an exact phase and step delegated to their authenticated identity. Their
 step evidence is retained separately and cannot populate or advance controller-owned phase readiness.
+Every current-phase delegation must nevertheless have a latest complete, healthy, invariant-backed,
+unblocked report before the human controller can advance.
 
 Support guidance can be proven in ordinary revision-pinned development workspaces. Immutable attempts
 bind an exact cited answer revision to sanitized thread inputs, declared environment, commands and
