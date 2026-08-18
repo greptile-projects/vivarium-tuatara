@@ -22,10 +22,17 @@ var (
 )
 
 type Inclusion struct {
-	PullRequestIDs []string `json:"pull_request_ids"`
-	ProposalIDs    []string `json:"proposal_ids"`
-	TaskIDs        []string `json:"task_ids"`
-	ContributorIDs []string `json:"contributor_ids"`
+	PullRequestIDs []string       `json:"pull_request_ids"`
+	PullEvidence   []PullEvidence `json:"pull_evidence,omitempty"`
+	ProposalIDs    []string       `json:"proposal_ids"`
+	TaskIDs        []string       `json:"task_ids"`
+	ContributorIDs []string       `json:"contributor_ids"`
+}
+
+type PullEvidence struct {
+	PullRequestID  string   `json:"pull_request_id"`
+	SourceCommitID string   `json:"source_commit_id"`
+	ChangedPaths   []string `json:"changed_paths"`
 }
 
 type Candidate struct {
@@ -72,6 +79,27 @@ func (s *Store) Create(candidate Candidate) (Candidate, error) {
 	if !validID(candidate.RepositoryID) || !validID(candidate.CreatedBy) || !validCommit(candidate.CommitID) || strings.TrimSpace(candidate.Version) == "" || len(candidate.Version) > 100 || strings.TrimSpace(candidate.Notes) == "" || len(candidate.Notes) > 10000 {
 		return Candidate{}, ErrInvalid
 	}
+	if len(candidate.Inclusions.PullEvidence) > 0 {
+		included := map[string]bool{}
+		for _, pullID := range candidate.Inclusions.PullRequestIDs {
+			included[pullID] = true
+		}
+		seen := map[string]bool{}
+		for _, evidence := range candidate.Inclusions.PullEvidence {
+			if !included[evidence.PullRequestID] || seen[evidence.PullRequestID] || !validCommit(evidence.SourceCommitID) {
+				return Candidate{}, ErrInvalid
+			}
+			seen[evidence.PullRequestID] = true
+			for _, changedPath := range evidence.ChangedPaths {
+				if changedPath == "" || strings.HasPrefix(changedPath, "/") || filepath.Clean(changedPath) != changedPath || strings.HasPrefix(changedPath, "../") {
+					return Candidate{}, ErrInvalid
+				}
+			}
+		}
+		if len(seen) != len(included) {
+			return Candidate{}, ErrInvalid
+		}
+	}
 	items, err := s.list(candidate.RepositoryID)
 	if err != nil {
 		return Candidate{}, err
@@ -90,6 +118,12 @@ func (s *Store) Create(candidate Candidate) (Candidate, error) {
 	for _, values := range [][]string{candidate.Inclusions.PullRequestIDs, candidate.Inclusions.ProposalIDs, candidate.Inclusions.TaskIDs, candidate.Inclusions.ContributorIDs} {
 		sort.Strings(values)
 	}
+	for index := range candidate.Inclusions.PullEvidence {
+		sort.Strings(candidate.Inclusions.PullEvidence[index].ChangedPaths)
+	}
+	sort.Slice(candidate.Inclusions.PullEvidence, func(i, j int) bool {
+		return candidate.Inclusions.PullEvidence[i].PullRequestID < candidate.Inclusions.PullEvidence[j].PullRequestID
+	})
 	sort.Strings(candidate.ChangedPaths)
 	dir := filepath.Join(s.root, candidate.RepositoryID)
 	if err := os.MkdirAll(dir, 0700); err != nil {

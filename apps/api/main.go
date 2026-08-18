@@ -4502,7 +4502,7 @@ func deriveReleaseInclusions(repository *storage.Repository, commitID string, pr
 			delete(rangeCommits, string(commit.ID))
 		}
 	}
-	result := releases.Inclusion{PullRequestIDs: []string{}, ProposalIDs: []string{}, TaskIDs: []string{}, ContributorIDs: []string{}}
+	result := releases.Inclusion{PullRequestIDs: []string{}, PullEvidence: []releases.PullEvidence{}, ProposalIDs: []string{}, TaskIDs: []string{}, ContributorIDs: []string{}}
 	if pullStore == nil {
 		return result, nil
 	}
@@ -4516,6 +4516,15 @@ func deriveReleaseInclusions(repository *storage.Repository, commitID string, pr
 			continue
 		}
 		result.PullRequestIDs = append(result.PullRequestIDs, pull.ID)
+		changes, changeErr := pullStore.Changes(repositoryID, pull.ID)
+		if changeErr != nil {
+			return releases.Inclusion{}, changeErr
+		}
+		paths := make([]string, 0, len(changes))
+		for _, change := range changes {
+			paths = append(paths, change.Path)
+		}
+		result.PullEvidence = append(result.PullEvidence, releases.PullEvidence{PullRequestID: pull.ID, SourceCommitID: pull.SourceCommitID, ChangedPaths: paths})
 		contributorIDs[pull.AuthorID] = true
 		if pull.MergedBy != nil {
 			contributorIDs[*pull.MergedBy] = true

@@ -3821,7 +3821,10 @@ review, assignment, or merge controls.
   expiring exceptions; the same projection and blockers appear in ordinary
   `merge-readiness`.
 - `GET /repositories/{id}/releases/{release_id}/design-readiness` evaluates exact
-  release paths without converting design evidence into release authority.
+  release paths without converting design evidence into release authority. A
+  release freezes every included pull's source revision and changed paths; later
+  pull synchronization cannot change that evaluation. For a pull revision, the
+  latest durable interface check per journey supersedes older failed attempts.
   `POST .../interface-systems/{system_id}/migration-work` creates ordinary
   repository proposal work for implementation or documentation, while `POST
   .../releases/{release_id}/design-repairs` connects feedback or observed

@@ -33,10 +33,7 @@ func registerDesignGovernanceRoutes(mux *http.ServeMux, repos *repositories.Stor
 			return designgovernance.Readiness{}, err
 		}
 		currentPreview := false
-		for _, c := range all {
-			if c.Revision != revision {
-				continue
-			}
+		for _, c := range latestInterfaceChecks(all, revision) {
 			currentPreview = true
 			if c.Status != "passed" {
 				diagnostics = append(diagnostics, designgovernance.Diagnostic{Kind: "failed_interface_check", Severity: "blocking", Message: "A current interface check did not pass.", ResourceID: c.ID})
@@ -225,22 +222,12 @@ func registerDesignGovernanceRoutes(mux *http.ServeMux, repos *repositories.Stor
 				return
 			}
 		} else {
-			for _, pullID := range release.Inclusions.PullRequestIDs {
-				included, pullErr := pulls.Get(release.RepositoryID, pullID)
-				if pullErr != nil {
-					writeAPIError(w, 500, "design_governance_unavailable", "included pull evidence is unavailable")
-					return
-				}
-				includedChanges, changeErr := pulls.Changes(release.RepositoryID, included.ID)
-				if changeErr != nil {
-					writeAPIError(w, 500, "design_governance_unavailable", "included pull paths are unavailable")
-					return
-				}
-				paths := make([]string, 0, len(includedChanges))
-				for _, change := range includedChanges {
-					paths = append(paths, change.Path)
-				}
-				projected, evalErr := readiness(release.RepositoryID, included.ID, included.SourceCommitID, paths)
+			if len(release.Inclusions.PullEvidence) == 0 {
+				out.Ready = false
+				out.Diagnostics = append(out.Diagnostics, designgovernance.Diagnostic{Kind: "missing_release_pull_evidence", Severity: "blocking", Message: "The release predates immutable included-pull design evidence."})
+			}
+			for _, included := range release.Inclusions.PullEvidence {
+				projected, evalErr := readiness(release.RepositoryID, included.PullRequestID, included.SourceCommitID, included.ChangedPaths)
 				if evalErr != nil {
 					writeAPIError(w, 500, "design_governance_unavailable", "design readiness is unavailable")
 					return
@@ -326,6 +313,24 @@ func registerDesignGovernanceRoutes(mux *http.ServeMux, repos *repositories.Stor
 func mustChanges(store *pullrequests.Store, p pullrequests.PullRequest) []pullrequests.FileChange {
 	v, _ := store.Changes(p.RepositoryID, p.ID)
 	return v
+}
+
+func latestInterfaceChecks(all []interfacechecks.Check, revision string) []interfacechecks.Check {
+	latest := map[string]interfacechecks.Check{}
+	for _, check := range all {
+		if check.Revision != revision {
+			continue
+		}
+		current, found := latest[check.Journey]
+		if !found || check.CreatedAt.After(current.CreatedAt) || check.CreatedAt.Equal(current.CreatedAt) && check.ID > current.ID {
+			latest[check.Journey] = check
+		}
+	}
+	out := make([]interfacechecks.Check, 0, len(latest))
+	for _, check := range latest {
+		out = append(out, check)
+	}
+	return out
 }
 func writeDesignGovernance(w http.ResponseWriter, out any, err error, status int) {
 	switch {

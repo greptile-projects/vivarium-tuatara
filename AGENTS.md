@@ -308,7 +308,10 @@ whenever dependencies change or the web job fails before it starts.
   freeze the exact pull revision and policy version. `/design-readiness` is
   projected into ordinary merge readiness and separately for releases; unresolved
   differences, regressions, obsolete implementation evidence, stale previews,
-  and exceptions expiring within seven days remain explicit. Interface-system
+  and exceptions expiring within seven days remain explicit. Successful interface
+  reruns supersede older attempts for the same revision and journey. Releases
+  freeze each included pull's source revision and changed paths, so later pull
+  synchronization cannot rewrite release readiness. Interface-system
   migration work and post-release feedback/regression repairs create ordinary
   repository proposal tasks and grant design participants no review, merge,
   release, deployment, organization, or repository authority. Records default

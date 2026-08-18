@@ -54,6 +54,12 @@ feedback or observed regressions can seed linked repairs. Both continue through
 ordinary task, Git, review, check, merge, release, and deployment controls. Records
 default beneath `$DESIGN_GOVERNANCE_STORAGE_ROOT` (`design-governance`).
 
+Each release freezes the source revision and changed paths for every included
+pull. Release design readiness consumes that immutable snapshot rather than the
+pull's later synchronized state. Within one pull revision, the latest durable
+interface-check result for a journey is authoritative, allowing a successful
+rerun to supersede an earlier failed attempt while retaining both records.
+
 The API resolves the named release itself, derives its retained display version,
 requires the exact release commit to exist, and verifies every component,
 interaction, and content source path in that snapshot. Current implementations
