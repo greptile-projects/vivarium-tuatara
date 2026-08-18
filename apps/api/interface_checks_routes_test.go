@@ -36,6 +36,23 @@ func TestLatestInterfaceCheckSupersedesFailedJourneyAttempt(t *testing.T) {
 	}
 }
 
+func TestLatestInterfaceChecksPreserveIndependentDefinitionsForOneJourney(t *testing.T) {
+	revision := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	failed := interfacechecks.Check{ID: "1", Revision: revision, Journey: "checkout", DefinitionPath: ".vivarium/a.json", DefinitionDigest: "a", Status: "failed", CreatedAt: time.Unix(1, 0)}
+	passed := interfacechecks.Check{ID: "2", Revision: revision, Journey: "checkout", DefinitionPath: ".vivarium/b.json", DefinitionDigest: "b", Status: "passed", CreatedAt: time.Unix(2, 0)}
+	latest := latestInterfaceChecks([]interfacechecks.Check{failed, passed}, revision)
+	if len(latest) != 2 {
+		t.Fatalf("independent definition was discarded: %#v", latest)
+	}
+	statuses := map[string]string{}
+	for _, check := range latest {
+		statuses[check.DefinitionPath] = check.Status
+	}
+	if statuses[failed.DefinitionPath] != "failed" || statuses[passed.DefinitionPath] != "passed" {
+		t.Fatalf("independent results = %#v", statuses)
+	}
+}
+
 func TestInterfaceEvidenceRequirementsComeFromAcceptedDesign(t *testing.T) {
 	design := designproposals.Proposal{CurrentVersion: 1, Revisions: []designproposals.Revision{{Journeys: []designproposals.Journey{{Name: "checkout"}}, AcceptanceCriteria: []string{"keyboard flow"}}}, Implementation: &designproposals.Implementation{DesignVersion: 1}}
 	check := interfacechecks.Check{DesignVersion: 1, Journey: "checkout", AffectedRequirements: []string{"keyboard flow"}, Differences: []interfacechecks.Difference{{Requirement: "unaccepted requirement"}}}

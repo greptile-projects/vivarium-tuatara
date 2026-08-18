@@ -3824,7 +3824,8 @@ review, assignment, or merge controls.
   release paths without converting design evidence into release authority. A
   release freezes every included pull's source revision and changed paths; later
   pull synchronization cannot change that evaluation. For a pull revision, the
-  latest durable interface check per journey supersedes older failed attempts.
+  latest durable interface check per definition and journey supersedes older
+  failed attempts without suppressing independent definitions.
   `POST .../interface-systems/{system_id}/migration-work` creates ordinary
   repository proposal work for implementation or documentation, while `POST
   .../releases/{release_id}/design-repairs` connects feedback or observed

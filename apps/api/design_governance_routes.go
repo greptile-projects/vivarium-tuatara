@@ -321,9 +321,10 @@ func latestInterfaceChecks(all []interfacechecks.Check, revision string) []inter
 		if check.Revision != revision {
 			continue
 		}
-		current, found := latest[check.Journey]
+		key := check.DefinitionPath + "\x00" + check.DefinitionDigest + "\x00" + check.Journey
+		current, found := latest[key]
 		if !found || check.CreatedAt.After(current.CreatedAt) || check.CreatedAt.Equal(current.CreatedAt) && check.ID > current.ID {
-			latest[check.Journey] = check
+			latest[key] = check
 		}
 	}
 	out := make([]interfacechecks.Check, 0, len(latest))
