@@ -48,6 +48,21 @@ func TestDesignArtifactProjectionHonorsExplicitAudience(t *testing.T) {
 	}
 }
 
+func TestDesignArtifactProjectionRedactsHistoricalRevisionForCurrentPublisher(t *testing.T) {
+	v := designproposals.Proposal{Revisions: []designproposals.Revision{
+		{Artifacts: []designproposals.Artifact{{ID: "historical", Description: "historical-description", Content: "historical-content", Interactions: []string{"historical-interaction"}, Audience: []string{"original-designer"}}}},
+		{Artifacts: []designproposals.Artifact{{ID: "current", Description: "current-description", Content: "current-content", Interactions: []string{"current-interaction"}, Audience: []string{"publisher"}}}},
+	}}
+	redactDesignArtifacts(&v, "publisher")
+	historical, current := v.Revisions[0].Artifacts[0], v.Revisions[1].Artifacts[0]
+	if historical.Content != "" || len(historical.Interactions) != 0 || historical.Description == "historical-description" {
+		t.Fatalf("historical restricted artifact leaked to current publisher: %#v", historical)
+	}
+	if current.Content != "current-content" || current.Description != "current-description" || len(current.Interactions) != 1 {
+		t.Fatalf("current explicitly visible artifact was redacted: %#v", current)
+	}
+}
+
 func TestDesignEvidenceProjectionRechecksCurrentReaderVisibility(t *testing.T) {
 	feedbackStore, err := productfeedback.New(t.TempDir())
 	if err != nil {

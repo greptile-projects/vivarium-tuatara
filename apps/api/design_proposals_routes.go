@@ -213,6 +213,7 @@ func registerDesignProposalRoutes(mux *http.ServeMux, git *storage.Store, catalo
 			writeDesignProposal(w, out, e, 0)
 			return
 		}
+		redactDesignArtifacts(&out, actor.UserID)
 		writeJSON(w, 201, map[string]any{"design_proposal": out, "proposal": ordinary, "tasks": made})
 	})
 	mux.HandleFunc("POST /repositories/{id}/design-proposals/{proposal_id}/implementation/reports", func(w http.ResponseWriter, r *http.Request) {
