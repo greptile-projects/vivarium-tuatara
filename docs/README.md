@@ -86,6 +86,22 @@ and contract-phase rollback rejection. The web record then exposes every contain
 beside the observation-gated owner approval, per-environment schema version, cost, retained/changed data,
 and verified obsolete-field deletion.
 
+## Infrastructure as project state
+
+Repository infrastructure lives at `/repositories/{id}/infrastructure` in both the API and web
+application. Each immutable revision resolves to an exact repository commit and declares environments,
+services, networks, identities, data stores, compute, and external dependencies together with owners,
+providers, configuration boundaries, dependencies, cost/capacity constraints, and operational
+commitments. Release and environment links resolve against existing repository records.
+
+Append-only observations retain only permitted, sanitized provider state at an exact definition and
+provider revision. Participant-only observation identity and summaries are redacted on public reads;
+secret values and credential-shaped text are rejected. Derived diagnostics make inaccessible providers,
+unmanaged discoveries, stale or missing observations, conflicting ownership, and secret-backed
+configuration explicit. This inventory grants no cloud, deployment, environment, credential, or
+infrastructure execution authority. Records default beneath `$INFRASTRUCTURE_STORAGE_ROOT`
+(`infrastructure`).
+
 Support guidance can be proven in ordinary revision-pinned development workspaces. Immutable attempts
 bind an exact cited answer revision to sanitized thread inputs, declared environment, commands and
 outputs, artifacts, cost, and result; fresh-workspace reruns preserve the original record and reads expose

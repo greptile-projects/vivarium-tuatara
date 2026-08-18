@@ -3612,6 +3612,40 @@ Current repository participants use `POST .../support-solutions/{solution_id}/ac
 `needs_revalidation`; `archive` marks advice obsolete; `merge_duplicate` names an active canonical solution
 with the same audience. These actions never rewrite the original instructions, scope, discussion, authorship,
 or verification evidence. Records default beneath `$SUPPORT_SOLUTION_STORAGE_ROOT` (`support-solutions`).
+## Infrastructure definitions and observations
+
+`GET /repositories/{id}/infrastructure` lists readable definitions and `GET
+/repositories/{id}/infrastructure/{definition_id}` returns one definition with its immutable revision
+history, append-only observations, and current diagnostics. Public repositories expose the declared
+resource model anonymously. Participant-only observations retain their existence, attribution, status,
+visibility, and time but replace provider identity, observed revision, and summary with `restricted` or
+an explicit participant-only marker.
+
+Current repository participants use `POST /repositories/{id}/infrastructure` and `POST
+/repositories/{id}/infrastructure/{definition_id}/revisions`. A request contains `revision`; successor
+requests also contain `expected_version`. Every revision must cite an exact Git commit in `revision`,
+name current participant owners, and completely declare one or more `environment`, `service`, `network`,
+`identity`, `data_store`, `compute`, or `external_dependency` resources. Resources include provider and
+provider-access state, optional non-secret provider identity, exact existing release/environment links,
+dependencies, configuration source and sensitivity boundaries, cost/capacity constraints, and security,
+privacy, reliability, continuity, and regional commitments. Configuration values are never accepted.
+
+`POST /repositories/{id}/infrastructure/{definition_id}/observations` appends one sanitized observation
+bound to an exact retained definition version and provider revision. Managed observations name a resource
+in that revision; unmanaged discoveries deliberately omit `resource_id`. Optional release and environment
+IDs must resolve in the repository. Visibility is `public` or `participant`, status is `healthy`,
+`degraded`, or `unknown`, and `observed_at` records source freshness. Credential-shaped provider,
+revision, configuration, summary, or commitment text—including common provider token and access-key
+formats—is rejected. Future timestamps are rejected; only current-definition observations from the
+preceding 24 hours satisfy current observed-state coverage.
+
+Reads derive diagnostics for unmanaged resources, inaccessible providers, observations older than 24
+hours or attached to an earlier definition revision, conflicting owners for one provider identity,
+secret-backed configuration boundaries, and resources without a current permitted observation. The
+records explain intent and permitted evidence only: they grant no provider access, credentials, Git,
+release, deployment, environment, or infrastructure execution authority. Storage defaults to
+`$INFRASTRUCTURE_STORAGE_ROOT` (`infrastructure`).
+
 # Durable-state migration work
 
 `POST /repositories/{id}/durable-schemas/{schema_id}/migrations/{migration_id}/work`
