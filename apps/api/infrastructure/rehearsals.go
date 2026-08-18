@@ -229,4 +229,6 @@ func CommandDigest(command string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func SafeEvidence(values ...string) bool { return !unsafe(values...) }
+
 func sortedActions(actions []string) []string { sort.Strings(actions); return actions }

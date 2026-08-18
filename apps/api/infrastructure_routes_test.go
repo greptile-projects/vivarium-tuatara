@@ -47,6 +47,13 @@ func TestInfrastructureRehearsalBindingUsesLatestCommandRetry(t *testing.T) {
 	if !ok || run.Result != "passed" || len(run.Outcomes) != 1 || run.Outcomes[0].SanitizedLog != "retry passed" || run.Outcomes[0].ExitCode != 0 {
 		t.Fatalf("latest retry binding = %#v, %v", run, ok)
 	}
+	stale := workspaces.CommandOutcome{ID: "stale", CommandSHA256: digest, ExitCode: 0, Output: "stale retry", ActorID: "owner", StartedAt: created.Add(-2 * time.Second), CompletedAt: created.Add(-time.Second)}
+	secret := workspaces.CommandOutcome{ID: "secret", CommandSHA256: digest, ExitCode: 0, Output: "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", ActorID: "owner", StartedAt: created.Add(5 * time.Second), CompletedAt: created.Add(6 * time.Second)}
+	ws.Commands = append(ws.Commands, stale, secret)
+	run, ok = bindInfrastructureRehearsal(ws, infrastructure.ChangePlan{}, rehearsal, []string{"provisioning"})
+	if !ok || run.Result != "passed" || len(run.Outcomes) != 1 || run.Outcomes[0].SanitizedLog != "retry passed" || run.Outcomes[0].CommandDigest != digest {
+		t.Fatalf("newest eligible retry binding = %#v, %v", run, ok)
+	}
 }
 
 func TestInfrastructureAPIKeepsExactIntentPublicAndSensitiveEvidenceBounded(t *testing.T) {

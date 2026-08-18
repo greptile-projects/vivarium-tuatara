@@ -380,13 +380,19 @@ func bindInfrastructureRehearsal(ws workspaces.Workspace, plan infrastructure.Ch
 		}
 		digest := infrastructure.CommandDigest(check.Command)
 		matches := retained[digest]
-		if len(matches) == 0 {
+		var selected *workspaces.CommandOutcome
+		for i := len(matches) - 1; i >= 0; i-- {
+			x := matches[i]
+			if x.StartedAt.Before(rehearsal.CreatedAt) || x.CompletedAt.Before(x.StartedAt) || len(x.Output) > 65500 || reusableSecret.MatchString(x.Output) || !infrastructure.SafeEvidence(x.Output) {
+				continue
+			}
+			selected = &x
+			break
+		}
+		if selected == nil {
 			return run, false
 		}
-		x := matches[len(matches)-1]
-		if x.StartedAt.Before(rehearsal.CreatedAt) || x.CompletedAt.Before(x.StartedAt) || len(x.Output) > 65500 || reusableSecret.MatchString(x.Output) {
-			return run, false
-		}
+		x := *selected
 		status := "passed"
 		if x.ExitCode != 0 {
 			status, passed = "failed", false
@@ -398,7 +404,7 @@ func bindInfrastructureRehearsal(ws workspaces.Workspace, plan infrastructure.Ch
 		}
 	}
 	for _, change := range ws.Changes {
-		if reusableSecret.MatchString(change.Path) {
+		if reusableSecret.MatchString(change.Path) || !infrastructure.SafeEvidence(change.Path) {
 			return run, false
 		}
 		run.Artifacts = append(run.Artifacts, infrastructure.RehearsalArtifact{Path: change.Path, Digest: change.SHA256, Size: change.Size})
