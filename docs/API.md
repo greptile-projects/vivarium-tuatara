@@ -3559,6 +3559,38 @@ repository participant. Responses retain attributable diagnostics for missing ow
 explicit conflicts, untestable claims, expired exceptions, and exceptions expiring within seven
 days. Storage defaults to `$QUALITY_PLAN_STORAGE_ROOT` (`quality-plans`).
 
+## Reusable test scenarios
+
+`POST /repositories/{id}/test-scenarios` publishes an immutable executable behavior specification.
+`GET /repositories/{id}/test-scenarios` and `GET
+/repositories/{id}/test-scenarios/{scenario_id}` follow repository read visibility. Publication is
+participant-only and accepts exact-revision rationale; typed parameters; explicit preconditions,
+actions, assertions, environments, and cases; safe fixtures; and an ordinary Git implementation
+proposal with author type, branch, commit, test paths, framework, rerun command, assumptions, and
+provenance.
+
+Source kinds are `issue`, `reproduction`, `design_specification`, `api_contract`, `documentation`,
+or `user_journey`. Every source revision must be a real repository commit, and each supplied source
+path must be a text blob in that commit. An optional quality-plan binding names real requirements in
+an exact retained plan version. The implementation branch must currently resolve to the declared
+commit; all test and fixture paths resolve there, and each fixture SHA-256 must match its blob.
+Optional pull and workspace IDs must bind that same repository and commit.
+
+Every rationale ID and revision pair is resolved before persistence. Issue citations must match an
+exact commit retained by triage, a reproduction attempt, repair implementation/verification, or
+delivery. Design specifications must match their implementation base. Replay scenarios, API contracts,
+and documentation must expose the same exact commit. A user journey must be declared by a retained
+repository quality-plan journey scope whose `source_revision` equals the citation revision. Quality
+plan scopes may omit `source_revision` for compatibility, but such a journey cannot be reused as an
+exact-revision scenario source.
+
+Fixtures may only be `synthetic`, `generated`, or `template` assets classified as `synthetic`,
+`anonymized`, or `public`; assumptions and provenance are mandatory. The API stores only their path,
+digest, generator, and metadata, scans both the resolved blob and scenario metadata for secret-shaped
+content, and never imports production
+personal data or inaccessible evidence. Storage defaults to `$TEST_SCENARIO_STORAGE_ROOT`
+(`test-scenarios`). Records grant no execution, Git, pull, workspace, environment, or data authority.
+
 ## Locale plans
 
 `POST /repositories/{id}/locale-plans` publishes a complete localization support contract. The

@@ -20,9 +20,10 @@ var ErrInvalid = errors.New("invalid quality plan")
 var ErrConflict = errors.New("quality plan version conflict")
 
 type Scope struct {
-	Kind       string `json:"kind"`
-	ResourceID string `json:"resource_id,omitempty"`
-	Name       string `json:"name"`
+	Kind           string `json:"kind"`
+	ResourceID     string `json:"resource_id,omitempty"`
+	Name           string `json:"name"`
+	SourceRevision string `json:"source_revision,omitempty"`
 }
 type Environment struct {
 	ID          string `json:"id"`
@@ -206,7 +207,7 @@ func validate(r Revision) error {
 		return ErrInvalid
 	}
 	for _, scope := range r.Scopes {
-		if !set("repository", "release", "journey", "interface")[scope.Kind] || strings.TrimSpace(scope.Name) == "" || (scope.Kind != "repository" && strings.TrimSpace(scope.ResourceID) == "") {
+		if !set("repository", "release", "journey", "interface")[scope.Kind] || strings.TrimSpace(scope.Name) == "" || (scope.Kind != "repository" && strings.TrimSpace(scope.ResourceID) == "") || (scope.SourceRevision != "" && (len(scope.SourceRevision) != 40 || !hexRevision(scope.SourceRevision))) {
 			return ErrInvalid
 		}
 	}
@@ -263,6 +264,7 @@ func validate(r Revision) error {
 	}
 	return nil
 }
+func hexRevision(v string) bool { _, err := hex.DecodeString(v); return err == nil }
 func set(v ...string) map[string]bool {
 	m := map[string]bool{}
 	for _, x := range v {

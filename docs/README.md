@@ -19,6 +19,29 @@ current repository participant inside the repository mutation boundary. The ledg
 `$QUALITY_PLAN_STORAGE_ROOT` (`quality-plans`) and grants no check execution, preview, release,
 environment, merge, or evidence authority.
 
+## Reusable test scenarios
+
+The quality workspace also publishes immutable executable specifications through
+`/repositories/{id}/test-scenarios`. A scenario names its exact issue, reproduction, design,
+API-contract, documentation, or journey rationale and spells out parameters, preconditions,
+actions, assertions, environments, cases, and assumptions. Another contributor can therefore see
+both what the test proves and the command that reruns it without interpreting an opaque script.
+
+Tests and fixtures are proposed through ordinary repository branches (and optionally an exact pull
+or bounded workspace). Publication resolves the branch commit, every test path, every optional source
+path, and each fixture SHA-256 from Git. Only synthetic, anonymized, or public fixture classifications
+are reusable; resolved fixture bytes are scanned for credential-shaped content but are not copied into
+this ledger. Source IDs must resolve through their repository-owned issue, replay, design, contract,
+documentation, or quality-plan journey record. Generated scenarios identify their human
+or agent authoring mode, framework, provenance, and assumptions. Records default beneath
+`$TEST_SCENARIO_STORAGE_ROOT` (`test-scenarios`) and grant no Git, workspace, test-execution, review,
+merge, environment, or data authority.
+
+The cited commit must also be source-owned evidence, not merely another repository commit. Issues bind
+through retained triage/reproduction/repair/delivery revisions, implemented designs through their base
+revision, and journey scopes through an explicit quality-plan `source_revision`; replay, contract, and
+documentation sources already retain their exact commit directly.
+
 ## Versioned interface systems
 
 Reusable product language is repository state, not an untracked style-guide
