@@ -385,6 +385,15 @@ func findingIsCurrentBug(v Session, findingID string) bool {
 	return classification == "bug"
 }
 
+func findingRepairPending(v Session, findingID string) bool {
+	for _, repair := range v.Repairs {
+		if repair.FindingID == findingID && repair.State == "pending" {
+			return true
+		}
+	}
+	return false
+}
+
 func sameRepairRequest(r Repair, in RepairInput) bool {
 	return r.FindingID == in.FindingID && r.ReproductionID == in.ReproductionEventID && r.AssigneeType == in.AssigneeType && r.AssigneeID == strings.TrimSpace(in.AssigneeID) && r.QualityPlanID == in.QualityPlanID && r.QualityPlanVersion == in.QualityPlanVersion && slicesEqual(r.EvidenceEventIDs, in.EvidenceEventIDs) && slicesEqual(r.AcceptanceCriteria, in.AcceptanceCriteria) && slicesEqual(r.RequirementIDs, in.RequirementIDs)
 }
@@ -511,6 +520,12 @@ func ValidEvent(v Session, in EventInput) bool {
 		return false
 	}
 	if one(in.Kind, "classify", "discard") && !findingExists(v, in.FindingID) {
+		return false
+	}
+	// Reservation is the cross-store publication boundary. Holding the finding
+	// decision stable while pending lets deterministic issue/task creation be
+	// retried and linked instead of becoming orphaned through supersession.
+	if one(in.Kind, "classify", "discard") && findingRepairPending(v, in.FindingID) {
 		return false
 	}
 	if in.Kind == "reproduce" {

@@ -16,6 +16,9 @@ permitted timeline evidence, minimized reproduction, acceptance criteria, assign
 before creating a linked issue and ordinary human/agent proposal task. Lasting coverage links back only from
 a reusable scenario implemented by that exact task pull and commit with matching issue and plan requirements;
 flaky, duplicate, environment-specific, and non-reproducible decisions remain explicit classifications.
+A pending repair reservation freezes further classification/discard events for its finding until
+deterministic issue/task publication is linked, preventing concurrent supersession from orphaning
+actionable work; linked history remains immutable while later finding decisions may append normally.
 Human actions also require an exact charter assignee/action match; audience membership alone admits
 only collaborative guidance.
 Candidate movement marks evidence stale without rewriting it. These records grant no preview,

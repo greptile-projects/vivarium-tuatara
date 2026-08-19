@@ -3629,6 +3629,10 @@ proposal, and task identities. Candidate movement or changed handoff data is rej
 plan requires the regression to fail at the affected revision, pass at the repair revision, and become a
 maintainable reusable scenario. `flaky`, `duplicate`, `environment_specific`, and `not_reproducible`
 classifications remain durable resolution paths but are not eligible for confirmed-bug repair.
+While the retry-safe repair reservation is pending, further classify/discard events for that finding
+are rejected. The reservation is therefore the publication boundary: deterministic issue/task creation
+can be retried and finalized without concurrent supersession orphaning actionable work. Once linked,
+later decisions may append normally and do not rewrite the retained repair history.
 
 After the repair pull publishes its reusable scenario, `POST .../{session_id}/findings/{finding_id}/coverage`
 links it back to the finding. The scenario must cite the linked issue, use the repair task's exact pull and

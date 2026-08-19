@@ -73,6 +73,10 @@ pull task, candidate commit, issue, and frozen quality-plan requirements all mat
 retains bidirectional finding/issue/task/pull/commit/scenario provenance. `flaky`, `duplicate`,
 `environment_specific`, and `not_reproducible` decisions remain explicit timeline classifications and
 cannot silently enter the confirmed-bug repair path.
+Once a repair identity is reserved, its finding disposition is frozen while ordinary issue/task
+publication is pending. This prevents concurrent reclassification from orphaning actionable work;
+exact publication retries reconcile the same identities. Later evidence may append a new classification
+after the repair link is durable without rewriting either history.
 
 ## Versioned interface systems
 

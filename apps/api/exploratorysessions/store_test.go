@@ -154,7 +154,7 @@ func TestSupersedingFindingDecisionsBlockPendingRepair(t *testing.T) {
 	}
 }
 
-func TestSupersedingDecisionBlocksRepairFinalization(t *testing.T) {
+func TestPendingRepairFreezesFindingDecisionUntilLinked(t *testing.T) {
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	s, _ := New(t.TempDir())
 	s.now = func() time.Time { return now }
@@ -165,13 +165,16 @@ func TestSupersedingDecisionBlocksRepairFinalization(t *testing.T) {
 	reproductionID := v.Events[len(v.Events)-1].ID
 	v, _ = s.Append(v.ID, "owner", EventInput{ExpectedVersion: v.Version, Kind: "classify", CharterID: "owner", FindingID: "finding", Summary: "Initially confirmed", Classification: "bug"})
 	v, repair, _ := s.ReserveRepair(v.ID, "owner", RepairInput{ExpectedVersion: v.Version, FindingID: "finding", EvidenceEventIDs: []string{observationID, reproductionID}, ReproductionEventID: reproductionID, AcceptanceCriteria: []string{"Failure is absent"}, AssigneeType: "human", AssigneeID: "owner"})
-	v, _ = s.Append(v.ID, "owner", EventInput{ExpectedVersion: v.Version, Kind: "classify", CharterID: "owner", FindingID: "finding", Summary: "Superseded after more evidence", Classification: "flaky"})
-	if _, err := s.FinalizeRepair(v.ID, repair.RecoveryID, "issue", "proposal", "task"); !errors.Is(err, ErrFindingNotConfirmed) {
-		t.Fatalf("superseded finding finalized repair: %v", err)
+	if _, err := s.Append(v.ID, "owner", EventInput{ExpectedVersion: v.Version, Kind: "classify", CharterID: "owner", FindingID: "finding", Summary: "Superseded during publication", Classification: "flaky"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("pending repair allowed a superseding decision: %v", err)
 	}
-	stored, _ := s.Get(v.ID)
-	if stored.Repairs[0].State != "pending" || stored.Repairs[0].IssueID != "" || stored.Repairs[0].ProposalID != "" || stored.Repairs[0].TaskID != "" {
-		t.Fatalf("failed finalization attached work: %+v", stored.Repairs[0])
+	v, err := s.FinalizeRepair(v.ID, repair.RecoveryID, "issue", "proposal", "task")
+	if err != nil || v.Repairs[0].State != "linked" {
+		t.Fatalf("unchanged confirmed repair did not finalize: %+v %v", v.Repairs[0], err)
+	}
+	v, err = s.Append(v.ID, "owner", EventInput{ExpectedVersion: v.Version, Kind: "classify", CharterID: "owner", FindingID: "finding", Summary: "Later evidence retained after publication", Classification: "flaky"})
+	if err != nil || v.Events[len(v.Events)-1].Classification != "flaky" {
+		t.Fatalf("linked repair should not erase later finding decisions: %v", err)
 	}
 }
 
