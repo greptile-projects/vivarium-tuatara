@@ -106,6 +106,30 @@ func (s *Store) IssuePullRequestBound(userID string, name string, scopes []strin
 	return s.issueBound(userID, Git, name, scopes, lifetime, repositoryID, gitWriteBranch, pullRequestID, nil)
 }
 
+// IssueTaskAgentBound preserves the assigned agent principal on an ordinary
+// task credential while retaining its exact repository and branch bounds.
+func (s *Store) IssueTaskAgentBound(userID, name, agentID string, scopes []string, lifetime time.Duration, repositoryID, gitWriteBranch string) (IssuedCredential, error) {
+	issued, err := s.issueBound(userID, Git, name, scopes, lifetime, repositoryID, gitWriteBranch, "", nil)
+	if err != nil {
+		return issued, err
+	}
+	if !validID(agentID) {
+		_, _ = s.Revoke(userID, issued.ID)
+		return IssuedCredential{}, ErrInvalid
+	}
+	credential, err := s.read(issued.ID)
+	if err != nil {
+		return IssuedCredential{}, err
+	}
+	credential.AgentID = agentID
+	if err = s.write(credential); err != nil {
+		_, _ = s.Revoke(userID, issued.ID)
+		return IssuedCredential{}, err
+	}
+	issued.Credential = credential
+	return issued, nil
+}
+
 // IssuePackageBound creates a repository-owned registry credential whose
 // authority is frozen to an explicit set of package identities.
 func (s *Store) IssuePackageBound(userID, name, repositoryID string, packageNames []string, lifetime time.Duration) (IssuedCredential, error) {

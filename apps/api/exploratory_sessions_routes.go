@@ -96,7 +96,7 @@ func registerExploratorySessionRoutes(mux *http.ServeMux, git *storage.Store, ca
 		writeExploratorySession(w, out, e, 201)
 	})
 	mux.HandleFunc("POST /repositories/{id}/exploratory-sessions/{session_id}/events", func(w http.ResponseWriter, r *http.Request) {
-		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		actor, ok := authorizeExploratoryEvent(w, r, catalog, credentials, r.PathValue("id"))
 		if !ok {
 			return
 		}
@@ -331,6 +331,43 @@ func registerExploratorySessionRoutes(mux *http.ServeMux, git *storage.Store, ca
 			return exploratorysessions.Repair{}
 		}(), "scenario": scenario, "pull_request": pull})
 	})
+}
+
+// Exploratory agents operate through an ordinary task credential. That
+// credential is repository-bound and carries Git write scope, not general API
+// mutation authority; the session store separately requires its authenticated
+// agent identity to match an exact charter and allowed action.
+func authorizeExploratoryEvent(w http.ResponseWriter, r *http.Request, catalog *repositories.Store, credentials *auth.Store, repositoryID string) (auth.Credential, bool) {
+	actor, authenticated, err := authenticateOptionalCredential(r, credentials, "repositories:write")
+	if errors.Is(err, auth.ErrNotFound) {
+		actor, authenticated, err = authenticateOptionalCredential(r, credentials, "git:write")
+		if err == nil && authenticated && (actor.AgentID == "" || actor.RepositoryID != repositoryID) {
+			writeAPIError(w, 403, "exploratory_agent_scope_invalid", "agent exploration requires an exact repository-bound task credential")
+			return auth.Credential{}, false
+		}
+	}
+	if err != nil || !authenticated {
+		writeAuthenticationRequired(w, false)
+		return auth.Credential{}, false
+	}
+	repository, err := catalog.GetByID(repositoryID)
+	if err != nil {
+		writeRepositoryError(w, err)
+		return auth.Credential{}, false
+	}
+	if actor.AgentID != "" && actor.RepositoryID == repositoryID {
+		return actor, true
+	}
+	collaborator, err := catalog.HasCollaborator(actor.UserID, repositoryID)
+	if err != nil {
+		writeRepositoryError(w, err)
+		return auth.Credential{}, false
+	}
+	if actor.UserID != repository.OwnerID && !collaborator {
+		writeAPIError(w, 404, "repository_not_found", "repository not found")
+		return auth.Credential{}, false
+	}
+	return actor, true
 }
 
 func exploratorySameStrings(a, b []string) bool {
