@@ -43,16 +43,49 @@ func TestVersionedQualityPlanKeepsExplicitCollaborativeGaps(t *testing.T) {
 	if err != nil || revised.CurrentVersion != 2 || len(revised.Revisions) != 2 || len(revised.Diagnostics) != 1 || revised.Diagnostics[0].Kind != "missing_evidence" {
 		t.Fatalf("revised = %#v, %v", revised, err)
 	}
-	if got := revised.Revisions[1].Evidence[0].AddedBy; got != "author" {
-		t.Fatalf("carried evidence added_by = %q, want author", got)
+	if got := revised.Revisions[1].Evidence[0].AddedBy; got != "reviewer" {
+		t.Fatalf("changed evidence added_by = %q, want reviewer", got)
 	}
 	revision.Evidence = append(revision.Evidence, Evidence{ID: "manual", Kind: "manual", ResourceKind: "sign_off", ResourceID: "signoff-1", Summary: "Release review", Status: "passing"})
 	revised, err = store.Revise(created.ID, 2, "reviewer", revision)
 	if err != nil || revised.Revisions[2].Evidence[1].AddedBy != "reviewer" {
 		t.Fatalf("new evidence provenance = %#v, %v", revised.Revisions[2].Evidence, err)
 	}
+	revision.Evidence[0].ResourceID = "run-2"
+	revision.Evidence[0].Revision = "def"
+	revision.Evidence[0].Summary = "Updated checkout suite"
+	revision.Evidence[0].Status = "missing"
+	revised, err = store.Revise(created.ID, 3, "reviewer", revision)
+	if err != nil || revised.Revisions[3].Evidence[0].AddedBy != "reviewer" {
+		t.Fatalf("changed evidence provenance = %#v, %v", revised.Revisions[3].Evidence, err)
+	}
+	changedDiagnostic := false
+	for _, diagnostic := range revised.Diagnostics {
+		if diagnostic.RequirementID == "checkout" && diagnostic.Kind == "missing_evidence" && diagnostic.AttributedTo == "reviewer" {
+			changedDiagnostic = true
+		}
+	}
+	if !changedDiagnostic {
+		t.Fatalf("changed evidence diagnostic = %#v", revised.Diagnostics)
+	}
 	if _, err = store.Revise(created.ID, 1, "reviewer", revision); !errors.Is(err, ErrConflict) {
 		t.Fatalf("stale revise = %v", err)
+	}
+}
+
+func TestUnchangedEvidenceRetainsOriginalContributor(t *testing.T) {
+	store, _ := New(t.TempDir())
+	revision := completeRevision()
+	created, err := store.Create("repo", "author", revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revised, err := store.Revise(created.ID, 1, "reviewer", revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := revised.Revisions[1].Evidence[0].AddedBy; got != "author" {
+		t.Fatalf("unchanged evidence added_by = %q, want author", got)
 	}
 }
 

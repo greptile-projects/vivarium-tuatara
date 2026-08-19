@@ -140,10 +140,10 @@ func (s *Store) Revise(id string, expected int, actor string, r Revision) (Plan,
 		if validate(r) != nil {
 			return ErrInvalid
 		}
-		priorEvidence := map[string]string{}
+		priorEvidence := map[string]Evidence{}
 		if len(v.Revisions) > 0 {
 			for _, evidence := range v.Revisions[len(v.Revisions)-1].Evidence {
-				priorEvidence[evidence.ID] = evidence.AddedBy
+				priorEvidence[evidence.ID] = evidence
 			}
 		}
 		stamp(&r, expected+1, actor, s.now(), priorEvidence)
@@ -184,17 +184,21 @@ func (s *Store) List(repo string) ([]Plan, error) {
 	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
 	return out, err
 }
-func stamp(r *Revision, v int, actor string, now time.Time, priorEvidence map[string]string) {
+func stamp(r *Revision, v int, actor string, now time.Time, priorEvidence map[string]Evidence) {
 	r.Version = v
 	r.CreatedBy = actor
 	r.CreatedAt = now
 	for i := range r.Evidence {
-		if addedBy := priorEvidence[r.Evidence[i].ID]; addedBy != "" {
-			r.Evidence[i].AddedBy = addedBy
+		if prior, ok := priorEvidence[r.Evidence[i].ID]; ok && sameEvidence(prior, r.Evidence[i]) {
+			r.Evidence[i].AddedBy = prior.AddedBy
 		} else {
 			r.Evidence[i].AddedBy = actor
 		}
 	}
+}
+
+func sameEvidence(a, b Evidence) bool {
+	return a.ID == b.ID && a.Kind == b.Kind && a.ResourceKind == b.ResourceKind && a.ResourceID == b.ResourceID && a.Revision == b.Revision && a.Summary == b.Summary && a.Status == b.Status
 }
 
 func validate(r Revision) error {
