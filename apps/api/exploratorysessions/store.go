@@ -233,6 +233,9 @@ func ValidEvent(v Session, in EventInput) bool {
 	if in.ExpectedVersion < 1 || bad(in.Summary) || !one(in.Kind, "observation", "guide", "pause", "resume", "reproduce", "classify", "discard", "close") {
 		return false
 	}
+	if !one(in.Kind, "classify", "discard") && in.Classification != "" {
+		return false
+	}
 	if v.Status == "closed" {
 		return false
 	}

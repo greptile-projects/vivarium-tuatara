@@ -3613,7 +3613,8 @@ metadata. Paused sessions accept only guidance, resume, or close; closed and exp
 new events. Agent credentials must match the exact charter assignee and share the session-wide action
 budget. Agent lifecycle, guidance, reproduction, classification, and discard events additionally
 require those exact actions in the charter; observation authority alone cannot control the session or
-decide a finding. Reproduction event IDs and classified or discarded finding IDs must resolve from a
+decide a finding, and classification fields are rejected on every non-decision event kind.
+Reproduction event IDs and classified or discarded finding IDs must resolve from a
 prior observation or reproduction in the same session. Credential-shaped content is rejected. Storage defaults to
 `$EXPLORATORY_SESSION_STORAGE_ROOT` (`exploratory-sessions`) and conveys no operational authority.
 

@@ -42,6 +42,9 @@ func TestTimelineIsBoundedCASAndAttributable(t *testing.T) {
 	if _, err = s.Append(v.ID, "agent-1", EventInput{ExpectedVersion: 2, Kind: "pause", CharterID: "payment", Summary: "Attempt undelegated control", ActorType: "agent", ActorID: "agent-1"}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("expected lifecycle-scope rejection, got %v", err)
 	}
+	if _, err = s.Append(v.ID, "agent-1", EventInput{ExpectedVersion: 2, Kind: "observation", CharterID: "payment", FindingID: "smuggled-decision", Summary: "Attempt classification through observation", Classification: "bug", ActorType: "agent", ActorID: "agent-1"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("expected observation classification rejection, got %v", err)
+	}
 	v, err = s.Append(v.ID, "tester", EventInput{ExpectedVersion: 2, Kind: "reproduce", CharterID: "payment", FindingID: "duplicate-submit", Summary: "Reproduced with keyboard", ReproducesEventID: v.Events[0].ID})
 	if err != nil {
 		t.Fatal(err)
