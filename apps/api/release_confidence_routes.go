@@ -162,7 +162,7 @@ func registerReleaseConfidenceRoutes(mux *http.ServeMux, catalog *repositories.S
 			return
 		}
 		scenario, e := scenarios.Get(in.ScenarioID)
-		if e != nil || scenario.RepositoryID != r.PathValue("id") {
+		if e != nil || scenario.RepositoryID != r.PathValue("id") || scenario.Implementation.CommitID != rel.CommitID {
 			writeAPIError(w, 422, "quality_signal_invalid", "sampled scenario does not resolve")
 			return
 		}

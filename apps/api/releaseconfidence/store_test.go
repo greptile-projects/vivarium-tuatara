@@ -15,14 +15,14 @@ func TestMatrixRetainsExactAttemptsAndInvalidatesOnlyAffectedEvidence(t *testing
 	}
 	reqs := []Requirement{
 		{ID: "checkout", Title: "Checkout works in French", Kind: "scenario", ResourceID: "scenario", OwnerIDs: []string{"owner"}, Selector: Selector{Branches: []string{"main"}, Journeys: []string{"checkout"}, Risks: []string{"critical"}, Locales: []string{"fr-FR"}, Platforms: []string{"web"}, Paths: []string{"apps/web/src/checkout"}}},
-		{ID: "api", Title: "API remains compatible", Kind: "test", OwnerIDs: []string{"owner"}, Selector: Selector{Branches: []string{"main"}, Paths: []string{"apps/api"}}},
+		{ID: "api", Title: "API remains compatible", Kind: "test", ResourceID: "run", OwnerIDs: []string{"owner"}, Selector: Selector{Branches: []string{"main"}, Paths: []string{"apps/api"}}},
 	}
 	if _, err = s.Publish("repo", "owner", 0, reqs); err != nil {
 		t.Fatal(err)
 	}
 	for _, a := range []Attempt{
 		{RequirementID: "checkout", Revision: revA, Status: "passed", ScenarioID: "scenario", Environment: "preview", Journey: "checkout", RiskClass: "critical", Locale: "fr-FR", Platform: "web", AffectedPaths: []string{"apps/web/src/checkout"}, Summary: "sample passed"},
-		{RequirementID: "api", Revision: revA, Status: "passed", CheckRunID: "run", Environment: "linux", AffectedPaths: []string{"apps/api"}, Summary: "tests passed"},
+		{RequirementID: "api", Revision: revA, Status: "passed", CheckRunID: "run", PullRequestID: "pull", Environment: "linux", AffectedPaths: []string{"apps/api"}, Summary: "tests passed"},
 	} {
 		if _, err = s.RecordAttempt("repo", "owner", a); err != nil {
 			t.Fatal(err)
@@ -44,10 +44,30 @@ func TestMatrixRetainsExactAttemptsAndInvalidatesOnlyAffectedEvidence(t *testing
 	}
 }
 
+func TestAttemptMustMatchRequirementKindAndConfiguredResource(t *testing.T) {
+	s, _ := New(t.TempDir())
+	_, err := s.Publish("repo", "owner", 0, []Requirement{{ID: "required", Title: "Required scenario", Kind: "scenario", ResourceID: "scenario-required", OwnerIDs: []string{"owner"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := Attempt{RequirementID: "required", Revision: revA, Status: "passed", ScenarioID: "scenario-unrelated", Environment: "preview", Summary: "passed"}
+	if _, err = s.RecordAttempt("repo", "owner", base); err != ErrInvalid {
+		t.Fatalf("unrelated scenario = %v", err)
+	}
+	base.ScenarioID, base.CheckRunID, base.PullRequestID = "", "scenario-required", "pull"
+	if _, err = s.RecordAttempt("repo", "owner", base); err != ErrInvalid {
+		t.Fatalf("wrong evidence kind = %v", err)
+	}
+	base.CheckRunID, base.PullRequestID, base.ScenarioID = "", "", "scenario-required"
+	if _, err = s.RecordAttempt("repo", "owner", base); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestOverrideIsOwnerScopedExpiringAndFollowedUp(t *testing.T) {
 	s, _ := New(t.TempDir())
 	s.now = func() time.Time { return time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC) }
-	_, _ = s.Publish("repo", "owner", 0, []Requirement{{ID: "risk", Title: "Risk sign-off", Kind: "exploratory_signoff", OwnerIDs: []string{"owner"}, Selector: Selector{Branches: []string{"main"}}}})
+	_, _ = s.Publish("repo", "owner", 0, []Requirement{{ID: "risk", Title: "Risk sign-off", Kind: "exploratory_signoff", ResourceID: "session", OwnerIDs: []string{"owner"}, Selector: Selector{Branches: []string{"main"}}}})
 	in := Override{RequirementID: "risk", Revision: revA, Rationale: "Accepted for this candidate only", Scope: Selector{Branches: []string{"main"}}, ExpiresAt: s.now().Add(24 * time.Hour), FollowUpKind: "issue", FollowUpID: "issue-1"}
 	if _, err := s.Override("repo", "other", in); err != ErrInvalid {
 		t.Fatalf("non-owner override = %v", err)

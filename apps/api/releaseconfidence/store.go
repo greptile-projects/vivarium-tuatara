@@ -147,7 +147,8 @@ func (s *Store) RecordAttempt(repo, actor string, in Attempt) (Attempt, error) {
 		if e != nil {
 			return e
 		}
-		if !requirementExists(p, in.RequirementID) || !validAttempt(in) {
+		requirement, found := findRequirement(p, in.RequirementID)
+		if !found || !validAttempt(in) || !evidenceBound(requirement, in) {
 			return ErrInvalid
 		}
 		in.ID = newID()
@@ -285,20 +286,32 @@ func validRequirements(rs []Requirement) bool {
 	}
 	seen := map[string]bool{}
 	for _, r := range rs {
-		if r.ID == "" || r.Title == "" || !map[string]bool{"scenario": true, "exploratory_signoff": true, "test": true}[r.Kind] || len(r.OwnerIDs) == 0 || seen[r.ID] {
+		if r.ID == "" || r.Title == "" || r.ResourceID == "" || !map[string]bool{"scenario": true, "exploratory_signoff": true, "test": true}[r.Kind] || len(r.OwnerIDs) == 0 || seen[r.ID] {
 			return false
 		}
 		seen[r.ID] = true
 	}
 	return true
 }
-func requirementExists(p Policy, id string) bool {
-	for _, r := range p.Requirements {
-		if r.ID == id {
-			return true
+func findRequirement(p Policy, id string) (Requirement, bool) {
+	for _, requirement := range p.Requirements {
+		if requirement.ID == id {
+			return requirement, true
 		}
 	}
-	return false
+	return Requirement{}, false
+}
+func evidenceBound(requirement Requirement, attempt Attempt) bool {
+	switch requirement.Kind {
+	case "scenario":
+		return attempt.ScenarioID == requirement.ResourceID && attempt.SessionID == "" && attempt.CheckRunID == "" && attempt.PullRequestID == ""
+	case "exploratory_signoff":
+		return attempt.SessionID == requirement.ResourceID && attempt.ScenarioID == "" && attempt.CheckRunID == "" && attempt.PullRequestID == ""
+	case "test":
+		return attempt.CheckRunID == requirement.ResourceID && attempt.PullRequestID != "" && attempt.ScenarioID == "" && attempt.SessionID == ""
+	default:
+		return false
+	}
 }
 func requirementOwner(p Policy, id, actor string) bool {
 	for _, r := range p.Requirements {
