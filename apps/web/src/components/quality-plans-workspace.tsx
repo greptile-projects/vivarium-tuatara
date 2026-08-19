@@ -143,6 +143,19 @@ type Scenario = {
   created_by: string;
   created_at: string;
 };
+type Exploration = {
+  id: string;
+  title: string;
+  source: { kind: string; resource_id: string; revision: string; label: string };
+  access: string[];
+  limits: { expires_at: string; max_cost_cents: number; max_agent_actions: number; allowed_actions: string[]; test_data: string[] };
+  charters: { id: string; title: string; risk: string; mission: string; assignee_type: string; assignee_id: string; allowed_actions: string[]; coverage: string[]; uncertainty: string }[];
+  status: string;
+  version: number;
+  stale: boolean;
+  stale_reason?: string;
+  events: { id: string; kind: string; charter_id?: string; finding_id?: string; summary: string; route?: string; inputs?: string[]; command?: string; coverage?: string[]; uncertainty?: string; classification?: string; artifacts?: { kind: string; sha256: string; description: string }[]; actor_type: string; actor_id: string; created_at: string }[];
+};
 const value = (f: FormData, n: string) => String(f.get(n) ?? "").trim();
 const list = (v: string) =>
   v
@@ -158,13 +171,15 @@ export function QualityPlansWorkspace({
   const { token, user } = useAuth(),
     [plans, setPlans] = useState<Plan[]>([]),
     [scenarios, setScenarios] = useState<Scenario[]>([]),
+    [explorations, setExplorations] = useState<Exploration[]>([]),
+    [exploration, setExploration] = useState<Exploration>(),
     [selected, setSelected] = useState<Plan>(),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   const load = useCallback(async () => {
     if (!token) return;
     try {
-      const [out, cases] = await Promise.all([
+      const [out, cases, sessions] = await Promise.all([
         api<{ plans: Plan[] }>(
           `/repositories/${repositoryID}/quality-plans`,
           {},
@@ -175,9 +190,14 @@ export function QualityPlansWorkspace({
           {},
           token,
         ),
+        api<{ sessions: Exploration[] }>(
+          `/repositories/${repositoryID}/exploratory-sessions`, {}, token,
+        ),
       ]);
       setPlans(out.plans);
       setScenarios(cases.scenarios);
+      setExplorations(sessions.sessions);
+      setExploration((old) => sessions.sessions.find((x) => x.id === old?.id) ?? sessions.sessions[0]);
       setSelected(
         (old) => out.plans.find((x) => x.id === old?.id) ?? out.plans[0],
       );
@@ -453,6 +473,25 @@ export function QualityPlansWorkspace({
     } finally {
       setBusy(false);
     }
+  }
+  async function createExploration(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); if (!token) return;
+    const f = new FormData(event.currentTarget), assignee = value(f, "exploration_assignee"), charterID = value(f, "charter_id");
+    setBusy(true); setError("");
+    try {
+      const out = await api<Exploration>(`/repositories/${repositoryID}/exploratory-sessions`, { method: "POST", body: JSON.stringify({
+        title: value(f, "exploration_title"), source: { kind: value(f, "exploration_source_kind"), resource_id: value(f, "exploration_source_id"), revision: value(f, "exploration_revision"), label: value(f, "exploration_source_label") },
+        access: list(value(f, "exploration_access")), limits: { expires_at: new Date(value(f, "exploration_expiry")).toISOString(), max_cost_cents: Number(value(f, "max_cost")), max_agent_actions: Number(value(f, "max_agent_actions")), allowed_actions: list(value(f, "allowed_actions")), test_data: list(value(f, "test_data")) },
+        charters: [{ id: charterID, title: value(f, "charter_title"), risk: value(f, "charter_risk"), mission: value(f, "charter_mission"), assignee_type: value(f, "assignee_type"), assignee_id: assignee, allowed_actions: list(value(f, "charter_actions")), coverage: list(value(f, "charter_coverage")), uncertainty: value(f, "charter_uncertainty") }],
+      }) }, token);
+      setExplorations((items) => [out, ...items]); setExploration(out); event.currentTarget.reset();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Exploratory session could not be opened."); } finally { setBusy(false); }
+  }
+  async function addExplorationEvent(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); if (!token || !exploration) return; const f = new FormData(event.currentTarget), artifactDigest = value(f, "event_artifact_digest");
+    setBusy(true); setError("");
+    try { const out = await api<Exploration>(`/repositories/${repositoryID}/exploratory-sessions/${exploration.id}/events`, { method: "POST", body: JSON.stringify({ expected_version: exploration.version, kind: value(f, "event_kind"), charter_id: value(f, "event_charter"), finding_id: value(f, "event_finding"), summary: value(f, "event_summary"), route: value(f, "event_route"), inputs: list(value(f, "event_inputs")), command: value(f, "event_command"), coverage: list(value(f, "event_coverage")), uncertainty: value(f, "event_uncertainty"), classification: value(f, "event_classification"), reproduces_event_id: value(f, "reproduces_event"), artifacts: artifactDigest ? [{ kind: value(f, "event_artifact_kind"), sha256: artifactDigest, media_type: value(f, "event_artifact_media"), description: value(f, "event_artifact_description") }] : [] }) }, token); setExploration(out); setExplorations((items) => [out, ...items.filter((x) => x.id !== out.id)]); event.currentTarget.reset(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Timeline event could not be recorded."); } finally { setBusy(false); }
   }
   return (
     <div className="space-y-6">
@@ -972,6 +1011,72 @@ export function QualityPlansWorkspace({
           })}
         </div>
       </section>
+      <Card className="p-5">
+        <h2 className="font-semibold">Open bounded exploration</h2>
+        <p className="mt-1 text-sm text-[var(--muted)]">Assign one risk charter at an exact candidate revision. The audience, privacy-safe data, time, cost, and agent actions are a boundary—not runtime authority.</p>
+        <form className="mt-4 space-y-4" onSubmit={createExploration}>
+          <Group title="Candidate and audience">
+            <Field n="exploration_title" l="Session title" />
+            <Select n="exploration_source_kind" l="Starting context" v="pull_preview" options={["pull_preview", "release_candidate", "issue", "quality_plan"]} />
+            <Field n="exploration_source_id" l="Source resource ID" />
+            <Field n="exploration_revision" l="Exact 40-character commit" />
+            <Field n="exploration_source_label" l="Candidate label" />
+            <Field n="exploration_access" l="Explicit participant IDs" v={user?.id} />
+          </Group>
+          <Group title="Session bounds">
+            <Field n="exploration_expiry" l="Expiry (maximum 24 hours)" type="datetime-local" />
+            <Field n="max_cost" l="Maximum cost in cents" type="number" v="0" />
+            <Field n="max_agent_actions" l="Maximum agent actions" type="number" v="20" />
+            <Field n="allowed_actions" l="Allowed actions" v="navigate, input, screenshot, trace, command, observe" />
+            <Field n="test_data" l="Permitted test data" v="synthetic" />
+          </Group>
+          <Group title="Risk charter">
+            <Field n="charter_id" l="Charter key" />
+            <Field n="charter_title" l="Charter title" />
+            <Field n="charter_risk" l="Risk under investigation" />
+            <Select n="assignee_type" l="Assignee type" v="human" options={["human", "agent"]} />
+            <Field n="exploration_assignee" l="Human or approved agent ID" v={user?.id} />
+            <Field n="charter_actions" l="Charter actions" v="navigate, input, screenshot, observe" />
+            <Field n="charter_coverage" l="Target behavior and routes" />
+          </Group>
+          <Area n="charter_mission" l="Risk-based mission" />
+          <Area n="charter_uncertainty" l="Known uncertainty at assignment" />
+          <Button disabled={busy}>{busy ? "Opening…" : "Open exact-revision session"}</Button>
+        </form>
+      </Card>
+      <section>
+        <h2 className="text-lg font-semibold">Exploratory sessions</h2>
+        <div className="mt-3 grid gap-3 md:grid-cols-3">
+          {explorations.map((x) => <button type="button" className="rounded-xl border bg-white p-4 text-left hover:border-[var(--brand)]" key={x.id} onClick={() => setExploration(x)}><span className="font-semibold">{x.title}</span><span className="mt-1 block text-xs text-[var(--muted)]">{x.source.label} @ {x.source.revision.slice(0, 8)} · {x.events.length} timeline event(s)</span><span className="mt-2 flex gap-2"><Badge tone={x.stale ? "warning" : "success"}>{x.stale ? "stale evidence" : x.status}</Badge></span></button>)}
+        </div>
+      </section>
+      {exploration && <Card className="p-5">
+        <div className="flex flex-wrap gap-2"><h2 className="font-semibold">Shared exploration timeline</h2><Badge>{exploration.source.kind.replaceAll("_", " ")}</Badge>{exploration.stale && <Badge tone="warning">{exploration.stale_reason}</Badge>}</div>
+        <p className="mt-2 text-xs text-[var(--muted)]">Audience: {exploration.access.join(", ")} · data: {exploration.limits.test_data.join(", ")} · expires {new Date(exploration.limits.expires_at).toLocaleString()}</p>
+        <form className="mt-4 space-y-4" onSubmit={addExplorationEvent}>
+          <Group title="Attributable event">
+            <Select n="event_kind" l="Action" v="observation" options={["observation", "guide", "pause", "resume", "reproduce", "classify", "discard", "close"]} />
+            <Field n="event_charter" l="Charter key" v={exploration.charters[0]?.id} required={false} />
+            <Field n="event_finding" l="Finding key" required={false} />
+            <Field n="event_route" l="Route exercised" required={false} />
+            <Field n="event_inputs" l="Sanitized input descriptions" required={false} />
+            <Field n="event_command" l="Exact command" required={false} />
+            <Field n="event_coverage" l="Behavior covered" required={false} />
+            <Field n="event_uncertainty" l="Remaining uncertainty" required={false} />
+            <Select n="event_classification" l="Classification" v="bug" options={["bug", "risk", "question", "expected", "duplicate", "not_reproducible", "discarded"]} />
+            <Field n="reproduces_event" l="Original event ID" required={false} />
+          </Group>
+          <Area n="event_summary" l="Observation, guidance, or decision" />
+          <Group title="Digest-addressed artifact (optional)">
+            <Select n="event_artifact_kind" l="Artifact type" v="screenshot" options={["screenshot", "trace", "recording", "log", "command_output"]} />
+            <Field n="event_artifact_digest" l="SHA-256" required={false} />
+            <Field n="event_artifact_media" l="Media type" v="image/png" required={false} />
+            <Field n="event_artifact_description" l="Artifact description" required={false} />
+          </Group>
+          <Button disabled={busy}>{busy ? "Recording…" : "Append to shared timeline"}</Button>
+        </form>
+        <ol className="mt-5 space-y-3">{exploration.events.map((x) => <li className="rounded-lg border p-3" key={x.id}><div className="flex flex-wrap gap-2"><Badge>{x.kind}</Badge>{x.classification && <Badge tone={x.classification === "bug" ? "danger" : "warning"}>{x.classification}</Badge>}<span className="text-xs text-[var(--muted)]">{x.actor_type} {x.actor_id} · {new Date(x.created_at).toLocaleString()}</span></div><p className="mt-2 text-sm">{x.summary}</p><p className="mt-1 text-xs text-[var(--muted)]">{[x.route, x.command, x.coverage?.join(", "), x.uncertainty].filter(Boolean).join(" · ")}</p>{x.artifacts?.map((a) => <p className="mt-1 font-mono text-xs" key={a.sha256}>{a.kind}: {a.sha256.slice(0, 16)}… — {a.description}</p>)}</li>)}</ol>
+      </Card>}
     </div>
   );
 }

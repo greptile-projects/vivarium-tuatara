@@ -42,6 +42,23 @@ through retained triage/reproduction/repair/delivery revisions, implemented desi
 revision, and journey scopes through an explicit quality-plan `source_revision`; replay, contract, and
 documentation sources already retain their exact commit directly.
 
+## Bounded exploratory sessions
+
+Authorized repository participants open exact-revision sessions at
+`/repositories/{id}/exploratory-sessions` from a pull preview, release candidate, issue, or quality
+plan. Each session freezes its explicit human audience, maximum-24-hour expiry, privacy-safe test-data
+classes, cost and agent-action ceilings, allowed actions, and risk-based human or approved-agent
+charters. Human assignees and audience members must be repository participants when the session is
+created; an agent can append only under its exact charter and cannot broaden the session's actions.
+
+The compare-and-swap shared timeline retains attributable observations, guidance, pause/resume/close
+controls, reproductions, classifications, discards, exercised routes, sanitized input descriptions,
+commands, coverage, uncertainty, and digest-addressed screenshots, traces, recordings, logs, or command
+outputs. Credential-shaped metadata is rejected and artifact bytes are not copied. Pull movement and
+unavailable source records mark retained observations stale on reads without rewriting history. The
+ledger defaults beneath `$EXPLORATORY_SESSION_STORAGE_ROOT` (`exploratory-sessions`) and grants no
+preview, workspace, runtime, environment, Git, deployment, data, or agent authority.
+
 ## Versioned interface systems
 
 Reusable product language is repository state, not an untracked style-guide

@@ -2,6 +2,16 @@
 
 Guidance for coding agents working in this repository.
 
+Collaborative exploration at `/repositories/{id}/quality` and the public
+`/repositories/{id}/exploratory-sessions` API retains exact-revision sessions from pull previews,
+release candidates, issues, or quality plans beneath `$EXPLORATORY_SESSION_STORAGE_ROOT`
+(`exploratory-sessions`). Explicit participant audiences, maximum-24-hour expiry, privacy-safe test
+data, cost/action budgets, and narrowing human or approved-agent risk charters bound each session.
+CAS timeline events retain attributable routes, sanitized inputs, commands, coverage, uncertainty,
+digest-addressed artifacts, guidance, pause/resume, reproduction, classification, and discard history.
+Candidate movement marks evidence stale without rewriting it. These records grant no preview,
+workspace, runtime, environment, Git, deployment, data, or general agent authority.
+
 Production debugging at `/repositories/{id}/debugging` and the public
 `/repositories/{id}/debugging-workspaces` API retains revision-exact, audience-controlled starting context
 from issues, incidents, support threads, deployments, service objectives, traces, or manual observations beneath
