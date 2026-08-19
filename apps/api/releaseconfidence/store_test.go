@@ -64,6 +64,42 @@ func TestAttemptMustMatchRequirementKindAndConfiguredResource(t *testing.T) {
 	}
 }
 
+func TestMatrixIsolatesPullChecksAndReleaseSignalsAtSharedRevision(t *testing.T) {
+	s, _ := New(t.TempDir())
+	_, err := s.Publish("repo", "owner", 0, []Requirement{
+		{ID: "check", Title: "Pull check", Kind: "test", ResourceID: "run", OwnerIDs: []string{"owner"}},
+		{ID: "sample", Title: "Release sample", Kind: "scenario", ResourceID: "scenario", OwnerIDs: []string{"owner"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RecordAttempt("repo", "owner", Attempt{RequirementID: "check", Revision: revA, Status: "passed", CheckRunID: "run", PullRequestID: "pull-b", Environment: "linux", Summary: "passed"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RecordAttempt("repo", "owner", Attempt{RequirementID: "sample", Revision: revA, Status: "passed", ScenarioID: "scenario", TargetKind: "release", TargetID: "release-a", Environment: "production", Summary: "sampled"}); err != nil {
+		t.Fatal(err)
+	}
+	pull, err := s.Matrix("repo", Target{Kind: "pull", ID: "pull-a", Revision: revA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pull.Ready || pull.Cells[0].State != "gap" || len(pull.Cells[0].StaleAttempts) != 1 {
+		t.Fatalf("cross-pull matrix = %#v", pull)
+	}
+	release, err := s.Matrix("repo", Target{Kind: "release", ID: "release-b", Revision: revA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release.Ready {
+		t.Fatalf("cross-release matrix = %#v", release)
+	}
+	for _, cell := range release.Cells {
+		if cell.Requirement.ID == "sample" && (cell.State != "gap" || len(cell.StaleAttempts) != 1) {
+			t.Fatalf("release sample cell = %#v", cell)
+		}
+	}
+}
+
 func TestOverrideIsOwnerScopedExpiringAndFollowedUp(t *testing.T) {
 	s, _ := New(t.TempDir())
 	s.now = func() time.Time { return time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC) }

@@ -53,6 +53,8 @@ type Attempt struct {
 	SessionID       string    `json:"exploratory_session_id,omitempty"`
 	CheckRunID      string    `json:"check_run_id,omitempty"`
 	PullRequestID   string    `json:"pull_request_id,omitempty"`
+	TargetKind      string    `json:"target_kind,omitempty"`
+	TargetID        string    `json:"target_id,omitempty"`
 	Environment     string    `json:"environment"`
 	Journey         string    `json:"journey,omitempty"`
 	RiskClass       string    `json:"risk_class,omitempty"`
@@ -204,6 +206,14 @@ func (s *Store) Matrix(repo string, target Target) (Matrix, error) {
 			if a.RequirementID != req.ID {
 				continue
 			}
+			if target.Kind == "pull" && req.Kind == "test" && a.PullRequestID != target.ID {
+				cell.StaleAttempts = append(cell.StaleAttempts, a)
+				continue
+			}
+			if a.TargetKind != "" && (a.TargetKind != target.Kind || a.TargetID != target.ID) {
+				cell.StaleAttempts = append(cell.StaleAttempts, a)
+				continue
+			}
 			if attemptMatches(req.Selector, a) && (a.Revision == target.Revision || !invalidated(a, target.ChangedPaths)) {
 				cell.Attempts = append(cell.Attempts, a)
 			} else {
@@ -278,7 +288,8 @@ func pathsIntersect(scope, changed []string) bool {
 }
 func validAttempt(a Attempt) bool {
 	ok := map[string]bool{"passed": true, "failed": true, "flaky": true, "gap": true, "quarantined": true}[a.Status]
-	return ok && len(a.Revision) == 40 && strings.TrimSpace(a.Environment) != "" && strings.TrimSpace(a.Summary) != ""
+	targetValid := (a.TargetKind == "" && a.TargetID == "") || (map[string]bool{"pull": true, "release": true}[a.TargetKind] && a.TargetID != "")
+	return ok && targetValid && len(a.Revision) == 40 && strings.TrimSpace(a.Environment) != "" && strings.TrimSpace(a.Summary) != ""
 }
 func validRequirements(rs []Requirement) bool {
 	if len(rs) == 0 {

@@ -42,6 +42,9 @@ func registerReleaseConfidenceRoutes(mux *http.ServeMux, catalog *repositories.S
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
+		// Target identity is server-owned. Pull checks carry it through their
+		// resolved check run; release sampling uses the dedicated route below.
+		in.TargetKind, in.TargetID = "", ""
 		// Evidence references must resolve in the repository; this record grants no execution authority.
 		if in.ScenarioID != "" {
 			x, e := scenarios.Get(in.ScenarioID)
@@ -157,6 +160,7 @@ func registerReleaseConfidenceRoutes(mux *http.ServeMux, catalog *repositories.S
 			return
 		}
 		in.Revision = rel.CommitID
+		in.TargetKind, in.TargetID = "release", rel.ID
 		if in.Environment == "" || in.ScenarioID == "" {
 			writeAPIError(w, 422, "quality_signal_invalid", "a sampled scenario and established environment are required")
 			return
