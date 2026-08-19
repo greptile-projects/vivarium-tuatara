@@ -2079,6 +2079,17 @@ whenever dependencies change or the web job fails before it starts.
   unsupported formats, conflicting preferred terminology, and coverage stale against the current
   default branch; plans document support but grant no repository or release authority.
 
+  Quality intent at `/repositories/{id}/quality` and the public
+  `/repositories/{id}/quality-plans` collection retains complete compare-and-swap revisions beneath
+  `$QUALITY_PLAN_STORAGE_ROOT` (default `quality-plans`). Repository, release, journey, and interface
+  scopes connect issue, decision, design, accessibility, privacy, performance, and reliability
+  requirements to risks, observable expected behavior, test levels, privacy-safe representative
+  data, coverage goals, supported environments, owners, release judges, schedules, thresholds, and
+  existing automated or manual evidence references. Missing ownership/evidence, explicit conflicts,
+  untestable claims, and exceptions expiring within seven days remain attributable diagnostics.
+  Every named owner, judge, and exception grantor must remain a current repository participant;
+  plans describe quality intent and grant no check, preview, release, environment, or merge authority.
+
   Pull localization reviews retain repository-defined extraction maps and exact-source snapshots
   beneath `$LOCALIZATION_STORAGE_ROOT` (default `localization`). Server-derived stable units carry
   context, screenshots, variables, plural rules, and source locations; pull reads project added,

@@ -3,6 +3,22 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Versioned quality plans
+
+Repository quality intent is published at `/repositories/{id}/quality-plans` and rendered in the
+`/repositories/{id}/quality` workspace. Complete immutable revisions cover repository, release,
+journey, and interface scopes and retain the risks, expected behavior, test levels, representative
+privacy-safe data, coverage goals, supported environments, owners, schedules, and release thresholds
+the project intends to protect. Requirements trace to issue, decision, design, accessibility,
+privacy, performance, or reliability sources and may reference existing automated or manual evidence.
+
+Reads derive attributable missing-owner and missing-evidence states, explicit contradictory
+requirements, claims without an observable verification method, and expired or seven-day-expiring
+exceptions. Publication validates every named owner, release judge, and exception grantor as a
+current repository participant inside the repository mutation boundary. The ledger defaults beneath
+`$QUALITY_PLAN_STORAGE_ROOT` (`quality-plans`) and grants no check execution, preview, release,
+environment, merge, or evidence authority.
+
 ## Versioned interface systems
 
 Reusable product language is repository state, not an untracked style-guide
