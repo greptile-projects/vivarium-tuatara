@@ -1126,8 +1126,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	if authStore != nil && repositoryCatalog != nil && designProposalStore != nil {
 		registerDesignProposalRoutes(mux, store, repositoryCatalog, authStore, designProposalStore, issueStore, feedbackStore, roadmapStore, accessibilityAssessmentStore, pullRequestStore, proposalStore)
 	}
-	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil && previewStore != nil && designProposalStore != nil && interfaceCheckStore != nil {
-		registerInterfaceCheckRoutes(mux, store, repositoryCatalog, authStore, pullRequestStore, previewStore, designProposalStore, interfaceCheckStore)
+	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil && previewStore != nil && checkRunStore != nil && designProposalStore != nil && interfaceCheckStore != nil {
+		registerInterfaceCheckRoutes(mux, store, repositoryCatalog, authStore, pullRequestStore, previewStore, checkRunStore, designProposalStore, interfaceCheckStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && organizationStore != nil && designGovernanceStore != nil && pullRequestStore != nil && releaseStore != nil && interfaceCheckStore != nil && interfaceSystemStore != nil && proposalStore != nil {
 		registerDesignGovernanceRoutes(mux, repositoryCatalog, organizationStore, authStore, designGovernanceStore, pullRequestStore, releaseStore, interfaceCheckStore, interfaceSystemStore, proposalStore)

@@ -52,6 +52,10 @@ failed/known-good pair, and post-action write races remain explicitly pending fo
 The connected `debugging-journey.spec.ts` browser/API/Git journey retains denied and privacy-redacted probes,
 noisy evidence, disputed diagnosis, revoked agent access, failed and refined replay, a failed first repair,
 reviewed integration checks, release, staged deployment signals, and the final validated user outcome.
+The connected `interface-design-journey.spec.ts` browser/API/Git journey retains invited-user feedback,
+designer and agent-assisted alternatives, a stale and missing-state prototype, human/agent implementation,
+exact responsive/localized/accessibility previews, visual-regression recovery, a rejected deviation, governed
+acceptances, staged delivery, measured outcome feedback, a changed token, and downstream migration work.
 
 ## What this is
 

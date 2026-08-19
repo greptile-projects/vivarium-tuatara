@@ -27,6 +27,17 @@ func TestDesignImplementationReasoningDoesNotCopyRestrictedArtifactPayload(t *te
 	}
 }
 
+func TestDesignRequirementItemsGiveEveryStateAStableDistinctIdentity(t *testing.T) {
+	items := designRequirementItems(designproposals.Revision{States: []designproposals.State{
+		{Name: "loading", Description: "restoring", Content: "Loading"},
+		{Name: "ready", Description: "restored", Content: "Continue"},
+		{Name: "error", Description: "failed", Content: "Try again"},
+	}})
+	if len(items) != 3 || items[0].ID != "state-1" || items[1].ID != "state-2" || items[2].ID != "state-3" {
+		t.Fatalf("state reasoning identities = %#v", items)
+	}
+}
+
 func TestDesignArtifactProjectionHonorsExplicitAudience(t *testing.T) {
 	v := designproposals.Proposal{Revisions: []designproposals.Revision{{Artifacts: []designproposals.Artifact{{ID: "private-research", Description: "private interview", Content: "participant details", Interactions: []string{"open transcript"}, Audience: []string{"invited-user"}}}}}}
 	redactDesignArtifacts(&v, "developer")
@@ -69,7 +80,7 @@ func TestDesignEvidenceProjectionRechecksCurrentReaderVisibility(t *testing.T) {
 		t.Fatal(err)
 	}
 	repositoryID := "22222222222222222222222222222222"
-	item, err := feedbackStore.Create(productfeedback.Item{RepositoryID: repositoryID, Target: productfeedback.Target{Kind: "project", Label: "Setup"}, Need: "Safer setup", DesiredOutcome: "Preview effects", Frequency: "weekly", Impact: "Abandoned setup", Audience: "organization_private", IdentityVisibility: "reporter_only", ContactPreference: "none"}, "reporter")
+	item, err := feedbackStore.Create(productfeedback.Item{RepositoryID: repositoryID, Target: productfeedback.Target{Kind: "project", Label: "Setup"}, Need: "Safer setup", DesiredOutcome: "Preview effects", Frequency: "weekly", Impact: "Abandoned setup", Audience: "organization_private", IdentityVisibility: "reporter_only", ContactPreference: "none"}, strings.Repeat("1", 32))
 	if err != nil {
 		t.Fatal(err)
 	}
