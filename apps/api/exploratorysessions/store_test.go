@@ -62,6 +62,73 @@ func TestTimelineIsBoundedCASAndAttributable(t *testing.T) {
 	}
 }
 
+func TestConfirmedFindingRepairIsFrozenAndRetrySafe(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.now = func() time.Time { return now }
+	v, err := s.Create("repo", "owner", example(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.Append(v.ID, "tester", EventInput{ExpectedVersion: v.Version, Kind: "observation", CharterID: "tester", FindingID: "double-charge", Summary: "A retry submits payment twice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observationID := v.Events[len(v.Events)-1].ID
+	v, err = s.Append(v.ID, "tester", EventInput{ExpectedVersion: v.Version, Kind: "reproduce", CharterID: "tester", FindingID: "double-charge", Summary: "Reproduced with one synthetic card and one retry", ReproducesEventID: observationID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reproductionID := v.Events[len(v.Events)-1].ID
+	v, err = s.Append(v.ID, "owner", EventInput{ExpectedVersion: v.Version, Kind: "classify", CharterID: "owner", FindingID: "double-charge", Summary: "Confirmed defect", Classification: "bug"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := RepairInput{ExpectedVersion: v.Version, FindingID: "double-charge", EvidenceEventIDs: []string{observationID, reproductionID}, ReproductionEventID: reproductionID, AcceptanceCriteria: []string{"One retry produces one charge", "The regression command fails on the affected revision"}, AssigneeType: "human", AssigneeID: "tester", QualityPlanID: "plan", QualityPlanVersion: 2, RequirementIDs: []string{"checkout"}}
+	v, repair, err := s.ReserveRepair(v.ID, "owner", in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repair.State != "pending" || repair.AffectedRevision != example(now).Source.Revision || v.Version != 5 {
+		t.Fatalf("unexpected reservation: %+v", repair)
+	}
+	_, retried, err := s.ReserveRepair(v.ID, "owner", in)
+	if err != nil || retried.RecoveryID != repair.RecoveryID {
+		t.Fatalf("exact retry must converge: %+v %v", retried, err)
+	}
+	v, err = s.FinalizeRepair(v.ID, repair.RecoveryID, "issue", "proposal", "task")
+	if err != nil || v.Repairs[0].State != "linked" || v.Repairs[0].IssueID != "issue" {
+		t.Fatalf("repair was not linked: %+v %v", v.Repairs, err)
+	}
+	if _, err = s.FinalizeRepair(v.ID, repair.RecoveryID, "issue", "proposal", "task"); err != nil {
+		t.Fatalf("finalization retry must converge: %v", err)
+	}
+	v, err = s.LinkCoverage(v.ID, repair.FindingID, "scenario", "pull", strings.Repeat("b", 40))
+	if err != nil || v.Repairs[0].ScenarioID != "scenario" || v.Repairs[0].PullRequestID != "pull" {
+		t.Fatalf("lasting coverage was not linked: %+v %v", v.Repairs, err)
+	}
+	if _, err = s.LinkCoverage(v.ID, repair.FindingID, "different", "pull", strings.Repeat("b", 40)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("different coverage must not replace retained proof: %v", err)
+	}
+}
+
+func TestOnlyConfirmedReproducedBugsEnterRepair(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	s, _ := New(t.TempDir())
+	s.now = func() time.Time { return now }
+	v, _ := s.Create("repo", "owner", example(now))
+	v, _ = s.Append(v.ID, "tester", EventInput{ExpectedVersion: v.Version, Kind: "observation", CharterID: "tester", FindingID: "environment-only", Summary: "Observed only in one browser"})
+	observationID := v.Events[0].ID
+	v, _ = s.Append(v.ID, "owner", EventInput{ExpectedVersion: v.Version, Kind: "classify", CharterID: "owner", FindingID: "environment-only", Summary: "Environment-specific", Classification: "risk"})
+	_, _, err := s.ReserveRepair(v.ID, "owner", RepairInput{ExpectedVersion: v.Version, FindingID: "environment-only", EvidenceEventIDs: []string{observationID}, ReproductionEventID: observationID, AcceptanceCriteria: []string{"Document environment boundary"}, AssigneeType: "human", AssigneeID: "owner"})
+	if !errors.Is(err, ErrFindingNotConfirmed) {
+		t.Fatalf("non-bug resolution entered repair: %v", err)
+	}
+}
+
 func TestTimelineReferencesMustResolveWithinSession(t *testing.T) {
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	s, err := New(t.TempDir())

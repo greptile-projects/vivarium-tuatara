@@ -1,24 +1,28 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/exploratorysessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/qualityplans"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/testscenarios"
 )
 
-func registerExploratorySessionRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, sessions *exploratorysessions.Store, pulls *pullrequests.Store, releaseStore *releases.Store, issueStore *issues.Store, plans *qualityplans.Store) {
+func registerExploratorySessionRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, sessions *exploratorysessions.Store, pulls *pullrequests.Store, releaseStore *releases.Store, issueStore *issues.Store, plans *qualityplans.Store, proposalStore *proposals.Store, scenarios *testscenarios.Store) {
 	project := func(repo, actor string, v exploratorysessions.Session) (exploratorysessions.Session, bool) {
 		if !slices.Contains(v.Access, actor) {
 			return exploratorysessions.Session{}, false
@@ -130,6 +134,238 @@ func registerExploratorySessionRoutes(mux *http.ServeMux, git *storage.Store, ca
 		}
 		writeExploratorySession(w, out, e, 201)
 	})
+	mux.HandleFunc("POST /repositories/{id}/exploratory-sessions/{session_id}/findings/{finding_id}/repair", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if actor.AgentID != "" {
+			writeAPIError(w, 403, "exploratory_repair_human_required", "a human collaborator must authorize ordinary repair work")
+			return
+		}
+		if issueStore == nil || proposalStore == nil {
+			writeAPIError(w, 503, "exploratory_repair_unavailable", "governed issue and task publication is unavailable")
+			return
+		}
+		var in struct {
+			ExpectedVersion     int      `json:"expected_version"`
+			Title               string   `json:"title"`
+			ExpectedBehavior    string   `json:"expected_behavior"`
+			Severity            string   `json:"severity"`
+			Environment         string   `json:"environment"`
+			EvidenceEventIDs    []string `json:"evidence_event_ids"`
+			ReproductionEventID string   `json:"reproduction_event_id"`
+			AcceptanceCriteria  []string `json:"acceptance_criteria"`
+			AssigneeType        string   `json:"assignee_type"`
+			AssigneeID          string   `json:"assignee_id"`
+			QualityPlanID       string   `json:"quality_plan_id"`
+			QualityPlanVersion  int      `json:"quality_plan_version"`
+			RequirementIDs      []string `json:"requirement_ids"`
+		}
+		if decodeJSON(r, &in) != nil || strings.TrimSpace(in.Title) == "" || strings.TrimSpace(in.ExpectedBehavior) == "" || strings.TrimSpace(in.Environment) == "" {
+			writeAPIError(w, 422, "exploratory_repair_invalid", "a confirmed reproduction, bounded evidence, acceptance criteria, issue context, and owner are required")
+			return
+		}
+		encoded, _ := json.Marshal(in)
+		if reusableSecret.Match(encoded) || len(in.Title) > 4096 || len(in.ExpectedBehavior) > 4096 || len(in.Environment) > 4096 || !slices.Contains([]string{"low", "medium", "high", "critical"}, in.Severity) || !slices.Contains([]string{"human", "agent"}, in.AssigneeType) {
+			writeAPIError(w, 422, "exploratory_repair_invalid", "repair metadata must be bounded, non-sensitive, and use a supported severity and owner type")
+			return
+		}
+		current, err := sessions.Get(r.PathValue("session_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") || !slices.Contains(current.Access, actor.UserID) {
+			writeAPIError(w, 404, "exploratory_session_not_found", "exploratory session not found")
+			return
+		}
+		if current.Stale || func() bool {
+			stale, _ := exploratorySessionStale(current.RepositoryID, current, pulls, releaseStore, issueStore, plans)
+			return stale
+		}() {
+			writeAPIError(w, 409, "exploratory_candidate_stale", "the exact candidate changed before repair was authorized")
+			return
+		}
+		if in.AssigneeType == "human" {
+			if strings.TrimSpace(in.AssigneeID) == "" {
+				in.AssigneeID = actor.UserID
+			}
+			repo, _ := catalog.GetByID(current.RepositoryID)
+			collaborator, _ := catalog.HasCollaborator(in.AssigneeID, current.RepositoryID)
+			if repo.OwnerID != in.AssigneeID && !collaborator {
+				writeAPIError(w, 422, "exploratory_repair_assignee_invalid", "a human repair owner must be a current repository participant")
+				return
+			}
+		}
+		if !exploratoryOpaqueID(in.AssigneeID) {
+			writeAPIError(w, 422, "exploratory_repair_assignee_invalid", "the repair owner must have a stable platform identity")
+			return
+		}
+		if in.QualityPlanID != "" {
+			plan, planErr := plans.Get(in.QualityPlanID)
+			if planErr != nil || plan.RepositoryID != current.RepositoryID || in.QualityPlanVersion < 1 || in.QualityPlanVersion > plan.CurrentVersion || !qualityRequirementsExist(plan, in.QualityPlanVersion, in.RequirementIDs) {
+				writeAPIError(w, 422, "exploratory_quality_plan_invalid", "the frozen quality plan version and requirements must resolve in this repository")
+				return
+			}
+		}
+		request := exploratorysessions.RepairInput{ExpectedVersion: in.ExpectedVersion, FindingID: r.PathValue("finding_id"), EvidenceEventIDs: in.EvidenceEventIDs, ReproductionEventID: in.ReproductionEventID, AcceptanceCriteria: in.AcceptanceCriteria, AssigneeType: in.AssigneeType, AssigneeID: in.AssigneeID, QualityPlanID: in.QualityPlanID, QualityPlanVersion: in.QualityPlanVersion, RequirementIDs: in.RequirementIDs}
+		reservedSession, repair, err := sessions.ReserveRepair(current.ID, actor.UserID, request)
+		if errors.Is(err, exploratorysessions.ErrConflict) {
+			writeAPIError(w, 409, "exploratory_repair_changed", "the finding or its frozen repair handoff changed")
+			return
+		}
+		if errors.Is(err, exploratorysessions.ErrFindingNotConfirmed) {
+			writeAPIError(w, 409, "exploratory_finding_not_confirmed", "only a current bug classification with an exact reproduction can enter repair")
+			return
+		}
+		if err != nil {
+			writeExploratorySession(w, exploratorysessions.Session{}, err, 0)
+			return
+		}
+		events := map[string]exploratorysessions.Event{}
+		steps := []string{}
+		observed := []string{}
+		items := []proposals.ReasoningItem{}
+		for _, event := range reservedSession.Events {
+			events[event.ID] = event
+		}
+		for _, id := range repair.EvidenceEventIDs {
+			event := events[id]
+			observed = append(observed, event.Summary)
+			steps = append(steps, event.Summary)
+			items = append(items, proposals.ReasoningItem{ID: event.ID, Kind: "exploratory_evidence", Summary: event.Summary, Status: "permitted"})
+		}
+		reproduction := events[repair.ReproductionID]
+		items = append(items, proposals.ReasoningItem{ID: reproduction.ID, Kind: "minimized_reproduction", Summary: reproduction.Summary, Status: "confirmed"})
+		issue, issueErr := issueStore.CreateEscalated(issues.Issue{RepositoryID: current.RepositoryID, ReporterID: actor.UserID, Title: strings.TrimSpace(in.Title), ExpectedBehavior: strings.TrimSpace(in.ExpectedBehavior), ObservedBehavior: strings.Join(observed, "\n"), Severity: in.Severity, Environment: strings.TrimSpace(in.Environment), ReproductionSteps: steps, Visibility: "repository", Triage: issues.Triage{Classification: "bug", Priority: in.Severity, AssigneeID: in.AssigneeID, SuspectedRevision: repair.AffectedRevision}, Links: []issues.Link{{ID: issues.NewEvidenceID(), Kind: "exploratory_finding", RepositoryID: current.RepositoryID, ResourceID: current.ID + ":" + repair.FindingID, Revision: repair.AffectedRevision, Label: "Exploratory finding " + repair.FindingID, AddedBy: actor.UserID, CreatedAt: time.Now().UTC()}}}, repair.RecoveryID)
+		if issueErr != nil && !errors.Is(issueErr, issues.ErrDurabilityUncertain) {
+			writeAPIError(w, 500, "exploratory_issue_failed", "the reserved finding could not be reconciled into an issue")
+			return
+		}
+		criteria := strings.Join(repair.AcceptanceCriteria, "\n- ")
+		origin := proposals.ReasoningOrigin{ExploratorySessionID: current.ID, ExploratoryFindingID: repair.FindingID, ExploratoryRepairID: repair.RecoveryID, IssueID: "", Revision: repair.AffectedRevision, SelectedItemIDs: append(append([]string{}, repair.EvidenceEventIDs...), repair.ReproductionID), Items: items, AnalysisStatus: "exploratory_repair"}
+		proposal, tasks, proposalErr := proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: current.RepositoryID, ActorID: actor.UserID, Title: "Repair: " + strings.TrimSpace(in.Title), Body: "Governed repair for exploratory finding " + repair.FindingID + " linked to issue " + issue.ID + ".\n\nAcceptance criteria:\n- " + criteria, Origin: origin, Tasks: []proposals.ImplementationTaskInput{{Title: "Repair " + strings.TrimSpace(in.Title), Outcome: "The exact candidate failure no longer reproduces and durable regression coverage detects its return.", Risk: in.Severity + " exploratory defect at " + repair.AffectedRevision, VerificationPlan: "Demonstrate failure against the affected revision, pass on the repair revision, and publish the regression scenario.\n- " + criteria, AssigneeType: in.AssigneeType, AssigneeID: in.AssigneeID}}})
+		if proposalErr != nil && !errors.Is(proposalErr, proposals.ErrDurabilityUncertain) {
+			writeAPIError(w, 500, "exploratory_task_failed", "the issue was retained but repair work could not be reconciled")
+			return
+		}
+		updated, finalizeErr := sessions.FinalizeRepair(current.ID, repair.RecoveryID, issue.ID, proposal.ID, tasks[0].ID)
+		status := 201
+		if finalizeErr != nil || errors.Is(issueErr, issues.ErrDurabilityUncertain) || errors.Is(proposalErr, proposals.ErrDurabilityUncertain) {
+			status = 202
+		}
+		if finalizeErr != nil {
+			updated = reservedSession
+		} else {
+			for _, linked := range updated.Repairs {
+				if linked.RecoveryID == repair.RecoveryID {
+					repair = linked
+					break
+				}
+			}
+		}
+		writeJSON(w, status, map[string]any{"session": updated, "repair": repair, "issue": issue, "proposal": proposal, "task": tasks[0], "recovery_pending": finalizeErr != nil})
+	})
+	mux.HandleFunc("POST /repositories/{id}/exploratory-sessions/{session_id}/findings/{finding_id}/coverage", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if actor.AgentID != "" {
+			writeAPIError(w, 403, "exploratory_coverage_human_required", "a human collaborator must publish lasting finding coverage")
+			return
+		}
+		var in struct {
+			ScenarioID      string `json:"scenario_id"`
+			ExpectedVersion int    `json:"expected_version"`
+		}
+		if decodeJSON(r, &in) != nil || strings.TrimSpace(in.ScenarioID) == "" || scenarios == nil {
+			writeAPIError(w, 422, "exploratory_coverage_invalid", "a published regression scenario is required")
+			return
+		}
+		current, err := sessions.Get(r.PathValue("session_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") || current.Version != in.ExpectedVersion || !slices.Contains(current.Access, actor.UserID) {
+			writeAPIError(w, 409, "exploratory_coverage_changed", "the session changed before coverage was linked")
+			return
+		}
+		var repair *exploratorysessions.Repair
+		for i := range current.Repairs {
+			if current.Repairs[i].FindingID == r.PathValue("finding_id") {
+				repair = &current.Repairs[i]
+			}
+		}
+		if repair == nil || repair.State != "linked" {
+			writeAPIError(w, 409, "exploratory_repair_incomplete", "the finding must first enter governed repair")
+			return
+		}
+		scenario, err := scenarios.Get(in.ScenarioID)
+		if err != nil || scenario.RepositoryID != current.RepositoryID || scenario.Implementation.PullRequestID == "" {
+			writeAPIError(w, 422, "exploratory_coverage_invalid", "the scenario must resolve to the repair repository and an exact pull revision")
+			return
+		}
+		issueSource := false
+		for _, source := range scenario.Sources {
+			issueSource = issueSource || source.Kind == "issue" && source.ResourceID == repair.IssueID && (source.Revision == repair.AffectedRevision || source.Revision == scenario.Implementation.CommitID)
+		}
+		if !issueSource || scenario.QualityPlanID != repair.QualityPlanID || scenario.QualityPlanVersion != repair.QualityPlanVersion || !exploratorySameStrings(scenario.RequirementIDs, repair.RequirementIDs) {
+			writeAPIError(w, 422, "exploratory_coverage_invalid", "the scenario must cite the linked issue and frozen quality requirements")
+			return
+		}
+		pull, err := pulls.Get(current.RepositoryID, scenario.Implementation.PullRequestID)
+		if err != nil || pull.SourceCommitID != scenario.Implementation.CommitID || pull.TaskID == nil || *pull.TaskID != repair.TaskID {
+			writeAPIError(w, 422, "exploratory_coverage_invalid", "the scenario must be implemented by the finding's exact repair pull")
+			return
+		}
+		updated, err := sessions.LinkCoverage(current.ID, repair.FindingID, scenario.ID, pull.ID, scenario.Implementation.CommitID)
+		if errors.Is(err, exploratorysessions.ErrConflict) {
+			writeAPIError(w, 409, "exploratory_coverage_changed", "different lasting coverage is already linked")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 500, "exploratory_coverage_unavailable", "lasting coverage could not be linked")
+			return
+		}
+		writeJSON(w, 201, map[string]any{"session": updated, "repair": func() exploratorysessions.Repair {
+			for _, x := range updated.Repairs {
+				if x.FindingID == repair.FindingID {
+					return x
+				}
+			}
+			return exploratorysessions.Repair{}
+		}(), "scenario": scenario, "pull_request": pull})
+	})
+}
+
+func exploratorySameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func exploratoryOpaqueID(value string) bool {
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == 16
+}
+
+func qualityRequirementsExist(plan qualityplans.Plan, version int, ids []string) bool {
+	for _, revision := range plan.Revisions {
+		if revision.Version == version {
+			found := map[string]bool{}
+			for _, requirement := range revision.Requirements {
+				found[requirement.ID] = true
+			}
+			for _, id := range ids {
+				if !found[id] {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	return false
 }
 
 func explorationParticipants(catalog *repositories.Store, repo string, v exploratorysessions.Session) bool {

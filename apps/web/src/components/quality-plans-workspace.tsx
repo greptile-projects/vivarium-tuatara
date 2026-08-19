@@ -154,6 +154,7 @@ type Exploration = {
   version: number;
   stale: boolean;
   stale_reason?: string;
+  repairs?: { finding_id: string; recovery_id: string; state: string; affected_revision: string; evidence_event_ids: string[]; reproduction_event_id: string; acceptance_criteria: string[]; assignee_type: string; assignee_id: string; quality_plan_id?: string; quality_plan_version?: number; requirement_ids?: string[]; issue_id?: string; proposal_id?: string; task_id?: string; scenario_id?: string; pull_request_id?: string; regression_commit_id?: string }[];
   events: { id: string; kind: string; charter_id?: string; finding_id?: string; summary: string; route?: string; inputs?: string[]; command?: string; coverage?: string[]; uncertainty?: string; classification?: string; artifacts?: { kind: string; sha256: string; description: string }[]; actor_type: string; actor_id: string; created_at: string }[];
 };
 const value = (f: FormData, n: string) => String(f.get(n) ?? "").trim();
@@ -492,6 +493,20 @@ export function QualityPlansWorkspace({
     setBusy(true); setError("");
     try { const out = await api<Exploration>(`/repositories/${repositoryID}/exploratory-sessions/${exploration.id}/events`, { method: "POST", body: JSON.stringify({ expected_version: exploration.version, kind: eventKind, charter_id: value(f, "event_charter"), finding_id: value(f, "event_finding"), summary: value(f, "event_summary"), route: value(f, "event_route"), inputs: list(value(f, "event_inputs")), command: value(f, "event_command"), coverage: list(value(f, "event_coverage")), uncertainty: value(f, "event_uncertainty"), classification: ["classify", "discard"].includes(eventKind) ? value(f, "event_classification") : "", reproduces_event_id: value(f, "reproduces_event"), artifacts: artifactDigest ? [{ kind: value(f, "event_artifact_kind"), sha256: artifactDigest, media_type: value(f, "event_artifact_media"), description: value(f, "event_artifact_description") }] : [] }) }, token); setExploration(out); setExplorations((items) => [out, ...items.filter((x) => x.id !== out.id)]); event.currentTarget.reset(); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Timeline event could not be recorded."); } finally { setBusy(false); }
+  }
+  async function createExplorationRepair(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); if (!token || !exploration) return; const f = new FormData(event.currentTarget), findingID = value(f, "repair_finding");
+    setBusy(true); setError("");
+    try {
+      const out = await api<{ session: Exploration }>(`/repositories/${repositoryID}/exploratory-sessions/${exploration.id}/findings/${findingID}/repair`, { method: "POST", body: JSON.stringify({ expected_version: exploration.version, title: value(f, "repair_title"), expected_behavior: value(f, "repair_expected"), severity: value(f, "repair_severity"), environment: value(f, "repair_environment"), evidence_event_ids: list(value(f, "repair_evidence")), reproduction_event_id: value(f, "repair_reproduction"), acceptance_criteria: list(value(f, "repair_criteria")), assignee_type: value(f, "repair_assignee_type"), assignee_id: value(f, "repair_assignee"), quality_plan_id: value(f, "repair_plan"), quality_plan_version: Number(value(f, "repair_plan_version")) || 0, requirement_ids: list(value(f, "repair_requirements")) }) }, token);
+      setExploration(out.session); setExplorations((items) => [out.session, ...items.filter((x) => x.id !== out.session.id)]); event.currentTarget.reset();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Finding could not enter governed repair."); } finally { setBusy(false); }
+  }
+  async function linkExplorationCoverage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); if (!token || !exploration) return; const f = new FormData(event.currentTarget), findingID = value(f, "coverage_finding");
+    setBusy(true); setError("");
+    try { const out = await api<{ session: Exploration }>(`/repositories/${repositoryID}/exploratory-sessions/${exploration.id}/findings/${findingID}/coverage`, { method: "POST", body: JSON.stringify({ expected_version: exploration.version, scenario_id: value(f, "coverage_scenario") }) }, token); setExploration(out.session); setExplorations((items) => [out.session, ...items.filter((x) => x.id !== out.session.id)]); event.currentTarget.reset(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Regression coverage could not be linked."); } finally { setBusy(false); }
   }
   return (
     <div className="space-y-6">
@@ -1063,7 +1078,7 @@ export function QualityPlansWorkspace({
             <Field n="event_command" l="Exact command" required={false} />
             <Field n="event_coverage" l="Behavior covered" required={false} />
             <Field n="event_uncertainty" l="Remaining uncertainty" required={false} />
-            <Select n="event_classification" l="Classification" v="bug" options={["bug", "risk", "question", "expected", "duplicate", "not_reproducible", "discarded"]} />
+            <Select n="event_classification" l="Classification" v="bug" options={["bug", "risk", "question", "expected", "duplicate", "flaky", "environment_specific", "not_reproducible", "discarded"]} />
             <Field n="reproduces_event" l="Original event ID" required={false} />
           </Group>
           <Area n="event_summary" l="Observation, guidance, or decision" />
@@ -1076,6 +1091,30 @@ export function QualityPlansWorkspace({
           <Button disabled={busy}>{busy ? "Recording…" : "Append to shared timeline"}</Button>
         </form>
         <ol className="mt-5 space-y-3">{exploration.events.map((x) => <li className="rounded-lg border p-3" key={x.id}><div className="flex flex-wrap gap-2"><Badge>{x.kind}</Badge>{x.classification && <Badge tone={x.classification === "bug" ? "danger" : "warning"}>{x.classification}</Badge>}<span className="text-xs text-[var(--muted)]">{x.actor_type} {x.actor_id} · {new Date(x.created_at).toLocaleString()}</span></div><p className="mt-2 text-sm">{x.summary}</p><p className="mt-1 text-xs text-[var(--muted)]">{[x.route, x.command, x.coverage?.join(", "), x.uncertainty].filter(Boolean).join(" · ")}</p>{x.artifacts?.map((a) => <p className="mt-1 font-mono text-xs" key={a.sha256}>{a.kind}: {a.sha256.slice(0, 16)}… — {a.description}</p>)}</li>)}</ol>
+        <form className="mt-6 space-y-4 border-t pt-5" onSubmit={createExplorationRepair}>
+          <h3 className="font-semibold">Carry a confirmed defect into repair</h3>
+          <p className="text-xs text-[var(--muted)]">Freeze only permitted timeline evidence and the minimized reproduction. Ordinary issue, assignment, pull, review, and regression-scenario controls remain authoritative.</p>
+          <Group title="Failure and ownership">
+            <Field n="repair_finding" l="Confirmed finding key" />
+            <Field n="repair_title" l="Issue title" />
+            <Field n="repair_expected" l="Expected behavior" />
+            <Select n="repair_severity" l="Severity" v="medium" options={["low", "medium", "high", "critical"]} />
+            <Field n="repair_environment" l="Affected environment" />
+            <Field n="repair_evidence" l="Permitted evidence event IDs" />
+            <Field n="repair_reproduction" l="Minimized reproduction event ID" />
+            <Field n="repair_criteria" l="Acceptance criteria" />
+            <Select n="repair_assignee_type" l="Repair owner type" v="human" options={["human", "agent"]} />
+            <Field n="repair_assignee" l="Human or approved agent ID" v={user?.id} />
+          </Group>
+          <Group title="Lasting quality coverage">
+            <Field n="repair_plan" l="Quality plan ID" v={selected?.id} required={false} />
+            <Field n="repair_plan_version" l="Quality plan version" v={selected?.current_version?.toString()} required={false} />
+            <Field n="repair_requirements" l="Requirement IDs" v={requirement?.id} required={false} />
+          </Group>
+          <Button disabled={busy}>Create linked issue and repair</Button>
+        </form>
+        {!!exploration.repairs?.length && <div className="mt-5 space-y-2">{exploration.repairs.map((repair) => <div className="rounded-lg border p-3" key={repair.recovery_id}><div className="flex flex-wrap gap-2"><Badge tone={repair.state === "linked" ? "success" : "warning"}>{repair.state}</Badge><span className="font-medium">{repair.finding_id}</span>{repair.scenario_id && <Badge tone="success">regression covered</Badge>}</div><p className="mt-1 text-xs text-[var(--muted)]">candidate {repair.affected_revision.slice(0, 8)} · {repair.assignee_type} {repair.assignee_id}</p>{repair.issue_id && <p className="mt-2 text-sm"><Link className="text-[var(--brand)]" href={`/repositories/${repositoryID}/issues/${repair.issue_id}`}>Issue {repair.issue_id.slice(0, 8)}</Link> · proposal {repair.proposal_id?.slice(0, 8)} · task {repair.task_id?.slice(0, 8)}</p>}{repair.scenario_id && <p className="mt-1 text-xs text-[var(--muted)]">scenario {repair.scenario_id.slice(0, 8)} · pull {repair.pull_request_id?.slice(0, 8)} · commit {repair.regression_commit_id?.slice(0, 8)}</p>}</div>)}</div>}
+        {!!exploration.repairs?.some((repair) => repair.state === "linked" && !repair.scenario_id) && <form className="mt-5 flex flex-wrap items-end gap-3" onSubmit={linkExplorationCoverage}><Field n="coverage_finding" l="Finding key" /><Field n="coverage_scenario" l="Published regression scenario ID" /><Button disabled={busy}>Link lasting coverage</Button></form>}
       </Card>}
     </div>
   );

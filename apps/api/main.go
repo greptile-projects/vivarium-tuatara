@@ -1145,7 +1145,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerTestScenarioRoutes(mux, store, repositoryCatalog, authStore, testScenarioStore, qualityPlanStore, pullRequestStore, workspaceStore, testScenarioSources{issues: issueStore, reproductions: debugWorkspaceStore, designs: designProposalStore, contracts: apiContractStore, documentation: documentationStore})
 	}
 	if authStore != nil && repositoryCatalog != nil && store != nil && exploratorySessionStore != nil && pullRequestStore != nil && releaseStore != nil && issueStore != nil && qualityPlanStore != nil {
-		registerExploratorySessionRoutes(mux, store, repositoryCatalog, authStore, exploratorySessionStore, pullRequestStore, releaseStore, issueStore, qualityPlanStore)
+		registerExploratorySessionRoutes(mux, store, repositoryCatalog, authStore, exploratorySessionStore, pullRequestStore, releaseStore, issueStore, qualityPlanStore, proposalStore, testScenarioStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && accessibilityCommitmentStore != nil {
 		registerAccessibilityCommitmentRoutes(mux, repositoryCatalog, authStore, accessibilityCommitmentStore)
