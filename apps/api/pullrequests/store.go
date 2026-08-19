@@ -496,6 +496,7 @@ type MergeReadiness struct {
 	LocalizationReadiness   *localization.LocaleReadiness          `json:"localization_readiness,omitempty"`
 	ReliabilityReadiness    []serviceobjectives.DeliveryEvaluation `json:"reliability_readiness"`
 	DesignReadiness         any                                    `json:"design_readiness,omitempty"`
+	QualityConfidence       any                                    `json:"quality_confidence,omitempty"`
 }
 
 type commentRecord struct {
@@ -532,12 +533,19 @@ type Store struct {
 	localization             *localization.Store
 	reliability              *serviceobjectives.Store
 	designReadiness          func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)
+	qualityConfidence        func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)
 }
 
 // ConfigureDesignReadiness adds an evidence-only policy projection to ordinary
 // readiness. Its blockers remain subject to every existing review and check.
 func (s *Store) ConfigureDesignReadiness(fn func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)) {
 	s.designReadiness = fn
+}
+
+// ConfigureQualityConfidence makes ordinary merge and queue readiness consume
+// the same revision-exact quality matrix exposed by the quality API.
+func (s *Store) ConfigureQualityConfidence(fn func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)) {
+	s.qualityConfidence = fn
 }
 
 func (s *Store) ConfigurePerformanceEvidence(store *performanceevidence.Store) { s.performance = store }
@@ -1833,6 +1841,18 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 			return MergeReadiness{}, designErr
 		}
 		report.DesignReadiness = projection
+		report.Blockers = append(report.Blockers, blockers...)
+	}
+	if s.qualityConfidence != nil {
+		changes, changeErr := s.Changes(repositoryID, pullRequestID)
+		if changeErr != nil {
+			return MergeReadiness{}, changeErr
+		}
+		projection, blockers, qualityErr := s.qualityConfidence(p, changes)
+		if qualityErr != nil {
+			return MergeReadiness{}, qualityErr
+		}
+		report.QualityConfidence = projection
 		report.Blockers = append(report.Blockers, blockers...)
 	}
 	report.Mergeable = len(report.Blockers) == 0

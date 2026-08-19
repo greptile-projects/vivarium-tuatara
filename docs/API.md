@@ -4005,3 +4005,22 @@ report for every current-phase delegation to be 100% complete, healthy, invarian
 unblocked, so an operator cannot bypass incomplete delegated work. An agent cannot control the execution.
 These records carry no command, credential, database, environment,
 deployment, or destructive authority.
+# Release confidence
+
+Participants manage policy and evidence through `POST /repositories/{id}/quality-requirements`,
+`POST /repositories/{id}/quality-attempts`, and `POST /repositories/{id}/quality-overrides`.
+Policy updates use `expected_version`; stale updates return `409`. Evidence sources are mutually
+exclusive and server-resolved: `scenario_id`, `exploratory_session_id`, or `check_run_id` with its
+`pull_request_id`. Attempts name an exact 40-character `revision`, environment, summary, and one of
+`passed`, `failed`, `flaky`, `gap`, or `quarantined`.
+
+`GET /repositories/{id}/pulls/{pull_id}/quality-confidence` and
+`GET /repositories/{id}/releases/{release_id}/quality-confidence` return the evaluated revision,
+policy identity/version, overall `ready` state, and one cell per applicable requirement. Each cell
+contains current attempts, invalidated `stale_attempts`, its effective state, and any active scoped
+override. Pull merge-readiness embeds the identical projection as `quality_confidence` and reports
+the `quality_confidence_incomplete` blocker when it is not ready.
+
+`POST /repositories/{id}/releases/{release_id}/quality-signals` records a post-release sampled
+scenario at the release's server-resolved commit. These APIs retain evidence and decisions only;
+they grant no execution, environment, Git, review, merge, queue, release, or deployment authority.
