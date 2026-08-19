@@ -339,6 +339,10 @@ func registerExploratorySessionRoutes(mux *http.ServeMux, git *storage.Store, ca
 // agent identity to match an exact charter and allowed action.
 func authorizeExploratoryEvent(w http.ResponseWriter, r *http.Request, catalog *repositories.Store, credentials *auth.Store, repositoryID string) (auth.Credential, bool) {
 	actor, authenticated, err := authenticateOptionalCredential(r, credentials, "repositories:write")
+	if err == nil && authenticated && actor.AgentID != "" {
+		writeAPIError(w, 403, "exploratory_agent_scope_invalid", "agent exploration requires an exact repository-bound task credential")
+		return auth.Credential{}, false
+	}
 	if errors.Is(err, auth.ErrNotFound) {
 		actor, authenticated, err = authenticateOptionalCredential(r, credentials, "git:write")
 		if err == nil && authenticated && (actor.AgentID == "" || actor.RepositoryID != repositoryID) {
