@@ -146,7 +146,7 @@ func registerDesignGovernanceRoutes(mux *http.ServeMux, repos *repositories.Stor
 		writeDesignGovernance(w, out, e, 201)
 	})
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/design-acceptances", func(w http.ResponseWriter, r *http.Request) {
-		actor, ok := authenticateRequest(w, r, credentials, "repositories:write", false)
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")
 		if !ok {
 			return
 		}
