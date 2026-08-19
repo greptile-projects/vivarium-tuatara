@@ -19,6 +19,22 @@ current repository participant inside the repository mutation boundary. The ledg
 `$QUALITY_PLAN_STORAGE_ROOT` (`quality-plans`) and grants no check execution, preview, release,
 environment, merge, or evidence authority.
 
+## Reusable test scenarios
+
+The quality workspace also publishes immutable executable specifications through
+`/repositories/{id}/test-scenarios`. A scenario names its exact issue, reproduction, design,
+API-contract, documentation, or journey rationale and spells out parameters, preconditions,
+actions, assertions, environments, cases, and assumptions. Another contributor can therefore see
+both what the test proves and the command that reruns it without interpreting an opaque script.
+
+Tests and fixtures are proposed through ordinary repository branches (and optionally an exact pull
+or bounded workspace). Publication resolves the branch commit, every test path, every optional source
+path, and each fixture SHA-256 from Git. Only synthetic, anonymized, or public fixture classifications
+are reusable; fixture bytes are not copied into this ledger. Generated scenarios identify their human
+or agent authoring mode, framework, provenance, and assumptions. Records default beneath
+`$TEST_SCENARIO_STORAGE_ROOT` (`test-scenarios`) and grant no Git, workspace, test-execution, review,
+merge, environment, or data authority.
+
 ## Versioned interface systems
 
 Reusable product language is repository state, not an untracked style-guide

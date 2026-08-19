@@ -82,6 +82,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportsolutions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportthreads"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportverifications"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/testscenarios"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
@@ -424,6 +425,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	testScenarioRoot := os.Getenv("TEST_SCENARIO_STORAGE_ROOT")
+	if testScenarioRoot == "" {
+		testScenarioRoot = "test-scenarios"
+	}
+	testScenarioStore, err := testscenarios.New(testScenarioRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	accessibilityCommitmentRoot := os.Getenv("ACCESSIBILITY_COMMITMENT_STORAGE_ROOT")
 	if accessibilityCommitmentRoot == "" {
 		accessibilityCommitmentRoot = "accessibility-commitments"
@@ -683,7 +692,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, supportVerificationStore, supportSolutionStore, knowledgeAnswerStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore, apiContractStore, durableSchemaStore, infrastructureStore, debugWorkspaceStore, interfaceSystemStore, designProposalStore, interfaceCheckStore, designGovernanceStore, qualityPlanStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, supportVerificationStore, supportSolutionStore, knowledgeAnswerStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore, apiContractStore, durableSchemaStore, infrastructureStore, debugWorkspaceStore, interfaceSystemStore, designProposalStore, interfaceCheckStore, designGovernanceStore, qualityPlanStore, testScenarioStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -857,6 +866,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var interfaceCheckStore *interfacechecks.Store
 	var designGovernanceStore *designgovernance.Store
 	var qualityPlanStore *qualityplans.Store
+	var testScenarioStore *testscenarios.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -979,6 +989,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			designGovernanceStore = value
 		case *qualityplans.Store:
 			qualityPlanStore = value
+		case *testscenarios.Store:
+			testScenarioStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -1116,6 +1128,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && qualityPlanStore != nil {
 		registerQualityPlanRoutes(mux, repositoryCatalog, authStore, qualityPlanStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && store != nil && testScenarioStore != nil && qualityPlanStore != nil {
+		registerTestScenarioRoutes(mux, store, repositoryCatalog, authStore, testScenarioStore, qualityPlanStore, pullRequestStore, workspaceStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && accessibilityCommitmentStore != nil {
 		registerAccessibilityCommitmentRoutes(mux, repositoryCatalog, authStore, accessibilityCommitmentStore)
