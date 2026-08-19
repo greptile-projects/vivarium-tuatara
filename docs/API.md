@@ -3591,6 +3591,35 @@ content, and never imports production
 personal data or inaccessible evidence. Storage defaults to `$TEST_SCENARIO_STORAGE_ROOT`
 (`test-scenarios`). Records grant no execution, Git, pull, workspace, environment, or data authority.
 
+## Exploratory sessions
+
+`POST /repositories/{id}/exploratory-sessions` opens a participant-controlled session whose source is
+`pull_preview`, `release_candidate`, `issue`, or `quality_plan`. The source resource must exist and its
+declared 40-character revision must resolve in repository Git; pull and release sources additionally
+must equal their current candidate commit. The request supplies an explicit participant audience,
+expiry of at most 24 hours, non-negative cost and agent-action ceilings, allowed actions, test data
+limited to `synthetic`, `anonymized`, or `public`, and one or more risk charters. Charters assign a
+current human participant or named approved agent and may only narrow the session actions.
+
+`GET /repositories/{id}/exploratory-sessions` and `GET .../{session_id}` return only sessions whose
+explicit audience contains the authenticated human reader. Reads derive `stale` when a pull moves or a
+source becomes unavailable while preserving the original exact-revision record.
+
+`POST .../{session_id}/events` appends against `expected_version`. Event kinds are `observation`,
+`guide`, `pause`, `resume`, `reproduce`, `classify`, `discard`, and `close`. They retain route, sanitized
+inputs, exact command, coverage, uncertainty, finding and reproduced-event links, classification,
+attribution, and optional SHA-256-addressed screenshot, trace, recording, log, or command-output
+metadata. Paused sessions accept only guidance, resume, or close; closed and expired sessions reject
+new events. Agent credentials must match the exact charter assignee and share the session-wide action
+budget. Agent lifecycle, guidance, reproduction, classification, and discard events additionally
+require those exact actions in the charter; observation authority alone cannot control the session or
+decide a finding, and classification fields are rejected on every non-decision event kind.
+Human action events likewise require the authenticated participant to match the named human charter
+and its narrowed action set; explicit audience membership alone permits only unchartered guidance.
+Reproduction event IDs and classified or discarded finding IDs must resolve from a
+prior observation or reproduction in the same session. Credential-shaped content is rejected. Storage defaults to
+`$EXPLORATORY_SESSION_STORAGE_ROOT` (`exploratory-sessions`) and conveys no operational authority.
+
 ## Locale plans
 
 `POST /repositories/{id}/locale-plans` publishes a complete localization support contract. The
