@@ -121,7 +121,7 @@ func (s *Store) Create(repo, actor string, r Revision) (Plan, error) {
 			return ErrInvalid
 		}
 		now := s.now()
-		stamp(&r, 1, actor, now)
+		stamp(&r, 1, actor, now, nil)
 		out = Plan{ID: id(), RepositoryID: repo, CurrentVersion: 1, Revisions: []Revision{r}, CreatedAt: now, UpdatedAt: now}
 		return s.write(out)
 	})
@@ -140,7 +140,13 @@ func (s *Store) Revise(id string, expected int, actor string, r Revision) (Plan,
 		if validate(r) != nil {
 			return ErrInvalid
 		}
-		stamp(&r, expected+1, actor, s.now())
+		priorEvidence := map[string]string{}
+		if len(v.Revisions) > 0 {
+			for _, evidence := range v.Revisions[len(v.Revisions)-1].Evidence {
+				priorEvidence[evidence.ID] = evidence.AddedBy
+			}
+		}
+		stamp(&r, expected+1, actor, s.now(), priorEvidence)
 		v.CurrentVersion = r.Version
 		v.Revisions = append(v.Revisions, r)
 		v.UpdatedAt = r.CreatedAt
@@ -178,12 +184,16 @@ func (s *Store) List(repo string) ([]Plan, error) {
 	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
 	return out, err
 }
-func stamp(r *Revision, v int, actor string, now time.Time) {
+func stamp(r *Revision, v int, actor string, now time.Time, priorEvidence map[string]string) {
 	r.Version = v
 	r.CreatedBy = actor
 	r.CreatedAt = now
 	for i := range r.Evidence {
-		r.Evidence[i].AddedBy = actor
+		if addedBy := priorEvidence[r.Evidence[i].ID]; addedBy != "" {
+			r.Evidence[i].AddedBy = addedBy
+		} else {
+			r.Evidence[i].AddedBy = actor
+		}
 	}
 }
 

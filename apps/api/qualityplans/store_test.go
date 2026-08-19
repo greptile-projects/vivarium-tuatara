@@ -43,6 +43,14 @@ func TestVersionedQualityPlanKeepsExplicitCollaborativeGaps(t *testing.T) {
 	if err != nil || revised.CurrentVersion != 2 || len(revised.Revisions) != 2 || len(revised.Diagnostics) != 1 || revised.Diagnostics[0].Kind != "missing_evidence" {
 		t.Fatalf("revised = %#v, %v", revised, err)
 	}
+	if got := revised.Revisions[1].Evidence[0].AddedBy; got != "author" {
+		t.Fatalf("carried evidence added_by = %q, want author", got)
+	}
+	revision.Evidence = append(revision.Evidence, Evidence{ID: "manual", Kind: "manual", ResourceKind: "sign_off", ResourceID: "signoff-1", Summary: "Release review", Status: "passing"})
+	revised, err = store.Revise(created.ID, 2, "reviewer", revision)
+	if err != nil || revised.Revisions[2].Evidence[1].AddedBy != "reviewer" {
+		t.Fatalf("new evidence provenance = %#v, %v", revised.Revisions[2].Evidence, err)
+	}
 	if _, err = store.Revise(created.ID, 1, "reviewer", revision); !errors.Is(err, ErrConflict) {
 		t.Fatalf("stale revise = %v", err)
 	}
