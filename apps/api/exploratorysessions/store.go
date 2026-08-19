@@ -255,6 +255,9 @@ func (s *Store) ReserveRepair(id, actor string, in RepairInput) (Session, Repair
 	}
 	for _, repair := range v.Repairs {
 		if repair.FindingID == in.FindingID {
+			if repair.State == "pending" && !findingIsCurrentBug(v, in.FindingID) {
+				return Session{}, Repair{}, ErrFindingNotConfirmed
+			}
 			if sameRepairRequest(repair, in) {
 				return v, repair, nil
 			}
@@ -303,7 +306,7 @@ func (s *Store) FinalizeRepair(id, recoveryID, issueID, proposalID, taskID strin
 	return Session{}, ErrNotFound
 }
 
-func (s *Store) LinkCoverage(id, findingID, scenarioID, pullID, commitID string) (Session, error) {
+func (s *Store) LinkCoverage(id, findingID, scenarioID, pullID, commitID string, expectedVersion int) (Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v, err := s.read(id)
@@ -324,6 +327,9 @@ func (s *Store) LinkCoverage(id, findingID, scenarioID, pullID, commitID string)
 			}
 			return Session{}, ErrConflict
 		}
+		if v.Version != expectedVersion || v.Status != "active" {
+			return Session{}, ErrConflict
+		}
 		repair.ScenarioID, repair.PullRequestID, repair.RegressionCommitID = scenarioID, pullID, commitID
 		v.Version++
 		if err = s.write(v); err != nil {
@@ -338,14 +344,13 @@ func validRepair(v Session, in RepairInput) bool {
 	if bad(in.FindingID) || len(in.EvidenceEventIDs) == 0 || len(in.EvidenceEventIDs) > 20 || bad(in.ReproductionEventID) || len(in.AcceptanceCriteria) == 0 || len(in.AcceptanceCriteria) > 20 || !one(in.AssigneeType, "human", "agent") || bad(in.AssigneeID) {
 		return false
 	}
-	classified, reproduced := false, false
+	reproduced := false
 	events := map[string]Event{}
 	for _, event := range v.Events {
 		events[event.ID] = event
-		classified = classified || event.Kind == "classify" && event.FindingID == in.FindingID && event.Classification == "bug"
 		reproduced = reproduced || event.ID == in.ReproductionEventID && event.Kind == "reproduce" && event.FindingID == in.FindingID
 	}
-	if !classified || !reproduced {
+	if !findingIsCurrentBug(v, in.FindingID) || !reproduced {
 		return false
 	}
 	seen := map[string]bool{}
@@ -365,6 +370,16 @@ func validRepair(v Session, in RepairInput) bool {
 		return false
 	}
 	return true
+}
+
+func findingIsCurrentBug(v Session, findingID string) bool {
+	classification := ""
+	for _, event := range v.Events {
+		if event.FindingID == findingID && one(event.Kind, "classify", "discard") {
+			classification = event.Classification
+		}
+	}
+	return classification == "bug"
 }
 
 func sameRepairRequest(r Repair, in RepairInput) bool {

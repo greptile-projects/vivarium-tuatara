@@ -106,11 +106,11 @@ func TestConfirmedFindingRepairIsFrozenAndRetrySafe(t *testing.T) {
 	if _, err = s.FinalizeRepair(v.ID, repair.RecoveryID, "issue", "proposal", "task"); err != nil {
 		t.Fatalf("finalization retry must converge: %v", err)
 	}
-	v, err = s.LinkCoverage(v.ID, repair.FindingID, "scenario", "pull", strings.Repeat("b", 40))
+	v, err = s.LinkCoverage(v.ID, repair.FindingID, "scenario", "pull", strings.Repeat("b", 40), v.Version)
 	if err != nil || v.Repairs[0].ScenarioID != "scenario" || v.Repairs[0].PullRequestID != "pull" {
 		t.Fatalf("lasting coverage was not linked: %+v %v", v.Repairs, err)
 	}
-	if _, err = s.LinkCoverage(v.ID, repair.FindingID, "different", "pull", strings.Repeat("b", 40)); !errors.Is(err, ErrConflict) {
+	if _, err = s.LinkCoverage(v.ID, repair.FindingID, "different", "pull", strings.Repeat("b", 40), v.Version); !errors.Is(err, ErrConflict) {
 		t.Fatalf("different coverage must not replace retained proof: %v", err)
 	}
 }
@@ -126,6 +126,57 @@ func TestOnlyConfirmedReproducedBugsEnterRepair(t *testing.T) {
 	_, _, err := s.ReserveRepair(v.ID, "owner", RepairInput{ExpectedVersion: v.Version, FindingID: "environment-only", EvidenceEventIDs: []string{observationID}, ReproductionEventID: observationID, AcceptanceCriteria: []string{"Document environment boundary"}, AssigneeType: "human", AssigneeID: "owner"})
 	if !errors.Is(err, ErrFindingNotConfirmed) {
 		t.Fatalf("non-bug resolution entered repair: %v", err)
+	}
+}
+
+func TestSupersedingFindingDecisionsBlockPendingRepair(t *testing.T) {
+	for _, classification := range []string{"flaky", "environment_specific", "not_reproducible", "discarded"} {
+		t.Run(classification, func(t *testing.T) {
+			now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+			s, _ := New(t.TempDir())
+			s.now = func() time.Time { return now }
+			v, _ := s.Create("repo", "owner", example(now))
+			v, _ = s.Append(v.ID, "tester", EventInput{ExpectedVersion: v.Version, Kind: "observation", CharterID: "tester", FindingID: "finding", Summary: "Observed failure"})
+			observationID := v.Events[len(v.Events)-1].ID
+			v, _ = s.Append(v.ID, "tester", EventInput{ExpectedVersion: v.Version, Kind: "reproduce", CharterID: "tester", FindingID: "finding", Summary: "Reproduced failure", ReproducesEventID: observationID})
+			reproductionID := v.Events[len(v.Events)-1].ID
+			v, _ = s.Append(v.ID, "owner", EventInput{ExpectedVersion: v.Version, Kind: "classify", CharterID: "owner", FindingID: "finding", Summary: "Initially confirmed", Classification: "bug"})
+			kind := "classify"
+			if classification == "discarded" {
+				kind = "discard"
+			}
+			v, _ = s.Append(v.ID, "owner", EventInput{ExpectedVersion: v.Version, Kind: kind, CharterID: "owner", FindingID: "finding", Summary: "Superseded after more evidence", Classification: classification})
+			_, _, err := s.ReserveRepair(v.ID, "owner", RepairInput{ExpectedVersion: v.Version, FindingID: "finding", EvidenceEventIDs: []string{observationID, reproductionID}, ReproductionEventID: reproductionID, AcceptanceCriteria: []string{"Failure is absent"}, AssigneeType: "human", AssigneeID: "owner"})
+			if !errors.Is(err, ErrFindingNotConfirmed) {
+				t.Fatalf("superseded %s finding entered repair: %v", classification, err)
+			}
+		})
+	}
+}
+
+func TestCoverageLinkChecksVersionAndActiveStateUnderLock(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	s, _ := New(t.TempDir())
+	s.now = func() time.Time { return now }
+	v, _ := s.Create("repo", "owner", example(now))
+	v, _ = s.Append(v.ID, "tester", EventInput{ExpectedVersion: v.Version, Kind: "observation", CharterID: "tester", FindingID: "finding", Summary: "Observed failure"})
+	observationID := v.Events[len(v.Events)-1].ID
+	v, _ = s.Append(v.ID, "tester", EventInput{ExpectedVersion: v.Version, Kind: "reproduce", CharterID: "tester", FindingID: "finding", Summary: "Reproduced failure", ReproducesEventID: observationID})
+	reproductionID := v.Events[len(v.Events)-1].ID
+	v, _ = s.Append(v.ID, "owner", EventInput{ExpectedVersion: v.Version, Kind: "classify", CharterID: "owner", FindingID: "finding", Summary: "Confirmed", Classification: "bug"})
+	v, repair, _ := s.ReserveRepair(v.ID, "owner", RepairInput{ExpectedVersion: v.Version, FindingID: "finding", EvidenceEventIDs: []string{observationID, reproductionID}, ReproductionEventID: reproductionID, AcceptanceCriteria: []string{"Failure is absent"}, AssigneeType: "human", AssigneeID: "owner"})
+	v, _ = s.FinalizeRepair(v.ID, repair.RecoveryID, "issue", "proposal", "task")
+	capturedVersion := v.Version
+	v, err := s.Append(v.ID, "owner", EventInput{ExpectedVersion: v.Version, Kind: "close", CharterID: "owner", Summary: "Exploration complete"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.LinkCoverage(v.ID, repair.FindingID, "scenario", "pull", strings.Repeat("c", 40), capturedVersion); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale coverage mutated a closed session: %v", err)
+	}
+	stored, _ := s.Get(v.ID)
+	if stored.Version != v.Version || stored.Repairs[0].ScenarioID != "" {
+		t.Fatalf("stale coverage changed retained state: %+v", stored)
 	}
 }
 

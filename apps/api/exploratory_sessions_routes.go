@@ -313,7 +313,7 @@ func registerExploratorySessionRoutes(mux *http.ServeMux, git *storage.Store, ca
 			writeAPIError(w, 422, "exploratory_coverage_invalid", "the scenario must be implemented by the finding's exact repair pull")
 			return
 		}
-		updated, err := sessions.LinkCoverage(current.ID, repair.FindingID, scenario.ID, pull.ID, scenario.Implementation.CommitID)
+		updated, err := sessions.LinkCoverage(current.ID, repair.FindingID, scenario.ID, pull.ID, scenario.Implementation.CommitID, in.ExpectedVersion)
 		if errors.Is(err, exploratorysessions.ErrConflict) {
 			writeAPIError(w, 409, "exploratory_coverage_changed", "different lasting coverage is already linked")
 			return
