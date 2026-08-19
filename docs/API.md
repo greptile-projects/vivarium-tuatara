@@ -3538,6 +3538,27 @@ merged contribution at the task's exact current context revision, and proves eac
 commit descends from that base. A missing, replaced, obsolete, unfinished, closed-without-merge, or
 unrelated work record cannot become `verified`.
 
+## Quality plans
+
+`POST /repositories/{id}/quality-plans` publishes a complete versioned quality plan for an
+authorized repository participant. `POST
+/repositories/{id}/quality-plans/{plan_id}/revisions` publishes a compare-and-swap successor using
+`expected_version`. `GET /repositories/{id}/quality-plans` and `GET
+/repositories/{id}/quality-plans/{plan_id}` follow ordinary repository read visibility.
+
+Each revision supplies one or more repository, release, journey, or interface scopes; supported
+environments; source-linked behavioral requirements; automated or manual evidence references; and
+optional bounded exceptions. Requirements include their risk, expected behavior, test levels,
+representative data, coverage goal, owners, release judges, schedule, threshold, and observable
+verification method. Source kinds are closed to `issue`, `decision`, `design`, `accessibility`,
+`privacy`, `performance`, and `reliability`. Evidence status is one of `passing`, `failing`,
+`missing`, `stale`, or `unknown` and is descriptive rather than execution authority.
+
+Mutation validates every plan owner, requirement owner/judge, and exception grantor as a current
+repository participant. Responses retain attributable diagnostics for missing ownership or evidence,
+explicit conflicts, untestable claims, expired exceptions, and exceptions expiring within seven
+days. Storage defaults to `$QUALITY_PLAN_STORAGE_ROOT` (`quality-plans`).
+
 ## Locale plans
 
 `POST /repositories/{id}/locale-plans` publishes a complete localization support contract. The
