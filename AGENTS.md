@@ -2,6 +2,16 @@
 
 Guidance for coding agents working in this repository.
 
+Release confidence at pull and release `/quality-confidence` freezes versioned requirements by
+branch, journey, risk, locale, platform, release, and path beneath `$RELEASE_CONFIDENCE_STORAGE_ROOT`
+(`release-confidence`). Exact scenario, closed exploratory-session, and check-run attempts retain
+passes, failures, flakes, gaps, quarantines, affected-path invalidation, and narrow owner overrides;
+scenario outcomes derive from exact-command retained checks, exploratory success requires a chartered
+signoff event before closure, and every attempt is bound to an exact pull or release target;
+overrides expire within 30 days and require follow-up work. Pull merge and integration-queue
+readiness consume the same matrix. Post-release sampled scenario signals remain exact-release
+evidence and grant no test, environment, Git, merge, queue, release, or deployment authority.
+
 Collaborative exploration at `/repositories/{id}/quality` and the public
 `/repositories/{id}/exploratory-sessions` API retains exact-revision sessions from pull previews,
 release candidates, issues, or quality plans beneath `$EXPLORATORY_SESSION_STORAGE_ROOT`

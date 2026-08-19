@@ -74,6 +74,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/recoveryexercises"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/recoveryoperations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/relationships"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releaseconfidence"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/roadmaps"
@@ -442,6 +443,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	releaseConfidenceRoot := os.Getenv("RELEASE_CONFIDENCE_STORAGE_ROOT")
+	if releaseConfidenceRoot == "" {
+		releaseConfidenceRoot = "release-confidence"
+	}
+	releaseConfidenceStore, err := releaseconfidence.New(releaseConfidenceRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	accessibilityCommitmentRoot := os.Getenv("ACCESSIBILITY_COMMITMENT_STORAGE_ROOT")
 	if accessibilityCommitmentRoot == "" {
 		accessibilityCommitmentRoot = "accessibility-commitments"
@@ -701,7 +710,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, supportVerificationStore, supportSolutionStore, knowledgeAnswerStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore, apiContractStore, durableSchemaStore, infrastructureStore, debugWorkspaceStore, interfaceSystemStore, designProposalStore, interfaceCheckStore, designGovernanceStore, qualityPlanStore, testScenarioStore, exploratorySessionStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, supportVerificationStore, supportSolutionStore, knowledgeAnswerStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore, apiContractStore, durableSchemaStore, infrastructureStore, debugWorkspaceStore, interfaceSystemStore, designProposalStore, interfaceCheckStore, designGovernanceStore, qualityPlanStore, testScenarioStore, exploratorySessionStore, releaseConfidenceStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -877,6 +886,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var qualityPlanStore *qualityplans.Store
 	var testScenarioStore *testscenarios.Store
 	var exploratorySessionStore *exploratorysessions.Store
+	var releaseConfidenceStore *releaseconfidence.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -1003,6 +1013,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			testScenarioStore = value
 		case *exploratorysessions.Store:
 			exploratorySessionStore = value
+		case *releaseconfidence.Store:
+			releaseConfidenceStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -1146,6 +1158,27 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && store != nil && exploratorySessionStore != nil && pullRequestStore != nil && releaseStore != nil && issueStore != nil && qualityPlanStore != nil {
 		registerExploratorySessionRoutes(mux, store, repositoryCatalog, authStore, exploratorySessionStore, pullRequestStore, releaseStore, issueStore, qualityPlanStore, proposalStore, testScenarioStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && releaseConfidenceStore != nil && pullRequestStore != nil && releaseStore != nil && testScenarioStore != nil && exploratorySessionStore != nil && checkRunStore != nil {
+		registerReleaseConfidenceRoutes(mux, repositoryCatalog, authStore, releaseConfidenceStore, pullRequestStore, releaseStore, testScenarioStore, exploratorySessionStore, checkRunStore, issueStore, proposalStore)
+		pullRequestStore.ConfigureQualityConfidence(func(p pullrequests.PullRequest, changes []pullrequests.FileChange) (any, []pullrequests.ReadinessBlocker, error) {
+			paths := []string{}
+			for _, change := range changes {
+				paths = append(paths, change.Path)
+			}
+			matrix, matrixErr := releaseConfidenceStore.Matrix(p.RepositoryID, releaseconfidence.Target{Kind: "pull", ID: p.ID, Revision: p.SourceCommitID, Branch: p.TargetBranch, ChangedPaths: paths})
+			if errors.Is(matrixErr, releaseconfidence.ErrNotFound) {
+				return nil, nil, nil
+			}
+			if matrixErr != nil {
+				return nil, nil, matrixErr
+			}
+			blockers := []pullrequests.ReadinessBlocker{}
+			if !matrix.Ready {
+				blockers = append(blockers, pullrequests.ReadinessBlocker{Code: "quality_confidence_incomplete", Message: "current quality requirements retain failures, flakes, quarantines, or gaps"})
+			}
+			return matrix, blockers, nil
+		})
 	}
 	if authStore != nil && repositoryCatalog != nil && accessibilityCommitmentStore != nil {
 		registerAccessibilityCommitmentRoutes(mux, repositoryCatalog, authStore, accessibilityCommitmentStore)

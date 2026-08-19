@@ -3,6 +3,28 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Revision-exact release confidence
+
+Repository participants publish versioned release-confidence requirements at
+`/repositories/{id}/quality-requirements`. Each requirement selects branches, journeys, risk
+classes, locales, platforms, releases, and changed paths, names accountable owners, and requires
+one of reusable scenario coverage, closed exploratory sign-off, or a retained test result. Attempts
+at `/quality-attempts` must resolve to the exact repository scenario, closed session, or check run;
+they retain passed, failed, flaky, gap, and quarantined outcomes without rewriting earlier attempts.
+
+Pull and release `quality-confidence` reads produce a revision-exact matrix. Evidence from an older
+candidate remains usable only when its declared code and dependency paths do not intersect the new
+change; affected proof becomes an explicit stale attempt. The same pull matrix is embedded in merge
+readiness, so direct merges and integration queues remain blocked by current failures, flakes,
+quarantines, and gaps. Owner-only overrides freeze a narrow selector and candidate revision, expire
+within 30 days, retain rationale and attribution, and require an existing follow-up work reference.
+
+Post-release sampled scenario signals append against the exact release commit and established named
+environment. A failing sample reopens the linked requirement in the retained matrix; neither the
+signal reporter nor any quality record gains check execution, environment, Git, review, merge,
+queue, release, or deployment authority. Records default beneath
+`$RELEASE_CONFIDENCE_STORAGE_ROOT` (`release-confidence`).
+
 ## Versioned quality plans
 
 Repository quality intent is published at `/repositories/{id}/quality-plans` and rendered in the
