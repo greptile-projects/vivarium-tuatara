@@ -52,6 +52,8 @@ charters. Human assignees and audience members must be repository participants w
 created; an agent can append only under its exact charter and cannot broaden the session's actions.
 Control and finding-decision actions are separately chartered from observation, and every reproduced
 event or decided finding must resolve from the same session's retained timeline.
+Human and agent actions both require an exact assignee/action match; explicit-audience participants
+who are not assigned a charter may guide the investigation but cannot exercise its actions.
 
 The compare-and-swap shared timeline retains attributable observations, guidance, pause/resume/close
 controls, reproductions, classifications, discards, exercised routes, sanitized input descriptions,

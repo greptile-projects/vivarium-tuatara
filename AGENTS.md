@@ -11,6 +11,8 @@ CAS timeline events retain attributable routes, sanitized inputs, commands, cove
 digest-addressed artifacts, guidance, pause/resume, reproduction, classification, and discard history.
 Agent control and finding decisions require distinct charter actions, and finding/event references
 must resolve within that session's prior timeline.
+Human actions also require an exact charter assignee/action match; audience membership alone admits
+only collaborative guidance.
 Candidate movement marks evidence stale without rewriting it. These records grant no preview,
 workspace, runtime, environment, Git, deployment, data, or general agent authority.
 

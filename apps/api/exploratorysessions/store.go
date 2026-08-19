@@ -162,6 +162,14 @@ func (s *Store) List(repo string) ([]Session, error) {
 func (s *Store) Append(id, actor string, in EventInput) (Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if in.ActorType == "agent" {
+		if actor != in.ActorID {
+			return Session{}, ErrInvalid
+		}
+	} else {
+		in.ActorType = "human"
+		in.ActorID = actor
+	}
 	v, e := s.read(id)
 	if e != nil {
 		return Session{}, e
@@ -272,8 +280,13 @@ func ValidEvent(v Session, in EventInput) bool {
 		if n >= v.Limits.MaxAgentActions {
 			return false
 		}
-	} else if in.ActorType != "" && in.ActorType != "human" {
+	} else if in.ActorType != "human" {
 		return false
+	}
+	if in.Kind != "guide" {
+		if charter == nil || charter.AssigneeType != in.ActorType || charter.AssigneeID != in.ActorID {
+			return false
+		}
 	}
 	required := []string{in.Kind}
 	if in.Route != "" {
@@ -297,7 +310,7 @@ func ValidEvent(v Session, in EventInput) bool {
 		}
 	}
 	for _, action := range required {
-		if !contains(v.Limits.AllowedActions, action) || (in.ActorType == "agent" && (charter == nil || !contains(charter.AllowedActions, action))) {
+		if !contains(v.Limits.AllowedActions, action) || ((in.ActorType == "agent" || in.Kind != "guide") && !contains(charter.AllowedActions, action)) {
 			return false
 		}
 	}
