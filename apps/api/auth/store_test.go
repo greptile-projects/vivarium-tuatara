@@ -42,6 +42,36 @@ func TestIssueAuthenticateInspectAndRevoke(t *testing.T) {
 	}
 }
 
+func TestTaskAgentIdentityIsCreatedAtomicallyAndRevocationPersists(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	userID := "0123456789abcdef0123456789abcdef"
+	agentID := "abcdef0123456789abcdef0123456789"
+	repositoryID := "fedcba9876543210fedcba9876543210"
+	issued, err := store.IssueTaskAgentBound(userID, "bounded explorer", agentID, []string{"git:read", "git:write"}, time.Hour, repositoryID, "refs/heads/agent/explore")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issued.AgentID != agentID || issued.RepositoryID != repositoryID {
+		t.Fatalf("issued task credential = %#v", issued.Credential)
+	}
+	if _, err = store.Revoke(userID, issued.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Authenticate(issued.Token, "git:write"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("authenticate revoked task credential error = %v", err)
+	}
+	persisted, err := store.read(issued.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.RevokedAt == nil || persisted.AgentID != agentID {
+		t.Fatalf("persisted revoked task credential = %#v", persisted)
+	}
+}
+
 func TestBatchRevocationPublishesAllOrNothingAndReconciles(t *testing.T) {
 	root := t.TempDir()
 	store, err := New(root)
