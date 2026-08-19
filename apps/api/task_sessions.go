@@ -221,7 +221,7 @@ func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store
 				return responseWritten
 			}
 			var issueErr error
-			issued, issueErr = authStore.IssueBound(actor.UserID, auth.Git, "Agent task "+task.ID, []string{"git:read", "git:write"}, time.Duration(input.ExpiresIn)*time.Second, r.PathValue("id"), refName)
+			issued, issueErr = authStore.IssueTaskAgentBound(actor.UserID, "Agent task "+task.ID, task.Assignment.AssigneeID, []string{"git:read", "git:write"}, time.Duration(input.ExpiresIn)*time.Second, r.PathValue("id"), refName)
 			if issueErr != nil {
 				_ = repository.DeleteReference(refName)
 				writeAPIError(w, 500, "internal_error", "agent access could not be issued")

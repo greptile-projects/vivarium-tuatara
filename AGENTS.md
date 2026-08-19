@@ -11,6 +11,11 @@ signoff event before closure, and every attempt is bound to an exact pull or rel
 overrides expire within 30 days and require follow-up work. Pull merge and integration-queue
 readiness consume the same matrix. Post-release sampled scenario signals remain exact-release
 evidence and grant no test, environment, Git, merge, queue, release, or deployment authority.
+The connected `quality-engineering-journey.spec.ts` browser/API/Git journey retains cross-platform
+product intent, reviewed human and agent scenarios, unsafe-fixture rejection, bounded human-agent
+pull-preview exploration, stale-result invalidation, a minimized edge-case repair, failed-first and
+flaky evidence, matrix-gap and override containment, reviewed merge/release gates, and exact-release
+post-release confirmation. Playwright isolates quality-plan, scenario, exploration, and confidence stores.
 
 Collaborative exploration at `/repositories/{id}/quality` and the public
 `/repositories/{id}/exploratory-sessions` API retains exact-revision sessions from pull previews,
