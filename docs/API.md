@@ -3576,9 +3576,14 @@ an exact retained plan version. The implementation branch must currently resolve
 commit; all test and fixture paths resolve there, and each fixture SHA-256 must match its blob.
 Optional pull and workspace IDs must bind that same repository and commit.
 
+Every rationale ID is resolved before persistence: issues and design proposals must belong to the
+repository; replay scenarios must name the same commit; API-contract and documentation revisions must
+name the same commit; and user journeys must be declared by a retained repository quality-plan scope.
+
 Fixtures may only be `synthetic`, `generated`, or `template` assets classified as `synthetic`,
 `anonymized`, or `public`; assumptions and provenance are mandatory. The API stores only their path,
-digest, generator, and metadata, rejects secret-shaped scenario content, and never imports production
+digest, generator, and metadata, scans both the resolved blob and scenario metadata for secret-shaped
+content, and never imports production
 personal data or inaccessible evidence. Storage defaults to `$TEST_SCENARIO_STORAGE_ROOT`
 (`test-scenarios`). Records grant no execution, Git, pull, workspace, environment, or data authority.
 

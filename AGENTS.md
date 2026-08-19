@@ -2100,6 +2100,9 @@ whenever dependencies change or the web job fails before it starts.
   or agent authorship, command, framework, assumptions, and provenance. Fixture contents, credentials,
   production personal data, inaccessible evidence, and operational authority are never copied into the
   scenario record implicitly.
+  Publication resolves every rationale ID through its repository-owned issue, replay scenario,
+  design proposal, API contract, documentation collection, or quality-plan journey store and scans
+  the exact digest-matched fixture blob for credential-shaped content.
 
   Pull localization reviews retain repository-defined extraction maps and exact-source snapshots
   beneath `$LOCALIZATION_STORAGE_ROOT` (default `localization`). Server-derived stable units carry

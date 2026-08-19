@@ -30,7 +30,9 @@ both what the test proves and the command that reruns it without interpreting an
 Tests and fixtures are proposed through ordinary repository branches (and optionally an exact pull
 or bounded workspace). Publication resolves the branch commit, every test path, every optional source
 path, and each fixture SHA-256 from Git. Only synthetic, anonymized, or public fixture classifications
-are reusable; fixture bytes are not copied into this ledger. Generated scenarios identify their human
+are reusable; resolved fixture bytes are scanned for credential-shaped content but are not copied into
+this ledger. Source IDs must resolve through their repository-owned issue, replay, design, contract,
+documentation, or quality-plan journey record. Generated scenarios identify their human
 or agent authoring mode, framework, provenance, and assumptions. Records default beneath
 `$TEST_SCENARIO_STORAGE_ROOT` (`test-scenarios`) and grant no Git, workspace, test-execution, review,
 merge, environment, or data authority.
