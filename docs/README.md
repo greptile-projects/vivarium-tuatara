@@ -63,6 +63,21 @@ unavailable source records mark retained observations stale on reads without rew
 ledger defaults beneath `$EXPLORATORY_SESSION_STORAGE_ROOT` (`exploratory-sessions`) and grants no
 preview, workspace, runtime, environment, Git, deployment, data, or agent authority.
 
+Confirmed reproduced bugs can enter ordinary governed repair directly from their finding. The handoff
+reserves a retry-safe identity before publication, freezes the exact affected candidate, selected
+audience-permitted timeline evidence, minimized reproduction, acceptance criteria, assignee, and optional
+quality-plan requirements, then creates a linked repository issue and human- or agent-owned proposal task.
+The task continues through ordinary branch, pull, review, check, and merge controls. Once its exact pull
+publishes a reusable issue-sourced test scenario, the finding can link that scenario back only when its
+pull task, candidate commit, issue, and frozen quality-plan requirements all match. The session therefore
+retains bidirectional finding/issue/task/pull/commit/scenario provenance. `flaky`, `duplicate`,
+`environment_specific`, and `not_reproducible` decisions remain explicit timeline classifications and
+cannot silently enter the confirmed-bug repair path.
+Once a repair identity is reserved, its finding disposition is frozen while ordinary issue/task
+publication is pending. This prevents concurrent reclassification from orphaning actionable work;
+exact publication retries reconcile the same identities. Later evidence may append a new classification
+after the repair link is durable without rewriting either history.
+
 ## Versioned interface systems
 
 Reusable product language is repository state, not an untracked style-guide

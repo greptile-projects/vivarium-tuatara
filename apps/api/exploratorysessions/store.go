@@ -17,6 +17,7 @@ import (
 var ErrNotFound = errors.New("exploratory session not found")
 var ErrInvalid = errors.New("invalid exploratory session")
 var ErrConflict = errors.New("exploratory session version conflict")
+var ErrFindingNotConfirmed = errors.New("exploratory finding is not a confirmed bug")
 
 type Source struct {
 	Kind       string `json:"kind"`
@@ -67,6 +68,28 @@ type Event struct {
 	ActorID           string     `json:"actor_id"`
 	CreatedAt         time.Time  `json:"created_at"`
 }
+type Repair struct {
+	FindingID          string    `json:"finding_id"`
+	RecoveryID         string    `json:"recovery_id"`
+	State              string    `json:"state"`
+	AffectedRevision   string    `json:"affected_revision"`
+	EvidenceEventIDs   []string  `json:"evidence_event_ids"`
+	ReproductionID     string    `json:"reproduction_event_id"`
+	AcceptanceCriteria []string  `json:"acceptance_criteria"`
+	AssigneeType       string    `json:"assignee_type"`
+	AssigneeID         string    `json:"assignee_id"`
+	QualityPlanID      string    `json:"quality_plan_id,omitempty"`
+	QualityPlanVersion int       `json:"quality_plan_version,omitempty"`
+	RequirementIDs     []string  `json:"requirement_ids,omitempty"`
+	IssueID            string    `json:"issue_id,omitempty"`
+	ProposalID         string    `json:"proposal_id,omitempty"`
+	TaskID             string    `json:"task_id,omitempty"`
+	ScenarioID         string    `json:"scenario_id,omitempty"`
+	PullRequestID      string    `json:"pull_request_id,omitempty"`
+	RegressionCommitID string    `json:"regression_commit_id,omitempty"`
+	CreatedBy          string    `json:"created_by"`
+	CreatedAt          time.Time `json:"created_at"`
+}
 type Session struct {
 	ID           string    `json:"id"`
 	RepositoryID string    `json:"repository_id"`
@@ -78,10 +101,23 @@ type Session struct {
 	Status       string    `json:"status"`
 	Version      int       `json:"version"`
 	Events       []Event   `json:"events"`
+	Repairs      []Repair  `json:"repairs,omitempty"`
 	CreatedBy    string    `json:"created_by"`
 	CreatedAt    time.Time `json:"created_at"`
 	Stale        bool      `json:"stale"`
 	StaleReason  string    `json:"stale_reason,omitempty"`
+}
+type RepairInput struct {
+	ExpectedVersion     int      `json:"expected_version"`
+	FindingID           string   `json:"finding_id"`
+	EvidenceEventIDs    []string `json:"evidence_event_ids"`
+	ReproductionEventID string   `json:"reproduction_event_id"`
+	AcceptanceCriteria  []string `json:"acceptance_criteria"`
+	AssigneeType        string   `json:"assignee_type"`
+	AssigneeID          string   `json:"assignee_id"`
+	QualityPlanID       string   `json:"quality_plan_id,omitempty"`
+	QualityPlanVersion  int      `json:"quality_plan_version,omitempty"`
+	RequirementIDs      []string `json:"requirement_ids,omitempty"`
 }
 type EventInput struct {
 	ExpectedVersion   int        `json:"expected_version"`
@@ -207,6 +243,172 @@ func (s *Store) Append(id, actor string, in EventInput) (Session, error) {
 	return v, nil
 }
 
+// ReserveRepair freezes the exact confirmed finding handoff before any
+// ordinary issue or task is created. Exact retries return the same recovery
+// identity, allowing cross-store publication to reconcile without duplicates.
+func (s *Store) ReserveRepair(id, actor string, in RepairInput) (Session, Repair, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(id)
+	if err != nil {
+		return Session{}, Repair{}, err
+	}
+	for _, repair := range v.Repairs {
+		if repair.FindingID == in.FindingID {
+			if repair.State == "pending" && !findingIsCurrentBug(v, in.FindingID) {
+				return Session{}, Repair{}, ErrFindingNotConfirmed
+			}
+			if sameRepairRequest(repair, in) {
+				return v, repair, nil
+			}
+			return Session{}, Repair{}, ErrConflict
+		}
+	}
+	if in.ExpectedVersion != v.Version {
+		return Session{}, Repair{}, ErrConflict
+	}
+	if v.Status == "closed" || s.now().After(v.Limits.ExpiresAt) || !validRepair(v, in) {
+		return Session{}, Repair{}, ErrFindingNotConfirmed
+	}
+	repair := Repair{FindingID: in.FindingID, RecoveryID: newID(), State: "pending", AffectedRevision: v.Source.Revision, EvidenceEventIDs: append([]string(nil), in.EvidenceEventIDs...), ReproductionID: in.ReproductionEventID, AcceptanceCriteria: append([]string(nil), in.AcceptanceCriteria...), AssigneeType: in.AssigneeType, AssigneeID: strings.TrimSpace(in.AssigneeID), QualityPlanID: in.QualityPlanID, QualityPlanVersion: in.QualityPlanVersion, RequirementIDs: append([]string(nil), in.RequirementIDs...), CreatedBy: actor, CreatedAt: s.now()}
+	v.Repairs = append(v.Repairs, repair)
+	v.Version++
+	if err = s.write(v); err != nil {
+		return Session{}, Repair{}, err
+	}
+	return v, repair, nil
+}
+
+func (s *Store) FinalizeRepair(id, recoveryID, issueID, proposalID, taskID string) (Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(id)
+	if err != nil {
+		return Session{}, err
+	}
+	for i := range v.Repairs {
+		if v.Repairs[i].RecoveryID != recoveryID {
+			continue
+		}
+		if v.Repairs[i].State == "linked" {
+			if v.Repairs[i].IssueID == issueID && v.Repairs[i].ProposalID == proposalID && v.Repairs[i].TaskID == taskID {
+				return v, nil
+			}
+			return Session{}, ErrConflict
+		}
+		if !findingIsCurrentBug(v, v.Repairs[i].FindingID) {
+			return Session{}, ErrFindingNotConfirmed
+		}
+		v.Repairs[i].State, v.Repairs[i].IssueID, v.Repairs[i].ProposalID, v.Repairs[i].TaskID = "linked", issueID, proposalID, taskID
+		v.Version++
+		if err = s.write(v); err != nil {
+			return Session{}, err
+		}
+		return v, nil
+	}
+	return Session{}, ErrNotFound
+}
+
+func (s *Store) LinkCoverage(id, findingID, scenarioID, pullID, commitID string, expectedVersion int) (Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(id)
+	if err != nil {
+		return Session{}, err
+	}
+	for i := range v.Repairs {
+		repair := &v.Repairs[i]
+		if repair.FindingID != findingID {
+			continue
+		}
+		if repair.State != "linked" {
+			return Session{}, ErrInvalid
+		}
+		if repair.ScenarioID != "" {
+			if repair.ScenarioID == scenarioID && repair.PullRequestID == pullID && repair.RegressionCommitID == commitID {
+				return v, nil
+			}
+			return Session{}, ErrConflict
+		}
+		if v.Version != expectedVersion || v.Status != "active" {
+			return Session{}, ErrConflict
+		}
+		repair.ScenarioID, repair.PullRequestID, repair.RegressionCommitID = scenarioID, pullID, commitID
+		v.Version++
+		if err = s.write(v); err != nil {
+			return Session{}, err
+		}
+		return v, nil
+	}
+	return Session{}, ErrNotFound
+}
+
+func validRepair(v Session, in RepairInput) bool {
+	if bad(in.FindingID) || len(in.EvidenceEventIDs) == 0 || len(in.EvidenceEventIDs) > 20 || bad(in.ReproductionEventID) || len(in.AcceptanceCriteria) == 0 || len(in.AcceptanceCriteria) > 20 || !one(in.AssigneeType, "human", "agent") || bad(in.AssigneeID) {
+		return false
+	}
+	reproduced := false
+	events := map[string]Event{}
+	for _, event := range v.Events {
+		events[event.ID] = event
+		reproduced = reproduced || event.ID == in.ReproductionEventID && event.Kind == "reproduce" && event.FindingID == in.FindingID
+	}
+	if !findingIsCurrentBug(v, in.FindingID) || !reproduced {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, id := range in.EvidenceEventIDs {
+		event, ok := events[id]
+		if !ok || seen[id] || event.FindingID != in.FindingID || !one(event.Kind, "observation", "reproduce") {
+			return false
+		}
+		seen[id] = true
+	}
+	for _, criterion := range in.AcceptanceCriteria {
+		if strings.TrimSpace(criterion) == "" || len(criterion) > 1000 {
+			return false
+		}
+	}
+	if (in.QualityPlanID == "") != (in.QualityPlanVersion == 0) || (in.QualityPlanID == "" && len(in.RequirementIDs) > 0) {
+		return false
+	}
+	return true
+}
+
+func findingIsCurrentBug(v Session, findingID string) bool {
+	classification := ""
+	for _, event := range v.Events {
+		if event.FindingID == findingID && one(event.Kind, "classify", "discard") {
+			classification = event.Classification
+		}
+	}
+	return classification == "bug"
+}
+
+func findingRepairPending(v Session, findingID string) bool {
+	for _, repair := range v.Repairs {
+		if repair.FindingID == findingID && repair.State == "pending" {
+			return true
+		}
+	}
+	return false
+}
+
+func sameRepairRequest(r Repair, in RepairInput) bool {
+	return r.FindingID == in.FindingID && r.ReproductionID == in.ReproductionEventID && r.AssigneeType == in.AssigneeType && r.AssigneeID == strings.TrimSpace(in.AssigneeID) && r.QualityPlanID == in.QualityPlanID && r.QualityPlanVersion == in.QualityPlanVersion && slicesEqual(r.EvidenceEventIDs, in.EvidenceEventIDs) && slicesEqual(r.AcceptanceCriteria, in.AcceptanceCriteria) && slicesEqual(r.RequirementIDs, in.RequirementIDs)
+}
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func ValidSession(v Session, now time.Time) bool {
 	if bad(v.Title) || bad(v.Source.ResourceID) || bad(v.Source.Label) || len(v.Source.Revision) != 40 || !hexOnly(v.Source.Revision) || !one(v.Source.Kind, "pull_preview", "release_candidate", "issue", "quality_plan") || len(v.Access) == 0 || len(v.Charters) == 0 || !v.Limits.ExpiresAt.After(now) || v.Limits.ExpiresAt.After(now.Add(24*time.Hour)) || v.Limits.MaxCostCents < 0 || v.Limits.MaxCostCents > 100000 || v.Limits.MaxAgentActions < 0 || v.Limits.MaxAgentActions > 1000 || len(v.Limits.AllowedActions) == 0 || len(v.Limits.TestData) == 0 {
 		return false
@@ -314,10 +516,16 @@ func ValidEvent(v Session, in EventInput) bool {
 			return false
 		}
 	}
-	if one(in.Kind, "classify", "discard") && (bad(in.FindingID) || !one(in.Classification, "bug", "risk", "question", "expected", "duplicate", "not_reproducible", "discarded")) {
+	if one(in.Kind, "classify", "discard") && (bad(in.FindingID) || !one(in.Classification, "bug", "risk", "question", "expected", "duplicate", "flaky", "environment_specific", "not_reproducible", "discarded")) {
 		return false
 	}
 	if one(in.Kind, "classify", "discard") && !findingExists(v, in.FindingID) {
+		return false
+	}
+	// Reservation is the cross-store publication boundary. Holding the finding
+	// decision stable while pending lets deterministic issue/task creation be
+	// retried and linked instead of becoming orphaned through supersession.
+	if one(in.Kind, "classify", "discard") && findingRepairPending(v, in.FindingID) {
 		return false
 	}
 	if in.Kind == "reproduce" {

@@ -52,6 +52,9 @@ type Proposal struct {
 // ReasoningOrigin is an immutable, revision-exact handoff from collaborative
 // investigation and impact analysis into implementation and review.
 type ReasoningOrigin struct {
+	ExploratorySessionID           string                     `json:"exploratory_session_id,omitempty"`
+	ExploratoryFindingID           string                     `json:"exploratory_finding_id,omitempty"`
+	ExploratoryRepairID            string                     `json:"exploratory_repair_id,omitempty"`
 	DebuggingWorkspaceID           string                     `json:"debugging_workspace_id,omitempty"`
 	DebuggingRepairWorkID          string                     `json:"debugging_repair_work_id,omitempty"`
 	DebuggingScenarioID            string                     `json:"debugging_scenario_id,omitempty"`
@@ -385,7 +388,8 @@ func New(root string) (*Store, error) {
 }
 
 // CreateImplementation atomically creates an ordered, owned plan from one
-// frozen reasoning snapshot. Assessment identity makes retries converge.
+// frozen reasoning snapshot. The source-specific recovery identity makes
+// retries converge.
 func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Task, error) {
 	isAccessibility := validID(input.Origin.AssessmentID) && input.Origin.AssessmentVersion > 0 && validID(input.Origin.AccessibilityFindingID) && validID(input.Origin.AccessibilityCommitmentID) && input.Origin.AccessibilityCommitmentVersion > 0
 	isAssessment := validID(input.Origin.AssessmentID) && input.Origin.AssessmentVersion > 0 && !isAccessibility
@@ -399,8 +403,9 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 	isSupport := validID(input.Origin.SupportThreadID) && input.Origin.SupportThreadVersion > 0
 	isDesign := validID(input.Origin.DesignProposalID) && input.Origin.DesignProposalVersion > 0
 	isDebugging := validID(input.Origin.DebuggingWorkspaceID) && validID(input.Origin.DebuggingRepairWorkID) && validID(input.Origin.DebuggingScenarioID) && validID(input.Origin.DebuggingCauseClaimID)
+	isExploratory := validID(input.Origin.ExploratorySessionID) && strings.TrimSpace(input.Origin.ExploratoryFindingID) != "" && validID(input.Origin.ExploratoryRepairID)
 	originCount := 0
-	for _, present := range []bool{isAssessment, isAccessibility, isDecision, isIssue, isGovernance, isRoadmap, isDataObservation, isReliability, isRecovery, isSupport, isDebugging, isDesign} {
+	for _, present := range []bool{isAssessment, isAccessibility, isDecision, isIssue, isGovernance, isRoadmap, isDataObservation, isReliability, isRecovery, isSupport, isDebugging, isDesign, isExploratory} {
 		if present {
 			originCount++
 		}
@@ -433,6 +438,12 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 			return Proposal{}, nil, readErr
 		}
 		if isDebugging && r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && r.Proposal.Reasoning.DebuggingRepairWorkID == input.Origin.DebuggingRepairWorkID {
+			if !reflect.DeepEqual(*r.Proposal.Reasoning, input.Origin) || r.Proposal.Title != title || r.Proposal.Body != body || len(r.Tasks) != len(input.Tasks) {
+				return Proposal{}, nil, ErrImplementationConflict
+			}
+			return r.Proposal, append([]Task(nil), r.Tasks...), nil
+		}
+		if isExploratory && r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && r.Proposal.Reasoning.ExploratoryRepairID == input.Origin.ExploratoryRepairID {
 			if !reflect.DeepEqual(*r.Proposal.Reasoning, input.Origin) || r.Proposal.Title != title || r.Proposal.Body != body || len(r.Tasks) != len(input.Tasks) {
 				return Proposal{}, nil, ErrImplementationConflict
 			}

@@ -3620,6 +3620,27 @@ Reproduction event IDs and classified or discarded finding IDs must resolve from
 prior observation or reproduction in the same session. Credential-shaped content is rejected. Storage defaults to
 `$EXPLORATORY_SESSION_STORAGE_ROOT` (`exploratory-sessions`) and conveys no operational authority.
 
+`POST .../{session_id}/findings/{finding_id}/repair` is human-collaborator controlled and accepts only a
+current `bug` decision with a same-session reproduction. It compare-and-swap reserves the exact candidate,
+selected observation/reproduction event IDs, minimized reproduction, bounded acceptance criteria,
+human or agent assignee, and optional exact quality-plan version/requirements. It idempotently creates a
+repository-visible issue and ordinary assigned proposal task; exact retries converge on the reserved issue,
+proposal, and task identities. Candidate movement or changed handoff data is rejected. The task verification
+plan requires the regression to fail at the affected revision, pass at the repair revision, and become a
+maintainable reusable scenario. `flaky`, `duplicate`, `environment_specific`, and `not_reproducible`
+classifications remain durable resolution paths but are not eligible for confirmed-bug repair.
+While the retry-safe repair reservation is pending, further classify/discard events for that finding
+are rejected. The reservation is therefore the publication boundary: deterministic issue/task creation
+can be retried and finalized without concurrent supersession orphaning actionable work. Once linked,
+later decisions may append normally and do not rewrite the retained repair history.
+
+After the repair pull publishes its reusable scenario, `POST .../{session_id}/findings/{finding_id}/coverage`
+links it back to the finding. The scenario must cite the linked issue, use the repair task's exact pull and
+candidate commit, and match the handoff's quality-plan version and requirements. The resulting repair record
+retains the scenario, pull, and regression commit alongside the issue/proposal/task links; reviews and check
+evidence remain authoritative on that pull. Neither endpoint grants Git, workspace, review, merge, check,
+agent-launch, or execution authority.
+
 ## Locale plans
 
 `POST /repositories/{id}/locale-plans` publishes a complete localization support contract. The
