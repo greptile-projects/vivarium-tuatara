@@ -154,6 +154,27 @@ func TestSupersedingFindingDecisionsBlockPendingRepair(t *testing.T) {
 	}
 }
 
+func TestSupersedingDecisionBlocksRepairFinalization(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	s, _ := New(t.TempDir())
+	s.now = func() time.Time { return now }
+	v, _ := s.Create("repo", "owner", example(now))
+	v, _ = s.Append(v.ID, "tester", EventInput{ExpectedVersion: v.Version, Kind: "observation", CharterID: "tester", FindingID: "finding", Summary: "Observed failure"})
+	observationID := v.Events[len(v.Events)-1].ID
+	v, _ = s.Append(v.ID, "tester", EventInput{ExpectedVersion: v.Version, Kind: "reproduce", CharterID: "tester", FindingID: "finding", Summary: "Reproduced failure", ReproducesEventID: observationID})
+	reproductionID := v.Events[len(v.Events)-1].ID
+	v, _ = s.Append(v.ID, "owner", EventInput{ExpectedVersion: v.Version, Kind: "classify", CharterID: "owner", FindingID: "finding", Summary: "Initially confirmed", Classification: "bug"})
+	v, repair, _ := s.ReserveRepair(v.ID, "owner", RepairInput{ExpectedVersion: v.Version, FindingID: "finding", EvidenceEventIDs: []string{observationID, reproductionID}, ReproductionEventID: reproductionID, AcceptanceCriteria: []string{"Failure is absent"}, AssigneeType: "human", AssigneeID: "owner"})
+	v, _ = s.Append(v.ID, "owner", EventInput{ExpectedVersion: v.Version, Kind: "classify", CharterID: "owner", FindingID: "finding", Summary: "Superseded after more evidence", Classification: "flaky"})
+	if _, err := s.FinalizeRepair(v.ID, repair.RecoveryID, "issue", "proposal", "task"); !errors.Is(err, ErrFindingNotConfirmed) {
+		t.Fatalf("superseded finding finalized repair: %v", err)
+	}
+	stored, _ := s.Get(v.ID)
+	if stored.Repairs[0].State != "pending" || stored.Repairs[0].IssueID != "" || stored.Repairs[0].ProposalID != "" || stored.Repairs[0].TaskID != "" {
+		t.Fatalf("failed finalization attached work: %+v", stored.Repairs[0])
+	}
+}
+
 func TestCoverageLinkChecksVersionAndActiveStateUnderLock(t *testing.T) {
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	s, _ := New(t.TempDir())

@@ -296,6 +296,9 @@ func (s *Store) FinalizeRepair(id, recoveryID, issueID, proposalID, taskID strin
 			}
 			return Session{}, ErrConflict
 		}
+		if !findingIsCurrentBug(v, v.Repairs[i].FindingID) {
+			return Session{}, ErrFindingNotConfirmed
+		}
 		v.Repairs[i].State, v.Repairs[i].IssueID, v.Repairs[i].ProposalID, v.Repairs[i].TaskID = "linked", issueID, proposalID, taskID
 		v.Version++
 		if err = s.write(v); err != nil {
