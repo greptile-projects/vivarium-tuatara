@@ -4012,9 +4012,12 @@ Participants manage policy and evidence through `POST /repositories/{id}/quality
 Policy updates use `expected_version`; stale updates return `409`. Evidence sources are mutually
 exclusive and server-resolved: `scenario_id`, `exploratory_session_id`, or `check_run_id` with its
 `pull_request_id`. Attempts name an exact 40-character `revision`, environment, summary, and one of
-`passed`, `failed`, `flaky`, `gap`, or `quarantined`. Pull check attempts remain bound to their
-resolved pull. The release-signal endpoint server-binds sampled evidence to its selected release;
-callers cannot supply target identity through the generic attempt endpoint. Matrices retain proof
+`passed`, `failed`, `flaky`, `gap`, or `quarantined`. Every attempt resolves an exact pull or release
+target. Pull tests remain bound to their resolved pull; scenario coverage additionally requires an
+exact-revision retained check whose command matches the published scenario, and its outcome is
+derived from that check. Exploratory success requires a chartered retained `signoff` event and a
+closed session. The release-signal endpoint server-binds sampled evidence to its selected release;
+callers cannot choose the outcome. Matrices retain proof
 aimed at another pull or release as stale rather than transferring it across a shared commit.
 
 `GET /repositories/{id}/pulls/{pull_id}/quality-confidence` and

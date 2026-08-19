@@ -42,45 +42,64 @@ func registerReleaseConfidenceRoutes(mux *http.ServeMux, catalog *repositories.S
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
-		// Target identity is server-owned. Pull checks carry it through their
-		// resolved check run; release sampling uses the dedicated route below.
-		in.TargetKind, in.TargetID = "", ""
+		requirement, requirementErr := confidence.Requirement(r.PathValue("id"), in.RequirementID)
+		if requirementErr != nil {
+			writeAPIError(w, 422, "quality_evidence_invalid", "quality requirement does not resolve")
+			return
+		}
+		if in.TargetKind == "pull" {
+			target, e := pulls.Get(r.PathValue("id"), in.TargetID)
+			if e != nil || target.SourceCommitID != in.Revision {
+				writeAPIError(w, 422, "quality_evidence_invalid", "pull target must resolve at the attempted revision")
+				return
+			}
+		} else if in.TargetKind == "release" {
+			target, e := releaseStore.Get(r.PathValue("id"), in.TargetID)
+			if e != nil || target.CommitID != in.Revision {
+				writeAPIError(w, 422, "quality_evidence_invalid", "release target must resolve at the attempted revision")
+				return
+			}
+		} else {
+			writeAPIError(w, 422, "quality_evidence_invalid", "an exact pull or release target is required")
+			return
+		}
 		// Evidence references must resolve in the repository; this record grants no execution authority.
+		var scenario testscenarios.Scenario
 		if in.ScenarioID != "" {
-			x, e := scenarios.Get(in.ScenarioID)
-			if e != nil || x.RepositoryID != r.PathValue("id") || x.Implementation.CommitID != in.Revision {
+			var e error
+			scenario, e = scenarios.Get(in.ScenarioID)
+			if e != nil || scenario.RepositoryID != r.PathValue("id") || scenario.Implementation.CommitID != in.Revision {
 				writeAPIError(w, 422, "quality_evidence_invalid", "scenario evidence must resolve at the attempted revision")
 				return
 			}
 		}
 		if in.SessionID != "" {
 			x, e := sessions.Get(in.SessionID)
-			if e != nil || x.RepositoryID != r.PathValue("id") || x.Source.Revision != in.Revision || x.Status != "closed" {
+			signed := false
+			for _, event := range x.Events {
+				signed = signed || event.ID == in.SignoffEventID && event.Kind == "signoff"
+			}
+			if e != nil || x.RepositoryID != r.PathValue("id") || x.Source.Revision != in.Revision || x.Status != "closed" || !signed {
 				writeAPIError(w, 422, "quality_evidence_invalid", "exploratory sign-off must resolve to a closed exact-revision session")
 				return
 			}
 		}
 		if in.CheckRunID != "" {
 			x, e := checks.Get(r.PathValue("id"), in.PullRequestID, in.CheckRunID)
-			if e != nil || x.CommitID != in.Revision || ((in.Status == "passed") != (x.State == "succeeded")) {
+			if e != nil || x.CommitID != in.Revision || (in.TargetKind == "pull" && in.PullRequestID != in.TargetID) || (requirement.Kind == "scenario" && x.Definition.Command != scenario.Implementation.Command) {
 				writeAPIError(w, 422, "quality_evidence_invalid", "test evidence must resolve to the exact retained check outcome")
 				return
 			}
+			if x.State == "succeeded" {
+				in.Status = "passed"
+			} else {
+				in.Status = "failed"
+			}
 		}
-		sources := 0
-		if in.ScenarioID != "" {
-			sources++
+		if requirement.Kind == "exploratory_signoff" {
+			in.Status = "passed"
 		}
-		if in.SessionID != "" {
-			sources++
-		}
-		if in.CheckRunID != "" {
-			sources++
-		}
-		if sources != 1 {
-			writeAPIError(w, 422, "quality_evidence_invalid", "one governed evidence source is required")
-			return
-		}
+		in.OutcomeDerived = true
 		out, err := confidence.RecordAttempt(r.PathValue("id"), actor.UserID, in)
 		writeConfidence(w, out, err, 201)
 	})
@@ -161,8 +180,8 @@ func registerReleaseConfidenceRoutes(mux *http.ServeMux, catalog *repositories.S
 		}
 		in.Revision = rel.CommitID
 		in.TargetKind, in.TargetID = "release", rel.ID
-		if in.Environment == "" || in.ScenarioID == "" {
-			writeAPIError(w, 422, "quality_signal_invalid", "a sampled scenario and established environment are required")
+		if in.Environment == "" || in.ScenarioID == "" || in.CheckRunID == "" || in.PullRequestID == "" {
+			writeAPIError(w, 422, "quality_signal_invalid", "a sampled scenario, retained execution, and established environment are required")
 			return
 		}
 		scenario, e := scenarios.Get(in.ScenarioID)
@@ -170,6 +189,17 @@ func registerReleaseConfidenceRoutes(mux *http.ServeMux, catalog *repositories.S
 			writeAPIError(w, 422, "quality_signal_invalid", "sampled scenario does not resolve")
 			return
 		}
+		run, e := checks.Get(r.PathValue("id"), in.PullRequestID, in.CheckRunID)
+		if e != nil || run.CommitID != rel.CommitID || run.Definition.Command != scenario.Implementation.Command {
+			writeAPIError(w, 422, "quality_signal_invalid", "sampled scenario execution does not resolve at the release")
+			return
+		}
+		if run.State == "succeeded" {
+			in.Status = "passed"
+		} else {
+			in.Status = "failed"
+		}
+		in.OutcomeDerived = true
 		in.Summary = "post-release: " + in.Summary
 		out, e := confidence.RecordAttempt(r.PathValue("id"), actor.UserID, in)
 		writeConfidence(w, out, e, 201)

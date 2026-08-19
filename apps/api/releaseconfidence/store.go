@@ -55,6 +55,8 @@ type Attempt struct {
 	PullRequestID   string    `json:"pull_request_id,omitempty"`
 	TargetKind      string    `json:"target_kind,omitempty"`
 	TargetID        string    `json:"target_id,omitempty"`
+	SignoffEventID  string    `json:"signoff_event_id,omitempty"`
+	OutcomeDerived  bool      `json:"-"`
 	Environment     string    `json:"environment"`
 	Journey         string    `json:"journey,omitempty"`
 	RiskClass       string    `json:"risk_class,omitempty"`
@@ -162,6 +164,19 @@ func (s *Store) RecordAttempt(repo, actor string, in Attempt) (Attempt, error) {
 	})
 	return out, err
 }
+func (s *Store) Requirement(repo, id string) (Requirement, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	policy, err := s.current(repo)
+	if err != nil {
+		return Requirement{}, err
+	}
+	requirement, found := findRequirement(policy, id)
+	if !found {
+		return Requirement{}, ErrNotFound
+	}
+	return requirement, nil
+}
 func (s *Store) Override(repo, actor string, in Override) (Override, error) {
 	var out Override
 	err := s.lock(func() error {
@@ -210,7 +225,7 @@ func (s *Store) Matrix(repo string, target Target) (Matrix, error) {
 				cell.StaleAttempts = append(cell.StaleAttempts, a)
 				continue
 			}
-			if a.TargetKind != "" && (a.TargetKind != target.Kind || a.TargetID != target.ID) {
+			if a.TargetKind != target.Kind || a.TargetID != target.ID {
 				cell.StaleAttempts = append(cell.StaleAttempts, a)
 				continue
 			}
@@ -288,8 +303,8 @@ func pathsIntersect(scope, changed []string) bool {
 }
 func validAttempt(a Attempt) bool {
 	ok := map[string]bool{"passed": true, "failed": true, "flaky": true, "gap": true, "quarantined": true}[a.Status]
-	targetValid := (a.TargetKind == "" && a.TargetID == "") || (map[string]bool{"pull": true, "release": true}[a.TargetKind] && a.TargetID != "")
-	return ok && targetValid && len(a.Revision) == 40 && strings.TrimSpace(a.Environment) != "" && strings.TrimSpace(a.Summary) != ""
+	targetValid := map[string]bool{"pull": true, "release": true}[a.TargetKind] && a.TargetID != ""
+	return ok && a.OutcomeDerived && targetValid && len(a.Revision) == 40 && strings.TrimSpace(a.Environment) != "" && strings.TrimSpace(a.Summary) != ""
 }
 func validRequirements(rs []Requirement) bool {
 	if len(rs) == 0 {
@@ -315,11 +330,11 @@ func findRequirement(p Policy, id string) (Requirement, bool) {
 func evidenceBound(requirement Requirement, attempt Attempt) bool {
 	switch requirement.Kind {
 	case "scenario":
-		return attempt.ScenarioID == requirement.ResourceID && attempt.SessionID == "" && attempt.CheckRunID == "" && attempt.PullRequestID == ""
+		return attempt.ScenarioID == requirement.ResourceID && attempt.SessionID == "" && attempt.SignoffEventID == "" && attempt.CheckRunID != "" && attempt.PullRequestID != ""
 	case "exploratory_signoff":
-		return attempt.SessionID == requirement.ResourceID && attempt.ScenarioID == "" && attempt.CheckRunID == "" && attempt.PullRequestID == ""
+		return attempt.SessionID == requirement.ResourceID && attempt.SignoffEventID != "" && attempt.ScenarioID == "" && attempt.CheckRunID == "" && attempt.PullRequestID == ""
 	case "test":
-		return attempt.CheckRunID == requirement.ResourceID && attempt.PullRequestID != "" && attempt.ScenarioID == "" && attempt.SessionID == ""
+		return attempt.CheckRunID == requirement.ResourceID && attempt.PullRequestID != "" && attempt.ScenarioID == "" && attempt.SessionID == "" && attempt.SignoffEventID == ""
 	default:
 		return false
 	}

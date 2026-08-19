@@ -21,9 +21,10 @@ func TestMatrixRetainsExactAttemptsAndInvalidatesOnlyAffectedEvidence(t *testing
 		t.Fatal(err)
 	}
 	for _, a := range []Attempt{
-		{RequirementID: "checkout", Revision: revA, Status: "passed", ScenarioID: "scenario", Environment: "preview", Journey: "checkout", RiskClass: "critical", Locale: "fr-FR", Platform: "web", AffectedPaths: []string{"apps/web/src/checkout"}, Summary: "sample passed"},
-		{RequirementID: "api", Revision: revA, Status: "passed", CheckRunID: "run", PullRequestID: "pull", Environment: "linux", AffectedPaths: []string{"apps/api"}, Summary: "tests passed"},
+		{RequirementID: "checkout", Revision: revA, Status: "passed", ScenarioID: "scenario", CheckRunID: "scenario-run", PullRequestID: "pull", TargetKind: "pull", TargetID: "pull", Environment: "preview", Journey: "checkout", RiskClass: "critical", Locale: "fr-FR", Platform: "web", AffectedPaths: []string{"apps/web/src/checkout"}, Summary: "sample passed"},
+		{RequirementID: "api", Revision: revA, Status: "passed", CheckRunID: "run", PullRequestID: "pull", TargetKind: "pull", TargetID: "pull", Environment: "linux", AffectedPaths: []string{"apps/api"}, Summary: "tests passed"},
 	} {
+		a.OutcomeDerived = true
 		if _, err = s.RecordAttempt("repo", "owner", a); err != nil {
 			t.Fatal(err)
 		}
@@ -50,7 +51,7 @@ func TestAttemptMustMatchRequirementKindAndConfiguredResource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := Attempt{RequirementID: "required", Revision: revA, Status: "passed", ScenarioID: "scenario-unrelated", Environment: "preview", Summary: "passed"}
+	base := Attempt{RequirementID: "required", Revision: revA, Status: "passed", ScenarioID: "scenario-unrelated", CheckRunID: "run", PullRequestID: "pull", TargetKind: "pull", TargetID: "pull", Environment: "preview", Summary: "passed", OutcomeDerived: true}
 	if _, err = s.RecordAttempt("repo", "owner", base); err != ErrInvalid {
 		t.Fatalf("unrelated scenario = %v", err)
 	}
@@ -58,7 +59,12 @@ func TestAttemptMustMatchRequirementKindAndConfiguredResource(t *testing.T) {
 	if _, err = s.RecordAttempt("repo", "owner", base); err != ErrInvalid {
 		t.Fatalf("wrong evidence kind = %v", err)
 	}
-	base.CheckRunID, base.PullRequestID, base.ScenarioID = "", "", "scenario-required"
+	base.CheckRunID, base.PullRequestID, base.ScenarioID = "run", "pull", "scenario-required"
+	base.TargetKind, base.TargetID = "", ""
+	if _, err = s.RecordAttempt("repo", "owner", base); err != ErrInvalid {
+		t.Fatalf("targetless scenario = %v", err)
+	}
+	base.TargetKind, base.TargetID = "pull", "pull"
 	if _, err = s.RecordAttempt("repo", "owner", base); err != nil {
 		t.Fatal(err)
 	}
@@ -73,10 +79,10 @@ func TestMatrixIsolatesPullChecksAndReleaseSignalsAtSharedRevision(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.RecordAttempt("repo", "owner", Attempt{RequirementID: "check", Revision: revA, Status: "passed", CheckRunID: "run", PullRequestID: "pull-b", Environment: "linux", Summary: "passed"}); err != nil {
+	if _, err = s.RecordAttempt("repo", "owner", Attempt{RequirementID: "check", Revision: revA, Status: "passed", CheckRunID: "run", PullRequestID: "pull-b", TargetKind: "pull", TargetID: "pull-b", Environment: "linux", Summary: "passed", OutcomeDerived: true}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.RecordAttempt("repo", "owner", Attempt{RequirementID: "sample", Revision: revA, Status: "passed", ScenarioID: "scenario", TargetKind: "release", TargetID: "release-a", Environment: "production", Summary: "sampled"}); err != nil {
+	if _, err = s.RecordAttempt("repo", "owner", Attempt{RequirementID: "sample", Revision: revA, Status: "passed", ScenarioID: "scenario", CheckRunID: "scenario-run", PullRequestID: "pull", TargetKind: "release", TargetID: "release-a", Environment: "production", Summary: "sampled", OutcomeDerived: true}); err != nil {
 		t.Fatal(err)
 	}
 	pull, err := s.Matrix("repo", Target{Kind: "pull", ID: "pull-a", Revision: revA})

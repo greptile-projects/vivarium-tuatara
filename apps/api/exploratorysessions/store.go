@@ -415,7 +415,7 @@ func ValidSession(v Session, now time.Time) bool {
 	}
 	allowed := map[string]bool{}
 	for _, a := range v.Limits.AllowedActions {
-		if !one(a, "navigate", "input", "screenshot", "trace", "command", "observe", "guide", "pause", "resume", "reproduce", "classify", "discard", "close") {
+		if !one(a, "navigate", "input", "screenshot", "trace", "command", "observe", "guide", "pause", "resume", "reproduce", "classify", "discard", "signoff", "close") {
 			return false
 		}
 		allowed[a] = true
@@ -440,7 +440,7 @@ func ValidSession(v Session, now time.Time) bool {
 	return true
 }
 func ValidEvent(v Session, in EventInput) bool {
-	if in.ExpectedVersion < 1 || bad(in.Summary) || !one(in.Kind, "observation", "guide", "pause", "resume", "reproduce", "classify", "discard", "close") {
+	if in.ExpectedVersion < 1 || bad(in.Summary) || !one(in.Kind, "observation", "guide", "pause", "resume", "reproduce", "classify", "discard", "signoff", "close") {
 		return false
 	}
 	if !one(in.Kind, "classify", "discard") && in.Classification != "" {
