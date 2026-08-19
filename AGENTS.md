@@ -9,6 +9,8 @@ release candidates, issues, or quality plans beneath `$EXPLORATORY_SESSION_STORA
 data, cost/action budgets, and narrowing human or approved-agent risk charters bound each session.
 CAS timeline events retain attributable routes, sanitized inputs, commands, coverage, uncertainty,
 digest-addressed artifacts, guidance, pause/resume, reproduction, classification, and discard history.
+Agent control and finding decisions require distinct charter actions, and finding/event references
+must resolve within that session's prior timeline.
 Candidate movement marks evidence stale without rewriting it. These records grant no preview,
 workspace, runtime, environment, Git, deployment, data, or general agent authority.
 

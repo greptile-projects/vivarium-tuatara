@@ -1027,7 +1027,7 @@ export function QualityPlansWorkspace({
             <Field n="exploration_expiry" l="Expiry (maximum 24 hours)" type="datetime-local" />
             <Field n="max_cost" l="Maximum cost in cents" type="number" v="0" />
             <Field n="max_agent_actions" l="Maximum agent actions" type="number" v="20" />
-            <Field n="allowed_actions" l="Allowed actions" v="navigate, input, screenshot, trace, command, observe" />
+            <Field n="allowed_actions" l="Allowed actions" v="navigate, input, screenshot, trace, command, observe, guide, pause, resume, reproduce, classify, discard, close" />
             <Field n="test_data" l="Permitted test data" v="synthetic" />
           </Group>
           <Group title="Risk charter">

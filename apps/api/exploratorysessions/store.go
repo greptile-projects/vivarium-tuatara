@@ -205,7 +205,7 @@ func ValidSession(v Session, now time.Time) bool {
 	}
 	allowed := map[string]bool{}
 	for _, a := range v.Limits.AllowedActions {
-		if !one(a, "navigate", "input", "screenshot", "trace", "command", "observe") {
+		if !one(a, "navigate", "input", "screenshot", "trace", "command", "observe", "guide", "pause", "resume", "reproduce", "classify", "discard", "close") {
 			return false
 		}
 		allowed[a] = true
@@ -272,7 +272,7 @@ func ValidEvent(v Session, in EventInput) bool {
 	} else if in.ActorType != "" && in.ActorType != "human" {
 		return false
 	}
-	required := []string{}
+	required := []string{in.Kind}
 	if in.Route != "" {
 		required = append(required, "navigate")
 	}
@@ -283,7 +283,7 @@ func ValidEvent(v Session, in EventInput) bool {
 		required = append(required, "command")
 	}
 	if in.Kind == "observation" {
-		required = append(required, "observe")
+		required[0] = "observe"
 	}
 	for _, artifact := range in.Artifacts {
 		if artifact.Kind == "screenshot" {
@@ -301,8 +301,17 @@ func ValidEvent(v Session, in EventInput) bool {
 	if one(in.Kind, "classify", "discard") && (bad(in.FindingID) || !one(in.Classification, "bug", "risk", "question", "expected", "duplicate", "not_reproducible", "discarded")) {
 		return false
 	}
-	if in.Kind == "reproduce" && bad(in.ReproducesEventID) {
+	if one(in.Kind, "classify", "discard") && !findingExists(v, in.FindingID) {
 		return false
+	}
+	if in.Kind == "reproduce" {
+		if bad(in.ReproducesEventID) || bad(in.FindingID) {
+			return false
+		}
+		referenced, ok := eventByID(v, in.ReproducesEventID)
+		if !ok || !one(referenced.Kind, "observation", "reproduce") || referenced.FindingID != in.FindingID {
+			return false
+		}
 	}
 	for _, a := range in.Artifacts {
 		if !one(a.Kind, "screenshot", "trace", "recording", "log", "command_output") || len(a.SHA256) != 64 || !hexOnly(a.SHA256) || bad(a.MediaType) || bad(a.Description) {
@@ -367,6 +376,22 @@ func one(x string, xs ...string) bool {
 func contains(xs []string, wanted string) bool {
 	for _, x := range xs {
 		if x == wanted {
+			return true
+		}
+	}
+	return false
+}
+func eventByID(v Session, id string) (Event, bool) {
+	for _, event := range v.Events {
+		if event.ID == id {
+			return event, true
+		}
+	}
+	return Event{}, false
+}
+func findingExists(v Session, id string) bool {
+	for _, event := range v.Events {
+		if event.FindingID == id && one(event.Kind, "observation", "reproduce") {
 			return true
 		}
 	}
