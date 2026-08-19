@@ -41,6 +41,26 @@ current repository participant inside the repository mutation boundary. The ledg
 `$QUALITY_PLAN_STORAGE_ROOT` (`quality-plans`) and grants no check execution, preview, release,
 environment, merge, or evidence authority.
 
+## Versioned security expectations
+
+Authorized repository collaborators publish immutable security-intent revisions at
+`/repositories/{id}/security-expectations` and work with them at
+`/repositories/{id}/security`. A complete revision scopes repositories, services, interfaces,
+packages, extensions, environments, or user journeys and connects protected assets to explicit
+trust boundaries, actor trust and capabilities, abuse cases, required preventive/detective/
+response/recovery controls, accountable owners, severity response/release policy, and bounded
+exceptions. Links preserve the relationship to design, privacy, infrastructure, API, quality, and
+release commitments without copying or granting authority over those resources.
+
+Every reference inside the asset/boundary/actor/abuse/control graph is validated before an
+immutable version is retained, and compare-and-swap successors preserve the complete history.
+Reads derive attributable blocking diagnostics for missing expectation, asset, or abuse-case
+owners; explicitly contradictory boundaries; unsupported or unevidenced planned guarantees; and
+expired exceptions. Exceptions expiring within seven days remain attributable warnings. Named
+owners and exception grantors must be current repository participants. Records default beneath
+`$SECURITY_EXPECTATION_STORAGE_ROOT` (`security-expectations`) and grant no Git, review, merge,
+release, deployment, environment, control-execution, or linked-resource authority.
+
 ## Reusable test scenarios
 
 The quality workspace also publishes immutable executable specifications through

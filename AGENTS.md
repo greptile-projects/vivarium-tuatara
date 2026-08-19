@@ -329,6 +329,19 @@ whenever dependencies change or the web job fails before it starts.
   system. These records document reviewed product intent and provenance but grant
   no Git, release, review, merge, deployment, or consumer-repository authority.
 
+- **Security expectations** — `/repositories/{id}/security-expectations` and the repository
+  `/security` workspace retain immutable versions of intended security properties beneath
+  `$SECURITY_EXPECTATION_STORAGE_ROOT` (`security-expectations`). Repository, service, interface,
+  package, extension, environment, and journey scopes connect protected assets, trust boundaries,
+  human/agent/service/external/attacker capabilities, abuse cases, required controls, owners,
+  severity response and release rules, and expiring exceptions. Links identify related design,
+  privacy, infrastructure, API, quality, and release commitments without copying their contents or
+  authority. Publications validate the complete reference graph and current participant ownership;
+  reads keep missing owners, explicitly contradictory boundaries, unsupported guarantees, and
+  expired or seven-day-expiring exceptions visible and attributable. These records document intent
+  only and grant no Git, review, merge, release, deployment, environment, linked-resource, or
+  control-execution authority.
+
 - **Interface verification** — Pull evidence beneath
   `/repositories/{id}/pulls/{pull_id}/interface-checks` binds the exact candidate,
   successful bounded preview, candidate-resolved repository check definition, and
