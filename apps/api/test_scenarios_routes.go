@@ -176,7 +176,26 @@ func testScenarioSourceResolves(repoID string, source testscenarios.Source, plan
 			return false
 		}
 		v, e := stores.issues.Get(repoID, source.ResourceID)
-		return e == nil && v.RepositoryID == repoID
+		if e != nil || v.RepositoryID != repoID {
+			return false
+		}
+		if v.Triage.SuspectedRevision == source.Revision {
+			return true
+		}
+		for _, x := range v.ReproductionAttempts {
+			if x.CommitID == source.Revision {
+				return true
+			}
+		}
+		if v.Implementation != nil && v.Implementation.AffectedRevision == source.Revision {
+			return true
+		}
+		for _, x := range v.RepairVerifications {
+			if x.CandidateCommitID == source.Revision {
+				return true
+			}
+		}
+		return v.DeliveryResolution != nil && v.DeliveryResolution.ReleaseCommitID == source.Revision
 	case "reproduction":
 		if stores.reproductions == nil {
 			return false
@@ -198,7 +217,7 @@ func testScenarioSourceResolves(repoID string, source testscenarios.Source, plan
 			return false
 		}
 		v, e := stores.designs.Get(repoID, source.ResourceID)
-		return e == nil && v.RepositoryID == repoID
+		return e == nil && v.RepositoryID == repoID && v.Implementation != nil && v.Implementation.BaseRevision == source.Revision
 	case "api_contract":
 		if stores.contracts == nil {
 			return false
@@ -235,7 +254,7 @@ func testScenarioSourceResolves(repoID string, source testscenarios.Source, plan
 		for _, p := range all {
 			for _, r := range p.Revisions {
 				for _, scope := range r.Scopes {
-					if scope.Kind == "journey" && scope.ResourceID == source.ResourceID {
+					if scope.Kind == "journey" && scope.ResourceID == source.ResourceID && scope.SourceRevision == source.Revision {
 						return true
 					}
 				}

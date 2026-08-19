@@ -2102,7 +2102,10 @@ whenever dependencies change or the web job fails before it starts.
   scenario record implicitly.
   Publication resolves every rationale ID through its repository-owned issue, replay scenario,
   design proposal, API contract, documentation collection, or quality-plan journey store and scans
-  the exact digest-matched fixture blob for credential-shaped content.
+  the exact digest-matched fixture blob for credential-shaped content. Scenario citations are admitted
+  only when their declared commit equals source-owned revision evidence: issue triage/reproduction/
+  repair/delivery history, a design implementation base, a replay scenario, contract/documentation
+  revision, or a journey scope's explicit `source_revision`.
 
   Pull localization reviews retain repository-defined extraction maps and exact-source snapshots
   beneath `$LOCALIZATION_STORAGE_ROOT` (default `localization`). Server-derived stable units carry

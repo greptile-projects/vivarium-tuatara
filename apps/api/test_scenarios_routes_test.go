@@ -29,7 +29,7 @@ func TestScenarioProvenanceResolvesExactBranchAssetsAndQualityIntent(t *testing.
 	}
 	plans, _ := qualityplans.New(t.TempDir())
 	planRevision := qualityAPIRevision("owner")
-	planRevision.Scopes[0] = qualityplans.Scope{Kind: "journey", ResourceID: "checkout", Name: "Checkout"}
+	planRevision.Scopes[0] = qualityplans.Scope{Kind: "journey", ResourceID: "checkout", Name: "Checkout", SourceRevision: string(commit)}
 	plan, err := plans.Create("repo", "owner", planRevision)
 	if err != nil {
 		t.Fatal(err)
@@ -64,5 +64,11 @@ func TestScenarioProvenanceResolvesExactBranchAssetsAndQualityIntent(t *testing.
 	v.Sources[0].ResourceID = "nonexistent-unrelated-resource-273"
 	if testScenarioProvenance(git, "repo", v, plans, nil, nil, testScenarioSources{}) {
 		t.Fatal("nonexistent rationale resource was accepted")
+	}
+	v.Sources[0].ResourceID = "checkout"
+	unrelated := writeTestCommit(t, repo, tree, []storage.ObjectID{commit}, 2, "unrelated revision")
+	v.Sources[0].Revision = string(unrelated)
+	if testScenarioProvenance(git, "repo", v, plans, nil, nil, testScenarioSources{}) {
+		t.Fatal("journey rationale accepted an unrelated existing revision")
 	}
 }

@@ -98,6 +98,15 @@ func TestQualityPlanRejectsDanglingTraceability(t *testing.T) {
 	}
 }
 
+func TestQualityPlanScopeSourceRevisionMustBeExact(t *testing.T) {
+	store, _ := New(t.TempDir())
+	revision := completeRevision()
+	revision.Scopes[0].SourceRevision = "not-a-commit"
+	if _, err := store.Create("repo", "owner", revision); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func completeRevision() Revision {
 	return Revision{Title: "Checkout quality", Summary: "Protect checkout", Scopes: []Scope{{Kind: "journey", ResourceID: "checkout", Name: "Checkout"}}, Environments: []Environment{{ID: "chrome", Name: "Chrome", Description: "Current stable", Supported: true}}, OwnerIDs: []string{"owner"}, ReviewSchedule: "Every release", Rationale: "Initial plan", Requirements: []Requirement{{ID: "checkout", SourceKind: "issue", SourceID: "issue-1", Title: "Complete checkout", Rationale: "Revenue journey", ExpectedBehavior: "A valid card completes once", Risk: "critical", TestLevels: []string{"unit", "end_to_end", "manual"}, RepresentativeData: "Synthetic card token", CoverageGoal: "All payment outcomes", OwnerIDs: []string{"owner"}, JudgeIDs: []string{"owner"}, EnvironmentIDs: []string{"chrome"}, Schedule: "Every candidate", ReleaseThreshold: "All required evidence passes", EvidenceIDs: []string{"check"}, Verification: "Observe one order and one charge"}, {ID: "privacy-copy", SourceKind: "privacy", SourceID: "decision-2", Title: "Redacted error", Rationale: "Protect users", ExpectedBehavior: "Errors omit card data", Risk: "high", TestLevels: []string{"integration"}, RepresentativeData: "Synthetic token", CoverageGoal: "All decline reasons", OwnerIDs: []string{"owner"}, JudgeIDs: []string{"owner"}, EnvironmentIDs: []string{"chrome"}, Schedule: "Every candidate", ReleaseThreshold: "No disclosure", Verification: "Inspect sanitized response"}}, Evidence: []Evidence{{ID: "check", Kind: "automated", ResourceKind: "check_run", ResourceID: "run-1", Revision: "abc", Summary: "Checkout suite", Status: "passing"}}}
 }

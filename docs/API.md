@@ -3576,9 +3576,13 @@ an exact retained plan version. The implementation branch must currently resolve
 commit; all test and fixture paths resolve there, and each fixture SHA-256 must match its blob.
 Optional pull and workspace IDs must bind that same repository and commit.
 
-Every rationale ID is resolved before persistence: issues and design proposals must belong to the
-repository; replay scenarios must name the same commit; API-contract and documentation revisions must
-name the same commit; and user journeys must be declared by a retained repository quality-plan scope.
+Every rationale ID and revision pair is resolved before persistence. Issue citations must match an
+exact commit retained by triage, a reproduction attempt, repair implementation/verification, or
+delivery. Design specifications must match their implementation base. Replay scenarios, API contracts,
+and documentation must expose the same exact commit. A user journey must be declared by a retained
+repository quality-plan journey scope whose `source_revision` equals the citation revision. Quality
+plan scopes may omit `source_revision` for compatibility, but such a journey cannot be reused as an
+exact-revision scenario source.
 
 Fixtures may only be `synthetic`, `generated`, or `template` assets classified as `synthetic`,
 `anonymized`, or `public`; assumptions and provenance are mandatory. The API stores only their path,

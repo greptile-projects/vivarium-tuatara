@@ -37,6 +37,11 @@ or agent authoring mode, framework, provenance, and assumptions. Records default
 `$TEST_SCENARIO_STORAGE_ROOT` (`test-scenarios`) and grant no Git, workspace, test-execution, review,
 merge, environment, or data authority.
 
+The cited commit must also be source-owned evidence, not merely another repository commit. Issues bind
+through retained triage/reproduction/repair/delivery revisions, implemented designs through their base
+revision, and journey scopes through an explicit quality-plan `source_revision`; replay, contract, and
+documentation sources already retain their exact commit directly.
+
 ## Versioned interface systems
 
 Reusable product language is repository state, not an untracked style-guide
