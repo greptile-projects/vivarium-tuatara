@@ -5,6 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -87,5 +90,23 @@ func TestConcurrentStoresRetainOneStatementSigningIdentity(t *testing.T) {
 	a, b := <-results, <-results
 	if a.PublicKey != b.PublicKey {
 		t.Fatal("concurrent stores published different signing identities")
+	}
+}
+
+func TestFailedInitialKeyWriteLeavesCanonicalPathRetryable(t *testing.T) {
+	root := t.TempDir()
+	store, _ := New(root)
+	now := time.Now().UTC()
+	template := Statement{RepositoryID: "repo", AssessmentID: "assessment", ReleaseID: "release", ReleaseRevision: strings.Repeat("a", 40), ProgramID: "program", ProgramVersion: 1, Scope: Scope{ControlIDs: []string{"control"}, PeriodStartsAt: now.Add(-time.Hour), PeriodEndsAt: now}, ControlIDs: []string{"control"}, EvidenceDigest: strings.Repeat("b", 64), Audience: []string{"consumer"}, ExpiresAt: now.Add(time.Hour), IssuedBy: "owner"}
+	store.writeSigningKey = func(file *os.File, value []byte) error { _, _ = file.Write(value[:8]); return io.ErrShortWrite }
+	if _, err := store.CreateStatement(template); err == nil {
+		t.Fatal("partial first key write unexpectedly succeeded")
+	}
+	if _, err := os.Stat(filepath.Join(root, ".statement-signing-key")); !os.IsNotExist(err) {
+		t.Fatalf("failed initialization poisoned canonical key path: %v", err)
+	}
+	retry, _ := New(root)
+	if _, err := retry.CreateStatement(template); err != nil {
+		t.Fatalf("retry after failed initialization did not recover: %v", err)
 	}
 }

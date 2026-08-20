@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -100,9 +101,10 @@ type Assessment struct {
 	UpdatedAt          time.Time     `json:"updated_at"`
 }
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root            string
+	mu              sync.Mutex
+	now             func() time.Time
+	writeSigningKey func(*os.File, []byte) error
 }
 
 func New(root string) (*Store, error) {
@@ -112,7 +114,13 @@ func New(root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
-	return &Store{root: root, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }}, nil
+	return &Store{root: root, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }, writeSigningKey: func(file *os.File, value []byte) error {
+		written, err := file.Write(value)
+		if err == nil && written != len(value) {
+			return io.ErrShortWrite
+		}
+		return err
+	}}, nil
 }
 func (s *Store) Create(a Assessment) (Assessment, error) {
 	s.mu.Lock()
@@ -315,27 +323,26 @@ func (s *Store) getStatementUnlocked(id string) (Statement, error) {
 }
 func (s *Store) signingKey() (ed25519.PrivateKey, ed25519.PublicKey, error) {
 	path := filepath.Join(s.root, ".statement-signing-key")
-	if b, err := os.ReadFile(path); err == nil && len(b) == ed25519.PrivateKeySize {
+	if b, err := os.ReadFile(path); err == nil {
+		if len(b) != ed25519.PrivateKeySize {
+			return nil, nil, ErrInvalid
+		}
 		k := ed25519.PrivateKey(b)
 		return k, k.Public().(ed25519.PublicKey), nil
+	} else if !os.IsNotExist(err) {
+		return nil, nil, err
 	}
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, nil, err
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if errors.Is(err, os.ErrExist) {
-		b, readErr := os.ReadFile(path)
-		if readErr != nil || len(b) != ed25519.PrivateKeySize {
-			return nil, nil, ErrInvalid
-		}
-		key := ed25519.PrivateKey(b)
-		return key, key.Public().(ed25519.PublicKey), nil
-	}
+	file, err := os.CreateTemp(s.root, ".statement-signing-key-pending-")
 	if err != nil {
 		return nil, nil, err
 	}
-	if _, err = file.Write(priv); err == nil {
+	temporaryPath := file.Name()
+	defer os.Remove(temporaryPath)
+	if err = s.writeSigningKey(file, priv); err == nil {
 		err = file.Sync()
 	}
 	closeErr := file.Close()
@@ -343,6 +350,9 @@ func (s *Store) signingKey() (ed25519.PrivateKey, ed25519.PublicKey, error) {
 		err = closeErr
 	}
 	if err != nil {
+		return nil, nil, err
+	}
+	if err = os.Rename(temporaryPath, path); err != nil {
 		return nil, nil, err
 	}
 	directory, openErr := os.Open(s.root)
