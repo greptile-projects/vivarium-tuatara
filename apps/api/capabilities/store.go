@@ -67,13 +67,14 @@ type Diagnostic struct {
 	ConsumerIndex *int   `json:"consumer_index,omitempty"`
 }
 type Capability struct {
-	ID             string       `json:"id"`
-	RepositoryID   string       `json:"repository_id"`
-	CurrentVersion int          `json:"current_version"`
-	Revisions      []Revision   `json:"revisions"`
-	Diagnostics    []Diagnostic `json:"diagnostics"`
-	CreatedAt      time.Time    `json:"created_at"`
-	UpdatedAt      time.Time    `json:"updated_at"`
+	ID              string           `json:"id"`
+	RepositoryID    string           `json:"repository_id"`
+	CurrentVersion  int              `json:"current_version"`
+	Revisions       []Revision       `json:"revisions"`
+	Diagnostics     []Diagnostic     `json:"diagnostics"`
+	RetirementPlans []RetirementPlan `json:"retirement_plans,omitempty"`
+	CreatedAt       time.Time        `json:"created_at"`
+	UpdatedAt       time.Time        `json:"updated_at"`
 }
 type Store struct {
 	root string
@@ -216,6 +217,9 @@ func project(v Capability) Capability {
 		}
 	}
 	v.Diagnostics = d
+	for i := range v.RetirementPlans {
+		projectRetirement(&v.RetirementPlans[i], v.CurrentVersion, d, time.Now().UTC())
+	}
 	return v
 }
 func stamp(r *Revision, v int, a string, t time.Time) {

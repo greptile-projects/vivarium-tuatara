@@ -19,6 +19,19 @@ an assumption that use is absent. Records default beneath `$CAPABILITY_STORAGE_R
 (`capabilities`) and document footprint only: they grant no Git, consumer, release,
 environment, migration, merge, deployment, or removal authority.
 
+Human participants may open a retirement contract from an inventory revision. The contract names
+supported replacements and migration guidance, what stops working for each affected audience,
+ordered compatibility stages, owner-response and removal deadlines, success and rollback criteria,
+communication cadence and escalation, and every consumer owner whose acknowledgement is required.
+Humans and repository-bound read-only agents append cited impact assessments or challenges, but an
+agent cannot approve removal or make policy. Exact owners acknowledge only for themselves.
+
+The projection keeps unknown or stale usage, later inventory changes, missed acknowledgements,
+conflicting compatibility promises, active maximum-30-day exceptions, and embargoed dependencies as
+attributable blockers. Embargoed consumer detail is projected as a restricted affected audience for
+readers without that repository access. A human may record only a bounded, expiring deferral with
+follow-up work; neither an exception nor a retirement plan grants delivery or removal authority.
+
 ## Revision-exact security confidence
 
 Repository owners and organization owners publish scoped security requirements at
