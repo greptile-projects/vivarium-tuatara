@@ -60,11 +60,11 @@ func registerSecurityScenarioRoutes(mux *http.ServeMux, git *storage.Store, cata
 			return
 		}
 		model, e := models.Get(r.PathValue("id"), in.ThreatModelID, threatmodels.CurrentSource{})
-		if e != nil || model.CurrentVersion != in.ThreatModelVersion {
+		rev, retained := retainedThreatModelRevision(model, in.ThreatModelVersion)
+		if e != nil || !retained {
 			writeAPIError(w, 422, "security_scenario_threat_invalid", "the exact threat-model revision is required")
 			return
 		}
-		rev := model.Revisions[len(model.Revisions)-1]
 		if actor.AgentID != "" && (rev.Source.Kind != "pull_request" || actor.RepositoryID != r.PathValue("id") || actor.PullRequestID != rev.Source.ResourceID || actor.GitWriteBranch == "") {
 			writeAPIError(w, 403, "security_scenario_agent_scope_invalid", "agent scenarios require the exact source-pull task credential")
 			return
@@ -220,6 +220,13 @@ func registerSecurityScenarioRoutes(mux *http.ServeMux, git *storage.Store, cata
 		out, e := scenarios.AddAttempt(v.RepositoryID, v.ID, identity, a)
 		writeSecurityScenario(w, out, e, 201)
 	})
+}
+
+func retainedThreatModelRevision(model threatmodels.Model, version int) (threatmodels.Revision, bool) {
+	if version < 1 || version > len(model.Revisions) || model.Revisions[version-1].Version != version {
+		return threatmodels.Revision{}, false
+	}
+	return model.Revisions[version-1], true
 }
 
 func scenarioGraph(r threatmodels.Revision, s securityscenarios.Scenario) bool {

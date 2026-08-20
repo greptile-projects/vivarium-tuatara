@@ -408,7 +408,7 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 	isDesign := validID(input.Origin.DesignProposalID) && input.Origin.DesignProposalVersion > 0
 	isDebugging := validID(input.Origin.DebuggingWorkspaceID) && validID(input.Origin.DebuggingRepairWorkID) && validID(input.Origin.DebuggingScenarioID) && validID(input.Origin.DebuggingCauseClaimID)
 	isExploratory := validID(input.Origin.ExploratorySessionID) && strings.TrimSpace(input.Origin.ExploratoryFindingID) != "" && validID(input.Origin.ExploratoryRepairID)
-	isSecurityFinding := validID(input.Origin.SecurityFindingID) && input.Origin.SecurityFindingVersion > 0 && validID(input.Origin.ThreatModelID) && input.Origin.ThreatModelVersion > 0
+	isSecurityFinding := validID(input.Origin.SecurityFindingID) && input.Origin.SecurityFindingVersion > 0 && validThreatModelReference(input.Origin.ThreatModelID) && input.Origin.ThreatModelVersion > 0
 	originCount := 0
 	for _, present := range []bool{isAssessment, isAccessibility, isDecision, isIssue, isGovernance, isRoadmap, isDataObservation, isReliability, isRecovery, isSupport, isDebugging, isDesign, isExploratory, isSecurityFinding} {
 		if present {
@@ -547,6 +547,11 @@ func validReliabilityReference(value string) bool {
 	}
 	decoded, err := hex.DecodeString(value)
 	return err == nil && len(decoded) == 12
+}
+
+// Threat models use the same canonical 12-byte opaque identity shape.
+func validThreatModelReference(value string) bool {
+	return validReliabilityReference(value)
 }
 
 func (s *Store) Create(repositoryID, authorID, title, body string) (Proposal, error) {
