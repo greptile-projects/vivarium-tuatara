@@ -368,6 +368,60 @@ func (s *Store) WithCurrentParticipants(userIDs []string, repositoryID string, f
 	return s.WithCurrentDeliveryAuthority(userIDs, repositoryID, "", fn)
 }
 
+// WithCurrentParticipantsAndReadAccess holds one catalog boundary while
+// proving provider ownership roles and the publisher's read access to every
+// repository whose existence a dependent record would disclose.
+func (s *Store) WithCurrentParticipantsAndReadAccess(userIDs []string, repositoryID, readerID string, readableRepositoryIDs []string, fn func() error) error {
+	if !validID(repositoryID) || !validID(readerID) || len(userIDs) == 0 || fn == nil {
+		return ErrInvalidCollaborator
+	}
+	for _, id := range append(append([]string{}, userIDs...), readableRepositoryIDs...) {
+		if !validID(id) {
+			return ErrInvalidCollaborator
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	provider, err := s.read(repositoryID)
+	if err != nil {
+		return ErrNotFound
+	}
+	if _, err = s.git.Open(repositoryID); err != nil {
+		return ErrNotFound
+	}
+	for _, userID := range userIDs {
+		if provider.OwnerID != userID && !slices.Contains(collaboratorIDs(provider), userID) {
+			return ErrInvalidCollaborator
+		}
+	}
+	seen := map[string]bool{}
+	for _, id := range readableRepositoryIDs {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		repository, readErr := s.read(id)
+		if readErr != nil {
+			return ErrNotFound
+		}
+		if _, openErr := s.git.Open(id); openErr != nil {
+			return ErrNotFound
+		}
+		if repository.Visibility != Public && repository.OwnerID != readerID && !slices.Contains(collaboratorIDs(repository), readerID) {
+			return ErrNotFound
+		}
+	}
+	if s.afterParticipantAuthorization != nil {
+		s.afterParticipantAuthorization()
+	}
+	return fn()
+}
+
 // WithCurrentDeliveryAuthority additionally freezes an optional organization
 // association while a dependent delivery mutation commits.
 func (s *Store) WithCurrentDeliveryAuthority(userIDs []string, repositoryID, organizationID string, fn func() error) error {
