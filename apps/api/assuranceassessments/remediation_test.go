@@ -47,7 +47,7 @@ func TestFindingRemediationRequiresFreshEvidenceDisposition(t *testing.T) {
 func TestStatementSignaturePreservesOriginalAfterRevocation(t *testing.T) {
 	store, _ := New(t.TempDir())
 	now := time.Now().UTC()
-	v, err := store.CreateStatement(Statement{RepositoryID: "repo", AssessmentID: "assessment", ReleaseID: "release", ReleaseRevision: strings.Repeat("a", 40), ProgramID: "program", ProgramVersion: 1, Scope: Scope{ControlIDs: []string{"control"}, PeriodStartsAt: now.Add(-time.Hour), PeriodEndsAt: now}, ControlIDs: []string{"control"}, EvidenceDigest: strings.Repeat("b", 64), Audience: []string{"consumer"}, ExpiresAt: now.Add(time.Hour), IssuedBy: "owner"})
+	v, err := store.CreateStatement(Statement{RepositoryID: "repo", AssessmentID: "assessment", ReleaseID: "release", ReleaseRevision: strings.Repeat("a", 40), ProgramID: "program", ProgramVersion: 1, Scope: Scope{ControlIDs: []string{"control"}, PeriodStartsAt: now.Add(-time.Hour), PeriodEndsAt: now}, ControlIDs: []string{"control"}, Claim: "The exact release satisfies the assessed control.", EvidenceDigest: strings.Repeat("b", 64), Audience: []string{"consumer"}, ExpiresAt: now.Add(time.Hour), IssuedBy: "owner"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestConcurrentStoresRetainOneStatementSigningIdentity(t *testing.T) {
 	first, _ := New(root)
 	second, _ := New(root)
 	now := time.Now().UTC()
-	template := Statement{RepositoryID: "repo", AssessmentID: "assessment", ReleaseID: "release", ReleaseRevision: strings.Repeat("a", 40), ProgramID: "program", ProgramVersion: 1, Scope: Scope{ControlIDs: []string{"control"}, PeriodStartsAt: now.Add(-time.Hour), PeriodEndsAt: now}, ControlIDs: []string{"control"}, EvidenceDigest: strings.Repeat("b", 64), Audience: []string{"consumer"}, ExpiresAt: now.Add(time.Hour), IssuedBy: "owner"}
+	template := Statement{RepositoryID: "repo", AssessmentID: "assessment", ReleaseID: "release", ReleaseRevision: strings.Repeat("a", 40), ProgramID: "program", ProgramVersion: 1, Scope: Scope{ControlIDs: []string{"control"}, PeriodStartsAt: now.Add(-time.Hour), PeriodEndsAt: now}, ControlIDs: []string{"control"}, Claim: "The exact release satisfies the assessed control.", EvidenceDigest: strings.Repeat("b", 64), Audience: []string{"consumer"}, ExpiresAt: now.Add(time.Hour), IssuedBy: "owner"}
 	results := make(chan Statement, 2)
 	failures := make(chan error, 2)
 	for _, store := range []*Store{first, second} {
@@ -97,7 +97,7 @@ func TestFailedInitialKeyWriteLeavesCanonicalPathRetryable(t *testing.T) {
 	root := t.TempDir()
 	store, _ := New(root)
 	now := time.Now().UTC()
-	template := Statement{RepositoryID: "repo", AssessmentID: "assessment", ReleaseID: "release", ReleaseRevision: strings.Repeat("a", 40), ProgramID: "program", ProgramVersion: 1, Scope: Scope{ControlIDs: []string{"control"}, PeriodStartsAt: now.Add(-time.Hour), PeriodEndsAt: now}, ControlIDs: []string{"control"}, EvidenceDigest: strings.Repeat("b", 64), Audience: []string{"consumer"}, ExpiresAt: now.Add(time.Hour), IssuedBy: "owner"}
+	template := Statement{RepositoryID: "repo", AssessmentID: "assessment", ReleaseID: "release", ReleaseRevision: strings.Repeat("a", 40), ProgramID: "program", ProgramVersion: 1, Scope: Scope{ControlIDs: []string{"control"}, PeriodStartsAt: now.Add(-time.Hour), PeriodEndsAt: now}, ControlIDs: []string{"control"}, Claim: "The exact release satisfies the assessed control.", EvidenceDigest: strings.Repeat("b", 64), Audience: []string{"consumer"}, ExpiresAt: now.Add(time.Hour), IssuedBy: "owner"}
 	store.writeSigningKey = func(file *os.File, value []byte) error { _, _ = file.Write(value[:8]); return io.ErrShortWrite }
 	if _, err := store.CreateStatement(template); err == nil {
 		t.Fatal("partial first key write unexpectedly succeeded")

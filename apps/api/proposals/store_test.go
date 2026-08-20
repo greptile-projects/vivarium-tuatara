@@ -67,6 +67,20 @@ func TestDecisionImplementationFreezesCriteriaOwnershipAndRetry(t *testing.T) {
 	}
 }
 
+func TestAssuranceImplementationAcceptsCanonicalAssessmentReferences(t *testing.T) {
+	store, _ := New(t.TempDir())
+	origin := ReasoningOrigin{AssessmentID: strings.Repeat("a", 24), AssessmentVersion: 4, AssuranceFindingID: strings.Repeat("b", 24), Revision: strings.Repeat("c", 40), AnalysisStatus: "authorized_assurance_remediation", SelectedItemIDs: []string{strings.Repeat("b", 24)}, Items: []ReasoningItem{{ID: strings.Repeat("b", 24), Kind: "assurance_finding", Summary: "retention evidence is incomplete", Status: "contested"}}}
+	input := ImplementationInput{RepositoryID: repositoryID, ActorID: authorID, Title: "Correct retention", Body: "Carry the finding through ordinary review.", Origin: origin, Tasks: []ImplementationTaskInput{{Title: "Enforce retention", Outcome: "Retain for 30 days", Risk: "unresolved assurance finding", VerificationPlan: "collect fresh evidence", AssigneeType: "agent"}}}
+	proposal, tasks, err := store.CreateImplementation(input)
+	if err != nil || proposal.Reasoning == nil || proposal.Reasoning.AssessmentID != origin.AssessmentID || len(tasks) != 1 {
+		t.Fatalf("assurance implementation = %#v %#v, %v", proposal, tasks, err)
+	}
+	input.Origin.AssessmentID = strings.Repeat("d", 32)
+	if _, _, err = store.CreateImplementation(input); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("noncanonical assurance assessment reference = %v", err)
+	}
+}
+
 func TestSecurityFindingImplementationFreezesOriginAndRetry(t *testing.T) {
 	store, _ := New(t.TempDir())
 	origin := ReasoningOrigin{SecurityFindingID: strings.Repeat("1", 32), SecurityFindingVersion: 2, ThreatModelID: strings.Repeat("2", 24), ThreatModelVersion: 3, Revision: strings.Repeat("a", 40), SelectedItemIDs: []string{"attempt"}, Items: []ReasoningItem{{ID: "attempt", Kind: "permitted_security_evidence", Summary: "sanitized failed containment", Status: "audience_restricted"}}, AnalysisStatus: "security_finding_repair"}

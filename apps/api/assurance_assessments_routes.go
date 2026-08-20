@@ -125,6 +125,36 @@ func registerAssuranceAssessmentRoutes(mux *http.ServeMux, gitStore *storage.Sto
 			writeAPIError(w, 400, "invalid_request", "a complete attributable assessment event is required")
 			return
 		}
+		if in.Kind == "scope_change" {
+			if role != "owner" {
+				writeAPIError(w, 403, "assessment_owner_required", "only the program owner may propose a delivered release")
+				return
+			}
+			rel, releaseErr := releaseStore.Get(a.RepositoryID, in.ReleaseID)
+			if releaseErr != nil {
+				writeAPIError(w, 400, "invalid_scope_release", "scope changes must name an exact repository release")
+				return
+			}
+			program, programErr := programs.Get(a.ProgramID)
+			if programErr != nil || a.ProgramVersion < 1 || a.ProgramVersion > len(program.Revisions) {
+				writeAPIError(w, 409, "invalid_program_revision", "the frozen assurance program is unavailable")
+				return
+			}
+			candidateFound := false
+			for _, scope := range program.Revisions[a.ProgramVersion-1].Scopes {
+				if scope.Kind != "release" || !hasID(a.Scope.ReleaseIDs, scope.ID) {
+					continue
+				}
+				candidate, candidateErr := releaseStore.Get(a.RepositoryID, scope.ResourceID)
+				if candidateErr == nil && commitDescendsForStore(gitStore, a.RepositoryID, rel.CommitID, candidate.CommitID) {
+					candidateFound = true
+				}
+			}
+			if !candidateFound {
+				writeAPIError(w, 409, "scope_release_not_descendant", "the delivered release must descend from a selected candidate release")
+				return
+			}
+		}
 		out, err := assessments.Append(a.ID, in.ExpectedVersion, actor.UserID, role, in.Event)
 		writeAssessment(w, out, err, 201)
 	})
@@ -325,6 +355,9 @@ func registerAssuranceAssessmentRoutes(mux *http.ServeMux, gitStore *storage.Sto
 			}
 			revision := program.Revisions[a.ProgramVersion-1]
 			statementReleaseScopeIDs := assuranceStatementReleaseScopes(revision, a.Scope.ReleaseIDs, rel.ID)
+			if len(statementReleaseScopeIDs) == 0 && hasID(a.AssuredReleaseIDs, rel.ID) {
+				statementReleaseScopeIDs = append([]string(nil), a.Scope.ReleaseIDs...)
+			}
 			if len(statementReleaseScopeIDs) == 0 {
 				writeAPIError(w, 409, "statement_release_outside_scope", "the exact release must be selected by the assessment scope")
 				return

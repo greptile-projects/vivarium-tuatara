@@ -45,6 +45,10 @@ questions, samples, walkthroughs, attestation verification, findings and respons
 resolutions, appeals, and acknowledged scope changes without granting either side authority over Git,
 production, releases, deployments, source systems, or evidence collection. Records persist beneath
 `$ASSURANCE_ASSESSMENT_STORAGE_ROOT` (`assurance-assessments`).
+If correction produces a later delivered release, the owner can propose that exact repository release
+only when it descends from an originally selected candidate release. The assessor must explicitly
+acknowledge the proposal before that delivered release is eligible for a statement; a pending proposal
+cannot be silently replaced.
 
 An assessment owner can convert an assessor finding into an ordered ordinary proposal plan at
 `/{assessment_id}/remediations`. Each handoff freezes the finding and control, affected 40-character
@@ -55,18 +59,25 @@ must have a merged contribution, and an owner or assessor must disposition fresh
 post-correction evidence for the exact program and control. The affected commit resolves in the
 repository, each ordered merged contribution descends from the prior boundary, accepted evidence names
 the final merge revision, and a later statement release must descend from and include all those tasks.
-The named release must also resolve through a release scope retained by the assessment; publication
-narrows the signed release scope to that exact matching scope rather than implying another assessed release.
+The named release must resolve through a release scope retained by the assessment or the acknowledged
+delivered-release amendment; publication retains the originally selected candidate scope and exact
+delivered release rather than implying another assessed system.
 A rejected or reopened disposition returns
 the correction to open without removing its delivery history.
 
 Program owners publish release-exact claims at `/repositories/{id}/assurance-statements`. Publication
 requires the current assessed program revision and accepted verification for every included finding,
-and freezes the release commit, scope and period, controls, exception IDs, audience, expiry, and a
+and freezes the human-readable claim, release commit, scope and period, controls, exception IDs, audience, expiry, and a
 canonical digest of selected and verification evidence. The service signs the immutable payload with
 Ed25519 and returns its public key. Audience-gated reads disclose the digest, never restricted sources,
 and separately project `current`, `expired`, `revoked`, `drifted`, or `reopened`. Revocation and later
 status changes do not rewrite the originally signed claim.
+
+`assurance-journey.spec.ts` proves the connected private-repository workflow with browser, public API,
+and stock Git clients: obligation mapping, missing and current evidence, rejected exception authority,
+bounded independent access, contested findings, ordered human/agent remediation, pull assurance impact,
+ordinary review and merge, fresh delivered-release evidence, acknowledged scope, Ed25519 publication,
+program drift, and revocation. The Playwright server assigns isolated roots to every assurance store.
 
 ### Pre-merge assurance impact
 
