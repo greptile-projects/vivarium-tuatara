@@ -56,6 +56,18 @@ every current matrix row to pass and every audience to have an owner-acknowledge
 observation. These records grant no workspace, telemetry, consumer, Git, release, deployment, environment,
 or removal authority.
 
+After readiness and approvals remain satisfied, an authorized human capability owner may open a controlled
+removal execution against that exact candidate. Its ordered public stage reports cite the ordinary merge queue,
+release, schema or infrastructure migration, documentation, and protected-deployment resources that actually
+deliver the change, and show remaining old use, health, controller, rollback boundary, and next action.
+Residual use, degraded health, failed delivery, or an unexpected consumer pauses the execution. An explicit
+compatibility restore retains the attempt and its provenance instead of pretending removal succeeded.
+
+The final stage awaits separate revision- and path-bound proof for obsolete code, flags, data, credentials,
+telemetry, documentation, and policy exceptions. Only complete proof marks removal as a verified product
+outcome. These coordination records do not grant Git, queue, review, release, deployment, environment,
+documentation, schema, infrastructure, credential, telemetry, or destructive authority.
+
 ## Revision-exact security confidence
 
 Repository owners and organization owners publish scoped security requirements at

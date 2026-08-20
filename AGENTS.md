@@ -204,6 +204,14 @@ whenever dependencies change or the web job fails before it starts.
   become stale. Per-consumer usage windows remain measured, unmeasured, or inaccessible; readiness
   requires current passing checks plus owner-acknowledged measured zero old-behavior use for every frozen
   audience. Privacy projection retains restricted blockers without exposing consumer evidence or identity.
+  Once those gates and exact owner approvals remain current, a human capability owner can start a
+  controlled removal execution against the ready candidate. Ordered stage reports retain ordinary merge-queue,
+  release, schema/infrastructure migration, documentation, and deployment references alongside remaining use,
+  health, controller, rollback boundary, and next action. Degraded health, residual use, or an unexpected
+  consumer pauses advancement; an explicit compatibility restore preserves the failed attempt. Completion
+  requires revision- and path-bound proof that obsolete code, flags, data, credentials, telemetry,
+  documentation, and policy exceptions were each removed. Execution records retain provenance and expose
+  delivery state but grant none of the linked systems' authority.
   These records provide removal
   context only and grant no consumer-repository, Git,
   release, environment, migration, review, merge, deployment, or retirement authority.

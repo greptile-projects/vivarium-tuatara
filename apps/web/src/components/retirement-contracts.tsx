@@ -26,6 +26,7 @@ export type RetirementPlan = {
   deadline: string;
   success_criteria: string[];
   rollback_criteria: string[];
+  stages: { name: string; behavior: string; exit_criteria: string[] }[];
   events: {
     version: number;
     type: string;
@@ -72,6 +73,11 @@ export type RetirementPlan = {
     checks: { id: string; stage: string; journey?: string; repository_id: string; revision: string; expectation: string; status: string; evidence?: { id: string; status: string; stale: boolean; superseded: boolean; duration_ms: number; cost_units: number; artifacts?: { path: string; digest: string }[] }[] }[];
     usage_observations: { id: string; consumer_index: number; state: string; old_behavior_uses: number; total_uses: number; summary: string; owner_id?: string; acknowledged: boolean; superseded: boolean }[];
     blockers: { kind: string; message: string; audience?: string }[];
+  }[];
+  executions?: {
+    id: string; candidate_id: string; version: number; status: string; active_stage: number; stage_names: string[]; controller_id: string;
+    reports: { version: number; stage: string; action: string; remaining_use: number; health: string; control: string; rollback_boundary: string; next_action: string; unexpected_consumers?: string[]; compatibility_restored: boolean; delivery: { kind: string; resource_id: string; revision: string; status: string }[]; created_at: string }[];
+    completion?: { verified_by: string; verified_at: string; proofs: { kind: string; revision: string; paths: string[]; digest: string; summary: string }[] };
   }[];
 };
 const value = (f: FormData, n: string) => String(f.get(n) ?? "").trim();
@@ -265,6 +271,14 @@ export function RetirementContracts({
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Migration work could not be created."); }
     finally { setBusy(false); }
   }
+  async function startRemoval(plan: RetirementPlan, candidateID: string) {
+    setBusy(true); setError("");
+    try {
+      await api(`/repositories/${repositoryID}/capabilities/${capabilityID}/retirement-plans/${plan.id}/candidates/${candidateID}/removal-executions`, { method: "POST" }, token);
+      await reload();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Staged removal could not start."); }
+    finally { setBusy(false); }
+  }
   return (
     <section className="space-y-4">
       <div>
@@ -361,6 +375,21 @@ export function RetirementContracts({
               <div className="mt-3 grid gap-2 md:grid-cols-2">{candidate.checks.map((check) => <div key={check.id} className="rounded border border-[var(--line)] p-2"><div className="flex gap-2"><Badge tone={check.status === "passed" ? "success" : check.status === "stale" ? "warning" : "danger"}>{check.stage.replaceAll("_", " ")}</Badge><span>{check.status}</span></div><p className="mt-1">{check.expectation}</p><p className="text-xs text-[var(--muted)]">{check.repository_id} {check.revision.slice(0, 8)}{check.journey ? ` · ${check.journey}` : ""}</p>{check.evidence?.map((proof) => <p key={proof.id} className="mt-1 text-xs">{proof.superseded ? "Superseded" : proof.stale ? "Stale" : proof.status} · {proof.duration_ms}ms · {proof.cost_units.toFixed(3)} units · {proof.artifacts?.length ?? 0} artifacts</p>)}</div>)}</div>
               <div className="mt-3"><strong>Residual use and owner acknowledgement</strong>{candidate.usage_observations.map((usage) => <p key={usage.id} className={`mt-1 ${usage.superseded ? "text-[var(--muted)]" : ""}`}>Audience {usage.consumer_index + 1}: {usage.state} · old {usage.old_behavior_uses}/{usage.total_uses} · {usage.acknowledged ? `acknowledged by ${usage.owner_id}` : "owner acknowledgement required"} · {usage.summary}{usage.superseded ? " · superseded" : ""}</p>)}</div>
               {candidate.blockers.map((blocker, index) => <p key={`${blocker.kind}-${index}`} className="mt-2 text-[var(--danger)]">{blocker.kind.replaceAll("_", " ")}: {blocker.message}{blocker.audience ? ` (${blocker.audience})` : ""}</p>)}
+              {candidate.removal_ready && userID && !(plan.executions ?? []).some((execution) => execution.candidate_id === candidate.id && !["completed", "restored"].includes(execution.status)) && <div className="mt-3"><Button disabled={busy || plan.blockers.length > 0} onClick={() => void startRemoval(plan, candidate.id)}>Start controlled removal</Button></div>}
+            </div>)}
+          </div>}
+          {(plan.executions?.length ?? 0) > 0 && <div className="mt-5 space-y-3 border-t border-[var(--line)] pt-4">
+            <h4 className="text-sm font-semibold">Controlled removal delivery</h4>
+            {plan.executions?.map((execution) => <div key={execution.id} className="rounded-lg border border-[var(--line)] p-3 text-sm">
+              <div className="flex flex-wrap gap-2"><Badge tone={execution.status === "completed" ? "success" : execution.status === "paused" || execution.status === "restored" ? "warning" : "info"}>{execution.status.replaceAll("_", " ")}</Badge><Badge>{execution.stage_names[execution.active_stage] ?? "verified"}</Badge></div>
+              <p className="mt-2">Controller: {execution.controller_id} · stage {Math.min(execution.active_stage + 1, execution.stage_names.length)}/{execution.stage_names.length}</p>
+              {execution.reports.map((report) => <div key={report.version} className="mt-3 rounded border border-[var(--line)] p-2">
+                <div className="flex flex-wrap gap-2"><Badge>{report.stage}</Badge><Badge tone={report.health === "healthy" ? "success" : "danger"}>{report.health}</Badge><span>{report.action}</span></div>
+                <p className="mt-1">Remaining old use: {report.remaining_use} · control: {report.control}</p><p>Rollback boundary: {report.rollback_boundary}</p><p>Next: {report.next_action}</p>
+                {(report.unexpected_consumers?.length ?? 0) > 0 && <p className="text-[var(--danger)]">Unexpected consumers: {report.unexpected_consumers?.join(" · ")}</p>}
+                <p className="text-xs text-[var(--muted)]">Delivery: {report.delivery.map((item) => `${item.kind} ${item.resource_id} (${item.status})`).join(" · ")}</p>
+              </div>)}
+              {execution.completion && <div className="mt-3"><strong>Verified product removal</strong><p>Verified by {execution.completion.verified_by} at {new Date(execution.completion.verified_at).toLocaleString()}</p>{execution.completion.proofs.map((proof) => <p key={proof.kind} className="mt-1"><Badge tone="success">{proof.kind.replaceAll("_", " ")}</Badge> <span className="ml-1">{proof.summary} · {proof.paths.join(", ")}</span></p>)}</div>}
             </div>)}
           </div>}
           {userID && current.consumers.some((consumer) => consumer.repository_id && consumer.revision) && <form onSubmit={(event) => void createWork(event, plan)} className="mt-5 grid gap-3 border-t border-[var(--line)] pt-4 md:grid-cols-2">

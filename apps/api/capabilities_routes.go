@@ -453,6 +453,62 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 		}
 		writeCapability(w, out, err, 201)
 	})
+	removalOwner := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return auth.Credential{}, false
+		}
+		current, err := inventory.Get(r.PathValue("id"), r.PathValue("capability_id"))
+		if err != nil || actor.AgentID != "" || len(current.Revisions) == 0 || !containsString(current.Revisions[len(current.Revisions)-1].OwnerIDs, actor.UserID) {
+			writeAPIError(w, 403, "removal_execution_forbidden", "an authorized human capability owner must control removal")
+			return auth.Credential{}, false
+		}
+		return actor, true
+	}
+	mux.HandleFunc("POST /repositories/{id}/capabilities/{capability_id}/retirement-plans/{plan_id}/candidates/{candidate_id}/removal-executions", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := removalOwner(w, r)
+		if !ok {
+			return
+		}
+		out, execution, err := inventory.StartRemoval(r.PathValue("id"), r.PathValue("capability_id"), r.PathValue("plan_id"), r.PathValue("candidate_id"), actor.UserID)
+		if err != nil {
+			writeCapability(w, out, err, 201)
+			return
+		}
+		writeJSON(w, 201, map[string]any{"capability": out, "execution": execution})
+	})
+	mux.HandleFunc("POST /repositories/{id}/capabilities/{capability_id}/retirement-plans/{plan_id}/removal-executions/{execution_id}/reports", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := removalOwner(w, r)
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int                      `json:"expected_version"`
+			Report          capabilities.StageReport `json:"report"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_removal_report", "an exact staged removal report is required")
+			return
+		}
+		out, err := inventory.ReportRemovalStage(r.PathValue("id"), r.PathValue("capability_id"), r.PathValue("plan_id"), r.PathValue("execution_id"), actor.UserID, in.ExpectedVersion, in.Report)
+		writeCapability(w, out, err, 200)
+	})
+	mux.HandleFunc("POST /repositories/{id}/capabilities/{capability_id}/retirement-plans/{plan_id}/removal-executions/{execution_id}/completion", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := removalOwner(w, r)
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int                         `json:"expected_version"`
+			Proofs          []capabilities.CleanupProof `json:"proofs"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_removal_completion", "complete category-specific removal proof is required")
+			return
+		}
+		out, err := inventory.CompleteRemoval(r.PathValue("id"), r.PathValue("capability_id"), r.PathValue("plan_id"), r.PathValue("execution_id"), actor.UserID, in.ExpectedVersion, in.Proofs)
+		writeCapability(w, out, err, 200)
+	})
 }
 
 func projectCapabilityCandidateFreshness(git *storage.Store, providerID string, values []capabilities.Capability) []capabilities.Capability {
