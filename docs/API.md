@@ -6,7 +6,10 @@
 /repositories/{id}/threat-models/{model_id}` return repository-visible immutable analysis with
 server-derived `freshness`. `POST /repositories/{id}/threat-models` opens a complete model at the
 exact current source revision; `POST .../{model_id}/revisions` publishes a complete compare-and-swap
-successor using `expected_version`.
+successor using `expected_version`. Architecture, trust-boundary, and dependency revisions are
+server-derived from the authoritative source snapshot; caller values are discarded. Inaccessible
+evidence is returned only as `accessible: false`, `kind: restricted_gap`, and its explicit `gap`;
+resource identity, revision, and summary are redacted from every retained revision projection.
 
 `POST .../{model_id}/events` accepts `expected_version` and an event of `finding`, `challenge`,
 `alternative_comparison`, or `acknowledgement_request`. Every event is bound to that model version

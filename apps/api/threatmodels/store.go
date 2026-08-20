@@ -265,7 +265,7 @@ func (s *Store) Get(repo, model string, current CurrentSource) (Model, error) {
 	})
 	return project(out, current), err
 }
-func (s *Store) List(repo string, current func(Source) (CurrentSource, error)) ([]Model, error) {
+func (s *Store) List(repo string, current func(Revision) (CurrentSource, error)) ([]Model, error) {
 	out := []Model{}
 	err := s.lock(func() error {
 		xs, e := os.ReadDir(s.root)
@@ -281,7 +281,7 @@ func (s *Store) List(repo string, current func(Source) (CurrentSource, error)) (
 				return e
 			}
 			if v.RepositoryID == repo {
-				c, _ := current(v.Revisions[len(v.Revisions)-1].Source)
+				c, _ := current(v.Revisions[len(v.Revisions)-1])
 				out = append(out, project(v, c))
 			}
 		}
@@ -457,6 +457,19 @@ func project(v Model, c CurrentSource) Model {
 		return v
 	}
 	r := v.Revisions[len(v.Revisions)-1]
+	// Reader projections retain only the explicit existence and gap for evidence
+	// the model author could see but the current repository audience may not.
+	for revisionIndex := range v.Revisions {
+		for evidenceIndex := range v.Revisions[revisionIndex].Evidence {
+			evidence := &v.Revisions[revisionIndex].Evidence[evidenceIndex]
+			if !evidence.Accessible {
+				evidence.Kind = "restricted_gap"
+				evidence.ResourceID = ""
+				evidence.Revision = ""
+				evidence.Summary = ""
+			}
+		}
+	}
 	add := func(reason string) {
 		v.Freshness.Fresh = false
 		v.Freshness.Reasons = append(v.Freshness.Reasons, reason)

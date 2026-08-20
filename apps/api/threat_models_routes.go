@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -26,8 +29,10 @@ type threatModelSources struct {
 	experiments    *productexperiments.Store
 }
 
-func (s threatModelSources) current(repo string, source threatmodels.Source) (threatmodels.CurrentSource, error) {
+func (s threatModelSources) current(repo string, revision threatmodels.Revision) (threatmodels.CurrentSource, error) {
 	current := threatmodels.CurrentSource{DependencyRevisions: map[string]string{}}
+	source := revision.Source
+	var snapshot any
 	switch source.Kind {
 	case "design_proposal":
 		v, e := s.designs.Get(repo, source.ResourceID)
@@ -35,38 +40,55 @@ func (s threatModelSources) current(repo string, source threatmodels.Source) (th
 			return current, e
 		}
 		current.Revision = strconv.Itoa(v.CurrentVersion)
+		snapshot = v
 	case "pull_request":
 		v, e := s.pulls.Get(repo, source.ResourceID)
 		if e != nil {
 			return current, e
 		}
 		current.Revision = v.SourceCommitID
+		snapshot = v
 	case "api_evolution":
 		v, e := s.apis.Get(source.ResourceID)
 		if e != nil || v.RepositoryID != repo {
 			return current, threatmodels.ErrNotFound
 		}
 		current.Revision = strconv.Itoa(v.CurrentVersion)
+		snapshot = v
 	case "schema_evolution":
 		v, e := s.schemas.Get(repo, source.ResourceID)
 		if e != nil {
 			return current, e
 		}
 		current.Revision = strconv.Itoa(v.CurrentVersion)
+		snapshot = v
 	case "infrastructure_plan":
 		v, e := s.infrastructure.GetPlan(source.ResourceID)
 		if e != nil || v.RepositoryID != repo {
 			return current, threatmodels.ErrNotFound
 		}
 		current.Revision = v.SourceRevision
+		snapshot = v
 	case "product_experiment":
 		v, e := s.experiments.Get(source.ResourceID)
 		if e != nil || v.RepositoryID != repo {
 			return current, threatmodels.ErrNotFound
 		}
 		current.Revision = strconv.Itoa(v.CurrentVersion)
+		snapshot = v
 	default:
 		return current, threatmodels.ErrInvalid
+	}
+	encoded, e := json.Marshal(snapshot)
+	if e != nil {
+		return current, e
+	}
+	digest := sha256.Sum256(encoded)
+	fingerprint := hex.EncodeToString(digest[:])
+	current.ArchitectureDigest = fingerprint
+	current.TrustBoundaryDigest = fingerprint
+	for _, dependency := range revision.Dependencies {
+		current.DependencyRevisions[dependency.ID] = fingerprint
 	}
 	return current, nil
 }
@@ -85,8 +107,8 @@ type threatAcknowledgementInput struct {
 }
 
 func registerThreatModelRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *threatmodels.Store, sources threatModelSources) {
-	readCurrent := func(repo string, source threatmodels.Source) threatmodels.CurrentSource {
-		v, _ := sources.current(repo, source)
+	readCurrent := func(repo string, revision threatmodels.Revision) threatmodels.CurrentSource {
+		v, _ := sources.current(repo, revision)
 		return v
 	}
 	mux.HandleFunc("GET /repositories/{id}/threat-models", func(w http.ResponseWriter, r *http.Request) {
@@ -94,8 +116,8 @@ func registerThreatModelRoutes(mux *http.ServeMux, catalog *repositories.Store, 
 		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, repo); !ok {
 			return
 		}
-		values, e := store.List(repo, func(source threatmodels.Source) (threatmodels.CurrentSource, error) {
-			return sources.current(repo, source)
+		values, e := store.List(repo, func(revision threatmodels.Revision) (threatmodels.CurrentSource, error) {
+			return sources.current(repo, revision)
 		})
 		if e != nil {
 			writeAPIError(w, 500, "threat_models_unavailable", "threat models could not be read")
@@ -114,8 +136,8 @@ func registerThreatModelRoutes(mux *http.ServeMux, catalog *repositories.Store, 
 			return
 		}
 		writeJSON(w, 200, func() threatmodels.Model {
-			source := raw.Revisions[len(raw.Revisions)-1].Source
-			return func() threatmodels.Model { v, _ := store.Get(repo, raw.ID, readCurrent(repo, source)); return v }()
+			revision := raw.Revisions[len(raw.Revisions)-1]
+			return func() threatmodels.Model { v, _ := store.Get(repo, raw.ID, readCurrent(repo, revision)); return v }()
 		}())
 	})
 	publish := func(revise bool) http.HandlerFunc {
@@ -132,10 +154,18 @@ func registerThreatModelRoutes(mux *http.ServeMux, catalog *repositories.Store, 
 				writeAPIError(w, 400, "invalid_request", "a complete threat model revision is required")
 				return
 			}
-			current, e := sources.current(r.PathValue("id"), in.Revision.Source)
+			current, e := sources.current(r.PathValue("id"), in.Revision)
 			if e != nil || current.Revision != in.Revision.Source.Revision {
 				writeAPIError(w, 400, "invalid_threat_model_source", "the exact visible source revision is required")
 				return
+			}
+			// Freshness inputs are snapshots of authoritative source state, never
+			// caller assertions. Dependencies share that snapshot until their
+			// source model exposes a narrower repository-owned revision mapping.
+			in.Revision.ArchitectureDigest = current.ArchitectureDigest
+			in.Revision.TrustBoundaryDigest = current.TrustBoundaryDigest
+			for i := range in.Revision.Dependencies {
+				in.Revision.Dependencies[i].Revision = current.DependencyRevisions[in.Revision.Dependencies[i].ID]
 			}
 			var out threatmodels.Model
 			participants := append([]string{actor.UserID}, in.Revision.OwnerIDs...)
@@ -201,6 +231,10 @@ func registerThreatModelRoutes(mux *http.ServeMux, catalog *repositories.Store, 
 }
 func authorizeThreatModelContributor(w http.ResponseWriter, r *http.Request, catalog *repositories.Store, credentials *auth.Store, repo string) (auth.Credential, bool) {
 	actor, authenticated, e := authenticateOptionalCredential(r, credentials, "repositories:write")
+	if e == nil && authenticated && actor.AgentID != "" {
+		writeAPIError(w, 403, "threat_model_agent_scope_invalid", "agent evidence requires an exact repository-bound task credential")
+		return auth.Credential{}, false
+	}
 	if errors.Is(e, auth.ErrNotFound) {
 		actor, authenticated, e = authenticateOptionalCredential(r, credentials, "git:write")
 	}
@@ -209,7 +243,7 @@ func authorizeThreatModelContributor(w http.ResponseWriter, r *http.Request, cat
 		return auth.Credential{}, false
 	}
 	if actor.AgentID != "" {
-		if actor.RepositoryID != repo {
+		if actor.Kind != auth.Git || actor.RepositoryID != repo || actor.GitWriteBranch == "" {
 			writeAPIError(w, 403, "threat_model_agent_scope_invalid", "agent evidence requires an exact repository-bound task credential")
 			return auth.Credential{}, false
 		}

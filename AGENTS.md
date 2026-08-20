@@ -350,9 +350,10 @@ whenever dependencies change or the web job fails before it starts.
   alternatives, assumptions, permitted citations, and affected owners. Humans and exact
   repository-bound task agents append revision-bound cited findings, challenges, comparisons, and
   acknowledgement requests; only a current named human owner can acknowledge. Inaccessible
-  citations remain explicit gaps and cannot support a contribution. Reads re-resolve the source;
-  source, architecture, trust-boundary, or dependency movement projects staleness without rewriting
-  history or exposing restricted evidence. These records grant no source, Git, review, merge,
+  citations project only an explicit gap and cannot support a contribution. Publications replace
+  caller freshness claims with a fingerprint of the authoritative source snapshot; reads re-resolve
+  that fingerprint so source, architecture, trust-boundary, or dependency movement projects
+  staleness without rewriting history or exposing restricted metadata. These records grant no source, Git, review, merge,
   release, deployment, environment, infrastructure, experiment, or general agent authority.
 
 - **Interface verification** — Pull evidence beneath

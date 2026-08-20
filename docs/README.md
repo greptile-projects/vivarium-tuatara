@@ -72,9 +72,10 @@ expectations so teams can compare safer designs before implementation hardens as
 
 Human collaborators and exact repository-bound task agents can append cited findings, challenges,
 alternative comparisons, and acknowledgement requests to the current model revision. Contributions
-can cite only evidence retained as accessible; restricted evidence remains a visible gap without
-becoming usable or disclosed. Only a named human owner may acknowledge or request changes. Reads
-project source, architecture, trust-boundary, and dependency movement as stale without rewriting the
+can cite only evidence retained as accessible; restricted evidence projects as a gap with its kind,
+resource, revision, and summary redacted. Only a named human owner may acknowledge or request changes.
+Publication freezes server-derived source-snapshot fingerprints, and reads re-resolve them to project
+source, architecture, trust-boundary, and dependency movement as stale without rewriting the
 retained analysis. Records default beneath `$THREAT_MODEL_STORAGE_ROOT` (`threat-models`) and grant
 no source, Git, review, merge, release, deployment, environment, infrastructure, experiment, or
 general agent authority.

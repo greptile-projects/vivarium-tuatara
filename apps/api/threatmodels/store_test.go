@@ -42,3 +42,16 @@ func TestOnlyAffectedOwnerCanAcknowledgeCurrentRevision(t *testing.T) {
 		t.Fatalf("ack=%#v err=%v", v.Acknowledgements, e)
 	}
 }
+
+func TestReaderProjectionRedactsRestrictedEvidenceMetadata(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, _ := s.Create("repo", "owner", modelRevision())
+	got, err := s.Get("repo", v.ID, CurrentSource{Revision: "abc", ArchitectureDigest: "arch-1", TrustBoundaryDigest: "trust-1", DependencyRevisions: map[string]string{"identity": "1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restricted := got.Revisions[0].Evidence[1]
+	if restricted.Accessible || restricted.Kind != "restricted_gap" || restricted.ResourceID != "" || restricted.Revision != "" || restricted.Summary != "" || restricted.Gap != "not in audience" {
+		t.Fatalf("restricted projection=%#v", restricted)
+	}
+}
