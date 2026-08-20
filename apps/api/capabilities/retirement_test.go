@@ -75,3 +75,29 @@ func TestRetirementChangedUsageAndBoundedDecisions(t *testing.T) {
 		t.Fatal("changed usage did not block")
 	}
 }
+
+func TestRetirementProjectionUsesStoreClock(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	v, err := s.Create("repo", "provider", retirementFixture(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.OpenRetirement("repo", v.ID, "provider", planFixture(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.now = func() time.Time { return now.Add(25 * time.Hour) }
+	v, err = s.Get("repo", v.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, blocker := range v.RetirementPlans[0].Blockers {
+		found = found || blocker.Kind == "unresponsive_owner"
+	}
+	if !found {
+		t.Fatalf("advanced Store clock did not make owner overdue: %#v", v.RetirementPlans[0].Blockers)
+	}
+}

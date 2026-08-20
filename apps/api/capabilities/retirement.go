@@ -157,7 +157,7 @@ func (s *Store) OpenRetirement(repo, capabilityID, actor string, p RetirementPla
 		}
 		p.ID = randomID()
 		p.CapabilityVersion = v.CurrentVersion
-		p.FrozenDiagnostics = append([]Diagnostic(nil), project(v).Diagnostics...)
+		p.FrozenDiagnostics = append([]Diagnostic(nil), s.project(v).Diagnostics...)
 		p.Status = "proposed"
 		p.CreatedBy = actor
 		p.CreatedAt = now
@@ -167,7 +167,7 @@ func (s *Store) OpenRetirement(repo, capabilityID, actor string, p RetirementPla
 		out = v
 		return s.write(v)
 	})
-	return project(out), err
+	return s.project(out), err
 }
 
 func (s *Store) AppendRetirementEvent(repo, capabilityID, planID, actor, actorType string, expected int, event RetirementEvent) (Capability, error) {
@@ -223,7 +223,7 @@ func (s *Store) AppendRetirementEvent(repo, capabilityID, planID, actor, actorTy
 		out = v
 		return s.write(v)
 	})
-	return project(out), err
+	return s.project(out), err
 }
 
 func contains(v []string, s string) bool {

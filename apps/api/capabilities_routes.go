@@ -150,13 +150,17 @@ func projectCapabilitiesForReader(catalog *repositories.Store, actorID string, v
 	}
 	for valueIndex := range values {
 		restrictedCurrentConsumers := map[int]bool{}
+		restrictedConsumersByVersion := map[int]map[int]bool{}
 		for revisionIndex := range values[valueIndex].Revisions {
 			revision := &values[valueIndex].Revisions[revisionIndex]
+			restrictedConsumers := map[int]bool{}
+			restrictedConsumersByVersion[revision.Version] = restrictedConsumers
 			for consumerIndex := range revision.Consumers {
 				consumer := &revision.Consumers[consumerIndex]
 				if canRead(consumer.RepositoryID) {
 					continue
 				}
+				restrictedConsumers[consumerIndex] = true
 				if revisionIndex == len(values[valueIndex].Revisions)-1 {
 					restrictedCurrentConsumers[consumerIndex] = true
 				}
@@ -165,10 +169,17 @@ func projectCapabilitiesForReader(catalog *repositories.Store, actorID string, v
 		}
 		for planIndex := range values[valueIndex].RetirementPlans {
 			plan := &values[valueIndex].RetirementPlans[planIndex]
+			restrictedPlanConsumers, boundRevisionFound := restrictedConsumersByVersion[plan.CapabilityVersion]
+			if !boundRevisionFound {
+				restrictedPlanConsumers = map[int]bool{}
+				for consumerIndex := range plan.Audiences {
+					restrictedPlanConsumers[consumerIndex] = true
+				}
+			}
 			restrictedAudiences := map[string]bool{}
 			restrictedOwners := map[string]bool{}
 			for consumerIndex := range plan.Audiences {
-				if !restrictedCurrentConsumers[consumerIndex] {
+				if !restrictedPlanConsumers[consumerIndex] {
 					continue
 				}
 				restrictedAudiences[plan.Audiences[consumerIndex].Name] = true
@@ -179,7 +190,7 @@ func projectCapabilitiesForReader(catalog *repositories.Store, actorID string, v
 			}
 			for diagnosticIndex := range plan.FrozenDiagnostics {
 				diagnostic := &plan.FrozenDiagnostics[diagnosticIndex]
-				if diagnostic.ConsumerIndex != nil && restrictedCurrentConsumers[*diagnostic.ConsumerIndex] {
+				if diagnostic.ConsumerIndex != nil && restrictedPlanConsumers[*diagnostic.ConsumerIndex] {
 					diagnostic.Consumer = "restricted"
 				}
 			}

@@ -180,7 +180,9 @@ whenever dependencies change or the web job fails before it starts.
   Append-only cited assessments and challenges admit humans and repository-bound read-only agents,
   while only exact human owners acknowledge. Inventory drift, evidence gaps, conflicting commitments,
   embargoed dependencies, bounded exceptions, and unresponsive owners remain attributable blockers;
-  human deferrals expire within 30 days and retain follow-up work. These records provide removal
+  human deferrals expire within 30 days and retain follow-up work. Every plan projects deadlines
+  through the durable store clock and redacts its frozen audiences against its bound inventory
+  revision, so later consumer reordering cannot expose restricted history. These records provide removal
   context only and grant no consumer-repository, Git,
   release, environment, migration, review, merge, deployment, or retirement authority.
 
