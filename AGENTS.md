@@ -342,6 +342,24 @@ whenever dependencies change or the web job fails before it starts.
   only and grant no Git, review, merge, release, deployment, environment, linked-resource, or
   control-execution authority.
 
+- **Change threat models** — `/repositories/{id}/threat-models` and the repository `/security`
+  workspace retain immutable analysis revisions beneath `$THREAT_MODEL_STORAGE_ROOT`
+  (`threat-models`). Each model is server-bound to an exact design proposal, pull, API contract,
+  durable schema, infrastructure plan, or product experiment revision and maps entry points,
+  privileges, data flows, dependencies, attacker goals, abuse paths, mitigations, residual risk,
+  alternatives, assumptions, permitted citations, and affected owners. Humans and exact
+  exact source-pull task/branch-bound agents append revision-bound cited findings, challenges, comparisons, and
+  acknowledgement requests; only a current named human owner can acknowledge. Inaccessible
+  citations project only an explicit gap and cannot support a contribution. Reader projections
+  reauthorize citation metadata through the currently visible governed source; evidence without a
+  current resolver is redacted even when it was accessible at publication. Authorization keys bind
+  the complete citation identity across each retained revision, and events whose citations become
+  inaccessible project a restricted placeholder instead of contributor prose. Publications replace
+  caller freshness claims with a fingerprint of the authoritative source snapshot; reads re-resolve
+  that fingerprint so source, architecture, trust-boundary, or dependency movement projects
+  staleness without rewriting history or exposing restricted metadata. These records grant no source, Git, review, merge,
+  release, deployment, environment, infrastructure, experiment, or general agent authority.
+
 - **Interface verification** — Pull evidence beneath
   `/repositories/{id}/pulls/{pull_id}/interface-checks` binds the exact candidate,
   successful bounded preview, candidate-resolved repository check definition, and

@@ -61,6 +61,28 @@ owners and exception grantors must be current repository participants. Records d
 `$SECURITY_EXPECTATION_STORAGE_ROOT` (`security-expectations`) and grant no Git, review, merge,
 release, deployment, environment, control-execution, or linked-resource authority.
 
+## Revision-bound change threat models
+
+Collaborators open inspectable attack analysis at `/repositories/{id}/threat-models` from an exact
+design-proposal, pull, API-contract, durable-schema, infrastructure-plan, or product-experiment
+revision. A complete model connects entry points, privileges, data flows, dependencies, attacker
+goals, abuse paths, mitigations, residual risk, alternatives, assumptions, cited evidence, and
+affected owners. The repository `/security` workspace renders this graph beside versioned security
+expectations so teams can compare safer designs before implementation hardens assumptions.
+
+Human collaborators and agents whose credential matches the exact source pull task and branch can append cited findings, challenges,
+alternative comparisons, and acknowledgement requests to the current model revision. Contributions
+can cite only evidence retained as accessible. Reads reauthorize citation metadata through the
+currently visible governed source; revoked or unresolvable evidence projects as a gap with its kind,
+resource, revision, and summary redacted. Only a named human owner may acknowledge or request changes.
+Citation authorization binds ID, kind, resource, and revision separately across model history;
+events citing anything no longer permitted project without their contributor-controlled body.
+Publication freezes server-derived source-snapshot fingerprints, and reads re-resolve them to project
+source, architecture, trust-boundary, and dependency movement as stale without rewriting the
+retained analysis. Records default beneath `$THREAT_MODEL_STORAGE_ROOT` (`threat-models`) and grant
+no source, Git, review, merge, release, deployment, environment, infrastructure, experiment, or
+general agent authority.
+
 ## Reusable test scenarios
 
 The quality workspace also publishes immutable executable specifications through
