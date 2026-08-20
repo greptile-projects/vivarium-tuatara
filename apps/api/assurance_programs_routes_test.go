@@ -27,6 +27,11 @@ func TestAssuranceProgramAPIIsVersionedAndOwnerScoped(t *testing.T) {
 	_ = json.NewDecoder(response.Body).Decode(&repo)
 	response.Body.Close()
 	revision := completeAssuranceRevision(owner.User.ID, repo.ID)
+	invalid := revision
+	invalid.Scopes = append([]assuranceprograms.Scope(nil), revision.Scopes...)
+	invalid.Scopes[0].ResourceID = "another-repository"
+	invalidPayload, _ := json.Marshal(map[string]any{"revision": invalid})
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/assurance-programs", string(invalidPayload), owner.Credential.Token, http.StatusBadRequest).Body.Close()
 	payload, _ := json.Marshal(map[string]any{"revision": revision})
 	createdResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/assurance-programs", string(payload), owner.Credential.Token, http.StatusCreated)
 	var created assuranceprograms.Program

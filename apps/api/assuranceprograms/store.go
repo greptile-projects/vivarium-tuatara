@@ -120,7 +120,7 @@ func New(root string) (*Store, error) {
 func (s *Store) Create(repo, actor string, r Revision) (Program, error) {
 	var out Program
 	err := s.lock(func() error {
-		if !valid(r) {
+		if !valid(repo, r) {
 			return ErrInvalid
 		}
 		now := s.now()
@@ -140,7 +140,7 @@ func (s *Store) Revise(pid string, expected int, actor string, r Revision) (Prog
 		if p.CurrentVersion != expected {
 			return ErrConflict
 		}
-		if !valid(r) {
+		if !valid(p.RepositoryID, r) {
 			return ErrInvalid
 		}
 		stamp(&r, expected+1, actor, s.now())
@@ -187,7 +187,7 @@ func stamp(r *Revision, v int, actor string, now time.Time) {
 	r.CreatedAt = now
 }
 
-func valid(r Revision) bool {
+func valid(repo string, r Revision) bool {
 	if strings.TrimSpace(r.Title) == "" || strings.TrimSpace(r.Summary) == "" || r.ReviewPeriodDays < 1 || len(r.Requirements) == 0 || len(r.Scopes) == 0 || len(r.Controls) == 0 {
 		return false
 	}
@@ -200,6 +200,9 @@ func valid(r Revision) bool {
 	}
 	for _, x := range r.Scopes {
 		if x.ID == "" || scopes[x.ID] || !one(x.Kind, "repository", "policy", "data_flow", "infrastructure", "environment", "release", "procedure") || x.ResourceID == "" || x.Description == "" || (x.Revision != "" && !revision(x.Revision)) {
+			return false
+		}
+		if x.Kind == "repository" && x.ResourceID != repo {
 			return false
 		}
 		scopes[x.ID] = true

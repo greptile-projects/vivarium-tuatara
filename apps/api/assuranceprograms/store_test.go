@@ -15,7 +15,7 @@ func TestVersioningAndDiagnostics(t *testing.T) {
 	}
 	now := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
 	s.now = func() time.Time { return now }
-	p, e := s.Create("repo", "author", complete(now))
+	p, e := s.Create("repository", "author", complete(now))
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -36,7 +36,16 @@ func TestRejectsBrokenReferences(t *testing.T) {
 	s, _ := New(t.TempDir())
 	r := complete(time.Now())
 	r.Controls[0].Mappings[0].ScopeID = "missing"
-	if _, e := s.Create("repo", "actor", r); e != ErrInvalid {
+	if _, e := s.Create("repository", "actor", r); e != ErrInvalid {
+		t.Fatalf("got %v", e)
+	}
+}
+
+func TestRejectsRepositoryScopeForAnotherResource(t *testing.T) {
+	s, _ := New(t.TempDir())
+	r := complete(time.Now())
+	r.Scopes[0].ResourceID = "other-repository"
+	if _, e := s.Create("repository", "actor", r); e != ErrInvalid {
 		t.Fatalf("got %v", e)
 	}
 }
