@@ -106,6 +106,9 @@ func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store
 				}
 			}
 		}
+		var retirementPlan capabilities.RetirementPlan
+		var retirementLink capabilities.RetirementWork
+		var hasRetirementWork bool
 		if capabilityStore != nil {
 			_, plan, link, findErr := capabilityStore.FindRetirementWork(r.PathValue("id"), r.PathValue("task_id"))
 			if findErr != nil && !errors.Is(findErr, capabilities.ErrPlanNotFound) {
@@ -113,18 +116,7 @@ func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store
 				return
 			}
 			if findErr == nil {
-				completed := map[string]bool{}
-				for _, candidate := range plan.Work {
-					if task, taskErr := proposalStore.GetTask(candidate.RepositoryID, candidate.ProposalID, candidate.TaskID); taskErr == nil {
-						completed[candidate.ID] = task.Status == proposals.TaskCompleted && task.Contribution != nil && task.Contribution.Status == "merged" && task.Contribution.ContextRevision == task.ContextRevision
-					}
-				}
-				for _, dependency := range link.DependencyIDs {
-					if !completed[dependency] {
-						writeAPIError(w, 409, "retirement_dependencies_incomplete", "earlier retirement contributions must merge before this agent session can start")
-						return
-					}
-				}
+				retirementPlan, retirementLink, hasRetirementWork = plan, link, true
 			}
 		}
 		repositoryRecord, err := catalog.GetByID(r.PathValue("id"))
@@ -147,6 +139,23 @@ func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store
 		var uncertain bool
 		responseWritten := errors.New("task start response written")
 		err = proposalStore.WithStartableAgentTask(r.PathValue("id"), r.PathValue("proposal_id"), r.PathValue("task_id"), input.ExpectedAssignmentID, func(proposal proposals.Proposal, task proposals.Task, allTasks []proposals.Task, comments []proposals.Comment) error {
+			// This callback runs under the proposal store's process and file
+			// locks. Re-reading predecessors here serializes their merged state
+			// with session and credential publication for the dependent task.
+			if hasRetirementWork {
+				completed := map[string]bool{}
+				for _, candidate := range retirementPlan.Work {
+					if predecessor, taskErr := proposalStore.GetTask(candidate.RepositoryID, candidate.ProposalID, candidate.TaskID); taskErr == nil {
+						completed[candidate.ID] = predecessor.Status == proposals.TaskCompleted && predecessor.Contribution != nil && predecessor.Contribution.Status == "merged" && predecessor.Contribution.ContextRevision == predecessor.ContextRevision
+					}
+				}
+				for _, dependency := range retirementLink.DependencyIDs {
+					if !completed[dependency] {
+						writeAPIError(w, 409, "retirement_dependencies_incomplete", "earlier retirement contributions must remain merged until this agent session is published")
+						return responseWritten
+					}
+				}
+			}
 			if task.Reasoning != nil && task.Reasoning.AnalysisStatus == "stewardship_opportunity" {
 				if organizationStore == nil {
 					writeAPIError(w, 503, "stewardship_state_unavailable", "stewardship authority could not be revalidated")

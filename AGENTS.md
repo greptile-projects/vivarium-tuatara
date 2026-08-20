@@ -192,7 +192,11 @@ whenever dependencies change or the web job fails before it starts.
   contributions to merge. Task, session, workspace, fork, pull, review, and merge authority stays with the
   target repository, while visible plan reads derive its current progress. Current participants in a newly
   discovered consumer can report exact revision/path evidence back to the frozen plan for reassessment
-  without enrolling their repository into provider authority. These records provide removal
+  without enrolling their repository into provider authority. A post-rename capability directory-sync
+  failure is durability-uncertain committed state: linked target-repository work is preserved for
+  reconciliation, never destructively compensated. Dependency completion is derived before privacy
+  filtering and revalidated beneath the ordinary proposal start lock through agent-session publication.
+  These records provide removal
   context only and grant no consumer-repository, Git,
   release, environment, migration, review, merge, deployment, or retirement authority.
 

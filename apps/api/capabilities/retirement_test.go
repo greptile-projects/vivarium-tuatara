@@ -1,12 +1,43 @@
 package capabilities
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
 
 func retirementFixture(now time.Time) Revision {
 	return Revision{Name: "legacy", Summary: "legacy endpoint", CommitID: string(make([]byte, 40)), ReleaseID: "release", OwnerIDs: []string{"provider"}, Items: []Item{{Kind: "interface", Name: "v1", Path: "api.go", Revision: string(make([]byte, 40))}}, Consumers: []Consumer{{Name: "mobile", OwnerIDs: []string{"mobile-owner"}, Environment: "production", Discovery: "declared", EvidenceState: "unknown", CompatibilityPromise: "supported through 2027"}}}
+}
+
+func TestRetirementWorkPreservesCommittedLinkWhenDirectorySyncIsUncertain(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	r := retirementFixture(now)
+	r.Consumers[0].RepositoryID = "consumer-repository"
+	v, err := s.Create("provider-repository", "provider", r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.OpenRetirement("provider-repository", v.ID, "provider", planFixture(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.directorySync = func(string) error { return errors.New("injected directory sync failure") }
+	work := RetirementWork{AudienceIndex: 0, RepositoryID: "consumer-repository", OldContract: "legacy", ReplacementContract: "supported", AcceptanceCriteria: []string{"tests pass"}, DocumentationChanges: []string{"update guide"}, RolloutStage: "adopt"}
+	_, linked, err := s.CreateRetirementWork("provider-repository", v.ID, v.RetirementPlans[0].ID, "consumer-owner", 0, work, func() (string, string, error) { return "proposal-one", "task-one", nil })
+	if !errors.Is(err, ErrDurabilityUncertain) {
+		t.Fatalf("error = %v", err)
+	}
+	if linked.ProposalID != "proposal-one" || linked.TaskID != "task-one" {
+		t.Fatalf("linked result = %#v", linked)
+	}
+	s.directorySync = syncCapabilityDirectory
+	persisted, err := s.Get("provider-repository", v.ID)
+	if err != nil || persisted.RetirementPlans[0].WorkVersion != 1 || len(persisted.RetirementPlans[0].Work) != 1 {
+		t.Fatalf("persisted link = %#v, %v", persisted.RetirementPlans, err)
+	}
 }
 func planFixture(now time.Time) RetirementPlan {
 	return RetirementPlan{Rationale: "replace an unsafe protocol", Replacements: []Replacement{{Name: "v2", Reference: "capability:v2", MigrationGuide: "docs/migrate.md", Supported: true}}, Audiences: []Audience{{Name: "mobile", OwnerIDs: []string{"mobile-owner"}, Impact: "v1 requests stop working", Commitment: "supported through 2027", EmbargoedDependency: true}}, Stages: []CompatibilityStage{{Name: "warn", StartsAt: now.Add(time.Hour), Behavior: "serve with warning", ExitCriteria: []string{"owners notified"}}, {Name: "disable", StartsAt: now.Add(48 * time.Hour), Behavior: "reject v1", ExitCriteria: []string{"traffic zero"}}}, Deadline: now.Add(72 * time.Hour), ApprovalDueAt: now.Add(24 * time.Hour), SuccessCriteria: []string{"v2 success rate is stable"}, RollbackCriteria: []string{"consumer errors exceed one percent"}, Communication: CommunicationPolicy{Channels: []string{"owner inbox"}, NoticeDays: 30, Updates: "weekly", Escalation: "repository owner"}, RequiredOwnerIDs: []string{"mobile-owner"}}

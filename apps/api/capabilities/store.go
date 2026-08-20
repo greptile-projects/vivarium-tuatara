@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -19,6 +20,10 @@ import (
 var ErrNotFound = errors.New("capability not found")
 var ErrInvalid = errors.New("invalid capability")
 var ErrConflict = errors.New("capability version conflict")
+
+// ErrDurabilityUncertain means the atomic rename committed visible state but
+// the parent-directory sync failed. Referenced external work must be preserved.
+var ErrDurabilityUncertain = errors.New("capability durability uncertain")
 
 var itemKinds = map[string]bool{"interface": true, "symbol": true, "flag": true, "package": true, "schema": true, "configuration": true, "documentation": true, "journey": true, "release": true}
 var discoveryStates = map[string]bool{"declared": true, "dynamic": true, "unknown": true}
@@ -77,9 +82,10 @@ type Capability struct {
 	UpdatedAt       time.Time        `json:"updated_at"`
 }
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root          string
+	mu            sync.Mutex
+	now           func() time.Time
+	directorySync func(string) error
 }
 
 func New(root string) (*Store, error) {
@@ -89,7 +95,7 @@ func New(root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
-	return &Store{root: root, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }}, nil
+	return &Store{root: root, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }, directorySync: syncCapabilityDirectory}, nil
 }
 func (s *Store) Create(repo, actor string, r Revision) (Capability, error) {
 	var out Capability
@@ -282,22 +288,27 @@ func (s *Store) write(v Capability) error {
 	if e == nil {
 		e = ce
 	}
+	renamed := false
 	if e == nil {
 		e = os.Rename(name, filepath.Join(dir, v.ID+".json"))
+		renamed = e == nil
 	}
 	if e == nil {
-		var directory *os.File
-		directory, e = os.Open(dir)
-		if e == nil {
-			e = directory.Sync()
-			// Rename plus a successful directory sync is the commit point. A
-			// later close error cannot safely be reported as an uncommitted
-			// mutation because retrying Create may duplicate it and retrying
-			// Revise will use a stale expected version.
-			_ = directory.Close()
-		}
+		e = s.directorySync(dir)
+	}
+	if e != nil && renamed {
+		return fmt.Errorf("%w: %v", ErrDurabilityUncertain, e)
 	}
 	return e
+}
+
+func syncCapabilityDirectory(dir string) error {
+	directory, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }
 func (s *Store) lock(fn func() error) error {
 	s.mu.Lock()

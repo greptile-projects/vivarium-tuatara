@@ -39,7 +39,7 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 			writeAPIError(w, 500, "capabilities_unavailable", "capability inventory could not be read")
 			return
 		}
-		writeJSON(w, 200, map[string]any{"capabilities": projectCapabilityWork(projectCapabilitiesForReader(catalog, actor.UserID, out), actor.UserID, proposalStore, pulls, sessions, workspaceStore)})
+		writeJSON(w, 200, map[string]any{"capabilities": projectCapabilitiesForReader(catalog, actor.UserID, projectCapabilityWork(out, actor.UserID, proposalStore, pulls, sessions, workspaceStore))})
 	})
 	mux.HandleFunc("GET /repositories/{id}/capabilities/{capability_id}", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
@@ -51,7 +51,7 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 			writeAPIError(w, 404, "capability_not_found", "capability not found")
 			return
 		}
-		writeJSON(w, 200, projectCapabilityWork(projectCapabilitiesForReader(catalog, actor.UserID, []capabilities.Capability{out}), actor.UserID, proposalStore, pulls, sessions, workspaceStore)[0])
+		writeJSON(w, 200, projectCapabilitiesForReader(catalog, actor.UserID, projectCapabilityWork([]capabilities.Capability{out}, actor.UserID, proposalStore, pulls, sessions, workspaceStore))[0])
 	})
 	publish := func(revise bool) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -211,13 +211,18 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 			return proposal.ID, task.ID, nil
 		})
 		if err != nil {
+			if errors.Is(err, capabilities.ErrDurabilityUncertain) {
+				out = projectCapabilitiesForReader(catalog, actor.UserID, projectCapabilityWork([]capabilities.Capability{out}, actor.UserID, proposalStore, pulls, sessions, workspaceStore))[0]
+				writeJSON(w, 202, map[string]any{"capability": out, "retirement_work": link, "task": assigned, "publication_state": "durability_uncertain"})
+				return
+			}
 			if proposal.ID != "" && assigned.Assignment != nil {
 				_ = proposalStore.DeleteMigrationWork(in.RepositoryID, proposal.ID, assigned.ID, assigned.Assignment.ID)
 			}
 			writeCapability(w, out, err, 201)
 			return
 		}
-		out = projectCapabilityWork(projectCapabilitiesForReader(catalog, actor.UserID, []capabilities.Capability{out}), actor.UserID, proposalStore, pulls, sessions, workspaceStore)[0]
+		out = projectCapabilitiesForReader(catalog, actor.UserID, projectCapabilityWork([]capabilities.Capability{out}, actor.UserID, proposalStore, pulls, sessions, workspaceStore))[0]
 		writeJSON(w, 201, map[string]any{"capability": out, "retirement_work": link, "task": assigned})
 	})
 	mux.HandleFunc("POST /repositories/{id}/capabilities/{capability_id}/retirement-plans/{plan_id}/consumer-discoveries", func(w http.ResponseWriter, r *http.Request) {
@@ -267,7 +272,7 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 		}
 		out, err := inventory.ReportRetirementConsumer(r.PathValue("id"), r.PathValue("capability_id"), r.PathValue("plan_id"), actor.UserID, in.ExpectedVersion, in.Discovery)
 		if err == nil {
-			out = projectCapabilityWork(projectCapabilitiesForReader(catalog, actor.UserID, []capabilities.Capability{out}), actor.UserID, proposalStore, pulls, sessions, workspaceStore)[0]
+			out = projectCapabilitiesForReader(catalog, actor.UserID, projectCapabilityWork([]capabilities.Capability{out}, actor.UserID, proposalStore, pulls, sessions, workspaceStore))[0]
 		}
 		writeCapability(w, out, err, 201)
 	})
