@@ -342,6 +342,17 @@ whenever dependencies change or the web job fails before it starts.
   only and grant no Git, review, merge, release, deployment, environment, linked-resource, or
   control-execution authority.
 
+- **Executable security scenarios** — `/repositories/{id}/security-scenarios` translates an exact
+  threat-model abuse path into an immutable owner-reviewed attempt/defense specification. Scenarios
+  freeze bounded attacker capabilities, safe fixture digests, candidate-defined checks, actions, and
+  observable containment, detection, and recovery. Evidence resolves from an exact-candidate isolated
+  workspace or current successful preview; workspace commands derive from retained outcomes, and
+  sanitized logs, artifact metadata, coverage, gaps, costs, and provenance remain append-only.
+  Destructive, secret-bearing, production/user-data, hidden-fixture, stale, and over-budget work is
+  rejected, while unsafe and non-reproducible outcomes require explicit reasons. Records beneath
+  `$SECURITY_SCENARIO_STORAGE_ROOT` (`security-scenarios`) grant no execution, workspace, preview,
+  environment, Git, review, merge, release, deployment, secret, or data authority.
+
 - **Change threat models** — `/repositories/{id}/threat-models` and the repository `/security`
   workspace retain immutable analysis revisions beneath `$THREAT_MODEL_STORAGE_ROOT`
   (`threat-models`). Each model is server-bound to an exact design proposal, pull, API contract,

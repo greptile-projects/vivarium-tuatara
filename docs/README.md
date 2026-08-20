@@ -83,6 +83,23 @@ retained analysis. Records default beneath `$THREAT_MODEL_STORAGE_ROOT` (`threat
 no source, Git, review, merge, release, deployment, environment, infrastructure, experiment, or
 general agent authority.
 
+## Executable security scenarios
+
+Threat-model abuse paths become reviewed, immutable evidence specifications at
+`/repositories/{id}/security-scenarios` and are visible in the repository `/security` workspace.
+Each scenario freezes the exact model version, path, mitigations, candidate commit,
+candidate-defined check, attacker preconditions, bounded capabilities, safe fixture digests,
+actions, and observable containment, detection, and recovery criteria. Human owners named by the
+threat model review scenarios; repository-bound agents act only for their exact source pull.
+
+Attempts resolve through an isolated workspace or successful current preview at the exact candidate.
+Workspace commands are projected from retained outcomes; sanitized logs, artifact metadata, coverage,
+gaps, costs, and provenance remain attached. Secret-shaped, destructive, production/user-data,
+hidden-fixture, stale, and over-budget work is rejected. `unsafe` and `not_reproducible` are durable
+results with required reasons. Records default beneath `$SECURITY_SCENARIO_STORAGE_ROOT`
+(`security-scenarios`) and grant no execution, workspace, preview, secret, data, environment, Git,
+review, merge, release, or deployment authority.
+
 ## Reusable test scenarios
 
 The quality workspace also publishes immutable executable specifications through
