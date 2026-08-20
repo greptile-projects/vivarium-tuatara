@@ -1,0 +1,33 @@
+"use client";
+
+import { FormEvent, useCallback, useEffect, useState } from "react";
+import { api } from "@/lib/api";
+import { useAuth } from "@/components/auth";
+import { Badge, Button, Card } from "@/components/ui";
+
+type Definition = { id:string; program_id:string; program_version:number; control_id:string; title:string; period_starts_at:string; period_ends_at:string; schedule:string; queries:{id:string;kind:string;required:boolean;max_age_hours:number}[] };
+type Package = { id:string; definition_id:string; control_id:string; collected_at:string; coverage_percent:number; gaps:string[]; contradictions:string[]; manifest_hash:string; attestation:string; sources:{query_id:string;kind:string;provenance:string;transformations?:string[];gap?:string;contradiction?:string;digest?:string}[] };
+const field=(f:FormData,n:string)=>String(f.get(n)||"").trim();
+
+export function AssuranceEvidence({repositoryID,programID,programVersion,controlID}:{repositoryID:string;programID?:string;programVersion?:number;controlID?:string}){
+  const {token}=useAuth(),[definitions,setDefinitions]=useState<Definition[]>([]),[packages,setPackages]=useState<Package[]>([]),[error,setError]=useState("");
+  const load=useCallback(async()=>{if(!token)return;try{const out=await api<{definitions:Definition[];packages:Package[]}>(`/repositories/${repositoryID}/assurance-evidence`,{},token);setDefinitions(out.definitions);setPackages(out.packages);setError("")}catch(e){setError(e instanceof Error?e.message:"Evidence could not be loaded.")}},[repositoryID,token]);
+  useEffect(()=>{void Promise.resolve().then(load)},[load]);
+  async function define(e:FormEvent<HTMLFormElement>){e.preventDefault();const f=new FormData(e.currentTarget);try{await api(`/repositories/${repositoryID}/assurance-evidence/definitions`,{method:"POST",body:JSON.stringify({program_id:field(f,"program"),program_version:Number(field(f,"version")),control_id:field(f,"control"),title:field(f,"title"),period_starts_at:new Date(field(f,"starts")).toISOString(),period_ends_at:new Date(field(f,"ends")).toISOString(),schedule:field(f,"schedule"),audience:field(f,"audience").split(",").map(x=>x.trim()).filter(Boolean),queries:[{id:field(f,"query"),kind:field(f,"kind"),resource_id:field(f,"resource"),revision:field(f,"revision"),required:true,max_age_hours:Number(field(f,"freshness"))}]})},token);await load()}catch(x){setError(x instanceof Error?x.message:"Definition could not be created.")}}
+  return <section className="space-y-4" aria-labelledby="evidence-heading">
+    <div><h2 id="evidence-heading" className="text-xl font-semibold">Control operation evidence</h2><p className="mt-1 text-sm text-[var(--muted)]">Collect exact collaboration and delivery records for an assessment period. Packages expose source provenance and gaps, never a compliance badge.</p></div>
+    {error&&<p role="alert" className="text-sm text-[var(--danger)]">{error}</p>}
+    <div className="grid gap-4 lg:grid-cols-2">
+      <Card className="p-5"><h3 className="font-semibold">Evidence coverage</h3>{packages.length===0?<p className="mt-2 text-sm text-[var(--muted)]">No immutable evidence package has been collected.</p>:packages.map(p=><article key={p.id} className="mt-3 rounded-lg border p-3"><div className="flex items-center justify-between gap-2"><strong>{p.control_id}</strong><Badge tone={p.gaps.length||p.contradictions.length?"warning":"success"}>{p.coverage_percent}% covered</Badge></div><p className="mt-2 text-xs text-[var(--muted)]">Collected {new Date(p.collected_at).toLocaleString()} · manifest {p.manifest_hash.slice(0,12)}…</p>{p.sources.map(s=><div key={s.query_id} className="mt-2 text-sm"><strong>{s.kind}</strong> · {s.provenance}{s.transformations?.length?` · ${s.transformations.join(", ")}`:""}</div>)}{[...p.gaps,...p.contradictions].map((g,i)=><p key={i} className="mt-2 text-sm text-[var(--danger)]">{g}</p>)}</article>)}</Card>
+      <Card className="p-5"><h3 className="font-semibold">Define a collection</h3><form onSubmit={define} className="mt-3 grid gap-3 sm:grid-cols-2">
+        <label className="text-sm">Program ID<input name="program" required defaultValue={programID} className="mt-1 w-full rounded-lg border bg-transparent p-2"/></label><label className="text-sm">Exact version<input name="version" type="number" min="1" required defaultValue={programVersion} className="mt-1 w-full rounded-lg border bg-transparent p-2"/></label>
+        <label className="text-sm">Control ID<input name="control" required defaultValue={controlID} className="mt-1 w-full rounded-lg border bg-transparent p-2"/></label><label className="text-sm">Definition title<input name="title" required className="mt-1 w-full rounded-lg border bg-transparent p-2"/></label>
+        <label className="text-sm">Period starts<input name="starts" type="datetime-local" required className="mt-1 w-full rounded-lg border bg-transparent p-2"/></label><label className="text-sm">Period ends<input name="ends" type="datetime-local" required className="mt-1 w-full rounded-lg border bg-transparent p-2"/></label>
+        <label className="text-sm">Schedule<select name="schedule" className="mt-1 w-full rounded-lg border bg-transparent p-2"><option>daily</option><option>weekly</option><option>monthly</option><option>quarterly</option><option>manual</option></select></label><label className="text-sm">Audience IDs<input name="audience" required defaultValue="repository" className="mt-1 w-full rounded-lg border bg-transparent p-2"/></label>
+        <label className="text-sm">Query key<input name="query" required defaultValue="source-1" className="mt-1 w-full rounded-lg border bg-transparent p-2"/></label><label className="text-sm">Record kind<select name="kind" className="mt-1 w-full rounded-lg border bg-transparent p-2">{["review","check","access","dependency","build","release","deployment","incident","continuity","security","privacy","governance"].map(k=><option key={k}>{k}</option>)}</select></label>
+        <label className="text-sm">Resource ID<input name="resource" required className="mt-1 w-full rounded-lg border bg-transparent p-2"/></label><label className="text-sm">Exact revision<input name="revision" className="mt-1 w-full rounded-lg border bg-transparent p-2"/></label><label className="text-sm">Freshness (hours)<input name="freshness" type="number" min="1" defaultValue="24" required className="mt-1 w-full rounded-lg border bg-transparent p-2"/></label><div className="self-end"><Button type="submit">Bind evidence query</Button></div>
+      </form></Card>
+    </div>
+    {definitions.length>0&&<p className="text-xs text-[var(--muted)]">{definitions.length} immutable collection definition{definitions.length===1?"":"s"} retained.</p>}
+  </section>
+}
