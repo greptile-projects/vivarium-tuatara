@@ -101,3 +101,49 @@ func TestRetirementProjectionUsesStoreClock(t *testing.T) {
 		t.Fatalf("advanced Store clock did not make owner overdue: %#v", v.RetirementPlans[0].Blockers)
 	}
 }
+
+func TestRetirementWorkIsOrderedAndNewConsumersRemainReports(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	r := retirementFixture(now)
+	r.Consumers[0].RepositoryID = "consumer-repository"
+	v, err := s.Create("provider-repository", "provider", r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.OpenRetirement("provider-repository", v.ID, "provider", planFixture(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := v.RetirementPlans[0]
+	work := RetirementWork{AudienceIndex: 0, RepositoryID: "consumer-repository", OldContract: "GET /v1 returns legacy widgets", ReplacementContract: "GET /v2 returns supported widgets", AcceptanceCriteria: []string{"consumer tests pass against v2"}, DocumentationChanges: []string{"replace v1 examples"}, RolloutStage: "adopt"}
+	v, first, err := s.CreateRetirementWork("provider-repository", v.ID, p.ID, "consumer-owner", 0, work, func() (string, string, error) { return "proposal-one", "task-one", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	work.DependencyIDs = []string{first.ID}
+	v, second, err := s.CreateRetirementWork("provider-repository", v.ID, p.ID, "consumer-owner", 1, work, func() (string, string, error) { return "proposal-two", "task-two", nil })
+	if err != nil || second.DependencyIDs[0] != first.ID {
+		t.Fatalf("ordered work = %#v, %v", second, err)
+	}
+	called := false
+	if _, _, err = s.CreateRetirementWork("provider-repository", v.ID, p.ID, "consumer-owner", 1, work, func() (string, string, error) { called = true; return "extra", "extra", nil }); err != ErrConflict || called {
+		t.Fatalf("stale publication = %v, called=%v", err, called)
+	}
+	v, err = s.ReportRetirementConsumer("provider-repository", v.ID, p.ID, "new-owner", 2, ConsumerDiscovery{RepositoryID: "new-consumer", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Paths: []string{"client.go"}, Evidence: []string{"symbol:legacyClient"}, Impact: "client still calls v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := v.RetirementPlans[0]
+	if len(plan.Work) != 2 || len(plan.DiscoveredConsumers) != 1 || plan.WorkVersion != 3 {
+		t.Fatalf("plan coordination = %#v", plan)
+	}
+	found := false
+	for _, blocker := range plan.Blockers {
+		found = found || blocker.Kind == "new_consumer_discovered"
+	}
+	if !found {
+		t.Fatalf("discovery did not require reassessment: %#v", plan.Blockers)
+	}
+}

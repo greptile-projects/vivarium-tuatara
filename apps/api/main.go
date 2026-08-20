@@ -1143,7 +1143,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerChangeSessionRoutes(mux, store, repositoryCatalog, pullRequestStore, changeSessionStore, authStore, activityStore, checkRunStore, previewStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && proposalStore != nil && changeSessionStore != nil {
-		registerTaskChangeSessionRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, changeSessionStore, authStore, relationshipStore, durableSchemaStore, organizationStore)
+		registerTaskChangeSessionRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, changeSessionStore, authStore, relationshipStore, durableSchemaStore, capabilityStore, organizationStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && activityStore != nil {
 		registerActivityRoutes(mux, repositoryCatalog, activityStore, authStore)
@@ -1307,7 +1307,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerInterfaceSystemRoutes(mux, store, repositoryCatalog, authStore, interfaceSystemStore, releaseStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && capabilityStore != nil && store != nil && releaseStore != nil {
-		registerCapabilityRoutes(mux, store, repositoryCatalog, authStore, capabilityStore, releaseStore)
+		registerCapabilityRoutes(mux, store, repositoryCatalog, authStore, capabilityStore, releaseStore, proposalStore, pullRequestStore, changeSessionStore, workspaceStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && designProposalStore != nil {
 		registerDesignProposalRoutes(mux, store, repositoryCatalog, authStore, designProposalStore, issueStore, feedbackStore, roadmapStore, accessibilityAssessmentStore, pullRequestStore, proposalStore)
