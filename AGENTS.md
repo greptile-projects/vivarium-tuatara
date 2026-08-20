@@ -15,6 +15,17 @@ releases through their repository-owned stores. Policy and procedure scopes are 
 runbook files: `resource_id` must equal `path`, and that path must exist at the exact 40-character
 `revision` in the containing repository.
 
+Continuous assurance evidence at `/repositories/{id}/assurance-evidence` binds owner-defined
+queries and manual, daily, weekly, monthly, or quarterly schedules to an exact assurance-program
+revision, control, and assessment period beneath `$ASSURANCE_EVIDENCE_STORAGE_ROOT`
+(`assurance-evidence`). Queries cover review, check, access, dependency, build, release,
+deployment, incident, continuity, security, privacy, and governance records with exact optional
+resource/revision selectors and freshness limits. Immutable packages derive coverage, explicit
+missing/inaccessible/stale gaps, contradictions, source and manifest SHA-256 digests, and an
+actor/time attestation. Definition audiences are rechecked on reads; restricted sources retain only
+an opaque gap, and credential-shaped prose is rejected. These records prove provenance and grant no
+source-system, repository, review, release, deployment, incident, or governance authority.
+
 Security confidence at pull, release, and deployment `/security-confidence` freezes repository or
 organization requirements by branch, component, asset, risk class, and path beneath
 `$SECURITY_CONFIDENCE_STORAGE_ROOT` (`security-confidence`). Matrices derive current threat-model

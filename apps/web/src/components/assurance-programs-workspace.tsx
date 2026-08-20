@@ -5,6 +5,7 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import { useAuth } from "@/components/auth";
 import { Badge, Button, Card } from "@/components/ui";
+import { AssuranceEvidence } from "@/components/assurance-evidence";
 
 type Revision = {
   version: number;
@@ -557,6 +558,7 @@ export function AssuranceProgramsWorkspace({
           </form>
         </Card>
       </div>
+      <AssuranceEvidence repositoryID={repositoryID} programID={selected?.id} programVersion={selected?.current_version} controlID={current?.controls[0]?.id} />
     </main>
   );
 }

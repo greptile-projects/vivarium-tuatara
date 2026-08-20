@@ -10,6 +10,19 @@
 Writes require `repositories:write`; every named program, requirement, control, and exception
 owner must be a current repository participant.
 
+## Continuous assurance evidence
+
+- `GET /repositories/{id}/assurance-evidence` returns definitions and immutable packages admitted
+  by the reader's explicit audience.
+- `POST /repositories/{id}/assurance-evidence/definitions` lets a named owner bind scheduled queries
+  to one exact assurance-program revision, control, and assessment period.
+- `POST /repositories/{id}/assurance-evidence/definitions/{definition_id}/packages` collects
+  period-bound source references. Exact selectors are enforced, stale evidence becomes a gap,
+  inaccessible evidence loses identifying metadata, and credential-shaped content is rejected.
+
+Packages derive coverage, provenance hashes, transformations, gaps, contradictions, a canonical
+SHA-256 manifest, and an actor/time attestation without copying linked record payloads.
+
 ## Security confidence
 
 - `POST /repositories/{id}/security-requirements` publishes repository-owner policy; `POST
