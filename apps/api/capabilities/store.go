@@ -286,10 +286,11 @@ func (s *Store) write(v Capability) error {
 		directory, e = os.Open(dir)
 		if e == nil {
 			e = directory.Sync()
-			closeErr := directory.Close()
-			if e == nil {
-				e = closeErr
-			}
+			// Rename plus a successful directory sync is the commit point. A
+			// later close error cannot safely be reported as an uncommitted
+			// mutation because retrying Create may duplicate it and retrying
+			// Revise will use a stale expected version.
+			_ = directory.Close()
 		}
 	}
 	return e
