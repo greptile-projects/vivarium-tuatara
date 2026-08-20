@@ -36,6 +36,16 @@ missing/inaccessible/stale gaps, contradictions, a canonical manifest hash, and 
 attestation. Restricted sources become opaque gaps with no identifying metadata. Records default
 beneath `$ASSURANCE_EVIDENCE_STORAGE_ROOT` (`assurance-evidence`) and grant no linked authority.
 
+Program owners can open bounded independent reviews through
+`/repositories/{id}/assurance-assessments`. Each record freezes the exact program version, controls,
+admitted system/release scope, assessment period, selected immutable evidence-package IDs, an
+identified internal or external assessor, conflict disclosure, and a maximum-90-day access window.
+Only the owner and invited assessor can read the record. Their separate event capabilities retain
+questions, samples, walkthroughs, attestation verification, findings and responses, disagreements,
+resolutions, appeals, and acknowledged scope changes without granting either side authority over Git,
+production, releases, deployments, source systems, or evidence collection. Records persist beneath
+`$ASSURANCE_ASSESSMENT_STORAGE_ROOT` (`assurance-assessments`).
+
 ### Pre-merge assurance impact
 
 Pull reviewers inspect revision-exact compliance impact through

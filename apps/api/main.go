@@ -23,6 +23,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/agentevaluations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/apicontracts"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/assuranceassessments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/assuranceevidence"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/assuranceimpact"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/assuranceprograms"
@@ -460,6 +461,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	assuranceAssessmentRoot := os.Getenv("ASSURANCE_ASSESSMENT_STORAGE_ROOT")
+	if assuranceAssessmentRoot == "" {
+		assuranceAssessmentRoot = "assurance-assessments"
+	}
+	assuranceAssessmentStore, err := assuranceassessments.New(assuranceAssessmentRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	securityExpectationRoot := os.Getenv("SECURITY_EXPECTATION_STORAGE_ROOT")
 	if securityExpectationRoot == "" {
 		securityExpectationRoot = "security-expectations"
@@ -791,7 +800,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, supportVerificationStore, supportSolutionStore, knowledgeAnswerStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore, apiContractStore, durableSchemaStore, infrastructureStore, debugWorkspaceStore, interfaceSystemStore, capabilityStore, designProposalStore, interfaceCheckStore, designGovernanceStore, qualityPlanStore, assuranceProgramStore, assuranceEvidenceStore, assuranceImpactStore, testScenarioStore, exploratorySessionStore, releaseConfidenceStore, securityExpectationStore, threatModelStore, securityScenarioStore, securityFindingStore, securityConfidenceStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, supportVerificationStore, supportSolutionStore, knowledgeAnswerStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore, apiContractStore, durableSchemaStore, infrastructureStore, debugWorkspaceStore, interfaceSystemStore, capabilityStore, designProposalStore, interfaceCheckStore, designGovernanceStore, qualityPlanStore, assuranceProgramStore, assuranceEvidenceStore, assuranceImpactStore, assuranceAssessmentStore, testScenarioStore, exploratorySessionStore, releaseConfidenceStore, securityExpectationStore, threatModelStore, securityScenarioStore, securityFindingStore, securityConfidenceStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -969,6 +978,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var assuranceProgramStore *assuranceprograms.Store
 	var assuranceEvidenceStore *assuranceevidence.Store
 	var assuranceImpactStore *assuranceimpact.Store
+	var assuranceAssessmentStore *assuranceassessments.Store
 	var testScenarioStore *testscenarios.Store
 	var exploratorySessionStore *exploratorysessions.Store
 	var releaseConfidenceStore *releaseconfidence.Store
@@ -1107,6 +1117,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			assuranceEvidenceStore = value
 		case *assuranceimpact.Store:
 			assuranceImpactStore = value
+		case *assuranceassessments.Store:
+			assuranceAssessmentStore = value
 		case *testscenarios.Store:
 			testScenarioStore = value
 		case *exploratorysessions.Store:
@@ -1266,6 +1278,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		if assuranceEvidenceStore != nil {
 			registerAssuranceEvidenceRoutes(mux, repositoryCatalog, authStore, assuranceProgramStore, assuranceEvidenceStore, assuranceEvidenceSources{pulls: pullRequestStore, checks: checkRunStore, releases: releaseStore, deployments: deploymentStore, incidents: incidentStore, privacy: privacyReviewStore, continuity: recoveryExerciseStore, access: protectionPlanStore, dependencies: packageStore, governance: governanceStore})
 		}
+	}
+	if authStore != nil && repositoryCatalog != nil && userStore != nil && assuranceProgramStore != nil && assuranceEvidenceStore != nil && assuranceAssessmentStore != nil {
+		registerAssuranceAssessmentRoutes(mux, repositoryCatalog, authStore, userStore, assuranceProgramStore, assuranceEvidenceStore, assuranceAssessmentStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && assuranceProgramStore != nil && assuranceImpactStore != nil && pullRequestStore != nil {
 		registerAssuranceImpactRoutes(mux, repositoryCatalog, authStore, assuranceImpactStore, assuranceProgramStore, pullRequestStore)

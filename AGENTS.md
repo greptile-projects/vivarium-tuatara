@@ -29,6 +29,17 @@ repository-owned pull, check/build, access, dependency, release, deployment, inc
 privacy, and governance stores, while unavailable resolvers fail closed. These records prove provenance and grant no
 source-system, repository, review, release, deployment, incident, or governance authority.
 
+Independent assessments at `/repositories/{id}/assurance-assessments` bind a named program owner,
+an exact assurance-program revision, selected controls and admitted system/release scopes, an exact
+period, explicitly selected evidence packages, and an identified internal or external platform user
+beneath `$ASSURANCE_ASSESSMENT_STORAGE_ROOT` (`assurance-assessments`). Invitations expire within 90
+days and disclose conflicts before evidence work begins. The owner and assessor append CAS-versioned,
+attributable questions, sample and walkthrough requests, attestation verification, findings,
+responses, disagreements, resolutions, appeals, and scope-change acknowledgements according to
+distinct roles. Reads expose only the selected packages and already-sanitized evidence sources;
+expired or conflicted assessor access fails closed. Assessments grant no repository, source-system,
+production, review, release, deployment, evidence-collection, or project mutation authority.
+
 Pre-merge assurance impact at `/repositories/{id}/pulls/{pull_id}/assurance-impact` binds an exact
 pull commit to an exact assurance-program revision beneath `$ASSURANCE_IMPACT_STORAGE_ROOT`
 (`assurance-impacts`). The server derives affected controls and paths from the Git diff and control

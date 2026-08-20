@@ -224,6 +224,11 @@ func (s *Store) ListPackages(repo string) ([]Package, error) {
 	sort.Slice(out, func(i, j int) bool { return out[i].CollectedAt.After(out[j].CollectedAt) })
 	return out, e
 }
+func (s *Store) GetPackage(id string) (Package, error) {
+	var p Package
+	e := s.get("packages", id, &p)
+	return p, e
+}
 
 func validDefinition(d Definition) bool {
 	if d.RepositoryID == "" || d.ProgramID == "" || d.ProgramVersion < 1 || d.ControlID == "" || d.OwnerID == "" || d.Title == "" || !d.PeriodEndsAt.After(d.PeriodStartsAt) || d.PeriodEndsAt.After(time.Now().UTC().Add(366*24*time.Hour)) || !one(d.Schedule, "manual", "daily", "weekly", "monthly", "quarterly") || len(d.Audience) == 0 || len(d.Queries) == 0 {
