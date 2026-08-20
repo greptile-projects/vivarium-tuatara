@@ -246,6 +246,27 @@ originating bounded system and no endpoint grants execution or merge authority.
   `observation_period_seconds`; its projection keeps contained failures, recovery actions, owner approvals,
   environment cleanup evidence, and verified deletion visible after completion.
 
+## Versioned agent projects
+
+- `POST|GET /repositories/{id}/agent-projects` and `POST
+  /repositories/{id}/agent-projects/{project_id}/revisions` retain immutable agent-intent revisions.
+  Each revision binds reviewed prompts, instructions, knowledge and dependency files to exact Git commits;
+  names tools and their permitted actions, model versions, tasks, outputs, prohibitions, memory and data-use
+  policy, budgets, accountable owners, human escalation, and deployment boundaries.
+- Reads derive effective tasks/tools/stops and attributable diagnostics for missing owners, unsupported
+  guarantees, and conflicting permitted/prohibited actions, while preserving the full change history.
+  Publication requires current named owners, publisher access to every dependency repository, and commit
+  reachability from a visible non-`vivarium-security/` branch. Reads recheck every historical source and
+  replace inaccessible or newly hidden provenance with an attributable opaque diagnostic. Durable writes
+  authorize dependency reads before resolving any source contents. Writes synchronize the staged file before
+  rename and the parent directory afterward; post-rename failures return the committed record with
+  a persisted `durability_uncertain` recovery state rather than an ambiguous operation failure. Publication
+  first retains a conservative marked copy and clears it only after that canonical rename is directory-synced,
+  so Get and List cannot lose the warning on reload. Successful mutation responses use the
+  same history-wide privacy projection as reads. These
+  definitions provide review context and grant no agent, model, tool, repository, network, deployment, or
+  data authority. Records default beneath `$AGENT_PROJECT_STORAGE_ROOT` (`agent-projects`).
+
 ## Approved-agent evaluation
 
 - `GET /organizations/{id}/agent-participations` projects current bounded authority together with
