@@ -258,7 +258,10 @@ originating bounded system and no endpoint grants execution or merge authority.
   Publication requires current named owners, publisher access to every dependency repository, and commit
   reachability from a visible non-`vivarium-security/` branch. Reads recheck every historical source and
   replace inaccessible or newly hidden provenance with an attributable opaque diagnostic. Durable writes
-  synchronize the staged file and parent directory before returning success. These
+  authorize dependency reads before resolving any source contents. Writes synchronize the staged file before
+  rename and the parent directory afterward; post-rename failures return the committed record with
+  `durability_uncertain` rather than an ambiguous operation failure. Successful mutation responses use the
+  same history-wide privacy projection as reads. These
   definitions provide review context and grant no agent, model, tool, repository, network, deployment, or
   data authority. Records default beneath `$AGENT_PROJECT_STORAGE_ROOT` (`agent-projects`).
 

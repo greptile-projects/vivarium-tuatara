@@ -1,6 +1,9 @@
 package agentprojects
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestProjectVersionsIntentAndDerivesReviewBoundary(t *testing.T) {
 	s, _ := New(t.TempDir())
@@ -23,5 +26,19 @@ func TestProjectVersionsIntentAndDerivesReviewBoundary(t *testing.T) {
 	}
 	if _, err = s.Revise(p.ID, 1, "author", r); err != ErrConflict {
 		t.Fatalf("conflict = %v", err)
+	}
+}
+
+func TestCommittedProjectReportsPostRenameDurabilityUncertaintyAsSuccess(t *testing.T) {
+	s, _ := New(t.TempDir())
+	s.syncDirectory = func(string) error { return errors.New("injected directory sync failure") }
+	r := Revision{Title: "Review helper", Purpose: "Review changes", Sources: []Source{{ID: "prompt", Kind: "prompt", RepositoryID: "repo", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Path: "agent.md", Purpose: "prompt"}}, Models: []Model{{Provider: "openai", Name: "codex", Version: "1", Purpose: "reasoning"}}, SupportedTasks: []string{"review"}, ExpectedOutputs: []string{"findings"}, ProhibitedActions: []string{"write"}, MemoryPolicy: "session", DataUseTerms: "repository only", Budget: Budget{MaxTokens: 1, MaxRuntimeSeconds: 1}, ChangeSummary: "initial"}
+	p, err := s.Create("repo", "author", r)
+	if err != nil || !p.DurabilityUncertain {
+		t.Fatalf("create = %#v, %v", p, err)
+	}
+	persisted, err := s.Get(p.ID)
+	if err != nil || persisted.ID != p.ID {
+		t.Fatalf("committed ledger = %#v, %v", persisted, err)
 	}
 }

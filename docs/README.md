@@ -10,7 +10,9 @@ it in `/repositories/{id}/agents`. Immutable revisions connect prompts, instruct
 dependencies, tools, models, tasks, outputs, prohibitions, memory/data terms, budgets, owners, escalation,
 and deployment limits to exact repository files and commits reachable from visible non-security branches.
 Public projections recheck and redact sources across the complete history when dependency access or commit
-visibility changes, and durable publication synchronizes content and directory metadata. Projections derive effective
+visibility changes; successful mutations use that same projection. Publication authorizes source repositories
+before resolving their contents, synchronizes content before rename and directory metadata afterward, and marks
+a committed response `durability_uncertain` if post-rename synchronization fails. Projections derive effective
 capability and keep missing ownership, conflicting instructions, inaccessible dependencies, and
 unsupported guarantees explicit. The ledger defaults beneath `$AGENT_PROJECT_STORAGE_ROOT`
 (`agent-projects`) and grants no implementation or runtime authority.

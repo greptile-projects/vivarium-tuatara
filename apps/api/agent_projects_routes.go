@@ -57,10 +57,6 @@ func registerAgentProjectRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 			deps := []string{}
 			for _, s := range in.Revision.Sources {
 				deps = append(deps, s.RepositoryID)
-				if !agentProjectSourceResolves(git, s) {
-					writeAPIError(w, 400, "invalid_agent_project", "every source must resolve to an exact repository file")
-					return
-				}
 			}
 			owners := append([]string{actor.UserID}, in.Revision.OwnerIDs...)
 			for _, e := range in.Revision.Escalations {
@@ -69,6 +65,11 @@ func registerAgentProjectRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 			var out agentprojects.Project
 			var e error
 			e = catalog.WithCurrentParticipantsAndReadAccess(owners, repo, actor.UserID, deps, func() error {
+				for _, source := range in.Revision.Sources {
+					if !agentProjectSourceResolves(git, source) {
+						return agentprojects.ErrInvalid
+					}
+				}
 				if revise {
 					current, x := store.Get(r.PathValue("project_id"))
 					if x != nil || current.RepositoryID != repo {
@@ -83,6 +84,9 @@ func registerAgentProjectRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 			status := 201
 			if revise {
 				status = 200
+			}
+			if e == nil {
+				out = projectAgentSources(git, catalog, actor.UserID, []agentprojects.Project{out})[0]
 			}
 			writeAgentProject(w, out, e, status)
 		}

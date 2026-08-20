@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,6 +19,7 @@ import (
 var ErrNotFound = errors.New("agent project not found")
 var ErrInvalid = errors.New("invalid agent project")
 var ErrConflict = errors.New("agent project version conflict")
+var errDurabilityUncertain = errors.New("agent project durability uncertain")
 
 type Source struct {
 	ID           string `json:"id"`
@@ -100,11 +102,13 @@ type Project struct {
 	EffectiveCapability EffectiveCapability `json:"effective_capability"`
 	CreatedAt           time.Time           `json:"created_at"`
 	UpdatedAt           time.Time           `json:"updated_at"`
+	DurabilityUncertain bool                `json:"durability_uncertain,omitempty"`
 }
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root          string
+	mu            sync.Mutex
+	now           func() time.Time
+	syncDirectory func(string) error
 }
 
 func New(root string) (*Store, error) {
@@ -114,7 +118,7 @@ func New(root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
-	return &Store{root: root, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }}, nil
+	return &Store{root: root, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }, syncDirectory: syncDirectory}, nil
 }
 func (s *Store) Create(repo, actor string, r Revision) (Project, error) {
 	var out Project
@@ -125,7 +129,12 @@ func (s *Store) Create(repo, actor string, r Revision) (Project, error) {
 		now := s.now()
 		stamp(&r, 1, actor, now)
 		out = Project{ID: id(), RepositoryID: repo, CurrentVersion: 1, Revisions: []Revision{r}, CreatedAt: now, UpdatedAt: now}
-		return s.write(out)
+		e := s.write(out)
+		if errors.Is(e, errDurabilityUncertain) {
+			out.DurabilityUncertain = true
+			return nil
+		}
+		return e
 	})
 	return project(out), err
 }
@@ -147,7 +156,12 @@ func (s *Store) Revise(pid string, expected int, actor string, r Revision) (Proj
 		p.Revisions = append(p.Revisions, r)
 		p.UpdatedAt = r.CreatedAt
 		out = p
-		return s.write(p)
+		e = s.write(p)
+		if errors.Is(e, errDurabilityUncertain) {
+			out.DurabilityUncertain = true
+			return nil
+		}
+		return e
 	})
 	return project(out), err
 }
@@ -317,18 +331,22 @@ func (s *Store) write(p Project) error {
 		return e
 	}
 	remove = false
-	directory, e := os.Open(s.root)
-	if e != nil {
-		return e
-	}
-	if e = directory.Sync(); e != nil {
-		_ = directory.Close()
-		return e
-	}
-	if e = directory.Close(); e != nil {
-		return e
+	if e = s.syncDirectory(s.root); e != nil {
+		return fmt.Errorf("%w: %v", errDurabilityUncertain, e)
 	}
 	return nil
+}
+
+func syncDirectory(root string) error {
+	directory, err := os.Open(root)
+	if err != nil {
+		return err
+	}
+	if err = directory.Sync(); err != nil {
+		_ = directory.Close()
+		return err
+	}
+	return directory.Close()
 }
 func (s *Store) lock(fn func() error) error {
 	s.mu.Lock()
