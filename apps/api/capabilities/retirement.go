@@ -126,6 +126,7 @@ type RetirementPlan struct {
 	Work                []RetirementWork     `json:"work,omitempty"`
 	DiscoveredConsumers []ConsumerDiscovery  `json:"discovered_consumers,omitempty"`
 	Candidates          []MigrationCandidate `json:"candidates,omitempty"`
+	Executions          []RemovalExecution   `json:"executions,omitempty"`
 	Blockers            []RetirementBlocker  `json:"blockers"`
 	Status              string               `json:"status"`
 	CreatedBy           string               `json:"created_by"`
@@ -490,5 +491,11 @@ func projectRetirement(p *RetirementPlan, current int, diagnostics []Diagnostic,
 		p.Status = "acknowledged"
 	} else {
 		p.Status = "blocked"
+	}
+	if len(p.Executions) > 0 {
+		execution := p.Executions[len(p.Executions)-1]
+		if execution.Status == "running" || execution.Status == "paused" || execution.Status == "restored" || execution.Status == "awaiting_verification" || execution.Status == "completed" {
+			p.Status = execution.Status
+		}
 	}
 }

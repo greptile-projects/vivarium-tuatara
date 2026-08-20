@@ -10,6 +10,14 @@ func retirementFixture(now time.Time) Revision {
 	return Revision{Name: "legacy", Summary: "legacy endpoint", CommitID: string(make([]byte, 40)), ReleaseID: "release", OwnerIDs: []string{"provider"}, Items: []Item{{Kind: "interface", Name: "v1", Path: "api.go", Revision: string(make([]byte, 40))}}, Consumers: []Consumer{{Name: "mobile", OwnerIDs: []string{"mobile-owner"}, Environment: "production", Discovery: "declared", EvidenceState: "unknown", CompatibilityPromise: "supported through 2027"}}}
 }
 
+func cleanupFixture(repo, revision, path string) []CleanupRequirement {
+	out := []CleanupRequirement{}
+	for _, kind := range []string{"code", "flags", "data", "credentials", "telemetry", "documentation", "policy_exceptions"} {
+		out = append(out, CleanupRequirement{ID: "cleanup-" + kind, Kind: kind, RepositoryID: repo, Path: path, Revision: revision, PreviousBlob: "blob-before-" + kind, Expectation: "removed"})
+	}
+	return out
+}
+
 func TestRetirementWorkPreservesCommittedLinkWhenDirectorySyncIsUncertain(t *testing.T) {
 	s, _ := New(t.TempDir())
 	now := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
@@ -192,7 +200,15 @@ func TestMigrationCandidateRetainsMatrixAndNeverTreatsUnknownUseAsMigrated(t *te
 	for _, stage := range []string{"old_only", "dual_support", "replacement", "rollback", "journey"} {
 		checks = append(checks, CandidateCheck{ID: stage, Stage: stage, Journey: map[bool]string{true: "checkout"}[stage == "journey"], RepositoryID: "repo", Revision: r.CommitID, Command: "test " + stage, Paths: []string{"api.go"}, Expectation: stage + " remains supported"})
 	}
-	v, candidate, err := s.CreateMigrationCandidate("repo", v.ID, v.RetirementPlans[0].ID, "provider", MigrationCandidate{Environment: "isolated synthetic compatibility lab", Checks: checks})
+	if _, _, unrelatedErr := s.CreateMigrationCandidate("repo", v.ID, v.RetirementPlans[0].ID, "provider", MigrationCandidate{Environment: "isolated synthetic compatibility lab", Checks: checks, CleanupRequirements: cleanupFixture("repo", r.CommitID, "unrelated.txt")}); unrelatedErr != ErrInvalid {
+		t.Fatalf("unrelated cleanup inventory = %v", unrelatedErr)
+	}
+	duplicate := cleanupFixture("repo", r.CommitID, "api.go")
+	duplicate = append(duplicate, CleanupRequirement{ID: "duplicate-code", Kind: "code", RepositoryID: "repo", Path: "api.go", Revision: r.CommitID, PreviousBlob: "duplicate-before", Expectation: "removed"})
+	if _, _, duplicateErr := s.CreateMigrationCandidate("repo", v.ID, v.RetirementPlans[0].ID, "provider", MigrationCandidate{Environment: "isolated synthetic compatibility lab", Checks: checks, CleanupRequirements: duplicate}); duplicateErr != ErrInvalid {
+		t.Fatalf("duplicate cleanup surface = %v", duplicateErr)
+	}
+	v, candidate, err := s.CreateMigrationCandidate("repo", v.ID, v.RetirementPlans[0].ID, "provider", MigrationCandidate{Environment: "isolated synthetic compatibility lab", Checks: checks, CleanupRequirements: cleanupFixture("repo", r.CommitID, "api.go")})
 	if err != nil {
 		t.Fatal(err)
 	}

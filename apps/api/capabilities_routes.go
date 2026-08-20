@@ -1,10 +1,13 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"log"
 	"net/http"
 	"path"
+	"sort"
 	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -321,6 +324,41 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 				}
 			}
 		}
+		current, currentErr := inventory.Get(r.PathValue("id"), r.PathValue("capability_id"))
+		providerRevision := ""
+		for _, plan := range current.RetirementPlans {
+			if plan.ID == r.PathValue("plan_id") && plan.CapabilityVersion > 0 && plan.CapabilityVersion <= len(current.Revisions) {
+				providerRevision = current.Revisions[plan.CapabilityVersion-1].CommitID
+			}
+		}
+		provider, providerErr := git.Open(r.PathValue("id"))
+		var commit storage.Commit
+		var entries []storage.TreePath
+		commitErr, treeErr := providerErr, providerErr
+		if providerErr == nil {
+			commit, commitErr = provider.ReadCommit(storage.ObjectID(strings.ToLower(providerRevision)))
+		}
+		if commitErr == nil {
+			entries, treeErr = provider.WalkTree(commit.Tree)
+		}
+		if currentErr != nil || providerErr != nil || commitErr != nil || treeErr != nil {
+			writeAPIError(w, 422, "invalid_cleanup_inventory", "the frozen provider revision must resolve before cleanup requirements are retained")
+			return
+		}
+		providerBlobs := map[string]string{}
+		for _, entry := range entries {
+			if entry.Type == storage.BlobObject {
+				providerBlobs[entry.Path] = string(entry.ID)
+			}
+		}
+		for i := range candidate.CleanupRequirements {
+			requirement := &candidate.CleanupRequirements[i]
+			if providerBlobs[requirement.Path] == "" {
+				writeAPIError(w, 422, "invalid_cleanup_inventory", "every obsolete artifact must exist at the frozen provider revision")
+				return
+			}
+			requirement.RepositoryID, requirement.Revision, requirement.PreviousBlob = r.PathValue("id"), providerRevision, providerBlobs[requirement.Path]
+		}
 		out, created, err := inventory.CreateMigrationCandidate(r.PathValue("id"), r.PathValue("capability_id"), r.PathValue("plan_id"), actor.UserID, candidate)
 		if err != nil {
 			writeCapability(w, out, err, 201)
@@ -452,6 +490,162 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 			out = projectCapabilitiesForReader(catalog, actor.UserID, []capabilities.Capability{out})[0]
 		}
 		writeCapability(w, out, err, 201)
+	})
+	removalOwner := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return auth.Credential{}, false
+		}
+		current, err := inventory.Get(r.PathValue("id"), r.PathValue("capability_id"))
+		if err != nil || actor.AgentID != "" || len(current.Revisions) == 0 || !containsString(current.Revisions[len(current.Revisions)-1].OwnerIDs, actor.UserID) {
+			writeAPIError(w, 403, "removal_execution_forbidden", "an authorized human capability owner must control removal")
+			return auth.Credential{}, false
+		}
+		return actor, true
+	}
+	mux.HandleFunc("POST /repositories/{id}/capabilities/{capability_id}/retirement-plans/{plan_id}/candidates/{candidate_id}/removal-executions", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := removalOwner(w, r)
+		if !ok {
+			return
+		}
+		out, execution, err := inventory.StartRemoval(r.PathValue("id"), r.PathValue("capability_id"), r.PathValue("plan_id"), r.PathValue("candidate_id"), actor.UserID)
+		if err != nil {
+			writeCapability(w, out, err, 201)
+			return
+		}
+		writeJSON(w, 201, map[string]any{"capability": out, "execution": execution})
+	})
+	mux.HandleFunc("POST /repositories/{id}/capabilities/{capability_id}/retirement-plans/{plan_id}/removal-executions/{execution_id}/reports", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := removalOwner(w, r)
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int                      `json:"expected_version"`
+			Report          capabilities.StageReport `json:"report"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_removal_report", "an exact staged removal report is required")
+			return
+		}
+		out, err := inventory.ReportRemovalStage(r.PathValue("id"), r.PathValue("capability_id"), r.PathValue("plan_id"), r.PathValue("execution_id"), actor.UserID, in.ExpectedVersion, in.Report)
+		writeCapability(w, out, err, 200)
+	})
+	mux.HandleFunc("POST /repositories/{id}/capabilities/{capability_id}/retirement-plans/{plan_id}/removal-executions/{execution_id}/controller", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := removalOwner(w, r)
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int    `json:"expected_version"`
+			ControllerID    string `json:"controller_id"`
+			Reason          string `json:"reason"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_controller_transfer", "an exact successor owner and reason are required")
+			return
+		}
+		current, err := inventory.Get(r.PathValue("id"), r.PathValue("capability_id"))
+		if err != nil || len(current.Revisions) == 0 || !containsString(current.Revisions[len(current.Revisions)-1].OwnerIDs, in.ControllerID) {
+			writeAPIError(w, 422, "invalid_removal_controller", "the successor must be a current capability owner")
+			return
+		}
+		out, err := inventory.TransferRemovalController(r.PathValue("id"), r.PathValue("capability_id"), r.PathValue("plan_id"), r.PathValue("execution_id"), actor.UserID, in.ControllerID, in.Reason, in.ExpectedVersion)
+		writeCapability(w, out, err, 200)
+	})
+	mux.HandleFunc("POST /repositories/{id}/capabilities/{capability_id}/retirement-plans/{plan_id}/removal-executions/{execution_id}/completion", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := removalOwner(w, r)
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int                         `json:"expected_version"`
+			Proofs          []capabilities.CleanupProof `json:"proofs"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_removal_completion", "complete category-specific removal proof is required")
+			return
+		}
+		current, err := inventory.Get(r.PathValue("id"), r.PathValue("capability_id"))
+		allowedRevisions := map[string]bool{}
+		cleanupRequirements := map[string]capabilities.CleanupRequirement{}
+		if err == nil {
+			for _, plan := range current.RetirementPlans {
+				if plan.ID == r.PathValue("plan_id") {
+					for _, execution := range plan.Executions {
+						if execution.ID == r.PathValue("execution_id") {
+							for _, candidate := range plan.Candidates {
+								if candidate.ID == execution.CandidateID {
+									for _, requirement := range candidate.CleanupRequirements {
+										cleanupRequirements[requirement.ID] = requirement
+									}
+								}
+							}
+							for _, report := range execution.Reports {
+								for _, delivery := range report.Delivery {
+									if delivery.Status == "succeeded" {
+										allowedRevisions[strings.ToLower(delivery.Revision)] = true
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		verify := func(proof capabilities.CleanupProof) bool {
+			revision := strings.ToLower(proof.Revision)
+			if proof.RepositoryID != r.PathValue("id") || !allowedRevisions[revision] {
+				return false
+			}
+			repository, openErr := git.Open(proof.RepositoryID)
+			if openErr != nil {
+				return false
+			}
+			commit, readErr := repository.ReadCommit(storage.ObjectID(revision))
+			if readErr != nil {
+				return false
+			}
+			entries, walkErr := repository.WalkTree(commit.Tree)
+			if walkErr != nil {
+				return false
+			}
+			blobs := map[string]string{}
+			for _, entry := range entries {
+				if entry.Type == storage.BlobObject {
+					blobs[entry.Path] = string(entry.ID)
+				}
+			}
+			ids := append([]string(nil), proof.RequirementIDs...)
+			sort.Strings(ids)
+			digest := sha256.New()
+			prior := ""
+			for _, requirementID := range ids {
+				requirement, exists := cleanupRequirements[requirementID]
+				if requirementID == prior || !exists || requirement.Kind != proof.Kind || requirement.RepositoryID != proof.RepositoryID {
+					return false
+				}
+				prior = requirementID
+				outcome := blobs[requirement.Path]
+				if requirement.Expectation == "removed" {
+					if outcome != "" {
+						return false
+					}
+					outcome = "absent"
+				} else if outcome == "" || outcome == requirement.PreviousBlob || (requirement.ReplacementBlob != "" && outcome != requirement.ReplacementBlob) {
+					return false
+				}
+				_, _ = digest.Write([]byte(requirementID))
+				_, _ = digest.Write([]byte{0})
+				_, _ = digest.Write([]byte(requirement.Path))
+				_, _ = digest.Write([]byte{0})
+				_, _ = digest.Write([]byte(outcome))
+				_, _ = digest.Write([]byte{0})
+			}
+			return strings.EqualFold(proof.Digest, hex.EncodeToString(digest.Sum(nil)))
+		}
+		out, err := inventory.CompleteRemoval(r.PathValue("id"), r.PathValue("capability_id"), r.PathValue("plan_id"), r.PathValue("execution_id"), actor.UserID, in.ExpectedVersion, in.Proofs, verify)
+		writeCapability(w, out, err, 200)
 	})
 }
 

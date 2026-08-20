@@ -56,6 +56,28 @@ every current matrix row to pass and every audience to have an owner-acknowledge
 observation. These records grant no workspace, telemetry, consumer, Git, release, deployment, environment,
 or removal authority.
 
+After readiness and approvals remain satisfied, an authorized human capability owner may open a controlled
+removal execution against that exact candidate. Its ordered public stage reports cite the ordinary merge queue,
+release, schema or infrastructure migration, documentation, and protected-deployment resources that actually
+deliver the change, and show remaining old use, health, controller, rollback boundary, and next action.
+Residual use, degraded health, failed delivery, or an unexpected consumer pauses the execution. An explicit
+compatibility restore retains the attempt and its provenance instead of pretending removal succeeded.
+If capability ownership changes during an active execution, a current human owner explicitly transfers its
+CAS-versioned controller; history retains the predecessor, successor, transferring owner, reason, and time so
+the removal cannot be stranded or silently taken over.
+
+The final stage awaits separate revision- and path-bound proof for obsolete code, flags, data, credentials,
+telemetry, documentation, and policy exceptions. Only complete proof marks removal as a verified product
+outcome. Every proof names the provider repository and a revision retained as succeeded delivery for that
+execution. The candidate freezes every required obsolete surface by category, provider path, pre-removal
+revision/blob, and expected removed or replaced outcome. Requirements can name only paths selected by the
+frozen capability revision, every selected path must be covered, and duplicate category/path requirements are
+rejected at admission. Completion accounts for every requirement ID
+exactly once and derives its canonical digest from the absent or changed path at the delivered revision;
+unrelated retained files cannot substitute for removal evidence.
+These coordination records do not grant Git, queue, review, release, deployment, environment,
+documentation, schema, infrastructure, credential, telemetry, or destructive authority.
+
 ## Revision-exact security confidence
 
 Repository owners and organization owners publish scoped security requirements at
