@@ -2,6 +2,15 @@
 
 Guidance for coding agents working in this repository.
 
+Agent intent at `/repositories/{id}/agent-projects` and the repository `/agents` workspace retains
+immutable reviewed prompts, instructions, tools, models, knowledge, memory/data terms, tasks, outputs,
+prohibitions, budgets, owners, escalation, and deployment boundaries beneath `$AGENT_PROJECT_STORAGE_ROOT`
+(`agent-projects`). Sources resolve to exact repository files and 40-character commits; publishers must
+read every dependency and named owners must be current participants. Reads derive effective capability,
+provenance, history, and attributable missing-owner, conflicting-instruction, inaccessible-dependency,
+and unsupported-guarantee diagnostics. Definitions grant no agent, Git, tool, model, network, deployment,
+data, or repository authority.
+
 Assurance programs at `/repositories/{id}/assurance-programs` and the repository
 `/assurance` workspace retain immutable selections of regulatory, contractual, and
 organization requirements beneath `$ASSURANCE_PROGRAM_STORAGE_ROOT` (`assurance-programs`).

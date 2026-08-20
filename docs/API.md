@@ -246,6 +246,19 @@ originating bounded system and no endpoint grants execution or merge authority.
   `observation_period_seconds`; its projection keeps contained failures, recovery actions, owner approvals,
   environment cleanup evidence, and verified deletion visible after completion.
 
+## Versioned agent projects
+
+- `POST|GET /repositories/{id}/agent-projects` and `POST
+  /repositories/{id}/agent-projects/{project_id}/revisions` retain immutable agent-intent revisions.
+  Each revision binds reviewed prompts, instructions, knowledge and dependency files to exact Git commits;
+  names tools and their permitted actions, model versions, tasks, outputs, prohibitions, memory and data-use
+  policy, budgets, accountable owners, human escalation, and deployment boundaries.
+- Reads derive effective tasks/tools/stops and attributable diagnostics for missing owners, unsupported
+  guarantees, and conflicting permitted/prohibited actions, while preserving the full change history.
+  Publication requires current named owners and publisher access to every dependency repository. These
+  definitions provide review context and grant no agent, model, tool, repository, network, deployment, or
+  data authority. Records default beneath `$AGENT_PROJECT_STORAGE_ROOT` (`agent-projects`).
+
 ## Approved-agent evaluation
 
 - `GET /organizations/{id}/agent-participations` projects current bounded authority together with
