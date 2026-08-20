@@ -68,24 +68,36 @@ type UsageObservation struct {
 	Superseded      bool      `json:"superseded"`
 }
 
+type CleanupRequirement struct {
+	ID              string `json:"id"`
+	Kind            string `json:"kind"`
+	RepositoryID    string `json:"repository_id"`
+	Path            string `json:"path"`
+	Revision        string `json:"revision"`
+	PreviousBlob    string `json:"previous_blob"`
+	Expectation     string `json:"expectation"`
+	ReplacementBlob string `json:"replacement_blob,omitempty"`
+}
+
 type MigrationCandidate struct {
-	ID                  string              `json:"id"`
-	PlanVersion         int                 `json:"plan_version"`
-	CapabilityVersion   int                 `json:"capability_version"`
-	ProviderRevision    string              `json:"provider_revision"`
-	ReleaseID           string              `json:"release_id"`
-	ReleaseVersion      string              `json:"release_version"`
-	SchemaConfiguration []CandidateRevision `json:"schema_configuration"`
-	Consumers           []CandidateRevision `json:"consumers"`
-	Environment         string              `json:"environment"`
-	Checks              []CandidateCheck    `json:"checks"`
-	Usage               []UsageObservation  `json:"usage_observations"`
-	Status              string              `json:"status"`
-	RemovalReady        bool                `json:"removal_ready"`
-	Blockers            []RetirementBlocker `json:"blockers"`
-	CreatedBy           string              `json:"created_by"`
-	CreatedAt           time.Time           `json:"created_at"`
-	UpdatedAt           time.Time           `json:"updated_at"`
+	ID                  string               `json:"id"`
+	PlanVersion         int                  `json:"plan_version"`
+	CapabilityVersion   int                  `json:"capability_version"`
+	ProviderRevision    string               `json:"provider_revision"`
+	ReleaseID           string               `json:"release_id"`
+	ReleaseVersion      string               `json:"release_version"`
+	SchemaConfiguration []CandidateRevision  `json:"schema_configuration"`
+	Consumers           []CandidateRevision  `json:"consumers"`
+	Environment         string               `json:"environment"`
+	Checks              []CandidateCheck     `json:"checks"`
+	Usage               []UsageObservation   `json:"usage_observations"`
+	CleanupRequirements []CleanupRequirement `json:"cleanup_requirements"`
+	Status              string               `json:"status"`
+	RemovalReady        bool                 `json:"removal_ready"`
+	Blockers            []RetirementBlocker  `json:"blockers"`
+	CreatedBy           string               `json:"created_by"`
+	CreatedAt           time.Time            `json:"created_at"`
+	UpdatedAt           time.Time            `json:"updated_at"`
 }
 
 func CommandDigest(command string) string {
@@ -94,7 +106,7 @@ func CommandDigest(command string) string {
 }
 
 func validateCandidate(c MigrationCandidate, p RetirementPlan, r Revision) bool {
-	if strings.TrimSpace(c.Environment) == "" || len(c.Checks) < 5 || p.CapabilityVersion != r.Version {
+	if strings.TrimSpace(c.Environment) == "" || len(c.Checks) < 5 || p.CapabilityVersion != r.Version || len(c.CleanupRequirements) < len(cleanupKinds) {
 		return false
 	}
 	seen, stages := map[string]bool{}, map[string]bool{}
@@ -109,6 +121,30 @@ func validateCandidate(c MigrationCandidate, p RetirementPlan, r Revision) bool 
 	}
 	for stage := range candidateStages {
 		if !stages[stage] {
+			return false
+		}
+	}
+	requirementIDs, requirementKinds := map[string]bool{}, map[string]bool{}
+	capabilityPaths, coveredPaths := map[string]bool{}, map[string]bool{}
+	for _, item := range r.Items {
+		if item.Path != "" {
+			capabilityPaths[item.Path] = true
+		}
+	}
+	for _, requirement := range c.CleanupRequirements {
+		if requirement.ID == "" || requirementIDs[requirement.ID] || !cleanupKinds[requirement.Kind] || requirement.RepositoryID == "" || !capabilityPaths[requirement.Path] || len(requirement.Revision) != 40 || requirement.PreviousBlob == "" || (requirement.Expectation != "removed" && requirement.Expectation != "replaced") || (requirement.Expectation == "replaced" && requirement.ReplacementBlob == requirement.PreviousBlob) {
+			return false
+		}
+		requirementIDs[requirement.ID], requirementKinds[requirement.Kind] = true, true
+		coveredPaths[requirement.Path] = true
+	}
+	for kind := range cleanupKinds {
+		if !requirementKinds[kind] {
+			return false
+		}
+	}
+	for path := range capabilityPaths {
+		if !coveredPaths[path] {
 			return false
 		}
 	}
@@ -198,6 +234,11 @@ func (s *Store) CreateMigrationCandidate(repo, capabilityID, planID, actor strin
 		}
 		for _, check := range c.Checks {
 			if allowedRevisions[check.RepositoryID] == "" || !strings.EqualFold(allowedRevisions[check.RepositoryID], check.Revision) {
+				return ErrInvalid
+			}
+		}
+		for _, requirement := range c.CleanupRequirements {
+			if requirement.RepositoryID != repo || !strings.EqualFold(requirement.Revision, r.CommitID) {
 				return ErrInvalid
 			}
 		}

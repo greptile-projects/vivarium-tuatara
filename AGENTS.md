@@ -214,8 +214,11 @@ whenever dependencies change or the web job fails before it starts.
   delivery state but grant none of the linked systems' authority. If ownership changes during active removal,
   a current human capability owner must explicitly transfer the CAS-versioned controller and retain the prior
   controller, successor, actor, reason, and time. Final cleanup proof names the provider repository, must use a
-  revision retained as succeeded delivery for that execution, and is accepted only when every cited path exists
-  at that exact Git revision and its canonical path/blob digest matches.
+  revision retained as succeeded delivery for that execution. Each migration candidate freezes a
+  category-complete obsolete-artifact inventory with provider path, pre-removal revision/blob, and an expected
+  removed or replaced outcome; only paths selected by the frozen capability revision are admitted and every
+  selected path must be covered. Completion maps proofs one-to-one to those requirement IDs and verifies absence
+  or the declared changed blob at the delivered revision; unrelated retained files cannot satisfy cleanup.
   These records provide removal
   context only and grant no consumer-repository, Git,
   release, environment, migration, review, merge, deployment, or retirement authority.

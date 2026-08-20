@@ -324,6 +324,41 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 				}
 			}
 		}
+		current, currentErr := inventory.Get(r.PathValue("id"), r.PathValue("capability_id"))
+		providerRevision := ""
+		for _, plan := range current.RetirementPlans {
+			if plan.ID == r.PathValue("plan_id") && plan.CapabilityVersion > 0 && plan.CapabilityVersion <= len(current.Revisions) {
+				providerRevision = current.Revisions[plan.CapabilityVersion-1].CommitID
+			}
+		}
+		provider, providerErr := git.Open(r.PathValue("id"))
+		var commit storage.Commit
+		var entries []storage.TreePath
+		commitErr, treeErr := providerErr, providerErr
+		if providerErr == nil {
+			commit, commitErr = provider.ReadCommit(storage.ObjectID(strings.ToLower(providerRevision)))
+		}
+		if commitErr == nil {
+			entries, treeErr = provider.WalkTree(commit.Tree)
+		}
+		if currentErr != nil || providerErr != nil || commitErr != nil || treeErr != nil {
+			writeAPIError(w, 422, "invalid_cleanup_inventory", "the frozen provider revision must resolve before cleanup requirements are retained")
+			return
+		}
+		providerBlobs := map[string]string{}
+		for _, entry := range entries {
+			if entry.Type == storage.BlobObject {
+				providerBlobs[entry.Path] = string(entry.ID)
+			}
+		}
+		for i := range candidate.CleanupRequirements {
+			requirement := &candidate.CleanupRequirements[i]
+			if providerBlobs[requirement.Path] == "" {
+				writeAPIError(w, 422, "invalid_cleanup_inventory", "every obsolete artifact must exist at the frozen provider revision")
+				return
+			}
+			requirement.RepositoryID, requirement.Revision, requirement.PreviousBlob = r.PathValue("id"), providerRevision, providerBlobs[requirement.Path]
+		}
 		out, created, err := inventory.CreateMigrationCandidate(r.PathValue("id"), r.PathValue("capability_id"), r.PathValue("plan_id"), actor.UserID, candidate)
 		if err != nil {
 			writeCapability(w, out, err, 201)
@@ -533,11 +568,19 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 		}
 		current, err := inventory.Get(r.PathValue("id"), r.PathValue("capability_id"))
 		allowedRevisions := map[string]bool{}
+		cleanupRequirements := map[string]capabilities.CleanupRequirement{}
 		if err == nil {
 			for _, plan := range current.RetirementPlans {
 				if plan.ID == r.PathValue("plan_id") {
 					for _, execution := range plan.Executions {
 						if execution.ID == r.PathValue("execution_id") {
+							for _, candidate := range plan.Candidates {
+								if candidate.ID == execution.CandidateID {
+									for _, requirement := range candidate.CleanupRequirements {
+										cleanupRequirements[requirement.ID] = requirement
+									}
+								}
+							}
 							for _, report := range execution.Reports {
 								for _, delivery := range report.Delivery {
 									if delivery.Status == "succeeded" {
@@ -573,18 +616,30 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 					blobs[entry.Path] = string(entry.ID)
 				}
 			}
-			paths := append([]string(nil), proof.Paths...)
-			sort.Strings(paths)
+			ids := append([]string(nil), proof.RequirementIDs...)
+			sort.Strings(ids)
 			digest := sha256.New()
 			prior := ""
-			for _, proofPath := range paths {
-				if proofPath == prior || blobs[proofPath] == "" {
+			for _, requirementID := range ids {
+				requirement, exists := cleanupRequirements[requirementID]
+				if requirementID == prior || !exists || requirement.Kind != proof.Kind || requirement.RepositoryID != proof.RepositoryID {
 					return false
 				}
-				prior = proofPath
-				_, _ = digest.Write([]byte(proofPath))
+				prior = requirementID
+				outcome := blobs[requirement.Path]
+				if requirement.Expectation == "removed" {
+					if outcome != "" {
+						return false
+					}
+					outcome = "absent"
+				} else if outcome == "" || outcome == requirement.PreviousBlob || (requirement.ReplacementBlob != "" && outcome != requirement.ReplacementBlob) {
+					return false
+				}
+				_, _ = digest.Write([]byte(requirementID))
 				_, _ = digest.Write([]byte{0})
-				_, _ = digest.Write([]byte(blobs[proofPath]))
+				_, _ = digest.Write([]byte(requirement.Path))
+				_, _ = digest.Write([]byte{0})
+				_, _ = digest.Write([]byte(outcome))
 				_, _ = digest.Write([]byte{0})
 			}
 			return strings.EqualFold(proof.Digest, hex.EncodeToString(digest.Sum(nil)))

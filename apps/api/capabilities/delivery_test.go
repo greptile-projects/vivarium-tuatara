@@ -25,7 +25,7 @@ func readyRemoval(t *testing.T) (*Store, Capability, RetirementPlan, MigrationCa
 	for i, stage := range []string{"old_only", "dual_support", "replacement", "rollback", "journey"} {
 		checks = append(checks, CandidateCheck{ID: stage, Stage: stage, Journey: map[bool]string{true: "checkout"}[stage == "journey"], RepositoryID: "repo", Revision: r.CommitID, Command: "test " + stage, Paths: []string{"api.go"}, Expectation: "pass", Evidence: []CandidateEvidence{{ID: stage, OutcomeID: "outcome-" + stage, Status: "passed", CreatedAt: now.Add(time.Duration(i) * time.Second)}}})
 	}
-	c := MigrationCandidate{ID: randomID(), CapabilityVersion: 1, ProviderRevision: r.CommitID, Checks: checks, Usage: []UsageObservation{{ID: randomID(), ConsumerIndex: 0, RepositoryID: "consumer", Revision: r.Consumers[0].Revision, State: "measured", TotalUses: 10, OldBehaviorUses: 0, Summary: "zero use", OwnerID: "mobile-owner", Acknowledged: true}}}
+	c := MigrationCandidate{ID: randomID(), CapabilityVersion: 1, ProviderRevision: r.CommitID, Checks: checks, CleanupRequirements: cleanupFixture("repo", r.CommitID, "api.go"), Usage: []UsageObservation{{ID: randomID(), ConsumerIndex: 0, RepositoryID: "consumer", Revision: r.Consumers[0].Revision, State: "measured", TotalUses: 10, OldBehaviorUses: 0, Summary: "zero use", OwnerID: "mobile-owner", Acknowledged: true}}}
 	raw, _ := s.read("repo", v.ID)
 	raw.RetirementPlans[0].Candidates = []MigrationCandidate{c}
 	if err := s.write(raw); err != nil {
@@ -79,7 +79,7 @@ func TestRemovalCompletionAccountsForEveryObsoleteSurface(t *testing.T) {
 	}
 	proofs := []CleanupProof{}
 	for _, kind := range []string{"code", "flags", "data", "credentials", "telemetry", "documentation", "policy_exceptions"} {
-		proofs = append(proofs, CleanupProof{Kind: kind, RepositoryID: "repo", Revision: c.ProviderRevision, Paths: []string{"evidence/" + kind}, Digest: "sha256:" + kind, Summary: kind + " removed"})
+		proofs = append(proofs, CleanupProof{Kind: kind, RequirementIDs: []string{"cleanup-" + kind}, RepositoryID: "repo", Revision: c.ProviderRevision, Paths: []string{"api.go"}, Digest: "sha256:" + kind, Summary: kind + " removed"})
 	}
 	unrelated := append([]CleanupProof(nil), proofs...)
 	for i := range unrelated {
@@ -87,6 +87,11 @@ func TestRemovalCompletionAccountsForEveryObsoleteSurface(t *testing.T) {
 	}
 	if _, err = s.CompleteRemoval("repo", v.ID, p.ID, execution.ID, "provider", version, unrelated, func(CleanupProof) bool { return true }); err != ErrConflict {
 		t.Fatalf("unrelated cleanup revision = %v", err)
+	}
+	unrelated = append([]CleanupProof(nil), proofs...)
+	unrelated[0].Paths = []string{"unrelated-retained/code"}
+	if _, err = s.CompleteRemoval("repo", v.ID, p.ID, execution.ID, "provider", version, unrelated, func(CleanupProof) bool { return true }); err != ErrConflict {
+		t.Fatalf("unrelated cleanup path = %v", err)
 	}
 	v, err = s.CompleteRemoval("repo", v.ID, p.ID, execution.ID, "provider", version, proofs, verify)
 	if err != nil || v.RetirementPlans[0].Executions[0].Status != "completed" {

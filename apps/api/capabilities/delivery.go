@@ -33,12 +33,13 @@ type StageReport struct {
 }
 
 type CleanupProof struct {
-	Kind         string   `json:"kind"`
-	RepositoryID string   `json:"repository_id"`
-	Revision     string   `json:"revision"`
-	Paths        []string `json:"paths"`
-	Digest       string   `json:"digest"`
-	Summary      string   `json:"summary"`
+	Kind           string   `json:"kind"`
+	RequirementIDs []string `json:"requirement_ids"`
+	RepositoryID   string   `json:"repository_id"`
+	Revision       string   `json:"revision"`
+	Paths          []string `json:"paths"`
+	Digest         string   `json:"digest"`
+	Summary        string   `json:"summary"`
 }
 
 type ControllerTransfer struct {
@@ -261,15 +262,37 @@ func (s *Store) ReportRemovalStage(repo, capabilityID, planID, executionID, acto
 	return s.project(out), err
 }
 
-func validCleanup(repo string, proofs []CleanupProof, deliveredRevisions map[string]bool, verify func(CleanupProof) bool) bool {
+func validCleanup(repo string, requirements []CleanupRequirement, proofs []CleanupProof, deliveredRevisions map[string]bool, verify func(CleanupProof) bool) bool {
 	seen := map[string]bool{}
+	required := map[string]CleanupRequirement{}
+	for _, requirement := range requirements {
+		required[requirement.ID] = requirement
+	}
+	accounted := map[string]bool{}
 	for _, p := range proofs {
-		if !cleanupKinds[p.Kind] || seen[p.Kind] || p.RepositoryID != repo || !deliveredRevisions[strings.ToLower(p.Revision)] || len(p.Paths) == 0 || p.Digest == "" || p.Summary == "" || verify == nil || !verify(p) {
+		if !cleanupKinds[p.Kind] || seen[p.Kind] || p.RepositoryID != repo || !deliveredRevisions[strings.ToLower(p.Revision)] || len(p.RequirementIDs) == 0 || len(p.Paths) != len(p.RequirementIDs) || p.Digest == "" || p.Summary == "" || verify == nil {
+			return false
+		}
+		paths := map[string]bool{}
+		for _, path := range p.Paths {
+			if paths[path] {
+				return false
+			}
+			paths[path] = true
+		}
+		for _, id := range p.RequirementIDs {
+			requirement, ok := required[id]
+			if !ok || accounted[id] || requirement.Kind != p.Kind || requirement.RepositoryID != repo || !paths[requirement.Path] {
+				return false
+			}
+			accounted[id] = true
+		}
+		if !verify(p) {
 			return false
 		}
 		seen[p.Kind] = true
 	}
-	return len(seen) == len(cleanupKinds)
+	return len(seen) == len(cleanupKinds) && len(accounted) == len(required)
 }
 
 func (s *Store) CompleteRemoval(repo, capabilityID, planID, executionID, actor string, expected int, proofs []CleanupProof, verify func(CleanupProof) bool) (Capability, error) {
@@ -315,7 +338,7 @@ func (s *Store) CompleteRemoval(repo, capabilityID, planID, executionID, actor s
 				}
 			}
 		}
-		if x.ControllerID != actor || x.Version != expected || x.Status != "awaiting_verification" || candidate == nil || !candidate.RemovalReady || len(p.Blockers) != 0 || !validCleanup(repo, proofs, deliveredRevisions, verify) {
+		if x.ControllerID != actor || x.Version != expected || x.Status != "awaiting_verification" || candidate == nil || !candidate.RemovalReady || len(p.Blockers) != 0 || !validCleanup(repo, candidate.CleanupRequirements, proofs, deliveredRevisions, verify) {
 			return ErrConflict
 		}
 		now := s.now()
