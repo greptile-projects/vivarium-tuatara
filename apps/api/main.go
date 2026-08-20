@@ -1238,7 +1238,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerQualityPlanRoutes(mux, repositoryCatalog, authStore, qualityPlanStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && assuranceProgramStore != nil {
-		registerAssuranceProgramRoutes(mux, repositoryCatalog, authStore, assuranceProgramStore)
+		registerAssuranceProgramRoutes(mux, repositoryCatalog, authStore, assuranceProgramStore, assuranceScopeResources{git: store, dataFlows: dataFlowStore, infrastructure: infrastructureStore, environments: deploymentStore, releases: releaseStore})
 	}
 	if authStore != nil && repositoryCatalog != nil && securityExpectationStore != nil {
 		registerSecurityExpectationRoutes(mux, repositoryCatalog, authStore, securityExpectationStore)

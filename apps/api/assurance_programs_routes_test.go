@@ -32,6 +32,11 @@ func TestAssuranceProgramAPIIsVersionedAndOwnerScoped(t *testing.T) {
 	invalid.Scopes[0].ResourceID = "another-repository"
 	invalidPayload, _ := json.Marshal(map[string]any{"revision": invalid})
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/assurance-programs", string(invalidPayload), owner.Credential.Token, http.StatusBadRequest).Body.Close()
+	for _, kind := range []string{"policy", "data_flow", "infrastructure", "environment", "release", "procedure"} {
+		invalid.Scopes[0] = assuranceprograms.Scope{ID: "scope", Kind: kind, ResourceID: "invented-resource", Description: "Unverified association"}
+		invalidPayload, _ = json.Marshal(map[string]any{"revision": invalid})
+		authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/assurance-programs", string(invalidPayload), owner.Credential.Token, http.StatusBadRequest).Body.Close()
+	}
 	payload, _ := json.Marshal(map[string]any{"revision": revision})
 	createdResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/assurance-programs", string(payload), owner.Credential.Token, http.StatusCreated)
 	var created assuranceprograms.Program

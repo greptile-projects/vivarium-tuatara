@@ -18,6 +18,10 @@ unmapped requirements, unsupported control claims, and expired or near-expiry ex
 owners and exception grantors are rechecked as current participants at publication. Records
 default beneath `$ASSURANCE_PROGRAM_STORAGE_ROOT` (`assurance-programs`) and grant no Git,
 policy, evidence, infrastructure, environment, release, or operational authority.
+Scope publication resolves data-flow maps, infrastructure definitions, deployment environments,
+and releases in their repository-owned ledgers. Policy and procedure resources resolve as exact
+files in the containing repository, with `resource_id` equal to `path` and a retained Git revision;
+invented and cross-repository associations are rejected.
 
 ## Revision-exact capability inventory
 

@@ -4,10 +4,16 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os/exec"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/assuranceprograms"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/dataflows"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/infrastructure"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
 type assuranceProgramInput struct {
@@ -15,7 +21,7 @@ type assuranceProgramInput struct {
 	Revision        assuranceprograms.Revision `json:"revision"`
 }
 
-func registerAssuranceProgramRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *assuranceprograms.Store) {
+func registerAssuranceProgramRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *assuranceprograms.Store, resources assuranceScopeResources) {
 	mux.HandleFunc("GET /repositories/{id}/assurance-programs", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
 			return
@@ -63,6 +69,10 @@ func registerAssuranceProgramRoutes(mux *http.ServeMux, catalog *repositories.St
 			}
 			var out assuranceprograms.Program
 			var e error
+			if !resources.valid(repo, in.Revision.Scopes) {
+				writeAPIError(w, 400, "invalid_assurance_program", "every assurance scope must resolve to an exact resource owned by this repository")
+				return
+			}
 			e = catalog.WithCurrentParticipants(participants, repo, func() error {
 				if revise {
 					current, x := store.Get(r.PathValue("program_id"))
@@ -84,6 +94,65 @@ func registerAssuranceProgramRoutes(mux *http.ServeMux, catalog *repositories.St
 	}
 	mux.HandleFunc("POST /repositories/{id}/assurance-programs", publish(false))
 	mux.HandleFunc("POST /repositories/{id}/assurance-programs/{program_id}/revisions", publish(true))
+}
+
+type assuranceScopeResources struct {
+	git            *storage.Store
+	dataFlows      *dataflows.Store
+	infrastructure *infrastructure.Store
+	environments   *deployments.Store
+	releases       *releases.Store
+}
+
+func (r assuranceScopeResources) valid(repo string, scopes []assuranceprograms.Scope) bool {
+	for _, scope := range scopes {
+		switch scope.Kind {
+		case "repository":
+			if scope.ResourceID != repo {
+				return false
+			}
+		case "data_flow":
+			if r.dataFlows == nil {
+				return false
+			}
+			if _, err := r.dataFlows.Get(repo, scope.ResourceID); err != nil {
+				return false
+			}
+		case "infrastructure":
+			if r.infrastructure == nil {
+				return false
+			}
+			v, err := r.infrastructure.Get(scope.ResourceID, true)
+			if err != nil || v.RepositoryID != repo {
+				return false
+			}
+		case "environment":
+			if r.environments == nil {
+				return false
+			}
+			if _, err := r.environments.GetEnvironment(repo, scope.ResourceID); err != nil {
+				return false
+			}
+		case "release":
+			if r.releases == nil {
+				return false
+			}
+			if _, err := r.releases.Get(repo, scope.ResourceID); err != nil {
+				return false
+			}
+		case "policy", "procedure":
+			if r.git == nil || scope.Path == "" || scope.Revision == "" || scope.ResourceID != scope.Path {
+				return false
+			}
+			repository, err := r.git.Open(repo)
+			if err != nil || exec.Command("git", "--git-dir="+repository.Path(), "cat-file", "-e", scope.Revision+":"+scope.Path).Run() != nil {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 func writeAssuranceProgram(w http.ResponseWriter, v assuranceprograms.Program, e error, status int) {
 	switch {

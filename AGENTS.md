@@ -10,6 +10,10 @@ exceptions, control objectives, evidence criteria, and exact resource mappings i
 Derived diagnostics keep missing owners, unsupported claims, inherited duties, conflicting
 interpretations, and expiring exceptions explicit and attributable. Named owners and exception
 grantors must be current repository participants; records grant no linked-system authority.
+Assurance scope admission resolves data flows, infrastructure definitions, environments, and
+releases through their repository-owned stores. Policy and procedure scopes are policy-as-code or
+runbook files: `resource_id` must equal `path`, and that path must exist at the exact 40-character
+`revision` in the containing repository.
 
 Security confidence at pull, release, and deployment `/security-confidence` freezes repository or
 organization requirements by branch, component, asset, risk class, and path beneath

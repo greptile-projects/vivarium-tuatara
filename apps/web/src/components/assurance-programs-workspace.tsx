@@ -293,6 +293,35 @@ export function AssuranceProgramsWorkspace({
           {error}
         </p>
       )}
+      {programs.length > 0 && (
+        <Card className="flex flex-wrap items-end gap-3 p-4">
+          <label className="min-w-64 flex-1 text-sm font-medium">
+            Assurance program
+            <select
+              aria-label="Assurance program"
+              value={selected?.id ?? ""}
+              onChange={(event) =>
+                setSelected(
+                  programs.find((item) => item.id === event.target.value) ??
+                    null,
+                )
+              }
+              className="mt-1 w-full rounded-lg border bg-transparent p-2.5"
+            >
+              {!selected && <option value="">New assurance program</option>}
+              {programs.map((program) => (
+                <option key={program.id} value={program.id}>
+                  {program.revisions.at(-1)?.title ?? program.id} · version{" "}
+                  {program.current_version}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Button type="button" onClick={() => setSelected(null)}>
+            Create another program
+          </Button>
+        </Card>
+      )}
       <div className="grid gap-6 lg:grid-cols-[1fr_1.35fr]">
         <Card className="p-6">
           <h2 className="text-lg font-semibold">
