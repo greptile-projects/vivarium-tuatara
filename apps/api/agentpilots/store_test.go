@@ -65,6 +65,29 @@ func TestPilotConsentDelegationPolicyAndFeedback(t *testing.T) {
 	}
 }
 
+func TestPilotAcceptanceRequiresLatestExplicitAcceptance(t *testing.T) {
+	now := time.Date(2026, 8, 20, 20, 0, 0, 0, time.UTC)
+	s, _ := New(t.TempDir())
+	s.now = func() time.Time { return now }
+	p, _ := s.Create(fixture(now))
+	if Accepted(p) {
+		t.Fatal("unconsented pilot was accepted")
+	}
+	p, _ = s.Consent(p.ID, "user", p.Version, false)
+	p, _ = s.AddFeedback(p.ID, "user", p.Version, Feedback{CandidateRevision: p.CandidateRevision, Outcome: "failed", ExpectedOutcome: "idempotent retry", Correction: "reuse the request key"})
+	if Accepted(p) {
+		t.Fatal("corrective feedback was treated as acceptance")
+	}
+	p, _ = s.AddFeedback(p.ID, "user", p.Version, Feedback{CandidateRevision: p.CandidateRevision, Outcome: "accepted", ExpectedOutcome: "idempotent retry", Correction: "the correction is now demonstrated"})
+	if !Accepted(p) {
+		t.Fatal("latest explicit acceptance was not recognized")
+	}
+	p, _ = s.Consent(p.ID, "user", p.Version, true)
+	if Accepted(p) {
+		t.Fatal("revoked acceptance remained effective")
+	}
+}
+
 func TestPilotPausesWithoutDiscardingEvidence(t *testing.T) {
 	now := time.Date(2026, 8, 20, 20, 0, 0, 0, time.UTC)
 	s, _ := New(t.TempDir())

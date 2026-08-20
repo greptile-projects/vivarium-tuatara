@@ -2618,6 +2618,21 @@ whenever dependencies change or the web job fails before it starts.
   behavior, repository-access loss, expiry, or pull movement pauses new work without deleting legitimate
   evidence. A pilot never grants merge, publish, disclosure, release, deployment, secret, environment, or
   authoritative-resource mutation authority and cannot be converted implicitly into durable participation.
+  Attested releases beneath `$AGENT_RELEASE_STORAGE_ROOT` (default `agent-releases`) require current candidate
+  and accepted-pilot evidence plus approved evaluation, domain review, pilot acceptance, data-policy, and
+  resource records, and bind an existing organization agent, exact contract, model/tool versions, roles, and a
+  derived attestation. Deployments separately freeze identity, credential scopes, budgets, operator terms, and
+  a same-agent rollback release; successors never inherit consent. Versioned signals and narrow, pause,
+  rollback, private-finding, or human/agent-repair controls preserve all earlier evidence and contributions.
+  Organization participation remains the source of technical authority.
+  Approval actors are server-derived, candidate-bound records from five distinct current human participants;
+  evaluation approvals resolve authoritative run evidence, while pilot approval and release publication require
+  every invitee's current consent and latest exact-candidate feedback to explicitly be `accepted`. Rollback releases must share both
+  agent and repository identity. Deployment CAS mutations hold a storage-root advisory lock across processes,
+  and failed release-store initialization leaves explicit 503 routes rather than silently removing the API.
+  Approval publication rechecks owners and collaborators through current repository participation rather than
+  owner-only lookup. Pilot approval and release publication also recheck every invitee's live access to every
+  selected repository. Fallback release routes register independently of pilot-store initialization.
   Suite selections freeze the exact scenario-ID manifest; run publication rejects unknown scenarios,
   duplicate attempt identities, negative correction counts, and samples below the declared minimum.
   Evaluator attribution is derived from the authenticated publisher rather than caller prose. Candidate and

@@ -409,3 +409,23 @@ func (s *Store) AddFeedback(pid, participant string, expected int, f Feedback) (
 		return nil
 	})
 }
+
+// Accepted reports explicit current acceptance by every invited participant.
+// Earlier corrective feedback remains history, but each participant's latest
+// decision must accept the exact candidate after retaining that correction.
+func Accepted(p Pilot) bool {
+	if p.Paused || len(p.Invitations) == 0 {
+		return false
+	}
+	latest := map[string]Feedback{}
+	for _, feedback := range p.Feedback {
+		latest[feedback.ParticipantID] = feedback
+	}
+	for _, invitation := range p.Invitations {
+		feedback, ok := latest[invitation.ParticipantID]
+		if invitation.ConsentedAt == nil || invitation.RevokedAt != nil || !ok || feedback.CandidateRevision != p.CandidateRevision || feedback.Outcome != "accepted" {
+			return false
+		}
+	}
+	return true
+}
