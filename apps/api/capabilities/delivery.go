@@ -33,11 +33,21 @@ type StageReport struct {
 }
 
 type CleanupProof struct {
-	Kind     string   `json:"kind"`
-	Revision string   `json:"revision"`
-	Paths    []string `json:"paths"`
-	Digest   string   `json:"digest"`
-	Summary  string   `json:"summary"`
+	Kind         string   `json:"kind"`
+	RepositoryID string   `json:"repository_id"`
+	Revision     string   `json:"revision"`
+	Paths        []string `json:"paths"`
+	Digest       string   `json:"digest"`
+	Summary      string   `json:"summary"`
+}
+
+type ControllerTransfer struct {
+	Version            int       `json:"version"`
+	PreviousController string    `json:"previous_controller"`
+	Controller         string    `json:"controller"`
+	TransferredBy      string    `json:"transferred_by"`
+	Reason             string    `json:"reason"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 type RemovalCompletion struct {
@@ -47,17 +57,56 @@ type RemovalCompletion struct {
 }
 
 type RemovalExecution struct {
-	ID           string             `json:"id"`
-	CandidateID  string             `json:"candidate_id"`
-	Version      int                `json:"version"`
-	Status       string             `json:"status"`
-	ActiveStage  int                `json:"active_stage"`
-	StageNames   []string           `json:"stage_names"`
-	Reports      []StageReport      `json:"reports"`
-	Completion   *RemovalCompletion `json:"completion,omitempty"`
-	ControllerID string             `json:"controller_id"`
-	StartedAt    time.Time          `json:"started_at"`
-	UpdatedAt    time.Time          `json:"updated_at"`
+	ID           string               `json:"id"`
+	CandidateID  string               `json:"candidate_id"`
+	Version      int                  `json:"version"`
+	Status       string               `json:"status"`
+	ActiveStage  int                  `json:"active_stage"`
+	StageNames   []string             `json:"stage_names"`
+	Reports      []StageReport        `json:"reports"`
+	Transfers    []ControllerTransfer `json:"controller_transfers,omitempty"`
+	Completion   *RemovalCompletion   `json:"completion,omitempty"`
+	ControllerID string               `json:"controller_id"`
+	StartedAt    time.Time            `json:"started_at"`
+	UpdatedAt    time.Time            `json:"updated_at"`
+}
+
+func (s *Store) TransferRemovalController(repo, capabilityID, planID, executionID, actor, controller, reason string, expected int) (Capability, error) {
+	var out Capability
+	err := s.lock(func() error {
+		v, err := s.read(repo, capabilityID)
+		if err != nil {
+			return err
+		}
+		var p *RetirementPlan
+		var x *RemovalExecution
+		for pi := range v.RetirementPlans {
+			if v.RetirementPlans[pi].ID == planID {
+				p = &v.RetirementPlans[pi]
+				for ei := range p.Executions {
+					if p.Executions[ei].ID == executionID {
+						x = &p.Executions[ei]
+					}
+				}
+			}
+		}
+		if p == nil {
+			return ErrPlanNotFound
+		}
+		if x == nil || actor == "" || controller == "" || controller == x.ControllerID || strings.TrimSpace(reason) == "" || len([]rune(reason)) > 2000 {
+			return ErrInvalid
+		}
+		if x.Version != expected || x.Status == "completed" || x.Status == "restored" {
+			return ErrConflict
+		}
+		now := s.now()
+		x.Transfers = append(x.Transfers, ControllerTransfer{Version: len(x.Transfers) + 1, PreviousController: x.ControllerID, Controller: controller, TransferredBy: actor, Reason: reason, CreatedAt: now})
+		x.ControllerID = controller
+		x.Version++
+		x.UpdatedAt, p.UpdatedAt, v.UpdatedAt, out = now, now, now, v
+		return s.write(v)
+	})
+	return s.project(out), err
 }
 
 func findPlanAndCandidate(v *Capability, planID, candidateID string) (*RetirementPlan, *MigrationCandidate) {
@@ -212,10 +261,10 @@ func (s *Store) ReportRemovalStage(repo, capabilityID, planID, executionID, acto
 	return s.project(out), err
 }
 
-func validCleanup(proofs []CleanupProof) bool {
+func validCleanup(repo string, proofs []CleanupProof, deliveredRevisions map[string]bool, verify func(CleanupProof) bool) bool {
 	seen := map[string]bool{}
 	for _, p := range proofs {
-		if !cleanupKinds[p.Kind] || seen[p.Kind] || len(p.Revision) != 40 || len(p.Paths) == 0 || p.Digest == "" || p.Summary == "" {
+		if !cleanupKinds[p.Kind] || seen[p.Kind] || p.RepositoryID != repo || !deliveredRevisions[strings.ToLower(p.Revision)] || len(p.Paths) == 0 || p.Digest == "" || p.Summary == "" || verify == nil || !verify(p) {
 			return false
 		}
 		seen[p.Kind] = true
@@ -223,7 +272,7 @@ func validCleanup(proofs []CleanupProof) bool {
 	return len(seen) == len(cleanupKinds)
 }
 
-func (s *Store) CompleteRemoval(repo, capabilityID, planID, executionID, actor string, expected int, proofs []CleanupProof) (Capability, error) {
+func (s *Store) CompleteRemoval(repo, capabilityID, planID, executionID, actor string, expected int, proofs []CleanupProof, verify func(CleanupProof) bool) (Capability, error) {
 	var out Capability
 	err := s.lock(func() error {
 		v, err := s.read(repo, capabilityID)
@@ -258,7 +307,15 @@ func (s *Store) CompleteRemoval(repo, capabilityID, planID, executionID, actor s
 		if candidate != nil {
 			ProjectCandidate(candidate, *p)
 		}
-		if x.ControllerID != actor || x.Version != expected || x.Status != "awaiting_verification" || candidate == nil || !candidate.RemovalReady || len(p.Blockers) != 0 || !validCleanup(proofs) {
+		deliveredRevisions := map[string]bool{}
+		for _, report := range x.Reports {
+			for _, delivery := range report.Delivery {
+				if delivery.Status == "succeeded" {
+					deliveredRevisions[strings.ToLower(delivery.Revision)] = true
+				}
+			}
+		}
+		if x.ControllerID != actor || x.Version != expected || x.Status != "awaiting_verification" || candidate == nil || !candidate.RemovalReady || len(p.Blockers) != 0 || !validCleanup(repo, proofs, deliveredRevisions, verify) {
 			return ErrConflict
 		}
 		now := s.now()

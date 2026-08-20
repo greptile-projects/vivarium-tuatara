@@ -62,10 +62,15 @@ release, schema or infrastructure migration, documentation, and protected-deploy
 deliver the change, and show remaining old use, health, controller, rollback boundary, and next action.
 Residual use, degraded health, failed delivery, or an unexpected consumer pauses the execution. An explicit
 compatibility restore retains the attempt and its provenance instead of pretending removal succeeded.
+If capability ownership changes during an active execution, a current human owner explicitly transfers its
+CAS-versioned controller; history retains the predecessor, successor, transferring owner, reason, and time so
+the removal cannot be stranded or silently taken over.
 
 The final stage awaits separate revision- and path-bound proof for obsolete code, flags, data, credentials,
 telemetry, documentation, and policy exceptions. Only complete proof marks removal as a verified product
-outcome. These coordination records do not grant Git, queue, review, release, deployment, environment,
+outcome. Every proof names the provider repository and a revision retained as succeeded delivery for that
+execution; each cited path must exist at that exact Git revision and its canonical path/blob digest must match.
+These coordination records do not grant Git, queue, review, release, deployment, environment,
 documentation, schema, infrastructure, credential, telemetry, or destructive authority.
 
 ## Revision-exact security confidence

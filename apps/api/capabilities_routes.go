@@ -1,10 +1,13 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"log"
 	"net/http"
 	"path"
+	"sort"
 	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -493,6 +496,28 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 		out, err := inventory.ReportRemovalStage(r.PathValue("id"), r.PathValue("capability_id"), r.PathValue("plan_id"), r.PathValue("execution_id"), actor.UserID, in.ExpectedVersion, in.Report)
 		writeCapability(w, out, err, 200)
 	})
+	mux.HandleFunc("POST /repositories/{id}/capabilities/{capability_id}/retirement-plans/{plan_id}/removal-executions/{execution_id}/controller", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := removalOwner(w, r)
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int    `json:"expected_version"`
+			ControllerID    string `json:"controller_id"`
+			Reason          string `json:"reason"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_controller_transfer", "an exact successor owner and reason are required")
+			return
+		}
+		current, err := inventory.Get(r.PathValue("id"), r.PathValue("capability_id"))
+		if err != nil || len(current.Revisions) == 0 || !containsString(current.Revisions[len(current.Revisions)-1].OwnerIDs, in.ControllerID) {
+			writeAPIError(w, 422, "invalid_removal_controller", "the successor must be a current capability owner")
+			return
+		}
+		out, err := inventory.TransferRemovalController(r.PathValue("id"), r.PathValue("capability_id"), r.PathValue("plan_id"), r.PathValue("execution_id"), actor.UserID, in.ControllerID, in.Reason, in.ExpectedVersion)
+		writeCapability(w, out, err, 200)
+	})
 	mux.HandleFunc("POST /repositories/{id}/capabilities/{capability_id}/retirement-plans/{plan_id}/removal-executions/{execution_id}/completion", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := removalOwner(w, r)
 		if !ok {
@@ -506,7 +531,65 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 			writeAPIError(w, 400, "invalid_removal_completion", "complete category-specific removal proof is required")
 			return
 		}
-		out, err := inventory.CompleteRemoval(r.PathValue("id"), r.PathValue("capability_id"), r.PathValue("plan_id"), r.PathValue("execution_id"), actor.UserID, in.ExpectedVersion, in.Proofs)
+		current, err := inventory.Get(r.PathValue("id"), r.PathValue("capability_id"))
+		allowedRevisions := map[string]bool{}
+		if err == nil {
+			for _, plan := range current.RetirementPlans {
+				if plan.ID == r.PathValue("plan_id") {
+					for _, execution := range plan.Executions {
+						if execution.ID == r.PathValue("execution_id") {
+							for _, report := range execution.Reports {
+								for _, delivery := range report.Delivery {
+									if delivery.Status == "succeeded" {
+										allowedRevisions[strings.ToLower(delivery.Revision)] = true
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		verify := func(proof capabilities.CleanupProof) bool {
+			revision := strings.ToLower(proof.Revision)
+			if proof.RepositoryID != r.PathValue("id") || !allowedRevisions[revision] {
+				return false
+			}
+			repository, openErr := git.Open(proof.RepositoryID)
+			if openErr != nil {
+				return false
+			}
+			commit, readErr := repository.ReadCommit(storage.ObjectID(revision))
+			if readErr != nil {
+				return false
+			}
+			entries, walkErr := repository.WalkTree(commit.Tree)
+			if walkErr != nil {
+				return false
+			}
+			blobs := map[string]string{}
+			for _, entry := range entries {
+				if entry.Type == storage.BlobObject {
+					blobs[entry.Path] = string(entry.ID)
+				}
+			}
+			paths := append([]string(nil), proof.Paths...)
+			sort.Strings(paths)
+			digest := sha256.New()
+			prior := ""
+			for _, proofPath := range paths {
+				if proofPath == prior || blobs[proofPath] == "" {
+					return false
+				}
+				prior = proofPath
+				_, _ = digest.Write([]byte(proofPath))
+				_, _ = digest.Write([]byte{0})
+				_, _ = digest.Write([]byte(blobs[proofPath]))
+				_, _ = digest.Write([]byte{0})
+			}
+			return strings.EqualFold(proof.Digest, hex.EncodeToString(digest.Sum(nil)))
+		}
+		out, err := inventory.CompleteRemoval(r.PathValue("id"), r.PathValue("capability_id"), r.PathValue("plan_id"), r.PathValue("execution_id"), actor.UserID, in.ExpectedVersion, in.Proofs, verify)
 		writeCapability(w, out, err, 200)
 	})
 }

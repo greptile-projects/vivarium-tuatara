@@ -211,7 +211,11 @@ whenever dependencies change or the web job fails before it starts.
   consumer pauses advancement; an explicit compatibility restore preserves the failed attempt. Completion
   requires revision- and path-bound proof that obsolete code, flags, data, credentials, telemetry,
   documentation, and policy exceptions were each removed. Execution records retain provenance and expose
-  delivery state but grant none of the linked systems' authority.
+  delivery state but grant none of the linked systems' authority. If ownership changes during active removal,
+  a current human capability owner must explicitly transfer the CAS-versioned controller and retain the prior
+  controller, successor, actor, reason, and time. Final cleanup proof names the provider repository, must use a
+  revision retained as succeeded delivery for that execution, and is accepted only when every cited path exists
+  at that exact Git revision and its canonical path/blob digest matches.
   These records provide removal
   context only and grant no consumer-repository, Git,
   release, environment, migration, review, merge, deployment, or retirement authority.

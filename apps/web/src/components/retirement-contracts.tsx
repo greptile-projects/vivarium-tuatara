@@ -76,6 +76,7 @@ export type RetirementPlan = {
   }[];
   executions?: {
     id: string; candidate_id: string; version: number; status: string; active_stage: number; stage_names: string[]; controller_id: string;
+    controller_transfers?: { version: number; previous_controller: string; controller: string; transferred_by: string; reason: string; created_at: string }[];
     reports: { version: number; stage: string; action: string; remaining_use: number; health: string; control: string; rollback_boundary: string; next_action: string; unexpected_consumers?: string[]; compatibility_restored: boolean; delivery: { kind: string; resource_id: string; revision: string; status: string }[]; created_at: string }[];
     completion?: { verified_by: string; verified_at: string; proofs: { kind: string; revision: string; paths: string[]; digest: string; summary: string }[] };
   }[];
@@ -383,6 +384,7 @@ export function RetirementContracts({
             {plan.executions?.map((execution) => <div key={execution.id} className="rounded-lg border border-[var(--line)] p-3 text-sm">
               <div className="flex flex-wrap gap-2"><Badge tone={execution.status === "completed" ? "success" : execution.status === "paused" || execution.status === "restored" ? "warning" : "info"}>{execution.status.replaceAll("_", " ")}</Badge><Badge>{execution.stage_names[execution.active_stage] ?? "verified"}</Badge></div>
               <p className="mt-2">Controller: {execution.controller_id} · stage {Math.min(execution.active_stage + 1, execution.stage_names.length)}/{execution.stage_names.length}</p>
+              {execution.controller_transfers?.map((transfer) => <p key={transfer.version} className="mt-1 text-xs text-[var(--muted)]">Controller transferred from {transfer.previous_controller} to {transfer.controller} by {transfer.transferred_by}: {transfer.reason}</p>)}
               {execution.reports.map((report) => <div key={report.version} className="mt-3 rounded border border-[var(--line)] p-2">
                 <div className="flex flex-wrap gap-2"><Badge>{report.stage}</Badge><Badge tone={report.health === "healthy" ? "success" : "danger"}>{report.health}</Badge><span>{report.action}</span></div>
                 <p className="mt-1">Remaining old use: {report.remaining_use} · control: {report.control}</p><p>Rollback boundary: {report.rollback_boundary}</p><p>Next: {report.next_action}</p>

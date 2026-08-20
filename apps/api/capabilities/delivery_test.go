@@ -71,15 +71,41 @@ func TestRemovalCompletionAccountsForEveryObsoleteSurface(t *testing.T) {
 	if v.RetirementPlans[0].Executions[0].Status != "awaiting_verification" {
 		t.Fatal("final stage did not await verification")
 	}
-	if _, err = s.CompleteRemoval("repo", v.ID, p.ID, execution.ID, "provider", version, []CleanupProof{{Kind: "code"}}); err != ErrConflict {
+	verify := func(proof CleanupProof) bool {
+		return proof.RepositoryID == "repo" && proof.Revision == c.ProviderRevision
+	}
+	if _, err = s.CompleteRemoval("repo", v.ID, p.ID, execution.ID, "provider", version, []CleanupProof{{Kind: "code"}}, verify); err != ErrConflict {
 		t.Fatalf("partial cleanup = %v", err)
 	}
 	proofs := []CleanupProof{}
 	for _, kind := range []string{"code", "flags", "data", "credentials", "telemetry", "documentation", "policy_exceptions"} {
-		proofs = append(proofs, CleanupProof{Kind: kind, Revision: c.ProviderRevision, Paths: []string{"evidence/" + kind}, Digest: "sha256:" + kind, Summary: kind + " removed"})
+		proofs = append(proofs, CleanupProof{Kind: kind, RepositoryID: "repo", Revision: c.ProviderRevision, Paths: []string{"evidence/" + kind}, Digest: "sha256:" + kind, Summary: kind + " removed"})
 	}
-	v, err = s.CompleteRemoval("repo", v.ID, p.ID, execution.ID, "provider", version, proofs)
+	v, err = s.CompleteRemoval("repo", v.ID, p.ID, execution.ID, "provider", version, proofs, verify)
 	if err != nil || v.RetirementPlans[0].Executions[0].Status != "completed" {
 		t.Fatalf("completion = %#v, %v", v.RetirementPlans[0].Executions, err)
+	}
+}
+
+func TestRemovalControllerTransferPreservesRecoveryAfterOwnershipChange(t *testing.T) {
+	s, v, p, c := readyRemoval(t)
+	_, execution, err := s.StartRemoval("repo", v.ID, p.ID, c.ID, "provider")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.TransferRemovalController("repo", v.ID, p.ID, execution.ID, "new-owner", "new-owner", "provider ownership changed", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transferred := v.RetirementPlans[0].Executions[0]
+	if transferred.ControllerID != "new-owner" || transferred.Version != 2 || len(transferred.Transfers) != 1 || transferred.Transfers[0].PreviousController != "provider" {
+		t.Fatalf("transfer = %#v", transferred)
+	}
+	report := StageReport{StageIndex: 0, Stage: p.Stages[0].Name, Action: "pause", Health: "healthy", Control: "successor owner", RollbackBoundary: "before contract", NextAction: "inspect", Delivery: []DeliveryReference{{Kind: "deployment", ResourceID: "deployment-1", Revision: c.ProviderRevision, Status: "pending"}}}
+	if _, err = s.ReportRemovalStage("repo", v.ID, p.ID, execution.ID, "provider", 2, report); err != ErrConflict {
+		t.Fatalf("predecessor report = %v", err)
+	}
+	if _, err = s.ReportRemovalStage("repo", v.ID, p.ID, execution.ID, "new-owner", 2, report); err != nil {
+		t.Fatalf("successor report = %v", err)
 	}
 }
