@@ -164,7 +164,11 @@ func (s *Store) Current(scopeKind, scopeID string) (Policy, error) {
 func (s *Store) AddException(repo, actor string, x Exception) (Exception, error) {
 	var out Exception
 	err := s.lock(func() error {
-		if x.RequirementID == "" || x.Revision == "" || len(strings.TrimSpace(x.Rationale)) < 10 || x.ExpiresAt.After(s.now().Add(30*24*time.Hour)) || !x.ExpiresAt.After(s.now()) || x.FollowUpID == "" || !one(x.FollowUpKind, "issue", "proposal") {
+		// Components, assets, and risk classes are retained on requirements, but
+		// delivery targets do not yet provide authoritative values for them.
+		// Refuse such exception scopes instead of treating them as wildcards.
+		unevaluableScope := len(x.Scope.Components) > 0 || len(x.Scope.Assets) > 0 || len(x.Scope.RiskClasses) > 0
+		if x.RequirementID == "" || x.Revision == "" || len(strings.TrimSpace(x.Rationale)) < 10 || x.ExpiresAt.After(s.now().Add(30*24*time.Hour)) || !x.ExpiresAt.After(s.now()) || x.FollowUpID == "" || !one(x.FollowUpKind, "issue", "proposal") || unevaluableScope || len(x.Scope.Branches)+len(x.Scope.Paths) == 0 {
 			return ErrInvalid
 		}
 		x.ID = newID()

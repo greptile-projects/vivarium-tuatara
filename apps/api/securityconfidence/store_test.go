@@ -59,6 +59,12 @@ func TestExceptionIsExactExpiringAttributedAndFollowedUp(t *testing.T) {
 	if !errors.Is(err, ErrInvalid) {
 		t.Fatalf("long exception = %v", err)
 	}
+	for _, scope := range []Selector{{Components: []string{"identity"}}, {Assets: []string{"credentials"}}, {RiskClasses: []string{"critical"}}} {
+		_, err = s.AddException("repo", "security-owner", Exception{RequirementID: "security_scenario", Revision: revision, Rationale: "Cannot evaluate this dimension safely", Scope: scope, ExpiresAt: time.Now().Add(time.Hour), FollowUpKind: "issue", FollowUpID: "issue"})
+		if !errors.Is(err, ErrInvalid) {
+			t.Fatalf("unevaluable exception scope %#v = %v", scope, err)
+		}
+	}
 }
 
 func TestProductionSignalRequiresExactSanitizedResponseLink(t *testing.T) {

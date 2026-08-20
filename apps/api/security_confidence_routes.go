@@ -200,7 +200,7 @@ func registerSecurityConfidenceRoutes(mux *http.ServeMux, catalog *repositories.
 				valid = err == nil && incidentScopesRepository(v, d.RepositoryID)
 			case "security_advisory":
 				v, err := advisoryStore.Get(in.ResponseID)
-				valid = err == nil && advisoryAffectsRepository(v, d.RepositoryID)
+				valid = err == nil && advisoryAffectsRepository(v, d.RepositoryID) && securityAdvisoryVisible(catalog, actor.UserID, v)
 			case "repair":
 				_, err := proposalStore.Get(d.RepositoryID, in.ResponseID)
 				valid = err == nil
@@ -235,8 +235,14 @@ func securityMatrix(s *securityconfidence.Store, c *repositories.Store, models *
 		return securityconfidence.Matrix{}, e
 	}
 	ownerRepo, _ := c.GetByID(repo)
-	allFindings, _ := findings.List(repo, ownerRepo.OwnerID)
-	visible, _ := findings.List(repo, reader)
+	allFindings, err := findings.List(repo, ownerRepo.OwnerID)
+	if err != nil {
+		return securityconfidence.Matrix{}, err
+	}
+	visible, err := findings.List(repo, reader)
+	if err != nil {
+		return securityconfidence.Matrix{}, err
+	}
 	visibleIDs := map[string]bool{}
 	for _, f := range visible {
 		visibleIDs[f.ID] = true
@@ -269,7 +275,7 @@ func securityMatrix(s *securityconfidence.Store, c *repositories.Store, models *
 		}
 		if q.ScenarioID != "" {
 			scenario, err := scenarios.Get(repo, q.ScenarioID)
-			if err == nil && scenario.Review != nil && scenario.Review.Decision == "approved" && (scenario.CommitID == revision || !securityPathsIntersect(paths, append(scenario.DependencyIDs, scenario.CheckPath))) {
+			if err == nil && securityScenarioCurrent(q, scenario, revision, paths) {
 				for i := len(scenario.Attempts) - 1; i >= 0; i-- {
 					a := scenario.Attempts[i]
 					if a.Revision == scenario.CommitID {
@@ -307,6 +313,18 @@ func securityPathsIntersect(a, b []string) bool {
 	}
 	return false
 }
+func securityScenarioCurrent(q securityconfidence.Requirement, scenario securityscenarios.Scenario, revision string, paths []string) bool {
+	if scenario.Review == nil || scenario.Review.Decision != "approved" {
+		return false
+	}
+	if scenario.CommitID == revision {
+		return true
+	}
+	// DependencyIDs are semantic threat-model identities, not repository paths.
+	// Reuse older proof only when policy freezes an explicit path scope and the
+	// candidate does not intersect it; otherwise require an exact-revision rerun.
+	return len(q.Selector.Paths) > 0 && !securityPathsIntersect(paths, q.Selector.Paths)
+}
 func containsSecurityString(xs []string, x string) bool {
 	for _, v := range xs {
 		if v == x {
@@ -337,6 +355,18 @@ func incidentScopesRepository(v incidents.Incident, repo string) bool {
 func advisoryAffectsRepository(v securityadvisories.Advisory, repo string) bool {
 	for _, affected := range v.AffectedRepositories {
 		if affected.RepositoryID == repo {
+			return true
+		}
+	}
+	return false
+}
+func securityAdvisoryVisible(catalog *repositories.Store, actor string, v securityadvisories.Advisory) bool {
+	if actor == v.ReporterID || containsSecurityString(v.ResponseTeam, actor) {
+		return true
+	}
+	for _, affected := range v.AffectedRepositories {
+		repo, err := catalog.GetByID(affected.RepositoryID)
+		if err == nil && repo.OwnerID == actor {
 			return true
 		}
 	}
