@@ -13,7 +13,7 @@ async function git(cwd: string, ...args: string[]) {
   return (await run("git", args, { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } })).stdout.trim();
 }
 async function authenticatedGit(token: string, cwd: string, ...args: string[]) {
-  return (await run("git", args, { cwd, env: { ...process.env, GIT_ASKPASS: join(__dirname, "git-askpass.sh"), GIT_TERMINAL_PROMPT: "0", VIVARIUM_GIT_TOKEN: token } })).stdout.trim();
+  return (await run("git", ["-c", "credential.helper=", ...args], { cwd, env: { ...process.env, GIT_ASKPASS: join(__dirname, "git-askpass.sh"), GIT_TERMINAL_PROMPT: "0", VIVARIUM_GIT_TOKEN: token } })).stdout.trim();
 }
 async function account(page: Page, suffix: string, name: string) {
   await page.goto("/");
