@@ -2,6 +2,15 @@
 
 Guidance for coding agents working in this repository.
 
+Assurance programs at `/repositories/{id}/assurance-programs` and the repository
+`/assurance` workspace retain immutable selections of regulatory, contractual, and
+organization requirements beneath `$ASSURANCE_PROGRAM_STORAGE_ROOT` (`assurance-programs`).
+Each revision makes applicability, interpretation, inheritance, owners, review periods,
+exceptions, control objectives, evidence criteria, and exact resource mappings inspectable.
+Derived diagnostics keep missing owners, unsupported claims, inherited duties, conflicting
+interpretations, and expiring exceptions explicit and attributable. Named owners and exception
+grantors must be current repository participants; records grant no linked-system authority.
+
 Security confidence at pull, release, and deployment `/security-confidence` freezes repository or
 organization requirements by branch, component, asset, risk class, and path beneath
 `$SECURITY_CONFIDENCE_STORAGE_ROOT` (`security-confidence`). Matrices derive current threat-model

@@ -3,6 +3,22 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Versioned assurance programs
+
+Repository collaborators publish assurance programs through
+`/repositories/{id}/assurance-programs` and inspect them at `/repositories/{id}/assurance`.
+Complete immutable revisions select regulatory, contractual, and organization requirements with
+exact citations, applicability, interpretations, inherited sources, owners, and review periods.
+Controls connect obligations to an explicit satisfaction claim, objective, owner, evidence
+criteria, and exact repository, policy, data-flow, infrastructure, environment, release, or
+operational-procedure resources.
+
+Reads retain attributable missing owners, conflicting interpretations, inherited obligations,
+unmapped requirements, unsupported control claims, and expired or near-expiry exceptions. Named
+owners and exception grantors are rechecked as current participants at publication. Records
+default beneath `$ASSURANCE_PROGRAM_STORAGE_ROOT` (`assurance-programs`) and grant no Git,
+policy, evidence, infrastructure, environment, release, or operational authority.
+
 ## Revision-exact capability inventory
 
 Authorized repository collaborators publish immutable capability revisions at

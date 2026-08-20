@@ -1,5 +1,15 @@
 # HTTP API contract
 
+## Assurance programs
+
+- `GET /repositories/{id}/assurance-programs` lists visible versioned programs.
+- `GET /repositories/{id}/assurance-programs/{program_id}` returns a program and diagnostics.
+- `POST /repositories/{id}/assurance-programs` publishes its first complete revision.
+- `POST /repositories/{id}/assurance-programs/{program_id}/revisions` publishes a complete CAS successor.
+
+Writes require `repositories:write`; every named program, requirement, control, and exception
+owner must be a current repository participant.
+
 ## Security confidence
 
 - `POST /repositories/{id}/security-requirements` publishes repository-owner policy; `POST
