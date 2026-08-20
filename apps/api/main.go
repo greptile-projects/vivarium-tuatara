@@ -1257,7 +1257,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	if authStore != nil && repositoryCatalog != nil && userStore != nil && organizationStore != nil {
 		registerOrganizationRoutes(mux, store, organizationStore, repositoryCatalog, userStore, authStore, activityStore, proposalStore, pullRequestStore, releaseStore, packageStore, incidentStore, relationshipStore, securityAdvisoryStore, agentEvaluationStore)
 		if agentEvaluationStore != nil && store != nil {
-			registerAgentEvaluationRoutes(mux, store, repositoryCatalog, authStore, organizationStore, agentEvaluationStore)
+			registerAgentEvaluationRoutes(mux, store, repositoryCatalog, authStore, organizationStore, agentEvaluationStore, issueStore, supportThreadStore, proposalStore, incidentStore, decisionStore, exploratorySessionStore)
 		}
 	}
 	if authStore != nil && repositoryCatalog != nil && agentProjectStore != nil && store != nil {

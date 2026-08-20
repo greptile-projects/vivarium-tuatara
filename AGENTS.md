@@ -2584,7 +2584,11 @@ whenever dependencies change or the web job fails before it starts.
   projections replace protected source identity with an opaque marker and omit protected prompts,
   inputs, context, outcomes, rubric, checks, uncertainty, judgment, and candidate outputs. Historical
   suites without the collaborative-case fields remain reproducible but successors can adopt the full
-  contract. Trial evidence binds an exact published agent profile and retains bounded outputs, tool
+  contract. Case publication resolves each source through its repository-owned issue, support,
+  proposal-task, incident, decision, or exploratory-session store under the author's current
+  repository-participant boundary; the source must belong to the suite repository and its caller-supplied
+  decimal revision must equal the record's current version. Prior sessions additionally require their
+  explicit audience or creator. Trial evidence binds an exact published agent profile and retains bounded outputs, tool
   actions, digest-addressed artifacts, costs, latency, failures, derived checks, contamination,
   reproducibility, and human decisions. Protected check definitions never appear in suite or run
   projections. Ordinary member projections derive aggregates only from public criteria and omit

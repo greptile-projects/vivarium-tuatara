@@ -2903,6 +2903,11 @@ project only opaque identity and metadata to ordinary members; their prompt, ans
 context, source identity, and candidate output remain available only to the human owner evaluator.
 Suites and favorable results remain evidence rather than permission to train, broaden evaluation,
 access source records, or participate in repository work.
+Create and revise resolve each source in its repository-owned store while holding the author's current
+suite-repository participation boundary. The record must belong to that repository and its declared
+decimal revision must equal the current version; exploratory sessions also require explicit audience or
+creator access. Missing, cross-repository, stale, or inaccessible provenance fails closed before ledger
+persistence.
 The linked request and grant retain the approved participation limits. Derived API/Git credentials
 require an explicit `repository.read` or `repository.write` action and a compatible
 `repository_metadata` or `repository_content` data boundary; write is never inferred from the role.

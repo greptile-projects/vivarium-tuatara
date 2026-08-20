@@ -34,6 +34,10 @@ func TestOwnerLinkedAgentCannotDecideProtectedEvaluationEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	gitRepo, _ := git.Open(repo.ID)
+	commit := writeCommit(t, gitRepo, 1700000000, "evaluation fixture")
+	fabricated := `{"name":"Fabricated provenance","repository_id":"` + repo.ID + `","expected_version":0,"revision":{"repository_revision":"` + string(commit) + `","scenarios":[{"id":"case","title":"Case","visibility":"public","source":{"kind":"incident","id":"does-not-exist","revision":"1","sanitized":true},"inputs":["synthetic"],"permitted_context":["README"],"sanitized_prompt":"inspect fixture","expected_outcomes":["done"],"rubric":["correct"],"human_judgment":["owner reviews"],"training_use":"prohibited","data_classification":"synthetic","license":"evaluation only","checks":[{"name":"done","kind":"contains","expected":"done"}]}],"budget":{"max_cost":1,"max_latency_ms":1000,"max_tool_actions":3},"prohibited_actions":["publish"],"human_review_criteria":["inspect"],"change_summary":"fabricated"}}`
+	authenticatedRequest(t, http.MethodPost, server.URL+"/organizations/"+org.ID+"/agent-evaluation-suites", fabricated, owner.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
 	revision := agentevaluations.Revision{
 		RepositoryRevision: strings.Repeat("a", 40),
 		Scenarios:          []agentevaluations.Scenario{{ID: "safe", Title: "Safe", SanitizedPrompt: "complete fixture", ExpectedOutcomes: []string{"done"}, Checks: []agentevaluations.Check{{Name: "public", Kind: "contains", Expected: "done"}}, HiddenChecks: []agentevaluations.Check{{Name: "protected", Kind: "contains", Expected: "done"}}}},
