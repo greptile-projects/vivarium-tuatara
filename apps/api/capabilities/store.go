@@ -60,10 +60,11 @@ type Revision struct {
 	CreatedAt        time.Time  `json:"created_at"`
 }
 type Diagnostic struct {
-	Kind     string `json:"kind"`
-	Severity string `json:"severity"`
-	Message  string `json:"message"`
-	Consumer string `json:"consumer,omitempty"`
+	Kind          string `json:"kind"`
+	Severity      string `json:"severity"`
+	Message       string `json:"message"`
+	Consumer      string `json:"consumer,omitempty"`
+	ConsumerIndex *int   `json:"consumer_index,omitempty"`
 }
 type Capability struct {
 	ID             string       `json:"id"`
@@ -193,24 +194,25 @@ func project(v Capability) Capability {
 	}
 	r := v.Revisions[len(v.Revisions)-1]
 	d := []Diagnostic{}
-	add := func(k, s, m, c string) { d = append(d, Diagnostic{k, s, m, c}) }
+	add := func(k, s, m, c string, consumerIndex *int) { d = append(d, Diagnostic{k, s, m, c, consumerIndex}) }
 	if r.UnknownUse {
-		add("unknown_use", "blocking", r.UnknownUseReason, "")
+		add("unknown_use", "blocking", r.UnknownUseReason, "", nil)
 	}
-	for _, c := range r.Consumers {
+	for index, c := range r.Consumers {
+		consumerIndex := index
 		switch c.Discovery {
 		case "dynamic":
-			add("dynamic_use", "warning", "Runtime discovery may reveal additional use.", c.Name)
+			add("dynamic_use", "warning", "Runtime discovery may reveal additional use.", c.Name, &consumerIndex)
 		case "unknown":
-			add("unknown_consumer", "blocking", "The consumer footprint is not established.", c.Name)
+			add("unknown_consumer", "blocking", "The consumer footprint is not established.", c.Name, &consumerIndex)
 		}
 		switch c.EvidenceState {
 		case "stale":
-			add("stale_evidence", "blocking", "Usage evidence does not describe the declared revision.", c.Name)
+			add("stale_evidence", "blocking", "Usage evidence does not describe the declared revision.", c.Name, &consumerIndex)
 		case "inaccessible":
-			add("inaccessible_evidence", "blocking", "Usage evidence exists but is not available to this inventory.", c.Name)
+			add("inaccessible_evidence", "blocking", "Usage evidence exists but is not available to this inventory.", c.Name, &consumerIndex)
 		case "unknown":
-			add("unknown_evidence", "blocking", "Usage has not been measured.", c.Name)
+			add("unknown_evidence", "blocking", "Usage has not been measured.", c.Name, &consumerIndex)
 		}
 	}
 	v.Diagnostics = d

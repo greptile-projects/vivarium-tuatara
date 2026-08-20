@@ -102,7 +102,7 @@ func projectCapabilitiesForReader(catalog *repositories.Store, actorID string, v
 		return err == nil && allowed
 	}
 	for valueIndex := range values {
-		restrictedCurrentNames := map[string]bool{}
+		restrictedCurrentConsumers := map[int]bool{}
 		for revisionIndex := range values[valueIndex].Revisions {
 			revision := &values[valueIndex].Revisions[revisionIndex]
 			for consumerIndex := range revision.Consumers {
@@ -111,14 +111,15 @@ func projectCapabilitiesForReader(catalog *repositories.Store, actorID string, v
 					continue
 				}
 				if revisionIndex == len(values[valueIndex].Revisions)-1 {
-					restrictedCurrentNames[consumer.Name] = true
+					restrictedCurrentConsumers[consumerIndex] = true
 				}
 				*consumer = capabilities.Consumer{Name: "restricted", Environment: "restricted", Discovery: "unknown", EvidenceState: "inaccessible", CompatibilityPromise: "restricted"}
 			}
 		}
 		for diagnosticIndex := range values[valueIndex].Diagnostics {
-			if restrictedCurrentNames[values[valueIndex].Diagnostics[diagnosticIndex].Consumer] {
-				values[valueIndex].Diagnostics[diagnosticIndex].Consumer = "restricted"
+			diagnostic := &values[valueIndex].Diagnostics[diagnosticIndex]
+			if diagnostic.ConsumerIndex != nil && restrictedCurrentConsumers[*diagnostic.ConsumerIndex] {
+				diagnostic.Consumer = "restricted"
 			}
 		}
 	}
