@@ -1,8 +1,10 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/threatmodels"
 )
 
@@ -19,6 +21,40 @@ func TestSecurityAttemptCommandsMustMatchReviewedCommand(t *testing.T) {
 	}
 	if !securityCommandMatches(reviewed, reviewed) {
 		t.Fatal("exact preview command did not match reviewed security command")
+	}
+}
+
+func TestSecurityScenarioRepairCandidateMustDescendFromModeledCommit(t *testing.T) {
+	git, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, err := git.Create(strings.Repeat("1", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	vulnerableBlob, err := repository.WriteObject(storage.BlobObject, []byte("vulnerable\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := writeTestTree(t, repository, testTreeEntry{mode: "100644", name: "security.txt", id: vulnerableBlob})
+	modeled := writeTestCommit(t, repository, tree, nil, 1, "modeled candidate")
+	protectedBlob, err := repository.WriteObject(storage.BlobObject, []byte("protected\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repairTree := writeTestTree(t, repository, testTreeEntry{mode: "100644", name: "security.txt", id: protectedBlob})
+	repair := writeTestCommit(t, repository, repairTree, []storage.ObjectID{modeled}, 2, "repair candidate")
+	unrelated := writeTestCommit(t, repository, repairTree, nil, 3, "unrelated candidate")
+
+	if !securityScenarioCandidateDescendsFrom(git, repository.ID(), string(modeled), string(modeled)) {
+		t.Fatal("modeled candidate rejected")
+	}
+	if !securityScenarioCandidateDescendsFrom(git, repository.ID(), string(modeled), string(repair)) {
+		t.Fatal("descendant repair rejected")
+	}
+	if securityScenarioCandidateDescendsFrom(git, repository.ID(), string(modeled), string(unrelated)) {
+		t.Fatal("unrelated candidate admitted")
 	}
 }
 

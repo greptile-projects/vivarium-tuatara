@@ -1226,13 +1226,13 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerSecurityFindingRoutes(mux, repositoryCatalog, authStore, securityFindingStore, threatModelStore, securityScenarioStore, proposalStore, pullRequestStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && securityConfidenceStore != nil && pullRequestStore != nil && releaseStore != nil && deploymentStore != nil && threatModelStore != nil && securityScenarioStore != nil && securityFindingStore != nil && issueStore != nil && proposalStore != nil && incidentStore != nil && securityAdvisoryStore != nil {
-		registerSecurityConfidenceRoutes(mux, repositoryCatalog, organizationStore, authStore, securityConfidenceStore, pullRequestStore, releaseStore, deploymentStore, threatModelStore, securityScenarioStore, securityFindingStore, issueStore, proposalStore, incidentStore, securityAdvisoryStore)
+		registerSecurityConfidenceRoutes(mux, store, repositoryCatalog, organizationStore, authStore, securityConfidenceStore, pullRequestStore, releaseStore, deploymentStore, threatModelStore, securityScenarioStore, securityFindingStore, issueStore, proposalStore, incidentStore, securityAdvisoryStore)
 		pullRequestStore.ConfigureSecurityConfidence(func(p pullrequests.PullRequest, changes []pullrequests.FileChange) (any, []pullrequests.ReadinessBlocker, error) {
 			paths := []string{}
 			for _, change := range changes {
 				paths = append(paths, change.Path)
 			}
-			matrix, matrixErr := securityMatrix(securityConfidenceStore, repositoryCatalog, threatModelStore, securityScenarioStore, securityFindingStore, p.RepositoryID, "", "pull", p.ID, p.SourceCommitID, p.TargetBranch, paths)
+			matrix, matrixErr := securityMatrix(securityConfidenceStore, store, repositoryCatalog, threatModelStore, securityScenarioStore, securityFindingStore, p.RepositoryID, "", "pull", p.ID, p.SourceCommitID, p.TargetBranch, paths)
 			if errors.Is(matrixErr, securityconfidence.ErrNotFound) {
 				return nil, nil, nil
 			}

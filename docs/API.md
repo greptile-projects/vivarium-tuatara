@@ -11,7 +11,10 @@
   /repositories/{id}/releases/{release_id}/security-confidence`, and `GET
   /repositories/{id}/deployments/{deployment_id}/security-confidence` expose the exact policy,
   revision, evidence, residual risk, gaps, scoped exception, and readiness result. Restricted finding
-  identities remain opaque. Pull merge and queue readiness embed this same projection.
+  identities remain opaque. Pull merge and queue readiness embed this same projection. Exact repair
+  scenarios may run at their frozen modeled commit or a verified Git descendant. A later merge,
+  release, or deployment commit can reuse threat and scenario evidence only when every explicit
+  policy path resolves to identical blob content at the evidence and target commits.
 - `POST /repositories/{id}/security-exceptions` accepts only a named requirement owner, the exact
   target revision, a narrow selector, an expiry within 30 days, a rationale, and an existing issue or
   proposal follow-up.

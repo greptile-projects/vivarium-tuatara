@@ -15,6 +15,13 @@ repository-scoped private incident, advisory, or governed repair without grantin
 disclosure, Git, review, merge, queue, release, deployment, environment, or agent authority.
 Component, asset, and risk-class requirement labels are admitted only with explicit repository paths;
 delivery targets do not otherwise provide authoritative values for those governance dimensions.
+The connected `security-assurance-journey.spec.ts` browser/API/Git journey retains privileged-workflow
+expectations, bounded agent uncertainty, affected-owner threat decisions, inaccessible evidence, unsafe and
+failed replay attempts, a false positive, stale analysis, governed repair, rejected exception, exact security
+confidence through review/integration/release/staged deployment, and a sanitized changed-assumption signal
+linked to private follow-up work. Repair scenarios may evaluate exact descendants of their frozen modeled
+commit; merge and release targets reuse threat/scenario proof only when every explicitly selected path has
+identical Git content, so unrelated history shape does not invalidate proof and changed protected blobs do.
 
 Release confidence at pull and release `/quality-confidence` freezes versioned requirements by
 branch, journey, risk, locale, platform, release, and path beneath `$RELEASE_CONFIDENCE_STORAGE_ROOT`

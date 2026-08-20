@@ -18,10 +18,11 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/securityconfidence"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/securityfindings"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/securityscenarios"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/threatmodels"
 )
 
-func registerSecurityConfidenceRoutes(mux *http.ServeMux, catalog *repositories.Store, orgs *organizations.Store, credentials *auth.Store, confidence *securityconfidence.Store, pulls *pullrequests.Store, releaseStore *releases.Store, deploymentsStore *deployments.Store, models *threatmodels.Store, scenarios *securityscenarios.Store, findings *securityfindings.Store, issueStore *issues.Store, proposalStore *proposals.Store, incidentStore *incidents.Store, advisoryStore *securityadvisories.Store) {
+func registerSecurityConfidenceRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, orgs *organizations.Store, credentials *auth.Store, confidence *securityconfidence.Store, pulls *pullrequests.Store, releaseStore *releases.Store, deploymentsStore *deployments.Store, models *threatmodels.Store, scenarios *securityscenarios.Store, findings *securityfindings.Store, issueStore *issues.Store, proposalStore *proposals.Store, incidentStore *incidents.Store, advisoryStore *securityadvisories.Store) {
 	publish := func(scope string) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			actor, owner, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
@@ -130,7 +131,7 @@ func registerSecurityConfidenceRoutes(mux *http.ServeMux, catalog *repositories.
 		for _, c := range changes {
 			paths = append(paths, c.Path)
 		}
-		m, e := securityMatrix(confidence, catalog, models, scenarios, findings, p.RepositoryID, actor.UserID, "pull", p.ID, p.SourceCommitID, p.TargetBranch, paths)
+		m, e := securityMatrix(confidence, git, catalog, models, scenarios, findings, p.RepositoryID, actor.UserID, "pull", p.ID, p.SourceCommitID, p.TargetBranch, paths)
 		writeSecurityConfidence(w, m, e, 200)
 	})
 	mux.HandleFunc("GET /repositories/{id}/releases/{release_id}/security-confidence", func(w http.ResponseWriter, r *http.Request) {
@@ -143,7 +144,7 @@ func registerSecurityConfidenceRoutes(mux *http.ServeMux, catalog *repositories.
 			writeSecurityConfidence(w, nil, e, 0)
 			return
 		}
-		m, e := securityMatrix(confidence, catalog, models, scenarios, findings, v.RepositoryID, actor.UserID, "release", v.ID, v.CommitID, v.TargetBranch, v.ChangedPaths)
+		m, e := securityMatrix(confidence, git, catalog, models, scenarios, findings, v.RepositoryID, actor.UserID, "release", v.ID, v.CommitID, v.TargetBranch, v.ChangedPaths)
 		writeSecurityConfidence(w, m, e, 200)
 	})
 	mux.HandleFunc("GET /repositories/{id}/deployments/{deployment_id}/security-confidence", func(w http.ResponseWriter, r *http.Request) {
@@ -161,7 +162,7 @@ func registerSecurityConfidenceRoutes(mux *http.ServeMux, catalog *repositories.
 			writeSecurityConfidence(w, nil, e, 0)
 			return
 		}
-		m, e := securityMatrix(confidence, catalog, models, scenarios, findings, d.RepositoryID, actor.UserID, "deployment", d.ID, d.CommitID, rel.TargetBranch, rel.ChangedPaths)
+		m, e := securityMatrix(confidence, git, catalog, models, scenarios, findings, d.RepositoryID, actor.UserID, "deployment", d.ID, d.CommitID, rel.TargetBranch, rel.ChangedPaths)
 		writeSecurityConfidence(w, m, e, 200)
 	})
 	mux.HandleFunc("POST /repositories/{id}/deployments/{deployment_id}/security-signals", func(w http.ResponseWriter, r *http.Request) {
@@ -229,7 +230,7 @@ func effectiveSecurityPolicy(s *securityconfidence.Store, c *repositories.Store,
 	p.RepositoryID = repoID
 	return p, e
 }
-func securityMatrix(s *securityconfidence.Store, c *repositories.Store, models *threatmodels.Store, scenarios *securityscenarios.Store, findings *securityfindings.Store, repo, reader, kind, id, revision, branch string, paths []string) (securityconfidence.Matrix, error) {
+func securityMatrix(s *securityconfidence.Store, git *storage.Store, c *repositories.Store, models *threatmodels.Store, scenarios *securityscenarios.Store, findings *securityfindings.Store, repo, reader, kind, id, revision, branch string, paths []string) (securityconfidence.Matrix, error) {
 	p, e := effectiveSecurityPolicy(s, c, repo)
 	if e != nil {
 		return securityconfidence.Matrix{}, e
@@ -260,7 +261,7 @@ func securityMatrix(s *securityconfidence.Store, c *repositories.Store, models *
 				}
 				m, err = models.Get(repo, q.ThreatModelID, threatmodels.CurrentSource{Revision: r.Source.Revision, ArchitectureDigest: r.ArchitectureDigest, TrustBoundaryDigest: r.TrustBoundaryDigest, DependencyRevisions: deps})
 				x.ThreatRevision = m.CurrentVersion
-				x.ThreatCurrent = err == nil && m.Freshness.Fresh && (r.Source.Revision == revision || !securityPathsIntersect(paths, q.Selector.Paths))
+				x.ThreatCurrent = err == nil && m.Freshness.Fresh && (r.Source.Revision == revision || !securityPathsIntersect(paths, q.Selector.Paths) || securityScopedPathsUnchanged(git, repo, r.Source.Revision, revision, q.Selector.Paths))
 				for _, a := range m.Acknowledgements {
 					if a.ModelVersion == m.CurrentVersion && a.Decision == "acknowledged" {
 						x.AcknowledgedOwnerIDs = append(x.AcknowledgedOwnerIDs, a.OwnerID)
@@ -275,7 +276,7 @@ func securityMatrix(s *securityconfidence.Store, c *repositories.Store, models *
 		}
 		if q.ScenarioID != "" {
 			scenario, err := scenarios.Get(repo, q.ScenarioID)
-			if err == nil && securityScenarioCurrent(q, scenario, revision, paths) {
+			if err == nil && securityScenarioCurrent(git, repo, q, scenario, revision, paths) {
 				for i := len(scenario.Attempts) - 1; i >= 0; i-- {
 					a := scenario.Attempts[i]
 					if a.Revision == scenario.CommitID {
@@ -303,6 +304,20 @@ func securityMatrix(s *securityconfidence.Store, c *repositories.Store, models *
 	}
 	return s.Evaluate(p, kind, id, revision, branch, paths, ev)
 }
+
+func securityScopedPathsUnchanged(git *storage.Store, repo, modeled, target string, paths []string) bool {
+	if git == nil || len(paths) == 0 || modeled == "" || target == "" {
+		return false
+	}
+	for _, path := range paths {
+		_, modeledDigest, modeledFound := infrastructureCommitBlob(git, repo, modeled, path)
+		_, targetDigest, targetFound := infrastructureCommitBlob(git, repo, target, path)
+		if !modeledFound || !targetFound || modeledDigest != targetDigest {
+			return false
+		}
+	}
+	return true
+}
 func securityPathsIntersect(a, b []string) bool {
 	for _, x := range a {
 		for _, y := range b {
@@ -313,11 +328,14 @@ func securityPathsIntersect(a, b []string) bool {
 	}
 	return false
 }
-func securityScenarioCurrent(q securityconfidence.Requirement, scenario securityscenarios.Scenario, revision string, paths []string) bool {
+func securityScenarioCurrent(git *storage.Store, repo string, q securityconfidence.Requirement, scenario securityscenarios.Scenario, revision string, paths []string) bool {
 	if scenario.Review == nil || scenario.Review.Decision != "approved" {
 		return false
 	}
 	if scenario.CommitID == revision {
+		return true
+	}
+	if securityScopedPathsUnchanged(git, repo, scenario.CommitID, revision, q.Selector.Paths) {
 		return true
 	}
 	// DependencyIDs are semantic threat-model identities, not repository paths.

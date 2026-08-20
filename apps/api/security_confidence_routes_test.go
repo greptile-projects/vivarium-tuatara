@@ -13,14 +13,14 @@ func TestSecurityScenarioCurrentRequiresExactRerunWithoutPathMapping(t *testing.
 	oldRevision, newRevision := strings.Repeat("a", 40), strings.Repeat("b", 40)
 	scenario := securityscenarios.Scenario{CommitID: oldRevision, DependencyIDs: []string{"identity"}, CheckPath: "security/login_test.go", Review: &securityscenarios.Review{Decision: "approved"}}
 	q := securityconfidence.Requirement{Selector: securityconfidence.Selector{}}
-	if securityScenarioCurrent(q, scenario, newRevision, []string{"apps/api/auth/login.go"}) {
+	if securityScenarioCurrent(nil, "", q, scenario, newRevision, []string{"apps/api/auth/login.go"}) {
 		t.Fatal("semantic dependency ID was treated as an unaffected path")
 	}
 	q.Selector.Paths = []string{"apps/api/auth"}
-	if securityScenarioCurrent(q, scenario, newRevision, []string{"apps/api/auth/login.go"}) {
+	if securityScenarioCurrent(nil, "", q, scenario, newRevision, []string{"apps/api/auth/login.go"}) {
 		t.Fatal("affected explicit path retained stale scenario proof")
 	}
-	if !securityScenarioCurrent(q, scenario, newRevision, []string{"docs/readme.md"}) {
+	if !securityScenarioCurrent(nil, "", q, scenario, newRevision, []string{"docs/readme.md"}) {
 		t.Fatal("unaffected explicit path invalidated scenario proof")
 	}
 }
