@@ -324,6 +324,11 @@ func registerAssuranceAssessmentRoutes(mux *http.ServeMux, gitStore *storage.Sto
 				}
 			}
 			revision := program.Revisions[a.ProgramVersion-1]
+			statementReleaseScopeIDs := assuranceStatementReleaseScopes(revision, a.Scope.ReleaseIDs, rel.ID)
+			if len(statementReleaseScopeIDs) == 0 {
+				writeAPIError(w, 409, "statement_release_outside_scope", "the exact release must be selected by the assessment scope")
+				return
+			}
 			for _, exceptionID := range in.ExceptionIDs {
 				found := false
 				for _, exception := range revision.Exceptions {
@@ -383,7 +388,7 @@ func registerAssuranceAssessmentRoutes(mux *http.ServeMux, gitStore *storage.Sto
 				return
 			}
 			sum := sha256.Sum256([]byte(strings.Join(hashes, "\n")))
-			statementScope := assuranceStatementScope(a.Scope, in.ControlIDs)
+			statementScope := assuranceStatementScope(a.Scope, in.ControlIDs, statementReleaseScopeIDs)
 			in.RepositoryID, in.ProgramID, in.ProgramVersion, in.Scope, in.EvidenceDigest, in.IssuedBy = a.RepositoryID, a.ProgramID, a.ProgramVersion, statementScope, hex.EncodeToString(sum[:]), actor.UserID
 			out, err := assessments.CreateStatement(in)
 			if err != nil {
@@ -525,9 +530,19 @@ func commitDescendsForStore(store *storage.Store, repositoryID, descendant, ance
 	repository, err := store.Open(repositoryID)
 	return err == nil && commitDescends(repository, descendant, ancestor)
 }
-func assuranceStatementScope(assessed assuranceassessments.Scope, controls []string) assuranceassessments.Scope {
+func assuranceStatementScope(assessed assuranceassessments.Scope, controls, releases []string) assuranceassessments.Scope {
 	assessed.ControlIDs = append([]string(nil), controls...)
+	assessed.ReleaseIDs = append([]string(nil), releases...)
 	return assessed
+}
+func assuranceStatementReleaseScopes(revision assuranceprograms.Revision, selectedScopeIDs []string, releaseID string) []string {
+	out := []string{}
+	for _, scope := range revision.Scopes {
+		if scope.Kind == "release" && scope.ResourceID == releaseID && hasID(selectedScopeIDs, scope.ID) {
+			out = append(out, scope.ID)
+		}
+	}
+	return out
 }
 func assessmentScopeValid(r assuranceprograms.Revision, s assuranceassessments.Scope) bool {
 	for _, id := range s.ControlIDs {

@@ -46,7 +46,8 @@ acceptance criteria, and human or agent ownership. Progress derives from ordinar
 records; accepted closure requires fresh gap-free post-work evidence and an owner or assessor
 disposition. The affected revision must exist in the repository; ordered merged contributions descend
 from it, accepted evidence names the final merged revision, and a claimed release descends from and
-includes every corrective task. Exact-release `/assurance-statements` retain an immutable Ed25519-signed claim over scope,
+includes every corrective task and resolves through a release scope explicitly selected by the assessment.
+Exact-release `/assurance-statements` retain an immutable Ed25519-signed claim over scope,
 period, controls, exceptions, and evidence digest for an explicit audience. Reads project revocation,
 expiry, program drift, and reopened work separately without rewriting the signature or exposing evidence.
 Neither record grants task, agent, workspace, Git, policy, release, operational, or evidence authority.

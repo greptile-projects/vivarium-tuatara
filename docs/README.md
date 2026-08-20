@@ -55,6 +55,8 @@ must have a merged contribution, and an owner or assessor must disposition fresh
 post-correction evidence for the exact program and control. The affected commit resolves in the
 repository, each ordered merged contribution descends from the prior boundary, accepted evidence names
 the final merge revision, and a later statement release must descend from and include all those tasks.
+The named release must also resolve through a release scope retained by the assessment; publication
+narrows the signed release scope to that exact matching scope rather than implying another assessed release.
 A rejected or reopened disposition returns
 the correction to open without removing its delivery history.
 
