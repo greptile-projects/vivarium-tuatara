@@ -300,6 +300,15 @@ originating bounded system and no endpoint grants execution or merge authority.
   only those evaluators may decide a run. Suites, runs, and decisions grant no agent access or
   repository authority. Records default beneath `$AGENT_EVALUATION_STORAGE_ROOT`
   (`agent-evaluations`).
+- `POST|GET /repositories/{id}/pulls/{pull_id}/agent-candidates` assembles and lists immutable
+  exact-pull candidates from one agent-project revision and selected evaluation-suite revisions. A candidate
+  may name an earlier repository candidate as its baseline; projections compare only unchanged suite digests
+  and report changed suites separately. Pull movement marks prior candidates stale without rewriting them.
+- `POST /repositories/{id}/pulls/{pull_id}/agent-candidates/{candidate_id}/runs` retains isolated,
+  bounded scenario attempts with digest-addressed traces, outputs, tool actions, artifacts, evaluator decisions,
+  corrections, uncertainty, latency, cost, contamination, nondeterminism, and explicit sample/confidence limits.
+  The server rejects evidence exceeding its declared tool, cost, or latency bounds and excludes contaminated
+  attempts from aggregate comparisons. Records default beneath `$AGENT_CANDIDATE_STORAGE_ROOT` (`agent-candidates`).
 
 ## Runtime privacy checks
 
