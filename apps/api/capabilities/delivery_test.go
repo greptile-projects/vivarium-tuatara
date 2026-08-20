@@ -81,6 +81,13 @@ func TestRemovalCompletionAccountsForEveryObsoleteSurface(t *testing.T) {
 	for _, kind := range []string{"code", "flags", "data", "credentials", "telemetry", "documentation", "policy_exceptions"} {
 		proofs = append(proofs, CleanupProof{Kind: kind, RepositoryID: "repo", Revision: c.ProviderRevision, Paths: []string{"evidence/" + kind}, Digest: "sha256:" + kind, Summary: kind + " removed"})
 	}
+	unrelated := append([]CleanupProof(nil), proofs...)
+	for i := range unrelated {
+		unrelated[i].Revision = "cccccccccccccccccccccccccccccccccccccccc"
+	}
+	if _, err = s.CompleteRemoval("repo", v.ID, p.ID, execution.ID, "provider", version, unrelated, func(CleanupProof) bool { return true }); err != ErrConflict {
+		t.Fatalf("unrelated cleanup revision = %v", err)
+	}
 	v, err = s.CompleteRemoval("repo", v.ID, p.ID, execution.ID, "provider", version, proofs, verify)
 	if err != nil || v.RetirementPlans[0].Executions[0].Status != "completed" {
 		t.Fatalf("completion = %#v, %v", v.RetirementPlans[0].Executions, err)
