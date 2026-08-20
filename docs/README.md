@@ -12,7 +12,8 @@ and deployment limits to exact repository files and commits reachable from visib
 Public projections recheck and redact sources across the complete history when dependency access or commit
 visibility changes; successful mutations use that same projection. Publication authorizes source repositories
 before resolving their contents, synchronizes content before rename and directory metadata afterward, and marks
-a committed response `durability_uncertain` if post-rename synchronization fails. Projections derive effective
+a committed record `durability_uncertain` if post-rename synchronization fails. The conservative marker is
+persisted and remains visible after reload until the canonical rename has been confirmed durable. Projections derive effective
 capability and keep missing ownership, conflicting instructions, inaccessible dependencies, and
 unsupported guarantees explicit. The ledger defaults beneath `$AGENT_PROJECT_STORAGE_ROOT`
 (`agent-projects`) and grants no implementation or runtime authority.

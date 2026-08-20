@@ -301,6 +301,29 @@ func (s *Store) read(v string) (Project, error) {
 	return p, nil
 }
 func (s *Store) write(p Project) error {
+	// Publish a conservative state first. Only a successful parent-directory
+	// sync proves the canonical rename durable enough to clear this marker.
+	p.DurabilityUncertain = true
+	if err := s.replace(p); err != nil {
+		return err
+	}
+	if err := s.syncDirectory(s.root); err != nil {
+		return fmt.Errorf("%w: %v", errDurabilityUncertain, err)
+	}
+
+	// The project mutation is durable now. Clearing the marker is best effort:
+	// a failure leaves the synchronized conservative copy, while a successful
+	// rename is safe even if its directory sync fails (a crash may only restore
+	// the already-durable uncertain copy).
+	p.DurabilityUncertain = false
+	if err := s.replace(p); err != nil {
+		return nil
+	}
+	_ = s.syncDirectory(s.root)
+	return nil
+}
+
+func (s *Store) replace(p Project) error {
 	b, e := json.MarshalIndent(p, "", "  ")
 	if e != nil {
 		return e
@@ -331,9 +354,6 @@ func (s *Store) write(p Project) error {
 		return e
 	}
 	remove = false
-	if e = s.syncDirectory(s.root); e != nil {
-		return fmt.Errorf("%w: %v", errDurabilityUncertain, e)
-	}
 	return nil
 }
 

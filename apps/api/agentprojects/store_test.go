@@ -38,7 +38,20 @@ func TestCommittedProjectReportsPostRenameDurabilityUncertaintyAsSuccess(t *test
 		t.Fatalf("create = %#v, %v", p, err)
 	}
 	persisted, err := s.Get(p.ID)
-	if err != nil || persisted.ID != p.ID {
+	if err != nil || persisted.ID != p.ID || !persisted.DurabilityUncertain {
 		t.Fatalf("committed ledger = %#v, %v", persisted, err)
+	}
+	listed, err := s.List("repo")
+	if err != nil || len(listed) != 1 || !listed[0].DurabilityUncertain {
+		t.Fatalf("listed ledger = %#v, %v", listed, err)
+	}
+	r.ChangeSummary = "successor"
+	p, err = s.Revise(p.ID, 1, "author", r)
+	if err != nil || p.CurrentVersion != 2 || !p.DurabilityUncertain {
+		t.Fatalf("revise = %#v, %v", p, err)
+	}
+	persisted, err = s.Get(p.ID)
+	if err != nil || persisted.CurrentVersion != 2 || !persisted.DurabilityUncertain {
+		t.Fatalf("reloaded revision = %#v, %v", persisted, err)
 	}
 }

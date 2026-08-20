@@ -260,7 +260,9 @@ originating bounded system and no endpoint grants execution or merge authority.
   replace inaccessible or newly hidden provenance with an attributable opaque diagnostic. Durable writes
   authorize dependency reads before resolving any source contents. Writes synchronize the staged file before
   rename and the parent directory afterward; post-rename failures return the committed record with
-  `durability_uncertain` rather than an ambiguous operation failure. Successful mutation responses use the
+  a persisted `durability_uncertain` recovery state rather than an ambiguous operation failure. Publication
+  first retains a conservative marked copy and clears it only after that canonical rename is directory-synced,
+  so Get and List cannot lose the warning on reload. Successful mutation responses use the
   same history-wide privacy projection as reads. These
   definitions provide review context and grant no agent, model, tool, repository, network, deployment, or
   data authority. Records default beneath `$AGENT_PROJECT_STORAGE_ROOT` (`agent-projects`).

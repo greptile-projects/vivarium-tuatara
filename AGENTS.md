@@ -10,7 +10,8 @@ read every dependency and named owners must be current participants. Commits mus
 non-`vivarium-security/` branch, and reads recheck and redact inaccessible or hidden sources across every
 historical revision. Source contents are resolved only after repository read authorization. Ledger publication
 fsyncs staged content before rename and its directory entry afterward; a post-rename sync failure returns the
-committed project with `durability_uncertain` instead of falsely reporting an uncommitted mutation.
+committed project with a persisted `durability_uncertain` recovery state instead of falsely reporting an
+uncommitted mutation. The marker is cleared only after the conservative canonical copy is directory-synced.
 Reads derive effective capability,
 provenance, history, and attributable missing-owner, conflicting-instruction, inaccessible-dependency,
 and unsupported-guarantee diagnostics. Definitions grant no agent, Git, tool, model, network, deployment,
