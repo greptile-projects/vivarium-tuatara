@@ -40,6 +40,15 @@ distinct roles. Reads expose only the selected packages and already-sanitized ev
 expired or conflicted assessor access fails closed. Assessments grant no repository, source-system,
 production, review, release, deployment, evidence-collection, or project mutation authority.
 
+Assessment findings can seed ordered ordinary proposal tasks through
+`/{assessment_id}/remediations`, freezing the exact finding/control, affected revision, deadline,
+acceptance criteria, and human or agent ownership. Progress derives from ordinary task and merged-pull
+records; accepted closure requires fresh gap-free post-work evidence and an owner or assessor
+disposition. Exact-release `/assurance-statements` retain an immutable Ed25519-signed claim over scope,
+period, controls, exceptions, and evidence digest for an explicit audience. Reads project revocation,
+expiry, program drift, and reopened work separately without rewriting the signature or exposing evidence.
+Neither record grants task, agent, workspace, Git, policy, release, operational, or evidence authority.
+
 Pre-merge assurance impact at `/repositories/{id}/pulls/{pull_id}/assurance-impact` binds an exact
 pull commit to an exact assurance-program revision beneath `$ASSURANCE_IMPACT_STORAGE_ROOT`
 (`assurance-impacts`). The server derives affected controls and paths from the Git diff and control

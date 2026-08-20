@@ -2,7 +2,10 @@
 package assuranceassessments
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -47,23 +50,53 @@ type Event struct {
 	Status             string    `json:"status,omitempty"`
 	CreatedAt          time.Time `json:"created_at"`
 }
-type Assessment struct {
+type Remediation struct {
+	ID                             string                    `json:"id"`
+	FindingEventID                 string                    `json:"finding_event_id"`
+	ControlID                      string                    `json:"control_id"`
+	AffectedRevision               string                    `json:"affected_revision"`
+	Deadline                       time.Time                 `json:"deadline"`
+	AcceptanceCriteria             []string                  `json:"acceptance_criteria"`
+	ProposalID                     string                    `json:"proposal_id"`
+	TaskIDs                        []string                  `json:"task_ids"`
+	State                          string                    `json:"state"`
+	Verification                   string                    `json:"verification,omitempty"`
+	VerificationEvidencePackageIDs []string                  `json:"verification_evidence_package_ids,omitempty"`
+	VerifiedBy                     string                    `json:"verified_by,omitempty"`
+	VerifiedAt                     *time.Time                `json:"verified_at,omitempty"`
+	Disposition                    string                    `json:"disposition,omitempty"`
+	DispositionBy                  string                    `json:"disposition_by,omitempty"`
+	CreatedBy                      string                    `json:"created_by"`
+	CreatedAt                      time.Time                 `json:"created_at"`
+	Verifications                  []RemediationVerification `json:"verifications"`
+}
+type RemediationVerification struct {
 	ID                 string    `json:"id"`
-	RepositoryID       string    `json:"repository_id"`
-	ProgramID          string    `json:"program_id"`
-	ProgramVersion     int       `json:"program_version"`
-	Title              string    `json:"title"`
-	OwnerID            string    `json:"owner_id"`
-	Assessor           Assessor  `json:"assessor"`
-	Scope              Scope     `json:"scope"`
-	EvidencePackageIDs []string  `json:"evidence_package_ids"`
-	StartsAt           time.Time `json:"starts_at"`
-	ExpiresAt          time.Time `json:"expires_at"`
-	Status             string    `json:"status"`
-	Version            int       `json:"version"`
-	Events             []Event   `json:"events"`
+	EvidencePackageIDs []string  `json:"evidence_package_ids,omitempty"`
+	Summary            string    `json:"summary"`
+	Disposition        string    `json:"disposition"`
+	ActorID            string    `json:"actor_id"`
+	ActorRole          string    `json:"actor_role"`
 	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+}
+type Assessment struct {
+	ID                 string        `json:"id"`
+	RepositoryID       string        `json:"repository_id"`
+	ProgramID          string        `json:"program_id"`
+	ProgramVersion     int           `json:"program_version"`
+	Title              string        `json:"title"`
+	OwnerID            string        `json:"owner_id"`
+	Assessor           Assessor      `json:"assessor"`
+	Scope              Scope         `json:"scope"`
+	EvidencePackageIDs []string      `json:"evidence_package_ids"`
+	StartsAt           time.Time     `json:"starts_at"`
+	ExpiresAt          time.Time     `json:"expires_at"`
+	Status             string        `json:"status"`
+	Version            int           `json:"version"`
+	Events             []Event       `json:"events"`
+	Remediations       []Remediation `json:"remediations"`
+	CreatedAt          time.Time     `json:"created_at"`
+	UpdatedAt          time.Time     `json:"updated_at"`
 }
 type Store struct {
 	root string
@@ -92,6 +125,7 @@ func (s *Store) Create(a Assessment) (Assessment, error) {
 	a.CreatedAt = now
 	a.UpdatedAt = now
 	a.Events = []Event{}
+	a.Remediations = []Remediation{}
 	if a.Assessor.ConflictDisclosure == "none" {
 		a.Assessor.ConflictStatus = "clear"
 		a.Status = "open"
@@ -100,6 +134,189 @@ func (s *Store) Create(a Assessment) (Assessment, error) {
 		a.Status = "conflict_review"
 	}
 	return a, s.write(a)
+}
+func (s *Store) LinkRemediation(assessmentID string, expected int, actor string, work Remediation) (Assessment, error) {
+	var out Assessment
+	err := s.lock(func() error {
+		a, err := s.read(assessmentID)
+		if err != nil {
+			return err
+		}
+		if a.Version != expected {
+			return ErrConflict
+		}
+		finding, ok := findEvent(a.Events, work.FindingEventID)
+		if !ok || finding.Kind != "finding" || finding.ControlID == "" || work.ControlID != finding.ControlID || len(work.AffectedRevision) != 40 || work.Deadline.IsZero() || !work.Deadline.After(s.now()) || len(work.AcceptanceCriteria) == 0 || work.ProposalID == "" || len(work.TaskIDs) == 0 {
+			return ErrInvalid
+		}
+		for _, existing := range a.Remediations {
+			if existing.FindingEventID == work.FindingEventID {
+				return ErrConflict
+			}
+		}
+		work.ID, work.State, work.CreatedBy, work.CreatedAt = id(), "delivering", actor, s.now()
+		work.Verifications = []RemediationVerification{}
+		a.Remediations = append(a.Remediations, work)
+		a.Version++
+		a.UpdatedAt = work.CreatedAt
+		if err := s.write(a); err != nil {
+			return err
+		}
+		out = a
+		return nil
+	})
+	return out, err
+}
+func (s *Store) VerifyRemediation(assessmentID, remediationID string, expected int, actor, role, verification, disposition string, evidencePackageIDs []string) (Assessment, error) {
+	var out Assessment
+	err := s.lock(func() error {
+		a, err := s.read(assessmentID)
+		if err != nil {
+			return err
+		}
+		if a.Version != expected {
+			return ErrConflict
+		}
+		if !one(role, "owner", "assessor") || strings.TrimSpace(verification) == "" || credentialShaped(verification) || !one(disposition, "accepted", "rejected", "reopened") || (disposition == "accepted" && len(evidencePackageIDs) == 0) || !unique(evidencePackageIDs) {
+			return ErrInvalid
+		}
+		found := false
+		now := s.now()
+		for i := range a.Remediations {
+			if a.Remediations[i].ID == remediationID {
+				found = true
+				a.Remediations[i].Verification, a.Remediations[i].VerifiedBy, a.Remediations[i].VerifiedAt, a.Remediations[i].Disposition, a.Remediations[i].DispositionBy = strings.TrimSpace(verification), actor, &now, disposition, actor
+				a.Remediations[i].VerificationEvidencePackageIDs = append([]string(nil), evidencePackageIDs...)
+				a.Remediations[i].Verifications = append(a.Remediations[i].Verifications, RemediationVerification{ID: id(), EvidencePackageIDs: append([]string(nil), evidencePackageIDs...), Summary: strings.TrimSpace(verification), Disposition: disposition, ActorID: actor, ActorRole: role, CreatedAt: now})
+				if disposition == "accepted" {
+					a.Remediations[i].State = "verified"
+				} else {
+					a.Remediations[i].State = "open"
+				}
+			}
+		}
+		if !found {
+			return ErrNotFound
+		}
+		a.Version++
+		a.UpdatedAt = now
+		if err := s.write(a); err != nil {
+			return err
+		}
+		out = a
+		return nil
+	})
+	return out, err
+}
+func findEvent(events []Event, eventID string) (Event, bool) {
+	for _, e := range events {
+		if e.ID == eventID {
+			return e, true
+		}
+	}
+	return Event{}, false
+}
+
+type Statement struct {
+	ID               string     `json:"id"`
+	RepositoryID     string     `json:"repository_id"`
+	AssessmentID     string     `json:"assessment_id"`
+	ReleaseID        string     `json:"release_id"`
+	ReleaseRevision  string     `json:"release_revision"`
+	ProgramID        string     `json:"program_id"`
+	ProgramVersion   int        `json:"program_version"`
+	Scope            Scope      `json:"scope"`
+	ControlIDs       []string   `json:"control_ids"`
+	ExceptionIDs     []string   `json:"exception_ids"`
+	EvidenceDigest   string     `json:"evidence_digest"`
+	Audience         []string   `json:"audience"`
+	ExpiresAt        time.Time  `json:"expires_at"`
+	IssuedBy         string     `json:"issued_by"`
+	IssuedAt         time.Time  `json:"issued_at"`
+	Payload          string     `json:"payload"`
+	Signature        string     `json:"signature"`
+	PublicKey        string     `json:"public_key"`
+	RevokedAt        *time.Time `json:"revoked_at,omitempty"`
+	RevokedBy        string     `json:"revoked_by,omitempty"`
+	RevocationReason string     `json:"revocation_reason,omitempty"`
+}
+
+func (s *Store) CreateStatement(v Statement) (Statement, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if v.RepositoryID == "" || v.AssessmentID == "" || v.ReleaseID == "" || len(v.ReleaseRevision) != 40 || v.ProgramID == "" || v.ProgramVersion < 1 || len(v.ControlIDs) == 0 || !unique(v.ControlIDs) || !unique(v.ExceptionIDs) || v.EvidenceDigest == "" || len(v.Audience) == 0 || !unique(v.Audience) || !v.ExpiresAt.After(s.now()) || v.ExpiresAt.After(s.now().Add(365*24*time.Hour)) {
+		return Statement{}, ErrInvalid
+	}
+	v.ID, v.IssuedAt = id(), s.now()
+	unsigned := v
+	unsigned.Payload, unsigned.Signature, unsigned.PublicKey = "", "", ""
+	raw, _ := json.Marshal(unsigned)
+	sum := sha256.Sum256(raw)
+	v.Payload = base64.RawURLEncoding.EncodeToString(raw)
+	priv, pub, err := s.signingKey()
+	if err != nil {
+		return Statement{}, err
+	}
+	v.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(priv, sum[:]))
+	v.PublicKey = base64.RawURLEncoding.EncodeToString(pub)
+	if err = os.MkdirAll(filepath.Join(s.root, "statements"), 0700); err != nil {
+		return Statement{}, err
+	}
+	b, _ := json.MarshalIndent(v, "", "  ")
+	err = os.WriteFile(filepath.Join(s.root, "statements", v.ID+".json"), b, 0600)
+	return v, err
+}
+func (s *Store) GetStatement(statementID string) (Statement, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var v Statement
+	b, err := os.ReadFile(filepath.Join(s.root, "statements", statementID+".json"))
+	if os.IsNotExist(err) {
+		return v, ErrNotFound
+	}
+	if err != nil || json.Unmarshal(b, &v) != nil {
+		return v, ErrInvalid
+	}
+	return v, nil
+}
+func (s *Store) RevokeStatement(statementID, actor, reason string) (Statement, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.getStatementUnlocked(statementID)
+	if err != nil {
+		return v, err
+	}
+	if strings.TrimSpace(reason) == "" || v.RevokedAt != nil {
+		return v, ErrInvalid
+	}
+	now := s.now()
+	v.RevokedAt, v.RevokedBy, v.RevocationReason = &now, actor, strings.TrimSpace(reason)
+	b, _ := json.MarshalIndent(v, "", "  ")
+	err = os.WriteFile(filepath.Join(s.root, "statements", v.ID+".json"), b, 0600)
+	return v, err
+}
+func (s *Store) getStatementUnlocked(id string) (Statement, error) {
+	var v Statement
+	b, err := os.ReadFile(filepath.Join(s.root, "statements", id+".json"))
+	if os.IsNotExist(err) {
+		return v, ErrNotFound
+	}
+	if err != nil || json.Unmarshal(b, &v) != nil {
+		return v, ErrInvalid
+	}
+	return v, nil
+}
+func (s *Store) signingKey() (ed25519.PrivateKey, ed25519.PublicKey, error) {
+	path := filepath.Join(s.root, ".statement-signing-key")
+	if b, err := os.ReadFile(path); err == nil && len(b) == ed25519.PrivateKeySize {
+		k := ed25519.PrivateKey(b)
+		return k, k.Public().(ed25519.PublicKey), nil
+	}
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err == nil {
+		err = os.WriteFile(path, priv, 0600)
+	}
+	return priv, pub, err
 }
 func (s *Store) Get(id string) (Assessment, error) {
 	s.mu.Lock()
