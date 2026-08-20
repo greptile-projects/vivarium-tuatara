@@ -340,7 +340,8 @@ originating bounded system and no endpoint grants execution or merge authority.
 - `POST /repositories/{id}/agent-candidates/{candidate_id}/release-approvals` retains an authenticated human
   participant's candidate-bound decision. Evaluation approvals resolve a passing uncontaminated candidate run;
   pilot acceptance requires every invitee's current consent and latest exact-candidate feedback to explicitly
-  be `accepted`; failed, corrective, unresolved, or revoked feedback fails closed. Domain, data-policy, and resource decisions retain their
+  be `accepted`, and rechecks each invitee's current access to every selected repository; failed, corrective,
+  unresolved, revoked, or access-withdrawn feedback fails closed. Domain, data-policy, and resource decisions retain their
   rationale as the evidence record. Release publication requires five distinct current human approvers.
 - `POST|GET /repositories/{id}/agent-releases` binds a current exact candidate and accepted pilot to an
   existing organization agent after approved evaluation, domain review, pilot acceptance, data policy, and
@@ -352,7 +353,8 @@ originating bounded system and no endpoint grants execution or merge authority.
   narrow, pause, rollback, private-finding, and human/agent-repair controls without erasing history. Records
   default beneath `$AGENT_RELEASE_STORAGE_ROOT` (`agent-releases`); organization participation remains the source
   of technical authority.
-  An unusable release ledger keeps these documented routes present with `503 agent_release_unavailable`.
+  An unusable release or prerequisite pilot ledger keeps these documented routes present with
+  `503 agent_release_unavailable`, including when both stores fail initialization.
 
 ## Runtime privacy checks
 

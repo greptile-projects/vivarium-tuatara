@@ -51,6 +51,27 @@ func registerAgentReleaseRoutes(mux *http.ServeMux, catalog *repositories.Store,
 		}
 		return actor, true
 	}
+	isCurrentParticipant := func(userID, repositoryID string) bool {
+		repository, e := catalog.GetByID(repositoryID)
+		if e != nil {
+			return false
+		}
+		if repository.OwnerID == userID {
+			return true
+		}
+		member, e := catalog.HasCollaborator(userID, repositoryID)
+		return e == nil && member
+	}
+	pilotParticipantsCurrent := func(p agentpilots.Pilot) bool {
+		for _, invitation := range p.Invitations {
+			for _, repositoryID := range invitation.RepositoryIDs {
+				if !isCurrentParticipant(invitation.ParticipantID, repositoryID) {
+					return false
+				}
+			}
+		}
+		return true
+	}
 	type approvalInput struct {
 		Kind       string `json:"kind"`
 		Evidence   string `json:"evidence"`
@@ -101,7 +122,7 @@ func registerAgentReleaseRoutes(mux *http.ServeMux, catalog *repositories.Store,
 			}
 		case "pilot_acceptance":
 			pilot, er := pilots.Get(in.EvidenceID)
-			accepted := er == nil && pilot.CandidateID == candidate.ID && agentpilots.Accepted(pilot)
+			accepted := er == nil && pilot.CandidateID == candidate.ID && agentpilots.Accepted(pilot) && pilotParticipantsCurrent(pilot)
 			if !accepted {
 				writeErr(w, agentreleases.ErrDenied)
 				return
@@ -141,7 +162,7 @@ func registerAgentReleaseRoutes(mux *http.ServeMux, catalog *repositories.Store,
 			return
 		}
 		p, e := pilots.Get(in.PilotID)
-		if e != nil || p.CandidateID != c.ID || !agentpilots.Accepted(p) {
+		if e != nil || p.CandidateID != c.ID || !agentpilots.Accepted(p) || !pilotParticipantsCurrent(p) {
 			writeErr(w, agentreleases.ErrDenied)
 			return
 		}
@@ -153,7 +174,7 @@ func registerAgentReleaseRoutes(mux *http.ServeMux, catalog *repositories.Store,
 				return
 			}
 			in.Approvals = append(in.Approvals, approval)
-			if _, e := catalog.Get(approval.OwnerID, c.RepositoryID); e != nil {
+			if !isCurrentParticipant(approval.OwnerID, c.RepositoryID) {
 				writeErr(w, agentreleases.ErrDenied)
 				return
 			}

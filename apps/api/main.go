@@ -1291,11 +1291,11 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerAgentCandidateRoutes(mux, repositoryCatalog, authStore, pullRequestStore, agentProjectStore, agentEvaluationStore, agentCandidateStore)
 		if agentPilotStore != nil {
 			registerAgentPilotRoutes(mux, repositoryCatalog, authStore, pullRequestStore, agentCandidateStore, agentPilotStore)
-			if organizationStore != nil && agentReleaseStore != nil {
-				registerAgentReleaseRoutes(mux, repositoryCatalog, authStore, organizationStore, pullRequestStore, agentCandidateStore, agentPilotStore, agentReleaseStore)
-			} else if agentReleaseStoreErr != nil {
-				registerAgentReleaseUnavailableRoutes(mux)
-			}
+		}
+		if organizationStore != nil && agentPilotStore != nil && agentReleaseStore != nil {
+			registerAgentReleaseRoutes(mux, repositoryCatalog, authStore, organizationStore, pullRequestStore, agentCandidateStore, agentPilotStore, agentReleaseStore)
+		} else if agentReleaseStoreErr != nil || agentPilotStore == nil {
+			registerAgentReleaseUnavailableRoutes(mux)
 		}
 	}
 	if authStore != nil && repositoryCatalog != nil && charterStore != nil {
