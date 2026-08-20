@@ -498,6 +498,7 @@ type MergeReadiness struct {
 	DesignReadiness         any                                    `json:"design_readiness,omitempty"`
 	QualityConfidence       any                                    `json:"quality_confidence,omitempty"`
 	SecurityConfidence      any                                    `json:"security_confidence,omitempty"`
+	AssuranceImpact         any                                    `json:"assurance_impact,omitempty"`
 }
 
 type commentRecord struct {
@@ -536,6 +537,7 @@ type Store struct {
 	designReadiness          func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)
 	qualityConfidence        func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)
 	securityConfidence       func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)
+	assuranceImpact          func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)
 }
 
 // ConfigureDesignReadiness adds an evidence-only policy projection to ordinary
@@ -554,6 +556,9 @@ func (s *Store) ConfigureQualityConfidence(fn func(PullRequest, []FileChange) (a
 // consume the same revision-exact security matrix exposed by delivery APIs.
 func (s *Store) ConfigureSecurityConfidence(fn func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)) {
 	s.securityConfidence = fn
+}
+func (s *Store) ConfigureAssuranceImpact(fn func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)) {
+	s.assuranceImpact = fn
 }
 
 func (s *Store) ConfigurePerformanceEvidence(store *performanceevidence.Store) { s.performance = store }
@@ -1873,6 +1878,18 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 			return MergeReadiness{}, securityErr
 		}
 		report.SecurityConfidence = projection
+		report.Blockers = append(report.Blockers, blockers...)
+	}
+	if s.assuranceImpact != nil {
+		changes, changeErr := s.Changes(repositoryID, pullRequestID)
+		if changeErr != nil {
+			return MergeReadiness{}, changeErr
+		}
+		projection, blockers, impactErr := s.assuranceImpact(p, changes)
+		if impactErr != nil {
+			return MergeReadiness{}, impactErr
+		}
+		report.AssuranceImpact = projection
 		report.Blockers = append(report.Blockers, blockers...)
 	}
 	report.Mergeable = len(report.Blockers) == 0

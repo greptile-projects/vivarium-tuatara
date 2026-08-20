@@ -25,6 +25,23 @@ owner must be a current repository participant.
 Packages derive coverage, provenance hashes, transformations, gaps, contradictions, a canonical
 SHA-256 manifest, and an actor/time attestation without copying linked record payloads.
 
+## Pre-merge assurance impact
+
+- `GET /repositories/{id}/pulls/{pull_id}/assurance-impact` lists retained impact assessments.
+- `POST /repositories/{id}/pulls/{pull_id}/assurance-impact` creates an assessment from an exact
+  `program_id`, `program_version`, and per-control applicability, rationale, tests, notices,
+  retention actions, exceptions, mitigation, and residual risk. Controls, affected paths, evidence
+  criteria, candidate revision, and required owners are server-derived.
+- `POST /repositories/{id}/assurance-impacts/{impact_id}/events` appends a CAS-versioned cited
+  `analysis`, `challenge`, `mitigation`, or `residual_risk` event. Exact pull-task agents can
+  contribute but cannot acknowledge.
+- `POST /repositories/{id}/assurance-impacts/{impact_id}/acknowledgements` lets a required current
+  human control owner acknowledge one control.
+
+Candidate movement invalidates the assessment; program successors compare per-control digests and
+invalidate only changed controls. Current programs govern pull merge and queue readiness. Records
+default beneath `$ASSURANCE_IMPACT_STORAGE_ROOT` and grant no delivery or linked-system authority.
+
 ## Security confidence
 
 - `POST /repositories/{id}/security-requirements` publishes repository-owner policy; `POST

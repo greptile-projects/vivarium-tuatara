@@ -1292,6 +1292,22 @@ export function PullRequestDetail({
                   </p>
                 </div>
                 {readiness.required_checks.length > 0 && <div className="mt-4 space-y-2"><p className="text-xs font-semibold text-[var(--muted)]">Required checks</p>{readiness.required_checks.map((check) => <div key={check.name} className="flex items-center justify-between gap-3 text-xs"><span className="font-medium">{check.name}</span><Badge tone={check.status === "passed" ? "success" : check.status === "pending" ? "warning" : "neutral"}>{check.status}</Badge></div>)}</div>}
+                {readiness.assurance_impact && readiness.assurance_impact.length > 0 && (
+                  <div className="mt-4 space-y-3 border-t border-[var(--line)] pt-4 text-xs">
+                    <div className="flex items-center justify-between gap-2"><p className="font-semibold">Compliance impact</p><Badge tone={readiness.assurance_impact.every((assessment) => assessment.ready) ? "success" : "warning"}>{readiness.assurance_impact.every((assessment) => assessment.ready) ? "Acknowledged" : "Review required"}</Badge></div>
+                    <p className="text-[var(--muted)]">Exact candidate decisions show whether this change alters a regulated promise before merge.</p>
+                    {readiness.assurance_impact.map((assessment) => <div key={assessment.id} className="space-y-2 rounded-lg bg-[var(--canvas)] p-3">
+                      <p className="font-medium">Assurance program v{assessment.program_version} · <code title={assessment.candidate.revision}>{short(assessment.candidate.revision)}</code>{assessment.stale ? " · stale" : ""}</p>
+                      {assessment.impacts.map((impact) => <div key={impact.control_id} className="border-t border-[var(--line)] pt-2 first:border-0 first:pt-0">
+                        <div className="flex items-start justify-between gap-3"><span className="font-medium">{impact.control_title}</span><Badge tone={impact.current && impact.applicability !== "uncertain" ? "neutral" : "warning"}>{impact.applicability.replaceAll("_", " ")}</Badge></div>
+                        <p className="mt-1 text-[var(--muted)]">{impact.rationale}</p>
+                        <p className="mt-1">Evidence: {impact.changed_evidence_ids?.length ?? 0} · tests: {impact.tests?.length ?? 0} · notices: {impact.notices?.length ?? 0} · retention actions: {impact.retention_actions?.length ?? 0} · exceptions: {impact.exception_ids?.length ?? 0}</p>
+                        <p className="text-[var(--muted)]">Owner acknowledgements {impact.acknowledged_owner_ids?.length ?? 0} / {impact.required_owner_ids?.length ?? 0}{impact.residual_risk ? ` · residual risk: ${impact.residual_risk}` : ""}</p>
+                      </div>)}
+                      {assessment.events.map((event) => <p key={event.id}><Badge tone={event.kind === "challenge" ? "warning" : "neutral"}>{event.actor_type} {event.kind}</Badge> {event.body}</p>)}
+                    </div>)}
+                  </div>
+                )}
                 {readiness.accessibility_readiness && readiness.accessibility_readiness.requirements.length > 0 && (
                   <div className="mt-4 space-y-3 border-t border-[var(--line)] pt-4 text-xs">
                     <div className="flex items-center justify-between gap-2"><p className="font-semibold">Accessibility delivery bar</p><Badge tone={readiness.accessibility_readiness.ready ? "success" : "warning"}>{readiness.accessibility_readiness.ready ? "Current" : "Unresolved"}</Badge></div>
