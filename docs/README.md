@@ -3,6 +3,16 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Governed security repairs
+
+Security findings at `/repositories/{id}/security-findings` freeze an exact threat-model path and
+candidate, keep permitted evidence inside an explicit participant audience, and retain owner-authored
+classifications. Only confirmed findings can create ordinary human- or agent-assigned proposal work.
+Completion links the task's exact pull only after a failed abuse attempt is retained for the affected
+base and an owner-reviewed scenario passes on the repair commit. Finding records grant no Git,
+workspace, review, merge, secret, deployment, or environment authority and non-repair resolutions
+remain attributable in append-only history.
+
 ## Revision-exact release confidence
 
 Repository participants publish versioned release-confidence requirements at

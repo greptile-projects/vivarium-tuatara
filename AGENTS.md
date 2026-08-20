@@ -353,6 +353,18 @@ whenever dependencies change or the web job fails before it starts.
   `$SECURITY_SCENARIO_STORAGE_ROOT` (`security-scenarios`) grant no execution, workspace, preview,
   environment, Git, review, merge, release, deployment, secret, or data authority.
 
+- **Governed security findings** — `/repositories/{id}/security-findings` retains audience-controlled,
+  revision-exact findings linked to threat-model paths beneath `$SECURITY_FINDING_STORAGE_ROOT`
+  (`security-findings`). Reporters retain authorship and bounded permitted evidence, while only the
+  repository owner can classify or change the audience. Confirmed findings can seed ordinary assigned
+  proposal tasks whose reasoning freezes the threat, candidate, evidence, and acceptance criteria;
+  requested task, change-session, or shared-workspace context is launched through those existing
+  authorization boundaries. Lasting protection requires the exact task pull, an owner-reviewed passing
+  security scenario on its source commit, and retained failed abuse evidence on the affected base.
+  Duplicate, false-positive, accepted-risk, embargoed, and failed-repair decisions remain append-only.
+  Finding records grant no Git, task execution, workspace, agent, secret, review, merge, deployment, or
+  environment authority.
+
 - **Change threat models** — `/repositories/{id}/threat-models` and the repository `/security`
   workspace retain immutable analysis revisions beneath `$THREAT_MODEL_STORAGE_ROOT`
   (`threat-models`). Each model is server-bound to an exact design proposal, pull, API contract,

@@ -67,6 +67,24 @@ func TestDecisionImplementationFreezesCriteriaOwnershipAndRetry(t *testing.T) {
 	}
 }
 
+func TestSecurityFindingImplementationFreezesOriginAndRetry(t *testing.T) {
+	store, _ := New(t.TempDir())
+	origin := ReasoningOrigin{SecurityFindingID: strings.Repeat("1", 32), SecurityFindingVersion: 2, ThreatModelID: strings.Repeat("2", 24), ThreatModelVersion: 3, Revision: strings.Repeat("a", 40), SelectedItemIDs: []string{"attempt"}, Items: []ReasoningItem{{ID: "attempt", Kind: "permitted_security_evidence", Summary: "sanitized failed containment", Status: "audience_restricted"}}, AnalysisStatus: "security_finding_repair"}
+	input := ImplementationInput{RepositoryID: repositoryID, ActorID: authorID, Title: "Contain replay", Body: "Governed security repair", Origin: origin, Tasks: []ImplementationTaskInput{{Title: "Repair replay", Outcome: "Contain the abuse path", Risk: "high", VerificationPlan: "Fail on base and pass on repair", AssigneeType: "agent", AssigneeID: commenterID}}}
+	proposal, tasks, err := store.CreateImplementation(input)
+	if err != nil || len(tasks) != 1 || tasks[0].Reasoning == nil || tasks[0].Reasoning.SecurityFindingID != origin.SecurityFindingID {
+		t.Fatalf("security implementation = %#v %#v, %v", proposal, tasks, err)
+	}
+	retry, retryTasks, err := store.CreateImplementation(input)
+	if err != nil || retry.ID != proposal.ID || retryTasks[0].ID != tasks[0].ID {
+		t.Fatalf("retry = %#v %#v, %v", retry, retryTasks, err)
+	}
+	input.Origin.SecurityFindingVersion++
+	if _, _, err = store.CreateImplementation(input); !errors.Is(err, ErrImplementationConflict) {
+		t.Fatalf("changed retry = %v", err)
+	}
+}
+
 func TestReliabilityImplementationAcceptsCompactOpaqueReferences(t *testing.T) {
 	store, _ := New(t.TempDir())
 	input := ImplementationInput{
