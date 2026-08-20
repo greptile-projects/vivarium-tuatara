@@ -67,13 +67,14 @@ type Diagnostic struct {
 	ConsumerIndex *int   `json:"consumer_index,omitempty"`
 }
 type Capability struct {
-	ID             string       `json:"id"`
-	RepositoryID   string       `json:"repository_id"`
-	CurrentVersion int          `json:"current_version"`
-	Revisions      []Revision   `json:"revisions"`
-	Diagnostics    []Diagnostic `json:"diagnostics"`
-	CreatedAt      time.Time    `json:"created_at"`
-	UpdatedAt      time.Time    `json:"updated_at"`
+	ID              string           `json:"id"`
+	RepositoryID    string           `json:"repository_id"`
+	CurrentVersion  int              `json:"current_version"`
+	Revisions       []Revision       `json:"revisions"`
+	Diagnostics     []Diagnostic     `json:"diagnostics"`
+	RetirementPlans []RetirementPlan `json:"retirement_plans,omitempty"`
+	CreatedAt       time.Time        `json:"created_at"`
+	UpdatedAt       time.Time        `json:"updated_at"`
 }
 type Store struct {
 	root string
@@ -101,7 +102,7 @@ func (s *Store) Create(repo, actor string, r Revision) (Capability, error) {
 		out = Capability{ID: randomID(), RepositoryID: repo, CurrentVersion: 1, Revisions: []Revision{r}, CreatedAt: now, UpdatedAt: now}
 		return s.write(out)
 	})
-	return project(out), err
+	return s.project(out), err
 }
 func (s *Store) Revise(repo, id string, expected int, actor string, r Revision) (Capability, error) {
 	var out Capability
@@ -123,12 +124,12 @@ func (s *Store) Revise(repo, id string, expected int, actor string, r Revision) 
 		out = v
 		return s.write(v)
 	})
-	return project(out), err
+	return s.project(out), err
 }
 func (s *Store) Get(repo, id string) (Capability, error) {
 	var out Capability
 	err := s.lock(func() error { var e error; out, e = s.read(repo, id); return e })
-	return project(out), err
+	return s.project(out), err
 }
 func (s *Store) List(repo string) ([]Capability, error) {
 	var raw []Capability
@@ -149,7 +150,7 @@ func (s *Store) List(repo string) ([]Capability, error) {
 				return e
 			}
 			if v.RepositoryID == repo {
-				raw = append(raw, project(v))
+				raw = append(raw, s.project(v))
 			}
 		}
 		return nil
@@ -188,7 +189,7 @@ func validate(r Revision) error {
 	}
 	return nil
 }
-func project(v Capability) Capability {
+func (s *Store) project(v Capability) Capability {
 	if len(v.Revisions) == 0 {
 		return v
 	}
@@ -216,6 +217,9 @@ func project(v Capability) Capability {
 		}
 	}
 	v.Diagnostics = d
+	for i := range v.RetirementPlans {
+		projectRetirement(&v.RetirementPlans[i], v.CurrentVersion, d, s.now())
+	}
 	return v
 }
 func stamp(r *Revision, v int, a string, t time.Time) {

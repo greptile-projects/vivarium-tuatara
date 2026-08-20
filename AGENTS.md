@@ -174,7 +174,19 @@ whenever dependencies change or the web job fails before it starts.
   Publication proves the collaborator can still read every named consumer repository while
   holding the repository mutation boundary. Unknown or dynamically discovered consumers and
   stale, inaccessible, or absent evidence remain explicit diagnostics and never imply zero
-  use. These inventories provide removal context only and grant no consumer-repository, Git,
+  use. Human participants can open a retirement plan against an exact inventory version with
+  supported replacements, affected audiences and stop-working impact, ordered compatibility
+  stages, deadlines, success/rollback criteria, communication, and every consumer-owner approval.
+  Append-only cited assessments and challenges admit humans and repository-bound read-only agents,
+  while only exact human owners acknowledge. Inventory drift, evidence gaps, conflicting commitments,
+  embargoed dependencies, bounded exceptions, and unresponsive owners remain attributable blockers;
+  human deferrals expire within 30 days and retain follow-up work. Every plan projects deadlines
+  through the durable store clock and redacts its frozen audiences against its bound inventory
+  revision; regenerated inventory blockers retain their current diagnostic consumer index, so later
+  consumer reordering or renaming cannot expose restricted current names either. Restricted-owner event
+  identities, prose, and citations are redacted on reads and retirement mutation responses through the
+  same projection. These records provide removal
+  context only and grant no consumer-repository, Git,
   release, environment, migration, review, merge, deployment, or retirement authority.
 
 - **Durable state** — `/repositories/{id}/durable-schemas` and the repository

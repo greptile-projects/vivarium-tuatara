@@ -19,6 +19,11 @@ type capabilityInput struct {
 	Revision        capabilities.Revision `json:"revision"`
 }
 
+type retirementEventInput struct {
+	ExpectedVersion int                          `json:"expected_version"`
+	Event           capabilities.RetirementEvent `json:"event"`
+}
+
 func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, inventory *capabilities.Store, releaseStore *releases.Store) {
 	mux.HandleFunc("GET /repositories/{id}/capabilities", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
@@ -84,6 +89,54 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 	}
 	mux.HandleFunc("POST /repositories/{id}/capabilities", publish(false))
 	mux.HandleFunc("POST /repositories/{id}/capabilities/{capability_id}/revisions", publish(true))
+	mux.HandleFunc("POST /repositories/{id}/capabilities/{capability_id}/retirement-plans", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if actor.AgentID != "" {
+			writeAPIError(w, 403, "retirement_plan_forbidden", "agents may assess plans but cannot open them")
+			return
+		}
+		var plan capabilities.RetirementPlan
+		if decodeJSON(r, &plan) != nil {
+			writeAPIError(w, 400, "invalid_request", "a complete retirement contract is required")
+			return
+		}
+		out, err := inventory.OpenRetirement(r.PathValue("id"), r.PathValue("capability_id"), actor.UserID, plan)
+		if err == nil {
+			out = projectCapabilitiesForReader(catalog, actor.UserID, []capabilities.Capability{out})[0]
+		}
+		writeCapability(w, out, err, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/capabilities/{capability_id}/retirement-plans/{plan_id}/events", func(w http.ResponseWriter, r *http.Request) {
+		actor, authenticated, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok || !authenticated {
+			return
+		}
+		var in retirementEventInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an expected version and cited retirement event are required")
+			return
+		}
+		if in.Event.Type == "policy_decision" {
+			repository, repositoryErr := catalog.GetByID(r.PathValue("id"))
+			collaborator, collaboratorErr := catalog.HasCollaborator(actor.UserID, r.PathValue("id"))
+			if actor.AgentID != "" || repositoryErr != nil || (repository.OwnerID != actor.UserID && (collaboratorErr != nil || !collaborator)) {
+				writeAPIError(w, 403, "retirement_policy_forbidden", "only a human repository participant may record a bounded policy decision")
+				return
+			}
+		}
+		actorID, actorType := actor.UserID, "human"
+		if actor.AgentID != "" {
+			actorID, actorType = actor.AgentID, "read_only_agent"
+		}
+		out, err := inventory.AppendRetirementEvent(r.PathValue("id"), r.PathValue("capability_id"), r.PathValue("plan_id"), actorID, actorType, in.ExpectedVersion, in.Event)
+		if err == nil {
+			out = projectCapabilitiesForReader(catalog, actor.UserID, []capabilities.Capability{out})[0]
+		}
+		writeCapability(w, out, err, 200)
+	})
 }
 
 func projectCapabilitiesForReader(catalog *repositories.Store, actorID string, values []capabilities.Capability) []capabilities.Capability {
@@ -103,17 +156,80 @@ func projectCapabilitiesForReader(catalog *repositories.Store, actorID string, v
 	}
 	for valueIndex := range values {
 		restrictedCurrentConsumers := map[int]bool{}
+		restrictedConsumersByVersion := map[int]map[int]bool{}
 		for revisionIndex := range values[valueIndex].Revisions {
 			revision := &values[valueIndex].Revisions[revisionIndex]
+			restrictedConsumers := map[int]bool{}
+			restrictedConsumersByVersion[revision.Version] = restrictedConsumers
 			for consumerIndex := range revision.Consumers {
 				consumer := &revision.Consumers[consumerIndex]
 				if canRead(consumer.RepositoryID) {
 					continue
 				}
+				restrictedConsumers[consumerIndex] = true
 				if revisionIndex == len(values[valueIndex].Revisions)-1 {
 					restrictedCurrentConsumers[consumerIndex] = true
 				}
 				*consumer = capabilities.Consumer{Name: "restricted", Environment: "restricted", Discovery: "unknown", EvidenceState: "inaccessible", CompatibilityPromise: "restricted"}
+			}
+		}
+		for planIndex := range values[valueIndex].RetirementPlans {
+			plan := &values[valueIndex].RetirementPlans[planIndex]
+			restrictedPlanConsumers, boundRevisionFound := restrictedConsumersByVersion[plan.CapabilityVersion]
+			if !boundRevisionFound {
+				restrictedPlanConsumers = map[int]bool{}
+				for consumerIndex := range plan.Audiences {
+					restrictedPlanConsumers[consumerIndex] = true
+				}
+			}
+			restrictedAudiences := map[string]bool{}
+			restrictedOwners := map[string]bool{}
+			for consumerIndex := range plan.Audiences {
+				if !restrictedPlanConsumers[consumerIndex] {
+					continue
+				}
+				restrictedAudiences[plan.Audiences[consumerIndex].Name] = true
+				for _, ownerID := range plan.Audiences[consumerIndex].OwnerIDs {
+					restrictedOwners[ownerID] = true
+				}
+				plan.Audiences[consumerIndex] = capabilities.Audience{Name: "restricted", OwnerIDs: []string{"restricted"}, Impact: "restricted affected audience", Commitment: "restricted", EmbargoedDependency: true}
+			}
+			for diagnosticIndex := range plan.FrozenDiagnostics {
+				diagnostic := &plan.FrozenDiagnostics[diagnosticIndex]
+				if diagnostic.ConsumerIndex != nil && restrictedPlanConsumers[*diagnostic.ConsumerIndex] {
+					diagnostic.Consumer = "restricted"
+				}
+			}
+			for blockerIndex := range plan.Blockers {
+				blocker := &plan.Blockers[blockerIndex]
+				if blocker.ConsumerIndex != nil && restrictedCurrentConsumers[*blocker.ConsumerIndex] {
+					blocker.Audience = "restricted"
+				}
+				if restrictedAudiences[blocker.Audience] {
+					blocker.Audience = "restricted"
+				}
+				if restrictedOwners[blocker.OwnerID] {
+					blocker.OwnerID = "restricted"
+				}
+			}
+			for ownerIndex := range plan.RequiredOwnerIDs {
+				if restrictedOwners[plan.RequiredOwnerIDs[ownerIndex]] {
+					plan.RequiredOwnerIDs[ownerIndex] = "restricted"
+				}
+			}
+			for eventIndex := range plan.Events {
+				event := &plan.Events[eventIndex]
+				if restrictedOwners[event.ActorID] || restrictedOwners[event.OwnerID] {
+					event.ActorID = "restricted"
+					event.OwnerID = "restricted"
+					event.Summary = "restricted owner response"
+					event.Evidence = nil
+				}
+			}
+			for exceptionIndex := range plan.Exceptions {
+				if restrictedAudiences[plan.Exceptions[exceptionIndex].Audience] {
+					plan.Exceptions[exceptionIndex].Audience = "restricted"
+				}
 			}
 		}
 		for diagnosticIndex := range values[valueIndex].Diagnostics {
@@ -191,10 +307,12 @@ func writeCapability(w http.ResponseWriter, v capabilities.Capability, err error
 		writeJSON(w, status, v)
 	case errors.Is(err, capabilities.ErrNotFound):
 		writeAPIError(w, 404, "capability_not_found", "capability not found")
+	case errors.Is(err, capabilities.ErrPlanNotFound):
+		writeAPIError(w, 404, "retirement_plan_not_found", "retirement plan not found")
 	case errors.Is(err, capabilities.ErrConflict):
 		writeAPIError(w, 409, "capability_conflict", "the capability changed; reload before publishing")
 	case errors.Is(err, capabilities.ErrInvalid):
-		writeAPIError(w, 400, "invalid_capability", "define exact items, owners, consumers, evidence, compatibility promises, and unknown use")
+		writeAPIError(w, 400, "invalid_capability", "define exact capability evidence or a complete, bounded retirement contract")
 	case errors.Is(err, repositories.ErrInvalidCollaborator), errors.Is(err, repositories.ErrNotFound):
 		writeAPIError(w, 403, "capability_forbidden", "only current repository participants may own or publish capabilities")
 	default:
