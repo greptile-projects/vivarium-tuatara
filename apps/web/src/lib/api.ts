@@ -3337,6 +3337,32 @@ export type MergeReadiness = {
   target: PullRequestBranchState;
   has_conflicts: boolean;
   blockers: { code: string; message: string }[];
+  assurance_impact?: {
+    id: string;
+    program_id: string;
+    program_version: number;
+    ready: boolean;
+    stale: boolean;
+    candidate: { kind: string; id: string; revision: string };
+    impacts: {
+      control_id: string;
+      control_title: string;
+      applicability: "affected" | "not_affected" | "uncertain";
+      rationale: string;
+      current: boolean;
+      affected_paths?: string[];
+      changed_evidence_ids?: string[];
+      required_owner_ids?: string[];
+      acknowledged_owner_ids?: string[];
+      tests?: { id: string; description: string }[];
+      notices?: { id: string; description: string }[];
+      retention_actions?: { id: string; description: string }[];
+      exception_ids?: string[];
+      mitigation?: string;
+      residual_risk?: string;
+    }[];
+    events: { id: string; kind: string; control_id: string; body: string; actor_type: "human" | "agent" }[];
+  }[];
   accessibility_readiness?: {
     ready: boolean;
     revision: string;

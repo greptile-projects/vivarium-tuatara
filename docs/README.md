@@ -36,6 +36,21 @@ missing/inaccessible/stale gaps, contradictions, a canonical manifest hash, and 
 attestation. Restricted sources become opaque gaps with no identifying metadata. Records default
 beneath `$ASSURANCE_EVIDENCE_STORAGE_ROOT` (`assurance-evidence`) and grant no linked authority.
 
+### Pre-merge assurance impact
+
+Pull reviewers inspect revision-exact compliance impact through
+`/repositories/{id}/pulls/{pull_id}/assurance-impact`. A human collaborator selects an exact
+assurance-program revision; the server derives affected controls and paths from the exact Git diff
+instead of accepting caller-authored scope. Decisions retain applicability, changed evidence,
+tests, notices, retention work, exceptions, mitigations, residual risk, and required owners.
+
+Humans and exact pull-task agents append cited analysis and challenges. Only current named human
+control owners acknowledge. Pull movement makes the assessment stale; a program successor
+invalidates only controls whose definition changed. A current program makes missing, uncertain,
+stale, or unacknowledged impact an ordinary merge and integration-queue blocker, and the pull
+workspace renders the same retained matrix. Storage defaults beneath
+`$ASSURANCE_IMPACT_STORAGE_ROOT` (`assurance-impacts`) and grants no linked authority.
+
 ## Revision-exact capability inventory
 
 Authorized repository collaborators publish immutable capability revisions at

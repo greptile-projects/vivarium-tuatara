@@ -29,6 +29,18 @@ repository-owned pull, check/build, access, dependency, release, deployment, inc
 privacy, and governance stores, while unavailable resolvers fail closed. These records prove provenance and grant no
 source-system, repository, review, release, deployment, incident, or governance authority.
 
+Pre-merge assurance impact at `/repositories/{id}/pulls/{pull_id}/assurance-impact` binds an exact
+pull commit to an exact assurance-program revision beneath `$ASSURANCE_IMPACT_STORAGE_ROOT`
+(`assurance-impacts`). The server derives affected controls and paths from the Git diff and control
+mappings. Decisions retain applicability, changed evidence, tests, notices, retention actions,
+exceptions, mitigations, residual risk, and current control-owner acknowledgements. Humans and
+exact pull-task read-only agents append cited analysis and challenges; only named human control
+owners acknowledge. Pull movement invalidates the candidate, while program successors invalidate
+only changed controls. Once a repository has a current assurance program, missing, uncertain,
+stale, or unacknowledged impact blocks merge and integration-queue readiness. Historical
+assessments remain immutable. Records grant no Git, review, merge, release, evidence, policy, or
+linked-system authority.
+
 Security confidence at pull, release, and deployment `/security-confidence` freezes repository or
 organization requirements by branch, component, asset, risk class, and path beneath
 `$SECURITY_CONFIDENCE_STORAGE_ROOT` (`security-confidence`). Matrices derive current threat-model
