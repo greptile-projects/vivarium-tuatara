@@ -71,7 +71,8 @@ telemetry, documentation, and policy exceptions. Only complete proof marks remov
 outcome. Every proof names the provider repository and a revision retained as succeeded delivery for that
 execution. The candidate freezes every required obsolete surface by category, provider path, pre-removal
 revision/blob, and expected removed or replaced outcome. Requirements can name only paths selected by the
-frozen capability revision, and every selected path must be covered. Completion accounts for every requirement ID
+frozen capability revision, every selected path must be covered, and duplicate category/path requirements are
+rejected at admission. Completion accounts for every requirement ID
 exactly once and derives its canonical digest from the absent or changed path at the delivered revision;
 unrelated retained files cannot substitute for removal evidence.
 These coordination records do not grant Git, queue, review, release, deployment, environment,

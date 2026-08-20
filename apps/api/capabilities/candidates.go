@@ -124,7 +124,7 @@ func validateCandidate(c MigrationCandidate, p RetirementPlan, r Revision) bool 
 			return false
 		}
 	}
-	requirementIDs, requirementKinds := map[string]bool{}, map[string]bool{}
+	requirementIDs, requirementKinds, requirementSurfaces := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	capabilityPaths, coveredPaths := map[string]bool{}, map[string]bool{}
 	for _, item := range r.Items {
 		if item.Path != "" {
@@ -132,10 +132,12 @@ func validateCandidate(c MigrationCandidate, p RetirementPlan, r Revision) bool 
 		}
 	}
 	for _, requirement := range c.CleanupRequirements {
-		if requirement.ID == "" || requirementIDs[requirement.ID] || !cleanupKinds[requirement.Kind] || requirement.RepositoryID == "" || !capabilityPaths[requirement.Path] || len(requirement.Revision) != 40 || requirement.PreviousBlob == "" || (requirement.Expectation != "removed" && requirement.Expectation != "replaced") || (requirement.Expectation == "replaced" && requirement.ReplacementBlob == requirement.PreviousBlob) {
+		surface := requirement.Kind + "\x00" + requirement.Path
+		if requirement.ID == "" || requirementIDs[requirement.ID] || requirementSurfaces[surface] || !cleanupKinds[requirement.Kind] || requirement.RepositoryID == "" || !capabilityPaths[requirement.Path] || len(requirement.Revision) != 40 || requirement.PreviousBlob == "" || (requirement.Expectation != "removed" && requirement.Expectation != "replaced") || (requirement.Expectation == "replaced" && requirement.ReplacementBlob == requirement.PreviousBlob) {
 			return false
 		}
 		requirementIDs[requirement.ID], requirementKinds[requirement.Kind] = true, true
+		requirementSurfaces[surface] = true
 		coveredPaths[requirement.Path] = true
 	}
 	for kind := range cleanupKinds {

@@ -203,6 +203,11 @@ func TestMigrationCandidateRetainsMatrixAndNeverTreatsUnknownUseAsMigrated(t *te
 	if _, _, unrelatedErr := s.CreateMigrationCandidate("repo", v.ID, v.RetirementPlans[0].ID, "provider", MigrationCandidate{Environment: "isolated synthetic compatibility lab", Checks: checks, CleanupRequirements: cleanupFixture("repo", r.CommitID, "unrelated.txt")}); unrelatedErr != ErrInvalid {
 		t.Fatalf("unrelated cleanup inventory = %v", unrelatedErr)
 	}
+	duplicate := cleanupFixture("repo", r.CommitID, "api.go")
+	duplicate = append(duplicate, CleanupRequirement{ID: "duplicate-code", Kind: "code", RepositoryID: "repo", Path: "api.go", Revision: r.CommitID, PreviousBlob: "duplicate-before", Expectation: "removed"})
+	if _, _, duplicateErr := s.CreateMigrationCandidate("repo", v.ID, v.RetirementPlans[0].ID, "provider", MigrationCandidate{Environment: "isolated synthetic compatibility lab", Checks: checks, CleanupRequirements: duplicate}); duplicateErr != ErrInvalid {
+		t.Fatalf("duplicate cleanup surface = %v", duplicateErr)
+	}
 	v, candidate, err := s.CreateMigrationCandidate("repo", v.ID, v.RetirementPlans[0].ID, "provider", MigrationCandidate{Environment: "isolated synthetic compatibility lab", Checks: checks, CleanupRequirements: cleanupFixture("repo", r.CommitID, "api.go")})
 	if err != nil {
 		t.Fatal(err)

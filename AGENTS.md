@@ -217,7 +217,7 @@ whenever dependencies change or the web job fails before it starts.
   revision retained as succeeded delivery for that execution. Each migration candidate freezes a
   category-complete obsolete-artifact inventory with provider path, pre-removal revision/blob, and an expected
   removed or replaced outcome; only paths selected by the frozen capability revision are admitted and every
-  selected path must be covered. Completion maps proofs one-to-one to those requirement IDs and verifies absence
+  selected path must be covered, while duplicate category/path requirements are rejected. Completion maps proofs one-to-one to those requirement IDs and verifies absence
   or the declared changed blob at the delivered revision; unrelated retained files cannot satisfy cleanup.
   These records provide removal
   context only and grant no consumer-repository, Git,
