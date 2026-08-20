@@ -27,6 +27,16 @@ controls can link to a repository-scoped private incident, security advisory, or
 the signal grants no production, disclosure, Git, review, queue, release, deployment, or agent
 authority. Records default beneath `$SECURITY_CONFIDENCE_STORAGE_ROOT` (`security-confidence`).
 
+The connected `security-assurance-journey.spec.ts` browser/API/Git journey carries a new privileged
+credential-rotation workflow from versioned expectations and bounded agent uncertainty through
+owner-reviewed threat analysis, safe executable replay, a confidential governed repair, ordinary review,
+integration, release, and staged deployment. It retains an unsafe test, false positive, inaccessible
+citation, stale model, failed first repair, and rejected exception before a sanitized changed-assumption
+signal links private follow-up work. A repair scenario remains tied to the original finding's model revision
+and may run only at that modeled commit or a verified Git descendant. Merge/release/deployment matrices reuse
+the proof only when each policy-selected path resolves to identical content at the evidence and delivery
+commits; changing any selected blob invalidates it.
+
 ## Governed security repairs
 
 Security findings at `/repositories/{id}/security-findings` freeze an exact threat-model path and

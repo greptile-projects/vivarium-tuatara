@@ -69,8 +69,8 @@ func registerSecurityScenarioRoutes(mux *http.ServeMux, git *storage.Store, cata
 			writeAPIError(w, 403, "security_scenario_agent_scope_invalid", "agent scenarios require the exact source-pull task credential")
 			return
 		}
-		if rev.Source.Kind == "pull_request" && rev.Source.Revision != in.CommitID {
-			writeAPIError(w, 422, "security_scenario_candidate_invalid", "pull-sourced scenarios must evaluate the exact modeled candidate")
+		if rev.Source.Kind == "pull_request" && !securityScenarioCandidateDescendsFrom(git, r.PathValue("id"), rev.Source.Revision, in.CommitID) {
+			writeAPIError(w, 422, "security_scenario_candidate_invalid", "pull-sourced scenarios must evaluate the modeled candidate or an exact descendant repair")
 			return
 		}
 		if !scenarioGraph(rev, in) {
@@ -220,6 +220,30 @@ func registerSecurityScenarioRoutes(mux *http.ServeMux, git *storage.Store, cata
 		out, e := scenarios.AddAttempt(v.RepositoryID, v.ID, identity, a)
 		writeSecurityScenario(w, out, e, 201)
 	})
+}
+
+// A finding freezes the model revision that discovered it, while its lasting
+// protection must execute at a later repair commit. Preserve that connection
+// without allowing an unrelated candidate by resolving the repair through the
+// repository's verified commit graph.
+func securityScenarioCandidateDescendsFrom(git *storage.Store, repositoryID, modeled, candidate string) bool {
+	if modeled == candidate {
+		return true
+	}
+	repository, err := git.Open(repositoryID)
+	if err != nil {
+		return false
+	}
+	commits, err := repository.ListCommitAncestry(storage.ObjectID(candidate))
+	if err != nil {
+		return false
+	}
+	for _, commit := range commits {
+		if string(commit.ID) == modeled {
+			return true
+		}
+	}
+	return false
 }
 
 func retainedThreatModelRevision(model threatmodels.Model, version int) (threatmodels.Revision, bool) {
