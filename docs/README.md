@@ -2894,6 +2894,15 @@ the only source of technical authority used by established collaboration workflo
 concurrent versions, trial evidence, agreements, expiry, activation, and revocation remain retained;
 revocation retires the linked grant and derived credentials. Evaluation approval, budgets, policy
 exceptions, and governance or sponsorship standing never create access on their own.
+Evaluation suite scenarios can be derived from governed issues, support threads, tasks, incidents,
+decisions, or sanitized prior sessions without copying the source record. Each authored case declares
+its visibility, source version, synthetic or sanitized inputs, permitted context, expected outcomes,
+quality/safety rubric, prohibited behavior, budget, uncertainty, required human judgment, license,
+and either prohibited training use or a requirement for separate explicit consent. Protected cases
+project only opaque identity and metadata to ordinary members; their prompt, answer set, rubric,
+context, source identity, and candidate output remain available only to the human owner evaluator.
+Suites and favorable results remain evidence rather than permission to train, broaden evaluation,
+access source records, or participate in repository work.
 The linked request and grant retain the approved participation limits. Derived API/Git credentials
 require an explicit `repository.read` or `repository.write` action and a compatible
 `repository_metadata` or `repository_content` data boundary; write is never inferred from the role.
