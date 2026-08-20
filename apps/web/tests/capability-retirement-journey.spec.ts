@@ -12,6 +12,9 @@ const run = promisify(execFile);
 async function git(cwd: string, ...args: string[]) {
   return (await run("git", args, { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } })).stdout.trim();
 }
+async function authenticatedGit(token: string, cwd: string, ...args: string[]) {
+  return (await run("git", args, { cwd, env: { ...process.env, GIT_ASKPASS: join(__dirname, "git-askpass.sh"), GIT_TERMINAL_PROMPT: "0", VIVARIUM_GIT_TOKEN: token } })).stdout.trim();
+}
 async function account(page: Page, suffix: string, name: string) {
   await page.goto("/");
   await page.getByLabel("Display name").fill(name);
@@ -54,8 +57,12 @@ test("collaborators retire a released capability through governed cleanup", asyn
     const consumerCredential = await json(consumerPage, "post", "/auth/credentials", consumer.headers, { kind: "git", name: "consumer retirement journey", scopes: ["git:read", "git:write"], expires_in: 3600 });
     const providerCopy = await mkdtemp(join(tmpdir(), "vivarium-capability-provider-")); copies.push(providerCopy);
     const consumerCopy = await mkdtemp(join(tmpdir(), "vivarium-capability-consumer-")); copies.push(consumerCopy);
-    await git(tmpdir(), "clone", `http://git:${credential.token}@localhost:3000/git/${providerRepo.id}.git`, providerCopy);
-    await git(tmpdir(), "clone", `http://git:${consumerCredential.token}@localhost:3000/git/${consumerRepo.id}.git`, consumerCopy);
+    const providerGitURL = `http://localhost:3000/git/${providerRepo.id}.git`;
+    const consumerGitURL = `http://localhost:3000/git/${consumerRepo.id}.git`;
+    await authenticatedGit(credential.token, tmpdir(), "clone", providerGitURL, providerCopy);
+    await authenticatedGit(consumerCredential.token, tmpdir(), "clone", consumerGitURL, consumerCopy);
+    expect(await git(providerCopy, "remote", "get-url", "origin")).toBe(providerGitURL);
+    expect(await git(consumerCopy, "remote", "get-url", "origin")).toBe(consumerGitURL);
     for (const copy of copies) { await git(copy, "config", "user.name", "Capability Journey"); await git(copy, "config", "user.email", "capability@example.test"); }
 
     const surfaces = [
@@ -65,12 +72,12 @@ test("collaborators retire a released capability through governed cleanup", asyn
     ];
     await mkdir(join(providerCopy, "legacy"));
     for (const [, path] of surfaces) await writeFile(join(providerCopy, path), `obsolete ${path}\n`);
-    await git(providerCopy, "add", "."); await git(providerCopy, "commit", "-m", "Release legacy search v1"); await git(providerCopy, "push", "origin", "main");
+    await git(providerCopy, "add", "."); await git(providerCopy, "commit", "-m", "Release legacy search v1"); await authenticatedGit(credential.token, providerCopy, "push", "origin", "main");
     const providerRevision = await git(providerCopy, "rev-parse", "HEAD");
     await mkdir(join(consumerCopy, ".vivarium"));
     await writeFile(join(consumerCopy, ".vivarium", "workspace.json"), JSON.stringify({ version: 1, image: "alpine:3.22", tools: [{ name: "sh", version: "3.22" }], dependencies: ["sh"], setup: [], experiments: [], resources: { cpus: 1, memory_mb: 128, storage_mb: 128, setup_seconds: 30 } }));
     await writeFile(join(consumerCopy, "consumer.txt"), "legacy and replacement coexist\n");
-    await git(consumerCopy, "add", "."); await git(consumerCopy, "commit", "-m", "Declare legacy capability use"); await git(consumerCopy, "push", "origin", "main");
+    await git(consumerCopy, "add", "."); await git(consumerCopy, "commit", "-m", "Declare legacy capability use"); await authenticatedGit(consumerCredential.token, consumerCopy, "push", "origin", "main");
     const consumerRevision = await git(consumerCopy, "rev-parse", "HEAD");
 
     const release = await json(ownerPage, "post", `/repositories/${providerRepo.id}/releases`, owner.headers, { version: "v1.0.0", notes: "Legacy search release", commit_id: providerRevision });
@@ -137,7 +144,7 @@ test("collaborators retire a released capability through governed cleanup", asyn
     await report({ stage_index: 1, stage: "remove", action: "advance", remaining_use: 0, health: "degraded", control: "removal paused", rollback_boundary: "code not yet deleted", next_action: "correct late checkout regression", unexpected_consumers: ["late checkout regression"], delivery });
     await report({ stage_index: 1, stage: "remove", action: "resume", remaining_use: 0, health: "healthy", control: "late regression corrected", rollback_boundary: "final cleanup pending", next_action: "deliver cleanup", delivery });
     for (const [, path] of surfaces) await rm(join(providerCopy, path));
-    await git(providerCopy, "add", "-A"); await git(providerCopy, "commit", "-m", "Remove legacy search surfaces"); await git(providerCopy, "push", "origin", "main");
+    await git(providerCopy, "add", "-A"); await git(providerCopy, "commit", "-m", "Remove legacy search surfaces"); await authenticatedGit(credential.token, providerCopy, "push", "origin", "main");
     const cleanupRevision = await git(providerCopy, "rev-parse", "HEAD");
     await report({ stage_index: 1, stage: "remove", action: "advance", remaining_use: 0, health: "healthy", control: "obsolete behavior removed", rollback_boundary: "point of no return recorded", next_action: "verify exact cleanup", delivery: [{ kind: "merge_queue", resource_id: "legacy-cleanup", revision: cleanupRevision, status: "succeeded" }] });
     expect(execution.status).toBe("awaiting_verification");
@@ -145,7 +152,7 @@ test("collaborators retire a released capability through governed cleanup", asyn
     const completed = await json(ownerPage, "post", `${executionBase}/removal-executions/${execution.id}/completion`, owner.headers, { expected_version: execution.version, proofs });
     expect(completed.retirement_plans[0].executions.at(-1).status).toBe("completed");
 
-    await writeFile(join(consumerCopy, "consumer.txt"), "replacement only after retirement\n"); await git(consumerCopy, "add", "."); await git(consumerCopy, "commit", "-m", "Move consumer after retained measurement"); await git(consumerCopy, "push", "origin", "main");
+    await writeFile(join(consumerCopy, "consumer.txt"), "replacement only after retirement\n"); await git(consumerCopy, "add", "."); await git(consumerCopy, "commit", "-m", "Move consumer after retained measurement"); await authenticatedGit(consumerCredential.token, consumerCopy, "push", "origin", "main");
     const movedConsumer = await git(consumerCopy, "rev-parse", "HEAD");
     await json(ownerPage, "post", `/repositories/${providerRepo.id}/capabilities/${capability.id}/revisions`, owner.headers, { expected_version: 1, revision: {
       name: "legacy search", summary: "Post-retirement inventory retains the moved consumer signal", commit_id: providerRevision, release_id: release.id, owner_ids: [owner.user.id],

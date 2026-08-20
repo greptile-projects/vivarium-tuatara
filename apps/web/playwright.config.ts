@@ -1,5 +1,8 @@
 import { defineConfig } from "@playwright/test";
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 function systemChromium() {
   if (process.env.CHROMIUM_PATH) return process.env.CHROMIUM_PATH;
@@ -11,7 +14,12 @@ function systemChromium() {
 }
 
 const chromiumPath = systemChromium();
-const capabilityStorageRoot = `/tmp/vivarium-playwright-capabilities-${process.pid}`;
+const capabilityStorageRoot = mkdtempSync(
+  join(tmpdir(), "vivarium-playwright-capabilities-"),
+);
+process.once("exit", () => {
+  rmSync(capabilityStorageRoot, { recursive: true, force: true });
+});
 
 export default defineConfig({
   testDir: "./tests",
