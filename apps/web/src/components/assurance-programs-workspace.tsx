@@ -84,6 +84,7 @@ const upsert = <T extends { id: string }>(items: T[], item: T) => [
   ...items.filter((existing) => existing.id !== item.id),
   item,
 ];
+const unique = (items: string[]) => [...new Set(items)];
 function Field({
   n,
   l,
@@ -159,66 +160,95 @@ export function AssuranceProgramsWorkspace({
     const req = v(f, "requirement_id"),
       scope = v(f, "scope_id"),
       control = v(f, "control_id"),
-      owner = v(f, "owner") || user?.id || "",
-      revision: Revision = {
-        version: 0,
-        title: v(f, "title"),
-        summary: v(f, "summary"),
-        owner_ids: list(owner),
-        review_period_days: Number(v(f, "program_review")),
-        requirements: upsert(current?.requirements ?? [], {
-          id: req,
-          kind: v(f, "requirement_kind"),
-          authority: v(f, "authority"),
-          citation: v(f, "citation"),
-          title: v(f, "requirement_title"),
-          summary: v(f, "requirement_summary"),
-          applicability: v(f, "applicability"),
-          inherited_from: v(f, "inherited_from"),
-          owner_ids: list(v(f, "requirement_owners")),
-          interpretation: v(f, "interpretation"),
-          conflicts_with: list(v(f, "conflicts")),
-        }),
-        scopes: upsert(current?.scopes ?? [], {
-          id: scope,
-          kind: v(f, "scope_kind"),
-          resource_id: v(f, "resource_id"),
-          revision: v(f, "revision"),
-          path: v(f, "path"),
-          description: v(f, "scope_description"),
-        }),
-        controls: upsert(current?.controls ?? [], {
-          id: control,
-          title: v(f, "control_title"),
-          objective: v(f, "objective"),
-          requirement_ids: [req],
-          owner_ids: list(v(f, "control_owners")),
-          review_period_days: Number(v(f, "control_review")),
-          mappings: [{ scope_id: scope, purpose: v(f, "mapping_purpose") }],
-          evidence_criteria: [
-            {
-              id: v(f, "evidence_id"),
-              description: v(f, "evidence_description"),
-              kind: v(f, "evidence_kind"),
-              resource_kind: v(f, "evidence_resource_kind"),
-              resource_id: v(f, "evidence_resource_id"),
-              revision: v(f, "evidence_revision"),
-            },
-          ],
-          claim: v(f, "claim"),
-        }),
-        exceptions: exceptionID
-          ? upsert(current?.exceptions ?? [], {
-              id: exceptionID,
-              requirement_ids: [req],
-              control_ids: [control],
-              rationale: v(f, "exception_rationale"),
-              granted_by: v(f, "exception_grantor"),
-              expires_at: new Date(exceptionFields[2]).toISOString(),
-              follow_up: v(f, "exception_follow_up"),
-            })
-          : (current?.exceptions ?? []),
-      };
+      owner = v(f, "owner") || user?.id || "";
+    const existingRequirement = current?.requirements.find(
+      (item) => item.id === req,
+    );
+    const existingControl = current?.controls.find(
+      (item) => item.id === control,
+    );
+    const existingException = current?.exceptions.find(
+      (item) => item.id === exceptionID,
+    );
+    const evidence = {
+      id: v(f, "evidence_id"),
+      description: v(f, "evidence_description"),
+      kind: v(f, "evidence_kind"),
+      resource_kind: v(f, "evidence_resource_kind"),
+      resource_id: v(f, "evidence_resource_id"),
+      revision: v(f, "evidence_revision"),
+    };
+    const mapping = { scope_id: scope, purpose: v(f, "mapping_purpose") };
+    const revision: Revision = {
+      version: 0,
+      title: v(f, "title"),
+      summary: v(f, "summary"),
+      owner_ids: list(owner),
+      review_period_days: Number(v(f, "program_review")),
+      requirements: upsert(current?.requirements ?? [], {
+        id: req,
+        kind: v(f, "requirement_kind"),
+        authority: v(f, "authority"),
+        citation: v(f, "citation"),
+        title: v(f, "requirement_title"),
+        summary: v(f, "requirement_summary"),
+        applicability: v(f, "applicability"),
+        inherited_from: v(f, "inherited_from"),
+        owner_ids: list(v(f, "requirement_owners")),
+        interpretation: v(f, "interpretation"),
+        conflicts_with: unique([
+          ...(existingRequirement?.conflicts_with ?? []),
+          ...list(v(f, "conflicts")),
+        ]),
+      }),
+      scopes: upsert(current?.scopes ?? [], {
+        id: scope,
+        kind: v(f, "scope_kind"),
+        resource_id: v(f, "resource_id"),
+        revision: v(f, "revision"),
+        path: v(f, "path"),
+        description: v(f, "scope_description"),
+      }),
+      controls: upsert(current?.controls ?? [], {
+        id: control,
+        title: v(f, "control_title"),
+        objective: v(f, "objective"),
+        requirement_ids: unique([
+          ...(existingControl?.requirement_ids ?? []),
+          req,
+        ]),
+        owner_ids: list(v(f, "control_owners")),
+        review_period_days: Number(v(f, "control_review")),
+        mappings: [
+          ...(existingControl?.mappings.filter(
+            (item) => item.scope_id !== scope,
+          ) ?? []),
+          mapping,
+        ],
+        evidence_criteria: upsert(
+          existingControl?.evidence_criteria ?? [],
+          evidence,
+        ),
+        claim: v(f, "claim"),
+      }),
+      exceptions: exceptionID
+        ? upsert(current?.exceptions ?? [], {
+            id: exceptionID,
+            requirement_ids: unique([
+              ...(existingException?.requirement_ids ?? []),
+              req,
+            ]),
+            control_ids: unique([
+              ...(existingException?.control_ids ?? []),
+              control,
+            ]),
+            rationale: v(f, "exception_rationale"),
+            granted_by: v(f, "exception_grantor"),
+            expires_at: new Date(exceptionFields[2]).toISOString(),
+            follow_up: v(f, "exception_follow_up"),
+          })
+        : (current?.exceptions ?? []),
+    };
     const url = selected
       ? `/repositories/${repositoryID}/assurance-programs/${selected.id}/revisions`
       : `/repositories/${repositoryID}/assurance-programs`;
