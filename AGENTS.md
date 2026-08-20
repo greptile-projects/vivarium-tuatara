@@ -2608,6 +2608,10 @@ whenever dependencies change or the web job fails before it starts.
   invalidated while unaffected suites remain comparable. Contamination and nondeterminism remain explicit
   and contaminated attempts are excluded from aggregates. Pull movement marks the immutable candidate stale.
   Candidate and run records grant no agent, repository, tool, service, network, merge, release, or deployment authority.
+  Suite selections freeze the exact scenario-ID manifest; run publication rejects unknown scenarios,
+  duplicate attempt identities, negative correction counts, and samples below the declared minimum.
+  Evaluator attribution is derived from the authenticated publisher rather than caller prose. Candidate and
+  run files are synchronized before rename and their storage directory is synchronized before success.
   The connected agent-adoption browser journey compares two published candidates, contains hidden-check,
   prohibited-action, budget, and operator-outage trial failures, activates only sponsored project-owned
   evaluation evidence, and carries the selected agent through an ordinary proposal task, isolated session,

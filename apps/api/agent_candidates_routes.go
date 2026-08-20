@@ -75,7 +75,11 @@ func registerAgentCandidateRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			}
 			sr := suite.Revisions[x.Version-1]
 			d := agentcandidates.Digest(sr)
-			selected = append(selected, agentcandidates.SuiteSelection{SuiteID: x.SuiteID, Version: x.Version, Digest: d})
+			scenarioIDs := make([]string, 0, len(sr.Scenarios))
+			for _, scenario := range sr.Scenarios {
+				scenarioIDs = append(scenarioIDs, scenario.ID)
+			}
+			selected = append(selected, agentcandidates.SuiteSelection{SuiteID: x.SuiteID, Version: x.Version, Digest: d, ScenarioIDs: scenarioIDs})
 			components = append(components, agentcandidates.ComponentDigest{Kind: "scenario_judge", ID: x.SuiteID, Digest: d})
 		}
 		if in.BaselineCandidateID != "" {
@@ -142,8 +146,7 @@ func registerAgentCandidateRoutes(mux *http.ServeMux, catalog *repositories.Stor
 		}
 		in.ID = ""
 		in.CandidateID = c.ID
-		in.CreatedBy = actor.UserID
-		out, e := candidates.CreateRun(in)
+		out, e := candidates.CreateRun(in, actor.UserID)
 		if e != nil {
 			writeErr(w, e)
 			return

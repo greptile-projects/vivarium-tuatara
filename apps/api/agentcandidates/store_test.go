@@ -3,7 +3,7 @@ package agentcandidates
 import "testing"
 
 func candidate(repo, pull, rev, suite, digest string) Candidate {
-	return Candidate{RepositoryID: repo, PullRequestID: pull, PullRevision: rev, ProjectID: "project", ProjectVersion: 1, ContractDigest: Digest("contract"), Components: []ComponentDigest{{Kind: "prompt", ID: "p", Digest: Digest("p")}}, Suites: []SuiteSelection{{SuiteID: suite, Version: 1, Digest: digest}}, CreatedBy: "owner"}
+	return Candidate{RepositoryID: repo, PullRequestID: pull, PullRevision: rev, ProjectID: "project", ProjectVersion: 1, ContractDigest: Digest("contract"), Components: []ComponentDigest{{Kind: "prompt", ID: "p", Digest: Digest("p")}}, Suites: []SuiteSelection{{SuiteID: suite, Version: 1, Digest: digest, ScenarioIDs: []string{"case"}}}, CreatedBy: "owner"}
 }
 func run(c Candidate, digest string, success bool) Run {
 	return Run{CandidateID: c.ID, SuiteID: "suite", SuiteVersion: 1, SuiteDigest: digest, Isolation: "ephemeral", Network: "simulated", MaxToolActions: 2, MaxCost: 2, MaxLatencyMS: 1000, Limits: StatisticalLimits{ConfidenceLevel: .95, MinimumSamples: 2, MarginOfError: .1}, Results: []ScenarioResult{
@@ -24,7 +24,7 @@ func TestComparisonKeepsContaminationAndInvalidatesOnlyChangedSuite(t *testing.T
 	br := run(base, d, false)
 	br.Contaminated = true
 	br.ContaminationReasons = []string{"protected canary overlap"}
-	if _, err = s.CreateRun(br); err != nil {
+	if _, err = s.CreateRun(br, "judge"); err != nil {
 		t.Fatal(err)
 	}
 	c := candidate("repo", "pull1", "1123456789012345678901234567890123456789", "suite", d)
@@ -35,7 +35,7 @@ func TestComparisonKeepsContaminationAndInvalidatesOnlyChangedSuite(t *testing.T
 	}
 	cr := run(c, d, true)
 	cr.Results[1].OutputDigest = Digest("different-output")
-	if _, err = s.CreateRun(cr); err != nil {
+	if _, err = s.CreateRun(cr, "judge"); err != nil {
 		t.Fatal(err)
 	}
 	cmp, err := s.Compare(c)
@@ -69,12 +69,49 @@ func TestRunRejectsUnboundedOrStatisticallyInsufficientEvidence(t *testing.T) {
 	}
 	r := run(c, d, true)
 	r.Results = r.Results[:1]
-	if _, err = s.CreateRun(r); err != ErrInvalid {
+	if _, err = s.CreateRun(r, "judge"); err != ErrInvalid {
 		t.Fatalf("err = %v", err)
 	}
 	r = run(c, d, true)
 	r.Results[0].Cost = 3
-	if _, err = s.CreateRun(r); err != ErrInvalid {
+	if _, err = s.CreateRun(r, "judge"); err != ErrInvalid {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRunBindsEvaluatorAndRejectsMalformedScenarioSamples(t *testing.T) {
+	s, _ := New(t.TempDir())
+	d := Digest("suite")
+	c, err := s.Create(candidate("repo", "pull", "0123456789012345678901234567890123456789", "suite", d))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := run(c, d, true)
+	for i := range r.Results {
+		r.Results[i].EvaluatorID = "impersonated-owner"
+	}
+	created, err := s.CreateRun(r, "authenticated-collaborator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range created.Results {
+		if result.EvaluatorID != "authenticated-collaborator" {
+			t.Fatalf("evaluator = %q", result.EvaluatorID)
+		}
+	}
+	r = run(c, d, true)
+	r.Results[1].Attempt = 1
+	if _, err = s.CreateRun(r, "judge"); err != ErrInvalid {
+		t.Fatalf("duplicate attempt err = %v", err)
+	}
+	r = run(c, d, true)
+	r.Results[0].HumanCorrections = -1
+	if _, err = s.CreateRun(r, "judge"); err != ErrInvalid {
+		t.Fatalf("negative corrections err = %v", err)
+	}
+	r = run(c, d, true)
+	r.Results[0].ScenarioID = "not-in-suite"
+	if _, err = s.CreateRun(r, "judge"); err != ErrInvalid {
+		t.Fatalf("unknown scenario err = %v", err)
 	}
 }

@@ -308,7 +308,10 @@ originating bounded system and no endpoint grants execution or merge authority.
   bounded scenario attempts with digest-addressed traces, outputs, tool actions, artifacts, evaluator decisions,
   corrections, uncertainty, latency, cost, contamination, nondeterminism, and explicit sample/confidence limits.
   The server rejects evidence exceeding its declared tool, cost, or latency bounds and excludes contaminated
-  attempts from aggregate comparisons. Records default beneath `$AGENT_CANDIDATE_STORAGE_ROOT` (`agent-candidates`).
+  attempts from aggregate comparisons. Evaluator IDs are server-bound to the authenticated publisher; unknown
+  suite scenarios, duplicate attempt identities, and negative correction counts are rejected. Publication
+  synchronizes the staged record and storage directory before returning success. Records default beneath
+  `$AGENT_CANDIDATE_STORAGE_ROOT` (`agent-candidates`).
 
 ## Runtime privacy checks
 

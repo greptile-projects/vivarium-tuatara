@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,9 +21,10 @@ var ErrNotFound = errors.New("agent candidate not found")
 var ErrConflict = errors.New("agent candidate conflict")
 
 type SuiteSelection struct {
-	SuiteID string `json:"suite_id"`
-	Version int    `json:"version"`
-	Digest  string `json:"digest"`
+	SuiteID     string   `json:"suite_id"`
+	Version     int      `json:"version"`
+	Digest      string   `json:"digest"`
+	ScenarioIDs []string `json:"scenario_ids"`
 }
 type ComponentDigest struct {
 	Kind   string `json:"kind"`
@@ -148,11 +150,37 @@ func write(path string, v any) error {
 	if e != nil {
 		return e
 	}
-	tmp := path + ".tmp"
-	if e = os.WriteFile(tmp, b, 0600); e != nil {
+	tmp := path + ".tmp-" + uid()
+	f, e := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if e != nil {
 		return e
 	}
-	return os.Rename(tmp, path)
+	remove := true
+	defer func() {
+		_ = f.Close()
+		if remove {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if _, e = f.Write(b); e != nil {
+		return e
+	}
+	if e = f.Sync(); e != nil {
+		return e
+	}
+	if e = f.Close(); e != nil {
+		return e
+	}
+	if e = os.Rename(tmp, path); e != nil {
+		return e
+	}
+	remove = false
+	dir, e := os.Open(filepath.Dir(path))
+	if e != nil {
+		return e
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 func read[T any](path string) (T, error) {
 	var v T
@@ -173,8 +201,15 @@ func (s *Store) Create(c Candidate) (Candidate, error) {
 		return Candidate{}, ErrInvalid
 	}
 	for _, x := range c.Suites {
-		if !clean(x.SuiteID, 64) || x.Version < 1 || len(x.Digest) != 64 {
+		if !clean(x.SuiteID, 64) || x.Version < 1 || len(x.Digest) != 64 || len(x.ScenarioIDs) == 0 {
 			return Candidate{}, ErrInvalid
+		}
+		seen := map[string]bool{}
+		for _, scenarioID := range x.ScenarioIDs {
+			if !clean(scenarioID, 100) || seen[scenarioID] {
+				return Candidate{}, ErrInvalid
+			}
+			seen[scenarioID] = true
 		}
 	}
 	c.ID = uid()
@@ -203,17 +238,24 @@ func (s *Store) List(repo, pull string) ([]Candidate, error) {
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out, nil
 }
-func (s *Store) CreateRun(r Run) (Run, error) {
+func (s *Store) CreateRun(r Run, actor string) (Run, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !clean(actor, 64) {
+		return Run{}, ErrInvalid
+	}
 	c, e := read[Candidate](s.path("candidate", r.CandidateID))
 	if e != nil {
 		return Run{}, e
 	}
 	matched := false
+	allowedScenarios := map[string]bool{}
 	for _, x := range c.Suites {
 		if x.SuiteID == r.SuiteID && x.Version == r.SuiteVersion && x.Digest == r.SuiteDigest {
 			matched = true
+			for _, scenarioID := range x.ScenarioIDs {
+				allowedScenarios[scenarioID] = true
+			}
 		}
 	}
 	if !matched || r.Isolation != "ephemeral" || !slicesOne(r.Network, "none", "simulated", "permitted") || r.MaxToolActions < 1 || r.MaxCost < 0 || r.MaxLatencyMS < 1 || len(r.Results) == 0 || r.Limits.ConfidenceLevel <= 0 || r.Limits.ConfidenceLevel >= 1 || r.Limits.MinimumSamples < 1 || r.Limits.MarginOfError < 0 {
@@ -228,12 +270,16 @@ func (s *Store) CreateRun(r Run) (Run, error) {
 		}
 	}
 	counts := map[string]int{}
+	attempts := map[string]bool{}
 	outputs := map[string]string{}
 	r.Nondeterministic = false
-	for _, x := range r.Results {
-		if !clean(x.ScenarioID, 100) || x.Attempt < 1 || x.Uncertainty < 0 || x.Uncertainty > 1 || x.LatencyMS < 0 || x.Cost < 0 || len(x.TraceDigest) != 64 || len(x.OutputDigest) != 64 || !slicesOne(x.EvaluatorDecision, "passed", "failed", "needs_human") || !clean(x.EvaluatorID, 64) {
+	for i, x := range r.Results {
+		key := x.ScenarioID + "\x00" + fmt.Sprint(x.Attempt)
+		if !allowedScenarios[x.ScenarioID] || x.Attempt < 1 || attempts[key] || x.HumanCorrections < 0 || x.Uncertainty < 0 || x.Uncertainty > 1 || x.LatencyMS < 0 || x.Cost < 0 || len(x.TraceDigest) != 64 || len(x.OutputDigest) != 64 || !slicesOne(x.EvaluatorDecision, "passed", "failed", "needs_human") {
 			return Run{}, ErrInvalid
 		}
+		attempts[key] = true
+		r.Results[i].EvaluatorID = actor
 		counts[x.ScenarioID]++
 		if prior, ok := outputs[x.ScenarioID]; ok && prior != x.OutputDigest {
 			r.Nondeterministic = true
@@ -260,6 +306,7 @@ func (s *Store) CreateRun(r Run) (Run, error) {
 	}
 	r.Contaminated = len(r.ContaminationReasons) > 0
 	r.ID = uid()
+	r.CreatedBy = actor
 	r.CreatedAt = s.now()
 	return r, write(s.path("run", r.ID), r)
 }
