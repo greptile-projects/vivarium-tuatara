@@ -125,6 +125,7 @@ type RetirementPlan struct {
 	WorkVersion         int                  `json:"work_version"`
 	Work                []RetirementWork     `json:"work,omitempty"`
 	DiscoveredConsumers []ConsumerDiscovery  `json:"discovered_consumers,omitempty"`
+	Candidates          []MigrationCandidate `json:"candidates,omitempty"`
 	Blockers            []RetirementBlocker  `json:"blockers"`
 	Status              string               `json:"status"`
 	CreatedBy           string               `json:"created_by"`
@@ -429,6 +430,14 @@ func projectRetirement(p *RetirementPlan, current int, diagnostics []Diagnostic,
 	b := []RetirementBlocker{}
 	add := func(k, m, o, a string, consumerIndex *int) {
 		b = append(b, RetirementBlocker{Kind: k, Message: m, OwnerID: o, Audience: a, ConsumerIndex: consumerIndex})
+	}
+	readyCandidate := false
+	for i := range p.Candidates {
+		ProjectCandidate(&p.Candidates[i], *p)
+		readyCandidate = readyCandidate || p.Candidates[i].RemovalReady
+	}
+	if !readyCandidate {
+		add("migration_evidence_required", "No immutable candidate currently proves coexistence, rollback, journeys, and measured zero residual use.", "", "", nil)
 	}
 	if p.CapabilityVersion != current {
 		add("changed_usage", "The capability inventory changed after this plan was opened; reassess every affected audience.", "", "", nil)

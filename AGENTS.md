@@ -196,6 +196,13 @@ whenever dependencies change or the web job fails before it starts.
   failure is durability-uncertain committed state: linked target-repository work is preserved for
   reconciliation, never destructively compensated. Dependency completion is derived before privacy
   filtering and revalidated beneath the ordinary proposal start lock through agent-session publication.
+  Plans also retain immutable exact-provider/release, consumer, schema, and configuration coexistence
+  candidates. Mandatory old-only, dual-support, replacement, rollback, and journey checks derive logs,
+  artifacts, duration, and resource cost from exact-command bounded-workspace outcomes. New proof
+  supersedes rather than rewrites history, and reads compare selected Git blobs so only affected checks
+  become stale. Per-consumer usage windows remain measured, unmeasured, or inaccessible; readiness
+  requires current passing checks plus owner-acknowledged measured zero old-behavior use for every frozen
+  audience. Privacy projection retains restricted blockers without exposing consumer evidence or identity.
   These records provide removal
   context only and grant no consumer-repository, Git,
   release, environment, migration, review, merge, deployment, or retirement authority.

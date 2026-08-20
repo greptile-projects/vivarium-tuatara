@@ -11,7 +11,7 @@ type Consumer = {
   owner_ids: string[];
   compatibility_promise: string;
 };
-type Revision = { consumers: Consumer[] };
+type Revision = { commit_id?: string; consumers: Consumer[] };
 export type RetirementPlan = {
   id: string;
   capability_version: number;
@@ -65,6 +65,13 @@ export type RetirementPlan = {
     revision: string;
     paths: string[];
     impact: string;
+  }[];
+  candidates?: {
+    id: string; provider_revision: string; release_version: string; environment: string;
+    status: string; removal_ready: boolean;
+    checks: { id: string; stage: string; journey?: string; repository_id: string; revision: string; expectation: string; status: string; evidence?: { id: string; status: string; stale: boolean; superseded: boolean; duration_ms: number; cost_units: number; artifacts?: { path: string; digest: string }[] }[] }[];
+    usage_observations: { id: string; consumer_index: number; state: string; old_behavior_uses: number; total_uses: number; summary: string; owner_id?: string; acknowledged: boolean; superseded: boolean }[];
+    blockers: { kind: string; message: string; audience?: string }[];
   }[];
 };
 const value = (f: FormData, n: string) => String(f.get(n) ?? "").trim();
@@ -346,6 +353,16 @@ export function RetirementContracts({
             </div>)}
           </div>}
           {(plan.discovered_consumers?.length ?? 0) > 0 && <div className="mt-4"><h4 className="text-sm font-semibold">Newly reported consumers</h4>{plan.discovered_consumers?.map((item) => <p key={item.id} className="mt-1 text-sm">{item.repository_id} at {item.revision.slice(0, 8)} · {item.paths.join(", ")} · {item.impact}</p>)}</div>}
+          {(plan.candidates?.length ?? 0) > 0 && <div className="mt-5 space-y-3 border-t border-[var(--line)] pt-4">
+            <h4 className="text-sm font-semibold">Coexistence and removal evidence</h4>
+            {plan.candidates?.map((candidate) => <div key={candidate.id} className="rounded-lg border border-[var(--line)] p-3 text-sm">
+              <div className="flex flex-wrap gap-2"><Badge tone={candidate.removal_ready ? "success" : "danger"}>{candidate.removal_ready ? "removal ready" : candidate.status}</Badge><Badge>{candidate.environment}</Badge><Badge>release {candidate.release_version}</Badge></div>
+              <p className="mt-2 font-mono text-xs">provider {candidate.provider_revision.slice(0, 12)}</p>
+              <div className="mt-3 grid gap-2 md:grid-cols-2">{candidate.checks.map((check) => <div key={check.id} className="rounded border border-[var(--line)] p-2"><div className="flex gap-2"><Badge tone={check.status === "passed" ? "success" : check.status === "stale" ? "warning" : "danger"}>{check.stage.replaceAll("_", " ")}</Badge><span>{check.status}</span></div><p className="mt-1">{check.expectation}</p><p className="text-xs text-[var(--muted)]">{check.repository_id} {check.revision.slice(0, 8)}{check.journey ? ` · ${check.journey}` : ""}</p>{check.evidence?.map((proof) => <p key={proof.id} className="mt-1 text-xs">{proof.superseded ? "Superseded" : proof.stale ? "Stale" : proof.status} · {proof.duration_ms}ms · {proof.cost_units.toFixed(3)} units · {proof.artifacts?.length ?? 0} artifacts</p>)}</div>)}</div>
+              <div className="mt-3"><strong>Residual use and owner acknowledgement</strong>{candidate.usage_observations.map((usage) => <p key={usage.id} className={`mt-1 ${usage.superseded ? "text-[var(--muted)]" : ""}`}>Audience {usage.consumer_index + 1}: {usage.state} · old {usage.old_behavior_uses}/{usage.total_uses} · {usage.acknowledged ? `acknowledged by ${usage.owner_id}` : "owner acknowledgement required"} · {usage.summary}{usage.superseded ? " · superseded" : ""}</p>)}</div>
+              {candidate.blockers.map((blocker, index) => <p key={`${blocker.kind}-${index}`} className="mt-2 text-[var(--danger)]">{blocker.kind.replaceAll("_", " ")}: {blocker.message}{blocker.audience ? ` (${blocker.audience})` : ""}</p>)}
+            </div>)}
+          </div>}
           {userID && current.consumers.some((consumer) => consumer.repository_id && consumer.revision) && <form onSubmit={(event) => void createWork(event, plan)} className="mt-5 grid gap-3 border-t border-[var(--line)] pt-4 md:grid-cols-2">
             <h4 className="md:col-span-2 text-sm font-semibold">Create work in an affected repository you control</h4>
             <label className="grid gap-1 text-xs font-semibold">Affected consumer<select name="audience_index" className="min-h-10 rounded-lg border px-3 font-normal">{current.consumers.map((consumer, index) => consumer.repository_id && consumer.revision ? <option key={consumer.repository_id} value={index}>{consumer.name}</option> : null)}</select></label>

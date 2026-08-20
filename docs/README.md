@@ -42,6 +42,20 @@ but hide work in consumer repositories the reader cannot currently access. A par
 an omitted consumer may report exact commit, existing paths, evidence, and impact; the report blocks
 retirement for reassessment and does not give the provider mutation authority in that repository.
 
+Each plan can retain immutable coexistence candidates bound to its exact provider release, schema
+and configuration paths, consumer revisions, and bounded environment. A complete matrix requires
+old-only, dual-support, replacement, rollback, and named journey checks. Check status, sanitized logs,
+artifact digests, duration, and resource-derived cost come only from exact-command outcomes retained by
+the submitting participant's revision-matched workspace. Later proof supersedes without deleting failed
+history. Reads invalidate only checks whose selected Git blobs changed, so unrelated history retains proof.
+
+Affected owners append windowed usage observations against their frozen consumer revision. The public
+plan preserves measured residual calls, explicit inaccessible or unmeasured use, acknowledgements, and
+superseded observations while redacting repositories the reader cannot access. Removal readiness requires
+every current matrix row to pass and every audience to have an owner-acknowledged measured zero-old-use
+observation. These records grant no workspace, telemetry, consumer, Git, release, deployment, environment,
+or removal authority.
+
 ## Revision-exact security confidence
 
 Repository owners and organization owners publish scoped security requirements at

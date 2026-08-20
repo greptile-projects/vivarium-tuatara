@@ -39,6 +39,7 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 			writeAPIError(w, 500, "capabilities_unavailable", "capability inventory could not be read")
 			return
 		}
+		out = projectCapabilityCandidateFreshness(git, r.PathValue("id"), out)
 		writeJSON(w, 200, map[string]any{"capabilities": projectCapabilitiesForReader(catalog, actor.UserID, projectCapabilityWork(out, actor.UserID, proposalStore, pulls, sessions, workspaceStore))})
 	})
 	mux.HandleFunc("GET /repositories/{id}/capabilities/{capability_id}", func(w http.ResponseWriter, r *http.Request) {
@@ -51,6 +52,7 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 			writeAPIError(w, 404, "capability_not_found", "capability not found")
 			return
 		}
+		out = projectCapabilityCandidateFreshness(git, r.PathValue("id"), []capabilities.Capability{out})[0]
 		writeJSON(w, 200, projectCapabilitiesForReader(catalog, actor.UserID, projectCapabilityWork([]capabilities.Capability{out}, actor.UserID, proposalStore, pulls, sessions, workspaceStore))[0])
 	})
 	publish := func(revise bool) http.HandlerFunc {
@@ -276,6 +278,258 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 		}
 		writeCapability(w, out, err, 201)
 	})
+	mux.HandleFunc("POST /repositories/{id}/capabilities/{capability_id}/retirement-plans/{plan_id}/candidates", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var candidate capabilities.MigrationCandidate
+		if decodeJSON(r, &candidate) != nil {
+			writeAPIError(w, 400, "invalid_migration_candidate", "an exact bounded migration candidate is required")
+			return
+		}
+		for _, check := range candidate.Checks {
+			target, err := git.Open(check.RepositoryID)
+			if err != nil {
+				writeAPIError(w, 422, "invalid_candidate_revision", "every check repository and revision must resolve")
+				return
+			}
+			commit, err := target.ReadCommit(storage.ObjectID(strings.ToLower(check.Revision)))
+			if err != nil {
+				writeAPIError(w, 422, "invalid_candidate_revision", "every check repository and revision must resolve")
+				return
+			}
+			entries, err := target.WalkTree(commit.Tree)
+			present := map[string]bool{}
+			if err == nil {
+				for _, entry := range entries {
+					if entry.Type == storage.BlobObject {
+						present[entry.Path] = true
+					}
+				}
+			}
+			for _, sourcePath := range check.Paths {
+				if !present[sourcePath] {
+					writeAPIError(w, 422, "invalid_candidate_path", "every affected path must exist at the exact check revision")
+					return
+				}
+			}
+		}
+		out, created, err := inventory.CreateMigrationCandidate(r.PathValue("id"), r.PathValue("capability_id"), r.PathValue("plan_id"), actor.UserID, candidate)
+		if err != nil {
+			writeCapability(w, out, err, 201)
+			return
+		}
+		out = projectCapabilitiesForReader(catalog, actor.UserID, []capabilities.Capability{out})[0]
+		for _, plan := range out.RetirementPlans {
+			if plan.ID == r.PathValue("plan_id") {
+				for _, projected := range plan.Candidates {
+					if projected.ID == created.ID {
+						created = projected
+					}
+				}
+			}
+		}
+		writeJSON(w, 201, map[string]any{"capability": out, "candidate": created})
+	})
+	mux.HandleFunc("POST /repositories/{id}/capabilities/{capability_id}/retirement-plans/{plan_id}/candidates/{candidate_id}/evidence", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			CheckID     string `json:"check_id"`
+			WorkspaceID string `json:"workspace_id"`
+		}
+		if decodeJSON(r, &in) != nil || workspaceStore == nil {
+			writeAPIError(w, 400, "invalid_candidate_evidence", "a retained bounded workspace check is required")
+			return
+		}
+		current, err := inventory.Get(r.PathValue("id"), r.PathValue("capability_id"))
+		var check *capabilities.CandidateCheck
+		for pi := range current.RetirementPlans {
+			if current.RetirementPlans[pi].ID != r.PathValue("plan_id") {
+				continue
+			}
+			for ci := range current.RetirementPlans[pi].Candidates {
+				if current.RetirementPlans[pi].Candidates[ci].ID != r.PathValue("candidate_id") {
+					continue
+				}
+				for xi := range current.RetirementPlans[pi].Candidates[ci].Checks {
+					if current.RetirementPlans[pi].Candidates[ci].Checks[xi].ID == in.CheckID {
+						check = &current.RetirementPlans[pi].Candidates[ci].Checks[xi]
+					}
+				}
+			}
+		}
+		if err != nil || check == nil {
+			writeAPIError(w, 404, "migration_candidate_not_found", "candidate check not found")
+			return
+		}
+		ws, err := workspaceStore.Get(in.WorkspaceID)
+		if err != nil || ws.CreatorID != actor.UserID || ws.RepositoryID != check.RepositoryID || ws.CommitID != strings.ToLower(check.Revision) {
+			writeAPIError(w, 422, "invalid_candidate_workspace", "evidence must come from the caller's exact-revision bounded workspace")
+			return
+		}
+		digest := capabilities.CommandDigest(check.Command)
+		var selected *workspaces.CommandOutcome
+		for i := len(ws.Commands) - 1; i >= 0; i-- {
+			x := ws.Commands[i]
+			if x.CommandSHA256 == digest && !x.CompletedAt.Before(x.StartedAt) && len(x.Output) <= 65500 && !reusableSecret.MatchString(x.Output) {
+				selected = &x
+				break
+			}
+		}
+		if selected == nil {
+			writeAPIError(w, 422, "missing_candidate_outcome", "the workspace has no safe retained outcome for the exact command")
+			return
+		}
+		status := "passed"
+		if selected.ExitCode != 0 {
+			status = "failed"
+		}
+		duration := selected.CompletedAt.Sub(selected.StartedAt)
+		cost := float64(duration.Milliseconds()) / 1000 * (ws.Definition.Resources.CPUs + float64(ws.Definition.Resources.MemoryMB)/1024)
+		evidence := capabilities.CandidateEvidence{WorkspaceID: ws.ID, OutcomeID: selected.ID, Status: status, ExitCode: selected.ExitCode, SanitizedLog: selected.Output, CommandDigest: digest, DurationMS: duration.Milliseconds(), CostUnits: cost}
+		for _, change := range ws.Changes {
+			if reusableSecret.MatchString(change.Path) {
+				writeAPIError(w, 422, "unsafe_candidate_artifact", "artifact metadata must be sanitized")
+				return
+			}
+			evidence.Artifacts = append(evidence.Artifacts, capabilities.CandidateArtifact{Path: change.Path, Digest: change.SHA256, Size: change.Size})
+		}
+		out, err := inventory.AddCandidateEvidence(r.PathValue("id"), r.PathValue("capability_id"), r.PathValue("plan_id"), r.PathValue("candidate_id"), actor.UserID, in.CheckID, evidence)
+		if err == nil {
+			out = projectCapabilitiesForReader(catalog, actor.UserID, []capabilities.Capability{out})[0]
+		}
+		writeCapability(w, out, err, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/capabilities/{capability_id}/retirement-plans/{plan_id}/candidates/{candidate_id}/usage-observations", func(w http.ResponseWriter, r *http.Request) {
+		actor, authenticated, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok || !authenticated {
+			return
+		}
+		var observation capabilities.UsageObservation
+		if decodeJSON(r, &observation) != nil {
+			writeAPIError(w, 400, "invalid_usage_observation", "a bounded usage observation is required")
+			return
+		}
+		current, err := inventory.Get(r.PathValue("id"), r.PathValue("capability_id"))
+		var consumer *capabilities.Consumer
+		var audience *capabilities.Audience
+		for pi := range current.RetirementPlans {
+			p := &current.RetirementPlans[pi]
+			if p.ID == r.PathValue("plan_id") && observation.ConsumerIndex >= 0 && observation.ConsumerIndex < len(p.Audiences) && p.CapabilityVersion > 0 && p.CapabilityVersion <= len(current.Revisions) {
+				audience = &p.Audiences[observation.ConsumerIndex]
+				consumer = &current.Revisions[p.CapabilityVersion-1].Consumers[observation.ConsumerIndex]
+			}
+		}
+		if err != nil || consumer == nil || audience == nil {
+			writeAPIError(w, 422, "invalid_usage_consumer", "the frozen consumer must resolve")
+			return
+		}
+		allowed := containsString(audience.OwnerIDs, actor.UserID)
+		if consumer.RepositoryID != "" {
+			collaborator, _ := catalog.HasCollaborator(actor.UserID, consumer.RepositoryID)
+			target, _ := catalog.GetByID(consumer.RepositoryID)
+			allowed = allowed && (target.OwnerID == actor.UserID || collaborator)
+		}
+		if !allowed {
+			writeAPIError(w, 403, "usage_observation_forbidden", "an exact affected owner with consumer access must report use")
+			return
+		}
+		observation.RepositoryID = consumer.RepositoryID
+		observation.Revision = consumer.Revision
+		observation.OwnerID = actor.UserID
+		out, err := inventory.AddUsageObservation(r.PathValue("id"), r.PathValue("capability_id"), r.PathValue("plan_id"), r.PathValue("candidate_id"), actor.UserID, observation)
+		if err == nil {
+			out = projectCapabilitiesForReader(catalog, actor.UserID, []capabilities.Capability{out})[0]
+		}
+		writeCapability(w, out, err, 201)
+	})
+}
+
+func projectCapabilityCandidateFreshness(git *storage.Store, providerID string, values []capabilities.Capability) []capabilities.Capability {
+	for vi := range values {
+		if len(values[vi].Revisions) == 0 {
+			continue
+		}
+		current := values[vi].Revisions[len(values[vi].Revisions)-1]
+		consumerRevisions := map[string]string{}
+		for _, consumer := range current.Consumers {
+			consumerRevisions[consumer.RepositoryID] = consumer.Revision
+		}
+		for pi := range values[vi].RetirementPlans {
+			plan := &values[vi].RetirementPlans[pi]
+			for ci := range plan.Candidates {
+				candidate := &plan.Candidates[ci]
+				for xi := range candidate.Checks {
+					check := &candidate.Checks[xi]
+					target := consumerRevisions[check.RepositoryID]
+					if check.RepositoryID == providerID {
+						target = current.CommitID
+					}
+					stale := target == "" || !sameGitPaths(git, check.RepositoryID, check.Revision, target, check.Paths)
+					for ei := range check.Evidence {
+						check.Evidence[ei].Stale = stale
+					}
+				}
+				capabilities.ProjectCandidate(candidate, *plan)
+				for _, usage := range candidate.Usage {
+					if usage.Superseded || usage.RepositoryID == "" {
+						continue
+					}
+					if consumerRevisions[usage.RepositoryID] != usage.Revision {
+						candidate.Blockers = append(candidate.Blockers, capabilities.RetirementBlocker{Kind: "usage_revision_stale", Message: "The consumer revision changed after this usage window was retained."})
+						candidate.RemovalReady = false
+						candidate.Status = "blocked"
+					}
+				}
+			}
+		}
+	}
+	return values
+}
+
+func sameGitPaths(git *storage.Store, repositoryID, fromRevision, toRevision string, paths []string) bool {
+	if fromRevision == toRevision {
+		return true
+	}
+	repo, err := git.Open(repositoryID)
+	if err != nil {
+		return false
+	}
+	ids := func(revision string) (map[string]storage.ObjectID, bool) {
+		commit, e := repo.ReadCommit(storage.ObjectID(strings.ToLower(revision)))
+		if e != nil {
+			return nil, false
+		}
+		entries, e := repo.WalkTree(commit.Tree)
+		if e != nil {
+			return nil, false
+		}
+		out := map[string]storage.ObjectID{}
+		for _, entry := range entries {
+			if entry.Type == storage.BlobObject {
+				out[entry.Path] = entry.ID
+			}
+		}
+		return out, true
+	}
+	from, ok := ids(fromRevision)
+	if !ok {
+		return false
+	}
+	to, ok := ids(toRevision)
+	if !ok {
+		return false
+	}
+	for _, path := range paths {
+		if from[path] == "" || from[path] != to[path] {
+			return false
+		}
+	}
+	return true
 }
 
 func retirementWorkBody(capabilityID, planID string, work capabilities.RetirementWork) string {
@@ -441,6 +695,40 @@ func projectCapabilitiesForReader(catalog *repositories.Store, actorID string, v
 				}
 			}
 			plan.DiscoveredConsumers = visibleDiscoveries
+			for candidateIndex := range plan.Candidates {
+				candidate := &plan.Candidates[candidateIndex]
+				for consumerIndex := range candidate.Consumers {
+					if !canRead(candidate.Consumers[consumerIndex].RepositoryID) {
+						candidate.Consumers[consumerIndex] = capabilities.CandidateRevision{RepositoryID: "restricted"}
+					}
+				}
+				for checkIndex := range candidate.Checks {
+					check := &candidate.Checks[checkIndex]
+					if canRead(check.RepositoryID) {
+						continue
+					}
+					check.RepositoryID, check.Revision, check.Command, check.Paths, check.Expectation = "restricted", "", "", nil, "restricted check"
+					for evidenceIndex := range check.Evidence {
+						evidence := &check.Evidence[evidenceIndex]
+						evidence.WorkspaceID = ""
+						evidence.OutcomeID = ""
+						evidence.SanitizedLog = ""
+						evidence.Artifacts = nil
+						evidence.CreatedBy = "restricted"
+					}
+				}
+				for usageIndex := range candidate.Usage {
+					usage := &candidate.Usage[usageIndex]
+					if usage.ConsumerIndex >= 0 && restrictedPlanConsumers[usage.ConsumerIndex] {
+						usage.RepositoryID = "restricted"
+						usage.Revision = ""
+						usage.Summary = "restricted usage observation"
+						usage.ArtifactDigest = ""
+						usage.OwnerID = "restricted"
+						usage.State = "inaccessible"
+					}
+				}
+			}
 		}
 		for diagnosticIndex := range values[valueIndex].Diagnostics {
 			diagnostic := &values[valueIndex].Diagnostics[diagnosticIndex]
