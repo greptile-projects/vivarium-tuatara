@@ -33,6 +33,7 @@ type ComponentDigest struct {
 }
 type Candidate struct {
 	ID                  string            `json:"id"`
+	IdempotencyKey      string            `json:"idempotency_key"`
 	RepositoryID        string            `json:"repository_id"`
 	PullRequestID       string            `json:"pull_request_id"`
 	PullRevision        string            `json:"pull_revision"`
@@ -81,6 +82,7 @@ type StatisticalLimits struct {
 }
 type Run struct {
 	ID                   string            `json:"id"`
+	IdempotencyKey       string            `json:"idempotency_key"`
 	CandidateID          string            `json:"candidate_id"`
 	SuiteID              string            `json:"suite_id"`
 	SuiteVersion         int               `json:"suite_version"`
@@ -141,6 +143,10 @@ func Digest(v any) string {
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }
+func stableID(kind, scope, key string) string {
+	h := sha256.Sum256([]byte(kind + "\x00" + scope + "\x00" + key))
+	return hex.EncodeToString(h[:16])
+}
 func clean(v string, n int) bool {
 	return strings.TrimSpace(v) != "" && len(v) <= n && !strings.ContainsRune(v, '\x00')
 }
@@ -175,7 +181,10 @@ func write(path string, v any) error {
 		return e
 	}
 	remove = false
-	dir, e := os.Open(filepath.Dir(path))
+	return syncDirectory(filepath.Dir(path))
+}
+func syncDirectory(path string) error {
+	dir, e := os.Open(path)
 	if e != nil {
 		return e
 	}
@@ -197,7 +206,7 @@ func read[T any](path string) (T, error) {
 func (s *Store) Create(c Candidate) (Candidate, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !clean(c.RepositoryID, 64) || !clean(c.PullRequestID, 64) || len(c.PullRevision) != 40 || !clean(c.ProjectID, 64) || c.ProjectVersion < 1 || len(c.ContractDigest) != 64 || len(c.Components) == 0 || len(c.Suites) == 0 {
+	if !clean(c.IdempotencyKey, 200) || !clean(c.RepositoryID, 64) || !clean(c.PullRequestID, 64) || len(c.PullRevision) != 40 || !clean(c.ProjectID, 64) || c.ProjectVersion < 1 || len(c.ContractDigest) != 64 || len(c.Components) == 0 || len(c.Suites) == 0 {
 		return Candidate{}, ErrInvalid
 	}
 	for _, x := range c.Suites {
@@ -212,7 +221,20 @@ func (s *Store) Create(c Candidate) (Candidate, error) {
 			seen[scenarioID] = true
 		}
 	}
-	c.ID = uid()
+	c.ID = stableID("candidate", c.RepositoryID+"\x00"+c.PullRequestID, c.IdempotencyKey)
+	if prior, e := read[Candidate](s.path("candidate", c.ID)); e == nil {
+		requested := c
+		requested.CreatedAt = prior.CreatedAt
+		if Digest(requested) != Digest(prior) {
+			return Candidate{}, ErrConflict
+		}
+		if e = syncDirectory(s.root); e != nil {
+			return prior, e
+		}
+		return prior, nil
+	} else if !errors.Is(e, ErrNotFound) {
+		return Candidate{}, e
+	}
 	c.CreatedAt = s.now()
 	return c, write(s.path("candidate", c.ID), c)
 }
@@ -241,7 +263,7 @@ func (s *Store) List(repo, pull string) ([]Candidate, error) {
 func (s *Store) CreateRun(r Run, actor string) (Run, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !clean(actor, 64) {
+	if !clean(actor, 64) || !clean(r.IdempotencyKey, 200) {
 		return Run{}, ErrInvalid
 	}
 	c, e := read[Candidate](s.path("candidate", r.CandidateID))
@@ -299,14 +321,27 @@ func (s *Store) CreateRun(r Run, actor string) (Run, error) {
 			}
 		}
 	}
-	for _, n := range counts {
-		if n < r.Limits.MinimumSamples {
+	for scenarioID := range allowedScenarios {
+		if counts[scenarioID] < r.Limits.MinimumSamples {
 			return Run{}, ErrInvalid
 		}
 	}
 	r.Contaminated = len(r.ContaminationReasons) > 0
-	r.ID = uid()
 	r.CreatedBy = actor
+	r.ID = stableID("run", r.CandidateID, r.IdempotencyKey)
+	if prior, e := read[Run](s.path("run", r.ID)); e == nil {
+		requested := r
+		requested.CreatedAt = prior.CreatedAt
+		if Digest(requested) != Digest(prior) {
+			return Run{}, ErrConflict
+		}
+		if e = syncDirectory(s.root); e != nil {
+			return prior, e
+		}
+		return prior, nil
+	} else if !errors.Is(e, ErrNotFound) {
+		return Run{}, e
+	}
 	r.CreatedAt = s.now()
 	return r, write(s.path("run", r.ID), r)
 }

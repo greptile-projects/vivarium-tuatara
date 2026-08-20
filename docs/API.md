@@ -312,6 +312,9 @@ originating bounded system and no endpoint grants execution or merge authority.
   suite scenarios, duplicate attempt identities, and negative correction counts are rejected. Publication
   synchronizes the staged record and storage directory before returning success. Records default beneath
   `$AGENT_CANDIDATE_STORAGE_ROOT` (`agent-candidates`).
+  Candidate and run requests include an `idempotency_key`; identical retries resolve the same deterministic
+  record after ambiguous publication failures, while changed reuse conflicts. Each scenario in the selected
+  suite manifest must independently satisfy `minimum_samples` before a run is retained or aggregated.
 
 ## Runtime privacy checks
 

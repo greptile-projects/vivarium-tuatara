@@ -13,6 +13,7 @@ import (
 )
 
 type candidateCreateInput struct {
+	IdempotencyKey string `json:"idempotency_key"`
 	PullRevision   string `json:"pull_revision"`
 	ProjectID      string `json:"project_id"`
 	ProjectVersion int    `json:"project_version"`
@@ -92,7 +93,7 @@ func registerAgentCandidateRoutes(mux *http.ServeMux, catalog *repositories.Stor
 		var out agentcandidates.Candidate
 		e = pulls.WithSourceRevision(r.PathValue("id"), r.PathValue("pull_id"), in.PullRevision, func(p pullrequests.PullRequest) error {
 			var ce error
-			out, ce = candidates.Create(agentcandidates.Candidate{RepositoryID: p.RepositoryID, PullRequestID: p.ID, PullRevision: p.SourceCommitID, ProjectID: project.ID, ProjectVersion: in.ProjectVersion, ContractDigest: agentcandidates.Digest(rev), Components: components, Suites: selected, BaselineCandidateID: in.BaselineCandidateID, CreatedBy: actor.UserID})
+			out, ce = candidates.Create(agentcandidates.Candidate{IdempotencyKey: in.IdempotencyKey, RepositoryID: p.RepositoryID, PullRequestID: p.ID, PullRevision: p.SourceCommitID, ProjectID: project.ID, ProjectVersion: in.ProjectVersion, ContractDigest: agentcandidates.Digest(rev), Components: components, Suites: selected, BaselineCandidateID: in.BaselineCandidateID, CreatedBy: actor.UserID})
 			return ce
 		})
 		if e != nil {

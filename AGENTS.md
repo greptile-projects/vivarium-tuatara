@@ -2612,6 +2612,10 @@ whenever dependencies change or the web job fails before it starts.
   duplicate attempt identities, negative correction counts, and samples below the declared minimum.
   Evaluator attribution is derived from the authenticated publisher rather than caller prose. Candidate and
   run files are synchronized before rename and their storage directory is synchronized before success.
+  Candidate and run publications require caller-stable idempotency keys, derive deterministic identities
+  within their pull/candidate scope, and reconcile an identical already-published record after an ambiguous
+  post-rename failure; reuse with different content conflicts. Every scenario frozen into a selected suite
+  must independently meet the run's minimum sample count, so favorable partial coverage cannot aggregate.
   The connected agent-adoption browser journey compares two published candidates, contains hidden-check,
   prohibited-action, budget, and operator-outage trial failures, activates only sponsored project-owned
   evaluation evidence, and carries the selected agent through an ordinary proposal task, isolated session,

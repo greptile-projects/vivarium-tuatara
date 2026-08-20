@@ -3,13 +3,61 @@ package agentcandidates
 import "testing"
 
 func candidate(repo, pull, rev, suite, digest string) Candidate {
-	return Candidate{RepositoryID: repo, PullRequestID: pull, PullRevision: rev, ProjectID: "project", ProjectVersion: 1, ContractDigest: Digest("contract"), Components: []ComponentDigest{{Kind: "prompt", ID: "p", Digest: Digest("p")}}, Suites: []SuiteSelection{{SuiteID: suite, Version: 1, Digest: digest, ScenarioIDs: []string{"case"}}}, CreatedBy: "owner"}
+	return Candidate{IdempotencyKey: "candidate-key", RepositoryID: repo, PullRequestID: pull, PullRevision: rev, ProjectID: "project", ProjectVersion: 1, ContractDigest: Digest("contract"), Components: []ComponentDigest{{Kind: "prompt", ID: "p", Digest: Digest("p")}}, Suites: []SuiteSelection{{SuiteID: suite, Version: 1, Digest: digest, ScenarioIDs: []string{"case"}}}, CreatedBy: "owner"}
 }
 func run(c Candidate, digest string, success bool) Run {
-	return Run{CandidateID: c.ID, SuiteID: "suite", SuiteVersion: 1, SuiteDigest: digest, Isolation: "ephemeral", Network: "simulated", MaxToolActions: 2, MaxCost: 2, MaxLatencyMS: 1000, Limits: StatisticalLimits{ConfidenceLevel: .95, MinimumSamples: 2, MarginOfError: .1}, Results: []ScenarioResult{
+	return Run{IdempotencyKey: "run-key", CandidateID: c.ID, SuiteID: "suite", SuiteVersion: 1, SuiteDigest: digest, Isolation: "ephemeral", Network: "simulated", MaxToolActions: 2, MaxCost: 2, MaxLatencyMS: 1000, Limits: StatisticalLimits{ConfidenceLevel: .95, MinimumSamples: 2, MarginOfError: .1}, Results: []ScenarioResult{
 		{ScenarioID: "case", Attempt: 1, TaskSuccess: success, PolicyAdherence: true, Uncertainty: .2, LatencyMS: 20, Cost: 1, TraceDigest: Digest("trace1"), OutputDigest: Digest("out1"), EvaluatorDecision: "passed", EvaluatorID: "judge"},
 		{ScenarioID: "case", Attempt: 2, TaskSuccess: success, PolicyAdherence: true, Uncertainty: .4, LatencyMS: 40, Cost: 1, TraceDigest: Digest("trace2"), OutputDigest: Digest("out2"), EvaluatorDecision: "passed", EvaluatorID: "judge"},
 	}}
+}
+
+func TestRunRequiresMinimumSamplesForEverySelectedScenario(t *testing.T) {
+	s, _ := New(t.TempDir())
+	d := Digest("suite")
+	candidateInput := candidate("repo", "pull", "0123456789012345678901234567890123456789", "suite", d)
+	candidateInput.Suites[0].ScenarioIDs = []string{"case", "omitted"}
+	c, err := s.Create(candidateInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := run(c, d, true)
+	if _, err = s.CreateRun(r, "judge"); err != ErrInvalid {
+		t.Fatalf("omitted scenario err = %v", err)
+	}
+}
+
+func TestCreateAndRunRetriesUseStableIdentity(t *testing.T) {
+	s, _ := New(t.TempDir())
+	d := Digest("suite")
+	in := candidate("repo", "pull", "0123456789012345678901234567890123456789", "suite", d)
+	first, err := s.Create(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.Create(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != second.ID {
+		t.Fatalf("candidate IDs = %q, %q", first.ID, second.ID)
+	}
+	r := run(first, d, true)
+	firstRun, err := s.CreateRun(r, "judge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRun, err := s.CreateRun(r, "judge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstRun.ID != secondRun.ID {
+		t.Fatalf("run IDs = %q, %q", firstRun.ID, secondRun.ID)
+	}
+	in.ProjectVersion = 2
+	if _, err = s.Create(in); err != ErrConflict {
+		t.Fatalf("changed retry err = %v", err)
+	}
 }
 func TestComparisonKeepsContaminationAndInvalidatesOnlyChangedSuite(t *testing.T) {
 	s, err := New(t.TempDir())
