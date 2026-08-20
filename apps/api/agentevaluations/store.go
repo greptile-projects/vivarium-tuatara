@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -142,13 +143,32 @@ type Budget struct {
 	MaxLatencyMS   int64   `json:"max_latency_ms"`
 	MaxToolActions int     `json:"max_tool_actions"`
 }
+
+// ScenarioSource identifies the governed record from which a reusable case was
+// derived without copying that record into the evaluation ledger.
+type ScenarioSource struct {
+	Kind      string `json:"kind"`
+	ID        string `json:"id"`
+	Revision  string `json:"revision,omitempty"`
+	Sanitized bool   `json:"sanitized"`
+}
 type Scenario struct {
-	ID               string   `json:"id"`
-	Title            string   `json:"title"`
-	SanitizedPrompt  string   `json:"sanitized_prompt"`
-	ExpectedOutcomes []string `json:"expected_outcomes"`
-	Checks           []Check  `json:"checks"`
-	HiddenChecks     []Check  `json:"hidden_checks,omitempty"`
+	ID                 string         `json:"id"`
+	Title              string         `json:"title"`
+	Visibility         string         `json:"visibility"`
+	Source             ScenarioSource `json:"source"`
+	Inputs             []string       `json:"inputs"`
+	PermittedContext   []string       `json:"permitted_context"`
+	SanitizedPrompt    string         `json:"sanitized_prompt"`
+	ExpectedOutcomes   []string       `json:"expected_outcomes"`
+	Rubric             []string       `json:"rubric"`
+	Uncertainty        []string       `json:"uncertainty"`
+	HumanJudgment      []string       `json:"human_judgment"`
+	TrainingUse        string         `json:"training_use"`
+	DataClassification string         `json:"data_classification"`
+	License            string         `json:"license"`
+	Checks             []Check        `json:"checks"`
+	HiddenChecks       []Check        `json:"hidden_checks,omitempty"`
 }
 type Revision struct {
 	Version             int        `json:"version"`
@@ -290,6 +310,20 @@ func validRevision(r Revision) bool {
 		if !clean(s.ID, 100) || seen[s.ID] || !clean(s.Title, 300) || !clean(s.SanitizedPrompt, 10000) || !sanitized(s.SanitizedPrompt) || len(s.ExpectedOutcomes) == 0 || len(s.Checks) == 0 {
 			return false
 		}
+		// Older approved suites remain readable and reproducible. Once a source is
+		// supplied, the complete collaborative-case contract is mandatory.
+		if s.Source.Kind != "" {
+			if !s.Source.Sanitized || !slices.Contains([]string{"issue", "support_thread", "task", "incident", "decision", "prior_session"}, s.Source.Kind) || !clean(s.Source.ID, 200) ||
+				!slices.Contains([]string{"public", "protected"}, s.Visibility) || len(s.Inputs) == 0 || len(s.PermittedContext) == 0 || len(s.Rubric) == 0 || len(s.HumanJudgment) == 0 ||
+				!slices.Contains([]string{"prohibited", "explicit_consent_required"}, s.TrainingUse) || !slices.Contains([]string{"synthetic", "sanitized"}, s.DataClassification) || !clean(s.License, 200) {
+				return false
+			}
+			for _, text := range append(append(append(append(append(slices.Clone(s.Inputs), s.PermittedContext...), s.ExpectedOutcomes...), s.Rubric...), s.Uncertainty...), s.HumanJudgment...) {
+				if !clean(text, 2000) || !sanitized(text) {
+					return false
+				}
+			}
+		}
 		seen[s.ID] = true
 		for _, c := range append(slices.Clone(s.Checks), s.HiddenChecks...) {
 			if !clean(c.Name, 200) || (c.Kind != "contains" && c.Kind != "not_contains" && c.Kind != "policy" && c.Kind != "canary") || !clean(c.Expected, 1000) {
@@ -384,7 +418,14 @@ func (s *Store) List(org string) ([]Suite, error) {
 func publicSuite(v Suite) Suite {
 	for i := range v.Revisions {
 		for j := range v.Revisions[i].Scenarios {
-			v.Revisions[i].Scenarios[j].HiddenChecks = nil
+			scenario := &v.Revisions[i].Scenarios[j]
+			scenario.HiddenChecks = nil
+			if scenario.Visibility == "protected" {
+				scenario.Source.ID, scenario.Source.Revision = "protected", ""
+				scenario.Inputs, scenario.PermittedContext, scenario.ExpectedOutcomes = nil, nil, nil
+				scenario.Rubric, scenario.Uncertainty, scenario.HumanJudgment = nil, nil, nil
+				scenario.SanitizedPrompt, scenario.Checks = "", nil
+			}
 		}
 	}
 	return v
@@ -533,6 +574,12 @@ func projectedRun(v Run, rev Revision, evaluator bool) Run {
 	}
 	v.CheckResults = publicResults
 	if !evaluator {
+		v.Outputs = maps.Clone(v.Outputs)
+		for _, scenario := range rev.Scenarios {
+			if scenario.Visibility == "protected" {
+				delete(v.Outputs, scenario.ID)
+			}
+		}
 		correct, policy := true, true
 		for _, result := range publicResults {
 			if result.Kind == "policy" {

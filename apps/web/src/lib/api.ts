@@ -1773,8 +1773,18 @@ export type AgentEvaluationSuite = {
     scenarios: {
       id: string;
       title: string;
+      visibility: "public" | "protected";
+      source: { kind: "issue" | "support_thread" | "task" | "incident" | "decision" | "prior_session"; id: string; revision?: string; sanitized: boolean };
+      inputs: string[];
+      permitted_context: string[];
       sanitized_prompt: string;
       expected_outcomes: string[];
+      rubric: string[];
+      uncertainty: string[];
+      human_judgment: string[];
+      training_use: "prohibited" | "explicit_consent_required";
+      data_classification: "synthetic" | "sanitized";
+      license: string;
       checks: { name: string; kind: string; expected?: string }[];
     }[];
     budget: {

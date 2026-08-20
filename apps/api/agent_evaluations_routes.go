@@ -5,13 +5,20 @@ import (
 	"net/http"
 	"os/exec"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/agentevaluations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/decisions"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/exploratorysessions"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportthreads"
 )
 
 type evaluationSuiteInput struct {
@@ -47,7 +54,7 @@ type participationControlInput struct {
 	Control         agentevaluations.ControlInput `json:"control"`
 }
 
-func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, orgs *organizations.Store, evaluations *agentevaluations.Store) {
+func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, orgs *organizations.Store, evaluations *agentevaluations.Store, issueStore *issues.Store, supportStore *supportthreads.Store, proposalStore *proposals.Store, incidentStore *incidents.Store, decisionStore *decisions.Store, sessionStore *exploratorysessions.Store) {
 	require := func(w http.ResponseWriter, r *http.Request, scope string) (auth.Credential, organizations.Organization, bool) {
 		actor, ok := authenticateRequest(w, r, credentials, scope, false)
 		if !ok {
@@ -74,6 +81,92 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 	}
 	humanOwner := func(actor auth.Credential, org organizations.Organization) bool {
 		return actor.AgentID == "" && organizations.HasRole(org, actor.UserID, "owner")
+	}
+	resolveSources := func(repositoryID, actorID string, revision *agentevaluations.Revision) error {
+		for i := range revision.Scenarios {
+			source := &revision.Scenarios[i].Source
+			if source.Kind == "" {
+				continue
+			}
+			version, sourceRepository := 0, ""
+			switch source.Kind {
+			case "issue":
+				if issueStore == nil {
+					return agentevaluations.ErrInvalid
+				}
+				v, err := issueStore.Get(repositoryID, source.ID)
+				if err != nil {
+					return agentevaluations.ErrInvalid
+				}
+				version, sourceRepository = v.Version, v.RepositoryID
+			case "support_thread":
+				if supportStore == nil {
+					return agentevaluations.ErrInvalid
+				}
+				v, err := supportStore.Get(repositoryID, source.ID)
+				if err != nil {
+					return agentevaluations.ErrInvalid
+				}
+				version, sourceRepository = v.Version, v.RepositoryID
+			case "task":
+				if proposalStore == nil {
+					return agentevaluations.ErrInvalid
+				}
+				items, err := proposalStore.List(repositoryID)
+				if err != nil {
+					return agentevaluations.ErrInvalid
+				}
+				found := false
+				for _, proposal := range items {
+					if task, taskErr := proposalStore.GetTask(repositoryID, proposal.ID, source.ID); taskErr == nil {
+						version, sourceRepository, found = task.ContextRevision, repositoryID, true
+						break
+					}
+				}
+				if !found {
+					return agentevaluations.ErrInvalid
+				}
+			case "incident":
+				if incidentStore == nil {
+					return agentevaluations.ErrInvalid
+				}
+				v, err := incidentStore.Get(source.ID)
+				if err != nil {
+					return agentevaluations.ErrInvalid
+				}
+				for _, scope := range v.Scopes {
+					if scope.RepositoryID == repositoryID {
+						sourceRepository = repositoryID
+						break
+					}
+				}
+				version = v.Version
+			case "decision":
+				if decisionStore == nil {
+					return agentevaluations.ErrInvalid
+				}
+				v, err := decisionStore.Get(source.ID)
+				if err != nil {
+					return agentevaluations.ErrInvalid
+				}
+				version, sourceRepository = v.Version, v.RepositoryID
+			case "prior_session":
+				if sessionStore == nil {
+					return agentevaluations.ErrInvalid
+				}
+				v, err := sessionStore.Get(source.ID)
+				if err != nil || (v.CreatedBy != actorID && !slices.Contains(v.Access, actorID)) {
+					return agentevaluations.ErrInvalid
+				}
+				version, sourceRepository = v.Version, v.RepositoryID
+			default:
+				return agentevaluations.ErrInvalid
+			}
+			if sourceRepository != repositoryID || source.Revision != strconv.Itoa(version) {
+				return agentevaluations.ErrInvalid
+			}
+		}
+		return nil
 	}
 	requireHumanOwner := func(w http.ResponseWriter, actor auth.Credential, org organizations.Organization, code, message string) bool {
 		if !humanOwner(actor, org) {
@@ -126,8 +219,13 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 		}
 		in.Revision.CreatedBy = actor.UserID
 		var v agentevaluations.Suite
+		sourceInvalid := false
 		if in.ExpectedVersion == 0 {
 			e = catalog.WithCurrentParticipant(actor.UserID, in.RepositoryID, func() error {
+				if resolveSources(in.RepositoryID, actor.UserID, &in.Revision) != nil {
+					sourceInvalid = true
+					return agentevaluations.ErrInvalid
+				}
 				var x error
 				v, x = evaluations.Create(agentevaluations.Suite{OrganizationID: org.ID, RepositoryID: in.RepositoryID, Name: in.Name}, in.Revision)
 				return x
@@ -137,6 +235,10 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 			return
 		}
 		if e != nil {
+			if sourceInvalid {
+				writeAPIError(w, 422, "evaluation_source_invalid", "each scenario source must resolve at its exact current version in the suite repository and be visible to the author")
+				return
+			}
 			writeErr(w, e)
 			return
 		}
@@ -165,12 +267,21 @@ func registerAgentEvaluationRoutes(mux *http.ServeMux, git *storage.Store, catal
 			return
 		}
 		var v agentevaluations.Suite
+		sourceInvalid := false
 		e = catalog.WithCurrentParticipant(actor.UserID, current.RepositoryID, func() error {
+			if resolveSources(current.RepositoryID, actor.UserID, &in.Revision) != nil {
+				sourceInvalid = true
+				return agentevaluations.ErrInvalid
+			}
 			var x error
 			v, x = evaluations.Revise(current.ID, in.ExpectedVersion, in.Revision)
 			return x
 		})
 		if e != nil {
+			if sourceInvalid {
+				writeAPIError(w, 422, "evaluation_source_invalid", "each scenario source must resolve at its exact current version in the suite repository and be visible to the author")
+				return
+			}
 			writeErr(w, e)
 			return
 		}

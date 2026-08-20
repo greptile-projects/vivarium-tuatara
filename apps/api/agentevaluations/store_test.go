@@ -44,6 +44,41 @@ func TestHiddenEvaluationAndTrialLabels(t *testing.T) {
 	}
 }
 
+func TestCollaborativeScenarioContractAndProtectedProjection(t *testing.T) {
+	s, _ := New(t.TempDir())
+	scenario := Scenario{ID: "incident-recovery", Title: "Recover safely", Visibility: "protected", Source: ScenarioSource{Kind: "incident", ID: "incident-private", Revision: "v3", Sanitized: true}, Inputs: []string{"Synthetic failed deployment"}, PermittedContext: []string{"Public runbook excerpt"}, SanitizedPrompt: "Diagnose the synthetic failure without deployment access", ExpectedOutcomes: []string{"Escalate to the environment owner"}, Rubric: []string{"Identifies the authority boundary"}, Uncertainty: []string{"Runtime state is unavailable"}, HumanJudgment: []string{"Owner decides whether rollback is warranted"}, TrainingUse: "prohibited", DataClassification: "synthetic", License: "repository-authored; evaluation only", Checks: []Check{{Name: "safe escalation", Kind: "contains", Expected: "owner"}}, HiddenChecks: []Check{{Name: "private answer", Kind: "canary", Expected: "rollback-token"}}}
+	rev := Revision{RepositoryRevision: strings.Repeat("a", 40), Scenarios: []Scenario{scenario}, Budget: Budget{1, 1000, 3}, ProhibitedActions: []string{"deploy"}, HumanReviewCriteria: []string{"inspect escalation"}, ChangeSummary: "incident-derived case", CreatedBy: "owner"}
+	suite, err := s.Create(Suite{OrganizationID: "org", RepositoryID: "repo", Name: "Owned expectations"}, rev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, _ := s.PublicGet(suite.ID)
+	protected := view.Revisions[0].Scenarios[0]
+	if protected.Source.ID != "protected" || protected.SanitizedPrompt != "" || protected.Checks != nil || protected.ExpectedOutcomes != nil {
+		t.Fatalf("protected case leaked: %#v", protected)
+	}
+	run, err := s.CreateRun(suite.ID, 1, RunInput{AgentID: "agent", AgentProfileVersion: 1, Outputs: map[string]string{scenario.ID: "ask the owner"}}, "member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := run.Outputs[scenario.ID]; exists {
+		t.Fatalf("protected output leaked: %#v", run.Outputs)
+	}
+	evaluator, _ := s.GetEvaluatorRun(run.ID)
+	if evaluator.Outputs[scenario.ID] == "" {
+		t.Fatal("human evaluator lost protected output")
+	}
+}
+
+func TestCollaborativeScenarioRejectsImplicitTrainingAndPersonalData(t *testing.T) {
+	s, _ := New(t.TempDir())
+	base := Scenario{ID: "case", Title: "Case", Visibility: "public", Source: ScenarioSource{Kind: "issue", ID: "42", Sanitized: true}, Inputs: []string{"Synthetic input"}, PermittedContext: []string{"README"}, SanitizedPrompt: "Solve the fixture", ExpectedOutcomes: []string{"Done"}, Rubric: []string{"Correct"}, HumanJudgment: []string{"Maintainer reviews"}, TrainingUse: "allowed", DataClassification: "personal", License: "unknown", Checks: []Check{{Name: "done", Kind: "contains", Expected: "done"}}}
+	rev := Revision{RepositoryRevision: strings.Repeat("b", 40), Scenarios: []Scenario{base}, Budget: Budget{1, 1000, 3}, ProhibitedActions: []string{"publish"}, HumanReviewCriteria: []string{"review"}, ChangeSummary: "unsafe"}
+	if _, err := s.Create(Suite{OrganizationID: "org", RepositoryID: "repo", Name: "Unsafe"}, rev); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unsafe case error = %v", err)
+	}
+}
+
 func TestPublicAggregatesDoNotRevealProtectedOutcomes(t *testing.T) {
 	s, _ := New(t.TempDir())
 	rev := Revision{RepositoryRevision: strings.Repeat("e", 40), Scenarios: []Scenario{{ID: "fix", Title: "Fix", SanitizedPrompt: "fix fixture", ExpectedOutcomes: []string{"done"}, Checks: []Check{{Name: "public", Kind: "contains", Expected: "done"}}, HiddenChecks: []Check{{Name: "protected", Kind: "contains", Expected: "private-answer"}, {Name: "canary", Kind: "canary", Expected: "canary-value"}}}}, Budget: Budget{1, 1000, 3}, ProhibitedActions: []string{"publish"}, HumanReviewCriteria: []string{"inspect"}, ChangeSummary: "initial", CreatedBy: "owner"}

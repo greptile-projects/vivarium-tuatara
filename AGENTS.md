@@ -2576,7 +2576,19 @@ whenever dependencies change or the web job fails before it starts.
   Approved-agent evaluation suites beneath `$AGENT_EVALUATION_STORAGE_ROOT` (default
   `agent-evaluations`) freeze sanitized representative scenarios, expected outcomes, public and
   protected checks, budgets, prohibited actions, and human-review criteria to an exact repository
-  commit. Trial evidence binds an exact published agent profile and retains bounded outputs, tool
+  commit. New collaborative cases retain a non-content provenance reference to an issue, support
+  thread, task, incident, decision, or sanitized prior session together with explicit synthetic or
+  sanitized inputs, permitted context, rubric, uncertainty, human-judgment boundaries, license, and
+  training-use terms. Personal data is not an admitted classification and training is prohibited or
+  requires separate explicit consent; evaluation publication never supplies that consent. Public
+  projections replace protected source identity with an opaque marker and omit protected prompts,
+  inputs, context, outcomes, rubric, checks, uncertainty, judgment, and candidate outputs. Historical
+  suites without the collaborative-case fields remain reproducible but successors can adopt the full
+  contract. Case publication resolves each source through its repository-owned issue, support,
+  proposal-task, incident, decision, or exploratory-session store under the author's current
+  repository-participant boundary; the source must belong to the suite repository and its caller-supplied
+  decimal revision must equal the record's current version. Prior sessions additionally require their
+  explicit audience or creator. Trial evidence binds an exact published agent profile and retains bounded outputs, tool
   actions, digest-addressed artifacts, costs, latency, failures, derived checks, contamination,
   reproducibility, and human decisions. Protected check definitions never appear in suite or run
   projections. Ordinary member projections derive aggregates only from public criteria and omit
