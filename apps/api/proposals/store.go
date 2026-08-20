@@ -397,7 +397,7 @@ func New(root string) (*Store, error) {
 // retries converge.
 func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Task, error) {
 	isAccessibility := validID(input.Origin.AssessmentID) && input.Origin.AssessmentVersion > 0 && validID(input.Origin.AccessibilityFindingID) && validID(input.Origin.AccessibilityCommitmentID) && input.Origin.AccessibilityCommitmentVersion > 0
-	isAssessment := validID(input.Origin.AssessmentID) && input.Origin.AssessmentVersion > 0 && validID(input.Origin.AssuranceFindingID) && !isAccessibility
+	isAssessment := validAssuranceID(input.Origin.AssessmentID) && input.Origin.AssessmentVersion > 0 && validAssuranceID(input.Origin.AssuranceFindingID) && !isAccessibility
 	isDecision := validID(input.Origin.DecisionID) && input.Origin.CommitmentVersion > 0
 	isIssue := validID(input.Origin.IssueID) && input.Origin.IssueVersion > 0 && validID(input.Origin.ReproductionID)
 	isGovernance := validID(input.Origin.GovernanceProposalID) && validID(input.Origin.GovernanceReceiptID)
@@ -1391,6 +1391,13 @@ func newID() (string, error) {
 }
 func validID(id string) bool {
 	if len(id) != 32 || id != strings.ToLower(id) {
+		return false
+	}
+	_, err := hex.DecodeString(id)
+	return err == nil
+}
+func validAssuranceID(id string) bool {
+	if len(id) != 24 || id != strings.ToLower(id) {
 		return false
 	}
 	_, err := hex.DecodeString(id)

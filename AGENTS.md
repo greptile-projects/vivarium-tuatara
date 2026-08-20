@@ -39,6 +39,9 @@ responses, disagreements, resolutions, appeals, and scope-change acknowledgement
 distinct roles. Reads expose only the selected packages and already-sanitized evidence sources;
 expired or conflicted assessor access fails closed. Assessments grant no repository, source-system,
 production, review, release, deployment, evidence-collection, or project mutation authority.
+When correction produces a release after the originally selected candidate, the owner may propose
+that exact repository release only if it descends from a selected candidate release; the assessor
+must explicitly acknowledge it before the delivered release can be signed.
 
 Assessment findings can seed ordered ordinary proposal tasks through
 `/{assessment_id}/remediations`, freezing the exact finding/control, affected revision, deadline,
@@ -47,10 +50,15 @@ records; accepted closure requires fresh gap-free post-work evidence and an owne
 disposition. The affected revision must exist in the repository; ordered merged contributions descend
 from it, accepted evidence names the final merged revision, and a claimed release descends from and
 includes every corrective task and resolves through a release scope explicitly selected by the assessment.
-Exact-release `/assurance-statements` retain an immutable Ed25519-signed claim over scope,
+Exact-release `/assurance-statements` retain an immutable Ed25519-signed human-readable claim over scope,
 period, controls, exceptions, and evidence digest for an explicit audience. Reads project revocation,
 expiry, program drift, and reopened work separately without rewriting the signature or exposing evidence.
 Neither record grants task, agent, workspace, Git, policy, release, operational, or evidence authority.
+The connected `assurance-journey.spec.ts` browser/API/stock-Git journey covers rejected exception
+authority, missing evidence, bounded auditor access, a contested finding, ordered human and agent
+correction, assurance impact and ordinary review gates, fresh exact-release evidence, acknowledged
+delivered scope, signed publication, successor-program drift, and explicit revocation. Playwright
+isolates all assurance stores.
 
 Pre-merge assurance impact at `/repositories/{id}/pulls/{pull_id}/assurance-impact` binds an exact
 pull commit to an exact assurance-program revision beneath `$ASSURANCE_IMPACT_STORAGE_ROOT`

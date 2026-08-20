@@ -98,3 +98,27 @@ func TestAppendSerializesAcrossStoreProcessesAndHonorsStart(t *testing.T) {
 		t.Fatalf("persisted version=%d events=%d", got.Version, len(got.Events))
 	}
 }
+
+func TestDeliveredReleaseScopeRequiresOwnerProposalAndAssessorAcknowledgement(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	a, err := s.Create(Assessment{RepositoryID: "repo", ProgramID: "program", ProgramVersion: 1, Title: "Candidate release review", OwnerID: "owner", Assessor: Assessor{UserID: "auditor", Kind: "external", ConflictDisclosure: "none"}, Scope: Scope{ControlIDs: []string{"control"}, ReleaseIDs: []string{"candidate"}, PeriodStartsAt: now.Add(-time.Hour), PeriodEndsAt: now}, StartsAt: now, ExpiresAt: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Append(a.ID, a.Version, "auditor", "assessor", Event{Kind: "scope_change", Body: "substitute a release", ReleaseID: "release-x"}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("assessor proposed scope change: %v", err)
+	}
+	a, err = s.Append(a.ID, a.Version, "owner", "owner", Event{Kind: "scope_change", Body: "The correction is delivered in this exact release.", ReleaseID: "release-x"})
+	if err != nil || a.Status != "scope_changed" || a.PendingReleaseID != "release-x" {
+		t.Fatalf("proposal = %#v, %v", a, err)
+	}
+	if _, err = s.Append(a.ID, a.Version, "owner", "owner", Event{Kind: "scope_change", Body: "silently replace pending scope", ReleaseID: "release-y"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("pending scope was replaced: %v", err)
+	}
+	a, err = s.Append(a.ID, a.Version, "auditor", "assessor", Event{Kind: "scope_acknowledgement", Body: "I acknowledge the exact delivered release.", ReleaseID: "release-x"})
+	if err != nil || a.Status != "open" || a.PendingReleaseID != "" || len(a.AssuredReleaseIDs) != 1 || a.AssuredReleaseIDs[0] != "release-x" {
+		t.Fatalf("acknowledgement = %#v, %v", a, err)
+	}
+}

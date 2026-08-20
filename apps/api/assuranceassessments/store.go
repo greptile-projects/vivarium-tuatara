@@ -49,6 +49,7 @@ type Event struct {
 	EvidencePackageIDs []string  `json:"evidence_package_ids,omitempty"`
 	ParentID           string    `json:"parent_id,omitempty"`
 	Status             string    `json:"status,omitempty"`
+	ReleaseID          string    `json:"release_id,omitempty"`
 	CreatedAt          time.Time `json:"created_at"`
 }
 type Remediation struct {
@@ -97,6 +98,8 @@ type Assessment struct {
 	Version            int           `json:"version"`
 	Events             []Event       `json:"events"`
 	Remediations       []Remediation `json:"remediations"`
+	AssuredReleaseIDs  []string      `json:"assured_release_ids,omitempty"`
+	PendingReleaseID   string        `json:"pending_release_id,omitempty"`
 	CreatedAt          time.Time     `json:"created_at"`
 	UpdatedAt          time.Time     `json:"updated_at"`
 }
@@ -237,6 +240,7 @@ type Statement struct {
 	ProgramVersion   int        `json:"program_version"`
 	Scope            Scope      `json:"scope"`
 	ControlIDs       []string   `json:"control_ids"`
+	Claim            string     `json:"claim"`
 	ExceptionIDs     []string   `json:"exception_ids"`
 	EvidenceDigest   string     `json:"evidence_digest"`
 	Audience         []string   `json:"audience"`
@@ -254,7 +258,8 @@ type Statement struct {
 func (s *Store) CreateStatement(v Statement) (Statement, error) {
 	var out Statement
 	err := s.lock(func() error {
-		if v.RepositoryID == "" || v.AssessmentID == "" || v.ReleaseID == "" || len(v.ReleaseRevision) != 40 || v.ProgramID == "" || v.ProgramVersion < 1 || len(v.ControlIDs) == 0 || !unique(v.ControlIDs) || !unique(v.ExceptionIDs) || v.EvidenceDigest == "" || len(v.Audience) == 0 || !unique(v.Audience) || !v.ExpiresAt.After(s.now()) || v.ExpiresAt.After(s.now().Add(365*24*time.Hour)) {
+		v.Claim = strings.TrimSpace(v.Claim)
+		if v.RepositoryID == "" || v.AssessmentID == "" || v.ReleaseID == "" || len(v.ReleaseRevision) != 40 || v.ProgramID == "" || v.ProgramVersion < 1 || len(v.ControlIDs) == 0 || !unique(v.ControlIDs) || !unique(v.ExceptionIDs) || v.EvidenceDigest == "" || v.Claim == "" || len(v.Claim) > 4000 || credentialShaped(v.Claim) || len(v.Audience) == 0 || !unique(v.Audience) || !v.ExpiresAt.After(s.now()) || v.ExpiresAt.After(s.now().Add(365*24*time.Hour)) {
 			return ErrInvalid
 		}
 		v.ID, v.IssuedAt = id(), s.now()
@@ -449,12 +454,21 @@ func (s *Store) Append(assessmentID string, expected int, actor, role string, e 
 			}
 		}
 		if e.Kind == "scope_change" {
+			if role != "owner" || e.ReleaseID == "" || a.PendingReleaseID != "" {
+				return ErrInvalid
+			}
+			a.PendingReleaseID = e.ReleaseID
 			a.Status = "scope_changed"
 		}
 		if e.Kind == "scope_acknowledgement" {
-			if a.Status != "scope_changed" {
+			if a.Status != "scope_changed" || a.PendingReleaseID == "" || (e.ReleaseID != "" && e.ReleaseID != a.PendingReleaseID) {
 				return ErrInvalid
 			}
+			e.ReleaseID = a.PendingReleaseID
+			if !contains(a.AssuredReleaseIDs, a.PendingReleaseID) {
+				a.AssuredReleaseIDs = append(a.AssuredReleaseIDs, a.PendingReleaseID)
+			}
+			a.PendingReleaseID = ""
 			a.Status = "open"
 		}
 		if e.Kind == "close" {
