@@ -3,6 +3,29 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Revision-exact security confidence
+
+Repository owners and organization owners publish scoped security requirements at
+`/repositories/{id}/security-requirements` and
+`/repositories/{id}/organization-security-requirements`. Requirements select branches,
+components, protected assets, risk classes, and paths and require a current threat-model revision,
+a passing owner-reviewed security scenario, named control-owner acknowledgements, or resolution of
+scoped findings. Repository policy takes precedence over organization fallback policy.
+
+Pull, release, and deployment `/security-confidence` reads derive an exact-revision matrix from the
+existing threat-model, security-scenario, and private finding ledgers. Changed paths invalidate only
+intersecting threat and scenario proof; unrelated changes retain evidence. Finding IDs outside the
+reader's audience project as `restricted` while still blocking delivery. Pull merge and integration
+queue readiness consume the same matrix.
+
+Named requirement owners may create exact-revision exceptions lasting no more than 30 days. Each
+exception freezes its selector, rationale, attribution, and an existing issue or proposal follow-up.
+Deployment security signals retain only sanitized digest metadata against the exact release,
+deployment, environment, requirement, assumptions, and controls. Violated assumptions or failed
+controls can link to a repository-scoped private incident, security advisory, or governed repair;
+the signal grants no production, disclosure, Git, review, queue, release, deployment, or agent
+authority. Records default beneath `$SECURITY_CONFIDENCE_STORAGE_ROOT` (`security-confidence`).
+
 ## Governed security repairs
 
 Security findings at `/repositories/{id}/security-findings` freeze an exact threat-model path and

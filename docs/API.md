@@ -1,5 +1,25 @@
 # HTTP API contract
 
+## Security confidence
+
+- `POST /repositories/{id}/security-requirements` publishes repository-owner policy; `POST
+  /repositories/{id}/organization-security-requirements` publishes organization-owner fallback
+  policy. Requirements use `threat_coverage`, `security_scenario`, `control_acknowledgement`, or
+  `resolved_findings` and select branches, components, assets, risk classes, and paths.
+- `GET /repositories/{id}/pulls/{pull_id}/security-confidence`, `GET
+  /repositories/{id}/releases/{release_id}/security-confidence`, and `GET
+  /repositories/{id}/deployments/{deployment_id}/security-confidence` expose the exact policy,
+  revision, evidence, residual risk, gaps, scoped exception, and readiness result. Restricted finding
+  identities remain opaque. Pull merge and queue readiness embed this same projection.
+- `POST /repositories/{id}/security-exceptions` accepts only a named requirement owner, the exact
+  target revision, a narrow selector, an expiry within 30 days, a rationale, and an existing issue or
+  proposal follow-up.
+- `POST /repositories/{id}/deployments/{deployment_id}/security-signals` binds a sanitized
+  `assumption_violated` or `control_failed` signal to the server-resolved release, commit,
+  environment, and deployment. An optional response must resolve to a repository-scoped private
+  incident, security advisory, or repair proposal. These evidence APIs grant no operational or
+  disclosure authority.
+
 ## Threat models
 
 `GET /repositories/{id}/threat-models` and `GET

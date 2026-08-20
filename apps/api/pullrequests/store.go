@@ -497,6 +497,7 @@ type MergeReadiness struct {
 	ReliabilityReadiness    []serviceobjectives.DeliveryEvaluation `json:"reliability_readiness"`
 	DesignReadiness         any                                    `json:"design_readiness,omitempty"`
 	QualityConfidence       any                                    `json:"quality_confidence,omitempty"`
+	SecurityConfidence      any                                    `json:"security_confidence,omitempty"`
 }
 
 type commentRecord struct {
@@ -534,6 +535,7 @@ type Store struct {
 	reliability              *serviceobjectives.Store
 	designReadiness          func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)
 	qualityConfidence        func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)
+	securityConfidence       func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)
 }
 
 // ConfigureDesignReadiness adds an evidence-only policy projection to ordinary
@@ -546,6 +548,12 @@ func (s *Store) ConfigureDesignReadiness(fn func(PullRequest, []FileChange) (any
 // the same revision-exact quality matrix exposed by the quality API.
 func (s *Store) ConfigureQualityConfidence(fn func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)) {
 	s.qualityConfidence = fn
+}
+
+// ConfigureSecurityConfidence makes merge and integration-queue readiness
+// consume the same revision-exact security matrix exposed by delivery APIs.
+func (s *Store) ConfigureSecurityConfidence(fn func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)) {
+	s.securityConfidence = fn
 }
 
 func (s *Store) ConfigurePerformanceEvidence(store *performanceevidence.Store) { s.performance = store }
@@ -1853,6 +1861,18 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 			return MergeReadiness{}, qualityErr
 		}
 		report.QualityConfidence = projection
+		report.Blockers = append(report.Blockers, blockers...)
+	}
+	if s.securityConfidence != nil {
+		changes, changeErr := s.Changes(repositoryID, pullRequestID)
+		if changeErr != nil {
+			return MergeReadiness{}, changeErr
+		}
+		projection, blockers, securityErr := s.securityConfidence(p, changes)
+		if securityErr != nil {
+			return MergeReadiness{}, securityErr
+		}
+		report.SecurityConfidence = projection
 		report.Blockers = append(report.Blockers, blockers...)
 	}
 	report.Mergeable = len(report.Blockers) == 0
