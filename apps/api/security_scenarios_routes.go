@@ -183,6 +183,10 @@ func registerSecurityScenarioRoutes(mux *http.ServeMux, git *storage.Store, cata
 			a.Commands = []securityscenarios.Command{}
 			for _, o := range ws.Commands {
 				if selected[o.ID] {
+					if !securityCommandDigestMatches(o.CommandSHA256, v.Command) {
+						writeAPIError(w, 422, "security_outcome_command_invalid", "every selected outcome must execute the reviewed scenario command")
+						return
+					}
 					a.Commands = append(a.Commands, securityscenarios.Command{OutcomeID: o.ID, SHA256: o.CommandSHA256, Directory: o.Directory, ExitCode: o.ExitCode, Log: o.Output, StartedAt: o.StartedAt, CompletedAt: o.CompletedAt})
 				}
 			}
@@ -198,7 +202,7 @@ func registerSecurityScenarioRoutes(mux *http.ServeMux, git *storage.Store, cata
 				return
 			}
 			run, runErr := runs.Get(v.RepositoryID, in.PullRequestID, p.BuildRunID)
-			if runErr != nil || run.CommitID != v.CommitID || run.State != "succeeded" || run.ExitCode == nil || run.StartedAt == nil || run.CompletedAt == nil {
+			if runErr != nil || run.CommitID != v.CommitID || run.State != "succeeded" || run.ExitCode == nil || run.StartedAt == nil || run.CompletedAt == nil || !securityCommandMatches(run.Definition.Command, v.Command) {
 				writeAPIError(w, 422, "security_preview_run_invalid", "preview evidence requires its successful retained candidate build run")
 				return
 			}
@@ -251,6 +255,12 @@ func unsafeSecurityText(s securityscenarios.Scenario) bool {
 	return false
 }
 func securityDigest(v string) string { x := sha256.Sum256([]byte(v)); return hex.EncodeToString(x[:]) }
+func securityCommandDigestMatches(retainedDigest, reviewedCommand string) bool {
+	return retainedDigest != "" && retainedDigest == securityDigest(reviewedCommand)
+}
+func securityCommandMatches(retainedCommand, reviewedCommand string) bool {
+	return retainedCommand != "" && retainedCommand == reviewedCommand
+}
 func writeSecurityScenario(w http.ResponseWriter, v securityscenarios.Scenario, e error, status int) {
 	switch {
 	case e == nil:
