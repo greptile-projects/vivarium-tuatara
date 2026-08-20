@@ -61,6 +61,25 @@ func TestRetirementWorkStaysConsumerOwnedAndReportsExactNewUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan = capability.RetirementPlans[0]
+	candidateURL := fmt.Sprintf("%s/repositories/%s/capabilities/%s/retirement-plans/%s/candidates", server.URL, providerRepo.ID, capability.ID, plan.ID)
+	candidateChecks := []capabilities.CandidateCheck{}
+	for _, stage := range []string{"old_only", "dual_support", "replacement", "rollback", "journey"} {
+		candidateChecks = append(candidateChecks, capabilities.CandidateCheck{ID: stage, Stage: stage, Journey: map[bool]string{true: "checkout"}[stage == "journey"], RepositoryID: consumerRepo.ID, Revision: string(consumerCommit), Command: "test " + stage, Paths: []string{"README.md"}, Expectation: "supported behavior"})
+	}
+	requestCandidate := func(checks []capabilities.CandidateCheck) {
+		body, marshalErr := json.Marshal(capabilities.MigrationCandidate{Environment: "isolated", Checks: checks})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		authenticatedRequest(t, http.MethodPost, candidateURL, string(body), provider.Credential.Token, http.StatusNotFound).Body.Close()
+	}
+	requestCandidate(candidateChecks)
+	missingPath := append([]capabilities.CandidateCheck(nil), candidateChecks...)
+	missingPath[0].Paths = []string{"private-missing-path"}
+	requestCandidate(missingPath)
+	missingRevision := append([]capabilities.CandidateCheck(nil), candidateChecks...)
+	missingRevision[0].Revision = strings.Repeat("f", 40)
+	requestCandidate(missingRevision)
 	workURL := fmt.Sprintf("%s/repositories/%s/capabilities/%s/retirement-plans/%s/work", server.URL, providerRepo.ID, capability.ID, plan.ID)
 	body := fmt.Sprintf(`{"expected_version":0,"repository_id":"%s","title":"Adopt widget v2","completion_criteria":"Consumer tests and docs pass","assignee_type":"human","assignee_id":"%s","mandate":"Change only the affected consumer paths","base_revision":"%s","work":{"audience_index":0,"old_contract":"GET /v1 returns legacy widgets","replacement_contract":"GET /v2 returns supported widgets","acceptance_criteria":["v2 contract test passes"],"documentation_changes":["replace v1 example"],"rollout_stage":"adopt"}}`, consumerRepo.ID, consumer.User.ID, consumerCommit)
 	authenticatedRequest(t, http.MethodPost, workURL, body, provider.Credential.Token, http.StatusForbidden).Body.Close()

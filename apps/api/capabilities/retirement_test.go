@@ -178,3 +178,61 @@ func TestRetirementWorkIsOrderedAndNewConsumersRemainReports(t *testing.T) {
 		t.Fatalf("discovery did not require reassessment: %#v", plan.Blockers)
 	}
 }
+
+func TestMigrationCandidateRetainsMatrixAndNeverTreatsUnknownUseAsMigrated(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	r := retirementFixture(now)
+	r.Consumers[0].RepositoryID = "consumer"
+	r.Consumers[0].Revision = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	v, _ := s.Create("repo", "provider", r)
+	v, _ = s.OpenRetirement("repo", v.ID, "provider", planFixture(now))
+	checks := []CandidateCheck{}
+	for _, stage := range []string{"old_only", "dual_support", "replacement", "rollback", "journey"} {
+		checks = append(checks, CandidateCheck{ID: stage, Stage: stage, Journey: map[bool]string{true: "checkout"}[stage == "journey"], RepositoryID: "repo", Revision: r.CommitID, Command: "test " + stage, Paths: []string{"api.go"}, Expectation: stage + " remains supported"})
+	}
+	v, candidate, err := s.CreateMigrationCandidate("repo", v.ID, v.RetirementPlans[0].ID, "provider", MigrationCandidate{Environment: "isolated synthetic compatibility lab", Checks: checks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range checks {
+		v, err = s.AddCandidateEvidence("repo", v.ID, v.RetirementPlans[0].ID, candidate.ID, "provider", check.ID, CandidateEvidence{WorkspaceID: "workspace", OutcomeID: "outcome-" + check.ID, Status: "passed", CommandDigest: CommandDigest(check.Command)})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan := v.RetirementPlans[0]
+	if _, reuseErr := s.AddCandidateEvidence("repo", v.ID, plan.ID, candidate.ID, "provider", "dual_support", CandidateEvidence{WorkspaceID: "workspace", OutcomeID: "outcome-old_only", Status: "passed"}); reuseErr != ErrInvalid {
+		t.Fatalf("shared outcome was accepted for another check: %v", reuseErr)
+	}
+	if plan.Candidates[0].RemovalReady {
+		t.Fatal("missing usage observation was treated as migrated")
+	}
+	v, err = s.AddUsageObservation("repo", v.ID, plan.ID, candidate.ID, "mobile-owner", UsageObservation{ConsumerIndex: 0, State: "inaccessible", Summary: "telemetry cannot be read", WindowStartsAt: now.Add(-time.Hour), WindowEndsAt: now, OwnerID: "mobile-owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.RetirementPlans[0].Candidates[0].RemovalReady {
+		t.Fatal("inaccessible use was treated as migrated")
+	}
+	v, err = s.AddUsageObservation("repo", v.ID, plan.ID, candidate.ID, "mobile-owner", UsageObservation{ConsumerIndex: 0, State: "measured", Summary: "no old calls in the agreed window", WindowStartsAt: now.Add(-time.Hour), WindowEndsAt: now, TotalUses: 12, OwnerID: "mobile-owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := v.RetirementPlans[0].Candidates[0]
+	if !got.RemovalReady || !got.Usage[0].Superseded || got.Usage[1].Superseded {
+		t.Fatalf("candidate readiness = %#v", got)
+	}
+	_, err = s.AddCandidateEvidence("repo", v.ID, plan.ID, candidate.ID, "provider", "rollback", CandidateEvidence{WorkspaceID: "workspace-2", OutcomeID: "failed", Status: "failed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ = func() (MigrationCandidate, error) {
+		current, e := s.Get("repo", v.ID)
+		return current.RetirementPlans[0].Candidates[0], e
+	}()
+	if got.RemovalReady || !got.Checks[3].Evidence[0].Superseded {
+		t.Fatalf("failed superseding proof did not block: %#v", got.Checks[3])
+	}
+}

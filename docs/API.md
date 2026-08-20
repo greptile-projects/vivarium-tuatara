@@ -4078,3 +4078,25 @@ the `quality_confidence_incomplete` blocker when it is not ready.
 `POST /repositories/{id}/releases/{release_id}/quality-signals` records a post-release sampled
 scenario at the release's server-resolved commit. These APIs retain evidence and decisions only;
 they grant no execution, environment, Git, review, merge, queue, release, or deployment authority.
+# Capability retirement coexistence evidence
+
+`POST /repositories/{id}/capabilities/{capability_id}/retirement-plans/{plan_id}/candidates`
+creates an immutable bounded-environment matrix. It freezes the plan's provider release, consumer
+revisions, and schema/configuration paths; submitted checks must resolve an exact repository revision
+and existing paths and collectively cover `old_only`, `dual_support`, `replacement`, `rollback`, and
+`journey` (with a named journey). The caller must be able to read every check repository before the API
+resolves its revision or paths; inaccessible repository, revision, and path probes share an opaque response.
+
+`POST .../candidates/{candidate_id}/evidence` accepts only `check_id` and `workspace_id`. The workspace
+must belong to the caller and match the check repository and commit. The API selects a safe retained
+exact-command outcome and derives status, sanitized log, duration, resource cost, and artifact digests.
+An outcome ID may be retained for only one matrix row; insertion and readiness projection both reject
+cross-check reuse.
+
+`POST .../candidates/{candidate_id}/usage-observations` lets an affected owner with consumer-repository
+access append `measured`, `unmeasured`, or `inaccessible` windowed use. The server binds the frozen
+consumer revision and acknowledgement. Later observations supersede without deletion. Reads mark proof
+stale only when selected Git blobs differ and redact inaccessible consumer evidence. `removal_ready`
+requires all checks to pass and every audience to have acknowledged, measured zero old-behavior use.
+These endpoints grant no workspace, telemetry, Git, consumer, release, deployment, environment, or
+removal authority.
