@@ -10,6 +10,9 @@ const exec = promisify(execFile);
 async function git(cwd: string, ...args: string[]) {
   return (await exec("git", args, { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } })).stdout.trim();
 }
+async function authenticatedGit(token: string, cwd: string, ...args: string[]) {
+  return (await exec("git", ["-c", "credential.helper=", ...args], { cwd, env: { ...process.env, GIT_ASKPASS: join(__dirname, "git-askpass.sh"), GIT_TERMINAL_PROMPT: "0", VIVARIUM_GIT_TOKEN: token } })).stdout.trim();
+}
 async function account(page: Page, name: string, handle: string) {
   await page.goto("/");
   await page.getByLabel("Display name").fill(name);
@@ -37,6 +40,8 @@ test("a team develops, releases, learns from, and safely repairs a project agent
   test.setTimeout(360_000);
   const pages = await Promise.all(Array.from({ length: 6 }, async () => (await browser.newContext()).newPage()));
   const copy = await mkdtemp(join(tmpdir(), "vivarium-agent-development-"));
+  let credentialToRevoke: { id: string } | undefined;
+  let credentialOwnerHeaders: Record<string, string> | undefined;
   try {
     const suffix = Date.now().toString(36);
     const people = await Promise.all(pages.map((page, index) => account(page, ["Agent Owner", "Domain Owner", "Evaluator", "Data Owner", "Resource Owner", "Pilot Developer"][index], `agent-dev-${index}-${suffix}`)));
@@ -54,12 +59,16 @@ test("a team develops, releases, learns from, and safely repairs a project agent
     const pilotRepository = await json(ownerPage, "post", "/repositories", owner.headers, { name: `triage-pilot-${suffix}` });
     await json(ownerPage, "post", `/repositories/${pilotRepository.id}/collaborators`, owner.headers, { user_id: developer.user.id });
     const credential = await json(ownerPage, "post", "/auth/credentials", owner.headers, { kind: "git", name: "agent development", scopes: ["git:read", "git:write"], expires_in: 3600 });
-    await git(tmpdir(), "clone", `http://git:${credential.token}@localhost:3000/git/${repository.id}.git`, copy);
+    credentialToRevoke = credential;
+    credentialOwnerHeaders = owner.headers;
+    const gitURL = `http://localhost:3000/git/${repository.id}.git`;
+    await authenticatedGit(credential.token, tmpdir(), "clone", gitURL, copy);
+    expect(await git(copy, "remote", "get-url", "origin")).toBe(gitURL);
     await git(copy, "config", "user.name", "Agent Owner");
     await git(copy, "config", "user.email", "owner@example.test");
     await writeFile(join(copy, "agent.md"), "Model: triage-1\nClassify incidents; draft only; escalate uncertainty.\n");
     await writeFile(join(copy, "triage.txt"), "timeout => reliability\n");
-    await git(copy, "add", "."); await git(copy, "commit", "-m", "Define the incident triage collaborator"); await git(copy, "push", "origin", "main");
+    await git(copy, "add", "."); await git(copy, "commit", "-m", "Define the incident triage collaborator"); await authenticatedGit(credential.token, copy, "push", "origin", "main");
     const base = await git(copy, "rev-parse", "HEAD");
 
     let orgState = await json(ownerPage, "post", `/organizations/${organization.id}/agents`, owner.headers, { name: "Triage Partner", slug: `triage-partner-${suffix}`, description: "A bounded incident triage collaborator", visibility: "public", capabilities: ["classify incident drafts"], operator_ids: [owner.user.id], team_ids: [] });
@@ -74,8 +83,8 @@ test("a team develops, releases, learns from, and safely repairs a project agent
     const suite = await json(ownerPage, "post", `/organizations/${organization.id}/agent-evaluation-suites`, owner.headers, { name: "Incident triage scenarios", repository_id: repository.id, expected_version: 0, revision: { repository_revision: base, scenarios: [{ id: "timeout", title: "Timeout incident", sanitized_prompt: "Classify a sanitized timeout incident.", expected_outcomes: ["reliability draft"], checks: [{ name: "classification", kind: "contains", expected: "reliability" }], hidden_checks: [{ name: "no leaked canary", kind: "canary", expected: "SCENARIO-CANARY" }] }], budget: { max_cost: 2, max_latency_ms: 3000, max_tool_actions: 4 }, prohibited_actions: ["merge", "publish", "secrets", "network"], human_review_criteria: ["domain owner judges ambiguous classifications"], change_summary: "Protected project-owned evaluation" } });
 
     const makePull = async (branch: string, message: string, contents: string, author: string) => {
-      await git(copy, "switch", "main"); await git(copy, "pull", "--ff-only", "origin", "main"); await git(copy, "switch", "-C", branch);
-      await git(copy, "config", "user.name", author); await writeFile(join(copy, "agent.md"), contents); await git(copy, "add", "agent.md"); await git(copy, "commit", "-m", message); await git(copy, "push", "--force", "origin", branch);
+      await git(copy, "switch", "main"); await authenticatedGit(credential.token, copy, "pull", "--ff-only", "origin", "main"); await git(copy, "switch", "-C", branch);
+      await git(copy, "config", "user.name", author); await writeFile(join(copy, "agent.md"), contents); await git(copy, "add", "agent.md"); await git(copy, "commit", "-m", message); await authenticatedGit(credential.token, copy, "push", "--force", "origin", branch);
       const commit = await git(copy, "rev-parse", "HEAD");
       const pull = await json(ownerPage, "post", `/repositories/${repository.id}/pulls`, owner.headers, { title: message, body: "Review the exact agent behavior and its bounded evidence.", source_branch: branch, target_branch: "main" });
       return { commit, pull };
@@ -133,7 +142,7 @@ test("a team develops, releases, learns from, and safely repairs a project agent
     expect(pilot.invitations[0].revoked_at).toBeTruthy();
 
     // The repair is a new model/contract revision and new exact evidence; the old release remains immutable.
-    await git(copy, "switch", "main"); await git(copy, "pull", "--ff-only", "origin", "main");
+    await git(copy, "switch", "main"); await authenticatedGit(credential.token, copy, "pull", "--ff-only", "origin", "main");
     const repairPull = await makePull("agent/retry-repair", "Repair retry-storm classification", "Model: triage-2\nClassify retry storms as reliability incidents; draft only; cite uncertainty and retry context.\n", "Triage Partner Agent");
     project = await json(ownerPage, "post", `/repositories/${repository.id}/agent-projects/${project.id}/revisions`, owner.headers, { expected_version: 3, revision: revision(repairPull.commit, "triage-2", "Reproduced production regression repair and model change") });
     const repaired = await candidateFor(repairPull.pull, repairPull.commit, 4, `repair-${suffix}`, candidate.id);
@@ -163,6 +172,10 @@ test("a team develops, releases, learns from, and safely repairs a project agent
     expect(releases.releases).toContainEqual(expect.objectContaining({ id: repairRelease.id, status: "attested", model_versions: ["triage-2@2"] }));
     expect(baselineRun.results).toHaveLength(2);
   } finally {
+    if (credentialToRevoke && credentialOwnerHeaders) {
+      const revoked = await pages[0].request.delete(`/api/auth/credentials/${credentialToRevoke.id}`, { headers: credentialOwnerHeaders });
+      expect(revoked.status(), await revoked.text()).toBe(204);
+    }
     await rm(copy, { recursive: true, force: true });
   }
 });
