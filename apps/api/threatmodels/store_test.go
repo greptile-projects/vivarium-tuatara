@@ -46,12 +46,25 @@ func TestOnlyAffectedOwnerCanAcknowledgeCurrentRevision(t *testing.T) {
 func TestReaderProjectionRedactsRestrictedEvidenceMetadata(t *testing.T) {
 	s, _ := New(t.TempDir())
 	v, _ := s.Create("repo", "owner", modelRevision())
-	got, err := s.Get("repo", v.ID, CurrentSource{Revision: "abc", ArchitectureDigest: "arch-1", TrustBoundaryDigest: "trust-1", DependencyRevisions: map[string]string{"identity": "1"}})
+	got, err := s.Get("repo", v.ID, CurrentSource{Revision: "abc", ArchitectureDigest: "arch-1", TrustBoundaryDigest: "trust-1", DependencyRevisions: map[string]string{"identity": "1"}, PermittedEvidenceIDs: map[string]bool{"design": true}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	restricted := got.Revisions[0].Evidence[1]
 	if restricted.Accessible || restricted.Kind != "restricted_gap" || restricted.ResourceID != "" || restricted.Revision != "" || restricted.Summary != "" || restricted.Gap != "not in audience" {
 		t.Fatalf("restricted projection=%#v", restricted)
+	}
+}
+
+func TestReaderProjectionRechecksPreviouslyAccessibleEvidence(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, _ := s.Create("repo", "owner", modelRevision())
+	got, err := s.Get("repo", v.ID, CurrentSource{Revision: "abc", ArchitectureDigest: "arch-1", TrustBoundaryDigest: "trust-1", DependencyRevisions: map[string]string{"identity": "1"}, PermittedEvidenceIDs: map[string]bool{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := got.Revisions[0].Evidence[0]
+	if evidence.Accessible || evidence.Kind != "restricted_gap" || evidence.ResourceID != "" || evidence.Revision != "" || evidence.Summary != "" {
+		t.Fatalf("revoked evidence projection=%#v", evidence)
 	}
 }

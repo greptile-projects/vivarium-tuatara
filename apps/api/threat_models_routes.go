@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/apicontracts"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -30,7 +31,7 @@ type threatModelSources struct {
 }
 
 func (s threatModelSources) current(repo string, revision threatmodels.Revision) (threatmodels.CurrentSource, error) {
-	current := threatmodels.CurrentSource{DependencyRevisions: map[string]string{}}
+	current := threatmodels.CurrentSource{DependencyRevisions: map[string]string{}, PermittedEvidenceIDs: map[string]bool{}}
 	source := revision.Source
 	var snapshot any
 	switch source.Kind {
@@ -89,6 +90,14 @@ func (s threatModelSources) current(repo string, revision threatmodels.Revision)
 	current.TrustBoundaryDigest = fingerprint
 	for _, dependency := range revision.Dependencies {
 		current.DependencyRevisions[dependency.ID] = fingerprint
+	}
+	// Only evidence that resolves through the same currently authorized source
+	// can expose metadata. Other citation kinds retain a gap until a dedicated
+	// reader-aware resolver for that governed resource exists.
+	for _, evidence := range revision.Evidence {
+		if evidence.Accessible && evidence.ResourceID == source.ResourceID && evidence.Revision == source.Revision {
+			current.PermittedEvidenceIDs[evidence.ID] = true
+		}
 	}
 	return current, nil
 }
@@ -207,6 +216,15 @@ func registerThreatModelRoutes(mux *http.ServeMux, catalog *repositories.Store, 
 		}
 		actorID, actorType := actor.UserID, "human"
 		if actor.AgentID != "" {
+			model, modelErr := store.Get(r.PathValue("id"), r.PathValue("model_id"), threatmodels.CurrentSource{})
+			if modelErr != nil {
+				writeThreatModel(w, model, modelErr, 200)
+				return
+			}
+			if !sources.agentAuthorized(actor, model.Revisions[len(model.Revisions)-1]) {
+				writeAPIError(w, 403, "threat_model_agent_task_mismatch", "agent evidence requires the exact source pull task and branch credential")
+				return
+			}
 			actorID, actorType = actor.AgentID, "agent"
 		}
 		out, e := store.AddEvent(r.PathValue("id"), r.PathValue("model_id"), in.ExpectedVersion, actorID, actorType, in.Event)
@@ -228,6 +246,25 @@ func registerThreatModelRoutes(mux *http.ServeMux, catalog *repositories.Store, 
 		out, e := store.Acknowledge(r.PathValue("id"), r.PathValue("model_id"), in.ModelVersion, actor.UserID, in.Acknowledgement)
 		writeThreatModel(w, out, e, 201)
 	})
+}
+
+func (s threatModelSources) agentAuthorized(actor auth.Credential, revision threatmodels.Revision) bool {
+	if revision.Source.Kind != "pull_request" {
+		return false
+	}
+	pull, err := s.pulls.Get(actor.RepositoryID, revision.Source.ResourceID)
+	if err != nil {
+		return false
+	}
+	return agentMatchesPullTask(actor, pull, revision)
+}
+
+func agentMatchesPullTask(actor auth.Credential, pull pullrequests.PullRequest, revision threatmodels.Revision) bool {
+	if pull.SourceCommitID != revision.Source.Revision || pull.TaskID == nil {
+		return false
+	}
+	expectedBranch := "refs/heads/" + pull.SourceBranch
+	return actor.GitWriteBranch == expectedBranch && strings.HasPrefix(pull.SourceBranch, "agent/tasks/"+*pull.TaskID+"-")
 }
 func authorizeThreatModelContributor(w http.ResponseWriter, r *http.Request, catalog *repositories.Store, credentials *auth.Store, repo string) (auth.Credential, bool) {
 	actor, authenticated, e := authenticateOptionalCredential(r, credentials, "repositories:write")

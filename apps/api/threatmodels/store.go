@@ -142,10 +142,11 @@ type Model struct {
 	UpdatedAt        time.Time         `json:"updated_at"`
 }
 type CurrentSource struct {
-	Revision            string
-	ArchitectureDigest  string
-	TrustBoundaryDigest string
-	DependencyRevisions map[string]string
+	Revision             string
+	ArchitectureDigest   string
+	TrustBoundaryDigest  string
+	DependencyRevisions  map[string]string
+	PermittedEvidenceIDs map[string]bool
 }
 
 type Store struct {
@@ -462,7 +463,8 @@ func project(v Model, c CurrentSource) Model {
 	for revisionIndex := range v.Revisions {
 		for evidenceIndex := range v.Revisions[revisionIndex].Evidence {
 			evidence := &v.Revisions[revisionIndex].Evidence[evidenceIndex]
-			if !evidence.Accessible {
+			if !evidence.Accessible || !c.PermittedEvidenceIDs[evidence.ID] {
+				evidence.Accessible = false
 				evidence.Kind = "restricted_gap"
 				evidence.ResourceID = ""
 				evidence.Revision = ""

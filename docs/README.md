@@ -70,9 +70,10 @@ goals, abuse paths, mitigations, residual risk, alternatives, assumptions, cited
 affected owners. The repository `/security` workspace renders this graph beside versioned security
 expectations so teams can compare safer designs before implementation hardens assumptions.
 
-Human collaborators and exact repository-bound task agents can append cited findings, challenges,
+Human collaborators and agents whose credential matches the exact source pull task and branch can append cited findings, challenges,
 alternative comparisons, and acknowledgement requests to the current model revision. Contributions
-can cite only evidence retained as accessible; restricted evidence projects as a gap with its kind,
+can cite only evidence retained as accessible. Reads reauthorize citation metadata through the
+currently visible governed source; revoked or unresolvable evidence projects as a gap with its kind,
 resource, revision, and summary redacted. Only a named human owner may acknowledge or request changes.
 Publication freezes server-derived source-snapshot fingerprints, and reads re-resolve them to project
 source, architecture, trust-boundary, and dependency movement as stale without rewriting the

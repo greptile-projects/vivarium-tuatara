@@ -10,11 +10,14 @@ successor using `expected_version`. Architecture, trust-boundary, and dependency
 server-derived from the authoritative source snapshot; caller values are discarded. Inaccessible
 evidence is returned only as `accessible: false`, `kind: restricted_gap`, and its explicit `gap`;
 resource identity, revision, and summary are redacted from every retained revision projection.
+Historically accessible evidence is reauthorized on each read and receives the same redaction when
+its exact source is no longer currently permitted or has no reader-aware resolver.
 
 `POST .../{model_id}/events` accepts `expected_version` and an event of `finding`, `challenge`,
 `alternative_comparison`, or `acknowledgement_request`. Every event is bound to that model version
 and must cite accessible retained evidence IDs. Human participants and exact repository-bound task
-agents may contribute; agents cannot publish revisions or acknowledge. `POST
+agents may contribute only when their Git credential matches the model's exact source pull task,
+source revision, and branch; agents cannot publish revisions or acknowledge. `POST
 .../{model_id}/acknowledgements` accepts `model_version` and an owner-authored acknowledgement whose
 decision is `acknowledged` or `changes_requested`. Only a named current model owner may act.
 

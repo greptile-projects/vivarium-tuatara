@@ -9,6 +9,7 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/designproposals"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/threatmodels"
@@ -48,6 +49,26 @@ func TestThreatModelContributorRejectsGeneralAgentAndRequiresTaskCredential(t *t
 	}
 	if w, actor, ok := request(human.Token); !ok || w.Code != http.StatusOK || actor.UserID != ownerID || actor.AgentID != "" {
 		t.Fatalf("human=%d actor=%#v ok=%v", w.Code, actor, ok)
+	}
+}
+
+func TestThreatModelAgentMustMatchExactSourcePullTaskAndBranch(t *testing.T) {
+	taskID := strings.Repeat("5", 32)
+	revision := threatmodels.Revision{Source: threatmodels.Source{Kind: "pull_request", ResourceID: strings.Repeat("6", 32), Revision: strings.Repeat("a", 40)}}
+	pull := pullrequests.PullRequest{ID: revision.Source.ResourceID, RepositoryID: strings.Repeat("1", 32), SourceBranch: "agent/tasks/" + taskID + "-assignment", SourceCommitID: revision.Source.Revision, TaskID: &taskID}
+	matching := auth.Credential{Kind: auth.Git, AgentID: strings.Repeat("2", 32), RepositoryID: pull.RepositoryID, GitWriteBranch: "refs/heads/" + pull.SourceBranch}
+	if !agentMatchesPullTask(matching, pull, revision) {
+		t.Fatal("matching source task credential rejected")
+	}
+	unrelated := matching
+	unrelated.GitWriteBranch = "refs/heads/agent/tasks/unrelated-task"
+	if agentMatchesPullTask(unrelated, pull, revision) {
+		t.Fatal("unrelated task credential accepted")
+	}
+	wrongRevision := revision
+	wrongRevision.Source.Revision = strings.Repeat("b", 40)
+	if agentMatchesPullTask(matching, pull, wrongRevision) {
+		t.Fatal("stale source task credential accepted")
 	}
 }
 
