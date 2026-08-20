@@ -255,7 +255,10 @@ originating bounded system and no endpoint grants execution or merge authority.
   policy, budgets, accountable owners, human escalation, and deployment boundaries.
 - Reads derive effective tasks/tools/stops and attributable diagnostics for missing owners, unsupported
   guarantees, and conflicting permitted/prohibited actions, while preserving the full change history.
-  Publication requires current named owners and publisher access to every dependency repository. These
+  Publication requires current named owners, publisher access to every dependency repository, and commit
+  reachability from a visible non-`vivarium-security/` branch. Reads recheck every historical source and
+  replace inaccessible or newly hidden provenance with an attributable opaque diagnostic. Durable writes
+  synchronize the staged file and parent directory before returning success. These
   definitions provide review context and grant no agent, model, tool, repository, network, deployment, or
   data authority. Records default beneath `$AGENT_PROJECT_STORAGE_ROOT` (`agent-projects`).
 

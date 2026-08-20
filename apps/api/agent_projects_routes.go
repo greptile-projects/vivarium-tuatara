@@ -28,7 +28,7 @@ func registerAgentProjectRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 			writeAPIError(w, 500, "agent_projects_unavailable", "agent projects could not be read")
 			return
 		}
-		writeJSON(w, 200, map[string]any{"projects": projectAgentDependencies(catalog, actor.UserID, v)})
+		writeJSON(w, 200, map[string]any{"projects": projectAgentSources(git, catalog, actor.UserID, v)})
 	})
 	mux.HandleFunc("GET /repositories/{id}/agent-projects/{project_id}", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
@@ -40,7 +40,7 @@ func registerAgentProjectRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 			writeAPIError(w, 404, "agent_project_not_found", "agent project not found")
 			return
 		}
-		writeJSON(w, 200, projectAgentDependencies(catalog, actor.UserID, []agentprojects.Project{v})[0])
+		writeJSON(w, 200, projectAgentSources(git, catalog, actor.UserID, []agentprojects.Project{v})[0])
 	})
 	publish := func(revise bool) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -91,21 +91,23 @@ func registerAgentProjectRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 	mux.HandleFunc("POST /repositories/{id}/agent-projects/{project_id}/revisions", publish(true))
 }
 
-func projectAgentDependencies(catalog *repositories.Store, reader string, values []agentprojects.Project) []agentprojects.Project {
+func projectAgentSources(git *storage.Store, catalog *repositories.Store, reader string, values []agentprojects.Project) []agentprojects.Project {
 	for i := range values {
-		if len(values[i].Revisions) == 0 {
-			continue
-		}
-		r := &values[i].Revisions[len(values[i].Revisions)-1]
-		for sourceIndex := range r.Sources {
-			source := &r.Sources[sourceIndex]
-			if source.RepositoryID == values[i].RepositoryID {
-				continue
-			}
-			dependency, err := catalog.GetByID(source.RepositoryID)
-			readable := err == nil && (dependency.Visibility == repositories.Public || catalog.WithCurrentParticipant(reader, source.RepositoryID, func() error { return nil }) == nil)
-			if !readable {
-				values[i].Diagnostics = append(values[i].Diagnostics, agentprojects.Diagnostic{Kind: "inaccessible_dependency", Severity: "blocking", Message: "A selected dependency is no longer accessible to this reader.", SourceID: source.ID, AttributedTo: r.CreatedBy})
+		for revisionIndex := range values[i].Revisions {
+			r := &values[i].Revisions[revisionIndex]
+			for sourceIndex := range r.Sources {
+				source := &r.Sources[sourceIndex]
+				dependency, err := catalog.GetByID(source.RepositoryID)
+				readable := err == nil && (dependency.Visibility == repositories.Public || catalog.WithCurrentParticipant(reader, source.RepositoryID, func() error { return nil }) == nil)
+				visible := readable && agentProjectSourceResolves(git, *source)
+				if visible {
+					continue
+				}
+				kind, message := "inaccessible_source", "A selected source is no longer reachable from a visible repository branch."
+				if source.RepositoryID != values[i].RepositoryID && !readable {
+					kind, message = "inaccessible_dependency", "A selected dependency is no longer accessible to this reader."
+				}
+				values[i].Diagnostics = append(values[i].Diagnostics, agentprojects.Diagnostic{Kind: kind, Severity: "blocking", Message: message, SourceID: source.ID, AttributedTo: r.CreatedBy})
 				source.RepositoryID, source.Revision, source.Path, source.Purpose = "restricted", "", "", "restricted dependency"
 			}
 		}
@@ -122,6 +124,10 @@ func agentProjectSourceResolves(git *storage.Store, s agentprojects.Source) bool
 	}
 	commit, e := repo.ReadCommit(storage.ObjectID(strings.ToLower(s.Revision)))
 	if e != nil {
+		return false
+	}
+	visible, e := revisionReachableFromVisibleBranch(repo, commit.ID)
+	if e != nil || !visible {
 		return false
 	}
 	entries, e := repo.WalkTree(commit.Tree)

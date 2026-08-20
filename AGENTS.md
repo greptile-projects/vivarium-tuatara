@@ -6,7 +6,10 @@ Agent intent at `/repositories/{id}/agent-projects` and the repository `/agents`
 immutable reviewed prompts, instructions, tools, models, knowledge, memory/data terms, tasks, outputs,
 prohibitions, budgets, owners, escalation, and deployment boundaries beneath `$AGENT_PROJECT_STORAGE_ROOT`
 (`agent-projects`). Sources resolve to exact repository files and 40-character commits; publishers must
-read every dependency and named owners must be current participants. Reads derive effective capability,
+read every dependency and named owners must be current participants. Commits must remain reachable from a
+non-`vivarium-security/` branch, and reads recheck and redact inaccessible or hidden sources across every
+historical revision. Ledger publication fsyncs both staged content and its directory entry before success.
+Reads derive effective capability,
 provenance, history, and attributable missing-owner, conflicting-instruction, inaccessible-dependency,
 and unsupported-guarantee diagnostics. Definitions grant no agent, Git, tool, model, network, deployment,
 data, or repository authority.

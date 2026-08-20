@@ -292,13 +292,43 @@ func (s *Store) write(p Project) error {
 		return e
 	}
 	tmp := s.path(p.ID) + ".tmp-" + id()
-	if e = os.WriteFile(tmp, b, 0600); e != nil {
+	f, e := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if e != nil {
+		return e
+	}
+	remove := true
+	defer func() {
+		if remove {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if _, e = f.Write(b); e != nil {
+		_ = f.Close()
+		return e
+	}
+	if e = f.Sync(); e != nil {
+		_ = f.Close()
+		return e
+	}
+	if e = f.Close(); e != nil {
 		return e
 	}
 	if e = os.Rename(tmp, s.path(p.ID)); e != nil {
-		_ = os.Remove(tmp)
+		return e
 	}
-	return e
+	remove = false
+	directory, e := os.Open(s.root)
+	if e != nil {
+		return e
+	}
+	if e = directory.Sync(); e != nil {
+		_ = directory.Close()
+		return e
+	}
+	if e = directory.Close(); e != nil {
+		return e
+	}
+	return nil
 }
 func (s *Store) lock(fn func() error) error {
 	s.mu.Lock()

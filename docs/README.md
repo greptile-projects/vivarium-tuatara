@@ -8,7 +8,9 @@ written down here as they're decided, not before.
 Repository collaborators define intended agent behavior at `/repositories/{id}/agent-projects` and review
 it in `/repositories/{id}/agents`. Immutable revisions connect prompts, instructions, knowledge,
 dependencies, tools, models, tasks, outputs, prohibitions, memory/data terms, budgets, owners, escalation,
-and deployment limits to exact repository files and commits. Public projections derive effective
+and deployment limits to exact repository files and commits reachable from visible non-security branches.
+Public projections recheck and redact sources across the complete history when dependency access or commit
+visibility changes, and durable publication synchronizes content and directory metadata. Projections derive effective
 capability and keep missing ownership, conflicting instructions, inaccessible dependencies, and
 unsupported guarantees explicit. The ledger defaults beneath `$AGENT_PROJECT_STORAGE_ROOT`
 (`agent-projects`) and grants no implementation or runtime authority.
