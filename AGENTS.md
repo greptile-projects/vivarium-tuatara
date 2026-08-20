@@ -2649,6 +2649,14 @@ whenever dependencies change or the web job fails before it starts.
   stock Git contribution, independent review, repository check, and merge. Its retained outcome, material
   profile successor, failed reevaluation, and credential-free replacement handoff keep claims, evidence,
   authority, cost, code, and human decisions linked without letting consent reactivate retired authority.
+  The connected `agent-development-journey.spec.ts` browser/API/stock-Git journey carries a project-defined
+  role through reviewed human and agent behavior revisions, protected exact-candidate evaluation and baseline
+  comparison, intended-user pilots, independent release approvals, ordinary pull review/merge, attested release,
+  bounded project work, production regression, rollback, reproduced model/contract repair, fresh consent and
+  reevaluation, and a separately attested safe rollout. Leaked protected evidence, denied merge authority,
+  evaluator disagreement, cost containment, model change, and revoked consent remain attributable without
+  broadening credentials or rewriting the earlier release trail. Playwright isolates all four agent-development
+  ledgers.
 
   Update it when you change how the apps fit together, not for every change.
 

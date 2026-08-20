@@ -656,6 +656,15 @@ reviewed, checked, and merged Git contribution, and the retained cost/outcome ev
 profile successor, failed reevaluation, and credential-free replacement handoff. A handoff retires authority;
 later profile consent cannot implicitly reactivate it.
 
+`agent-development-journey.spec.ts` connects the repository-owned development primitives into one lifecycle.
+A team reviews human- and agent-authored behavior contracts, compares protected candidate evidence with a
+baseline, contains leaked scenarios, prohibited actions, evaluator disagreement and cost overrun, and pilots the
+exact candidate under explicit consent. Five independent current participants approve an attested release before
+bounded work; sanitized production feedback then drives rollback, a reproduced model/contract repair, fresh
+evaluation and pilot acceptance, a new attestation, ordinary review and merge, and a separately consented rollout.
+The test assigns isolated Playwright roots to agent projects, candidates, pilots, and releases so no prior run can
+supply evidence or authority.
+
 ## Inspectable project knowledge
 
 The repository knowledge workspace at `/repositories/{id}/knowledge` turns exact, currently visible
