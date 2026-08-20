@@ -165,6 +165,18 @@ whenever dependencies change or the web job fails before it starts.
 
 ## Conventions
 
+- **Capability inventory** — `/repositories/{id}/capabilities` and the repository
+  `/capabilities` workspace retain immutable, exact-release capability revisions beneath
+  `$CAPABILITY_STORAGE_ROOT` (`capabilities`). A revision selects interfaces, symbols,
+  flags, packages, schemas, configuration, documentation, journeys, and releases by exact
+  Git revision and repository path, and maps accountable owners, permitted consumer
+  repositories, environments, revision-bound usage evidence, and compatibility promises.
+  Publication proves the collaborator can still read every named consumer repository while
+  holding the repository mutation boundary. Unknown or dynamically discovered consumers and
+  stale, inaccessible, or absent evidence remain explicit diagnostics and never imply zero
+  use. These inventories provide removal context only and grant no consumer-repository, Git,
+  release, environment, migration, review, merge, deployment, or retirement authority.
+
 - **Durable state** — `/repositories/{id}/durable-schemas` and the repository
   `/durable-state` workspace retain immutable database, queue, index, object-store,
   event-log, cache, and other persistent-store schema revisions beneath

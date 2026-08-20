@@ -3,6 +3,22 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Revision-exact capability inventory
+
+Authorized repository collaborators publish immutable capability revisions at
+`/repositories/{id}/capabilities` and inspect them in the repository `/capabilities`
+workspace. Each revision binds its released provider commit and selected interfaces,
+symbols, flags, packages, schemas, configuration, documentation, journeys, and release
+surface to exact Git revisions and paths. It also records accountable owners, environments,
+consumer revisions, usage evidence, discovery mode, and compatibility promises.
+
+Named consumer repositories must remain readable to the publisher through the atomic
+publication boundary. Derived diagnostics preserve unknown and runtime-discovered use plus
+stale, inaccessible, and unmeasured evidence as blockers or warnings; none are converted into
+an assumption that use is absent. Records default beneath `$CAPABILITY_STORAGE_ROOT`
+(`capabilities`) and document footprint only: they grant no Git, consumer, release,
+environment, migration, merge, deployment, or removal authority.
+
 ## Revision-exact security confidence
 
 Repository owners and organization owners publish scoped security requirements at
