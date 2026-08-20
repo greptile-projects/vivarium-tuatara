@@ -315,6 +315,8 @@ originating bounded system and no endpoint grants execution or merge authority.
   Candidate and run requests include an `idempotency_key`; identical retries resolve the same deterministic
   record after ambiguous publication failures, while changed reuse conflicts. Each scenario in the selected
   suite manifest must independently satisfy `minimum_samples` before a run is retained or aggregated.
+  Reconciliation and publication hold a storage-root cross-process lock, so concurrent conflicting reuse
+  produces one retained record and one conflict rather than last-writer replacement.
 
 ## Runtime privacy checks
 

@@ -59,6 +59,34 @@ func TestCreateAndRunRetriesUseStableIdentity(t *testing.T) {
 		t.Fatalf("changed retry err = %v", err)
 	}
 }
+
+func TestConcurrentStoresRejectConflictingRunPublication(t *testing.T) {
+	root := t.TempDir()
+	firstStore, _ := New(root)
+	secondStore, _ := New(root)
+	d := Digest("suite")
+	c, err := firstStore.Create(candidate("repo", "pull", "0123456789012345678901234567890123456789", "suite", d))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := run(c, d, true)
+	second := run(c, d, false)
+	second.Results[0].OutputDigest = Digest("conflicting-output-1")
+	second.Results[1].OutputDigest = Digest("conflicting-output-2")
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	go func() { <-start; _, err := firstStore.CreateRun(first, "judge"); errs <- err }()
+	go func() { <-start; _, err := secondStore.CreateRun(second, "judge"); errs <- err }()
+	close(start)
+	a, b := <-errs, <-errs
+	if !((a == nil && b == ErrConflict) || (a == ErrConflict && b == nil)) {
+		t.Fatalf("concurrent errors = %v, %v", a, b)
+	}
+	runs, err := firstStore.Runs(c.ID)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("runs = %#v, err = %v", runs, err)
+	}
+}
 func TestComparisonKeepsContaminationAndInvalidatesOnlyChangedSuite(t *testing.T) {
 	s, err := New(t.TempDir())
 	if err != nil {

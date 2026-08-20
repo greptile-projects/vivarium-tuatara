@@ -2616,6 +2616,8 @@ whenever dependencies change or the web job fails before it starts.
   within their pull/candidate scope, and reconcile an identical already-published record after an ambiguous
   post-rename failure; reuse with different content conflicts. Every scenario frozen into a selected suite
   must independently meet the run's minimum sample count, so favorable partial coverage cannot aggregate.
+  A storage-root advisory lock serializes reconciliation and publication across API processes, preventing
+  conflicting evidence with one retry identity from replacing an independently accepted record.
   The connected agent-adoption browser journey compares two published candidates, contains hidden-check,
   prohibited-action, budget, and operator-outage trial failures, activates only sponsored project-owned
   evaluation evidence, and carries the selected agent through an ordinary proposal task, isolated session,

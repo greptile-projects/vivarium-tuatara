@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -128,6 +129,18 @@ type Store struct {
 	now  func() time.Time
 }
 
+func (s *Store) lock() (func(), error) {
+	f, err := os.OpenFile(filepath.Join(s.root, ".publication.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil
+}
+
 func New(root string) (*Store, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, ErrInvalid
@@ -206,6 +219,11 @@ func read[T any](path string) (T, error) {
 func (s *Store) Create(c Candidate) (Candidate, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Candidate{}, err
+	}
+	defer unlock()
 	if !clean(c.IdempotencyKey, 200) || !clean(c.RepositoryID, 64) || !clean(c.PullRequestID, 64) || len(c.PullRevision) != 40 || !clean(c.ProjectID, 64) || c.ProjectVersion < 1 || len(c.ContractDigest) != 64 || len(c.Components) == 0 || len(c.Suites) == 0 {
 		return Candidate{}, ErrInvalid
 	}
@@ -263,6 +281,11 @@ func (s *Store) List(repo, pull string) ([]Candidate, error) {
 func (s *Store) CreateRun(r Run, actor string) (Run, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Run{}, err
+	}
+	defer unlock()
 	if !clean(actor, 64) || !clean(r.IdempotencyKey, 200) {
 		return Run{}, ErrInvalid
 	}
