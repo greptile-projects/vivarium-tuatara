@@ -1,5 +1,20 @@
 # HTTP API contract
 
+## Threat models
+
+`GET /repositories/{id}/threat-models` and `GET
+/repositories/{id}/threat-models/{model_id}` return repository-visible immutable analysis with
+server-derived `freshness`. `POST /repositories/{id}/threat-models` opens a complete model at the
+exact current source revision; `POST .../{model_id}/revisions` publishes a complete compare-and-swap
+successor using `expected_version`.
+
+`POST .../{model_id}/events` accepts `expected_version` and an event of `finding`, `challenge`,
+`alternative_comparison`, or `acknowledgement_request`. Every event is bound to that model version
+and must cite accessible retained evidence IDs. Human participants and exact repository-bound task
+agents may contribute; agents cannot publish revisions or acknowledge. `POST
+.../{model_id}/acknowledgements` accepts `model_version` and an owner-authored acknowledgement whose
+decision is `acknowledged` or `changes_requested`. Only a named current model owner may act.
+
 ## Pull request interface verification
 
 - `GET /repositories/{id}/pulls/{pull_id}/interface-checks` is repository-readable
