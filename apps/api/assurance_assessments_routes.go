@@ -14,12 +14,14 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/assuranceprograms"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
 
-func registerAssuranceAssessmentRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, people *users.Store, programs *assuranceprograms.Store, evidence *assuranceevidence.Store, assessments *assuranceassessments.Store, proposalStore *proposals.Store, releaseStore *releases.Store) {
+func registerAssuranceAssessmentRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *repositories.Store, credentials *auth.Store, people *users.Store, programs *assuranceprograms.Store, evidence *assuranceevidence.Store, assessments *assuranceassessments.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, releaseStore *releases.Store) {
 	mux.HandleFunc("GET /repositories/{id}/assurance-assessments", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
 		if !ok {
@@ -126,7 +128,7 @@ func registerAssuranceAssessmentRoutes(mux *http.ServeMux, catalog *repositories
 		out, err := assessments.Append(a.ID, in.ExpectedVersion, actor.UserID, role, in.Event)
 		writeAssessment(w, out, err, 201)
 	})
-	if proposalStore != nil {
+	if proposalStore != nil && pullStore != nil && gitStore != nil {
 		mux.HandleFunc("POST /repositories/{id}/assurance-assessments/{assessment_id}/remediations", func(w http.ResponseWriter, r *http.Request) {
 			actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
 			if !ok {
@@ -158,6 +160,16 @@ func registerAssuranceAssessmentRoutes(mux *http.ServeMux, catalog *repositories
 				writeAPIError(w, 400, "invalid_remediation", "ordered corrective tasks and frozen finding context are required")
 				return
 			}
+			repository, openErr := gitStore.Open(a.RepositoryID)
+			if openErr != nil {
+				writeAPIError(w, 500, "remediation_repository_unavailable", "repository revision could not be resolved")
+				return
+			}
+			in.AffectedRevision = strings.ToLower(in.AffectedRevision)
+			if _, readErr := repository.ReadCommit(storage.ObjectID(in.AffectedRevision)); readErr != nil {
+				writeAPIError(w, 422, "invalid_affected_revision", "affected_revision must name an exact commit in this repository")
+				return
+			}
 			var finding assuranceassessments.Event
 			found := false
 			for _, e := range a.Events {
@@ -172,7 +184,11 @@ func registerAssuranceAssessmentRoutes(mux *http.ServeMux, catalog *repositories
 			criteria := strings.Join(in.AcceptanceCriteria, "; ")
 			taskInputs := make([]proposals.ImplementationTaskInput, len(in.Tasks))
 			for i, task := range in.Tasks {
-				taskInputs[i] = proposals.ImplementationTaskInput{Title: task.Title, Outcome: criteria, Risk: "Unresolved assurance finding for control " + finding.ControlID + " at " + in.AffectedRevision, VerificationPlan: "Fresh evidence must satisfy: " + criteria, AssigneeType: task.AssigneeType, AssigneeID: task.AssigneeID, DependsOnPrevious: i > 0}
+				assigneeID := task.AssigneeID
+				if task.AssigneeType == "human" && assigneeID == "" {
+					assigneeID = actor.UserID
+				}
+				taskInputs[i] = proposals.ImplementationTaskInput{Title: task.Title, Outcome: criteria, Risk: "Unresolved assurance finding for control " + finding.ControlID + " at " + in.AffectedRevision, VerificationPlan: "Fresh evidence must satisfy: " + criteria, AssigneeType: task.AssigneeType, AssigneeID: assigneeID, DependsOnPrevious: i > 0}
 			}
 			origin := proposals.ReasoningOrigin{AssessmentID: a.ID, AssessmentVersion: a.Version, AssuranceFindingID: finding.ID, Revision: in.AffectedRevision, SelectedItemIDs: []string{finding.ID}, Items: []proposals.ReasoningItem{{ID: finding.ID, Kind: "assurance_finding", Summary: finding.Body, Status: finding.Status}}, AnalysisStatus: "authorized_assurance_remediation"}
 			p, tasks, err := proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: a.RepositoryID, ActorID: actor.UserID, Title: in.Title, Body: "Correct assurance finding " + finding.ID + " by " + in.Deadline.UTC().Format(time.RFC3339) + ".\n\nControl: " + finding.ControlID + "\nAffected revision: " + in.AffectedRevision + "\nAcceptance criteria: " + criteria, Origin: origin, Tasks: taskInputs})
@@ -218,15 +234,28 @@ func registerAssuranceAssessmentRoutes(mux *http.ServeMux, catalog *repositories
 				return
 			}
 			workFound := false
+			verifiedRevision := ""
+			repository, repositoryErr := gitStore.Open(a.RepositoryID)
+			if repositoryErr != nil {
+				writeAPIError(w, 500, "verification_repository_unavailable", "repository history could not be resolved")
+				return
+			}
 			for _, work := range a.Remediations {
 				if work.ID == r.PathValue("remediation_id") {
 					workFound = true
+					verifiedRevision = work.AffectedRevision
 					for _, taskID := range work.TaskIDs {
 						task, e := proposalStore.GetTask(a.RepositoryID, work.ProposalID, taskID)
 						if e != nil || task.Status != proposals.TaskCompleted || task.Contribution == nil || task.Contribution.Status != "merged" {
 							writeAPIError(w, 409, "remediation_incomplete", "every ordered task must be merged before verification")
 							return
 						}
+						pull, e := pullStore.Get(a.RepositoryID, task.Contribution.PullRequestID)
+						if e != nil || pull.MergeCommitID == nil || !commitDescends(repository, *pull.MergeCommitID, verifiedRevision) {
+							writeAPIError(w, 409, "remediation_revision_mismatch", "each merged corrective contribution must descend from the affected revision and prior ordered work")
+							return
+						}
+						verifiedRevision = *pull.MergeCommitID
 					}
 				}
 			}
@@ -241,19 +270,24 @@ func registerAssuranceAssessmentRoutes(mux *http.ServeMux, catalog *repositories
 						writeAPIError(w, 409, "verification_evidence_not_current", "accepted closure requires current gap-free exact-program evidence")
 						return
 					}
-					matched := false
+					matched, revisionMatched := false, false
 					for _, work := range a.Remediations {
 						if work.ID == r.PathValue("remediation_id") && p.ControlID == work.ControlID && p.CollectedAt.After(work.CreatedAt) {
 							matched = true
 						}
 					}
-					if !matched {
-						writeAPIError(w, 409, "verification_evidence_not_current", "verification evidence must cover the finding control and postdate corrective work")
+					for _, source := range p.Sources {
+						if source.Accessible && source.Revision == verifiedRevision {
+							revisionMatched = true
+						}
+					}
+					if !matched || !revisionMatched {
+						writeAPIError(w, 409, "verification_evidence_not_current", "verification evidence must cover the finding control at the exact delivered revision and postdate corrective work")
 						return
 					}
 				}
 			}
-			out, err := assessments.VerifyRemediation(a.ID, r.PathValue("remediation_id"), in.ExpectedVersion, actor.UserID, role, in.Verification, in.Disposition, in.EvidencePackageIDs)
+			out, err := assessments.VerifyRemediation(a.ID, r.PathValue("remediation_id"), in.ExpectedVersion, actor.UserID, role, in.Verification, in.Disposition, verifiedRevision, in.EvidencePackageIDs)
 			writeAssessment(w, out, err, 201)
 		})
 	}
@@ -312,6 +346,10 @@ func registerAssuranceAssessmentRoutes(mux *http.ServeMux, catalog *repositories
 						closed := false
 						for _, work := range a.Remediations {
 							if work.FindingEventID == event.ID && work.State == "verified" && work.Disposition == "accepted" {
+								if !commitDescendsForStore(gitStore, a.RepositoryID, rel.CommitID, work.VerifiedRevision) || !allIDs(rel.Inclusions.TaskIDs, work.TaskIDs) {
+									writeAPIError(w, 409, "statement_release_unverified", "the exact release must contain and descend from every accepted corrective task")
+									return
+								}
 								closed = true
 							}
 						}
@@ -325,7 +363,7 @@ func registerAssuranceAssessmentRoutes(mux *http.ServeMux, catalog *repositories
 			hashes := []string{}
 			for _, pid := range a.EvidencePackageIDs {
 				p, e := evidence.GetPackage(pid)
-				if e == nil {
+				if e == nil && hasID(in.ControlIDs, p.ControlID) {
 					hashes = append(hashes, p.ManifestHash)
 				}
 			}
@@ -340,8 +378,13 @@ func registerAssuranceAssessmentRoutes(mux *http.ServeMux, catalog *repositories
 				}
 			}
 			sort.Strings(hashes)
+			if len(hashes) == 0 {
+				writeAPIError(w, 409, "statement_evidence_missing", "included controls require selected or verification evidence")
+				return
+			}
 			sum := sha256.Sum256([]byte(strings.Join(hashes, "\n")))
-			in.RepositoryID, in.ProgramID, in.ProgramVersion, in.Scope, in.EvidenceDigest, in.IssuedBy = a.RepositoryID, a.ProgramID, a.ProgramVersion, a.Scope, hex.EncodeToString(sum[:]), actor.UserID
+			statementScope := assuranceStatementScope(a.Scope, in.ControlIDs)
+			in.RepositoryID, in.ProgramID, in.ProgramVersion, in.Scope, in.EvidenceDigest, in.IssuedBy = a.RepositoryID, a.ProgramID, a.ProgramVersion, statementScope, hex.EncodeToString(sum[:]), actor.UserID
 			out, err := assessments.CreateStatement(in)
 			if err != nil {
 				writeAPIError(w, 400, "invalid_statement", "statement could not be signed")
@@ -451,6 +494,40 @@ func intersects(left, right []string) bool {
 		}
 	}
 	return false
+}
+func allIDs(have, required []string) bool {
+	for _, id := range required {
+		if !hasID(have, id) {
+			return false
+		}
+	}
+	return true
+}
+func commitDescends(repository *storage.Repository, descendant, ancestor string) bool {
+	if len(descendant) != 40 || len(ancestor) != 40 {
+		return false
+	}
+	commits, err := repository.ListCommitAncestry(storage.ObjectID(descendant))
+	if err != nil {
+		return false
+	}
+	for _, commit := range commits {
+		if string(commit.ID) == ancestor {
+			return true
+		}
+	}
+	return false
+}
+func commitDescendsForStore(store *storage.Store, repositoryID, descendant, ancestor string) bool {
+	if store == nil {
+		return false
+	}
+	repository, err := store.Open(repositoryID)
+	return err == nil && commitDescends(repository, descendant, ancestor)
+}
+func assuranceStatementScope(assessed assuranceassessments.Scope, controls []string) assuranceassessments.Scope {
+	assessed.ControlIDs = append([]string(nil), controls...)
+	return assessed
 }
 func assessmentScopeValid(r assuranceprograms.Revision, s assuranceassessments.Scope) bool {
 	for _, id := range s.ControlIDs {

@@ -55,6 +55,7 @@ type Remediation struct {
 	FindingEventID                 string                    `json:"finding_event_id"`
 	ControlID                      string                    `json:"control_id"`
 	AffectedRevision               string                    `json:"affected_revision"`
+	VerifiedRevision               string                    `json:"verified_revision,omitempty"`
 	Deadline                       time.Time                 `json:"deadline"`
 	AcceptanceCriteria             []string                  `json:"acceptance_criteria"`
 	ProposalID                     string                    `json:"proposal_id"`
@@ -167,7 +168,7 @@ func (s *Store) LinkRemediation(assessmentID string, expected int, actor string,
 	})
 	return out, err
 }
-func (s *Store) VerifyRemediation(assessmentID, remediationID string, expected int, actor, role, verification, disposition string, evidencePackageIDs []string) (Assessment, error) {
+func (s *Store) VerifyRemediation(assessmentID, remediationID string, expected int, actor, role, verification, disposition, verifiedRevision string, evidencePackageIDs []string) (Assessment, error) {
 	var out Assessment
 	err := s.lock(func() error {
 		a, err := s.read(assessmentID)
@@ -177,7 +178,7 @@ func (s *Store) VerifyRemediation(assessmentID, remediationID string, expected i
 		if a.Version != expected {
 			return ErrConflict
 		}
-		if !one(role, "owner", "assessor") || strings.TrimSpace(verification) == "" || credentialShaped(verification) || !one(disposition, "accepted", "rejected", "reopened") || (disposition == "accepted" && len(evidencePackageIDs) == 0) || !unique(evidencePackageIDs) {
+		if !one(role, "owner", "assessor") || strings.TrimSpace(verification) == "" || credentialShaped(verification) || !one(disposition, "accepted", "rejected", "reopened") || (disposition == "accepted" && (len(evidencePackageIDs) == 0 || len(verifiedRevision) != 40)) || !unique(evidencePackageIDs) {
 			return ErrInvalid
 		}
 		found := false
@@ -187,6 +188,7 @@ func (s *Store) VerifyRemediation(assessmentID, remediationID string, expected i
 				found = true
 				a.Remediations[i].Verification, a.Remediations[i].VerifiedBy, a.Remediations[i].VerifiedAt, a.Remediations[i].Disposition, a.Remediations[i].DispositionBy = strings.TrimSpace(verification), actor, &now, disposition, actor
 				a.Remediations[i].VerificationEvidencePackageIDs = append([]string(nil), evidencePackageIDs...)
+				a.Remediations[i].VerifiedRevision = verifiedRevision
 				a.Remediations[i].Verifications = append(a.Remediations[i].Verifications, RemediationVerification{ID: id(), EvidencePackageIDs: append([]string(nil), evidencePackageIDs...), Summary: strings.TrimSpace(verification), Disposition: disposition, ActorID: actor, ActorRole: role, CreatedAt: now})
 				if disposition == "accepted" {
 					a.Remediations[i].State = "verified"
@@ -242,29 +244,34 @@ type Statement struct {
 }
 
 func (s *Store) CreateStatement(v Statement) (Statement, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if v.RepositoryID == "" || v.AssessmentID == "" || v.ReleaseID == "" || len(v.ReleaseRevision) != 40 || v.ProgramID == "" || v.ProgramVersion < 1 || len(v.ControlIDs) == 0 || !unique(v.ControlIDs) || !unique(v.ExceptionIDs) || v.EvidenceDigest == "" || len(v.Audience) == 0 || !unique(v.Audience) || !v.ExpiresAt.After(s.now()) || v.ExpiresAt.After(s.now().Add(365*24*time.Hour)) {
-		return Statement{}, ErrInvalid
-	}
-	v.ID, v.IssuedAt = id(), s.now()
-	unsigned := v
-	unsigned.Payload, unsigned.Signature, unsigned.PublicKey = "", "", ""
-	raw, _ := json.Marshal(unsigned)
-	sum := sha256.Sum256(raw)
-	v.Payload = base64.RawURLEncoding.EncodeToString(raw)
-	priv, pub, err := s.signingKey()
-	if err != nil {
-		return Statement{}, err
-	}
-	v.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(priv, sum[:]))
-	v.PublicKey = base64.RawURLEncoding.EncodeToString(pub)
-	if err = os.MkdirAll(filepath.Join(s.root, "statements"), 0700); err != nil {
-		return Statement{}, err
-	}
-	b, _ := json.MarshalIndent(v, "", "  ")
-	err = os.WriteFile(filepath.Join(s.root, "statements", v.ID+".json"), b, 0600)
-	return v, err
+	var out Statement
+	err := s.lock(func() error {
+		if v.RepositoryID == "" || v.AssessmentID == "" || v.ReleaseID == "" || len(v.ReleaseRevision) != 40 || v.ProgramID == "" || v.ProgramVersion < 1 || len(v.ControlIDs) == 0 || !unique(v.ControlIDs) || !unique(v.ExceptionIDs) || v.EvidenceDigest == "" || len(v.Audience) == 0 || !unique(v.Audience) || !v.ExpiresAt.After(s.now()) || v.ExpiresAt.After(s.now().Add(365*24*time.Hour)) {
+			return ErrInvalid
+		}
+		v.ID, v.IssuedAt = id(), s.now()
+		unsigned := v
+		unsigned.Payload, unsigned.Signature, unsigned.PublicKey = "", "", ""
+		raw, _ := json.Marshal(unsigned)
+		sum := sha256.Sum256(raw)
+		v.Payload = base64.RawURLEncoding.EncodeToString(raw)
+		priv, pub, signErr := s.signingKey()
+		if signErr != nil {
+			return signErr
+		}
+		v.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(priv, sum[:]))
+		v.PublicKey = base64.RawURLEncoding.EncodeToString(pub)
+		if mkdirErr := os.MkdirAll(filepath.Join(s.root, "statements"), 0700); mkdirErr != nil {
+			return mkdirErr
+		}
+		b, _ := json.MarshalIndent(v, "", "  ")
+		if writeErr := os.WriteFile(filepath.Join(s.root, "statements", v.ID+".json"), b, 0600); writeErr != nil {
+			return writeErr
+		}
+		out = v
+		return nil
+	})
+	return out, err
 }
 func (s *Store) GetStatement(statementID string) (Statement, error) {
 	s.mu.Lock()
@@ -313,8 +320,42 @@ func (s *Store) signingKey() (ed25519.PrivateKey, ed25519.PublicKey, error) {
 		return k, k.Public().(ed25519.PublicKey), nil
 	}
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if errors.Is(err, os.ErrExist) {
+		b, readErr := os.ReadFile(path)
+		if readErr != nil || len(b) != ed25519.PrivateKeySize {
+			return nil, nil, ErrInvalid
+		}
+		key := ed25519.PrivateKey(b)
+		return key, key.Public().(ed25519.PublicKey), nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, err = file.Write(priv); err == nil {
+		err = file.Sync()
+	}
+	closeErr := file.Close()
 	if err == nil {
-		err = os.WriteFile(path, priv, 0600)
+		err = closeErr
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	directory, openErr := os.Open(s.root)
+	if openErr != nil {
+		return nil, nil, openErr
+	}
+	syncErr := directory.Sync()
+	closeDirectoryErr := directory.Close()
+	if syncErr != nil {
+		return nil, nil, syncErr
+	}
+	if closeDirectoryErr != nil {
+		return nil, nil, closeDirectoryErr
 	}
 	return priv, pub, err
 }

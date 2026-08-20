@@ -114,3 +114,11 @@ func TestAssessorWindowIncludesStartAndExcludesExpiry(t *testing.T) {
 		t.Fatal("window remained open at expiry")
 	}
 }
+
+func TestAssuranceStatementScopeContainsOnlyValidatedControls(t *testing.T) {
+	assessed := assuranceassessments.Scope{ControlIDs: []string{"resolved", "unresolved"}, SystemIDs: []string{"system"}, ReleaseIDs: []string{"release"}}
+	signed := assuranceStatementScope(assessed, []string{"resolved"})
+	if len(signed.ControlIDs) != 1 || signed.ControlIDs[0] != "resolved" || len(signed.SystemIDs) != 1 || len(assessed.ControlIDs) != 2 {
+		t.Fatalf("signed scope was not narrowed without mutating assessment: %#v %#v", signed, assessed)
+	}
+}

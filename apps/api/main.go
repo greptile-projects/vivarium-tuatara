@@ -1280,7 +1280,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		}
 	}
 	if authStore != nil && repositoryCatalog != nil && userStore != nil && assuranceProgramStore != nil && assuranceEvidenceStore != nil && assuranceAssessmentStore != nil {
-		registerAssuranceAssessmentRoutes(mux, repositoryCatalog, authStore, userStore, assuranceProgramStore, assuranceEvidenceStore, assuranceAssessmentStore, proposalStore, releaseStore)
+		registerAssuranceAssessmentRoutes(mux, store, repositoryCatalog, authStore, userStore, assuranceProgramStore, assuranceEvidenceStore, assuranceAssessmentStore, proposalStore, pullRequestStore, releaseStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && assuranceProgramStore != nil && assuranceImpactStore != nil && pullRequestStore != nil {
 		registerAssuranceImpactRoutes(mux, repositoryCatalog, authStore, assuranceImpactStore, assuranceProgramStore, pullRequestStore)

@@ -52,7 +52,10 @@ revision, deadline, acceptance criteria, human or agent assignees, and task orde
 reuse the existing session, workspace, pull, review, policy, release, and operational boundaries; the
 assessment record grants none of those authorities. Closure is not inferred from a ticket: every task
 must have a merged contribution, and an owner or assessor must disposition fresh, gap-free,
-post-correction evidence for the exact program and control. A rejected or reopened disposition returns
+post-correction evidence for the exact program and control. The affected commit resolves in the
+repository, each ordered merged contribution descends from the prior boundary, accepted evidence names
+the final merge revision, and a later statement release must descend from and include all those tasks.
+A rejected or reopened disposition returns
 the correction to open without removing its delivery history.
 
 Program owners publish release-exact claims at `/repositories/{id}/assurance-statements`. Publication

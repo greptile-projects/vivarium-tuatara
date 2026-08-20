@@ -28,14 +28,14 @@ func TestFindingRemediationRequiresFreshEvidenceDisposition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.VerifyRemediation(a.ID, a.Remediations[0].ID, a.Version, "owner", "owner", "looks good", "accepted", nil); err != ErrInvalid {
+	if _, err = store.VerifyRemediation(a.ID, a.Remediations[0].ID, a.Version, "owner", "owner", "looks good", "accepted", "", nil); err != ErrInvalid {
 		t.Fatalf("accepted without evidence: %v", err)
 	}
-	a, err = store.VerifyRemediation(a.ID, a.Remediations[0].ID, a.Version, "assessor", "assessor", "package is current", "accepted", []string{"package"})
+	a, err = store.VerifyRemediation(a.ID, a.Remediations[0].ID, a.Version, "assessor", "assessor", "package is current", "accepted", strings.Repeat("b", 40), []string{"package"})
 	if err != nil || a.Remediations[0].State != "verified" {
 		t.Fatalf("verification failed: %#v %v", a.Remediations, err)
 	}
-	a, err = store.VerifyRemediation(a.ID, a.Remediations[0].ID, a.Version, "owner", "owner", "later regression", "reopened", nil)
+	a, err = store.VerifyRemediation(a.ID, a.Remediations[0].ID, a.Version, "owner", "owner", "later regression", "reopened", "", nil)
 	if err != nil || a.Remediations[0].State != "open" || len(a.Remediations[0].Verifications) != 2 || a.Remediations[0].Verifications[0].Disposition != "accepted" {
 		t.Fatalf("reopen failed: %#v %v", a.Remediations, err)
 	}
@@ -65,5 +65,27 @@ func TestStatementSignaturePreservesOriginalAfterRevocation(t *testing.T) {
 	}
 	if revoked.Payload != v.Payload || revoked.Signature != v.Signature || revoked.RevokedAt == nil {
 		t.Fatal("revocation rewrote the original claim")
+	}
+}
+
+func TestConcurrentStoresRetainOneStatementSigningIdentity(t *testing.T) {
+	root := t.TempDir()
+	first, _ := New(root)
+	second, _ := New(root)
+	now := time.Now().UTC()
+	template := Statement{RepositoryID: "repo", AssessmentID: "assessment", ReleaseID: "release", ReleaseRevision: strings.Repeat("a", 40), ProgramID: "program", ProgramVersion: 1, Scope: Scope{ControlIDs: []string{"control"}, PeriodStartsAt: now.Add(-time.Hour), PeriodEndsAt: now}, ControlIDs: []string{"control"}, EvidenceDigest: strings.Repeat("b", 64), Audience: []string{"consumer"}, ExpiresAt: now.Add(time.Hour), IssuedBy: "owner"}
+	results := make(chan Statement, 2)
+	failures := make(chan error, 2)
+	for _, store := range []*Store{first, second} {
+		go func(store *Store) { v, err := store.CreateStatement(template); results <- v; failures <- err }(store)
+	}
+	for range 2 {
+		if err := <-failures; err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, b := <-results, <-results
+	if a.PublicKey != b.PublicKey {
+		t.Fatal("concurrent stores published different signing identities")
 	}
 }
