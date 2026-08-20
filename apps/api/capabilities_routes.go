@@ -196,6 +196,9 @@ func projectCapabilitiesForReader(catalog *repositories.Store, actorID string, v
 			}
 			for blockerIndex := range plan.Blockers {
 				blocker := &plan.Blockers[blockerIndex]
+				if blocker.ConsumerIndex != nil && restrictedCurrentConsumers[*blocker.ConsumerIndex] {
+					blocker.Audience = "restricted"
+				}
 				if restrictedAudiences[blocker.Audience] {
 					blocker.Audience = "restricted"
 				}

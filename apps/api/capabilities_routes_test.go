@@ -34,7 +34,8 @@ func TestRetirementProjectionUsesFrozenRevisionConsumerAccess(t *testing.T) {
 	}
 	secretConsumer := capabilities.Consumer{Name: "SECRET_AUDIENCE", RepositoryID: restricted.ID, OwnerIDs: []string{"SECRET_OWNER"}, Environment: "SECRET_ENVIRONMENT", Discovery: "declared", EvidenceState: "unknown", CompatibilityPromise: "SECRET_COMMITMENT"}
 	publicConsumer := capabilities.Consumer{Name: "public audience", RepositoryID: public.ID, OwnerIDs: []string{"public-owner"}, Environment: "public", Discovery: "declared", EvidenceState: "unknown", CompatibilityPromise: "public promise"}
-	consumerIndex := 0
+	frozenConsumerIndex := 0
+	currentConsumerIndex := 1
 	values := []capabilities.Capability{{
 		CurrentVersion: 2,
 		Revisions: []capabilities.Revision{
@@ -47,10 +48,13 @@ func TestRetirementProjectionUsesFrozenRevisionConsumerAccess(t *testing.T) {
 				{Name: "SECRET_AUDIENCE", OwnerIDs: []string{"SECRET_OWNER"}, Impact: "SECRET_IMPACT", Commitment: "SECRET_COMMITMENT"},
 				{Name: "public audience", OwnerIDs: []string{"public-owner"}, Impact: "public impact"},
 			},
-			FrozenDiagnostics: []capabilities.Diagnostic{{Kind: "unknown_evidence", Consumer: "SECRET_AUDIENCE", ConsumerIndex: &consumerIndex}},
+			FrozenDiagnostics: []capabilities.Diagnostic{{Kind: "unknown_evidence", Consumer: "SECRET_AUDIENCE", ConsumerIndex: &frozenConsumerIndex}},
 			RequiredOwnerIDs:  []string{"SECRET_OWNER", "public-owner"},
 			Exceptions:        []capabilities.PlanException{{Audience: "SECRET_AUDIENCE"}},
-			Blockers:          []capabilities.RetirementBlocker{{Kind: "conflicting_commitment", Audience: "SECRET_AUDIENCE", OwnerID: "SECRET_OWNER"}},
+			Blockers: []capabilities.RetirementBlocker{
+				{Kind: "conflicting_commitment", Audience: "SECRET_AUDIENCE", OwnerID: "SECRET_OWNER"},
+				{Kind: "inventory_unknown_evidence", Audience: "LATEST_RESTRICTED_NAME", ConsumerIndex: &currentConsumerIndex},
+			},
 		}},
 	}}
 
@@ -59,7 +63,7 @@ func TestRetirementProjectionUsesFrozenRevisionConsumerAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, secret := range []string{"SECRET_AUDIENCE", "SECRET_OWNER", "SECRET_ENVIRONMENT", "SECRET_COMMITMENT", "SECRET_IMPACT"} {
+	for _, secret := range []string{"SECRET_AUDIENCE", "SECRET_OWNER", "SECRET_ENVIRONMENT", "SECRET_COMMITMENT", "SECRET_IMPACT", "LATEST_RESTRICTED_NAME"} {
 		if strings.Contains(string(body), secret) {
 			t.Fatalf("frozen revision detail %q leaked after consumer reorder: %s", secret, body)
 		}

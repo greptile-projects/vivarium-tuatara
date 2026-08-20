@@ -54,10 +54,11 @@ type RetirementEvent struct {
 	CreatedAt time.Time  `json:"created_at"`
 }
 type RetirementBlocker struct {
-	Kind     string `json:"kind"`
-	Message  string `json:"message"`
-	OwnerID  string `json:"owner_id,omitempty"`
-	Audience string `json:"audience,omitempty"`
+	Kind          string `json:"kind"`
+	Message       string `json:"message"`
+	OwnerID       string `json:"owner_id,omitempty"`
+	Audience      string `json:"audience,omitempty"`
+	ConsumerIndex *int   `json:"consumer_index,omitempty"`
 }
 type RetirementPlan struct {
 	ID                string               `json:"id"`
@@ -236,15 +237,15 @@ func contains(v []string, s string) bool {
 }
 func projectRetirement(p *RetirementPlan, current int, diagnostics []Diagnostic, now time.Time) {
 	b := []RetirementBlocker{}
-	add := func(k, m, o, a string) {
-		b = append(b, RetirementBlocker{Kind: k, Message: m, OwnerID: o, Audience: a})
+	add := func(k, m, o, a string, consumerIndex *int) {
+		b = append(b, RetirementBlocker{Kind: k, Message: m, OwnerID: o, Audience: a, ConsumerIndex: consumerIndex})
 	}
 	if p.CapabilityVersion != current {
-		add("changed_usage", "The capability inventory changed after this plan was opened; reassess every affected audience.", "", "")
+		add("changed_usage", "The capability inventory changed after this plan was opened; reassess every affected audience.", "", "", nil)
 	}
 	for _, d := range diagnostics {
 		if d.Severity == "blocking" {
-			add("inventory_"+d.Kind, d.Message, "", d.Consumer)
+			add("inventory_"+d.Kind, d.Message, "", d.Consumer, d.ConsumerIndex)
 		}
 	}
 	approved := map[string]bool{}
@@ -255,7 +256,7 @@ func projectRetirement(p *RetirementPlan, current int, diagnostics []Diagnostic,
 		}
 		if e.Type == "policy_decision" && e.Decision == "defer" && e.ExpiresAt != nil && e.ExpiresAt.After(now) {
 			deferred = true
-			add("policy_deferred", "An attributable bounded decision defers removal: "+e.Summary, e.ActorID, "")
+			add("policy_deferred", "An attributable bounded decision defers removal: "+e.Summary, e.ActorID, "", nil)
 		}
 	}
 	for _, id := range p.RequiredOwnerIDs {
@@ -264,20 +265,20 @@ func projectRetirement(p *RetirementPlan, current int, diagnostics []Diagnostic,
 			if now.After(p.ApprovalDueAt) {
 				kind = "unresponsive_owner"
 			}
-			add(kind, "Required owner has not acknowledged the migration contract.", id, "")
+			add(kind, "Required owner has not acknowledged the migration contract.", id, "", nil)
 		}
 	}
 	for _, a := range p.Audiences {
 		if a.Commitment != "" {
-			add("conflicting_commitment", "An affected audience has a compatibility commitment that must be reconciled.", "", a.Name)
+			add("conflicting_commitment", "An affected audience has a compatibility commitment that must be reconciled.", "", a.Name, nil)
 		}
 		if a.EmbargoedDependency {
-			add("embargoed_dependency", "A restricted dependency remains represented without disclosing it.", "", a.Name)
+			add("embargoed_dependency", "A restricted dependency remains represented without disclosing it.", "", a.Name, nil)
 		}
 	}
 	for _, x := range p.Exceptions {
 		if x.ExpiresAt.After(now) {
-			add("active_exception", "A bounded exception delays retirement: "+x.Rationale, x.GrantedBy, x.Audience)
+			add("active_exception", "A bounded exception delays retirement: "+x.Rationale, x.GrantedBy, x.Audience, nil)
 		}
 	}
 	p.Blockers = b
