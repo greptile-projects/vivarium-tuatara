@@ -56,10 +56,26 @@ func registerAssuranceEvidenceRoutes(mux *http.ServeMux, catalog *repositories.S
 			writeAPIError(w, 500, "assurance_evidence_unavailable", "assurance evidence could not be read")
 			return
 		}
+		currentParticipant := false
+		if authenticated {
+			repository, repositoryErr := catalog.GetByID(r.PathValue("id"))
+			if repositoryErr != nil {
+				writeAPIError(w, 500, "assurance_evidence_unavailable", "assurance evidence authorization could not be resolved")
+				return
+			}
+			currentParticipant = repository.OwnerID == actor.UserID
+			if !currentParticipant {
+				currentParticipant, e = catalog.HasCollaborator(actor.UserID, repository.ID)
+				if e != nil {
+					writeAPIError(w, 500, "assurance_evidence_unavailable", "assurance evidence authorization could not be resolved")
+					return
+				}
+			}
+		}
 		visible := map[string]bool{}
 		filteredDefinitions := definitions[:0]
 		for _, definition := range definitions {
-			if evidenceAudienceAllows(definition.Audience, actor.UserID, authenticated) {
+			if evidenceAudienceAllows(definition.Audience, actor.UserID, authenticated, currentParticipant) {
 				visible[definition.ID] = true
 				filteredDefinitions = append(filteredDefinitions, definition)
 			}
@@ -293,9 +309,9 @@ func (s assuranceEvidenceSources) resolveOne(repo string, q assuranceevidence.Qu
 	return source, nil
 }
 
-func evidenceAudienceAllows(audience []string, userID string, authenticated bool) bool {
+func evidenceAudienceAllows(audience []string, userID string, authenticated, currentParticipant bool) bool {
 	for _, member := range audience {
-		if member == "repository" || (authenticated && member == userID) {
+		if member == "repository" || (authenticated && currentParticipant && member == userID) {
 			return true
 		}
 	}
