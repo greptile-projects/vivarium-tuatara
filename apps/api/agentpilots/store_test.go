@@ -2,9 +2,20 @@ package agentpilots
 
 import (
 	"errors"
+	"os"
 	"testing"
 	"time"
 )
+
+func TestNewRejectsUnavailableStorageRoot(t *testing.T) {
+	path := t.TempDir() + "/file"
+	if err := os.WriteFile(path, []byte("occupied"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if store, err := New(path); err == nil || store != nil {
+		t.Fatalf("unavailable root = %#v, %v", store, err)
+	}
+}
 
 func fixture(now time.Time) Pilot {
 	return Pilot{RepositoryID: "repo", PullRequestID: "pull", CandidateID: "candidate", CandidateRevision: "0123456789abcdef0123456789abcdef01234567", OwnerID: "owner", RepositoryIDs: []string{"repo"}, Roles: []string{"reviewer"}, TaskKinds: []string{"issue"}, Actions: []string{"repository.read", "draft.create"}, Budget: Budget{MaxMinutes: 10, MaxActions: 2, MaxCost: 5}, StartsAt: now, ExpiresAt: now.Add(24 * time.Hour), Invitations: []Invitation{{ParticipantID: "user", Role: "reviewer", RepositoryIDs: []string{"repo"}, TaskKinds: []string{"issue"}, Actions: []string{"repository.read", "draft.create"}}}}
@@ -81,6 +92,27 @@ func TestPilotPausesWithoutDiscardingEvidence(t *testing.T) {
 	}
 	if len(p.Sessions[0].Events) != 1 || p.Invitations[0].RevokedAt == nil {
 		t.Fatalf("revocation discarded evidence = %#v", p)
+	}
+}
+
+func TestOversizedResultIsDeniedBeforeBudgetAccounting(t *testing.T) {
+	now := time.Date(2026, 8, 20, 20, 0, 0, 0, time.UTC)
+	s, _ := New(t.TempDir())
+	s.now = func() time.Time { return now }
+	p, _ := s.Create(fixture(now))
+	p, _ = s.Consent(p.ID, "user", p.Version, false)
+	p, _ = s.StartSession(p.ID, "user", p.Version, Session{RepositoryID: "repo", TaskKind: "issue", TaskID: "9", ExpectedOutcome: "bounded draft"}, false, false)
+	p, err := s.AppendEvent(p.ID, "user", p.Version, p.Sessions[0].ID, SessionEvent{Kind: "result", Summary: "oversized draft", Action: "draft.create", Cost: 6, Minutes: 11}, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := p.Sessions[0].Events[0]
+	if event.Kind != "policy_denial" || event.Cost != 0 || event.Minutes != 0 || !p.Paused || p.PauseReason != "budget_exhausted" {
+		t.Fatalf("oversized result = %#v, pilot = %#v", event, p)
+	}
+	access := s.Effective(p, "user", false, false)
+	if access.Used.MaxCost != 0 || access.Used.MaxMinutes != 0 || access.Remaining.MaxCost != p.Budget.MaxCost || access.Remaining.MaxMinutes != p.Budget.MaxMinutes {
+		t.Fatalf("oversized accounting = %#v", access)
 	}
 }
 

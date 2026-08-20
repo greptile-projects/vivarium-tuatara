@@ -351,12 +351,26 @@ func (s *Store) AppendEvent(pid, participant string, expected int, sessionID str
 			e.Cost = 0
 			e.Minutes = 0
 		}
+		if e.Kind == "result" {
+			u := usage(*p)
+			if u.MaxActions+1 > p.Budget.MaxActions || u.MaxMinutes+e.Minutes > p.Budget.MaxMinutes || u.MaxCost+e.Cost > p.Budget.MaxCost {
+				e.Kind = "policy_denial"
+				e.Summary = "result denied because it would exceed the pilot budget"
+				e.Cost = 0
+				e.Minutes = 0
+				p.Paused = true
+				p.PauseReason = "budget_exhausted"
+			}
+		}
 		for i := range p.Sessions {
 			if p.Sessions[i].ID == sessionID && p.Sessions[i].ParticipantID == participant {
 				e.ID = id()
 				e.ActorID = participant
 				e.CreatedAt = s.now()
 				p.Sessions[i].Events = append(p.Sessions[i].Events, e)
+				if p.Paused && p.PauseReason == "budget_exhausted" {
+					p.Sessions[i].Status = "paused"
+				}
 				if e.Kind == "stop" {
 					p.Sessions[i].Status = "stopped"
 				}
