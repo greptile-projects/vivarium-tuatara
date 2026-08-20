@@ -2,7 +2,9 @@ package main
 
 import (
 	"testing"
+	"time"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/assuranceimpact"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/assuranceprograms"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 )
@@ -20,8 +22,20 @@ func TestDeriveAssuranceImpactsSelectsOnlyMappedChangedControls(t *testing.T) {
 	if len(impacts) != 1 || impacts[0].ControlID != "export" || len(impacts[0].AffectedPaths) != 1 || impacts[0].ChangedEvidenceIDs[0] != "scenario" {
 		t.Fatalf("impacts = %#v", impacts)
 	}
-	current := assuranceImpactCurrent("commit", revision, changes)
+	current := assuranceImpactCurrent("commit", revision, changes, map[string]bool{"security": true, "privacy": true})
 	if len(current.ControlDigests) != 1 || current.ControlDigests["export"] == "" {
 		t.Fatalf("current = %#v", current)
+	}
+}
+
+func TestNewerAssuranceAssessmentPrefersProgramVersionOverLaterMutation(t *testing.T) {
+	now := time.Now().UTC()
+	current := assuranceimpact.Assessment{ID: "v2", ProgramVersion: 2, CreatedAt: now, UpdatedAt: now}
+	obsolete := assuranceimpact.Assessment{ID: "v1", ProgramVersion: 1, CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(time.Hour)}
+	if newerAssuranceAssessment(obsolete, current) {
+		t.Fatal("later mutation of obsolete program assessment displaced current assessment")
+	}
+	if !newerAssuranceAssessment(current, obsolete) {
+		t.Fatal("current program assessment was not preferred")
 	}
 }

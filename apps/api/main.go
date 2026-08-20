@@ -1275,7 +1275,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 				if e != nil || len(program.Revisions) == 0 {
 					return assuranceimpact.Current{CandidateRevision: p.SourceCommitID}
 				}
-				return assuranceImpactCurrent(p.SourceCommitID, program.Revisions[len(program.Revisions)-1], changes)
+				return assuranceImpactCurrent(p.SourceCommitID, program.Revisions[len(program.Revisions)-1], changes, assuranceImpactParticipants(repositoryCatalog, p.RepositoryID, program.Revisions[len(program.Revisions)-1]))
 			})
 			if err != nil {
 				return nil, nil, err
@@ -1285,7 +1285,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			ready := true
 			for _, v := range values {
 				if v.Candidate.Kind == "pull_request" && v.Candidate.ID == p.ID {
-					if prior, ok := latest[v.ProgramID]; !ok || v.UpdatedAt.After(prior.UpdatedAt) {
+					if prior, ok := latest[v.ProgramID]; !ok || newerAssuranceAssessment(v, prior) {
 						latest[v.ProgramID] = v
 					}
 				}
@@ -1581,6 +1581,10 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		runGitService(w, r, repo, receivePackService, false, contributor, onlyBranch)
 	})
 	return mux
+}
+
+func newerAssuranceAssessment(candidate, current assuranceimpact.Assessment) bool {
+	return candidate.ProgramVersion > current.ProgramVersion || candidate.ProgramVersion == current.ProgramVersion && (candidate.CreatedAt.After(current.CreatedAt) || candidate.CreatedAt.Equal(current.CreatedAt) && candidate.ID > current.ID)
 }
 
 func activeMaintainerCredential(pulls *pullrequests.Store, catalog *repositories.Store, remote string, credential auth.Credential) bool {

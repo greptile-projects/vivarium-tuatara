@@ -18,15 +18,19 @@ func TestAssessmentInvalidatesOnlyChangedControlAndRequiresOwners(t *testing.T) 
 	if assessment.Ready {
 		t.Fatal("unacknowledged affected control was ready")
 	}
-	assessment, err = store.AddEvent("repo", assessment.ID, assessment.Version, "agent", "agent", Event{Kind: "challenge", ControlID: "access", Body: "The service role broadens the regulated export path.", Citations: []Citation{{Kind: "policy", ResourceID: "policy/access.rego", Revision: "commit-1", Summary: "export role rule"}}}, Current{CandidateRevision: "commit-1", ControlDigests: map[string]string{"access": "digest-a", "retention": "digest-b"}})
+	assessment, err = store.AddEvent("repo", assessment.ID, assessment.Version, "agent", "agent", Event{Kind: "challenge", ControlID: "access", Body: "The service role broadens the regulated export path.", Citations: []Citation{{Kind: "policy", ResourceID: "policy/access.rego", Revision: "commit-1", Summary: "export role rule"}}}, Current{CandidateRevision: "commit-1", ControlDigests: map[string]string{"access": "digest-a", "retention": "digest-b"}, ParticipantIDs: map[string]bool{"owner": true}})
 	if err != nil || len(assessment.Events) != 1 || assessment.Events[0].ActorType != "agent" {
 		t.Fatalf("event = %#v, %v", assessment, err)
 	}
-	assessment, err = store.Acknowledge("repo", assessment.ID, "access", "owner", assessment.Version, Current{CandidateRevision: "commit-1", ControlDigests: map[string]string{"access": "digest-a", "retention": "digest-b"}})
+	assessment, err = store.Acknowledge("repo", assessment.ID, "access", "owner", assessment.Version, Current{CandidateRevision: "commit-1", ControlDigests: map[string]string{"access": "digest-a", "retention": "digest-b"}, ParticipantIDs: map[string]bool{"owner": true}})
 	if err != nil || !assessment.Ready {
 		t.Fatalf("acknowledged = %#v, %v", assessment, err)
 	}
-	current, err := store.Get("repo", assessment.ID, Current{CandidateRevision: "commit-1", ControlDigests: map[string]string{"access": "digest-a", "retention": "changed"}})
+	revoked, err := store.Get("repo", assessment.ID, Current{CandidateRevision: "commit-1", ControlDigests: map[string]string{"access": "digest-a", "retention": "digest-b"}, ParticipantIDs: map[string]bool{}})
+	if err != nil || revoked.Ready {
+		t.Fatalf("revoked owner acknowledgement remained ready: %#v, %v", revoked, err)
+	}
+	current, err := store.Get("repo", assessment.ID, Current{CandidateRevision: "commit-1", ControlDigests: map[string]string{"access": "digest-a", "retention": "changed"}, ParticipantIDs: map[string]bool{"owner": true}})
 	if err != nil {
 		t.Fatal(err)
 	}

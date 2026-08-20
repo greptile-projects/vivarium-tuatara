@@ -84,6 +84,7 @@ type Assessment struct {
 type Current struct {
 	CandidateRevision string
 	ControlDigests    map[string]string
+	ParticipantIDs    map[string]bool
 }
 type Store struct {
 	root string
@@ -232,7 +233,7 @@ func project(p Assessment, current Current) Assessment {
 		if !impact.Current {
 			p.Stale = true
 		}
-		if impact.Applicability == "uncertain" || !impact.Current || !all(impact.RequiredOwnerIDs, impact.AcknowledgedOwnerIDs) {
+		if impact.Applicability == "uncertain" || !impact.Current || !allCurrent(impact.RequiredOwnerIDs, impact.AcknowledgedOwnerIDs, current.ParticipantIDs) {
 			p.Ready = false
 		}
 	}
@@ -285,6 +286,14 @@ func hasControl(p Assessment, id string) bool {
 func all(required, actual []string) bool {
 	for _, x := range required {
 		if !contains(actual, x) {
+			return false
+		}
+	}
+	return true
+}
+func allCurrent(required, actual []string, participants map[string]bool) bool {
+	for _, x := range required {
+		if !contains(actual, x) || !participants[x] {
 			return false
 		}
 	}

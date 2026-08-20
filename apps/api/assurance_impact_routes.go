@@ -51,7 +51,7 @@ func registerAssuranceImpactRoutes(mux *http.ServeMux, catalog *repositories.Sto
 		if e != nil {
 			return assuranceimpact.Current{}
 		}
-		return assuranceImpactCurrent(p.SourceCommitID, program.Revisions[len(program.Revisions)-1], changes)
+		return assuranceImpactCurrent(p.SourceCommitID, program.Revisions[len(program.Revisions)-1], changes, assuranceImpactParticipants(catalog, a.RepositoryID, program.Revisions[len(program.Revisions)-1]))
 	}
 	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/assurance-impact", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
@@ -200,12 +200,33 @@ func deriveAssuranceImpacts(r assuranceprograms.Revision, changes []pullrequests
 	}
 	return out
 }
-func assuranceImpactCurrent(candidate string, r assuranceprograms.Revision, changes []pullrequests.FileChange) assuranceimpact.Current {
+func assuranceImpactCurrent(candidate string, r assuranceprograms.Revision, changes []pullrequests.FileChange, participants map[string]bool) assuranceimpact.Current {
 	m := map[string]string{}
 	for _, impact := range deriveAssuranceImpacts(r, changes, map[string]assuranceImpactInputDecision{}) {
 		m[impact.ControlID] = impact.ControlDigest
 	}
-	return assuranceimpact.Current{CandidateRevision: candidate, ControlDigests: m}
+	return assuranceimpact.Current{CandidateRevision: candidate, ControlDigests: m, ParticipantIDs: participants}
+}
+
+func assuranceImpactParticipants(catalog *repositories.Store, repo string, revision assuranceprograms.Revision) map[string]bool {
+	current := map[string]bool{}
+	repository, err := catalog.GetByID(repo)
+	if err != nil {
+		return current
+	}
+	for _, control := range revision.Controls {
+		for _, owner := range control.OwnerIDs {
+			if owner == repository.OwnerID {
+				current[owner] = true
+				continue
+			}
+			present, err := catalog.HasCollaborator(owner, repo)
+			if err == nil && present {
+				current[owner] = true
+			}
+		}
+	}
+	return current
 }
 func appendUnique(xs []string, v string) []string {
 	for _, x := range xs {
