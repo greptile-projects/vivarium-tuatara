@@ -22,6 +22,7 @@ func TestVersionedInventoryKeepsIncompleteUseExplicit(t *testing.T) {
 	r.UnknownUseReason = ""
 	r.Consumers[0].Discovery = "declared"
 	r.Consumers[0].EvidenceState = "current"
+	r.Consumers[0].RepositoryID = "consumer-repo"
 	r.Consumers[0].Revision = string(make([]byte, 40))
 	r.Consumers[0].EvidenceReference = "signal-1"
 	now := time.Now()

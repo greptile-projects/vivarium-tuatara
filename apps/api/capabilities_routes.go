@@ -69,6 +69,9 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 			var out capabilities.Capability
 			var err error
 			err = catalog.WithCurrentParticipantsAndReadAccess(ownerIDs, r.PathValue("id"), actor.UserID, consumerRepositories, func() error {
+				if !capabilityConsumerProvenanceResolves(git, in.Revision) {
+					return capabilities.ErrInvalid
+				}
 				if revise {
 					out, err = inventory.Revise(r.PathValue("id"), r.PathValue("capability_id"), in.ExpectedVersion, actor.UserID, in.Revision)
 				} else {
@@ -99,7 +102,7 @@ func projectCapabilitiesForReader(catalog *repositories.Store, actorID string, v
 		return err == nil && allowed
 	}
 	for valueIndex := range values {
-		restrictedNames := map[string]bool{}
+		restrictedCurrentNames := map[string]bool{}
 		for revisionIndex := range values[valueIndex].Revisions {
 			revision := &values[valueIndex].Revisions[revisionIndex]
 			for consumerIndex := range revision.Consumers {
@@ -107,17 +110,35 @@ func projectCapabilitiesForReader(catalog *repositories.Store, actorID string, v
 				if canRead(consumer.RepositoryID) {
 					continue
 				}
-				restrictedNames[consumer.Name] = true
+				if revisionIndex == len(values[valueIndex].Revisions)-1 {
+					restrictedCurrentNames[consumer.Name] = true
+				}
 				*consumer = capabilities.Consumer{Name: "restricted", Environment: "restricted", Discovery: "unknown", EvidenceState: "inaccessible", CompatibilityPromise: "restricted"}
 			}
 		}
 		for diagnosticIndex := range values[valueIndex].Diagnostics {
-			if restrictedNames[values[valueIndex].Diagnostics[diagnosticIndex].Consumer] {
+			if restrictedCurrentNames[values[valueIndex].Diagnostics[diagnosticIndex].Consumer] {
 				values[valueIndex].Diagnostics[diagnosticIndex].Consumer = "restricted"
 			}
 		}
 	}
 	return values
+}
+
+func capabilityConsumerProvenanceResolves(git *storage.Store, revision capabilities.Revision) bool {
+	for _, consumer := range revision.Consumers {
+		if consumer.EvidenceState != "current" {
+			continue
+		}
+		repository, err := git.Open(consumer.RepositoryID)
+		if err != nil {
+			return false
+		}
+		if _, err = repository.ReadCommit(storage.ObjectID(strings.ToLower(consumer.Revision))); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func capabilityProvenanceResolves(git *storage.Store, releases *releases.Store, repoID string, r *capabilities.Revision) bool {

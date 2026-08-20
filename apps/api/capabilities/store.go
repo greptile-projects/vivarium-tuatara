@@ -178,6 +178,9 @@ func validate(r Revision) error {
 		if x.EvidenceState == "current" && (x.Revision == "" || x.EvidenceReference == "" || x.LastObservedAt == nil) {
 			return ErrInvalid
 		}
+		if x.EvidenceState == "current" && x.RepositoryID == "" {
+			return ErrInvalid
+		}
 	}
 	if r.UnknownUse && strings.TrimSpace(r.UnknownUseReason) == "" {
 		return ErrInvalid
@@ -275,6 +278,17 @@ func (s *Store) write(v Capability) error {
 	}
 	if e == nil {
 		e = os.Rename(name, filepath.Join(dir, v.ID+".json"))
+	}
+	if e == nil {
+		var directory *os.File
+		directory, e = os.Open(dir)
+		if e == nil {
+			e = directory.Sync()
+			closeErr := directory.Close()
+			if e == nil {
+				e = closeErr
+			}
+		}
 	}
 	return e
 }
