@@ -264,6 +264,12 @@ func validRequirements(rs []Requirement) bool {
 		if !bounded(r.ID, 200) || !bounded(r.Title, 500) || seen[r.ID] || !one(r.Kind, "threat_coverage", "security_scenario", "control_acknowledgement", "resolved_findings") || len(r.OwnerIDs) == 0 || !boundedList(r.OwnerIDs, 50, 200) || !boundedList(r.Selector.Branches, 50, 500) || !boundedList(r.Selector.Components, 50, 500) || !boundedList(r.Selector.Assets, 50, 500) || !boundedList(r.Selector.RiskClasses, 50, 500) || !boundedList(r.Selector.Paths, 100, 1000) {
 			return false
 		}
+		// Components, assets, and risk classes are governance labels rather than
+		// target facts today. Require an explicit path mapping so delivery
+		// evaluation has authoritative context and cannot apply the label globally.
+		if len(r.Selector.Components)+len(r.Selector.Assets)+len(r.Selector.RiskClasses) > 0 && len(r.Selector.Paths) == 0 {
+			return false
+		}
 		for _, severity := range r.FindingSeverities {
 			if !one(severity, "low", "medium", "high", "critical") {
 				return false

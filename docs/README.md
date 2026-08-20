@@ -10,7 +10,8 @@ Repository owners and organization owners publish scoped security requirements a
 `/repositories/{id}/organization-security-requirements`. Requirements select branches,
 components, protected assets, risk classes, and paths and require a current threat-model revision,
 a passing owner-reviewed security scenario, named control-owner acknowledgements, or resolution of
-scoped findings. Repository policy takes precedence over organization fallback policy.
+scoped findings. Component, asset, and risk labels require an explicit repository-path mapping so
+they cannot become global delivery selectors. Repository policy takes precedence over organization fallback policy.
 
 Pull, release, and deployment `/security-confidence` reads derive an exact-revision matrix from the
 existing threat-model, security-scenario, and private finding ledgers. Changed paths invalidate only

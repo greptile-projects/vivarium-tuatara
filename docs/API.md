@@ -5,7 +5,8 @@
 - `POST /repositories/{id}/security-requirements` publishes repository-owner policy; `POST
   /repositories/{id}/organization-security-requirements` publishes organization-owner fallback
   policy. Requirements use `threat_coverage`, `security_scenario`, `control_acknowledgement`, or
-  `resolved_findings` and select branches, components, assets, risk classes, and paths.
+  `resolved_findings` and select branches, components, assets, risk classes, and paths. Component,
+  asset, and risk selectors must include an explicit path mapping used for delivery evaluation.
 - `GET /repositories/{id}/pulls/{pull_id}/security-confidence`, `GET
   /repositories/{id}/releases/{release_id}/security-confidence`, and `GET
   /repositories/{id}/deployments/{deployment_id}/security-confidence` expose the exact policy,

@@ -79,3 +79,25 @@ func TestProductionSignalRequiresExactSanitizedResponseLink(t *testing.T) {
 		t.Fatalf("unsafe signal = %v", err)
 	}
 }
+
+func TestRequirementGovernanceDimensionsRequirePathMapping(t *testing.T) {
+	for _, selector := range []Selector{{Components: []string{"identity"}}, {Assets: []string{"credentials"}}, {RiskClasses: []string{"critical"}}} {
+		s, _ := New(t.TempDir())
+		r := requirement("resolved_findings")
+		r.Selector = selector
+		if _, err := s.Publish("repository", "repo", "repo", "owner", 0, []Requirement{r}); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("selector-only requirement %#v = %v", selector, err)
+		}
+	}
+	s, _ := New(t.TempDir())
+	r := requirement("resolved_findings")
+	r.Selector = Selector{Components: []string{"identity"}, Assets: []string{"credentials"}, RiskClasses: []string{"critical"}, Paths: []string{"apps/api/auth"}}
+	p, err := s.Publish("repository", "repo", "repo", "owner", 0, []Requirement{r})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.Evaluate(p, "pull", "pull", strings.Repeat("a", 40), "main", []string{"docs/readme.md"}, map[string]Evidence{})
+	if err != nil || !m.Ready || len(m.Requirements) != 0 {
+		t.Fatalf("unrelated mapped requirement = %#v, %v", m, err)
+	}
+}

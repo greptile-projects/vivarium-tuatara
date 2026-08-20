@@ -13,6 +13,8 @@ an existing follow-up issue or proposal, and grant no delivery authority. Exact-
 signals retain sanitized digests for violated assumptions and failed controls and may connect a
 repository-scoped private incident, advisory, or governed repair without granting production,
 disclosure, Git, review, merge, queue, release, deployment, environment, or agent authority.
+Component, asset, and risk-class requirement labels are admitted only with explicit repository paths;
+delivery targets do not otherwise provide authoritative values for those governance dimensions.
 
 Release confidence at pull and release `/quality-confidence` freezes versioned requirements by
 branch, journey, risk, locale, platform, release, and path beneath `$RELEASE_CONFIDENCE_STORAGE_ROOT`
