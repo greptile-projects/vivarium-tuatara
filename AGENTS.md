@@ -129,6 +129,11 @@ docs/       notes on how the pieces fit together
 Next.js than your training data, so read `node_modules/next/dist/docs/` before
 writing frontend code rather than reaching for remembered APIs.
 
+The connected `capability-retirement-journey.spec.ts` browser/API/Git journey proves the
+capability workflow from released inventory and independent-owner acknowledgement through
+human/agent migration, failed-first coexistence evidence, rollback and late-regression
+containment, exact delivery, post-retirement staleness, and category-complete cleanup.
+
 ## Commands
 
 Run these from the repo root. The runtime is **Bun**, not Node — use `bun`, not

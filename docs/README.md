@@ -78,6 +78,15 @@ unrelated retained files cannot substitute for removal evidence.
 These coordination records do not grant Git, queue, review, release, deployment, environment,
 documentation, schema, infrastructure, credential, telemetry, or destructive authority.
 
+The connected `capability-retirement-journey.spec.ts` browser/API/Git journey carries a released
+legacy capability from exact inventory and independently owned consumer acknowledgement through
+human- and agent-authored migration work, failed-first coexistence proof, superseded residual-use
+evidence, staged disablement, and category-complete cleanup. It retains a missed acknowledgement,
+a changed consumer signal, a hidden dependent, a compatibility restore before destructive removal,
+and a late post-disable regression, then proves that each condition pauses delivery until corrected.
+The final workspace trail connects the original release, decisions and citations, bounded work,
+checks, observed use, delivery revisions, rollback authority, and verified absent artifacts.
+
 ## Revision-exact security confidence
 
 Repository owners and organization owners publish scoped security requirements at
