@@ -2,6 +2,20 @@
 
 Guidance for coding agents working in this repository.
 
+Security confidence at pull, release, and deployment `/security-confidence` freezes repository or
+organization requirements by branch, component, asset, risk class, and path beneath
+`$SECURITY_CONFIDENCE_STORAGE_ROOT` (`security-confidence`). Matrices derive current threat-model
+coverage, reviewed exact-command security-scenario outcomes, current control-owner acknowledgements,
+residual risk, and audience-safe unresolved finding gaps. Pull merge and integration-queue readiness
+consume the same matrix; affected paths invalidate only intersecting evidence. Named requirement-owner
+exceptions bind the exact revision and narrow selector, expire within 30 days, retain attribution and
+an existing follow-up issue or proposal, and grant no delivery authority. Exact-release deployment
+signals retain sanitized digests for violated assumptions and failed controls and may connect a
+repository-scoped private incident, advisory, or governed repair without granting production,
+disclosure, Git, review, merge, queue, release, deployment, environment, or agent authority.
+Component, asset, and risk-class requirement labels are admitted only with explicit repository paths;
+delivery targets do not otherwise provide authoritative values for those governance dimensions.
+
 Release confidence at pull and release `/quality-confidence` freezes versioned requirements by
 branch, journey, risk, locale, platform, release, and path beneath `$RELEASE_CONFIDENCE_STORAGE_ROOT`
 (`release-confidence`). Exact scenario, closed exploratory-session, and check-run attempts retain
