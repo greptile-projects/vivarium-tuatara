@@ -43,7 +43,7 @@ func registerAssuranceAssessmentRoutes(mux *http.ServeMux, catalog *repositories
 			writeAPIError(w, 404, "assessment_not_found", "assessment not found")
 			return
 		}
-		if actor.UserID == a.Assessor.UserID && !writeAssessorWindowError(w, a, time.Now().UTC()) {
+		if actor.UserID == a.Assessor.UserID && actor.UserID != a.OwnerID && !writeAssessorWindowError(w, a, time.Now().UTC()) {
 			return
 		}
 		packages := []assuranceevidence.Package{}

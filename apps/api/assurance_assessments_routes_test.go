@@ -63,6 +63,13 @@ func TestIndependentAssessorHasOnlyBoundedAssessmentAccess(t *testing.T) {
 	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repo.ID+"/assurance-assessments/"+future.ID, "", outside.Credential.Token, http.StatusForbidden).Body.Close()
 	payload, _ = json.Marshal(map[string]any{"expected_version": 1, "kind": "question", "body": "too early"})
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/assurance-assessments/"+future.ID+"/events", string(payload), outside.Credential.Token, http.StatusForbidden).Body.Close()
+	dualFuture := base
+	dualFuture.OwnerID, dualFuture.StartsAt, dualFuture.ExpiresAt = outside.User.ID, time.Now().UTC().Add(time.Hour), time.Now().UTC().Add(2*time.Hour)
+	dualFuture, createErr = assessments.Create(dualFuture)
+	if createErr != nil {
+		t.Fatal(createErr)
+	}
+	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repo.ID+"/assurance-assessments/"+dualFuture.ID, "", outside.Credential.Token, http.StatusOK).Body.Close()
 	expired := base
 	expired.StartsAt, expired.ExpiresAt = time.Now().UTC(), time.Now().UTC().Add(100*time.Millisecond)
 	expired, createErr = assessments.Create(expired)
@@ -71,14 +78,26 @@ func TestIndependentAssessorHasOnlyBoundedAssessmentAccess(t *testing.T) {
 	}
 	time.Sleep(150 * time.Millisecond)
 	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repo.ID+"/assurance-assessments/"+expired.ID, "", outside.Credential.Token, http.StatusForbidden).Body.Close()
+	dualExpired := base
+	dualExpired.OwnerID, dualExpired.StartsAt, dualExpired.ExpiresAt = outside.User.ID, time.Now().UTC(), time.Now().UTC().Add(100*time.Millisecond)
+	dualExpired, createErr = assessments.Create(dualExpired)
+	if createErr != nil {
+		t.Fatal(createErr)
+	}
+	time.Sleep(150 * time.Millisecond)
+	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repo.ID+"/assurance-assessments/"+dualExpired.ID, "", outside.Credential.Token, http.StatusOK).Body.Close()
 	response = authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repo.ID+"/assurance-assessments", "", outside.Credential.Token, http.StatusOK)
 	var visible struct {
 		Assessments []assuranceassessments.Assessment `json:"assessments"`
 	}
 	_ = json.NewDecoder(response.Body).Decode(&visible)
 	response.Body.Close()
-	if len(visible.Assessments) != 1 || visible.Assessments[0].ID != assessment.ID {
-		t.Fatalf("assessor list exposed out-of-window records: %#v", visible.Assessments)
+	seen := map[string]bool{}
+	for _, item := range visible.Assessments {
+		seen[item.ID] = true
+	}
+	if len(visible.Assessments) != 3 || !seen[assessment.ID] || !seen[dualFuture.ID] || !seen[dualExpired.ID] || seen[future.ID] || seen[expired.ID] {
+		t.Fatalf("list did not preserve owner access while filtering assessor-only windows: %#v", visible.Assessments)
 	}
 }
 
