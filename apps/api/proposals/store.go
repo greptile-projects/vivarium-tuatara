@@ -52,6 +52,10 @@ type Proposal struct {
 // ReasoningOrigin is an immutable, revision-exact handoff from collaborative
 // investigation and impact analysis into implementation and review.
 type ReasoningOrigin struct {
+	SecurityFindingID              string                     `json:"security_finding_id,omitempty"`
+	SecurityFindingVersion         int                        `json:"security_finding_version,omitempty"`
+	ThreatModelID                  string                     `json:"threat_model_id,omitempty"`
+	ThreatModelVersion             int                        `json:"threat_model_version,omitempty"`
 	ExploratorySessionID           string                     `json:"exploratory_session_id,omitempty"`
 	ExploratoryFindingID           string                     `json:"exploratory_finding_id,omitempty"`
 	ExploratoryRepairID            string                     `json:"exploratory_repair_id,omitempty"`
