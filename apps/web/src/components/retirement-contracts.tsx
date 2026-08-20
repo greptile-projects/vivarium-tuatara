@@ -31,7 +31,11 @@ export type RetirementPlan = {
     version: number;
     type: string;
     actor_id: string;
+    actor_type?: string;
     summary: string;
+    evidence?: string[];
+    decision?: string;
+    created_at?: string;
   }[];
   blockers: {
     kind: string;
@@ -355,6 +359,23 @@ export function RetirementContracts({
                     {x.audience ? ` Audience: ${x.audience}` : ""}
                   </span>
                 </p>
+              ))}
+            </div>
+          )}
+          {plan.events.length > 0 && (
+            <div className="mt-4 space-y-2">
+              <h4 className="text-sm font-semibold">Decision and evidence trail</h4>
+              {plan.events.map((event) => (
+                <div key={event.version} className="rounded-lg border border-[var(--line)] p-3 text-sm">
+                  <div className="flex flex-wrap gap-2">
+                    <Badge tone={event.type === "approval" ? "success" : event.type === "challenge" ? "warning" : "info"}>
+                      {event.type.replaceAll("_", " ")}
+                    </Badge>
+                    <span>{event.actor_type ?? "human"} · {event.actor_id}</span>
+                  </div>
+                  <p className="mt-1">{event.summary}</p>
+                  {(event.evidence?.length ?? 0) > 0 && <p className="text-xs text-[var(--muted)]">Evidence: {event.evidence?.join(" · ")}</p>}
+                </div>
               ))}
             </div>
           )}
