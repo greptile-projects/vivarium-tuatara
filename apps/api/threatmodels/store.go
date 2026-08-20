@@ -117,6 +117,7 @@ type Event struct {
 	RequestedOwnerIDs []string  `json:"requested_owner_ids,omitempty"`
 	ActorID           string    `json:"actor_id"`
 	ActorType         string    `json:"actor_type"`
+	ContentRestricted bool      `json:"content_restricted,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
 }
 type Acknowledgement struct {
@@ -142,11 +143,11 @@ type Model struct {
 	UpdatedAt        time.Time         `json:"updated_at"`
 }
 type CurrentSource struct {
-	Revision             string
-	ArchitectureDigest   string
-	TrustBoundaryDigest  string
-	DependencyRevisions  map[string]string
-	PermittedEvidenceIDs map[string]bool
+	Revision              string
+	ArchitectureDigest    string
+	TrustBoundaryDigest   string
+	DependencyRevisions   map[string]string
+	PermittedEvidenceKeys map[string]bool
 }
 
 type Store struct {
@@ -463,13 +464,44 @@ func project(v Model, c CurrentSource) Model {
 	for revisionIndex := range v.Revisions {
 		for evidenceIndex := range v.Revisions[revisionIndex].Evidence {
 			evidence := &v.Revisions[revisionIndex].Evidence[evidenceIndex]
-			if !evidence.Accessible || !c.PermittedEvidenceIDs[evidence.ID] {
+			if !evidence.Accessible || !c.PermittedEvidenceKeys[EvidenceAuthorizationKey(*evidence)] {
 				evidence.Accessible = false
 				evidence.Kind = "restricted_gap"
 				evidence.ResourceID = ""
 				evidence.Revision = ""
 				evidence.Summary = ""
 			}
+		}
+	}
+	for eventIndex := range v.Events {
+		event := &v.Events[eventIndex]
+		var revision *Revision
+		for revisionIndex := range v.Revisions {
+			if v.Revisions[revisionIndex].Version == event.ModelVersion {
+				revision = &v.Revisions[revisionIndex]
+				break
+			}
+		}
+		permitted := revision != nil
+		for _, evidenceID := range event.EvidenceIDs {
+			matched := false
+			if revision != nil {
+				for _, evidence := range revision.Evidence {
+					if evidence.ID == evidenceID && evidence.Accessible && c.PermittedEvidenceKeys[EvidenceAuthorizationKey(evidence)] {
+						matched = true
+						break
+					}
+				}
+			}
+			if !matched {
+				permitted = false
+				break
+			}
+		}
+		if !permitted {
+			event.Body = "Restricted citation content."
+			event.EvidenceIDs = []string{}
+			event.ContentRestricted = true
 		}
 	}
 	add := func(reason string) {
@@ -495,6 +527,9 @@ func project(v Model, c CurrentSource) Model {
 		}
 	}
 	return v
+}
+func EvidenceAuthorizationKey(e Evidence) string {
+	return e.ID + "\x00" + e.Kind + "\x00" + e.ResourceID + "\x00" + e.Revision
 }
 func one(v string, values ...string) bool {
 	for _, x := range values {

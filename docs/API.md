@@ -12,6 +12,9 @@ evidence is returned only as `accessible: false`, `kind: restricted_gap`, and it
 resource identity, revision, and summary are redacted from every retained revision projection.
 Historically accessible evidence is reauthorized on each read and receives the same redaction when
 its exact source is no longer currently permitted or has no reader-aware resolver.
+Permits bind the citation ID, kind, resource, and revision, preventing a current citation from
+authorizing reused historical IDs. Events with any currently unpermitted citation return
+`content_restricted: true`, a fixed placeholder body, and no evidence IDs.
 
 `POST .../{model_id}/events` accepts `expected_version` and an event of `finding`, `challenge`,
 `alternative_comparison`, or `acknowledgement_request`. Every event is bound to that model version

@@ -31,7 +31,7 @@ type threatModelSources struct {
 }
 
 func (s threatModelSources) current(repo string, revision threatmodels.Revision) (threatmodels.CurrentSource, error) {
-	current := threatmodels.CurrentSource{DependencyRevisions: map[string]string{}, PermittedEvidenceIDs: map[string]bool{}}
+	current := threatmodels.CurrentSource{DependencyRevisions: map[string]string{}, PermittedEvidenceKeys: map[string]bool{}}
 	source := revision.Source
 	var snapshot any
 	switch source.Kind {
@@ -96,7 +96,7 @@ func (s threatModelSources) current(repo string, revision threatmodels.Revision)
 	// reader-aware resolver for that governed resource exists.
 	for _, evidence := range revision.Evidence {
 		if evidence.Accessible && evidence.ResourceID == source.ResourceID && evidence.Revision == source.Revision {
-			current.PermittedEvidenceIDs[evidence.ID] = true
+			current.PermittedEvidenceKeys[threatmodels.EvidenceAuthorizationKey(evidence)] = true
 		}
 	}
 	return current, nil

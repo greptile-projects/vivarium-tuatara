@@ -352,7 +352,9 @@ whenever dependencies change or the web job fails before it starts.
   acknowledgement requests; only a current named human owner can acknowledge. Inaccessible
   citations project only an explicit gap and cannot support a contribution. Reader projections
   reauthorize citation metadata through the currently visible governed source; evidence without a
-  current resolver is redacted even when it was accessible at publication. Publications replace
+  current resolver is redacted even when it was accessible at publication. Authorization keys bind
+  the complete citation identity across each retained revision, and events whose citations become
+  inaccessible project a restricted placeholder instead of contributor prose. Publications replace
   caller freshness claims with a fingerprint of the authoritative source snapshot; reads re-resolve
   that fingerprint so source, architecture, trust-boundary, or dependency movement projects
   staleness without rewriting history or exposing restricted metadata. These records grant no source, Git, review, merge,

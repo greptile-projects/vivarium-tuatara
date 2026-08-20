@@ -75,6 +75,8 @@ alternative comparisons, and acknowledgement requests to the current model revis
 can cite only evidence retained as accessible. Reads reauthorize citation metadata through the
 currently visible governed source; revoked or unresolvable evidence projects as a gap with its kind,
 resource, revision, and summary redacted. Only a named human owner may acknowledge or request changes.
+Citation authorization binds ID, kind, resource, and revision separately across model history;
+events citing anything no longer permitted project without their contributor-controlled body.
 Publication freezes server-derived source-snapshot fingerprints, and reads re-resolve them to project
 source, architecture, trust-boundary, and dependency movement as stale without rewriting the
 retained analysis. Records default beneath `$THREAT_MODEL_STORAGE_ROOT` (`threat-models`) and grant

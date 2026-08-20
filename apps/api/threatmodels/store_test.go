@@ -46,7 +46,8 @@ func TestOnlyAffectedOwnerCanAcknowledgeCurrentRevision(t *testing.T) {
 func TestReaderProjectionRedactsRestrictedEvidenceMetadata(t *testing.T) {
 	s, _ := New(t.TempDir())
 	v, _ := s.Create("repo", "owner", modelRevision())
-	got, err := s.Get("repo", v.ID, CurrentSource{Revision: "abc", ArchitectureDigest: "arch-1", TrustBoundaryDigest: "trust-1", DependencyRevisions: map[string]string{"identity": "1"}, PermittedEvidenceIDs: map[string]bool{"design": true}})
+	design := modelRevision().Evidence[0]
+	got, err := s.Get("repo", v.ID, CurrentSource{Revision: "abc", ArchitectureDigest: "arch-1", TrustBoundaryDigest: "trust-1", DependencyRevisions: map[string]string{"identity": "1"}, PermittedEvidenceKeys: map[string]bool{EvidenceAuthorizationKey(design): true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,12 +60,56 @@ func TestReaderProjectionRedactsRestrictedEvidenceMetadata(t *testing.T) {
 func TestReaderProjectionRechecksPreviouslyAccessibleEvidence(t *testing.T) {
 	s, _ := New(t.TempDir())
 	v, _ := s.Create("repo", "owner", modelRevision())
-	got, err := s.Get("repo", v.ID, CurrentSource{Revision: "abc", ArchitectureDigest: "arch-1", TrustBoundaryDigest: "trust-1", DependencyRevisions: map[string]string{"identity": "1"}, PermittedEvidenceIDs: map[string]bool{}})
+	got, err := s.Get("repo", v.ID, CurrentSource{Revision: "abc", ArchitectureDigest: "arch-1", TrustBoundaryDigest: "trust-1", DependencyRevisions: map[string]string{"identity": "1"}, PermittedEvidenceKeys: map[string]bool{}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	evidence := got.Revisions[0].Evidence[0]
 	if evidence.Accessible || evidence.Kind != "restricted_gap" || evidence.ResourceID != "" || evidence.Revision != "" || evidence.Summary != "" {
 		t.Fatalf("revoked evidence projection=%#v", evidence)
+	}
+}
+
+func TestEvidencePermissionIsBoundToFullHistoricalCitationIdentity(t *testing.T) {
+	s, _ := New(t.TempDir())
+	first := modelRevision()
+	first.Evidence[0] = Evidence{ID: "design", Kind: "incident", ResourceID: "restricted-incident", Revision: "secret-revision", Summary: "restricted summary", Accessible: true}
+	v, err := s.Create("repo", "owner", first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := modelRevision()
+	v, err = s.Revise("repo", v.ID, 1, "owner", second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentEvidence := modelRevision().Evidence[0]
+	got, err := s.Get("repo", v.ID, CurrentSource{Revision: "abc", PermittedEvidenceKeys: map[string]bool{EvidenceAuthorizationKey(currentEvidence): true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	historical := got.Revisions[0].Evidence[0]
+	if historical.Accessible || historical.ResourceID != "" || historical.Revision != "" || historical.Summary != "" || historical.Kind != "restricted_gap" {
+		t.Fatalf("historical collision=%#v", historical)
+	}
+	if !got.Revisions[1].Evidence[0].Accessible {
+		t.Fatalf("current citation unexpectedly redacted: %#v", got.Revisions[1].Evidence[0])
+	}
+}
+
+func TestEventContentIsRedactedWhenItsCitationIsRevoked(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, _ := s.Create("repo", "owner", modelRevision())
+	v, err := s.AddEvent("repo", v.ID, 1, "owner", "human", Event{Kind: "finding", Body: "Copied restricted incident details", EvidenceIDs: []string{"design"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get("repo", v.ID, CurrentSource{Revision: "abc", PermittedEvidenceKeys: map[string]bool{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := got.Events[0]
+	if !event.ContentRestricted || event.Body != "Restricted citation content." || len(event.EvidenceIDs) != 0 {
+		t.Fatalf("event projection=%#v", event)
 	}
 }
