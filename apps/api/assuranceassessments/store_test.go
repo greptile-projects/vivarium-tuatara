@@ -40,6 +40,10 @@ func TestBoundedAssessmentRolesConflictAndExpiry(t *testing.T) {
 	if _, err = s.Append(a.ID, a.Version, "outside", "assessor", Event{Kind: "question", Body: "late"}); !errors.Is(err, ErrExpired) {
 		t.Fatalf("expected expiry, got %v", err)
 	}
+	a, err = s.Append(a.ID, a.Version, "owner", "owner", Event{Kind: "close", Body: "retain the final record after assessor access ends"})
+	if err != nil || a.Status != "closed" {
+		t.Fatalf("owner close after assessor expiry = %#v, %v", a, err)
+	}
 }
 
 func TestAppendSerializesAcrossStoreProcessesAndHonorsStart(t *testing.T) {

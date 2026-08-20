@@ -143,7 +143,7 @@ func (s *Store) Append(assessmentID string, expected int, actor, role string, e 
 		if role == "assessor" && now.Before(a.StartsAt) {
 			return ErrNotStarted
 		}
-		if !now.Before(a.ExpiresAt) {
+		if role == "assessor" && !now.Before(a.ExpiresAt) {
 			return ErrExpired
 		}
 		if a.Status == "closed" {
