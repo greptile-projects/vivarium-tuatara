@@ -23,6 +23,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/agentcandidates"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/agentevaluations"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/agentpilots"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/agentprojects"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/apicontracts"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/assuranceassessments"
@@ -985,6 +986,11 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var agentEvaluationStore *agentevaluations.Store
 	var agentProjectStore *agentprojects.Store
 	var agentCandidateStore *agentcandidates.Store
+	agentPilotRoot := os.Getenv("AGENT_PILOT_STORAGE_ROOT")
+	if agentPilotRoot == "" {
+		agentPilotRoot = "agent-pilots"
+	}
+	agentPilotStore, _ := agentpilots.New(agentPilotRoot)
 	var apiContractStore *apicontracts.Store
 	var durableSchemaStore *durableschemas.Store
 	var infrastructureStore *infrastructure.Store
@@ -1277,6 +1283,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil && agentProjectStore != nil && agentEvaluationStore != nil && agentCandidateStore != nil {
 		registerAgentCandidateRoutes(mux, repositoryCatalog, authStore, pullRequestStore, agentProjectStore, agentEvaluationStore, agentCandidateStore)
+		registerAgentPilotRoutes(mux, repositoryCatalog, authStore, pullRequestStore, agentCandidateStore, agentPilotStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && charterStore != nil {
 		registerCharterRoutes(mux, charterStore, governanceStore, repositoryCatalog, organizationStore, authStore)

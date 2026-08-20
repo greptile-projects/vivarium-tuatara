@@ -2608,6 +2608,16 @@ whenever dependencies change or the web job fails before it starts.
   invalidated while unaffected suites remain comparable. Contamination and nondeterminism remain explicit
   and contaminated attempts are excluded from aggregates. Pull movement marks the immutable candidate stale.
   Candidate and run records grant no agent, repository, tool, service, network, merge, release, or deployment authority.
+  Exact-candidate collaboration pilots beneath `$AGENT_PILOT_STORAGE_ROOT` (default `agent-pilots`)
+  let the human repository owner invite current participants into a maximum-30-day, consent-based trial
+  across owner-controlled repositories, roles, task kinds, and explicit `repository.read`, `draft.create`,
+  `draft.update`, or `task.comment` actions. Invitees inspect effective access, consent or revoke, delegate
+  scoped sessions, guide or stop work, and retain revision-bound observed/expected outcomes and corrections.
+  Sessions expose cost, minutes, actions, escalations, unsafe behavior, and policy denials; ungranted or
+  authoritative actions become denials rather than effects. Revoked consent, exhausted budgets, unsafe
+  behavior, repository-access loss, expiry, or pull movement pauses new work without deleting legitimate
+  evidence. A pilot never grants merge, publish, disclosure, release, deployment, secret, environment, or
+  authoritative-resource mutation authority and cannot be converted implicitly into durable participation.
   Suite selections freeze the exact scenario-ID manifest; run publication rejects unknown scenarios,
   duplicate attempt identities, negative correction counts, and samples below the declared minimum.
   Evaluator attribution is derived from the authenticated publisher rather than caller prose. Candidate and

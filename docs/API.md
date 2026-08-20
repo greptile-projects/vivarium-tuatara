@@ -318,6 +318,23 @@ originating bounded system and no endpoint grants execution or merge authority.
   Reconciliation and publication hold a storage-root cross-process lock, so concurrent conflicting reuse
   produces one retained record and one conflict rather than last-writer replacement.
 
+### Exact-candidate collaboration pilots
+
+- `POST|GET /repositories/{id}/pulls/{pull_id}/agent-candidates/{candidate_id}/pilots` lets the human
+  repository owner publish an exact, current candidate for a maximum-30-day pilot over selected
+  owner-controlled repositories, roles, current participants, task kinds, read/draft-only actions, and
+  cost/action/minute budgets. Reads are limited to the owner and invited participants and return each
+  caller's live `effective_access` with pause reasons and remaining budget.
+- `POST .../pilots/{pilot_id}/actions` uses `expected_version` with `consent`, `revoke_consent`,
+  `delegate`, `session_event`, or `feedback`. Session events retain guidance, stops, results, escalations,
+  denials, cost, minutes, and unsafe signals. Feedback is bound to the frozen candidate revision and compares
+  observed and expected outcomes with a correction. Candidate movement, access or consent revocation,
+  expiry, budget exhaustion, or unsafe behavior pauses further work without deleting evidence.
+- The admitted actions are `repository.read`, `draft.create`, `draft.update`, and `task.comment`.
+  Ungranted or authoritative result actions are retained as `policy_denial`; pilots grant no merge, publish,
+  disclosure, deployment, release, secret, environment, or authoritative mutation authority. Records default
+  beneath `$AGENT_PILOT_STORAGE_ROOT` (`agent-pilots`).
+
 ## Runtime privacy checks
 
 - `POST|GET /repositories/{id}/privacy-check-policies` lets repository owners define and readers

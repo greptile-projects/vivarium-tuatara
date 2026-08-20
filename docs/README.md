@@ -2911,6 +2911,16 @@ corrections, uncertainty, digest-addressed traces/outputs/artifacts, evaluator d
 Review comparisons exclude contaminated attempts, expose nondeterminism, and compare only suite digests shared
 with the selected baseline; a changed suite invalidates its own evidence rather than flattening every result.
 Advancing the pull marks the old candidate stale without altering its evidence or creating release authority.
+Owners can publish one exact candidate into a separate collaboration pilot before granting durable
+participation. A pilot lasts at most 30 days and freezes selected owner-controlled repositories, participant
+roles, task kinds, invitations, read/draft-only actions, and cost/action/minute budgets. Each invitee sees
+their effective access, explicitly consents, delegates only matching work, and can append guidance, stop a
+run, or submit candidate-revision-bound feedback comparing observed and expected outcomes with a correction.
+The pull workspace shows live session state, spend, escalations, unsafe events, policy denials, and feedback.
+Consent revocation, expiry, access loss, budget exhaustion, unsafe behavior, or a moved candidate pauses the
+pilot while retaining its evidence. The pilot ledger defaults beneath `$AGENT_PILOT_STORAGE_ROOT`
+(`agent-pilots`) and supplies no merge, publish, disclose, deploy, release, environment, secret, or
+authoritative mutation capability.
 Create and revise resolve each source in its repository-owned store while holding the author's current
 suite-repository participation boundary. The record must belong to that repository and its declared
 decimal revision must equal the current version; exploratory sessions also require explicit audience or
