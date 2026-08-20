@@ -183,7 +183,9 @@ whenever dependencies change or the web job fails before it starts.
   human deferrals expire within 30 days and retain follow-up work. Every plan projects deadlines
   through the durable store clock and redacts its frozen audiences against its bound inventory
   revision; regenerated inventory blockers retain their current diagnostic consumer index, so later
-  consumer reordering or renaming cannot expose restricted current names either. These records provide removal
+  consumer reordering or renaming cannot expose restricted current names either. Restricted-owner event
+  identities, prose, and citations are redacted on reads and retirement mutation responses through the
+  same projection. These records provide removal
   context only and grant no consumer-repository, Git,
   release, environment, migration, review, merge, deployment, or retirement authority.
 

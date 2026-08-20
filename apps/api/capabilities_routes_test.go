@@ -50,7 +50,10 @@ func TestRetirementProjectionUsesFrozenRevisionConsumerAccess(t *testing.T) {
 			},
 			FrozenDiagnostics: []capabilities.Diagnostic{{Kind: "unknown_evidence", Consumer: "SECRET_AUDIENCE", ConsumerIndex: &frozenConsumerIndex}},
 			RequiredOwnerIDs:  []string{"SECRET_OWNER", "public-owner"},
-			Exceptions:        []capabilities.PlanException{{Audience: "SECRET_AUDIENCE"}},
+			Events: []capabilities.RetirementEvent{{
+				Version: 1, Type: "approval", ActorID: "SECRET_OWNER", ActorType: "human", OwnerID: "SECRET_OWNER", Decision: "approved", Summary: "SECRET_EVENT_SUMMARY", Evidence: []string{"SECRET_EVENT_EVIDENCE"},
+			}},
+			Exceptions: []capabilities.PlanException{{Audience: "SECRET_AUDIENCE"}},
 			Blockers: []capabilities.RetirementBlocker{
 				{Kind: "conflicting_commitment", Audience: "SECRET_AUDIENCE", OwnerID: "SECRET_OWNER"},
 				{Kind: "inventory_unknown_evidence", Audience: "LATEST_RESTRICTED_NAME", ConsumerIndex: &currentConsumerIndex},
@@ -63,7 +66,7 @@ func TestRetirementProjectionUsesFrozenRevisionConsumerAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, secret := range []string{"SECRET_AUDIENCE", "SECRET_OWNER", "SECRET_ENVIRONMENT", "SECRET_COMMITMENT", "SECRET_IMPACT", "LATEST_RESTRICTED_NAME"} {
+	for _, secret := range []string{"SECRET_AUDIENCE", "SECRET_OWNER", "SECRET_ENVIRONMENT", "SECRET_COMMITMENT", "SECRET_IMPACT", "LATEST_RESTRICTED_NAME", "SECRET_EVENT_SUMMARY", "SECRET_EVENT_EVIDENCE"} {
 		if strings.Contains(string(body), secret) {
 			t.Fatalf("frozen revision detail %q leaked after consumer reorder: %s", secret, body)
 		}
@@ -71,5 +74,8 @@ func TestRetirementProjectionUsesFrozenRevisionConsumerAccess(t *testing.T) {
 	plan := projected[0].RetirementPlans[0]
 	if plan.Audiences[0].Name != "restricted" || plan.Audiences[1].Name != "public audience" {
 		t.Fatalf("plan audiences projected from wrong revision: %#v", plan.Audiences)
+	}
+	if plan.Events[0].ActorID != "restricted" || plan.Events[0].OwnerID != "restricted" || plan.Events[0].Summary != "restricted owner response" || len(plan.Events[0].Evidence) != 0 {
+		t.Fatalf("restricted owner event was not projected safely: %#v", plan.Events[0])
 	}
 }

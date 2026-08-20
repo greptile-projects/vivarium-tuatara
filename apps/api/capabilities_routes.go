@@ -104,6 +104,9 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 			return
 		}
 		out, err := inventory.OpenRetirement(r.PathValue("id"), r.PathValue("capability_id"), actor.UserID, plan)
+		if err == nil {
+			out = projectCapabilitiesForReader(catalog, actor.UserID, []capabilities.Capability{out})[0]
+		}
 		writeCapability(w, out, err, 201)
 	})
 	mux.HandleFunc("POST /repositories/{id}/capabilities/{capability_id}/retirement-plans/{plan_id}/events", func(w http.ResponseWriter, r *http.Request) {
@@ -129,6 +132,9 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 			actorID, actorType = actor.AgentID, "read_only_agent"
 		}
 		out, err := inventory.AppendRetirementEvent(r.PathValue("id"), r.PathValue("capability_id"), r.PathValue("plan_id"), actorID, actorType, in.ExpectedVersion, in.Event)
+		if err == nil {
+			out = projectCapabilitiesForReader(catalog, actor.UserID, []capabilities.Capability{out})[0]
+		}
 		writeCapability(w, out, err, 200)
 	})
 }
@@ -209,6 +215,15 @@ func projectCapabilitiesForReader(catalog *repositories.Store, actorID string, v
 			for ownerIndex := range plan.RequiredOwnerIDs {
 				if restrictedOwners[plan.RequiredOwnerIDs[ownerIndex]] {
 					plan.RequiredOwnerIDs[ownerIndex] = "restricted"
+				}
+			}
+			for eventIndex := range plan.Events {
+				event := &plan.Events[eventIndex]
+				if restrictedOwners[event.ActorID] || restrictedOwners[event.OwnerID] {
+					event.ActorID = "restricted"
+					event.OwnerID = "restricted"
+					event.Summary = "restricted owner response"
+					event.Evidence = nil
 				}
 			}
 			for exceptionIndex := range plan.Exceptions {
