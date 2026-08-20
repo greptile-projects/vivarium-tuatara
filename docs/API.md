@@ -335,6 +335,19 @@ originating bounded system and no endpoint grants execution or merge authority.
   disclosure, deployment, release, secret, environment, or authoritative mutation authority. Records default
   beneath `$AGENT_PILOT_STORAGE_ROOT` (`agent-pilots`).
 
+### Attested agent releases and governed deployments
+
+- `POST|GET /repositories/{id}/agent-releases` binds a current exact candidate and accepted pilot to an
+  existing organization agent after approved evaluation, domain review, pilot acceptance, data policy, and
+  resource evidence. It freezes contract, model/tool versions, selected roles, and a derived SHA-256 attestation.
+- `POST /repositories/{id}/agent-releases/{release_id}/deployments` separately binds identity, exactly approved
+  roles, credential scopes, budgets, operator terms, and a same-agent rollback release. Successors do not inherit
+  deployment consent.
+- `POST /repositories/{id}/agent-deployments/{deployment_id}/actions` appends versioned sanitized signals or
+  narrow, pause, rollback, private-finding, and human/agent-repair controls without erasing history. Records
+  default beneath `$AGENT_RELEASE_STORAGE_ROOT` (`agent-releases`); organization participation remains the source
+  of technical authority.
+
 ## Runtime privacy checks
 
 - `POST|GET /repositories/{id}/privacy-check-policies` lets repository owners define and readers

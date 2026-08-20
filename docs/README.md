@@ -2921,6 +2921,12 @@ Consent revocation, expiry, access loss, budget exhaustion, unsafe behavior, or 
 pilot while retaining its evidence. The pilot ledger defaults beneath `$AGENT_PILOT_STORAGE_ROOT`
 (`agent-pilots`) and supplies no merge, publish, disclose, deploy, release, environment, secret, or
 authoritative mutation capability.
+Accepted candidates advance into a separate attested release ledger only after current evaluation,
+domain review, pilot acceptance, data-policy, and resource approvals. A release binds the existing
+organization agent and selected roles to exact contract and model/tool versions. Deployment separately freezes
+credential scopes, budgets, operator terms, and a same-agent rollback target, so updates never inherit consent.
+Sanitized signals and narrow, pause, rollback, private-finding, or repair controls remain append-only beneath
+`$AGENT_RELEASE_STORAGE_ROOT` (`agent-releases`); organization participation remains authoritative for access.
 Create and revise resolve each source in its repository-owned store while holding the author's current
 suite-repository participation boundary. The record must belong to that repository and its declared
 decimal revision must equal the current version; exploratory sessions also require explicit audience or
