@@ -101,7 +101,7 @@ func registerAgentReleaseRoutes(mux *http.ServeMux, catalog *repositories.Store,
 			}
 		case "pilot_acceptance":
 			pilot, er := pilots.Get(in.EvidenceID)
-			accepted := er == nil && pilot.CandidateID == candidate.ID && !pilot.Paused && len(pilot.Feedback) > 0
+			accepted := er == nil && pilot.CandidateID == candidate.ID && agentpilots.Accepted(pilot)
 			if !accepted {
 				writeErr(w, agentreleases.ErrDenied)
 				return
@@ -141,7 +141,7 @@ func registerAgentReleaseRoutes(mux *http.ServeMux, catalog *repositories.Store,
 			return
 		}
 		p, e := pilots.Get(in.PilotID)
-		if e != nil || p.CandidateID != c.ID || p.Paused || len(p.Feedback) == 0 {
+		if e != nil || p.CandidateID != c.ID || !agentpilots.Accepted(p) {
 			writeErr(w, agentreleases.ErrDenied)
 			return
 		}

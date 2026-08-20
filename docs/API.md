@@ -339,7 +339,8 @@ originating bounded system and no endpoint grants execution or merge authority.
 
 - `POST /repositories/{id}/agent-candidates/{candidate_id}/release-approvals` retains an authenticated human
   participant's candidate-bound decision. Evaluation approvals resolve a passing uncontaminated candidate run;
-  pilot acceptance resolves the current accepted pilot; domain, data-policy, and resource decisions retain their
+  pilot acceptance requires every invitee's current consent and latest exact-candidate feedback to explicitly
+  be `accepted`; failed, corrective, unresolved, or revoked feedback fails closed. Domain, data-policy, and resource decisions retain their
   rationale as the evidence record. Release publication requires five distinct current human approvers.
 - `POST|GET /repositories/{id}/agent-releases` binds a current exact candidate and accepted pilot to an
   existing organization agent after approved evaluation, domain review, pilot acceptance, data policy, and

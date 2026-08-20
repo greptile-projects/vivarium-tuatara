@@ -2626,7 +2626,8 @@ whenever dependencies change or the web job fails before it starts.
   rollback, private-finding, or human/agent-repair controls preserve all earlier evidence and contributions.
   Organization participation remains the source of technical authority.
   Approval actors are server-derived, candidate-bound records from five distinct current human participants;
-  evaluation and pilot approvals resolve authoritative run and pilot evidence. Rollback releases must share both
+  evaluation approvals resolve authoritative run evidence, while pilot approval and release publication require
+  every invitee's current consent and latest exact-candidate feedback to explicitly be `accepted`. Rollback releases must share both
   agent and repository identity. Deployment CAS mutations hold a storage-root advisory lock across processes,
   and failed release-store initialization leaves explicit 503 routes rather than silently removing the API.
   Suite selections freeze the exact scenario-ID manifest; run publication rejects unknown scenarios,
