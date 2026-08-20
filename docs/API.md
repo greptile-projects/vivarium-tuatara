@@ -4084,11 +4084,14 @@ they grant no execution, environment, Git, review, merge, queue, release, or dep
 creates an immutable bounded-environment matrix. It freezes the plan's provider release, consumer
 revisions, and schema/configuration paths; submitted checks must resolve an exact repository revision
 and existing paths and collectively cover `old_only`, `dual_support`, `replacement`, `rollback`, and
-`journey` (with a named journey).
+`journey` (with a named journey). The caller must be able to read every check repository before the API
+resolves its revision or paths; inaccessible repository, revision, and path probes share an opaque response.
 
 `POST .../candidates/{candidate_id}/evidence` accepts only `check_id` and `workspace_id`. The workspace
 must belong to the caller and match the check repository and commit. The API selects a safe retained
 exact-command outcome and derives status, sanitized log, duration, resource cost, and artifact digests.
+An outcome ID may be retained for only one matrix row; insertion and readiness projection both reject
+cross-check reuse.
 
 `POST .../candidates/{candidate_id}/usage-observations` lets an affected owner with consumer-repository
 access append `measured`, `unmeasured`, or `inaccessible` windowed use. The server binds the frozen

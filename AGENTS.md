@@ -199,7 +199,8 @@ whenever dependencies change or the web job fails before it starts.
   Plans also retain immutable exact-provider/release, consumer, schema, and configuration coexistence
   candidates. Mandatory old-only, dual-support, replacement, rollback, and journey checks derive logs,
   artifacts, duration, and resource cost from exact-command bounded-workspace outcomes. New proof
-  supersedes rather than rewrites history, and reads compare selected Git blobs so only affected checks
+  supersedes rather than rewrites history; one retained outcome can satisfy only one matrix check, and
+  candidate publication resolves a check repository only after authorizing the reader. Reads compare selected Git blobs so only affected checks
   become stale. Per-consumer usage windows remain measured, unmeasured, or inaccessible; readiness
   requires current passing checks plus owner-acknowledged measured zero old-behavior use for every frozen
   audience. Privacy projection retains restricted blockers without exposing consumer evidence or identity.

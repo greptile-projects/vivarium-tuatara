@@ -197,12 +197,15 @@ func TestMigrationCandidateRetainsMatrixAndNeverTreatsUnknownUseAsMigrated(t *te
 		t.Fatal(err)
 	}
 	for _, check := range checks {
-		v, err = s.AddCandidateEvidence("repo", v.ID, v.RetirementPlans[0].ID, candidate.ID, "provider", check.ID, CandidateEvidence{WorkspaceID: "workspace", OutcomeID: "outcome", Status: "passed", CommandDigest: CommandDigest(check.Command)})
+		v, err = s.AddCandidateEvidence("repo", v.ID, v.RetirementPlans[0].ID, candidate.ID, "provider", check.ID, CandidateEvidence{WorkspaceID: "workspace", OutcomeID: "outcome-" + check.ID, Status: "passed", CommandDigest: CommandDigest(check.Command)})
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
 	plan := v.RetirementPlans[0]
+	if _, reuseErr := s.AddCandidateEvidence("repo", v.ID, plan.ID, candidate.ID, "provider", "dual_support", CandidateEvidence{WorkspaceID: "workspace", OutcomeID: "outcome-old_only", Status: "passed"}); reuseErr != ErrInvalid {
+		t.Fatalf("shared outcome was accepted for another check: %v", reuseErr)
+	}
 	if plan.Candidates[0].RemovalReady {
 		t.Fatal("missing usage observation was treated as migrated")
 	}

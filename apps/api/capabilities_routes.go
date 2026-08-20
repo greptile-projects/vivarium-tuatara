@@ -289,6 +289,12 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 			return
 		}
 		for _, check := range candidate.Checks {
+			repository, repositoryErr := catalog.GetByID(check.RepositoryID)
+			collaborator, collaboratorErr := catalog.HasCollaborator(actor.UserID, check.RepositoryID)
+			if repositoryErr != nil || (repository.Visibility != repositories.Public && repository.OwnerID != actor.UserID && (collaboratorErr != nil || !collaborator)) {
+				writeAPIError(w, 404, "candidate_repository_not_found", "check repository is unavailable")
+				return
+			}
 			target, err := git.Open(check.RepositoryID)
 			if err != nil {
 				writeAPIError(w, 422, "invalid_candidate_revision", "every check repository and revision must resolve")

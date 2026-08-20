@@ -117,6 +117,7 @@ func validateCandidate(c MigrationCandidate, p RetirementPlan, r Revision) bool 
 
 func ProjectCandidate(c *MigrationCandidate, p RetirementPlan) {
 	c.Blockers = nil
+	usedOutcomes := map[string]string{}
 	for i := range c.Checks {
 		x := &c.Checks[i]
 		x.Status = "missing"
@@ -127,8 +128,11 @@ func ProjectCandidate(c *MigrationCandidate, p RetirementPlan) {
 			e := x.Evidence[len(x.Evidence)-1]
 			if e.Stale {
 				x.Status = "stale"
+			} else if priorCheck, reused := usedOutcomes[e.OutcomeID]; e.OutcomeID == "" || (reused && priorCheck != x.ID) {
+				x.Status = "reused_outcome"
 			} else {
 				x.Status = e.Status
+				usedOutcomes[e.OutcomeID] = x.ID
 			}
 		}
 		if x.Status != "passed" {
@@ -245,6 +249,19 @@ func (s *Store) AddCandidateEvidence(repo, capabilityID, planID, candidateID, ac
 				}
 				for xi := range c.Checks {
 					if c.Checks[xi].ID == checkID {
+						if e.OutcomeID == "" {
+							return ErrInvalid
+						}
+						for otherCheckIndex := range c.Checks {
+							if c.Checks[otherCheckIndex].ID == checkID {
+								continue
+							}
+							for _, retained := range c.Checks[otherCheckIndex].Evidence {
+								if retained.OutcomeID == e.OutcomeID {
+									return ErrInvalid
+								}
+							}
+						}
 						e.ID = randomID()
 						e.CreatedBy = actor
 						e.CreatedAt = s.now()
