@@ -46,6 +46,28 @@ resolutions, appeals, and acknowledged scope changes without granting either sid
 production, releases, deployments, source systems, or evidence collection. Records persist beneath
 `$ASSURANCE_ASSESSMENT_STORAGE_ROOT` (`assurance-assessments`).
 
+An assessment owner can convert an assessor finding into an ordered ordinary proposal plan at
+`/{assessment_id}/remediations`. Each handoff freezes the finding and control, affected 40-character
+revision, deadline, acceptance criteria, human or agent assignees, and task order. The resulting tasks
+reuse the existing session, workspace, pull, review, policy, release, and operational boundaries; the
+assessment record grants none of those authorities. Closure is not inferred from a ticket: every task
+must have a merged contribution, and an owner or assessor must disposition fresh, gap-free,
+post-correction evidence for the exact program and control. The affected commit resolves in the
+repository, each ordered merged contribution descends from the prior boundary, accepted evidence names
+the final merge revision, and a later statement release must descend from and include all those tasks.
+The named release must also resolve through a release scope retained by the assessment; publication
+narrows the signed release scope to that exact matching scope rather than implying another assessed release.
+A rejected or reopened disposition returns
+the correction to open without removing its delivery history.
+
+Program owners publish release-exact claims at `/repositories/{id}/assurance-statements`. Publication
+requires the current assessed program revision and accepted verification for every included finding,
+and freezes the release commit, scope and period, controls, exception IDs, audience, expiry, and a
+canonical digest of selected and verification evidence. The service signs the immutable payload with
+Ed25519 and returns its public key. Audience-gated reads disclose the digest, never restricted sources,
+and separately project `current`, `expired`, `revoked`, `drifted`, or `reopened`. Revocation and later
+status changes do not rewrite the originally signed claim.
+
 ### Pre-merge assurance impact
 
 Pull reviewers inspect revision-exact compliance impact through

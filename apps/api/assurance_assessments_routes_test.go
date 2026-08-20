@@ -114,3 +114,21 @@ func TestAssessorWindowIncludesStartAndExcludesExpiry(t *testing.T) {
 		t.Fatal("window remained open at expiry")
 	}
 }
+
+func TestAssuranceStatementScopeContainsOnlyValidatedControls(t *testing.T) {
+	assessed := assuranceassessments.Scope{ControlIDs: []string{"resolved", "unresolved"}, SystemIDs: []string{"system"}, ReleaseIDs: []string{"release"}}
+	signed := assuranceStatementScope(assessed, []string{"resolved"}, []string{"release"})
+	if len(signed.ControlIDs) != 1 || signed.ControlIDs[0] != "resolved" || len(signed.SystemIDs) != 1 || len(assessed.ControlIDs) != 2 {
+		t.Fatalf("signed scope was not narrowed without mutating assessment: %#v %#v", signed, assessed)
+	}
+}
+
+func TestAssuranceStatementReleaseMustResolveThroughAssessmentScope(t *testing.T) {
+	revision := assuranceprograms.Revision{Scopes: []assuranceprograms.Scope{{ID: "release-a-scope", Kind: "release", ResourceID: "release-a"}, {ID: "release-b-scope", Kind: "release", ResourceID: "release-b"}}}
+	if got := assuranceStatementReleaseScopes(revision, []string{"release-a-scope"}, "release-b"); len(got) != 0 {
+		t.Fatalf("release outside assessed scope resolved: %v", got)
+	}
+	if got := assuranceStatementReleaseScopes(revision, []string{"release-a-scope"}, "release-a"); len(got) != 1 || got[0] != "release-a-scope" {
+		t.Fatalf("assessed release did not resolve: %v", got)
+	}
+}
