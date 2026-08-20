@@ -2625,6 +2625,10 @@ whenever dependencies change or the web job fails before it starts.
   a same-agent rollback release; successors never inherit consent. Versioned signals and narrow, pause,
   rollback, private-finding, or human/agent-repair controls preserve all earlier evidence and contributions.
   Organization participation remains the source of technical authority.
+  Approval actors are server-derived, candidate-bound records from five distinct current human participants;
+  evaluation and pilot approvals resolve authoritative run and pilot evidence. Rollback releases must share both
+  agent and repository identity. Deployment CAS mutations hold a storage-root advisory lock across processes,
+  and failed release-store initialization leaves explicit 503 routes rather than silently removing the API.
   Suite selections freeze the exact scenario-ID manifest; run publication rejects unknown scenarios,
   duplicate attempt identities, negative correction counts, and samples below the declared minimum.
   Evaluator attribution is derived from the authenticated publisher rather than caller prose. Candidate and

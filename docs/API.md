@@ -337,6 +337,10 @@ originating bounded system and no endpoint grants execution or merge authority.
 
 ### Attested agent releases and governed deployments
 
+- `POST /repositories/{id}/agent-candidates/{candidate_id}/release-approvals` retains an authenticated human
+  participant's candidate-bound decision. Evaluation approvals resolve a passing uncontaminated candidate run;
+  pilot acceptance resolves the current accepted pilot; domain, data-policy, and resource decisions retain their
+  rationale as the evidence record. Release publication requires five distinct current human approvers.
 - `POST|GET /repositories/{id}/agent-releases` binds a current exact candidate and accepted pilot to an
   existing organization agent after approved evaluation, domain review, pilot acceptance, data policy, and
   resource evidence. It freezes contract, model/tool versions, selected roles, and a derived SHA-256 attestation.
@@ -347,6 +351,7 @@ originating bounded system and no endpoint grants execution or merge authority.
   narrow, pause, rollback, private-finding, and human/agent-repair controls without erasing history. Records
   default beneath `$AGENT_RELEASE_STORAGE_ROOT` (`agent-releases`); organization participation remains the source
   of technical authority.
+  An unusable release ledger keeps these documented routes present with `503 agent_release_unavailable`.
 
 ## Runtime privacy checks
 

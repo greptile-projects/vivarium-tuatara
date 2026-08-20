@@ -14,6 +14,17 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 )
 
+func registerAgentReleaseUnavailableRoutes(mux *http.ServeMux) {
+	unavailable := func(w http.ResponseWriter, _ *http.Request) {
+		writeAPIError(w, 503, "agent_release_unavailable", "agent release storage could not be initialized")
+	}
+	mux.HandleFunc("POST /repositories/{id}/agent-candidates/{candidate_id}/release-approvals", unavailable)
+	mux.HandleFunc("POST /repositories/{id}/agent-releases", unavailable)
+	mux.HandleFunc("GET /repositories/{id}/agent-releases", unavailable)
+	mux.HandleFunc("POST /repositories/{id}/agent-releases/{release_id}/deployments", unavailable)
+	mux.HandleFunc("POST /repositories/{id}/agent-deployments/{deployment_id}/actions", unavailable)
+}
+
 func registerAgentReleaseRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, orgs *organizations.Store, pulls *pullrequests.Store, candidates *agentcandidates.Store, pilots *agentpilots.Store, releases *agentreleases.Store) {
 	writeErr := func(w http.ResponseWriter, e error) {
 		switch {
@@ -40,6 +51,75 @@ func registerAgentReleaseRoutes(mux *http.ServeMux, catalog *repositories.Store,
 		}
 		return actor, true
 	}
+	type approvalInput struct {
+		Kind       string `json:"kind"`
+		Evidence   string `json:"evidence"`
+		EvidenceID string `json:"evidence_id"`
+	}
+	mux.HandleFunc("POST /repositories/{id}/agent-candidates/{candidate_id}/release-approvals", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if actor.AgentID != "" {
+			writeAPIError(w, 403, "agent_release_human_approval_required", "release approvals require an attributable human participant")
+			return
+		}
+		candidate, e := candidates.Get(r.PathValue("candidate_id"))
+		if e != nil || candidate.RepositoryID != r.PathValue("id") {
+			writeErr(w, agentreleases.ErrNotFound)
+			return
+		}
+		var in approvalInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an approval decision is required")
+			return
+		}
+		evidence := in.Evidence
+		switch in.Kind {
+		case "evaluation":
+			runs, er := candidates.Runs(candidate.ID)
+			passed, found := er == nil, false
+			for _, run := range runs {
+				if run.ID != in.EvidenceID {
+					continue
+				}
+				found = true
+				evidence = run.ID
+				if run.Contaminated {
+					passed = false
+				}
+				for _, result := range run.Results {
+					if !result.TaskSuccess || !result.PolicyAdherence || result.EvaluatorDecision != "passed" {
+						passed = false
+					}
+				}
+			}
+			if !found || !passed {
+				writeErr(w, agentreleases.ErrDenied)
+				return
+			}
+		case "pilot_acceptance":
+			pilot, er := pilots.Get(in.EvidenceID)
+			accepted := er == nil && pilot.CandidateID == candidate.ID && !pilot.Paused && len(pilot.Feedback) > 0
+			if !accepted {
+				writeErr(w, agentreleases.ErrDenied)
+				return
+			}
+			evidence = pilot.ID
+		case "domain_review", "data_policy", "resources":
+			// The authenticated decision is the evidence record; prose is rationale, not an authority reference.
+		default:
+			writeErr(w, agentreleases.ErrInvalid)
+			return
+		}
+		out, e := releases.CreateApproval(candidate.ID, in.Kind, actor.UserID, evidence)
+		if e != nil {
+			writeErr(w, e)
+			return
+		}
+		writeJSON(w, 201, out)
+	})
 	mux.HandleFunc("POST /repositories/{id}/agent-releases", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := isOwner(w, r)
 		if !ok {
@@ -65,7 +145,14 @@ func registerAgentReleaseRoutes(mux *http.ServeMux, catalog *repositories.Store,
 			writeErr(w, agentreleases.ErrDenied)
 			return
 		}
-		for _, approval := range in.Approvals {
+		in.Approvals = nil
+		for _, approvalID := range in.ApprovalIDs {
+			approval, er := releases.GetApproval(approvalID)
+			if er != nil || approval.CandidateID != c.ID {
+				writeErr(w, agentreleases.ErrDenied)
+				return
+			}
+			in.Approvals = append(in.Approvals, approval)
 			if _, e := catalog.Get(approval.OwnerID, c.RepositoryID); e != nil {
 				writeErr(w, agentreleases.ErrDenied)
 				return

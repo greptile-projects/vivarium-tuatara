@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -21,11 +22,13 @@ var ErrConflict = errors.New("agent release changed")
 var ErrDenied = errors.New("agent release action denied")
 
 type Approval struct {
-	Kind       string    `json:"kind"`
-	OwnerID    string    `json:"owner_id"`
-	EvidenceID string    `json:"evidence_id"`
-	Decision   string    `json:"decision"`
-	ApprovedAt time.Time `json:"approved_at"`
+	ID          string    `json:"id"`
+	CandidateID string    `json:"candidate_id"`
+	Kind        string    `json:"kind"`
+	OwnerID     string    `json:"owner_id"`
+	EvidenceID  string    `json:"evidence_id"`
+	Decision    string    `json:"decision"`
+	ApprovedAt  time.Time `json:"approved_at"`
 }
 type Release struct {
 	ID                string     `json:"id"`
@@ -41,6 +44,7 @@ type Release struct {
 	ToolVersions      []string   `json:"tool_versions"`
 	Roles             []string   `json:"roles"`
 	Approvals         []Approval `json:"approvals"`
+	ApprovalIDs       []string   `json:"approval_ids,omitempty"`
 	PilotID           string     `json:"pilot_id"`
 	Attestation       string     `json:"attestation"`
 	Status            string     `json:"status"`
@@ -123,6 +127,17 @@ func validList(v []string) bool {
 	return true
 }
 func (s *Store) path(kind, id string) string { return filepath.Join(s.root, kind+"-"+id+".json") }
+func (s *Store) lock() (func(), error) {
+	f, err := os.OpenFile(filepath.Join(s.root, ".mutation.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil
+}
 func write(path string, v any) error {
 	b, e := json.MarshalIndent(v, "", "  ")
 	if e != nil {
@@ -173,6 +188,18 @@ func digest(v any) string {
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }
+func (s *Store) CreateApproval(candidateID, kind, actor, evidence string) (Approval, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !valid(candidateID, 64) || !slices.Contains([]string{"evaluation", "domain_review", "pilot_acceptance", "data_policy", "resources"}, kind) || !valid(actor, 64) || !valid(evidence, 1000) {
+		return Approval{}, ErrInvalid
+	}
+	a := Approval{ID: uid(), CandidateID: candidateID, Kind: kind, OwnerID: actor, EvidenceID: evidence, Decision: "approved", ApprovedAt: s.now()}
+	return a, write(s.path("approval", a.ID), a)
+}
+func (s *Store) GetApproval(id string) (Approval, error) {
+	return read[Approval](s.path("approval", id))
+}
 func (s *Store) CreateRelease(v Release) (Release, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -181,11 +208,13 @@ func (s *Store) CreateRelease(v Release) (Release, error) {
 	}
 	required := []string{"evaluation", "domain_review", "pilot_acceptance", "data_policy", "resources"}
 	seenApprovals := map[string]bool{}
+	seenOwners := map[string]bool{}
 	for _, a := range v.Approvals {
-		if !slices.Contains(required, a.Kind) || seenApprovals[a.Kind] || a.Decision != "approved" || !valid(a.OwnerID, 64) || !valid(a.EvidenceID, 200) || a.ApprovedAt.IsZero() || a.ApprovedAt.After(s.now().Add(time.Minute)) {
+		if !valid(a.ID, 64) || a.CandidateID != v.CandidateID || !slices.Contains(required, a.Kind) || seenApprovals[a.Kind] || seenOwners[a.OwnerID] || a.Decision != "approved" || !valid(a.OwnerID, 64) || !valid(a.EvidenceID, 1000) || a.ApprovedAt.IsZero() || a.ApprovedAt.After(s.now().Add(time.Minute)) {
 			return Release{}, ErrInvalid
 		}
 		seenApprovals[a.Kind] = true
+		seenOwners[a.OwnerID] = true
 	}
 	for _, kind := range required {
 		ok := false
@@ -247,7 +276,7 @@ func (s *Store) CreateDeployment(v Deployment) (Deployment, error) {
 		return Deployment{}, ErrDenied
 	}
 	rollback, e := s.GetRelease(v.RollbackReleaseID)
-	if e != nil || rollback.AgentID != rel.AgentID {
+	if e != nil || rollback.AgentID != rel.AgentID || rollback.RepositoryID != rel.RepositoryID {
 		return Deployment{}, ErrDenied
 	}
 	now := s.now()
@@ -274,6 +303,11 @@ func (s *Store) GetDeployment(id string) (Deployment, error) {
 func (s *Store) mutate(id string, expected int, fn func(*Deployment) error) (Deployment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, e := s.lock()
+	if e != nil {
+		return Deployment{}, e
+	}
+	defer unlock()
 	v, e := s.GetDeployment(id)
 	if e != nil {
 		return v, e

@@ -996,7 +996,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	if agentReleaseRoot == "" {
 		agentReleaseRoot = "agent-releases"
 	}
-	agentReleaseStore, _ := agentreleases.New(agentReleaseRoot)
+	agentReleaseStore, agentReleaseStoreErr := agentreleases.New(agentReleaseRoot)
 	var apiContractStore *apicontracts.Store
 	var durableSchemaStore *durableschemas.Store
 	var infrastructureStore *infrastructure.Store
@@ -1293,6 +1293,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			registerAgentPilotRoutes(mux, repositoryCatalog, authStore, pullRequestStore, agentCandidateStore, agentPilotStore)
 			if organizationStore != nil && agentReleaseStore != nil {
 				registerAgentReleaseRoutes(mux, repositoryCatalog, authStore, organizationStore, pullRequestStore, agentCandidateStore, agentPilotStore, agentReleaseStore)
+			} else if agentReleaseStoreErr != nil {
+				registerAgentReleaseUnavailableRoutes(mux)
 			}
 		}
 	}
