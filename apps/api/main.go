@@ -21,6 +21,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/accessibilitydelivery"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/accessibilityreports"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/agentcandidates"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/agentevaluations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/agentprojects"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/apicontracts"
@@ -347,6 +348,14 @@ func main() {
 		agentEvaluationRoot = "agent-evaluations"
 	}
 	agentEvaluationStore, err := agentevaluations.New(agentEvaluationRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
+	agentCandidateRoot := os.Getenv("AGENT_CANDIDATE_STORAGE_ROOT")
+	if agentCandidateRoot == "" {
+		agentCandidateRoot = "agent-candidates"
+	}
+	agentCandidateStore, err := agentcandidates.New(agentCandidateRoot)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -809,7 +818,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, supportVerificationStore, supportSolutionStore, knowledgeAnswerStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore, agentProjectStore, apiContractStore, durableSchemaStore, infrastructureStore, debugWorkspaceStore, interfaceSystemStore, capabilityStore, designProposalStore, interfaceCheckStore, designGovernanceStore, qualityPlanStore, assuranceProgramStore, assuranceEvidenceStore, assuranceImpactStore, assuranceAssessmentStore, testScenarioStore, exploratorySessionStore, releaseConfidenceStore, securityExpectationStore, threatModelStore, securityScenarioStore, securityFindingStore, securityConfidenceStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, supportVerificationStore, supportSolutionStore, knowledgeAnswerStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore, agentProjectStore, agentCandidateStore, apiContractStore, durableSchemaStore, infrastructureStore, debugWorkspaceStore, interfaceSystemStore, capabilityStore, designProposalStore, interfaceCheckStore, designGovernanceStore, qualityPlanStore, assuranceProgramStore, assuranceEvidenceStore, assuranceImpactStore, assuranceAssessmentStore, testScenarioStore, exploratorySessionStore, releaseConfidenceStore, securityExpectationStore, threatModelStore, securityScenarioStore, securityFindingStore, securityConfidenceStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -975,6 +984,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var recoveryOperationStore *recoveryoperations.Store
 	var agentEvaluationStore *agentevaluations.Store
 	var agentProjectStore *agentprojects.Store
+	var agentCandidateStore *agentcandidates.Store
 	var apiContractStore *apicontracts.Store
 	var durableSchemaStore *durableschemas.Store
 	var infrastructureStore *infrastructure.Store
@@ -1105,6 +1115,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			agentEvaluationStore = value
 		case *agentprojects.Store:
 			agentProjectStore = value
+		case *agentcandidates.Store:
+			agentCandidateStore = value
 		case *apicontracts.Store:
 			apiContractStore = value
 		case *infrastructure.Store:
@@ -1262,6 +1274,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && agentProjectStore != nil && store != nil {
 		registerAgentProjectRoutes(mux, store, repositoryCatalog, authStore, agentProjectStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && pullRequestStore != nil && agentProjectStore != nil && agentEvaluationStore != nil && agentCandidateStore != nil {
+		registerAgentCandidateRoutes(mux, repositoryCatalog, authStore, pullRequestStore, agentProjectStore, agentEvaluationStore, agentCandidateStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && charterStore != nil {
 		registerCharterRoutes(mux, charterStore, governanceStore, repositoryCatalog, organizationStore, authStore)

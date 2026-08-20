@@ -30,6 +30,7 @@ import { ChangeSessionsCard } from "./change-sessions";
 import { PullRequestChecks } from "./pull-request-checks";
 import { AccessibilityAssessmentsWorkspace } from "./accessibility-assessments-workspace";
 import { PullPerformanceEvaluations } from "./pull-performance-evaluations";
+import { PullAgentCandidates } from "./pull-agent-candidates";
 import { PullPrivacyReview } from "./pull-privacy-review";
 import { PullLocalizationReview } from "./pull-localization-review";
 import { PullRequestPreviews } from "./pull-request-previews";
@@ -880,6 +881,7 @@ export function PullRequestDetail({
           <PullPrivacyReview repositoryID={repositoryID} pullRequestID={pullRequestID} sourceRevision={pull.source_commit_id} targetRevision={pull.target_commit_id} participant={participant} />
           <PullLocalizationReview repositoryID={repositoryID} pullRequestID={pullRequestID} />
           <PullPerformanceEvaluations repositoryID={repositoryID} pullRequestID={pullRequestID} />
+          <PullAgentCandidates repositoryID={repositoryID} pullRequestID={pullRequestID} />
           <PullInfrastructurePlans repositoryID={repositoryID} pullRequestID={pullRequestID} participant={participant} />
           <section
             id="conversation"

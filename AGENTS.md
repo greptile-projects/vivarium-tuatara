@@ -2599,6 +2599,25 @@ whenever dependencies change or the web job fails before it starts.
   Every evaluation authority manifest disables publish, secret, merge, environment,
   and network access; a suite or favorable decision grants no organization or repository authority.
   Repeated and operator-supplied trials remain explicitly labeled.
+  Pull-scoped agent candidates beneath `$AGENT_CANDIDATE_STORAGE_ROOT` (default `agent-candidates`)
+  immutably assemble an exact open-pull revision, agent-project behavior-contract revision, component
+  digests, and selected evaluation-suite revisions. Isolated run evidence retains bounded network,
+  services, tools, cost, and latency together with per-attempt traces, actions, outputs, artifacts,
+  evaluator decisions, human corrections, uncertainty, and statistical limits. Pull projections compare
+  only suite digests shared with the selected baseline; changed scenario or judge evidence is listed as
+  invalidated while unaffected suites remain comparable. Contamination and nondeterminism remain explicit
+  and contaminated attempts are excluded from aggregates. Pull movement marks the immutable candidate stale.
+  Candidate and run records grant no agent, repository, tool, service, network, merge, release, or deployment authority.
+  Suite selections freeze the exact scenario-ID manifest; run publication rejects unknown scenarios,
+  duplicate attempt identities, negative correction counts, and samples below the declared minimum.
+  Evaluator attribution is derived from the authenticated publisher rather than caller prose. Candidate and
+  run files are synchronized before rename and their storage directory is synchronized before success.
+  Candidate and run publications require caller-stable idempotency keys, derive deterministic identities
+  within their pull/candidate scope, and reconcile an identical already-published record after an ambiguous
+  post-rename failure; reuse with different content conflicts. Every scenario frozen into a selected suite
+  must independently meet the run's minimum sample count, so favorable partial coverage cannot aggregate.
+  A storage-root advisory lock serializes reconciliation and publication across API processes, preventing
+  conflicting evidence with one retry identity from replacing an independently accepted record.
   The connected agent-adoption browser journey compares two published candidates, contains hidden-check,
   prohibited-action, budget, and operator-outage trial failures, activates only sponsored project-owned
   evaluation evidence, and carries the selected agent through an ordinary proposal task, isolated session,

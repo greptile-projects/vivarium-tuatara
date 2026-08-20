@@ -2903,6 +2903,14 @@ project only opaque identity and metadata to ordinary members; their prompt, ans
 context, source identity, and candidate output remain available only to the human owner evaluator.
 Suites and favorable results remain evidence rather than permission to train, broaden evaluation,
 access source records, or participate in repository work.
+Pull requests assemble a separate immutable release candidate from an exact source revision, one exact
+agent-project behavior contract, component-level prompt/instruction/knowledge/tool/model digests, and selected
+suite/judge revisions. Each isolated run declares its network and permitted simulated or real services plus
+hard tool-action, cost, and latency ceilings. Per-attempt evidence retains task and policy outcomes, human
+corrections, uncertainty, digest-addressed traces/outputs/artifacts, evaluator decisions, and statistical limits.
+Review comparisons exclude contaminated attempts, expose nondeterminism, and compare only suite digests shared
+with the selected baseline; a changed suite invalidates its own evidence rather than flattening every result.
+Advancing the pull marks the old candidate stale without altering its evidence or creating release authority.
 Create and revise resolve each source in its repository-owned store while holding the author's current
 suite-repository participation boundary. The record must belong to that repository and its declared
 decimal revision must equal the current version; exploratory sessions also require explicit audience or
