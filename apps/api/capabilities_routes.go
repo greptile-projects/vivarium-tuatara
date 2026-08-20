@@ -9,9 +9,13 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/capabilities"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
 type capabilityInput struct {
@@ -24,7 +28,7 @@ type retirementEventInput struct {
 	Event           capabilities.RetirementEvent `json:"event"`
 }
 
-func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, inventory *capabilities.Store, releaseStore *releases.Store) {
+func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, inventory *capabilities.Store, releaseStore *releases.Store, proposalStore *proposals.Store, pulls *pullrequests.Store, sessions *changesessions.Store, workspaceStore *workspaces.Store) {
 	mux.HandleFunc("GET /repositories/{id}/capabilities", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
 		if !ok {
@@ -35,7 +39,7 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 			writeAPIError(w, 500, "capabilities_unavailable", "capability inventory could not be read")
 			return
 		}
-		writeJSON(w, 200, map[string]any{"capabilities": projectCapabilitiesForReader(catalog, actor.UserID, out)})
+		writeJSON(w, 200, map[string]any{"capabilities": projectCapabilitiesForReader(catalog, actor.UserID, projectCapabilityWork(out, actor.UserID, proposalStore, pulls, sessions, workspaceStore))})
 	})
 	mux.HandleFunc("GET /repositories/{id}/capabilities/{capability_id}", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
@@ -47,7 +51,7 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 			writeAPIError(w, 404, "capability_not_found", "capability not found")
 			return
 		}
-		writeJSON(w, 200, projectCapabilitiesForReader(catalog, actor.UserID, []capabilities.Capability{out})[0])
+		writeJSON(w, 200, projectCapabilitiesForReader(catalog, actor.UserID, projectCapabilityWork([]capabilities.Capability{out}, actor.UserID, proposalStore, pulls, sessions, workspaceStore))[0])
 	})
 	publish := func(revise bool) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -137,6 +141,197 @@ func registerCapabilityRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 		}
 		writeCapability(w, out, err, 200)
 	})
+	mux.HandleFunc("POST /repositories/{id}/capabilities/{capability_id}/retirement-plans/{plan_id}/work", func(w http.ResponseWriter, r *http.Request) {
+		actor, authenticated, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok || !authenticated {
+			return
+		}
+		var in struct {
+			ExpectedVersion    int                         `json:"expected_version"`
+			RepositoryID       string                      `json:"repository_id"`
+			Title              string                      `json:"title"`
+			CompletionCriteria string                      `json:"completion_criteria"`
+			AssigneeType       string                      `json:"assignee_type"`
+			AssigneeID         string                      `json:"assignee_id"`
+			Mandate            string                      `json:"mandate"`
+			BaseRevision       string                      `json:"base_revision"`
+			Work               capabilities.RetirementWork `json:"work"`
+		}
+		if decodeJSON(r, &in) != nil || proposalStore == nil || (in.AssigneeType != "human" && in.AssigneeType != "agent") {
+			writeAPIError(w, 400, "invalid_retirement_work", "ordered work, an assignment, and an exact contract are required")
+			return
+		}
+		target, err := catalog.GetByID(in.RepositoryID)
+		collaborator, _ := catalog.HasCollaborator(actor.UserID, in.RepositoryID)
+		if err != nil || (target.OwnerID != actor.UserID && !collaborator) {
+			writeAPIError(w, 403, "retirement_work_forbidden", "a current target-repository participant must create its migration work")
+			return
+		}
+		if strings.TrimSpace(in.Title) == "" || strings.ContainsAny(in.Title, "\r\n") || len([]rune(in.Title)) > 200 || strings.TrimSpace(in.CompletionCriteria) == "" || len([]rune(in.CompletionCriteria)) > 2000 || strings.TrimSpace(in.Mandate) == "" || len([]rune(in.Mandate)) > 4000 {
+			writeAPIError(w, 422, "invalid_retirement_work", "title, completion criteria, and mandate are required and bounded")
+			return
+		}
+		repository, err := git.Open(in.RepositoryID)
+		if err != nil {
+			writeAPIError(w, 422, "invalid_retirement_repository", "target repository storage is unavailable")
+			return
+		}
+		in.BaseRevision = strings.ToLower(in.BaseRevision)
+		if _, err = repository.ReadCommit(storage.ObjectID(in.BaseRevision)); err != nil {
+			writeAPIError(w, 422, "invalid_base_revision", "base revision must be an existing target-repository commit")
+			return
+		}
+		if in.AssigneeType == "human" {
+			participant, _ := catalog.HasCollaborator(in.AssigneeID, in.RepositoryID)
+			if in.AssigneeID != target.OwnerID && !participant {
+				writeAPIError(w, 422, "invalid_task_assignee", "human assignee must participate in the target repository")
+				return
+			}
+		}
+		in.Work.RepositoryID = in.RepositoryID
+		var proposal proposals.Proposal
+		var assigned proposals.Task
+		out, link, err := inventory.CreateRetirementWork(r.PathValue("id"), r.PathValue("capability_id"), r.PathValue("plan_id"), actor.UserID, in.ExpectedVersion, in.Work, func() (string, string, error) {
+			body := retirementWorkBody(r.PathValue("capability_id"), r.PathValue("plan_id"), in.Work)
+			var publishErr error
+			proposal, publishErr = proposalStore.Create(in.RepositoryID, actor.UserID, in.Title, body)
+			if publishErr != nil && !errors.Is(publishErr, proposals.ErrDurabilityUncertain) {
+				return "", "", publishErr
+			}
+			task, taskErr := proposalStore.CreateTask(in.RepositoryID, proposal.ID, actor.UserID, in.Title, in.CompletionCriteria, nil, nil)
+			if taskErr != nil && !errors.Is(taskErr, proposals.ErrDurabilityUncertain) {
+				_ = proposalStore.DeleteMigrationWork(in.RepositoryID, proposal.ID, "", "")
+				return "", "", taskErr
+			}
+			assigned, publishErr = proposalStore.AssignTask(in.RepositoryID, proposal.ID, task.ID, actor.UserID, proposals.TaskAssignmentInput{AssigneeType: in.AssigneeType, AssigneeID: in.AssigneeID, Mandate: in.Mandate, RepositoryID: in.RepositoryID, BaseRevision: in.BaseRevision})
+			if publishErr != nil && !errors.Is(publishErr, proposals.ErrDurabilityUncertain) {
+				_ = proposalStore.DeleteMigrationWork(in.RepositoryID, proposal.ID, task.ID, "")
+				return "", "", publishErr
+			}
+			return proposal.ID, task.ID, nil
+		})
+		if err != nil {
+			if errors.Is(err, capabilities.ErrDurabilityUncertain) {
+				out = projectCapabilitiesForReader(catalog, actor.UserID, projectCapabilityWork([]capabilities.Capability{out}, actor.UserID, proposalStore, pulls, sessions, workspaceStore))[0]
+				writeJSON(w, 202, map[string]any{"capability": out, "retirement_work": link, "task": assigned, "publication_state": "durability_uncertain"})
+				return
+			}
+			if proposal.ID != "" && assigned.Assignment != nil {
+				_ = proposalStore.DeleteMigrationWork(in.RepositoryID, proposal.ID, assigned.ID, assigned.Assignment.ID)
+			}
+			writeCapability(w, out, err, 201)
+			return
+		}
+		out = projectCapabilitiesForReader(catalog, actor.UserID, projectCapabilityWork([]capabilities.Capability{out}, actor.UserID, proposalStore, pulls, sessions, workspaceStore))[0]
+		writeJSON(w, 201, map[string]any{"capability": out, "retirement_work": link, "task": assigned})
+	})
+	mux.HandleFunc("POST /repositories/{id}/capabilities/{capability_id}/retirement-plans/{plan_id}/consumer-discoveries", func(w http.ResponseWriter, r *http.Request) {
+		actor, authenticated, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok || !authenticated {
+			return
+		}
+		var in struct {
+			ExpectedVersion int                            `json:"expected_version"`
+			Discovery       capabilities.ConsumerDiscovery `json:"discovery"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_consumer_discovery", "exact consumer evidence is required")
+			return
+		}
+		target, err := catalog.GetByID(in.Discovery.RepositoryID)
+		collaborator, _ := catalog.HasCollaborator(actor.UserID, in.Discovery.RepositoryID)
+		if err != nil || (target.OwnerID != actor.UserID && !collaborator) {
+			writeAPIError(w, 403, "consumer_discovery_forbidden", "only a current consumer-repository participant may report its use")
+			return
+		}
+		repository, err := git.Open(in.Discovery.RepositoryID)
+		if err != nil {
+			writeAPIError(w, 422, "invalid_consumer_discovery", "consumer repository is unavailable")
+			return
+		}
+		in.Discovery.Revision = strings.ToLower(in.Discovery.Revision)
+		commit, err := repository.ReadCommit(storage.ObjectID(in.Discovery.Revision))
+		if err != nil {
+			writeAPIError(w, 422, "invalid_consumer_discovery", "consumer revision must resolve exactly")
+			return
+		}
+		entries, err := repository.WalkTree(commit.Tree)
+		existing := map[string]bool{}
+		if err == nil {
+			for _, entry := range entries {
+				if entry.Type == storage.BlobObject {
+					existing[entry.Path] = true
+				}
+			}
+		}
+		for _, candidate := range in.Discovery.Paths {
+			if !existing[candidate] {
+				writeAPIError(w, 422, "invalid_consumer_discovery", "every reported path must exist at the exact consumer revision")
+				return
+			}
+		}
+		out, err := inventory.ReportRetirementConsumer(r.PathValue("id"), r.PathValue("capability_id"), r.PathValue("plan_id"), actor.UserID, in.ExpectedVersion, in.Discovery)
+		if err == nil {
+			out = projectCapabilitiesForReader(catalog, actor.UserID, projectCapabilityWork([]capabilities.Capability{out}, actor.UserID, proposalStore, pulls, sessions, workspaceStore))[0]
+		}
+		writeCapability(w, out, err, 201)
+	})
+}
+
+func retirementWorkBody(capabilityID, planID string, work capabilities.RetirementWork) string {
+	return "Capability retirement " + planID + " for capability " + capabilityID + ".\n\nOld contract\n" + work.OldContract + "\n\nSupported replacement contract\n" + work.ReplacementContract + "\n\nAcceptance criteria\n- " + strings.Join(work.AcceptanceCriteria, "\n- ") + "\n\nDocumentation changes\n- " + strings.Join(work.DocumentationChanges, "\n- ") + "\n\nRollout stage: " + work.RolloutStage + "\n\nThis context grants the retiring provider no repository, Git, agent, review, merge, release, or deployment authority."
+}
+
+func projectCapabilityWork(values []capabilities.Capability, actorID string, proposalStore *proposals.Store, pulls *pullrequests.Store, sessions *changesessions.Store, workspaceStore *workspaces.Store) []capabilities.Capability {
+	if proposalStore == nil {
+		return values
+	}
+	var actorWorkspaces []workspaces.Workspace
+	if workspaceStore != nil && actorID != "" {
+		actorWorkspaces, _ = workspaceStore.List(actorID)
+	}
+	for ci := range values {
+		for pi := range values[ci].RetirementPlans {
+			plan := &values[ci].RetirementPlans[pi]
+			completed := map[string]bool{}
+			for wi := range plan.Work {
+				work := &plan.Work[wi]
+				if task, err := proposalStore.GetTask(work.RepositoryID, work.ProposalID, work.TaskID); err == nil {
+					work.Status = task.Status
+					completed[work.ID] = task.Status == proposals.TaskCompleted && task.Contribution != nil && task.Contribution.Status == "merged" && task.Contribution.ContextRevision == task.ContextRevision
+					if task.Assignment != nil {
+						work.AssignmentID, work.AssigneeType, work.AssigneeID, work.BaseRevision = task.Assignment.ID, task.Assignment.AssigneeType, task.Assignment.AssigneeID, task.Assignment.Access.BaseRevision
+					}
+					if task.Contribution != nil {
+						work.PullRequestID, work.ContributionStatus = task.Contribution.PullRequestID, task.Contribution.Status
+						if pulls != nil {
+							if pull, pullErr := pulls.Get(work.RepositoryID, work.PullRequestID); pullErr == nil && pull.SourceRepositoryID != work.RepositoryID {
+								work.ForkRepositoryID = pull.SourceRepositoryID
+							}
+						}
+					}
+				}
+				if sessions != nil {
+					if list, sessionErr := sessions.List(work.RepositoryID, work.TaskID); sessionErr == nil && len(list) > 0 {
+						work.SessionID = list[len(list)-1].ID
+					}
+				}
+				for _, workspace := range actorWorkspaces {
+					if workspace.RepositoryID == work.RepositoryID && workspace.Source.Kind == "proposal_task" && workspace.Source.ProposalID == work.ProposalID && workspace.Source.TaskID == work.TaskID {
+						work.WorkspaceID = workspace.ID
+						break
+					}
+				}
+			}
+			for wi := range plan.Work {
+				plan.Work[wi].Ready = plan.Work[wi].Status == proposals.TaskTodo
+				for _, dependency := range plan.Work[wi].DependencyIDs {
+					plan.Work[wi].Ready = plan.Work[wi].Ready && completed[dependency]
+				}
+			}
+		}
+	}
+	return values
 }
 
 func projectCapabilitiesForReader(catalog *repositories.Store, actorID string, values []capabilities.Capability) []capabilities.Capability {
@@ -231,6 +426,21 @@ func projectCapabilitiesForReader(catalog *repositories.Store, actorID string, v
 					plan.Exceptions[exceptionIndex].Audience = "restricted"
 				}
 			}
+			visibleWork := plan.Work[:0]
+			for _, work := range plan.Work {
+				if restrictedPlanConsumers[work.AudienceIndex] || !canRead(work.RepositoryID) {
+					continue
+				}
+				visibleWork = append(visibleWork, work)
+			}
+			plan.Work = visibleWork
+			visibleDiscoveries := plan.DiscoveredConsumers[:0]
+			for _, discovery := range plan.DiscoveredConsumers {
+				if canRead(discovery.RepositoryID) {
+					visibleDiscoveries = append(visibleDiscoveries, discovery)
+				}
+			}
+			plan.DiscoveredConsumers = visibleDiscoveries
 		}
 		for diagnosticIndex := range values[valueIndex].Diagnostics {
 			diagnostic := &values[valueIndex].Diagnostics[diagnosticIndex]

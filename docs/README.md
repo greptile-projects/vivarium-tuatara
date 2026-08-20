@@ -32,6 +32,16 @@ attributable blockers. Embargoed consumer detail is projected as a restricted af
 readers without that repository access. A human may record only a bounded, expiring deferral with
 follow-up work; neither an exception nor a retirement plan grants delivery or removal authority.
 
+Provider- and affected-consumer-repository participants can turn that shared reason into ordered ordinary proposal tasks in
+their own repository. A contribution freezes its inventory audience, exact legacy and supported
+replacement contracts, acceptance criteria, required documentation changes, rollout stage, exact base,
+and earlier work dependencies. Human or approved-agent assignment then reuses the normal task session,
+workspace, fork, pull, review, and merge controls; an agent session cannot start until every selected
+predecessor contribution merged at its current context. Plan reads derive visible task and pull progress,
+but hide work in consumer repositories the reader cannot currently access. A participant who discovers
+an omitted consumer may report exact commit, existing paths, evidence, and impact; the report blocks
+retirement for reassessment and does not give the provider mutation authority in that repository.
+
 ## Revision-exact security confidence
 
 Repository owners and organization owners publish scoped security requirements at

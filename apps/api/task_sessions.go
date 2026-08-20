@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/capabilities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/durableschemas"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
@@ -20,7 +21,7 @@ import (
 
 // registerTaskChangeSessionRoutes connects proposal planning to the existing
 // durable session protocol without manufacturing a placeholder pull request.
-func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, sessionStore *changesessions.Store, authStore *auth.Store, relationStore *relationships.Store, durableStore *durableschemas.Store, organizationStore *organizations.Store) {
+func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, catalog *repositories.Store, proposalStore *proposals.Store, pullStore *pullrequests.Store, sessionStore *changesessions.Store, authStore *auth.Store, relationStore *relationships.Store, durableStore *durableschemas.Store, capabilityStore *capabilities.Store, organizationStore *organizations.Store) {
 	key := func(r *http.Request) (string, string, string) {
 		return r.PathValue("id"), r.PathValue("proposal_id"), r.PathValue("task_id")
 	}
@@ -105,6 +106,19 @@ func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store
 				}
 			}
 		}
+		var retirementPlan capabilities.RetirementPlan
+		var retirementLink capabilities.RetirementWork
+		var hasRetirementWork bool
+		if capabilityStore != nil {
+			_, plan, link, findErr := capabilityStore.FindRetirementWork(r.PathValue("id"), r.PathValue("task_id"))
+			if findErr != nil && !errors.Is(findErr, capabilities.ErrPlanNotFound) {
+				writeAPIError(w, 503, "retirement_plan_unavailable", "retirement dependencies could not be verified")
+				return
+			}
+			if findErr == nil {
+				retirementPlan, retirementLink, hasRetirementWork = plan, link, true
+			}
+		}
 		repositoryRecord, err := catalog.GetByID(r.PathValue("id"))
 		if err != nil {
 			writeAPIError(w, 404, "repository_not_found", "repository not found")
@@ -125,6 +139,23 @@ func registerTaskChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store
 		var uncertain bool
 		responseWritten := errors.New("task start response written")
 		err = proposalStore.WithStartableAgentTask(r.PathValue("id"), r.PathValue("proposal_id"), r.PathValue("task_id"), input.ExpectedAssignmentID, func(proposal proposals.Proposal, task proposals.Task, allTasks []proposals.Task, comments []proposals.Comment) error {
+			// This callback runs under the proposal store's process and file
+			// locks. Re-reading predecessors here serializes their merged state
+			// with session and credential publication for the dependent task.
+			if hasRetirementWork {
+				completed := map[string]bool{}
+				for _, candidate := range retirementPlan.Work {
+					if predecessor, taskErr := proposalStore.GetTask(candidate.RepositoryID, candidate.ProposalID, candidate.TaskID); taskErr == nil {
+						completed[candidate.ID] = predecessor.Status == proposals.TaskCompleted && predecessor.Contribution != nil && predecessor.Contribution.Status == "merged" && predecessor.Contribution.ContextRevision == predecessor.ContextRevision
+					}
+				}
+				for _, dependency := range retirementLink.DependencyIDs {
+					if !completed[dependency] {
+						writeAPIError(w, 409, "retirement_dependencies_incomplete", "earlier retirement contributions must remain merged until this agent session is published")
+						return responseWritten
+					}
+				}
+			}
 			if task.Reasoning != nil && task.Reasoning.AnalysisStatus == "stewardship_opportunity" {
 				if organizationStore == nil {
 					writeAPIError(w, 503, "stewardship_state_unavailable", "stewardship authority could not be revalidated")

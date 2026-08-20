@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/capabilities"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
@@ -77,5 +78,42 @@ func TestRetirementProjectionUsesFrozenRevisionConsumerAccess(t *testing.T) {
 	}
 	if plan.Events[0].ActorID != "restricted" || plan.Events[0].OwnerID != "restricted" || plan.Events[0].Summary != "restricted owner response" || len(plan.Events[0].Evidence) != 0 {
 		t.Fatalf("restricted owner event was not projected safely: %#v", plan.Events[0])
+	}
+}
+
+func TestRetirementReadinessUsesHiddenMergedDependenciesWithoutDisclosingThem(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	hiddenOwner, publicOwner, reader := strings.Repeat("a", 32), strings.Repeat("b", 32), strings.Repeat("c", 32)
+	hidden, _ := catalog.Create(hiddenOwner, "hidden-consumer")
+	visible, _ := catalog.Create(publicOwner, "visible-consumer")
+	_, _ = catalog.SetVisibility(publicOwner, visible.ID, repositories.Public)
+	proposalStore, _ := proposals.New(t.TempDir())
+	makeTask := func(repo, owner, title string) (proposals.Proposal, proposals.Task) {
+		proposal, err := proposalStore.Create(repo, owner, title, "retirement work")
+		if err != nil {
+			t.Fatal(err)
+		}
+		task, err := proposalStore.CreateTask(repo, proposal.ID, owner, title, "complete", nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return proposal, task
+	}
+	hiddenProposal, hiddenTask := makeTask(hidden.ID, hiddenOwner, "hidden predecessor")
+	pullID := strings.Repeat("d", 32)
+	linked, err := proposalStore.LinkTaskContribution(hidden.ID, hiddenProposal.ID, hiddenTask.ID, hiddenOwner, proposals.TaskContribution{PullRequestID: pullID, SourceCommitID: strings.Repeat("e", 40), CommitIDs: []string{strings.Repeat("e", 40)}, Status: "review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = proposalStore.UpdateTaskContribution(hidden.ID, hiddenProposal.ID, hiddenTask.ID, hiddenOwner, pullID, "merged"); err != nil {
+		t.Fatal(err)
+	}
+	visibleProposal, visibleTask := makeTask(visible.ID, publicOwner, "visible dependent")
+	values := []capabilities.Capability{{CurrentVersion: 1, Revisions: []capabilities.Revision{{Version: 1, Consumers: []capabilities.Consumer{{Name: "hidden", RepositoryID: hidden.ID}, {Name: "visible", RepositoryID: visible.ID}}}}, RetirementPlans: []capabilities.RetirementPlan{{CapabilityVersion: 1, Audiences: []capabilities.Audience{{Name: "hidden"}, {Name: "visible"}}, Work: []capabilities.RetirementWork{{ID: "hidden-work", AudienceIndex: 0, RepositoryID: hidden.ID, ProposalID: hiddenProposal.ID, TaskID: linked.ID}, {ID: "visible-work", AudienceIndex: 1, RepositoryID: visible.ID, ProposalID: visibleProposal.ID, TaskID: visibleTask.ID, DependencyIDs: []string{"hidden-work"}}}}}}}
+	projected := projectCapabilitiesForReader(catalog, reader, projectCapabilityWork(values, reader, proposalStore, nil, nil, nil))
+	work := projected[0].RetirementPlans[0].Work
+	if len(work) != 1 || work[0].ID != "visible-work" || !work[0].Ready {
+		t.Fatalf("visible readiness leaked or lost hidden completion: %#v", work)
 	}
 }

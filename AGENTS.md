@@ -185,7 +185,18 @@ whenever dependencies change or the web job fails before it starts.
   revision; regenerated inventory blockers retain their current diagnostic consumer index, so later
   consumer reordering or renaming cannot expose restricted current names either. Restricted-owner event
   identities, prose, and citations are redacted on reads and retirement mutation responses through the
-  same projection. These records provide removal
+  same projection. A current participant in the provider or each affected consumer repository can publish ordered human-
+  or approved-agent-owned migration tasks into that repository's ordinary proposal workflow. Each link
+  freezes the exact old and supported replacement contract, acceptance criteria, documentation changes,
+  rollout stage, exact base, and earlier contribution dependencies; agent sessions wait for those earlier
+  contributions to merge. Task, session, workspace, fork, pull, review, and merge authority stays with the
+  target repository, while visible plan reads derive its current progress. Current participants in a newly
+  discovered consumer can report exact revision/path evidence back to the frozen plan for reassessment
+  without enrolling their repository into provider authority. A post-rename capability directory-sync
+  failure is durability-uncertain committed state: linked target-repository work is preserved for
+  reconciliation, never destructively compensated. Dependency completion is derived before privacy
+  filtering and revalidated beneath the ordinary proposal start lock through agent-session publication.
+  These records provide removal
   context only and grant no consumer-repository, Git,
   release, environment, migration, review, merge, deployment, or retirement authority.
 
