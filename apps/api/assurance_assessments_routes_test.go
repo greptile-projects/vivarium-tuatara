@@ -39,7 +39,7 @@ func TestIndependentAssessorHasOnlyBoundedAssessmentAccess(t *testing.T) {
 	_ = json.NewDecoder(response.Body).Decode(&program)
 	response.Body.Close()
 	now := time.Now().UTC()
-	payload, _ = json.Marshal(map[string]any{"program_id": program.ID, "program_version": 1, "title": "Independent controls review", "assessor": map[string]any{"user_id": outside.User.ID, "kind": "external", "organization": "Independent LLP", "conflict_disclosure": "none"}, "scope": map[string]any{"control_ids": []string{"control"}, "system_ids": []string{"repo"}, "release_ids": []string{}, "period_starts_at": now.Add(-24 * time.Hour), "period_ends_at": now}, "evidence_package_ids": []string{}, "starts_at": now.Add(time.Second), "expires_at": now.Add(24 * time.Hour)})
+	payload, _ = json.Marshal(map[string]any{"program_id": program.ID, "program_version": 1, "title": "Independent controls review", "assessor": map[string]any{"user_id": outside.User.ID, "kind": "external", "organization": "Independent LLP", "conflict_disclosure": "none"}, "scope": map[string]any{"control_ids": []string{"control"}, "system_ids": []string{"repo"}, "release_ids": []string{}, "period_starts_at": now.Add(-24 * time.Hour), "period_ends_at": now}, "evidence_package_ids": []string{}, "starts_at": now, "expires_at": now.Add(24 * time.Hour)})
 	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/assurance-assessments", string(payload), owner.Credential.Token, http.StatusCreated)
 	var assessment assuranceassessments.Assessment
 	_ = json.NewDecoder(response.Body).Decode(&assessment)
@@ -52,4 +52,46 @@ func TestIndependentAssessorHasOnlyBoundedAssessmentAccess(t *testing.T) {
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/assurance-assessments/"+assessment.ID+"/events", string(payload), outside.Credential.Token, http.StatusCreated).Body.Close()
 	payload, _ = json.Marshal(map[string]any{"expected_version": assessment.Version + 1, "kind": "response", "body": "attempt project-side response"})
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/assurance-assessments/"+assessment.ID+"/events", string(payload), outside.Credential.Token, http.StatusForbidden).Body.Close()
+
+	base := assuranceassessments.Assessment{RepositoryID: repo.ID, ProgramID: program.ID, ProgramVersion: 1, Title: "Window regression", OwnerID: owner.User.ID, Assessor: assuranceassessments.Assessor{UserID: outside.User.ID, Kind: "external", ConflictDisclosure: "none"}, Scope: assuranceassessments.Scope{ControlIDs: []string{"control"}, PeriodStartsAt: now.Add(-time.Hour), PeriodEndsAt: now}}
+	future := base
+	future.StartsAt, future.ExpiresAt = time.Now().UTC().Add(time.Hour), time.Now().UTC().Add(2*time.Hour)
+	future, createErr := assessments.Create(future)
+	if createErr != nil {
+		t.Fatal(createErr)
+	}
+	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repo.ID+"/assurance-assessments/"+future.ID, "", outside.Credential.Token, http.StatusForbidden).Body.Close()
+	payload, _ = json.Marshal(map[string]any{"expected_version": 1, "kind": "question", "body": "too early"})
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/assurance-assessments/"+future.ID+"/events", string(payload), outside.Credential.Token, http.StatusForbidden).Body.Close()
+	expired := base
+	expired.StartsAt, expired.ExpiresAt = time.Now().UTC(), time.Now().UTC().Add(100*time.Millisecond)
+	expired, createErr = assessments.Create(expired)
+	if createErr != nil {
+		t.Fatal(createErr)
+	}
+	time.Sleep(150 * time.Millisecond)
+	authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repo.ID+"/assurance-assessments/"+expired.ID, "", outside.Credential.Token, http.StatusForbidden).Body.Close()
+	response = authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repo.ID+"/assurance-assessments", "", outside.Credential.Token, http.StatusOK)
+	var visible struct {
+		Assessments []assuranceassessments.Assessment `json:"assessments"`
+	}
+	_ = json.NewDecoder(response.Body).Decode(&visible)
+	response.Body.Close()
+	if len(visible.Assessments) != 1 || visible.Assessments[0].ID != assessment.ID {
+		t.Fatalf("assessor list exposed out-of-window records: %#v", visible.Assessments)
+	}
+}
+
+func TestAssessorWindowIncludesStartAndExcludesExpiry(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	a := assuranceassessments.Assessment{StartsAt: now, ExpiresAt: now.Add(time.Hour)}
+	if assessorWindowOpen(a, now.Add(-time.Nanosecond)) {
+		t.Fatal("window opened early")
+	}
+	if !assessorWindowOpen(a, now) {
+		t.Fatal("window closed at exact start")
+	}
+	if assessorWindowOpen(a, a.ExpiresAt) {
+		t.Fatal("window remained open at expiry")
+	}
 }

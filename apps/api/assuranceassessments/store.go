@@ -20,6 +20,7 @@ var ErrInvalid = errors.New("invalid assurance assessment")
 var ErrConflict = errors.New("assurance assessment version conflict")
 var ErrForbidden = errors.New("assurance assessment action forbidden")
 var ErrExpired = errors.New("assurance assessment access expired")
+var ErrNotStarted = errors.New("assurance assessment access has not started")
 
 type Scope struct {
 	ControlIDs     []string  `json:"control_ids"`
@@ -129,72 +130,81 @@ func (s *Store) List(repo string) ([]Assessment, error) {
 	return out, nil
 }
 func (s *Store) Append(assessmentID string, expected int, actor, role string, e Event) (Assessment, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	a, err := s.read(assessmentID)
-	if err != nil {
-		return Assessment{}, err
-	}
-	if a.Version != expected {
-		return Assessment{}, ErrConflict
-	}
-	now := s.now()
-	if !now.Before(a.ExpiresAt) {
-		return Assessment{}, ErrExpired
-	}
-	if a.Status == "closed" {
-		return Assessment{}, ErrForbidden
-	}
-	if a.Status == "conflict_review" && !(role == "owner" && e.Kind == "conflict_resolution") {
-		return Assessment{}, ErrForbidden
-	}
-	if !allowed(role, e.Kind) {
-		return Assessment{}, ErrForbidden
-	}
-	if strings.TrimSpace(e.Body) == "" || len(e.Body) > 8000 || credentialShaped(e.Body) || (e.Status != "" && !one(e.Status, "cleared", "rejected", "accepted", "contested", "open", "resolved", "pending", "upheld", "overturned", "unavailable")) {
-		return Assessment{}, ErrInvalid
-	}
-	if e.ControlID != "" && !contains(a.Scope.ControlIDs, e.ControlID) {
-		return Assessment{}, ErrInvalid
-	}
-	for _, pid := range e.EvidencePackageIDs {
-		if !contains(a.EvidencePackageIDs, pid) {
-			return Assessment{}, ErrInvalid
+	var out Assessment
+	err := s.lock(func() error {
+		a, err := s.read(assessmentID)
+		if err != nil {
+			return err
 		}
-	}
-	if e.ParentID != "" && !eventExists(a.Events, e.ParentID) {
-		return Assessment{}, ErrInvalid
-	}
-	if e.Kind == "conflict_resolution" {
-		if a.Assessor.ConflictStatus != "pending" || !one(e.Status, "cleared", "rejected") {
-			return Assessment{}, ErrInvalid
+		if a.Version != expected {
+			return ErrConflict
 		}
-		a.Assessor.ConflictStatus = e.Status
-		if e.Status == "cleared" {
+		now := s.now()
+		if role == "assessor" && now.Before(a.StartsAt) {
+			return ErrNotStarted
+		}
+		if !now.Before(a.ExpiresAt) {
+			return ErrExpired
+		}
+		if a.Status == "closed" {
+			return ErrForbidden
+		}
+		if a.Status == "conflict_review" && !(role == "owner" && e.Kind == "conflict_resolution") {
+			return ErrForbidden
+		}
+		if !allowed(role, e.Kind) {
+			return ErrForbidden
+		}
+		if strings.TrimSpace(e.Body) == "" || len(e.Body) > 8000 || credentialShaped(e.Body) || (e.Status != "" && !one(e.Status, "cleared", "rejected", "accepted", "contested", "open", "resolved", "pending", "upheld", "overturned", "unavailable")) {
+			return ErrInvalid
+		}
+		if e.ControlID != "" && !contains(a.Scope.ControlIDs, e.ControlID) {
+			return ErrInvalid
+		}
+		for _, pid := range e.EvidencePackageIDs {
+			if !contains(a.EvidencePackageIDs, pid) {
+				return ErrInvalid
+			}
+		}
+		if e.ParentID != "" && !eventExists(a.Events, e.ParentID) {
+			return ErrInvalid
+		}
+		if e.Kind == "conflict_resolution" {
+			if a.Assessor.ConflictStatus != "pending" || !one(e.Status, "cleared", "rejected") {
+				return ErrInvalid
+			}
+			a.Assessor.ConflictStatus = e.Status
+			if e.Status == "cleared" {
+				a.Status = "open"
+			} else {
+				a.Status = "closed"
+			}
+		}
+		if e.Kind == "scope_change" {
+			a.Status = "scope_changed"
+		}
+		if e.Kind == "scope_acknowledgement" {
+			if a.Status != "scope_changed" {
+				return ErrInvalid
+			}
 			a.Status = "open"
-		} else {
+		}
+		if e.Kind == "close" {
 			a.Status = "closed"
 		}
-	}
-	if e.Kind == "scope_change" {
-		a.Status = "scope_changed"
-	}
-	if e.Kind == "scope_acknowledgement" {
-		if a.Status != "scope_changed" {
-			return Assessment{}, ErrInvalid
+		e.ID = id()
+		e.ActorID = actor
+		e.CreatedAt = now
+		a.Events = append(a.Events, e)
+		a.Version++
+		a.UpdatedAt = now
+		if err := s.write(a); err != nil {
+			return err
 		}
-		a.Status = "open"
-	}
-	if e.Kind == "close" {
-		a.Status = "closed"
-	}
-	e.ID = id()
-	e.ActorID = actor
-	e.CreatedAt = now
-	a.Events = append(a.Events, e)
-	a.Version++
-	a.UpdatedAt = now
-	return a, s.write(a)
+		out = a
+		return nil
+	})
+	return out, err
 }
 func valid(a Assessment, now time.Time) bool {
 	return a.RepositoryID != "" && a.ProgramID != "" && a.ProgramVersion > 0 && a.Title != "" && a.OwnerID != "" && a.Assessor.UserID != "" && one(a.Assessor.Kind, "internal", "external") && a.Assessor.ConflictDisclosure != "" && !credentialShaped(a.Title) && !credentialShaped(a.Assessor.ConflictDisclosure) && len(a.Scope.ControlIDs) > 0 && unique(a.Scope.ControlIDs) && unique(a.Scope.SystemIDs) && unique(a.Scope.ReleaseIDs) && unique(a.EvidencePackageIDs) && !a.Scope.PeriodStartsAt.IsZero() && a.Scope.PeriodEndsAt.After(a.Scope.PeriodStartsAt) && !a.StartsAt.Before(now.Add(-time.Minute)) && a.ExpiresAt.After(a.StartsAt) && !a.ExpiresAt.After(a.StartsAt.Add(90*24*time.Hour))

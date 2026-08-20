@@ -25,8 +25,9 @@ func registerAssuranceAssessmentRoutes(mux *http.ServeMux, catalog *repositories
 			return
 		}
 		out := values[:0]
+		now := time.Now().UTC()
 		for _, a := range values {
-			if a.OwnerID == actor.UserID || a.Assessor.UserID == actor.UserID {
+			if a.OwnerID == actor.UserID || (a.Assessor.UserID == actor.UserID && assessorWindowOpen(a, now)) {
 				out = append(out, a)
 			}
 		}
@@ -42,8 +43,7 @@ func registerAssuranceAssessmentRoutes(mux *http.ServeMux, catalog *repositories
 			writeAPIError(w, 404, "assessment_not_found", "assessment not found")
 			return
 		}
-		if actor.UserID == a.Assessor.UserID && !time.Now().UTC().Before(a.ExpiresAt) {
-			writeAPIError(w, 403, "assessment_access_expired", "the assessor's bounded evidence access has expired")
+		if actor.UserID == a.Assessor.UserID && !writeAssessorWindowError(w, a, time.Now().UTC()) {
 			return
 		}
 		packages := []assuranceevidence.Package{}
@@ -124,6 +124,20 @@ func registerAssuranceAssessmentRoutes(mux *http.ServeMux, catalog *repositories
 func assessmentParty(a assuranceassessments.Assessment, id string) bool {
 	return a.OwnerID == id || a.Assessor.UserID == id
 }
+func assessorWindowOpen(a assuranceassessments.Assessment, now time.Time) bool {
+	return !now.Before(a.StartsAt) && now.Before(a.ExpiresAt)
+}
+func writeAssessorWindowError(w http.ResponseWriter, a assuranceassessments.Assessment, now time.Time) bool {
+	if now.Before(a.StartsAt) {
+		writeAPIError(w, 403, "assessment_access_not_started", "the assessor's bounded evidence access has not started")
+		return false
+	}
+	if !now.Before(a.ExpiresAt) {
+		writeAPIError(w, 403, "assessment_access_expired", "the assessor's bounded evidence access has expired")
+		return false
+	}
+	return true
+}
 func hasID(xs []string, id string) bool {
 	for _, x := range xs {
 		if x == id {
@@ -178,6 +192,8 @@ func writeAssessment(w http.ResponseWriter, a assuranceassessments.Assessment, e
 		writeAPIError(w, 409, "assessment_version_conflict", "the assessment changed; reload before appending")
 	case errors.Is(err, assuranceassessments.ErrExpired):
 		writeAPIError(w, 403, "assessment_access_expired", "bounded assessment access has expired")
+	case errors.Is(err, assuranceassessments.ErrNotStarted):
+		writeAPIError(w, 403, "assessment_access_not_started", "bounded assessment access has not started")
 	case errors.Is(err, assuranceassessments.ErrForbidden):
 		writeAPIError(w, 403, "assessment_action_forbidden", "this party cannot perform that assessment action")
 	default:

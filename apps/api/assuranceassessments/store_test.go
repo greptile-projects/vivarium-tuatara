@@ -2,6 +2,7 @@ package assuranceassessments
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -38,5 +39,58 @@ func TestBoundedAssessmentRolesConflictAndExpiry(t *testing.T) {
 	now = a.ExpiresAt
 	if _, err = s.Append(a.ID, a.Version, "outside", "assessor", Event{Kind: "question", Body: "late"}); !errors.Is(err, ErrExpired) {
 		t.Fatalf("expected expiry, got %v", err)
+	}
+}
+
+func TestAppendSerializesAcrossStoreProcessesAndHonorsStart(t *testing.T) {
+	root := t.TempDir()
+	first, _ := New(root)
+	second, _ := New(root)
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	first.now = func() time.Time { return now }
+	second.now = first.now
+	a, err := first.Create(Assessment{RepositoryID: "repo", ProgramID: "program", ProgramVersion: 1, Title: "Future review", OwnerID: "owner", Assessor: Assessor{UserID: "outside", Kind: "external", ConflictDisclosure: "none"}, Scope: Scope{ControlIDs: []string{"control"}, PeriodStartsAt: now.Add(-time.Hour), PeriodEndsAt: now}, StartsAt: now.Add(time.Hour), ExpiresAt: now.Add(2 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = first.Append(a.ID, 1, "outside", "assessor", Event{Kind: "question", Body: "too early"}); !errors.Is(err, ErrNotStarted) {
+		t.Fatalf("pre-start append = %v", err)
+	}
+	// Owners may prepare responses before the assessor window. At the exact boundary, two processes cannot both consume one CAS version.
+	now = a.StartsAt
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i, store := range []*Store{first, second} {
+		wg.Add(1)
+		go func(i int, s *Store) {
+			defer wg.Done()
+			<-start
+			_, e := s.Append(a.ID, 1, "outside", "assessor", Event{Kind: "question", Body: []string{"first", "second"}[i]})
+			errs <- e
+		}(i, store)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	success, conflict := 0, 0
+	for e := range errs {
+		if e == nil {
+			success++
+		} else if errors.Is(e, ErrConflict) {
+			conflict++
+		} else {
+			t.Fatalf("append = %v", e)
+		}
+	}
+	if success != 1 || conflict != 1 {
+		t.Fatalf("success=%d conflict=%d", success, conflict)
+	}
+	got, err := first.Get(a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Version != 2 || len(got.Events) != 1 {
+		t.Fatalf("persisted version=%d events=%d", got.Version, len(got.Events))
 	}
 }
