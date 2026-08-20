@@ -408,8 +408,9 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 	isDesign := validID(input.Origin.DesignProposalID) && input.Origin.DesignProposalVersion > 0
 	isDebugging := validID(input.Origin.DebuggingWorkspaceID) && validID(input.Origin.DebuggingRepairWorkID) && validID(input.Origin.DebuggingScenarioID) && validID(input.Origin.DebuggingCauseClaimID)
 	isExploratory := validID(input.Origin.ExploratorySessionID) && strings.TrimSpace(input.Origin.ExploratoryFindingID) != "" && validID(input.Origin.ExploratoryRepairID)
+	isSecurityFinding := validID(input.Origin.SecurityFindingID) && input.Origin.SecurityFindingVersion > 0 && validID(input.Origin.ThreatModelID) && input.Origin.ThreatModelVersion > 0
 	originCount := 0
-	for _, present := range []bool{isAssessment, isAccessibility, isDecision, isIssue, isGovernance, isRoadmap, isDataObservation, isReliability, isRecovery, isSupport, isDebugging, isDesign, isExploratory} {
+	for _, present := range []bool{isAssessment, isAccessibility, isDecision, isIssue, isGovernance, isRoadmap, isDataObservation, isReliability, isRecovery, isSupport, isDebugging, isDesign, isExploratory, isSecurityFinding} {
 		if present {
 			originCount++
 		}
@@ -450,6 +451,18 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 		if isExploratory && r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && r.Proposal.Reasoning.ExploratoryRepairID == input.Origin.ExploratoryRepairID {
 			if !reflect.DeepEqual(*r.Proposal.Reasoning, input.Origin) || r.Proposal.Title != title || r.Proposal.Body != body || len(r.Tasks) != len(input.Tasks) {
 				return Proposal{}, nil, ErrImplementationConflict
+			}
+			return r.Proposal, append([]Task(nil), r.Tasks...), nil
+		}
+		if isSecurityFinding && r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && r.Proposal.Reasoning.SecurityFindingID == input.Origin.SecurityFindingID {
+			if !reflect.DeepEqual(*r.Proposal.Reasoning, input.Origin) || r.Proposal.Title != title || r.Proposal.Body != body || len(r.Tasks) != len(input.Tasks) {
+				return Proposal{}, nil, ErrImplementationConflict
+			}
+			for i, task := range r.Tasks {
+				value := input.Tasks[i]
+				if task.Title != strings.TrimSpace(value.Title) || task.Outcome != strings.TrimSpace(value.Outcome) || task.Risk != strings.TrimSpace(value.Risk) || task.VerificationPlan != strings.TrimSpace(value.VerificationPlan) || task.Assignment == nil || task.Assignment.AssigneeType != value.AssigneeType || (value.AssigneeID != "" && task.Assignment.AssigneeID != value.AssigneeID) || (i > 0 && value.DependsOnPrevious != (len(task.DependencyIDs) == 1 && task.DependencyIDs[0] == r.Tasks[i-1].ID)) {
+					return Proposal{}, nil, ErrImplementationConflict
+				}
 			}
 			return r.Proposal, append([]Task(nil), r.Tasks...), nil
 		}
