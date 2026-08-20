@@ -147,9 +147,8 @@ func (s *Store) CreatePackage(d Definition, actor string, sources []Source) (Pac
 			x.Provenance = "restricted source"
 			x.Summary = ""
 			x.Transformations = nil
-			if x.Gap == "" {
-				x.Gap = "source is inaccessible"
-			}
+			x.Gap = "source is inaccessible"
+			x.Contradiction = ""
 		}
 		if x.Accessible && (x.ResourceID == "" || x.Provenance == "" || x.OccurredAt.IsZero() || x.OccurredAt.Before(d.PeriodStartsAt) || x.OccurredAt.After(d.PeriodEndsAt)) {
 			return Package{}, ErrInvalid
@@ -160,7 +159,7 @@ func (s *Store) CreatePackage(d Definition, actor string, sources []Source) (Pac
 		if x.Accessible && now.Sub(x.OccurredAt) > time.Duration(query.MaxAgeHours)*time.Hour && x.Gap == "" {
 			x.Gap = "source is outside the required freshness window"
 		}
-		if containsCredential(x.Provenance) || containsCredential(x.Summary) || containsCredential(x.Gap) || containsCredential(x.Contradiction) {
+		if containsCredential(x.Provenance) || containsCredential(x.Summary) || containsCredential(x.Gap) || containsCredential(x.Contradiction) || containsCredentialValues(x.Transformations) {
 			return Package{}, ErrInvalid
 		}
 		x.Digest = digest(*x)
@@ -197,6 +196,15 @@ func (s *Store) CreatePackage(d Definition, actor string, sources []Source) (Pac
 	return p, s.put("packages", p.ID, p)
 }
 
+func containsCredentialValues(values []string) bool {
+	for _, value := range values {
+		if containsCredential(value) {
+			return true
+		}
+	}
+	return false
+}
+
 func containsCredential(value string) bool {
 	lower := strings.ToLower(value)
 	return strings.Contains(lower, "-----begin private key-----") || strings.Contains(lower, "authorization: bearer ") || strings.Contains(lower, "ghp_") || strings.Contains(lower, "sk-")
@@ -223,7 +231,7 @@ func validDefinition(d Definition) bool {
 	}
 	seen := map[string]bool{}
 	for _, q := range d.Queries {
-		if q.ID == "" || seen[q.ID] || !kinds[q.Kind] || q.MaxAgeHours < 1 {
+		if q.ID == "" || seen[q.ID] || !kinds[q.Kind] || q.ResourceID == "" || q.MaxAgeHours < 1 {
 			return false
 		}
 		seen[q.ID] = true

@@ -23,7 +23,10 @@ deployment, incident, continuity, security, privacy, and governance records with
 resource/revision selectors and freshness limits. Immutable packages derive coverage, explicit
 missing/inaccessible/stale gaps, contradictions, source and manifest SHA-256 digests, and an
 actor/time attestation. Definition audiences are rechecked on reads; restricted sources retain only
-an opaque gap, and credential-shaped prose is rejected. These records prove provenance and grant no
+an opaque gap, and credential-shaped prose is rejected. Package requests select query IDs only;
+resource identity, revision, occurrence, provenance, outcome, and transformations are derived from
+repository-owned pull, check/build, access, dependency, release, deployment, incident, continuity,
+privacy, and governance stores, while unavailable resolvers fail closed. These records prove provenance and grant no
 source-system, repository, review, release, deployment, incident, or governance authority.
 
 Security confidence at pull, release, and deployment `/security-confidence` freezes repository or

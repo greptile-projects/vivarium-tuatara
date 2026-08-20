@@ -17,7 +17,9 @@ owner must be a current repository participant.
 - `POST /repositories/{id}/assurance-evidence/definitions` lets a named owner bind scheduled queries
   to one exact assurance-program revision, control, and assessment period.
 - `POST /repositories/{id}/assurance-evidence/definitions/{definition_id}/packages` collects
-  period-bound source references. Exact selectors are enforced, stale evidence becomes a gap,
+  selected query IDs. The server resolves their period-bound records and derives identity, revision,
+  timing, provenance, outcome, and transformations from repository-owned stores; callers cannot
+  submit those attested fields. Exact selectors are enforced, stale evidence becomes a gap,
   inaccessible evidence loses identifying metadata, and credential-shaped content is rejected.
 
 Packages derive coverage, provenance hashes, transformations, gaps, contradictions, a canonical

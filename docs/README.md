@@ -28,7 +28,9 @@ invented and cross-repository associations are rejected.
 Named control owners define immutable collection queries at
 `/repositories/{id}/assurance-evidence`. A definition freezes the assurance program and control
 version, assessment window, collection cadence, least-privilege audience, source categories, exact
-selectors, and freshness expectations. Collections retain sanitized source links rather than
+selectors, and freshness expectations. Collection requests contain query IDs only; source identity,
+revision, timing, provenance, outcome, and transformations resolve from repository-owned stores.
+Collections retain sanitized source links rather than
 screenshots or source payloads. The server derives source hashes, coverage,
 missing/inaccessible/stale gaps, contradictions, a canonical manifest hash, and an actor/time
 attestation. Restricted sources become opaque gaps with no identifying metadata. Records default

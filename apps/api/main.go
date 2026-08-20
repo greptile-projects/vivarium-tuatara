@@ -1252,7 +1252,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	if authStore != nil && repositoryCatalog != nil && assuranceProgramStore != nil {
 		registerAssuranceProgramRoutes(mux, repositoryCatalog, authStore, assuranceProgramStore, assuranceScopeResources{git: store, dataFlows: dataFlowStore, infrastructure: infrastructureStore, environments: deploymentStore, releases: releaseStore})
 		if assuranceEvidenceStore != nil {
-			registerAssuranceEvidenceRoutes(mux, repositoryCatalog, authStore, assuranceProgramStore, assuranceEvidenceStore)
+			registerAssuranceEvidenceRoutes(mux, repositoryCatalog, authStore, assuranceProgramStore, assuranceEvidenceStore, assuranceEvidenceSources{pulls: pullRequestStore, checks: checkRunStore, releases: releaseStore, deployments: deploymentStore, incidents: incidentStore, privacy: privacyReviewStore, continuity: recoveryExerciseStore, access: protectionPlanStore, dependencies: packageStore, governance: governanceStore})
 		}
 	}
 	if authStore != nil && repositoryCatalog != nil && securityExpectationStore != nil {

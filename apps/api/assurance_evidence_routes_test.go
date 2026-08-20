@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/assuranceevidence"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/assuranceprograms"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
@@ -37,7 +39,7 @@ func TestAssuranceEvidenceBindsExactControlAndProjectsAudience(t *testing.T) {
 	_ = json.NewDecoder(response.Body).Decode(&program)
 	response.Body.Close()
 	now := time.Now().UTC()
-	definition := assuranceevidence.Definition{ProgramID: program.ID, ProgramVersion: 1, ControlID: "control", Title: "Storage operation", PeriodStartsAt: now.Add(-time.Hour), PeriodEndsAt: now.Add(time.Hour), Schedule: "daily", Audience: []string{owner.User.ID}, Queries: []assuranceevidence.Query{{ID: "check", Kind: "check", Required: true, MaxAgeHours: 24}}}
+	definition := assuranceevidence.Definition{ProgramID: program.ID, ProgramVersion: 1, ControlID: "control", Title: "Storage operation", PeriodStartsAt: now.Add(-time.Hour), PeriodEndsAt: now.Add(time.Hour), Schedule: "daily", Audience: []string{owner.User.ID}, Queries: []assuranceevidence.Query{{ID: "check", Kind: "check", ResourceID: "nonexistent", Required: true, MaxAgeHours: 24}}}
 	body, _ := json.Marshal(definition)
 	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/assurance-evidence/definitions", string(body), owner.Credential.Token, http.StatusCreated)
 	var created assuranceevidence.Definition
@@ -46,14 +48,8 @@ func TestAssuranceEvidenceBindsExactControlAndProjectsAudience(t *testing.T) {
 	if created.ProgramVersion != 1 || created.OwnerID != owner.User.ID {
 		t.Fatalf("definition = %#v", created)
 	}
-	sources, _ := json.Marshal(map[string]any{"sources": []assuranceevidence.Source{{QueryID: "check", Kind: "check", ResourceID: "run-1", Revision: "commit", OccurredAt: now, Provenance: "retained check run", Summary: "passed", Accessible: true}}})
-	response = authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/assurance-evidence/definitions/"+created.ID+"/packages", string(sources), owner.Credential.Token, http.StatusCreated)
-	var pkg assuranceevidence.Package
-	_ = json.NewDecoder(response.Body).Decode(&pkg)
-	response.Body.Close()
-	if pkg.Coverage != 100 || pkg.ManifestHash == "" {
-		t.Fatalf("package = %#v", pkg)
-	}
+	fabricated, _ := json.Marshal(map[string]any{"sources": []assuranceevidence.Source{{QueryID: "check", Kind: "check", ResourceID: "nonexistent", Revision: "invented", OccurredAt: now, Provenance: "caller claim", Accessible: true}}, "query_ids": []string{"check"}})
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/assurance-evidence/definitions/"+created.ID+"/packages", string(fabricated), owner.Credential.Token, http.StatusBadRequest).Body.Close()
 	outsider := createTestAccount(t, server.URL, "evidence-outsider")
 	listed := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repo.ID+"/assurance-evidence", "", outsider.Credential.Token, http.StatusOK)
 	var projection struct {
@@ -64,5 +60,25 @@ func TestAssuranceEvidenceBindsExactControlAndProjectsAudience(t *testing.T) {
 	listed.Body.Close()
 	if len(projection.Definitions) != 0 || len(projection.Packages) != 0 {
 		t.Fatalf("private evidence leaked: %#v", projection)
+	}
+}
+
+func TestAssuranceEvidenceSourceResolverDerivesReleaseRecord(t *testing.T) {
+	store, _ := releases.New(t.TempDir())
+	repo, actor, commit := strings.Repeat("a", 32), strings.Repeat("b", 32), strings.Repeat("c", 40)
+	release, err := store.Create(releases.Candidate{RepositoryID: repo, Version: "v1", Notes: "reviewed release", CommitID: commit, TargetBranch: "main", CreatedBy: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := (assuranceEvidenceSources{releases: store}).resolveOne(repo, assuranceevidence.Query{ID: "release", Kind: "release", ResourceID: release.ID, Revision: commit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.ResourceID != release.ID || source.Revision != commit || source.OccurredAt.IsZero() || source.Provenance != "repository release ledger" {
+		t.Fatalf("source = %#v", source)
+	}
+	_, err = (assuranceEvidenceSources{releases: store}).resolveOne(repo, assuranceevidence.Query{ID: "release", Kind: "release", ResourceID: release.ID, Revision: strings.Repeat("d", 40)})
+	if err == nil {
+		t.Fatal("mismatched revision resolved")
 	}
 }
