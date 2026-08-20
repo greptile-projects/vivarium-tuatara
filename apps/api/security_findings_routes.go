@@ -86,8 +86,12 @@ func registerSecurityFindingRoutes(mux *http.ServeMux, catalog *repositories.Sto
 			writeAPIError(w, 422, "security_finding_candidate_invalid", "the exact modeled abuse path and candidate are required")
 			return
 		}
+		repo, _ := catalog.GetByID(r.PathValue("id"))
+		if !securityFindingAudienceIncludesOwner(in.Audience, repo.OwnerID) {
+			writeAPIError(w, 422, "security_finding_audience_invalid", "the repository owner must remain in the finding audience")
+			return
+		}
 		for _, id := range in.Audience {
-			repo, _ := catalog.GetByID(r.PathValue("id"))
 			collab, _ := catalog.HasCollaborator(id, r.PathValue("id"))
 			if id != a.UserID && id != a.AgentID && id != repo.OwnerID && !collab {
 				writeAPIError(w, 422, "security_finding_audience_invalid", "audience members must be current repository participants")
@@ -117,6 +121,10 @@ func registerSecurityFindingRoutes(mux *http.ServeMux, catalog *repositories.Sto
 			return
 		}
 		repo, _ := catalog.GetByID(r.PathValue("id"))
+		if !securityFindingAudienceIncludesOwner(in.Audience, repo.OwnerID) {
+			writeAPIError(w, 422, "security_finding_audience_invalid", "the repository owner must remain in the finding audience")
+			return
+		}
 		current, _ := findings.Get(r.PathValue("id"), r.PathValue("finding_id"))
 		for _, id := range in.Audience {
 			collab, _ := catalog.HasCollaborator(id, r.PathValue("id"))
@@ -210,14 +218,14 @@ func registerSecurityFindingRoutes(mux *http.ServeMux, catalog *repositories.Sto
 			return
 		}
 		s, e := scenarios.Get(v.RepositoryID, in.ScenarioID)
-		if e != nil || s.ThreatModelID != v.ThreatModelID || s.AbusePathID != v.AbusePathID || s.CommitID != p.SourceCommitID || s.Review == nil || s.Review.Decision != "approved" || !passedSecurityAttempt(s) {
+		if e != nil || !securityScenarioProtectsFinding(s, v, p.SourceCommitID) {
 			writeAPIError(w, 422, "security_repair_scenario_invalid", "an owner-reviewed passing scenario at the exact repair commit is required")
 			return
 		}
 		baseProved := false
 		all, _ := scenarios.List(v.RepositoryID)
 		for _, x := range all {
-			baseProved = baseProved || (x.ThreatModelID == v.ThreatModelID && x.AbusePathID == v.AbusePathID && x.CommitID == v.CandidateCommitID && failedSecurityAttempt(x))
+			baseProved = baseProved || securityScenarioProvesFindingBase(x, v)
 		}
 		if !baseProved {
 			writeAPIError(w, 422, "security_finding_base_unproven", "a retained failed abuse attempt against the affected base is required")
@@ -230,6 +238,15 @@ func registerSecurityFindingRoutes(mux *http.ServeMux, catalog *repositories.Sto
 		}
 		writeJSON(w, 201, v)
 	})
+}
+func securityFindingAudienceIncludesOwner(audience []string, owner string) bool {
+	return strings.TrimSpace(owner) != "" && slices.Contains(audience, owner)
+}
+func securityScenarioProtectsFinding(s securityscenarios.Scenario, v securityfindings.Finding, commit string) bool {
+	return s.ThreatModelID == v.ThreatModelID && s.ThreatModelVersion == v.ThreatModelVersion && s.AbusePathID == v.AbusePathID && s.CommitID == commit && s.Review != nil && s.Review.Decision == "approved" && passedSecurityAttempt(s)
+}
+func securityScenarioProvesFindingBase(s securityscenarios.Scenario, v securityfindings.Finding) bool {
+	return s.ThreatModelID == v.ThreatModelID && s.ThreatModelVersion == v.ThreatModelVersion && s.AbusePathID == v.AbusePathID && s.CommitID == v.CandidateCommitID && failedSecurityAttempt(s)
 }
 func passedSecurityAttempt(s securityscenarios.Scenario) bool {
 	for _, a := range s.Attempts {

@@ -3,6 +3,7 @@ Append-only agent log. Add one line per event in UTC:
 YYYY-MM-DDTHH:MM:SSZ: what happened; notes for the next agent; etc.
 Fetch the timestamp on Linux with: date -u '+%Y-%m-%dT%H:%M:%SZ'
 -->
+2026-08-20T02:50:28Z: Hardened governed security repair after Greptile round 2: finding creation and reclassification now preserve repository-owner audience access, and both failed-base and passing-repair scenarios must match the frozen threat-model revision. Focused API/package tests, vet, and build pass.
 2026-08-20T02:40:20Z: Hardened governed security repair after Greptile round 1: proposal validation now admits the exact security-finding/threat-model origin and exact retries converge while changed evidence conflicts. Focused proposal/security tests plus API vet and build pass.
 2026-08-20T02:29:48Z: Added audience-controlled, exact-threat security findings with owner-only attributable resolutions, governed human/agent repair tasks, exact task-pull linkage, failed-base proof, and owner-reviewed repair scenario protection. Focused tests and API vet/build pass; the broad suite retains known Docker exit-125, package-inventory 404, and merge-reconciliation failures.
 2026-08-20T02:04:27Z: Hardened security scenario evidence after Greptile round 1: selected workspace outcome digests and successful preview run commands must now exactly match the reviewed candidate-defined scenario command. Focused command-substitution regressions, API tests, vet, and build pass.
