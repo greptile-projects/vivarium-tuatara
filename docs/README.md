@@ -66,7 +66,10 @@ resource and obligation resolution, preventing a closed incubator from silently 
 After transition the launch trail is immutable.
 Observations likewise resolve through feedback, support, service-objective, fund, or outcome stores;
 roadmap/proposal work and graduation/merge targets must exist in their owning stores. Archive
-resolution exhaustively names every frozen launch artifact ID and readiness evidence reference.
+resolution exhaustively maps every frozen launch artifact ID to an existing closed repository-scoped
+governance proposal (`artifact_id=proposal_id`) and names every readiness evidence reference. Current
+accepted obligations remain resolved; exception-backed obligations require their governed follow-up
+proposal to be closed.
 
 ### Evidence-backed project shape exploration
 

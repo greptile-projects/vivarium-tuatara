@@ -178,7 +178,9 @@ func TestLaunchReadinessBlocksRiskAndNarrowsOnlyWithBoundedOwnerExceptions(t *te
 
 func TestLaunchLearningAndAccountableStewardship(t *testing.T) {
 	s, _ := New(t.TempDir())
-	s.ConfigureLaunchResolvers(func(a LaunchArtifact) bool { return !strings.HasPrefix(a.ResourceID, "missing") }, func(o LaunchObservation) bool { return o.ResourceID == "feedback-1" }, func(w StewardshipWork) bool { return w.ResourceID == "task-1" }, func(t StewardshipTransition) bool { return t.TargetResourceID == "initiative-1" })
+	s.ConfigureLaunchResolvers(func(a LaunchArtifact) bool { return !strings.HasPrefix(a.ResourceID, "missing") }, func(o LaunchObservation) bool { return o.ResourceID == "feedback-1" }, func(w StewardshipWork) bool { return w.ResourceID == "task-1" }, func(t StewardshipTransition) bool { return t.TargetResourceID == "initiative-1" }, func(a LaunchArtifact, resolution string) bool {
+		return !strings.HasPrefix(a.ResourceID, "unresolved") && resolution == "closed-cleanup"
+	}, func(ReadinessEvidence, []ReadinessDecision) bool { return true })
 	x, _ := s.Create(fixture(), "human-a", nil)
 	x.Invitations = append(x.Invitations, Invitation{PrincipalType: "agent", PrincipalID: "agent-a", Status: "accepted"})
 	x.DeliveryPlans = []DeliveryPlan{{ID: "delivery", Status: "active", WorkItems: []DeliveryWorkItem{{RepositoryID: "repo-a"}}}}
@@ -246,13 +248,19 @@ func TestLaunchLearningAndAccountableStewardship(t *testing.T) {
 func TestArchiveRequiresResolvedResourcesAndObligations(t *testing.T) {
 	s, _ := New(t.TempDir())
 	x, _ := s.Create(fixture(), "human-a", nil)
-	x.ProjectLaunches = []ProjectLaunch{{ID: "launch", Version: 1}}
+	x.ProjectLaunches = []ProjectLaunch{{ID: "launch", Version: 1, ReadinessID: "ready", Artifacts: []LaunchArtifact{{Kind: "environment", ResourceID: "unresolved-environment"}}}}
+	x.LaunchReadiness = []LaunchReadiness{{ID: "ready", Evidence: []ReadinessEvidence{{Dimension: "ownership", Reference: "proposal:cleanup"}}}}
 	if e := s.write(&x); e != nil {
 		t.Fatal(e)
 	}
-	_, e := s.TransitionStewardship(x.ID, "launch", "human-a", 1, 1, StewardshipTransition{Disposition: "archived", Rationale: "Experiment ended", ResolvedResources: []string{"environment removed"}})
+	_, e := s.TransitionStewardship(x.ID, "launch", "human-a", 1, 1, StewardshipTransition{Disposition: "archived", Rationale: "Experiment ended", ResolvedResources: []string{"unresolved-environment"}, ResolvedObligations: []string{"proposal:cleanup"}})
 	if e != ErrInvalid {
-		t.Fatalf("abandoned obligations accepted: %v", e)
+		t.Fatalf("caller-attested cleanup accepted: %v", e)
+	}
+	s.ConfigureLaunchResolvers(func(LaunchArtifact) bool { return true }, func(LaunchObservation) bool { return true }, func(StewardshipWork) bool { return true }, func(StewardshipTransition) bool { return true }, func(_ LaunchArtifact, resolution string) bool { return resolution == "closed-cleanup" }, func(ReadinessEvidence, []ReadinessDecision) bool { return true })
+	x, e = s.TransitionStewardship(x.ID, "launch", "human-a", 1, 1, StewardshipTransition{Disposition: "archived", Rationale: "Experiment ended", ResolvedResources: []string{"unresolved-environment=closed-cleanup"}, ResolvedObligations: []string{"proposal:cleanup"}})
+	if e != nil || x.ProjectLaunches[0].Transition == nil {
+		t.Fatalf("authoritative cleanup rejected: %#v, %v", x.ProjectLaunches[0], e)
 	}
 }
 

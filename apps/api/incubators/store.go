@@ -661,16 +661,28 @@ func (s *Store) TransitionStewardship(id, launchID, actor string, expected, laun
 				if readiness.ID == p.ReadinessID {
 					for _, evidence := range readiness.Evidence {
 						obligations[evidence.Reference] = true
+						if !s.resolveArchivedObligation(evidence, readiness.Decisions) {
+							resolved = false
+						}
 					}
 				}
 			}
-			resolved = len(in.ResolvedResources) == len(resources) && len(in.ResolvedObligations) == len(obligations)
+			resolved = resolved && len(in.ResolvedResources) == len(resources) && len(in.ResolvedObligations) == len(obligations)
 			seenResources, seenObligations := map[string]bool{}, map[string]bool{}
 			for _, value := range in.ResolvedResources {
-				if !resources[value] || seenResources[value] {
+				parts := strings.SplitN(value, "=", 2)
+				if len(parts) != 2 || !resources[parts[0]] || seenResources[parts[0]] {
 					resolved = false
+				} else {
+					for _, artifact := range p.Artifacts {
+						if artifact.ResourceID == parts[0] && !s.resolveArchivedArtifact(artifact, parts[1]) {
+							resolved = false
+						}
+					}
 				}
-				seenResources[value] = true
+				if len(parts) > 0 {
+					seenResources[parts[0]] = true
+				}
 			}
 			for _, value := range in.ResolvedObligations {
 				if !obligations[value] || seenObligations[value] {
@@ -836,27 +848,30 @@ func (s *Store) AddDeliveryReport(id, planID, typ, actor string, expected, planV
 }
 
 type Store struct {
-	root               string
-	mu                 sync.Mutex
-	now                func() time.Time
-	syncDir            func() error
-	resolveArtifact    func(LaunchArtifact) bool
-	resolveObservation func(LaunchObservation) bool
-	resolveWork        func(StewardshipWork) bool
-	resolveTransition  func(StewardshipTransition) bool
+	root                      string
+	mu                        sync.Mutex
+	now                       func() time.Time
+	syncDir                   func() error
+	resolveArtifact           func(LaunchArtifact) bool
+	resolveObservation        func(LaunchObservation) bool
+	resolveWork               func(StewardshipWork) bool
+	resolveTransition         func(StewardshipTransition) bool
+	resolveArchivedArtifact   func(LaunchArtifact, string) bool
+	resolveArchivedObligation func(ReadinessEvidence, []ReadinessDecision) bool
 }
 
-func (s *Store) ConfigureLaunchResolvers(artifact func(LaunchArtifact) bool, observation func(LaunchObservation) bool, work func(StewardshipWork) bool, transition func(StewardshipTransition) bool) {
+func (s *Store) ConfigureLaunchResolvers(artifact func(LaunchArtifact) bool, observation func(LaunchObservation) bool, work func(StewardshipWork) bool, transition func(StewardshipTransition) bool, archivedArtifact func(LaunchArtifact, string) bool, archivedObligation func(ReadinessEvidence, []ReadinessDecision) bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.resolveArtifact, s.resolveObservation, s.resolveWork, s.resolveTransition = artifact, observation, work, transition
+	s.resolveArchivedArtifact, s.resolveArchivedObligation = archivedArtifact, archivedObligation
 }
 
 func New(root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
-	s := &Store{root: root, now: time.Now, resolveArtifact: func(LaunchArtifact) bool { return false }, resolveObservation: func(LaunchObservation) bool { return false }, resolveWork: func(StewardshipWork) bool { return false }, resolveTransition: func(StewardshipTransition) bool { return false }}
+	s := &Store{root: root, now: time.Now, resolveArtifact: func(LaunchArtifact) bool { return false }, resolveObservation: func(LaunchObservation) bool { return false }, resolveWork: func(StewardshipWork) bool { return false }, resolveTransition: func(StewardshipTransition) bool { return false }, resolveArchivedArtifact: func(LaunchArtifact, string) bool { return false }, resolveArchivedObligation: func(ReadinessEvidence, []ReadinessDecision) bool { return false }}
 	s.syncDir = func() error {
 		d, e := os.Open(root)
 		if e != nil {

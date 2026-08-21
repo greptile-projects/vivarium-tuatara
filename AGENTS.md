@@ -328,7 +328,8 @@ whenever dependencies change or the web job fails before it starts.
   roadmap, task, environment, organization, release, package, or deployment authority.
   All artifact, observation, work, graduation, and merge references resolve through their owning
   stores before mutation; missing resolvers fail closed. One incubator has one first launch, and
-  archive closure exhaustively names every frozen artifact and readiness evidence reference.
+  archive closure maps every frozen artifact to a closed repository-scoped governance proposal and
+  rechecks every accepted or exception-backed readiness obligation; copied identifiers are not proof.
 
 - **Capability inventory** — `/repositories/{id}/capabilities` and the repository
   `/capabilities` workspace retain immutable, exact-release capability revisions beneath

@@ -140,13 +140,17 @@ func registerIncubatorRoutes(mux *http.ServeMux, git *storage.Store, credentials
 			return e == nil && x.RepositoryID == a.RepositoryID && (a.Revision == "" || x.SourceCommit == a.Revision)
 		case "api_contract":
 			x, e := apiStore.Get(a.ResourceID)
-			return e == nil && x.RepositoryID == a.RepositoryID
+			if e != nil || x.RepositoryID != a.RepositoryID || len(x.Revisions) == 0 {
+				return false
+			}
+			current := x.Revisions[len(x.Revisions)-1]
+			return a.Revision == "" || current.Source.CommitID == a.Revision
 		case "contributor_opportunity":
 			x, e := opportunityStore.Get(a.RepositoryID, a.ResourceID)
 			return e == nil && (a.Revision == "" || x.Revision == a.Revision)
 		case "environment":
 			x, e := deploymentStore.GetEnvironment(a.RepositoryID, a.ResourceID)
-			return e == nil && x.RepositoryID == a.RepositoryID
+			return e == nil && x.RepositoryID == a.RepositoryID && a.Revision == ""
 		}
 		return false
 	}, func(o incubators.LaunchObservation) bool {
@@ -214,6 +218,28 @@ func registerIncubatorRoutes(mux *http.ServeMux, git *storage.Store, credentials
 			return e == nil
 		}
 		return true
+	}, func(a incubators.LaunchArtifact, resolutionID string) bool {
+		if proposals == nil {
+			return false
+		}
+		resolution, e := proposals.Get(resolutionID)
+		return e == nil && resolution.Status == "closed" && resolution.ScopeType == "repository" && resolution.ScopeID == a.RepositoryID
+	}, func(e incubators.ReadinessEvidence, decisions []incubators.ReadinessDecision) bool {
+		for i := len(decisions) - 1; i >= 0; i-- {
+			decision := decisions[i]
+			if decision.Dimension != e.Dimension {
+				continue
+			}
+			if decision.Kind == "accepted" {
+				return e.Status == "current"
+			}
+			if decision.Kind == "exception" && proposals != nil {
+				followUp, err := proposals.Get(decision.FollowUpWork)
+				return err == nil && followUp.Status == "closed"
+			}
+			return false
+		}
+		return false
 	})
 	authn := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
 		a, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
