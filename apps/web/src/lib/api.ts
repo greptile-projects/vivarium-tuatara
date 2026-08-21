@@ -12,7 +12,7 @@ export type Incubator = {
   source: { kind: "feedback" | "support_gap" | "governed_proposal" | "new_idea"; repository_id?: string; resource_id?: string; label: string; resolution: "resolved" | "missing" | "inaccessible"; detail?: string };
   decision_rights: { kind: "scope_change" | "visibility_change" | "project_update"; decision: string; principal_ids: string[]; rule: string }[];
   invitations: { id: string; principal_type: "human" | "agent"; principal_id: string; organization_id?: string; role: string; status: string; invited_by: string; invited_at: string; responded_at?: string }[];
-  events: { id: string; kind: string; body: string; visibility: string; actor_type: string; actor_id: string; created_at: string }[];
+  events: { id: string; kind: string; decision_kind?: "scope_change" | "visibility_change"; body: string; visibility: string; actor_type: string; actor_id: string; created_at: string }[];
   potential_duplicates: { incubator_id: string; title: string; reason: string }[];
   durability_uncertain: boolean;
   created_by: string; created_at: string; updated_at: string;

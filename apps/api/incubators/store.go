@@ -47,13 +47,14 @@ type Invitation struct {
 	RespondedAt    *time.Time `json:"responded_at,omitempty"`
 }
 type Event struct {
-	ID         string    `json:"id"`
-	Kind       string    `json:"kind"`
-	Body       string    `json:"body"`
-	Visibility string    `json:"visibility"`
-	ActorType  string    `json:"actor_type"`
-	ActorID    string    `json:"actor_id"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID           string    `json:"id"`
+	Kind         string    `json:"kind"`
+	DecisionKind string    `json:"decision_kind,omitempty"`
+	Body         string    `json:"body"`
+	Visibility   string    `json:"visibility"`
+	ActorType    string    `json:"actor_type"`
+	ActorID      string    `json:"actor_id"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 type Duplicate struct {
 	IncubatorID string `json:"incubator_id"`
@@ -280,7 +281,7 @@ func decisionSatisfied(x Incubator, right DecisionRight, actor, body string) boo
 	}
 	support := map[string]bool{actor: true}
 	for _, event := range x.Events {
-		if event.Kind == "decision_support" && event.Body == body && principalForDecision(x, right.Kind, event.ActorID) {
+		if event.Kind == "decision_support" && event.DecisionKind == right.Kind && event.Body == body && principalForDecision(x, right.Kind, event.ActorID) {
 			support[event.ActorID] = true
 		}
 	}
@@ -385,8 +386,10 @@ func (s *Store) AddEvent(id, typ, actor string, expected int, in Event) (Incubat
 	if !map[string]bool{"discussion": true, "evidence": true, "assumption": true, "decision_support": true, "scope_change": true, "visibility_change": true}[in.Kind] || !text(in.Body, 10000) || !map[string]bool{"participants": true, "public": true}[in.Visibility] {
 		return Incubator{}, ErrInvalid
 	}
-	if in.Kind == "decision_support" && !principalForDecision(x, "scope_change", actor) {
-		return Incubator{}, ErrInvalid
+	if in.Kind == "decision_support" {
+		if !map[string]bool{"scope_change": true, "visibility_change": true}[in.DecisionKind] || !principalForDecision(x, in.DecisionKind, actor) {
+			return Incubator{}, ErrInvalid
+		}
 	}
 	if in.Kind == "scope_change" {
 		right, ok := decisionFor(x, "scope_change")
@@ -395,7 +398,8 @@ func (s *Store) AddEvent(id, typ, actor string, expected int, in Event) (Incubat
 		}
 	}
 	if in.Kind == "visibility_change" {
-		if typ != "human" || actor != x.CreatedBy || !map[string]bool{"private": true, "participants": true, "public": true}[strings.TrimSpace(in.Body)] {
+		right, ok := decisionFor(x, "visibility_change")
+		if !ok || !decisionSatisfied(x, right, actor, in.Body) || !map[string]bool{"private": true, "participants": true, "public": true}[strings.TrimSpace(in.Body)] {
 			return Incubator{}, ErrInvalid
 		}
 		x.Visibility = strings.TrimSpace(in.Body)

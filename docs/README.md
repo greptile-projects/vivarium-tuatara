@@ -22,6 +22,8 @@ declared owner, while majority and consensus/consent rules count exact-body supp
 distinct declared principals. Duplicate-looking initiatives remain separate and are reported explicitly to
 readers who can see both. Storage defaults beneath `$INCUBATOR_STORAGE_ROOT` (`incubators`) and
 grants no repository, Git, organization, implementation, review, release, or deployment authority.
+Visibility mutations use the same rule evaluation through their separate typed right; support
+events name the decision kind, preventing a scope vote from authorizing publication.
 Publication first directory-syncs a conservative durability marker and clears it only with a second
 synced canonical copy; post-rename sync failures therefore return committed, explicitly uncertain
 state instead of inviting a duplicate retry.

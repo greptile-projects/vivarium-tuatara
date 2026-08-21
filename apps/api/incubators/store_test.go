@@ -77,12 +77,36 @@ func TestScopeChangeUsesOnlyTypedRightAndEvaluatesMajority(t *testing.T) {
 	}
 	y, _ = s.Consent(y.ID, y.Invitations[0].ID, "human-b", "accepted", 1)
 	y, _ = s.Consent(y.ID, y.Invitations[1].ID, "human-c", "accepted", 2)
-	y, e = s.AddEvent(y.ID, "human", "human-b", 3, Event{Kind: "decision_support", Body: "Serve external teams", Visibility: "participants"})
+	y, e = s.AddEvent(y.ID, "human", "human-b", 3, Event{Kind: "decision_support", DecisionKind: "scope_change", Body: "Serve external teams", Visibility: "participants"})
 	if e != nil {
 		t.Fatal(e)
 	}
 	if _, e = s.AddEvent(y.ID, "human", "human-c", 4, Event{Kind: "scope_change", Body: "Serve external teams", Visibility: "participants"}); e != nil {
 		t.Fatalf("majority scope change rejected: %v", e)
+	}
+}
+
+func TestVisibilityChangeRequiresConfiguredDecision(t *testing.T) {
+	s, _ := New(t.TempDir())
+	x := fixture()
+	x.DecisionRights = append(x.DecisionRights, DecisionRight{Kind: "visibility_change", Decision: "Publish incubator", PrincipalIDs: []string{"human-b"}, Rule: "owner"})
+	x, e := s.Create(x, "human-a", []Invitation{{PrincipalType: "human", PrincipalID: "human-b", Role: "publication owner"}})
+	if e != nil {
+		t.Fatal(e)
+	}
+	x, e = s.Consent(x.ID, x.Invitations[0].ID, "human-b", "accepted", 1)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.AddEvent(x.ID, "human", "human-a", 2, Event{Kind: "visibility_change", Body: "public", Visibility: "participants"}); e != ErrInvalid {
+		t.Fatalf("creator bypassed visibility owner: %v", e)
+	}
+	x, e = s.AddEvent(x.ID, "human", "human-b", 2, Event{Kind: "visibility_change", Body: "public", Visibility: "participants"})
+	if e != nil || x.Visibility != "public" {
+		t.Fatalf("declared visibility owner failed: %#v, %v", x, e)
+	}
+	if _, e = s.Get(x.ID, "outsider"); e != nil {
+		t.Fatalf("published incubator not readable: %v", e)
 	}
 }
 

@@ -22,6 +22,7 @@ type incubatorCreateInput struct {
 type incubatorEventInput struct {
 	ExpectedVersion int    `json:"expected_version"`
 	Kind            string `json:"kind"`
+	DecisionKind    string `json:"decision_kind"`
 	Body            string `json:"body"`
 	Visibility      string `json:"visibility"`
 }
@@ -179,7 +180,7 @@ func registerIncubatorRoutes(mux *http.ServeMux, credentials *auth.Store, identi
 		if actor.AgentID != "" {
 			typ, id = "agent", actor.AgentID
 		}
-		out, e := store.AddEvent(r.PathValue("incubator_id"), typ, id, in.ExpectedVersion, incubators.Event{Kind: in.Kind, Body: in.Body, Visibility: in.Visibility})
+		out, e := store.AddEvent(r.PathValue("incubator_id"), typ, id, in.ExpectedVersion, incubators.Event{Kind: in.Kind, DecisionKind: in.DecisionKind, Body: in.Body, Visibility: in.Visibility})
 		writeIncubator(w, out, e, 200)
 	})
 	mux.HandleFunc("POST /incubators/{incubator_id}/invitations/{invitation_id}/consent", func(w http.ResponseWriter, r *http.Request) {

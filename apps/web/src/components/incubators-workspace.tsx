@@ -72,6 +72,12 @@ export function IncubatorsWorkspace() {
                 principal_ids: [user.id],
                 rule: f.get("decision_rule"),
               },
+              {
+                kind: "visibility_change",
+                decision: "Change incubator visibility",
+                principal_ids: [user.id],
+                rule: "owner",
+              },
             ],
             invitations: lines(f.get("invitees")).map((v) => {
               const [id, role] = v.split("|").map((s) => s.trim());
