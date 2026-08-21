@@ -46,6 +46,33 @@ func TestResearchComparisonExperimentAndSupersessionRemainReproducible(t *testin
 	}
 }
 
+func TestBootstrapPreviewApprovalActivationAndRollbackAreAtomic(t *testing.T) {
+	s, _ := New(t.TempDir())
+	x, _ := s.Create(fixture(), "human-a", nil)
+	x, _ = s.AddAlternative(x.ID, "human", "human-a", 1, nil, Alternative{Name: "Accepted direction", ProductBoundary: "Developer service", Architecture: "API and web", Interfaces: []string{"HTTP"}, Dependencies: []string{"Bun"}, Licenses: []string{"MIT"}, OperatingCosts: []string{"$10/month"}, SecurityRisks: []string{"credentials"}, DataRisks: []string{"user data"}, BuildOrAdopt: "build", Unknowns: []string{"scale"}})
+	kinds := []string{"organization", "repository", "team", "package", "agent_role", "contributor_pathway", "documentation", "environment", "review_policy", "security_policy", "privacy_policy", "quality_policy", "release_policy"}
+	resources := make([]BootstrapResource, 0, len(kinds))
+	for _, kind := range kinds {
+		resources = append(resources, BootstrapResource{Kind: kind, Mode: "create", Name: "project-" + kind, OwnerIDs: []string{"human-a"}, EffectiveAccess: []string{"owners:admin", "contributors:write"}, MonthlyCostCents: 100, GeneratedContent: []string{"generated baseline"}, InheritedPolicies: []string{"organization baseline"}})
+	}
+	x, e := s.PreviewBootstrap(x.ID, "human-a", 2, x.Alternatives[0].ID, resources)
+	if e != nil || x.BootstrapPlans[0].RecurringCostCents != 1300 || x.BootstrapPlans[0].Status != "preview" || len(x.BootstrapPlans[0].Resources[0].ResourceID) != 32 {
+		t.Fatalf("preview = %#v, %v", x.BootstrapPlans, e)
+	}
+	p := x.BootstrapPlans[0]
+	x, e = s.DecideBootstrap(x.ID, p.ID, "human-a", "approved", 3, 1)
+	if e != nil || x.BootstrapPlans[0].Status != "approved" {
+		t.Fatalf("approval = %#v, %v", x.BootstrapPlans, e)
+	}
+	x, e = s.FinishBootstrap(x.ID, p.ID, "human-a", "activate", 4, 2)
+	if e != nil || x.BootstrapPlans[0].Status != "active" || x.BootstrapPlans[0].ActivatedAt == nil {
+		t.Fatalf("activation = %#v, %v", x.BootstrapPlans, e)
+	}
+	if _, e = s.FinishBootstrap(x.ID, p.ID, "human-a", "rollback", 5, 3); e != ErrInvalid {
+		t.Fatalf("active rollback = %v", e)
+	}
+}
+
 func TestConsentAttributionVisibilityAndCAS(t *testing.T) {
 	s, e := New(t.TempDir())
 	if e != nil {

@@ -287,6 +287,17 @@ whenever dependencies change or the web job fails before it starts.
   digests, unknowns, assumptions, dissent, and supersession. Experiment authority is always
   `research_only_no_code_or_infrastructure_authority`; these records do not create repositories,
   commits, packages, environments, infrastructure, or implementation authority.
+  An accepted non-superseded direction can reserve a complete governed project boundary through
+  `/incubators/{id}/bootstrap-previews`. The manifest covers organization, repositories, teams,
+  packages, agent roles, contributor pathway, documentation, environments, and review/security/
+  privacy/quality/release baselines, exposing create/connect intent, current human owners, effective
+  access, recurring cost, generated defaults, inherited policy, and exact incubator/alternative
+  provenance before activation. Connected organizations and repositories resolve inside the
+  requester's current ownership boundary. Every distinct consenting human resource owner approves an
+  exact plan version; activation is one canonical ledger transition, while previewed, rejected, and
+  approved reservations can be atomically released. The boundary reserves identities and context but
+  grants none of the underlying organization, Git, credential, package, environment, policy, review,
+  release, or deployment authority.
 
 - **Capability inventory** — `/repositories/{id}/capabilities` and the repository
   `/capabilities` workspace retain immutable, exact-release capability revisions beneath

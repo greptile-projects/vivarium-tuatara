@@ -140,6 +140,36 @@ type ResearchNote struct {
 	ActorType     string    `json:"actor_type"`
 	CreatedAt     time.Time `json:"created_at"`
 }
+type BootstrapResource struct {
+	Kind              string   `json:"kind"`
+	Mode              string   `json:"mode"`
+	Name              string   `json:"name"`
+	ResourceID        string   `json:"resource_id,omitempty"`
+	OwnerIDs          []string `json:"owner_ids"`
+	EffectiveAccess   []string `json:"effective_access"`
+	MonthlyCostCents  int64    `json:"monthly_cost_cents"`
+	GeneratedContent  []string `json:"generated_content"`
+	InheritedPolicies []string `json:"inherited_policies"`
+}
+type BootstrapApproval struct {
+	OwnerID   string    `json:"owner_id"`
+	Decision  string    `json:"decision"`
+	CreatedAt time.Time `json:"created_at"`
+}
+type BootstrapPlan struct {
+	ID                 string              `json:"id"`
+	Version            int                 `json:"version"`
+	AlternativeID      string              `json:"alternative_id"`
+	Status             string              `json:"status"`
+	Resources          []BootstrapResource `json:"resources"`
+	RecurringCostCents int64               `json:"recurring_cost_cents"`
+	GeneratedFrom      string              `json:"generated_from"`
+	GeneratedBy        string              `json:"generated_by"`
+	GeneratedAt        time.Time           `json:"generated_at"`
+	Approvals          []BootstrapApproval `json:"approvals"`
+	ActivatedAt        *time.Time          `json:"activated_at,omitempty"`
+	RolledBackAt       *time.Time          `json:"rolled_back_at,omitempty"`
+}
 type Incubator struct {
 	ID                  string                 `json:"id"`
 	Version             int                    `json:"version"`
@@ -163,6 +193,7 @@ type Incubator struct {
 	Alternatives        []Alternative          `json:"alternatives"`
 	Experiments         []ExperimentDefinition `json:"experiments"`
 	ResearchNotes       []ResearchNote         `json:"research_notes"`
+	BootstrapPlans      []BootstrapPlan        `json:"bootstrap_plans"`
 	DurabilityUncertain bool                   `json:"durability_uncertain"`
 }
 type Store struct {
@@ -300,6 +331,9 @@ func (s *Store) read(id string) (Incubator, error) {
 	if x.ResearchNotes == nil {
 		x.ResearchNotes = []ResearchNote{}
 	}
+	if x.BootstrapPlans == nil {
+		x.BootstrapPlans = []BootstrapPlan{}
+	}
 	return x, e
 }
 func (s *Store) all() ([]Incubator, error) {
@@ -429,6 +463,7 @@ func (s *Store) Create(x Incubator, actor string, invitations []Invitation) (Inc
 	x.Alternatives = []Alternative{}
 	x.Experiments = []ExperimentDefinition{}
 	x.ResearchNotes = []ResearchNote{}
+	x.BootstrapPlans = []BootstrapPlan{}
 	x.Events = []Event{{ID: uid(), Kind: "opened", Body: "Incubator opened", Visibility: "participants", ActorType: "human", ActorID: actor, CreatedAt: now}}
 	all, e := s.all()
 	if e != nil {
@@ -668,6 +703,229 @@ func (s *Store) AddResearchNote(id, typ, actor string, expected int, in Research
 	in.ActorType = typ
 	in.CreatedAt = now
 	x.ResearchNotes = append(x.ResearchNotes, in)
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(&x)
+	return x, e
+}
+
+var bootstrapKinds = map[string]bool{"organization": true, "repository": true, "team": true, "package": true, "agent_role": true, "contributor_pathway": true, "documentation": true, "environment": true, "review_policy": true, "security_policy": true, "privacy_policy": true, "quality_policy": true, "release_policy": true}
+
+// PreviewBootstrap reserves a complete, reviewable project boundary without
+// creating credentials or mutating any connected resource.
+func (s *Store) PreviewBootstrap(id, actor string, expected int, alternative string, resources []BootstrapResource) (Incubator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Incubator{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(id)
+	if e != nil || !participant(x, "human", actor) {
+		return Incubator{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Incubator{}, ErrConflict
+	}
+	accepted := false
+	for _, a := range x.Alternatives {
+		if a.ID == alternative && !a.Superseded {
+			accepted = true
+		}
+	}
+	if !accepted || len(resources) < len(bootstrapKinds) || len(resources) > 50 {
+		return Incubator{}, ErrInvalid
+	}
+	seen, total := map[string]bool{}, int64(0)
+	reserved := map[string]bool{}
+	all, allErr := s.all()
+	if allErr != nil {
+		return Incubator{}, allErr
+	}
+	for _, other := range all {
+		for _, plan := range other.BootstrapPlans {
+			if !map[string]bool{"preview": true, "approved": true, "active": true}[plan.Status] {
+				continue
+			}
+			for _, resource := range plan.Resources {
+				if resource.Mode == "create" {
+					reserved[resource.Kind+":"+strings.ToLower(strings.TrimSpace(resource.Name))] = true
+				}
+			}
+		}
+	}
+	for i := range resources {
+		r := &resources[i]
+		if !bootstrapKinds[r.Kind] || seen[r.Kind] || !map[string]bool{"create": true, "connect": true}[r.Mode] || !text(r.Name, 200) || !validList(r.OwnerIDs, 30) || !validList(r.EffectiveAccess, 50) || r.MonthlyCostCents < 0 || r.MonthlyCostCents > 100000000 || len(r.GeneratedContent) > 50 || len(r.InheritedPolicies) > 50 || (r.Mode == "connect" && !text(r.ResourceID, 200)) || (r.Mode == "create" && r.ResourceID != "") {
+			return Incubator{}, ErrInvalid
+		}
+		if r.Mode == "create" {
+			key := r.Kind + ":" + strings.ToLower(strings.TrimSpace(r.Name))
+			if reserved[key] {
+				return Incubator{}, ErrInvalid
+			}
+			reserved[key] = true
+			r.ResourceID = uid()
+		}
+		seen[r.Kind], total = true, total+r.MonthlyCostCents
+	}
+	for kind := range bootstrapKinds {
+		if !seen[kind] {
+			return Incubator{}, ErrInvalid
+		}
+	}
+	for _, plan := range x.BootstrapPlans {
+		if plan.Status == "preview" || plan.Status == "approved" || plan.Status == "active" {
+			return Incubator{}, ErrInvalid
+		}
+	}
+	now := s.now().UTC().Truncate(time.Microsecond)
+	plan := BootstrapPlan{ID: uid(), Version: 1, AlternativeID: alternative, Status: "preview", Resources: resources, RecurringCostCents: total, GeneratedFrom: "incubator:" + x.ID + "/alternative:" + alternative, GeneratedBy: actor, GeneratedAt: now, Approvals: []BootstrapApproval{}}
+	x.BootstrapPlans = append(x.BootstrapPlans, plan)
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(&x)
+	return x, e
+}
+
+func (s *Store) DecideBootstrap(id, planID, actor, decision string, expected, planVersion int) (Incubator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Incubator{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(id)
+	if e != nil || !participant(x, "human", actor) {
+		return Incubator{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Incubator{}, ErrConflict
+	}
+	if !map[string]bool{"approved": true, "rejected": true}[decision] {
+		return Incubator{}, ErrInvalid
+	}
+	now, found := s.now().UTC().Truncate(time.Microsecond), false
+	for i := range x.BootstrapPlans {
+		p := &x.BootstrapPlans[i]
+		if p.ID != planID {
+			continue
+		}
+		found = true
+		if p.Version != planVersion || p.Status != "preview" {
+			return Incubator{}, ErrConflict
+		}
+		owner := false
+		for _, r := range p.Resources {
+			for _, o := range r.OwnerIDs {
+				if o == actor {
+					owner = true
+				}
+			}
+		}
+		if !owner {
+			return Incubator{}, ErrNotFound
+		}
+		for _, a := range p.Approvals {
+			if a.OwnerID == actor {
+				return Incubator{}, ErrInvalid
+			}
+		}
+		p.Approvals = append(p.Approvals, BootstrapApproval{OwnerID: actor, Decision: decision, CreatedAt: now})
+		p.Version++
+		if decision == "rejected" {
+			p.Status = "rejected"
+		} else {
+			required, approved := map[string]bool{}, map[string]bool{}
+			for _, r := range p.Resources {
+				for _, o := range r.OwnerIDs {
+					required[o] = true
+				}
+			}
+			for _, a := range p.Approvals {
+				if a.Decision == "approved" {
+					approved[a.OwnerID] = true
+				}
+			}
+			if len(required) == len(approved) {
+				p.Status = "approved"
+			}
+		}
+	}
+	if !found {
+		return Incubator{}, ErrNotFound
+	}
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(&x)
+	return x, e
+}
+
+func (s *Store) FinishBootstrap(id, planID, actor, action string, expected, planVersion int) (Incubator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Incubator{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(id)
+	if e != nil || !participant(x, "human", actor) {
+		return Incubator{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Incubator{}, ErrConflict
+	}
+	now, found := s.now().UTC().Truncate(time.Microsecond), false
+	for i := range x.BootstrapPlans {
+		p := &x.BootstrapPlans[i]
+		if p.ID != planID {
+			continue
+		}
+		found = true
+		owner := false
+		for _, resource := range p.Resources {
+			for _, id := range resource.OwnerIDs {
+				if id == actor {
+					owner = true
+				}
+			}
+		}
+		if !owner {
+			return Incubator{}, ErrNotFound
+		}
+		if p.Version != planVersion {
+			return Incubator{}, ErrConflict
+		}
+		switch action {
+		case "activate":
+			if p.Status != "approved" {
+				return Incubator{}, ErrInvalid
+			}
+			p.Status = "active"
+			p.ActivatedAt = &now
+		case "rollback":
+			if p.Status == "active" {
+				return Incubator{}, ErrInvalid
+			}
+			if !map[string]bool{"preview": true, "approved": true, "rejected": true}[p.Status] {
+				return Incubator{}, ErrInvalid
+			}
+			p.Status = "rolled_back"
+			p.RolledBackAt = &now
+		default:
+			return Incubator{}, ErrInvalid
+		}
+		p.Version++
+	}
+	if !found {
+		return Incubator{}, ErrNotFound
+	}
 	x.Version++
 	x.UpdatedAt = now
 	e = s.write(&x)

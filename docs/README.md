@@ -50,6 +50,24 @@ and explicit supersession. The ledger labels every definition
 `research_only_no_code_or_infrastructure_authority`: an experiment is evidence, not a repository,
 prototype deployment, package publication, or grant to mutate code or infrastructure.
 
+### Governed project bootstrap
+
+An accepted, non-superseded direction can be carried into
+`/{incubator_id}/bootstrap-previews`. A preview reserves one complete manifest across organization,
+repository, team, package, agent-role, contributor-pathway, documentation, environment, review,
+security, privacy, quality, and release boundaries. Each entry says whether it will be created or
+connected and exposes its owners, effective access, monthly cost, generated content, and inherited
+policy. Existing organizations and repositories are resolved inside the requesting owner's current
+authority; named owners must be current, consenting human incubator participants.
+
+The manifest retains its incubator/alternative source and generator. Every distinct resource owner
+must append an attributable decision against an exact plan version before activation. Activation is
+one canonical incubator-ledger transition, so none of the reserved identities, defaults, or policy
+claims become authoritative after a partial write. Previewed, approved, or rejected reservations can
+be rolled back as a unit, and CAS retries reconcile against the durable state. An active boundary is
+project context only: ordinary organization, repository, credential, package, environment, policy,
+review, release, and deployment APIs retain their own authority.
+
 ## Versioned agent projects
 
 Repository collaborators define intended agent behavior at `/repositories/{id}/agent-projects` and review
