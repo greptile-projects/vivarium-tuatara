@@ -983,6 +983,29 @@ export function IncubatorsWorkspace() {
                     </Button>
                   </form>
                 )}
+              <h3 className="mt-8 font-semibold">Running value slice</h3>
+              <p className="mt-1 text-sm text-[var(--muted)]">
+                Ordered human-agent work stays connected to exact repository
+                revisions and reports ordinary execution evidence back here.
+              </p>
+              <div className="mt-3 space-y-3">
+                {(current.delivery_plans ?? []).map((plan) => (
+                  <article key={plan.id} className="rounded-lg border p-4">
+                    <div className="flex flex-wrap gap-2"><Badge tone="success">{plan.status}</Badge><Badge>{plan.participants.length} temporary teammates</Badge><Badge>{plan.reports.length} retained reports</Badge></div>
+                    <p className="mt-2 font-semibold">{plan.journey}</p>
+                    <ol className="mt-3 space-y-2 text-sm">
+                      {plan.work_items.map((item) => (
+                        <li key={item.id} className="rounded bg-[var(--surface-2)] p-3">
+                          <strong>{item.integration_order}. {item.kind}</strong> · {item.title}
+                          <p className="text-xs text-[var(--muted)]">{item.owner_type} {item.owner_id} · {item.repository_id}@{item.base_revision.slice(0, 12)}</p>
+                          {plan.reports.filter((report) => report.work_item_id === item.id).map((report) => <p key={report.id} className="mt-1 text-xs"><Badge>{report.kind.replaceAll("_", " ")}</Badge> {report.summary} · {report.actor_type} {report.actor_id}</p>)}
+                        </li>
+                      ))}
+                    </ol>
+                  </article>
+                ))}
+                {(current.delivery_plans ?? []).length === 0 && <p className="rounded-lg border border-dashed p-4 text-sm text-[var(--muted)]">No running slice has been connected yet.</p>}
+              </div>
             </Card>
           ) : (
             <Card className="p-8 text-sm text-[var(--muted)]">

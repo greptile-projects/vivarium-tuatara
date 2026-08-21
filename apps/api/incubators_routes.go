@@ -9,14 +9,18 @@ import (
 	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	productfeedback "github.com/greptile-projects/vivarium-tuatara/apps/api/feedback"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/governance"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incubators"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportthreads"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
 type incubatorCreateInput struct {
@@ -66,8 +70,17 @@ type incubatorBootstrapActionInput struct {
 	PlanVersion     int    `json:"plan_version"`
 	Action          string `json:"action"`
 }
+type incubatorDeliveryInput struct {
+	ExpectedVersion int                     `json:"expected_version"`
+	Plan            incubators.DeliveryPlan `json:"plan"`
+}
+type incubatorDeliveryReportInput struct {
+	ExpectedVersion int                       `json:"expected_version"`
+	PlanVersion     int                       `json:"plan_version"`
+	Report          incubators.DeliveryReport `json:"report"`
+}
 
-func registerIncubatorRoutes(mux *http.ServeMux, git *storage.Store, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, store *incubators.Store, feedback *productfeedback.Store, support *supportthreads.Store, proposals *governance.Store) {
+func registerIncubatorRoutes(mux *http.ServeMux, git *storage.Store, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, store *incubators.Store, feedback *productfeedback.Store, support *supportthreads.Store, proposals *governance.Store, workspaceStore *workspaces.Store, pullStore *pullrequests.Store, previewStore *previews.Store, checkStore *checkruns.Store) {
 	authn := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
 		a, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
 		if !ok {
@@ -546,6 +559,92 @@ func registerIncubatorRoutes(mux *http.ServeMux, git *storage.Store, credentials
 			return
 		}
 		writeIncubator(w, projectResearch(out, actor), nil, 200)
+	})
+	mux.HandleFunc("POST /incubators/{incubator_id}/delivery-plans", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		if actor.AgentID != "" {
+			writeAPIError(w, 403, "human_owner_required", "a human participant must create the delivery plan")
+			return
+		}
+		var in incubatorDeliveryInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an ordered representative journey is required")
+			return
+		}
+		for _, item := range in.Plan.WorkItems {
+			repo, e := catalog.GetByID(item.RepositoryID)
+			allowed := e == nil && (repo.Visibility == repositories.Public || repo.OwnerID == actor.UserID)
+			if !allowed && e == nil {
+				allowed, _ = catalog.HasCollaborator(actor.UserID, repo.ID)
+			}
+			gr, openErr := git.Open(item.RepositoryID)
+			_, commitErr := storage.Commit{}, openErr
+			if openErr == nil {
+				_, commitErr = gr.ReadCommit(storage.ObjectID(strings.ToLower(item.BaseRevision)))
+			}
+			if !allowed || commitErr != nil {
+				writeAPIError(w, 422, "invalid_work_scope", "every work item must use a readable bootstrapped repository and exact commit")
+				return
+			}
+		}
+		out, e := store.CreateDeliveryPlan(r.PathValue("incubator_id"), actor.UserID, in.ExpectedVersion, in.Plan)
+		writeIncubator(w, projectResearch(out, actor), e, 201)
+	})
+	mux.HandleFunc("POST /incubators/{incubator_id}/delivery-plans/{delivery_plan_id}/reports", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		var in incubatorDeliveryReportInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an attributable delivery report and exact versions are required")
+			return
+		}
+		resolved := false
+		switch in.Report.Kind {
+		case "workspace":
+			x, e := workspaceStore.Get(in.Report.ResourceID)
+			resolved = e == nil && x.RepositoryID == in.Report.RepositoryID && x.CommitID == in.Report.Revision
+		case "pull_request":
+			x, e := pullStore.Get(in.Report.RepositoryID, in.Report.ResourceID)
+			resolved = e == nil && x.SourceCommitID == in.Report.Revision
+		case "preview", "check", "review":
+			parts := strings.Split(in.Report.ResourceID, ":")
+			if len(parts) == 2 {
+				switch in.Report.Kind {
+				case "preview":
+					x, e := previewStore.Get(in.Report.RepositoryID, parts[0], parts[1])
+					resolved = e == nil && x.Revision == in.Report.Revision
+				case "check":
+					x, e := checkStore.Get(in.Report.RepositoryID, parts[0], parts[1])
+					resolved = e == nil && x.CommitID == in.Report.Revision
+				case "review":
+					reviews, e := pullStore.ListReviews(in.Report.RepositoryID, parts[0])
+					if e == nil {
+						for _, review := range reviews {
+							if review.ID == parts[1] {
+								resolved = true
+							}
+						}
+					}
+				}
+			}
+		case "target_user_feedback":
+			x, e := feedback.Get(in.Report.ResourceID)
+			resolved = e == nil && x.RepositoryID == in.Report.RepositoryID
+		default:
+			resolved = true
+		}
+		if !resolved {
+			writeAPIError(w, 422, "unresolved_delivery_evidence", "linked delivery evidence must resolve in its repository-owned store at the reported revision")
+			return
+		}
+		typ, id := actorIdentity(actor)
+		out, e := store.AddDeliveryReport(r.PathValue("incubator_id"), r.PathValue("delivery_plan_id"), typ, id, in.ExpectedVersion, in.PlanVersion, in.Report)
+		writeIncubator(w, projectResearch(out, actor), e, 201)
 	})
 }
 

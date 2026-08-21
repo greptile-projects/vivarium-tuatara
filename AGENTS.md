@@ -302,6 +302,12 @@ whenever dependencies change or the web job fails before it starts.
   retained template source; unsupported connected kinds fail closed. Activation refreshes those
   derived fields and holds every declared connected-organization/repository owner's current ownership stable through the
   canonical boundary write, so deletion or transfer cannot race activation.
+  Once active, an incubator can retain an ordered representative delivery slice with exactly one
+  code, tests, documentation, infrastructure, and interface work item, each bound to a readable
+  repository commit and a temporary human-agent participant. Dependencies are admitted as earlier
+  one-based positions and frozen to generated work-item IDs. Attributable workspace, pull, preview,
+  target-user feedback, agent action, handoff, cost, deviation, check, and review reports connect
+  ordinary execution back to the incubator without granting any linked authority.
 
 - **Capability inventory** — `/repositories/{id}/capabilities` and the repository
   `/capabilities` workspace retain immutable, exact-release capability revisions beneath

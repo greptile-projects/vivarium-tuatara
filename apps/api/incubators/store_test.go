@@ -2,6 +2,7 @@ package incubators
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -70,6 +71,42 @@ func TestBootstrapPreviewApprovalActivationAndRollbackAreAtomic(t *testing.T) {
 	}
 	if _, e = s.FinishBootstrap(x.ID, p.ID, "human-a", "rollback", 5, 3); e != ErrInvalid {
 		t.Fatalf("active rollback = %v", e)
+	}
+}
+
+func TestDeliveryPlanConnectsOrderedMixedWorkAndAttributableEvidence(t *testing.T) {
+	s, _ := New(t.TempDir())
+	x, _ := s.Create(fixture(), "human-a", []Invitation{{PrincipalType: "agent", PrincipalID: "agent-a", OrganizationID: "org-a", Role: "builder"}})
+	x, _ = s.AddAlternative(x.ID, "human", "human-a", 1, nil, Alternative{Name: "Running slice", ProductBoundary: "Journey", Architecture: "Web and API", Interfaces: []string{"HTTP"}, Dependencies: []string{"runtime"}, Licenses: []string{"MIT"}, OperatingCosts: []string{"bounded"}, SecurityRisks: []string{"access"}, DataRisks: []string{"feedback"}, BuildOrAdopt: "build", Unknowns: []string{"adoption"}})
+	resources := []BootstrapResource{}
+	for kind := range bootstrapKinds {
+		resource := BootstrapResource{Kind: kind, Mode: "create", Name: "slice-" + kind, OwnerIDs: []string{"human-a"}}
+		if kind == "repository" {
+			resource.Mode, resource.ResourceID = "connect", "repo-a"
+		}
+		resources = append(resources, resource)
+	}
+	x, _ = s.PreviewBootstrap(x.ID, "human-a", 2, x.Alternatives[0].ID, resources)
+	p := x.BootstrapPlans[0]
+	x, _ = s.DecideBootstrap(x.ID, p.ID, "human-a", "approved", 3, 1)
+	x, _ = s.FinishBootstrap(x.ID, p.ID, "human-a", "activate", 4, 2)
+	kinds := []string{"code", "tests", "documentation", "infrastructure", "interface"}
+	items := []DeliveryWorkItem{}
+	for i, kind := range kinds {
+		deps := []string{}
+		if i > 0 {
+			deps = []string{fmt.Sprintf("%d", i)}
+		}
+		items = append(items, DeliveryWorkItem{Kind: kind, Title: "Deliver " + kind, RepositoryID: "repo-a", BaseRevision: strings.Repeat("a", 40), OwnerType: []string{"human", "agent"}[i%2], OwnerID: []string{"human-a", "agent-a"}[i%2], DependencyIDs: deps, Acceptance: []string{"ordinary check passes"}, IntegrationOrder: i + 1})
+	}
+	x, e := s.CreateDeliveryPlan(x.ID, "human-a", 5, DeliveryPlan{BootstrapPlanID: p.ID, Journey: "An invited developer exercises the running slice", Participants: []DeliveryParticipant{{PrincipalType: "human", PrincipalID: "human-a", Role: "lead"}, {PrincipalType: "agent", PrincipalID: "agent-a", Role: "builder"}}, WorkItems: items})
+	if e != nil || len(x.DeliveryPlans) != 1 || x.DeliveryPlans[0].WorkItems[1].DependencyIDs[0] != x.DeliveryPlans[0].WorkItems[0].ID {
+		t.Fatalf("delivery plan = %#v, %v", x.DeliveryPlans, e)
+	}
+	d := x.DeliveryPlans[0]
+	x, e = s.AddDeliveryReport(x.ID, d.ID, "agent", "agent-a", 6, 1, DeliveryReport{WorkItemID: d.WorkItems[0].ID, Kind: "agent_action", Revision: strings.Repeat("b", 40), Summary: "Implemented the bounded slice", CostCents: 25})
+	if e != nil || x.DeliveryPlans[0].Reports[0].ActorID != "agent-a" || x.DeliveryPlans[0].Version != 2 {
+		t.Fatalf("report = %#v, %v", x.DeliveryPlans[0], e)
 	}
 }
 
