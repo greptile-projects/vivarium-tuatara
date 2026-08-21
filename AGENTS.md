@@ -291,13 +291,17 @@ whenever dependencies change or the web job fails before it starts.
   `/incubators/{id}/bootstrap-previews`. The manifest covers organization, repositories, teams,
   packages, agent roles, contributor pathway, documentation, environments, and review/security/
   privacy/quality/release baselines, exposing create/connect intent, current human owners, effective
-  access, recurring cost, generated defaults, inherited policy, and exact incubator/alternative
+  access, explicitly unverified recurring-cost estimates, generated defaults, inherited policy, and exact incubator/alternative
   provenance before activation. Connected organizations and repositories resolve inside the
   requester's current ownership boundary. Every distinct consenting human resource owner approves an
   exact plan version; activation is one canonical ledger transition, while previewed, rejected, and
   approved reservations can be atomically released. The boundary reserves identities and context but
   grants none of the underlying organization, Git, credential, package, environment, policy, review,
   release, or deployment authority.
+  Caller-supplied access/default/policy claims are discarded in favor of the server template and
+  retained template source; unsupported connected kinds fail closed. Activation refreshes those
+  derived fields and holds current connected-organization/repository ownership stable through the
+  canonical boundary write, so deletion or transfer cannot race activation.
 
 - **Capability inventory** — `/repositories/{id}/capabilities` and the repository
   `/capabilities` workspace retain immutable, exact-release capability revisions beneath

@@ -53,10 +53,10 @@ func TestBootstrapPreviewApprovalActivationAndRollbackAreAtomic(t *testing.T) {
 	kinds := []string{"organization", "repository", "team", "package", "agent_role", "contributor_pathway", "documentation", "environment", "review_policy", "security_policy", "privacy_policy", "quality_policy", "release_policy"}
 	resources := make([]BootstrapResource, 0, len(kinds))
 	for _, kind := range kinds {
-		resources = append(resources, BootstrapResource{Kind: kind, Mode: "create", Name: "project-" + kind, OwnerIDs: []string{"human-a"}, EffectiveAccess: []string{"owners:admin", "contributors:write"}, MonthlyCostCents: 100, GeneratedContent: []string{"generated baseline"}, InheritedPolicies: []string{"organization baseline"}})
+		resources = append(resources, BootstrapResource{Kind: kind, Mode: "create", Name: "project-" + kind, OwnerIDs: []string{"human-a"}, EffectiveAccess: []string{"fabricated:admin"}, MonthlyCostEstimateCents: 100, GeneratedContent: []string{"fabricated baseline"}, InheritedPolicies: []string{"fabricated policy"}})
 	}
 	x, e := s.PreviewBootstrap(x.ID, "human-a", 2, x.Alternatives[0].ID, resources)
-	if e != nil || x.BootstrapPlans[0].RecurringCostCents != 1300 || x.BootstrapPlans[0].Status != "preview" || len(x.BootstrapPlans[0].Resources[0].ResourceID) != 32 {
+	if e != nil || x.BootstrapPlans[0].RecurringCostEstimateCents != 1300 || x.BootstrapPlans[0].Status != "preview" || len(x.BootstrapPlans[0].Resources[0].ResourceID) != 32 || x.BootstrapPlans[0].Resources[0].EffectiveAccess[0] == "fabricated:admin" || x.BootstrapPlans[0].Resources[0].CostBasis != "participant_estimate_unverified" {
 		t.Fatalf("preview = %#v, %v", x.BootstrapPlans, e)
 	}
 	p := x.BootstrapPlans[0]

@@ -56,9 +56,11 @@ An accepted, non-superseded direction can be carried into
 `/{incubator_id}/bootstrap-previews`. A preview reserves one complete manifest across organization,
 repository, team, package, agent-role, contributor-pathway, documentation, environment, review,
 security, privacy, quality, and release boundaries. Each entry says whether it will be created or
-connected and exposes its owners, effective access, monthly cost, generated content, and inherited
-policy. Existing organizations and repositories are resolved inside the requesting owner's current
-authority; named owners must be current, consenting human incubator participants.
+connected and exposes its owners, server-derived effective access, explicitly unverified monthly
+cost estimate, generated content, inherited baseline, and metadata source. Existing organizations
+and repositories are resolved inside the requesting owner's current authority; named owners must be
+current, consenting human incubator participants. Other resource kinds cannot claim an existing
+connection until their authoritative resolver exists.
 
 The manifest retains its incubator/alternative source and generator. Every distinct resource owner
 must append an attributable decision against an exact plan version before activation. Activation is
@@ -67,6 +69,9 @@ claims become authoritative after a partial write. Previewed, approved, or rejec
 be rolled back as a unit, and CAS retries reconcile against the durable state. An active boundary is
 project context only: ordinary organization, repository, credential, package, environment, policy,
 review, release, and deployment APIs retain their own authority.
+Activation re-resolves connected organizations and repositories while holding their mutation locks,
+requires the activating owner to retain current ownership, and refreshes server-derived access,
+generated-content, inherited-policy, cost-basis, and template-source fields before committing.
 
 ## Versioned agent projects
 

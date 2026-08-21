@@ -141,15 +141,17 @@ type ResearchNote struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 type BootstrapResource struct {
-	Kind              string   `json:"kind"`
-	Mode              string   `json:"mode"`
-	Name              string   `json:"name"`
-	ResourceID        string   `json:"resource_id,omitempty"`
-	OwnerIDs          []string `json:"owner_ids"`
-	EffectiveAccess   []string `json:"effective_access"`
-	MonthlyCostCents  int64    `json:"monthly_cost_cents"`
-	GeneratedContent  []string `json:"generated_content"`
-	InheritedPolicies []string `json:"inherited_policies"`
+	Kind                     string   `json:"kind"`
+	Mode                     string   `json:"mode"`
+	Name                     string   `json:"name"`
+	ResourceID               string   `json:"resource_id,omitempty"`
+	OwnerIDs                 []string `json:"owner_ids"`
+	EffectiveAccess          []string `json:"effective_access"`
+	MonthlyCostEstimateCents int64    `json:"monthly_cost_estimate_cents"`
+	CostBasis                string   `json:"cost_basis"`
+	GeneratedContent         []string `json:"generated_content"`
+	InheritedPolicies        []string `json:"inherited_policies"`
+	MetadataSource           string   `json:"metadata_source"`
 }
 type BootstrapApproval struct {
 	OwnerID   string    `json:"owner_id"`
@@ -157,18 +159,18 @@ type BootstrapApproval struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 type BootstrapPlan struct {
-	ID                 string              `json:"id"`
-	Version            int                 `json:"version"`
-	AlternativeID      string              `json:"alternative_id"`
-	Status             string              `json:"status"`
-	Resources          []BootstrapResource `json:"resources"`
-	RecurringCostCents int64               `json:"recurring_cost_cents"`
-	GeneratedFrom      string              `json:"generated_from"`
-	GeneratedBy        string              `json:"generated_by"`
-	GeneratedAt        time.Time           `json:"generated_at"`
-	Approvals          []BootstrapApproval `json:"approvals"`
-	ActivatedAt        *time.Time          `json:"activated_at,omitempty"`
-	RolledBackAt       *time.Time          `json:"rolled_back_at,omitempty"`
+	ID                         string              `json:"id"`
+	Version                    int                 `json:"version"`
+	AlternativeID              string              `json:"alternative_id"`
+	Status                     string              `json:"status"`
+	Resources                  []BootstrapResource `json:"resources"`
+	RecurringCostEstimateCents int64               `json:"recurring_cost_estimate_cents"`
+	GeneratedFrom              string              `json:"generated_from"`
+	GeneratedBy                string              `json:"generated_by"`
+	GeneratedAt                time.Time           `json:"generated_at"`
+	Approvals                  []BootstrapApproval `json:"approvals"`
+	ActivatedAt                *time.Time          `json:"activated_at,omitempty"`
+	RolledBackAt               *time.Time          `json:"rolled_back_at,omitempty"`
 }
 type Incubator struct {
 	ID                  string                 `json:"id"`
@@ -711,6 +713,18 @@ func (s *Store) AddResearchNote(id, typ, actor string, expected int, in Research
 
 var bootstrapKinds = map[string]bool{"organization": true, "repository": true, "team": true, "package": true, "agent_role": true, "contributor_pathway": true, "documentation": true, "environment": true, "review_policy": true, "security_policy": true, "privacy_policy": true, "quality_policy": true, "release_policy": true}
 
+func deriveBootstrapFacts(r *BootstrapResource) {
+	r.EffectiveAccess = []string{}
+	for _, owner := range r.OwnerIDs {
+		r.EffectiveAccess = append(r.EffectiveAccess, "human:"+owner+":owner")
+	}
+	r.EffectiveAccess = append(r.EffectiveAccess, "contributors:proposal-only", "agents:task-scoped")
+	r.GeneratedContent = []string{"server-generated " + strings.ReplaceAll(r.Kind, "_", " ") + " baseline"}
+	r.InheritedPolicies = []string{"safe-collaboration-template:v1"}
+	r.CostBasis = "participant_estimate_unverified"
+	r.MetadataSource = "server-bootstrap-template:v1"
+}
+
 // PreviewBootstrap reserves a complete, reviewable project boundary without
 // creating credentials or mutating any connected resource.
 func (s *Store) PreviewBootstrap(id, actor string, expected int, alternative string, resources []BootstrapResource) (Incubator, error) {
@@ -758,9 +772,10 @@ func (s *Store) PreviewBootstrap(id, actor string, expected int, alternative str
 	}
 	for i := range resources {
 		r := &resources[i]
-		if !bootstrapKinds[r.Kind] || seen[r.Kind] || !map[string]bool{"create": true, "connect": true}[r.Mode] || !text(r.Name, 200) || !validList(r.OwnerIDs, 30) || !validList(r.EffectiveAccess, 50) || r.MonthlyCostCents < 0 || r.MonthlyCostCents > 100000000 || len(r.GeneratedContent) > 50 || len(r.InheritedPolicies) > 50 || (r.Mode == "connect" && !text(r.ResourceID, 200)) || (r.Mode == "create" && r.ResourceID != "") {
+		if !bootstrapKinds[r.Kind] || seen[r.Kind] || !map[string]bool{"create": true, "connect": true}[r.Mode] || !text(r.Name, 200) || !validList(r.OwnerIDs, 30) || r.MonthlyCostEstimateCents < 0 || r.MonthlyCostEstimateCents > 100000000 || (r.Mode == "connect" && (!text(r.ResourceID, 200) || !map[string]bool{"organization": true, "repository": true}[r.Kind])) || (r.Mode == "create" && r.ResourceID != "") {
 			return Incubator{}, ErrInvalid
 		}
+		deriveBootstrapFacts(r)
 		if r.Mode == "create" {
 			key := r.Kind + ":" + strings.ToLower(strings.TrimSpace(r.Name))
 			if reserved[key] {
@@ -769,7 +784,7 @@ func (s *Store) PreviewBootstrap(id, actor string, expected int, alternative str
 			reserved[key] = true
 			r.ResourceID = uid()
 		}
-		seen[r.Kind], total = true, total+r.MonthlyCostCents
+		seen[r.Kind], total = true, total+r.MonthlyCostEstimateCents
 	}
 	for kind := range bootstrapKinds {
 		if !seen[kind] {
@@ -782,7 +797,7 @@ func (s *Store) PreviewBootstrap(id, actor string, expected int, alternative str
 		}
 	}
 	now := s.now().UTC().Truncate(time.Microsecond)
-	plan := BootstrapPlan{ID: uid(), Version: 1, AlternativeID: alternative, Status: "preview", Resources: resources, RecurringCostCents: total, GeneratedFrom: "incubator:" + x.ID + "/alternative:" + alternative, GeneratedBy: actor, GeneratedAt: now, Approvals: []BootstrapApproval{}}
+	plan := BootstrapPlan{ID: uid(), Version: 1, AlternativeID: alternative, Status: "preview", Resources: resources, RecurringCostEstimateCents: total, GeneratedFrom: "incubator:" + x.ID + "/alternative:" + alternative, GeneratedBy: actor, GeneratedAt: now, Approvals: []BootstrapApproval{}}
 	x.BootstrapPlans = append(x.BootstrapPlans, plan)
 	x.Version++
 	x.UpdatedAt = now
@@ -906,6 +921,11 @@ func (s *Store) FinishBootstrap(id, planID, actor, action string, expected, plan
 		case "activate":
 			if p.Status != "approved" {
 				return Incubator{}, ErrInvalid
+			}
+			p.RecurringCostEstimateCents = 0
+			for i := range p.Resources {
+				deriveBootstrapFacts(&p.Resources[i])
+				p.RecurringCostEstimateCents += p.Resources[i].MonthlyCostEstimateCents
 			}
 			p.Status = "active"
 			p.ActivatedAt = &now

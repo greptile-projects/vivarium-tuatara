@@ -488,8 +488,53 @@ func registerIncubatorRoutes(mux *http.ServeMux, git *storage.Store, credentials
 			writeAPIError(w, 400, "invalid_request", "an activation or rollback action and exact versions are required")
 			return
 		}
-		out, e := store.FinishBootstrap(r.PathValue("incubator_id"), r.PathValue("plan_id"), actor.UserID, in.Action, in.ExpectedVersion, in.PlanVersion)
-		writeIncubator(w, projectResearch(out, actor), e, 200)
+		current, e := store.Get(r.PathValue("incubator_id"), actor.UserID)
+		if e != nil {
+			writeIncubator(w, incubators.Incubator{}, e, 404)
+			return
+		}
+		var organizationID, repositoryID string
+		for _, plan := range current.BootstrapPlans {
+			if plan.ID == r.PathValue("plan_id") {
+				for _, resource := range plan.Resources {
+					if resource.Mode == "connect" {
+						if resource.Kind == "organization" {
+							organizationID = resource.ResourceID
+						}
+						if resource.Kind == "repository" {
+							repositoryID = resource.ResourceID
+						}
+					}
+				}
+			}
+		}
+		var out incubators.Incubator
+		var finishErr error
+		finish := func() error {
+			out, finishErr = store.FinishBootstrap(r.PathValue("incubator_id"), r.PathValue("plan_id"), actor.UserID, in.Action, in.ExpectedVersion, in.PlanVersion)
+			return finishErr
+		}
+		withRepository := func() error {
+			if in.Action == "activate" && repositoryID != "" {
+				return catalog.WithCurrentOwner(actor.UserID, []string{repositoryID}, finish)
+			}
+			return finish()
+		}
+		var authorityErr error
+		if in.Action == "activate" && organizationID != "" {
+			authorityErr = orgs.WithCurrentOwner(organizationID, actor.UserID, withRepository)
+		} else {
+			authorityErr = withRepository()
+		}
+		if finishErr != nil {
+			writeIncubator(w, projectResearch(out, actor), finishErr, 200)
+			return
+		}
+		if authorityErr != nil {
+			writeAPIError(w, 409, "bootstrap_authority_changed", "a connected resource is missing or no longer controlled by the activating owner")
+			return
+		}
+		writeIncubator(w, projectResearch(out, actor), nil, 200)
 	})
 }
 

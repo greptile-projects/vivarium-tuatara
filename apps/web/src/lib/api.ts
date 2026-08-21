@@ -6,21 +6,165 @@ export type User = {
   updated_at: string;
 };
 export type Incubator = {
-  id: string; version: number; title: string; audience: string; problem: string;
-  desired_outcome: string; constraints: string[]; success_measures: string[];
-  sponsor_ids: string[]; visibility: "private" | "participants" | "public";
-  source: { kind: "feedback" | "support_gap" | "governed_proposal" | "new_idea"; repository_id?: string; resource_id?: string; label: string; resolution: "resolved" | "missing" | "inaccessible"; detail?: string };
-  decision_rights: { kind: "scope_change" | "visibility_change" | "project_update"; decision: string; principal_ids: string[]; rule: string }[];
-  invitations: { id: string; principal_type: "human" | "agent"; principal_id: string; organization_id?: string; role: string; status: string; invited_by: string; invited_at: string; responded_at?: string }[];
-  events: { id: string; kind: string; decision_kind?: "scope_change" | "visibility_change"; body: string; visibility: string; actor_type: string; actor_id: string; created_at: string }[];
-  potential_duplicates: { incubator_id: string; title: string; reason: string }[];
-  research_sources: { id: string; kind: "public" | "organization" | "decision" | "prototype" | "package" | "api_contract" | "code"; label: string; url?: string; organization_id?: string; repository_id?: string; resource_id?: string; revision?: string; path?: string; resolution: "resolved" | "missing" | "inaccessible"; detail?: string }[];
-  alternatives: { id: string; name: string; product_boundary: string; architecture: string; interfaces: string[]; dependencies: string[]; licenses: string[]; operating_costs: string[]; security_risks: string[]; data_risks: string[]; build_or_adopt: "build" | "adopt" | "hybrid"; unknowns: string[]; source_ids: string[]; supersedes_id?: string; superseded: boolean; created_by: string; created_by_type: string; created_at: string }[];
-  experiments: { id: string; alternative_id: string; question: string; environment: string; commands: string[]; inputs: string[]; expected_measures: string[]; safety_limits: string[]; source_ids: string[]; definition_sha256: string; authority: string; created_by: string; created_by_type: string; created_at: string; results: { id: string; outcome: string; measurements: { name: string; value: number; unit: string }[]; artifact_sha256: string[]; notes?: string; unknowns: string[]; recorded_by: string; recorded_by_type: string; recorded_at: string }[] }[];
-  research_notes: { id: string; kind: "assumption" | "unknown" | "measurement" | "dissent"; body: string; alternative_id?: string; source_ids: string[]; supersedes_id?: string; superseded: boolean; actor_id: string; actor_type: string; created_at: string }[];
-  bootstrap_plans: { id: string; version: number; alternative_id: string; status: "preview" | "approved" | "rejected" | "active" | "rolled_back"; recurring_cost_cents: number; generated_from: string; generated_by: string; generated_at: string; activated_at?: string; rolled_back_at?: string; resources: { kind: string; mode: "create" | "connect"; name: string; resource_id?: string; owner_ids: string[]; effective_access: string[]; monthly_cost_cents: number; generated_content: string[]; inherited_policies: string[] }[]; approvals: { owner_id: string; decision: string; created_at: string }[] }[];
+  id: string;
+  version: number;
+  title: string;
+  audience: string;
+  problem: string;
+  desired_outcome: string;
+  constraints: string[];
+  success_measures: string[];
+  sponsor_ids: string[];
+  visibility: "private" | "participants" | "public";
+  source: {
+    kind: "feedback" | "support_gap" | "governed_proposal" | "new_idea";
+    repository_id?: string;
+    resource_id?: string;
+    label: string;
+    resolution: "resolved" | "missing" | "inaccessible";
+    detail?: string;
+  };
+  decision_rights: {
+    kind: "scope_change" | "visibility_change" | "project_update";
+    decision: string;
+    principal_ids: string[];
+    rule: string;
+  }[];
+  invitations: {
+    id: string;
+    principal_type: "human" | "agent";
+    principal_id: string;
+    organization_id?: string;
+    role: string;
+    status: string;
+    invited_by: string;
+    invited_at: string;
+    responded_at?: string;
+  }[];
+  events: {
+    id: string;
+    kind: string;
+    decision_kind?: "scope_change" | "visibility_change";
+    body: string;
+    visibility: string;
+    actor_type: string;
+    actor_id: string;
+    created_at: string;
+  }[];
+  potential_duplicates: {
+    incubator_id: string;
+    title: string;
+    reason: string;
+  }[];
+  research_sources: {
+    id: string;
+    kind:
+      | "public"
+      | "organization"
+      | "decision"
+      | "prototype"
+      | "package"
+      | "api_contract"
+      | "code";
+    label: string;
+    url?: string;
+    organization_id?: string;
+    repository_id?: string;
+    resource_id?: string;
+    revision?: string;
+    path?: string;
+    resolution: "resolved" | "missing" | "inaccessible";
+    detail?: string;
+  }[];
+  alternatives: {
+    id: string;
+    name: string;
+    product_boundary: string;
+    architecture: string;
+    interfaces: string[];
+    dependencies: string[];
+    licenses: string[];
+    operating_costs: string[];
+    security_risks: string[];
+    data_risks: string[];
+    build_or_adopt: "build" | "adopt" | "hybrid";
+    unknowns: string[];
+    source_ids: string[];
+    supersedes_id?: string;
+    superseded: boolean;
+    created_by: string;
+    created_by_type: string;
+    created_at: string;
+  }[];
+  experiments: {
+    id: string;
+    alternative_id: string;
+    question: string;
+    environment: string;
+    commands: string[];
+    inputs: string[];
+    expected_measures: string[];
+    safety_limits: string[];
+    source_ids: string[];
+    definition_sha256: string;
+    authority: string;
+    created_by: string;
+    created_by_type: string;
+    created_at: string;
+    results: {
+      id: string;
+      outcome: string;
+      measurements: { name: string; value: number; unit: string }[];
+      artifact_sha256: string[];
+      notes?: string;
+      unknowns: string[];
+      recorded_by: string;
+      recorded_by_type: string;
+      recorded_at: string;
+    }[];
+  }[];
+  research_notes: {
+    id: string;
+    kind: "assumption" | "unknown" | "measurement" | "dissent";
+    body: string;
+    alternative_id?: string;
+    source_ids: string[];
+    supersedes_id?: string;
+    superseded: boolean;
+    actor_id: string;
+    actor_type: string;
+    created_at: string;
+  }[];
+  bootstrap_plans: {
+    id: string;
+    version: number;
+    alternative_id: string;
+    status: "preview" | "approved" | "rejected" | "active" | "rolled_back";
+    recurring_cost_estimate_cents: number;
+    generated_from: string;
+    generated_by: string;
+    generated_at: string;
+    activated_at?: string;
+    rolled_back_at?: string;
+    resources: {
+      kind: string;
+      mode: "create" | "connect";
+      name: string;
+      resource_id?: string;
+      owner_ids: string[];
+      effective_access: string[];
+      monthly_cost_estimate_cents: number;
+      cost_basis: "participant_estimate_unverified";
+      generated_content: string[];
+      inherited_policies: string[];
+      metadata_source: string;
+    }[];
+    approvals: { owner_id: string; decision: string; created_at: string }[];
+  }[];
   durability_uncertain: boolean;
-  created_by: string; created_at: string; updated_at: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
 };
 
 export type KnowledgeCitation = {
@@ -1167,7 +1311,12 @@ export type DevelopmentWorkspace = {
   commit_id: string;
   creator_id: string;
   state:
-    "provisioning" | "running" | "suspended" | "failed" | "stopped" | "expired";
+    | "provisioning"
+    | "running"
+    | "suspended"
+    | "failed"
+    | "stopped"
+    | "expired";
   definition_sha256: string;
   created_at: string;
   updated_at: string;
@@ -1721,7 +1870,10 @@ export type OrganizationAgentProfile = {
   model_provenance: string;
   execution_provenance: string;
   deployment_boundaries: (
-    "platform" | "operator_managed" | "customer_managed" | "external_service"
+    | "platform"
+    | "operator_managed"
+    | "customer_managed"
+    | "external_service"
   )[];
   data_use: string;
   retention: string;
@@ -1791,7 +1943,18 @@ export type AgentEvaluationSuite = {
       id: string;
       title: string;
       visibility: "public" | "protected";
-      source: { kind: "issue" | "support_thread" | "task" | "incident" | "decision" | "prior_session"; id: string; revision?: string; sanitized: boolean };
+      source: {
+        kind:
+          | "issue"
+          | "support_thread"
+          | "task"
+          | "incident"
+          | "decision"
+          | "prior_session";
+        id: string;
+        revision?: string;
+        sanitized: boolean;
+      };
       inputs: string[];
       permitted_context: string[];
       sanitized_prompt: string;
@@ -2198,7 +2361,11 @@ export type EvolutionPlan = {
       migration_task_ids: Record<string, string>;
       environment_ids?: Record<string, string>;
       state?:
-        "blocked" | "awaiting_approval" | "ready" | "paused" | "completed";
+        | "blocked"
+        | "awaiting_approval"
+        | "ready"
+        | "paused"
+        | "completed";
       next_action?: string;
     }[];
     outcomes: {
@@ -2451,7 +2618,12 @@ export type RecoveryOperation = {
         evidence: { kind: string; resource_id: string; sha256: string };
       }[];
       status:
-        "pending" | "paused" | "running" | "validated" | "failed" | "blocked";
+        | "pending"
+        | "paused"
+        | "running"
+        | "validated"
+        | "failed"
+        | "blocked";
       message?: string;
       updated_by?: string;
       updated_at?: string;
@@ -2696,7 +2868,12 @@ export type SecurityAdvisory = {
   evidence: {
     id?: string;
     kind?:
-      "commit" | "dependency" | "build" | "artifact" | "release" | "deployment";
+      | "commit"
+      | "dependency"
+      | "build"
+      | "artifact"
+      | "release"
+      | "deployment";
     repository_id?: string;
     commit_id?: string;
     release_id?: string;
@@ -2713,7 +2890,11 @@ export type SecurityAdvisory = {
   response_team: string[];
   severity: "untriaged" | "low" | "moderate" | "high" | "critical";
   embargo_state:
-    "reported" | "triaging" | "embargoed" | "coordinating" | "disclosed";
+    | "reported"
+    | "triaging"
+    | "embargoed"
+    | "coordinating"
+    | "disclosed";
   messages: {
     id: string;
     actor_id: string;
@@ -2872,7 +3053,12 @@ export type IncidentAction = {
   deployment_id: string;
   rationale: string;
   status:
-    "proposed" | "approved" | "rejected" | "executing" | "failed" | "recovered";
+    | "proposed"
+    | "approved"
+    | "rejected"
+    | "executing"
+    | "failed"
+    | "recovered";
   proposed_by: string;
   evidence: IncidentEvidence[];
   health_criteria: { stage: string; signal: string }[];
@@ -3388,7 +3574,13 @@ export type MergeReadiness = {
       mitigation?: string;
       residual_risk?: string;
     }[];
-    events: { id: string; kind: string; control_id: string; body: string; actor_type: "human" | "agent" }[];
+    events: {
+      id: string;
+      kind: string;
+      control_id: string;
+      body: string;
+      actor_type: "human" | "agent";
+    }[];
   }[];
   accessibility_readiness?: {
     ready: boolean;
@@ -3398,7 +3590,12 @@ export type MergeReadiness = {
       kind: "automated_check" | "scenario" | "acknowledgement" | "barrier";
       name: string;
       status:
-        "missing" | "stale" | "pending" | "unevaluated" | "failed" | "passed";
+        | "missing"
+        | "stale"
+        | "pending"
+        | "unevaluated"
+        | "failed"
+        | "passed";
       message: string;
     }[];
     active_exceptions: {
@@ -3732,7 +3929,11 @@ export type ActivityEvent = {
   repository_id: string;
   repository_name: string;
   resource_type:
-    "proposal" | "pull_request" | "repository" | "deployment" | "incident";
+    | "proposal"
+    | "pull_request"
+    | "repository"
+    | "deployment"
+    | "incident";
   resource_id: string;
   resource_title: string;
   target_user_id: string | null;
