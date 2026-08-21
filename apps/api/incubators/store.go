@@ -248,6 +248,56 @@ type LaunchReadiness struct {
 	CreatedAt         time.Time           `json:"created_at"`
 	UpdatedAt         time.Time           `json:"updated_at"`
 }
+type LaunchArtifact struct {
+	Kind         string `json:"kind"`
+	RepositoryID string `json:"repository_id,omitempty"`
+	ResourceID   string `json:"resource_id"`
+	Revision     string `json:"revision,omitempty"`
+	Audience     string `json:"audience"`
+}
+type LaunchObservation struct {
+	ID           string    `json:"id"`
+	Kind         string    `json:"kind"`
+	RepositoryID string    `json:"repository_id,omitempty"`
+	ResourceID   string    `json:"resource_id"`
+	Summary      string    `json:"summary"`
+	ActorType    string    `json:"actor_type"`
+	ActorID      string    `json:"actor_id"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+type StewardshipWork struct {
+	ID           string    `json:"id"`
+	Kind         string    `json:"kind"`
+	RepositoryID string    `json:"repository_id"`
+	ResourceID   string    `json:"resource_id"`
+	OwnerType    string    `json:"owner_type"`
+	OwnerID      string    `json:"owner_id"`
+	Rationale    string    `json:"rationale"`
+	CreatedBy    string    `json:"created_by"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+type StewardshipTransition struct {
+	Disposition         string    `json:"disposition"`
+	TargetResourceID    string    `json:"target_resource_id,omitempty"`
+	Rationale           string    `json:"rationale"`
+	ResolvedResources   []string  `json:"resolved_resources"`
+	ResolvedObligations []string  `json:"resolved_obligations"`
+	DecidedBy           string    `json:"decided_by"`
+	DecidedAt           time.Time `json:"decided_at"`
+}
+type ProjectLaunch struct {
+	ID           string                 `json:"id"`
+	Version      int                    `json:"version"`
+	ReadinessID  string                 `json:"readiness_id"`
+	Audience     string                 `json:"audience"`
+	Artifacts    []LaunchArtifact       `json:"artifacts"`
+	Observations []LaunchObservation    `json:"observations"`
+	Work         []StewardshipWork      `json:"work"`
+	Transition   *StewardshipTransition `json:"transition,omitempty"`
+	PublishedBy  string                 `json:"published_by"`
+	PublishedAt  time.Time              `json:"published_at"`
+	UpdatedAt    time.Time              `json:"updated_at"`
+}
 type Incubator struct {
 	ID                  string                 `json:"id"`
 	Version             int                    `json:"version"`
@@ -274,6 +324,7 @@ type Incubator struct {
 	BootstrapPlans      []BootstrapPlan        `json:"bootstrap_plans"`
 	DeliveryPlans       []DeliveryPlan         `json:"delivery_plans"`
 	LaunchReadiness     []LaunchReadiness      `json:"launch_readiness"`
+	ProjectLaunches     []ProjectLaunch        `json:"project_launches"`
 	DurabilityUncertain bool                   `json:"durability_uncertain"`
 }
 
@@ -419,6 +470,191 @@ func (s *Store) DecideLaunchReadiness(id, readinessID, actor string, expected, r
 		r.Version++
 		r.UpdatedAt = now
 		evaluateReadiness(r, now)
+	}
+	if !found {
+		return Incubator{}, ErrNotFound
+	}
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(&x)
+	return x, e
+}
+
+var launchArtifactKinds = map[string]bool{"release": true, "documentation": true, "package": true, "api_contract": true, "contributor_opportunity": true, "environment": true}
+var launchObservationKinds = map[string]bool{"adoption": true, "support": true, "reliability": true, "cost": true, "success_measure": true, "feedback": true}
+
+func (s *Store) PublishLaunch(id, actor string, expected int, in ProjectLaunch) (Incubator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Incubator{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(id)
+	if e != nil || !participant(x, "human", actor) {
+		return Incubator{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Incubator{}, ErrConflict
+	}
+	ready, repositories := false, map[string]bool{}
+	for _, r := range x.LaunchReadiness {
+		if r.ID == in.ReadinessID && r.Ready && r.EffectiveAudience == in.Audience {
+			ready = true
+			for _, p := range x.DeliveryPlans {
+				if p.ID == r.DeliveryPlanID {
+					for _, w := range p.WorkItems {
+						repositories[w.RepositoryID] = true
+					}
+				}
+			}
+		}
+	}
+	kinds, seen := map[string]bool{}, map[string]bool{}
+	for _, a := range in.Artifacts {
+		key := a.Kind + ":" + a.RepositoryID + ":" + a.ResourceID
+		if !launchArtifactKinds[a.Kind] || seen[key] || !text(a.ResourceID, 1000) || a.Audience != in.Audience || (a.RepositoryID != "" && !repositories[a.RepositoryID]) || (a.Revision != "" && len(a.Revision) != 40) {
+			return Incubator{}, ErrInvalid
+		}
+		seen[key], kinds[a.Kind] = true, true
+	}
+	if !ready || !map[string]bool{"experimental": true, "limited": true, "public": true}[in.Audience] || !kinds["release"] || !kinds["documentation"] || !kinds["contributor_opportunity"] || !kinds["environment"] || (!kinds["package"] && !kinds["api_contract"]) {
+		return Incubator{}, ErrInvalid
+	}
+	now := s.now().UTC().Truncate(time.Microsecond)
+	in.ID, in.Version, in.PublishedBy, in.PublishedAt, in.UpdatedAt = uid(), 1, actor, now, now
+	in.Observations, in.Work, in.Transition = []LaunchObservation{}, []StewardshipWork{}, nil
+	x.ProjectLaunches = append(x.ProjectLaunches, in)
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(&x)
+	return x, e
+}
+
+func (s *Store) AddLaunchObservation(id, launchID, typ, actor string, expected, launchVersion int, in LaunchObservation) (Incubator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Incubator{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(id)
+	if e != nil || !participant(x, typ, actor) {
+		return Incubator{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Incubator{}, ErrConflict
+	}
+	now, found := s.now().UTC().Truncate(time.Microsecond), false
+	for i := range x.ProjectLaunches {
+		p := &x.ProjectLaunches[i]
+		if p.ID != launchID {
+			continue
+		}
+		found = true
+		inScope := in.RepositoryID == ""
+		for _, artifact := range p.Artifacts {
+			if artifact.RepositoryID == in.RepositoryID {
+				inScope = true
+			}
+		}
+		if p.Version != launchVersion || p.Transition != nil || !inScope || !launchObservationKinds[in.Kind] || !text(in.ResourceID, 1000) || !text(in.Summary, 10000) {
+			return Incubator{}, ErrInvalid
+		}
+		in.ID, in.ActorType, in.ActorID, in.CreatedAt = uid(), typ, actor, now
+		p.Observations = append(p.Observations, in)
+		p.Version++
+		p.UpdatedAt = now
+	}
+	if !found {
+		return Incubator{}, ErrNotFound
+	}
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(&x)
+	return x, e
+}
+
+func (s *Store) AddStewardshipWork(id, launchID, typ, actor string, expected, launchVersion int, in StewardshipWork) (Incubator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Incubator{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(id)
+	if e != nil || !participant(x, typ, actor) {
+		return Incubator{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Incubator{}, ErrConflict
+	}
+	now, found := s.now().UTC().Truncate(time.Microsecond), false
+	for i := range x.ProjectLaunches {
+		p := &x.ProjectLaunches[i]
+		if p.ID != launchID {
+			continue
+		}
+		found = true
+		inScope := false
+		for _, artifact := range p.Artifacts {
+			if artifact.RepositoryID == in.RepositoryID {
+				inScope = true
+			}
+		}
+		if p.Version != launchVersion || p.Transition != nil || !inScope || !participant(x, in.OwnerType, in.OwnerID) || !map[string]bool{"roadmap_revision": true, "proposal_task": true}[in.Kind] || !text(in.RepositoryID, 200) || !text(in.ResourceID, 1000) || !map[string]bool{"human": true, "agent": true}[in.OwnerType] || !text(in.OwnerID, 200) || !text(in.Rationale, 10000) {
+			return Incubator{}, ErrInvalid
+		}
+		in.ID, in.CreatedBy, in.CreatedAt = uid(), actor, now
+		p.Work = append(p.Work, in)
+		p.Version++
+		p.UpdatedAt = now
+	}
+	if !found {
+		return Incubator{}, ErrNotFound
+	}
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(&x)
+	return x, e
+}
+
+func (s *Store) TransitionStewardship(id, launchID, actor string, expected, launchVersion int, in StewardshipTransition) (Incubator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Incubator{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(id)
+	if e != nil || !participant(x, "human", actor) {
+		return Incubator{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Incubator{}, ErrConflict
+	}
+	now, found := s.now().UTC().Truncate(time.Microsecond), false
+	for i := range x.ProjectLaunches {
+		p := &x.ProjectLaunches[i]
+		if p.ID != launchID {
+			continue
+		}
+		found = true
+		if p.Version != launchVersion || p.Transition != nil || !map[string]bool{"organization_initiative": true, "experimental": true, "merged": true, "archived": true}[in.Disposition] || !text(in.Rationale, 10000) || ((in.Disposition == "organization_initiative" || in.Disposition == "merged") && !text(in.TargetResourceID, 1000)) || (in.Disposition == "archived" && (len(in.ResolvedResources) == 0 || len(in.ResolvedObligations) == 0)) {
+			return Incubator{}, ErrInvalid
+		}
+		in.DecidedBy, in.DecidedAt = actor, now
+		p.Transition = &in
+		p.Version++
+		p.UpdatedAt = now
 	}
 	if !found {
 		return Incubator{}, ErrNotFound
@@ -711,6 +947,9 @@ func (s *Store) read(id string) (Incubator, error) {
 	if x.LaunchReadiness == nil {
 		x.LaunchReadiness = []LaunchReadiness{}
 	}
+	if x.ProjectLaunches == nil {
+		x.ProjectLaunches = []ProjectLaunch{}
+	}
 	for i := range x.LaunchReadiness {
 		evaluateReadiness(&x.LaunchReadiness[i], s.now().UTC())
 	}
@@ -733,6 +972,9 @@ func (s *Store) all() ([]Incubator, error) {
 		}
 		if x.LaunchReadiness == nil {
 			x.LaunchReadiness = []LaunchReadiness{}
+		}
+		if x.ProjectLaunches == nil {
+			x.ProjectLaunches = []ProjectLaunch{}
 		}
 		for i := range x.LaunchReadiness {
 			evaluateReadiness(&x.LaunchReadiness[i], s.now().UTC())
@@ -852,6 +1094,7 @@ func (s *Store) Create(x Incubator, actor string, invitations []Invitation) (Inc
 	x.BootstrapPlans = []BootstrapPlan{}
 	x.DeliveryPlans = []DeliveryPlan{}
 	x.LaunchReadiness = []LaunchReadiness{}
+	x.ProjectLaunches = []ProjectLaunch{}
 	x.Events = []Event{{ID: uid(), Kind: "opened", Body: "Incubator opened", Visibility: "participants", ActorType: "human", ActorID: actor, CreatedAt: now}}
 	all, e := s.all()
 	if e != nil {

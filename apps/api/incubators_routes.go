@@ -88,6 +88,25 @@ type incubatorReadinessDecisionInput struct {
 	ReadinessVersion int                          `json:"readiness_version"`
 	Decision         incubators.ReadinessDecision `json:"decision"`
 }
+type incubatorLaunchInput struct {
+	ExpectedVersion int                      `json:"expected_version"`
+	Launch          incubators.ProjectLaunch `json:"launch"`
+}
+type incubatorLaunchObservationInput struct {
+	ExpectedVersion int                          `json:"expected_version"`
+	LaunchVersion   int                          `json:"launch_version"`
+	Observation     incubators.LaunchObservation `json:"observation"`
+}
+type incubatorStewardshipWorkInput struct {
+	ExpectedVersion int                        `json:"expected_version"`
+	LaunchVersion   int                        `json:"launch_version"`
+	Work            incubators.StewardshipWork `json:"work"`
+}
+type incubatorStewardshipTransitionInput struct {
+	ExpectedVersion int                              `json:"expected_version"`
+	LaunchVersion   int                              `json:"launch_version"`
+	Transition      incubators.StewardshipTransition `json:"transition"`
+}
 
 func registerIncubatorRoutes(mux *http.ServeMux, git *storage.Store, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, store *incubators.Store, feedback *productfeedback.Store, support *supportthreads.Store, proposals *governance.Store, workspaceStore *workspaces.Store, pullStore *pullrequests.Store, previewStore *previews.Store, checkStore *checkruns.Store) {
 	authn := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
@@ -729,6 +748,68 @@ func registerIncubatorRoutes(mux *http.ServeMux, git *storage.Store, credentials
 			}
 		}
 		out, e := store.DecideLaunchReadiness(r.PathValue("incubator_id"), r.PathValue("readiness_id"), actor.UserID, in.ExpectedVersion, in.ReadinessVersion, in.Decision)
+		writeIncubator(w, projectResearch(out, actor), e, 201)
+	})
+	mux.HandleFunc("POST /incubators/{incubator_id}/launches", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		if actor.AgentID != "" {
+			writeAPIError(w, 403, "human_owner_required", "a human collaborator must publish the first project launch")
+			return
+		}
+		var in incubatorLaunchInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an exact ready launch manifest is required")
+			return
+		}
+		out, e := store.PublishLaunch(r.PathValue("incubator_id"), actor.UserID, in.ExpectedVersion, in.Launch)
+		writeIncubator(w, projectResearch(out, actor), e, 201)
+	})
+	mux.HandleFunc("POST /incubators/{incubator_id}/launches/{launch_id}/observations", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		var in incubatorLaunchObservationInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an exact operational observation is required")
+			return
+		}
+		typ, id := actorIdentity(actor)
+		out, e := store.AddLaunchObservation(r.PathValue("incubator_id"), r.PathValue("launch_id"), typ, id, in.ExpectedVersion, in.LaunchVersion, in.Observation)
+		writeIncubator(w, projectResearch(out, actor), e, 201)
+	})
+	mux.HandleFunc("POST /incubators/{incubator_id}/launches/{launch_id}/work", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		var in incubatorStewardshipWorkInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "connected roadmap or proposal work is required")
+			return
+		}
+		typ, id := actorIdentity(actor)
+		out, e := store.AddStewardshipWork(r.PathValue("incubator_id"), r.PathValue("launch_id"), typ, id, in.ExpectedVersion, in.LaunchVersion, in.Work)
+		writeIncubator(w, projectResearch(out, actor), e, 201)
+	})
+	mux.HandleFunc("POST /incubators/{incubator_id}/launches/{launch_id}/transition", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		if actor.AgentID != "" {
+			writeAPIError(w, 403, "human_owner_required", "a human collaborator must decide project stewardship")
+			return
+		}
+		var in incubatorStewardshipTransitionInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an exact stewardship disposition is required")
+			return
+		}
+		out, e := store.TransitionStewardship(r.PathValue("incubator_id"), r.PathValue("launch_id"), actor.UserID, in.ExpectedVersion, in.LaunchVersion, in.Transition)
 		writeIncubator(w, projectResearch(out, actor), e, 201)
 	})
 }
