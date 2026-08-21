@@ -300,7 +300,7 @@ whenever dependencies change or the web job fails before it starts.
   release, or deployment authority.
   Caller-supplied access/default/policy claims are discarded in favor of the server template and
   retained template source; unsupported connected kinds fail closed. Activation refreshes those
-  derived fields and holds current connected-organization/repository ownership stable through the
+  derived fields and holds every declared connected-organization/repository owner's current ownership stable through the
   canonical boundary write, so deletion or transfer cannot race activation.
 
 - **Capability inventory** — `/repositories/{id}/capabilities` and the repository

@@ -86,11 +86,16 @@ func TestBootstrapActivationRevalidatesConnectedRepositoryOwnership(t *testing.T
 	server := httptest.NewServer(newPlatformHandlerWithChecks(git, identities, credentials, catalog, nil, nil, nil, nil, nil, orgs, ledger))
 	defer server.Close()
 	creator := createTestAccount(t, server.URL, "bootstrap-authority-owner")
-	x, err := ledger.Create(incubators.Incubator{Title: "Governed boundary", Audience: "Contributors", Problem: "Disconnected settings", DesiredOutcome: "One safe boundary", Constraints: []string{"No orphaned names"}, SuccessMeasures: []string{"Current authority"}, SponsorIDs: []string{creator.User.ID}, DecisionRights: []incubators.DecisionRight{{Kind: "project_update", Decision: "Activate boundary", PrincipalIDs: []string{creator.User.ID}, Rule: "owner"}}, Visibility: "participants", Source: incubators.Source{Kind: "new_idea", Label: "Project", Resolution: "resolved"}}, creator.User.ID, nil)
+	invitee := createTestAccount(t, server.URL, "bootstrap-non-owner")
+	x, err := ledger.Create(incubators.Incubator{Title: "Governed boundary", Audience: "Contributors", Problem: "Disconnected settings", DesiredOutcome: "One safe boundary", Constraints: []string{"No orphaned names"}, SuccessMeasures: []string{"Current authority"}, SponsorIDs: []string{creator.User.ID}, DecisionRights: []incubators.DecisionRight{{Kind: "project_update", Decision: "Activate boundary", PrincipalIDs: []string{creator.User.ID}, Rule: "owner"}}, Visibility: "participants", Source: incubators.Source{Kind: "new_idea", Label: "Project", Resolution: "resolved"}}, creator.User.ID, []incubators.Invitation{{PrincipalType: "human", PrincipalID: invitee.User.ID, Role: "participant"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	x, err = ledger.AddAlternative(x.ID, "human", creator.User.ID, 1, nil, incubators.Alternative{Name: "Accepted", ProductBoundary: "Service", Architecture: "API", Interfaces: []string{"HTTP"}, Dependencies: []string{"runtime"}, Licenses: []string{"MIT"}, OperatingCosts: []string{"estimated"}, SecurityRisks: []string{"access"}, DataRisks: []string{"retention"}, BuildOrAdopt: "build", Unknowns: []string{"scale"}})
+	x, err = ledger.Consent(x.ID, x.Invitations[0].ID, invitee.User.ID, "accepted", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	x, err = ledger.AddAlternative(x.ID, "human", creator.User.ID, 2, nil, incubators.Alternative{Name: "Accepted", ProductBoundary: "Service", Architecture: "API", Interfaces: []string{"HTTP"}, Dependencies: []string{"runtime"}, Licenses: []string{"MIT"}, OperatingCosts: []string{"estimated"}, SecurityRisks: []string{"access"}, DataRisks: []string{"retention"}, BuildOrAdopt: "build", Unknowns: []string{"scale"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,18 +113,26 @@ func TestBootstrapActivationRevalidatesConnectedRepositoryOwnership(t *testing.T
 		}
 		resources = append(resources, resource)
 	}
-	body, _ := json.Marshal(map[string]any{"expected_version": 2, "alternative_id": x.Alternatives[0].ID, "resources": resources})
+	fabricated := append([]incubators.BootstrapResource{}, resources...)
+	for i := range fabricated {
+		if fabricated[i].Kind == "repository" {
+			fabricated[i].OwnerIDs = []string{creator.User.ID, invitee.User.ID}
+		}
+	}
+	body, _ := json.Marshal(map[string]any{"expected_version": 3, "alternative_id": x.Alternatives[0].ID, "resources": fabricated})
+	authenticatedRequest(t, http.MethodPost, server.URL+"/incubators/"+x.ID+"/bootstrap-previews", string(body), creator.Credential.Token, http.StatusUnprocessableEntity).Body.Close()
+	body, _ = json.Marshal(map[string]any{"expected_version": 3, "alternative_id": x.Alternatives[0].ID, "resources": resources})
 	response := authenticatedRequest(t, http.MethodPost, server.URL+"/incubators/"+x.ID+"/bootstrap-previews", string(body), creator.Credential.Token, http.StatusCreated)
 	_ = json.NewDecoder(response.Body).Decode(&x)
 	response.Body.Close()
 	plan := x.BootstrapPlans[0]
-	response = authenticatedRequest(t, http.MethodPost, server.URL+"/incubators/"+x.ID+"/bootstrap-plans/"+plan.ID+"/decisions", `{"expected_version":3,"plan_version":1,"decision":"approved"}`, creator.Credential.Token, http.StatusOK)
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/incubators/"+x.ID+"/bootstrap-plans/"+plan.ID+"/decisions", `{"expected_version":4,"plan_version":1,"decision":"approved"}`, creator.Credential.Token, http.StatusOK)
 	_ = json.NewDecoder(response.Body).Decode(&x)
 	response.Body.Close()
 	if err = catalog.Delete(creator.User.ID, repo.ID); err != nil {
 		t.Fatal(err)
 	}
-	action := `{"expected_version":4,"plan_version":2,"action":"activate"}`
+	action := `{"expected_version":5,"plan_version":2,"action":"activate"}`
 	authenticatedRequest(t, http.MethodPost, server.URL+"/incubators/"+x.ID+"/bootstrap-plans/"+plan.ID+"/actions", action, creator.Credential.Token, http.StatusConflict).Body.Close()
 	retained, err := ledger.Get(x.ID, creator.User.ID)
 	if err != nil || retained.BootstrapPlans[0].Status != "approved" {

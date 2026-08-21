@@ -442,13 +442,21 @@ func registerIncubatorRoutes(mux *http.ServeMux, git *storage.Store, credentials
 			switch resource.Kind {
 			case "organization":
 				org, e := orgs.Get(resource.ResourceID)
-				if e != nil || !organizations.HasRole(org, actor.UserID, "owner") {
+				ownersCurrent := e == nil
+				for _, owner := range resource.OwnerIDs {
+					ownersCurrent = ownersCurrent && organizations.HasRole(org, owner, "owner")
+				}
+				if !ownersCurrent {
 					writeAPIError(w, 422, "inaccessible_resource", "connected resources must exist within the owner's current authority")
 					return
 				}
 			case "repository":
 				repo, e := catalog.GetByID(resource.ResourceID)
-				if e != nil || repo.OwnerID != actor.UserID {
+				ownersCurrent := e == nil
+				for _, owner := range resource.OwnerIDs {
+					ownersCurrent = ownersCurrent && repo.OwnerID == owner
+				}
+				if !ownersCurrent {
 					writeAPIError(w, 422, "inaccessible_resource", "connected resources must exist within the owner's current authority")
 					return
 				}
@@ -494,15 +502,18 @@ func registerIncubatorRoutes(mux *http.ServeMux, git *storage.Store, credentials
 			return
 		}
 		var organizationID, repositoryID string
+		var organizationOwners, repositoryOwners []string
 		for _, plan := range current.BootstrapPlans {
 			if plan.ID == r.PathValue("plan_id") {
 				for _, resource := range plan.Resources {
 					if resource.Mode == "connect" {
 						if resource.Kind == "organization" {
 							organizationID = resource.ResourceID
+							organizationOwners = append([]string{}, resource.OwnerIDs...)
 						}
 						if resource.Kind == "repository" {
 							repositoryID = resource.ResourceID
+							repositoryOwners = append([]string{}, resource.OwnerIDs...)
 						}
 					}
 				}
@@ -516,13 +527,13 @@ func registerIncubatorRoutes(mux *http.ServeMux, git *storage.Store, credentials
 		}
 		withRepository := func() error {
 			if in.Action == "activate" && repositoryID != "" {
-				return catalog.WithCurrentOwner(actor.UserID, []string{repositoryID}, finish)
+				return catalog.WithCurrentOwners(repositoryOwners, []string{repositoryID}, finish)
 			}
 			return finish()
 		}
 		var authorityErr error
 		if in.Action == "activate" && organizationID != "" {
-			authorityErr = orgs.WithCurrentOwner(organizationID, actor.UserID, withRepository)
+			authorityErr = orgs.WithCurrentOwners(organizationID, organizationOwners, withRepository)
 		} else {
 			authorityErr = withRepository()
 		}

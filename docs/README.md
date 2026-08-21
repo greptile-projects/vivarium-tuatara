@@ -70,7 +70,7 @@ be rolled back as a unit, and CAS retries reconcile against the durable state. A
 project context only: ordinary organization, repository, credential, package, environment, policy,
 review, release, and deployment APIs retain their own authority.
 Activation re-resolves connected organizations and repositories while holding their mutation locks,
-requires the activating owner to retain current ownership, and refreshes server-derived access,
+requires every declared owner to retain current ownership, and refreshes server-derived access,
 generated-content, inherited-policy, cost-basis, and template-source fields before committing.
 
 ## Versioned agent projects
