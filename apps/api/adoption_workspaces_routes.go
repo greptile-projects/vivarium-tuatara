@@ -29,6 +29,14 @@ type adoptionConsentInput struct {
 	Decision        string `json:"decision"`
 	ExpectedVersion int    `json:"expected_version"`
 }
+type adoptionTrialInput struct {
+	adoptionworkspaces.Trial
+	ExpectedVersion int `json:"expected_version"`
+}
+type adoptionTrialEventInput struct {
+	adoptionworkspaces.TrialEvent
+	ExpectedVersion int `json:"expected_version"`
+}
 
 func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, incubatorStore *incubators.Store, federationStore *federation.Store, roadmapStore *roadmaps.Store, supportStore *supportthreads.Store, decisionStore *decisions.Store, packageStore *packageversions.Store, apiStore *apicontracts.Store, store *adoptionworkspaces.Store) {
 	authn := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
@@ -259,6 +267,32 @@ func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store
 		}
 		out, e := store.Consent(r.PathValue("workspace_id"), r.PathValue("invitation_id"), actor.UserID, in.Decision, in.ExpectedVersion)
 		writeAdoptionWorkspace(w, out, e, 200)
+	})
+	mux.HandleFunc("POST /adoption-workspaces/{workspace_id}/trials", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		var in adoptionTrialInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a bounded exact-candidate trial and expected version are required")
+			return
+		}
+		out, e := store.CreateTrial(r.PathValue("workspace_id"), in.Trial, viewer(actor), in.ExpectedVersion)
+		writeAdoptionWorkspace(w, out, e, 201)
+	})
+	mux.HandleFunc("POST /adoption-workspaces/{workspace_id}/trials/{trial_id}/events", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		var in adoptionTrialEventInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an attributable sanitized trial event and expected version are required")
+			return
+		}
+		out, e := store.AppendTrialEvent(r.PathValue("workspace_id"), r.PathValue("trial_id"), in.TrialEvent, viewer(actor), in.ExpectedVersion)
+		writeAdoptionWorkspace(w, out, e, 201)
 	})
 }
 

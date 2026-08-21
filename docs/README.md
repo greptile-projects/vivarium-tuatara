@@ -12,7 +12,7 @@ required journeys, target environments, constraints, budget, owners, weighted ev
 and one or more candidate versions.
 
 Provider maintainers and affected users remain pending until they explicitly accept their invitation.
-Approved organization agents can participate only as read-only observers. Each candidate retains
+Approved organization agents remain read-only observers of the adoption decision. Each candidate retains
 separate capability, provenance, support, security, data-use, compatibility, and known-gap evidence.
 Pending humans can discover only their invitation coordinates, role, inviter, and timestamp until
 they accept. Reads recheck repository access and replace evidence outside the viewer's current
@@ -21,6 +21,15 @@ Unavailable references remain missing or inaccessible, while evidence naming ano
 version is derived as stale. Candidate fit stays `undetermined` whenever any dimension lacks current
 evidence. The ledger defaults beneath `$ADOPTION_WORKSPACE_STORAGE_ROOT` (`adoption-workspaces`) and
 grants no package, API, procurement, Git, environment, deployment, or provider-roadmap authority.
+
+Visible participants can assemble a trial ledger entry without gaining any runtime authority. Each
+trial binds an attested candidate release or exact revision to scoped packages/APIs, synthetic or
+permitted data, adopter journeys and policies, and portable setup instructions. Human and approved
+agent participants may append sanitized, attributable setup, configuration, command, integration,
+check, preview, measurement, cost, finding, and user-feedback events produced under authority they
+already hold. Credential-shaped content is rejected, repository-bound artifacts are reprojected on
+every read, and failed or non-reproducible attempts remain alongside explicitly linked reproduction
+attempts so candidate versions can be compared without copying a private machine or production data.
 
 ## Project incubators before repositories
 

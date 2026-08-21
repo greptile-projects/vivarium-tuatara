@@ -77,6 +77,50 @@ type Candidate struct {
 	FitStatus       string     `json:"fit_status"`
 	Gaps            []string   `json:"gaps"`
 }
+type TrialScope struct {
+	Packages []string `json:"packages"`
+	APIs     []string `json:"apis"`
+}
+type TrialData struct {
+	Kind        string `json:"kind"`
+	Description string `json:"description"`
+	Reference   string `json:"reference,omitempty"`
+}
+type TrialEvent struct {
+	ID             string    `json:"id"`
+	Kind           string    `json:"kind"`
+	Summary        string    `json:"summary"`
+	Command        string    `json:"command,omitempty"`
+	Status         string    `json:"status"`
+	Value          float64   `json:"value,omitempty"`
+	Unit           string    `json:"unit,omitempty"`
+	CostCents      int64     `json:"cost_cents,omitempty"`
+	ArtifactSHA256 string    `json:"artifact_sha256,omitempty"`
+	RepositoryID   string    `json:"repository_id,omitempty"`
+	Reference      string    `json:"reference,omitempty"`
+	ActorType      string    `json:"actor_type"`
+	ActorID        string    `json:"actor_id"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+type Trial struct {
+	ID                string       `json:"id"`
+	CandidateID       string       `json:"candidate_id"`
+	CandidateVersion  string       `json:"candidate_version"`
+	CandidateRevision string       `json:"candidate_revision,omitempty"`
+	SourceKind        string       `json:"source_kind"`
+	SourceReference   string       `json:"source_reference"`
+	Scope             TrialScope   `json:"scope"`
+	Data              []TrialData  `json:"data"`
+	Journeys          []string     `json:"journeys"`
+	Policies          []string     `json:"policies"`
+	Setup             []string     `json:"setup"`
+	Status            string       `json:"status"`
+	ReproducesTrialID string       `json:"reproduces_trial_id,omitempty"`
+	Events            []TrialEvent `json:"events"`
+	CreatedByType     string       `json:"created_by_type"`
+	CreatedBy         string       `json:"created_by"`
+	CreatedAt         time.Time    `json:"created_at"`
+}
 type Workspace struct {
 	ID               string       `json:"id"`
 	Version          int          `json:"version"`
@@ -92,6 +136,7 @@ type Workspace struct {
 	Criteria         []Criterion  `json:"evaluation_criteria"`
 	Candidates       []Candidate  `json:"candidates"`
 	Invitations      []Invitation `json:"invitations"`
+	Trials           []Trial      `json:"trials"`
 	CreatedBy        string       `json:"created_by"`
 	CreatedAt        time.Time    `json:"created_at"`
 	UpdatedAt        time.Time    `json:"updated_at"`
@@ -264,6 +309,143 @@ func valid(x Workspace) bool {
 	}
 	return true
 }
+
+var trialEventKinds = map[string]bool{"setup": true, "configuration": true, "command": true, "integration_change": true, "check": true, "preview": true, "measurement": true, "cost": true, "finding": true, "user_feedback": true}
+
+func credentialShaped(v string) bool {
+	l := strings.ToLower(v)
+	return strings.Contains(l, "-----begin private key-----") || strings.Contains(l, "ghp_") || strings.Contains(l, "authorization: bearer ") || strings.Contains(l, "aws_secret_access_key")
+}
+
+func validTrial(t Trial) bool {
+	if !text(t.CandidateID, 100) || !map[string]bool{"attested_release": true, "exact_revision": true}[t.SourceKind] || !text(t.SourceReference, 1000) || !list(t.Journeys, 30) || !list(t.Policies, 30) || !list(t.Setup, 50) || len(t.Scope.Packages)+len(t.Scope.APIs) == 0 || len(t.Scope.Packages) > 50 || len(t.Scope.APIs) > 50 || len(t.Data) == 0 || len(t.Data) > 30 {
+		return false
+	}
+	if len(t.Scope.Packages) > 0 && !list(t.Scope.Packages, 50) || len(t.Scope.APIs) > 0 && !list(t.Scope.APIs, 50) {
+		return false
+	}
+	for _, d := range t.Data {
+		if !map[string]bool{"synthetic": true, "permitted": true}[d.Kind] || !text(d.Description, 2000) || credentialShaped(d.Description+d.Reference) {
+			return false
+		}
+	}
+	for _, v := range append(append(append([]string{}, t.Journeys...), t.Policies...), t.Setup...) {
+		if credentialShaped(v) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Store) participant(x Workspace, viewer Viewer) bool { return visible(x, viewer) }
+
+func (s *Store) CreateTrial(workspace string, in Trial, actor Viewer, expected int) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Workspace{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(workspace)
+	if e != nil || !s.participant(x, actor) {
+		return Workspace{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	if !validTrial(in) || !text(actor.PrincipalID, 100) {
+		return Workspace{}, ErrInvalid
+	}
+	var candidate *Candidate
+	for i := range x.Candidates {
+		if x.Candidates[i].ID == in.CandidateID {
+			candidate = &x.Candidates[i]
+		}
+	}
+	if candidate == nil || in.SourceReference != candidate.SourceReference || (in.SourceKind == "exact_revision" && (len(candidate.Revision) != 40 || in.SourceReference != candidate.Revision)) {
+		return Workspace{}, ErrInvalid
+	}
+	if in.SourceKind == "attested_release" && !map[string]bool{"package": true, "api": true, "federated_repository": true}[candidate.SourceKind] {
+		return Workspace{}, ErrInvalid
+	}
+	if in.ReproducesTrialID != "" {
+		found := false
+		for _, prior := range x.Trials {
+			found = found || prior.ID == in.ReproducesTrialID && prior.CandidateID == in.CandidateID
+		}
+		if !found {
+			return Workspace{}, ErrInvalid
+		}
+	}
+	now := s.now().UTC().Truncate(time.Microsecond)
+	in.ID = id()
+	in.CandidateVersion = candidate.Version
+	in.CandidateRevision = candidate.Revision
+	in.Status = "running"
+	in.Events = []TrialEvent{}
+	in.CreatedByType = actor.PrincipalType
+	in.CreatedBy = actor.PrincipalID
+	in.CreatedAt = now
+	x.Trials = append(x.Trials, in)
+	x.Version++
+	x.UpdatedAt = now
+	if e = s.write(x); e != nil {
+		return Workspace{}, e
+	}
+	return s.project(x, actor), nil
+}
+
+func (s *Store) AppendTrialEvent(workspace, trialID string, in TrialEvent, actor Viewer, expected int) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Workspace{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(workspace)
+	if e != nil || !s.participant(x, actor) {
+		return Workspace{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	if !trialEventKinds[in.Kind] || !text(in.Summary, 5000) || !map[string]bool{"passed": true, "failed": true, "observed": true, "non_reproducible": true}[in.Status] || in.CostCents < 0 || credentialShaped(in.Summary+in.Command+in.Reference) {
+		return Workspace{}, ErrInvalid
+	}
+	if in.ArtifactSHA256 != "" && (len(in.ArtifactSHA256) != 64 || strings.Trim(in.ArtifactSHA256, "0123456789abcdef") != "") {
+		return Workspace{}, ErrInvalid
+	}
+	now := s.now().UTC().Truncate(time.Microsecond)
+	found := false
+	for i := range x.Trials {
+		if x.Trials[i].ID == trialID {
+			found = true
+			in.ID = id()
+			in.ActorType = actor.PrincipalType
+			in.ActorID = actor.PrincipalID
+			in.CreatedAt = now
+			x.Trials[i].Events = append(x.Trials[i].Events, in)
+			if in.Status == "failed" || in.Status == "non_reproducible" {
+				x.Trials[i].Status = in.Status
+			} else if in.Kind == "check" && in.Status == "passed" && x.Trials[i].Status == "running" {
+				x.Trials[i].Status = "demonstrated"
+			}
+		}
+	}
+	if !found {
+		return Workspace{}, ErrInvalid
+	}
+	x.Version++
+	x.UpdatedAt = now
+	if e = s.write(x); e != nil {
+		return Workspace{}, e
+	}
+	return s.project(x, actor), nil
+}
 func (s *Store) Create(x Workspace, actor string, invitations []Invitation) (Workspace, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -361,6 +543,15 @@ func (s *Store) project(x Workspace, viewer Viewer) Workspace {
 		}
 		x.Candidates[i].Evidence = out
 		derive(&x.Candidates[i])
+	}
+	for i := range x.Trials {
+		for j := range x.Trials[i].Events {
+			e := &x.Trials[i].Events[j]
+			if e.RepositoryID != "" && !s.canReadRepository(viewer, e.RepositoryID) {
+				e.RepositoryID, e.Reference, e.Summary, e.Command, e.ArtifactSHA256 = "", "Restricted evidence", "Restricted evidence", "", ""
+				e.Status = "observed"
+			}
+		}
 	}
 	return x
 }

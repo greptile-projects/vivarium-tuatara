@@ -261,7 +261,8 @@ whenever dependencies change or the web job fails before it starts.
   incubator, decision, package, API, or signed federated-repository snapshot and records required
   journeys, environments, constraints, budget, accountable owners, weighted criteria, and exact
   candidate versions. Provider maintainers and affected users explicitly consent before reading;
-  already-approved organization agents are observer-only and receive no mutation authority.
+  already-approved organization agents are observer-only for the adoption decision and receive no
+  general workspace mutation authority.
   Pending humans discover only consent coordinates and invitation metadata. Reads match typed
   principal and organization identity and recheck repository evidence access for every viewer,
   replacing out-of-bound evidence with an opaque gap.
@@ -270,6 +271,13 @@ whenever dependencies change or the web job fails before it starts.
   version-stale evidence remains an explicit gap rather than proof of fit. Workspaces grant no
   repository, package, API, procurement, agent, Git, environment, deployment, or provider-roadmap
   authority.
+  Visible participants can retain bounded trials against an attested candidate release or exact
+  revision. Trials freeze scoped packages/APIs, synthetic or permitted data, adopter journeys and
+  policies, portable setup, and attributable setup/configuration/command/integration/check/preview/
+  measurement/cost/finding/user-feedback events. Approved agents may publish only this sanitized
+  trial record under authority they already hold; the workspace grants no execution authority.
+  Credential-shaped content is rejected, restricted repository evidence is reprojected on reads,
+  and failed, non-reproducible, and explicitly linked reproduction attempts remain inspectable.
 
 - **Project incubators** — `/incubators` and the web `/incubators` workspace provide a
   collaborative home before repository creation beneath `$INCUBATOR_STORAGE_ROOT`
