@@ -309,6 +309,15 @@ whenever dependencies change or the web job fails before it starts.
   target-user feedback, agent action, handoff, cost, deviation, check, and review reports connect
   ordinary execution back to the incubator without granting any linked authority.
 
+- **Incubator launch readiness** — `/{incubator_id}/launch-readiness` retains a complete,
+  versioned public-life assessment only after an active project boundary and running delivery slice.
+  Thirteen closed expectations bind evidence and a current human participant owner. Only that owner
+  accepts current evidence or records a maximum-30-day exception with connected follow-up work;
+  failed user validation cannot be excepted, and any exception narrows a public declaration to a
+  limited audience. Missing maintainers, unsafe defaults, unsupported promises, stale evidence, and
+  expired exceptions remain explicit blockers. Readiness grants no release, package, deployment,
+  governance, budget, repository, or follow-up-work authority.
+
 - **Capability inventory** — `/repositories/{id}/capabilities` and the repository
   `/capabilities` workspace retain immutable, exact-release capability revisions beneath
   `$CAPABILITY_STORAGE_ROOT` (`capabilities`). A revision selects interfaces, symbols,
