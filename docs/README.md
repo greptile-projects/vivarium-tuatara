@@ -3,6 +3,24 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Project incubators before repositories
+
+Authenticated collaborators use `/incubators` or the web project-incubator workspace to establish
+purpose and participation before choosing filenames, frameworks, or repository ownership. An
+incubator records a working title, audience, problem, desired outcome, constraints, success
+measures, sponsors, explicit decision rights, visibility, and human or approved-agent invitations.
+Its starting point can be existing feedback, a support gap, a governed proposal, or an original
+idea. The API resolves repository context only inside the creator's current read boundary and
+retains `resolved`, `missing`, or opaque `inaccessible` diagnostics.
+
+Invite visibility does not imply participation: each human invitee must append explicit consent
+before contributing. Approved organization agents retain their already-governed identity; the
+incubator grants no new runtime or tool authority. Versioned append-only events attribute
+discussion, evidence, assumptions, scope changes, visibility changes, and consent to a stable human
+or agent identity. Duplicate-looking initiatives remain separate and are reported explicitly to
+readers who can see both. Storage defaults beneath `$INCUBATOR_STORAGE_ROOT` (`incubators`) and
+grants no repository, Git, organization, implementation, review, release, or deployment authority.
+
 ## Versioned agent projects
 
 Repository collaborators define intended agent behavior at `/repositories/{id}/agent-projects` and review

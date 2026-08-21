@@ -255,6 +255,20 @@ whenever dependencies change or the web job fails before it starts.
 
 ## Conventions
 
+- **Project incubators** — `/incubators` and the web `/incubators` workspace provide a
+  collaborative home before repository creation beneath `$INCUBATOR_STORAGE_ROOT`
+  (`incubators`). Human collaborators open an incubator from feedback, a support gap, a
+  repository governed proposal, or a new idea and freeze its audience, problem, desired
+  outcome, constraints, success measures, human sponsors, decision rights, visibility, and
+  invitations. Source resolution is server-derived and remains explicitly `resolved`,
+  `missing`, or `inaccessible`; inaccessible records do not disclose whether a private source
+  exists. Existing visible initiatives with the same title or problem are reported as potential
+  duplicates rather than silently merged. Human invitees must explicitly accept before shaping
+  the work; approved organization agents retain their existing identity and approval boundary.
+  Compare-and-swap events keep discussion, evidence, assumptions, scope and visibility changes,
+  and consent attributable. Incubators grant no repository, organization, Git, agent, tool,
+  deployment, or implementation authority.
+
 - **Capability inventory** — `/repositories/{id}/capabilities` and the repository
   `/capabilities` workspace retain immutable, exact-release capability revisions beneath
   `$CAPABILITY_STORAGE_ROOT` (`capabilities`). A revision selects interfaces, symbols,

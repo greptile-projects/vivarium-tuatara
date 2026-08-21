@@ -5,6 +5,17 @@ export type User = {
   created_at: string;
   updated_at: string;
 };
+export type Incubator = {
+  id: string; version: number; title: string; audience: string; problem: string;
+  desired_outcome: string; constraints: string[]; success_measures: string[];
+  sponsor_ids: string[]; visibility: "private" | "participants" | "public";
+  source: { kind: "feedback" | "support_gap" | "governed_proposal" | "new_idea"; repository_id?: string; resource_id?: string; label: string; resolution: "resolved" | "missing" | "inaccessible"; detail?: string };
+  decision_rights: { decision: string; principal_ids: string[]; rule: string }[];
+  invitations: { id: string; principal_type: "human" | "agent"; principal_id: string; organization_id?: string; role: string; status: string; invited_by: string; invited_at: string; responded_at?: string }[];
+  events: { id: string; kind: string; body: string; visibility: string; actor_type: string; actor_id: string; created_at: string }[];
+  potential_duplicates: { incubator_id: string; title: string; reason: string }[];
+  created_by: string; created_at: string; updated_at: string;
+};
 
 export type KnowledgeCitation = {
   kind:
